@@ -1,4 +1,4 @@
-# Handover - 2026-09-26, rank 8 MED batch shipped as 7.25.4 (+ a CI flake fix, 7.25.5); the LOW batch is next
+# STALE - read 2026-09-26, work continued
 
 ## In flight
 

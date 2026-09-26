@@ -881,15 +881,33 @@ def test_follow_up_touches_the_domains_list_only_for_a_new_category(tmp_path, re
     assert "only if" in out and "`coding`" in out
 
 
-def test_report_says_skipped_when_a_credit_line_was_already_there(tmp_path, record_subprocess,
-                                                                 capsys):
+def test_report_says_skipped_when_this_sources_credit_line_was_already_there(
+        tmp_path, record_subprocess, capsys):
+    repo, skills = _fake_repo(tmp_path)
+    src = _fake_source(tmp_path)
+    (src / "SKILL.md").write_text(
+        "# Up\n\n> Adapted from upstream-skill (upstream) (MIT).\n\nbody\n", encoding="utf-8")
+    AS.main([str(src), "--name", "coding-up", "--dest", str(skills)])
+    out = capsys.readouterr().out
+    assert "credit line SKIPPED (already present)" in out
+    assert (skills / "coding-up" / "SKILL.md").read_text(encoding="utf-8").count(
+        "> Adapted from ") == 1
+
+
+def test_a_credit_line_for_a_different_upstream_does_not_stand_in_for_this_one(
+        tmp_path, record_subprocess, capsys):
+    # the source is itself adapted from obra/superpowers; what we adopt from is upstream-skill,
+    # and that is the source the credit must name
     repo, skills = _fake_repo(tmp_path)
     src = _fake_source(tmp_path)
     (src / "SKILL.md").write_text("# Up\n\n> Adapted from obra/superpowers (MIT).\n\nbody\n",
                                   encoding="utf-8")
     AS.main([str(src), "--name", "coding-up", "--dest", str(skills)])
     out = capsys.readouterr().out
-    assert "credit line SKIPPED (already present)" in out
+    assert "credit line written" in out
+    text = (skills / "coding-up" / "SKILL.md").read_text(encoding="utf-8")
+    assert "> Adapted from upstream-skill (upstream) (MIT)." in text
+    assert "> Adapted from obra/superpowers (MIT)." in text
 
 
 def test_report_says_skipped_when_the_notice_entry_already_existed(tmp_path, record_subprocess,
@@ -1027,3 +1045,94 @@ def test_cp1252_stdout_does_not_crash_the_report(tmp_path):
                         "--dest", str(skills)], capture_output=True, env=env)
     assert r.returncode == 0, r.stderr.decode("utf-8", "replace")
     assert b"LICENSE GATE: ACCEPTED" in r.stdout
+
+
+# --------------------------------------------------------------------------
+# A failed adoption leaves nothing behind; --subdir stays in the source; BOMs; SEE LICENSE IN
+# --------------------------------------------------------------------------
+
+def test_a_failure_after_the_copy_leaves_nothing_that_blocks_a_retry(tmp_path, record_subprocess,
+                                                                     capsys):
+    repo, skills = _fake_repo(tmp_path)
+    notices = repo / "plugins/bitranox/THIRD_PARTY_NOTICES.md"
+    before = notices.read_bytes()
+    src = _fake_source(tmp_path)
+    # a FILE named tests beside a shipped script: the test scaffold is the last step and it
+    # fails there, after the copy, the credit line and the notice entry were all written
+    (src / "tests").write_text("not a dir\n", encoding="utf-8")
+    assert AS.main([str(src), "--name", "coding-up", "--dest", str(skills)]) == 2
+    capsys.readouterr()
+    assert not (skills / "coding-up").exists()
+    assert notices.read_bytes() == before
+    (src / "tests").unlink()
+    assert AS.main([str(src), "--name", "coding-up", "--dest", str(skills)]) == 0
+    assert "destination already exists" not in capsys.readouterr().err
+
+
+def test_a_destination_that_already_existed_is_never_removed(tmp_path, record_subprocess):
+    repo, skills = _fake_repo(tmp_path)
+    (skills / "coding-up").mkdir()
+    (skills / "coding-up" / "SKILL.md").write_text("# mine\n", encoding="utf-8")
+    assert AS.main([str(_fake_source(tmp_path)), "--name", "coding-up",
+                    "--dest", str(skills)]) == 2
+    assert (skills / "coding-up" / "SKILL.md").read_text(encoding="utf-8") == "# mine\n"
+
+
+@pytest.mark.parametrize("subdir", ["..", "../..", "skills/../..", "ABS"])
+def test_a_subdir_pointing_outside_the_source_is_refused_up_front(tmp_path, record_subprocess,
+                                                                  capsys, subdir):
+    repo, skills = _fake_repo(tmp_path)
+    src = _fake_source(tmp_path)
+    if subdir == "ABS":
+        subdir = str(_tree(tmp_path / "elsewhere", {"SKILL.md": "# E\n", "LICENSE": MIT}))
+    rc = AS.main([str(src), "--subdir", subdir, "--name", "coding-up", "--dest", str(skills)])
+    assert rc == 2
+    # the refusal itself, not "multiple skills found; use --subdir", which a walk of whatever
+    # directory the subdir escaped to can also print
+    assert "--subdir points outside the source" in capsys.readouterr().err
+    assert not (skills / "coding-up").exists()
+
+
+def test_a_subdir_with_dotdot_that_stays_inside_still_works(tmp_path, record_subprocess):
+    repo, skills = _fake_repo(tmp_path)
+    src = _tree(tmp_path / "multi", {"LICENSE": MIT, "skills/a/SKILL.md": "# A\n\nbody\n",
+                                     "skills/b/SKILL.md": "# B\n\nbody\n"})
+    assert AS.main([str(src), "--subdir", "skills/b/../a", "--name", "coding-a",
+                    "--dest", str(skills)]) == 0
+    assert (skills / "coding-a" / "SKILL.md").read_text(encoding="utf-8").startswith("# A")
+
+
+def test_a_bom_is_dropped_from_every_adopted_text_file(tmp_path, record_subprocess):
+    repo, skills = _fake_repo(tmp_path)
+    src = _fake_source(tmp_path)
+    bom = b"\xef\xbb\xbf"
+    (src / "run.py").write_bytes(bom + b"VALUE = 1\n")
+    (src / "notes.md").write_bytes(bom + b"# Notes\r\n\r\nplain\r\n")
+    (src / "go.sh").write_bytes(bom + b"#!/bin/sh\necho hi\n")
+    (src / "blob.bin").write_bytes(bom + b"\xff\xfe binary")
+    assert AS.main([str(src), "--name", "coding-up", "--dest", str(skills)]) == 0
+    dest = skills / "coding-up"
+    assert (dest / "run.py").read_bytes() == b"VALUE = 1\n"
+    assert (dest / "notes.md").read_bytes() == b"# Notes\r\n\r\nplain\r\n"   # line ends kept
+    assert (dest / "go.sh").read_bytes() == b"#!/bin/sh\necho hi\n"
+    assert (dest / "blob.bin").read_bytes() == bom + b"\xff\xfe binary"   # not text: untouched
+
+
+@pytest.mark.parametrize("named, text, status, lic_id", [
+    ("LICENSE.txt", MIT, "accept", "MIT"),
+    ("TERMS", MIT, "accept", "MIT"),
+    ("TERMS", GPL, "reject", None),
+    ("TERMS", "Proprietary. All rights reserved.\n", "absent", None),
+    ("MISSING", None, "absent", None),
+    ("../../outside.txt", None, "absent", None),
+], ids=["license-file", "other-name-mit", "other-name-gpl", "unrecognised", "missing",
+        "outside-the-source"])
+def test_npm_see_license_in_reads_the_named_file(tmp_path, named, text, status, lic_id):
+    files = {"skill/SKILL.md": "# S\n",
+             "skill/package.json": json.dumps({"license": f"SEE LICENSE IN {named}"})}
+    if text is not None:
+        files[f"skill/{named}"] = text
+    tree = _tree(tmp_path / "src", files)
+    (tmp_path / "outside.txt").write_text(MIT, encoding="utf-8")
+    lic = AS.find_license(tree, tree / "skill")
+    assert (lic["status"], lic["id"]) == (status, lic_id), lic["where"]

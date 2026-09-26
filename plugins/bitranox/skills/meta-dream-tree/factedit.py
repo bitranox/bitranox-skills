@@ -69,7 +69,7 @@ from pathlib import Path
 # tree_support is this script's sibling; a caller loading the script by path does not put this
 # dir on sys.path the way running it directly does.
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from tree_support import store_anchor, utf8_stdio  # noqa: E402
+from tree_support import store_anchor, utf8_stdio
 
 LEVEL_FILE = "CLAUDE.local.md"
 STORE_DIRNAME = ".claude-memory"
@@ -88,7 +88,11 @@ _MARKETPLACE = ".claude/plugins/marketplaces/bitranox-skills/plugins/bitranox/ho
 # Mirrors the engine's own frontmatter reader: the body's `description:` IS the hook.
 _DESC_RX = re.compile(r"(?m)^description:[ \t]*(.*)$")
 # `metadata:\n  type: <t>` - indented, so it cannot be confused with the top-level keys above it.
-_TYPE_RX = re.compile(r"(?m)^[ \t]+type:[ \t]*(\S+)[ \t]*$")
+_TYPE_RX = re.compile(r"(?m)^[ \t]+type:[ \t]*(\S+)[ \t]*\r?$")
+# The engine's frontmatter test (memory_engine._frontmatter): a CLOSED leading block that carries
+# a `name:` key. A body that merely opens with a horizontal rule has no frame at all.
+_FRAME_RX = re.compile(r"---[ \t]*\r?\n(.*?\r?\n)?---[ \t]*(?:\r?\n|\Z)", re.DOTALL)
+_NAME_RX = re.compile(r"(?m)^name:")
 
 
 class FactEditError(Exception):
@@ -200,14 +204,15 @@ def body_description(text: str) -> str:
 def body_type(text: str) -> str:
     """The `metadata: type:` value from a framed body's frontmatter, or '' when it has none. PURE.
 
-    Scoped to the LEADING frontmatter block, so an indented `type:` line in the prose below cannot
-    answer for it.
+    Scoped to the LEADING frontmatter block, read the way the engine reads it (closed, with a
+    `name:` key), so an indented `type:` line in the prose - of a framed body, or of one that
+    merely opens with a horizontal rule - cannot answer for it.
     """
-    head = (text or "").lstrip()
-    if not head.startswith("---"):
+    frame = _FRAME_RX.match((text or "").lstrip())
+    inner = (frame.group(1) or "") if frame else ""
+    if not _NAME_RX.search(inner):
         return ""
-    end = head.find("\n---", 3)
-    m = _TYPE_RX.search(head[:end] if end > 0 else head)
+    m = _TYPE_RX.search(inner)
     return m.group(1) if m else ""
 
 

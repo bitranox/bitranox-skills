@@ -80,7 +80,8 @@ first and aborts if it fails, normalizes the name to bitranox conventions, rewri
 internal cross-references to `bitranox:<name>`, scaffolds a `tests/` stub when the skill ships
 `.py`, records attribution (the credit line plus a `THIRD_PARTY_NOTICES.md` entry), runs the repo
 gate read-only, and prints a follow-up checklist. It never commits, never pushes, and never
-removes anything. Review every rewrite it reports.
+removes anything it did not write: a run that fails part-way removes the skill folder it started
+and puts `THIRD_PARTY_NOTICES.md` back, so a retry starts clean. Review every rewrite it reports.
 
 It renames the old name only where it identifies the skill: the front matter `name:`, an H1 that
 is exactly the name, a `<namespace>:<name>` reference, and a path segment under `skills/`. A plain
@@ -93,7 +94,8 @@ above it up to the source root - never a sibling plugin's files, which govern th
 one. Within that scope it reads EVERY declared license - every license file (LICENSE, COPYING,
 LICENSE-*, LICENSES/*), every SPDX header, and every `license` / `license-files` value of every
 plugin.json, package.json, marketplace.json and pyproject.toml in any form (an SPDX expression, a
-`{text}` or `{file}` table, an npm `type` object) - and one copyleft id rejects, including one
+`{text}` or `{file}` table, an npm `type` object, npm's `SEE LICENSE IN <file>`, whose file it
+reads) - and one copyleft id rejects, including one
 alternative of an `OR`. Anything it cannot read, classify or vouch for (an unparseable manifest, a
 license text it does not recognise, an unknown id, a named license file that is missing, a
 symlinked folder or a link to a file outside the skill, whose target would be copied unread) stops

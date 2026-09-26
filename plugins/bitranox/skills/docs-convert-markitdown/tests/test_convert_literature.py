@@ -178,6 +178,79 @@ def test_unreadable_subdir_is_reported_not_skipped(script_runner, tmp_path, fake
     assert "locked" in run.output
 
 
+@pytest.mark.skipif(
+    sys.platform == "win32" or (hasattr(os, "geteuid") and os.geteuid() == 0),
+    reason="needs POSIX permission bits enforced (not root, not Windows)",
+)
+def test_unreadable_subdir_is_counted_in_the_total(script_runner, tmp_path, fake_markitdown_dir):
+    """The unreadable directory is one of the failures, so it is part of the total too."""
+    _paper(tmp_path / "in" / "Ok_2020_Paper.pdf", "OK")
+    locked = tmp_path / "in" / "locked"
+    _paper(locked / "Hidden_2020_Paper.pdf", "HIDDEN")
+    locked.chmod(0)
+    try:
+        run = _lit(script_runner, tmp_path, fake_markitdown_dir, "-r")
+    finally:
+        locked.chmod(0o755)
+
+    assert re.search(r"^Total:\s+2\b", run.stdout, re.MULTILINE), run.stdout
+    assert "Successful:      1" in run.stdout
+    assert "Failed:          1" in run.stdout
+    assert "Success rate:    50.0%" in run.stdout
+
+
+def test_case_only_collision_names_every_output_it_would_write(
+    script_runner, tmp_path, fake_markitdown_dir
+):
+    _paper(tmp_path / "in" / "Doe_2020_X.pdf", "ONE")
+    _paper(tmp_path / "in" / "Doe_2020_x.pdf", "TWO")
+    if len(os.listdir(tmp_path / "in")) != 2:
+        pytest.skip("case-insensitive file system: the two names are one file")
+
+    run = _lit(script_runner, tmp_path, fake_markitdown_dir)
+
+    assert run.returncode == 2, run.output
+    lines = [line for line in run.stdout.splitlines() if line.startswith("[FAIL] Output collision")]
+    assert len(lines) == 2, run.stdout
+    for line in lines:
+        assert "Doe_2020_X.md" in line and "Doe_2020_x.md" in line, line
+        assert "case" in line, line
+
+
+# DEL, C1 controls, NEL and the Unicode line/paragraph separators: YAML either refuses them
+# outright (not printable) or reads them as line breaks inside a double-quoted scalar.
+_YAML_HOSTILE = ["\x7f", "\x80", "\x85", "\x9b", "\x9f", "\u2028", "\u2029"]
+
+
+@pytest.mark.parametrize("char", _YAML_HOSTILE, ids=[hex(ord(c)) for c in _YAML_HOSTILE])
+def test_front_matter_round_trips_a_control_character(literature, char):
+    metadata = {
+        "title": "A" + char + "B", "author": "Doe" + char, "year": "2020",
+        "source_file": "Doe_2020_A" + char + "B.pdf", "converted_date": "2026-01-01T00:00:00",
+    }
+
+    text = literature.render_paper(metadata, "BODY")
+
+    front = yaml.safe_load(text.split("---\n", 2)[1])
+    assert front["title"] == metadata["title"]
+    assert front["author"] == metadata["author"]
+    assert front["source"] == metadata["source_file"]
+
+
+def test_front_matter_parses_for_a_filename_holding_del(script_runner, tmp_path, fake_markitdown_dir):
+    name = "Doe_2020_A\x7fB.pdf"
+    try:
+        _paper(tmp_path / "in" / name, "DEL")
+    except OSError:
+        pytest.skip("this file system refuses DEL in a filename")
+
+    run = _lit(script_runner, tmp_path, fake_markitdown_dir)
+
+    assert run.returncode == 0, run.output
+    meta = _front_matter(tmp_path / "out" / "Doe_2020_A\x7fB.md")
+    assert meta["source"] == name
+
+
 def test_help_works_without_markitdown(script_runner, block_import, tmp_path):
     run = script_runner("convert_literature", ["--help"], cwd=tmp_path, prelude=block_import("markitdown"))
 

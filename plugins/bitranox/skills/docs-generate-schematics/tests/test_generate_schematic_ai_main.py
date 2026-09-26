@@ -247,6 +247,46 @@ def test_a_verdict_forced_retry_above_the_threshold_is_not_called_below_it(
     assert "at or above the 8.5/10 threshold" in stdout
 
 
+def test_a_failed_retry_review_keeps_the_reviewed_first_image(
+    gen_ai, scripted, monkeypatch, capsys, tmp_path
+):
+    """Keep-best chooses among REVIEWED images only: a retry whose review failed has an unknown
+    quality, so it cannot displace the reviewed v1, and the run is judged on v1's score."""
+    scripted(image("V1"), review("SCORE: 6.0"), image("V2"), failure(500))
+
+    rc = run_main(gen_ai, monkeypatch, "diagram", "-o", str(_out(tmp_path)), "--doc-type", "journal")
+
+    stdout = capsys.readouterr().out
+    assert rc == 1  # v1's 6.0 is below the journal threshold
+    assert _out(tmp_path).read_bytes() == b"V1"
+    log = json.loads((tmp_path / "out_review_log.json").read_text(encoding="utf-8"))
+    assert log["final_score"] == 6.0
+    assert log["kept_iteration"] == 1
+    assert log["threshold_met"] is False
+    assert log["review_skipped"] is False  # the delivered image WAS reviewed
+    assert "review of v2 failed" in stdout
+    assert "NOT verified" not in stdout
+    verdict = stdout.strip().splitlines()[-1]
+    assert "6.0/10" in verdict and "8.5/10" in verdict
+
+
+def test_a_failed_retry_review_after_a_verdict_forced_retry_keeps_v1_and_exits_0(
+    gen_ai, scripted, monkeypatch, capsys, tmp_path
+):
+    """The control: v1 met the numeric threshold (the verdict alone forced the retry), so keeping
+    it after v2's review failed is a met threshold, exit 0."""
+    scripted(image("V1"), review("SCORE: 9.0\nVERDICT: NEEDS_IMPROVEMENT"), image("V2"), failure(500))
+
+    rc = run_main(gen_ai, monkeypatch, "diagram", "-o", str(_out(tmp_path)), "--doc-type", "journal")
+
+    stdout = capsys.readouterr().out
+    assert rc == 0
+    assert _out(tmp_path).read_bytes() == b"V1"
+    assert "review of v2 failed" in stdout
+    log = json.loads((tmp_path / "out_review_log.json").read_text(encoding="utf-8"))
+    assert (log["kept_iteration"], log["threshold_met"]) == (1, True)
+
+
 def test_exit_status_docs_name_the_missed_threshold(gen_ai):
     assert "threshold" in gen_ai.__doc__.split("Exit status:", 1)[1].split("Usage:", 1)[0]
     assert "threshold" in gen_ai.build_parser().epilog.split("Exit status:", 1)[1]

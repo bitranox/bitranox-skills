@@ -42,10 +42,13 @@ def _run_main(mod, argv, monkeypatch, env_key="env-key"):
     return captured
 
 
-def test_missing_api_key_exits_1(gen_wrapper, monkeypatch):
+def test_missing_api_key_exits_1(gen_wrapper, monkeypatch, capsys):
     out = _run_main(gen_wrapper, ["a diagram", "-o", "x.png"], monkeypatch, env_key=None)
     assert out["exit"] == 1
     assert "cmd" not in out  # never reached subprocess
+    captured = capsys.readouterr()
+    assert "OPENROUTER_API_KEY" in captured.err
+    assert captured.out == ""  # stdout is the child's progress stream; errors never go there
 
 
 def test_builds_command_with_defaults(gen_wrapper, gen_ai, monkeypatch):
@@ -128,7 +131,7 @@ def test_dash_prefixed_values_reach_the_child_intact(gen_wrapper, gen_ai, monkey
     assert (child.prompt, child.output) == (prompt, output)
 
 
-def test_launch_error_exits_1(gen_wrapper, monkeypatch):
+def test_launch_error_exits_1(gen_wrapper, monkeypatch, capsys):
     def refuse(*args, **kwargs):
         raise OSError("cannot launch")
 
@@ -138,6 +141,9 @@ def test_launch_error_exits_1(gen_wrapper, monkeypatch):
     with pytest.raises(SystemExit) as exc:
         gen_wrapper.main()
     assert exc.value.code == 1
+    captured = capsys.readouterr()
+    assert "cannot launch" in captured.err
+    assert captured.out == ""
 
 
 def _copy_wrapper(tmp_path, child_source):
@@ -166,7 +172,8 @@ def test_missing_ai_script_exits_1(tmp_path):
     wrapper = _copy_wrapper(tmp_path, None)
     proc = _run_copy(wrapper, tmp_path)
     assert proc.returncode == 1
-    assert b"not found" in proc.stdout + proc.stderr
+    assert b"not found" in proc.stderr
+    assert proc.stdout == b""
 
 
 def test_cp1252_console_with_non_ascii_path_prints_its_error(tmp_path):
@@ -176,4 +183,4 @@ def test_cp1252_console_with_non_ascii_path_prints_its_error(tmp_path):
     proc = _run_copy(wrapper, home, encoding="cp1252")
     assert proc.returncode == 1
     assert b"Traceback" not in proc.stderr
-    assert b"not found" in proc.stdout
+    assert b"not found" in proc.stderr

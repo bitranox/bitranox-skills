@@ -562,6 +562,50 @@ def test_archive_entry_raises_when_the_body_cannot_be_moved(proj):
     assert slug in {e.slug for e in ME.read_store(proj)[1]}
 
 
+_NO_CHMOD = not hasattr(__import__("os"), "geteuid") or __import__("os").geteuid() == 0
+
+
+@pytest.mark.skipif(_NO_CHMOD, reason="needs a non-root POSIX user for a read-only level file")
+def test_a_failed_pointer_write_puts_the_body_back_and_exits_2(proj, capsys):
+    """The body was moved BEFORE the pointer was written, so a pointer write that failed left the
+    pointer naming a body that was already in the archive - an orphan pointer - while the CLI
+    said "its pointer and body are unchanged"."""
+    slug = ME.add_or_update_entry(proj, "Keep fact", "h", body="the body", scope_default="lvl")
+    local = Path(proj) / "CLAUDE.local.md"
+    local.chmod(0o444)
+    try:
+        rc = R.main(["--archive", slug, proj])
+    finally:
+        local.chmod(0o644)
+    err = capsys.readouterr().err
+    assert rc == 2 and "unchanged" in err, err
+    assert slug in {e.slug for e in ME.read_store(proj)[1]}, "the pointer must survive"
+    assert us.body_path(proj, slug).is_file(), "the body must be back where the pointer says"
+    archive = us.central_facts_dir(proj).parent / ".archive"
+    assert not archive.exists() or not any(archive.iterdir())
+
+
+def test_a_failed_pointer_write_whose_rollback_also_fails_names_the_archived_body(proj, capsys):
+    """When the body cannot be put back either, the message must not claim nothing changed: it
+    names where the body now is. The move seam performs the real move once, then refuses."""
+    slug = ME.add_or_update_entry(proj, "Keep fact", "h", body="the body", scope_default="lvl")
+    moves = []
+
+    def move_once(src, dst):
+        moves.append((src, dst))
+        if len(moves) > 1:
+            raise OSError("put-back refused")
+        return R.shutil.move(src, dst)
+
+    def refuse_commit(*_args):
+        raise OSError("pointer write refused")
+
+    with pytest.raises(R.ArchiveRollbackFailed) as info:
+        R.archive_entry(proj, slug, move=move_once, commit=refuse_commit)
+    assert str(moves[0][1]) in str(info.value)
+    assert "unchanged" not in str(info.value)
+
+
 # ---- a directory that does not exist is an error, never a clean tree ---------------------------
 
 @pytest.mark.parametrize("mode", [["--check-tree"], ["--check"], [], ["--check-misplaced"],

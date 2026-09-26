@@ -435,3 +435,36 @@ def test_a_non_cp1252_claim_name_does_not_crash_a_cp1252_stdout(tmp_path):
                          env={**os.environ, "PYTHONIOENCODING": "cp1252"}, timeout=60)
     assert res.returncode == 0, res.stderr
     assert b"CONFIRMED" in res.stdout
+
+
+# ---- LOW batch (rank-8 review follow-up) --------------------------------------------------------
+
+@pytest.mark.parametrize("value", ["nan", "inf", "-inf", "0", "-1"])
+def test_a_timeout_that_is_not_a_positive_finite_number_is_a_usage_error(tmp_path, value):
+    """nan/inf crashed inside subprocess with a traceback and exit 1 - the UNUSABLE code - and
+    0/-1 ran both sides into an instant timeout reported as ERROR claims."""
+    hook = _fake_hook(tmp_path, 'data = sys.stdin.read()\nif "TRAP" in data: print("fired")\n')
+    res = subprocess.run([sys.executable, str(SCRIPT), "--hook", str(hook), "--name", "c",
+                          "--probe", "TRAP", "--control", "clean", "--timeout", value],
+                         capture_output=True, text=True, encoding="utf-8", errors="replace",
+                         env={**os.environ}, timeout=60, check=False)
+    assert res.returncode == 2, res.stderr
+    assert "Traceback" not in res.stderr
+    assert "--timeout" in res.stderr
+
+
+def test_the_subject_gets_the_utf8_environment_the_production_shim_exports(tmp_path):
+    """hooks/run-python.sh exports PYTHONUTF8=1 and PYTHONIOENCODING=utf-8 before exec'ing a
+    hook; a subject judged without them runs under a different codec than it ships under."""
+    hook = _fake_hook(tmp_path, "import os\nprint(os.environ.get('PYTHONUTF8'), "
+                                "os.environ.get('PYTHONIOENCODING'))\n")
+    run = A.run_once(A.subject_for_hook(hook), "", [])
+    assert run.stdout.split() == ["1", "utf-8"]
+
+
+def test_adjudicate_asks_to_be_launched_with_a_plain_interpreter():
+    """The subject runs on sys.executable. Under `uv run` that is uv's throwaway env, where a
+    hook's optional imports (PyYAML, lxml) are missing and it degrades unlike production;
+    toolbox-nudge reads LAUNCH_WITH to suggest the right launch."""
+    assert A.LAUNCH_WITH == "python3"
+    assert "uv run scripts/adjudicate.py" not in (A.__doc__ or "")

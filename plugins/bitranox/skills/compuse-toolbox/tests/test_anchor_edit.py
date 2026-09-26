@@ -410,6 +410,32 @@ def test_a_multiline_lf_anchor_matches_in_a_crlf_file(tmp_path):
     assert target.read_bytes() == b"a\r\nb\r\nnew\r\nc\r\n"
 
 
+def test_crlf_new_text_in_a_crlf_file_is_not_doubled_to_cr_cr_lf(tmp_path):
+    """The file is edited as LF and written back by turning every LF into CRLF, so a CRLF that
+    arrived IN the new text came out as CR CR LF."""
+    target = tmp_path / "w.txt"
+    target.write_bytes(b"a\r\nb\r\nc\r\n")
+    AE.apply_to_file(target, lambda s: AE.replace_exact(s, "b\n", "x\r\ny\r\n"))
+    assert target.read_bytes() == b"a\r\nx\r\ny\r\nc\r\n"
+
+
+def test_cli_crlf_new_text_in_a_crlf_file_is_not_doubled(tmp_path):
+    target = tmp_path / "w.txt"
+    target.write_bytes(b"a\r\nb\r\n")
+    proc = _run("replace", str(target), "--anchor", "a", "--new-text", "x\r\ny")
+    assert proc.returncode == 0, proc.stderr
+    assert target.read_bytes() == b"x\r\ny\r\nb\r\n"
+
+
+def test_a_crlf_file_holding_cr_cr_lf_still_round_trips_byte_exact(tmp_path):
+    """Every newline is part of a CRLF here too, so it is edited as LF with a CR left before one
+    LF; that CR is file content and must survive the write-back."""
+    target = tmp_path / "w.txt"
+    target.write_bytes(b"a\r\r\nb\r\n")
+    AE.apply_to_file(target, lambda s: AE.replace_exact(s, "b", "B"))
+    assert target.read_bytes() == b"a\r\r\nB\r\n"
+
+
 def test_an_lf_file_stays_lf(tmp_path):
     target = tmp_path / "u.txt"
     target.write_bytes(b"a\nb\nc\n")

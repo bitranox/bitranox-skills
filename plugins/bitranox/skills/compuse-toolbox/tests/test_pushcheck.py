@@ -305,6 +305,71 @@ def test_a_range_that_never_carried_the_leak_still_passes(tmp_path):
     assert r.returncode == 0, r.stdout + r.stderr
 
 
+def test_a_symmetric_range_scans_only_the_side_being_pushed(tmp_path):
+    """`A...B` means "what B adds since it forked from A" to `git diff`, but "both sides" to
+    `git log`. A leak on the UPSTREAM side is already there and is not what this push publishes,
+    so it must not refuse the push."""
+    repo = _repo(tmp_path)
+    _git(repo, "checkout", "-qb", "up")
+    _commit_file(repo, "up.md", "run it from /home/alice/project\n", "upstream leak")
+    _git(repo, "checkout", "-q", "main")
+    _commit_file(repo, "doc.md", "nothing private here\n", "local")
+    r = run_cli(["--repo", str(repo), "--range", "up...main", "--visibility", "public",
+                 "--json"], tmp_path)
+    assert r.returncode == 0, r.stdout + r.stderr
+    assert json.loads(r.stdout)["data"]["examined_lines"] == 1
+
+
+def test_a_symmetric_range_still_refuses_a_leak_on_the_pushed_side(tmp_path):
+    """Control for the test above: the fix narrows the scan to one side, not to nothing."""
+    repo = _repo(tmp_path)
+    _git(repo, "checkout", "-qb", "up")
+    _commit_file(repo, "up.md", "nothing private here\n", "upstream")
+    _git(repo, "checkout", "-q", "main")
+    _commit_file(repo, "doc.md", "run it from /home/alice/project\n", "local leak")
+    r = run_cli(["--repo", str(repo), "--range", "up...main", "--visibility", "public",
+                 "--json"], tmp_path)
+    assert r.returncode == 1, r.stdout + r.stderr
+
+
+def test_a_range_that_only_removes_a_leak_is_pushable(tmp_path):
+    """A cleanup commit adds nothing, so zero ADDED lines is its correct count, not a sign that
+    the range was empty. Refusing it would make the leak unfixable through this gate."""
+    repo = _repo(tmp_path, remote="git@github.com:owner/repo.git")
+    _commit_file(repo, "doc.md", "run it from /home/alice/project\nkeep\n", "leak")
+    _commit_file(repo, "doc.md", "keep\n", "remove the leak")
+    r = run_cli(["--repo", str(repo), "--range", "HEAD~1..HEAD", "--visibility", "public",
+                 "--json"], tmp_path)
+    assert r.returncode == 0, r.stdout + r.stderr
+    env = json.loads(r.stdout)
+    assert env["ok"] is True
+    assert "removes 1 line" in env["data"]["reason"], env["data"]["reason"]
+
+
+def test_a_removal_beside_an_unscanned_binary_addition_is_not_called_safe(tmp_path):
+    """Zero added TEXT lines is safe only when the range adds nothing else. A binary file is
+    never scanned, so a cleanup that also adds one must stay a refusal, not a clean pass."""
+    repo = _repo(tmp_path)
+    _commit_file(repo, "doc.md", "a\nb\n", "base")
+    (repo / "doc.md").write_text("a\n", encoding="utf-8")
+    (repo / "blob.bin").write_bytes(b"\x00\x01/home/alice/secret\x00")
+    _git(repo, "add", "doc.md", "blob.bin")
+    _git(repo, "commit", "-qm", "remove a line, add a binary")
+    r = run_cli(["--repo", str(repo), "--range", "HEAD~1..HEAD", "--visibility", "public",
+                 "--json"], tmp_path)
+    assert r.returncode == 2, r.stdout + r.stderr
+
+
+def test_a_removal_only_range_still_needs_a_known_visibility():
+    v = PC.decide(visibility=None, findings=[], examined_lines=0, removed_lines=3)
+    assert not v.ok and v.exit_code == 2
+
+
+def test_a_range_with_neither_added_nor_removed_lines_still_refuses():
+    v = PC.decide(visibility="public", findings=[], examined_lines=0, removed_lines=0)
+    assert not v.ok and v.exit_code == 2
+
+
 # ---- the diff parser: headers only where a header can be -----------------------------------
 
 def test_an_added_line_that_begins_with_two_plus_signs_is_scanned():
@@ -377,6 +442,8 @@ def test_a_non_ascii_path_is_reported_by_its_real_name_and_can_be_excluded(tmp_p
     r'{"root": "C:\\Users\\alice\\proj"}',          # JSON-escaped
     r"c:\users\alice\proj",                           # lowercase
     r"D:\USERS\alice\proj",
+    "c:/users/alice/proj",                            # forward slashes, lowercase
+    "D:/USERS/alice/proj",
 ])
 def test_a_windows_user_path_is_found_in_every_spelling(text):
     hits = PC.scan_text(text, "cfg.json")

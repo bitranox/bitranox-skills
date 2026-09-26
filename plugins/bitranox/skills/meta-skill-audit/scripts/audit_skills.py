@@ -465,10 +465,13 @@ def hook_registration(room, rel):
     """The hooks.json entries that invoke `rel`, as [(event, matcher, command)], or None.
 
     The file name must stand as a whole path component: a substring test credits `tell-sweep.py`
-    with every entry for `commit-tell-sweep.py` and hands its reviewer the wrong event contract."""
+    with every entry for `commit-tell-sweep.py` and hands its reviewer the wrong event contract.
+    "Whole" means no file-name character (letter, digit, `_`, `-`, `.`) on either side, so shell
+    punctuation around it - `gate.py;`, `gate.py&&`, `(gate.py)`, a pipe or redirect - still counts:
+    a list of accepted neighbours missed those, and the reviewer was told the hook never fires."""
     path = Path(room) / "hooks" / "hooks.json"
     name = str(rel).replace("\\", "/").split("/")[-1]
-    whole = re.compile(r"(?:^|[/\\\"'\s])" + re.escape(name) + r"(?=[\"'\s]|$)")
+    whole = re.compile(r"(?<![\w.-])" + re.escape(name) + r"(?![\w.-])")
     if not path.is_file():
         return None
     try:
@@ -532,10 +535,13 @@ def sibling_tests(room, rel, limit=3):
     return out[:limit]
 
 
-_FINDING_RX = re.compile(r"^FINDING:\s*([A-Z-]+)\s*\|\s*([^|]+?)\s*\|", re.M)
 # A finding is a LINE that starts with the label. A substring count also counted the label quoted
 # inside a claim, and the missing-report marker's own sentence, which said "no FINDING: line".
-_FINDING_LINE_RX = re.compile(r"^[ \t]*FINDING:", re.M)
+# Counting and parsing share this one prefix: when only the counter allowed indentation, an
+# indented finding was counted but never classed and its exhibits were never checked.
+_FINDING_PREFIX = r"^[ \t]*FINDING:"
+_FINDING_LINE_RX = re.compile(_FINDING_PREFIX, re.M)
+_FINDING_RX = re.compile(_FINDING_PREFIX + r"\s*([A-Z-]+)\s*\|\s*([^|]+?)\s*\|", re.M)
 _EXHIBIT_LINE_RX = re.compile(r"^\s+(\d+):\s?(.*)$")
 
 
@@ -619,7 +625,11 @@ def evidence_problems(text, room):
     The skill sweep needs a human to `grep -F` each quote; at 134 targets that does not happen, so
     the same rule is enforced here mechanically. The result is APPENDED to the report and never used
     to delete a finding: deleting hides a reviewer that is malfunctioning, and the count of
-    unverifiable findings is itself the signal for whether the prompt is working."""
+    unverifiable findings is itself the signal for whether the prompt is working.
+
+    A counted finding line that does not follow the `FINDING: <CLASS> | <path> | <claim>` format is
+    reported too, and its exhibits are left unchecked rather than checked against the file of the
+    finding before it."""
     room = Path(room)
     problems, current, cache = [], None, {}
     for raw in physical_lines(text):
@@ -627,6 +637,11 @@ def evidence_problems(text, room):
         if head:
             current = head.group(2).rsplit(":", 1)[0] if ":" in head.group(2) else head.group(2)
             current = current.strip()
+            continue
+        if _FINDING_LINE_RX.match(raw):
+            problems.append("finding line is not in the FINDING: <CLASS> | <path> | <claim> "
+                            "format, so its exhibits were not checked: %s" % raw.strip()[:120])
+            current = None
             continue
         hit = _EXHIBIT_LINE_RX.match(raw)
         if not hit or current is None or not raw.strip():

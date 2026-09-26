@@ -13,6 +13,9 @@ Rules applied:
 - Leaves a table alone when its indentation makes it an indented code block
 - Reformats tables inside ```markdown / ```md fenced code blocks
 - Skips tables inside all other fenced code blocks, including one nested in a markdown fence
+- Recognises fences the CommonMark way: an opener or closer sits less than four columns into its
+  block, a backtick fence's info string holds no backtick (so a line opening with an inline span
+  such as ```x``` is prose), and a closer is bare and at least as long as its opener
 - Keeps the file's line endings (CRLF stays CRLF) and a leading UTF-8 BOM
 
 Usage:
@@ -53,8 +56,8 @@ EXIT_OK = 0
 EXIT_FINDING = 1
 EXIT_ERROR = 2
 
-_FENCE_OPEN_RX = re.compile(r"^(`{3,}|~{3,})")
-_FENCE_CLOSE_RX = re.compile(r"^(`{3,}|~{3,})\s*$")
+# A fence line with its indentation removed: the marker run, then the rest (the info string).
+_FENCE_RX = re.compile(r"^(`{3,}|~{3,})(.*)$")
 # A list item marker and the whitespace after it; group(0) ends where the item's content starts.
 _LIST_ITEM_RX = re.compile(r"^[ \t]*(?:[-*+]|\d{1,9}[.)])(?:[ \t]+|$)")
 # CommonMark: four columns of indentation beyond the enclosing block's content make a code block.
@@ -228,7 +231,7 @@ def reformat_table(lines):
     return result
 
 
-def _strip_blockquote(line):
+def strip_blockquote(line):
     """Strip blockquote prefix (``> ``) from a line.
 
     Returns (prefix, rest) where *prefix* is the blockquote marker(s)
@@ -255,18 +258,15 @@ def _indent_columns(line):
     return len(_leading_whitespace(line).expandtabs(_TAB_WIDTH))
 
 
-def _is_indented_code(lines, index, floor, base_columns):
-    """Whether the line at `index` is indented code rather than a table row.
+def _container_columns(lines, index, floor, base_columns):
+    """The column where the block holding the line at `index` starts its content.
 
-    Four columns beyond the enclosing block make an indented code block in CommonMark, so a
-    pipe table written that way is an example, not a table. Inside a list item the enclosing
-    block is the item's content, which starts after its marker, so a table indented to sit in
-    the item is not code. The walk goes back to the nearest less-indented line: a list item
-    decides by its content column, top-level text means there is no list to belong to.
+    Inside a list item that is the item's content column, after its marker; otherwise it is
+    `base_columns` (the page margin, or the indentation of an enclosing markdown fence). The walk
+    goes back, no further than `floor`, to the nearest less-indented line: a list item decides by
+    its content column, top-level text means there is no list to belong to.
     """
     columns = _indent_columns(lines[index])
-    if columns - base_columns < _CODE_INDENT:
-        return False
     for j in range(index - 1, floor, -1):
         prior = lines[j]
         if not prior.strip():
@@ -279,34 +279,123 @@ def _is_indented_code(lines, index, floor, base_columns):
             content_columns = len(item.group(0).expandtabs(_TAB_WIDTH))
             if not item.group(0).endswith((" ", "\t")):
                 content_columns += 1
-            return columns - content_columns >= _CODE_INDENT
+            return content_columns
         if prior_columns <= base_columns:
-            return True
-    return True
+            return base_columns
+    return base_columns
+
+
+def is_indented_code(lines, index, floor, base_columns):
+    """Whether the line at `index` is indented code rather than a table row or a fence.
+
+    Four columns beyond the enclosing block make an indented code block in CommonMark, so a
+    pipe table written that way is an example, not a table. Inside a list item the enclosing
+    block is the item's content, so a table indented to sit in the item is not code.
+    """
+    columns = _indent_columns(lines[index])
+    if columns - base_columns < _CODE_INDENT:
+        return False
+    return columns - _container_columns(lines, index, floor, base_columns) >= _CODE_INDENT
 
 
 class _Fence:
-    """An open fenced code block: its marker, and whether its content is markdown."""
+    """An open fenced code block: its marker, whether its content is markdown, and the content
+    column of the block it sits in (a closer must be within three columns of that too)."""
 
-    def __init__(self, marker, info, index, columns):
+    def __init__(self, marker, info, columns, container):
         self.char = marker[0]
         self.length = len(marker)
         lang = info.split()[0].lower() if info else ""
         self.markdown = lang in ("markdown", "md")
-        self.index = index
         self.columns = columns
+        self.container = container
 
-    def closed_by(self, lstripped):
-        close = _FENCE_CLOSE_RX.match(lstripped)
-        return bool(close) and close.group(1)[0] == self.char and len(close.group(1)) >= self.length
+    def closed_by(self, line):
+        """CommonMark: the same character, at least as long, nothing after it but whitespace,
+        and indented less than four columns into the block. A deeper line is fence content."""
+        close = _FENCE_RX.match(line.lstrip())
+        if not close or close.group(2).strip():
+            return False
+        marker = close.group(1)
+        return (marker[0] == self.char and len(marker) >= self.length
+                and _indent_columns(line) - self.container < _CODE_INDENT)
 
 
-def _fence_opener(lstripped, index, columns):
-    match = _FENCE_OPEN_RX.match(lstripped)
+def _fence_opener(lines, index, floor, base_columns):
+    """The fence the line at `index` opens, or None.
+
+    CommonMark: a run of three or more backticks or tildes, indented less than four columns into
+    its block. A BACKTICK fence's info string may not contain a backtick - without that rule a
+    prose line opening with an inline span (```x``` ...) opens a fence that swallows the rest of
+    the file."""
+    line = lines[index]
+    match = _FENCE_RX.match(line.lstrip())
     if not match:
         return None
-    marker = match.group(1)
-    return _Fence(marker, lstripped[len(marker):].strip(), index, columns)
+    marker, info = match.group(1), match.group(2)
+    if marker[0] == "`" and "`" in info:
+        return None
+    if is_indented_code(lines, index, floor, base_columns):
+        return None
+    container = _container_columns(lines, index, floor, base_columns)
+    return _Fence(marker, info.strip(), _indent_columns(line), container)
+
+
+# What classify_lines says about one line.
+FENCE = "fence"      # a fence opener or closer
+LITERAL = "literal"  # inside a code fence whose content is not markdown
+TEXT = "text"        # markdown: where a table can be
+
+
+class LineClass:
+    """One line's classification. `floor` is the index of the last fence line above it (-1 when
+    none) and `base` the indentation of the markdown fence it sits in (0 at top level): the two
+    arguments `is_indented_code` needs to judge a candidate table row on this line."""
+
+    __slots__ = ("kind", "floor", "base")
+
+    def __init__(self, kind, floor, base):
+        self.kind = kind
+        self.floor = floor
+        self.base = base
+
+
+def classify_lines(lines):
+    """Classify every line (newline-free) as FENCE, LITERAL or TEXT: the one fence scanner both
+    this tool and tablekit.py use, so the two always agree on which lines may hold a table.
+
+    A fence tagged `markdown` or `md` holds a document of its own, so its lines are TEXT and a
+    fence nested in it is tracked too. Its own closer is checked FIRST, as a renderer of the outer
+    document does: a nested fence can never outlive the markdown fence it sits in.
+    """
+    classes = []
+    fence = None   # the open outer fence
+    inner = None   # a fence opened inside a markdown fence
+    floor = -1     # index of the last fence line, where the indented-code walk stops
+
+    for index, line in enumerate(lines):
+        kind = TEXT
+        if fence is None:
+            opener = _fence_opener(lines, index, floor, 0)
+            if opener is not None:
+                fence, kind = opener, FENCE
+        elif fence.closed_by(line):
+            fence, inner, kind = None, None, FENCE
+        elif not fence.markdown:
+            kind = LITERAL
+        elif inner is not None and inner.closed_by(line):
+            inner, kind = None, FENCE
+        elif inner is None:
+            opener = _fence_opener(lines, index, floor, fence.columns)
+            if opener is not None:
+                inner, kind = opener, FENCE
+        elif not inner.markdown:
+            kind = LITERAL
+        base = fence.columns if fence is not None and kind != FENCE else 0
+        classes.append(LineClass(kind, floor, base))
+        if kind == FENCE:
+            floor = index
+    return classes
 
 
 def _ragged_messages(filepath, first_line, contents):
@@ -352,9 +441,6 @@ def _reformat_lines(lines, filepath, warnings):
     result = []
     table_lines = []   # (indent, blockquote prefix, row content)
     table_start = [0]  # 1-based file line of the current table's first row
-    fence = None       # the open outer fence
-    inner = None       # a fence opened inside a markdown fence
-    boundary = [-1]    # index of the last fence line, where the indented-code walk stops
 
     def flush_table():
         if not table_lines:
@@ -367,51 +453,19 @@ def _reformat_lines(lines, filepath, warnings):
             result.append(indent + bq_prefix + fline)
         table_lines.clear()
 
-    for index, line in enumerate(lines):
-        lstripped = line.lstrip()
-        columns = _indent_columns(line)
-
-        if fence is None:
-            opener = _fence_opener(lstripped, index, columns)
-            if opener is not None:
-                flush_table()
-                fence, boundary[0] = opener, index
-                result.append(line)
-                continue
-        elif fence.closed_by(lstripped):
+    for index, (line, cls) in enumerate(zip(lines, classify_lines(lines), strict=True)):
+        if cls.kind != TEXT:
+            # Flushing at a fence line keeps a pending table above it, where it was.
             flush_table()
-            fence, inner, boundary[0] = None, None, index
             result.append(line)
             continue
-        elif not fence.markdown:
-            result.append(line)
-            continue
-        else:
-            # Inside a markdown fence the content is a document of its own, so a fence there opens
-            # or closes a nested block. Flushing first keeps the pending table above the fence line.
-            if inner is not None and inner.closed_by(lstripped):
-                flush_table()
-                inner, boundary[0] = None, index
-                result.append(line)
-                continue
-            if inner is None:
-                opener = _fence_opener(lstripped, index, columns)
-                if opener is not None:
-                    flush_table()
-                    inner, boundary[0] = opener, index
-                    result.append(line)
-                    continue
-            if inner is not None and not inner.markdown:
-                result.append(line)
-                continue
 
         # Collect table rows (must start with | and contain at least one more |)
         # Also detect tables inside blockquotes (> | ... |)
-        bq_prefix, table_content = _strip_blockquote(line.strip())
+        bq_prefix, table_content = strip_blockquote(line.strip())
         is_row = table_content.startswith("|") and "|" in table_content[1:]
         if is_row and not table_lines:
-            base = fence.columns if fence is not None else 0
-            is_row = not _is_indented_code(lines, index, boundary[0], base)
+            is_row = not is_indented_code(lines, index, cls.floor, cls.base)
         if is_row:
             if not table_lines:
                 table_start[0] = index + 1

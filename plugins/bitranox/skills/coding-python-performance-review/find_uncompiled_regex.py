@@ -75,11 +75,23 @@ def _finding(file_path, call, name):
     }
 
 
+def _scoped_children(node, in_function):
+    """(child, runs inside a function body) for each child of *node*.
+
+    Only a function's BODY runs on every call. Its decorators, default values and annotations
+    run where the def or lambda itself runs - once at module level, once per call of an
+    enclosing function - so they keep the enclosing scope's answer."""
+    if not isinstance(node, _FUNCTION_NODES):
+        return [(child, in_function) for child in ast.iter_child_nodes(node)]
+    body = node.body if isinstance(node.body, list) else [node.body]
+    body_ids = {id(stmt) for stmt in body}
+    return [(child, in_function or id(child) in body_ids) for child in ast.iter_child_nodes(node)]
+
+
 def _calls_in_function_bodies(tree):
-    """Yield every Call that sits inside a def, async def or lambda (at any depth)."""
+    """Yield every Call that runs each time a def, async def or lambda body runs."""
     def walk(node, in_function):
-        for child in ast.iter_child_nodes(node):
-            inside = in_function or isinstance(child, _FUNCTION_NODES)
+        for child, inside in _scoped_children(node, in_function):
             if inside and isinstance(child, ast.Call):
                 yield child
             yield from walk(child, inside)

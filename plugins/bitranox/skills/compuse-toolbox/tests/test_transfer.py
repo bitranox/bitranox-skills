@@ -1,6 +1,7 @@
 """Is it stalled, or is my instrument lying? The jig must never answer from one signal."""
 from __future__ import annotations
 
+import argparse
 import functools
 import http.server
 import os
@@ -312,6 +313,28 @@ class TestReadCommandNumber:
     def test_a_missing_program_is_unreadable(self):
         assert pc.read_command_number("no-such-program-xyz-123") is None
 
+    @pytest.mark.parametrize(("text", "value"), [
+        ("1,234,567 bytes", 1234567.0), ("rx 12,345.5", 12345.5), ("-1,000", -1000.0)])
+    def test_a_thousands_separated_number_is_read_whole(self, text, value):
+        """`1,234,567` read as 1 makes a moving counter look flat, and flat reads as STALLED."""
+        assert pc.read_command_number(_py(f"print({text!r})")) == value
+
+    @pytest.mark.parametrize(("text", "value"), [
+        ("42,17", 42.0), ("1,2,3", 1.0), ("1,2345", 1.0), ("1,234,56", 1.0)])
+    def test_a_comma_list_is_not_mistaken_for_grouping(self, text, value):
+        """Only exact three-digit groups are grouping; anything else keeps its first field."""
+        assert pc.read_command_number(_py(f"print({text!r})")) == value
+
+    def test_a_growing_grouped_counter_is_advancing_end_to_end(self, tmp_path):
+        counter = tmp_path / "n"
+        code = ("import pathlib; p = pathlib.Path(%r); n = int(p.read_text()) if p.exists() "
+                "else 1234567; p.write_text(str(n + 1000)); print(f'{n:,} bytes')") % str(counter)
+        f = tmp_path / "static.bin"
+        f.write_bytes(b"x")
+        p = _run("check", "--file", str(f), "--cmd", _py(code), "--interval", "0")
+        assert p.returncode == 0, p.stdout + p.stderr
+        assert "ADVANCING" in p.stdout
+
 
 class TestCommandArgument:
     @pytest.mark.parametrize("cmd", ["ls -l dev.txt | awk '{print $5}'", "cat f && echo 1",
@@ -326,6 +349,37 @@ class TestCommandArgument:
     def test_an_operator_inside_one_quoted_remote_argument_is_fine(self):
         cmd = _join(["ssh", "host", "cat /proc/net/dev | grep eth0"])
         assert pc.command_argument(cmd) == cmd
+
+    @pytest.mark.parametrize("cmd", [
+        "sh -c 'grep eth0 /proc/net/dev;'", "sh -c 'a; b'", "find . -exec stat {} ';'",
+        r"find . -exec stat {} \;", 'sh -c "grep x f;"'])
+    def test_a_quoted_or_escaped_operator_is_literal_and_accepted(self, cmd):
+        """The wrapper the refusal itself recommends, and find's `\\;`, are not shell syntax."""
+        assert pc.command_argument(cmd) == cmd
+
+    @pytest.mark.parametrize("cmd", ["echo a|wc -l", "cat f>out", "a&b", "echo 1;"])
+    def test_an_unquoted_operator_glued_to_a_word_is_refused(self, cmd):
+        with pytest.raises(argparse.ArgumentTypeError, match="shell syntax"):
+            pc.command_argument(cmd)
+
+
+class TestShellOperatorsWindowsRules:
+    """Windows quoting has double quotes only; a backslash escapes nothing but a quote.
+
+    Checked through the scanner's own `windows=` flag, so it runs on every platform.
+    """
+
+    @pytest.mark.parametrize(("cmd", "found"), [
+        ('ssh host "a | b"', []), ("ssh host 'a | b'", ["|"]), (r'x "a\" | b"', []),
+        (r'x "a\\" | b', ["|"]), ("cmd /c a & b", ["&"]), (r"C:\x.exe --n", [])])
+    def test_windows_quoting(self, cmd, found):
+        assert pc.shell_operators(cmd, windows=True) == found
+
+    @pytest.mark.parametrize(("cmd", "found"), [
+        ("ssh host 'a | b'", []), (r"find . -exec x {} \;", []), ("a && b", ["&&"]),
+        ("stat f 2>&1", [">&"]), ("x 'it''s' ; y", [";"])])
+    def test_posix_quoting(self, cmd, found):
+        assert pc.shell_operators(cmd, windows=False) == found
 
     def test_help_does_not_promise_a_shell(self):
         help_text = " ".join(_run("check", "--help").stdout.split())  # immune to line wrapping

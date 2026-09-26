@@ -29,9 +29,12 @@ The candidate list is informational and never on its own sets exit 1.
 The baseline lives in the store the ENGINE uses (the topmost dir with a `CLAUDE.md` and a store,
 see tree_support), never merely the nearest one.
 
-Run (from the plugin root, via the launcher that forces UTF-8):
-  `bash hooks/run-python.sh skills/meta-dream-tree/statusrot.py scan --chain /path/to/project`
-  `bash hooks/run-python.sh skills/meta-dream-tree/statusrot.py scan --level a/CLAUDE.local.md --json`
+Run (from the plugin root):
+  `uv run skills/meta-dream-tree/statusrot.py scan --chain /path/to/project`
+  `uv run skills/meta-dream-tree/statusrot.py scan --level a/CLAUDE.local.md --json`
+It needs no third-party package, runs no command of the caller's, and sets UTF-8 on its own output
+streams, so any Python 3.10+ runs it identically - the plugin's run-python.sh launcher, which the
+dream passes use, included.
 """
 from __future__ import annotations
 
@@ -50,12 +53,12 @@ from pathlib import Path
 # facts a level holds - including a dotted slug, which a hand-rolled [a-z0-9-]+ silently skips
 # and so mistakes its body for an orphan.
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "hooks"))
-import uuid_store  # noqa: E402
+import uuid_store
 
 # tree_support is this script's sibling; a caller loading the script by path does not put this
 # dir on sys.path the way running it directly does.
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from tree_support import store_anchor, utf8_stdio  # noqa: E402
+from tree_support import store_anchor, utf8_stdio
 
 PATTERNS: dict[str, re.Pattern[str]] = {
     "SHIPPED": re.compile(
@@ -139,16 +142,36 @@ def self_contradiction(ptr: Pointer) -> str | None:
     return None
 
 
+class LevelUnreadable(Exception):
+    """A level that could not be read; the message names its path and the reason."""
+
+
+def _read_level(path: Path) -> str:
+    """The text of one level, or LevelUnreadable naming the path.
+
+    A decode error's own text names a codec and a byte offset but never the file, so over a chain
+    of levels it said which byte was bad and not where. A BOM is accepted (utf-8-sig), since it
+    would otherwise hide a pointer on line one.
+    """
+    try:
+        return Path(path).read_text(encoding="utf-8-sig")
+    except UnicodeDecodeError as exc:
+        raise LevelUnreadable(f"cannot read {path}: not UTF-8 ({exc.reason} at byte "
+                              f"{exc.start})") from exc
+    except OSError as exc:
+        raise LevelUnreadable(f"cannot read {path}: {exc.strerror or exc}") from exc
+
+
 def scan(levels: list[Path]) -> ScanResult:
     """Scan the given CLAUDE.local.md files.
 
-    Raises OSError on a missing or unreadable level and UnicodeDecodeError on one that is not
-    UTF-8; a BOM is accepted (utf-8-sig), since it would otherwise hide a pointer on line one.
+    Raises LevelUnreadable, naming the path, on a missing or unreadable level or one that is not
+    UTF-8.
     """
     result = ScanResult()
     flagged: set[str] = set()
     for path in levels:
-        text = Path(path).read_text(encoding="utf-8-sig")
+        text = _read_level(path)
         for ptr in parse_pointers(text, level=Path(path).parent.name or str(path)):
             result.total_pointers += 1
             for kind in classify(ptr):
@@ -354,6 +377,12 @@ def _record_cleared(result: "ScanResult", cleared: dict[str, dict[str, str]],
     A slug held at several levels is recorded with the digest of EVERY copy, so an edit to any
     one of them comes back. The level recorded is the narrowest copy's (the chain is walked
     narrow to broad), which is the one the triage dates its sweep by.
+
+    The new digests are ADDED to the ones the record already vouched for, never swapped in: a
+    clear scoped to one level sees only that level's copies, and a record rebuilt from them
+    alone forgot the copy at a level outside the scope, so the next full scan reported that
+    untouched copy as RE-SURFACED. A digest names one exact hook text, so keeping an old one
+    vouches only for that text, which a human did check.
     """
     level_of: dict[str, str] = {}
     for ptrs in result.by_kind.values():
@@ -365,12 +394,14 @@ def _record_cleared(result: "ScanResult", cleared: dict[str, dict[str, str]],
         if wanted and slug not in wanted:
             continue
         prior = cleared.get(slug)
-        if prior and digests <= cleared_digests(prior):
+        vouched = cleared_digests(prior) if prior else set()
+        if prior and digests <= vouched:
             continue
+        kept = sorted(digests | vouched)
         rec = {"level": level_of[slug], "hook_sha256": sorted(digests)[0],
                "cleared": today, "note": note}
-        if len(digests) > 1:
-            rec["hook_sha256s"] = sorted(digests)
+        if len(kept) > 1:
+            rec["hook_sha256s"] = kept
         cleared[slug] = rec
         added += 1
     return added
@@ -507,7 +538,7 @@ def main(argv: list[str] | None = None) -> int:
 
     try:
         result = scan(levels)
-    except (OSError, UnicodeDecodeError) as exc:
+    except LevelUnreadable as exc:
         return _usage_error(args, str(exc))
 
     anchor = args.chain or levels[0].parent

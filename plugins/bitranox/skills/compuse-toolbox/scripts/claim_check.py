@@ -26,8 +26,8 @@ listed, so a reader can see which ones the gate did not vouch for.
 Verdicts and exit codes (format-independent):
   PRESENT  0   the pattern matched; matching path:line:text are reported
   ABSENT   1   the pattern did not match AND the control did, and every path was read
-  BROKEN   2   the control missed, a path could not be read, the regex is invalid, or the tool
-               itself failed - answer withheld
+  BROKEN   2   the control missed, a path could not be read and nothing matched, the regex is
+               invalid, or the tool itself failed - answer withheld
 
 Run: uv run scripts/claim_check.py FILE... --pattern REGEX --control REGEX [--json] [--case-sensitive]
      uv run scripts/claim_check.py skills/*/SKILL.md --pattern 'LC_ALL=C' --control 'git'

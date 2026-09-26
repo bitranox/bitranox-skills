@@ -268,10 +268,14 @@ def run_main_bg(monkeypatch, command, background):
     ("label", "command"),
     [
         ("make test with the safe redirect", 'make test > log 2>&1; echo "RC=$?" >> log; tail log'),
-        ("make push", "make push ARGS='fix: x'"),
-        ("ci_wait", "uv run ci_wait.py --sha deadbeef"),
-        ("gh run watch", "gh run watch 123"),
-        ("pytest", "pytest tests/ -q > out.log"),
+        ("gh run watch without --exit-status", "gh run watch 123"),
+        ("a pipe into tee", "pytest tests/ -q | tee out.log"),
+        ("an echo after &&", "make test && echo done"),
+        ("a newline, then tail", "make test > log 2>&1\ntail log"),
+        ("or-true", "make test || true"),
+        ("a trailing ampersand", "make test > log 2>&1 &"),
+        ("a second gate after the first", "make test; make lint"),
+        ("ci_wait then a status echo", 'uv run ci_wait.py --sha deadbeef; echo "RC=$?"'),
     ],
 )
 def test_a_backgrounded_gate_without_the_jig_is_blocked(monkeypatch, capsys, label, command):
@@ -280,7 +284,9 @@ def test_a_backgrounded_gate_without_the_jig_is_blocked(monkeypatch, capsys, lab
     The safe-redirect case is deliberately in this list. It is the form the memory entry
     recommends, and it is the exact command that produced the 2026-09-02 miss: written
     correctly, then misreported from the notice before the log was ever opened. Backgrounding
-    is what makes the notice the thing you read, so the redirect does not rescue it.
+    is what makes the notice the thing you read, so the redirect does not rescue it. `gh run
+    watch` is here with nothing after it because it exits 0 whatever the run concluded unless
+    it is given --exit-status, so its own status is not a verdict either.
     """
     assert run_main_bg(monkeypatch, command, True) == 2
     assert "BLOCKED: a backgrounded gate" in capsys.readouterr().err
@@ -296,6 +302,17 @@ def test_a_backgrounded_gate_without_the_jig_is_blocked(monkeypatch, capsys, lab
         ("foreground gate", 'make test > log 2>&1; echo "RC=$?" >> log', False),
         ("field absent entirely", "make test", None),
         ("backgrounded non-gate", "rsync -a src/ dst/ > sync.log 2>&1", True),
+        # Nothing runs after the gate, so the task's exit code IS the gate's.
+        ("make push alone", "make push ARGS='fix: x'", True),
+        ("ci_wait alone, sha from a substitution",
+         'python3 /p/skills/compuse-toolbox/scripts/ci_wait.py --sha "$(git rev-parse --verify HEAD)"',
+         True),
+        ("ci_wait after a cd", "cd /some/dir && uv run /p/scripts/ci_wait.py --sha deadbeef", True),
+        ("gh run watch with --exit-status", "gh run watch 123 --exit-status", True),
+        ("a lone redirected gate", "pytest tests/ -q > out.log 2>&1", True),
+        ("a gate continued over two lines", "pytest tests/ \\\n  -q > out.log 2>&1", True),
+        ("a trailing comment", "make test > log 2>&1  # the unit suite; slow", True),
+        ("a trailing newline", "make test > log 2>&1\n", True),
     ],
 )
 def test_what_the_background_block_must_never_refuse(monkeypatch, label, command, background):
@@ -323,7 +340,7 @@ def test_the_background_block_launches_the_jig_the_way_the_jig_says(monkeypatch,
     """gate.py's own docstring: plain python3, NOT uv run - under uv run the gate inherits uv's
     isolated interpreter, so a `python3 -m pytest` gate reads RED. The block told a reader to
     run exactly that, as the one safe way out of the refusal it had just issued."""
-    assert run_main_bg(monkeypatch, "pytest tests/ -q > out.log", True) == 2
+    assert run_main_bg(monkeypatch, "pytest tests/ -q > out.log; tail out.log", True) == 2
     line = _suggested_jig_line(capsys.readouterr().err)
     assert not line.startswith("uv run"), line
     plain = "python" if os.name == "nt" else "python3"
@@ -334,7 +351,7 @@ def test_the_background_block_and_the_nudge_name_the_same_launch(monkeypatch, ca
     """Two hooks name the jig; the pin keeps them from drifting apart again."""
     import toolbox_nudge as N  # noqa: PLC0415 - the sibling hook is the oracle for this test only
 
-    assert run_main_bg(monkeypatch, "pytest tests/ -q > out.log", True) == 2
+    assert run_main_bg(monkeypatch, "pytest tests/ -q > out.log; tail out.log", True) == 2
     line = _suggested_jig_line(capsys.readouterr().err)
     nudge_cmd, _note = N.launch_command(N._shipped_dir() / "gate.py")
     assert line.split()[0] == nudge_cmd.split()[0], (line, nudge_cmd)
@@ -343,7 +360,50 @@ def test_the_background_block_and_the_nudge_name_the_same_launch(monkeypatch, ca
 def test_the_background_block_quotes_the_gate_the_way_every_platform_splits(monkeypatch, capsys):
     """gate.py: quote --gate with DOUBLE quotes - a Windows command line has no single-quoting, so
     `--gate '<cmd>'` arrives as broken argv there."""
-    assert run_main_bg(monkeypatch, "pytest tests/ -q > out.log", True) == 2
+    assert run_main_bg(monkeypatch, "pytest tests/ -q > out.log; tail out.log", True) == 2
     err = capsys.readouterr().err
     assert "--gate '" not in err and "--then '" not in err, err
     assert '--gate "' in err, err
+
+
+def test_the_background_block_names_no_drive_relative_log_path(monkeypatch, capsys):
+    """`/tmp/...` is DRIVE-RELATIVE on Windows (gate.py says so), and a fixed shared log name is
+    the very hazard gate.py's fresh per-invocation default exists to remove."""
+    assert run_main_bg(monkeypatch, "pytest tests/ -q > out.log; tail out.log", True) == 2
+    err = capsys.readouterr().err
+    assert "/tmp/" not in err, err
+    assert "--log" not in _suggested_jig_line(err), err
+
+
+@pytest.mark.parametrize("background", [True, False])
+def test_the_jig_launched_under_uv_run_gets_an_advisory(monkeypatch, capsys, background):
+    """gate.py declares LAUNCH_WITH = python3: under `uv run` a child `python3 -m pytest` gate
+    resolves to uv's throwaway env and reads a false RED. Not a block - the result errs RED."""
+    rc = run_main_bg(monkeypatch, 'uv run /p/scripts/gate.py --gate "make test"', background)
+    assert rc == 0
+    context = json.loads(capsys.readouterr().out)["hookSpecificOutput"]["additionalContext"]
+    assert "uv run" in context and "gate.py" in context
+
+
+@pytest.mark.parametrize("command", [
+    "uv run --with pytest python plugins/bitranox/hooks/repo-gate.py --ci > log 2>&1; tail log",
+    "uv run --with pytest python -m pytest tests/test_gate.py > log 2>&1; tail log",
+])
+def test_a_file_merely_ending_in_gate_py_is_not_the_jig(monkeypatch, capsys, command):
+    """`\\bgate\\.py` matched inside `repo-gate.py`, which both exempted a masked backgrounded
+    gate as if it ran through the jig and drew the uv-run advisory for a different program."""
+    assert run_main_bg(monkeypatch, command, True) == 2
+    assert capsys.readouterr().out == ""
+
+
+def test_the_jig_under_a_plain_interpreter_gets_no_advisory(monkeypatch, capsys):
+    assert run_main_bg(monkeypatch, 'python3 /p/scripts/gate.py --gate "make test"', True) == 0
+    assert capsys.readouterr().out == ""
+
+
+def test_both_advisories_arrive_as_one_json_document(monkeypatch, capsys):
+    """Claude Code reads ONE JSON document from a hook's stdout; two lines of JSON is neither."""
+    command = 'foo | tail -3; echo "rc=$?"; uv run /p/scripts/gate.py --gate "make test"'
+    assert run_main_bg(monkeypatch, command, False) == 0
+    context = json.loads(capsys.readouterr().out)["hookSpecificOutput"]["additionalContext"]
+    assert "MASKED EXIT STATUS" in context and "uv run" in context

@@ -37,9 +37,12 @@ uv run --with httpx2 scripts/generate_schematic.py "Data pipeline overview" -o p
 figure); `--iterations` caps the regenerate loop.
 
 Exit status of `generate_schematic_ai.py`: 0 the kept image met the `--doc-type` threshold; 1 no
-image, an image whose review failed, or a best image still below the threshold - the image is
-written in those last two cases, so check the exit code, not just the file; 2 a usage error. The
-review is scored by its TOTAL (`SCORE: n/10`), never by a per-criterion score such as `2/2`.
+image, an image whose review failed with no earlier reviewed image to fall back on, or a best
+image still below the threshold - the image is written in those last two cases, so check the
+exit code, not just the file; 2 a usage error. The image kept is the best-scoring REVIEWED one:
+a retry whose review failed never displaces it. The threshold is numeric, so a kept image scoring
+at or above it exits 0 even when the reviewer's verdict said NEEDS_IMPROVEMENT. The review is
+scored by its TOTAL (`SCORE: n/10`), never by a per-criterion score such as `2/2`.
 
 ## Common mistakes
 

@@ -201,6 +201,17 @@ def test_body_description_is_empty_for_an_unframed_body():
     assert FE.body_description("just prose\n") == ""
 
 
+def test_body_type_reads_the_frame_and_nothing_else():
+    """The engine's rule: only a CLOSED leading block with a `name:` key is frontmatter. A body
+    opening with a horizontal rule has no frame, so an indented `type:` in its prose is not its
+    kind - reading it there reported a type the engine does not see."""
+    framed = "---\nname: s\ndescription: d\nmetadata:\n  type: feedback\n---\n\nprose\n"
+    assert FE.body_type(framed) == "feedback"
+    assert FE.body_type(framed.replace("\n", "\r\n")) == "feedback"
+    assert FE.body_type("---\nSome text\n  type: feedback\n") == ""
+    assert FE.body_type("---\nno name key\n  type: feedback\n---\nprose\n") == ""
+
+
 # ---- tree walking -------------------------------------------------------------------------------
 
 def test_chain_levels_finds_every_level_narrowest_first(tmp_path):

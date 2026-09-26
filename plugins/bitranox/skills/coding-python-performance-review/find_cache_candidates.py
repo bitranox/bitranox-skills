@@ -1,5 +1,9 @@
 """Find pure, expensive functions that might benefit from caching (AST heuristic).
 
+A function that returns a mutable container it builds (a list, dict, set or ndarray, or a name
+bound to one) is not reported even when pure: lru_cache would hand every caller the same
+object, so one caller's edit would change every later result.
+
 Usage: python find_cache_candidates.py FILE [FILE ...]
 
 Exit codes: 0 every file was scanned (whether or not candidates were found), 2 at least one
@@ -14,12 +18,22 @@ import sys
 # A call through any of these names makes the function impure (I/O, state, or a clock).
 _IMPURE_NAME_CALLS = frozenset({'print', 'open', 'input', 'write',
                                 'time', 'perf_counter', 'monotonic', 'process_time'})
-_IMPURE_ATTR_CALLS = frozenset({'write', 'read', 'append', 'execute',
+_IMPURE_ATTR_CALLS = frozenset({'write', 'read', 'execute',
                                 'now', 'today', 'utcnow', 'random', 'randint',
                                 'time', 'time_ns', 'perf_counter', 'perf_counter_ns',
                                 'monotonic', 'monotonic_ns', 'process_time'})
 # Calling anything on these modules runs a process: never deterministic, never side-effect free.
 _IMPURE_MODULES = frozenset({'subprocess'})
+# Methods that change the object they are called on (list, dict, set, deque, bytearray, ndarray).
+# Called on a container the function created, they are local work; on anything else - a
+# parameter, a global, self.x - they are a side effect the caller sees.
+_MUTATING_METHODS = frozenset({
+    'append', 'extend', 'insert', 'remove', 'pop', 'clear', 'sort', 'reverse',
+    'update', 'setdefault', 'popitem',
+    'add', 'discard', 'difference_update', 'intersection_update', 'symmetric_difference_update',
+    'appendleft', 'extendleft', 'popleft', 'rotate',
+    'fill', 'resize', 'put', 'itemset',
+})
 
 
 def _is_impure_call(node):
@@ -39,6 +53,15 @@ _FRESH_CONTAINER_CALLS = frozenset({'list', 'dict', 'set', 'bytearray',
                                     'Counter', 'OrderedDict', 'deque', 'defaultdict'})
 _FRESH_ELEMENT_FACTORIES = frozenset({'list', 'dict', 'set', 'bytearray'})
 _INFINITE = float('inf')
+# numpy constructors that allocate a new array from a shape or a fill value. Indexing an
+# ndarray at any depth (a[i], a[i][j], a[i, j]) lands in that one new buffer. Recognised on
+# the conventional module names only: the scan sees one function, not the file's imports.
+_NUMPY_MODULES = frozenset({'np', 'numpy'})
+_NUMPY_NEW_ARRAYS = frozenset({'zeros', 'ones', 'empty', 'full', 'zeros_like', 'ones_like',
+                               'empty_like', 'full_like', 'arange', 'identity', 'eye'})
+# Calls whose result is a NEW mutable object: returning one from a cached function hands every
+# caller the same object.
+_NEW_MUTABLE_CALLS = _FRESH_CONTAINER_CALLS | {'sorted'}
 
 
 def _call_name(func):
@@ -72,7 +95,15 @@ def _fresh_depth(expr):
     return 0
 
 
+def _is_numpy_new_array(call):
+    func = call.func
+    return (isinstance(func, ast.Attribute) and func.attr in _NUMPY_NEW_ARRAYS
+            and isinstance(func.value, ast.Name) and func.value.id in _NUMPY_MODULES)
+
+
 def _fresh_call_depth(call):
+    if _is_numpy_new_array(call):
+        return _INFINITE
     name = _call_name(call.func)
     if name == 'copy' and isinstance(call.func, ast.Attribute) and not call.args:
         return 1  # x.copy(): a new container holding x's elements
@@ -100,16 +131,23 @@ def _not_new(target):
     return [(name, 0) for name in _target_names(target)]
 
 
-def _target_depths(target, value):
-    """Pair each name in *target* with the fresh depth of the value it receives."""
+def _target_values(target, value):
+    """Pair each name in *target* with the expression it receives, or None when unpacking
+    hides which part of *value* that is."""
     if isinstance(target, ast.Name):
-        return [(target.id, _fresh_depth(value))]
+        return [(target.id, value)]
     pairwise = (isinstance(target, (ast.Tuple, ast.List)) and isinstance(value, (ast.Tuple, ast.List))
                 and len(target.elts) == len(value.elts)
                 and not any(isinstance(e, ast.Starred) for e in (*target.elts, *value.elts)))
     if pairwise:  # prev, cur = [0] * n, [0] * n
-        return [pair for t, v in zip(target.elts, value.elts) for pair in _target_depths(t, v)]
-    return _not_new(target)
+        return [pair for t, v in zip(target.elts, value.elts, strict=True) for pair in _target_values(t, v)]
+    return [(name, None) for name in _target_names(target)]
+
+
+def _target_depths(target, value):
+    """Pair each name in *target* with the fresh depth of the value it receives."""
+    return [(name, _fresh_depth(v) if v is not None else 0)
+            for name, v in _target_values(target, value)]
 
 
 def _binding_depths(node):
@@ -161,12 +199,10 @@ def _store_targets(node):
     return []
 
 
-def _is_shared_store(target, local_depths):
-    """True when storing into *target* (``x[i] = ...``, ``x.a = ...``) can mutate an object
-    the caller sees. A subscript store into a container created in this function is local."""
-    if not isinstance(target, (ast.Subscript, ast.Attribute)):
-        return False
-    levels, node = 0, target
+def _reaches_shared_object(expr, local_depths, levels):
+    """True when *expr*, reached through *levels* more subscripts or a method call, can be an
+    object the caller sees; False when every level stays inside objects this function created."""
+    node = expr
     while isinstance(node, ast.Subscript):
         levels += 1
         node = node.value
@@ -175,6 +211,32 @@ def _is_shared_store(target, local_depths):
         # function did not create, as does a store through a call's result
         return True
     return local_depths.get(node.id, 0) < levels
+
+
+def _is_shared_store(target, local_depths):
+    """True when storing into *target* (``x[i] = ...``, ``x.a = ...``) can mutate an object
+    the caller sees. A subscript store into a container created in this function is local."""
+    if isinstance(target, ast.Attribute):
+        return True
+    return isinstance(target, ast.Subscript) and _reaches_shared_object(target, local_depths, 0)
+
+
+def _mutates_shared_object(call, local_depths, modules):
+    """True when *call* is a mutating method (``x.append(...)``, ``x[i].update(...)``) on an
+    object the caller can see. A function of an imported module (``np.add``) is no method."""
+    func = call.func
+    if not (isinstance(func, ast.Attribute) and func.attr in _MUTATING_METHODS):
+        return False
+    if isinstance(func.value, ast.Name) and func.value.id in modules:
+        return False
+    return _reaches_shared_object(func.value, local_depths, 1)
+
+
+def _module_aliases(tree):
+    """The names ``import x`` / ``import x.y as z`` bind anywhere in *tree*."""
+    return frozenset((a.asname or a.name).split('.')[0]
+                     for node in ast.walk(tree) if isinstance(node, ast.Import)
+                     for a in node.names)
 
 
 def _stores_into_shared_object(node, local_depths):
@@ -186,15 +248,19 @@ def _stores_into_shared_object(node, local_depths):
     return False
 
 
-def is_pure_function(func_node):
+def is_pure_function(func_node, modules=None):
     """Heuristic to detect pure functions - no I/O, no global state, no clock, no generator.
 
-    A store into a container the function created itself (a DP table, a local tally dict)
-    stays pure; a store into a parameter, a global, a closure variable or an attribute
-    (self.x) does not."""
+    A store into a container the function created itself (a DP table, a local tally dict), or
+    a mutating method called on one (``out.append(x)``), stays pure; either one aimed at a
+    parameter, a global, a closure variable or an attribute (self.x) does not. *modules* names
+    the imported modules, whose functions are not methods of a container (default: the
+    modules the function imports itself)."""
+    modules = _module_aliases(func_node) if modules is None else modules
     local_depths = _local_container_depths(func_node)
     for node in ast.walk(func_node):
-        if isinstance(node, ast.Call) and _is_impure_call(node):
+        if isinstance(node, ast.Call) and (_is_impure_call(node)
+                                           or _mutates_shared_object(node, local_depths, modules)):
             return False
         if isinstance(node, (ast.Global, ast.Nonlocal)):
             return False
@@ -204,6 +270,52 @@ def is_pure_function(func_node):
         if _stores_into_shared_object(node, local_depths):
             return False
     return True
+
+
+def _is_new_mutable(expr, mutable_names):
+    """True when *expr* evaluates to a mutable object created right here (or holds one)."""
+    if isinstance(expr, (ast.List, ast.Set, ast.Dict, ast.ListComp, ast.SetComp, ast.DictComp)):
+        return True
+    if isinstance(expr, ast.Tuple):  # a tuple of new lists still shares those lists
+        return any(_is_new_mutable(e, mutable_names) for e in expr.elts)
+    if isinstance(expr, ast.BinOp) and isinstance(expr.op, (ast.Mult, ast.Add)):
+        return _is_new_mutable(expr.left, mutable_names) or _is_new_mutable(expr.right, mutable_names)
+    if isinstance(expr, ast.IfExp):
+        return _is_new_mutable(expr.body, mutable_names) or _is_new_mutable(expr.orelse, mutable_names)
+    if isinstance(expr, ast.Call):
+        func = expr.func
+        is_copy = isinstance(func, ast.Attribute) and func.attr == 'copy' and not expr.args
+        return is_copy or _is_numpy_new_array(expr) or _call_name(func) in _NEW_MUTABLE_CALLS
+    return isinstance(expr, ast.Name) and expr.id in mutable_names
+
+
+def _own_nodes(func_node):
+    """Every node of *func_node*'s own body, not descending into nested defs, lambdas, classes."""
+    stack = list(func_node.body)
+    while stack:
+        node = stack.pop()
+        yield node
+        if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.Lambda, ast.ClassDef)):
+            stack.extend(ast.iter_child_nodes(node))
+
+
+def returns_new_mutable(func_node):
+    """True when *func_node* returns a mutable container it created (a list, dict, set,
+    ndarray, or a name bound to one). lru_cache would hand every caller that same object, so
+    one caller's edit would change every later call's result."""
+    bindings = [(name, value)
+                for node in _own_nodes(func_node)
+                if isinstance(node, (ast.Assign, ast.AnnAssign, ast.NamedExpr)) and node.value is not None
+                for target in (node.targets if isinstance(node, ast.Assign) else [node.target])
+                for name, value in _target_values(target, node.value) if value is not None]
+    mutable_names, grew = set(), True
+    while grew:  # b = a after a = []: repeat until an alias of an alias is found too
+        found = {name for name, value in bindings if _is_new_mutable(value, mutable_names)}
+        grew = not found <= mutable_names
+        mutable_names |= found
+    return any(isinstance(node, ast.Return) and node.value is not None
+               and _is_new_mutable(node.value, mutable_names)
+               for node in _own_nodes(func_node))
 
 
 def is_expensive_computation(func_node):
@@ -262,6 +374,7 @@ def find_cache_candidates(file_path):
     caller can tell "no candidates" from "not scanned".
     """
     tree = _parse(file_path)
+    modules = _module_aliases(tree)
     candidates = []
 
     for node in ast.walk(tree):
@@ -273,7 +386,7 @@ def find_cache_candidates(file_path):
                 continue
 
             # Check if pure
-            if is_pure_function(node):
+            if is_pure_function(node, modules) and not returns_new_mutable(node):
                 expensive = is_expensive_computation(node)
 
                 if expensive:

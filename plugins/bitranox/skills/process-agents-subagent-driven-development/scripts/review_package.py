@@ -35,13 +35,19 @@ def _git(*args):
         raise GitError(f"could not run git: {exc}") from exc
 
 
-def _git_text(*args):
-    """Stdout of a git command that must succeed, decoded without touching line endings."""
+def _git_bytes(*args):
+    """Stdout of a git command that must succeed, exactly as git wrote it."""
     proc = _git(*args)
     if proc.returncode != 0:
         err = proc.stderr.decode("utf-8", "replace").strip()
         raise GitError("git %s failed (exit %d): %s" % (" ".join(args), proc.returncode, err))
-    return proc.stdout.decode("utf-8", "replace")
+    return proc.stdout
+
+
+def _git_text(*args):
+    """Stdout of a git command that must succeed, decoded - for refs and counts only, never
+    for content the package carries, where a replaced byte would hide an encoding change."""
+    return _git_bytes(*args).decode("utf-8", "replace")
 
 
 def _resolves(ref):
@@ -55,20 +61,24 @@ def _is_ancestor(base, head):
 
 
 def build(base, head):
-    """The review-package text for base..head. Raises GitError when any git call fails."""
+    """The review-package bytes for base..head. Raises GitError when any git call fails.
+
+    Bytes end to end: git's output is copied as written, so a non-UTF-8 byte in a changed line
+    reaches the reviewer as that byte, not as a U+FFFD that reads like an ordinary character.
+    """
     span = "%s..%s" % (base, head)
-    return "\n".join([
-        "# Review package: %s" % span,
-        "",
-        "## Commits",
-        _git_text("log", "--oneline", span).rstrip("\n"),
-        "",
-        "## Files changed",
-        _git_text("diff", "--stat", span).rstrip("\n"),
-        "",
-        "## Diff",
-        _git_text("diff", "-U10", span).rstrip("\n"),
-        "",
+    return b"\n".join([
+        ("# Review package: %s" % span).encode("utf-8"),
+        b"",
+        b"## Commits",
+        _git_bytes("log", "--oneline", span).rstrip(b"\n"),
+        b"",
+        b"## Files changed",
+        _git_bytes("diff", "--stat", span).rstrip(b"\n"),
+        b"",
+        b"## Diff",
+        _git_bytes("diff", "-U10", span).rstrip(b"\n"),
+        b"",
     ])
 
 
@@ -129,7 +139,7 @@ def main(argv=None):
         print(problem, file=sys.stderr)
         return 2
     try:
-        text = build(base, head)
+        data = build(base, head)
         commits = _git_text("rev-list", "--count", "%s..%s" % (base, head)).strip()
         if len(argv) == 3:
             out = Path(argv[2])
@@ -139,7 +149,6 @@ def main(argv=None):
     except (GitError, sdd_workspace.WorkspaceError) as exc:
         print(str(exc), file=sys.stderr)
         return 2
-    data = text.encode("utf-8")
     try:
         out.write_bytes(data)  # bytes, so Windows does not rewrite every "\n" as "\r\n"
     except OSError as exc:

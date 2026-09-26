@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import json
 import os
+import shutil
 import subprocess
 import sys
 from pathlib import Path
@@ -156,7 +157,7 @@ def test_facts_are_loaded_with_their_level_so_a_candidate_can_be_opened(tmp_path
 
 def run_cli(args, cwd):
     return subprocess.run([sys.executable, str(TOOL), *args], capture_output=True, text=True,
-                          encoding="utf-8", check=False, cwd=str(cwd))
+                          encoding="utf-8", errors="replace", check=False, cwd=str(cwd))
 
 
 def test_cli_exits_1_and_frames_the_output_as_candidates(tmp_path):
@@ -213,6 +214,30 @@ def test_an_unreadable_level_is_reported_and_exits_2(tmp_path):
         level.chmod(0o644)
     assert r.returncode == 2, r.stdout + r.stderr
     assert "could not be read" in r.stdout and str(level) in r.stdout
+
+
+def test_a_directory_deleted_mid_walk_is_gone_not_unreadable(tmp_path):
+    """A directory that no longer exists holds no level. Filed as unreadable, a cache dir deleted
+    by another process mid-walk turned the whole scan into exit 2. The lister REALLY deletes the
+    directory just before listing it, so the error is the filesystem's own."""
+    make_tree(tmp_path)
+    victim = tmp_path / "cache" / "tmp"
+    victim.mkdir(parents=True)
+
+    def list_dir(d: Path) -> list[Path]:
+        if d == victim:
+            shutil.rmtree(victim)
+        return list(d.iterdir())
+
+    skipped: list[str] = []
+    assert DS._levels(tmp_path, skipped, list_dir=list_dir) == [tmp_path]
+    assert skipped == []
+
+
+def test_a_fact_deleted_before_it_is_read_is_gone_not_unreadable(tmp_path):
+    skipped: list[str] = []
+    assert DS._read(tmp_path / "facts" / "gone.md", skipped) is None
+    assert skipped == []
 
 
 def test_a_non_utf8_fact_is_reported_not_a_traceback(tmp_path):
@@ -283,6 +308,45 @@ def test_the_control_fires_when_every_fact_is_one_short_sentence():
     result = DS.run(short, threshold=0.5)
     assert result.control.detected, result.control
     assert result.control.score < 1.0
+
+
+def test_the_control_fires_when_the_longest_fact_is_a_short_sentence_full_of_stopwords():
+    """Eleven whitespace words but only five CONTENT words: sized by whitespace, the plant took
+    the long-text branch, dropped two of the five and added four, a Jaccard of 3/9 - so a store
+    whose longest fact is one such sentence reported an instrument failure on every run."""
+    result = DS.run(facts(("a", "Keep the cache warm and the logs short when it runs."),
+                          ("b", "Pin floor version.")), threshold=0.5)
+    assert result.control.detected, result.control
+    assert result.control.score < 1.0
+
+
+CONTENT = ["alpha", "bravo", "charlie", "delta", "echo", "foxtrot", "golf", "hotel", "india",
+           "juliet", "kilo", "lima", "mike", "november", "oscar", "papa", "quebec", "romeo",
+           "sierra", "tango", "uniform", "victor", "whiskey", "xray"]
+
+
+@pytest.mark.parametrize("n_content", range(2, len(CONTENT) + 1))
+@pytest.mark.parametrize("filler", ["", "the", "and the of"])
+def test_the_control_fires_for_every_content_length_and_stopword_density(n_content, filler):
+    """The plant's size decision must be made on the words the scorer SEES. Pinned across every
+    length either side of the short/long switch, bare and with stopwords between the words.
+
+    From two content words up: the pair index links two facts only when they share two words,
+    so a longest fact of ONE content word cannot be paired with anything, its plant included.
+    The other fact has no content word at all, so the longest fact is always the one built."""
+    text = " ".join(f"{w} {filler}".strip() for w in CONTENT[:n_content])
+    result = DS.run(facts(("x", text), ("y", "ok")), threshold=0.5)
+    assert result.control.source_slug == "x"
+    assert result.control.detected, (text, result.control)
+    assert result.control.score < 1.0, (text, result.control)
+
+
+def test_the_plant_never_adds_a_word_the_source_already_has():
+    """An added word the source already carries adds nothing to the union, so a short source
+    would plant an identical word set and the control would score 1.0."""
+    text = "restated moreover differently herein cache"
+    result = DS.run(facts(("x", text), ("y", "ok")), threshold=0.5)
+    assert result.control.detected and result.control.score < 1.0, result.control
 
 
 def test_text_output_shows_the_control_line_distribution_and_candidates(tmp_path):

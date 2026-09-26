@@ -103,6 +103,23 @@ def test_a_mutation_the_test_notices_is_killed(tmp_path):
     assert "assert" in (data["failure"] or "").lower()
 
 
+def test_a_long_node_id_still_reports_the_assertion(tmp_path):
+    """pytest drops the message from a summary line that does not fit the terminal width, and a
+    captured child sees a narrow default. The reason must survive a long node id."""
+    p = make_project(tmp_path)
+    long_name = "test_zero_" + "x" * 90
+    (p / "test_src.py").write_text(TEST.replace("def test_zero", f"def {long_name}"),
+                                   encoding="utf-8")
+    (p / "old.txt").write_text('return "zero"', encoding="utf-8")
+    (p / "new.txt").write_text('return "ZERO"', encoding="utf-8")
+    proc = run(p, "--mutate", "src.py", "old.txt", "new.txt",
+               "--test", f"test_src.py::{long_name}", "--json")
+    assert proc.returncode == 0, (proc.stdout, proc.stderr)
+    data = json.loads(proc.stdout)["data"]
+    assert data["verdict"] == "killed"
+    assert (data["failure"] or "").startswith("AssertionError"), data["failure"]
+
+
 def test_a_mutation_the_test_cannot_see_survives(tmp_path):
     """The finding worth having: this arm does not cover that line."""
     p = make_project(tmp_path)
@@ -555,6 +572,46 @@ def test_a_restore_that_cannot_write_is_reported_loudly(tmp_path):
     assert 'return "ZERO"' in (p / "src.py").read_text(encoding="utf-8")
 
 
+LOCKING_TEST = '''\
+import os
+import sys
+from pathlib import Path
+sys.path.insert(0, str(Path(__file__).parent))
+from src import classify
+
+
+def test_zero():
+    # Leaves the mutant on disk read-only, so the tool's restore cannot write it back.
+    os.chmod(Path(__file__).parent / "src.py", 0o444)
+    assert classify(0) == "zero"
+'''
+
+
+@pytest.mark.parametrize("as_json", [False, True])
+def test_the_cli_says_restore_failed_and_exits_2(tmp_path, as_json):
+    """The loud half of a failed restore is the CLI's stderr line and its exit code; run_arm's
+    report alone does not prove a user running the tool would ever see it."""
+    p = make_project(tmp_path)
+    (p / "test_src.py").write_text(LOCKING_TEST, encoding="utf-8")
+    (p / "old.txt").write_text('return "zero"', encoding="utf-8")
+    (p / "new.txt").write_text('return "ZERO"', encoding="utf-8")
+    probe = p / "probe.txt"
+    probe.write_text("x", encoding="utf-8")
+    if not _cannot_write(probe):
+        pytest.skip("this user can write a read-only file, so there is no failure to test")
+    try:
+        proc = run(p, "--mutate", "src.py", "old.txt", "new.txt",
+                   "--test", "test_src.py::test_zero", *(["--json"] if as_json else []))
+    finally:
+        (p / "src.py").chmod(0o644)
+    assert proc.returncode == 2, (proc.stdout, proc.stderr)
+    assert "RESTORE FAILED" in proc.stderr, proc.stderr
+    assert "Traceback" not in proc.stderr
+    assert 'return "ZERO"' in (p / "src.py").read_text(encoding="utf-8"), "the arm must really fail"
+    if as_json:
+        assert json.loads(proc.stdout)["ok"] is False
+
+
 # --------------------------------------------------------------------------
 # Several mutations: each anchor is checked against the text the earlier ones leave
 # --------------------------------------------------------------------------
@@ -618,6 +675,19 @@ def test_a_parametrize_id_containing_the_separator_does_not_cut_the_reason():
     output = ("=========================== short test summary info ============================\n"
               "FAILED test_src.py::test_x[a - b] - AssertionError: assert 'ZERO' == 'zero'\n")
     assert M.failure_reason(output) == "AssertionError: assert 'ZERO' == 'zero'"
+
+
+@pytest.mark.parametrize("node, reason", [
+    ("test_src.py::test_x[a[1] - b]", "AssertionError: boom"),
+    ("test_src.py::test_x[[a - b]]", "AssertionError: boom"),
+    ("test_src.py::T::test_x[a[1] - b]", "AssertionError: boom"),
+    ("test_src.py::test_x[a]b]", "AssertionError: boom"),               # unbalanced id
+    ("test_src.py::test_x[a]", "AssertionError: assert [1] - [2] == x"),
+])
+def test_a_nested_bracket_parametrize_id_does_not_cut_the_reason(node, reason):
+    output = ("=========================== short test summary info ============================\n"
+              f"FAILED {node} - {reason}\n")
+    assert M.failure_reason(output) == reason
 
 
 def test_a_line_separator_inside_the_reason_does_not_cut_it():

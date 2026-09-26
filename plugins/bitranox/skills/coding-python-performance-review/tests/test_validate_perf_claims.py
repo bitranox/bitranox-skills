@@ -16,6 +16,16 @@ def test_hex_literals_and_dimensions_are_not_claims(tmp_path):
     assert _claims(tmp_path, '+MASK = 0xFF\n+SIZE = "1920x1080"\n+flags=0x10\n') == []
 
 
+def test_spaced_dimensions_are_not_claims(tmp_path):
+    assert _claims(tmp_path, "+grid = 10 x 20 cells\n+resize to 1920 x 1080\n"
+                             "+reduced the board from 8 x 8 squares\n+a 3 X 3 kernel\n") == []
+
+
+def test_spaced_multiplier_claims_are_still_found(tmp_path):
+    claims = _claims(tmp_path, "+it is 3 x faster\n+a 10 x speedup here\n+improved by 4 x\n")
+    assert {"3 x faster", "10 x speedup", "improved by 4 x"} <= set(claims)
+
+
 def test_multiplier_claim_is_still_found(tmp_path):
     assert _claims(tmp_path, "+gives a 3x speedup\n") == ["3x speedup"]
 

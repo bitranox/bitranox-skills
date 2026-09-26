@@ -25,8 +25,11 @@ the data they hold ended, and every rate computed across a file boundary used th
 neighbour, with no error. `--name-timestamp` keys on a fixed-width stamp in the filename
 instead, and then reports the age from that stamp too (`age_basis` in --json says which), since
 an mtime age would make a stale set look fresh. A stamped path that no longer exists is skipped
-and reported, never picked. The default run WARNS when the two keys disagree about the answer,
-which is exactly when the choice of key matters.
+and reported, never picked. A stamp is read as UTC whether or not it ends in `Z`: one written
+in LOCAL time (`date +%Y%m%d-%H%M%S`) reports an age off by the UTC offset - negative for a fresh
+file east of Greenwich - while the ORDER within a set written one way is unaffected. The default
+run WARNS when the two keys disagree about the answer, which is exactly when the choice of key
+matters.
 
 A glob the shell did not expand (cmd.exe, PowerShell, a quoted argument) is expanded here; an
 argument that names an existing path is always taken literally.
@@ -222,7 +225,8 @@ def main(argv=None) -> int:
     ap.add_argument("--json", action="store_true", help="machine-readable envelope")
     ap.add_argument("--name-timestamp", action="store_true",
                     help="key on a fixed-width timestamp in the FILENAME, not mtime - "
-                         "correct when a later pass rewrote the files")
+                         "correct when a later pass rewrote the files; the stamp is read "
+                         "as UTC, Z or not")
     args = ap.parse_args(argv)
     _tolerate_unencodable_output()
 
@@ -245,8 +249,7 @@ def main(argv=None) -> int:
         if not ordered:
             # Never fall back to mtime here. A silent fallback answers the question the caller
             # explicitly said was the wrong one, which is the defect this flag exists to fix.
-            print("newest: no path carries a parseable fixed-width name stamp "
-                  "(YYYYMMDDTHHMMSSZ, YYYYMMDD-HHMMSS or YYYYMMDD)", file=sys.stderr)
+            print(_no_stamped_match_reason(paths, no_stamp), file=sys.stderr)
             return 1
     else:
         ordered = by_mtime(paths)
@@ -281,6 +284,19 @@ def main(argv=None) -> int:
             print(f"{item['path']}  (age {_human_age(float('inf') if age is None else age)}"
                   f"{label})")
     return 0
+
+
+def _no_stamped_match_reason(paths, no_stamp) -> str:
+    """Why --name-timestamp found nothing, naming the cause that actually applies.
+
+    When some names DID carry a stamp and only their paths are missing, "no parseable stamp"
+    would send the reader to fix a naming scheme that is correct.
+    """
+    if len(no_stamp) < len(paths):
+        return ("newest: the name stamps parsed, but none of them could be read - every "
+                "stamped path is missing, a dangling symlink, or denied")
+    return ("newest: no path carries a parseable fixed-width name stamp "
+            "(YYYYMMDDTHHMMSSZ, YYYYMMDD-HHMMSS or YYYYMMDD)")
 
 
 def _json_age(seconds: float) -> float | None:

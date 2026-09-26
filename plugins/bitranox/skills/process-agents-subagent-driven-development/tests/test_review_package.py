@@ -91,6 +91,18 @@ def test_a_lone_carriage_return_is_not_turned_into_a_line_break(repo, tmp_path):
     assert b"+x\ry\n" in data
 
 
+def test_a_non_utf8_byte_reaches_the_package_unchanged(repo, tmp_path):
+    """Decoding git's output with errors="replace" turned a Latin-1 byte into U+FFFD, so the
+    reviewer saw a replacement character where the change had a real byte - an encoding
+    regression looks like a correct edit."""
+    r, base = repo
+    head = _commit(r, "a.txt", b"a\ncaf\xe9\n", "latin-1")
+    rc, data = _package(tmp_path, base, head)
+    assert rc == 0
+    assert b"+caf\xe9\n" in data
+    assert "\ufffd".encode("utf-8") not in data
+
+
 # ---- BASE must be an ancestor of HEAD -----------------------------------------------------------
 def test_swapped_base_and_head_are_refused(repo, tmp_path, capsys):
     """Swapped, the package read "0 commits" and a reversed diff, exit 0."""

@@ -1,5 +1,6 @@
 """Tests for classifier_eval.py - the shadow-log report comparing the regex and Jev per site."""
 import json
+import os
 import pathlib
 
 import pytest
@@ -1098,6 +1099,20 @@ def test_replay_passes_the_router_text_to_the_controls(tmp_path, capsys):
     assert all(offered[name] == router[name] for name in SKILLS)
 
 
+def test_replay_vets_the_description_overrides_it_replays(tmp_path, capsys):
+    """The controls ranked on the UNOVERRIDDEN descriptions, so a reworded description that
+    broke the router passed the gate built to stop it and every row was then bought with it."""
+    new = tmp_path / "desc.txt"
+    new.write_text("Use when a MARKDOWN TABLE needs its columns padded", encoding="utf-8")
+    clf = FakeClassifier()
+    assert _replay(tmp_path, "--arm", "choice_full", "--description",
+                   "docs-md-table-formatting=%s" % new, clf=clf) == 0
+    control_request = clf.asked[0][1]
+    offered = control_request[1].criteria
+    assert offered["docs-md-table-formatting"] == "Use when a MARKDOWN TABLE needs its columns padded"
+    assert offered["compuse-bash"] == SKILLS["compuse-bash"]
+
+
 def test_replay_without_an_api_key_exits_2(tmp_path, capsys):
     assert _replay(tmp_path, "--arm", "choice_full", clf=FakeClassifier(key=None)) == 2
     assert "no api key" in json.loads(capsys.readouterr().out)["error"]
@@ -1264,7 +1279,7 @@ def test_a_replay_skips_a_prompt_whose_prefix_cannot_be_built_and_says_so(tmp_pa
     rows = [json.loads(line) for line in out.read_text(encoding="utf-8").splitlines()]
     assert [r["uuid"] for r in rows] == ["xb"], "the skipped prompt was scored anyway"
     assert env["data"]["sampled"] == 1
-    assert env["skipped"] == {"prompts_without_a_prefix": 1}
+    assert env["skipped"] == {"prompts_without_a_prefix": 1, "unreadable_corpus_paths": 0}
 
 
 def test_a_replay_with_every_prefix_readable_skips_nothing(tmp_path, capsys):
@@ -1279,6 +1294,32 @@ def test_a_replay_with_every_prefix_readable_skips_nothing(tmp_path, capsys):
                  clf=FakeClassifier(), skills=SKILLS)
     env = json.loads(capsys.readouterr().out)
     assert rc == 0 and env["data"]["skipped_prompts"] == [] and env["data"]["sampled"] == 2
+
+
+def test_a_replay_reports_a_corpus_transcript_it_could_not_read(tmp_path, capsys):
+    """collect_prompts names every transcript it could not open in `skipped`; the replay dropped
+    that list, so an unreadable corpus file shrank the sample with nothing said about it."""
+    corpus = tmp_path / "corpus"
+    corpus.mkdir()
+    (corpus / "a.jsonl").write_text(_cli_record("x0", "please reformat the markdown table for me")
+                                    + "\n", encoding="utf-8")
+    (corpus / "b.jsonl").write_text(_cli_record("xb", "go ahead") + "\n", encoding="utf-8")
+    gone = corpus / "c.jsonl"
+    try:
+        os.symlink(str(tmp_path / "no-such-transcript.jsonl"), str(gone))
+    except (OSError, NotImplementedError) as exc:
+        pytest.skip("cannot create a dangling symlink here: %s" % exc)
+    rc = ce.main(["replay", "--root", str(corpus), "--limit", "1", "--arm", "choice_full",
+                  "--out", str(tmp_path / "out.jsonl"), "--json"],
+                 clf=FakeClassifier(), skills=SKILLS)
+    captured = capsys.readouterr()
+    env = json.loads(captured.out)
+    assert rc == 0, env
+    unread = env["data"]["corpus"]["unreadable"]
+    assert len(unread) == 1 and "c.jsonl" in unread[0]
+    assert env["skipped"]["unreadable_corpus_paths"] == 1
+    assert "c.jsonl" in captured.err
+    assert "c.jsonl" in ce.render_replay(env["data"])
 
 
 # ---- this file stays ASCII: an invisible separator in a literal is unreviewable ----------------

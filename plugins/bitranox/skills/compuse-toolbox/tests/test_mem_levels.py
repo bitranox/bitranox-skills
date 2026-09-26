@@ -319,6 +319,9 @@ def test_an_unreadable_level_is_an_error_not_a_no(tmp_path, capsys, what):
         target.chmod(0o755 if what == "dir" else 0o644)
     assert slug_rc == 2 and list_rc == 2
     assert "sub" in slug_err and "sub" in list_err
+    # A partial read cannot establish absence, so the stderr must not claim it.
+    assert "no level points at" not in slug_err
+    assert "hidden-fact is unknown" in slug_err
 
 
 def test_slug_json_found_and_absent(tmp_path, capsys):

@@ -29,6 +29,99 @@ than the change, so entries reconstructed from them would read like coverage wit
 a hole nobody has drawn a line under is one that gets rediscovered and half-filled - which is how
 two "versions with no entry" notes came to sit in this file disagreeing with it.
 
+## [7.25.6]
+
+### Fixed
+
+- block-masked-gate-exit allows a gate backgrounded ALONE (a single `ci_wait.py` or `pytest`
+  call, whose task exit code is the gate's own) and blocks only one with something after it
+  (`;`, `&&`, `||`, a pipe, a newline, a trailing `&`) or a `gh run watch` without
+  `--exit-status`. Replayed over about 90,900 real Bash calls: 376 firings dropped, none added,
+  every dropped one read and none truly masked. A file merely ending in `gate.py` no longer counts
+  as the gate jig, the suggestion names no drive-relative `/tmp` log, and `gate.py` launched under
+  `uv run` gets an advisory.
+- gate accepts a `--name` written right after its own `--gate` beside a positional gate, refuses
+  `-- ""` as a usage error, and prints `--then` output after the report on a pipe. ci_triage
+  honours quoting in `--cmd`, no longer counts a keyword inside a path or a flag
+  (`src/errors/`, `-Wno-error`), and `--step` also takes a step matched by its own header and the
+  UNKNOWN STEP lines that continue it. adjudicate refuses a non-positive or non-finite
+  `--timeout`, declares `LAUNCH_WITH = "python3"` and gives the hook run-python.sh's UTF-8
+  environment. anchor_edit no longer writes CRLF new text into a CRLF file as CR CR LF.
+- enforced treats a `tests`/`test` directory given as `--root` as test code unless it holds a
+  project marker, parses a `.env.py` module as Python, and counts a `case` pattern as a decision.
+  grep_all never counts a file named on the command line as hidden, never searches a `.git`
+  gitdir file, and emits the full envelope (`skipped`, `ignored_matches: null`) when a search
+  cannot run.
+- mdwrap never ends a wrapped line in a backslash, refuses a one-item `* `, `+ `, `1. ` or `1) `
+  list under any lead-in, and writes a hard-linked file, or one in a directory that refuses temp
+  files, in place (`write: "in-place"`). jsonl_grep's stdlib fallback reads JSON as strictly as
+  orjson (NaN and Infinity unparseable on both), counts absurdly deep nesting as an unparseable
+  line, and reads a pipe path such as `<(cmd)`. guard_replay's text report says how many calls
+  lacked the replayed field; mem_levels `--slug` on a partly read tree says the answer is unknown;
+  transcript_index refuses a query with no letter or digit (exit 2).
+- newest says a stamped path is missing instead of "no parseable stamp" and documents that a name
+  stamp is read as UTC. pushcheck scans only the pushed side of an `A...B` range, finds
+  `c:/users/<name>` paths, and accepts a range that only removes lines unless it changes a binary
+  file. mutation_arm keeps the failure reason for nested-bracket and long node ids. ci_wait
+  treats `--timeout` as a wall-clock deadline. fleet_ssh drops a changed host key under the name
+  ssh recorded, so ssh_config aliases and custom ports heal, and says so only when the entry was
+  really removed.
+- transfer `check --cmd` accepts quoted or escaped shell characters (`sh -c '...;'`,
+  `find -exec ... \;`), refuses unquoted operators glued to a word, and reads `1,234,567` as one
+  number. renamescope reports a def or lambda default or annotation in its enclosing scope.
+  winlog decodes a UTF-16 segment opening with a U+xx00 character after a narrow line as its own
+  segment. conflict_scan names a symlinked directory it does not follow. confound treats a plain
+  plural unit (`file`/`files`) as the same unit. diffbehave sends stdin byte for byte on every
+  platform.
+- script_prepass suppresses the X_OK finding only where a platform test actually guards the call,
+  no longer counts a short script name as tested because an unrelated test quotes it, and reports
+  `js_parse` files UNMEASURED instead of a clean zero. audit_skills finds a hook registration next
+  to shell punctuation and classes indented FINDING lines. redcheck finds Markdown files with the
+  platform's own case rule.
+- compare_performance re-applies nothing when the BEFORE run recreated a file the stash restores,
+  names it, and prints a recovery that works. find_uncompiled_regex no longer reports `re.*` calls
+  in decorators, defaults and annotations. find_cache_candidates keeps a function pure when it
+  mutates a container it created, makes it impure when it mutates a parameter, global or `self.x`
+  through a method, stops suggesting functions that return a new list/dict/set/ndarray, and
+  treats numpy constructors as local tables. validate_perf_claims no longer reads `1920 x 1080` as
+  a claim. The skill launches setup_env.py with the user's own Python first.
+- batch_convert and convert_literature count an unreadable subdirectory in the total and name
+  both outputs of a case-only collision; convert_literature escapes DEL, C1, NEL and U+2028/2029
+  in front matter. generate_schematic prints its errors on stderr. generate_schematic_ai keeps the
+  best REVIEWED image when a retry's review fails, and its rating/quality fallback ignores a score
+  not out of 10.
+- recall-memory centres snippets on a keyword match however the note spells it (sharp s,
+  decomposed umlauts). claudemd_variance reports the largest variant's share of the copies (JSON
+  `copy_count`). adopt_skill removes its half-written folder and restores THIRD_PARTY_NOTICES.md
+  on failure, credits the real upstream when the source carries another credit line, refuses a
+  `--subdir` leaving the source, drops a BOM from every adopted text file, and reads npm's
+  `SEE LICENSE IN <file>`. gather_scan's `--self` with a trailing separator no longer hides a
+  colliding sibling.
+- dedup_scan's planted control fires for a short stopword-heavy longest fact; dedup_scan and
+  store_manifest pass over a directory or file deleted mid-walk. statusrot names the path of a
+  non-UTF-8 level and keeps the verdict of a copy outside a scoped `clear`. reconcile_memory_index
+  `--archive` puts the body back when the pointer write fails. memory_engine and factedit re-type
+  or re-describe a body only inside a real front-matter frame, CRLF included, so a body opening
+  with a horizontal rule is framed instead of getting metadata appended to its prose.
+- migrate_memory no longer overwrites a curated fact that merely contains the native body, reuses
+  its own placement on a resumed run, decodes git paths under any locale, and reports a tracked
+  store. self_improve_signals never overwrites a config that exists but is not a readable JSON
+  object, records a retried drain or close once, and handles a non-ASCII repo path under an ASCII
+  locale. classifier_eval runs its controls on the `--description` overrides it replays and
+  reports every corpus path it could not read.
+- pluginprune labels a plan-refused directory REFUSED under `--apply` and matches a Windows pin in
+  any letter case. wtclean resolves a relative worktree path against the caller's directory.
+  hookdoc_stamp no longer caches an `--offline` placeholder. pfsense `snort why` picks the latest
+  alert across a year boundary, and a named-target ini with `%%` escapes or `%(key)s` references
+  reads as intended. review_package carries git's output byte for byte. docs/installation.md shows
+  a settings.json hook registered with `run-python.sh --hook`.
+- reformat_tables and tablekit recognise code fences the CommonMark way, so a line opening with an
+  inline span no longer hides every later table from reformatting and from repo-gate's
+  ragged-row check (verdicts unchanged over 84,270 real .md files); tablekit numbers tables with
+  the same scanner, counts blockquoted ones and keeps their `> ` prefix, and `replace --stdout`
+  prints exact bytes. audit_headers grades a CSP header sent twice as two policies, conflicting
+  X-Frame-Options values as the block browsers apply, and exits 2 for a host it cannot encode.
+
 ## [7.25.5]
 
 ### Fixed

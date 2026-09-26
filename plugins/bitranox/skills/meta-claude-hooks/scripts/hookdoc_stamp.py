@@ -798,7 +798,9 @@ def cmd_check(args: argparse.Namespace) -> int:
         "source": args.source,
         "sources": [v.as_dict() for v in verdicts],
     }
-    if not args.body:
+    # Only a verdict something actually LOOKED at is cached. A --body run read a local file and an
+    # --offline run read nothing, so replaying either would answer the next online check for it.
+    if not args.body and not args.offline:
         write_cache(cache_dir, payload)
     emit(args, "check", _EXIT[overall] == 0, payload, _human_check(payload))
     return 1 if _expectation_failed(args, overall) else _EXIT[overall]

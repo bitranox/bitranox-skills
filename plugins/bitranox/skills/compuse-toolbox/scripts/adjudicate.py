@@ -36,11 +36,16 @@ Typical uses:
   * checking a guard you just fixed still fires on the case it was built for
   * proving a "false positive" report is real before changing anything
 
-Run:
-  `uv run scripts/adjudicate.py --hook hooks/some-guard.py \\
+Run (plain python3, NOT uv run: the subject runs on THIS interpreter, and under uv run that is uv's
+throwaway env, where a hook's optional imports such as PyYAML or lxml are missing, so it degrades in
+a way it never does under hooks/run-python.sh in production):
+  `python3 scripts/adjudicate.py --hook hooks/some-guard.py \\
       --name "fires on a mention" --probe '{"tool_input":{"command":"echo x"}}' \\
                                   --control '{"tool_input":{"command":"echo y"}}'`
-  `uv run scripts/adjudicate.py --hook hooks/some-guard.py --claim-file claims.jsonl --json`
+  `python3 scripts/adjudicate.py --hook hooks/some-guard.py --claim-file claims.jsonl --json`
+
+The subject gets the UTF-8 environment run-python.sh exports (PYTHONUTF8=1,
+PYTHONIOENCODING=utf-8). `--timeout` is seconds per side and must be a positive finite number.
 
 In a claim file, `probe`/`control` are a string or a JSON object (sent as its JSON text), and the
 optional `probe_args`/`control_args` are lists of strings.
@@ -51,8 +56,14 @@ on every path; a usage error gives `{"ok": false, "data": {"reason": ...}}`.
 """
 from __future__ import annotations
 
+# Run with plain python3, never `uv run`: the subject runs on sys.executable, which under uv run is
+# uv's throwaway env without the optional deps a hook degrades without. toolbox-nudge reads this.
+LAUNCH_WITH = "python3"
+
 import argparse
 import json
+import math
+import os
 import re
 import subprocess
 import sys
@@ -60,6 +71,10 @@ from dataclasses import asdict, dataclass, field
 from pathlib import Path
 
 FIRED_MODES = ("output", "nonzero", "match")
+
+# What hooks/run-python.sh exports before it execs a hook, so the subject decodes and encodes as it
+# does in production rather than under whatever locale codec the caller happens to have.
+_SHIM_ENV = {"PYTHONUTF8": "1", "PYTHONIOENCODING": "utf-8"}
 
 
 @dataclass(frozen=True)
@@ -148,7 +163,7 @@ def run_once(subject: list[str], stdin: str, args: list[str], timeout: float = 6
     try:
         completed = subprocess.run(
             [*subject, *args], input=stdin, capture_output=True, text=True,
-            encoding="utf-8", errors="replace", timeout=timeout)
+            encoding="utf-8", errors="replace", timeout=timeout, env={**os.environ, **_SHIM_ENV})
     except subprocess.TimeoutExpired:
         # A hung subject is neither "fired" nor "did not fire": mark it so the claim scores ERROR.
         message = f"adjudicate: timed out after {timeout}s"
@@ -308,6 +323,19 @@ class _Parser(argparse.ArgumentParser):
         raise UsageError(message)
 
 
+def _positive_seconds(text: str) -> float:
+    """--timeout as a positive finite float. nan and inf crashed inside subprocess with a traceback
+    and exit 1 - the code this tool reserves for UNUSABLE - and 0 or a negative ran every side
+    into an instant timeout that was then reported as ERROR claims rather than a bad argument."""
+    try:
+        value = float(text)
+    except ValueError as exc:
+        raise argparse.ArgumentTypeError(f"not a number: {text!r}") from exc
+    if not math.isfinite(value) or value <= 0:
+        raise argparse.ArgumentTypeError(f"must be a positive finite number of seconds: {text!r}")
+    return value
+
+
 def _parser() -> argparse.ArgumentParser:
     parser = _Parser(
         description="Score a claim about a guard by running it on a probe AND a control.")
@@ -319,7 +347,8 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument("--fired-when", choices=FIRED_MODES, default="output",
                         help="what counts as firing (default: any output on stdout/stderr)")
     parser.add_argument("--fired-pattern", help="regex, required when --fired-when match")
-    parser.add_argument("--timeout", type=float, default=60.0)
+    parser.add_argument("--timeout", type=_positive_seconds, default=60.0,
+                        help="seconds per side, a positive finite number (default: 60)")
     parser.add_argument("--json", action="store_true", help="emit the machine-readable envelope")
     return parser
 

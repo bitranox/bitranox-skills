@@ -519,6 +519,26 @@ class TestSourceShapes:
         assert [(s.site_kind, s.binding) for s in result.sites] == [
             (SiteKind.PARAMETER_DECL, Binding.PARAMETER), (SiteKind.LOAD, Binding.PARAMETER)]
 
+    def test_a_lambda_default_is_bound_in_the_outer_scope(self) -> None:
+        """`lambda mac=mac: mac` - the default is evaluated OUTSIDE the lambda, from the loop."""
+        source = "def f(macs):\n    for mac in macs:\n        g = lambda mac=mac: mac\n"
+        result = scan(source, "mac", "f")
+        assert [(s.col, s.binding) for s in result.sites if s.line == 3] == [
+            (19, Binding.PARAMETER), (23, Binding.LOOP_VAR), (28, Binding.PARAMETER)]
+
+    def test_a_def_default_and_annotation_are_bound_in_the_outer_scope(self) -> None:
+        source = ("def f(macs):\n    for mac in macs:\n"
+                  "        def g(mac=mac, *, k: mac = mac) -> mac:\n            return mac\n")
+        result = scan(source, "mac", "f", "f.g")
+        line3 = [(s.col, s.binding) for s in result.sites if s.line == 3]
+        assert line3 == [(14, Binding.PARAMETER), (18, Binding.LOOP_VAR), (29, Binding.LOOP_VAR),
+                         (35, Binding.LOOP_VAR), (43, Binding.LOOP_VAR)]
+        assert [s.binding for s in result.sites if s.line == 4] == [Binding.PARAMETER]
+
+    def test_a_nested_lambda_default_reads_the_outer_lambda_parameter(self) -> None:
+        result = scan("def f():\n    return lambda a: (lambda b=a: b)\n", "a", "f")
+        assert [s.binding for s in result.sites] == [Binding.PARAMETER, Binding.PARAMETER]
+
     def test_control_outside_the_lambda_the_name_stays_free(self) -> None:
         result = scan("def f(items):\n    g = lambda mac: mac\n    return mac\n", "mac", "f")
         assert [s.binding for s in result.sites] == [

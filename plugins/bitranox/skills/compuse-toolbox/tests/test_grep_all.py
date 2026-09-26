@@ -422,3 +422,54 @@ def test_a_missing_path_still_says_it_does_not_exist(tmp_path):
     """Control for the refusal above: a genuinely missing path keeps its own message."""
     code, _, err = _run(["NEEDLE", str(tmp_path / "nope")])
     assert code == 2 and "does not exist" in err and "nope" in err
+
+
+# ---- review fixes (rank-8 LOW batch, group L4b) -------------------------------------------------
+
+
+@pytest.mark.parametrize("argv", [["NEEDLE(", "."], ["NEEDLE", "no-such-path-l4b"]])
+def test_the_failure_envelope_has_the_success_shape_and_an_unknown_count(tmp_path, monkeypatch,
+                                                                        argv):
+    """A caller reading `skipped` or `ignored_matches` must not get a KeyError or a false 0: on a
+    failure nothing was asked of git, so the count is unknown (null), as on a git failure."""
+    monkeypatch.chdir(tmp_path)
+    code, out, _ = _run([*argv, "--json"])
+    payload = json.loads(out)
+    assert code == 2 and payload["ok"] is False
+    assert payload["skipped"] == []
+    assert payload["data"]["ignored_matches"] is None
+    assert payload["data"]["files_scanned"] == 0
+
+
+def test_an_explicitly_named_ignored_file_is_not_counted_as_hidden(tmp_path, monkeypatch):
+    """rg searches a file it is GIVEN whatever .gitignore says, so a gitignore-aware search of
+    that same argument would not have missed it."""
+    root = _repo(tmp_path)
+    monkeypatch.chdir(root / "sub")
+    code, out, err = _run(["NEEDLE", "secret.md", "--json"])
+    assert code == 0, err
+    assert [m["gitignored"] for m in json.loads(out)["data"]["matches"]] == [False]
+    assert "0 of them are gitignored" in err
+
+
+def test_a_named_file_beside_its_directory_is_not_hidden_but_its_siblings_still_are(tmp_path):
+    """Control: naming one ignored file does not un-hide an ignored sibling the dir walk found."""
+    root = _repo(tmp_path)
+    (root / "sub" / "other.md").write_text("NEEDLE too\n", encoding="utf-8")
+    (root / ".gitignore").write_text("secret.md\nother.md\n", encoding="utf-8")
+    code, out, err = _run(["NEEDLE", str(root), str(root / "sub" / "secret.md"), "--json"])
+    assert code == 0, err
+    flags = {PurePath(m["path"]).name: m["gitignored"] for m in json.loads(out)["data"]["matches"]}
+    assert flags == {"tracked.md": False, "secret.md": False, "other.md": True}
+
+
+def test_a_linked_worktree_gitdir_file_is_not_searched(tmp_path):
+    """A `.git` FILE is the gitdir pointer of a linked worktree or submodule, never content; its
+    text named the needle and read as a match (and the dangling pointer made the count UNKNOWN)."""
+    plain = tmp_path / "wt"
+    plain.mkdir()
+    (plain / ".git").write_text("gitdir: /nowhere/NEEDLE\n", encoding="utf-8")
+    (plain / "a.md").write_text("no match here\n", encoding="utf-8")
+    code, out, err = _run(["NEEDLE", str(plain)])
+    assert code == 1, (out, err)
+    assert ".git" not in out

@@ -706,6 +706,46 @@ class TestAStalledGhCannotOutliveTheTimeout:
         assert result.state == "error"
         assert len(calls) == 2
 
+    @staticmethod
+    def _cli_on_a_fake_clock(monkeypatch, argv, gh_seconds=1.0):
+        """Run main() with the CLOCK faked - the one external edge here that cannot be injected
+        through the command line - and gh answering 'still running' after `gh_seconds`."""
+        now = [1000.0]
+        calls: list[float] = []
+
+        def pending(sha, **kw):
+            calls.append(now[0])
+            now[0] += gh_seconds
+            return [run("CI", "in_progress", None)]
+
+        monkeypatch.setattr(ci_wait, "sha_is_known_locally", lambda sha, **kw: True)
+        monkeypatch.setattr(ci_wait, "gh_runs", pending)
+        monkeypatch.setattr(ci_wait.time, "monotonic", lambda: now[0])
+        monkeypatch.setattr(ci_wait.time, "sleep", lambda s: now.__setitem__(0, now[0] + s))
+        rc = ci_wait.main(argv)
+        return rc, [t - 1000.0 for t in calls], now[0] - 1000.0
+
+    def test_a_timeout_shorter_than_two_intervals_still_polls_until_the_deadline(self, monkeypatch):
+        """A poll COUNT of timeout // interval gave --timeout 50 --interval 30 one poll, so the
+        wait ended after a second while the documented wall-clock deadline had 49 left."""
+        rc, polled_at, ended = self._cli_on_a_fake_clock(
+            monkeypatch, ["--sha", SHA, "--timeout", "50", "--interval", "30"])
+        assert rc == 2
+        assert len(polled_at) >= 2, polled_at
+        assert ended >= 50.0, ended
+
+    def test_the_last_sleep_is_cut_to_the_deadline_rather_than_overshooting_it(self, monkeypatch):
+        rc, polled_at, ended = self._cli_on_a_fake_clock(
+            monkeypatch, ["--sha", SHA, "--timeout", "50", "--interval", "30"])
+        assert polled_at == [0.0, 31.0, 50.0], polled_at
+        assert ended <= 51.0, ended
+
+    def test_slow_polls_do_not_stretch_the_wait_past_the_timeout(self, monkeypatch):
+        rc, polled_at, ended = self._cli_on_a_fake_clock(
+            monkeypatch, ["--sha", SHA, "--timeout", "100", "--interval", "10"], gh_seconds=15.0)
+        assert rc == 2
+        assert ended <= 115.0, ended
+
     @pytest.mark.skipif(os.name == "nt", reason="a fake gh on PATH needs a POSIX shebang")
     def test_a_hanging_gh_is_ended_by_timeout_end_to_end(self, tmp_path):
         fake = tmp_path / "bin" / "gh"

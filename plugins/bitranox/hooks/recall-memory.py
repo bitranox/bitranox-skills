@@ -13,6 +13,7 @@ Pure standard library. Fail-open: every error path exits 0, so a broken or slow 
 import json
 import os
 import sys
+import unicodedata
 from pathlib import Path
 
 _HOOKS_DIR = Path(__file__).resolve().parent
@@ -108,6 +109,26 @@ def _label(path):
     return p.stem
 
 
+def _first_match(text, keywords):
+    """Index in `text` (already NFC) of the earliest keyword occurrence, else -1.
+
+    The keywords arrive folded the way scan() matched them (gather_scan._fold: NFC, then casefold),
+    so the text is folded the same way here; a plain lower() leaves a sharp s as one character where
+    the keyword has "ss" and never finds it. Casefolding can lengthen the text (a sharp s becomes two
+    characters), so each folded character remembers the original character it came from and the
+    position returned indexes `text` itself. Case folding maps each code point on its own, so folding
+    character by character equals folding the whole string."""
+    folded, owner = [], []
+    for i, ch in enumerate(text):
+        f = ch.casefold()
+        folded.append(f)
+        owner.extend([i] * len(f))
+    low = "".join(folded)
+    hits = [low.find(gs._fold(k)) for k in keywords if k]
+    hits = [i for i in hits if i != -1]
+    return owner[min(hits)] if hits else -1
+
+
 def _snippet(path, keywords, maxlen):
     """Body to inject. Small files: the whole thing (trimmed). Large files (CLAUDE.md can be tens of
     KB): a window CENTERED on the first matched keyword, so the relevant rule is shown, not just the
@@ -118,10 +139,10 @@ def _snippet(path, keywords, maxlen):
         return ""
     if Path(path).name == sig.CURATED_INDEX:      # strip the scope descriptor (meta, not a fact) from a curated index
         text = sig._strip_scope(text)
+    text = unicodedata.normalize("NFC", text)
     if len(text) <= maxlen:
         return text.strip()
-    low = text.lower()
-    pos = min((i for i in (low.find((k or "").lower()) for k in keywords) if i != -1), default=-1)
+    pos = _first_match(text, keywords)
     if pos < 0:
         return text.strip()[:maxlen]
     start = max(0, pos - maxlen // 3)
@@ -161,10 +182,11 @@ def _lines_keepends(text):
 
 
 def _matched_section(text, keywords):
-    """(heading line, section body) of the section holding the first keyword match, else None."""
-    low = text.lower()
-    pos = min((i for i in (low.find((k or "").lower()) for k in keywords if k) if i != -1),
-              default=-1)
+    """(heading line, section body) of the section holding the first keyword match, else None.
+    The text is NFC-normalised first so the match offset and the line offsets count the same
+    characters."""
+    text = unicodedata.normalize("NFC", text)
+    pos = _first_match(text, keywords)
     if pos < 0:
         return None
     lines = _lines_keepends(text)

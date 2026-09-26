@@ -18,8 +18,11 @@ Requirements:
     - httpx2 library
 
 Exit status: 0 an image was written, reviewed and met the quality threshold; 1 no image, an
-image whose review failed so its quality was NOT verified, or an image whose best score stayed
-below the threshold (in both of those cases the image is still written); 2 a usage error.
+image whose review failed so its quality was NOT verified (only when no earlier image was
+reviewed: otherwise the best-scoring reviewed image is kept and judged), or an image whose best
+score stayed below the threshold (in both of those cases the image is still written); 2 a usage
+error. The threshold is numeric: a kept image scoring at or above it exits 0 even when the
+reviewer's verdict said NEEDS_IMPROVEMENT.
 
 Usage:
     python generate_schematic_ai.py "Create a flowchart showing CONSORT participant flow" -o flowchart.png
@@ -64,6 +67,11 @@ _SCORE_LABEL = re.compile(
     r'(?P<num>\d+(?:\.\d+)?)(?:\s*\**\s*/\s*(?P<den>\d+(?:\.\d+)?))?',
     re.IGNORECASE,
 )
+# The older wording a review may use instead: "Rating: 7", "Overall quality: 6 / 10".
+_FALLBACK_LABEL = re.compile(
+    r'(?:rating|quality)[:\s]+(?P<num>\d+(?:\.\d+)?)(?:\s*/\s*(?P<den>\d+(?:\.\d+)?))?',
+    re.IGNORECASE,
+)
 # What may stand before the label on its own line: indentation, emphasis, heading, quote.
 _LINE_START_MARKUP = re.compile(r'[\s*_#>]*')
 
@@ -87,7 +95,9 @@ def _parse_score(content: str) -> Optional[float]:
     0-10]", so a review can carry several "score" labels. A candidate out of anything but 10
     ("Accuracy score (2/2)") or above 10 is a criterion, never the total. Of the rest, the one
     closest to the requested format wins: the upper-case SCORE label first, then a label that
-    opens its line, then an explicit "total/overall/final score"; ties go to the first.
+    opens its line, then an explicit "total/overall/final score"; ties go to the first. With
+    no "score" label at all, the first "rating"/"quality" value out of 10 is read, under the
+    same out-of-10 rule ("quality: 2/2" is a criterion, not 2 out of 10).
     """
     candidates = []
     for match in _SCORE_LABEL.finditer(content):
@@ -98,10 +108,13 @@ def _parse_score(content: str) -> Optional[float]:
         candidates.append((_score_rank(content, match), match.start(), value))
     if candidates:
         return min(candidates)[2]
-    match = re.search(r'(?:rating|quality)[:\s]+(\d+(?:\.\d+)?)\s*(?:/\s*10)?', content, re.IGNORECASE)
-    if match is None or float(match.group(1)) > 10:
-        return None
-    return float(match.group(1))
+    # The older "rating"/"quality" wording, under the same rule: the first one out of 10.
+    for match in _FALLBACK_LABEL.finditer(content):
+        value = float(match.group("num"))
+        denominator = match.group("den")
+        if value <= 10 and (denominator is None or float(denominator) == 10):
+            return value
+    return None
 
 
 class ScientificSchematicGenerator:
@@ -722,9 +735,14 @@ Generate a publication-quality scientific diagram that meets all the guidelines 
             results["iterations"].append(iteration_result)
 
             if score is None:
-                # No score means no critique to improve on and no threshold check: keep the
-                # image, but say plainly that its quality is unknown.
                 print(f"[WARN] {critique.splitlines()[0]}")
+                if best is not None:
+                    # An earlier image WAS reviewed. This one's quality is unknown, so it cannot
+                    # outrank a known score: keep-best below chooses among reviewed images only.
+                    results["unreviewed_iteration"] = i
+                    break
+                # No reviewed image at all: keep this one, but say plainly that its quality is
+                # unknown.
                 print(f"[WARN] Quality NOT verified against the {doc_type} threshold ({threshold}/10)")
                 results["final_image"] = str(iter_path)
                 results["final_score"] = None
@@ -760,23 +778,30 @@ Generate a publication-quality scientific diagram that meets all the guidelines 
             current_prompt = self.improve_prompt(user_prompt, critique, i + 1)
 
         if not results["success"] and best is not None:
-            # No image met the threshold (or the last generation failed): every reviewed image
-            # was paid for, so the one delivered is the best-scoring, never simply the last.
+            # No image met the threshold, the last generation failed, or the last image's review
+            # failed: every reviewed image was paid for, so the one delivered is the
+            # best-scoring REVIEWED one, never simply the last.
             last_failed = not results["iterations"][-1].get("success")
+            unreviewed = results.get("unreviewed_iteration")
             # A score at or above the threshold lands here when the reviewer's verdict still
             # asked for improvement, so "below" is said only when it is true.
             met = best["score"] >= threshold
-            reason = ("The last generation failed" if last_failed
-                      else "No image was judged acceptable" if met else "No image met the threshold")
+            if last_failed:
+                reason = "The last generation failed"
+            elif unreviewed is not None:
+                reason = (f"The review of v{unreviewed} failed, so its quality is unknown "
+                          f"(it stays on disk as {results['iterations'][-1]['image_path']})")
+            else:
+                reason = "No image was judged acceptable" if met else "No image met the threshold"
             relation = "at or above" if met else "below"
-            print(f"\n[WARN] {reason}; keeping v{best['iteration']}, the best-scoring "
-                  f"(score {best['score']}/10, {relation} the {threshold}/10 threshold)")
+            print(f"\n[WARN] {reason}; keeping v{best['iteration']}, the best-scoring reviewed "
+                  f"image (score {best['score']}/10, {relation} the {threshold}/10 threshold)")
             results["final_image"] = best["image_path"]
             results["final_score"] = best["score"]
             results["success"] = True
             results["threshold_met"] = met
             results["kept_iteration"] = best["iteration"]
-            if last_failed:
+            if last_failed or unreviewed is not None:
                 results["fallback_iteration"] = best["iteration"]
 
         # Copy final version to output path
@@ -840,7 +865,9 @@ Environment:
   OPENROUTER_API_KEY    OpenRouter API key (required; the only way to pass the key)
 
 Exit status: 0 image written, reviewed and at or above the threshold; 1 failure, review
-unavailable, or best score below the threshold (the image may still be written); 2 usage error.
+unavailable with no earlier reviewed image, or best reviewed score below the threshold (the
+image may still be written); 2 usage error. The threshold is numeric: a NEEDS_IMPROVEMENT
+verdict on a score at or above it still exits 0.
         """
     )
     

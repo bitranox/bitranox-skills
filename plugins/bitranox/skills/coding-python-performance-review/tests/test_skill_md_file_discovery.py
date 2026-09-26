@@ -221,6 +221,28 @@ def test_step2_bootstrap_runs_without_uv_or_a_bare_python(tmp_path):
     assert "Session file: " in result.stdout, result.stdout
 
 
+def test_step2_without_a_project_venv_records_the_users_python_not_uvs_throwaway_env(tmp_path):
+    """With no .venv/venv, setup_env records the interpreter running it. Launched by `uv run`,
+    that is uv's throwaway script env, which has neither the project nor pytest; the user's own
+    python3 is the one that can have them (an activated venv, a conda env)."""
+    project = tmp_path / "proj"
+    project.mkdir()
+    (project / "pyproject.toml").write_text("[project]\nname = 'p'\n", encoding="utf-8")
+    env, marker = _shim_env(tmp_path, None)
+    throwaway = tmp_path / "uv-cache" / "environments" / "bin"
+    throwaway.mkdir(parents=True)
+    (throwaway / "python3").symlink_to(sys.executable)
+    # a working `uv`: `uv run SCRIPT` runs SCRIPT with the throwaway env's interpreter
+    _write_exe(tmp_path / "bin" / "uv", f'#!/bin/sh\nshift\nexec "{throwaway / "python3"}" "$@"\n')
+    block = _block("### Step 2: Setup").replace(SKILL_DIR_PLACEHOLDER, f'SKILL_DIR="{SKILL_DIR}"')
+    result = _run(block + '\ncat "$BX_PERF_SESSION"\n', project, env)
+    assert not marker.exists(), marker.read_text(encoding="utf-8")
+    assert result.returncode == 0, result.stdout + result.stderr
+    recorded = json.loads(result.stdout[result.stdout.rindex("{\n  \"tmpdir\""):])["python"]
+    assert not recorded.startswith(str(tmp_path / "uv-cache")), recorded
+    assert recorded == str(tmp_path / "bin" / "python3"), recorded
+
+
 def test_step7_final_run_uses_the_recorded_interpreter(tmp_path):
     project = tmp_path / "proj"
     (project / "tests").mkdir(parents=True)

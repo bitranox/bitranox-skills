@@ -48,6 +48,26 @@ def test_module_level_one_shot_call_is_not_flagged(tmp_path):
     assert _lines(tmp_path, code) == [6, 8, 9]
 
 
+def test_defaults_decorators_and_annotations_run_where_the_def_runs(tmp_path):
+    code = (
+        "import re\n"                                              # 1
+        "@register(re.sub(\"a\", \"b\", \"abc\"))\n"               # 2: decorator, runs once
+        "def f(s, m=re.match(\"a\", \"a\"), *, k=re.search(\"b\", \"b\")"
+        ") -> re.split(\"c\", \"c\"):\n"                           # 3: defaults, annotation: once
+        "    return re.match(\"d\", s)\n"                          # 4: every call
+        "key = lambda s, d=re.findall(\"e\", \"e\"): re.match(\"f\", s)\n"  # 5: body only
+        "def outer(s):\n"                                          # 6
+        "    def inner(x=re.match(\"g\", s)):\n"                   # 7: default, once per outer call
+        "        return x\n"
+        "    return inner\n"
+    )
+    assert _lines(tmp_path, code) == [4, 5, 7]
+    p = tmp_path / "m.py"
+    calls = sorted((f["line"], f["call"]) for f in fur.find_uncompiled_regex(str(p)))
+    assert calls == [(4, "re.match('d', ...)"), (5, "re.match('f', ...)"),
+                     (7, "re.match('g', ...)")]
+
+
 def test_fstring_pattern_is_reported_as_dynamic(tmp_path):
     p = tmp_path / "m.py"
     p.write_text("import re\ndef f(s, n):\n    return re.match(f\"a{n}\", s)\n", encoding="utf-8")

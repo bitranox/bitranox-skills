@@ -406,9 +406,32 @@ def test_nosniff_first_value_not_nosniff_is_medium():
     assert sev(a._nosniff("garbage, nosniff")) == "MEDIUM"
 
 
-def test_xfo_repeated_identical_values_ok_conflicting_medium():
+def test_xfo_repeated_identical_values_ok():
     assert sev(a._clickjacking("DENY, DENY", None)) == "OK"
-    assert sev(a._clickjacking("DENY, SAMEORIGIN", None)) == "MEDIUM"
+
+
+# HTML "check a navigation response's adherence to X-Frame-Options": more than one distinct value,
+# any of them deny / sameorigin / allowall, BLOCKS framing outright - Chrome logs "conflicting
+# values ... Falling back to 'deny'". Grading that as unprotected is a false FAIL.
+@pytest.mark.parametrize("xfo", ["DENY, SAMEORIGIN", "sameorigin, deny", "deny, allowall",
+                                 "allowall, garbage"])
+def test_xfo_conflicting_values_block_framing_and_grade_ok(xfo):
+    finding = a._clickjacking(xfo, None)
+    assert sev(finding) == "OK", finding
+    assert "conflicting" in finding.detail
+
+
+@pytest.mark.parametrize("xfo", ["allowall", "ALLOWALL, allowall", "garbage, junk",
+                                 "ALLOW-FROM https://partner.example"])
+def test_xfo_values_that_allow_framing_stay_medium_and_name_the_value(xfo):
+    finding = a._clickjacking(xfo, None)
+    assert sev(finding) == "MEDIUM", finding
+    assert "no X-Frame-Options" not in finding.detail
+    assert xfo.split(",")[0].strip().lower() in finding.detail.lower()
+
+
+def test_xfo_absent_still_reads_as_missing():
+    assert "no X-Frame-Options" in a._clickjacking(None, None).detail
 
 
 def test_referrer_policy_repeated_header_uses_last_recognised_token():
@@ -514,3 +537,46 @@ def test_csp_unsafe_eval_is_governed_by_script_src_only():
     # eval() consults script-src (then default-src); an 'unsafe-eval' in script-src-elem is ignored
     policy = "script-src 'self'; script-src-elem 'self' 'unsafe-eval'; object-src 'none'"
     assert sev(a._csp(policy)) == "OK"
+
+
+def test_csp_unsafe_eval_falls_back_to_default_src():
+    # no script-src, so eval() is governed by default-src
+    finding = a._csp("default-src 'self' 'unsafe-eval'")
+    assert sev(finding) == "MEDIUM"
+    assert "'unsafe-eval'" in finding.detail
+
+
+def test_csp_script_src_overrides_a_default_src_unsafe_eval():
+    assert sev(a._csp("default-src 'self' 'unsafe-eval'; script-src 'self'")) == "OK"
+
+
+# ---- a CSP header sent twice reaches us joined with ", ": that is TWO policies ----
+# CSP 3 parses a header value as a comma-separated LIST of policies and enforces every one, so
+# something is allowed only when every policy allows it. Read as one policy, the comma glues the
+# second policy's first directive onto the first policy's last source list.
+def test_joined_csp_frame_ancestors_star_in_the_first_policy_is_medium():
+    finding = a._clickjacking(None, "frame-ancestors *, default-src 'self'")
+    assert sev(finding) == "MEDIUM", finding
+
+
+def test_joined_csp_any_restrictive_frame_ancestors_protects_the_page():
+    assert sev(a._clickjacking(None, "frame-ancestors *, frame-ancestors 'self'")) == "OK"
+    assert sev(a._clickjacking(None, "default-src 'self'; frame-ancestors 'none', script-src *")) == "OK"
+
+
+def test_joined_csp_frame_ancestors_in_the_second_policy_counts():
+    assert sev(a._clickjacking("SAMEORIGIN", "default-src 'self', frame-ancestors *")) == "MEDIUM"
+
+
+def test_joined_csp_unsafe_inline_is_medium_when_no_other_policy_restricts_scripts():
+    assert sev(a._csp("script-src 'unsafe-inline', img-src 'self'")) == "MEDIUM"
+
+
+def test_joined_csp_unsafe_inline_is_blocked_by_a_second_policy():
+    assert sev(a._csp("script-src 'self', script-src 'unsafe-inline'; object-src 'none'")) == "OK"
+    assert sev(a._csp("default-src 'self', script-src 'self' 'unsafe-eval'")) == "OK"
+
+
+def test_joined_csp_unsafe_eval_is_medium_when_every_policy_allows_it():
+    policy = "default-src 'self' 'unsafe-eval', script-src 'unsafe-eval'"
+    assert sev(a._csp(policy)) == "MEDIUM"

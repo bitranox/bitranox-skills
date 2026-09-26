@@ -332,6 +332,23 @@ def test_name_timestamp_with_every_stamped_path_gone_is_no_match(tmp_path):
     assert "Infinity" not in r.stdout
 
 
+def test_every_stamped_path_gone_is_not_reported_as_no_stamp(tmp_path):
+    """The stamp parsed fine; the path is what is missing. Saying 'no parseable stamp' sends the
+    reader to fix a naming scheme that is correct."""
+    r = _run(["--name-timestamp", str(tmp_path / "gone-20260901.gz")])
+    assert r.returncode == 1
+    assert "no path carries a parseable" not in r.stderr, r.stderr
+    assert "none of them could be read" in r.stderr, r.stderr
+
+
+def test_no_stamp_at_all_still_names_the_stamp_forms(tmp_path):
+    f = tmp_path / "plain.gz"
+    f.write_text("x", encoding="utf-8")
+    r = _run(["--name-timestamp", str(f)])
+    assert r.returncode == 1
+    assert "no path carries a parseable fixed-width name stamp" in r.stderr, r.stderr
+
+
 def test_the_disagreement_warning_ignores_a_stamp_winner_that_is_gone(tmp_path):
     real = tmp_path / "s-20260101T000000Z.gz"
     _touch(real, 100.0)

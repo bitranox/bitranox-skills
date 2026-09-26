@@ -19,9 +19,16 @@ Exit codes: 0 = clean; 1 = error/warning lines found, or the `--cmd` command exi
 `--step` names no step in the log). Line numbers always count from the top of the whole log, so
 they match `grep -n`, including under `--step`.
 
-`--step NAME` selects, in every job, the lines whose `gh run view --log` step column contains NAME
-(the step name as GitHub lists it); when no line carries such a column, it selects every block from a
-`##[group]`/`Run ` header containing NAME to the next header.
+`--step NAME` selects, in every job, every step whose `gh run view --log` step column (the step name
+as GitHub lists it) OR whose own `##[group]`/`Run ` header contains NAME. A line with no step column
+- a downloaded job log, or one gh wrote as UNKNOWN STEP - belongs to the block it continues: from a
+header containing NAME, or from a selected step, up to the next header, mapped line or job.
+
+`--cmd` is split into argv the way a shell would split it (shlex on POSIX, CommandLineToArgvW on
+Windows) and run without a shell; quote with DOUBLE quotes, which both honour.
+
+The default keywords ignore a keyword that is only a path component (`src/errors/mod.rs`) or part
+of a command-line flag (`-Wno-error=foo`, `--fail-under=80`); `--keywords` matches raw text.
 """
 from __future__ import annotations
 
@@ -37,12 +44,18 @@ import subprocess
 import sys
 from collections.abc import Callable, Iterable, Sequence
 
+# gate's splitter, not a copy: shlex on POSIX, CommandLineToArgvW on Windows. A bare str.split()
+# ignored quoting, so `--cmd "python3 -c 'import x'"` ran with its argument torn in two.
+from gate import split_command
+
 _ANSI = re.compile(r"\x1b\[[0-9;]*m")
 # `gh run view --log` prefixes each line with "job<TAB>step<TAB>timestamp "; a downloaded job log
 # prefixes it with the timestamp alone. Both hide a header from a ^-anchored match.
 _GH_PREFIX = re.compile(r"^(?:[^\t\n]*\t[^\t\n]*\t)?\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d(?:\.\d+)?Z ?")
-# The same gh prefix with its step column captured; a downloaded job log has no such column.
-_GH_STEP = re.compile(r"^[^\t\n]*\t([^\t\n]*)\t\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d(?:\.\d+)?Z")
+# The same gh prefix with its job and step columns captured; a downloaded job log has neither.
+_GH_COLUMNS = re.compile(r"^([^\t\n]*)\t([^\t\n]*)\t\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d(?:\.\d+)?Z")
+# What gh writes in the step column for a line it could not map to a step.
+_GH_UNMAPPED = "UNKNOWN STEP"
 _HEADER = re.compile(r"^##\[group\]|^\s*Run ")
 # Word-bound so a hex sha or "stderr" is not a hit; the scoped case-sensitive arms keep exception
 # class names, whose "Error"/"Warning" follows any letter or digit (TypeError, OSError, HTTPError),
@@ -59,6 +72,12 @@ _ZERO_COUNT = re.compile(rf"\b0 {_COUNTED}\b|\b{_COUNTED}\s*[:=]\s*0(?![\d.])", 
 _CARGO_CRATE = re.compile(
     r"(?-i:\b(?:Compiling|Checking|Downloaded|Downloading|Documenting|Fresh|Installing|Installed|"
     r"Locking|Adding|Updating|Removing|Unpacking))\s+[A-Za-z0-9_-]+(?=\s+v\d)")
+# A keyword that is a PATH COMPONENT (src/errors/mod.rs) or part of a command-line FLAG
+# (-Wno-error=foo, --fail-under=80, --no-fail-fast) names a place or an option, not an outcome.
+# A flag starts a token and has a letter right after its dashes, so go test's `--- FAIL:` and a
+# diff's `- error` line are left alone; a path component touches a separator, so a gcc/MSVC
+# `file.c:3: error:` keeps its keyword, which is separated from the path by `: `.
+_PATH_OR_FLAG = re.compile(r"(?<!\S)--?[A-Za-z][\w-]*(?:=\S*)?|(?<=[/\\])[\w.-]+|[\w.-]+(?=[/\\])")
 _BOMS = [(b"\xef\xbb\xbf", "utf-8"), (b"\xff\xfe", "utf-16-le"), (b"\xfe\xff", "utf-16-be")]
 
 Runner = Callable[[Sequence[str]], "tuple[str, int]"]
@@ -92,8 +111,9 @@ def error_lines(text: str, keywords=None) -> list[tuple[int, str]]:
 
 
 def _scrub(body: str) -> str:
-    """The default keywords' view of a line: zero counts and cargo crate names removed."""
-    return _CARGO_CRATE.sub("", _ZERO_COUNT.sub("", body))
+    """The default keywords' view of a line: zero counts, cargo crate names, path components and
+    command-line flags removed."""
+    return _PATH_OR_FLAG.sub("", _CARGO_CRATE.sub("", _ZERO_COUNT.sub("", body)))
 
 
 def _hits(lines: list[str], keywords, indices: Iterable[int]) -> list[tuple[int, str]]:
@@ -109,28 +129,53 @@ def _hits(lines: list[str], keywords, indices: Iterable[int]) -> list[tuple[int,
     return out
 
 
-def _gh_step(line: str) -> str | None:
-    """The step column of a `gh run view --log` line, or None for a line without one."""
-    m = _GH_STEP.match(line)
-    return None if m is None else m.group(1)
+def _gh_columns(line: str) -> tuple[str | None, str | None]:
+    """(job, step) of a `gh run view --log` line; step is None when the line has no step column
+    or gh wrote UNKNOWN STEP for it, and job is None only for a line with no gh columns at all."""
+    m = _GH_COLUMNS.match(line)
+    if m is None:
+        return None, None
+    job, step = m.group(1), m.group(2)
+    return job, (None if step == _GH_UNMAPPED else step)
+
+
+def _chosen_steps(columns, lines: list[str], step: str) -> set[tuple[str | None, str]]:
+    """The (job, step name) pairs of every mapped step whose name, or one of whose own headers,
+    contains `step`."""
+    chosen: set[tuple[str | None, str]] = set()
+    for (job, name), ln in zip(columns, lines):
+        if name is None:
+            continue
+        body = content(ln)
+        if step in name or (_HEADER.search(body) and step in body):
+            chosen.add((job, name))
+    return chosen
 
 
 def locate_step(lines: list[str], step: str) -> list[int]:
     """Indices of the lines belonging to `step`, in every job; empty when no step matches.
 
-    A gh log names each line's step in its 2nd column, so those lines are selected; otherwise each
-    block from a header containing `step` up to the next header is. Every match counts, because a
+    A gh log names each line's step in its 2nd column. A MAPPED step is selected whole when its
+    name contains `step` or when any of its own `##[group]`/`Run ` headers does - both, never one
+    route shadowing the other, so a name matching "Install pytest" cannot hide the step whose
+    header is "Run pytest -q". A line with no step column (a downloaded job log, or gh's UNKNOWN
+    STEP) belongs to the block it continues: the mapped step above it, or the header block it is
+    in, up to the next header, the next mapped line or the next job. Every match counts, because a
     matrix run repeats the step once per job and the failing job need not be the first.
     """
-    by_column = [i for i, ln in enumerate(lines) if step in (_gh_step(ln) or "")]
-    if by_column:
-        return by_column
+    columns = [_gh_columns(ln) for ln in lines]
+    chosen = _chosen_steps(columns, lines, step)
     picked: list[int] = []
     inside = False
-    for i, ln in enumerate(lines):
-        body = content(ln)
-        if _HEADER.search(body):
-            inside = step in body
+    previous_job: str | None = None
+    for i, ((job, name), ln) in enumerate(zip(columns, lines)):
+        if job != previous_job:
+            inside = False
+            previous_job = job
+        if name is not None:
+            inside = (job, name) in chosen
+        elif _HEADER.search(content(ln)):
+            inside = step in content(ln)
         if inside:
             picked.append(i)
     return picked
@@ -171,7 +216,10 @@ def _read_source(args, run: Runner) -> tuple[str, int]:
         except OSError as exc:
             raise TriageError(f"cannot read {args.file}: {exc}") from exc
     if args.cmd is not None:
-        argv = args.cmd.split()
+        try:
+            argv = split_command(args.cmd)
+        except (ValueError, OSError) as exc:
+            raise TriageError(f"--cmd cannot be split into arguments: {exc}: {args.cmd!r}") from exc
         if not argv:
             raise TriageError("--cmd is empty")
         try:
@@ -221,7 +269,9 @@ def _parser() -> argparse.ArgumentParser:
                                  "Exit 0 clean, 1 errors found or command failed, 2 tool error.")
     src = ap.add_mutually_exclusive_group()
     src.add_argument("--file")
-    src.add_argument("--cmd", help="run this shell-free command (space-split) and triage its output")
+    src.add_argument("--cmd", help="run this command WITHOUT a shell and triage its output; it is "
+                     "split into argv like a shell would (shlex on POSIX, CommandLineToArgvW on "
+                     "Windows, which has no single-quoting, so quote with DOUBLE quotes)")
     src.add_argument("--gh", metavar="RUN_ID", help="fetch a GitHub Actions run log via gh")
     ap.add_argument("--repo")
     ap.add_argument("--step", help="triage only this step: the gh step name, else the ##[group]/Run "

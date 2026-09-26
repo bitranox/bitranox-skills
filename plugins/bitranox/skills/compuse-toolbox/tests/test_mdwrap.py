@@ -411,6 +411,94 @@ def test_cli_unexpected_crash_exits_2_not_the_refusal_code(tmp_path, capsys, mon
 
 
 def test_help_names_the_real_script_path():
-    proc = subprocess.run([sys.executable, str(SCRIPT), "--help"], capture_output=True, text=True)
+    proc = subprocess.run([sys.executable, str(SCRIPT), "--help"], capture_output=True, text=True,
+                          encoding="utf-8", errors="replace")
     assert "tools/mdwrap.py" not in proc.stdout
     assert "scripts/mdwrap.py" in proc.stdout
+
+
+# --- a wrap never creates a hard line break ---------------------------------------------------------
+
+@pytest.mark.parametrize("token", ["C:\\", "a\\", "\\"])
+def test_a_wrap_never_ends_a_line_in_a_backslash(token):
+    # A backslash at the end of a line is a Markdown hard line break: a wrap point falling right
+    # after "C:\" would put a break into the paragraph that the source never had - the very
+    # shape the tool refuses to reflow in its input.
+    src = f"ANCHOR copy the file to {token} and then run the installer from there please\n"
+    for width in range(4, 60):
+        r = mdwrap.rewrap(src, anchor="ANCHOR", width=width)
+        assert r.ok, (width, r.reason)
+        lines = r.text.split("\n")[:-1]
+        assert not any(l.endswith("\\") for l in lines[:-1]), (width, r.text)
+        assert r.text.split() == src.split(), (width, r.text)
+
+
+# --- a one-item list under a lead-in is a list, whatever the lead-in ends with ----------------------
+
+@pytest.mark.parametrize("item", ["* build the image", "+ build the image", "1. build the image",
+                                  "1) build the image"])
+def test_a_single_list_item_under_a_lead_in_without_a_colon_is_refused(item):
+    # CommonMark reads each of these, directly under a paragraph line, as a list item that
+    # interrupts the paragraph; flattening it into the prose deletes the list. Only a '- ' line
+    # is the known damage shape a previous bad wrap leaves, and that one is repaired.
+    r = mdwrap.rewrap(f"Steps to run ANCHOR\n{item}\n", anchor="ANCHOR", width=80)
+    assert not r.ok and "list" in r.reason, r.text
+
+
+def test_an_ordered_number_other_than_one_under_prose_is_still_rewrapped():
+    # The control: "2024. " cannot interrupt a paragraph (an ordered list may only do that when it
+    # starts at 1), so it is ordinary continuation text and the paragraph is reflowed.
+    r = mdwrap.rewrap("It shipped in ANCHOR\n2024. Then it broke again\n", anchor="ANCHOR",
+                      width=80)
+    assert r.ok and r.text == "It shipped in ANCHOR 2024. Then it broke again\n"
+
+
+# --- the write keeps hard links and works in a directory it cannot create files in -------------------
+
+def test_cli_apply_keeps_a_hard_link_linked(tmp_path, capsys):
+    p = tmp_path / "doc.md"
+    p.write_text(PARA, encoding="utf-8")
+    twin = tmp_path / "twin.md"
+    os.link(p, twin)
+    assert mdwrap.main(["--file", str(p), "--anchor", "ANCHOR", "--width", "20", "--apply"]) == 0
+    assert twin.read_text(encoding="utf-8") == p.read_text(encoding="utf-8") != PARA
+    assert os.path.samefile(p, twin)
+
+
+def _refuse_temp(*_a, **_k):
+    raise PermissionError(13, "Permission denied", "<dir>")
+
+
+def test_a_directory_refusing_a_temp_file_falls_back_to_an_in_place_write(tmp_path):
+    p = tmp_path / "doc.md"
+    p.write_text(PARA, encoding="utf-8")
+    mode = mdwrap._write_file(p, "new text\r\n", make_temp=_refuse_temp)
+    assert mode == "in-place"
+    assert p.read_bytes() == b"new text\r\n"
+
+
+def test_an_ordinary_file_is_still_written_atomically(tmp_path):
+    p = tmp_path / "doc.md"
+    p.write_text(PARA, encoding="utf-8")
+    assert mdwrap._write_file(p, "new text\n") == "atomic"
+    assert p.read_bytes() == b"new text\n"
+
+
+@pytest.mark.skipif(sys.platform == "win32" or getattr(os, "geteuid", lambda: 1)() == 0,
+                    reason="needs POSIX mode bits and a non-root user to make a directory read-only")
+def test_cli_apply_to_a_writable_file_in_a_read_only_directory_exits_0(tmp_path, capsys):
+    d = tmp_path / "ro"
+    d.mkdir()
+    p = d / "doc.md"
+    p.write_text(PARA, encoding="utf-8")
+    d.chmod(0o555)
+    try:
+        rc = mdwrap.main(["--file", str(p), "--anchor", "ANCHOR", "--width", "20", "--apply",
+                          "--json"])
+        env = json.loads(capsys.readouterr().out)
+        assert rc == 0, env
+        assert p.read_text(encoding="utf-8").startswith("Title\n\nANCHOR one two three\n")
+        assert env["data"]["applied"] is True and env["data"]["write"] == "in-place"
+    finally:
+        d.chmod(0o755)
+    assert sorted(x.name for x in d.iterdir()) == ["doc.md"]

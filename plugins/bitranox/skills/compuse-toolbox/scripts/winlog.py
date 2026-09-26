@@ -73,6 +73,16 @@ def _aligned_wide_end(data: bytes, pos: int) -> int:
         k = i + 1
 
 
+def _wide_line_aligned(data: bytes, pos: int) -> bool:
+    """Read from pos as UTF-16LE, is the NEXT `0A 00` pair a whole code unit (or EOF, evenly)?
+
+    Only the first pair is consulted, never an aligned one further on: searching past misaligned
+    pairs costs the rest of the file per call, and a file of such lines went quadratic.
+    """
+    first = data.find(_WIDE_LF, pos)
+    return ((len(data) if first < 0 else first) - pos) % 2 == 0
+
+
 class _Segmenter:
     """Cut bytes into (chunk, is_wide) lines. Narrow text never holds a NUL byte; UTF-16LE
     holds one at least in its LF (0A 00), and in every ASCII character besides."""
@@ -92,12 +102,16 @@ class _Segmenter:
 
         It is wide when that 0x0A is a low byte (even offset), the next NUL is a high byte
         (odd offset), and every 0x0A in between is a low byte too. A narrow line followed by a
-        UTF-16 segment always fails one of those parity tests, whatever the line lengths.
+        UTF-16 segment fails one of those parity tests - except when the segment's first
+        character is U+xx00 (00 xx): the narrow LF and that NUL then read as a wide LF, and
+        only what follows can tell the two apart (`_narrow_lf_before_wide`).
         """
         if (lf - pos) % 2:
             return False
         nul = self._next_nul(lf + 1)
         if nul >= len(self.data) or (nul - pos) % 2 == 0:
+            return False
+        if nul == lf + 1 and self._narrow_lf_before_wide(pos, lf):
             return False
         k = lf + 1
         while True:
@@ -107,6 +121,34 @@ class _Segmenter:
             if (i - pos) % 2:
                 return False
             k = i + 1
+
+    def _narrow_lf_before_wide(self, pos: int, lf: int) -> bool:
+        """Is `0A 00` at lf a narrow LF followed by a wide segment opening with U+xx00?
+
+        Both readings are valid bytes, so alignment decides: the narrow reading must leave a
+        wide line from lf+1 that ends on an aligned LF (or at EOF on a whole code unit), and the
+        wide reading must leave a line from lf+2 that does NOT - a real wide file stays aligned
+        after its LF, a misread transition does not. The line itself must read as narrow text.
+        """
+        if not _reads_as_narrow_text(self.data[pos:lf]):
+            return False
+        return _wide_line_aligned(self.data, lf + 1) and not self._line_fits(lf + 2)
+
+    def _line_fits(self, start: int) -> bool:
+        """Does a line starting at `start` read cleanly: narrow, or wide on whole code units?
+
+        Narrow means no NUL up to and including the byte after its LF - a NUL there is the same
+        ambiguous `0A 00` again, which only alignment can settle.
+        """
+        if start >= len(self.data):
+            return True
+        lf = self.data.find(b"\n", start)
+        after_lf = len(self.data) if lf < 0 else lf + 2
+        # A bounded find, not _next_nul: that cache only moves forward, and the caller's next
+        # line starts BEFORE `start`.
+        if self.data.find(b"\x00", start, after_lf) < 0:
+            return True
+        return _wide_line_aligned(self.data, start)
 
     def _plausibly_wide(self, pos: int, narrow_end: int) -> bool:
         """Is the NUL-bearing line at pos UTF-16LE, or narrow text with a stray NUL?

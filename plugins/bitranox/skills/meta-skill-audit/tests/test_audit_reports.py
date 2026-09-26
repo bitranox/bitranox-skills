@@ -230,3 +230,76 @@ def test_evidence_of_line_one_survives_a_bom(tmp_path):
 def test_mention_block_line_numbers_are_not_shifted_by_a_line_separator(tmp_path):
     (tmp_path / "doc.md").write_text("one\u2028still one\nrun gate.py here\n", encoding="utf-8")
     assert "doc.md:2:" in A.mention_block(tmp_path, "skills/a/gate.py", ["doc.md"])
+
+
+# ---- a registration is found whatever shell punctuation follows or precedes the file name ------
+
+def _one_command(room, command):
+    (room / "hooks").mkdir(parents=True, exist_ok=True)
+    (room / "hooks" / "hooks.json").write_text(
+        json.dumps({"hooks": {"Stop": [{"hooks": [{"command": command}]}]}}), encoding="utf-8")
+
+
+@pytest.mark.parametrize("command", [
+    "bash run-python.sh --hook hooks/gate.py; echo done",
+    "bash run-python.sh --hook hooks/gate.py&&echo done",
+    "(bash run-python.sh --hook hooks/gate.py)",
+    "bash run-python.sh --hook hooks/gate.py|tee log",
+    "bash run-python.sh --hook hooks/gate.py>log",
+    "bash run-python.sh --hook `echo hooks/gate.py`",
+])
+def test_hook_registration_sees_a_name_next_to_shell_punctuation(tmp_path, command):
+    _one_command(tmp_path, command)
+    assert A.hook_registration(tmp_path, "hooks/gate.py") == [("Stop", "*", command)]
+
+
+@pytest.mark.parametrize("command", [
+    "bash run-python.sh --hook hooks/gate.py.bak",
+    "bash run-python.sh --hook hooks/gate.pyc",
+    "bash run-python.sh --hook hooks/pre-gate.py",
+    "bash run-python.sh --hook hooks/my.gate.py",
+])
+def test_hook_registration_control_a_longer_name_is_still_not_this_hook(tmp_path, command):
+    _one_command(tmp_path, command)
+    assert A.hook_registration(tmp_path, "hooks/gate.py") is None
+
+
+# ---- every counted finding line is also parsed ---------------------------------------------------
+
+def test_an_indented_finding_is_classed():
+    text = "  FINDING: BUG | a.py:1 | x\n\tFINDING: SECURITY | b.py:2 | y\n"
+    assert A.count_findings(text) == 2
+    counts = A.count_by_class(text)
+    assert counts["BUG"] == 1 and counts["SECURITY"] == 1
+
+
+def test_an_indented_findings_exhibit_is_checked(tmp_path):
+    (tmp_path / "hooks").mkdir()
+    (tmp_path / "hooks" / "m.py").write_text("a = 1\n", encoding="utf-8")
+    text = "  FINDING: BUG | hooks/m.py:1 | claim\nEXHIBIT:\n  1: a = 999\nWHY: z\n"
+    problems = A.evidence_problems(text, tmp_path)
+    assert problems and "does not match" in problems[0], problems
+
+
+def test_an_unparseable_finding_line_does_not_lend_its_exhibits_to_the_one_before(tmp_path):
+    """A counted line the parser cannot read left `current` on the PREVIOUS finding's file, so the
+    next finding's exhibits were checked against a file they never quoted."""
+    (tmp_path / "hooks").mkdir()
+    (tmp_path / "hooks" / "m.py").write_text("a = 1\n", encoding="utf-8")
+    text = ("FINDING: BUG | hooks/m.py:1 | claim\nEXHIBIT:\n  1: a = 1\n"
+            "FINDING: bug, lowercase | hooks/other.py:1 | claim\nEXHIBIT:\n  1: b = 2\n")
+    problems = A.evidence_problems(text, tmp_path)
+    assert not any("hooks/m.py" in p for p in problems), problems
+    assert any("not in the FINDING:" in p for p in problems), problems
+
+
+# ---- the --settings JSON survives a Windows claude.cmd launch -----------------------------------
+
+def test_reviewer_settings_carry_nothing_cmd_exe_would_reinterpret():
+    """An npm install launches `claude.cmd`, so the argv goes through cmd.exe twice (the launch and
+    the shim's `%*`). The JSON's double quotes only toggle cmd's quoting state, which is harmless
+    while no metacharacter sits inside; a space, `&`, `|`, `<`, `>`, `^`, `%` or `!` would be split
+    or expanded on the way. This pins the value to the shape that is safe."""
+    assert json.loads(A.REVIEWER_SETTINGS) == {"disableAllHooks": True}
+    assert not set(A.REVIEWER_SETTINGS) & set(" \t&|<>^%!")
+    assert A.reviewer_command("claude", "opus")[-2:] == ["--settings", A.REVIEWER_SETTINGS]

@@ -229,8 +229,8 @@ def _platform_test(node):
 
     Two shapes: a comparison somewhere containing a platform read (`os.name == "posix"`,
     `platform.system() == "Windows"`), and a method call ON a platform read
-    (`sys.platform.startswith("win")`) - either way against a Windows or POSIX value. This is a
-    direction test, not a dominance proof: a Windows test anywhere in the function still counts."""
+    (`sys.platform.startswith("win")`) - either way against a Windows or POSIX value. Whether the
+    test actually guards a given call is decided separately, by `_platform_guarded_nodes`."""
     if isinstance(node, ast.Compare):
         return any(_reads_platform(n) for n in ast.walk(node)) and _names_windows_or_posix(node)
     if isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute):
@@ -238,8 +238,93 @@ def _platform_test(node):
     return False
 
 
-def _is_platform_guarded(func):
-    """True when a function already branches on the platform.
+_SCOPES = (ast.FunctionDef, ast.AsyncFunctionDef, ast.Lambda, ast.ClassDef)
+_BLOCK_EXITS = (ast.Return, ast.Raise, ast.Continue, ast.Break)
+_PROCESS_EXITS = frozenset({"sys.exit", "exit", "quit", "os._exit"})
+
+
+def _own_nodes(scope):
+    """Every node of `scope` that is not inside a nested function, lambda or class."""
+    stack = list(ast.iter_child_nodes(scope))
+    while stack:
+        node = stack.pop()
+        yield node
+        if not isinstance(node, _SCOPES):
+            stack.extend(ast.iter_child_nodes(node))
+
+
+def _platform_flags(scope):
+    """Names this scope assigns from a platform test, e.g. `on_posix = os.name == "posix"`.
+
+    Scoped to the assigning function: a parameter that merely shares the name in another function
+    carries no platform test, and this rule's only job is to SUPPRESS a finding."""
+    names = set()
+    for node in _own_nodes(scope):
+        if isinstance(node, (ast.Assign, ast.AnnAssign)) and node.value is not None and any(
+                _platform_test(n) for n in ast.walk(node.value)):
+            targets = node.targets if isinstance(node, ast.Assign) else [node.target]
+            names.update(t.id for t in targets if isinstance(t, ast.Name))
+    return names
+
+
+def _tests_platform(expr, flags):
+    """True when `expr` contains a platform test, or reads a name assigned from one."""
+    return any(_platform_test(n) or (isinstance(n, ast.Name) and n.id in flags)
+               for n in ast.walk(expr))
+
+
+def _always_leaves(block):
+    """True when a statement block ends by returning, raising, continuing, breaking or exiting."""
+    if not block:
+        return False
+    last = block[-1]
+    if isinstance(last, _BLOCK_EXITS):
+        return True
+    return (isinstance(last, ast.Expr) and isinstance(last.value, ast.Call)
+            and _call_name(last.value) in _PROCESS_EXITS)
+
+
+def _mark(guarded, nodes):
+    for node in nodes:
+        guarded.update(id(n) for n in ast.walk(node))
+
+
+def _child_blocks(stmt):
+    """The statement lists nested in `stmt`: bodies, else/finally blocks, handler and case bodies."""
+    for _field, value in ast.iter_fields(stmt):
+        if not isinstance(value, list) or not value:
+            continue
+        if isinstance(value[0], ast.stmt):
+            yield value
+            continue
+        for item in value:
+            body = getattr(item, "body", None)
+            if isinstance(body, list):
+                yield body
+
+
+def _guard_block(block, flags, guarded):
+    """Mark what runs only after, or inside, a platform branch of this block.
+
+    Dominance, not presence: a platform `if` guards its own branches, and guards the REST of this
+    block only when one of its branches always leaves it. A call before the test, or after a branch
+    that falls through, still runs on Windows. Nested functions start over with their own flags."""
+    shielded = False
+    for stmt in block:
+        if shielded:
+            _mark(guarded, [stmt])
+            continue
+        if isinstance(stmt, ast.If) and _tests_platform(stmt.test, flags):
+            _mark(guarded, stmt.body + stmt.orelse)
+            shielded = _always_leaves(stmt.body) or _always_leaves(stmt.orelse)
+            continue
+        inner = flags | _platform_flags(stmt) if isinstance(stmt, _SCOPES) else flags
+        for child in _child_blocks(stmt):
+            _guard_block(child, inner, guarded)
+
+
+def _platform_guarded_nodes(tree):
+    """ids of every node that runs only on a platform the code has already tested for.
 
     Structural, never a substring of the dumped AST. The substring form suppressed real defects
     three ways: `"posix" in source` matched a DOCSTRING saying "only meaningful on posix", or a
@@ -247,17 +332,31 @@ def _is_platform_guarded(func):
     Every one of those reads as a guard while the `os.access(X_OK)` under it is genuinely unguarded,
     and this function's only job is to SUPPRESS a finding - so a loose rule here is silent.
 
-    `harness_checks.is_executable` is the reference shape: `(os.name == "posix") if posix is None
-    else posix` returns False off POSIX before ever reaching os.access, so its X_OK call is correct
-    and reporting it is a false positive."""
-    return any(_platform_test(node) for node in ast.walk(func))
+    Three guard shapes count: a platform `if` (its branches, and the rest of the block when a branch
+    always leaves), a conditional expression whose test is a platform test, and a boolean operation
+    with a platform test among its operands. `harness_checks.is_executable` is the reference shape:
+    `on_posix = (os.name == "posix") if posix is None else posix`, then `if not on_posix: return
+    False` before ever reaching os.access, so its X_OK call is correct and reporting it is a false
+    positive."""
+    guarded = set()
+    _guard_block(tree.body, _platform_flags(tree), guarded)
+    for scope in [tree] + [n for n in ast.walk(tree) if isinstance(n, _SCOPES)]:
+        flags = _platform_flags(tree) | _platform_flags(scope)
+        for node in _own_nodes(scope):
+            if isinstance(node, ast.IfExp) and _tests_platform(node.test, flags):
+                _mark(guarded, [node.body, node.orelse])
+            elif isinstance(node, ast.BoolOp) and any(_tests_platform(v, flags)
+                                                      for v in node.values):
+                _mark(guarded, node.values)
+    return guarded
 
 
 def os_access_x_ok(paths, allow=()):
     """An UNGUARDED `os.access(p, os.X_OK)` reports True for every file on Windows.
 
     The concept does not exist there, so the branch under it is dead and the check silently stops
-    checking. A call inside a platform-guarded function is fine and is not reported."""
+    checking. A call that runs only after, or inside, a Windows/POSIX test is fine and is not
+    reported; see `_platform_guarded_nodes` for what counts."""
     allow = set(allow)
     out = []
     for rel, path in paths:
@@ -266,10 +365,7 @@ def os_access_x_ok(paths, allow=()):
         tree = _parse(path)
         if tree is None:
             continue
-        guarded = set()
-        for func in ast.walk(tree):
-            if isinstance(func, (ast.FunctionDef, ast.AsyncFunctionDef)) and _is_platform_guarded(func):
-                guarded.update(id(c) for c in ast.walk(func))
+        guarded = _platform_guarded_nodes(tree)
         for node in ast.walk(tree):
             if not isinstance(node, ast.Call) or _call_name(node) not in ("os.access", "access"):
                 continue
@@ -367,30 +463,63 @@ def per_file_test_module(paths, test_roots=()):
     long as the package has any tests at all.
 
     "Names" means a real reference, never a substring: a `test_<stem>.py` file, an import of the
-    stem, the literal `<stem>.py`, or the stem as a whole quoted string - the form a conftest
-    loader takes (`load_script("batch_convert")`, a hyphenated hook's alias map), which is why
-    conftest.py files are read too. A substring test let every short stem pass - `check.py` was
-    "covered" by an unrelated `test_check_output` - so the lead was lost exactly where it mattered."""
-    corpus, files = [], set()
+    stem, the literal `<stem>.py`, or the stem as a quoted string IN A LOADER - the first argument of
+    a call whose name says it loads or imports (`load_script("batch_convert")`,
+    `importlib.import_module("x")`), or a string-to-string entry of an alias map (a hyphenated
+    hook's `{"my-guard": "my_guard"}`) - which is why conftest.py files are read too. A substring
+    test let every short stem pass - `check.py` was "covered" by an unrelated `test_check_output` -
+    and so did ANY quoted string: `mode="check"` in an unrelated test covered `check.py`."""
+    corpus, files, loaded = [], set(), set()
     for root in test_roots:
         for pattern in ("test_*.py", "conftest.py"):
             for path in Path(root).rglob(pattern):
                 files.add(path.name)
-                corpus.append(_source(path))
+                text = _source(path)
+                corpus.append(text)
+                loaded.update(_loader_strings(text))
     blob = "\n".join(corpus)
     out = []
     for rel, _path in paths:
         if not str(rel).endswith(".py"):
             continue
         stem = Path(rel).stem
-        if not _test_names(stem, files, blob):
+        if not _test_names(stem, files, blob, loaded):
             out.append((rel, 0, "no test module anywhere names '%s' (lead: coverage may be "
                                 "indirect)" % stem))
     return out
 
 
-def _test_names(stem, test_files, blob):
-    """True when a test module file is named for `stem`, imports it, or names `<stem>.py`."""
+_LOADER_WORDS = ("load", "import", "spec")
+
+
+def _loader_strings(text):
+    """Strings a test module hands to a loader: a loader call's first argument, an alias-map entry.
+
+    A loader call is one whose function name contains load, import or spec. An alias-map entry is a
+    dict item whose key AND value are both strings; both sides count, because the map may run
+    stem-to-alias or alias-to-stem. A test module that does not parse contributes nothing here."""
+    try:
+        tree = ast.parse(text)
+    except (SyntaxError, ValueError):
+        return set()
+    out = set()
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Call) and node.args and _is_str(node.args[0]):
+            if any(word in _call_name(node).lower() for word in _LOADER_WORDS):
+                out.add(node.args[0].value)
+        elif isinstance(node, ast.Dict):
+            for key, value in zip(node.keys, node.values):
+                if _is_str(key) and _is_str(value):
+                    out.update((key.value, value.value))
+    return out
+
+
+def _is_str(node):
+    return isinstance(node, ast.Constant) and isinstance(node.value, str)
+
+
+def _test_names(stem, test_files, blob, loaded=frozenset()):
+    """True when a test module is named for `stem`, imports it, names `<stem>.py`, or loads it."""
     for name in {stem, stem.replace("-", "_")}:
         if "test_%s.py" % name in test_files:
             return True
@@ -399,7 +528,7 @@ def _test_names(stem, test_files, blob):
             return True
         if re.search(r"(?<![\w-])%s\.py(?!\w)" % re.escape(name), blob):
             return True
-        if re.search(r"[\"']%s[\"']" % re.escape(name), blob):
+        if name in loaded:
             return True
     return False
 
@@ -436,17 +565,37 @@ def argparse_flags_vs_docs(targets, room, docs_text, run=_run):
     return out
 
 
-def js_parse(paths, run=_run, room="."):
-    """`node --check` where node exists; silent otherwise. The only mechanical check for the JS."""
+def js_parse(paths, run=_run, room=".", unmeasured=None):
+    """`node --check` over each JS file. The only mechanical check for the JS.
+
+    A file node could not judge is UNMEASURED, never clean, and is appended to `unmeasured` as
+    (rel, reason) when a list is passed: every file when node cannot be launched at all (it is not
+    on PATH), or the one file whose check timed out. Hits already found are kept either way - a
+    timeout on the last file used to discard every earlier failure and report a clean zero."""
+    unmeasured = [] if unmeasured is None else unmeasured
+    paths = list(paths)
     out = []
-    for rel, _path in paths:
+    for index, (rel, _path) in enumerate(paths):
         try:
             proc = run(["node", "--check", rel], room)
-        except Exception:
-            return []                                    # UNMEASURED: no node on this machine
+        except subprocess.TimeoutExpired:
+            unmeasured.append((rel, "node --check timed out"))
+            continue
+        except OSError as exc:
+            reason = "node could not be launched (%s)" % exc.__class__.__name__
+            unmeasured.extend((r, reason) for r, _p in paths[index:])
+            break
         if proc.returncode != 0:
             out.append((rel, 0, "node --check fails: %s" % (proc.stderr or "").strip()[:200]))
     return out
+
+
+def _unmeasured_note(unmeasured):
+    """The summary-line suffix for files a check could not judge, or ''."""
+    if not unmeasured:
+        return ""
+    reasons = sorted({reason for _rel, reason in unmeasured})
+    return ", UNMEASURED for %d file(s): %s" % (len(unmeasured), "; ".join(reasons))
 
 
 CHECKS = {
@@ -490,7 +639,8 @@ def run_prepass(room, targets, ci_min="3.11", vendored=(), run=_run):
     shipped Python in the plugin that nothing checked at all. Nothing else is run over them, and
     they reach no reviewer prompt - the hits are for the operator reading the summary.
 
-    `run` is the subprocess seam `js_parse` uses for `node --check` over the JS targets."""
+    `run` is the subprocess seam `js_parse` uses for `node --check` over the JS targets. A file it
+    could not judge is named UNMEASURED on its summary line, so "0 hit(s)" there means checked."""
     room = Path(room)
     py = [(rel, room / rel) for rel, _k in targets if rel.endswith(".py")]
     js = [(rel, room / rel) for rel, _k in targets if rel.endswith(".js")]
@@ -501,6 +651,7 @@ def run_prepass(room, targets, ci_min="3.11", vendored=(), run=_run):
     vendored_py = [(rel, room / rel) for rel, _k in vendored if rel.endswith(".py")]
 
     facts, leads, summary = [], [], []
+    unmeasured = {"js_parse": []}
     for name, fn in (("syntax_errors", lambda: syntax_errors(py + vendored_py)),
                      ("unguarded_third_party_imports",
                       lambda: unguarded_third_party_imports(hook_py, siblings)),
@@ -511,11 +662,13 @@ def run_prepass(room, targets, ci_min="3.11", vendored=(), run=_run):
                      ("hardcoded_tmp", lambda: hardcoded_tmp(py)),
                      ("pep723_problems", lambda: pep723_problems(py, ci_min, hooks)),
                      ("per_file_test_module", lambda: per_file_test_module(py, test_roots)),
-                     ("js_parse", lambda: js_parse(js, run=run, room=room))):
+                     ("js_parse", lambda: js_parse(js, run=run, room=room,
+                                                   unmeasured=unmeasured["js_parse"]))):
         found = fn()
         (leads if name in LEAD_CHECKS else facts).extend(found)
-        summary.append("%-34s %d hit(s)%s" % (name, len(found),
-                                              " (lead)" if name in LEAD_CHECKS else ""))
+        summary.append("%-34s %d hit(s)%s%s" % (name, len(found),
+                                                " (lead)" if name in LEAD_CHECKS else "",
+                                                _unmeasured_note(unmeasured.get(name))))
     return group_by_file(facts), group_by_file(leads), summary
 
 

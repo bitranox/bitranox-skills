@@ -814,3 +814,57 @@ class TestBareCommandNamesOnWindows:
         monkeypatch.setenv("PATH", str(shim_dir) + os.pathsep + os.environ.get("PATH", ""))
         rep = gate.run_gates([("shim", ["gateshim"])], tmp_path / "g.log")
         assert rep.results[0].returncode == 0
+
+
+# ---- LOW batch (rank-8 review follow-up) --------------------------------------------------------
+
+
+class TestANameRightAfterItsOwnGateBesideAPositional:
+    def test_a_name_directly_after_a_gate_option_written_after_the_positional_is_accepted(
+            self, tmp_path, capsys):
+        """`<A> --gate B --name x` has exactly one reading: x labels B, the gate right before it.
+        Only a --name whose nearest preceding gate is the POSITIONAL is ambiguous."""
+        rc = gate.main(["--log", str(tmp_path / "g.log"), OK, "--gate", FAIL, "--name", "lint"])
+        out = capsys.readouterr().out
+        assert rc == 1
+        assert "[FAIL] lint" in out
+
+    def test_a_name_after_the_positional_with_a_later_gate_is_still_refused(self, tmp_path, capsys):
+        """`<A> --name x --gate B`: a reader means A, while written order has nothing before it."""
+        with pytest.raises(SystemExit) as exc:
+            gate.main(["--log", str(tmp_path / "g.log"), OK, "--name", "x", "--gate", FAIL])
+        assert exc.value.code == 2
+        assert "positional" in capsys.readouterr().err
+
+    def test_a_name_after_a_second_gate_option_written_before_the_positional_is_refused(
+            self, tmp_path, capsys):
+        with pytest.raises(SystemExit) as exc:
+            gate.main(["--log", str(tmp_path / "g.log"), "--gate", OK, "--gate", FAIL, OK,
+                       "--log", str(tmp_path / "g.log"), "--name", "x"])
+        assert exc.value.code == 2
+
+
+class TestAnEmptyDashDashGateIsAUsageError:
+    @pytest.mark.parametrize("rest", [[""], [" "], ["", "x"]])
+    def test_an_empty_argv0_after_dashdash_exits_2_and_runs_nothing(self, tmp_path, capsys, rest):
+        log = tmp_path / "g.log"
+        with pytest.raises(SystemExit) as exc:
+            gate.main(["--log", str(log), "--", *rest])
+        assert exc.value.code == 2
+        assert "empty gate" in capsys.readouterr().err
+        assert not log.exists()
+
+
+class TestTheFollowUpPrintsAfterTheReport:
+    def test_then_output_follows_the_report_when_stdout_is_a_pipe(self, tmp_path):
+        """A piped stdout is block-buffered, so the report sat in Python's buffer while the --then
+        child wrote straight to the shared descriptor and appeared FIRST."""
+        follow = quoted(sys.executable, "-c", "print('THEN-MARK')")
+        done = subprocess.run([sys.executable, gate.__file__, "--log", str(tmp_path / "g.log"),
+                               "--gate", OK, "--then", follow],
+                              capture_output=True, text=True, encoding="utf-8", errors="replace",
+                              env={**os.environ}, timeout=120, check=False)
+        assert done.returncode == 0, done.stderr
+        out = done.stdout
+        assert "THEN-MARK" in out and "ALL GATES PASSED" in out
+        assert out.index("ALL GATES PASSED") < out.index("gates green") < out.index("THEN-MARK")

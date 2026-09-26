@@ -284,3 +284,148 @@ def test_no_skill_md_sends_a_cli_through_the_fail_open_launcher():
     bad = [f"{path.parent.name}: {line.strip()}" for path in skill_mds
            for line in _fail_open_launches(path.read_text(encoding="utf-8"))]
     assert bad == []
+
+
+# ---- os.access(X_OK): a platform test guards only the code it dominates -------------------------
+# A platform test anywhere in the function used to silence every X_OK call in it, so a call made
+# BEFORE the test, or after a branch that falls through, still ran on Windows and was not reported.
+
+def _x_ok_lines(tmp_path, body):
+    return [h[1] for h in P.os_access_x_ok(_write(tmp_path, "m.py", body))]
+
+
+def test_an_x_ok_call_before_the_platform_test_is_reported(tmp_path):
+    body = ("import os\n"
+            "def f(p):\n"
+            "    ok = os.access(p, os.X_OK)\n"
+            "    if os.name == 'nt':\n"
+            "        print('windows')\n"
+            "    return ok\n")
+    assert _x_ok_lines(tmp_path, body) == [3]
+
+
+def test_a_platform_branch_that_falls_through_does_not_guard_the_call_after_it(tmp_path):
+    body = ("import os\n"
+            "def f(p):\n"
+            "    if os.name == 'nt':\n"
+            "        print('windows')\n"
+            "    return os.access(p, os.X_OK)\n")
+    assert _x_ok_lines(tmp_path, body) == [5]
+
+
+def test_an_early_exit_inside_a_loop_does_not_guard_code_after_the_loop(tmp_path):
+    body = ("import os\n"
+            "def f(ps, q):\n"
+            "    for p in ps:\n"
+            "        if os.name == 'nt':\n"
+            "            continue\n"
+            "        os.access(p, os.X_OK)\n"
+            "    return os.access(q, os.X_OK)\n")
+    assert _x_ok_lines(tmp_path, body) == [7]
+
+
+@pytest.mark.parametrize("body", [
+    # the call sits inside the POSIX branch
+    "import os\ndef f(p):\n    if os.name == 'posix':\n        return os.access(p, os.X_OK)\n"
+    "    return False\n",
+    # ... or in the else of a Windows test
+    "import os\ndef f(p):\n    if os.name == 'nt':\n        return False\n    else:\n"
+    "        return os.access(p, os.X_OK)\n",
+    # an early exit that raises
+    "import os, sys\ndef f(p):\n    if sys.platform.startswith('win'):\n"
+    "        raise OSError('posix only')\n    return os.access(p, os.X_OK)\n",
+    # the platform test and the call in one expression
+    "import os\ndef f(p):\n    return os.name == 'posix' and os.access(p, os.X_OK)\n",
+    "import os\ndef f(p):\n    return os.access(p, os.X_OK) if os.name == 'posix' else False\n",
+    # a module-level branch
+    "import os\nif os.name == 'posix':\n    OK = os.access('/bin/sh', os.X_OK)\n",
+])
+def test_a_dominating_platform_test_suppresses(tmp_path, body):
+    assert _x_ok_lines(tmp_path, body) == []
+
+
+def test_a_platform_flag_read_in_one_function_does_not_guard_another(tmp_path):
+    """The name that carries the platform test is scoped to the function that assigns it."""
+    body = ("import os\n"
+            "def a():\n"
+            "    on_posix = os.name == 'posix'\n"
+            "    return on_posix\n"
+            "def b(p, on_posix):\n"
+            "    if not on_posix:\n"
+            "        return False\n"
+            "    return os.access(p, os.X_OK)\n")
+    assert _x_ok_lines(tmp_path, body) == [8]
+
+
+# ---- per_file_test_module: a quoted stem counts only where a loader names it ---------------------
+
+@pytest.mark.parametrize("body", [
+    "def test_x():\n    assert parse(mode='check')\n",
+    "def test_x():\n    assert CHOICES == ['check', 'run']\n",
+    "def test_x():\n    assert {'check': 1}\n",
+])
+def test_a_short_stem_as_an_unrelated_string_is_not_coverage(tmp_path, body):
+    tests = _tests(tmp_path, "test_other.py", body)
+    hits = P.per_file_test_module(_write(tmp_path, "check.py", "x = 1\n"), test_roots=[tests])
+    assert hits and "'check'" in hits[0][2]
+
+
+@pytest.mark.parametrize("name,body", [
+    ("test_other.py", "def test_x():\n    mod = load_script('check')\n"),
+    ("test_other.py", "import importlib\nmod = importlib.import_module('check')\n"),
+    ("conftest.py", "_HOOK_MODULES = {\n    'check': 'check_alias',\n}\n"),
+])
+def test_a_loader_naming_the_stem_is_coverage(tmp_path, name, body):
+    tests = _tests(tmp_path, name, body)
+    assert P.per_file_test_module(_write(tmp_path, "check.py", "x = 1\n"), test_roots=[tests]) == []
+
+
+def test_a_hyphenated_hook_in_an_alias_map_is_coverage(tmp_path):
+    tests = _tests(tmp_path, "conftest.py", "_HOOK_MODULES = {'my-guard': 'my_guard'}\n")
+    assert P.per_file_test_module(_write(tmp_path, "my-guard.py", "x = 1\n"),
+                                  test_roots=[tests]) == []
+
+
+# ---- js_parse: no node is UNMEASURED, and a timeout costs one file, not the hits before it -------
+
+def test_js_parse_records_every_file_unmeasured_when_node_is_absent(tmp_path):
+    def no_node(*_a, **_k):
+        raise FileNotFoundError("node")
+
+    unmeasured = []
+    hits = P.js_parse([("a.js", tmp_path / "a.js"), ("b.js", tmp_path / "b.js")], run=no_node,
+                      unmeasured=unmeasured)
+    assert hits == [] and [u[0] for u in unmeasured] == ["a.js", "b.js"]
+
+
+def test_js_parse_keeps_earlier_hits_when_a_later_file_times_out(tmp_path):
+    replies = iter([_Proc(1, "", "SyntaxError"), subprocess.TimeoutExpired("node", 20), _Proc(0)])
+
+    def run(*_a, **_k):
+        reply = next(replies)
+        if isinstance(reply, Exception):
+            raise reply
+        return reply
+
+    unmeasured = []
+    hits = P.js_parse([("bad.js", tmp_path / "bad.js"), ("slow.js", tmp_path / "slow.js"),
+                       ("ok.js", tmp_path / "ok.js")], run=run, unmeasured=unmeasured)
+    assert [h[0] for h in hits] == ["bad.js"]
+    assert [u[0] for u in unmeasured] == ["slow.js"]
+
+
+def test_run_prepass_says_unmeasured_when_node_is_absent(tmp_path):
+    def no_node(*_a, **_k):
+        raise FileNotFoundError("node")
+
+    room = _room_with_js(tmp_path, "const x = 1;\n")
+    _facts, _leads, summary = P.run_prepass(room, [("skills/a/broken.js", "js")], run=no_node)
+    line = [s for s in summary if s.startswith("js_parse")][0]
+    assert "UNMEASURED" in line and "1 file(s)" in line, line
+
+
+def test_run_prepass_control_a_measured_js_scan_says_nothing_unmeasured(tmp_path):
+    room = _room_with_js(tmp_path, "const x = 1;\n")
+    _facts, _leads, summary = P.run_prepass(room, [("skills/a/broken.js", "js")],
+                                            run=lambda *_a, **_k: _Proc(0))
+    assert not any("UNMEASURED" in s for s in summary), summary

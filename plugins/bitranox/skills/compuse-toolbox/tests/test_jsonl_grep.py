@@ -1,5 +1,6 @@
 """Tests for jsonl_grep.py - filter a JSONL stream by type/role, extract a field or regex. ASCII."""
 import sys
+import threading
 import pytest
 import json
 
@@ -311,11 +312,11 @@ def test_list_mode_prints_a_null_value(tmp_path, capsys):
 # --- encoding: cp1252 stdout, undecodable stdin, BOM, line separators -----------------------------
 
 def test_non_ascii_values_survive_a_cp1252_stdout(tmp_path):
-    p = _write(tmp_path, "u.jsonl", [{"m": "café — \U0001f600"}])
+    p = _write(tmp_path, "u.jsonl", [{"m": "caf\u00e9 \u2014 \U0001f600"}])
     for args in (["--count"], []):
         proc = _run([str(p), "--field", "m", *args], env_extra={"PYTHONIOENCODING": "cp1252"})
         assert proc.returncode == 0, proc.stderr
-        assert "café — \U0001f600" in proc.stdout.decode("utf-8")
+        assert "caf\u00e9 \u2014 \U0001f600" in proc.stdout.decode("utf-8")
 
 
 def test_undecodable_stdin_bytes_do_not_crash_the_read():
@@ -360,3 +361,72 @@ def test_an_invalid_pattern_is_a_usage_error(tmp_path, capsys, extra):
     rc = J.main([str(p), "--pattern", "(", *extra])
     assert rc == 2
     assert "--pattern" in capsys.readouterr().err
+
+
+# --- both JSON backends read and print the same records ----------------------------------------
+
+# Runs the script with orjson unimportable, so the stdlib fallback is the reader - the arm CI takes,
+# since CI does not install orjson. Blocking the import is the one seam: the script picks its
+# backend at import time.
+_STDLIB_SHIM = ("import runpy, sys; sys.modules['orjson'] = None; script = sys.argv[1]; "
+                "sys.argv = sys.argv[1:]; runpy.run_path(script, run_name='__main__')")
+
+
+def _run_backend(backend, args, stdin=b""):
+    if backend == "orjson":
+        pytest.importorskip("orjson", reason="the orjson arm needs orjson installed")
+        cmd = [sys.executable, str(SCRIPT), *args]
+    else:
+        cmd = [sys.executable, "-c", _STDLIB_SHIM, str(SCRIPT), *args]
+    return subprocess.run(cmd, input=stdin, capture_output=True,
+                          env={**os.environ, "PYTHONUTF8": "1"})
+
+
+@pytest.mark.parametrize("backend", ["stdlib", "orjson"])
+def test_a_non_standard_constant_is_unparseable_and_its_string_prints_bare(tmp_path, backend):
+    # NaN and Infinity are not JSON. orjson refuses them; the stdlib accepted them, so the same
+    # line parsed or not depending on what was installed, and the string "NaN" printed quoted on
+    # one backend and bare on the other.
+    p = tmp_path / "c.jsonl"
+    p.write_text('{"x":NaN}\n{"x":"NaN"}\n{"x":-Infinity}\n{"x":"Infinity"}\n',
+                 encoding="utf-8")
+    proc = _run_backend(backend, [str(p), "--field", "x"])
+    assert proc.returncode == 0, proc.stderr
+    assert proc.stdout.decode("utf-8").splitlines() == ["NaN", "Infinity"]
+    assert b"2 unparseable line(s)" in proc.stderr
+
+
+@pytest.mark.parametrize("backend", ["stdlib", "orjson"])
+def test_absurdly_deep_nesting_is_an_unparseable_line_not_a_traceback(tmp_path, backend):
+    p = tmp_path / "deep.jsonl"
+    p.write_text('{"x":' + "[" * 100000 + "]" * 100000 + '}\n{"x":"ok"}\n', encoding="utf-8")
+    for extra in ([], ["--count"]):
+        proc = _run_backend(backend, [str(p), "--field", "x", *extra])
+        assert proc.returncode == 0, proc.stderr
+        assert b"Traceback" not in proc.stderr
+        assert proc.stdout.decode("utf-8").split()[-1] == "ok"
+        assert b"1 unparseable line(s)" in proc.stderr
+
+
+# --- a path that exists but is not a regular file (a pipe from <(...)) is read -------------------
+
+@pytest.mark.skipif(not hasattr(os, "mkfifo"), reason="named pipes need os.mkfifo (POSIX)")
+@pytest.mark.parametrize("extra", [[], ["--count"]])
+def test_a_named_pipe_is_read_not_reported_missing(tmp_path, capsys, extra):
+    fifo = tmp_path / "pipe"
+    os.mkfifo(fifo)
+
+    def feed():
+        with open(fifo, "w", encoding="utf-8") as handle:
+            handle.write(_mk([{"v": "a"}, {"v": "b"}]))
+
+    writer = threading.Thread(target=feed, daemon=True)
+    writer.start()
+    rc = J.main([str(fifo), "--field", "v", *extra])
+    if writer.is_alive():                                # nothing opened the pipe: release the writer
+        os.close(os.open(fifo, os.O_RDONLY | os.O_NONBLOCK))
+    writer.join(timeout=10)
+    cap = capsys.readouterr()
+    assert rc == 0, cap.err
+    assert "no such file" not in cap.err
+    assert sorted(cap.out.split()) == (["1", "1", "a", "b"] if extra else ["a", "b"])

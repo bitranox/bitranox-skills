@@ -685,6 +685,22 @@ def test_offline_with_no_cache_fetches_nothing(tmp_path, monkeypatch, capsys):
     assert net.calls == []
 
 
+def test_an_offline_run_does_not_poison_the_next_online_check(tmp_path, monkeypatch, capsys):
+    """--offline looked at nothing, so its BROKEN is no result. Cached, the next ONLINE check
+    replayed "offline and no fresh cache" for the BROKEN window without fetching at all."""
+    net = FakeNet({SAMPLE_URL: "hooks-sample.md"})
+    monkeypatch.setattr(H, "_fetch", net)
+    stamp = FIXTURES / "stamp-sample.json"
+    common = ["--stamp", str(stamp), "--cache-dir", str(tmp_path), "--no-cli-probe", "--json"]
+    assert H.main(["check", "--offline", *common]) == 2
+    capsys.readouterr()
+    rc = H.main(["check", *common])
+    payload = json.loads(capsys.readouterr().out)["data"]
+    assert net.calls == [SAMPLE_URL]
+    assert payload["cached"] is False
+    assert rc == 0, payload
+
+
 def test_offline_with_a_fresh_cache_replays_it(tmp_path, monkeypatch, capsys):
     net = FakeNet({SAMPLE_URL: "hooks-sample.md"})
     monkeypatch.setattr(H, "_fetch", net)

@@ -135,7 +135,9 @@ script sweep needs `--plugin`; `--skills-dir` is refused there.
 scans the whole corpus deterministically before any reviewer starts, and `--scripts` runs it for you
 - it is not a separate step. Run it alone with `--room <plugin dir>` to see the corpus summary, or
 `--json` for the per-file map. A room that is missing or has neither `hooks/` nor `skills/` exits 2
-rather than printing a clean zero.
+rather than printing a clean zero. A check that could not judge a file says so on its summary line:
+with no `node` on PATH, or a `node --check` that timed out, the `js_parse` line reads `UNMEASURED
+for N file(s)` instead of a bare `0 hit(s)`.
 
 What it finds splits in two, and a reviewer is told the OPPOSITE thing about each:
 

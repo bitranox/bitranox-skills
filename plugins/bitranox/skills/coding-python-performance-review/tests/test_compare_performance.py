@@ -256,3 +256,55 @@ def test_ctrl_c_during_before_run_restores_branch_and_changes(tmp_path, make_rep
     assert git("symbolic-ref", "HEAD").stdout.strip() == "refs/heads/main"
     assert (root / "mod.py").read_text(encoding="utf-8") == "x = 2\n"
     assert _stash_list(git) == []
+
+
+# The suite writes a file in BOTH commits where the user's untracked work sits in the stash, so
+# the BEFORE run recreates something the stash has to put back: the same file, or a file where
+# the stash needs a directory.
+def _recreating_suite(blocker):
+    return ("import pathlib\n\n\ndef test_gen():\n"
+            f"    p = pathlib.Path({blocker!r})\n"
+            "    if not p.exists():\n"
+            "        p.write_text('made by the suite\\n')\n")
+
+
+COLLISIONS = pytest.mark.parametrize("user_file,blocker", [("gen.txt", "gen.txt"),
+                                                           ("gen/x.txt", "gen")],
+                                     ids=["same-file", "file-where-a-directory-goes"])
+
+
+def _collision_run(make_repo, run_script, user_file, blocker):
+    root, env, git = make_repo({"tests/test_gen.py": _recreating_suite(blocker)})
+    (root / "mod.py").write_text("x = 2\n", encoding="utf-8")            # tracked edit
+    (root / user_file).parent.mkdir(parents=True, exist_ok=True)
+    (root / user_file).write_text("mine\n", encoding="utf-8")            # the user's untracked file
+    return root, git, run_script(SCRIPT, cwd=str(root), env=env)
+
+
+@COLLISIONS
+def test_an_untracked_file_the_before_run_recreates_applies_nothing_and_names_it(
+        make_repo, run_script, user_file, blocker):
+    root, git, r = _collision_run(make_repo, run_script, user_file, blocker)
+    assert r.returncode == 2, r.stdout + r.stderr
+    err = r.stderr.decode("utf-8")
+    # nothing half-applied: the tracked edit is still only in the stash, as the message says
+    assert (root / "mod.py").read_text(encoding="utf-8") == "x = 1\n", err
+    assert git("status", "--porcelain", "--untracked-files=no").stdout == "", err
+    assert f"({blocker})" in err
+    assert "nothing was re-applied" in err
+    assert len(git("stash", "list", "--format=%H").stdout.split()) == 1
+
+
+@COLLISIONS
+def test_the_recovery_for_a_recreated_untracked_file_actually_recovers(make_repo, run_script,
+                                                                      user_file, blocker):
+    root, git, r = _collision_run(make_repo, run_script, user_file, blocker)
+    commands = _recovery_commands(r.stderr)
+    assert commands, r.stderr
+    assert "out of the way" in r.stderr.decode("utf-8")
+    (root / blocker).unlink()                        # the step the message asks for first
+    for command in commands:
+        git(*command.split()[1:])
+    assert git("symbolic-ref", "HEAD").stdout.strip() == "refs/heads/main"
+    assert (root / "mod.py").read_text(encoding="utf-8") == "x = 2\n"
+    assert (root / user_file).read_text(encoding="utf-8") == "mine\n"

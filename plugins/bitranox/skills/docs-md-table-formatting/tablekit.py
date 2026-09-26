@@ -13,13 +13,17 @@ Stdlib only on purpose: a GFM pipe table is a narrow, well-specified format, and
 round-trips alignment and escaped pipes more faithfully than a general markdown library (which
 discards formatting) or a re-tabulator.
 
-Tables are numbered the way reformat_tables.py sees them: a table inside a fenced code block is an
-example, not a table, unless the fence is tagged `markdown` or `md`.
+Tables are numbered the way reformat_tables.py sees them, through its own fence scanner: a table
+inside a fenced code block is an example, not a table, unless the fence is tagged `markdown` or
+`md`, and so is one indented into a code block; a table in a blockquote counts, and `replace` keeps
+its `> ` prefix. The one difference: a table written without a leading pipe (`a | b` over
+`--- | ---`) is counted here, since GFM renders it, while reformat_tables leaves it unaligned.
 
 Run:
   python3 tablekit.py read FILE [--index N]     # FILE (or -) -> JSON (one table, or all)
   python3 tablekit.py render < table.json       # JSON (one table) -> aligned markdown
-  python3 tablekit.py replace FILE --index N < table.json   # splice back in place (--stdout to preview)
+  python3 tablekit.py replace FILE --index N < table.json   # splice back in place (--stdout to
+                                                            # preview the exact bytes it would write)
 
 Exit codes: 0 = done, 1 = no table at that index, 2 = refused or error (a row with more cells than
 the headers, which a round trip would delete; an unknown alignment; invalid JSON; an unreadable file).
@@ -30,17 +34,17 @@ import argparse
 import json
 import re
 import sys
+from typing import NamedTuple
 
-# One column-width rule for both tools: the reformat hook realigns whatever tablekit renders, so
-# two definitions of "width" would make every CJK or emoji table churn between them.
-from reformat_tables import display_width
+# One column-width rule and one fence scanner for both tools: the reformat hook realigns whatever
+# tablekit renders, so two definitions of "width" would make every CJK or emoji table churn between
+# them, and two fence scanners would number the tables differently.
+from reformat_tables import TEXT, classify_lines, display_width, is_indented_code, strip_blockquote
 
 # A delimiter cell: optional leading colon, one or more dashes, optional trailing colon.
 _DELIM_CELL = re.compile(r"^:?-+:?$")
 # Split a row on pipes that are NOT backslash-escaped.
 _UNESCAPED_PIPE = re.compile(r"(?<!\\)\|")
-_FENCE_OPEN = re.compile(r"^[ \t]*(`{3,}|~{3,})(.*)$")
-_FENCE_CLOSE = re.compile(r"^[ \t]*(`{3,}|~{3,})[ \t]*$")
 ALIGNMENTS = ("left", "right", "center", "none")
 
 
@@ -92,38 +96,49 @@ def _strip_ending(line: str) -> str:
     return line[:-1] if line.endswith("\n") else line
 
 
-def _table_lines(lines: list[str]) -> list[bool]:
-    """Per line: may it belong to a table? Fence lines never do, nor anything inside a fence
-    whose info string is not markdown. A fence tagged markdown holds a document of its own, so a
-    fence nested in it is tracked too and its content is excluded unless it is markdown as well."""
-    eligible: list[bool] = []
-    stack: list[tuple[str, int, bool]] = []  # (marker char, length, is markdown)
-    for line in lines:
-        if stack:
-            close = _FENCE_CLOSE.match(line)
-            char, length, _markdown = stack[-1]
-            if close and close.group(1)[0] == char and len(close.group(1)) >= length:
-                stack.pop()
-                eligible.append(False)
-                continue
-        opener = _FENCE_OPEN.match(line)
-        if opener and (not stack or stack[-1][2]):
-            lang = opener.group(2).strip().split()[0].lower() if opener.group(2).strip() else ""
-            stack.append((opener.group(1)[0], len(opener.group(1)), lang in ("markdown", "md")))
-            eligible.append(False)
+class _View(NamedTuple):
+    """A line that may hold a table row: its blockquote prefix and the content after it, plus
+    the fence context `is_indented_code` needs (see reformat_tables.LineClass)."""
+
+    prefix: str
+    content: str
+    floor: int
+    base: int
+
+
+def _row_views(lines: list[str]) -> list[_View | None]:
+    """Per line: its view, or None when it cannot belong to a table.
+
+    The fence scanning is reformat_tables' own, so both tools agree line for line: fence lines
+    never hold a table, nor anything inside a fence whose info string is not markdown."""
+    views: list[_View | None] = []
+    for line, cls in zip(lines, classify_lines(lines), strict=True):
+        if cls.kind != TEXT:
+            views.append(None)
             continue
-        eligible.append(not stack or stack[-1][2])
-    return eligible
+        prefix, content = strip_blockquote(line.strip())
+        views.append(_View(prefix, content, cls.floor, cls.base))
+    return views
 
 
-def _starts_table(lines: list[str], eligible: list[bool], i: int) -> bool:
-    """A header line immediately followed by a delimiter with the SAME cell count. GFM renders no
-    table when the counts differ, and a setext heading (`Use a | b` over `---`) must not qualify."""
-    if i + 1 >= len(lines) or not (eligible[i] and eligible[i + 1]):
-        return False
-    if not _looks_like_table_row(lines[i]) or not _is_delimiter(lines[i + 1]):
-        return False
-    return len(_split_cells(lines[i + 1])) == len(_split_cells(lines[i]))
+def _table_head(lines: list[str], views: list[_View | None], i: int) -> tuple[_View, _View] | None:
+    """(header, delimiter) when a table starts at line `i`, else None.
+
+    A table starts at a header line immediately followed by a delimiter with the SAME cell count,
+    in the same blockquote, and not indented far enough to be a code block. GFM renders no table
+    when the counts differ, and a setext heading (`Use a | b` over `---`) must not qualify."""
+    if i + 1 >= len(lines):
+        return None
+    header, delimiter = views[i], views[i + 1]
+    if header is None or delimiter is None or header.prefix != delimiter.prefix:
+        return None
+    if not _looks_like_table_row(header.content) or not _is_delimiter(delimiter.content):
+        return None
+    if len(_split_cells(delimiter.content)) != len(_split_cells(header.content)):
+        return None
+    if is_indented_code(lines, i, header.floor, header.base):
+        return None
+    return header, delimiter
 
 
 def parse_tables(text: str) -> list[dict]:
@@ -140,22 +155,28 @@ def parse_tables(text: str) -> list[dict]:
                       is lossy, so `read` and `replace` refuse such a table rather than delete text
     """
     lines = [_strip_ending(line) for line in _lines_with_endings(text)]
-    eligible = _table_lines(lines)
+    views = _row_views(lines)
     tables: list[dict] = []
     i = 0
     while i < len(lines):
-        if not _starts_table(lines, eligible, i):
+        head = _table_head(lines, views, i)
+        if head is None:
             i += 1
             continue
-        headers = _split_cells(lines[i])
+        header, delimiter = head
+        headers = _split_cells(header.content)
         width = len(headers)
-        alignments = [_alignment(c) for c in _split_cells(lines[i + 1])]
+        alignments = [_alignment(c) for c in _split_cells(delimiter.content)]
         rows: list[list[str]] = []
         surplus: list[int] = []
         end_line = i + 2  # 1-based delimiter line, in case there is no body
         j = i + 2
-        while j < len(lines) and eligible[j] and _looks_like_table_row(lines[j]):
-            cells = _split_cells(lines[j])
+        while j < len(lines):
+            row = views[j]
+            # A body row stays in the header's blockquote; a blank or pipe-free line ends it.
+            if row is None or row.prefix != header.prefix or not _looks_like_table_row(row.content):
+                break
+            cells = _split_cells(row.content)
             if len(cells) > width:
                 surplus.append(j + 1)
             rows.append((cells + [""] * width)[:width])
@@ -247,8 +268,9 @@ def render_table(table: dict) -> str:
 def replace_table(text: str, index: int, table: dict) -> str:
     """Return `text` with the table at position `index` replaced by render_table(table).
 
-    The rendered table takes the header line's indentation, so a table nested in a list item stays
-    in it, and the header line's line ending, so a CRLF file stays CRLF.
+    The rendered table takes the header line's indentation and blockquote prefix, so a table
+    nested in a list item or a quote stays in it, and the header line's line ending, so a CRLF
+    file stays CRLF.
 
     Raises:
         IndexError: there is no table at `index`.
@@ -263,9 +285,10 @@ def replace_table(text: str, index: int, table: dict) -> str:
     end = target["end_line"]          # exclusive slice end == last body line (1-based)
     header = lines[start]
     indent = header[: len(header) - len(header.lstrip(" \t"))]
+    quote, _content = strip_blockquote(_strip_ending(header).strip())
     eol = "\r\n" if header.endswith("\r\n") else "\n"
     last = lines[end - 1]
-    rendered = eol.join(indent + row for row in render_table(table).split("\n"))
+    rendered = eol.join(indent + quote + row for row in render_table(table).split("\n"))
     if last.endswith("\n"):
         rendered += eol
     return "".join(lines[:start]) + rendered + "".join(lines[end:])
@@ -295,6 +318,22 @@ def _utf8_stdio() -> None:
         sys.stderr.reconfigure(errors="backslashreplace")
     except (AttributeError, ValueError, OSError):
         pass
+
+
+def _write_stdout_exact(text: str) -> None:
+    """Write `text` to stdout as UTF-8 bytes, with no newline translation.
+
+    `replace --stdout` previews the file it would write, so it must match it byte for byte. A
+    Windows console or pipe is a text stream that turns every "\\n" into "\\r\\n": an LF file came
+    out CRLF and a CRLF one "\\r\\r\\n". A stdout with no byte buffer (a StringIO) translates
+    nothing, so the text goes to it as it is."""
+    buffer = getattr(sys.stdout, "buffer", None)
+    if buffer is None:
+        sys.stdout.write(text)
+        return
+    sys.stdout.flush()
+    buffer.write(text.encode("utf-8"))
+    buffer.flush()
 
 
 def _error(message: str, code: int) -> int:
@@ -342,7 +381,7 @@ def _cmd_replace(args: argparse.Namespace) -> int:
     if bom:
         new_text = "\ufeff" + new_text
     if args.stdout:
-        sys.stdout.write(new_text)
+        _write_stdout_exact(new_text)
     else:
         with open(args.file, "w", encoding="utf-8", newline="") as f:
             f.write(new_text)

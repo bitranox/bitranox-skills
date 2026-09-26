@@ -111,7 +111,7 @@ python3 reformat_tables.py --strict -r
 
 Exit codes: 0 = done, 1 = `--check` found a table to reformat or `--strict` found a ragged row, 2 = usage error or a file that could not be read (not UTF-8, missing, not a regular file). A directory named `*.md` or a dangling link met by `-r` is reported and skipped.
 
-Safe by design: reformats tables inside blockquotes and `` ```markdown ``/`` ```md `` fenced code blocks, skips all other fenced code blocks (including one nested inside a markdown fence) and indented code blocks, keeps a list-nested table's indentation, preserves alignment markers (`:---`, `:---:`, `---:`), measures width in display columns (a CJK character counts two), keeps the file's line endings and a leading BOM, and leaves a table with inconsistent column counts alone.
+Safe by design: reformats tables inside blockquotes and `` ```markdown ``/`` ```md `` fenced code blocks, skips all other fenced code blocks (including one nested inside a markdown fence) and indented code blocks, recognises fences the CommonMark way (a line that merely opens with an inline span such as ` ```x``` ` is prose, and a fence indented four columns into its block is code, not a fence), keeps a list-nested table's indentation, preserves alignment markers (`:---`, `:---:`, `---:`), measures width in display columns (a CJK character counts two), keeps the file's line endings and a leading BOM, and leaves a table with inconsistent column counts alone.
 
 **A pipe inside backticks still splits the cell.** GFM gives a code span no protection, so `` `a | b` `` in a table cell renders as two cells; write `` `a \| b` ``. The tool splits exactly as GFM does, so such a row is reported as ragged rather than accepted.
 
@@ -142,8 +142,12 @@ python3 tablekit.py read FILE.md --index 0 \
 `rows` is a list of cell-lists; a SHORT row is padded to the column count on render, a row
 with MORE cells than headers is refused (exit 2), because truncating it would delete text
 from the file - `read --index` refuses such a table for the same reason. Tables are numbered
-as `reformat_tables.py` sees them: one inside a non-markdown code fence is not counted.
-`replace` keeps the table's indentation, the file's line endings and a leading BOM. Exit
+as `reformat_tables.py` sees them (it shares that tool's fence scanner): one inside a
+non-markdown code fence or an indented code block is not counted, one in a blockquote is. The
+one difference is a table written without a leading pipe, which `tablekit.py` counts (GFM
+renders it) and `reformat_tables.py` leaves unaligned. `replace` keeps the table's indentation,
+its `> ` blockquote prefix, the file's line endings and a leading BOM; `--stdout` prints exactly
+the bytes it would have written. Exit
 codes: 0 = done, 1 = no table at that index, 2 = refused or error (invalid JSON, unreadable
 file). Stdlib only; a literal `|` in a cell round-trips (escaped as `\|` in the markdown,
 unescaped in the JSON).

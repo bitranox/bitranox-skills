@@ -18,9 +18,11 @@ What it establishes (the equivalent of the old bash Setup):
 * SKILL_DIR  - the directory containing this file (via __file__).
 * PYTHON     - the PROJECT's interpreter, which the profiling steps run the test
   suite with: <root>/.venv or <root>/venv when one exists, else the interpreter
-  running this script (with a note on stderr). Never uv's throwaway script env,
-  which `uv run setup_env.py` would otherwise record and which has neither the
-  project nor pytest installed. It is RUN once to read its version: every later
+  running this script (with a note on stderr). A project venv therefore wins over
+  uv's throwaway script env, which has neither the project nor pytest installed,
+  when `uv run setup_env.py` launched this; without one, the launcher decides, so
+  SKILL.md launches with the user's own python first and `uv run` only as the
+  fallback. The recorded interpreter is RUN once to read its version: every later
   step uses it, so it - not the interpreter running this script - must be
   MIN_PYTHON or newer, and one that cannot start at all is refused here rather
   than at the first profiling step.

@@ -356,9 +356,16 @@ def _named_file_decl(tree, path, label, where):
     return (_license_file_id(text), f"{label} text not recognised", where)
 
 
+_SEE_LICENSE_IN_RX = re.compile(r"^\s*SEE LICENSE IN\s+(\S.*)$")
+
+
 def _manifest_decl(tree, base, kind, value, where):
     """(mapped, label, where) entries for one (kind, value) a manifest declared."""
     if kind == "id":
+        named = _SEE_LICENSE_IN_RX.match(value)
+        if named:   # npm's way to point at a custom license file instead of an SPDX id
+            return [_named_file_decl(tree, base / named.group(1).strip(),
+                                     f"license file {named.group(1).strip()!r}", where)]
         return [(classify_license_id(value), f"unrecognised license id {value!r}", where)]
     if kind == "text":
         return [(_text_id(value), "license text not recognised", where)]
@@ -484,7 +491,8 @@ def find_license(tree, skill_dir=None):
     Within it every declared license counts: every license file (LICENSE, COPYING, LICENSE-*,
     LICENSES/*), every SPDX header, and every `license` / `license-files` value of every
     plugin.json, package.json, marketplace.json and pyproject.toml, in whatever form it takes (an
-    SPDX expression, a table with `text` or `file`, an npm `type` object or list). ANY copyleft id
+    SPDX expression, a table with `text` or `file`, an npm `type` object or list, npm's
+    `SEE LICENSE IN <file>`, whose file is read like a `file` table's). ANY copyleft id
     rejects. Anything the gate cannot read, classify or vouch for - an unlistable dir, a symlink
     whose target would ship unread, an unreadable or unparseable file, a license text it does not
     recognise, an id it can neither accept nor reject, a named license file that is missing -
@@ -563,6 +571,11 @@ def fetch(source, subdir, workdir):
             shutil.copytree(src, tree, ignore=_COPY_IGNORE)
 
     base = tree / subdir if subdir else tree
+    # Refused here, before the walk: a subdir that climbs out of the source (or is absolute)
+    # would search whatever directory it lands in for a SKILL.md and adopt one from there.
+    if not _inside(base, tree):
+        raise AdoptError(f"error: --subdir points outside the source: {subdir!r}. Name a "
+                         "directory inside the source, relative to its root.")
     skill_dir = _locate_skill_dir(base)
     return tree, skill_dir
 
@@ -786,13 +799,15 @@ def _write_keeping_eol(path, text, eol):
 def add_credit_line(skill_md, source_desc, lic_id):
     """Insert the credit line after the H1, or after the front matter when there is no H1.
 
-    Returns False when a credit line is already present. The front matter and fenced code are
-    skipped when looking for the H1: a `# comment` in either is not a heading, and a credit line
-    written into the front matter breaks it.
+    Returns False when a credit line naming THIS source is already present. A credit line for a
+    different source stays and ours is added too: an upstream that itself adapted another skill
+    carries that skill's credit, and it does not credit the upstream we copied from. The front
+    matter and fenced code are skipped when looking for the H1: a `# comment` in either is not a
+    heading, and a credit line written into the front matter breaks it.
     """
     text, eol = _read_keeping_eol(skill_md)
     credit = f"> Adapted from {source_desc} ({lic_id})."
-    if "> Adapted from " in text:
+    if f"> Adapted from {source_desc} (" in text:
         return False
     lines = text.split("\n")
     body = _frontmatter_end(lines)
@@ -918,33 +933,42 @@ def _gate(lic):
                        "explicit user decision before adopting. Nothing was scaffolded.")
 
 
+_CROSS_REF_SUFFIXES = {".md", ".py", ".txt", ".json", ".yml", ".yaml"}
+
+
 def _rewrite_tree(dest, old_name, new_name):
-    """Rewrite cross-refs in every text file, keeping each file's line endings.
+    """Rewrite cross-refs in every text file, keeping each file's line endings, and drop a
+    leading UTF-8 BOM from every file that decodes as UTF-8.
+
+    The BOM goes from every such file, not only SKILL.md: in front of SKILL.md's `---` it hides
+    the front matter (see _read_keeping_eol), in front of a `#!` it breaks the shebang, and the
+    marketplace's own checks refuse it in any text file. A file that is not UTF-8 is left as is.
 
     Returns {relpath: (rewritten, left)}: `left` counts the old name still standing as a plain
     word, which a human must judge (a skill named `git` means the tool there as often as itself).
     """
     rewrites = {}
     for f in dest.rglob("*"):
-        if f.is_file() and f.suffix.lower() in {".md", ".py", ".txt", ".json", ".yml", ".yaml"}:
-            try:
-                txt = f.read_bytes().decode("utf-8")
-            except (OSError, UnicodeDecodeError):
-                continue
-            is_skill_md = f == dest / "SKILL.md"
-            # A BOM in front of SKILL.md's `---` hides the front matter (see _read_keeping_eol).
-            had_bom = is_skill_md and txt.startswith(_BOM)
-            if had_bom:
-                txt = txt[len(_BOM):]
+        if not f.is_file():
+            continue
+        try:
+            txt = f.read_bytes().decode("utf-8")
+        except (OSError, UnicodeDecodeError):
+            continue
+        had_bom = txt.startswith(_BOM)
+        if had_bom:
+            txt = txt[len(_BOM):]
+        new_txt, n, left = txt, 0, 0
+        if f.suffix.lower() in _CROSS_REF_SUFFIXES:
             new_txt, n = rewrite_cross_refs(txt, old_name, new_name)
-            if is_skill_md:
+            if f == dest / "SKILL.md":
                 new_txt, m = rewrite_identity(new_txt, old_name, new_name)
                 n += m
-            if n or had_bom:
-                f.write_bytes(new_txt.encode("utf-8"))
             left = count_bare_mentions(new_txt, old_name) if old_name != new_name else 0
-            if n or left:
-                rewrites[str(f.relative_to(dest))] = (n, left)
+        if n or had_bom:
+            f.write_bytes(new_txt.encode("utf-8"))
+        if n or left:
+            rewrites[str(f.relative_to(dest))] = (n, left)
     return rewrites
 
 
@@ -966,23 +990,51 @@ def adopt(args, workdir):
     dest = Path(args.dest).resolve() / new_name
     if dest.exists():
         raise AdoptError(f"error: destination already exists: {dest}")
-    shutil.copytree(src_skill, dest, ignore=_COPY_IGNORE)
-    rewrites = _rewrite_tree(dest, old_name, new_name)
-
-    # Attribution.
-    source_desc = derive_name(args.source, args.subdir) + " (upstream)"
-    source_url = args.source if is_url(args.source) else ""
-    credited = add_credit_line(dest / "SKILL.md", source_desc, lic["id"])
     notices = repo_root / "plugins" / "bitranox" / "THIRD_PARTY_NOTICES.md"
-    noticed = append_notice(notices, new_name, source_desc, source_url, lic["id"],
-                            lic["copyright"], lic["text"], lic["notice"])
-
-    # Tests scaffold.
-    script = ships_scripts(dest)
-    stub = scaffold_tests(dest, script) if script else None
+    notices_before = notices.read_bytes() if notices.is_file() else None
+    try:
+        rewrites, stub, credited, noticed = _install(args, lic, src_skill, dest, notices,
+                                                     old_name=old_name, new_name=new_name)
+    except BaseException:
+        # Undo what this run wrote: a half-adopted dir is "destination already exists" to the
+        # retry, and a notice entry without its skill credits something that is not shipped.
+        shutil.rmtree(dest, ignore_errors=True)
+        _restore(notices, notices_before)
+        raise
 
     gate_out = run_gate_readonly(repo_root)
     _report(new_name, lic, dest, rewrites, stub, gate_out, credited=credited, noticed=noticed)
+
+
+def _install(args, lic, src_skill, dest, notices, *, old_name, new_name):
+    """Copy the skill to `dest`, rewrite it, credit it and scaffold its tests. Every write of an
+    adoption happens here, so adopt() can undo all of them when any one fails.
+
+    Returns (rewrites, stub, credited, noticed)."""
+    shutil.copytree(src_skill, dest, ignore=_COPY_IGNORE)
+    rewrites = _rewrite_tree(dest, old_name, new_name)
+
+    source_desc = derive_name(args.source, args.subdir) + " (upstream)"
+    source_url = args.source if is_url(args.source) else ""
+    credited = add_credit_line(dest / "SKILL.md", source_desc, lic["id"])
+    noticed = append_notice(notices, new_name, source_desc, source_url, lic["id"],
+                            lic["copyright"], lic["text"], lic["notice"])
+
+    script = ships_scripts(dest)
+    stub = scaffold_tests(dest, script) if script else None
+    return rewrites, stub, credited, noticed
+
+
+def _restore(path, before):
+    """Put `path` back to `before` (its bytes, or None when it did not exist). A restore that
+    fails is said on stderr: the original error still decides the exit code."""
+    try:
+        if before is None:
+            path.unlink(missing_ok=True)
+        else:
+            path.write_bytes(before)
+    except OSError as exc:
+        print(f"warning: could not restore {path}: {exc}", file=sys.stderr)
 
 
 def _find_repo_root(dest):

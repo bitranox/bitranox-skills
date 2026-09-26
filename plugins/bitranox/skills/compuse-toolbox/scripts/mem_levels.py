@@ -250,7 +250,11 @@ def _answer_slug(report: Report, slug: str, as_json: bool) -> int:
     else:
         for lvl in found:
             print(lvl)
-    if not found:
+    if not found and report.unreadable:
+        # Absence is established only by a full read: an unread level may be the one holding it.
+        print("no READABLE level points at %s; %d path(s) could not be read, so whether a level "
+              "holds %s is unknown" % (slug, len(report.unreadable), slug), file=sys.stderr)
+    elif not found:
         print("no level points at %s" % slug, file=sys.stderr)
     _report_unreadable(report)
     if report.unreadable:

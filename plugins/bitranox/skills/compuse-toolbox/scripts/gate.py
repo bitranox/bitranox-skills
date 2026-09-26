@@ -43,9 +43,9 @@ Two ways a correct exit status still proves nothing, both closed here:
     `[no tests to run]`). A gate that is not one of those reports no count and is judged on its
     status alone - so a zero run of any OTHER runner still passes.
 
-A malformed invocation - an empty gate, an unclosed quote, a bad --summary regex, or a --name
-written after a positional gate beside a --gate (which gate it labels is ambiguous) - is a usage
-error, exit 2, never a traceback. On Windows a bare `npm`/`yarn`/`pnpm` (a `.cmd` shim) that
+A malformed invocation - an empty gate (`--gate ""` or `-- ""`), an unclosed quote, a bad
+--summary regex, or a --name whose nearest preceding gate is the positional one beside a --gate
+(which gate it labels is ambiguous) - is a usage error, exit 2, never a traceback. On Windows a bare `npm`/`yarn`/`pnpm` (a `.cmd` shim) that
 CreateProcess cannot find is retried through PATHEXT instead of reading as rc=127.
 
 Run (plain python3, NOT uv run: this jig declares no dependencies, and uv run puts its own
@@ -225,7 +225,8 @@ def split_command(spec: str) -> list[str]:
     runtime's own `"a\"b"` quoting, so the real parser is called instead: it removes the class of
     problem rather than the instances of it.
 
-    Kept identical in gate.py, diffbehave.py and hooks/harness_checks.py.
+    Kept identical in gate.py, diffbehave.py and hooks/harness_checks.py; ci_triage.py imports
+    this one.
     """
     if os.name != "nt":
         return shlex.split(spec)
@@ -503,11 +504,13 @@ _VALUED_OPTIONS = ("--gate", "--name", "--log", "--summary", "--then")
 
 
 def _name_follows_positional(raw: list[str]) -> bool:
-    """Whether a --name (or an abbreviation argparse would accept) is written AFTER the first
-    positional token. Walks `raw` the way argparse did: an option taking a value skips the next
-    token unless it carries `=value`, and everything after `--` is the positional's own argv."""
+    """Whether a --name (or an abbreviation argparse would accept) has the POSITIONAL gate as
+    the nearest gate written before it. `<A> --gate B --name x` is unambiguous - x follows B
+    directly - so only a --name with no --gate between it and the positional counts. Walks `raw`
+    the way argparse did: an option taking a value skips the next token unless it carries
+    `=value`, and everything after `--` is the positional's own argv."""
     valued = _VALUED_OPTIONS
-    seen_positional = False
+    positional_is_nearest = False
     skip = False
     for token in raw:
         if skip:
@@ -518,11 +521,13 @@ def _name_follows_positional(raw: list[str]) -> bool:
         if token.startswith("--"):
             flag = token.split("=", 1)[0]
             matches = [opt for opt in valued if opt.startswith(flag)]
-            if seen_positional and matches == ["--name"]:
+            if positional_is_nearest and matches == ["--name"]:
                 return True
+            if matches == ["--gate"]:
+                positional_is_nearest = False
             skip = "=" not in token and len(matches) == 1
             continue
-        seen_positional = True
+        positional_is_nearest = True
     return False
 
 
@@ -579,6 +584,10 @@ def main(argv=None) -> int:
     positional = None
     if args.rest:
         if "--" in raw or len(args.rest) > 1:
+            if not args.rest[0].strip():
+                # `-- ""` names no program. Running it would report a gate result (rc=127) for
+                # what is a malformed invocation, and the quoted route already refuses the same.
+                p.error(f"empty gate: {args.rest!r}")
             # Real argv already. The NAME still comes from the whole command, never argv[0]:
             # `-- env -u VIRTUAL_ENV make --version` reported "[FAIL] env (rc=2)", naming the
             # wrapper instead of the thing under test, while the single-string gate named it
@@ -631,6 +640,9 @@ def main(argv=None) -> int:
         # tool's guarantee is that a GATE's status is never masked by a pipe - it was never
         # that the follow-up avoids a shell. By here every gate has already passed.
         print(f"\ngates green -> running: {args.then}")
+        # The child writes straight to the shared descriptor while print() sits in Python's
+        # buffer, which is block-sized on a pipe - unflushed, the follow-up's output came FIRST.
+        sys.stdout.flush()
         return subprocess.run(args.then, shell=True, check=False).returncode
     return 0
 

@@ -495,7 +495,13 @@ def git_worktree_remove(
     of the platform, so the sibling end-to-end test was skipped there - but the same removal run
     from the main checkout succeeds on Windows, so the tool was simply asking git to saw off the
     branch it was sitting on.
+
+    A relative `worktree` is made absolute against the CALLER's working directory first: git
+    resolves the path it is given against the directory it runs from, which here is the common
+    git dir, and a name that does not resolve there is matched as a suffix of a registered
+    worktree - which fails, or picks the wrong one, when two worktrees share that name.
     """
+    worktree = Path(os.path.abspath(worktree))
     run_dir, run_dir_warning = _git_run_dir(worktree, GIT_TIMEOUT_SECONDS)
     argv = ["git", "-C", str(run_dir), "worktree", "remove", str(worktree)]
     if force:

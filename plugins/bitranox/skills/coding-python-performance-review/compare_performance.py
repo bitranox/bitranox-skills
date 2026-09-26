@@ -11,7 +11,9 @@ Exit codes: 0 both suite runs passed and the delta is reported; 2 no comparison 
 possible - not a git repository, no commits, no parent commit, a git step failed, a suite
 run failed (a failing suite's timing measures nothing), or the working tree could not be
 restored (stderr then names the branch or commit to check out again, the sha of the stash
-that holds the uncommitted changes, and the git commands that put both back).
+that holds the uncommitted changes, and the git commands that put both back). When the BEFORE
+run created a file where the stash restores an untracked file, the stash is not popped at all
+- git would write the tracked changes and then refuse - and stderr names that file first.
 
 Cross-platform (Windows/macOS/Linux): pure standard library, invoked by the agent
 as `python compare_performance.py`, so it does not depend on bash (Claude Code
@@ -94,19 +96,70 @@ def _stash_entries():
     return _git("stash", "list", "--format=%H").stdout.split()
 
 
+def _stash_untracked_paths(sha):
+    """Repository-relative paths of the untracked files stash *sha* holds (its third parent)."""
+    if _rev(f"{sha}^3") is None:
+        return []
+    listed = _git("ls-tree", "-r", "-z", "--name-only", f"{sha}^3")
+    return [path for path in listed.stdout.split("\0") if path]
+
+
+def _blocking_path(top, path):
+    """The working-tree path that stops git from writing *path*, or None.
+
+    That is *path* itself when anything exists there, or a parent that exists as something
+    other than a real directory (git cannot create the directory the file needs)."""
+    parts = path.split("/")
+    for depth in range(1, len(parts)):
+        parent = "/".join(parts[:depth])
+        full = os.path.join(top, *parts[:depth])
+        if os.path.islink(full) or (os.path.lexists(full) and not os.path.isdir(full)):
+            return parent
+    return path if os.path.lexists(os.path.join(top, *parts)) else None
+
+
+def _untracked_in_the_way(sha):
+    """Working-tree paths that block restoring the untracked files of stash *sha*.
+
+    git restores a stash's tracked changes BEFORE its untracked files, and refuses an untracked
+    file it cannot write only after the tracked part is written: popping over one of these
+    half-applies the stash and still keeps the entry."""
+    top = _git("rev-parse", "--show-toplevel").stdout.strip()
+    blocked = (_blocking_path(top, path) for path in _stash_untracked_paths(sha))
+    return sorted({path for path in blocked if path})
+
+
+def _worktree_state():
+    """Everything a stash pop can change: tracked content against HEAD and the file list."""
+    status = _git("status", "--porcelain=v1", "-z", "--untracked-files=all").stdout
+    return status, _git("diff", "HEAD", "--binary").stdout
+
+
+_PARTIAL = "git re-applied PART of your changes before it failed"
+
+
 def _pop_stash(sha):
     """Re-apply and drop OUR stash entry (found by sha, whatever its position now).
 
-    Returns None on success, else why the changes are not back in the working tree."""
+    Returns None on success, else (why the changes are not back, whether PART of them was
+    applied anyway). The known half-apply - an untracked file of the stash that exists again -
+    is refused before git touches anything; any other failure is judged by comparing the
+    working tree before and after the attempt, never by git's message."""
     entries = _stash_entries()
     if sha not in entries:
-        return f"stash {sha} is gone; nothing to re-apply"
+        return f"stash {sha} is gone; nothing to re-apply", False
+    blockers = _untracked_in_the_way(sha)
+    if blockers:
+        return (f"the BEFORE test run created {len(blockers)} file(s) your stash also holds as "
+                f"untracked files ({', '.join(blockers)}), so nothing was re-applied"), False
     ref = f"stash@{{{entries.index(sha)}}}"
-    if _git("stash", "pop", "--index", ref).returncode == 0:
-        return None
-    if _git("stash", "pop", ref).returncode == 0:
-        return None
-    return "could not re-apply your changes"
+    before = _worktree_state()
+    for args in (("--index", ref), (ref,)):
+        if _git("stash", "pop", *args).returncode == 0:
+            return None
+        if _worktree_state() != before:
+            return _PARTIAL, True
+    return "could not re-apply your changes; nothing was re-applied", False
 
 
 def _first_line(text):
@@ -115,7 +168,7 @@ def _first_line(text):
     return line.rstrip(":")
 
 
-def _unrestored_report(ref, stash_sha, reason, *, on_ref):
+def _unrestored_report(ref, stash_sha, reason, *, on_ref, partial=False):
     """The lines that tell the user where they are and exactly how to get back.
 
     The stash is named by its sha, never stash@{n}: that position shifts the moment anything
@@ -124,10 +177,22 @@ def _unrestored_report(ref, stash_sha, reason, *, on_ref):
     if not on_ref:
         lines.append(f"HEAD is left DETACHED at {_rev('HEAD')}; you started on '{ref}'.")
     stashed = bool(stash_sha) and stash_sha in _stash_entries()
+    if stashed and partial:
+        lines.append(f"ALL of your uncommitted changes are still in stash {stash_sha} "
+                     f"('{STASH_MESSAGE}'); the working tree holds only part of them, so applying "
+                     "the stash again would collide with that part.")
+        lines.append(f"to recover, compare git status with git stash show -p --include-untracked "
+                     f"{stash_sha}, finish the restore by hand, and drop the '{STASH_MESSAGE}' "
+                     "entry only once every change is back.")
+        return lines
     if stashed:
         lines.append(f"your uncommitted changes are safe in stash {stash_sha} ('{STASH_MESSAGE}').")
     elif not stash_sha:
         lines.append("you had no uncommitted changes, so nothing was stashed.")
+    blockers = _untracked_in_the_way(stash_sha) if stashed else []
+    if blockers:
+        lines.append("first move these files out of the way - the BEFORE test run made them, and "
+                     f"your own versions are in the stash: {', '.join(blockers)}")
     lines.append("to recover, review what the BEFORE test run left behind (git status), then run:")
     if not on_ref:
         lines.append(f"  git checkout {ref}")
@@ -144,9 +209,10 @@ def _restore(ref, stash_sha):
     if checkout.returncode != 0:
         reason = f"could not check out '{ref}' again (git: {_first_line(checkout.stderr)})"
         return _unrestored_report(ref, stash_sha, reason, on_ref=False)
-    problem = _pop_stash(stash_sha) if stash_sha else None
-    if problem:
-        return _unrestored_report(ref, stash_sha, problem, on_ref=True)
+    failure = _pop_stash(stash_sha) if stash_sha else None
+    if failure:
+        reason, partial = failure
+        return _unrestored_report(ref, stash_sha, reason, on_ref=True, partial=partial)
     return []
 
 

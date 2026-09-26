@@ -15,14 +15,17 @@ of the matches ARE ignored and reports that count on stderr, which is the number
 search would have missed. A zero there means the two agree and your earlier grep was safe.
 "Ignored" is judged from where the search started: a match in a nested repo or linked worktree
 that sits in a directory the outer repo ignores counts as hidden when you pointed this at the
-outer repo, and as visible when you pointed it inside the nested one.
+outer repo, and as visible when you pointed it inside the nested one. A FILE named on the command
+line is never hidden, since a gitignore-aware search (rg) searches a file it is given regardless.
+A `.git` entry is never searched, whether the repo's directory or a linked worktree's gitdir file.
 
 Exit codes are format-independent: 0 at least one match, 1 no match, 2 the search could not run
 (bad regex, missing path), was incomplete (a file or directory could not be read AND nothing
 matched), or git could not say which matches are ignored (the count is printed as UNKNOWN,
 never as 0) - because "nothing matched" and "the pattern never compiled" must not look alike.
 Every unread path is listed on stderr and in the JSON `skipped` list, beside the binary files
-that were skipped by rule; `files_scanned` counts only the files actually searched.
+that were skipped by rule; `files_scanned` counts only the files actually searched. A search that
+could not run still emits the same envelope, with `ignored_matches` null (unknown) and an `error`.
 
     uv run scripts/grep_all.py PATTERN [PATH ...] [--glob '*.md'] [--json] [-i]
 """
@@ -40,6 +43,8 @@ from pathlib import Path
 # a broad skip list would reintroduce exactly the silent under-reporting this tool exists to stop.
 _SKIP_DIRS = {".git", "node_modules", "__pycache__", ".venv", ".venv-win", ".mypy_cache",
               ".pytest_cache", ".ruff_cache"}
+_SKIP_FILES = {".git"}
+"""A `.git` FILE is a linked worktree's or submodule's gitdir pointer - never content."""
 _BINARY_SNIFF = 4096
 
 
@@ -61,7 +66,8 @@ def walk(paths, glob=None, unreadable=None):
         for dirpath, dirnames, filenames in os.walk(p, onerror=record):
             dirnames[:] = [d for d in dirnames if d not in _SKIP_DIRS]
             for name in filenames:
-                out.append(Path(dirpath) / name)
+                if name not in _SKIP_FILES:
+                    out.append(Path(dirpath) / name)
     if glob:
         out = [f for f in out if f.match(glob)]
     return sorted(set(out))
@@ -83,7 +89,8 @@ def gitignored(files, roots=None):
     paths would reach it: its own repo is asked, and so is every enclosing repo whose worktree
     that root spans - a nested repo or linked worktree sitting in a directory the outer repo
     ignores is never entered from the outer repo. Without `roots` only the file's own repo is
-    asked.
+    asked. A file that IS one of the roots is never hidden: rg searches a named file whatever
+    .gitignore says.
 
     Each path is handed to check-ignore ABSOLUTE (resolved like git's own toplevel). A path
     relative to the caller's cwd means something else to `git -C <toplevel>`: from a
@@ -107,6 +114,8 @@ def gitignored(files, roots=None):
     for f in files:
         subject = _absolute(f)
         view = _deepest_view(Path(subject), views)
+        if view == Path(subject):
+            continue                # named on the command line, so searched regardless
         repo = toplevel(Path(subject).parent)
         while repo is not None:
             asks.setdefault(repo, {}).setdefault(subject, set()).add(f)
@@ -273,8 +282,9 @@ def main(argv=None, out=None, err=None) -> int:
         print("grep_all: %s" % msg, file=err)
         if args.json:
             print(json.dumps({"ok": False, "command": "grep-all",
-                              "data": {"matches": [], "ignored_matches": 0},
-                              "error": msg}, indent=2), file=out)
+                              "data": {"matches": [], "ignored_matches": None,
+                                       "files_scanned": 0},
+                              "skipped": [], "error": msg}, indent=2), file=out)
         return 2
 
     try:

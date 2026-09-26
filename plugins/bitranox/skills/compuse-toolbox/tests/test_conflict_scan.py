@@ -228,6 +228,32 @@ def test_a_symlink_to_a_file_with_markers_is_still_scanned(tmp_path):
     assert b"link.txt:1:" in r.stdout
 
 
+def test_cli_a_symlinked_directory_inside_a_walked_tree_is_named_not_silently_skipped(tmp_path):
+    """git records a link, never merges through it - so it is not followed, but it is SAID."""
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    (outside / "m.txt").write_text("<<<<<<< HEAD\n", encoding="utf-8")
+    tree = tmp_path / "tree"
+    tree.mkdir()
+    (tree / "a.txt").write_text("clean\n", encoding="utf-8")
+    _symlink(tree / "linked", outside)
+    r = _run(tree)
+    assert r.returncode == 0, r.stderr
+    assert r.stdout == b""
+    assert b"not followed" in r.stderr and b"linked" in r.stderr
+
+
+def test_cli_a_symlinked_directory_given_as_a_target_is_walked(tmp_path):
+    """Control: a link you NAME is followed; only one met during the walk is not."""
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    (outside / "m.txt").write_text("<<<<<<< HEAD\n", encoding="utf-8")
+    _symlink(tmp_path / "linked", outside)
+    r = _run(tmp_path / "linked")
+    assert r.returncode == 1, r.stderr
+    assert b"not followed" not in r.stderr
+
+
 def test_scan_files_lists_a_dangling_symlink_as_skipped_not_unreadable(tmp_path):
     _symlink(tmp_path / "stale", tmp_path / "gone")
     unreadable, skipped = [], []

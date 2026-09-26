@@ -448,6 +448,8 @@ def replay(root: str, predicate, tool: str = "Bash", sample: int = 0,
     report["files_read"] = files_read
     report["duplicates_skipped"] = duplicates
     report["calls_without_field"] = without_field
+    report["tool"] = tool
+    report["field"] = field
     report["skipped"] = skipped
     report["root"] = str(base)
     return report
@@ -517,6 +519,12 @@ def _render(report) -> str:
         "precision: %s%% (blocked / fires, block-pattern %r)" % (report["precision_pct"],
                                                                  report["block_pattern"]),
     ]
+    if report.get("calls_without_field"):
+        # The replay covered only the calls carrying the field; say how many it could not reach,
+        # or the denominator above reads as the tool's whole corpus.
+        lines.insert(3, "           (%d %s call(s) lacked the input field %r and were not replayed)"
+                     % (report["calls_without_field"], report.get("tool", "tool"),
+                        report.get("field")))
     if report["predicate_errors"]:
         lines.append("predicate raised on %d command(s) - that is a defect, not noise"
                      % report["predicate_errors"])

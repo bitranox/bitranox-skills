@@ -115,8 +115,16 @@ def failure_reason(output: str) -> str | None:
 
 
 def _reason_after_nodeid(rest: str) -> str:
-    """The text after `<nodeid> - `. A parametrize id may itself contain ` - ` inside its
-    brackets (`test_x[a - b]`), so the separator is searched after the closing bracket."""
+    """The text after `<nodeid> - `.
+
+    A parametrize id may itself contain ` - ` and brackets (`test_x[a - b]`, `test_x[a[1] - b]`),
+    so the id's end is found by walking its brackets to the one that closes the first: a search
+    for the first `] - ` stops at a NESTED bracket and hands part of the id back as the reason.
+    An id whose brackets do not balance falls back to that search.
+    """
+    balanced = _reason_after_balanced_id(rest)
+    if balanced is not None:
+        return balanced
     search_from = 0
     bracket, first_sep = rest.find("["), rest.find(" - ")
     if bracket != -1 and (first_sep == -1 or bracket < first_sep):
@@ -125,6 +133,28 @@ def _reason_after_nodeid(rest: str) -> str:
             search_from = close + 1
     _, sep, reason = rest[search_from:].partition(" - ")
     return reason.strip() if sep else ""
+
+
+def _reason_after_balanced_id(rest: str) -> str | None:
+    """The reason after a `path::name[...]` id whose brackets balance, else None.
+
+    The name part after `::` is Python identifiers joined by `::`, so the first `[` after the
+    first `::` opens the parametrize id. The id ends where that bracket closes, and a well-formed
+    line continues with ` - ` there; anything else is left to the caller's fallback.
+    """
+    names = rest.find("::")
+    bracket = rest.find("[", names) if names != -1 else -1
+    if bracket == -1 or " " in rest[names:bracket]:
+        return None
+    depth = 0
+    for index in range(bracket, len(rest)):
+        depth += {"[": 1, "]": -1}.get(rest[index], 0)
+        if depth == 0:
+            before, sep, reason = rest[index + 1:].partition(" - ")
+            if sep and not before:
+                return reason.strip()
+            return None
+    return None
 
 
 def verdict_for(returncode: int | None, output: str | None = None) -> str:
@@ -315,10 +345,16 @@ def run_arm(planned, nodeid, *, runner=None, timeout=None):
 
 
 def _run_pytest(runner, nodeid, timeout):
-    """(returncode, merged output) of the arm; returncode None when it hit the timeout."""
+    """(returncode, merged output) of the arm; returncode None when it hit the timeout.
+
+    `-vv`, not `-q`: below that verbosity pytest trims each summary line to the terminal width
+    and drops the message entirely when the node id alone fills it, and a captured child sees a
+    narrow default width. Widening COLUMNS instead would reach the tests themselves, whose
+    rendering can depend on it.
+    """
     try:
         proc = subprocess.run(
-            [*runner, nodeid, "-q", "--no-header", "-rfE", "--tb=no", "-p", "no:cacheprovider"],
+            [*runner, nodeid, "-vv", "--no-header", "-rfE", "--tb=no", "-p", "no:cacheprovider"],
             capture_output=True, text=True, encoding="utf-8", errors="replace",
             timeout=timeout,
             # Merged onto the real environment, never a fresh dict: on Windows a child without

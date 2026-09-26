@@ -213,6 +213,36 @@ class TestWideSegmentation:
         raw = head + "x\n\u4e0a\nDONE-OK\n".encode("utf-16-le")
         assert winlog.decode_windows_text(raw) == head.decode() + "x\n\u4e0a\nDONE-OK\n"
 
+    @pytest.mark.parametrize("head", [b"ab\n", b"head one\nab\n", b"\n", b"abcd\n"])
+    @pytest.mark.parametrize("first", ["\u4e00", "\u0100", "\u4e00\u4e00"])
+    def test_a_wide_segment_opening_with_a_00_low_byte_stays_separate(self, head, first):
+        """U+xx00 is 00 xx in UTF-16LE, so the narrow LF plus that NUL reads as a wide LF.
+
+        Taken as one wide line, every later code unit is misaligned and the marker is mojibake.
+        """
+        raw = head + f"{first} DONE-OK\r\n".encode("utf-16-le")
+        assert winlog.decode_windows_text(raw) == head.decode() + f"{first} DONE-OK\n"
+        if head.strip():  # a blank narrow line is no evidence of a narrow writer
+            assert winlog.describe_encoding(raw).startswith("MIXED")
+
+    def test_a_long_nul_free_wide_line_after_the_00_opener(self):
+        """Misaligned by one byte, `4E 61 62 .. 0A` looks like a clean narrow line - but its LF is
+        followed by a NUL again, so it is no evidence for the wide reading."""
+        wide = "\u4e00" + "\u6261" * 20 + " DONE-OK\n"
+        raw = b"ab\n" + "\u4e00\u6261\u6261\n".encode("utf-16-le") + wide.encode("utf-16-le")
+        assert winlog.decode_windows_text(raw) == "ab\n\u4e00\u6261\u6261\n" + wide
+
+    @pytest.mark.parametrize("first", ["\u6261", "\u4e00\u6261", "\u0414"])
+    def test_control_a_wide_line_whose_next_line_opens_with_a_00_low_byte(self, first):
+        """The same bytes (xx xx 0A 00 00 4E) are also a real wide file; alignment decides."""
+        raw = f"{first}\n\u4e00 DONE-OK\r\n".encode("utf-16-le")
+        assert winlog.decode_windows_text(raw) == f"{first}\n\u4e00 DONE-OK\n"
+        assert winlog.describe_encoding(raw) == "utf-16-le (no BOM)"
+
+    def test_control_a_narrow_line_then_zeroed_padding_is_still_padding(self):
+        raw = b"ab\n" + b"\x00" * 8
+        assert winlog.decode_windows_text(raw) == "ab\n"
+
     @pytest.mark.parametrize("line", [b"abc\x00def\n", b"abc\x00de\n", b"ab\x00d\n"])
     def test_a_stray_nul_does_not_flip_a_narrow_line(self, line):
         raw = line + b"next line\nDONE-OK\n"
@@ -223,6 +253,12 @@ class TestWideSegmentation:
     def test_mostly_cjk_line_with_one_ascii_space_before_a_0a_character(self):
         raw = "\u6f22\u6f22\u6f22\u6f22 \u4e0a DONE-OK\n".encode("utf-16-le")
         assert winlog.decode_windows_text(raw) == "\u6f22\u6f22\u6f22\u6f22 \u4e0a DONE-OK\n"
+
+    def test_many_ambiguous_0a_00_lines_are_not_quadratic(self):
+        """Each `ab\\n\\x00` asks the alignment question; answering it by scanning to EOF made
+        8,000 lines take 2.7 s, which puts 50,000 at roughly 100 s."""
+        raw = b"ab\n\x00" * 50_000
+        assert winlog.decode_windows_text(raw).count("\n") == 50_000
 
     def test_a_long_narrow_file_is_not_quadratic(self):
         raw = b"line of narrow text\n" * 50_000 + "tail\n".encode("utf-16-le")

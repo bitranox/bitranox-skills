@@ -122,6 +122,21 @@ def test_empty_query_is_refused(indexed):
         ti.search(indexed, "   ")
 
 
+@pytest.mark.parametrize("query", ["...", "--", "-- ...", '"', "\u2014", "\u0301"])
+def test_a_query_with_no_indexable_word_is_refused_not_a_miss(indexed, query):
+    # The tokenizer indexes letters, digits and private-use characters only, so a word made of
+    # anything else is an empty phrase that matches nothing - and "no match, not narrated" is a
+    # claim about the corpus the query never tested.
+    with pytest.raises(ti.QueryError, match="no searchable word"):
+        ti.search(indexed, query)
+
+
+@pytest.mark.parametrize("query", ["zpool ...", "zpool --", "\u00e9t\u00e9", "42"])
+def test_a_query_with_one_indexable_word_still_runs(indexed, query):
+    # The control: punctuation BESIDE a real word is ignored by FTS5, not refused.
+    ti.search(indexed, query)
+
+
 def test_list_content_with_only_tool_parts_is_not_indexed(tmp_path):
     _write_transcript(tmp_path, "-proj-c", [
         {"type": "assistant", "message": {"content": [
@@ -225,6 +240,13 @@ def test_cli_query_error_plain_goes_to_stderr(home):
     p = _cli(home, "search", "--fts", "anchor_edit.py")
     assert p.returncode == 2
     assert b"syntax error" in p.stderr
+    assert b"not narrated" not in p.stderr
+
+
+def test_cli_punctuation_only_query_exits_2_not_a_miss(home):
+    p = _cli(home, "search", "...")
+    assert p.returncode == 2
+    assert b"no searchable word" in p.stderr
     assert b"not narrated" not in p.stderr
 
 

@@ -41,6 +41,7 @@ import json
 import re
 import sys
 from collections import defaultdict
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -48,12 +49,12 @@ from pathlib import Path
 # skills/<skill> -> skills -> bitranox. A private regex read loose pointer-shaped prose outside
 # the managed block as facts at that level.
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "hooks"))
-import uuid_store  # noqa: E402
+import uuid_store
 
 # tree_support is this script's sibling; a caller loading the script by path does not put this
 # dir on sys.path the way running it directly does.
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from tree_support import STORE_DIR, store_anchor, utf8_stdio  # noqa: E402
+from tree_support import STORE_DIR, store_anchor, utf8_stdio
 
 __all__ = ["Fact", "Candidate", "Control", "Result", "similarity", "run", "load_facts", "main"]
 
@@ -193,28 +194,59 @@ def similarity(a: str, b: str) -> float:
     return len(ta & tb) / len(ta | tb)
 
 
+# Words the plant adds. Only those the source does not already carry are used: an added word the
+# source has adds nothing to the union, and a short source would plant its own word set.
+_PLANT_WORDS = ("moreover", "restated", "differently", "herein", "likewise", "furthermore",
+                "namely", "accordingly")
+
+
+def _content_order(text: str) -> list[str]:
+    """The distinct content words of `text` in first-seen order: the set `tokens` scores. PURE."""
+    seen: dict[str, None] = {}
+    for w in WORD_RX.findall((text or "").lower()):
+        if w not in STOPWORDS and len(w) > 2:
+            seen.setdefault(w, None)
+    return list(seen)
+
+
+def _new_words(present: set[str], count: int) -> list[str]:
+    """`count` words absent from `present`, from the pool first, then numbered spares. PURE."""
+    pool = [w for w in _PLANT_WORDS if w not in present]
+    n = 0
+    while len(pool) < count:
+        n += 1
+        spare = f"plantword{n}"
+        if spare not in present:
+            pool.append(spare)
+    return pool[:count]
+
+
 def _paraphrase(text: str) -> str:
     """A reworded copy: most of the content words, reordered, with some dropped and some added.
 
-    Every clause here is load-bearing, and the first version got it wrong. Merely REORDERING the
-    words produces an identical word SET, so a set-based scorer returns exactly 1.0 - measured on
-    the real store. A control like that proves only that the scorer is not string equality, and
-    would fire on an instrument that misses every genuine near-duplicate.
+    Every clause here is load-bearing. Merely REORDERING the words produces an identical word SET,
+    so a set-based scorer returns exactly 1.0 - measured on the real store. A control like that
+    proves only that the scorer is not string equality, and would fire on an instrument that
+    misses every genuine near-duplicate.
 
     So the plant DROPS about a quarter of the content words and ADDS words the source never had.
     That lands it where real duplicates live: high overlap, well under 1.0.
 
-    A source under eight words cannot lose a quarter and keep half: appending a fixed tail there
-    scored 0.42 on a store of one-sentence facts, so EVERY run reported an instrument failure. A
-    short source is instead kept whole plus ONE new word, a Jaccard of k/(k+1) - at least 0.5 for
-    any source with a content word, and still under 1.0.
+    Both decisions are made on the CONTENT words - the set the scorer compares - never on the
+    whitespace words. Sized by whitespace, a sentence of eleven words but five content words
+    took the long branch, lost two of its five and gained four, a Jaccard of 3/9, and the run
+    reported an instrument failure. With k content words the plant scores:
+      k < 8   all k kept plus ONE new word: k/(k+1), at least 0.5 from one content word up;
+      k >= 8  k - k//4 kept plus FOUR new words: (k - k//4)/(k + 4), exactly 0.5 at k = 8 and
+              rising toward 0.75.
+    Both are under 1.0 because every added word is one the source does not carry.
     """
-    words = [w for w in (text or "").split() if w]
+    words = _content_order(text)
     if len(words) < 8:
-        return f"{text} restated"
+        return " ".join(words + _new_words(set(words), 1))
     kept = [w for i, w in enumerate(words) if i % 4 != 3]        # drop every fourth word
     head, tail = kept[: len(kept) // 2], kept[len(kept) // 2:]
-    return " ".join(tail + ["moreover", "restated", "differently", "herein"] + head)
+    return " ".join(tail + _new_words(set(words), 4) + head)
 
 
 def _plant_control(facts: list[Fact]) -> tuple[list[Fact], Fact, Fact]:
@@ -310,13 +342,24 @@ def anchor_dir(start: Path) -> Path:
     return anchor
 
 
-def _levels(anchor: Path, skipped: list[str]) -> list[Path]:
-    """Every level dir under `anchor`; a directory that cannot be listed goes into `skipped`."""
+def _list_dir(d: Path) -> list[Path]:
+    return list(d.iterdir())
+
+
+def _levels(anchor: Path, skipped: list[str], *,
+            list_dir: Callable[[Path], list[Path]] = _list_dir) -> list[Path]:
+    """Every level dir under `anchor`; a directory that cannot be listed goes into `skipped`.
+
+    One that no longer EXISTS is not unreadable - another process deleted it after its parent was
+    listed (a cache cleared mid-walk) - and it holds nothing, so it is passed over.
+    """
     found, stack = [], [Path(anchor)]
     while stack:
         d = stack.pop()
         try:
-            entries = list(d.iterdir())
+            entries = list_dir(d)
+        except (FileNotFoundError, NotADirectoryError):
+            continue
         except OSError as exc:
             skipped.append(f"{d} ({type(exc).__name__})")
             continue
@@ -329,11 +372,14 @@ def _levels(anchor: Path, skipped: list[str]) -> list[Path]:
 
 
 def _read(path: Path, skipped: list[str]) -> str | None:
-    """A text file's content, or None with the reason recorded in `skipped`.
+    """A text file's content, or None: with the reason recorded in `skipped`, or without one when
+    the file no longer exists (deleted after it was listed, so there is nothing to scan).
 
     utf-8-sig so a BOM left by a Windows editor is not read as part of the first word."""
     try:
         return path.read_text(encoding="utf-8-sig")
+    except (FileNotFoundError, NotADirectoryError):
+        return None
     except (OSError, UnicodeDecodeError) as exc:
         skipped.append(f"{path} ({type(exc).__name__})")
         return None

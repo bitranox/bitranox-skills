@@ -246,16 +246,26 @@ def _placement_slug(anchor, entry):
 
     Titles collide - two topic files both opening with "# Notes" derived the same slug, and the
     second add silently UPDATED the first, losing its body. The native name is unique per store.
-    A slug already holding a different body is suffixed rather than overwritten; one already
-    holding this entry's body is the same fact (a resumed run) and is reused."""
-    slug = ME.slugify(entry["name"], entry["type"])
-    try:
-        stored = ME.us.body_path(anchor, slug).read_text(encoding="utf-8")
-    except FileNotFoundError:
-        return slug
-    if entry["body"] and entry["body"] in stored:
-        return slug
-    return ME._free_slug(anchor, slug)  # noqa: SLF001 - the engine's own collision suggestion
+    The slug and its `-2`, `-3`... suffixes are walked in the engine's own order: one holding
+    EXACTLY what this entry would write is its own earlier placement (a run resumed after a crash
+    lost the receipt) and is reused; otherwise the first free one is taken. A stored fact that
+    merely CONTAINS this body is a different fact and is never overwritten. Raises TreeWalkError
+    when a stored body cannot be read."""
+    base = ME.slugify(entry["name"], entry["type"])
+    n = 1
+    while True:
+        slug = base if n == 1 else "%s-%d" % (base, n)
+        path = ME.us.body_path(anchor, slug)
+        if not path.is_file() or _is_own_placement(ME.read_store_text(path), slug, entry):
+            return slug
+        n += 1
+
+
+def _is_own_placement(stored, slug, entry):
+    """True when the body `stored` at `slug` is byte for byte what migrating `entry` writes there."""
+    hook = (entry["hook"] or "").strip()
+    written = ME._framed_body(slug, hook, entry["type"], entry["body"])  # noqa: SLF001 - the engine's frame
+    return bool(entry["body"]) and stored.rstrip("\n") == written.rstrip("\n")
 
 
 # ---- receipts (idempotency + resume) -----------------------------------------------------------
@@ -294,8 +304,11 @@ def _save_receipt(proj, rec):
 
 def _git(proj, *args):
     try:
-        r = subprocess.run(["git", "-C", str(proj), *args], capture_output=True, text=True, timeout=15)
-        return r.returncode, r.stdout.strip()
+        # git prints paths as raw filename bytes. Text mode decoded them with the locale's codec
+        # (ASCII under LANG=C) and raised UnicodeDecodeError, which the guard below does not
+        # catch; os.fsdecode is the exact inverse of how this interpreter opens that path.
+        r = subprocess.run(["git", "-C", str(proj), *args], capture_output=True, timeout=15)
+        return r.returncode, os.fsdecode(r.stdout).strip()
     except (OSError, subprocess.SubprocessError):
         return 1, ""
 
@@ -312,8 +325,13 @@ def ensure_gitignore(proj):
     if rc != 0 or not top:
         return "not a git repo: skipped"
     root = Path(top)
-    for store in (sig.MEMORY_DIRNAME, sig.CURATED_DIRNAME):
-        if _git(proj, "ls-files", "--error-unmatch", store + "/")[0] == 0:
+    # The live store sits at the ANCHOR, usually above `proj`: a pathspec relative to `proj` looked
+    # for `<proj>/.claude-memory/`, which never exists below the tree top, so a committed store
+    # was never reported. Absolute pathspecs name the real dirs.
+    stores = (Path(ME._anchor(proj)) / sig.MEMORY_DIRNAME,   # noqa: SLF001 - the engine's anchor
+              sig.claude_memory_dir(proj))
+    for store in stores:
+        if _git(proj, "ls-files", "--error-unmatch", "--", str(store))[0] == 0:
             return "WARNING: %s is TRACKED (possible existing leak) - not modifying .gitignore" % store
     gi = root / ".gitignore"
     try:
@@ -611,8 +629,18 @@ def _usage_problems(args):
     return redirects, problems
 
 
+# The ensure_gitignore answers that need no attention; any other one (a store already tracked by
+# git, a .gitignore it could not rewrite) is printed, so a new status is loud by default.
+_GITIGNORE_FINE = ("gitignored", "already ignored", "not a git repo: skipped",
+                   "track_private: left tracked")
+
+
 def _report_store_problems(rep):
-    """Print what one store did NOT migrate; True when there was anything."""
+    """Print what one store did NOT migrate; True when there was anything. A gitignore warning is
+    printed too but does not count: every entry was still placed."""
+    gitignore = rep.get("gitignore")
+    if gitignore and gitignore not in _GITIGNORE_FINE:
+        print("  ! gitignore (%s): %s" % (rep["slug"], gitignore))
     for why in rep["failed"]:
         print("  ! NOT placed (%s): %s" % (rep["slug"], why))
     for why in rep["unreadable"]:

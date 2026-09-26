@@ -370,12 +370,76 @@ def test_a_usage_error_exits_2_without_connecting(capsys):
 
 # ---- a remote command that already ran must never run again ------------------------------------
 
-def test_even_ssh_s_own_fatal_line_is_not_rerun():
-    """The only fatal refusal left under StrictHostKeyChecking=no is a key marked @revoked, which
-    must not be healed into acceptance either; a strict-mode refusal is the caller's own config."""
-    r = _Runner(_FakeProc(255, _CHANGED + "Host key verification failed.\n"))
-    assert _heal(r) == 255
-    assert [c[0] for c in r.calls] == ["ssh", "ssh-keygen"]
+def _real_revoked(host: str = "h") -> str:
+    """What OpenSSH 10.2 prints under StrictHostKeyChecking=no for a host key marked @revoked in
+    the known-hosts file, captured from a real run. It is a WARNING only - ssh logs in and runs
+    the command - and it names no offending entry."""
+    frame = "@" * 59 + "\n"
+    return (frame + "@       WARNING: REVOKED HOST KEY DETECTED!               @\n" + frame +
+            f"The ED25519 host key for {host} is marked as revoked.\n"
+            "This could mean that a stolen key is being used to\n"
+            "impersonate this host.\n"
+            "Password authentication is disabled to avoid man-in-the-middle attacks.\n"
+            "Keyboard-interactive authentication is disabled to avoid man-in-the-middle attacks.\n")
+
+
+def test_a_revoked_key_is_never_healed_and_the_command_is_not_rerun(capsys):
+    """Dropping the entry would delete the @revoked marker itself - healing a revocation into
+    acceptance. ssh names no offending entry for it, so nothing is dropped, and the warning is
+    passed through for the caller to see."""
+    r = _Runner(_FakeProc(3, _real_revoked()))
+    assert _heal(r) == 3
+    assert [c[0] for c in r.calls] == ["ssh"]
+    assert "REVOKED HOST KEY" in capsys.readouterr().err
+
+
+def test_the_heal_drops_the_name_ssh_recorded_not_the_alias_it_was_given():
+    """An ssh_config alias or a non-default port is recorded under the RESOLVED name
+    (`[10.0.0.5]:2222`), so `ssh-keygen -R <alias>` removes nothing - measured against a real
+    sshd - and the banner then repeats on every call. ssh prints the exact name to remove."""
+    r = _Runner(_FakeProc(0, _real_changed("/kh", host="[10.0.0.5]:2222")))
+    assert _heal(r, host="fleetalias", argv=("ssh", "fleetalias", "uptime")) == 0
+    assert r.calls[1] == ["ssh-keygen", "-R", "[10.0.0.5]:2222", "-f", "/kh"]
+
+
+def test_the_removal_hint_of_an_inner_ssh_is_not_taken_for_ours():
+    inner = _real_changed("/root/.ssh/known_hosts", host="peer")
+    ours = _real_changed("/kh", host="10.0.0.5")
+    r = _Runner(_FakeProc(0, inner + ours))
+    assert _heal(r, host="fleetalias") == 0
+    assert r.calls[1] == ["ssh-keygen", "-R", "10.0.0.5", "-f", "/kh"]
+
+
+def test_without_ssh_s_removal_hint_the_host_given_is_dropped():
+    r = _Runner(_FakeProc(0, "Offending ED25519 key in /kh:1\n"))
+    assert _heal(r, host="h") == 0
+    assert r.calls[1] == ["ssh-keygen", "-R", "h", "-f", "/kh"]
+
+
+def test_a_drop_that_removed_nothing_is_reported_as_such(tmp_path, capsys):
+    """'dropped the stale entry' is a claim about the file; it is made only when the file
+    actually changed, and otherwise ssh's own removal command is handed to the reader."""
+    kh = tmp_path / "kh"
+    kh.write_text("[10.0.0.5]:2222 ssh-ed25519 AAAA\n", encoding="utf-8")
+    r = _Runner(_FakeProc(0, _real_changed(str(kh), host="[10.0.0.5]:2222")))
+    assert _heal(r, known_hosts=str(kh)) == 0
+    err = capsys.readouterr().err
+    assert "dropped the stale entry" not in err, err
+    assert "removed nothing" in err, err
+
+
+def test_a_drop_that_changed_the_file_is_reported_as_dropped(tmp_path, capsys):
+    kh = tmp_path / "kh"
+    kh.write_text("h ssh-ed25519 AAAA\n", encoding="utf-8")
+
+    def runner(argv, **kw):
+        if argv[0] == "ssh-keygen":
+            kh.write_text("", encoding="utf-8")
+            return _FakeProc()
+        return _FakeProc(0, _real_changed(str(kh)))
+
+    assert _heal(runner, known_hosts=str(kh)) == 0
+    assert "dropped the stale entry" in capsys.readouterr().err
 
 
 def test_a_mutating_command_that_failed_under_the_banner_says_it_was_not_rerun(capsys):

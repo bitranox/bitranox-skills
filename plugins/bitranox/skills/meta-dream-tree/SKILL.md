@@ -30,7 +30,8 @@ against its owner, and only a SELF-CONTRADICTION - a slug saying one thing under
 another - is a defect on its own and sets exit 1; its UNEXAMINED list is split into RE-SURFACED,
 WRITTEN SINCE the sweep and NEVER CHECKED, and only the last is a backlog of unchecked claims -
 read the count for that group, never the total; `clear` records an adjudication, which is what
-stops an entry being re-reported until its hook changes, and takes
+stops an entry being re-reported until its hook changes (a clear scoped to one level ADDS to
+what the record vouches for, so a copy at a level outside that scope keeps its verdict), and takes
 `--slug <s>` REPEATABLY - a bare `clear` certifies every candidate in scope, so name the ones you
 actually checked, and a slug that is not a flagged candidate is refused rather than recorded; a
 baseline it cannot parse, a merge conflict left in it for instance, is refused rather than
@@ -45,7 +46,8 @@ answer, so they surface without this file being open. Every one of these tools f
 way the engine does (the topmost dir holding a `CLAUDE.md` AND a `.claude-memory/`), so a leftover
 store lower down the chain is never backed up, scanned or recorded against in its place. A level,
 directory or fact any of them could not read is an error (exit 2) that names the path, never a
-silent omission.
+silent omission; one another process DELETED while the tool ran (a cache dir cleared mid-walk) no
+longer exists, holds nothing, and is passed over rather than called unreadable.
 
 Use the Read tool to load a referenced file when running its passes.
 

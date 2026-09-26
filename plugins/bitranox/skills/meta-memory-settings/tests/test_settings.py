@@ -1,4 +1,8 @@
-"""Tests for the meta-memory-settings CLI. All content ASCII."""
+"""Tests for the meta-memory-settings CLI.
+
+The source is ASCII only; the non-ASCII test data (CJK, umlauts, undecodable bytes) is spelled
+as escapes.
+"""
 
 import os
 import subprocess

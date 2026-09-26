@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import json
 import os
+import shutil
 import subprocess
 import sys
 from pathlib import Path
@@ -275,6 +276,33 @@ def test_an_unreadable_level_file_refuses_instead_of_omitting_it(tmp_path):
     env = json.loads(r.stdout)
     assert env["ok"] is False and str(locked) in " ".join(env["skipped"])
     assert not (tmp_path / "bk" / "manifest.json").exists()
+
+
+def _deleting_lister(victim: Path):
+    """A lister that REALLY deletes `victim` just before listing it: a concurrent cache delete
+    landing between the parent's listing and the child's, reproduced with the real filesystem."""
+    def list_dir(d: Path) -> list[Path]:
+        if d == victim:
+            shutil.rmtree(victim)
+        return list(d.iterdir())
+    return list_dir
+
+
+def test_a_directory_deleted_mid_walk_is_gone_not_unreadable(tmp_path):
+    """A directory that no longer exists holds no level. Filed as unreadable, a cache dir deleted
+    by another process mid-walk refused the whole backup."""
+    make_tree(tmp_path)
+    victim = tmp_path / "elsewhere"
+    unreadable: list[str] = []
+    levels = SM.levels_under(tmp_path, unreadable=unreadable, list_dir=_deleting_lister(victim))
+    assert unreadable == []
+    assert victim not in levels and tmp_path / "projects" / "app" in levels
+
+
+def test_a_level_file_deleted_before_it_is_read_is_gone_not_unreadable(tmp_path):
+    unreadable: list[str] = []
+    assert SM.read_level_text(tmp_path / "gone" / "CLAUDE.local.md", unreadable) is None
+    assert unreadable == []
 
 
 @pytest.mark.skipif(NO_CHMOD, reason="needs a non-root POSIX user for chmod 000")

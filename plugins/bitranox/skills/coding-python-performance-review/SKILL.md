@@ -96,7 +96,10 @@ discovery steps and use the two checker tools directly:
   suite run failed, there is no previous commit, or a git step failed; never quote its
   numbers then. If stderr says the repository was NOT restored, run the git commands it prints
   first: they name the branch to check out and the sha of the stash holding your uncommitted
-  changes.
+  changes. When the BEFORE run created a file where the stash puts back one of your untracked
+  files, it re-applies nothing and names that file: move it out of the way before those
+  commands. If it says PART of your changes was re-applied, it prints no command to run: the
+  stash still holds all of them, and the rest is restored by hand.
 
 Report findings with measured numbers from the real test suite; never accept a claim on
 synthetic benchmarks.
@@ -130,18 +133,21 @@ once, and writes `session.json` into that scratch dir holding every path later s
 must set it YOURSELF before the bootstrap: `session.json` is written BY
 `setup_env.py`, so the `skill_dir` field read back in the next block does not exist
 yet and cannot be used to launch the script that creates it.
-`uv run` is preferred (it fetches an isolated interpreter); without uv, `bx_py` runs it with
-the first of `python3`, `python`, `py -3` that actually starts - a bare `python` is missing on
-most Linux boxes and on macOS, and Windows' `python3` can be the Store stub, which exists but
-does not run. Run it once, capturing the printed session-file path. The script prints
+`bx_py` runs it first, with the first of `python3`, `python`, `py -3` that actually starts - a
+bare `python` is missing on most Linux boxes and on macOS, and Windows' `python3` can be the
+Store stub, which exists but does not run. That is the user's own interpreter (an activated
+venv or conda env included), which is what a project WITHOUT a `.venv/` or `venv/` gets
+recorded. `uv run` is only the fallback for a machine where that fails (no Python 3.10+): it
+fetches an interpreter, but the one it records is uv's throwaway script env. Run it once,
+capturing the printed session-file path. The script prints
 `Session file: <path>` on its first line, echoes the full JSON, and exits non-zero
 with a clear stderr message if there is no `pyproject.toml` or the interpreter is
 too old. `session.json` replaces the old `/tmp/bx-perf-session` and
 `/tmp/bx-perf-skill-dir` side-channel files; it contains `tmpdir`, `project_root`,
 `skill_dir`, `python`, and `status`. `python` is the PROJECT's interpreter (its `.venv/` or
-`venv/`), not the one running `setup_env.py`: under `uv run` that is a throwaway env without
-the project or pytest. With no project venv it falls back to the running interpreter and
-says so on stderr; then check `python` before profiling. The version gate judges that recorded
+`venv/`), not the one running `setup_env.py`. With no project venv it falls back to the running
+interpreter and says so on stderr; then check `python` before profiling - above all when the
+`uv run` fallback ran, whose throwaway env has neither the project nor pytest. The version gate judges that recorded
 interpreter, because every later step runs it: a venv python that cannot start, or one older than
 3.10, exits 2 naming its path, and no scratch dir is created.
 
@@ -154,7 +160,7 @@ SKILL_DIR="/absolute/path/to/skills/coding-python-performance-review"
 # Run the bootstrap once; capture the path to session.json from its output.
 bx_py() { local c; for c in python3 python "py -3"; do $c -c "" >/dev/null 2>&1 && { $c "$@"; return; }; done
     echo "no python3, python or py -3 starts on this machine" >&2; return 127; }
-BX_PERF_OUT="$(uv run "$SKILL_DIR/setup_env.py" || bx_py "$SKILL_DIR/setup_env.py")" || {
+BX_PERF_OUT="$(bx_py "$SKILL_DIR/setup_env.py" || uv run "$SKILL_DIR/setup_env.py")" || {
     echo "Setup failed - aborting performance analysis"; exit 1
 }
 echo "$BX_PERF_OUT"
@@ -244,7 +250,10 @@ echo "Prerequisites validated"
 
 #### 4a: Identify Pure Function Candidates
 
-Run `find_cache_candidates.py` from the skill directory against the project's Python files:
+Run `find_cache_candidates.py` from the skill directory against the project's Python files. A
+function that returns a list, dict, set or ndarray it builds is never reported: `lru_cache`
+would hand every caller that one object, so one caller's edit changes every later result.
+Return a tuple or frozenset first if such a function should be cached.
 
 ```bash
 # Re-load paths from session.json (see Step 2 for read_field / BX_PERF_SESSION).
@@ -331,6 +340,11 @@ done
 echo "Hot spots identified"
 ```
 
+`find_hotspots.py` exits 2 when a profile cannot be read, and `2>&1 || true` puts its
+`ERROR reading profile ...` line into `hotspots.txt` under that profile's `---` header. Such a
+section is NOT a result: no hotspots there means the profile was never read, not that nothing
+is hot.
+
 #### 4d: Cross-Reference Candidates with Hot Spots
 
 Run `prioritize_cache_candidates.py` from the skill directory:
@@ -347,6 +361,11 @@ BX_PERF_TMPDIR="$(read_field tmpdir)" && SKILL_DIR="$(read_field skill_dir)" \
 echo "Priority candidates identified"
 ```
 
+`prioritize_cache_candidates.py` exits 2 when either input cannot be read, and
+`priority_cache_candidates.txt` then holds only its `ERROR reading input: ...` line: that is
+NOT "no high-priority candidates". Also read the `ERROR` lines inside `cache_candidates.txt` and
+`hotspots.txt` - a file or profile that was not scanned cannot match anything here either.
+
 #### 4e: Audit Existing Caches
 
 This is an instructions-only step (no script). Use the Grep tool to find existing cache decorators:
@@ -359,6 +378,8 @@ For each cached function found, read the function and evaluate:
 1. Check profiling data from `hotspots.txt`  -  is the function called frequently (>100 calls)?
 2. Read the function body  -  is it pure (no I/O, no side effects, deterministic)?
 3. Check the function signature  -  are all args hashable (no mutable defaults leaking through)?
+   And the return value: a cached function returning a list/dict/set/ndarray it builds hands
+   every caller the same object (HARMFUL unless it returns a tuple/frozenset).
 4. Cross-reference with hotspots  -  does caching this function actually save measurable time?
 
 Manually write findings to `$BX_PERF_TMPDIR/cache/existing_caches.txt` with this format:
@@ -560,6 +581,7 @@ After running the test suite, report:
 | Not running tests after fixes                           | Run tests after EVERY implementation                     |
 | Caching impure functions                                | Never cache time/random/I/O/state-modifying              |
 | Caching with mutable args                               | Convert list/dict to tuples; lru_cache needs hashable    |
+| Caching a function that returns a new list/dict/set     | Return a tuple/frozenset; callers share the cached value |
 | Silently skip an accepted item ground truth contradicts | Re-open as a propose-first "Reconsider" finding          |
 | MINOR before SEVERE                                     | Sort: SEVERE -> MEDIUM -> MINOR                          |
 | Ignoring existing ineffective caches                    | Audit existing `@lru_cache`/`@cache`, propose removal    |

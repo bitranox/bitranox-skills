@@ -434,3 +434,46 @@ def test_a_line_separator_char_does_not_start_a_fake_heading():
     heading, body = R._matched_section(text, ["shim"])
     assert heading == "# Real"
     assert "more shim text" in body
+
+
+# The keywords reach _snippet / _matched_section already folded the way scan() matched them (NFC
+# then casefold), so a sharp s arrives as "ss" and a decomposed umlaut as the composed one. The
+# window must be found by the same folding, or a note that matched shows only its head.
+def _street_keyword():
+    import gather_scan as gs
+    (kw,) = gs.extract_keywords("Hauptstra\u00dfe")
+    assert kw == "hauptstrasse"
+    return kw
+
+
+def test_snippet_centres_on_a_sharp_s_keyword_match(tmp_path):
+    m = tmp_path / "note.md"
+    m.write_text("filler line\n" * 400 + "Die Hauptstra\u00dfe 5 ist die Adresse.\n" + "tail\n" * 50,
+                 encoding="utf-8")
+    snip = R._snippet(str(m), [_street_keyword()], 300)
+    assert "Hauptstra\u00dfe 5" in snip
+
+
+def test_snippet_offsets_stay_valid_when_folding_lengthens_the_text_before_the_match(tmp_path):
+    # every sharp s before the match folds to two characters, so a folded offset used on the
+    # original text would land about 600 characters past the match
+    m = tmp_path / "note.md"
+    m.write_text("Ma\u00dfe Stra\u00dfe Gr\u00fc\u00dfe\n" * 200 + "MARKER Hauptstra\u00dfe MARKER\n"
+                 + "Gru\u00df\n" * 300, encoding="utf-8")
+    snip = R._snippet(str(m), [_street_keyword()], 300)
+    assert "MARKER Hauptstra\u00dfe MARKER" in snip
+
+
+def test_snippet_matches_a_decomposed_umlaut_against_the_composed_keyword(tmp_path):
+    import gather_scan as gs
+    m = tmp_path / "note.md"
+    m.write_text("filler line\n" * 400 + "Das Buero in Mu\u0308nchen.\n" + "tail\n" * 50,
+                 encoding="utf-8")
+    snip = R._snippet(str(m), gs.extract_keywords("M\u00fcnchen"), 300)
+    assert "nchen" in snip and "Buero" in snip
+
+
+def test_matched_section_finds_a_sharp_s_keyword_behind_folding_sections():
+    text = ("# Masse\n\n" + "Ma\u00dfe und Gr\u00fc\u00dfe\n" * 100
+            + "# Adresse\n\nDie Hauptstra\u00dfe 5.\n\n# Danach\n\nnothing\n")
+    assert R._matched_section(text, [_street_keyword()]) == ("# Adresse", "Die Hauptstra\u00dfe 5.")

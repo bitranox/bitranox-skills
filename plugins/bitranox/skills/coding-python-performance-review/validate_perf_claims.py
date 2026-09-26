@@ -22,16 +22,20 @@ import sys
 DEFAULT_DIFF = "LLM-CONTEXT/review-anal/scope/changes.diff"
 
 _NUM = r"(?<![\w.])\d+(?:\.\d+)?"
+# A multiplier "x": never one followed by another number, which makes it a dimension
+# ("10 x 20", "1920 x 1080"; "1920x1080" already fails the word boundary).
+_TIMES = r"x\b(?!\s*\d)"
 # Each pattern matches a whole claim phrase; group(0) is the human-readable claim.
 _CLAIM_PATTERNS = [
     # number-first: "40% faster", "30 % lower latency"
     _NUM + r"\s*%\s*(?:faster|slower|lower|higher|less|more|improvement|improv\w*|speed\w*|reduc\w*|gain\w*|throughput|latency|memory)",
-    # "2x speedup", "3x" - but never a hex literal (0xFF) or a dimension (1920x1080)
-    r"(?<![\w.])(?!0x)\d+(?:\.\d+)?\s*x\b(?:\s*(?:faster|slower|speed\w*|improv\w*|reduc\w*))?",
+    # "2x speedup", "3x" - but never a hex literal (0xFF) or a dimension (1920x1080, 10 x 20)
+    r"(?<![\w.])(?!0x)\d+(?:\.\d+)?\s*" + _TIMES
+    + r"(?:\s*(?:faster|slower|speed\w*|improv\w*|reduc\w*))?",
     # keyword-first: "faster by 40%", "reduced latency by 30%", "improved by 2x"; the word
     # boundaries keep "execute" and "cut_width" from reading as "cut"
     r"\b(?:faster|slower|improv\w*|reduc\w*|optimiz\w*|speed\w*|gain\w*|cut|lower\w*|boost\w*)\b"
-    r"[^.\n]*?" + _NUM + r"\s*(?:%|x\b)",
+    r"[^.\n]*?" + _NUM + r"\s*(?:%|" + _TIMES + ")",
     # numberless claims
     r"\bimprov\w*\s+(?:the\s+)?(?:throughput|latency|performance|speed)\b",
     r"\b(?:twice|thrice|\d+(?:\.\d+)?\s+times)\s+(?:as\s+)?(?:fast|faster|quicker|slower)\b",

@@ -25,7 +25,7 @@ uv run scripts/claudemd_variance.py --root ~/src --json
 It splits every `CLAUDE.md` into `## ` sections, hashes each body (whitespace-normalised, so
 trivial reflowing does not read as a different variant - the definition is in `--help`), groups
 the identical ones, and reports each group's common ancestor plus the largest variant's share of
-the group. For each group of 3+, its common ancestor - not the one you assumed - is where the
+the group's copies. For each group of 3+, its common ancestor - not the one you assumed - is where the
 text belongs; `--lift-threshold` marks which variants clear that bar.
 
 Enumeration is a plain filesystem WALK, never the session `grep` or any gitignore-aware tool:

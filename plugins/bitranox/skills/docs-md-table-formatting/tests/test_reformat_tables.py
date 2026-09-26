@@ -517,6 +517,68 @@ def test_a_trailing_escaped_pipe_with_no_closing_pipe_is_kept(tmp_path):
     assert "| a | b \\| |" in out
 
 
+# ---- fences are matched the CommonMark way ----
+# An opener is at most three columns into its block, a backtick fence's info string holds no
+# backtick, and a closer is the same character, at least as long, bare, and also at most three
+# columns in. Anything looser opens a fence that swallows every later table.
+MISALIGNED = "| a | b |\n|---|---|\n| long | y |\n"
+ALIGNED = "| a    | b |\n|------|---|\n| long | y |\n"
+
+
+def test_an_inline_code_span_at_line_start_is_not_a_fence(tmp_path):
+    src = "```x``` is inline code, not a fence.\n\n" + MISALIGNED
+    _, out = run_file(tmp_path, src)
+    assert out.endswith(ALIGNED), out
+
+
+def test_a_backtick_fence_inside_an_indented_code_block_is_not_a_fence(tmp_path):
+    src = "A paragraph.\n\n    ```\n\nMore prose.\n\n" + MISALIGNED
+    _, out = run_file(tmp_path, src)
+    assert out.endswith(ALIGNED), out
+
+
+def test_a_closer_indented_four_columns_does_not_close_the_fence(tmp_path):
+    src = "```\ncode\n    ```\n" + MISALIGNED + "```\n"
+    proc, out = run_file(tmp_path, src)
+    assert out == src
+    assert "Unchanged" in proc.stdout
+
+
+def test_a_closer_shorter_than_its_opener_does_not_close_it(tmp_path):
+    src = "````\n```\n" + MISALIGNED + "````\n"
+    _, out = run_file(tmp_path, src)
+    assert out == src
+
+
+def test_a_tilde_closer_does_not_close_a_backtick_fence(tmp_path):
+    src = "```\n~~~\n" + MISALIGNED + "```\n"
+    _, out = run_file(tmp_path, src)
+    assert out == src
+
+
+def test_a_tilde_fence_info_string_may_hold_a_backtick(tmp_path):
+    """The no-backtick rule is for BACKTICK fences only: ~~~ with `x` still opens a fence."""
+    src = "~~~ `x`\n" + MISALIGNED + "~~~\n"
+    _, out = run_file(tmp_path, src)
+    assert out == src
+
+
+def test_a_fence_inside_a_nested_list_item_still_hides_its_table(tmp_path):
+    """Indentation is judged against the list item's content column, not the page margin."""
+    src = "- a\n  - b\n\n    ```\n    | a | b |\n    |---|---|\n    | long | y |\n    ```\n"
+    _, out = run_file(tmp_path, src)
+    assert out == src
+
+
+def test_a_ragged_table_after_an_inline_span_line_is_still_reported(tmp_path):
+    """The repo gate's ragged check reads through reformat_file, so it went blind here too."""
+    f = tmp_path / "r.md"
+    f.write_bytes(("```sh``` prose\n\n| a | b |\n|---|---|\n| 1 | 2 | 3 |\n").encode("utf-8"))
+    warnings = []
+    R.reformat_file(f, check_only=True, warnings=warnings)
+    assert len(warnings) == 1 and "LOSES CONTENT" in warnings[0], warnings
+
+
 def test_strict_fails_a_row_whose_code_span_pipe_drops_a_cell(tmp_path):
     """The HIGH finding: GFM splits at the pipe in backticks, so `z` is dropped when rendered."""
     src = "| a | b |\n|---|---|\n| `x | y` | z |\n"

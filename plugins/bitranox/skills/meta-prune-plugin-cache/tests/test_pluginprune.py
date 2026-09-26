@@ -13,7 +13,7 @@ import os
 import subprocess
 import sys
 import time
-from pathlib import Path
+from pathlib import Path, PureWindowsPath
 
 import pytest
 
@@ -1392,3 +1392,63 @@ def test_help_is_still_plain_text_with_json(capsys) -> None:
     assert stop.value.code == 0
     out = capsys.readouterr().out
     assert out.startswith("usage:")
+
+
+# --------------------------------------------------------------------------------------------
+# LOW batch: plan-time refusals are not apply failures; Windows pins compare case-insensitively
+# --------------------------------------------------------------------------------------------
+
+
+def test_apply_labels_a_plan_time_refusal_refused_not_failed(
+    cache: Path, tmp_path: Path, capsys
+) -> None:
+    """A directory the PLAN refused was never attempted, so --apply must not call it FAILED.
+
+    FAILED means a removal was tried and did not happen; a caller reading stderr for that word
+    would otherwise chase a permission fault that never occurred.
+    """
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    link = cache / "own-marketplace" / "own-plugin" / "latest"
+    link.symlink_to(outside, target_is_directory=True)
+    rc = P.main(["--cache-dir", str(cache), "--apply"])
+    err = capsys.readouterr().err
+    assert rc == 1
+    assert f"REFUSED: {link}: is a symlink" in err
+    assert f"FAILED: {link}" not in err
+    assert outside.exists()
+
+
+WINDOWS_PIN_CASES = [
+    "C:\\Users\\Bob\\.Claude\\Plugins\\cache\\m\\p\\1.0.0\\x.sh",
+    "c:\\users\\bob\\.claude\\plugins\\cache\\M\\P\\1.0.0\\x.sh",
+    "%USERPROFILE%\\.CLAUDE\\plugins\\cache\\m\\p\\1.0.0\\x.sh",
+]
+
+
+@pytest.mark.parametrize("command", WINDOWS_PIN_CASES)
+def test_a_windows_pin_in_another_letter_case_is_found(command: str) -> None:
+    """Windows paths are case-insensitive, so a settings file may spell the version directory in
+    any case and still point at it. Missed, the pinned version is planned for DELETION.
+
+    The platform is injected, so this runs everywhere rather than only on a Windows cell.
+    """
+    version = PureWindowsPath("C:/Users/Bob/.claude/plugins/cache/m/p/1.0.0")
+    settings = P.SettingsFile(
+        Path("settings.json"), json.dumps({"hooks": {"Stop": [{"command": command}]}}), frozenset()
+    )
+    found = P.pinning_settings(
+        version, [settings], anchors=[PureWindowsPath("C:/Users/Bob")], fold_case=True
+    )
+    assert found == "settings.json"
+
+
+def test_a_posix_pin_in_another_letter_case_is_not_the_same_directory(tmp_path: Path) -> None:
+    """Control: on a case-sensitive filesystem `.Claude` and `.claude` are different
+    directories, so a pin naming the other one keeps nothing."""
+    version = tmp_path / ".claude" / "plugins" / "cache" / "m" / "p" / "1.0.0"
+    other = str(version).replace("/.claude/", "/.Claude/")
+    settings = P.SettingsFile(
+        Path("settings.json"), json.dumps({"command": f"bash {other}/x.sh"}), frozenset()
+    )
+    assert P.pinning_settings(version, [settings], fold_case=False) is None

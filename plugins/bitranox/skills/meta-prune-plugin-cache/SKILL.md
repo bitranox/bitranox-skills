@@ -39,7 +39,8 @@ own run and removes THAT plan, not the one your earlier dry run printed: a `temp
 aged past `--min-age` in between can go although the dry run kept it. Every removal still passes
 the same rules, and within one `--apply` the set only shrinks - a session starting between the
 plan and the removal claims its version, and that directory is refused. Only what was actually
-removed is reported as removed; a directory that failed to delete is reported FAILED on stderr.
+removed is reported as removed. On stderr a directory the plan refused, and so never attempted, is
+reported REFUSED; one whose removal was attempted and did not happen is reported FAILED.
 
 ```bash
 uv run scripts/pluginprune.py             # the plan, with sizes and a reason per kept directory
@@ -53,7 +54,7 @@ It keeps a version with a live lock (or an `.in_use` directory it cannot list), 
 `installPath` from `installed_plugins.json` (what a fresh session resolves to), anything a
 settings file pins (spelled absolute, or relative to the home or Claude config directory however
 that prefix is written - `~/`, `"$HOME"/`, `${HOME}/`, `%USERPROFILE%\`, `$env:USERPROFILE/`,
-`${CLAUDE_CONFIG_DIR}/`, quoted or not), anything `--keep` names or points inside (so the base
+`${CLAUDE_CONFIG_DIR}/`, quoted or not, and on Windows in any letter case), anything `--keep` names or points inside (so the base
 path a skill invocation prints works), and the sole version of a plugin a settings file's
 `enabledPlugins` lists - a symlinked sibling is refused and never counts as a second version. Paths are compared resolved, so a relative
 `--keep` or `--cache-dir` or a symlinked `~/.claude` still matches; a `--keep` that matches no

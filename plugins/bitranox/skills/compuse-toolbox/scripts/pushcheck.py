@@ -20,9 +20,12 @@ Two things make this a tool rather than a habit:
    refusal.
 
 Only ADDED lines are scanned. A `-` line is content leaving the repo, and flagging it would make
-a cleanup commit unpushable, which is backwards. They are read from EVERY commit in the range,
-not from the diff between its two ends: a value added in one commit and removed in the next is
-still published, in that first commit.
+a cleanup commit unpushable, which is backwards; a range that only REMOVES lines, and changes no
+binary file (whose content is never scanned), is therefore safe, and "empty" means a range with
+neither added nor removed lines. They are read from EVERY commit in the range, not from the diff
+between its two ends: a value added in one commit and removed in the next is still published, in
+that first commit. A symmetric range `A...B` scans only B's side, the commits B adds since it
+forked from A.
 
 Documentation-safe values are deliberately NOT findings: the RFC5737 ranges (192.0.2.0/24,
 198.51.100.0/24, 203.0.113.0/24), `example.com`/`.test`/`.invalid`, loopback, and placeholder
@@ -62,10 +65,11 @@ _URL_RX = re.compile(r"^[a-z][a-z0-9+.-]*://(?:[^@/]+@)?(?P<host>[^:/]+)(?::\d+)
 # Absolute paths that carry local layout. Deliberately not "every absolute path": /usr/bin/python3
 # belongs in documentation, and flagging it would bury the findings that matter.
 # A Windows profile path is written with one backslash, with two once it sits inside a JSON or
-# source string literal, and in any case (NTFS is case-insensitive, `c:\users` is common).
+# source string literal, with forward slashes (Windows accepts both, and many config files and
+# tools write `c:/users/...`), and in any case (NTFS is case-insensitive, `c:\users` is common).
 _ABS_RX = re.compile(
     r"(?P<hit>(?:/home/|/Users/|/root/|/media/|/mnt/|/srv/)[A-Za-z0-9._-]+"
-    r"|(?i:[a-z]:\\{1,2}users\\{1,2})[A-Za-z0-9._-]+)")
+    r"|(?i:[a-z]:[\\/]{1,2}users[\\/]{1,2})[A-Za-z0-9._-]+)")
 # Home directories written as documentation. `alice` is NOT here on purpose: a real-looking name
 # is a candidate for a human to clear, and the cost of clearing one is a sentence.
 _PLACEHOLDER_USERS = {"user", "username", "youruser", "you", "me", "example", "USER", "$USER"}
@@ -256,8 +260,8 @@ def _header_path(field_text: str) -> str:
     return target[2:] if target.startswith(("a/", "b/")) else target
 
 
-def _added_lines(diff: str):
-    """(path, new-file line, text) for every ADDED line of a unified diff.
+def _changed_lines(diff: str):
+    """(path, new-file line, sign, text) for every ADDED (`+`) and REMOVED (`-`) line of a diff.
 
     A `+++ `/`--- ` line is a file header only BETWEEN a `diff ` line and the first `@@` of that
     file. Inside a hunk the same prefix is content: an added line that itself begins `++ ` shows
@@ -279,10 +283,19 @@ def _added_lines(diff: str):
                 path = _header_path(raw[4:])
             continue
         if raw.startswith("+"):
-            yield path, lineno, raw[1:]
+            yield path, lineno, "+", raw[1:]
             lineno += 1
-        elif not raw.startswith("-"):
+        elif raw.startswith("-"):
+            yield path, lineno, "-", raw[1:]
+        else:
             lineno += 1
+
+
+def _added_lines(diff: str):
+    """(path, new-file line, text) for every ADDED line of a unified diff."""
+    for path, lineno, sign, text in _changed_lines(diff):
+        if sign == "+":
+            yield path, lineno, text
 
 
 def scan_diff(diff: str, denylist: tuple[str, ...] | list[str] = ()) -> list[Finding]:
@@ -302,6 +315,20 @@ def scan_diff(diff: str, denylist: tuple[str, ...] | list[str] = ()) -> list[Fin
 def added_line_count(diff: str) -> int:
     """How many added lines the scan actually read - the denominator the verdict must report."""
     return sum(1 for _ in _added_lines(diff))
+
+
+def removed_line_count(diff: str) -> int:
+    """How many lines the range removes - what tells a cleanup range from an empty one."""
+    return sum(1 for _, _, sign, _ in _changed_lines(diff) if sign == "-")
+
+
+_BINARY_RX = re.compile(r"^Binary files .* differ$")
+
+
+def changes_binary_content(diff: str) -> bool:
+    """Whether any file in the range is binary. Its content is never scanned, so a range whose
+    only readable change is a removal is not known to add nothing when one is present."""
+    return any(_BINARY_RX.match(line) for line in _lines(diff))
 
 
 def exclude_findings(findings: list[Finding], patterns: list[str]) -> tuple[list[Finding],
@@ -324,13 +351,22 @@ def exclude_findings(findings: list[Finding], patterns: list[str]) -> tuple[list
 
 
 def decide(*, visibility: str | None, findings: list[Finding], examined_lines: int,
-           unused_exclusions: list[str] | None = None) -> Verdict:
-    """The verdict. PURE, and every non-answer fails closed."""
+           unused_exclusions: list[str] | None = None, removed_lines: int = 0) -> Verdict:
+    """The verdict. PURE, and every non-answer fails closed.
+
+    Zero added lines is a refusal only when the range removed nothing either: a range that only
+    REMOVES lines is a cleanup, which publishes nothing new, and refusing it would make a leak
+    unfixable through this gate. A caller that does not pass `removed_lines` gets the refusal.
+    """
     unused = list(unused_exclusions or [])
     if visibility is None:
         return Verdict(False, 2, "could not resolve the repository's visibility from its remote; "
                                  "refusing rather than guessing from the directory name",
                        examined_lines, None, findings, unused)
+    if examined_lines <= 0 and removed_lines > 0:
+        return Verdict(True, 0, f"the range only removes {removed_lines} line(s) and adds none, "
+                                f"so it publishes no new content", examined_lines, visibility,
+                       findings, unused)
     if examined_lines <= 0:
         return Verdict(False, 2, "the range is empty, so nothing was examined - that is a broken "
                                  "check, not a clean one", examined_lines, visibility, findings, unused)
@@ -397,10 +433,15 @@ def range_diff(repo: Path, rev_range: str) -> str:
     public history although the endpoint diff never shows it. A merge contributes its diff
     against its first parent, which covers a conflict resolution. `core.quotePath=false` keeps a
     non-ASCII path readable, so a finding names the real file and --exclude can match it.
+
+    `--right-only` keeps a symmetric range `A...B` meaning what it means to `git diff` - the
+    commits B adds since it forked from A - instead of `git log`'s both sides, where a commit only
+    on A (already upstream, not part of this push) would refuse the push. On an ordinary `A..B`
+    range no commit is marked left, so the option changes nothing there.
     """
     return _run(["git", "-c", "core.quotePath=false", "log", "-p", "--format=", "--unified=0",
-                 "--no-color", "--no-ext-diff", "--diff-merges=first-parent", rev_range, "--"],
-                repo)
+                 "--no-color", "--no-ext-diff", "--diff-merges=first-parent", "--right-only",
+                 rev_range, "--"], repo)
 
 
 def gh_visibility(host: str, owner: str, repo: str, gh: str = "gh") -> str | None:
@@ -503,7 +544,9 @@ def main(argv: list[str] | None = None) -> int:
         findings = scan_diff(diff, _denylist(args.denylist_file))
         findings, unused = exclude_findings(findings, list(args.exclude))
         verdict = decide(visibility=visibility, findings=findings,
-                         examined_lines=added_line_count(diff), unused_exclusions=unused)
+                         examined_lines=added_line_count(diff), unused_exclusions=unused,
+                         removed_lines=0 if changes_binary_content(diff)
+                         else removed_line_count(diff))
     except PushCheckError as exc:
         verdict = Verdict(False, 2, str(exc), 0, None, [])
         _emit(args.as_json, verdict)

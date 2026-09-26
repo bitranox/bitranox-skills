@@ -993,6 +993,20 @@ class TestAnOutcomeBandRespectsUnits:
         report = compare_arms(arms, outcome_tolerance="1")
         assert pairs_inconclusive(report, "model")
 
+    @pytest.mark.parametrize(("one", "many"), [("1 file", "3 files"), ("1min", "4 mins"),
+                                               ("1 byte", "9 bytes"), ("1 Run", "2 Runs")])
+    def test_a_plural_is_the_same_unit(self, one: str, many: str) -> None:
+        """`1 file` and `3 files` were refused as different units (exit 2)."""
+        arms = [Arm("a", {"model": "opus"}, outcome=one), Arm("b", {"model": "fable"}, outcome=many)]
+        assert pairs_supporting(compare_arms(arms, outcome_tolerance="0.5"), "model")
+
+    @pytest.mark.parametrize(("left", "right"), [("42ms", "42m"), ("4 boxes", "4 box"),
+                                                 ("3 passes", "3 pass"), ("2 Mb", "2 mb")])
+    def test_control_what_is_not_a_plain_plural_stays_a_different_unit(self, left, right) -> None:
+        arms = [Arm("a", {"model": "opus"}, outcome=left), Arm("b", {"model": "fable"}, outcome=right)]
+        with pytest.raises(ValueError, match="unit"):
+            compare_arms(arms, outcome_tolerance="1")
+
     def test_without_a_band_the_raw_strings_still_decide(self) -> None:
         arms = [
             Arm("a", {"model": "opus"}, outcome="42ms"),

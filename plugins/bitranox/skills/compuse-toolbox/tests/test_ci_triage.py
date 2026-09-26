@@ -343,3 +343,103 @@ class TestStepByGhStepName:
         out = capsys.readouterr().out
         assert rc == 1, out
         assert "6: error: boom" in out and "warning: lint" not in out, out
+
+
+# ---- LOW batch (rank-8 review follow-up) --------------------------------------------------------
+
+
+class TestCmdIsSplitLikeAShell:
+    def test_a_quoted_argument_stays_one_argv_element(self, capsys):
+        """--cmd was split with str.split(), so quoting was ignored and the argv arrived torn."""
+        seen: list[list[str]] = []
+
+        def run(argv):
+            seen.append(list(argv))
+            return "", 0
+
+        # DOUBLE quotes: the one quoting both shlex and CommandLineToArgvW honour.
+        assert T.main(["--cmd", 'prog -c "import pytest"'], run=run) == 0
+        assert seen == [["prog", "-c", "import pytest"]]
+
+    @pytest.mark.skipif(os.name == "nt", reason="CommandLineToArgvW accepts an unclosed quote; only "
+                                                "shlex refuses one")
+    def test_an_unclosed_quote_is_exit_2_not_a_traceback(self, capsys):
+        def run(argv):
+            raise AssertionError("must not run")
+
+        assert T.main(["--cmd", 'prog "unclosed'], run=run) == 2
+        assert "--cmd" in capsys.readouterr().err
+
+
+class TestAKeywordInsideAPathOrAFlagIsNotAHit:
+    @pytest.mark.parametrize("line", [
+        "  --> src/errors/mod.rs:10:5",
+        "C:\\src\\errors\\mod.rs compiled",
+        "gcc -Wall -Wno-error=foo -c x.c",
+        "coverage report --fail-under=80",
+        "cargo test --no-fail-fast",
+    ])
+    def test_green_line_is_not_a_hit(self, line):
+        assert T.error_lines(line + "\n") == [], line
+
+    @pytest.mark.parametrize("line", [
+        "src/errors/mod.rs:3:5: error: boom",
+        "src\\app.cpp(10): error C2065: undeclared",
+        "--- FAIL: TestFoo (0.00s)",
+        "error: could not compile `foo`",
+        "- error in the removed line",
+    ])
+    def test_a_real_hit_beside_a_path_or_flag_survives(self, line):
+        assert len(T.error_lines(line + "\n")) == 1, line
+
+
+class TestStepSelectionIsNotNarrowerThanTheStep:
+    def test_unmapped_lines_continuing_a_named_step_are_triaged(self, tmp_path, capsys):
+        """gh can map part of a step and write UNKNOWN STEP for the rest; the unmapped rest
+        belongs to the block it continues, not to nothing."""
+        rows = [
+            ("build", "Run tests", "##[group]Run pytest -q"),
+            ("build", "Run tests", "collected 3 items"),
+            ("build", "UNKNOWN STEP", "FAILED tests/test_a.py::test_x"),
+            ("build", "UNKNOWN STEP", "##[group]Run ruff check"),
+            ("build", "UNKNOWN STEP", "error: lint broke"),
+        ]
+        rc = T.main(["--file", _write(tmp_path, _gh_log(rows)), "--step", "Run tests"])
+        out = capsys.readouterr().out
+        assert rc == 1, out
+        assert "3: " in out and "lint broke" not in out, out
+
+    def test_unmapped_lines_of_the_next_job_do_not_continue_the_step(self, tmp_path, capsys):
+        rows = [
+            ("a", "Run tests", "##[group]Run pytest -q"),
+            ("a", "Run tests", "all good"),
+            ("b", "UNKNOWN STEP", "error: another job"),
+        ]
+        rc = T.main(["--file", _write(tmp_path, _gh_log(rows)), "--step", "Run tests"])
+        assert rc == 0, capsys.readouterr().out
+
+    def test_a_header_match_counts_even_when_another_steps_name_matches(self, tmp_path, capsys):
+        """`--step pytest` matched the column of "Install pytest" and so never looked at the step
+        whose header is "Run pytest -q" - the failing one."""
+        rows = [
+            ("build", "Install pytest", "##[group]Run pip install pytest"),
+            ("build", "Install pytest", "ok"),
+            ("build", "Run tests", "##[group]Run pytest -q"),
+            ("build", "Run tests", "FAILED tests/test_a.py::test_x"),
+            ("build", "Upload", "##[group]Run upload"),
+            ("build", "Upload", "warning: flaky upload"),
+        ]
+        rc = T.main(["--file", _write(tmp_path, _gh_log(rows)), "--step", "pytest"])
+        out = capsys.readouterr().out
+        assert rc == 1, out
+        assert "4: " in out and "flaky upload" not in out, out
+
+    def test_a_header_matched_mapped_step_is_selected_whole(self, tmp_path, capsys):
+        """A step can print several ##[group] headers of its own; its mapped lines all count."""
+        rows = [
+            ("build", "Run tests", "##[group]Run pytest -q"),
+            ("build", "Run tests", "##[group]Installed plugins"),
+            ("build", "Run tests", "FAILED tests/test_a.py::test_x"),
+        ]
+        rc = T.main(["--file", _write(tmp_path, _gh_log(rows)), "--step", "pytest -q"])
+        assert rc == 1, capsys.readouterr().out

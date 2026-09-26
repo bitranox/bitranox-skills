@@ -39,7 +39,8 @@ Kept, with the reason stated per directory:
 * any version whose path appears in a settings file, which pins it - spelled absolute, or
   relative to the home or Claude config directory however that prefix is written (`~/`,
   `"$HOME"/`, `%USERPROFILE%`, `$env:USERPROFILE/`, `${CLAUDE_CONFIG_DIR}/`, quoted or not):
-  the part beneath it is searched on its own;
+  the part beneath it is searched on its own. On Windows the search ignores letter case, as the
+  filesystem does;
 * the SOLE version of a plugin a settings file's `enabledPlugins` names, however it is set -
   counting only real version directories, since a symlinked sibling is refused and never removed;
   disabled is not uninstalled, and its cache is still wanted. `enabledPlugins` names a plugin,
@@ -556,16 +557,26 @@ def pinning_settings(
     *,
     spellings: Iterable[Path] = (),
     anchors: Iterable[Path] = (),
+    fold_case: bool | None = None,
 ) -> str | None:
     """The settings file that names this exact directory, or None when nothing pins it.
 
     See `pin_needles` for the spellings searched. A file that cannot be read raises
     SettingsError rather than being skipped, since skipping it deletes whatever it pins.
+
+    `fold_case` compares without regard to letter case, which is how Windows resolves a path:
+    a settings file spelling `.Claude\\Plugins\\...` names the same directory as `.claude\\...`
+    there. It defaults to the running platform (`os.name == "nt"`); on a case-sensitive
+    filesystem the other spelling is another directory and keeps nothing.
     """
+    folding = os.name == "nt" if fold_case is None else fold_case
     needles = pin_needles(path, spellings=spellings, anchors=anchors)
+    if folding:
+        needles = {needle.casefold() for needle in needles}
     for item in settings_files:
         settings = _loaded(item)
-        if any(needle in settings.text for needle in needles):
+        text = settings.text.casefold() if folding else settings.text
+        if any(needle in text for needle in needles):
             return settings.path.name
     return None
 
@@ -1355,7 +1366,8 @@ def _run(args: argparse.Namespace) -> int:
 
     applied = apply_plan(plan) if args.apply else None
     failures = list(applied.failures) if applied is not None else []
-    blocked = [f"{entry.path}: {entry.refusal}" for entry in plan.refused] + failures
+    refusals = [f"{entry.path}: {entry.refusal}" for entry in plan.refused]
+    blocked = refusals + failures
 
     if args.json:
         data: dict[str, object] = {"applied": args.apply, **plan.as_dict()}
@@ -1371,8 +1383,12 @@ def _run(args: argparse.Namespace) -> int:
     else:
         for line in _render(plan, applied=applied):
             print(line)
-        for item in blocked:
-            print(f"  {'FAILED' if args.apply else 'REFUSED'}: {item}", file=sys.stderr)
+        # REFUSED was never attempted; FAILED was attempted and is still there. One word for
+        # both sent a reader of an --apply run hunting a removal fault that never happened.
+        for item in refusals:
+            print(f"  REFUSED: {item}", file=sys.stderr)
+        for item in failures:
+            print(f"  FAILED: {item}", file=sys.stderr)
     return 1 if blocked else 0
 
 

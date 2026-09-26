@@ -293,6 +293,232 @@ def test_shared_store_fixture_is_expensive_so_only_purity_excludes_it(tmp_path):
     assert all(fcc.is_expensive_computation(f) for f in funcs)
 
 
+# A mutating METHOD call follows the same rule as a subscript store: onto a container this
+# function created it is invisible to every caller; onto anything else it is a side effect.
+LOCAL_METHOD_MUTATIONS = textwrap.dedent('''
+    import collections
+    import numpy as np
+
+    def collect(n):
+        out = []
+        for i in range(n):
+            out.append(i * i)
+        return sum(out)
+
+    def seen_count(xs):
+        s = set()
+        for x in xs:
+            s.add(x)
+        s.discard(None)
+        return len(s)
+
+    def by_len(xs):
+        groups = collections.defaultdict(list)
+        for x in xs:
+            groups[len(x)].append(x)
+        return len(groups)
+
+    def walk(start):
+        stack, seen = [start], {}
+        while stack:
+            node = stack.pop()
+            seen.setdefault(node, 0)
+            seen.update({node: 1})
+        return len(seen)
+
+    def rows_extend(n):
+        grid = [[] for _ in range(n)]
+        for i in range(n):
+            grid[i].extend([i])
+            grid[i].insert(0, i)
+        return len(grid)
+
+    def sorted_local(xs):
+        tmp = list(xs)
+        for _ in range(3):
+            tmp.sort()
+            tmp.reverse()
+        tmp.clear()
+        return len(tmp)
+
+    def np_table(n):
+        t = np.zeros((n, n))
+        for i in range(n):
+            t[i, i] = 1
+            t[i][0] = 2
+        t.fill(0)
+        return t.sum()
+''')
+
+PARAM_METHOD_MUTATIONS = textwrap.dedent('''
+    RESULTS = []
+
+    def ext(out, n):
+        for i in range(n):
+            out.extend([i])
+
+    def ins(out, n):
+        for i in range(n):
+            out.insert(0, i)
+
+    def upd(d, n):
+        for i in range(n):
+            d.update({i: i})
+
+    def add(s, n):
+        for i in range(n):
+            s.add(i)
+
+    def popper(xs, n):
+        for _ in range(n):
+            xs.pop()
+
+    def sorter(xs, n):
+        for _ in range(n):
+            pass
+        xs.sort()
+
+    def clr(xs, n):
+        for _ in range(n):
+            pass
+        xs.clear()
+
+    def sd(d, n):
+        for i in range(n):
+            d.setdefault(i, [])
+
+    def rm(xs, n):
+        for i in range(n):
+            xs.remove(i)
+
+    def disc(s, n):
+        for i in range(n):
+            s.discard(i)
+
+    def glob_append(n):
+        for i in range(n):
+            RESULTS.append(i)
+
+    def alias_append(p, n):
+        q = p
+        for i in range(n):
+            q.append(i)
+
+    def row_append(grid):
+        for row in grid:
+            row.append(0)
+
+    def element_of_local(param, n):
+        rows = [param]
+        for i in range(n):
+            rows[0].append(i)
+
+    class K:
+        def self_append(self, n):
+            for i in range(n):
+                self.items.append(i)
+''')
+
+
+def test_mutating_methods_on_a_locally_created_container_keep_a_function_pure(tmp_path):
+    p = tmp_path / "local_methods.py"
+    p.write_text(LOCAL_METHOD_MUTATIONS, encoding="utf-8")
+    assert _names(p) == {"collect", "seen_count", "by_len", "walk", "rows_extend",
+                         "sorted_local", "np_table"}
+
+
+def test_mutating_methods_on_a_caller_visible_object_make_a_function_impure(tmp_path):
+    p = tmp_path / "param_methods.py"
+    p.write_text(PARAM_METHOD_MUTATIONS, encoding="utf-8")
+    funcs = [n for n in ast.walk(ast.parse(PARAM_METHOD_MUTATIONS)) if isinstance(n, ast.FunctionDef)]
+    assert len(funcs) == 15 and all(fcc.is_expensive_computation(f) for f in funcs)  # liveness
+    assert _names(p) == set()
+
+
+# lru_cache hands every caller the SAME returned object, so a function that returns a mutable
+# container it built is not a safe candidate: one caller's edit changes every later result.
+RETURNS_MUTABLE = textwrap.dedent('''
+    import numpy as np
+
+    def squares_list(n):
+        out = []
+        for i in range(n):
+            out.append(i * i)
+        return out
+
+    def table(n):
+        for _ in range(n):
+            pass
+        return {i: i for i in range(n)}
+
+    def pair(n):
+        for _ in range(n):
+            pass
+        return n, [n]
+
+    def arr(n):
+        a = np.zeros(n)
+        for i in range(n):
+            a[i] = i
+        return a
+
+    def early(n):
+        acc = set()
+        for i in range(n):
+            if i > 3:
+                return acc
+            acc.add(i)
+        return None
+
+    def frozen(n):
+        out = []
+        for i in range(n):
+            out.append(i)
+        return tuple(out)
+
+    def scalar(n):
+        out = []
+        for i in range(n):
+            out.append(i)
+        return len(out)
+
+    def inner_list_not_returned(n):
+        def helper():
+            return []
+        for _ in range(n):
+            helper()
+        return n
+''')
+
+
+def test_a_function_returning_a_new_mutable_container_is_not_a_candidate(tmp_path):
+    p = tmp_path / "returns.py"
+    p.write_text(RETURNS_MUTABLE, encoding="utf-8")
+    assert _names(p) == {"frozen", "scalar", "inner_list_not_returned"}
+
+
+def test_a_module_function_named_like_a_method_is_no_mutation_and_aliases_are_followed(tmp_path):
+    p = tmp_path / "modfuncs.py"
+    p.write_text(textwrap.dedent('''
+        import numpy as np
+
+        def summed(a, b, n):
+            for _ in range(n):
+                a = np.add(a, b)
+                np.insert(a, 0, 1)
+            return float(np.sort(a)[0])
+
+        def alias_return(n):
+            a = []
+            for i in range(n):
+                a.append(i)
+            c = b
+            b = a
+            return c
+    '''), encoding="utf-8")
+    assert _names(p) == {"summed"}
+
+
 def test_open_makes_a_function_impure_and_file_io_is_not_an_indicator(tmp_path):
     p = tmp_path / "io.py"
     p.write_text("def reader(p):\n    for _ in range(3):\n        with open(p) as f:\n            f\n",

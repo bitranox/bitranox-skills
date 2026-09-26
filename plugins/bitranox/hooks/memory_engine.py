@@ -208,10 +208,24 @@ def _warn_dropped_invalid_pointers(local, text):
 _FRONTMATTER_BLOCK_RX = re.compile(r"---[ \t]*\r?\n(.*?\r?\n)?---[ \t]*(?:\r?\n|\Z)", re.S)
 
 
+def _frontmatter(body):
+    """(head, match): `body` without leading whitespace, and the match of its leading frontmatter
+    block - None unless the block is CLOSED and carries a `name:` key. `match.group(1)` is the text
+    between the delimiters, ending in its line break.
+
+    The one test of "is this frontmatter" for every reader and rewriter of a body: a body that
+    merely opens with a markdown horizontal rule has no frame, and a helper asking only
+    `startswith("---")` wrote a `metadata:` block onto the end of such a body's prose."""
+    head = (body or "").lstrip()
+    m = _FRONTMATTER_BLOCK_RX.match(head)
+    if m and re.search(r"(?m)^name:", m.group(1) or ""):
+        return head, m
+    return head, None
+
+
 def _has_frontmatter(body):
     """True when `body` opens with a closed frontmatter block that carries a `name:` key."""
-    m = _FRONTMATTER_BLOCK_RX.match((body or "").lstrip())
-    return bool(m) and re.search(r"(?m)^name:", m.group(1) or "") is not None
+    return _frontmatter(body)[1] is not None
 
 
 def _framed_body(slug, hook, type_, body):
@@ -396,50 +410,56 @@ def _body_type(text):
     slug the body IS the only record, so an update that reframes the body has to read it here or
     it silently re-classifies the fact - and nothing downstream reports that (`store_manifest
     verify` reads level/slug/title/pin, `lint --tree` looks for UNFRAMED bodies, and the write
-    prints its usual success line). Scoped to the LEADING frontmatter block so a `  type:` line in
-    the prose below cannot answer for it."""
-    head = (text or "").lstrip()
-    if not head.startswith("---"):
+    prints its usual success line). Scoped to the LEADING frontmatter block (see `_frontmatter`) so
+    a `  type:` line in the prose below cannot answer for it."""
+    _head, m = _frontmatter(text)
+    if m is None:
         return ""
-    end = head.find("\n---", 3)
-    m = re.search(r"(?m)^[ \t]+type:[ \t]*(\S+)[ \t]*$", head[:end] if end > 0 else head)
-    return m.group(1) if m else ""
+    t = re.search(r"(?m)^[ \t]+type:[ \t]*(\S+)[ \t]*\r?$", m.group(1))
+    return t.group(1) if t else ""
+
+
+def _with_frame(head, m, inner):
+    """`head` with the text between its frontmatter delimiters replaced by `inner`."""
+    return head[:m.start(1)] + inner + head[m.end(1):]
 
 
 def _reframe_description(text, hook):
     """Return `text` with its frontmatter `description:` reset to `hook` (whitespace collapsed), so a
     hook-only pointer update keeps the body's description in sync (spec: the body description IS the
-    hook). An unframed body (no leading frontmatter) is returned unchanged. The replacement is a
-    lambda: a hook can carry backslashes (Windows paths) that re.sub would otherwise treat as
-    template escapes."""
-    if not (text or "").lstrip().startswith("---"):
+    hook). A body with no frontmatter (see `_frontmatter`) is returned unchanged, and only a line
+    INSIDE the frame is rewritten: a `description:` line in the prose is the author's text. The
+    replacement is a lambda: a hook can carry backslashes (Windows paths) that re.sub would
+    otherwise treat as template escapes."""
+    head, m = _frontmatter(text)
+    if m is None:
         return text
     desc = " ".join((hook or "").split())
-    return re.sub(r"(?m)^(description:)[ \t]*.*$",
-                  lambda m: "%s %s" % (m.group(1), desc), text, count=1)
+    inner, n = re.subn(r"(?m)^(description:)[ \t]*[^\r\n]*",
+                       lambda d: "%s %s" % (d.group(1), desc), m.group(1), count=1)
+    return _with_frame(head, m, inner) if n else text
 
 
 def _retype_body(slug, hook, type_, text):
     """Return `text` with its frontmatter `metadata: type:` set to `type_`, prose untouched.
 
     Rewrites the same line `_body_type` reads (the first indented `type:` in the leading frontmatter),
-    so the kind read back is the kind written. Frontmatter with no `type:` line gains one; an unframed
-    body is framed with the new kind. The replacement is a lambda for the same reason as
-    `_reframe_description`."""
-    head = (text or "").lstrip()
-    if not head.startswith("---"):
+    so the kind read back is the kind written. Frontmatter with no `type:` line gains one; a body with
+    no frontmatter (see `_frontmatter`), a leading horizontal rule included, is framed with the new
+    kind. The replacement is a lambda for the same reason as `_reframe_description`."""
+    head, m = _frontmatter(text)
+    if m is None:
         return _framed_body(slug, hook, type_, text)
-    end = head.find("\n---", 3)
-    front, rest = (head[:end], head[end:]) if end > 0 else (head, "")
-    new_front, n = re.subn(r"(?m)^([ \t]+type:)[ \t]*\S*[ \t]*$",
-                           lambda m: "%s %s" % (m.group(1), type_), front, count=1)
+    inner = m.group(1)
+    nl = "\r\n" if inner.endswith("\r\n") else "\n"
+    new_inner, n = re.subn(r"(?m)^([ \t]+type:)[ \t]*[^\s]*[ \t]*(?=\r?$)",
+                           lambda t: "%s %s" % (t.group(1), type_), inner, count=1)
     if n == 0:
-        if re.search(r"(?m)^metadata:[ \t]*$", front):
-            new_front = re.sub(r"(?m)^(metadata:)[ \t]*$",
-                               lambda m: "%s\n  type: %s" % (m.group(1), type_), front, count=1)
-        else:
-            new_front = front + "\nmetadata:\n  type: %s" % type_
-    return new_front + rest
+        new_inner, n = re.subn(r"(?m)^(metadata:)[ \t]*(?=\r?$)",
+                               lambda t: "%s%s  type: %s" % (t.group(1), nl, type_), inner, count=1)
+    if n == 0:
+        new_inner = inner + "metadata:%s  type: %s%s" % (nl, type_, nl)
+    return _with_frame(head, m, new_inner)
 
 
 def _entry_from_body(anchor, slug):

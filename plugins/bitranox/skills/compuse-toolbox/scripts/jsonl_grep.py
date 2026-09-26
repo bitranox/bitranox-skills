@@ -31,8 +31,12 @@ Run:
   `uv run scripts/jsonl_grep.py ~/.claude/projects --field message.model --count`
   `... | uv run scripts/jsonl_grep.py --field message.model [--count]`     (stdin)
 
-Exit codes: 0 read something, 2 usage error or a named path that does not exist, 3 empty corpus
-(nothing was read).
+NaN and Infinity are not JSON: a line holding one is unparseable on either backend (orjson or the
+stdlib fallback), as is a line nested too deep to decode. A named path is read whatever kind of
+file it is, so a process substitution (`jsonl_grep <(cmd)`) works.
+
+Exit codes: 0 read something, 2 usage error or a named path that does not exist beside others that
+were read, 3 nothing was read (every named path missing or unreadable, or no *.jsonl found).
 """
 from __future__ import annotations
 
@@ -57,10 +61,19 @@ try:                                                     # fast path when availa
 except ModuleNotFoundError:                              # stdlib fallback so the script runs anywhere
     import json as _json
 
-    def _loads(raw):
-        return _json.loads(raw)
-
     _JSONDecodeError = _json.JSONDecodeError
+
+    def _reject_constant(name):
+        raise _JSONDecodeError(f"{name} is not JSON", name, 0)
+
+    def _loads(raw):
+        """Read strictly as orjson does, so the backend never decides what a line holds: NaN and
+        Infinity are refused, and nesting too deep for the stack is an unparseable line rather
+        than a RecursionError escaping as a traceback."""
+        try:
+            return _json.loads(raw, parse_constant=_reject_constant)
+        except RecursionError:
+            raise _JSONDecodeError("nesting too deep", raw[:40], 0) from None
 
     def _dumps(obj):
         return _json.dumps(obj, ensure_ascii=False)
@@ -172,14 +185,16 @@ def collect_paths(paths):
     """`(files, missing, unreadable_dirs)` for `paths`: a directory contributes its *.jsonl.
 
     A path that does not exist is returned in `missing` rather than dropped: beside a good path it
-    used to vanish, so a typo cost its whole share of the corpus while the run exited 0.
+    used to vanish, so a typo cost its whole share of the corpus while the run exited 0. Any other
+    existing path is read as a file, not only a regular one: `jsonl_grep <(cmd)` names a pipe
+    (/dev/fd/63), which is neither a file nor a directory to `Path`.
     """
     found, missing, unreadable = [], [], []
     for raw in paths:
         path = Path(raw)
         if path.is_dir():
             found.extend(_walk_jsonl(path, unreadable))
-        elif path.is_file():
+        elif path.exists():
             found.append(path)
         else:
             missing.append(str(path))

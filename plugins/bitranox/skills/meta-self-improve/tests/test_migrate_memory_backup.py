@@ -22,15 +22,17 @@ HAVE_GIT = shutil.which("git") is not None
 
 
 @pytest.fixture
-def env(tmp_path, monkeypatch):
+def env(tmp_path, short_root, monkeypatch):
+    """(root for project dirs, fake home); project dirs go under the conftest's `short_root` so a
+    long TMPDIR cannot push their slug past the 200-character cap."""
     home = tmp_path / "home"
     (home / ".claude").mkdir(parents=True)
     monkeypatch.setenv("HOME", str(home))
     monkeypatch.setenv("USERPROFILE", str(home))
     for var in ("GIT_DIR", "GIT_WORK_TREE", "GIT_INDEX_FILE", "GIT_OBJECT_DIRECTORY"):
         monkeypatch.delenv(var, raising=False)
-    monkeypatch.setattr(M, "_EXCLUDE_PREFIXES", ())   # tmp_path sits under /tmp
-    return tmp_path, home
+    monkeypatch.setattr(M, "_EXCLUDE_PREFIXES", ())   # both roots sit under the temp dir
+    return short_root, home
 
 
 def _slug(path):
@@ -247,4 +249,44 @@ def test_a_utf8_gitignore_holding_non_ascii_is_still_extended(env):
     top, proj = _tree(tmp_path, git=True)
     (top / ".gitignore").write_bytes("# caf\u00e9\n*.pyc\n".encode("utf-8"))
     assert M.ensure_gitignore(str(proj)) == "gitignored"
+    assert sig.MEMORY_DIRNAME + "/" in (top / ".gitignore").read_text(encoding="utf-8")
+
+
+@pytest.mark.skipif(not HAVE_GIT, reason="needs git to track the store")
+def test_a_tracked_store_warning_reaches_the_output(env, capsys):
+    """ensure_gitignore's answer was stored in the report and never printed, so a store already
+    COMMITTED to the repo - a possible leak of private memory - went unmentioned."""
+    root, home = env
+    top, proj = _tree(root, git=True)
+    git = ["git", "-C", str(top), "-c", "user.name=t", "-c", "user.email=t@t"]
+    subprocess.run(git + ["add", "-f", sig.MEMORY_DIRNAME], check=True, capture_output=True)
+    subprocess.run(git + ["commit", "-q", "-m", "x"], check=True, capture_output=True)
+    slug = _slug(proj)
+    _native(home, slug, {"project-alpha": "Alpha body."})
+    assert M.main(["--apply", "--slug=" + slug]) == 0
+    out = capsys.readouterr().out
+    assert "TRACKED" in out and slug in out.split("TRACKED")[0].splitlines()[-1]
+
+
+# ---- git output is decoded as UTF-8, whatever the locale -----------------------------------------
+
+@pytest.mark.skipif(not HAVE_GIT, reason="needs git for the repo .gitignore")
+def test_a_non_ascii_repo_path_under_an_ascii_locale_is_still_gitignored(env):
+    """git prints the repo path in UTF-8. Decoded with the LOCALE codec, an ASCII locale raised
+    UnicodeDecodeError out of the git helper - past its OSError guard - for any repo whose path
+    holds a non-ASCII character, so the ignore step died with a traceback."""
+    import sys
+    root, home = env
+    top = root / "M\u00fcller"
+    top.mkdir()
+    subprocess.run(["git", "init", "-q", str(top)], check=True, capture_output=True)
+    probe = ("import sys; sys.path.insert(0, %r); import migrate_memory as M; "
+             "print(M.ensure_gitignore(sys.argv[1]))" % str(Path(M.__file__).parent))
+    child = {**os.environ, "HOME": str(home), "USERPROFILE": str(home), "LC_ALL": "C",
+             "LANG": "C", "PYTHONUTF8": "0", "PYTHONCOERCECLOCALE": "0",
+             "PYTHONIOENCODING": "utf-8"}
+    r = subprocess.run([sys.executable, "-c", probe, str(top)], env=child, capture_output=True,
+                       encoding="utf-8", errors="replace")
+    assert r.returncode == 0, r.stderr
+    assert r.stdout.strip() == "gitignored", (r.stdout, r.stderr)
     assert sig.MEMORY_DIRNAME + "/" in (top / ".gitignore").read_text(encoding="utf-8")

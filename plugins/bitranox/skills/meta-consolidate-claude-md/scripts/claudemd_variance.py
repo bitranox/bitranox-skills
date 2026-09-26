@@ -36,7 +36,8 @@ Run:
 Exit codes: 0 = at least one CLAUDE.md file was found and analysed, 1 = the walk completed but
 matched zero files (an empty or misspelled --root), 2 = error (a --root path does not exist,
 every matched file failed to decode, a variant's members share no directory, or any other
-failure). `--json` emits `{ok, command, skipped, data}`, plus `error` when ok is false;
+failure). `--json` emits `{ok, command, skipped, data}`; ok is false on exit 1 and exit 2, and
+only an exit-2 envelope adds `error` (a zero-match run failed at nothing, so it carries none);
 warnings (an unreadable file, a directory the walk cannot list, a bound hit) always go to stderr
 so stdout stays parseable. Every JSON string is valid UTF-8: a name that is not shows its
 undecodable bytes as \\xNN, and `data.undecodable_paths` lists each such path as
@@ -45,6 +46,9 @@ undecodable bytes as \\xNN, and `data.undecodable_paths` lists each such path as
 A `## ` line inside a fenced code block (CommonMark: 3+ backticks or tildes) is not a heading, and
 a heading's closing sequence is a run of `#` preceded by whitespace, so `## Using C#` keeps its `#`.
 A heading's file count is its number of DISTINCT files: one file repeating a heading is one file.
+The largest variant's share is over COPIES, one per distinct (file, body) pair: a file carrying
+the heading with two different bodies is a copy of each variant, so more than one variant always
+means a share below 100%.
 """
 
 from __future__ import annotations
@@ -349,14 +353,23 @@ class HeadingGroup:
         return max(self.variants, key=lambda v: v.size)
 
     @property
+    def copy_count(self) -> int:
+        """Distinct (file, body) copies of this heading. Equals total_members unless one file
+        carries the heading with two different bodies; that file is one copy of EACH variant."""
+        return sum(v.size for v in self.variants)
+
+    @property
     def largest_variant_share(self) -> float:
-        total = self.total_members
+        """The largest variant's share of the COPIES, not of the files: over files, one file
+        holding two bodies made "2 variants, largest covers 100%", which reads as converged."""
+        total = self.copy_count
         return (self.largest_variant.size / total) if total else 0.0
 
     def as_dict(self) -> dict[str, object]:
         return {
             "heading": self.heading,
             "total_members": self.total_members,
+            "copy_count": self.copy_count,
             "variant_count": len(self.variants),
             "largest_variant_share_percent": round(self.largest_variant_share * 100, 1),
             "variants": [v.as_dict() for v in self.variants],

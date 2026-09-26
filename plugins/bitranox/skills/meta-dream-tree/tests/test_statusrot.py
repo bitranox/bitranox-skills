@@ -240,6 +240,21 @@ class TestLevelEncoding:
         assert "Traceback" not in proc.stderr
         assert json.loads(proc.stdout)["ok"] is False
 
+    @pytest.mark.parametrize("as_json", [True, False])
+    def test_a_non_utf8_level_error_names_the_file(self, tmp_path, as_json):
+        """A decode error's own text names a codec and a byte offset, never a file, so a run over
+        a chain of levels said which byte was bad and not in which of them."""
+        good = _level(tmp_path, "- [T](mem:s) - When X, it is deployed.")
+        bad_dir = tmp_path / "sub"
+        bad_dir.mkdir()
+        bad = bad_dir / "CLAUDE.local.md"
+        bad.write_bytes(b"# Memory index\n- [T](mem:t) - When X, caf\xe9 is deployed.\n")
+        args = ["scan", "--level", str(good), "--level", str(bad)] + (["--json"] if as_json else [])
+        proc = _cli(*args)
+        assert proc.returncode == 2, proc.stderr
+        said = json.loads(proc.stdout)["error"] if as_json else proc.stderr
+        assert str(bad) in said, said
+
     def test_a_bom_on_the_first_pointer_line_is_read(self, tmp_path):
         lvl = tmp_path / "CLAUDE.local.md"
         lvl.write_bytes(b"\xef\xbb\xbf- [T](mem:s) - When X, it is deployed.\n")

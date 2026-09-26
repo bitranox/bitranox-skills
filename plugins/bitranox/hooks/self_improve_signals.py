@@ -270,8 +270,11 @@ def ensure_gitignored(proj, *patterns):
         return True
     import subprocess
     try:
-        top = subprocess.run(["git", "-C", str(proj), "rev-parse", "--show-toplevel"],
-                             capture_output=True, text=True, timeout=5).stdout.strip()
+        # git prints the path as raw filename bytes. Text mode decoded them with the locale's
+        # codec (ASCII under LANG=C) and raised UnicodeDecodeError, which no OSError guard
+        # catches; os.fsdecode is the exact inverse of how this interpreter opens that path.
+        top = os.fsdecode(subprocess.run(["git", "-C", str(proj), "rev-parse", "--show-toplevel"],
+                                         capture_output=True, timeout=5).stdout).strip()
     except (OSError, subprocess.SubprocessError):
         return False
     if not top:
@@ -632,6 +635,12 @@ def read_contributions(proj):
     return _load_queue(f)
 
 
+def _contribution_key(rec):
+    """The identity of a contribution intent: (what, target). The queue dedups on it, a closed
+    one blocks a re-queue by it, and the closed set holds one tombstone per key."""
+    return str(rec.get("what")), str(rec.get("target") or "")
+
+
 def add_contribution(proj, record, max_items=100, strict=False):
     """Queue one pending contribution: {'what' (required), 'target', 'why', 'source'}.
 
@@ -648,8 +657,8 @@ def add_contribution(proj, record, max_items=100, strict=False):
         f = contrib_file(proj)
         with memory_lock(f):
             cur = _load_queue(f)
-            key = (str(record.get("what")), str(record.get("target") or ""))
-            if any((str(r.get("what")), str(r.get("target") or "")) == key for r in cur):
+            key = _contribution_key(record)
+            if any(_contribution_key(r) == key for r in cur):
                 return False
             # A CLOSED intent stays closed, whichever outcome closed it. Without this the dedup key
             # only spans the LIVE queue, so a later dream that re-notices a disproven gap silently
@@ -657,8 +666,7 @@ def add_contribution(proj, record, max_items=100, strict=False):
             # back as a TODO for work already shipped. Read the closed set, never just rejections,
             # and through the RAISING loader: a closed set that exists but cannot be read must
             # refuse the add, not let every closed intent back in.
-            if any((str(r.get("what")), str(r.get("target") or "")) == key
-                   for r in _load_closed(proj)):
+            if any(_contribution_key(r) == key for r in _load_closed(proj)):
                 return False
             rec = dict(record)
             rec.setdefault("ts", time.time())
@@ -783,8 +791,15 @@ def _write_closed(proj, records):
 
 def _append_tombstones(proj, tombs, max_items=200):
     """Append `tombs` to `proj`'s closed set (capped). Raises OSError when it cannot be written,
-    or when the existing set cannot be read (it is never replaced blind)."""
-    prev = _load_closed(proj)
+    or when the existing set cannot be read (it is never replaced blind).
+
+    One tombstone per intent, keyed on (what, target) like the queue's own dedup: a close retried
+    after a partial failure (tombstones written, queue update failed) closes entries that are
+    already closed. Appending again duplicated every one, and the duplicates evicted OTHER closed
+    intents from the cap, which could then be re-queued. The new tombstone replaces the old one,
+    so the latest outcome and note win."""
+    keys = {_contribution_key(t) for t in tombs}
+    prev = [r for r in _load_closed(proj) if _contribution_key(r) not in keys]
     prev.extend(tombs)
     if len(prev) > max_items:
         prev = prev[-max_items:]
@@ -1103,37 +1118,64 @@ DEFAULT_CONFIG = {
 }
 
 
-def load_config():
-    """Config merged over DEFAULT_CONFIG. Robust: a missing or corrupt file yields the
-    recommended defaults."""
-    cfg = dict(DEFAULT_CONFIG)
+class ConfigUnreadable(OSError):
+    """The config file exists but is not a readable JSON object, so it cannot be safely rewritten."""
+
+
+def _read_config_file():
+    """(settings, problem) for the config file: ({}, None) when there is none, (object, None)
+    when it holds a JSON object, and (None, why) when it exists but cannot be used - unreadable,
+    not UTF-8, not JSON, or JSON that is not an object. THE one reader, so `load_config` and
+    `save_config` agree on what "unusable" means."""
+    p = _config_path()
     try:
         # utf-8-sig: a file saved by a Windows editor carries a BOM, which json.loads refuses, so
         # every knob the user set there silently read as its default.
-        raw = json.loads(_config_path().read_text(encoding="utf-8-sig"))
-        if isinstance(raw, dict):
-            cfg.update({k: raw[k] for k in raw if k in DEFAULT_CONFIG})
-    except (OSError, ValueError):
-        pass
+        text = p.read_text(encoding="utf-8-sig")
+    except (FileNotFoundError, NotADirectoryError):   # no config can exist there
+        return {}, None
+    except OSError as exc:
+        return None, "cannot read %s: %s" % (p, exc)
+    except UnicodeDecodeError as exc:
+        return None, "%s is not UTF-8 text (%s)" % (p, exc)
+    try:
+        raw = json.loads(text)
+    except ValueError as exc:
+        return None, "%s is not valid JSON (%s)" % (p, exc)
+    if not isinstance(raw, dict):
+        return None, "%s holds a JSON %s, not an object" % (p, type(raw).__name__)
+    return raw, None
+
+
+def load_config():
+    """Config merged over DEFAULT_CONFIG. Robust: a missing or unusable file yields the
+    recommended defaults."""
+    cfg = dict(DEFAULT_CONFIG)
+    raw, _problem = _read_config_file()
+    cfg.update({k: raw[k] for k in (raw or {}) if k in DEFAULT_CONFIG})
     return cfg
 
 
 def save_config(updates, strict=False):
     """Merge known keys from `updates` into the config file (created if missing); return the
-    saved dict. Unknown keys are ignored so the file stays a clean, known schema.
+    merged dict. Unknown keys are ignored so the file stays a clean, known schema.
 
-    Best-effort by default (hooks must never fail a turn over it). `strict=True` re-raises the
+    Best-effort by default (hooks must never fail a turn over it). `strict=True` raises the
     OSError of a failed write instead: an operator CLI that reports the new value after a write
     that never happened tells the user a choice is recorded when it is not.
 
-    A config that exists but cannot be READ is never written: `load_config` answers the defaults
-    for it, so the save would replace every knob the user set with its default."""
-    cfg = load_config()
+    A config that exists but cannot be used - unreadable, not UTF-8, not a JSON object - is never
+    written, for every caller: `load_config` answers the defaults for it, so a save would replace
+    every knob the file still holds with its default. Strict raises `ConfigUnreadable` (an
+    OSError) naming why; best-effort returns the merged dict unsaved."""
+    raw, problem = _read_config_file()
+    cfg = dict(DEFAULT_CONFIG)
+    cfg.update({k: raw[k] for k in (raw or {}) if k in DEFAULT_CONFIG})
     cfg.update({k: updates[k] for k in updates if k in DEFAULT_CONFIG})
     try:
+        if problem:
+            raise ConfigUnreadable(problem)
         p = _config_path()
-        if os.path.lexists(p):
-            p.read_bytes()                             # raises when it cannot be read
         p.parent.mkdir(parents=True, exist_ok=True)
         p.write_text(json.dumps(cfg, indent=2, sort_keys=True) + "\n", encoding="utf-8")
     except OSError:

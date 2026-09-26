@@ -457,3 +457,53 @@ class TestTheCli:
                                str(tmp_path)], env=env, capture_output=True, timeout=60)
         assert b"Traceback" not in done.stderr, done.stderr
         assert done.returncode == 0
+
+
+# ---- review fixes (rank-8 LOW batch, group L4b) -------------------------------------------------
+
+class TestARootThatIsATestDirectory:
+    """--root pointed AT a tests dir used to judge each file only by the path below it, so a helper
+    there (no test_ prefix) read as production code and its assert as the enforcer: exit 0."""
+
+    @pytest.mark.parametrize("dirname", ["tests", "test", "Tests"])
+    def test_an_assert_in_a_helper_under_a_tests_root_is_not_a_decision(self, tmp_path: Path,
+                                                                       dirname: str) -> None:
+        write(tmp_path / "proj" / dirname / "helpers.py", TEST_ASSERT)
+        assert run(tmp_path / "proj" / dirname) == 1
+
+    def test_a_single_file_root_inside_a_tests_dir_is_test(self, tmp_path: Path) -> None:
+        assert run(write(tmp_path / "proj" / "tests" / "helpers.py", TEST_ASSERT)) == 1
+
+    def test_a_dot_root_that_is_a_tests_dir_is_test(self, tmp_path: Path, monkeypatch) -> None:
+        """`--root .` from inside tests/: the root's own name is only visible once resolved."""
+        write(tmp_path / "proj" / "tests" / "helpers.py", TEST_ASSERT)
+        monkeypatch.chdir(tmp_path / "proj" / "tests")
+        assert run(Path(".")) == 1
+
+    @pytest.mark.parametrize("marker", ["pyproject.toml", "setup.py", "setup.cfg", ".git"])
+    def test_a_project_root_named_test_is_still_the_project(self, tmp_path: Path, marker: str) -> None:
+        """A project whose own top directory is called test keeps its enforcers."""
+        write(tmp_path / "test" / marker, "")
+        write(tmp_path / "test" / "admit.py", GUARD)
+        assert run(tmp_path / "test") == 0
+
+
+class TestAPythonFileNamedLikeDotenv:
+    def test_a_dotenv_named_python_file_is_parsed_as_python(self, tmp_path: Path, capsys) -> None:
+        """`.env.py` starts with `.env.`, but it is a Python module and its decision counts."""
+        write(tmp_path / ".env.py", GUARD)
+        assert run(tmp_path) == 0
+        assert "config (" not in capsys.readouterr().out
+
+
+class TestACasePatternIsADecision:
+    @pytest.mark.parametrize("pattern", ["Mode.STRICT", "Mode.STRICT | Mode.LAX", "[Mode.STRICT, _]",
+                                         "{'k': Mode.STRICT}"])
+    def test_a_value_pattern_compares_the_subject_to_it(self, pattern: str) -> None:
+        src = f"def run(x):\n    match x:\n        case {pattern}:\n            raise Stop()\n"
+        hits = decisions(classify_source(src, "STRICT", path=Path("run.py")))
+        assert [h.line for h in hits] == [3]
+
+    def test_a_class_pattern_branches_on_the_class(self) -> None:
+        src = "def run(x):\n    match x:\n        case Strict():\n            raise Stop()\n"
+        assert decisions(classify_source(src, "Strict", path=Path("run.py")))

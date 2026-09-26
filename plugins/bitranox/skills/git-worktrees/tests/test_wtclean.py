@@ -900,6 +900,22 @@ def test_a_bare_repo_worktree_is_removed_through_the_cli(tmp_path):
 
 
 @needs_git
+def test_a_relative_worktree_path_is_removed_although_another_shares_its_name(
+    tmp_path, monkeypatch
+):
+    """git runs from the common git dir, so a RELATIVE worktree path handed to it resolved there
+    instead of in the caller's working directory. git then fell back to matching the name as a
+    suffix of a registered worktree, which fails as soon as two worktrees share it."""
+    main, first, git = make_repo_with_worktree(tmp_path, worktree_path=tmp_path / "a" / "wt-feat")
+    second = tmp_path / "b" / "wt-feat"
+    git("worktree", "add", "-q", str(second), "-b", "other")
+    monkeypatch.chdir(tmp_path / "a")
+    assert W.git_worktree_remove(Path("wt-feat")) is None
+    assert not first.exists()
+    assert second.exists()
+
+
+@needs_git
 def test_the_run_dir_is_the_common_git_dir_never_the_worktree(tmp_path):
     main, worktree, _git_fn = make_repo_with_worktree(tmp_path)
     run_dir, warning = W._git_run_dir(worktree, 30)

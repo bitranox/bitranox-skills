@@ -22,7 +22,10 @@ Host-key checking is left at ssh's own strict default. `--trust-changing-host-ke
 you reimage, where a changed key is expected rather than an attack: it turns strict checking off,
 keeps that churn in a SEPARATE known-hosts file instead of polluting your real one, and heals a
 changed key by dropping the stale entry, whatever the exit status, since ssh never replaces that
-entry itself and the banner would otherwise repeat on every call. It heals only when ssh names an
+entry itself and the banner would otherwise repeat on every call. The entry is dropped under the
+name ssh says it recorded, which for an ssh_config alias or a non-default port is not the name
+typed. Strict checking off also means a key marked @revoked is only a warning: ssh runs the
+command under it, and this tool passes the warning through but cannot stop that run. It heals only when ssh names an
 offending entry in THAT file: a remote command that itself runs ssh or rsync relays its inner
 ssh's banner and "Host key verification failed." too, about some other host. It never re-runs the
 command: with strict checking off a changed key is only a warning, ssh logs in and RUNS the
@@ -81,6 +84,10 @@ DEFAULT_FLEET_KNOWN_HOSTS = "{home}/.ssh/known_hosts_fleet"
 # verification failed." with them - phrase, frame and exit 255 alike. Only the FILE tells the two
 # apart: ours is the known-hosts file this run handed ssh, the inner one is the peer's.
 OFFENDING_KEY = re.compile(r"^Offending \S+ key in (?P<path>.+):\d+\s*$", re.MULTILINE)
+# ssh's own removal advice under that banner: `ssh-keygen -f '<file>' -R '<name>'`. The NAME is
+# what ssh recorded - `[10.0.0.5]:2222` for an ssh_config alias with a Port, never the alias - so
+# it is the one name `ssh-keygen -R` can actually find.
+_REMOVE_HINT = re.compile(r"ssh-keygen -f '(?P<path>[^']+)' -R '(?P<name>[^']+)'")
 # `user@[v6addr]:path` - the address holds colons, so it cannot be split off at the first one.
 _BRACKETED_REMOTE = re.compile(r"^((?:[^@/\[\]:]+@)?\[[^\]/]+\]):")
 # `C:\dir` is a Windows drive path on every platform: no remote scp path starts with a backslash.
@@ -260,19 +267,55 @@ def run_with_host_key_healing(argv: list[str], *, host: str | None, known_hosts:
 
     The command is never re-run. Under StrictHostKeyChecking=no ssh does not refuse a changed key
     (measured on OpenSSH 10.2: banner, no "Host key verification failed"), so a failing status
-    after the banner is the command's own, and `argv` can be MUTATING. The one fatal refusal left
-    there is a key marked @revoked, which no re-run should talk past. `run` is injected so this is
-    testable without a live host and a real changed key.
+    after the banner is the command's own, and `argv` can be MUTATING. It does not refuse a key
+    marked @revoked either (measured, same version: a REVOKED banner, then the command runs); that
+    banner names no offending entry, so the revocation marker is never dropped, and the banner is
+    passed through. The entry is dropped under the name ssh's own removal advice gives for this
+    file, falling back to `host`, and the report says whether the file actually changed. `run` is
+    injected so this is testable without a live host and a real changed key.
     """
     proc = _run_capturing_stderr(argv, run)
     err = proc.stderr or ""
     if heal and host and known_hosts and offends_known_hosts(err, known_hosts):
-        run(["ssh-keygen", "-R", host, "-f", known_hosts],
-            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=False)
-        print(f"fleet_ssh: host key for {host} changed; dropped the stale entry "
-              f"{_after_the_drop(proc.returncode)}", file=sys.stderr)
+        _drop_stale_entry(recorded_name(err, known_hosts) or host, known_hosts,
+                          proc.returncode, run)
     forward_stderr(err)
     return proc.returncode
+
+
+def recorded_name(err: str, known_hosts: str) -> str | None:
+    """The name ssh recorded the host under in THIS known-hosts file, from its removal advice.
+
+    An ssh_config alias or a non-default port is stored under the resolved name, so dropping the
+    name the caller typed removes nothing and the banner repeats on every later call. Advice about
+    another file is an inner ssh's, relayed through the remote command's stderr, and is skipped.
+    """
+    ours = _comparable_path(known_hosts)
+    for m in _REMOVE_HINT.finditer(err):
+        if _comparable_path(m.group("path")) == ours:
+            return m.group("name")
+    return None
+
+
+def _drop_stale_entry(name: str, known_hosts: str, returncode: int, run) -> None:
+    """`ssh-keygen -R`, then say what happened to the FILE - a claim checked, not assumed."""
+    before = _read_or_none(known_hosts)
+    run(["ssh-keygen", "-R", name, "-f", known_hosts],
+        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=False)
+    if before is not None and _read_or_none(known_hosts) != before:
+        print(f"fleet_ssh: host key for {name} changed; dropped the stale entry "
+              f"{_after_the_drop(returncode)}", file=sys.stderr)
+        return
+    print(f"fleet_ssh: host key for {name} changed, but `ssh-keygen -R {name} -f {known_hosts}` "
+          f"removed nothing, so the banner will repeat - remove the entry ssh names below by hand "
+          f"{_after_the_drop(returncode)}", file=sys.stderr)
+
+
+def _read_or_none(path: str) -> bytes | None:
+    try:
+        return Path(path).read_bytes()
+    except OSError:
+        return None
 
 
 def offends_known_hosts(err: str, known_hosts: str) -> bool:

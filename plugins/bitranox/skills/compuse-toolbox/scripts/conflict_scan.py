@@ -18,7 +18,9 @@ Output: one `path:line: text` row per marker line, then a summary line.
 Exit codes: 0 = no markers, 1 = markers found, 2 = a path or directory could not be read (or the
 tool itself failed), so "no markers" cannot be claimed for it. Unreadable paths go to stderr. A
 dangling or looping symlink is not an error: it resolves to no content, so it is listed on stderr
-as skipped and does not change the exit code.
+as skipped and does not change the exit code. A symlink to a directory met inside a walked tree is
+not followed (git stores the link, never merges through it) and is named on stderr; a directory
+you pass as PATH is walked even when it is a link, and a link to a FILE is always read.
 
 Run: `uv run scripts/conflict_scan.py [PATH ...]`  (a dir is walked, skipping .git)
 """
@@ -124,8 +126,13 @@ def scan_paths(paths, unreadable: list[str] | None = None) -> dict:
     return {p: [ln for ln, _ in hits] for p, hits in scan_files(paths, unreadable).items()}
 
 
-def _expand(targets, unreadable: list[str]) -> list[str]:
-    """Every file under `targets`; a directory os.walk cannot open is recorded, not dropped."""
+def _expand(targets, unreadable: list[str], linked_dirs: list[str] | None = None) -> list[str]:
+    """Every file under `targets`; a directory os.walk cannot open is recorded, not dropped.
+
+    A symlink to a directory met DURING the walk is not followed - git records the link itself
+    and never merges through it, and following risks loops and trees outside the repo - so it
+    goes to `linked_dirs` rather than vanishing. A target you name is walked even if it is a link.
+    """
     def _record(err: OSError) -> None:
         unreadable.append("%s (%s)" % (err.filename, err.strerror or err))
 
@@ -135,6 +142,9 @@ def _expand(targets, unreadable: list[str]) -> list[str]:
         if pt.is_dir():
             for dirpath, dirs, names in os.walk(t, onerror=_record):
                 dirs[:] = [d for d in dirs if d != ".git"]
+                if linked_dirs is not None:
+                    linked_dirs.extend(os.path.join(dirpath, d) for d in dirs
+                                       if os.path.islink(os.path.join(dirpath, d)))
                 files.extend(os.path.join(dirpath, n) for n in names)
         else:
             files.append(str(pt))
@@ -158,7 +168,8 @@ def _main(argv) -> int:
     args = ap.parse_args(argv)
     unreadable: list[str] = []
     skipped: list[str] = []
-    res = scan_files(_expand(args.paths, unreadable), unreadable, skipped=skipped)
+    linked_dirs: list[str] = []
+    res = scan_files(_expand(args.paths, unreadable, linked_dirs), unreadable, skipped=skipped)
     for path, hits in sorted(res.items()):
         for line_no, text in hits:
             print(f"{path}:{line_no}: {text}")
@@ -166,6 +177,8 @@ def _main(argv) -> int:
         print(f"CONFLICT MARKERS in {len(res)} file(s)")
     for entry in skipped:
         print(f"conflict_scan: skipped dangling symlink {entry}", file=sys.stderr)
+    for entry in linked_dirs:
+        print(f"conflict_scan: symlinked directory not followed {entry}", file=sys.stderr)
     for entry in unreadable:
         print(f"conflict_scan: could not read {entry}", file=sys.stderr)
     if unreadable:

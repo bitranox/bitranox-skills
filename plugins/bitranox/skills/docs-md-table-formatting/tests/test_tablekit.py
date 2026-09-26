@@ -408,3 +408,86 @@ def test_cli_render_run_from_another_directory_counts_columns(tmp_path):
     assert proc.returncode == 0, proc.stderr
     lines = proc.stdout.decode("utf-8").splitlines()
     assert len({_columns(line) for line in lines}) == 1, lines
+
+
+# --------------------------------------------------------------------------
+# tablekit numbers tables the way reformat_tables sees them
+# --------------------------------------------------------------------------
+
+# Every line of this table changes when reformatted, so the lines reformat_tables rewrites are
+# exactly the tables it recognised: an oracle independent of tablekit's own parser.
+T = "| a | bb |\n|-|-|\n| long | x |\n"
+
+PARITY_DOCS = {
+    "indented code block": "A paragraph.\n\n    | x | y |\n    |---|---|\n    | long | z |\n\n" + T,
+    "blockquote": "> " + T.replace("\n", "\n> ")[:-2] + "\ntext\n\n" + T,
+    "inline span at line start": "```x``` is inline code.\n\n" + T,
+    "fence closed early inside a markdown fence":
+        "```markdown\n```python\n" + T + "```\n" + T + "```\n" + T,
+    "closer indented four columns": "```\ncode\n    ```\n" + T + "```\n\n" + T,
+    "fence in a nested list item":
+        "- a\n  - b\n\n    ```\n    " + T.replace("\n", "\n    ")[:-4] + "    ```\n\n" + T,
+    "tilde line in a backtick fence": "```\n~~~\n" + T + "```\n" + T,
+    "four-space fence opener": "Text.\n\n    ```\n\n" + T,
+    "list-nested table": "- item:\n\n    " + T.replace("\n", "\n    ")[:-4],
+}
+
+
+def _reformatted_spans(tmp_path, text):
+    """1-based (first, last) line spans reformat_tables rewrote, from a real run on a copy."""
+    f = tmp_path / "parity.md"
+    f.write_bytes(text.encode("utf-8"))
+    reformat_tables.reformat_file(f)
+    before, after = text.split("\n"), f.read_bytes().decode("utf-8").split("\n")
+    assert len(before) == len(after)
+    changed = [i + 1 for i, (x, y) in enumerate(zip(before, after, strict=True)) if x != y]
+    spans = []
+    for number in changed:
+        if spans and spans[-1][1] == number - 1:
+            spans[-1][1] = number
+        else:
+            spans.append([number, number])
+    return [tuple(s) for s in spans]
+
+
+@pytest.mark.parametrize("name", sorted(PARITY_DOCS))
+def test_tablekit_numbers_the_tables_reformat_tables_formats(name, tmp_path):
+    text = PARITY_DOCS[name]
+    ours = [(t["start_line"], t["end_line"]) for t in TK.parse_tables(text)]
+    assert ours == _reformatted_spans(tmp_path, text), name
+    assert ours, "the fixture must hold at least one real table"
+
+
+def test_replace_index_0_skips_a_table_in_an_indented_code_block():
+    text = PARITY_DOCS["indented code block"]
+    out = TK.replace_table(text, 0, {"headers": ["a", "bb"], "rows": [["NEW", "x"]]})
+    assert out.startswith("A paragraph.\n\n    | x | y |\n    |---|---|\n    | long | z |\n\n")
+    assert "NEW" in out
+
+
+def test_read_and_replace_a_blockquoted_table_keeps_the_prefix():
+    text = "> | a | b |\n> |---|---|\n> | 1 | 2 |\n\nafter\n"
+    table = TK.parse_tables(text)[0]
+    assert table["headers"] == ["a", "b"] and table["rows"] == [["1", "2"]]
+    out = TK.replace_table(text, 0, {"headers": ["a", "b"], "rows": [["x", "y"]]})
+    assert out == "> | a   | b   |\n> | --- | --- |\n> | x   | y   |\n\nafter\n"
+
+
+# ---- replace --stdout writes the bytes it would have written to the file ----
+# A Windows console or pipe is a text stream that turns every "\n" into "\r\n"; a TextIOWrapper
+# with newline="\r\n" is that same translation, so the test runs on every platform.
+@pytest.mark.parametrize("eol", ["\n", "\r\n"])
+def test_replace_stdout_is_not_newline_translated(eol, tmp_path, monkeypatch):
+    f = tmp_path / "t.md"
+    f.write_bytes(BASIC.replace("\n", eol).encode("utf-8"))
+    payload = json.dumps({"headers": ["Name", "Age"], "rows": [["Carol", "41"]]})
+    windows_stdout = io.TextIOWrapper(io.BytesIO(), encoding="utf-8", newline="\r\n")
+    monkeypatch.setattr(sys, "stdin", io.StringIO(payload))
+    monkeypatch.setattr(sys, "stdout", windows_stdout)
+    rc = TK.main(["replace", str(f), "--index", "0", "--stdout"])
+    windows_stdout.flush()
+    written = windows_stdout.buffer.getvalue()
+    monkeypatch.undo()
+    assert rc == 0
+    expected = TK.replace_table(BASIC, 0, json.loads(payload)).replace("\n", eol).encode("utf-8")
+    assert written == expected

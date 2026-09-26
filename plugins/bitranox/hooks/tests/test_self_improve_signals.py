@@ -304,6 +304,36 @@ def test_save_config_never_overwrites_a_config_it_could_not_read(home):
     assert json.loads(p.read_text(encoding="utf-8")) == {"dream_mode": "off", "promotion": "eager"}
 
 
+UNPARSEABLE_CONFIGS = [
+    b'{"dream_mode":"off","note":"caf\xe9"}',                     # cp1252 byte, not UTF-8
+    b"\xff\xfe" + '{"dream_mode":"off"}'.encode("utf-16-le"),     # PowerShell UTF-16
+    b'{"dream_mode":"off",}',                                     # hand-edit, trailing comma
+    b'["dream_mode", "off"]',                                     # JSON, but not an object
+]
+
+
+@pytest.mark.parametrize("raw", UNPARSEABLE_CONFIGS)
+def test_save_config_never_writes_over_a_config_it_could_not_parse(home, raw):
+    """load_config answers the defaults for a config it can read but not parse, so a save built
+    on that answer wrote the defaults over every choice the file still held. Only the settings
+    CLI guarded against it; any other caller - a hook - would have clobbered the file."""
+    p = S._config_path()
+    p.write_bytes(raw)
+    assert S.save_config({"privacy": "walled"})["privacy"] == "walled"   # best-effort: no raise
+    with pytest.raises(OSError):
+        S.save_config({"privacy": "walled"}, strict=True)
+    assert p.read_bytes() == raw
+
+
+def test_save_config_still_writes_over_a_parseable_config(home):
+    """Control: a BOM-prefixed UTF-8 object is a readable config and is updated in place."""
+    p = S._config_path()
+    p.write_bytes(b'\xef\xbb\xbf{"dream_mode": "off"}')
+    S.save_config({"privacy": "walled"}, strict=True)
+    got = json.loads(p.read_text(encoding="utf-8"))
+    assert got["dream_mode"] == "off" and got["privacy"] == "walled"
+
+
 # --------------------------------------------------------------------------
 # altitude homes
 # --------------------------------------------------------------------------
@@ -544,6 +574,50 @@ def test_contribution_queue_drains_only_explicitly(home):
     S.add_contribution("/p/x", {"what": "b", "target": "skill:bar"})
     S.drain_contributions("/p/x")                             # only after it actually ships
     assert S.read_contributions("/p/x") == []
+
+
+def _queued_and_closed(proj, *whats):
+    """Queue `whats` and return (queue file, its bytes). A test closes them, then writes the
+    bytes back: the state a close leaves when its tombstones were written and the queue update
+    then failed - every entry still queued AND already closed - built from real calls only."""
+    for what in whats:
+        S.add_contribution(proj, {"what": what, "target": "skill:foo"})
+    f = S.contrib_file(proj)
+    raw = f.read_bytes()
+    return f, raw
+
+
+def test_a_drain_retried_after_a_partial_failure_tombstones_each_intent_once(home):
+    """The documented recovery for a drain that died after its tombstones: re-run it. That
+    appended a second tombstone per entry, and the duplicates ate the closed set's cap."""
+    proj = "/p/drainretry"
+    f, raw = _queued_and_closed(proj, "a", "b")
+    S.drain_contributions(proj)
+    f.write_bytes(raw)                                         # the unlink that "failed"
+    assert [r["what"] for r in S.drain_contributions(proj)] == ["a", "b"]
+    assert S.read_contributions(proj) == []
+    assert sorted(r["what"] for r in S.read_closed(proj)) == ["a", "b"]
+
+
+def test_a_single_close_retried_after_a_partial_failure_tombstones_once(home):
+    proj = "/p/shipretry"
+    f, raw = _queued_and_closed(proj, "a")
+    S.ship_contribution(proj, match="a")
+    f.write_bytes(raw)
+    S.ship_contribution(proj, match="a")
+    assert [r["what"] for r in S.read_closed(proj)] == ["a"]
+
+
+def test_duplicate_tombstones_do_not_push_older_intents_out_of_the_cap(home):
+    """Control on the cap: re-closing the same intents must not evict a DIFFERENT closed one."""
+    proj = "/p/capretry"
+    S.add_contribution(proj, {"what": "old", "target": "t"})
+    S.drop_contribution(proj, match="old", max_items=3)
+    f, raw = _queued_and_closed(proj, "a", "b")
+    S.drain_contributions(proj, max_items=3)
+    f.write_bytes(raw)
+    S.drain_contributions(proj, max_items=3)
+    assert sorted(r["what"] for r in S.read_closed(proj)) == ["a", "b", "old"]
 
 
 def test_contribution_queue_dedups_the_same_intent(home):
@@ -1052,6 +1126,25 @@ def test_ensure_gitignored_keeps_a_crlf_gitignore_crlf(home, tmp_path):
     data = (repo / ".gitignore").read_bytes()
     assert data.startswith(b"a\r\nb\r\n") and data.endswith(b"\r\nCLAUDE.local.md\r\n")
     assert b"\n" not in data.replace(b"\r\n", b"")
+
+
+def test_ensure_gitignored_reads_a_non_ascii_repo_path_under_an_ascii_locale(home, tmp_path):
+    """git prints the repo path in UTF-8; decoded with an ASCII locale's codec it raised
+    UnicodeDecodeError, which is not an OSError, out of a function documented never to raise."""
+    import subprocess
+    repo = tmp_path / "M\u00fcller"
+    subprocess.run(["git", "init", "-q", str(repo)], check=True)
+    probe = ("import sys; sys.path.insert(0, %r); import self_improve_signals as S; "
+             "print(S.ensure_gitignored(sys.argv[1], 'CLAUDE.local.md'))"
+             % str(Path(S.__file__).parent))
+    child = {**os.environ, "HOME": str(home), "USERPROFILE": str(home), "LC_ALL": "C",
+             "LANG": "C", "PYTHONUTF8": "0", "PYTHONCOERCECLOCALE": "0",
+             "PYTHONIOENCODING": "utf-8"}
+    r = subprocess.run([sys.executable, "-c", probe, str(repo)], env=child, capture_output=True,
+                       encoding="utf-8", errors="replace")
+    assert r.returncode == 0, r.stderr
+    assert r.stdout.strip() == "True", (r.stdout, r.stderr)
+    assert b"\nCLAUDE.local.md\n" in b"\n" + (repo / ".gitignore").read_bytes()
 
 
 # ---- curated-store relocation and cross-platform lock (Phase 1) ----------------------------------

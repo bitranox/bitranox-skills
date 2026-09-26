@@ -190,3 +190,55 @@ def test_real_markitdown_html_tree(script_runner, tmp_path):
     assert run.returncode == 0, run.output
     assert "SUB1" in (tmp_path / "out" / "sub1" / "x.md").read_text(encoding="utf-8")
     assert "SUB2" in (tmp_path / "out" / "sub2" / "x.md").read_text(encoding="utf-8")
+
+
+def _summary_counts(output):
+    """The Total/Successful/Failed numbers of the printed summary."""
+    counts = {}
+    for line in output.splitlines():
+        label, _, rest = line.partition(":")
+        if label.startswith("Total") or label in ("Successful", "Failed"):
+            counts[label.split()[0]] = int(rest.split()[0])
+    return counts
+
+
+@pytest.mark.skipif(
+    sys.platform == "win32" or (hasattr(os, "geteuid") and os.geteuid() == 0),
+    reason="needs POSIX permission bits enforced (not root, not Windows)",
+)
+def test_unreadable_subdir_is_counted_in_the_total(script_runner, tmp_path, fake_markitdown_dir):
+    """An unreadable directory is a failure, so it is part of the total: the summary must never
+    read "Total 1 / Successful 1 / Failed 1 / 100%"."""
+    _put(tmp_path / "in" / "ok.html", "OK")
+    locked = tmp_path / "in" / "locked"
+    _put(locked / "hidden.html", "HIDDEN")
+    locked.chmod(0)
+    try:
+        run = _batch(script_runner, tmp_path, fake_markitdown_dir, "-e", ".html", "-r")
+    finally:
+        locked.chmod(0o755)
+
+    counts = _summary_counts(run.stdout)
+    assert counts == {"Total": 2, "Successful": 1, "Failed": 1}, run.stdout
+    assert "Success rate:    50.0%" in run.stdout
+    assert "100.0%" not in run.stdout
+
+
+def test_case_only_collision_names_every_output_it_would_write(
+    script_runner, tmp_path, fake_markitdown_dir
+):
+    """Two names that differ only in case are one file on Windows and macOS. Each failure line
+    must name both outputs, not claim that each input alone "would all write" its own name."""
+    _put(tmp_path / "in" / "X.html", "UPPER")
+    _put(tmp_path / "in" / "x.html", "LOWER")
+    if len(os.listdir(tmp_path / "in")) != 2:
+        pytest.skip("case-insensitive file system: the two names are one file")
+
+    run = _batch(script_runner, tmp_path, fake_markitdown_dir, "-e", ".html")
+
+    assert run.returncode == 2, run.output
+    lines = [line for line in run.stdout.splitlines() if line.startswith("[FAIL] Output collision")]
+    assert len(lines) == 2, run.stdout
+    for line in lines:
+        assert "X.md" in line and "x.md" in line, line
+        assert "case" in line, line

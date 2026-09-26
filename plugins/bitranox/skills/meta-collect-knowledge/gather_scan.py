@@ -101,8 +101,9 @@ def extract_keywords(text, max_n=12, proj=None):
 
 def _own_memory_dirs(proj):
     """The resolved native memory dirs that belong to `proj`, under every spelling Claude Code may
-    have keyed it by: the spelling exactly as given when it is rooted, the absolute path (trailing
-    separator and "." normalised away) and the symlink-free one. Empty for no project.
+    have keyed it by: the spelling as given when it is rooted (with a trailing separator and "."
+    segments normalised away, as in the absolute path), the absolute path and the symlink-free
+    one. Empty for no project.
 
     The given spelling is kept because it is not always what abspath returns: on Windows abspath
     puts the current drive in front of a drive-less rooted path, so "/p/cur" becomes "D:\\p\\cur"
@@ -116,7 +117,9 @@ def _own_memory_dirs(proj):
         spelled = os.path.abspath(given)
         spellings = {spelled, os.path.realpath(spelled)}
         if Path(given).root:
-            spellings.add(given)
+            # normpath, not the raw text: "/p/cur/" keys "-p-cur-", which is the SIBLING project
+            # "/p/cur-", and excluding that would hide the sibling's notes as if they were ours.
+            spellings.add(os.path.normpath(given))
         for spelling in spellings:
             out.add(str(sig.memory_dir(spelling).resolve()))
     except (OSError, TypeError, ValueError):
@@ -351,7 +354,10 @@ def _curated_store_dirs(root, cache_ttl=3600):
     """Store DIRS under `root`, from a per-root cache of the expensive walk. The cache is valid while
     it is younger than `cache_ttl` AND stamped with the current stores-generation - so a newly created
     store dir (which bumps the generation) invalidates it immediately, while unchanged roots skip the
-    walk entirely. Cache sits with the other recall caches; any IO error falls back to a live walk."""
+    walk entirely. A PARTIAL walk (some dirs could not be listed) is cached like a complete one; its
+    skipped dirs are replayed as walk errors on every read and retried on the same TTL/generation
+    schedule (see the notes above _SKIPPED). Cache sits with the other recall caches; any IO error
+    falls back to a live walk."""
     key = hashlib.sha1(("dirs:" + str(root)).encode("utf-8", "surrogatepass")).hexdigest()[:12]
     cache = sig._audit_dir() / ("curated-dirs.%s.txt" % key)
     stamp = "v2 gen:%d" % sig.stores_generation()

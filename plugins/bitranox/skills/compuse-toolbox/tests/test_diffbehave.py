@@ -94,6 +94,23 @@ def test_stdin_is_delivered_to_both_sides():
     assert results[0].a.stdout.strip() == "abc"
 
 
+@pytest.mark.parametrize("payload", ["a\nb\n", "a\r\nb", "caf\u00e9\n", "\ud800x"])
+def test_stdin_reaches_the_side_byte_for_byte(payload):
+    """A text-mode stdin writes each \\n as \\r\\n on Windows, so a side reading LINES or bytes
+    saw input the case never held. The child reports the raw bytes it got, as hex."""
+    dump = _py("import sys;sys.stdout.write(sys.stdin.buffer.read().hex())")
+    (result,) = D.compare(dump, dump, [D.Case(name="raw", stdin=payload)])
+    assert result.verdict == "AGREE"
+    assert result.a.stdout == payload.encode("utf-8", errors="replace").hex()
+
+
+def test_output_newlines_are_still_read_universally():
+    """Control: a CRLF or lone CR in OUTPUT still reads as a newline, as it did in text mode."""
+    crlf = _py("import sys;sys.stdout.buffer.write(b'a\\r\\nb\\rc')")
+    (result,) = D.compare(crlf, crlf, [D.Case(name="c")])
+    assert result.a.stdout == "a\nb\nc"
+
+
 def test_a_command_that_fails_to_start_is_a_result_not_a_crash():
     """A result, and an ERROR one: a side that never ran has no behaviour to differ in. Reading it
     as DIFFER let a typo on ONE side satisfy --expect-differ without anything being compared."""

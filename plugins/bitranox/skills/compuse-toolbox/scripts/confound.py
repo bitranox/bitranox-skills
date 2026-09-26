@@ -57,7 +57,8 @@ Exit 0 = the claim is supported (or, with no --claim, no pair is confounded);
      1 = REFUTED - a confounded or unexplained pair exists, or the claimed dimension is isolated
          and the outcome did not move, or no pair isolates it at all;
      2 = usage error (including an outcome recorded on some arms but not all, a label missing,
-         a key given twice in one arm, or outcomes in different units under an outcome band),
+         a key given twice in one arm, or outcomes in different units under an outcome band -
+         a plain plural such as file/files is the same unit),
          or the tool itself failed;
      3 = INCONCLUSIVE - the claim is isolated but the outcome moved less than the declared band.
          Only reachable with --claim, because without one there is no claim to be unsure about.
@@ -206,6 +207,18 @@ def _measurement_unit(value: str) -> str:
     """
     match = _LEADING_NUMBER.match(str(value))
     return str(value)[match.end() :].strip() if match else ""
+
+
+def _singular(unit: str) -> str:
+    """Fold a plain English plural so `1 file` and `3 files` share a unit.
+
+    Only a letters-only word of three or more characters ending in a single `s` is folded: `ms`
+    against `m` or `Mb` against `mb` are different units, and a false merge would band a real
+    change away, while a missed plural only costs a refusal.
+    """
+    if len(unit) >= 3 and unit.isalpha() and unit.endswith("s") and not unit.endswith("ss"):
+        return unit[:-1]
+    return unit
 
 
 def _as_number(value: str) -> float | None:
@@ -386,7 +399,7 @@ def _resolve_outcome_tolerance(
     units = {
         arm.label: _measurement_unit(arm.outcome) for arm in arms if arm.outcome is not None
     }
-    if len(set(units.values())) > 1:
+    if len({_singular(unit) for unit in units.values()}) > 1:
         shown = ", ".join(f"{label}={unit!r}" for label, unit in sorted(units.items()))
         raise ValueError(
             f"outcome tolerance compares numbers, but the arms carry different units: {shown}. "

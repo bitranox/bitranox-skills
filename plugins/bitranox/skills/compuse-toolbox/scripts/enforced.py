@@ -17,7 +17,7 @@ reading what the hits DO.
 
 So this classifies every hit rather than counting them. Two buckets ENFORCE: DECISION (something
 is compared to it, or control flow branches on it - an if/while/assert test, a conditional
-expression, a `match` subject or a `case` guard - enforcement by refusal) and CLAMP (min()/max()
+expression, a `match` subject, a `case` pattern or a `case` guard - enforcement by refusal) and CLAMP (min()/max()
 caps a value with it - enforcement by truncation, which bounds without ever branching). The rest do
 not: DECLARATION, CONFIG, TEST, DOCSTRING, COMMENT and plain REFERENCE. Both empty is the answer.
 
@@ -37,10 +37,12 @@ that one exists. And it never reports a non-Python file as enforcement: a YAML o
 where a value is declared, never where it is enforced, which is exactly the confusion that makes
 a shipped config line look like a mechanism.
 
-What counts as a TEST hit: anything under a `test`/`tests` directory BELOW --root, and any
-`test_*.py`, `*_test.py` or `conftest.py`. The walk skips VCS, cache and vendored trees below
---root (`.git`, `__pycache__`, `venv`, any `.venv*`, `.tox`, `site-packages`, `node_modules`),
-reads a `.env` / `.env.*` file as config, and matches comments, docstrings and config lines as
+What counts as a TEST hit: anything under a `test`/`tests` directory BELOW --root, everything
+when --root itself is such a directory (or a file in one) that holds no project marker
+(`pyproject.toml`, `setup.py`, `setup.cfg`, `.git`), and any `test_*.py`, `*_test.py` or
+`conftest.py`. The walk skips VCS, cache and vendored trees below --root (`.git`, `__pycache__`,
+`venv`, any `.venv*`, `.tox`, `site-packages`, `node_modules`), reads a `.env` / `.env.*` file as
+config unless it is a `.py`/`.pyi` module, and matches comments, docstrings and config lines as
 whole words, taking comments from the tokenizer so a `#` inside a string is not one. A directory
 it cannot enter is listed as UNREAD like an unparsable file.
 
@@ -83,6 +85,9 @@ _SKIP_DIR_PREFIXES = (".venv",)
 site-packages decision under one read as this project's enforcer."""
 
 _TEST_DIRS = frozenset({"tests", "test"})
+_PROJECT_MARKERS = ("pyproject.toml", "setup.py", "setup.cfg", ".git")
+"""What makes a directory a project ROOT rather than a test folder, when --root itself is named
+test/tests: a project whose own top directory is called `test` keeps its enforcers."""
 _LINE_BREAK = re.compile(r"\r\n|\r|\n")
 """The line breaks Python's tokenizer and YAML/TOML count - NOT str.splitlines(), which also
 breaks on a form feed, U+2028 and friends and so shifts every later line number off the AST's."""
@@ -139,6 +144,18 @@ def _is_test_path(path: Path) -> bool:
     name = path.name.lower()
     return (bool(parts & _TEST_DIRS) or name.startswith("test_") or name.endswith("_test.py")
             or name == "conftest.py")
+
+
+def _is_test_root(root: Path) -> bool:
+    """Whether the scan root ITSELF is a test directory: named test/tests once resolved (so
+    `--root .` from inside tests/ counts) and holding no project marker.
+
+    `_is_test_path` sees only the part BELOW the root, so without this a helper module in a
+    tests dir given as --root read as production code and its assert as the enforcer."""
+    resolved = root.resolve()
+    if resolved.name.lower() not in _TEST_DIRS:
+        return False
+    return not any(os.path.lexists(resolved / marker) for marker in _PROJECT_MARKERS)
 
 
 def _skipped_dir(name: str) -> bool:
@@ -200,10 +217,12 @@ def _decides(node: ast.AST, table: dict[int, tuple[ast.AST, str]]) -> bool:
 
 
 def _branches_as_match(parent: ast.AST, field: str) -> bool:
-    """A `match` SUBJECT and a `case ... if` GUARD choose a branch exactly as an if-test does."""
+    """A `match` SUBJECT, a `case` PATTERN and a `case ... if` GUARD choose a branch exactly as an
+    if-test does: `case Mode.STRICT:` compares the subject to the value, `case Strict():` tests
+    its class."""
     if isinstance(parent, ast.Match) and field == "subject":
         return True
-    return isinstance(parent, ast.match_case) and field == "guard"
+    return isinstance(parent, ast.match_case) and field in {"pattern", "guard"}
 
 
 def _clamps(node: ast.AST, table: dict[int, tuple[ast.AST, str]]) -> bool:
@@ -349,8 +368,9 @@ def classify_source(source: str, identifier: str, *, path: Path, root: Path | No
         source: The file's text.
         identifier: The exact name to look for; substrings of longer names never match.
         path: Where it came from, used for the text of each hit and to spot a test path.
-        root: The scan root. When given, only the part of ``path`` BELOW it decides whether this
-            is a test file, so a project under a folder called ``test`` is not all tests.
+        root: The scan root. When given, only the part of ``path`` BELOW it, and the root's own
+            name, decide whether this is a test file, so a project under a folder called ``test``
+            is not all tests while a ``tests`` dir given as the root is.
 
     Returns:
         One :class:`Hit` per mention, in line order.
@@ -370,7 +390,7 @@ def classify_source(source: str, identifier: str, *, path: Path, root: Path | No
     tree = ast.parse(source)
     lines = _lines(source)
     table = _parents(tree)
-    in_test = _is_test_path(_below(path, root))
+    in_test = _is_test_path(_below(path, root)) or (root is not None and _is_test_root(root))
     hits: list[Hit] = []
     for node in _named_nodes(tree, identifier):
         line = getattr(node, "lineno", 1)
@@ -406,7 +426,11 @@ def _below(path: Path, root: Path | None) -> Path:
 
 
 def _is_config(path: Path) -> bool:
-    """A `.env` has suffix '' and `.env.production` has suffix '.production', so name them too."""
+    """A `.env` has suffix '' and `.env.production` has suffix '.production', so name them too -
+    but a Python module stays Python: `.env.py` also starts with `.env.`, and reading it as config
+    would drop every decision in it."""
+    if path.suffix in _PY_SUFFIXES:
+        return False
     return path.suffix in _CONFIG_SUFFIXES or path.name == ".env" or path.name.startswith(".env.")
 
 

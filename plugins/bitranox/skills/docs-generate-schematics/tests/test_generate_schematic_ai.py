@@ -117,6 +117,11 @@ def _review_response(text):
     # the older fallback wording, still read
     ("Overall quality: 6 / 10. Looks fine.", 6.0),
     ("Rating: 7", 7.0),
+    # the fallback wording out of anything but 10 is a criterion, never the total
+    ("quality: 2/2", None),
+    ("Rating: 3/5", None),
+    ("Label quality: 2/2\nOverall quality: 7/10", 7.0),
+    ("Rating: 85", None),
     # only per-criterion scores, or none at all: no total was stated
     ("Accuracy score: 2/2\nClarity score: 1/2", None),
     ("Looks nice overall, clear labels.", None),

@@ -34,7 +34,9 @@ Usage:
     transcript_index.py search --fts '"zpool scrub" OR resilver'
 
 Exit: 0 hits (or index done), 1 no match, 2 error (a malformed --fts query, an
-empty query, a directory or file that could not be read while indexing).
+empty query or one with no letter or digit in any word - punctuation is not
+indexed, so it could never match - a directory or file that could not be read
+while indexing).
 """
 
 from __future__ import annotations
@@ -45,6 +47,7 @@ import os
 import pathlib
 import sqlite3
 import sys
+import unicodedata
 
 __all__ = ["QueryError", "ensure_schema", "fts_literal", "index_dir", "search", "main"]
 
@@ -212,7 +215,19 @@ def fts_literal(query: str) -> str:
     words = query.split()
     if not words:
         raise QueryError("empty query")
+    if not any(_is_token_char(ch) for w in words for ch in w):
+        # Every word would be an empty phrase, which matches nothing, so the search would report
+        # "not narrated" about a corpus it never tested. A punctuation word BESIDE a real one is
+        # harmless: FTS5 drops the empty phrase from the AND.
+        raise QueryError("no searchable word in %r: only letters and digits are indexed, "
+                         "punctuation is not" % query)
     return " ".join('"' + w.replace('"', '""') + '"' for w in words)
+
+
+def _is_token_char(ch: str) -> bool:
+    """A character the unicode61 tokenizer keeps in a token: its default classes L*, N* and Co."""
+    category = unicodedata.category(ch)
+    return category[0] in "LN" or category == "Co"
 
 
 def search(db: sqlite3.Connection, query: str, limit: int = 10,

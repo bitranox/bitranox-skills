@@ -48,7 +48,9 @@ class FakeSite:
         if request.url.scheme == "http":
             target = str(request.url.copy_with(scheme="https", port=None))
             return httpx.Response(301, headers={"Location": target})
-        headers = list(self.headers.items()) + [("Set-Cookie", c) for c in self.cookies]
+        # a list of pairs can repeat a header, which a dict cannot
+        pairs = self.headers.items() if isinstance(self.headers, dict) else self.headers
+        headers = list(pairs) + [("Set-Cookie", c) for c in self.cookies]
         return httpx.Response(200, headers=headers, text=self.html)
 
 
@@ -127,6 +129,34 @@ def _free_port():
 
 def test_refused_real_port_exits_2(capsys):
     assert a.main([f"http://127.0.0.1:{_free_port()}/"]) == 2
+
+
+# Hosts the resolver refuses to even encode: the IDNA codec (a label over 63 characters, an empty
+# label) and a NUL. None of them touch DNS, and none of them can be fetched.
+@pytest.mark.parametrize("host", ["a" * 64, "a..b", "x\x00y"])
+def test_a_host_the_resolver_cannot_encode_exits_2_not_a_traceback(host, capsys):
+    calls = []
+
+    def fetcher(url, proxy=None):
+        calls.append(url)
+        return []
+
+    rc = a.main([f"https://{host}/"], fetcher=fetcher)
+    err = capsys.readouterr().err
+    assert rc == 2
+    assert "could not fetch" in err
+    assert calls == []
+
+
+def test_two_csp_headers_are_graded_as_two_policies(capsys):
+    # httpx joins the repeated header with ", "; the first policy lets any site frame the page
+    headers = [(k, v) for k, v in CLEAN_HEADERS.items() if k != "Content-Security-Policy"]
+    headers += [("Content-Security-Policy", "frame-ancestors *"),
+                ("Content-Security-Policy", "default-src 'self'; object-src 'none'")]
+    rc, out = run_main([f"https://{SITE}/", "--json"], FakeSite(headers), capsys)
+    by = {f["check"]: f["severity"] for f in json.loads(out.out)["findings"]}
+    assert by["clickjacking"] == "MEDIUM"
+    assert rc == 1
 
 
 def test_internal_target_warning():

@@ -17,8 +17,8 @@ files still carry `name`/`description` frontmatter); `migrate_memory.py` imports
 
 Exit codes: 0 clean; 1 a problem was found (orphan pointer or ref, downward ref, duplicate, decoy,
 unreadable dir or file under `--check-tree`, misplaced fact, unrehomable body) or `--archive` named
-no entry; 2 a dir argument does not exist, `--archive` could not move the body (the pointer is then
-kept), or any other mode could not read a level file, fact body or store directory (not UTF-8, no
+no entry; 2 a dir argument does not exist, `--archive` could not move the body or write the pointer
+(the fact is then left as it was, or the message names where its body now is), or any other mode could not read a level file, fact body or store directory (not UTF-8, no
 permission) - it names the path and does not guess at an answer.
 
 Pure standard library; cross-platform; ASCII output only.
@@ -321,13 +321,45 @@ def _names_invalid_pointer(level_dir, slug):
     return any(n in raw + " " for raw in us.invalid_pointer_lines(text) for n in needles)
 
 
-def archive_entry(level_dir, slug, archive_subdir=".archive", dry_run=False):
+class ArchiveRollbackFailed(OSError):
+    """The pointer write failed after the body was archived, and the body could not be put back.
+    The message names where the body now is, since the pointer still names the old place."""
+
+
+def _put_back(moved, cause, move):
+    """Undo the body moves of an archive whose pointer write failed, newest first, so the failure
+    leaves the fact exactly as it was. Raises ArchiveRollbackFailed naming any body it could not
+    return: the caller must not then report the fact as unchanged."""
+    stuck = []
+    for src, dest in reversed(moved):
+        try:
+            move(str(dest), str(src))
+        except OSError:
+            stuck.append((src, dest))
+    if stuck:
+        where = "; ".join(f"now at {dst}, belongs at {src}" for src, dst in stuck)
+        raise ArchiveRollbackFailed(
+            f"the pointer write failed ({cause}) and the body could not be put back: {where} - "
+            "the pointer still names the old path, so move it back by hand") from cause
+
+
+def archive_entry(level_dir, slug, archive_subdir=".archive", dry_run=False, *, move=None,
+                  commit=None):
     """Forget a fact: drop its pointer line and move its central body to `<anchor>/.claude-memory/
     <archive_subdir>/`. With `dry_run`, report whether an entry WOULD be removed but write nothing.
     Returns True if an entry was (or, under dry_run, would be) removed.
 
     Raises OSError when the body cannot be archived, and then leaves the pointer in place: dropping
-    it anyway turned the fact into a dangling body while the CLI printed "archived"."""
+    it anyway turned the fact into a dangling body while the CLI printed "archived". Raises OSError
+    too when the pointer write fails, after moving the body BACK: the body moves first so that a
+    body that cannot move costs no pointer, and a pointer write that then fails must not leave the
+    pointer naming a body already in the archive. If the body cannot be put back either, the
+    error is ArchiveRollbackFailed and names where it is.
+
+    `move` and `commit` are the body-move and pointer-write seams (shutil.move and the engine's
+    store commit when omitted), resolved at call time."""
+    move = move or shutil.move
+    commit = commit or ME._commit_store
     d = Path(level_dir)
     scope, entries, bodies = ME.read_store(str(d))
     qcanon = _canon(slug)
@@ -338,11 +370,12 @@ def archive_entry(level_dir, slug, archive_subdir=".archive", dry_run=False):
         if not _names_invalid_pointer(d, slug):
             return False
         if not dry_run:
-            ME._commit_store(str(d), scope, entries, bodies)
+            commit(str(d), scope, entries, bodies)
         return True
     if dry_run:                                  # a dry run reports the outcome and writes NOTHING
         return True
     anchor = ME._anchor(str(d))
+    moved = []
     for e in entries:
         if _canon(e.slug) == qcanon:
             src = us.legacy_body_path(anchor, e.uuid) if e.legacy else us.body_path(anchor, e.slug)
@@ -352,8 +385,14 @@ def archive_entry(level_dir, slug, archive_subdir=".archive", dry_run=False):
                 archive = us.central_facts_dir(anchor).parent / archive_subdir
                 archive.mkdir(parents=True, exist_ok=True)
                 # an archive is the only copy of a retired fact: never move onto an earlier one
-                shutil.move(str(src), str(us.free_archive_path(archive, src.name)))
-    ME._commit_store(str(d), scope, kept, {e.slug: bodies.get(e.slug, "") for e in kept})
+                dest = us.free_archive_path(archive, src.name)
+                move(str(src), str(dest))
+                moved.append((src, dest))
+    try:
+        commit(str(d), scope, kept, {e.slug: bodies.get(e.slug, "") for e in kept})
+    except OSError as exc:
+        _put_back(moved, exc, move)
+        raise
     return True
 
 
@@ -798,6 +837,9 @@ def _main(argv=None):
         level = args.dirs[0]
         try:
             removed = archive_entry(level, args.archive, dry_run=args.dry_run)
+        except ArchiveRollbackFailed as exc:
+            print(f"! failed: could not archive {args.archive}: {exc}", file=sys.stderr)
+            return 2
         except OSError as exc:
             # exit 2, not 1: 1 already means "no such entry", and a failed write is not that
             print("! failed: could not archive %s (%s) - its pointer and body are unchanged"

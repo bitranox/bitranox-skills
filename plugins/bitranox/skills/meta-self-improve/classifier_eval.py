@@ -1072,6 +1072,10 @@ def _run_replay(args, clf=None, skills=None):
             return 1, None, "no prompts in %s" % args.prompts
     else:
         found = corpus_prompts.collect_prompts(args.root)
+        # A transcript or directory the walk could not open is a smaller corpus that reads like
+        # a whole one unless it is said, here and in the report.
+        for why in found.get("skipped", []):
+            print("classifier_eval: could not read corpus path - %s" % why, file=sys.stderr)
         typed = [p for p in found["prompts"] if router.prompt_text.typed_by_a_person(p["prompt"])]
         picked = stratified_prompts(typed, args.limit, seed=args.seed)
         if not picked:
@@ -1079,9 +1083,12 @@ def _run_replay(args, clf=None, skills=None):
     ask = Asker(clf)
     # Every arm this run replays, with the text it will rank on. A fixed arm here vetted
     # choice_short_rerank whatever was replayed, without router_text: a broken arm then passed the
-    # gate built to stop it, and a failure of the fixed arm aborted runs of healthy ones.
+    # gate built to stop it, and a failure of the fixed arm aborted runs of healthy ones. The
+    # --description overrides are applied too, for the same reason: vetted on the unedited text, a
+    # rewording that broke the router passed the controls and every row was bought with it.
+    vetted, _applied = with_descriptions(skills, dict(getattr(args, "description", None) or []))
     for arm in selected_arms(getattr(args, "arm", None)):
-        check_controls(arm, ask, skills, threshold=args.threshold, shortlist=args.shortlist,
+        check_controls(arm, ask, vetted, threshold=args.threshold, shortlist=args.shortlist,
                        bodies=bodies, router_text=router_text)
     triggers = router.load_triggers()
     rows, replayed, skipped = [], [], []
@@ -1103,7 +1110,8 @@ def _run_replay(args, clf=None, skills=None):
             replayed.append(prompt)
             fh.write(json.dumps(row, ensure_ascii=False) + "\n")
             fh.flush()
-    report = {"corpus": {"files_read": found["files_read"], "typed_prompts": len(typed)},
+    report = {"corpus": {"files_read": found["files_read"], "typed_prompts": len(typed),
+                         "unreadable": list(found.get("skipped", []))},
               "sampled": len(rows), "skipped_prompts": skipped,
               "input_tokens": ask.tokens, "requests": ask.calls,
               "failures": dict(ask.reasons), "log": str(args.out),
@@ -1211,6 +1219,9 @@ def render_replay(data):
              "spent: %d requests, %d input tokens; failures: %s"
              % (data["requests"], data["input_tokens"], data["failures"] or "none"),
              "log: %s" % data["log"]]
+    if data["corpus"].get("unreadable"):
+        lines.append("could not read %d corpus path(s) - their prompts were never sampled: %s"
+                     % (len(data["corpus"]["unreadable"]), "; ".join(data["corpus"]["unreadable"])))
     if data.get("skipped_prompts"):
         lines.append("skipped %d prompt(s) whose source transcript could not be read - not "
                      "scored: %s" % (len(data["skipped_prompts"]),
@@ -1251,7 +1262,8 @@ def main(argv=None, *, clf=None, skills=None):
         except (OSError, ValueError) as exc:
             _emit(args, False, error="%s: %s" % (type(exc).__name__, exc))
             return 2
-        skipped = ({"prompts_without_a_prefix": len(data["skipped_prompts"])}
+        skipped = ({"prompts_without_a_prefix": len(data["skipped_prompts"]),
+                    "unreadable_corpus_paths": len(data["corpus"].get("unreadable", []))}
                    if data and "skipped_prompts" in data else None)
         _emit(args, code == 0, data=data, error=error, skipped=skipped)
         return code

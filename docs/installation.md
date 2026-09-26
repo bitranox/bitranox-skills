@@ -35,7 +35,30 @@ Two things this route does NOT give you, both of which the marketplace install d
 
 - **The hooks stay dormant.** They need entries in `settings.json`, and this command does not
   write your settings. `bitranox-skills path` prints the bundled `hooks/` directory so you can
-  wire them deliberately.
+  wire them deliberately. Launch each one the way the plugin's own `hooks/hooks.json` does,
+  through `run-python.sh` with `--hook` before the script:
+
+  ```json
+  {
+    "hooks": {
+      "SessionStart": [
+        {
+          "hooks": [
+            {
+              "type": "command",
+              "command": "bash \"<hooks dir>/run-python.sh\" --hook \"<hooks dir>/session-start.py\""
+            }
+          ]
+        }
+      ]
+    }
+  }
+  ```
+
+  `--hook` is what makes a hook fail open: without it, a script the shim cannot run (moved,
+  no Python 3 found) exits 3 and shows as a hook error on every event, and the
+  `BITRANOX_HOOKS_OFF` kill-switch does not silence it. `hooks/hooks.json` lists every event,
+  matcher and script to copy.
 - **No auto-update.** A new version arrives when you run `uv tool upgrade bitranox-skills` and
   then `bitranox-skills install --force`, not on its own.
 

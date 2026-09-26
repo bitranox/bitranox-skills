@@ -48,18 +48,19 @@ import json
 import shutil
 import sys
 import time
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
 
 # The engine's pointer parser and anchor resolver, from the plugin's hooks dir:
 # skills/<skill> -> skills -> bitranox.
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "hooks"))
-import uuid_store  # noqa: E402
+import uuid_store
 
 # tree_support is this script's sibling; a caller loading the script by path does not put this
 # dir on sys.path the way running it directly does.
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from tree_support import STORE_DIR, store_anchor, utf8_stdio  # noqa: E402
+from tree_support import STORE_DIR, store_anchor, utf8_stdio
 
 __all__ = ["Entry", "Diff", "NoAnchor", "Unreadable", "derive", "diff", "manifest_key", "main"]
 
@@ -162,8 +163,13 @@ def anchor_dir(start: Path) -> Path:
     return anchor
 
 
+def _list_dir(d: Path) -> list[Path]:
+    return list(d.iterdir())
+
+
 def levels_under(anchor: Path, exclude: tuple[Path, ...] = (),
-                 unreadable: list[str] | None = None) -> list[Path]:
+                 unreadable: list[str] | None = None, *,
+                 list_dir: Callable[[Path], list[Path]] = _list_dir) -> list[Path]:
     """Every level dir under `anchor`, pruned. Filesystem walk, never grep - see the docstring.
 
     `exclude` exists for the backup dir itself. Writing the backup under the anchor puts COPIES
@@ -171,7 +177,10 @@ def levels_under(anchor: Path, exclude: tuple[Path, ...] = (),
     whole tree as moved - the tool breaking precisely the check it exists to perform.
 
     A directory that cannot be listed is appended to `unreadable` rather than skipped in silence:
-    it may hold a level, and a manifest that omits it looks exactly like one that had none.
+    it may hold a level, and a manifest that omits it looks exactly like one that had none. One
+    that no longer EXISTS is not unreadable - another process deleted it after its parent was
+    listed (a cache cleared mid-walk) - and it holds nothing, so it is passed over; refusing on it
+    turned every concurrent delete into a failed backup.
     """
     skip = tuple(Path(p).resolve() for p in exclude)
     found: list[Path] = []
@@ -179,7 +188,9 @@ def levels_under(anchor: Path, exclude: tuple[Path, ...] = (),
     while stack:
         d = stack.pop()
         try:
-            entries = list(d.iterdir())
+            entries = list_dir(d)
+        except (FileNotFoundError, NotADirectoryError):
+            continue
         except OSError:
             if unreadable is not None:
                 unreadable.append(str(d))
@@ -219,6 +230,22 @@ def parse_level(text: str, level: str) -> list[Entry]:
             for p in uuid_store.parse_pointer_index(text or "")[1] if not p.legacy]
 
 
+def read_level_text(path: Path, unreadable: list[str]) -> str | None:
+    """One level file's text, or None: with the reason appended to `unreadable`, or without one
+    when the file no longer exists (deleted after the walk found it, so there is no level there).
+
+    utf-8-sig: a BOM left by a Windows editor would otherwise glue itself to the first line and
+    hide a pointer written there.
+    """
+    try:
+        return path.read_text(encoding="utf-8-sig")
+    except (FileNotFoundError, NotADirectoryError):
+        return None
+    except (OSError, UnicodeDecodeError) as exc:
+        unreadable.append(f"{path} ({type(exc).__name__})")
+        return None
+
+
 def derive(root: Path, *, scope: str = "tree", start: Path | None = None,
            exclude: tuple[Path, ...] = ()) -> list[Entry]:
     """The manifest entries for the live tree, sorted so the result is order-independent.
@@ -234,14 +261,9 @@ def derive(root: Path, *, scope: str = "tree", start: Path | None = None,
               else levels_on_chain(begin, anchor))
     entries: list[Entry] = []
     for lvl in levels:
-        try:
-            # utf-8-sig: a BOM left by a Windows editor would otherwise glue itself to the first
-            # line and hide a pointer written there.
-            text = (lvl / LEVEL_FILE).read_text(encoding="utf-8-sig")
-        except (OSError, UnicodeDecodeError) as exc:
-            unreadable.append(f"{lvl / LEVEL_FILE} ({type(exc).__name__})")
-            continue
-        entries.extend(parse_level(text, str(lvl)))
+        text = read_level_text(lvl / LEVEL_FILE, unreadable)
+        if text is not None:
+            entries.extend(parse_level(text, str(lvl)))
     if unreadable:
         raise Unreadable(sorted(unreadable))
     return sorted(entries)

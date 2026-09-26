@@ -147,12 +147,15 @@ def read_pid_io_bytes(pid: int) -> int | None:
 
 
 # A number standing on its own: not the 0 of `eth0`, not a piece of `v1.2.3`, not `42MB`.
-_NUMBER = re.compile(r"(?<![\w.])-?\d+(?:\.\d+)?(?![\w.])")
+# Thousands grouping (`1,234,567`) is one number: read as 1, a moving counter looks flat and
+# two flat signals read as STALLED. Only exact three-digit groups count, so a comma list such
+# as `42,17` or `1,2,3` still yields its first field.
+_NUMBER = re.compile(r"(?<![\w.])-?(?:\d{1,3}(?:,\d{3})+(?!,?\d)|\d+)(?:\.\d+)?(?![\w.])")
 
-# Tokens that only mean something to a shell. With no shell they reach the first program as
-# plain arguments, and it may still print a number - of the wrong thing.
-_SHELL_OPERATORS = frozenset({"|", "||", "|&", "&", "&&", ";", ";;", ">", ">>", "<", "<<",
-                              "2>", "2>>", "2>&1", "&>", "1>"})
+# Characters that only mean something to a shell when they stand UNQUOTED. With no shell they
+# reach the first program as plain arguments, and it may still print a number - of the wrong
+# thing. Quoted or escaped they are literal: `sh -c 'a; b'` and find's `-exec ... \;`.
+_OPERATOR_CHARS = frozenset(";|&<>")
 
 
 def _split_windows(cmd: str) -> list[str]:
@@ -182,6 +185,61 @@ def split_command(cmd: str) -> list[str]:
     return _split_windows(cmd) if os.name == "nt" else shlex.split(cmd)
 
 
+def _posix_operators(cmd: str) -> list[str]:
+    """Runs of unquoted operator characters under POSIX shell quoting (', ", backslash)."""
+    runs: list[str] = []
+    current, quote, escaped = "", "", False
+    for ch in cmd:
+        if escaped:
+            escaped = False
+        elif quote == "'":
+            quote = "" if ch == "'" else quote
+        elif ch == "\\":
+            escaped = True
+        elif quote == '"':
+            quote = "" if ch == '"' else quote
+        elif ch in "'\"":
+            quote = ch
+        elif ch in _OPERATOR_CHARS:
+            current += ch
+            continue
+        if current:
+            runs.append(current)
+            current = ""
+    return runs + [current] if current else runs
+
+
+def _windows_operators(cmd: str) -> list[str]:
+    """Runs of unquoted operator characters under CommandLineToArgvW quoting.
+
+    Only double quotes group; a backslash is literal except before a quote, where an odd run
+    of backslashes makes that quote literal.
+    """
+    runs: list[str] = []
+    current, in_quote, backslashes = "", False, 0
+    for ch in cmd:
+        if ch == '"' and backslashes % 2 == 0:
+            in_quote = not in_quote
+        elif ch in _OPERATOR_CHARS and not in_quote:
+            current += ch
+            backslashes = 0
+            continue
+        backslashes = backslashes + 1 if ch == "\\" else 0
+        if current:
+            runs.append(current)
+            current = ""
+    return runs + [current] if current else runs
+
+
+def shell_operators(cmd: str, *, windows: bool | None = None) -> list[str]:
+    """The shell operators `cmd` uses UNQUOTED, by this platform's quoting rules.
+
+    `windows` defaults to the running platform; pass it to check the other one's rules.
+    """
+    use_windows = os.name == "nt" if windows is None else windows
+    return _windows_operators(cmd) if use_windows else _posix_operators(cmd)
+
+
 def command_argument(cmd: str) -> str:
     """argparse type for --cmd: refuse what cannot run as intended without a shell."""
     try:
@@ -190,7 +248,7 @@ def command_argument(cmd: str) -> str:
         raise argparse.ArgumentTypeError(f"cannot split {cmd!r}: {exc}") from exc
     if not argv:
         raise argparse.ArgumentTypeError("empty command")
-    bad = [t for t in argv if t in _SHELL_OPERATORS or (len(t) > 1 and t.endswith(";"))]
+    bad = shell_operators(cmd)
     if bad:
         raise argparse.ArgumentTypeError(
             f"{cmd!r} uses shell syntax ({' '.join(bad)}) but runs with no shell; wrap it in one "
@@ -222,7 +280,7 @@ def read_command_number(cmd: str) -> float | None:
     if p.returncode != 0:
         return None
     m = _NUMBER.search(p.stdout or "")
-    return float(m.group(0)) if m else None
+    return float(m.group(0).replace(",", "")) if m else None
 
 
 # ---- rate parsing -------------------------------------------------------------------

@@ -681,27 +681,66 @@ def _first_visible(match: re.Match[str]) -> tuple[int, bool]:
     return match.start() + lead, "\n" in token[:lead]
 
 
+_Span = tuple[tuple[int, int], tuple[int, int]]
+
+
+def _char_span(node: ast.AST, lines: list[str]) -> _Span | None:
+    """(line, char col) start and end of a node; AST columns are UTF-8 byte offsets."""
+    end_line = getattr(node, "end_lineno", None)
+    if end_line is None:
+        return None
+
+    def char_col(line: int, byte_col: int) -> int:
+        return _byte_col_to_char(lines[line - 1] if 1 <= line <= len(lines) else "", byte_col)
+
+    line = getattr(node, "lineno", 0)
+    return ((line, char_col(line, getattr(node, "col_offset", 0))),
+            (end_line, char_col(end_line, getattr(node, "end_col_offset", 0) or 0)))
+
+
+def _outer_evaluated_spans(node: ast.AST, lines: list[str]) -> tuple[_Span, ...]:
+    """Parts of a def/lambda signature evaluated in the ENCLOSING scope, before the call exists.
+
+    Defaults and annotations sit inside the signature text but are not read in the function's own
+    scope: `lambda mac=mac: mac` reads its default `mac` from the loop around it.
+    """
+    args = getattr(node, "args", None)
+    if not isinstance(args, ast.arguments):
+        return ()
+    exprs: list[ast.AST] = [*args.defaults, *(d for d in args.kw_defaults if d is not None)]
+    every = [*args.posonlyargs, *args.args, *args.kwonlyargs, args.vararg, args.kwarg]
+    exprs += [a.annotation for a in every if a is not None and a.annotation is not None]
+    returns = getattr(node, "returns", None)
+    if returns is not None:
+        exprs.append(returns)
+    return tuple(span for e in exprs if (span := _char_span(e, lines)) is not None)
+
+
+def _inside(spans: tuple[_Span, ...], pos: tuple[int, int]) -> bool:
+    return any(start <= pos < end for start, end in spans)
+
+
 @dataclass(frozen=True)
 class _Lambda:
     start: tuple[int, int]
     end: tuple[int, int]
     params: frozenset[str]
+    outside: tuple[_Span, ...]
+    """Default expressions: inside the lambda's text, evaluated in the scope around it."""
 
 
 def _lambdas(tree: ast.Module, lines: list[str]) -> list[_Lambda]:
     """Every lambda with its CHARACTER span: a lambda binds its parameters inside that span only."""
     found: list[_Lambda] = []
-
-    def char_col(line: int, byte_col: int) -> int:
-        return _byte_col_to_char(lines[line - 1] if 1 <= line <= len(lines) else "", byte_col)
-
     for node in ast.walk(tree):
-        if isinstance(node, ast.Lambda) and node.end_lineno is not None:
+        span = _char_span(node, lines) if isinstance(node, ast.Lambda) else None
+        if span is not None:
             found.append(
                 _Lambda(
-                    start=(node.lineno, char_col(node.lineno, node.col_offset)),
-                    end=(node.end_lineno, char_col(node.end_lineno, node.end_col_offset or 0)),
+                    start=span[0],
+                    end=span[1],
                     params=frozenset(_parameter_names(node)),
+                    outside=_outer_evaluated_spans(node, lines),
                 )
             )
     return found
@@ -710,8 +749,13 @@ def _lambdas(tree: ast.Module, lines: list[str]) -> list[_Lambda]:
 def _with_lambda_binding(
     bindings: tuple[Binding, ...], word: str, line: int, col: int, lambdas: list[_Lambda]
 ) -> tuple[Binding, ...]:
-    """A name inside `lambda mac: mac` is that lambda's PARAMETER, whatever the def around it has."""
-    if not any(lam.start <= (line, col) < lam.end and word in lam.params for lam in lambdas):
+    """A name inside `lambda mac: mac` is that lambda's PARAMETER, whatever the def around it has.
+
+    Its default (`lambda mac=mac: ...`) is not: that is read from the scope around the lambda.
+    """
+    pos = (line, col)
+    if not any(lam.start <= pos < lam.end and word in lam.params and not _inside(lam.outside, pos)
+               for lam in lambdas):
         return bindings
     rest = tuple(b for b in bindings if b not in (Binding.PARAMETER, Binding.FREE))
     return (Binding.PARAMETER, *rest)
@@ -767,6 +811,7 @@ def scan_source(
     starts = _line_starts(source)
     spans = _token_spans(source)
     lambdas = _lambdas(tree, lines)
+    signature_outer = {s.qualname: _outer_evaluated_spans(s.node, lines) for s in scopes}
     binding_cache: dict[str, tuple[Binding, ...]] = {}
     occ_cache: dict[str, list[_Occ]] = {}
 
@@ -789,7 +834,10 @@ def scan_source(
         enclosing = fn.qualname if fn else None
 
         on_decorator = any_scope is not None and line < any_scope.def_line
-        binds_outward = kind is SiteKind.DEF_NAME or on_decorator
+        # A default or annotation in the signature is evaluated before the function exists.
+        in_signature = any_scope is not None and _inside(
+            signature_outer[any_scope.qualname], (line, col))
+        binds_outward = kind is SiteKind.DEF_NAME or on_decorator or in_signature
         holder, holder_key = _binding_holder(tree, any_scope, binds_outward, scope_nodes)
         cache_key = f"{holder_key}\0{word}"
         if cache_key not in binding_cache:

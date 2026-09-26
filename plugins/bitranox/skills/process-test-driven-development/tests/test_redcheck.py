@@ -7,7 +7,9 @@ rather than patching internals.
 from __future__ import annotations
 
 import json
+import ntpath
 import os
+import posixpath
 import shutil
 import subprocess
 import sys
@@ -698,6 +700,34 @@ def test_the_uncontracted_forms_still_flag() -> None:
 
 def test_an_ordinary_contraction_is_not_a_telegraph() -> None:
     assert not R.audit("That's the export job. It doesn't run on Sundays.", corpus=[]).telegraphs
+
+
+# --- the markdown suffix is matched the way the platform's filesystem matches it ---------------
+# On Windows a fact body named NOTE.MD is the same file an agent opens as note.md, so a
+# case-sensitive suffix test left it out of the corpus there. The platform's own normcase is the
+# injected seam; ntpath and posixpath are the real implementations of each side.
+
+def _mixed_case_docs(tmp_path: Path) -> Path:
+    root = tmp_path / "facts"
+    root.mkdir()
+    for name in ("lower.md", "UPPER.MD", "Mixed.Md", "other.txt"):
+        (root / name).write_text("x\n", encoding="utf-8")
+    return root
+
+
+def test_markdown_suffix_is_case_insensitive_on_windows(tmp_path: Path) -> None:
+    found = R._markdown_files(_mixed_case_docs(tmp_path), print, normcase=ntpath.normcase)
+    assert sorted(p.name for p in found) == ["Mixed.Md", "UPPER.MD", "lower.md"]
+
+
+def test_markdown_suffix_is_case_sensitive_on_posix(tmp_path: Path) -> None:
+    found = R._markdown_files(_mixed_case_docs(tmp_path), print, normcase=posixpath.normcase)
+    assert [p.name for p in found] == ["lower.md"]
+
+
+def test_markdown_suffix_defaults_to_this_platforms_rule(tmp_path: Path) -> None:
+    expected = R._markdown_files(_mixed_case_docs(tmp_path), print, normcase=os.path.normcase)
+    assert R._markdown_files(tmp_path / "facts", print) == expected
 
 
 # --- --rarity-max-fraction is validated -----------------------------------------------------------

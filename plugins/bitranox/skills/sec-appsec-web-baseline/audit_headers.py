@@ -133,6 +133,16 @@ def _csp_directives(value: str) -> dict[str, str]:
     return directives
 
 
+def _csp_policies(value: str) -> list[dict[str, str]]:
+    """A header value as its LIST of policies, each split by :func:`_csp_directives`.
+
+    A header sent twice (app plus proxy) reaches us joined with ``", "``, and CSP 3 parses the
+    comma as the policy separator - no source expression can hold one. Every policy is enforced
+    on its own, so something is allowed only when EVERY policy allows it. Read as one policy, the
+    comma glues the next policy's first directive onto the previous one's last source list."""
+    return [_csp_directives(part) for part in value.split(",") if part.strip()]
+
+
 # CSP Level 3 splits inline scripts by where they sit: script-src-elem governs <script> elements,
 # script-src-attr inline event handlers, and each falls back to script-src, then default-src.
 # script-src itself is graded too, because a CSP 2 browser ignores the two newer directives.
@@ -144,17 +154,36 @@ _CSP_FALLBACK = {
 }
 
 
-def _effective_sources(directives: dict[str, str], name: str) -> str:
-    """The source list a browser enforces for ``name``: its own, else the first fallback present."""
+def _effective_sources(directives: dict[str, str], name: str) -> str | None:
+    """The source list a browser enforces for ``name``: its own, else the first fallback present,
+    else None - that policy places no restriction on ``name`` at all."""
     for candidate in _CSP_FALLBACK[name]:
         if candidate in directives:
             return directives[candidate]
-    return ""
+    return None
 
 
 def _has_nonce_or_hash(sources: str) -> bool:
     """A nonce or hash source makes browsers IGNORE 'unsafe-inline' in the same list."""
     return bool(re.search(r"'(?:nonce-|sha256-|sha384-|sha512-)", sources))
+
+
+def _allows_inline(sources: str) -> bool:
+    return "'unsafe-inline'" in sources.split() and not _has_nonce_or_hash(sources)
+
+
+def _allows_eval(sources: str) -> bool:
+    return "'unsafe-eval'" in sources.split()
+
+
+def _every_policy_allows(policies: list[dict[str, str]], name: str,
+                         allows: Callable[[str], bool]) -> bool:
+    """Whether a weakness survives every policy: each one that restricts ``name`` allows it.
+
+    A policy with no list for ``name`` restricts nothing, so it neither adds nor removes the
+    weakness; with no restricting policy at all there is no list to grade."""
+    lists = [s for s in (_effective_sources(p, name) for p in policies) if s is not None]
+    return bool(lists) and all(allows(s) for s in lists)
 
 
 def _csp(value: str | None, *, enforced: bool = True) -> Finding:
@@ -166,17 +195,15 @@ def _csp(value: str | None, *, enforced: bool = True) -> Finding:
     if not enforced:
         return Finding("csp", "MINOR", "CSP is report-only (a rollout phase, not enforced - it protects nothing yet)",
                        "promote to an enforced Content-Security-Policy once violations are clear")
-    directives = _csp_directives(value)
-    script_val = _effective_sources(directives, "script-src")
+    policies = _csp_policies(value)
     for name in _INLINE_SCRIPT_DIRECTIVES:
-        sources = _effective_sources(directives, name)
-        if "'unsafe-inline'" in sources.split() and not _has_nonce_or_hash(sources):
+        if _every_policy_allows(policies, name, _allows_inline):
             return Finding("csp", "MEDIUM", f"{name} allows 'unsafe-inline' (XSS not mitigated)",
                            "drop 'unsafe-inline'; use nonces or hashes for any inline script")
     # String compilation (eval) consults script-src only, never script-src-elem/-attr (CSP 3).
-    if "'unsafe-eval'" in script_val:
+    if _every_policy_allows(policies, "script-src", _allows_eval):
         return Finding("csp", "MEDIUM", "script-src allows 'unsafe-eval'", "remove 'unsafe-eval'")
-    if "object-src" not in directives and "default-src" not in directives:
+    if not any("object-src" in p or "default-src" in p for p in policies):
         return Finding("csp", "MINOR", "no object-src/default-src fallback", "add default-src 'self'; object-src 'none'")
     return Finding("csp", "OK", "present, no unsafe-inline/eval in scripts")
 
@@ -210,32 +237,61 @@ _PERMISSIVE_FRAME_SOURCE = re.compile(
 )
 
 
-def _frame_ancestors_finding(sources: str) -> Finding:
-    """Grade an enforced frame-ancestors source list: 'none', 'self', explicit origins and
-    scoped wildcards (``*.example.com``) restrict framing; a scheme-only source (``https:``) or a
-    host-source whose host is a bare ``*`` (``*``, ``https://*``, ``*:443``) allows any site to."""
-    permissive = [s for s in sources.split() if _PERMISSIVE_FRAME_SOURCE.match(s)]
-    if permissive:
-        return Finding("clickjacking", "MEDIUM",
-                       f"CSP frame-ancestors allows any site to frame the page ({' '.join(permissive)})",
-                       "restrict frame-ancestors to 'none', 'self' or explicit origins")
-    # An empty source list means 'none' in CSP.
-    return Finding("clickjacking", "OK", "CSP frame-ancestors " + (sources or "(empty list = 'none')"))
+def _permissive_frame_sources(sources: str) -> list[str]:
+    """The sources in one frame-ancestors list that let ANY site frame the page."""
+    return [s for s in sources.split() if _PERMISSIVE_FRAME_SOURCE.match(s)]
+
+
+def _frame_ancestors_finding(source_lists: list[str]) -> Finding:
+    """Grade the enforced frame-ancestors lists, one per policy that has the directive.
+
+    Within one list, 'none', 'self', explicit origins and scoped wildcards (``*.example.com``)
+    restrict framing; a scheme-only source (``https:``) or a host-source whose host is a bare
+    ``*`` (``*``, ``https://*``, ``*:443``) allows any site to. Across policies a frame loads only
+    when EVERY list allows it, so one restricting list protects the page."""
+    for sources in source_lists:
+        if not _permissive_frame_sources(sources):
+            # An empty source list means 'none' in CSP.
+            return Finding("clickjacking", "OK", "CSP frame-ancestors " + (sources or "(empty list = 'none')"))
+    permissive = [s for sources in source_lists for s in _permissive_frame_sources(sources)]
+    return Finding("clickjacking", "MEDIUM",
+                   f"CSP frame-ancestors allows any site to frame the page ({' '.join(permissive)})",
+                   "restrict frame-ancestors to 'none', 'self' or explicit origins")
+
+
+# The X-Frame-Options values the HTML algorithm acts on; anything else is ignored.
+_XFO_KNOWN = frozenset({"deny", "sameorigin", "allowall"})
+_XFO_FIX = "add CSP frame-ancestors 'none' (and X-Frame-Options: DENY for old browsers)"
+
+
+def _x_frame_options(xfo: str | None) -> Finding:
+    """Grade X-Frame-Options the way HTML's "check a navigation response's adherence to
+    X-Frame-Options" does: the values (a repeated header arrives joined with ", ") form a SET. More
+    than one distinct value with any of deny / sameorigin / allowall among them blocks framing
+    outright (Chrome: "conflicting values ... Falling back to 'deny'"); more than one otherwise,
+    or a lone value other than deny / sameorigin, allows it."""
+    values = sorted(set(_header_tokens(xfo)))
+    if len(values) > 1 and _XFO_KNOWN.intersection(values):
+        return Finding("clickjacking", "OK",
+                       f"X-Frame-Options has conflicting values ({', '.join(values)}) - browsers block "
+                       "all framing, as for DENY; send one value")
+    if len(values) == 1 and values[0] in ("deny", "sameorigin"):
+        return Finding("clickjacking", "OK", f"X-Frame-Options: {values[0].upper()}")
+    if not values:
+        return Finding("clickjacking", "MEDIUM", "no enforced frame-ancestors and no X-Frame-Options", _XFO_FIX)
+    return Finding("clickjacking", "MEDIUM",
+                   f"no enforced frame-ancestors, and X-Frame-Options: {xfo} does not restrict framing", _XFO_FIX)
 
 
 def _clickjacking(xfo: str | None, csp_enforced: str | None) -> Finding:
     """Clickjacking is covered by an ENFORCED CSP frame-ancestors OR X-Frame-Options. A
     report-only CSP does not count - it enforces nothing. When frame-ancestors is present
     browsers ignore X-Frame-Options, so a permissive frame-ancestors is not rescued by it."""
-    directives = _csp_directives(csp_enforced) if csp_enforced else {}
-    if "frame-ancestors" in directives:
-        return _frame_ancestors_finding(directives["frame-ancestors"])
-    tokens = _header_tokens(xfo)
-    # HTML: a repeated X-Frame-Options applies only when every value agrees.
-    if tokens and len(set(tokens)) == 1 and tokens[0] in ("deny", "sameorigin"):
-        return Finding("clickjacking", "OK", f"X-Frame-Options: {tokens[0].upper()}")
-    return Finding("clickjacking", "MEDIUM", "no enforced frame-ancestors and no X-Frame-Options",
-                   "add CSP frame-ancestors 'none' (and X-Frame-Options: DENY for old browsers)")
+    policies = _csp_policies(csp_enforced) if csp_enforced else []
+    source_lists = [p["frame-ancestors"] for p in policies if "frame-ancestors" in p]
+    if source_lists:
+        return _frame_ancestors_finding(source_lists)
+    return _x_frame_options(xfo)
 
 
 _REFERRER_POLICIES = frozenset({
@@ -513,8 +569,10 @@ def main(argv: list[str] | None = None, *, fetcher: Callable[..., list[Finding]]
                                         "internal network (public sites; see the net-rotating-proxies skill)")
     args = parser.parse_args(argv)
 
-    warning = internal_target_warning(args.url, args.proxy)
     try:
+        # Inside the try: a host the resolver cannot even encode (an over-long or empty label, a
+        # NUL) raises here, and that URL cannot be fetched either - exit 2, never the gate's 1.
+        warning = internal_target_warning(args.url, args.proxy)
         findings = fetcher(args.url, proxy=args.proxy)
     except Exception as exc:  # noqa: BLE001 - any fetch failure is "not measured", never a gate verdict
         sys.stderr.write(f"could not fetch {args.url}: {type(exc).__name__}: {exc}\n")

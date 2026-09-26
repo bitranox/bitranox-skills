@@ -111,12 +111,24 @@ def plan_outputs(files: List[Path], input_dir: Path,
         if len(group) == 1:
             planned[group[0]] = target[group[0]]
             continue
-        names = ", ".join(str(p.relative_to(input_dir)) for p in group)
+        message = collision_message(group, input_dir, target)
         for file_path in group:
-            collisions[file_path] = (
-                f"[FAIL] Output collision: {names} would all write {target[file_path].name}"
-            )
+            collisions[file_path] = message
     return planned, collisions
+
+
+def collision_message(group: List[Path], input_dir: Path, target: dict[Path, Path]) -> str:
+    """The failure line for inputs that share one output, naming every output they would write.
+
+    Names that differ only in case are one file on Windows and macOS, so they are refused on
+    every platform and the line says why.
+    """
+    names = ", ".join(str(p.relative_to(input_dir)) for p in group)
+    outputs = sorted({target[p].name for p in group})
+    if len(outputs) == 1:
+        return f"[FAIL] Output collision: {names} would all write {outputs[0]}"
+    return (f"[FAIL] Output collision: {names} would write {', '.join(outputs)}, which differ "
+            "only in case and are one file on a case-insensitive file system")
 
 
 def convert_file(md: Any, file_path: Path, output_file: Path) -> tuple[bool, str, str]:
@@ -178,8 +190,10 @@ def batch_convert(
         enable_plugins: Enable MarkItDown plugins
 
     Returns:
-        Dictionary with conversion statistics: total, success, failed, details.
-        An unreadable subdirectory and an output collision count as failures.
+        Dictionary with conversion statistics: total, unreadable_dirs, success,
+        failed, details. An unreadable subdirectory and an output collision count
+        as failures, and total counts every file found plus every unreadable
+        subdirectory, so total == success + failed.
     """
     output_dir.mkdir(parents=True, exist_ok=True)
     if extensions is None:
@@ -187,7 +201,10 @@ def batch_convert(
 
     walk_errors: List[str] = []
     files = find_files(input_dir, extensions, recursive, walk_errors)
-    results = {'total': len(files), 'success': 0, 'failed': 0, 'details': []}
+    # An unreadable directory is one of the failures, so it counts in the total as well:
+    # total == success + failed always holds.
+    results = {'total': len(files) + len(walk_errors), 'unreadable_dirs': len(walk_errors),
+               'success': 0, 'failed': 0, 'details': []}
     for error in walk_errors:
         _record(results, False, error, f"[FAIL] Cannot read directory {error}")
 
@@ -272,7 +289,9 @@ def _print_summary(results: dict) -> None:
     print("\n" + "="*50)
     print("CONVERSION SUMMARY")
     print("="*50)
-    print(f"Total files:     {results['total']}")
+    unreadable = results.get('unreadable_dirs', 0)
+    note = f" (including {unreadable} unreadable director{'y' if unreadable == 1 else 'ies'})"
+    print(f"Total:           {results['total']}{note if unreadable else ''}")
     print(f"Successful:      {results['success']}")
     print(f"Failed:          {results['failed']}")
     print(f"Success rate:    {results['success']/results['total']*100:.1f}%" if results['total'] > 0 else "N/A")

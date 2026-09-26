@@ -138,16 +138,38 @@ def plan_outputs(pdf_files: List[Path], input_dir: Path, output_dir: Path,
         if len(group) == 1:
             planned[group[0]] = target[group[0]]
             continue
-        names = ", ".join(str(p.relative_to(input_dir)) for p in group)
+        message = collision_message(group, input_dir, target)
         for pdf in group:
-            collisions[pdf] = f"[FAIL] Output collision: {names} would all write {target[pdf].name}"
+            collisions[pdf] = message
     return planned, collisions
+
+
+def collision_message(group: List[Path], input_dir: Path, target: Dict[Path, Path]) -> str:
+    """The failure line for papers that share one output, naming every output they would write.
+
+    Names that differ only in case are one file on Windows and macOS, so they are refused on
+    every platform and the line says why.
+    """
+    names = ", ".join(str(p.relative_to(input_dir)) for p in group)
+    outputs = sorted({target[p].name for p in group})
+    if len(outputs) == 1:
+        return f"[FAIL] Output collision: {names} would all write {outputs[0]}"
+    return (f"[FAIL] Output collision: {names} would write {', '.join(outputs)}, which differ "
+            "only in case and are one file on a case-insensitive file system")
+
+
+# Characters json.dumps leaves raw that YAML cannot carry raw in a double-quoted scalar: DEL and
+# the C1 controls are not printable (a YAML reader refuses the whole document), and NEL plus the
+# Unicode line and paragraph separators are read as line breaks and folded into a space.
+_YAML_UNSAFE = re.compile('[\x7f-\x9f\u2028\u2029]')
 
 
 def _yaml_str(value: str) -> str:
     """A YAML double-quoted scalar. JSON string syntax is a valid subset, so quotes and
-    backslashes in a filename cannot break the front matter."""
-    return json.dumps(value, ensure_ascii=False)
+    backslashes in a filename cannot break the front matter; the characters YAML would refuse
+    or fold are written as \\uXXXX escapes, which both JSON and YAML read back unchanged."""
+    quoted = json.dumps(value, ensure_ascii=False)
+    return _YAML_UNSAFE.sub(lambda m: f"\\u{ord(m.group()):04x}", quoted)
 
 
 def render_paper(metadata: Dict[str, str], text_content: str) -> str:
@@ -315,11 +337,16 @@ Exit status: 0 all converted, 1 no PDF files found, 2 an error.
     return parser.parse_args(argv)
 
 
-def _print_summary(total: int, success_count: int, failures: List[str]) -> None:
+def _print_summary(total: int, success_count: int, failures: List[str],
+                   unreadable_dirs: int = 0) -> None:
+    """Print the run summary. total counts every paper found plus every unreadable
+    directory, so total == successful + failed."""
     print("\n" + "="*50)
     print("CONVERSION SUMMARY")
     print("="*50)
-    print(f"Total papers:    {total}")
+    note = (f" (including {unreadable_dirs} unreadable "
+            f"director{'y' if unreadable_dirs == 1 else 'ies'})")
+    print(f"Total:           {total}{note if unreadable_dirs else ''}")
     print(f"Successful:      {success_count}")
     print(f"Failed:          {len(failures)}")
     if total:
@@ -367,7 +394,8 @@ def _run(args: argparse.Namespace) -> int:
     if args.create_index and results:
         create_index(results, args.output_dir)
 
-    _print_summary(len(pdf_files), len(results), failures)
+    # An unreadable directory is one of the failures, so it counts in the total as well.
+    _print_summary(len(pdf_files) + len(walk_errors), len(results), failures, len(walk_errors))
     return EXIT_ERROR if failures else EXIT_OK
 
 

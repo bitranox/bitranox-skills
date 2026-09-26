@@ -783,3 +783,17 @@ def test_a_store_cache_in_the_old_format_is_rewalked(tmp_path, monkeypatch):
     cache.write_text("\n".join([stamp, str(root / "bogus" / ".claude-memory")]), encoding="utf-8")
     got = G._curated_store_dirs(str(root))
     assert [Path(p).parent.name for p in got] == ["projA"]
+
+
+@pytest.mark.parametrize("self_spelling, sibling", [
+    ("/p/cur/", "/p/cur-"), ("/p/cur//", "/p/cur--"), ("/p/cur/.", "/p/cur--")])
+def test_a_trailing_separator_on_self_does_not_hide_a_colliding_sibling(home, capsys,
+                                                                        self_spelling, sibling):
+    # "/p/cur/" keyed verbatim is "-p-cur-", which is the key of the SIBLING project "/p/cur-"
+    assert sig.project_slug(self_spelling) == sig.project_slug(sibling)
+    _mem("/p/cur", "s.md", "fleet ssh self")
+    _mem(sibling, "o.md", "fleet ssh in the sibling")
+    assert G.main(["--topic", "fleet ssh access", "--self", self_spelling]) == 0
+    out = fwd(capsys.readouterr().out)
+    assert "/%s/" % sig.project_slug(sibling) in out     # the sibling's note is reported
+    assert "/-p-cur/" not in out                         # our own is not

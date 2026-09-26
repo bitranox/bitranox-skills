@@ -38,8 +38,8 @@ OWN copy - `.bak`, then `.bak.1`, `.bak.2` upward, higher number newer - so no r
 state another one recorded, and the run prints the exact path it wrote. The copy is byte-exact.
 
 Line endings are kept: a file whose every newline is CRLF is matched and edited as LF (so an LF
-anchor still matches) and written back as CRLF; any other file is edited byte for byte. The file
-must be UTF-8; a BOM is kept.
+anchor still matches) and written back as CRLF, new text with CRLF of its own included; any other
+file is edited byte for byte. The file must be UTF-8; a BOM is kept.
 
 Exit codes: 0 = the edit was applied, 1 = refused (nothing written), 2 = usage or IO error
 (unreadable or non-UTF-8 file, missing anchor argument, a write that failed).
@@ -285,6 +285,18 @@ def _write_bytes(target: Path, data: bytes, what: str) -> None:
         raise UsageError(f"{what}: {exc}") from exc
 
 
+def _back_to_crlf(before: str, after: str) -> str:
+    """The CRLF file's text again, from the LF form it was edited in.
+
+    A CR LF in `after` came from the NEW text, not from the file, whenever `before` holds none -
+    the file's own CRLFs were all turned into LF - so it is made LF first; otherwise converting
+    every LF wrote it back as CR CR LF. When `before` does hold one (the file had a CR before a
+    CRLF, a CR that is content), it is left alone, since the two can no longer be told apart.
+    """
+    lf = after if "\r\n" in before else after.replace("\r\n", "\n")
+    return lf.replace("\n", "\r\n")
+
+
 def apply_to_file(path: Path, transform, *, dry_run: bool = False, backup: bool = True):
     """Read, transform, and write the file, backing it up first when git does not track it.
 
@@ -304,7 +316,7 @@ def apply_to_file(path: Path, transform, *, dry_run: bool = False, backup: bool 
     if backup and not is_recoverable_from_git(path):
         saved = next_backup_path(path)
         _write_bytes(saved, raw, f"cannot write the backup {saved}, nothing written")
-    out = after.replace("\n", "\r\n") if crlf else after
+    out = _back_to_crlf(before, after) if crlf else after
     where = f"the pre-edit content is in {saved}" if saved else "restore it from git"
     _write_bytes(path, out.encode("utf-8"),
                  f"writing {path} failed, it may be unchanged or partly written - {where}")

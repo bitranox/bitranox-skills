@@ -571,12 +571,26 @@ class TestRepeatedHeadingInOneFile:
         report = CV.analyze([tmp_path])
         assert report.heading_groups == ()
 
-    def test_the_share_is_over_distinct_files(self, tmp_path):
+    def test_the_file_count_is_distinct_files_and_the_share_is_over_copies(self, tmp_path):
+        # a/ carries "first" AND "second": two files, three distinct (file, body) copies, and the
+        # largest variant is two of those three copies - not "100%" beside "2 variants"
         write(tmp_path / "a" / "CLAUDE.md", "## Notes\nfirst\n\n## Notes\nsecond\n")
         write(tmp_path / "b" / "CLAUDE.md", "## Notes\nfirst\n")
         group = CV.analyze([tmp_path]).heading_groups[0]
         assert group.total_members == 2
-        assert group.largest_variant_share == 1.0
+        assert group.largest_variant_share == pytest.approx(2 / 3)
+
+    def test_one_file_with_two_bodies_never_reports_two_variants_at_100_percent(self, tmp_path):
+        write(tmp_path / "a" / "CLAUDE.md", "## Notes\nfirst\n\n## Notes\nsecond\n")
+        group = CV.analyze([tmp_path], min_members=1).heading_groups[0]
+        assert (group.total_members, len(group.variants)) == (1, 2)
+        assert group.largest_variant_share == pytest.approx(0.5)
+
+    def test_the_same_body_repeated_in_one_file_is_one_copy(self, tmp_path):
+        write(tmp_path / "a" / "CLAUDE.md", "## Notes\nsame\n\n## Notes\nsame\n")
+        write(tmp_path / "b" / "CLAUDE.md", "## Notes\nother\n")
+        group = CV.analyze([tmp_path]).heading_groups[0]
+        assert group.largest_variant_share == pytest.approx(0.5)
 
 
 class TestClosingSequence:
@@ -716,4 +730,7 @@ class TestCliRobustness:
         f = write(tmp_path / "other.md", SECTION_A)
         proc = run_cli("--root", str(f), "--json")
         assert proc.returncode == 1
-        assert json.loads(proc.stdout)["data"]["files_matched"] == 0
+        payload = json.loads(proc.stdout)
+        assert payload["data"]["files_matched"] == 0
+        # the documented envelope: ok false, and no `error` - nothing failed, the answer is "no"
+        assert payload["ok"] is False and "error" not in payload

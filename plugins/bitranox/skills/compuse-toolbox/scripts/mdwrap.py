@@ -28,10 +28,11 @@ Paragraph = the maximal run of non-blank lines around the anchor, stopping at an
 thematic break (a heading directly above or below prose is its own block). It is REFUSED rather
 than reflowed when rewrapping would corrupt it: a table row, a fence line, a paragraph that sits
 inside a fenced code block, a blockquote (any line starting with '>'), a heading (ATX or setext),
-a list (the first line is an item, two or more lines start one, or one follows a lead-in line
-ending in ':'), or a Markdown hard line break (a line ending in two spaces or a backslash). A
-SINGLE continuation line starting with '- ' is the damage a previous bad wrap leaves, and is
-repaired. The paragraph's own leading indent is taken from its first line and preserved. A wrap
+a list (the first line is an item, two or more lines start one, one follows a lead-in line
+ending in ':', or one is a '* ', '+ ', '1. ' or '1) ' item), or a Markdown hard line break (a line
+ending in two spaces or a backslash). A SINGLE continuation line starting with '- ' is the damage
+a previous bad wrap leaves, and is repaired; a wrap never ends a line in a backslash, which would
+create a hard break. The paragraph's own leading indent is taken from its first line and preserved. A wrap
 that would still leave a block marker alone on a line after the repair is refused, never written.
 
 `--width` is the TOTAL line length including the paragraph's leading indent, matching how the
@@ -43,8 +44,11 @@ against a requested 98). A paragraph that renders wrong is the worse failure and
 so the overflow wins - and every over-width line is listed in `notes` so it is never hidden.
 If you need the width as an absolute guarantee, check `notes` and fix those lines by hand.
 
-The file's own line endings (LF, CRLF) and a leading BOM are kept, on every platform, and the
-write is atomic (a temp file beside it, then a rename), so a failed write leaves it untouched.
+The file's own line endings (LF, CRLF) and a leading BOM are kept, on every platform. The write
+is atomic (a temp file beside it, then a rename), so a failed write leaves it untouched - except
+for a file with more than one hard link, or one in a directory that refuses the temp file or the
+rename: that file is overwritten IN PLACE, which keeps its links and needs no directory write, and
+the JSON `write` field (and a stderr note) says "in-place" rather than "atomic".
 
 Dry-run by DEFAULT: it prints what would change and writes nothing until `--apply`. That is the
 point of the tool, so the safe direction is the default one.
@@ -199,23 +203,43 @@ def _first_line_is_a_break(out: list[str]) -> bool:
     return len(out) > 1 and bool(_THEMATIC.match(out[0].lstrip()))
 
 
+def _breaks_before(out: list[str], i: int) -> bool:
+    """True when line `i` would not continue line `i - 1` as plain paragraph text: it opens a new
+    block, or line `i - 1` ends in a backslash, which Markdown reads as a hard line break."""
+    return _starts_a_block(out[i]) or out[i - 1].endswith("\\")
+
+
 def _marker_line(out: list[str]) -> int:
     """Index of the first line CommonMark would not read as this paragraph's text, else -1."""
     if _THEMATIC.match(out[0].lstrip()):
         return 0
-    return next((i for i in range(1, len(out)) if _starts_a_block(out[i])), -1)
+    return next((i for i in range(1, len(out)) if _breaks_before(out, i)), -1)
+
+
+def _interrupts_as_a_list(line: str) -> bool:
+    """A list item CommonMark lets interrupt a paragraph: a '*' or '+' bullet, or an ordered
+    marker numbered 1 ('1.', '1)'). '2024. Then' under prose is plain continuation text."""
+    s = line.lstrip()
+    if s[:2] in ("* ", "+ "):
+        return True
+    head = s.split(" ", 1)[0]
+    return (len(s) > len(head) and head[-1:] in (".", ")") and head[:-1].isdigit()
+            and int(head[:-1]) == 1)
 
 
 def _list_refusal(block: list[str]) -> str:
     # The FIRST line decides whether this block is a list item. A SINGLE continuation line
-    # starting with '- ' is damage left by a previous bad wrap (CommonMark renders it as a bullet
-    # and splits the paragraph), and it is exactly what this tool exists to repair - refusing it
-    # made the repair impossible. Two or more such lines, or one under a lead-in ending in ':', is
-    # a real list, and flattening it into prose destroys it.
+    # starting with '- ' is damage left by a previous bad wrap (the wrap point fell before a
+    # ' - ' clause; CommonMark renders it as a bullet and splits the paragraph), and it is exactly
+    # what this tool exists to repair - refusing it made the repair impossible. Any other item a
+    # paragraph can be interrupted by ('* ', '+ ', '1. ', '1) ') is not that damage shape, so it
+    # is a real one-item list. Two or more marker lines, or one under a lead-in ending in ':', is
+    # a real list too, and flattening it into prose destroys it.
     if _starts_a_list(block[0]):
         return "paragraph is a list item - refusing to reflow it"
     items = [i for i in range(1, len(block)) if _starts_a_list(block[i])]
-    if len(items) >= 2 or (items and block[items[0] - 1].rstrip().endswith(":")):
+    if (len(items) >= 2 or (items and block[items[0] - 1].rstrip().endswith(":"))
+            or any(_interrupts_as_a_list(block[i]) for i in items)):
         return "paragraph holds a list under a lead-in line - refusing to reflow it"
     return ""
 
@@ -249,7 +273,9 @@ def _protect_dash_clauses(wrapped: list[str], indent: str) -> list[str]:
 
     A wrap point falling before a ' - ', ' # ', ' > ', ' ``` ' or ' <tag>' clause makes the
     continuation a new block, and one falling after it can leave '---' or '===' alone on a line,
-    which underlines everything above it as a heading - both silently change the document. Pull
+    which underlines everything above it as a heading; one falling after a token ending in a
+    backslash ('C:\\') turns that backslash into a hard line break - all silently change the
+    document. Pull
     such a line's first token up onto the previous line; the result is a few chars over the width
     at worst, which is strictly better than a paragraph that renders wrong. The repaired line is
     checked AGAIN, because its new first token can be a marker too ('- -'). A first line that is a
@@ -260,7 +286,7 @@ def _protect_dash_clauses(wrapped: list[str], indent: str) -> list[str]:
         _pull_up(out, 1, indent)
     i = 1
     while i < len(out):
-        if _starts_a_block(out[i]) and out[i - 1].strip():
+        if _breaks_before(out, i) and out[i - 1].strip():
             _pull_up(out, i, indent)
             continue
         i += 1
@@ -335,25 +361,52 @@ def _read(path: Path) -> tuple[str, bool]:
     return (text[1:], True) if text.startswith(_BOM) else (text, False)
 
 
-def _write_atomic(path: Path, text: str) -> None:
-    """Replace `path` with `text` exactly - no newline translation - or leave it untouched.
+def _write_in_place(real: Path, data: bytes) -> None:
+    """Overwrite `real`'s own bytes: same inode, so every hard link sees the new text."""
+    with open(real, "r+b") as handle:
+        handle.write(data)
+        handle.truncate()
+        handle.flush()
+        os.fsync(handle.fileno())
 
-    Written to a temp file beside the target and renamed over it, so a failure midway cannot
-    leave half a file. A read-only target is refused rather than silently replaced by the rename.
+
+def _write_file(path: Path, text: str, *, make_temp=tempfile.mkstemp) -> str:
+    """Replace `path` with `text` exactly - no newline translation. Returns how it was written.
+
+    "atomic": written to a temp file beside the target and renamed over it, so a failure midway
+    cannot leave half a file. "in-place": the target's own bytes are overwritten, which is not
+    atomic but is the only write that keeps the file what it was - used when the target has more
+    than one hard link (a rename would detach this name from the others) and when the directory
+    refuses the temp file or the rename although the file itself is writable. A read-only target
+    is refused either way rather than silently replaced. `make_temp` is the temp-file seam.
     """
     real = Path(os.path.realpath(path))
     if not os.access(real, os.W_OK):
         raise PermissionError(errno.EACCES, "file is not writable", str(real))
-    fd, tmp = tempfile.mkstemp(dir=str(real.parent), prefix="." + real.name + ".", suffix=".tmp")
+    data = text.encode("utf-8")
+    if real.stat().st_nlink > 1:
+        _write_in_place(real, data)
+        return "in-place"
     try:
-        with os.fdopen(fd, "w", encoding="utf-8", newline="") as handle:
-            handle.write(text)
+        fd, tmp = make_temp(dir=str(real.parent), prefix="." + real.name + ".", suffix=".tmp")
+    except PermissionError:
+        _write_in_place(real, data)
+        return "in-place"
+    try:
+        with os.fdopen(fd, "wb") as handle:
+            handle.write(data)
         shutil.copymode(real, tmp)
         os.replace(tmp, real)
+    except PermissionError:
+        with contextlib.suppress(OSError):
+            os.unlink(tmp)
+        _write_in_place(real, data)
+        return "in-place"
     except BaseException:
         with contextlib.suppress(OSError):
             os.unlink(tmp)
         raise
+    return "atomic"
 
 
 def _parse(argv):
@@ -366,7 +419,7 @@ def _parse(argv):
     return ap.parse_args(argv)
 
 
-def _payload(args, r: Result, applied: bool, error: str = "") -> dict:
+def _payload(args, r: Result, write: str, error: str = "") -> dict:
     reason = error or r.reason
     return {
         "ok": r.ok and not error, "command": "mdwrap",
@@ -374,7 +427,7 @@ def _payload(args, r: Result, applied: bool, error: str = "") -> dict:
             "file": str(args.file), "reason": reason,
             "start_line": r.start_line, "end_line": r.end_line,
             "line_delta": r.line_delta, "changed": r.changed,
-            "applied": applied, "notes": r.notes,
+            "applied": bool(write), "write": write, "notes": r.notes,
         },
         "skipped": [] if r.ok and not error else [reason],
     }
@@ -388,16 +441,15 @@ def _run(args) -> int:
         return 2
 
     r = rewrap(src, args.anchor, args.width)
-    applied, error = False, ""
+    write, error = "", ""
     if r.ok and r.changed and args.apply:
         try:
-            _write_atomic(args.file, (_BOM if bom else "") + r.text)
-            applied = True
+            write = _write_file(args.file, (_BOM if bom else "") + r.text)
         except OSError as exc:
             error = f"write failed: {exc}"
 
     if args.json:
-        print(json.dumps(_payload(args, r, applied, error), indent=2))
+        print(json.dumps(_payload(args, r, write, error), indent=2))
     if error:
         print(f"error: {error}", file=sys.stderr)
         return 2
@@ -406,12 +458,15 @@ def _run(args) -> int:
     if not r.ok:
         print(f"refused: {r.reason}", file=sys.stderr)
         return 1
-    verb = "rewrote" if applied else ("would rewrite" if r.changed else "unchanged")
+    verb = "rewrote" if write else ("would rewrite" if r.changed else "unchanged")
     span = f"lines {r.start_line}-{r.end_line}"
     print(f"{verb} {span} ({r.end_line - r.start_line + 1} -> "
           f"{r.end_line - r.start_line + 1 + r.line_delta} lines, delta {r.line_delta:+d})")
     for n in r.notes:
         print(f"  note: {n}", file=sys.stderr)
+    if write == "in-place":
+        print("  note: written in place, not atomically (a hard-linked file, or a directory that "
+              "refused the temp file)", file=sys.stderr)
     return 0
 
 

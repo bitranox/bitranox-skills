@@ -383,18 +383,24 @@ def audit(
     )
 
 
-def _markdown_files(root: Path, warn) -> list[Path]:
+def _markdown_files(root: Path, warn, *, normcase=os.path.normcase) -> list[Path]:
     """Every *.md under `root`, sorted, with an unreadable directory reported.
 
     os.walk with onerror rather than Path.rglob: rglob skips a directory it cannot list without a
     word, and a document missing from the corpus is a hole in a "clean" verdict nobody would see.
+
+    The suffix is matched the way the platform's filesystem matches names, through `normcase`:
+    case-insensitively on Windows, where an agent opening note.md reads NOTE.MD, and exactly on
+    POSIX, where it does not.
     """
     def report(exc: OSError) -> None:
         warn(f"unreadable directory, skipping: {exc.filename}: {exc.strerror}")
 
+    suffix = normcase(".md")
     found: list[Path] = []
     for dirpath, _dirnames, filenames in os.walk(root, onerror=report):
-        found.extend(Path(dirpath) / name for name in filenames if name.endswith(".md"))
+        found.extend(Path(dirpath) / name for name in filenames
+                     if normcase(name).endswith(suffix))
     return sorted(found)
 
 

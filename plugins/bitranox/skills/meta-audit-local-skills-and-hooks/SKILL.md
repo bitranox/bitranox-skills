@@ -51,7 +51,9 @@ silently drifts. Report it and stop.
 ```
 
 Anything a script can decide, a script decides: settings files Claude Code cannot load
-(`settings-unparseable` - every hook in one is dead), registrations that name a missing file, hook
+(`settings-unparseable` - every hook in one is dead), a settings file that opens with a UTF-8
+byte-order mark (`settings-bom` - the audit reads through it, but whether Claude Code does is not
+measured, so re-save it without one), registrations that name a missing file, hook
 scripts nothing registers, malformed tombstones, test dirs that cannot collect, skills shipping a
 script with no test, front matter whose name disagrees with its directory or whose description is
 not trigger-first, a local skill duplicating a shipped one, a local hook or skill script the

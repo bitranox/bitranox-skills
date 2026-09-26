@@ -154,13 +154,17 @@ def load_named_target(name: str, *, path: Path | None = None) -> Target:
     Named targets live in the USER's config, never in this repo: the tool ships publicly and must
     carry no host names. An ini file rather than toml so this works on 3.10, where tomllib is absent.
 
-    Interpolation is off: an ssh prefix legitimately carries `%` (ControlPath=~/.ssh/cm-%r@%h:%p),
-    and ConfigParser's default would turn that into a traceback instead of passing it through.
+    A value is read in whichever `%` dialect it is written in. An ssh prefix legitimately carries
+    raw `%` tokens (ControlPath=~/.ssh/cm-%r@%h:%p), which ConfigParser's default interpolation
+    rejects with a traceback, so such a value is taken as written. A value that IS valid under
+    that interpolation - every `%` doubled as `%%` or a `%(key)s` reference - is read through it,
+    because it was written for it: taken raw, `%%r` reached ssh as a literal percent and the
+    ControlPath silently named a different socket.
     """
     path = path or config_file()
     if not path.exists():
         raise PfsenseError(f"no target file at {path}; use --host, or create a [{name}] section there")
-    parser = configparser.ConfigParser(interpolation=None)
+    parser = configparser.ConfigParser()
     try:
         parser.read(path, encoding="utf-8-sig")
     except configparser.Error as exc:
@@ -169,15 +173,30 @@ def load_named_target(name: str, *, path: Path | None = None) -> Target:
         known = ", ".join(s for s in parser.sections()) or "none"
         raise PfsenseError(f"no [{name}] section in {path} (defined: {known})")
     section = parser[name]
-    host = section.get("host", "").strip()
+    host = _ini_value(section, "host", "").strip()
     if not host:
         raise PfsenseError(f"[{name}] in {path} has no host=")
+    timeout = _ini_value(section, "timeout", "30").strip()
+    try:
+        timeout_seconds = int(timeout)
+    except ValueError as exc:
+        raise PfsenseError(f"[{name}] in {path} has timeout={timeout!r}, not a whole number") from exc
     return Target(
         host=host,
-        user=section.get("user", "admin").strip(),
-        ssh=section.get("ssh", "ssh").strip(),
-        timeout=section.getint("timeout", 30),
+        user=_ini_value(section, "user", "admin").strip(),
+        ssh=_ini_value(section, "ssh", "ssh").strip(),
+        timeout=timeout_seconds,
     )
+
+
+def _ini_value(section: configparser.SectionProxy, key: str, default: str) -> str:
+    """One ini value, interpolated when it is valid interpolation syntax and raw otherwise."""
+    if key not in section:
+        return default
+    try:
+        return section.get(key, fallback=default)
+    except configparser.InterpolationError:
+        return section.get(key, raw=True, fallback=default)
 
 
 def _split_windows(text: str) -> list[str]:
@@ -320,6 +339,53 @@ def parse_alerts(text: str, ip: str | None = None) -> list[Alert]:
         if ip is None or ip in (alert.src, alert.dst):
             alerts.append(alert)
     return alerts
+
+
+_ALERT_STAMP_RX = re.compile(
+    r"^(\d{2})/(\d{2})(?:/(\d{2}))?-(\d{2}):(\d{2}):(\d{2})(?:\.(\d{1,6}))?$"
+)
+
+
+def alert_moment(timestamp: str, *, now: datetime) -> datetime | None:
+    """When a snort alert stamp happened, or None when it is not a snort stamp.
+
+    Snort writes `MM/DD-HH:MM:SS.ffffff`, with no year unless it runs with `-y`
+    (`MM/DD/YY-...`). A year it wrote is read. A missing one is inferred the way syslog readers
+    do: the most recent year that does not put the stamp after `now`, because an alert cannot
+    come from the future. Compared as text, a December alert outranked every January alert
+    written after it.
+    """
+    match = _ALERT_STAMP_RX.match(timestamp.strip())
+    if match is None:
+        return None
+    month, day, year, hour, minute, second, fraction = match.groups()
+    parts = (int(month), int(day), int(hour), int(minute), int(second),
+             int((fraction or "0").ljust(6, "0")))
+    try:
+        if year is not None:
+            return datetime(2000 + int(year), *parts)
+        moment = _in_year(now.year, parts)
+        if moment is not None and moment <= now:
+            return moment
+        return _in_year(now.year - 1, parts)
+    except ValueError:
+        return None  # 13/40, or a 02/29 in a year without one
+
+
+def _in_year(year: int, parts: tuple[int, ...]) -> datetime | None:
+    try:
+        return datetime(year, *parts)
+    except ValueError:
+        return None  # 02/29 in a non-leap year: the other candidate year decides
+
+
+def latest_alert(alerts: list[Alert], *, now: datetime) -> Alert:
+    """The most recent alert. A stamp that cannot be read ranks below every readable one."""
+    def key(alert: Alert) -> tuple[int, datetime]:
+        moment = alert_moment(alert.timestamp, now=now)
+        return (0, datetime.min) if moment is None else (1, moment)
+
+    return max(alerts, key=key)
 
 
 def instance_dir_from_ps(ps_text: str) -> str | None:
@@ -1108,6 +1174,7 @@ def cmd_snort_why(args) -> int:
     if rc != 0 and not out:
         raise PfsenseError(f"could not read the snort alert logs on {target.host}: {err.strip()[:200]}")
     found = {ip: [asdict(a) for a in parse_alerts(out, ip=ip)] for ip in args.ips}
+    now = datetime.now()  # the stamps are the firewall's local time and carry no year
 
     lines = []
     for ip, alerts in found.items():
@@ -1115,10 +1182,9 @@ def cmd_snort_why(args) -> int:
             lines.append(f"  {ip}: no alert names this IP (the block may come from a reputation feed)")
             continue
         sids = sorted({a["sid"] for a in alerts})
-        # The glob reads the current file BEFORE the rotated ones, so the last line is the oldest.
-        # Snort's MM/DD-HH:MM:SS stamp sorts as text in time order (it carries no year, so a
-        # December alert still outranks a January one across a year boundary).
-        latest = max(alerts, key=lambda a: a["timestamp"])
+        # The glob reads the current file BEFORE the rotated ones, so file order is not time
+        # order: pick by the stamp, with the year the stamp leaves out inferred from today.
+        latest = asdict(latest_alert([Alert(**a) for a in alerts], now=now))
         lines.append(f"  {ip}: {len(alerts)} alert(s), SID(s) {', '.join(sids)}")
         lines.append(f"      latest: {latest['timestamp']}  {latest['message']}")
     any_found = any(found.values())

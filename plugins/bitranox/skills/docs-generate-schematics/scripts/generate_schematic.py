@@ -112,12 +112,13 @@ unavailable, 2 usage error); 1 when the AI script cannot be found or launched.
     
     # Check for API key
     api_key = os.getenv("OPENROUTER_API_KEY")
+    # Errors go to stderr: stdout carries the AI script's progress lines.
     if not api_key:
-        print("Error: OPENROUTER_API_KEY environment variable not set")
-        print("\nFor AI generation, you need an OpenRouter API key.")
-        print("Get one at: https://openrouter.ai/keys")
-        print("\nSet it with:")
-        print("  export OPENROUTER_API_KEY='your_api_key'")
+        print("Error: OPENROUTER_API_KEY environment variable not set", file=sys.stderr)
+        print("\nFor AI generation, you need an OpenRouter API key.", file=sys.stderr)
+        print("Get one at: https://openrouter.ai/keys", file=sys.stderr)
+        print("\nSet it with:", file=sys.stderr)
+        print("  export OPENROUTER_API_KEY='your_api_key'", file=sys.stderr)
         sys.exit(1)
     
     # Find AI generation script
@@ -125,7 +126,7 @@ unavailable, 2 usage error); 1 when the AI script cannot be found or launched.
     ai_script = script_dir / "generate_schematic_ai.py"
     
     if not ai_script.exists():
-        print(f"Error: AI generation script not found: {ai_script}")
+        print(f"Error: AI generation script not found: {ai_script}", file=sys.stderr)
         sys.exit(1)
     
     # Build command. The output travels as --output=VALUE and the prompt after "--", so a
@@ -151,7 +152,7 @@ unavailable, 2 usage error); 1 when the AI script cannot be found or launched.
         result = subprocess.run(cmd, check=False, env=env)
         sys.exit(result.returncode)
     except Exception as e:
-        print(f"Error executing AI generation: {e}")
+        print(f"Error executing AI generation: {e}", file=sys.stderr)
         sys.exit(1)
 
 

@@ -628,6 +628,25 @@ def test_a_field_carried_by_only_some_calls_is_not_refused(tmp_path):
     assert report["commands"] == 1 and report["calls_without_field"] == 1
 
 
+def test_the_text_report_says_how_many_calls_lacked_the_field(tmp_path, capsys):
+    # The JSON report carried calls_without_field while the text one printed only "commands: 1",
+    # so a reader of the default output could not tell the replay covered part of the tool's calls.
+    no_field = {"type": "assistant", "cwd": "/r",
+                "message": {"content": [{"type": "tool_use", "id": "n", "name": "Bash",
+                                         "input": {"description": "x"}}]}}
+    rc = G.main(["--module", _module(tmp_path, FIRE_ON_FIRE), "--field", "command",
+                 "--root", _corpus(tmp_path, [no_field, _use("t1", "fire")])])
+    out = capsys.readouterr().out
+    assert rc == 0
+    assert "1 Bash call(s) lacked the input field 'command' and were not replayed" in out
+
+
+def test_the_text_report_is_silent_about_the_field_when_every_call_has_it(tmp_path, capsys):
+    G.main(["--module", _module(tmp_path, FIRE_ON_FIRE),
+            "--root", _corpus(tmp_path, [_use("t1", "fire")])])
+    assert "lacked the input field" not in capsys.readouterr().out
+
+
 # --- the exit-code contract end to end --------------------------------------------------------------
 
 def test_never_fired_exits_1_and_says_so(tmp_path, capsys):

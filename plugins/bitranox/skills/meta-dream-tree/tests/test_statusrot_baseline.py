@@ -221,6 +221,20 @@ class TestASlugAtTwoLevels:
         assert _scan_json(sub)["new_or_changed"] == ["s"]
 
 
+    def test_a_scoped_clear_keeps_the_verdict_on_the_copy_it_could_not_see(self, tmp_path: Path):
+        """Re-clearing ONE level after an edit there must not forget the other level's copy: a
+        record rebuilt from the in-scope digests alone dropped it, so the untouched copy read as
+        RE-SURFACED on the next full scan and a sound verdict had to be made twice."""
+        sub = _nested(tmp_path)
+        assert _run("clear", "--chain", str(sub)).returncode == 0
+        top = tmp_path / "CLAUDE.local.md"
+        top.write_text("# Memory index\n\n## Memory index\n"
+                       + SHIPPED_EDITED.replace("alpha", "s") + "\n", encoding="utf-8")
+        assert _scan_json(sub)["new_or_changed"] == ["s"], "control: the edit is seen"
+        assert _run("clear", "--level", str(top)).returncode == 0
+        data = _scan_json(sub)
+        assert data["new_or_changed"] == [], data["pending_triage"]
+
 class TestAMalformedBaseline:
     @pytest.mark.parametrize("payload", ["[]", '{"cleared": {"alpha": "2026-01-01"}}',
                                          '{"cleared": []}'])

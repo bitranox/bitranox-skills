@@ -1,4 +1,7 @@
-"""Tests for migrate_memory.py (Phase 2: native -> curated migration). All content ASCII."""
+"""Tests for migrate_memory.py (Phase 2: native -> curated migration).
+
+The source is ASCII only; non-ASCII test data is spelled as escapes.
+"""
 
 import sys
 import pytest
@@ -20,13 +23,15 @@ def _encode_slug(path):
 
 
 @pytest.fixture
-def env(tmp_path, monkeypatch):
+def env(tmp_path, short_root, monkeypatch):
+    """(root for project dirs, fake home). Project dirs go under `short_root` (conftest): their
+    path becomes a slug capped at 200 characters, which a long TMPDIR under tmp_path overran."""
     home = tmp_path / "home"
     (home / ".claude").mkdir(parents=True)
     monkeypatch.setenv("HOME", str(home))
     monkeypatch.setenv("USERPROFILE", str(home))
-    monkeypatch.setattr(M, "_EXCLUDE_PREFIXES", ())   # pytest tmp_path is under /tmp; don't exclude it here
-    return tmp_path, home
+    monkeypatch.setattr(M, "_EXCLUDE_PREFIXES", ())   # both roots sit under the temp dir; don't exclude it here
+    return short_root, home
 
 
 def test_is_excluded():
@@ -240,25 +245,25 @@ def test_slug_root_rejects_a_slug_that_is_neither():
     assert M.slug_root_and_tokens("home-bob") == (None, [])
 
 
-def test_resolve_slug_decodes_a_component_holding_a_space(tmp_path):
+def test_resolve_slug_decodes_a_component_holding_a_space(short_root):
     """The old decoder only tried '.', '-' and '_' as separators, so any other punctuation
     was undecodable - a path with a space resolved to nothing at all."""
-    proj = tmp_path / "grp" / "my proj"
+    proj = short_root / "grp" / "my proj"
     proj.mkdir(parents=True)
     got = M.resolve_slug(_encode(proj))
     assert str(proj.resolve()) in got, got
 
 
-def test_resolve_slug_decodes_a_component_holding_a_plus(tmp_path):
-    proj = tmp_path / "grp" / "c++lib"
+def test_resolve_slug_decodes_a_component_holding_a_plus(short_root):
+    proj = short_root / "grp" / "c++lib"
     proj.mkdir(parents=True)
     got = M.resolve_slug(_encode(proj))
     assert str(proj.resolve()) in got, got
 
 
-def test_resolve_slug_still_decodes_dot_and_underscore(tmp_path):
+def test_resolve_slug_still_decodes_dot_and_underscore(short_root):
     """The separators the old decoder did handle must keep working."""
-    proj = tmp_path / "grp" / "my.proj_dir"
+    proj = short_root / "grp" / "my.proj_dir"
     proj.mkdir(parents=True)
     got = M.resolve_slug(_encode(proj))
     assert str(proj.resolve()) in got, got
@@ -320,6 +325,38 @@ def test_a_slug_taken_by_a_different_existing_fact_is_suffixed_not_overwritten(e
     bodies = _placed_bodies(proj)
     assert "Earlier body." in bodies["notes"]
     assert any("New body." in b for s, b in bodies.items() if s != "notes")
+
+
+def test_a_curated_fact_that_merely_contains_the_native_body_is_not_overwritten(env):
+    """A slug holding a LONGER fact that contains the native body is a different fact, not a
+    resumed run: reusing it overwrote the extra text and the hook, and still exited 0."""
+    proj, slug, home = _project(env, "repoSuperset")
+    ME.add_or_update_entry(str(proj), "Notes", "the curated hook", slug="notes",
+                           body="Use the gitea key.\n\nPlus the curated detail nobody else has.")
+    _raw_store(home, slug, {"notes.md": "---\nname: notes\ndescription: native hook\n---\n"
+                                        "Use the gitea key.\n"})
+    assert M.main(["--apply", "--slug=" + slug]) == 0
+    bodies = _placed_bodies(proj)
+    assert "Plus the curated detail nobody else has." in bodies["notes"]
+    assert "description: the curated hook" in bodies["notes"]
+    assert any("Use the gitea key." in b for s, b in bodies.items() if s != "notes")
+
+
+def test_a_resumed_run_reuses_its_own_placement_and_places_no_duplicate(env):
+    """A crash between the write and the receipt leaves the fact placed but not recorded. The
+    re-run must recognise its own earlier placement - also one it had to suffix - or every
+    resume adds another copy."""
+    proj, slug, home = _project(env, "repoResume")
+    ME.add_or_update_entry(str(proj), "Notes", "an earlier fact", body="Earlier body.",
+                           slug="notes")
+    _raw_store(home, slug, {"notes.md": "---\nname: notes\ndescription: d\n---\nNew body.\n",
+                            "other.md": "---\nname: other\ndescription: o\n---\nOther.\n"})
+    M.migrate_store(slug, dry_run=False)
+    first = _placed_bodies(proj)
+    M._receipt_path(str(proj)).unlink()                    # the crash lost the receipt
+    rep = M.migrate_store(slug, dry_run=False)
+    assert rep["placed"] == 2 and not rep["failed"]
+    assert _placed_bodies(proj) == first
 
 
 def test_a_nested_metadata_type_is_read():

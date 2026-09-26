@@ -49,6 +49,7 @@ crashed).
 from __future__ import annotations
 
 import argparse
+import itertools
 import json
 import math
 import re
@@ -227,7 +228,7 @@ def _named(runs: Iterable[dict[str, object]], field: str) -> str:
 def wait_for(
     fetch: Callable[[], list[dict[str, object]]],
     *,
-    deadline_polls: int,
+    deadline_polls: int | None = None,
     sleep: Callable[[float], None],
     interval_s: float = 30.0,
     appear_grace_s: float = 120.0,
@@ -289,7 +290,10 @@ def wait_for(
 
     Args:
         fetch: Returns the run rows for the sha under test.
-        deadline_polls: How many polls before giving up on runs that are still going.
+        deadline_polls: How many polls before giving up on runs that are still going. ``None``
+            sets no count, leaving ``deadline_s`` to end the wait - what the command line does,
+            since a count derived as timeout / interval ends early whenever an iteration is
+            shorter than the interval (a settle, or a timeout under two intervals).
         sleep: What to wait with between polls.
         interval_s: Seconds handed to ``sleep``.
         appear_grace_s: How long to keep tolerating an EMPTY match before reporting ``no-runs``.
@@ -298,8 +302,9 @@ def wait_for(
         settle_s: How long to wait before CONFIRMING an all-green result, so a run created after
             the first all-terminal poll is still counted. ``0`` returns on the first one.
         report: Where a per-poll progress line goes.
-        deadline_s: A wall-clock bound on the whole wait, checked after every poll. ``None``
-            leaves only ``deadline_polls``.
+        deadline_s: A wall-clock bound on the whole wait, checked after every poll. A sleep is
+            cut to the time left, so the last poll lands on the deadline instead of an interval
+            past it. ``None`` leaves only ``deadline_polls``.
         clock: Returns the current time in seconds; see above for the default.
 
     Returns:
@@ -307,7 +312,11 @@ def wait_for(
 
     Raises:
         GhUnavailable: `gh` cannot be run here; no budget can fix that.
+        ValueError: neither ``deadline_polls`` nor ``deadline_s`` is given, so nothing would end
+            a wait on runs that never finish.
     """
+    if deadline_polls is None and deadline_s is None:
+        raise ValueError("wait_for needs deadline_polls or deadline_s, or it can never end")
     timer = _Timer(sleep, clock)
     started = timer.now()
     empty_since: float | None = None
@@ -319,11 +328,19 @@ def wait_for(
     last_success: Verdict | None = None
 
     def may_poll_again(poll: int) -> bool:
-        if poll + 1 >= deadline_polls:
+        if deadline_polls is not None and poll + 1 >= deadline_polls:
             return False
         return deadline_s is None or timer.now() - started < deadline_s
 
-    for poll in range(deadline_polls):
+    def pause(seconds: float) -> None:
+        if deadline_s is not None:
+            seconds = min(seconds, max(0.0, deadline_s - (timer.now() - started)))
+        timer.sleep(seconds)
+
+    def label(poll: int) -> str:
+        return f"poll {poll + 1}" + ("" if deadline_polls is None else f"/{deadline_polls}")
+
+    for poll in itertools.count() if deadline_polls is None else range(deadline_polls):
         try:
             rows = fetch()
         except GhFailed as exc:
@@ -332,10 +349,10 @@ def wait_for(
             error_since = timer.now() if error_since is None else error_since
             if timer.now() - error_since >= error_grace_s:
                 return _gh_gave_up(errors_seen, last_error)
-            report(f"poll {poll + 1}/{deadline_polls}: gh failed, retrying: {last_error}")
+            report(f"{label(poll)}: gh failed, retrying: {last_error}")
             if not may_poll_again(poll):
                 break
-            timer.sleep(interval_s)
+            pause(interval_s)
             continue
         errors_seen = 0
         error_since = None
@@ -345,19 +362,19 @@ def wait_for(
             empty_since = timer.now() if empty_since is None else empty_since
             if timer.now() - empty_since >= appear_grace_s:
                 return current
-            report(f"poll {poll + 1}/{deadline_polls}: no runs yet for that sha")
+            report(f"{label(poll)}: no runs yet for that sha")
         elif current.state == "success":
             empty_since = None
             last_success = current
             seen = frozenset(_run_key(r) for r in rows)
             if settle_s <= 0 or settled == seen:
                 return current
-            report(f"poll {poll + 1}/{deadline_polls}: {current.summary}; confirming no run for "
+            report(f"{label(poll)}: {current.summary}; confirming no run for "
                    f"this sha is still being created")
             settled = seen
             if not may_poll_again(poll):
                 break
-            timer.sleep(settle_s)
+            pause(settle_s)
             continue
         elif current.state != "pending":
             return current
@@ -365,10 +382,10 @@ def wait_for(
             empty_since = None
             settled = None
             last_success = None
-            report(f"poll {poll + 1}/{deadline_polls}: {current.summary}")
+            report(f"{label(poll)}: {current.summary}")
         if not may_poll_again(poll):
             break
-        timer.sleep(interval_s)
+        pause(interval_s)
     # The deadline, reported from what the last ANSWERED poll saw. Re-fetching here to describe
     # the timeout cost an extra request that could itself fail, turning a plain timeout into an
     # error about the API - a report naming the wrong system entirely.
@@ -569,7 +586,6 @@ def _run(args: argparse.Namespace) -> int:
             f"will end in 'no-runs'. Derive it in the same command: --sha $(git rev-parse HEAD).",
             file=sys.stderr,
         )
-    polls = max(1, int(args.timeout // max(args.interval, 1.0)))
     started = time.monotonic()
 
     def fetch() -> list[dict[str, object]]:
@@ -582,7 +598,6 @@ def _run(args: argparse.Namespace) -> int:
     try:
         result = wait_for(
             fetch,
-            deadline_polls=polls,
             sleep=time.sleep,
             interval_s=args.interval,
             appear_grace_s=args.appear_grace,

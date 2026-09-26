@@ -11,6 +11,7 @@ The load-bearing properties, each one a fault that has actually shipped:
 
 Addresses are RFC 5737 documentation ranges throughout.
 """
+import datetime
 import os
 import pathlib
 import json
@@ -756,6 +757,38 @@ def test_a_percent_in_the_ini_ssh_line_is_taken_literally(tmp_path):
     assert "ControlPath=~/.ssh/cm-%r@%h:%p" in fake.calls[0]["argv"]
 
 
+def _named_ssh(tmp_path, ssh_line: str) -> str:
+    ini = tmp_path / "pfsense.ini"
+    ini.write_text(f"[home]\nhost = 192.0.2.1\nport = 2222\nssh = {ssh_line}\n", encoding="utf-8")
+    return P.load_named_target("home", path=ini).ssh
+
+
+def test_an_ini_that_escapes_its_percents_still_means_a_single_percent(tmp_path):
+    """An ini written for ConfigParser's default interpolation doubles every % (`%%r`). Read raw,
+    that reached ssh as `%%r`, which ssh reads as a literal percent: the ControlPath silently
+    changed to a different socket instead of failing."""
+    assert _named_ssh(tmp_path, "ssh -o ControlPath=~/.ssh/cm-%%r@%%h:%%p") == (
+        "ssh -o ControlPath=~/.ssh/cm-%r@%h:%p"
+    )
+
+
+@pytest.mark.parametrize(
+    "line",
+    [
+        "ssh -o ControlPath=~/.ssh/cm-%r@%h:%p",  # raw ssh tokens: the case interpolation broke
+        "ssh -o ControlPath=~/.ssh/cm-%%r@%h:%p",  # mixed: not valid escaping, so taken as written
+        "ssh -o ControlPath=%(missing)s",  # a reference to nothing: taken as written
+    ],
+)
+def test_an_ini_value_that_is_not_valid_escaping_is_taken_literally(tmp_path, line):
+    assert _named_ssh(tmp_path, line) == line
+
+
+def test_an_ini_reference_to_another_key_still_resolves(tmp_path):
+    """The escaped dialect also allowed `%(key)s`; an ini relying on it keeps working."""
+    assert _named_ssh(tmp_path, "ssh -p %(port)s") == "ssh -p 2222"
+
+
 def test_a_malformed_ini_is_a_typed_error_not_a_traceback(tmp_path, capsys):
     ini = tmp_path / "home" / "pfsense.ini"
     ini.parent.mkdir(parents=True)
@@ -922,6 +955,37 @@ def test_snort_why_labels_the_newest_alert_latest_whatever_the_file_order(capsys
     fake = FakeRun([("/var/log/snort", (0, ALERT_NEW + ALERT_OLD, ""))])
     assert P.main(["--host", "192.0.2.1", "snort", "why", "198.51.100.9"], run=fake) == 0
     assert "latest: 08/02-10:00:00.000000  NEW alert" in capsys.readouterr().out
+
+
+def _alert(stamp: str, message: str) -> P.Alert:
+    return P.Alert(timestamp=stamp, sid="1", message=message, src="192.0.2.7", dst="198.51.100.9")
+
+
+def test_latest_alert_crosses_a_year_boundary():
+    """Snort's MM/DD stamp carries no year, so as TEXT a December alert outranks the January one
+    written after it. Each stamp belongs to the most recent year that does not put it in the
+    future."""
+    alerts = [_alert("01/02-08:00:00.000000", "january"), _alert("12/31-23:00:00.000000", "december")]
+    now = datetime.datetime(2027, 1, 3, 12, 0, 0)
+    assert P.latest_alert(alerts, now=now).message == "january"
+
+
+def test_latest_alert_within_one_year_is_plain_time_order():
+    """Control: away from the boundary the later stamp is still the latest, and a December alert
+    seen in December is this year's, not last year's."""
+    alerts = [_alert("12/01-08:00:00.000000", "first"), _alert("12/02-08:00:00.000000", "second")]
+    assert P.latest_alert(alerts, now=datetime.datetime(2026, 12, 5)).message == "second"
+
+
+def test_latest_alert_honours_a_year_when_snort_logs_one():
+    """`snort -y` writes MM/DD/YY: the year is then read, never inferred."""
+    alerts = [_alert("12/31/25-23:00:00.000000", "old"), _alert("01/02/26-08:00:00.000000", "new")]
+    assert P.latest_alert(alerts, now=datetime.datetime(2026, 6, 1)).message == "new"
+
+
+def test_latest_alert_puts_an_unparseable_stamp_last():
+    alerts = [_alert("garbage", "bad"), _alert("03/04-05:06:07.000000", "good")]
+    assert P.latest_alert(alerts, now=datetime.datetime(2026, 6, 1)).message == "good"
 
 
 def test_snort_why_with_no_alert_for_the_ip_is_no():

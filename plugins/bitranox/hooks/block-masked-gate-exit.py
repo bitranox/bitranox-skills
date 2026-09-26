@@ -21,6 +21,11 @@ A pipeline whose status is handled correctly is never blocked: `set -o pipefail`
 and any `PIPESTATUS` reference are honoured as the fix and exit clean, as does
 running the gate bare (no pipe) or ending the pipeline with the gate itself.
 
+A BACKGROUNDED gate (`run_in_background`) is blocked too when the task's exit code will not be
+the gate's own: something runs after it (`; tail`, `&& echo`, `| tee`, a newline), a trailing `&`
+detaches it, or it is a `gh run watch` without --exit-status. A gate backgrounded alone, and any
+gate run through gate.py, is allowed. gate.py launched under `uv run` gets an advisory.
+
 Pure standard library: no jq, no shell. Reads the PreToolUse event JSON on stdin.
 Exit 2 blocks the call and shows stderr to the model; every other path (including
 any error) exits 0, so a broken guard never wedges a turn.
@@ -70,8 +75,21 @@ BACKGROUND_GATE = re.compile(
     r"|" + GATE.pattern
 )
 
-# The jig that returns the GATE's own status and can chain the follow-up itself.
-JIG = re.compile(r"\bgate\.py\b")
+# The jig that returns the GATE's own status and can chain the follow-up itself. The file NAME
+# `gate.py`, never a longer name ending in it: `\b` sits between `-` and `g`, so a bare `\bgate`
+# read `hooks/repo-gate.py` (and `test_gate.py` is kept out by `_` being a word character).
+_JIG_NAME = r"(?<![\w.-])gate\.py\b"
+JIG = re.compile(_JIG_NAME)
+
+# The jig launched under `uv run`, which it asks never to be (its LAUNCH_WITH is python3).
+_JIG_UNDER_UV = re.compile(r"\buv\s+run\b[^\n;&|]*?" + _JIG_NAME)
+
+# `gh run watch` exits 0 whatever the run concluded unless it is told --exit-status, so its OWN
+# status is no verdict either, even with nothing after it.
+_WATCH_WITHOUT_VERDICT = re.compile(r"\bgh\s+run\s+watch\b(?![^\n;&|]*--exit-status\b)")
+
+# A backslash-newline continues the SAME command; it is not the newline that ends a statement.
+_LINE_CONTINUATION = re.compile(r"\\\r?\n")
 
 # How the block tells a reader to launch that jig: the plain interpreter gate.py's docstring
 # asks for, never `uv run`. `python` on Windows, where `python3` is usually the Store stub.
@@ -108,7 +126,39 @@ def backgrounded_gate_without_the_jig(command: str, *, background: object) -> st
     if JIG.search(command):
         return None
     found = BACKGROUND_GATE.search(command)
-    return found.group(0) if found else None
+    if found is None:
+        return None
+    return found.group(0) if gate_status_is_not_the_tasks(command) else None
+
+
+def gate_status_is_not_the_tasks(command: str, tool_name: str = "Bash") -> bool:
+    """True when the task's exit code would NOT be the gate's own verdict.
+
+    That is so when anything runs after the FIRST gate - `; tail`, `&& echo`, `| tee`, `|| true`,
+    a second gate on a new line - or a trailing `&` makes the task itself exit at once, and when
+    the gate is a `gh run watch` without --exit-status. A LONE gate (redirected, prefixed by a
+    `cd DIR &&`, its argument built by a `$(...)`) is not masked: its status is the task's, which
+    is exactly what the completion notice reports, so blocking it refused the correct form.
+
+    Read on the command with heredoc bodies, quoted text, substitutions and comments masked, so a
+    `;` inside `--sha "$(a; b)"` or a comment is not a statement. A gate visible ONLY in such a
+    region (`bash -c "make test; tail x"`) cannot be analysed here and still counts as masked -
+    the conservative direction for a guard whose miss is a believed false PASS.
+    """
+    joined = _LINE_CONTINUATION.sub("  ", strip_heredoc_bodies(command))
+    text = mask_data_regions(joined, tool_name=tool_name)
+    first = BACKGROUND_GATE.search(text)
+    if first is None:
+        return True
+    if _WATCH_WITHOUT_VERDICT.match(text, first.start()):
+        return True
+    rest = text[first.end():]
+    if "|" in rest:
+        return True
+    for sep in LIST_SEP.finditer(rest):
+        if sep.group(0) == "&" or rest[sep.end():].strip():
+            return True
+    return False
 
 # Split into statements on shell_text's list separators (; && || & and newlines), trimming the
 # whitespace around each. A pipeline stays one statement: whether it masks a gate is the question.
@@ -192,19 +242,30 @@ def main() -> int:
     if not cmd:
         return 0
 
+    # Advisories, emitted as ONE additionalContext: Claude Code reads a single JSON document from
+    # a hook's stdout, so two written separately would be neither.
+    advisories = []
     # The verification shape, which needs no recognised gate: a pipe into a truncating filter and
     # then a read of `$?`. Advisory rather than a block - measuring an exit code is legitimate
     # work, and the mistake is reading the WRONG one, so the fix is to name the right form.
     if reads_masked_status(cmd):
+        advisories.append(
+            "MASKED EXIT STATUS: this pipes into a truncating filter and then reads `$?`, "
+            "which is the FILTER's status, not the command's. Measured: a tool that had "
+            "correctly exited 1 reported rc=0 this way, so a working negative control read "
+            "as broken - and a passing one would have been recorded as proof. Use "
+            "`cmd > out 2>&1; rc=$?` and read the file, or gate.py for a real gate.")
+    # The jig under `uv run`: advisory, not a block, because the failure it causes errs RED.
+    if _JIG_UNDER_UV.search(strip_heredoc_bodies(cmd)):
+        advisories.append(
+            f"GATE.PY UNDER UV RUN: launch gate.py with `{_PLAIN_PYTHON}`, not `uv run`. It runs "
+            "YOUR gate, and `uv run` puts its own throwaway interpreter first on the PATH the gate "
+            "inherits, so a `python3 -m pytest` gate dies with `No module named pytest` and reads "
+            "as a false RED.")
+    if advisories:
         sys.stdout.write(json.dumps({"hookSpecificOutput": {
             "hookEventName": "PreToolUse",
-            "additionalContext": (
-                "MASKED EXIT STATUS: this pipes into a truncating filter and then reads `$?`, "
-                "which is the FILTER's status, not the command's. Measured: a tool that had "
-                "correctly exited 1 reported rc=0 this way, so a working negative control read "
-                "as broken - and a passing one would have been recorded as proof. Use "
-                "`cmd > out 2>&1; rc=$?` and read the file, or gate.py for a real gate."
-            ),
+            "additionalContext": "\n\n".join(advisories),
         }}) + "\n")
 
     # A backgrounded gate that does not go through the jig: the completion notice will report
@@ -223,10 +284,16 @@ def main() -> int:
             "the compound - `tail`, `echo`, whatever ended it - never the gate's own. Measured",
             "2026-09-02: the redirect form was written correctly, the notice said exit code 0,",
             "that was relayed as `the gate passed`, and the log said RC=2 with a failing test.",
+            "(`gh run watch` is refused even alone unless given --exit-status: without it, it",
+            "exits 0 whatever the run concluded.)",
             "",
             "Run it through the jig, which returns the GATE's status and can chain the action:",
             f"  {_PLAIN_PYTHON} <plugin>/skills/compuse-toolbox/scripts/gate.py \\",
-            '      --log /tmp/gate.log --gate "<the gate>" [--then "<the action>"]',
+            '      --gate "<the gate>" [--then "<the action>"]',
+            "Its report ends with the path of a fresh per-invocation log; pass --log with an",
+            "ABSOLUTE path to pin one instead.",
+            "",
+            "Or background the gate ALONE, with nothing after it, so its status is the task's.",
             "",
             "Launch the jig with a plain interpreter, never `uv run`: it runs your gate, and",
             "`uv run` puts its own isolated interpreter first on the PATH the gate inherits, so",

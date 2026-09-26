@@ -183,17 +183,27 @@ def _split_command(command: str) -> list[str]:
     return _windows_argv(command)
 
 
+def _decode_output(raw: bytes | None) -> str:
+    """UTF-8 with replacement, and CRLF or a lone CR read as a newline - what text mode did.
+
+    Explicit, not the locale codec: that fails differently per platform - stdout can come back
+    None on Windows, and POSIX raises past a handler that only catches OSError.
+    """
+    text = (raw or b"").decode("utf-8", errors="replace")
+    return text.replace("\r\n", "\n").replace("\r", "\n")
+
+
 def _run_one(command: str, case: Case, timeout: float) -> Run:
     """Execute one side. A command that cannot start is a RESULT, never an exception.
 
-    `encoding="utf-8", errors="replace"` is explicit: with no encoding, capture decodes with the
-    machine's locale codec, which fails differently per platform - stdout can come back None on
-    Windows, and POSIX raises past a handler that only catches OSError.
+    stdin goes in as BYTES: a text-mode stdin writes each \\n as \\r\\n on Windows, so both
+    sides would read input the case never held. Output is decoded by `_decode_output`.
     """
     argv = _split_command(command) + list(case.args)
+    stdin = case.stdin.encode("utf-8", errors="replace")
     try:
-        proc = subprocess.run(argv, input=case.stdin, capture_output=True, text=True,
-                              encoding="utf-8", errors="replace", timeout=timeout, check=False)
+        proc = subprocess.run(argv, input=stdin, capture_output=True, timeout=timeout,
+                              check=False)
     except FileNotFoundError as exc:
         return Run(returncode=127, stderr=str(exc), launched=False)
     except subprocess.TimeoutExpired:
@@ -201,7 +211,8 @@ def _run_one(command: str, case: Case, timeout: float) -> Run:
                    timed_out=True)
     except OSError as exc:
         return Run(returncode=126, stderr=str(exc), launched=False)
-    return Run(returncode=proc.returncode, stdout=proc.stdout, stderr=proc.stderr)
+    return Run(returncode=proc.returncode, stdout=_decode_output(proc.stdout),
+               stderr=_decode_output(proc.stderr))
 
 
 def compare(command_a: str, command_b: str, cases: list[Case], timeout: float = 60.0) -> list[CaseResult]:
