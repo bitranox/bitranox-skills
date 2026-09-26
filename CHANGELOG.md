@@ -29,6 +29,12 @@ than the change, so entries reconstructed from them would read like coverage wit
 a hole nobody has drawn a line under is one that gets rediscovered and half-filled - which is how
 two "versions with no entry" notes came to sit in this file disagreeing with it.
 
+## [7.25.10]
+
+### Fixed
+
+- Guard hooks: findings from re-checking the 2026-08-28 guard review against 7.25.9.
+
 ## [7.25.9]
 
 ### Fixed
