@@ -92,7 +92,8 @@ def overflow_finding(scroll_width: float, client_width: float, device_kind: str,
 
     SEVERE on phones/tablets (the explicit "no horizontal scrollbar on mobile/tablet"
     rule); MEDIUM on desktop where a stray overflow is less harmful but still a defect.
-    Returns ``None`` when the page fits.
+    Returns ``None`` when the page fits. ``offenders`` arrive from detectors.js worst-first
+    (largest overflow past the scrolling edge), so the ten kept here are the ten worst.
     """
     if scroll_width <= client_width + OVERFLOW_TOLERANCE:
         return None

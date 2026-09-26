@@ -70,9 +70,11 @@ globalThis.document = {
   },
 };
 globalThis.getComputedStyle = (el) => el.style;
-// eval of the skill's OWN detectors.js is the point: it mirrors page.evaluate(source).
+// eval of the skill's OWN detectors.js is the point: the file is a bare function expression, and
+// this wraps and calls it exactly as chrome-devtools-mcp evaluate_script does (`(${fn})`, then fn()).
 const src = require("fs").readFileSync(process.argv[3], "utf8");
-process.stdout.write(JSON.stringify(eval(src)));
+const detect = eval("(" + src + ")");
+process.stdout.write(JSON.stringify(detect()));
 """
 
 

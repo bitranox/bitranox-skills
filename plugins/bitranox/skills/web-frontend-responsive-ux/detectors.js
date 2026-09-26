@@ -9,28 +9,47 @@
 //            overflow_offenders[], targets[] }
 // Touch-target spacing is computed here (min gap to any other interactive box) because it
 // needs the full set of client rects, which only exist in the page.
+//
+// The file is ONE bare function expression, never invoked here and with no trailing
+// semicolon, because that is the only shape every caller accepts: Playwright's
+// page.evaluate(source) calls a string that evaluates to a function, chrome-devtools-mcp
+// evaluate_script wraps it as `(${source})` and calls the result, and @playwright/mcp
+// browser_evaluate does the same. An IIFE with a `;` is a SyntaxError inside those parens.
 
-(() => {
+() => {
   const doc = document.documentElement;
   const vw = doc.clientWidth;
   const vh = window.innerHeight;
 
-  // --- horizontal overflow: elements whose right edge passes the viewport -------------
-  const offenders = [];
-  const all = document.querySelectorAll("*");
-  for (const el of all) {
+  // --- horizontal overflow: elements that make the DOCUMENT scroll sideways -------------
+  // Only one side of the viewport scrolls: the end side of the page's direction (right for
+  // LTR, left for RTL). Past the other edge a box is simply unreachable - a skip link parked
+  // at left:-9999px in an LTR page adds no scrollbar - so it is not an offender. Browsers take
+  // that direction from <body> when there is one (the CSS principal writing mode), which is
+  // why a dir="rtl" on <body> alone flips it while <html> still computes ltr.
+  const rtl = getComputedStyle(document.body || doc).direction === "rtl";
+  const scrollX = window.scrollX || 0;
+  const candidates = [];
+  for (const el of document.querySelectorAll("*")) {
     const r = el.getBoundingClientRect();
-    // ignore zero-size and intentionally off-screen-left elements
     if (r.width === 0 && r.height === 0) continue;
-    if (r.right > vw + 1 || r.left < -1) {
-      offenders.push({
-        selector: cssPath(el),
-        right: Math.round(r.right),
-        width: Math.round(r.width),
-      });
-      if (offenders.length >= 25) break;
-    }
+    const overflow = rtl ? -(r.left + scrollX) : r.right + scrollX - vw;
+    if (overflow <= 1) continue;
+    // A box an ancestor clips or scrolls sideways (a carousel rail) never widens the page.
+    if (clippedByAncestor(el)) continue;
+    // querySelectorAll is document order, so an ancestor is seen before its descendants:
+    // the table's rows and cells would otherwise take the slots that should name more culprits.
+    if (candidates.some((c) => c.el.contains(el))) continue;
+    candidates.push({ el, r, overflow });
   }
+  // Worst first, so truncating to 25 (and analysis.py to 10) drops the least harmful.
+  candidates.sort((a, b) => b.overflow - a.overflow);
+  const offenders = candidates.slice(0, 25).map(({ el, r }) => ({
+    selector: cssPath(el),
+    left: Math.round(r.left),
+    right: Math.round(r.right),
+    width: Math.round(r.width),
+  }));
 
   // --- interactive targets: size + spacing --------------------------------------------
   const interactiveSel =
@@ -98,19 +117,48 @@
     return s.visibility !== "hidden" && s.display !== "none";
   }
 
-  // Smallest centre-to-edge gap from rect `i` to any other interactive rect; Infinity
-  // when isolated (reported as a large number so analysis.py treats it as "not cramped").
+  // Smallest edge-to-edge gap from rect `i` to any other interactive rect; 9999 when it
+  // has no neighbour (a large number, so analysis.py treats it as "not cramped").
+  //
+  // Boxes that OVERLAP are skipped: a control floated over a swipe surface, or a button
+  // nested in a link, intersects it by design and has no gap to measure. Overlap means an
+  // intersection with area, more than 1px on both axes, which also covers one box containing
+  // the other. Boxes that merely share an edge (or overlap by a sub-pixel rounding sliver)
+  // do NOT overlap: they are the most cramped pair of all and report a gap of 0.
   function minGap(r, list, i) {
     let best = Infinity;
     for (let j = 0; j < list.length; j++) {
       if (j === i) continue;
       const o = list[j];
-      const dx = Math.max(0, Math.max(r.left - o.right, o.left - r.right));
-      const dy = Math.max(0, Math.max(r.top - o.bottom, o.top - r.bottom));
-      if (dx === 0 && dy === 0) continue; // overlapping / nested - not a spacing gap
+      const ix = Math.min(r.right, o.right) - Math.max(r.left, o.left);
+      const iy = Math.min(r.bottom, o.bottom) - Math.max(r.top, o.top);
+      if (ix > 1 && iy > 1) continue;
+      const dx = Math.max(0, r.left - o.right, o.left - r.right);
+      const dy = Math.max(0, r.top - o.bottom, o.top - r.bottom);
       best = Math.min(best, Math.hypot(dx, dy));
     }
     return best === Infinity ? 9999 : best;
+  }
+
+  // Whether an ancestor that clips or scrolls sideways contains `el`. Only ancestors on its
+  // containing-block chain count: an absolutely positioned box escapes a clipping parent that
+  // is not positioned, and a fixed one escapes everything but a transformed ancestor - both
+  // can still widen the page. <html> and <body> are not asked: their overflow applies to the
+  // viewport itself, and whether THAT scrolls is what scroll_width already reports.
+  function clippedByAncestor(el) {
+    let position = getComputedStyle(el).position;
+    for (let a = el.parentElement; a && a !== document.body && a !== doc; a = a.parentElement) {
+      const s = getComputedStyle(a);
+      const transformed = s.transform !== "none";
+      const contains =
+        position === "fixed" ? transformed
+        : position === "absolute" ? s.position !== "static" || transformed
+        : true;
+      if (!contains) continue;
+      if (s.overflowX !== "visible") return true;
+      position = s.position;
+    }
+    return false;
   }
 
   function cssPath(el) {
@@ -127,4 +175,4 @@
     }
     return parts.join(" > ");
   }
-})();
+}

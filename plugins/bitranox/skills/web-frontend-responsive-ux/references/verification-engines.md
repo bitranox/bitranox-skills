@@ -158,10 +158,16 @@ The same modes apply per locale. Two angles:
 
 ## Driving an MCP manually (when you want a quick interactive check)
 
-The same `detectors.js` works through an MCP `evaluate_script` call after you resize/emulate
-a device; read the file and pass its contents. Use `lighthouse_audit` (Chrome DevTools MCP)
-only for the layout-perf/CLS signal - full performance/SEO scoring is the future
-`web-frontend-pagespeed` skill's job, not this one.
+The same `detectors.js` works through an MCP call after you resize/emulate a device: read the
+file and pass its WHOLE contents, header comments included, as the function - Chrome DevTools
+MCP `evaluate_script` (`function` parameter) or Playwright MCP `browser_evaluate`. The file is
+one bare `() => { ... }` expression that both of them wrap in parentheses and call, so do not
+append `()` or a `;` to it. It returns the same raw JSON the headless runner collects; judge it
+with `analysis.py` (e.g. `analysis.build_device_report(profile, raw)`) rather than by eye.
+
+Use `lighthouse_audit` (Chrome DevTools MCP) only for the layout-perf/CLS signal - full
+performance/SEO scoring is out of scope here (asset caching and compression are the
+`web-frontend-pagespeed` skill's job).
 
 ## Diagnose AND verify by probing computed values (not screenshots alone)
 
