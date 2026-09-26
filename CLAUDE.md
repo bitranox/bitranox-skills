@@ -44,12 +44,16 @@ does not silently break it. These rules are enforced/encoded by `.gitattributes`
   files with explicit `encoding="utf-8"`.
 - **No portable interpreter name.** On Windows `python3` is usually the Microsoft Store stub
   (exits non-zero), `python` may be Python 2, `py -3` is Windows-only. Launch Python through
-  `run-python.sh`, which probes `python3 -> python -> py -3` and `cygpath`-converts POSIX paths.
-  Do not change that probe order or the path conversion.
-- **Git Bash only on Windows; never WSL/Cygwin.** The shim guards `uname -s` and skips loudly to
-  stderr under an unexpected shell. A hook must never wedge a turn: every hooks.json command
+  `run-python.sh`, which probes `python3 -> python -> py -3` and `cygpath`-converts the script
+  path (only the script path: a later argument is the script's own business). Do not change that
+  probe order or the path conversion.
+- **Git Bash is the supported Windows shell.** Cygwin is accepted best-effort (untested); WSL
+  reports `Linux` to `uname` and cannot be told apart from it. The shim guards `uname -s` and skips
+  loudly to stderr under any other shell. A hook must never wedge a turn: every hooks.json command
   launches the shim with `--hook`, under which every failure path exits 0 (a CLI call without
-  `--hook` gets exit 3 instead, so a mistyped path in a gate is loud).
+  `--hook` gets exit 3 instead, so a mistyped path in a gate is loud). Python is started on a small
+  `-c` bootstrap rather than on the script, because python's own "can't open file" exit is 2, the
+  block code: a script that vanishes or cannot be opened degrades instead.
 
 When a learning here applies beyond this repo (it usually does), it also belongs in the shared
 `skill-writer` skill's "Bundled scripts and hooks: keep them cross-platform" section.

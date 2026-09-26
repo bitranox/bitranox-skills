@@ -5,9 +5,9 @@
 #   bash run-python.sh <script>.py [args...]          CLI / gate / skill step: LOUD by default
 #   bash run-python.sh --hook <script>.py [args...]   hooks.json registration: fail-OPEN
 #
-# When the shim itself cannot run the script (the script is missing, no Python 3 interpreter,
-# an unexpected shell) a CLI caller gets exit 3 and a stderr line, so a mistyped path in a gate
-# never reads as a clean pass. A hook must never wedge a turn, so `--hook` turns the same
+# When the shim itself cannot run the script (the script is missing or unreadable, no Python 3
+# interpreter, an unexpected shell, a failed path conversion) a CLI caller gets exit 3 and a stderr
+# line, so a mistyped path in a gate never reads as a clean pass. A hook must never wedge a turn, so `--hook` turns the same
 # conditions into exit 0 after the stderr line. Neither mode ever produces exit 2 on its own (the
 # code Claude Code treats as a block); a script's OWN exit code, 2 included, always passes through.
 # BITRANOX_RUN_PYTHON_STRICT=1 forces the loud contract in both modes.
@@ -41,24 +41,28 @@ if [ -n "$_hook_mode" ] && [ -n "$BITRANOX_HOOKS_OFF" ]; then
 fi
 
 # The shim could not run the script: always say so on stderr, then exit 3 (loud) unless this is
-# a hook launch without BITRANOX_RUN_PYTHON_STRICT, which exits 0 so the turn goes on.
+# a hook launch without BITRANOX_RUN_PYTHON_STRICT, which exits 0 so the turn goes on. The code is
+# decided once here because the Python bootstrap below degrades with the same one.
+_degrade_rc=3
+if [ -n "$_hook_mode" ] && [ -z "$BITRANOX_RUN_PYTHON_STRICT" ]; then _degrade_rc=0; fi
 _degrade() {
   echo "run-python.sh: $1" >&2
-  if [ -n "$_hook_mode" ] && [ -z "$BITRANOX_RUN_PYTHON_STRICT" ]; then exit 0; fi
-  exit 3
+  exit "$_degrade_rc"
 }
 
-# This shim is designed for Git Bash (Git for Windows) on Windows, and the native
-# bash on macOS/Linux. WSL bash mounts Windows under /mnt/c and resolves a *Linux*
-# python, and Cygwin uses different path mounts - the native-path/cygpath design
-# below assumes Git Bash. Under an unexpected shell, say so and degrade rather than misbehave.
+# Git Bash (Git for Windows) is the supported Windows shell; native bash on macOS/Linux is the
+# other target. Cygwin is accepted best-effort and untested: it has cygpath, so the conversion
+# below plausibly works. WSL reports Linux to uname and cannot be told apart from it here. Any
+# other kernel name is an unexpected shell: say so and degrade rather than misbehave.
 case "$(uname -s 2>/dev/null)" in
-  MINGW*|MSYS*|CYGWIN*|Linux|Darwin) : ;;
+  MINGW* | MSYS* | CYGWIN* | Linux | Darwin) : ;;
   *) _degrade "unexpected shell '$(uname -s 2>/dev/null)'; script not run." ;;
 esac
 
-# Self-document a missing script arg instead of erroring obscurely.
+# Self-document a missing or unreadable script arg instead of erroring obscurely. The bootstrap
+# below re-checks at the moment python opens it, so this is the clean message, not the guarantee.
 [ -n "$1" ] && [ -f "$1" ] || _degrade "script not found: ${1:-<none>}"
+[ -r "$1" ] || _degrade "script not readable: $1"
 
 # Windows Python defaults to cp1252; force UTF-8 for all IO. PYTHONUTF8 (PEP 540,
 # 3.7+) covers modern interpreters; PYTHONIOENCODING is the classic companion that
@@ -67,18 +71,54 @@ export PYTHONUTF8=1
 export PYTHONIOENCODING=utf-8
 
 # Git Bash passes POSIX paths (/c/Users/...) that a native python.exe misreads as
-# <drive>:\c\Users\... Convert absolute args to native Windows form when cygpath exists
-# (a Git Bash builtin; the command -v guard makes this a no-op on macOS/Linux).
+# <drive>:\c\Users\... Convert the SCRIPT path to native Windows form when cygpath exists
+# (a Git Bash builtin; the command -v guard makes this a no-op on macOS/Linux). Only the script
+# path: a later argument is the script's own business, and a slash-leading one need not be a path
+# at all (a /regex/, a /flag).
 if command -v cygpath >/dev/null 2>&1; then
-  converted=()
-  for a in "$@"; do
-    case "$a" in
-      /*) converted+=("$(cygpath -w "$a")") ;;
-      *)  converted+=("$a") ;;
-    esac
-  done
-  set -- "${converted[@]}"
+  case "$1" in
+    /*)
+      _script=$(cygpath -w "$1") || _degrade "cygpath failed on the script path: $1"
+      shift
+      set -- "$_script" "$@"
+      ;;
+  esac
 fi
+
+# python itself exits 2 when it cannot open a script, and 2 is the code Claude Code treats as a
+# block. The -f/-r checks above cannot close that: the file can vanish before python opens it, and
+# python opens the cygpath result, not the path that was checked. So python is handed this
+# bootstrap instead of the script. It runs the script as `python script.py` would (argv, __file__,
+# __name__ == "__main__", sys.path[0] = the script's resolved directory), and when runpy fails to
+# OPEN the script - no frame of the script ever ran - it degrades with the shim's own code. An
+# OSError the script raises itself has the script's frame in its traceback and passes through.
+# The degrade code arrives in an environment variable the bootstrap removes before the script runs.
+# Loader frames are matched by their code's co_filename: runpy is a frozen module on 3.11+, so its
+# frames read "<frozen runpy>" while runpy.__file__ names the .py on disk.
+# Git Bash's MSYS runtime rewrites slash-bearing arguments to a native python.exe, but leaves alone
+# any argument whose first whitespace comes before its first slash or backslash
+# (msys2_path_conv.cc, convert()): keep the code starting with "import os, ..." so it passes intact.
+_bootstrap='import os, runpy, sys
+rc = int(os.environ.pop("_BITRANOX_RUN_PYTHON_DEGRADE_RC", "3"))
+sys.argv = sys.argv[1:]
+script = os.path.abspath(sys.argv[0])
+if not getattr(sys.flags, "safe_path", False):
+    sys.path[0] = os.path.dirname(os.path.realpath(script))
+try:
+    runpy.run_path(script, run_name="__main__")
+except OSError as exc:
+    pkgutil = sys.modules.get("pkgutil")
+    loader = {"<string>", runpy.run_path.__code__.co_filename}
+    if pkgutil is not None:
+        loader.add(pkgutil.read_code.__code__.co_filename)
+    tb = exc.__traceback__
+    while tb is not None and tb.tb_frame.f_code.co_filename in loader:
+        tb = tb.tb_next
+    if tb is not None:
+        raise
+    sys.stderr.write("run-python.sh: cannot open script %s: %s; script not run.\n" % (sys.argv[0], exc.strerror or exc))
+    sys.exit(rc)
+'
 
 _is_py3() { "$@" -c 'import sys; sys.exit(0 if sys.version_info[0] >= 3 else 1)' >/dev/null 2>&1; }
 
@@ -86,7 +126,7 @@ for cmd in python3 python "py -3"; do
   # shellcheck disable=SC2086
   if _is_py3 $cmd; then
     # shellcheck disable=SC2086
-    exec $cmd "$@"
+    _BITRANOX_RUN_PYTHON_DEGRADE_RC=$_degrade_rc exec $cmd -c "$_bootstrap" "$@"
   fi
 done
 
