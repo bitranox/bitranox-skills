@@ -1,5 +1,13 @@
 """Tests for git-path-not-here-nudge.py - a path-status answer about a path that is not here. ASCII."""
+import json
+import os
+import subprocess
+import sys
+from pathlib import Path
+
 import git_path_not_here_nudge as G
+
+_HOOK = Path(__file__).resolve().parent.parent / "git-path-not-here-nudge.py"
 
 
 def _repo(tmp_path, name):
@@ -139,3 +147,122 @@ def test_missing_inputs_are_silent(tmp_path):
     assert G.notice("", str(tmp_path)) is None
     assert G.notice("git check-ignore x", "") is None
     assert G.notice(None, str(tmp_path)) is None
+
+
+def _umbrella(tmp_path):
+    """The measured incident's layout: handover.md in the outer project, the shell in a sub-repo."""
+    outer = _repo(tmp_path, "umbrella")
+    (outer / "handover.md").write_text("x")
+    inner = _repo(outer, "planning")
+    (inner / "local.txt").write_text("x")
+    return outer, inner
+
+
+# --- a heredoc BEFORE the statement must not move it ---------------------------------------------
+# Offsets were read on heredoc-STRIPPED text and applied to the raw command, so a statement after a
+# heredoc was sliced out of the body instead: the real nudge was lost, or a name that exists only in
+# the body was reported as the path being asked about.
+
+def test_the_nudge_survives_a_heredoc_before_it(tmp_path):
+    _outer, inner = _umbrella(tmp_path)
+    cmd = "cat > note.md <<'EOF'\nprose\nEOF\ngit ls-files --error-unmatch handover.md"
+    msg = G.notice(cmd, str(inner))
+    assert msg is not None and "'handover.md'" in msg
+
+
+def test_a_name_only_the_heredoc_body_mentions_is_not_reported(tmp_path):
+    _outer, inner = _umbrella(tmp_path)
+    assert G.notice("git check-ignore -q local.txt", str(inner)) is None          # control
+    cmd = "cat >n <<'EOF'\nxxxxxxxxxxxxxxxx handover.md\nEOF\ngit check-ignore -q local.txt"
+    assert G.notice(cmd, str(inner)) is None
+
+
+# --- check-attr operands -------------------------------------------------------------------------
+
+def test_check_attr_with_a_named_attribute_skips_the_attribute(tmp_path):
+    _outer, inner = _umbrella(tmp_path)
+    assert G.notice("git check-attr text handover.md", str(inner)) is not None
+    # `handover.md` in the ATTRIBUTE slot is an attribute name, not a path
+    assert G.notice("git check-attr handover.md local.txt", str(inner)) is None
+
+
+def test_check_attr_all_has_no_attribute_operand(tmp_path):
+    # `-a`/`--all` replace the attribute list, so the first bare token is already a path. Skipping
+    # it as an attribute made the hook permanently silent for this form.
+    _outer, inner = _umbrella(tmp_path)
+    assert G.notice("git check-attr -a handover.md", str(inner)) is not None
+    assert G.notice("git check-attr --all handover.md", str(inner)) is not None
+
+
+def test_check_attr_double_dash_separates_attributes_from_paths(tmp_path):
+    _outer, inner = _umbrella(tmp_path)
+    assert G.notice("git check-attr text eol -- handover.md", str(inner)) is not None
+    assert G.notice("git check-attr text handover.md -- local.txt", str(inner)) is None
+
+
+def test_check_attr_source_value_is_not_the_attribute(tmp_path):
+    # `--source <tree-ish>` consumes its value; read as the attribute, it shifted the real
+    # attribute into the path slot and fired on a name that was never a path.
+    _outer, inner = _umbrella(tmp_path)
+    assert G.notice("git check-attr --source HEAD handover.md local.txt", str(inner)) is None
+    assert G.notice("git check-attr --source HEAD text handover.md", str(inner)) is not None
+
+
+def test_an_operand_after_double_dash_is_a_path_even_with_a_leading_dash(tmp_path):
+    outer, inner = _umbrella(tmp_path)
+    (outer / "-odd.md").write_text("x")
+    assert G.notice("git ls-files --error-unmatch -- -odd.md", str(inner)) is not None
+    assert G.notice("git ls-files --error-unmatch -odd.md", str(inner)) is None     # an option
+
+
+# --- the walks that reach the filesystem root ----------------------------------------------------
+
+def test_no_work_tree_anywhere_is_silent(tmp_path):
+    # Neither the cwd nor any ancestor is a work tree: there is no project to point at.
+    plain = tmp_path / "plain"
+    (plain / "sub").mkdir(parents=True)
+    (plain / "f.md").write_text("x")
+    assert G.notice("git ls-files --error-unmatch f.md", str(plain / "sub")) is None
+
+
+# --- main(): the hook as the harness runs it -----------------------------------------------------
+
+def _run(event, env_extra=None, cwd=None):
+    env = {k: v for k, v in os.environ.items() if k != "CLAUDE_PROJECT_DIR"}
+    env.update(env_extra or {})
+    proc = subprocess.run([sys.executable, str(_HOOK)], input=json.dumps(event).encode("utf-8"),
+                          capture_output=True, env=env, cwd=cwd, timeout=60)
+    return proc.returncode, proc.stdout.decode("utf-8", "replace")
+
+
+def test_main_emits_additional_context_json(tmp_path):
+    _outer, inner = _umbrella(tmp_path)
+    rc, out = _run({"tool_name": "Bash", "cwd": str(inner),
+                    "tool_input": {"command": "git ls-files --error-unmatch handover.md"}})
+    assert rc == 0
+    payload = json.loads(out)["hookSpecificOutput"]
+    assert payload["hookEventName"] == "PreToolUse"
+    assert "PATH NOT IN THIS DIRECTORY" in payload["additionalContext"]
+
+
+def test_main_is_silent_for_a_non_shell_tool(tmp_path):
+    _outer, inner = _umbrella(tmp_path)
+    rc, out = _run({"tool_name": "Read", "cwd": str(inner),
+                    "tool_input": {"command": "git ls-files --error-unmatch handover.md"}})
+    assert (rc, out) == (0, "")
+
+
+def test_main_falls_back_to_the_project_dir_then_the_process_cwd(tmp_path):
+    _outer, inner = _umbrella(tmp_path)
+    event = {"tool_name": "Bash", "tool_input": {"command": "git check-ignore -q handover.md"}}
+    rc, out = _run(event, env_extra={"CLAUDE_PROJECT_DIR": str(inner)})
+    assert rc == 0 and "PATH NOT IN THIS DIRECTORY" in out
+    rc, out = _run(event, cwd=str(inner))
+    assert rc == 0 and "PATH NOT IN THIS DIRECTORY" in out
+    rc, out = _run(event, cwd=str(tmp_path))       # the outer dir itself: nothing is missing
+    assert (rc, out) == (0, "")
+
+
+def test_main_fails_open_on_garbage_stdin():
+    proc = subprocess.run([sys.executable, str(_HOOK)], input=b"{", capture_output=True, timeout=60)
+    assert (proc.returncode, proc.stdout) == (0, b"")
