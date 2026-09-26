@@ -18,7 +18,8 @@ This blocks exactly that shape and nothing else:
   - and a LATER statement must claim success (an OK-ish echo) or commit/push.
 
 A pipeline whose status is handled correctly is never blocked: `set -o pipefail`
-and any `PIPESTATUS` reference are honoured as the fix and exit clean, as does
+and any `PIPESTATUS` expansion are honoured as the fix and exit clean (the bare
+words in a quoted message or a comment are not), as does
 running the gate bare (no pipe) or ending the pipeline with the gate itself.
 
 A BACKGROUNDED gate (`run_in_background`) is blocked too when the task's exit code will not be
@@ -36,7 +37,13 @@ import os
 import re
 import sys
 
-from shell_text import LIST_SEP, blank_unexpanded_text, mask_data_regions, strip_heredoc_bodies
+from shell_text import (
+    LIST_SEP,
+    blank_heredoc_bodies,
+    blank_unexpanded_text,
+    mask_data_regions,
+    strip_heredoc_bodies,
+)
 
 # Commands whose exit status is a quality verdict worth protecting.
 GATE = re.compile(
@@ -60,8 +67,14 @@ CONSUMER = re.compile(
     re.IGNORECASE,
 )
 
-# The correct handlings - if any is present the author is not making this mistake.
-HANDLED = re.compile(r"pipefail|PIPESTATUS")
+# The correct handlings - if either is present the author is not making this mistake. They are
+# looked for where they can ACT, never in prose (see `handles_pipe_status`).
+_PIPEFAIL = re.compile(r"\bpipefail\b")
+_PIPESTATUS_READ = re.compile(r"\$\{?PIPESTATUS\b")
+
+# One pipeline element boundary: `|` or `|&` (which pipes stderr too). `||` never reaches here -
+# the statement split has already consumed it.
+_PIPE = re.compile(r"\|&?")
 
 # A gate whose verdict a BACKGROUND job's completion notice will misreport. Broader than
 # GATE: a backgrounded `make push` or `ci_wait` is read for its verdict the same way, and
@@ -165,6 +178,51 @@ def gate_status_is_not_the_tasks(command: str, tool_name: str = "Bash") -> bool:
 SPLIT = re.compile(r"\s*(?:" + LIST_SEP.pattern + r")\s*")
 
 
+def handles_pipe_status(command: str, tool_name: str = "Bash") -> bool:
+    """True when the command genuinely handles a pipeline's status: pipefail or a PIPESTATUS read.
+
+    Searched where each can ACT, never on the raw text, because the bare word in prose disabled
+    the block: `pytest -q | tail -3 && git commit -m "note: add pipefail later"` was let through.
+    `pipefail` must stand outside every quoted region, substitution and comment (it is an option
+    to `set` or `bash -o`); `PIPESTATUS` must be an EXPANSION (`$PIPESTATUS`, `${PIPESTATUS[0]}`),
+    read on text where only single quotes, escapes and comments are blanked, because it expands
+    inside double quotes - `[ "${PIPESTATUS[0]}" -eq 0 ]` is the documented fix.
+    """
+    base = blank_heredoc_bodies(command or "")
+    if _PIPEFAIL.search(mask_data_regions(base, tool_name=tool_name)):
+        return True
+    return bool(_PIPESTATUS_READ.search(blank_unexpanded_text(base)))
+
+
+def _comments_blanked(raw: str, masked: str) -> str:
+    """`raw` with only its comments blanked, given `masked = mask_data_regions(raw)`.
+
+    `mask_data_regions` fills quoted text and substitutions with a non-space filler and blanks
+    comments to spaces, so a space in `masked` where `raw` has something else is exactly a comment
+    character. Quoted text survives here on purpose: a success claim IS a quoted string
+    (`echo "PASS"`, `echo 'OK'`), and masking it would delete the evidence.
+    """
+    return "".join(" " if m == " " else r for r, m in zip(raw, masked))
+
+
+def _statements(command: str, tool_name: str) -> list[tuple[str, str]]:
+    """Each statement as `(raw, readable)`: the raw text, and the same span with comments blanked.
+
+    The separators are found on the MASKED command and the raw text is cut at those offsets (every
+    pass here preserves length), so a `;` or newline inside quotes or a comment is not a statement
+    boundary: `# note; git commit when green` is one comment, not a commit.
+    """
+    raw = blank_heredoc_bodies(command)
+    masked = mask_data_regions(raw, tool_name=tool_name)
+    readable = _comments_blanked(raw, masked)
+    out, start = [], 0
+    for sep in SPLIT.finditer(masked):
+        out.append((raw[start:sep.start()], readable[start:sep.start()]))
+        start = sep.end()
+    out.append((raw[start:], readable[start:]))
+    return out
+
+
 # A read of the previous command's status. `$?` after a pipeline is the LAST element's status,
 # so a pipe into a truncating filter makes it report the filter, not the command being measured.
 _STATUS_READ = re.compile(r"\$\?")
@@ -193,11 +251,11 @@ def reads_masked_status(command: str) -> bool:
     so prose in double quotes is knowingly left as a false positive rather than lose the real case.
     """
     text = blank_unexpanded_text(strip_heredoc_bodies(command or ""))
-    if HANDLED.search(text):
+    if handles_pipe_status(command):
         return False
     statements = [s for s in SPLIT.split(text) if s.strip()]
     for index, statement in enumerate(statements):
-        elements = [e for e in statement.split("|") if e.strip()]
+        elements = [e for e in _PIPE.split(statement) if e.strip()]
         piped = len(elements) >= 2 and any(FILTER.match(e) for e in elements[1:])
         if not piped:
             continue
@@ -215,21 +273,19 @@ def masks_a_gate(statement: str, tool_name: str = "Bash") -> bool:
     scoped to this search on purpose - `CONSUMER` must still READ quoted text, since the success
     claim it looks for IS a quoted string (`echo "PASS"`), and masking there deletes the evidence.
     """
-    if "|" not in statement:
-        return False
-    # Split on a single '|' that is not part of '||' (already handled by SPLIT).
-    elements = [e for e in statement.split("|") if e.strip()]
+    # The pipeline is split on the MASKED text, so a `|` inside a quoted argument is not an element
+    # boundary; `|&` counts as one (it pipes stderr too, and the filter still sets the status).
+    masked = mask_data_regions(statement, tool_name=tool_name)
+    elements = [e for e in _PIPE.split(masked) if e.strip()]
     if len(elements) < 2:
         return False
-    # Length-preserving, so the element split below still lines up with the raw text.
-    masked = mask_data_regions(statement, tool_name=tool_name)
-    masked_elements = [e for e in masked.split("|") if e.strip()]
     if not GATE.search(masked):
         return False
     # If the gate IS the last element, the pipeline's status is the gate's.
-    if masked_elements and GATE.search(masked_elements[-1]):
+    if GATE.search(elements[-1]):
         return False
-    # Only a swallowing filter actually masks it.
+    # Only a swallowing filter actually masks it. Filter names stand outside quotes, so the masked
+    # element reads the same as the raw one here.
     return any(FILTER.match(e) for e in elements[1:])
 
 
@@ -306,29 +362,31 @@ def main() -> int:
 
     # A heredoc BODY is stdin data, so a doc that WRITES an example of the footgun is not one.
     # Measured live: that shape blocked a real command while this guard was under investigation.
-    cmd = strip_heredoc_bodies(cmd)
+    tool_name = data.get("tool_name") or "Bash"
 
     # Fast path: nothing further to protect if no gate runs here.
-    if not GATE.search(cmd):
+    if not GATE.search(strip_heredoc_bodies(cmd)):
         return 0
     # The author already handles the pipe's status correctly.
-    if HANDLED.search(cmd):
+    if handles_pipe_status(cmd, tool_name):
         return 0
 
-    statements = SPLIT.split(cmd)
+    # A comment is never executed, so CONSUMER reads each statement with its comments blanked:
+    # `# after this, never git commit on a red gate` under a piped gate was blocked as a commit.
+    statements = _statements(cmd, tool_name)
     masked_at = None
-    for i, st in enumerate(statements):
+    for i, (st, readable) in enumerate(statements):
         if masked_at is None:
-            if masks_a_gate(st, data.get("tool_name") or "Bash"):
+            if masks_a_gate(st, tool_name):
                 masked_at = i
             continue
-        if CONSUMER.search(st):
-            gate = GATE.search(statements[masked_at])
+        if CONSUMER.search(readable):
+            gate = GATE.search(statements[masked_at][0])
             msg = [
                 "BLOCKED: this claims success on a gate whose exit status the pipe threw away.",
                 "",
                 f"  gate      : {gate.group(0) if gate else '(gate)'}",
-                f"  piped into: {statements[masked_at].strip()[:100]}",
+                f"  piped into: {statements[masked_at][0].strip()[:100]}",
                 f"  then      : {st.strip()[:100]}",
                 "",
                 "A pipeline exits with its LAST element's status, so head/grep/tail succeed even",
