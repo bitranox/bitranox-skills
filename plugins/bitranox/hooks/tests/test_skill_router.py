@@ -212,3 +212,130 @@ def test_shipped_trigger_map_in_sync_with_descriptions():
     # the committed map must match the skills' current descriptions (rebuild on description change)
     import build_skill_triggers as B2
     assert B2.main(["--check"]) == 0
+
+
+# ---- a compound keyword and its component ---------------------------------------------------------
+# Both count on one token, so one distinctive identifier clears MIN_HITS by itself. Counting the
+# token once was measured on 1,311 real typed prompts: it removed no false nudge and dropped real
+# ones, so the double count is the intended behaviour and is pinned here.
+
+def test_match_counts_a_compound_keyword_and_its_component_on_one_token():
+    triggers = {"lc": ["config", "lib_layered_config", "profiles"]}
+    assert R.match("do we have lib_layered_config implemented here ?", triggers) == [("lc", 2)]
+
+
+def test_match_a_duplicated_keyword_counts_once():
+    assert R.match("widgets widgets", {"w": ["widgets", "widgets"]}) == []
+
+
+# ---- word boundaries in any script -----------------------------------------------------------------
+# The boundary class was ASCII [a-z0-9], so an umlaut counted as a word break and a German compound
+# (Fileuebersicht with a real u-umlaut) matched "file". Letters and digits of any script are word
+# characters now, the same rule gather_scan.scan uses.
+
+def test_match_does_not_split_a_german_compound_at_an_umlaut():
+    triggers = {"fx": ["file", "code"]}
+    assert R.match("die Fileübersicht und der Codeüberblick sind falsch", triggers) == []
+
+
+def test_match_control_the_separate_words_still_match():
+    triggers = {"fx": ["file", "code"]}
+    assert R.match("das file und der code sind falsch", triggers) == [("fx", 2)]
+    assert R.match("the file_path and code-base", triggers) == [("fx", 2)]   # _ and - separate
+
+
+# ---- ranking: top MAX_SKILLS, ties alphabetical ----------------------------------------------------
+
+def test_match_keeps_the_top_two_and_breaks_ties_alphabetically():
+    triggers = {"zeta": ["alpha", "beta"], "alef": ["alpha", "beta"],
+                "most": ["alpha", "beta", "gamma"], "weak": ["gamma", "delta-x"]}
+    assert R.match("alpha beta gamma", triggers) == [("most", 3), ("alef", 2)]
+    assert R.match("alpha beta gamma", triggers, max_skills=None) == [
+        ("most", 3), ("alef", 2), ("zeta", 2)]
+
+
+# ---- the per-session dedup runs BEFORE the cap -----------------------------------------------------
+# The cap was applied first, so two skills already nudged held both slots and a third skill that
+# matched this prompt was never nudged in the session.
+
+def _run_main(monkeypatch, capsys, prompt, sid="s1", cwd="/p/x"):
+    monkeypatch.setattr(sys, "stdin", io.StringIO(json.dumps(
+        {"prompt": prompt, "cwd": cwd, "session_id": sid})))
+    rc = R.main()
+    return rc, capsys.readouterr().out
+
+
+def test_already_nudged_skills_do_not_hold_the_slots_of_a_fresh_match(monkeypatch, capsys):
+    trig = {"aa": ["alpha", "beta", "gamma"], "bb": ["alpha", "beta", "gamma"],
+            "cc": ["alpha", "beta"]}
+    monkeypatch.setattr(R, "load_triggers", lambda: trig)
+    rc, out = _run_main(monkeypatch, capsys, "alpha beta gamma")
+    assert rc == 0 and "bitranox:aa" in out and "bitranox:bb" in out and "bitranox:cc" not in out
+    rc, out = _run_main(monkeypatch, capsys, "alpha beta gamma again")
+    assert rc == 0 and "bitranox:cc" in out
+    assert "bitranox:aa" not in out and "bitranox:bb" not in out
+
+
+def test_control_a_fresh_session_still_gets_the_top_two(monkeypatch, capsys):
+    trig = {"aa": ["alpha", "beta", "gamma"], "bb": ["alpha", "beta", "gamma"],
+            "cc": ["alpha", "beta"]}
+    monkeypatch.setattr(R, "load_triggers", lambda: trig)
+    _run_main(monkeypatch, capsys, "alpha beta gamma")
+    rc, out = _run_main(monkeypatch, capsys, "alpha beta gamma", sid="s2")
+    assert "bitranox:aa" in out and "bitranox:bb" in out and "bitranox:cc" not in out
+
+
+# ---- side branches of main() -----------------------------------------------------------------------
+
+def test_router_exits_zero_on_malformed_stdin(monkeypatch, capsys):
+    monkeypatch.setattr(sys, "stdin", io.StringIO("{not json"))
+    assert R.main() == 0 and capsys.readouterr().out == ""
+
+
+def test_router_exits_zero_on_an_empty_prompt(monkeypatch, capsys):
+    monkeypatch.setattr(R, "load_triggers", lambda: {"frob": ["frobnicating", "widgets"]})
+    rc, out = _run_main(monkeypatch, capsys, "   ")
+    assert rc == 0 and out == ""
+
+
+def test_router_survives_a_state_path_it_cannot_read(monkeypatch, capsys):
+    monkeypatch.setattr(R, "load_triggers", lambda: {"frob": ["frobnicating", "widgets"]})
+    R._state_file("/p/x", "s1").mkdir(parents=True)      # a directory where the file should be
+    rc, out = _run_main(monkeypatch, capsys, "frobnicating the widgets")
+    assert rc == 0 and out == ""
+
+
+def test_a_state_file_with_undecodable_bytes_does_not_silence_the_router(monkeypatch, capsys):
+    monkeypatch.setattr(R, "load_triggers", lambda: {"frob": ["frobnicating", "widgets"],
+                                                     "done": ["frobnicating", "widgets"]})
+    state = R._state_file("/p/x", "s1")
+    state.parent.mkdir(parents=True, exist_ok=True)
+    state.write_bytes(b"\xff\xfe junk\ndone\n")
+    rc, out = _run_main(monkeypatch, capsys, "frobnicating the widgets")
+    assert rc == 0 and "bitranox:frob" in out and "bitranox:done" not in out
+
+
+# ---- concrete routing on the SHIPPED trigger map ---------------------------------------------------
+# These run the real skill_triggers.json through match(), so a matcher change that re-opens a known
+# false positive fails here rather than only in a replay.
+
+def test_shipped_map_routes_a_lone_distinctive_identifier_to_its_skill():
+    triggers = R.load_triggers()
+    assert triggers                                      # the shipped map loaded
+    picked = [s for s, _n in R.match("do we have lib_layered_config implemented here ?", triggers)]
+    assert picked == ["coding-python-layered-config"]
+
+
+def test_shipped_map_does_not_route_plain_prose_with_one_keyword():
+    assert R.match("what time is it in the other office", R.load_triggers()) == []
+
+
+def test_shipped_map_does_not_route_german_umlaut_compounds():
+    triggers = R.load_triggers()
+    assert R.match("die Fileübersicht und der Codeüberblick sind falsch", triggers) == []
+
+
+def test_shipped_map_control_routes_a_real_json_editing_prompt():
+    triggers = R.load_triggers()
+    picked = [s for s, _n in R.match("editing package.json and validating the json file", triggers)]
+    assert picked and picked[0] == "files-edit-json"
