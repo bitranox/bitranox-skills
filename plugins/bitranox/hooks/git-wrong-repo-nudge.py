@@ -58,11 +58,11 @@ import os
 import re
 import sys
 
-from shell_text import SEP, is_shell_tool, mask_data_regions, strip_heredoc_bodies
+from shell_text import SEP, commands_only_aligned, is_shell_tool
 
-# `cd` as the statement's own verb, optionally behind env assignments. `cd -` and a bare `cd`
-# go somewhere this hook cannot know, so they are treated as a directory change with no target.
-_CD = re.compile(r"^\s*(?:\w+=\S*\s+)*cd\s+(?P<target>[^\s;&|]+)")
+# `cd` as the statement's own verb, optionally behind env assignments. The target is optional: a
+# bare `cd` is still a directory change, to $HOME, and must not read as "no cd happened".
+_CD = re.compile(r"^\s*(?:\w+=\S*\s+)*cd(?:\s+(?P<target>[^\s;&|]+))?(?:\s|$)")
 _GIT = re.compile(r"^\s*(?:\w+=\S*\s+)*(?:sudo\s+|timeout\s+\S+\s+)*git\b")
 
 
@@ -70,9 +70,12 @@ def _statements(command, tool_name="Bash"):
     """(start, end) offsets of each statement, read from the MASKED text.
 
     Structure comes from the mask; the caller slices the RAW string at these offsets, because a
-    path compared on masked text would be compared as filler characters.
+    path compared on masked text would be compared as filler characters. That slicing is only
+    sound because the mask is ALIGNED: heredoc bodies are blanked in place rather than deleted, so
+    an offset here is an offset into the raw command. A deleting strip shifted every statement after
+    a heredoc onto the body text, which blinded the guard or made it fire on the body's data.
     """
-    masked = mask_data_regions(strip_heredoc_bodies(command), tool_name=tool_name)
+    masked = commands_only_aligned(command, tool_name)
     spans, start = [], 0
     for hit in SEP.finditer(masked):
         spans.append((start, hit.start()))
@@ -82,6 +85,18 @@ def _statements(command, tool_name="Bash"):
 
 
 _UNKNOWABLE = re.compile(r"[$`<>|\n*?]")          # a destination no static read can resolve
+
+
+def _unknowable(target):
+    """True when `cd target` lands somewhere this hook cannot read.
+
+    A variable, substitution or glob; `cd -`, which returns to $OLDPWD; and a bare `cd` or a tilde
+    path, which expand against the HOME of the shell that runs the command, not this hook's.
+    """
+    if target is None:
+        return True
+    bare = target.strip().strip("'\"")
+    return bare == "-" or bare.startswith("~") or bool(_UNKNOWABLE.search(target))
 
 
 def _repo_root(path):
@@ -112,31 +127,36 @@ def _resolve(target, base):
 
 
 def notice(command, cwd, tool_name="Bash"):
-    """The nudge text when a later git answers about a DIFFERENT work tree, else None.
+    """The nudge text when two gits answer about DIFFERENT work trees, else None.
 
-    Silent unless the call's cd targets span more than one work tree: two cd's inside a single
-    repository leave both gits answering about the same thing. Silent too when any destination is
-    unreadable - a shell variable, or a path that is not there - because a verdict built on a
-    guessed destination is invented rather than measured.
+    Silent unless the call makes two or more cd's AND the landings that a git actually ran in span
+    more than one work tree: two cd's inside a single repository leave both gits answering about
+    the same thing, and two cd's followed by a single git leave one answer with one subject. Silent
+    too when any destination is unreadable - a shell variable, `cd -`, a bare `cd` or `~`, or a
+    path that is not there - because a verdict built on a guessed destination is invented rather
+    than measured.
     """
     if not command or not isinstance(command, str) or not cwd:
         return None
     masked, spans = _statements(command, tool_name)
-    here, landed = str(cwd), []
+    here, landed, answered = str(cwd), [], []
     for start, end in spans:
-        raw = command[start:end]
         cd_hit = _CD.match(masked[start:end])
         if cd_hit:
-            target = raw[cd_hit.start("target"):cd_hit.end("target")]
-            if _UNKNOWABLE.search(target):
-                return None            # a variable or redirect: where it lands is not readable here
+            target = None
+            if cd_hit.group("target") is not None:
+                target = command[start:end][cd_hit.start("target"):cd_hit.end("target")]
+            if _unknowable(target):
+                return None            # where it lands is not readable here
             here = _resolve(target, here)
             landed.append(here)
             continue
-        if not _GIT.match(masked[start:end]) or len(landed) < 2:
+        if not _GIT.match(masked[start:end]) or not landed:
             continue
-        roots = {_repo_root(path) for path in landed}
-        if None not in roots and len(roots) > 1:
+        answered.append(here)          # a git after a cd: it answers from this landing
+        if None in {_repo_root(path) for path in landed}:
+            continue
+        if len({_repo_root(path) for path in answered}) > 1:
             return _multi_cd_notice(here)
     return None
 
