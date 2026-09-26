@@ -99,16 +99,22 @@ def targets_config(file_path) -> bool:
 
 
 def _texts(record) -> list:
-    """Every text block of a user-role message in this record. PURE."""
-    message = record.get("message") or {}
-    if message.get("role") != "user":
+    """Every text block of a user-role message in this record, as strings. PURE.
+
+    A block whose `text` is not a string is skipped, as is a `message` that is not an object: the
+    caller calls `.lstrip()` on each, and a `null` text used to raise there - which `main()`
+    swallowed, so the edit went through with the guard silently off.
+    """
+    message = record.get("message")
+    if not isinstance(message, dict) or message.get("role") != "user":
         return []
     content = message.get("content")
     if isinstance(content, str):
         return [content]
     if not isinstance(content, list):
         return []
-    return [b.get("text", "") for b in content if isinstance(b, dict) and b.get("type") == "text"]
+    return [b["text"] for b in content
+            if isinstance(b, dict) and b.get("type") == "text" and isinstance(b.get("text"), str)]
 
 
 def _is_skill_body(line: str) -> bool:
