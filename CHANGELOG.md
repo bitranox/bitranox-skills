@@ -33,7 +33,41 @@ two "versions with no entry" notes came to sit in this file disagreeing with it.
 
 ### Fixed
 
-- Guard hooks: findings from re-checking the 2026-08-28 guard review against 7.25.9.
+- `store-edit-guard` denies NotebookEdit and cwd-relative writes into a memory store, keeps its
+  denies on a `CLAUDE.local.md` that is not valid UTF-8 (or is UTF-16), and judges MultiEdit edits
+  in order, so a chained pair cannot delete the pointer block and an edit cannot assemble a fence
+  marker from split pieces.
+- `shell-prefix-selfref-guard` checks a text argument attached to its flag (`git commit -m"..."`,
+  `--message="..."`, `gh pr create --body="..."`) for command substitution like the spaced form;
+  clean attached arguments and path flags (`-F`, `--body-file=`) still pass.
+- `block-pgrep-self-match` judges only `pgrep`/`pkill` calls that carry `-f`/`--full` and that the
+  shell will run: commented-out calls, heredoc prose, `-x` and `--pidfile` are no longer blocked,
+  and a `$(pgrep -f ...)` inside a commit message now is. A bracketed pattern's literal is caught
+  anywhere in the command, heredoc bodies and commit messages included, because they are part of
+  the shell's own command line.
+- `subagent-probe-capability-gate`: a no-tools declaration opened by "Please" or "Kindly" denies
+  like the bare form, an "except" later in the sentence no longer cancels a declaration, and "Do
+  not use tools that ..." is refused with a message naming the spelling that passes ("Do not use
+  any tools other than Read and Grep") instead of pointing at the Read-less baseline-probe.
+- `validate-structured-files`: a URL or glob inside a JSON string no longer exempts a broken
+  `.json`, a doubled opening brace or a `{{PLACEHOLDER}}` inside a string no longer skips
+  validation, NotebookEdit and `.ipynb` files are validated as JSON, a UTF-8 BOM is accepted, and
+  without lxml an XML document with an internal entity is skipped instead of blocked.
+- `skill-edit-guard` guards a `SKILL.md` however its path is cased (`Skills/x/skill.md` opens the
+  real file on macOS and Windows) and judges NotebookEdit edits by their `notebook_path`; its
+  docstring states the per-session meta-skill-writer receipt that allows an edit, and that a
+  receipt-store error blocks. `config-edit-guard` likewise judges NotebookEdit edits of Claude Code
+  settings JSON by their `notebook_path` instead of letting them pass unseen.
+- `subagent-model-gate` no longer denies or warns a dispatch of an agent type whose own definition
+  pins `model:` (for example `bitranox:baseline-probe`); definitions are read from this plugin's
+  `agents/`, `<project>/.claude/agents` and `~/.claude/agents`, and the warning no longer claims an
+  omitted model always inherits the session model.
+- `skill_receipt`: a receipt whose `ts` is an integer too large for a float, or whose body is
+  pathologically nested, reads as stale instead of crashing `skill_receipt.py check`.
+- Tests now cover branches that had none: self-improve-audit's list-shaped tool results and
+  transcript truncation, warn-inline-powershell's abbreviated `-File`/`-Command` prefixes,
+  session-start's autoUpdate settings fallthrough, and session-banner's whitespace-only `SKILL.md`
+  guard.
 
 ## [7.25.9]
 

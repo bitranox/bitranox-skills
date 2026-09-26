@@ -104,8 +104,9 @@ the module and collection fails.
 `.github/workflows/ci.yml`: `pytest PyYAML lxml defusedxml ruamel.yaml httpx2`. Anything less
 produces failures that read exactly like real defects but are artifacts of the environment:
 
-- without `lxml`, `validate_xml()` returns `(None, None)` instead of `(True, None)`, failing 4 tests
-  in `test_validate_structured_files.py`;
+- without `lxml`, `validate_xml()` falls back to defusedxml, which skips an entity-declaring
+  document instead of rejecting it, failing `test_validate_xml_entities_not_expanded`; without
+  `defusedxml` as well it skips every XML file, failing 5 tests in `test_validate_structured_files.py`;
 - without `httpx2`, `test_proxy_pool.py` fails at COLLECTION, which aborts the whole run;
 - `repo-gate.py --ci` shells out to pytest itself, so it needs the same set or it reports
   `repo-gate: FAILED` for a repo that is fine.
