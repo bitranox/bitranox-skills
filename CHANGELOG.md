@@ -29,6 +29,12 @@ than the change, so entries reconstructed from them would read like coverage wit
 a hole nobody has drawn a line under is one that gets rediscovered and half-filled - which is how
 two "versions with no entry" notes came to sit in this file disagreeing with it.
 
+## [7.25.12]
+
+### Fixed
+
+- Integration stub for the rank 10 hook-report fixes; replaced before release.
+
 ## [7.25.11]
 
 ### Fixed
