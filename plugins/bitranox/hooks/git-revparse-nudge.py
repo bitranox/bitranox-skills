@@ -1,9 +1,12 @@
 #!/usr/bin/env python3
 """PreToolUse(Bash|PowerShell) nudge: `git rev-parse <name>` without --verify echoes the name back.
 
-Given a ref it cannot resolve, a plain `git rev-parse` does not fail - it prints the argument
-verbatim and exits 0. So a comparison built on it succeeds against a string that was never a
-commit, and the wrong answer is confident and plausible. `--verify -q` makes it resolve or fail.
+Given a name it cannot resolve, a plain `git rev-parse` still prints the argument verbatim on
+stdout. It exits 128 with "ambiguous argument" on stderr - unless the name is also a path in the
+working tree, where it exits 0 and nothing at all says it failed. A `$(...)` capture keeps the
+stdout and drops the exit code either way, so a comparison built on it succeeds against a string
+that was never a commit, and the wrong answer is confident and plausible. `--verify -q` makes it
+resolve or fail with empty output.
 
 The informational forms (`--show-toplevel`, `--abbrev-ref`, `--git-dir`, `--is-inside-work-tree`)
 answer about the repository rather than resolving a ref, and are exactly what you should be
@@ -35,9 +38,11 @@ _SAFE_OPTS = re.compile(
 )
 
 _NOTICE = (
-    "BARE git rev-parse: given a ref it cannot resolve, this does NOT fail - it prints the "
-    "argument back verbatim and exits 0, so any comparison built on it succeeds against a string "
-    "that was never a commit. Add `--verify -q` so it resolves or fails. And if the answer will "
+    "BARE git rev-parse: given a name it cannot resolve, this still prints the name back "
+    "verbatim on stdout. It exits 128 (and 0 when the name is also a working-tree path), but a "
+    "`$(...)` capture keeps the stdout and drops the exit code, so any comparison built on it "
+    "succeeds against a string that was never a commit. Add `--verify -q` so it resolves or "
+    "fails with empty output. And if the answer will "
     "decide anything, put an absolute `cd /full/path &&` in THIS same call: the harness cwd both "
     "persists from an earlier cd and is sometimes reset between calls, so a bare git can answer "
     "confidently from another repository."
