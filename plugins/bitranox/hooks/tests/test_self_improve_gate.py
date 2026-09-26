@@ -641,3 +641,160 @@ def test_an_interactive_cli_prompt_without_an_origin_key_still_counts(tmp_path, 
     run_gate(monkeypatch, tmp_path, {"transcript_path": tp, "cwd": str(tmp_path),
                                      "last_assistant_message": "done"})
     assert decision_of(capsys) == "block"
+
+
+# --------------------------------------------------------------------------------------------
+# The dedup key, the hint size, the state-file key, and a non-object event
+# --------------------------------------------------------------------------------------------
+
+_ADMISSIONS = ("I was wrong about the path, my mistake.",
+               "My mistake - I misread the flag.",
+               "I was wrong again, the default is off.")
+
+
+def test_a_blank_user_half_never_dedups_distinct_turns(tmp_path, monkeypatch, capsys):
+    """A headless turn has no human prompt, so the user half is blank. Keying on it wrote the
+    constant sha1(""), and after the first block every later blank-user turn in that project read
+    as "already blocked" - distinct admissions went silent."""
+    for admission in _ADMISSIONS:
+        tp = _write(tmp_path, _rec("user", "run the audit", origin=None))
+        run_gate(monkeypatch, tmp_path, {"transcript_path": tp, "cwd": str(tmp_path),
+                                         "last_assistant_message": admission})
+        assert decision_of(capsys) == "block", admission
+
+
+def test_a_blank_user_half_writes_no_dedup_key(tmp_path, monkeypatch, capsys, isolated_state):
+    tp = _write(tmp_path, _rec("user", "run the audit", origin=None))
+    run_gate(monkeypatch, tmp_path, {"transcript_path": tp, "cwd": str(tmp_path),
+                                     "last_assistant_message": _ADMISSIONS[0]})
+    assert decision_of(capsys) == "block"
+    assert list(isolated_state.glob("claude-self-improve-*.state")) == []
+
+
+def test_a_state_file_already_holding_the_empty_hash_does_not_silence(tmp_path, monkeypatch,
+                                                                      capsys, isolated_state):
+    """State files written before the fix hold sha1(""); they must not keep a project quiet."""
+    key = G._sig.proj_key(str(tmp_path))
+    (isolated_state / ("claude-self-improve-%s.state" % key)).write_text(
+        "da39a3ee5e6b4b0d3255bfef95601890afd80709", encoding="utf-8")
+    tp = _write(tmp_path, _rec("user", "run the audit", origin=None))
+    run_gate(monkeypatch, tmp_path, {"transcript_path": tp, "cwd": str(tmp_path),
+                                     "last_assistant_message": _ADMISSIONS[1]})
+    assert decision_of(capsys) == "block"
+
+
+def test_a_typed_prompt_still_blocks_only_once(tmp_path, monkeypatch, capsys):
+    """Control for the blank-user change: a real prompt keeps its once-per-message dedup."""
+    tp = _write(tmp_path, *_tool_turn("no, that is wrong - use uv"))
+    event = {"transcript_path": tp, "cwd": str(tmp_path), "last_assistant_message": _ADMISSIONS[0]}
+    run_gate(monkeypatch, tmp_path, event)
+    assert decision_of(capsys) == "block"
+    run_gate(monkeypatch, tmp_path, dict(event, last_assistant_message=_ADMISSIONS[1]))
+    assert decision_of(capsys) is None
+
+
+def _buffer(S, session, count):
+    for i in range(count):
+        S.buffer_subagent_learning(session, {"agent_type": "Explore", "agent_id": "a%d" % i,
+                                             "matched": ["realization"],
+                                             "snippet": ("finding %03d " % i) + "x" * 176})
+
+
+def test_a_full_subagent_queue_keeps_the_reason_small(tmp_path, monkeypatch, capsys):
+    """Sixty buffered records made a 13,735-character reason, past the 10,000-character hook
+    output cap. The hint now shows the first few and says how many more wait."""
+    import self_improve_signals as S
+    _iso_home(tmp_path, monkeypatch)
+    _buffer(S, "subfull", 60)
+    tp = make_transcript(tmp_path, user="ok", asst="Done.")
+    run_gate(monkeypatch, tmp_path, {"transcript_path": tp, "cwd": str(tmp_path),
+                                     "session_id": "subfull"})
+    reason = _reason_of(capsys)
+    assert len(reason) < 5000, len(reason)
+    shown = G._SUBAGENT_HINT_MAX
+    assert "finding 000" in reason and "finding %03d" % (shown - 1) in reason
+    assert "finding %03d" % shown not in reason
+    assert "and %d more" % (60 - shown) in reason
+
+
+def test_the_unshown_subagent_records_stay_queued_in_order(tmp_path, monkeypatch, capsys):
+    """Capping the display must not drop what it did not display."""
+    import self_improve_signals as S
+    _iso_home(tmp_path, monkeypatch)
+    _buffer(S, "subrest", 25)
+    tp = make_transcript(tmp_path, user="ok", asst="Done.")
+    run_gate(monkeypatch, tmp_path, {"transcript_path": tp, "cwd": str(tmp_path),
+                                     "session_id": "subrest"})
+    capsys.readouterr()
+    left = [r["snippet"][:11] for r in S.read_subagent_learnings("subrest")]
+    assert left == ["finding %03d" % i for i in range(G._SUBAGENT_HINT_MAX, 25)]
+
+
+def test_a_short_subagent_queue_is_shown_whole_and_drained(tmp_path, monkeypatch, capsys):
+    """Control: under the cap nothing is held back and nothing is left queued."""
+    import self_improve_signals as S
+    _iso_home(tmp_path, monkeypatch)
+    _buffer(S, "subshort", 3)
+    tp = make_transcript(tmp_path, user="ok", asst="Done.")
+    run_gate(monkeypatch, tmp_path, {"transcript_path": tp, "cwd": str(tmp_path),
+                                     "session_id": "subshort"})
+    reason = _reason_of(capsys)
+    assert "finding 002" in reason and "more" not in reason.split("SUBAGENT LEARNINGS")[1]
+    assert S.read_subagent_learnings("subshort") == []
+
+
+@pytest.mark.parametrize("spelling", ["{p}/", "{p}/./", "{p}/sub/.."])
+def test_every_spelling_of_one_project_shares_one_state_file(tmp_path, monkeypatch, capsys,
+                                                             isolated_state, spelling):
+    """The gate hashed the raw cwd while proj_key normalises, so `p`, `p/` and `p/./` each got a
+    state file and the once-per-message dedup held for none of them across spellings."""
+    proj = tmp_path / "p"
+    (proj / "sub").mkdir(parents=True)
+    tp = _write(tmp_path, *_tool_turn("no, that is wrong - use uv"))
+    run_gate(monkeypatch, tmp_path, {"transcript_path": tp, "cwd": str(proj),
+                                     "last_assistant_message": "ok"})
+    assert decision_of(capsys) == "block"
+    other = spelling.format(p=str(proj))
+    run_gate(monkeypatch, tmp_path, {"transcript_path": tp, "cwd": other,
+                                     "last_assistant_message": "ok"})
+    assert decision_of(capsys) is None, other
+    assert len(list(isolated_state.glob("claude-self-improve-*.state"))) == 1
+
+
+def test_a_normalized_path_keeps_its_existing_state_file(tmp_path, monkeypatch, capsys,
+                                                         isolated_state):
+    """Existing state files were named from the RAW cwd. For an absolute, normalized cwd - the only
+    form Claude Code sends - the new key is the same digest, so no existing file is orphaned."""
+    import hashlib
+    proj = str(tmp_path / "p")
+    legacy = hashlib.sha1(proj.encode("utf-8", "replace")).hexdigest()[:16]
+    assert G._sig.proj_key(proj) == legacy
+    tp = _write(tmp_path, *_tool_turn("no, that is wrong - use uv"))
+    run_gate(monkeypatch, tmp_path, {"transcript_path": tp, "cwd": proj,
+                                     "last_assistant_message": "ok"})
+    assert decision_of(capsys) == "block"
+    assert (isolated_state / ("claude-self-improve-%s.state" % legacy)).is_file()
+
+
+@pytest.mark.parametrize("payload", ["[]", "null", "7", '"text"'])
+def test_a_non_object_event_exits_zero(payload, monkeypatch, capsys):
+    """`event.get` on a list raised outside any guard: rc 1 and a traceback, against the
+    module docstring's "every failure path exits 0"."""
+    monkeypatch.setattr(sys, "stdin", io.StringIO(payload))
+    assert G.main() == 0
+    assert decision_of(capsys) is None
+
+
+def test_the_routing_hint_says_what_its_evidence_covers(tmp_path, monkeypatch, capsys):
+    """The touched-paths record accumulates for the whole session and nothing clears it per turn,
+    so the hint may only claim the session edited those files, not this turn."""
+    import self_improve_signals as S
+    _iso_home(tmp_path, monkeypatch)
+    root = _two_trees(tmp_path)
+    S.record_touched_path("sR", str(root / "treeA" / "projA2" / "sib.py"))
+    tp = make_transcript(tmp_path, user="No, that's wrong, the flag is --tree")
+    run_gate(monkeypatch, tmp_path, {"transcript_path": tp, "cwd": str(root / "treeA" / "projA1"),
+                                     "session_id": "sR"})
+    reason = _reason_of(capsys)
+    assert "this session edited files under" in reason
+    assert "this turn also edited" not in reason
