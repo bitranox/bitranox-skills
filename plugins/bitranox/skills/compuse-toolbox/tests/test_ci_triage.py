@@ -221,3 +221,125 @@ class TestGhSource:
         assert T.main(["--gh", "123", "--repo", "o/r"], run=fake_gh) == 1
         assert calls[0][-2:] == ["--repo", "o/r"]
         assert "error: boom" in capsys.readouterr().out
+
+
+class TestKeywordCoverage:
+    """Real failure shapes the default keywords must hit, with the green lines they must not."""
+
+    @pytest.mark.parametrize("line", [
+        # An exception class whose name has capitals right before "Error"/"Warning".
+        "OSError: [Errno 2] No such file or directory: 'x'",
+        "IOError: disk full",
+        "EOFError: EOF when reading a line",
+        "ssl.SSLError: [SSL] certificate verify",
+        "HTTPError: HTTP 404: Not Found",
+        "requests.exceptions.HTTPError: 500 Server",
+        "URLError: <urlopen>",
+        # failure / failures / failing (maven, junit, mocha).
+        "[INFO] BUILD FAILURE",
+        "There were 2 failures:",
+        "Failures:",
+        "  1 failing",
+        # A count after the word, non-zero.
+        "Tests run: 5, Failures: 1, Errors: 0, Skipped: 0",
+        "Errors: 2",
+        "Tests run: 5, Failures: 0, Errors: 0, Warnings: 3",
+        # Rust double panic.
+        "thread 'main' panicked while panicking. aborting.",
+    ])
+    def test_failure_line_is_a_hit(self, line):
+        assert len(T.error_lines(line + "\n")) == 1, line
+
+    @pytest.mark.parametrize("line", [
+        # Zero counts in both orders are a green summary.
+        "Errors: 0",
+        "Warnings: 0",
+        "Tests run: 5, Failures: 0, Errors: 0, Skipped: 0",
+        "0 failures",
+        "  0 failing",
+        "  12 passing",
+        "[INFO] BUILD SUCCESS",
+        # A keyword glued into an identifier or a path is not a hit.
+        "src/error_handler.py:3 ok",
+        "import ErrorBoundary from './x'",
+        "collected tests/test_failing_cases.py",
+        # A crate named after a keyword is not a failure.
+        "Downloaded failure v0.1.8",
+        "   Compiling error-chain v0.12.4",
+        "    Checking failure_derive v0.1.8",
+        "  Downloaded warnings v0.2.1",
+    ])
+    def test_green_line_is_not_a_hit(self, line):
+        assert T.error_lines(line + "\n") == [], line
+
+
+def _gh_log(rows: list[tuple[str, str, str]]) -> str:
+    """A `gh run view --log` shaped log: job TAB step TAB timestamp SPACE line."""
+    ts = "2026-09-25T10:20:40.1234567Z"
+    return "".join(f"{job}\t{step}\t{ts} {body}\n" for job, step, body in rows)
+
+
+class TestStepByGhStepName:
+    """`--gh --step NAME` names the step as gh lists it (the 2nd column), not the ##[group] text."""
+
+    ROWS = [
+        ("build", "Set up job", "Current runner version: '2.330.0'"),
+        ("build", "Select PyPI auth method", "##[group]Run if [ -n \"$T\" ]; then"),
+        ("build", "Select PyPI auth method", "##[endgroup]"),
+        ("build", "Select PyPI auth method", "error: token missing"),
+        ("build", "Run tests", "##[group]Run make test"),
+        ("build", "Run tests", "all good"),
+    ]
+
+    def test_step_found_by_gh_step_column(self, tmp_path, capsys):
+        rc = T.main(["--file", _write(tmp_path, _gh_log(self.ROWS)), "--step", "Select PyPI auth method"])
+        out = capsys.readouterr().out
+        assert rc == 1, out
+        assert out.startswith("4: build\tSelect PyPI auth method\t"), out
+
+    def test_step_by_column_excludes_other_steps(self, tmp_path, capsys):
+        rc = T.main(["--file", _write(tmp_path, _gh_log(self.ROWS)), "--step", "Run tests"])
+        assert rc == 0, capsys.readouterr().out
+
+    def test_header_text_still_works_on_a_gh_log(self, tmp_path, capsys):
+        rc = T.main(["--file", _write(tmp_path, _gh_log(self.ROWS)), "--step", "Run if"])
+        assert rc == 1, capsys.readouterr().out
+
+    def test_absent_step_name_is_still_exit_2(self, tmp_path, capsys):
+        rc = T.main(["--file", _write(tmp_path, _gh_log(self.ROWS)), "--step", "Deploy"])
+        assert rc == 2
+        assert "Deploy" in capsys.readouterr().err
+
+    def test_unknown_step_column_falls_back_to_header_text(self, tmp_path, capsys):
+        """gh writes UNKNOWN STEP when it cannot map a line; the ##[group] header must still work."""
+        rows = [
+            ("build", "UNKNOWN STEP", "##[group]Run make lint"),
+            ("build", "UNKNOWN STEP", "warning: lint"),
+            ("build", "UNKNOWN STEP", "##[group]Run make test"),
+            ("build", "UNKNOWN STEP", "all good"),
+        ]
+        path = _write(tmp_path, _gh_log(rows))
+        assert T.main(["--file", path, "--step", "Run make test"]) == 0
+        assert T.main(["--file", path, "--step", "Run make lint"]) == 1
+        assert "2: build\tUNKNOWN STEP\t" in capsys.readouterr().out
+
+    def test_step_in_every_matrix_job_is_triaged_not_only_the_first(self, tmp_path, capsys):
+        rows = [
+            ("Tests (3.12, ubuntu)", "Run tests", "##[group]Run make test"),
+            ("Tests (3.12, ubuntu)", "Run tests", "all good"),
+            ("Tests (3.12, ubuntu)", "Upload", "##[group]Run upload"),
+            ("Tests (3.12, ubuntu)", "Upload", "warning: upload flaky"),
+            ("Tests (3.13, windows)", "Run tests", "##[group]Run make test"),
+            ("Tests (3.13, windows)", "Run tests", "FAILED tests/test_x.py::test_y"),
+        ]
+        rc = T.main(["--file", _write(tmp_path, _gh_log(rows)), "--step", "Run tests"])
+        out = capsys.readouterr().out
+        assert rc == 1, out
+        assert "6: " in out and "warning: upload flaky" not in out, out
+
+    def test_header_step_in_every_block_is_triaged_not_only_the_first(self, tmp_path, capsys):
+        log = "##[group]Run make test\nok\n##[group]Run lint\nwarning: lint\n##[group]Run make test\nerror: boom\n"
+        rc = T.main(["--file", _write(tmp_path, log), "--step", "Run make test"])
+        out = capsys.readouterr().out
+        assert rc == 1, out
+        assert "6: error: boom" in out and "warning: lint" not in out, out

@@ -79,7 +79,7 @@ _TABLE = "|"
 _FENCES = ("```", "~~~")
 _LIST_MARKERS = ("- ", "* ", "+ ")
 _EOL = re.compile(r"\r\n|\r|\n")
-_BOM = "﻿"
+_BOM = "\ufeff"
 # Matched on the lstripped line: this tool's documents indent prose, and treating an indented
 # heading as a boundary is the safe error (a refusal or a smaller paragraph, never a merge).
 _ATX = re.compile(r"#{1,6}(?:[ \t]|$)")

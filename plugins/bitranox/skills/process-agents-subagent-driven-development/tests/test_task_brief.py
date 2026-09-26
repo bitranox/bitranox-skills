@@ -103,18 +103,96 @@ def test_task_30_still_does_not_fold_into_task_3():
     assert "body thirty" in TB.extract_task(ID_PLAN, 30)
 
 
-# ---- a trailing non-task section ----------------------------------------------------------------
+# ---- where a task ends --------------------------------------------------------------------------
+# Real plans put a task's own sections (Steps, Files, a run record) at or below the task heading's
+# level, and plan-level sections (a phase, a milestone, Self-review) ABOVE it: the writing-plans
+# template writes "### Task N" under "## Global Constraints" / "## Self-review".
+
 def test_a_section_after_the_last_task_is_not_part_of_it():
-    plan = ("# Plan\n\n## Task 1: only\n\nbody one\n\n### Step detail\n\nstill one\n\n"
-            "## Rollout notes\n\nDelete the prod database\n")
-    text = TB.extract_task(plan, 1)
-    assert "still one" in text          # a deeper heading stays inside the task
+    """The template's shape: ### tasks, then a ## Self-review the implementer must not act on."""
+    plan = ("# Plan\n\n## Global Constraints\n\nc\n\n### Task 1: first\n\none\n\n"
+            "### Task 2: only\n\nbody two\n\n#### Step detail\n\nstill two\n\n"
+            "## Self-review\n\nDelete the prod database\n")
+    text = TB.extract_task(plan, 2)
+    assert "still two" in text          # a deeper heading stays inside the task
     assert "Delete the prod database" not in text
 
 
 def test_a_higher_level_heading_also_ends_the_task():
     plan = "### Task 1\none\n## Appendix\nnot one\n"
     assert "not one" not in TB.extract_task(plan, 1)
+
+
+def test_a_milestone_heading_between_tasks_ends_the_task_before_it():
+    plan = ("### Task 7: adopt\n\nseven\n\n## M2 - the kernel (Tasks 8-18)\n\nmilestone intro\n\n"
+            "### Task 8: token\n\neight\n")
+    assert "milestone intro" not in TB.extract_task(plan, 7)
+    assert "milestone intro" not in TB.extract_task(plan, 8)
+
+
+FLAT_PLAN = """# Plan
+
+## Task 1: one
+
+intro one
+
+## Steps
+
+step one
+
+## Files
+
+file_one.py
+
+## Task 2: two
+
+intro two
+
+## Steps
+
+step two
+
+## Files
+
+file_two.py
+"""
+
+
+@pytest.mark.parametrize("task, own, foreign", [
+    (1, ["intro one", "step one", "file_one.py"], ["intro two", "step two"]),
+    (2, ["intro two", "step two", "file_two.py"], ["intro one", "step one"]),  # the last task too
+])
+def test_a_task_section_at_the_task_heading_level_stays_inside_the_task(task, own, foreign):
+    """"## Task 1" then "## Steps" / "## Files": the task's own sections, not its end."""
+    text = TB.extract_task(FLAT_PLAN, task)
+    for needle in own:
+        assert needle in text, needle
+    for needle in foreign:
+        assert needle not in text, needle
+
+
+def test_a_single_task_with_same_level_sections_keeps_them():
+    plan = "# Plan\n\n## Task 1: only\n\nintro\n\n## Steps\n\nstep one\n\n## Files\n\nf.py\n"
+    text = TB.extract_task(plan, 1)
+    assert "step one" in text and "f.py" in text
+
+
+def test_a_run_record_under_the_last_task_of_a_part_stays_with_it():
+    """A real plan's shape: a ### record under ### Task 4, then a # Part heading, then Task 1."""
+    plan = ("# Part C\n\n### Task 4: the measurement run\n\nsteps\n\n"
+            "### What the run actually did\n\nthe record\n\n"
+            "# Part D: M1 only\n\npart intro\n\n### Task 1: the registry\n\nbody one\n")
+    four = TB.extract_task(plan, 4)
+    assert "the record" in four
+    assert "part intro" not in four and "body one" not in four
+
+
+def test_a_same_level_trailing_section_is_kept_with_the_last_task():
+    """The price of the rule above: after the last task, a section written at the task's own level
+    cannot be told from that task's Steps, so it stays in the brief rather than cutting the
+    task short. Write plan-level sections above the task level (the template does)."""
+    plan = "## Task 1: only\n\nbody one\n\n## Rollout notes\n\nnotes text\n"
+    assert "notes text" in TB.extract_task(plan, 1)
 
 
 # ---- line handling ------------------------------------------------------------------------------

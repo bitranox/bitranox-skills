@@ -37,8 +37,11 @@ Kept, with the reason stated per directory:
 * any version with a LIVE `.in_use` lock (a session running right now, this one included), or
   whose `.in_use` directory cannot be listed;
 * any version whose path appears in a settings file, which pins it - spelled absolute, or
-  relative to the home directory as `~/`, `$HOME/` or `${HOME}/`;
+  relative to the home or Claude config directory however that prefix is written (`~/`,
+  `"$HOME"/`, `%USERPROFILE%`, `$env:USERPROFILE/`, `${CLAUDE_CONFIG_DIR}/`, quoted or not):
+  the part beneath it is searched on its own;
 * the SOLE version of a plugin a settings file's `enabledPlugins` names, however it is set -
+  counting only real version directories, since a symlinked sibling is refused and never removed;
   disabled is not uninstalled, and its cache is still wanted. `enabledPlugins` names a plugin,
   never a version, so it cannot choose between several. The settings files are the user's pair
   PLUS the same pair inside every project `~/.claude.json` lists, because a plugin enabled only
@@ -78,8 +81,12 @@ cannot be read, is not UTF-8, is not valid JSON or has the wrong shape, or a `--
 `--claude-json` that names a missing file - stops the run with exit 2 before anything is planned
 or removed, naming the file and the reason. Skipping it would lose the pin or `enabledPlugins`
 entry it holds and plan that version for deletion. A discovered file that is simply absent, or
-one holding only whitespace, is ordinary and holds nothing. `--json` emits the machine-readable envelope; warnings
-always go to stderr so stdout stays parseable.
+one holding only whitespace, is ordinary and holds nothing.
+
+`--json` emits the machine-readable envelope `{ok, command, skipped, data}` on every exit code:
+on exit 2 (including a command line argparse rejects, and a crash) it is `ok: false`,
+`data: null` and an `error` naming the reason. Diagnostics always go to stderr as well, so
+stdout stays parseable.
 """
 
 from __future__ import annotations
@@ -93,9 +100,10 @@ import stat
 import sys
 import time
 import traceback
+from collections.abc import Callable, Iterable, Sequence
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Callable, Iterable, Sequence
+from typing import NoReturn
 
 __all__ = [
     "ApplyResult",
@@ -437,38 +445,54 @@ def read_install_record(installed_plugins: Path) -> InstallRecord:
     return InstallRecord(installed_plugins, frozenset(found))
 
 
-_HOME_PREFIXES = ("~", "$HOME", "${HOME}")
-
-
-def pin_needles(path: Path, *, spellings: Iterable[Path] = (), homes: Iterable[Path] = ()) -> set[str]:
+def pin_needles(
+    path: Path, *, spellings: Iterable[Path] = (), anchors: Iterable[Path] = ()
+) -> set[str]:
     r"""Every text a settings file may use to name this directory.
 
-    Three renderings per spelling, because the search is over the file's RAW TEXT (deliberately -
-    a path can sit anywhere in it, including in a file that is not valid JSON) and a settings file
-    is JSON, which ESCAPES a backslash. On Windows the stored text reads "C:\\Users\\..." while
-    str(path) is "C:\Users\...", so neither the native nor the posix spelling was ever found and
-    a pinned version looked unpinned. A hook command also names a path relative to the home
-    directory - `~/`, `$HOME/`, `${HOME}/` - which is the ordinary spelling, so those count too.
-    This function's false negative is a DELETION, so every extra needle errs the safe way.
+    The search is over the file's RAW TEXT (deliberately - a path can sit anywhere in it,
+    including in a file that is not valid JSON), and a settings file is JSON, which ESCAPES a
+    backslash: on Windows the stored text reads "C:\\Users\\..." while str(path) is
+    "C:\Users\...". So each spelling is searched native, posix, JSON-escaped, and with every "/"
+    written as the "\/" JSON also allows.
+
+    A hook command usually names the path relative to a directory it spells as a variable, and
+    that prefix is shell, PowerShell or cmd text: `~`, `$HOME`, `"$HOME"`, `'${HOME}'`,
+    `%USERPROFILE%`, `$env:USERPROFILE`, `${CLAUDE_CONFIG_DIR}`, each quoted or not. Enumerating
+    prefixes always misses one, so the part BENEATH each anchor (the home directory, the Claude
+    config directory) is searched on its own, whatever precedes it. That part still names the
+    marketplace, plugin and version, so it cannot match a neighbour. This function's false
+    negative is a DELETION, so every extra needle errs the safe way.
     """
     needles: set[str] = set()
-    home_list = list(homes)
+    anchor_list = list(anchors)
     for spelling in (path, *spellings):
         needles.update(_renderings(str(spelling), spelling.as_posix()))
-        for home in home_list:
+        for anchor in anchor_list:
             try:
-                relative = spelling.relative_to(home)
+                relative = spelling.relative_to(anchor)
             except ValueError:
                 continue
-            for prefix in _HOME_PREFIXES:
-                needles.update(
-                    _renderings(f"{prefix}{os.sep}{relative}", f"{prefix}/{relative.as_posix()}")
-                )
+            if relative.parts:
+                needles.update(_renderings(str(relative), relative.as_posix()))
     return needles
 
 
 def _renderings(native: str, posix: str) -> set[str]:
-    return {native, posix, json.dumps(native)[1:-1]}
+    """The native, posix and backslash forms, each also as JSON stores it inside a string.
+
+    The backslash form is rendered on every platform: a settings file may be shared or synced
+    from Windows, and an extra needle only keeps more.
+    """
+    windows = posix.replace("/", "\\")
+    return {
+        native,
+        posix,
+        windows,
+        json.dumps(native)[1:-1],
+        json.dumps(windows)[1:-1],
+        posix.replace("/", "\\/"),
+    }
 
 
 class SettingsError(ValueError):
@@ -531,14 +555,14 @@ def pinning_settings(
     settings_files: Iterable[Path | SettingsFile],
     *,
     spellings: Iterable[Path] = (),
-    homes: Iterable[Path] = (),
+    anchors: Iterable[Path] = (),
 ) -> str | None:
     """The settings file that names this exact directory, or None when nothing pins it.
 
     See `pin_needles` for the spellings searched. A file that cannot be read raises
     SettingsError rather than being skipped, since skipping it deletes whatever it pins.
     """
-    needles = pin_needles(path, spellings=spellings, homes=homes)
+    needles = pin_needles(path, spellings=spellings, anchors=anchors)
     for item in settings_files:
         settings = _loaded(item)
         if any(needle in settings.text for needle in needles):
@@ -735,7 +759,7 @@ def build_plan(
         installed=record.install_paths,
         explicit=tuple(canonical(item) for item in keep),
         settings=sources.files,
-        homes=_homes(given),
+        pin_anchors=_pin_anchors(given),
     )
     moment = time.time() if now is None else now
 
@@ -777,16 +801,17 @@ class _KeepContext:
     installed: frozenset[str]
     explicit: tuple[str, ...]
     settings: tuple[SettingsFile, ...]
-    homes: tuple[Path, ...]
+    pin_anchors: tuple[Path, ...]
 
 
-def _homes(given: Path) -> tuple[Path, ...]:
-    """The home directories a `~/` pin may be relative to: the user's, and the cache's own.
+def _pin_anchors(given: Path) -> tuple[Path, ...]:
+    """The directories a pin may be spelled relative to: the home directory and the config dir.
 
-    The cache path names its home (`<home>/.claude/plugins/cache`), which holds even when the
-    environment's HOME points elsewhere; both are searched, since an extra needle only keeps more.
+    The cache path names both (`<home>/<config dir>/plugins/cache`), which holds even when the
+    environment's HOME points elsewhere or the config dir is not `.claude` (CLAUDE_CONFIG_DIR);
+    the user's own home is searched too, since an extra needle only keeps more.
     """
-    found: list[Path] = [given.parent.parent.parent]
+    found: list[Path] = [given.parent.parent.parent, given.parent.parent]
     try:
         found.append(Path.home())
     except (RuntimeError, KeyError, OSError):
@@ -923,16 +948,33 @@ def _version_entry(version_dir: Path, *, holder: str | None, context: _KeepConte
     as_given = context.given / version_dir.relative_to(context.root)
     reason = _keep_reason(
         canonical(version_dir),
-        sole=len(_child_dirs(version_dir.parent)) == 1,
+        sole=_real_version_count(version_dir.parent, base=context.root) == 1,
         holder=holder,
         installed=context.installed,
         explicit=context.explicit,
         pinned=pinning_settings(
-            version_dir, context.settings, spellings=[as_given], homes=context.homes
+            version_dir, context.settings, spellings=[as_given], anchors=context.pin_anchors
         ),
         enabled=enabling_settings(marketplace, plugin, context.settings),
     )
     return Entry(**{**entry.__dict__, "keep_reason": reason})
+
+
+def _real_version_count(plugin_dir: Path, *, base: Path) -> int:
+    """How many distinct REAL version directories a plugin has, for the sole-version rule.
+
+    An alias beside a version - a symlinked sibling, whether it points at that version, at
+    another plugin's or outside the cache - is refused and never removed, so it is no version
+    of its own. Counted as one, it made an enabled plugin's only real version read as one of
+    two, and that version was deleted. Directories are also counted once per resolved path.
+    """
+    return len(
+        {
+            canonical(child)
+            for child in _child_dirs(plugin_dir)
+            if refusal_for(child, base=base) is None
+        }
+    )
 
 
 def _keep_reason(
@@ -1086,8 +1128,24 @@ def parse_duration(value: str) -> float:
     return float(match.group(1)) * _DURATION_UNITS[match.group(2)]
 
 
+class _ArgumentError(Exception):
+    """A command line argparse rejected, raised instead of exiting so --json can still answer."""
+
+
+class _Parser(argparse.ArgumentParser):
+    def error(self, message: str) -> NoReturn:
+        self.print_usage(sys.stderr)
+        raise _ArgumentError(f"error: {message}")
+
+
+def _wants_json(argv: Sequence[str]) -> bool:
+    """Whether --json was asked for, read BEFORE parsing so a rejected command line still gets
+    its envelope. argparse accepts an unambiguous prefix (`--js`), so that counts too."""
+    return any(len(token) >= 3 and "--json".startswith(token) for token in argv)
+
+
 def _build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(
+    parser = _Parser(
         prog="pluginprune",
         description=(
             "Reclaim disk from the Claude Code plugin cache without breaking a running "
@@ -1215,36 +1273,58 @@ def _usage_problem(plan: Plan, args: argparse.Namespace) -> str | None:
     return None
 
 
-def _report_settings_problems(problems: Sequence[str]) -> None:
-    """Name every settings source that could not be used, and why nothing was planned."""
-    for problem in problems:
-        print(f"pluginprune: settings: {problem}", file=sys.stderr)
-    print(
-        "pluginprune: nothing planned or removed - a pin or enabledPlugins entry in a file it"
-        " cannot use may be what keeps a version, and reading that file as empty would delete"
-        " it. Repair the file, or choose the files yourself with --settings or"
-        " --no-project-settings.",
-        file=sys.stderr,
-    )
+_SETTINGS_ADVICE = (
+    "nothing planned or removed - a pin or enabledPlugins entry in a file it cannot use may be"
+    " what keeps a version, and reading that file as empty would delete it. Repair the file, or"
+    " choose the files yourself with --settings or --no-project-settings."
+)
+
+
+def _settings_error(problems: Sequence[str]) -> str:
+    """Every settings source that could not be used, and why nothing was planned."""
+    return "".join(f"settings: {problem}\n" for problem in problems) + _SETTINGS_ADVICE
+
+
+def _error_exit(message: str, *, json_output: bool) -> int:
+    """Exit 2: the message on stderr, and under --json an envelope on stdout as well.
+
+    A caller that asked for --json parses stdout, so an empty stdout on exit 2 reads as a broken
+    tool rather than as the refusal it is.
+    """
+    for line in message.splitlines():
+        print(f"pluginprune: {line}", file=sys.stderr)
+    if json_output:
+        envelope = {
+            "ok": False,
+            "command": "pluginprune",
+            "skipped": [],
+            "data": None,
+            "error": message,
+        }
+        print(json.dumps(envelope, indent=2))
+    return 2
 
 
 def main(argv: Sequence[str] | None = None) -> int:
     """Run the command line. An unexpected crash exits 2, never 1 ("refused or not removed")."""
     _tolerant_streams()
-    args = _build_parser().parse_args(argv)
+    raw = list(sys.argv[1:] if argv is None else argv)
+    json_output = _wants_json(raw)
+    try:
+        args = _build_parser().parse_args(raw)
+    except _ArgumentError as exc:
+        return _error_exit(str(exc), json_output=json_output)
     try:
         return _run(args)
     except Exception as exc:  # noqa: BLE001 - the boundary that keeps a crash off exit code 1
         traceback.print_exc(file=sys.stderr)
-        print(f"pluginprune: unexpected {type(exc).__name__}: {exc}", file=sys.stderr)
-        return 2
+        return _error_exit(f"unexpected {type(exc).__name__}: {exc}", json_output=json_output)
 
 
 def _run(args: argparse.Namespace) -> int:
     cache_dir = Path(args.cache_dir).expanduser() if args.cache_dir else default_cache_dir()
     if not cache_dir.is_dir():
-        print(f"pluginprune: no plugin cache at {cache_dir}", file=sys.stderr)
-        return 2
+        return _error_exit(f"no plugin cache at {cache_dir}", json_output=args.json)
 
     plan = build_plan(
         cache_dir,
@@ -1259,11 +1339,9 @@ def _run(args: argparse.Namespace) -> int:
     )
     problem = _usage_problem(plan, args)
     if problem is not None:
-        print(f"pluginprune: {problem}", file=sys.stderr)
-        return 2
+        return _error_exit(problem, json_output=args.json)
     if plan.settings_problems:
-        _report_settings_problems(plan.settings_problems)
-        return 2
+        return _error_exit(_settings_error(plan.settings_problems), json_output=args.json)
 
     if plan.saw_lock_dir and not plan.saw_live_lock and plan.prune:
         # No live lock anywhere means the running session's own version cannot be identified

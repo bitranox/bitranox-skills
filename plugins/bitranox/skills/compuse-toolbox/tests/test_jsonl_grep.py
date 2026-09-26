@@ -339,8 +339,8 @@ def test_a_bom_on_stdin_does_not_cost_the_first_record():
 
 
 def test_a_line_separator_inside_a_value_does_not_split_the_record():
-    text = json.dumps({"m": "a b\fc"}, ensure_ascii=False) + "\n"
-    assert J.filter_records(text, field="m") == ["a b\fc"]
+    text = json.dumps({"m": "a\u2028b\fc"}, ensure_ascii=False) + "\n"
+    assert J.filter_records(text, field="m") == ["a\u2028b\fc"]
 
 
 # --- --count reads stdin like every other mode ----------------------------------------------------

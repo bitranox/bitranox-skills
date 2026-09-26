@@ -58,6 +58,7 @@ import json
 import os
 import re
 import shlex
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -418,8 +419,28 @@ def _in_a_venv(interpreter: Path) -> bool:
     return (Path(interpreter).parent.parent / "pyvenv.cfg").is_file()
 
 
-def default_python(path_env: str | None = None, base_prefix: Path | None = None) -> str:
-    """The interpreter to launch the engine with: the first NON-VENV python3 on PATH.
+_PROBE_TIMEOUT_S = 15
+
+
+def runs_python3(interpreter: Path) -> bool:
+    """True when `interpreter` actually STARTS and reports Python 3 - the bar run-python.sh sets.
+
+    Existing on disk proves nothing on Windows: %LOCALAPPDATA%/Microsoft/WindowsApps holds
+    python.exe and python3.exe App Execution Aliases that pass is_file() and os.access(X_OK) and,
+    unless the Store Python is installed, exit 9009 printing "Python was not found".
+    """
+    try:
+        proc = subprocess.run(
+            [str(interpreter), "-c", "import sys; sys.exit(0 if sys.version_info[0] >= 3 else 1)"],
+            capture_output=True, check=False, timeout=_PROBE_TIMEOUT_S)
+    except (OSError, subprocess.SubprocessError):
+        return False
+    return proc.returncode == 0
+
+
+def default_python(path_env: str | None = None, base_prefix: Path | None = None, *,
+                   runs: Callable[[Path], bool] = runs_python3) -> str:
+    """The interpreter to launch the engine with: the first NON-VENV python3 on PATH that RUNS.
 
     Neither of the obvious answers works. `sys.executable` under `uv run` is an EPHEMERAL build
     venv under the uv cache, so a --dry-run command printed for a human to paste names a path that
@@ -430,6 +451,11 @@ def default_python(path_env: str | None = None, base_prefix: Path | None = None)
     Windows names its interpreter `python.exe` (there is no python3.exe in a python.org install)
     and keeps it at the ROOT of the base prefix, not under bin/, so both are tried before falling
     back to sys.executable. A bare `python` is not tried on POSIX, where it may be Python 2.
+
+    Every candidate is EXECUTED (`runs`) before it is chosen, because the Windows Store stubs are
+    files too: with WindowsApps ahead of the real install on PATH, or the real install not on PATH
+    at all (the python.org installer's default), the stub won and every live apply died with
+    engine exit 9009. `runs` is the injection seam for tests that fake a layout.
     """
     raw = os.environ.get("PATH", "") if path_env is None else path_env
     for entry in raw.split(os.pathsep):
@@ -437,11 +463,12 @@ def default_python(path_env: str | None = None, base_prefix: Path | None = None)
             continue
         for name in ("python3", "python3.exe", "python.exe"):
             cand = Path(entry) / name
-            if cand.is_file() and os.access(cand, os.X_OK) and not _in_a_venv(cand):
+            if (cand.is_file() and os.access(cand, os.X_OK) and not _in_a_venv(cand)
+                    and runs(cand)):
                 return str(cand)
     base = Path(sys.base_prefix) if base_prefix is None else Path(base_prefix)
     for cand in (base / "bin" / "python3", base / "python.exe"):
-        if cand.is_file():
+        if cand.is_file() and runs(cand):
             return str(cand)
     return sys.executable
 
@@ -624,6 +651,9 @@ def cmd_apply(args, rules: EngineRules) -> int:
                         + ["the engine was not invoked; nothing was staged or written"]))
         return 1
 
+    # A stage dir this call CREATED is this call's to remove once the engine has taken the files;
+    # one the caller named with --stage-dir is the caller's, and is never touched.
+    own_stage = not args.stage_dir
     stage = Path(args.stage_dir) if args.stage_dir else Path(
         tempfile.mkdtemp(prefix="factedit-"))
     skipped: list[str] = []
@@ -646,8 +676,9 @@ def cmd_apply(args, rules: EngineRules) -> int:
             "body_file": str(body_path) if body_path else None,
             "hook_chars": verdict.length, "accepted": True,
             "advisories": verdict.advisories, "argv": argv,
-            "command": shlex.join(argv), "dry_run": bool(args.dry_run)}
+            "command": shlex.join(argv), "dry_run": bool(args.dry_run), "stage_kept": True}
     if args.dry_run:
+        # The printed command names the staged files and is meant to be pasted, so they stay.
         skipped.append("the engine was not invoked (--dry-run)")
         _emit(args.as_json, "apply", True, data, skipped,
               "\n".join([f"~ advisory: {a}" for a in verdict.advisories]
@@ -655,7 +686,10 @@ def cmd_apply(args, rules: EngineRules) -> int:
                         + ["", shlex.join(argv)]))
         return 0
 
-    proc = _run_engine(argv)
+    try:
+        proc = _run_engine(argv)
+    except EngineLaunchFailed as exc:
+        raise EngineLaunchFailed(f"{exc}; staged files kept in {stage}") from exc
     data["engine_stdout"] = (proc.stdout or "").strip()
     data["engine_returncode"] = proc.returncode
     if proc.stderr:
@@ -663,10 +697,28 @@ def cmd_apply(args, rules: EngineRules) -> int:
         print(proc.stderr.rstrip("\n"), file=sys.stderr)
     ok = proc.returncode == 0
     data["accepted"] = ok
+    if ok and own_stage:
+        data["stage_kept"] = not _remove_stage(stage, skipped)
+    tail = [] if not data["stage_kept"] else [f"staged files kept in {stage}"]
     _emit(args.as_json, "apply", ok, data, skipped,
           "\n".join([f"~ advisory: {a}" for a in verdict.advisories]
-                    + [data["engine_stdout"] or "(engine printed nothing)"]))
+                    + [data["engine_stdout"] or "(engine printed nothing)"] + tail))
     return _exit_for_engine(proc.returncode)
+
+
+def _remove_stage(stage: Path, skipped: list[str]) -> bool:
+    """Remove a stage dir this call created, now that the engine has the files. True if gone.
+
+    Without this every live apply left a factedit-* dir in the temp dir (1,600+ on one machine).
+    A removal that fails does not undo a write the engine already made, so it is reported in
+    `skipped` rather than turned into an error.
+    """
+    try:
+        shutil.rmtree(stage)
+    except OSError as exc:
+        skipped.append(f"could not remove the stage dir {stage}: {exc}")
+        return False
+    return True
 
 
 def _run_engine(argv: list[str]) -> subprocess.CompletedProcess:

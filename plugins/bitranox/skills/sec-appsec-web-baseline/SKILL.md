@@ -32,9 +32,9 @@ Use the Read tool to load the reference below before proposing fixes.
 
 ## Bundled scripts
 
-| Script             | Purpose                                                                                                                                                                                                                                                                                                                                            |
-|--------------------|----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
-| `audit_headers.py` | `uv run audit_headers.py https://host` - one GET + a plain-HTTP HEAD, grades headers/cookies/redirect/mixed-content SEVERE/MEDIUM/MINOR/OK, exits non-zero if not clean. `--json` for machine output. `--proxy URL` egresses through an external proxy (audit a public site from outside - see net-rotating-proxies). No external grading service. |
+| Script             | Purpose                                                                                                                                                                                                                                                                                                                                                                                                                                    |
+|--------------------|--------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
+| `audit_headers.py` | `uv run audit_headers.py https://host` - one GET + a plain-HTTP HEAD, grades headers/cookies/redirect/mixed-content SEVERE/MEDIUM/MINOR/OK, exits 0 when clean (0 SEVERE / 0 MEDIUM), 1 when not, 2 when the URL could not be fetched at all (nothing measured). `--json` for machine output. `--proxy URL` egresses through an external proxy (audit a public site from outside - see net-rotating-proxies). No external grading service. |
 
 ## Workflow
 
@@ -67,8 +67,9 @@ Defaults this skill prescribes; deviate only with a reason. Full values + snippe
   headers) and grades the wrong thing. Egress externally: `--proxy http://<proxy>` for one page, or fan a
   multi-page worklist across `net-rotating-proxies` (fast, parallel), ideally in SUBAGENTS (cross-ref
   `bitranox:process-agents-dispatching-parallel`) so each scan's output stays out of the main context.
-  Gate proxy-health on a written output file, NOT the scanner's exit code (which is the security verdict,
-  not a connection signal).
+  Gate proxy-health on exit 2 (the page could not be fetched - a dead proxy or an unreachable site,
+  nothing measured) plus a written output file; exits 0 and 1 are the security verdict, never a
+  connection signal.
 
 ## Scope boundary (hand off to sibling skills)
 

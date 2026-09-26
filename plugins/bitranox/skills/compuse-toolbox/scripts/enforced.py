@@ -533,6 +533,22 @@ def _tolerate_unencodable_stdout() -> None:
         pass
 
 
+def _root_problem(root: Path) -> str | None:
+    """Why ``root`` cannot be scanned, or None when it can be looked at.
+
+    Not Path.exists(): before Python 3.14 it RAISES PermissionError for a path under an
+    unreadable directory, and the traceback's exit 1 means "parsed but never enforced". Since
+    3.14 it answers False, which would call an unreachable root missing. Both are exit 2, and
+    the message says which."""
+    try:
+        os.stat(root)
+    except (FileNotFoundError, NotADirectoryError):
+        return f"no such root: {root}"
+    except (OSError, ValueError) as exc:
+        return f"root cannot be accessed ({type(exc).__name__}): {root}"
+    return None
+
+
 def main(argv: list[str] | None = None) -> int:
     _tolerate_unencodable_stdout()
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
@@ -542,15 +558,16 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
 
     root = Path(args.root)
-    if not root.exists():
+    problem = _root_problem(root)
+    if problem:
         # JSON mode must still emit JSON when it FAILS, or a caller parsing stdout gets an empty
         # string and reports "no hits" for what was actually a bad path.
         if args.json:
             print(json.dumps({"ok": False, "command": "enforced",
-                              "data": {"identifier": args.identifier, "error": f"no such root: {root}"},
+                              "data": {"identifier": args.identifier, "error": problem},
                               "skipped": []}, indent=1))
         else:
-            print(f"no such root: {root}", file=sys.stderr)
+            print(problem, file=sys.stderr)
         return 2
     hits, unreadable = classify_tree(root, args.identifier)
     verdict = verdict_of(hits)

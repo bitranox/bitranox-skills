@@ -490,8 +490,8 @@ def test_a_line_separator_inside_a_value_does_not_split_the_entry():
     import json
     f = S.contrib_file("/p/u4")
     f.parent.mkdir(parents=True, exist_ok=True)
-    f.write_text(json.dumps({"what": "a b"}, ensure_ascii=False) + "\n", encoding="utf-8")
-    assert [r["what"] for r in S.read_contributions("/p/u4")] == ["a b"]
+    f.write_text(json.dumps({"what": "a\u2028b"}, ensure_ascii=False) + "\n", encoding="utf-8")
+    assert [r["what"] for r in S.read_contributions("/p/u4")] == ["a\u2028b"]
 
 
 def test_an_unreadable_queue_is_never_overwritten_by_add():

@@ -33,20 +33,166 @@ def _is_impure_call(node):
     return False
 
 
-def _stores_into_object(node):
-    """True for ``x[i] = ...`` / ``x.a = ...`` (and aug/del): it mutates an object, often an argument."""
-    targets = []
+# Constructors that always return a NEW container. A shallow copy (list(x), dict(x), x.copy())
+# is new at the top level only: its elements are still the caller's objects.
+_FRESH_CONTAINER_CALLS = frozenset({'list', 'dict', 'set', 'bytearray',
+                                    'Counter', 'OrderedDict', 'deque', 'defaultdict'})
+_FRESH_ELEMENT_FACTORIES = frozenset({'list', 'dict', 'set', 'bytearray'})
+_INFINITE = float('inf')
+
+
+def _call_name(func):
+    if isinstance(func, ast.Name):
+        return func.id
+    if isinstance(func, ast.Attribute):
+        return func.attr
+    return ''
+
+
+def _fresh_depth(expr):
+    """How many subscript levels of *expr*'s value are objects created right here.
+
+    0: not known to be new (a parameter, a global, any other call's result). 1: a new container
+    whose elements may be shared (``[0] * n``, ``dict(base)``). 2: a new container of new
+    containers (``[[0] * m for _ in range(n)]``). A store ``x[i][j] = ...`` is local only
+    when the depth of every value ``x`` is ever bound to covers both subscripts."""
+    if isinstance(expr, (ast.List, ast.Set, ast.Tuple)):
+        return 1 + min((_fresh_depth(e) for e in expr.elts), default=0)
+    if isinstance(expr, ast.Dict):
+        return 1 + min((_fresh_depth(v) for v in expr.values), default=0)
+    if isinstance(expr, (ast.ListComp, ast.SetComp)):
+        return 1 + _fresh_depth(expr.elt)
+    if isinstance(expr, ast.DictComp):
+        return 1 + _fresh_depth(expr.value)
+    if isinstance(expr, ast.BinOp) and isinstance(expr.op, ast.Mult):
+        # [0] * n and n * [0]: repetition copies the element references, not the elements
+        return max(_fresh_depth(expr.left), _fresh_depth(expr.right))
+    if isinstance(expr, ast.Call):
+        return _fresh_call_depth(expr)
+    return 0
+
+
+def _fresh_call_depth(call):
+    name = _call_name(call.func)
+    if name == 'copy' and isinstance(call.func, ast.Attribute) and not call.args:
+        return 1  # x.copy(): a new container holding x's elements
+    if name not in _FRESH_CONTAINER_CALLS:
+        return 0
+    factory = call.args[0] if call.args else None
+    if name == 'defaultdict' and isinstance(factory, ast.Name) \
+            and factory.id in _FRESH_ELEMENT_FACTORIES:
+        return 2  # every missing key gets a new list/dict/set from the factory
+    return 1
+
+
+def _target_names(target):
+    """The plain names an assignment target binds; x[i] and x.a bind none (they store)."""
+    if isinstance(target, ast.Name):
+        return [target.id]
+    if isinstance(target, ast.Starred):
+        return _target_names(target.value)
+    if isinstance(target, (ast.Tuple, ast.List)):
+        return [name for elt in target.elts for name in _target_names(elt)]
+    return []
+
+
+def _not_new(target):
+    return [(name, 0) for name in _target_names(target)]
+
+
+def _target_depths(target, value):
+    """Pair each name in *target* with the fresh depth of the value it receives."""
+    if isinstance(target, ast.Name):
+        return [(target.id, _fresh_depth(value))]
+    pairwise = (isinstance(target, (ast.Tuple, ast.List)) and isinstance(value, (ast.Tuple, ast.List))
+                and len(target.elts) == len(value.elts)
+                and not any(isinstance(e, ast.Starred) for e in (*target.elts, *value.elts)))
+    if pairwise:  # prev, cur = [0] * n, [0] * n
+        return [pair for t, v in zip(target.elts, value.elts) for pair in _target_depths(t, v)]
+    return _not_new(target)
+
+
+def _binding_depths(node):
+    """(name, fresh depth) for each name *node* binds; depth 0 when the value is not new."""
     if isinstance(node, ast.Assign):
-        targets = node.targets
-    elif isinstance(node, (ast.AugAssign, ast.AnnAssign)):
-        targets = [node.target]
-    elif isinstance(node, ast.Delete):
-        targets = node.targets
-    return any(isinstance(t, (ast.Subscript, ast.Attribute)) for t in targets)
+        return [pair for t in node.targets for pair in _target_depths(t, node.value)]
+    if isinstance(node, ast.AnnAssign):
+        return _target_depths(node.target, node.value) if node.value is not None else []
+    if isinstance(node, ast.NamedExpr):
+        return [(node.target.id, _fresh_depth(node.value))]
+    if isinstance(node, ast.AugAssign) and isinstance(node.target, ast.Name):
+        # x += y keeps a mutable x's identity but can bring in y's elements
+        return [(node.target.id, 1)]
+    if isinstance(node, (ast.For, ast.AsyncFor, ast.comprehension)):
+        return _not_new(node.target)
+    if isinstance(node, ast.withitem) and node.optional_vars is not None:
+        return _not_new(node.optional_vars)
+    if isinstance(node, ast.ExceptHandler) and node.name:
+        return [(node.name, 0)]
+    if isinstance(node, ast.arguments):  # this function's, a nested one's, a lambda's
+        args = [*node.posonlyargs, *node.args, *node.kwonlyargs, node.vararg, node.kwarg]
+        return [(a.arg, 0) for a in args if a is not None]
+    if isinstance(node, (ast.Import, ast.ImportFrom)):
+        return [((a.asname or a.name).split('.')[0], 0) for a in node.names]
+    return []
+
+
+def _local_container_depths(func_node):
+    """Name -> how deep a subscript store into it stays inside objects this function created.
+
+    Every binding of the name anywhere in the function counts, nested functions and lambdas
+    included (their parameters too): one binding to something not created here - a
+    parameter, an alias, a loop variable - makes a store through that name a store into an
+    object the caller may hold. A name bound nowhere in the function is a global or a closure."""
+    depths = {}
+    for node in ast.walk(func_node):
+        for name, depth in _binding_depths(node):
+            depths[name] = min(depths.get(name, _INFINITE), depth)
+    return depths
+
+
+def _store_targets(node):
+    if isinstance(node, ast.Assign):
+        return node.targets
+    if isinstance(node, (ast.AugAssign, ast.AnnAssign)):
+        return [node.target]
+    if isinstance(node, ast.Delete):
+        return node.targets
+    return []
+
+
+def _is_shared_store(target, local_depths):
+    """True when storing into *target* (``x[i] = ...``, ``x.a = ...``) can mutate an object
+    the caller sees. A subscript store into a container created in this function is local."""
+    if not isinstance(target, (ast.Subscript, ast.Attribute)):
+        return False
+    levels, node = 0, target
+    while isinstance(node, ast.Subscript):
+        levels += 1
+        node = node.value
+    if not isinstance(node, ast.Name):
+        # an attribute anywhere in the chain (self.x, obj.table[i]) reaches an object the
+        # function did not create, as does a store through a call's result
+        return True
+    return local_depths.get(node.id, 0) < levels
+
+
+def _stores_into_shared_object(node, local_depths):
+    for target in _store_targets(node):
+        # (a, b[i]) = ... stores through each element of the tuple target
+        elts = target.elts if isinstance(target, (ast.Tuple, ast.List)) else [target]
+        if any(_is_shared_store(t, local_depths) for t in elts):
+            return True
+    return False
 
 
 def is_pure_function(func_node):
-    """Heuristic to detect pure functions - no I/O, no global state, no clock, no generator."""
+    """Heuristic to detect pure functions - no I/O, no global state, no clock, no generator.
+
+    A store into a container the function created itself (a DP table, a local tally dict)
+    stays pure; a store into a parameter, a global, a closure variable or an attribute
+    (self.x) does not."""
+    local_depths = _local_container_depths(func_node)
     for node in ast.walk(func_node):
         if isinstance(node, ast.Call) and _is_impure_call(node):
             return False
@@ -55,7 +201,7 @@ def is_pure_function(func_node):
         # A cached generator hands every later caller the same, already exhausted iterator.
         if isinstance(node, (ast.Yield, ast.YieldFrom)):
             return False
-        if _stores_into_object(node):
+        if _stores_into_shared_object(node, local_depths):
             return False
     return True
 

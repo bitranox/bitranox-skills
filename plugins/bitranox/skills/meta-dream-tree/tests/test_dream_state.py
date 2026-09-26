@@ -511,7 +511,7 @@ def test_help_lists_every_verb_and_exits_0(home, flag, capsys):
 
 def test_a_cp1252_stdout_does_not_crash_on_a_non_ascii_transcript(home, tmp_path):
     tp = tmp_path / "u.jsonl"
-    tp.write_text('{"type":"user","message":{"content":"done ✅ → next"}}\n',
+    tp.write_text('{"type":"user","message":{"content":"done \u2705 → next"}}\n',
                   encoding="utf-8")
     D.sig.record_session_meta("/p/u", "sid-u", str(tp))
     env = dict(os.environ, PYTHONIOENCODING="cp1252")

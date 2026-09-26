@@ -179,6 +179,86 @@ def test_cli_unreadable_subdir_is_an_error_not_a_silent_skip(tmp_path):
     assert b"sub" in r.stderr
 
 
+def _symlink(link, target):
+    """Create a symlink, or skip: Windows refuses one without Developer Mode or elevation."""
+    try:
+        os.symlink(target, link)
+    except (OSError, NotImplementedError) as exc:
+        pytest.skip("cannot create a symlink here: %s" % exc)
+
+
+def test_cli_a_dangling_symlink_in_a_walked_tree_is_skipped_not_an_error(tmp_path):
+    """A stale .venv link points at nothing, so it cannot hold a marker: the tree is clean."""
+    (tmp_path / "a.txt").write_text("clean\n", encoding="utf-8")
+    (tmp_path / ".venv" / "bin").mkdir(parents=True)
+    _symlink(tmp_path / ".venv" / "bin" / "python", tmp_path / "no-such-python")
+    r = _run(tmp_path)
+    assert r.returncode == 0, r.stderr
+    assert r.stdout == b""
+    assert b"dangling symlink" in r.stderr and b"python" in r.stderr
+
+
+def test_cli_a_dangling_symlink_does_not_turn_markers_found_into_an_error(tmp_path):
+    (tmp_path / "m.txt").write_text("<<<<<<< HEAD\nx\n=======\ny\n>>>>>>> b\n", encoding="utf-8")
+    _symlink(tmp_path / "stale", tmp_path / "gone")
+    r = _run(tmp_path)
+    assert r.returncode == 1, r.stderr
+    assert b"CONFLICT MARKERS in 1 file(s)" in r.stdout
+
+
+def test_cli_a_symlink_loop_in_a_walked_tree_is_skipped_not_an_error(tmp_path):
+    (tmp_path / "a.txt").write_text("clean\n", encoding="utf-8")
+    _symlink(tmp_path / "self", "self")
+    _symlink(tmp_path / "l1", "l2")
+    _symlink(tmp_path / "l2", "l1")
+    r = _run(tmp_path)
+    assert r.returncode == 0, r.stderr
+    assert r.stderr.count(b"dangling symlink") == 3
+
+
+def test_a_symlink_to_a_file_with_markers_is_still_scanned(tmp_path):
+    """Control: only a link that resolves to nothing is skipped, never a live one."""
+    real = tmp_path / "real.txt"
+    real.write_text("<<<<<<< HEAD\n", encoding="utf-8")
+    sub = tmp_path / "sub"
+    sub.mkdir()
+    _symlink(sub / "link.txt", real)
+    r = _run(sub)
+    assert r.returncode == 1, r.stderr
+    assert b"link.txt:1:" in r.stdout
+
+
+def test_scan_files_lists_a_dangling_symlink_as_skipped_not_unreadable(tmp_path):
+    _symlink(tmp_path / "stale", tmp_path / "gone")
+    unreadable, skipped = [], []
+    assert C.scan_files([tmp_path / "stale"], unreadable, skipped=skipped) == {}
+    assert unreadable == []
+    assert skipped == [str(tmp_path / "stale")]
+
+
+@pytest.mark.skipif(sys.platform == "win32" or (hasattr(os, "geteuid") and os.geteuid() == 0),
+                    reason="needs POSIX permissions that bind the running user (root reads anyway)")
+@pytest.mark.parametrize("via_link", [False, True])
+def test_cli_an_unreadable_real_file_is_still_an_error(tmp_path, via_link):
+    """Control: a real file that exists but cannot be read may hold markers, so it stays exit 2,
+    also when it is reached through a live symlink."""
+    secret = tmp_path / "secret.txt"
+    secret.write_text("<<<<<<< HEAD\n", encoding="utf-8")
+    target = tmp_path
+    if via_link:
+        sub = tmp_path / "sub"
+        sub.mkdir()
+        _symlink(sub / "link.txt", secret)
+        target = sub
+    secret.chmod(0)
+    try:
+        r = _run(target)
+    finally:
+        secret.chmod(0o644)
+    assert r.returncode == 2
+    assert b"could not read" in r.stderr
+
+
 @pytest.mark.skipif(sys.platform != "linux",
                     reason="only Linux filesystems accept a filename that is not valid UTF-8")
 def test_cli_a_non_utf8_filename_does_not_truncate_the_listing(tmp_path):

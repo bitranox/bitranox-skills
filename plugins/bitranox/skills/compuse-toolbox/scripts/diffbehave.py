@@ -20,9 +20,10 @@ Typical uses:
   * before/after a refactor: same inputs, same outputs?
   * two CLIs that are supposed to be equivalent
 
-Run:
-  `uv run scripts/diffbehave.py --a "python3 old.py" --b "python3 new.py" --case-file cases.jsonl`
-  `uv run scripts/diffbehave.py --a "python3 hook_old.py" --b "python3 hook_new.py" \\
+Run (plain python3, NOT uv run: both sides inherit the launcher's environment, and under uv run a
+side that imports pytest or the project fails the same way on both - which compares as AGREE):
+  `python3 scripts/diffbehave.py --a "python3 old.py" --b "python3 new.py" --case-file cases.jsonl`
+  `python3 scripts/diffbehave.py --a "python3 hook_old.py" --b "python3 hook_new.py" \\
       --case '{"x":1}' --expect-differ 1`
 
 A case where EITHER side did not run (could not be started, or its launcher exited 126/127) is
@@ -40,6 +41,11 @@ Exit codes: 0 = expectation met, 1 = expectation not met (or nothing differed wh
 machine-readable envelope.
 """
 from __future__ import annotations
+
+# Run with plain python3, never `uv run`: the command this jig runs inherits the launcher's
+# environment, and under uv run a child `python3` resolves to uv's throwaway build env, where
+# pytest and the project's packages are missing - a false RED. toolbox-nudge reads this.
+LAUNCH_WITH = "python3"
 
 import argparse
 import json

@@ -231,7 +231,7 @@ def test_a_bom_fact_is_read(tmp_path):
     (tmp_path / ".claude-memory" / "facts" / "bom-slug.md").write_bytes(
         b"\xef\xbb\xbf" + FAR.encode("utf-8"))
     loaded = {f.slug: f for f in DS.load_facts(tmp_path)}
-    assert not loaded["bom-slug"].text.startswith("﻿")
+    assert not loaded["bom-slug"].text.startswith("\ufeff")
 
 
 # ---- --top, the control's place in the counts, and what gets scored ----------------------------

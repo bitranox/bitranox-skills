@@ -403,6 +403,34 @@ class TestTheCli:
         assert run(tmp_path / "nope", "planner_kinds", "--json") == 2
         assert json.loads(capsys.readouterr().out)["ok"] is False
 
+    @pytest.mark.skipif(sys.platform == "win32",
+                        reason="Windows has no POSIX mode bits: chmod(0o000) leaves the dir readable")
+    @pytest.mark.parametrize("extra", [[], ["--json"]])
+    def test_a_root_under_an_unreadable_dir_is_exit_2_not_a_traceback(self, tmp_path: Path, capsys,
+                                                                       extra: list[str]) -> None:
+        """Before Python 3.14 Path.exists() RAISES PermissionError here, and the traceback's
+        exit 1 means "parsed but never enforced". It must be exit 2 naming why."""
+        locked = tmp_path / "locked"
+        write(locked / "app" / "admit.py", GUARD)
+        locked.chmod(0o000)
+        try:
+            if os.access(locked, os.R_OK):
+                pytest.skip("running with privileges that read a mode-000 dir (root)")
+            rc = run(locked / "app", "planner_kinds", *extra)
+        finally:
+            locked.chmod(0o755)
+        captured = capsys.readouterr()
+        assert rc == 2
+        said = captured.out if extra else captured.err
+        assert "PermissionError" in said and "no such root" not in said
+        if extra:
+            assert json.loads(captured.out)["ok"] is False
+
+    def test_a_missing_root_still_says_no_such_root(self, tmp_path: Path, capsys) -> None:
+        """Control for the refusal above: a genuinely missing root keeps its own message."""
+        assert run(tmp_path / "nope") == 2
+        assert "no such root" in capsys.readouterr().err
+
     def test_an_unparsable_file_without_a_decision_is_exit_2(self, tmp_path: Path, capsys) -> None:
         write(tmp_path / "policy.py", POLICY)
         write(tmp_path / "broken.py", "def (:\n")

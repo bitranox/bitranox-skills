@@ -345,31 +345,57 @@ def _tool_invocation(tool):
     return None
 
 
-#: How a tool asks to be LAUNCHED, declared in its own source as a top-level
-#: `LAUNCH_WITH = "<key>"` and read here without importing it. No declaration means "uv".
+#: How a tool asks to be LAUNCHED: a top-level `LAUNCH_WITH = "<key>"` in its own source, else
+#: the launch its own docstring shows being used on the tool itself (see `documented_launch`),
+#: both read here without importing it. Neither means "uv".
 #:
 #: The launch belongs to the tool, not to this hook: `uv run` gives a script an isolated
-#: interpreter, which is right for almost every tool and wrong for one whose work is its OWN
-#: interpreter running the project's pytest (mutation_arm) - there every arm reads INCONCLUSIVE.
-#: A special case here would be forgotten by the next such tool; a declaration travels with it.
+#: interpreter, which is right for almost every tool and wrong for two kinds. One whose work is
+#: its OWN interpreter running the project's pytest (mutation_arm): there every arm reads
+#: INCONCLUSIVE. One that runs a command the CALLER supplies (gate): `uv run` puts its build env
+#: first on the PATH that command inherits, so a `python3 -m pytest` gate dies with `No module
+#: named pytest` and reads RED - gate.py's docstring says so, and this hook suggested `uv run`
+#: anyway because it read declarations only. A special case here would be forgotten by the next
+#: such tool; a declaration, or a documented launch, travels with it.
 #:
 #: Each entry is (command template, note appended after the command).
 LAUNCHERS = {
     "uv": ("uv run %s --help", ""),
+    # `python` on Windows: there `python3` is usually the Microsoft Store stub, which exits
+    # non-zero without running anything.
+    "python3": (
+        ("python" if os.name == "nt" else "python3") + " %s --help",
+        (" - launch it with a plain interpreter, NOT `uv run`: it runs YOUR commands, and `uv run` "
+         "puts its own isolated interpreter first on the PATH they inherit, so a child "
+         "`python3 -m pytest` dies with `No module named pytest` and reads as a false RED")),
     "project-python": (
         (".venv\\Scripts\\python.exe" if os.name == "nt" else ".venv/bin/python") + " %s --help",
         (" - launch it with the PROJECT's own interpreter, which has the project's pytest and the "
          "project installed; the isolated environment `uv` would give it has neither")),
 }
 
+#: Resolved key for a docstring that shows the tool launched two different non-uv ways.
+AMBIGUOUS = "ambiguous"
 
-def declared_launch(path):
-    """The tool's `LAUNCH_WITH` value, read by parsing its source (never executing it); "uv" when
-    it declares none or cannot be read. A hook must not run arbitrary module-level code."""
+#: A launch written in a docstring, as (LAUNCHERS key, pattern for the words before the path).
+#: The plugin's run-python.sh shim is a plain interpreter too, so it counts as "python3".
+_DOCUMENTED_LAUNCHERS = (
+    ("project-python", r"\S*\.venv[\\/](?:bin[\\/]python3?|Scripts[\\/]python(?:\.exe)?)"),
+    ("python3", r"(?:bash\s+\S*run-python\.sh|python3?|py\s+-3)"),
+    ("uv", r"uv\s+run"),
+)
+
+
+def _parse_source(path):
+    """The tool's module AST, or None when it cannot be read or parsed."""
     try:
-        tree = ast.parse(Path(path).read_text(encoding="utf-8-sig"))
+        return ast.parse(Path(path).read_text(encoding="utf-8-sig"))
     except (OSError, SyntaxError, ValueError):
-        return "uv"
+        return None
+
+
+def _launch_declaration(tree):
+    """The string assigned to a top-level `LAUNCH_WITH`, or None."""
     for node in tree.body:
         targets = node.targets if isinstance(node, ast.Assign) else (
             [node.target] if isinstance(node, ast.AnnAssign) else [])
@@ -377,21 +403,60 @@ def declared_launch(path):
         if (any(isinstance(t, ast.Name) and t.id == "LAUNCH_WITH" for t in targets)
                 and isinstance(value, ast.Constant) and isinstance(value.value, str)):
             return value.value
-    return "uv"
+    return None
+
+
+def declared_launch(path):
+    """The tool's `LAUNCH_WITH` value, read by parsing its source (never executing it); "uv" when
+    it declares none or cannot be read. A hook must not run arbitrary module-level code."""
+    tree = _parse_source(path)
+    declared = _launch_declaration(tree) if tree is not None else None
+    return declared if declared is not None else "uv"
+
+
+def documented_launch(tree, filename):
+    """The LAUNCHERS key the module docstring shows running `filename` itself, or None. PURE.
+
+    Only a launcher immediately followed by a path ENDING in this file counts, so an example that
+    runs some other file (`--a "python3 old.py"`) says nothing about this one. A non-uv launch
+    wins over `uv run`, because a docstring that names a non-default launch for itself does so on
+    purpose, while a `uv run` beside it is usually the counter-example ("NOT uv run"). Two
+    different non-uv launches are AMBIGUOUS: guessing one is the wrong-interpreter suggestion."""
+    doc = ast.get_docstring(tree) or ""
+    path_tail = r"\s+(?:\S*[\\/])?" + re.escape(filename) + r"(?![\w.])"
+    said = {key for key, launcher in _DOCUMENTED_LAUNCHERS
+            if re.search(r"(?:^|(?<=[\s`(\"']))" + launcher + path_tail, doc, re.M)}
+    non_uv = said - {"uv"}
+    if len(non_uv) > 1:
+        return AMBIGUOUS
+    return next(iter(non_uv), "uv" if said else None)
+
+
+def resolve_launch(path):
+    """The LAUNCHERS key (or an unknown declared value, or AMBIGUOUS) for the tool at `path`: its
+    `LAUNCH_WITH`, else the launch its docstring documents for itself, else "uv"."""
+    tree = _parse_source(path)
+    if tree is None:
+        return "uv"
+    return (_launch_declaration(tree) or documented_launch(tree, Path(path).name) or "uv")
 
 
 def launch_command(path, shown=None):
     """(command, note) to suggest for the tool at `path`, shown as `shown` (default: the path).
 
-    A declaration this hook does not know is a requirement it cannot honour, so it never falls
-    back to `uv run` - that would be the wrong-interpreter suggestion this exists to prevent."""
+    A declaration this hook does not know, or a docstring showing two different launches, is a
+    requirement it cannot honour, so it never falls back to `uv run` - that would be the
+    wrong-interpreter suggestion this exists to prevent."""
     shown = shown or str(path)
-    declared = declared_launch(path)
-    if declared not in LAUNCHERS:
-        note = (f" - launch it as its docstring says: it declares LAUNCH_WITH={declared!r}, "
+    launch = resolve_launch(path)
+    if launch == AMBIGUOUS:
+        return f"{shown} --help", (" - launch it as its docstring says: it documents more than "
+                                   "one launch for itself, so read which one applies")
+    if launch not in LAUNCHERS:
+        note = (f" - launch it as its docstring says: it declares LAUNCH_WITH={launch!r}, "
                 f"which this hook does not know")
         return f"{shown} --help", note
-    template, note = LAUNCHERS[declared]
+    template, note = LAUNCHERS[launch]
     return template % shown, note
 
 

@@ -13,23 +13,31 @@ The rule this encodes: ONE instrument can prove MOTION but never prove ABSENCE o
 So a single flat signal is UNKNOWN, never STALLED, and when signals disagree the moving one
 wins and the flat one is named as suspect.
 
+Run with plain python3, NOT uv run: a `check --cmd` sampler inherits the launcher's
+environment, and uv run swaps in its own throwaway interpreter.
+
     # is this transfer alive?
-    uv run transfer.py check --file big.iso --pid 4992 --interval 10
+    python3 transfer.py check --file big.iso --pid 4992 --interval 10
 
     # fetch with a real cap (bits are spelled out, because `curl 8M` is 8 MiB/s = 67 Mbit)
-    uv run transfer.py fetch URL -o big.iso --rate 8Mbit
+    python3 transfer.py fetch URL -o big.iso --rate 8Mbit
 
     # send one to another host, capped and resumable (rsync --bwlimit is KiB/s, so 8 Mbit = 976)
-    uv run transfer.py push big.iso root@host:/dst/ --rate 8Mbit --ssh "ssh -i /key"
+    python3 transfer.py push big.iso root@host:/dst/ --rate 8Mbit --ssh "ssh -i /key"
 
     # a sampler runs with NO shell: wrap a pipeline in one explicitly
-    uv run transfer.py check --file big.iso --cmd "sh -c 'grep eth0 /proc/net/dev'"
+    python3 transfer.py check --file big.iso --cmd "sh -c 'grep eth0 /proc/net/dev'"
 
 check: exit 0 ADVANCING, 1 STALLED, 2 UNKNOWN (or a usage error).
 fetch/push: exit 0 ok, 1 the transfer failed, 2 usage error (bad rate, no output name, curl or
 rsync missing). --pid reads /proc, so it is Linux-only; elsewhere its signals read unusable.
 """
 from __future__ import annotations
+
+# Run with plain python3, never `uv run`: the command this jig runs inherits the launcher's
+# environment, and under uv run a child `python3` resolves to uv's throwaway build env, where
+# pytest and the project's packages are missing - a false RED. toolbox-nudge reads this.
+LAUNCH_WITH = "python3"
 
 import argparse
 import os

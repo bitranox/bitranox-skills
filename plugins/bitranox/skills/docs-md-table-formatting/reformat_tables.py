@@ -342,7 +342,7 @@ def _read_document(filepath):
     """(text without BOM, had_bom). newline="" keeps every CR, so line endings survive a rewrite."""
     with open(filepath, "r", encoding="utf-8", newline="") as f:
         original = f.read()
-    if original.startswith("﻿"):
+    if original.startswith("\ufeff"):
         return original[1:], True
     return original, False
 
@@ -456,7 +456,7 @@ def reformat_file(filepath, *, check_only=False, backup=False, warnings=None):
         shutil.copy2(filepath, str(filepath) + ".bak")
 
     with open(filepath, "w", encoding="utf-8", newline="") as f:
-        f.write(("﻿" if had_bom else "") + body)
+        f.write(("\ufeff" if had_bom else "") + body)
     return True
 
 

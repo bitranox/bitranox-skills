@@ -52,7 +52,13 @@ def _same_id(found, wanted):
 
 def extract_task(plan_text, n):
     """The lines of task N: from its `Task N` heading up to the next task heading, or the next
-    heading at the same or a higher level (a trailing "## Notes" is not part of the last task).
+    non-task heading at a strictly HIGHER level than the task's own.
+
+    Plans put a task's own sections (Steps, Files, a record of the run) at or below the task
+    heading's level, and plan-level sections (a phase, a milestone, Self-review) above it: the
+    writing-plans template writes "### Task N" and "## Self-review". So "## Task 1" followed by
+    "## Steps" keeps its steps, and "### Task 6" followed by "## Self-review" ends there. A
+    trailing section at the task's own level cannot be told from its Steps and stays in the brief.
 
     A heading inside a fenced block (``` or ~~~, closed per CommonMark) does not start or end a
     task. Lines are split on newline only: splitlines() would also break on form feed and
@@ -70,7 +76,7 @@ def extract_task(plan_text, n):
             heading = _ANY_HEADING.match(line)
             if task:
                 level = len(task.group(1)) if _same_id(task.group(2), n) else None
-            elif heading and level is not None and len(heading.group(1)) <= level:
+            elif heading and level is not None and len(heading.group(1)) < level:
                 level = None
         if level is not None:
             out.append(line)

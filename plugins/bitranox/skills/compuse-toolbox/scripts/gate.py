@@ -59,6 +59,11 @@ out to `python3 -m pytest` then died with `No module named pytest` and reported 
 """
 from __future__ import annotations
 
+# Run with plain python3, never `uv run`: the command this jig runs inherits the launcher's
+# environment, and under uv run a child `python3` resolves to uv's throwaway build env, where
+# pytest and the project's packages are missing - a false RED. toolbox-nudge reads this.
+LAUNCH_WITH = "python3"
+
 import argparse
 import os
 import re

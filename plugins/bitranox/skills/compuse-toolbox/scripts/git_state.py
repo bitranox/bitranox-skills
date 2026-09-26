@@ -186,7 +186,7 @@ def _ancestor_repo_root(start: Path):
     only the filesystem - no subprocess. Seeds the enclosing repo for the common case where
     `--root` is itself a subdirectory of a repo rather than a repo (or many repos') parent."""
     for p in (start, *start.parents):
-        # os.path.exists, not Path.exists: before Python 3.12 the latter RAISES PermissionError
+        # os.path.exists, not Path.exists: before Python 3.14 the latter RAISES PermissionError
         # for a path under an unreadable directory instead of answering False.
         if os.path.exists(p / ".git"):
             return p
@@ -341,10 +341,26 @@ def _print_files_result(pattern, root, data, as_json) -> None:
           file=sys.stderr)
 
 
+def root_problem(root) -> str | None:
+    """Why --root cannot be walked, or None when it can be looked at.
+
+    Not Path.exists()/is_dir(): before Python 3.14 they RAISE PermissionError for a path under
+    an unreadable directory, and the traceback's exit 1 reads as "out of sync" or "0 matched".
+    Since 3.14 they answer False, which would call an unreachable root missing. Both are exit 2,
+    and the message says which."""
+    try:
+        os.stat(root)
+    except (FileNotFoundError, NotADirectoryError):
+        return f"--root path does not exist: {root}"
+    except (OSError, ValueError) as exc:
+        return f"--root path cannot be accessed ({type(exc).__name__}): {root}"
+    return None
+
+
 def _main_files(pattern, root, as_json) -> int:
     root = root or "."
-    if not Path(root).exists():
-        msg = "--root path does not exist: %s" % root
+    msg = root_problem(root)
+    if msg:
         print("git_state: %s" % msg, file=sys.stderr)
         if as_json:
             print(json.dumps({"ok": False, "command": "git-state",
@@ -397,8 +413,11 @@ def _repo_targets(repos, root) -> tuple[list[str], list[str]]:
     """(repos to check, problems that make the check incomplete) - see _main_repos."""
     if not root:
         return list(repos), []
-    if not Path(root).is_dir():
-        return [], ["--root path does not exist: %s" % root]
+    problem = root_problem(root)
+    if problem:
+        return [], [problem]
+    if not os.path.isdir(root):
+        return [], ["--root path is not a directory: %s" % root]
     walk_errors: list[str] = []
     found = find_repos(root, errors=walk_errors)
     if not found and not walk_errors:

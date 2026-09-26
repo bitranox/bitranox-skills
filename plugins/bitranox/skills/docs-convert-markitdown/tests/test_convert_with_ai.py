@@ -84,6 +84,33 @@ def test_pptx_with_working_captions_succeeds(script_runner, tmp_path, fakes):
     assert (tmp_path / "deck.md").read_text(encoding="utf-8").count("FAKE-CAPTION") == 2
 
 
+_NO_CAPTION_MODES = ["nochoices", "empty", "blank", "null"]
+
+
+@pytest.mark.parametrize("mode", _NO_CAPTION_MODES)
+def test_pptx_whose_captions_come_back_empty_fails_the_run(script_runner, tmp_path, fakes, mode):
+    """A call that RETURNS without a caption (choices=[], "" or None) produced nothing, the same
+    as one that raised; it was counted only when it raised, so the deck converted "[OK]"."""
+    _deck(tmp_path / "deck.pptx", 2)
+
+    run = _ai(script_runner, tmp_path, fakes, ["deck.pptx", "deck.md"], mode=mode)
+
+    assert run.returncode == 1, run.output
+    assert _calls(tmp_path) == 2
+    assert "2 of 2 image description" in run.stderr
+    assert "[OK] Successfully converted" not in run.output
+
+
+@pytest.mark.parametrize("mode", _NO_CAPTION_MODES)
+def test_png_whose_caption_comes_back_empty_fails_the_run(script_runner, tmp_path, fakes, mode):
+    (tmp_path / "pic.png").write_text("PNG", encoding="utf-8")
+
+    run = _ai(script_runner, tmp_path, fakes, ["pic.png", "pic.md"], mode=mode)
+
+    assert run.returncode == 1, run.output
+    assert "[OK] Successfully converted" not in run.output
+
+
 def test_png_whose_caption_fails_fails_the_run(script_runner, tmp_path, fakes):
     (tmp_path / "pic.png").write_text("PNG", encoding="utf-8")
 
@@ -242,7 +269,7 @@ def _png():
     return b"\x89PNG\r\n\x1a\n" + chunk(b"IHDR", header) + chunk(b"IDAT", pixels) + chunk(b"IEND", b"")
 
 
-@pytest.mark.parametrize("mode,expected_rc", [("fail", 1), ("ok", 0)])
+@pytest.mark.parametrize("mode,expected_rc", [("fail", 1), ("ok", 0), ("nochoices", 1), ("empty", 1)])
 def test_real_markitdown_pptx_caption_failure_is_seen(script_runner, fake_openai_dir, tmp_path, mode, expected_rc):
     pytest.importorskip("markitdown")
     pptx = pytest.importorskip("pptx")
@@ -255,6 +282,19 @@ def test_real_markitdown_pptx_caption_failure_is_seen(script_runner, fake_openai
     deck.save(str(tmp_path / "deck.pptx"))
 
     run = _ai(script_runner, tmp_path, [fake_openai_dir], ["deck.pptx", "deck.md"], mode=mode)
+
+    assert run.returncode == expected_rc, run.output
+    assert _calls(tmp_path) == 1
+
+
+@pytest.mark.parametrize("mode,expected_rc", [("ok", 0), ("null", 1), ("empty", 1)])
+def test_real_markitdown_png_without_a_caption_is_seen(script_runner, fake_openai_dir, tmp_path, mode, expected_rc):
+    """markitdown's ImageConverter skips a None description silently and writes an empty one for
+    "", so neither raises: only the returned text tells a caption from none."""
+    pytest.importorskip("markitdown")
+    (tmp_path / "pic.png").write_bytes(_png())
+
+    run = _ai(script_runner, tmp_path, [fake_openai_dir], ["pic.png", "pic.md"], mode=mode)
 
     assert run.returncode == expected_rc, run.output
     assert _calls(tmp_path) == 1

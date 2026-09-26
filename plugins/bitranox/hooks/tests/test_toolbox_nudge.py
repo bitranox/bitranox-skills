@@ -1,6 +1,8 @@
 """Tests for toolbox-nudge.py (PreToolUse nudge on Bash, PowerShell, Edit, Write, MultiEdit and NotebookEdit toward a local toolbox tool). ASCII only."""
+import ast
 import io
 import json
+import os
 import re
 import sys
 from pathlib import Path
@@ -652,6 +654,8 @@ def _shipped_nudge_targets(tmp_path, monkeypatch):
 def test_every_nudged_tool_declares_a_launch_this_hook_knows(tmp_path, monkeypatch):
     for tool, path in _shipped_nudge_targets(tmp_path, monkeypatch).items():
         assert N.declared_launch(path) in N.LAUNCHERS, tool
+        # The docstring route too: an ambiguous or unknown launch would print no launcher at all.
+        assert N.resolve_launch(path) in N.LAUNCHERS, tool
 
 
 def test_a_nudged_tool_that_runs_pytest_on_its_own_interpreter_declares_the_project_python(
@@ -665,3 +669,216 @@ def test_a_nudged_tool_that_runs_pytest_on_its_own_interpreter_declares_the_proj
             checked.append(tool)
             assert N.declared_launch(path) == "project-python", tool
     assert "mutation_arm" in checked, "the detector must see the tool it was written for"
+
+
+# ---- a tool that says how to launch it in its DOCSTRING is launched that way -------------------
+#
+# gate.py's docstring says "plain python3, NOT uv run" - under `uv run` the gates it runs inherit
+# uv's isolated interpreter on PATH, so a `python3 -m pytest` gate dies with `No module named
+# pytest` and reads as RED. It declared no LAUNCH_WITH, so the nudge (and the background-gate
+# block) told agents `uv run gate.py`: the one launch the jig forbids. A launch documented for the
+# tool itself is now a declaration too, so a tool that writes its launch down once is believed.
+
+_PLAIN_PY = "python" if os.name == "nt" else "python3"
+_EXPECTED_PREFIX = {
+    "uv": "uv run ",
+    "python3": _PLAIN_PY + " ",
+    "project-python": (".venv\\Scripts\\python.exe " if os.name == "nt" else ".venv/bin/python "),
+}
+
+
+def _tool_file(tmp_path, doc, body="", name="t.py"):
+    tool = tmp_path / name
+    tool.write_text('"""' + doc + '"""\n' + body, encoding="utf-8")
+    return tool
+
+
+@pytest.mark.parametrize(
+    ("label", "doc", "expected"),
+    [
+        ("plain python3", "Run:\n  python3 scripts/t.py --x 1\n", "python3"),
+        ("the plugin shim", "Run:\n  `bash hooks/run-python.sh skills/s/t.py show`\n", "python3"),
+        ("the project venv", "Run:\n  `.venv/bin/python scripts/t.py --mutate a`\n",
+         "project-python"),
+        ("a uv counter-example beside the real launch",
+         "Run (plain python3, NOT uv run):\n  `uv run scripts/t.py` is wrong here\n"
+         "  python3 scripts/t.py -- pytest -q\n", "python3"),
+    ],
+)
+def test_a_launch_documented_for_the_tool_itself_is_the_one_suggested(tmp_path, label, doc,
+                                                                       expected):
+    cmd, _note = N.launch_command(_tool_file(tmp_path, doc))
+    assert cmd.startswith(_EXPECTED_PREFIX[expected]), (label, cmd)
+
+
+@pytest.mark.parametrize(
+    ("label", "doc"),
+    [
+        ("uv run only", "Run: `uv run scripts/t.py --root .`\n"),
+        ("no launch written at all", "Does a thing.\n"),
+        ("python3 launching a DIFFERENT file",
+         'Run: `uv run scripts/t.py --a "python3 old.py" --b "python3 new.py"`\n'),
+        ("python3 on a file whose name only ENDS like this one", "Run: python3 scripts/not_t.py\n"),
+    ],
+)
+def test_a_tool_that_documents_no_other_launch_is_still_suggested_with_uv_run(tmp_path, label,
+                                                                              doc):
+    """Controls: only a launch of THIS file counts, and uv stays the default."""
+    cmd, _note = N.launch_command(_tool_file(tmp_path, doc))
+    assert cmd.startswith("uv run "), (label, cmd)
+
+
+def test_two_different_documented_launches_suggest_neither(tmp_path):
+    """A docstring that shows the tool run two non-uv ways is ambiguous: guessing either one is
+    the wrong-interpreter suggestion this section removes, so the reader is sent to the doc."""
+    doc = "Run:\n  python3 scripts/t.py a\n  .venv/bin/python scripts/t.py b\n"
+    tool = _tool_file(tmp_path, doc)
+    cmd, note = N.launch_command(tool)
+    assert cmd == "%s --help" % tool, cmd
+    assert "docstring" in note and "uv run" not in cmd + note
+
+
+def test_a_declaration_outranks_the_docstring(tmp_path):
+    tool = _tool_file(tmp_path, "Run: python3 scripts/t.py\n", body='LAUNCH_WITH = "uv"\n')
+    assert N.launch_command(tool)[0].startswith("uv run ")
+
+
+def test_the_docstring_is_read_without_executing_the_tool(tmp_path):
+    tool = _tool_file(tmp_path, "Run: python3 scripts/t.py\n",
+                      body='raise SystemExit("importing me is a bug")\n')
+    assert N.launch_command(tool)[0].startswith(_EXPECTED_PREFIX["python3"])
+
+
+def test_the_plain_interpreter_note_says_why_uv_run_is_wrong(tmp_path):
+    _cmd, note = N.launch_command(_tool_file(tmp_path, "Run: python3 scripts/t.py\n"))
+    assert "uv run" in note and "RED" in note, note
+
+
+def test_gate_is_suggested_with_a_plain_interpreter_not_uv_run(tmp_path, monkeypatch, capsys):
+    """The reported instance, end to end through main()."""
+    msg = _nudge_for("pytest -q | tail -3", "g1", tmp_path, monkeypatch, capsys)
+    assert msg is not None and "gate.py --help" in msg, msg
+    assert "uv run" not in msg.split("gate.py --help")[0], msg
+    assert (_PLAIN_PY + " ") in msg, msg
+
+
+# ---- the pin, per jig: what the nudge suggests is what the jig itself says --------------------
+
+def _shipped_jigs():
+    """{tool: shipped path} for every tool a rule can name, ignoring any local toolbox copy."""
+    out = {}
+    for tool in sorted(N.ruled_tools()):
+        path = N._shipped_dir() / (tool + ".py")
+        path = path if path.is_file() else N._sibling_skill_script(tool)
+        if path is not None:
+            out[tool] = path
+    return out
+
+
+_SHIPPED_JIGS = _shipped_jigs()
+
+
+def _what_the_jig_says(path):
+    """The launch the jig asks for, read INDEPENDENTLY of the hook's own parser: its
+    `LAUNCH_WITH` line, else the word(s) in front of each whitespace token of its docstring that
+    names this very file."""
+    src = Path(path).read_text(encoding="utf-8")
+    declared = re.search(r"^LAUNCH_WITH\s*(?::\s*str\s*)?=\s*[\"']([^\"']+)[\"']", src, re.M)
+    if declared:
+        return declared.group(1)
+    said = set()
+    for line in (ast.get_docstring(ast.parse(src)) or "").splitlines():
+        words = [w.strip("`()'\"") for w in line.split()]
+        for i, word in enumerate(words):
+            if Path(word.replace("\\", "/")).name != Path(path).name or i == 0:
+                continue
+            before = words[i - 1]
+            if before in ("python3", "python") or before.endswith("run-python.sh"):
+                said.add("python3")
+            elif ".venv" in before:
+                said.add("project-python")
+            elif before == "run" and i >= 2 and words[i - 2] == "uv":
+                said.add("uv")
+    non_uv = said - {"uv"}
+    return non_uv.pop() if len(non_uv) == 1 else ("ambiguous" if non_uv else "uv")
+
+
+def test_the_independent_reading_sees_the_jig_it_was_written_for():
+    """Control: an oracle that answered "uv" for everything would pass the pin below vacuously."""
+    assert _what_the_jig_says(_SHIPPED_JIGS["gate"]) == "python3"
+    assert _what_the_jig_says(_SHIPPED_JIGS["mutation_arm"]) == "project-python"
+    assert _what_the_jig_says(_SHIPPED_JIGS["procsig"]) == "uv"
+
+
+@pytest.mark.parametrize("tool", sorted(_SHIPPED_JIGS))
+def test_the_nudge_suggests_each_jig_the_way_the_jig_says_to_launch_it(tool):
+    """The shape, not the instance: every jig a rule can name, against its own words. A new jig
+    that documents a launch is covered the moment a rule names it, with no edit here."""
+    path = _SHIPPED_JIGS[tool]
+    expected = _what_the_jig_says(path)
+    cmd, _note = N.launch_command(path)
+    if expected == "ambiguous":
+        assert cmd == "%s --help" % path, (tool, cmd)
+    else:
+        assert cmd.startswith(_EXPECTED_PREFIX[expected]), (tool, expected, cmd)
+
+
+# ---- a jig that runs YOUR command must never be suggested under uv run ------------------------
+#
+# Measured 2026-09-26: under `uv run`, a child `python3` resolves to uv's ephemeral build env,
+# which has no pytest. gate.py reported GATE RED rc=1 for a gate that passed under plain python3;
+# ci_triage `--cmd "python3 -m pytest --version"` exited 1 with "No module named pytest" where
+# python3 exited 0; transfer `check --cmd` read its sampler as unreadable (UNKNOWN, rc 2) where
+# python3 read it (rc 1). A jig that only spawns a FIXED program (git, gh) is unaffected.
+
+#: Nudged jigs that spawn a command the CALLER supplies, so its children inherit the launcher.
+_RUNS_YOUR_COMMANDS = {
+    "gate": "--gate / -- / --then",
+    "ci_triage": "--cmd",
+    "transfer": "check --cmd (a sampler)",
+    "mutation_arm": "the arm's pytest, on its own interpreter",
+}
+#: Nudged jigs whose computed argv only ever names a fixed program, never the caller's command.
+_SPAWNS_ONLY_FIXED_PROGRAMS = {
+    "ci_wait": "gh run list",
+    "pushcheck": "git",
+    "wtclean": "git worktree remove",
+    "factedit": "memory_engine.py, on the first NON-venv python3 on PATH (it skips uv's)",
+}
+
+
+def _spawns_a_computed_argv(path):
+    """True when a subprocess call's argv is anything but a list literal led by a string - the
+    only way a caller's command can reach a child. It sees `subprocess.<fn>(...)` calls only, so a
+    runner injected as a parameter (fleet_ssh's `run=`) is not seen; ssh runs its command remotely,
+    where the local PATH does not reach."""
+    tree = ast.parse(Path(path).read_text(encoding="utf-8"))
+    for node in ast.walk(tree):
+        if not (isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute)
+                and isinstance(node.func.value, ast.Name) and node.func.value.id == "subprocess"
+                and node.func.attr in ("run", "Popen", "call", "check_call", "check_output")):
+            continue
+        first = node.args[0] if node.args else None
+        if not (isinstance(first, ast.List) and first.elts and isinstance(first.elts[0], ast.Constant)
+                and isinstance(first.elts[0].value, str)):
+            return True
+    return False
+
+
+def test_every_nudged_jig_that_spawns_a_computed_argv_is_classified():
+    """The enumeration is pinned, not just its members: a new jig that runs a computed command
+    fails here until someone decides which list it belongs in."""
+    flagged = {tool for tool, path in _SHIPPED_JIGS.items() if _spawns_a_computed_argv(path)}
+    assert "gate" in flagged, "the detector must see the jig it was written for"
+    assert flagged == set(_RUNS_YOUR_COMMANDS) | set(_SPAWNS_ONLY_FIXED_PROGRAMS)
+
+
+@pytest.mark.parametrize("tool", [
+    "gate",
+    "ci_triage",
+    "transfer",
+    "mutation_arm",
+])
+def test_a_nudged_jig_that_runs_your_commands_is_never_suggested_under_uv_run(tool):
+    cmd, _note = N.launch_command(_SHIPPED_JIGS[tool])
+    assert not cmd.startswith("uv run"), (tool, cmd)

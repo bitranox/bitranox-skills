@@ -500,6 +500,306 @@ def test_notice_keeps_the_file_line_endings(tmp_path):
 
 
 # --------------------------------------------------------------------------
+# License gate: every manifest form, every license file, every expression
+# --------------------------------------------------------------------------
+
+GPL_TEXT_TOML = '"""GNU GENERAL PUBLIC LICENSE\nVersion 3, 29 June 2007\n"""'
+
+
+@pytest.mark.parametrize("files", [
+    {"pyproject.toml": '[project]\nlicense = {text = "GPL-3.0-only"}\n'},
+    {"pyproject.toml": "[project]\nlicense = { text = %s }\n" % GPL_TEXT_TOML},
+    {"pyproject.toml": '[project]\nlicense = {file = "COPYING.GPL"}\n', "COPYING.GPL": GPL},
+    {"pyproject.toml": '[project]\nlicense = "MIT OR GPL-3.0-only"\n'},
+    {"pyproject.toml": '[project]\nlicense = "Apache-2.0 AND LGPL-2.1-only"\n'},
+    {"pyproject.toml": '[project]\nlicense = "(GPL-3.0-only)"\n'},
+    {"pyproject.toml": '[project]\nlicense = "GPL-3.0-only WITH Classpath-exception-2.0"\n'},
+    {"pyproject.toml": '[tool.poetry]\nlicense = "GPL-3.0-or-later"\n'},
+    {"package.json": '{"license": {"type": "GPL-3.0", "url": "x"}}\n'},
+    {"package.json": '{"licenses": [{"type": "MIT"}, {"type": "GPL-3.0"}]}\n'},
+    {"x.py": "# SPDX-License-Identifier: MIT OR GPL-3.0-only\n"},
+    {"x.js": "// SPDX-License-Identifier: (MIT OR GPL-2.0-only)\n"},
+], ids=["toml-text-id", "toml-text-body", "toml-file", "pep639-or", "pep639-and", "pep639-paren",
+        "pep639-with", "poetry", "npm-object", "npm-licenses", "spdx-or", "spdx-paren"])
+def test_a_copyleft_id_in_any_declared_form_rejects_beside_an_mit_license(tmp_path, files):
+    _tree(tmp_path, {"LICENSE": MIT, **files})
+    lic = AS.find_license(tmp_path)
+    assert lic["status"] == "reject", lic
+
+
+@pytest.mark.parametrize("files", [
+    {"COPYING": GPL},
+    {"LICENSE-GPL": GPL},
+    {"COPYING.LESSER": "GNU LESSER GENERAL PUBLIC LICENSE\nVersion 3\n"},
+    {"LICENSES/GPL-3.0-only.txt": GPL},
+    {"vendor/lib/LICENSE": GPL},
+    {"sub/package.json": '{"license": "GPL-3.0"}\n'},
+    {"tools/pyproject.toml": '[project]\nlicense = "GPL-3.0"\n'},
+    {"skills/x/.claude-plugin/plugin.json": '{"license": "AGPL-3.0"}\n'},
+], ids=["copying", "license-gpl", "copying-lesser", "reuse-dir", "subdir-license",
+        "subdir-package-json", "subdir-pyproject", "nested-plugin-json"])
+def test_every_license_file_and_manifest_counts_not_the_first(tmp_path, files):
+    _tree(tmp_path, {"LICENSE": MIT, **files})
+    assert AS.find_license(tmp_path)["status"] == "reject"
+
+
+@pytest.mark.parametrize("files, where", [
+    ({"pyproject.toml": '[project]\nlicense = {file = "missing.txt"}\n'}, "missing.txt"),
+    ({"pyproject.toml": '[project]\nlicense = {file = "../outside.txt"}\n'}, "outside.txt"),
+    ({"pyproject.toml": "[project]\nlicense = [1, 2]\n"}, "pyproject.toml"),
+    ({"pyproject.toml": '[project\nlicense = "MIT"\n'}, "pyproject.toml"),
+    ({"package.json": '{"license": "MIT",}\n'}, "package.json"),
+    ({"package.json": '{"license": 7}\n'}, "package.json"),
+    ({"pyproject.toml": '[project]\nlicense = {text = "Some custom terms"}\n'}, "pyproject.toml"),
+    ({"x.py": "# SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception\n"}, "x.py"),
+    ({"COPYING": "custom terms, all rights reserved\n"}, "COPYING"),
+], ids=["file-missing", "file-outside", "not-a-string", "toml-broken", "json-broken",
+        "json-number", "text-unknown", "spdx-exception", "second-file-unknown"])
+def test_a_declared_license_it_cannot_read_or_classify_stops_for_a_human(tmp_path, files, where):
+    (tmp_path / "outside.txt").write_text(GPL, encoding="utf-8")
+    tree = tmp_path / "tree"
+    _tree(tree, {"LICENSE": MIT, **files})
+    lic = AS.find_license(tree)
+    assert lic["status"] == "absent", lic
+    assert where in lic["where"]
+
+
+@pytest.mark.parametrize("files, expected", [
+    ({"LICENSE": MIT}, "MIT"),
+    ({"pyproject.toml": '[project]\nlicense = "MIT"\n'}, "MIT"),
+    ({"pyproject.toml": '[project]\nlicense = {text = "MIT"}\n'}, "MIT"),
+    ({"pyproject.toml": '[project]\nlicense = {file = "LICENSE"}\n', "LICENSE": MIT}, "MIT"),
+    ({"pyproject.toml": '[project]\nlicense = {text = """%s"""}\n' % MIT}, "MIT"),
+    ({"pyproject.toml": '[project]\nlicense = "Apache-2.0 OR MIT"\n'}, "Apache-2.0 OR MIT"),
+    ({"LICENSE": APACHE, "NOTICE": "n\n"}, "Apache-2.0"),
+    ({"LICENSE.md": BSD3}, "BSD-3-Clause"),
+    ({"LICENSE": BSD2, "COPYING": BSD2}, "BSD-2-Clause"),
+    ({"package.json": '{"license": {"type": "ISC"}}\n'}, "ISC"),
+    ({"x.c": "/* SPDX-License-Identifier: MIT */\n", "LICENSE": MIT}, "MIT"),
+    ({"README.md": "<!-- SPDX-License-Identifier: MIT -->\n", "LICENSE": MIT}, "MIT"),
+    ({"license.py": "def check(): pass\n", "LICENSE": MIT}, "MIT"),
+    ({"license_check.sh": "echo\n", "LICENSE": MIT}, "MIT"),
+], ids=["mit-file", "toml-id", "toml-text-id", "toml-file", "toml-text-body", "pep639-accepted",
+        "apache", "bsd3-md", "two-same-files", "npm-object", "spdx-c-comment", "spdx-html-comment",
+        "license-py-is-code", "license-sh-is-code"])
+def test_plain_permissive_licenses_still_pass(tmp_path, files, expected):
+    _tree(tmp_path, files)
+    lic = AS.find_license(tmp_path)
+    assert lic["status"] == "accept" and lic["id"] == expected, lic
+
+
+def test_two_different_permissive_license_files_are_both_credited(tmp_path):
+    _tree(tmp_path, {"LICENSE-MIT": MIT, "LICENSE-APACHE": APACHE})
+    lic = AS.find_license(tmp_path)
+    assert lic["status"] == "accept" and lic["id"] == "Apache-2.0 AND MIT"
+    assert "Permission is hereby granted" in lic["text"] and "Apache License" in lic["text"]
+
+
+def test_pyproject_without_tomllib_fails_closed_on_anything_but_a_plain_string():
+    table = AS._pyproject_license_decls('[project]\nlicense = {text = "MIT"}\n', loads=None)
+    plain = AS._pyproject_license_decls('[project]\nlicense = "GPL-3.0"\n', loads=None)
+    assert [kind for kind, _v in table] == ["unreadable"]
+    assert plain == [("id", "GPL-3.0")]
+
+
+# --------------------------------------------------------------------------
+# License scope: what ships (the skill's subtree) plus what governs it (the license files and
+# manifests of each ancestor dir up to the source root) - never a sibling plugin's files
+# --------------------------------------------------------------------------
+
+PROPRIETARY = "Copyright (c) 2026 X. All rights reserved. Proprietary; no license is granted.\n"
+
+
+def _monorepo(tmp_path, extra):
+    """A source repo with an Apache root LICENSE and the skill under plugins/a."""
+    return _tree(tmp_path / "mono", {"LICENSE": APACHE, "plugins/a/SKILL.md": "# A\n\nbody\n",
+                                     "plugins/a/LICENSE": APACHE, **extra})
+
+
+def _adopt_subdir(tmp_path, src, subdir="plugins/a"):
+    repo, skills = _fake_repo(tmp_path)
+    rc = AS.main([str(src), "--subdir", subdir, "--name", "coding-scoped", "--dest", str(skills)])
+    return rc, skills / "coding-scoped"
+
+
+@pytest.mark.parametrize("extra", [
+    {"plugins/b/LICENSE": PROPRIETARY},
+    {"plugins/b/LICENSE": GPL},
+    {"plugins/b/x.py": "# SPDX-License-Identifier: GPL-3.0-only\n"},
+    {"plugins/b/package.json": '{"license": "MIT",}\n'},
+    {"plugins/b/pyproject.toml": '[project]\nlicense = "LicenseRef-Custom"\n'},
+    {"docs/LICENSE": GPL},
+    {"plugins/b/deep/COPYING": GPL},
+], ids=["sibling-proprietary", "sibling-gpl", "sibling-spdx-gpl", "sibling-broken-json",
+        "sibling-unknown-id", "root-other-subtree", "sibling-deep"])
+def test_a_sibling_plugin_does_not_decide_the_verdict(tmp_path, record_subprocess, capsys, extra):
+    rc, dest = _adopt_subdir(tmp_path, _monorepo(tmp_path, extra))
+    out = capsys.readouterr()
+    assert rc == 0, out.err
+    assert "LICENSE GATE: ACCEPTED (Apache-2.0" in out.out
+    assert (dest / "SKILL.md").is_file()
+
+
+@pytest.mark.parametrize("extra, status", [
+    ({"plugins/a/vendor/LICENSE": GPL}, "reject"),
+    ({"plugins/a/x.py": "# SPDX-License-Identifier: GPL-3.0-only\n"}, "reject"),
+    ({"plugins/COPYING": GPL}, "reject"),
+    ({"COPYING": GPL}, "reject"),
+    ({"LICENSES/GPL-3.0-only.txt": GPL}, "reject"),
+    ({"plugins/package.json": '{"license": "GPL-3.0"}\n'}, "reject"),
+    ({"pyproject.toml": '[project]\nlicense = {text = "GPL-3.0-only"}\n'}, "reject"),
+    ({"plugins/package.json": '{"license": "MIT",}\n'}, "absent"),
+    ({"plugins/a/package.json": '{"license": "MIT",}\n'}, "absent"),
+    ({"plugins/a/sub/pyproject.toml": "[project\n"}, "absent"),
+    ({"plugins/NOTES.md": "# SPDX-License-Identifier: GPL-3.0-only\n"}, "accept"),
+], ids=["own-subtree-license", "own-subtree-spdx", "ancestor-copying", "root-copying",
+        "root-reuse-dir", "ancestor-manifest", "root-pyproject-table", "ancestor-broken-json",
+        "own-broken-json", "own-nested-broken-toml", "ancestor-prose-not-a-license-file"])
+def test_the_skill_subtree_and_its_ancestors_still_decide(tmp_path, extra, status):
+    tree = _monorepo(tmp_path, extra)
+    assert AS.find_license(tree, tree / "plugins" / "a")["status"] == status
+
+
+def test_the_whole_tree_is_the_scope_when_the_skill_sits_at_the_root(tmp_path):
+    tree = _tree(tmp_path / "t", {"LICENSE": MIT, "SKILL.md": "# S\n", "deep/er/COPYING": GPL})
+    assert AS.find_license(tree, tree)["status"] == "reject"
+    assert AS.find_license(tree)["status"] == "reject"
+
+
+def test_a_dotdot_spelling_of_the_skill_dir_climbs_the_real_chain(tmp_path):
+    tree = _monorepo(tmp_path, {"plugins/b/LICENSE": GPL})
+    lic = AS.find_license(tree, tree / "plugins" / "b" / ".." / "a")
+    assert lic["status"] == "accept" and lic["id"] == "Apache-2.0"
+
+
+def test_a_skill_dir_outside_the_source_stops_the_gate(tmp_path):
+    tree = _monorepo(tmp_path, {})
+    elsewhere = _tree(tmp_path / "elsewhere", {"SKILL.md": "# E\n", "LICENSE": MIT})
+    lic = AS.find_license(tree, elsewhere)
+    assert lic["status"] == "absent" and "outside the source" in lic["where"]
+
+
+def test_a_notice_in_the_skill_or_an_ancestor_is_captured(tmp_path):
+    tree = _monorepo(tmp_path, {"plugins/a/NOTICE": "Skill A notice\n",
+                                "plugins/b/NOTICE": "Sibling notice\n"})
+    lic = AS.find_license(tree, tree / "plugins" / "a")
+    assert "Skill A notice" in lic["notice"] and "Sibling notice" not in lic["notice"]
+
+
+# --------------------------------------------------------------------------
+# Symlinks: copytree(symlinks=False) ships a link's TARGET, so the gate must have read it
+# --------------------------------------------------------------------------
+
+def _symlink(link, target, is_dir=False):
+    try:
+        os.symlink(target, link, target_is_directory=is_dir)
+    except (OSError, NotImplementedError) as exc:
+        pytest.skip(f"cannot create a symlink here: {exc}")
+
+
+def test_a_symlinked_dir_in_the_skill_stops_the_gate(tmp_path):
+    tree = _monorepo(tmp_path, {"plugins/a/real/tool.md": "x\n"})
+    _symlink(tree / "plugins" / "a" / "linked", tree / "plugins" / "a" / "real", is_dir=True)
+    lic = AS.find_license(tree, tree / "plugins" / "a")
+    assert lic["status"] == "absent" and "symlink" in lic["where"]
+
+
+def test_a_symlinked_file_pointing_out_of_the_skill_stops_the_gate(tmp_path):
+    tree = _monorepo(tmp_path, {"plugins/b/secret.md": "sibling content\n"})
+    _symlink(tree / "plugins" / "a" / "borrowed.md", tree / "plugins" / "b" / "secret.md")
+    lic = AS.find_license(tree, tree / "plugins" / "a")
+    assert lic["status"] == "absent" and "symlink" in lic["where"]
+
+
+def test_a_symlinked_file_inside_the_skill_is_fine(tmp_path):
+    tree = _monorepo(tmp_path, {"plugins/a/real.md": "x\n"})
+    _symlink(tree / "plugins" / "a" / "alias.md", tree / "plugins" / "a" / "real.md")
+    lic = AS.find_license(tree, tree / "plugins" / "a")
+    assert lic["status"] == "accept" and lic["id"] == "Apache-2.0"
+
+
+@pytest.mark.skipif(os.name == "nt", reason="git symlinks need core.symlinks and privilege")
+def test_a_cloned_skill_with_a_symlinked_dir_is_not_adopted(tmp_path, capsys):
+    # A clone keeps the link; copytree would then copy whatever it points at - here a GPL
+    # tree outside the repo that no scan ever read - into the marketplace.
+    if not AS.shutil.which("git"):
+        pytest.skip("git not installed")
+    outside = _tree(tmp_path / "outside", {"COPYING": GPL,
+                                           "lib.py": "# SPDX-License-Identifier: GPL-3.0-only\n"})
+    work = _root_skill(tmp_path / "w", "linkskill")
+    _symlink(work / "ext", outside, is_dir=True)
+    env = dict(os.environ, GIT_AUTHOR_NAME="t", GIT_AUTHOR_EMAIL="t@t", GIT_COMMITTER_NAME="t",
+               GIT_COMMITTER_EMAIL="t@t", GIT_CONFIG_GLOBAL=os.devnull, GIT_CONFIG_NOSYSTEM="1")
+    for cmd in (["git", "init", "-q"], ["git", "add", "-A"], ["git", "commit", "-q", "-m", "x"]):
+        subprocess.run(cmd, cwd=str(work), check=True, env=env, capture_output=True)
+    repo, skills = _fake_repo(tmp_path)
+    rc = AS.main([work.as_uri(), "--name", "coding-linked", "--dest", str(skills)])
+    err = capsys.readouterr().err
+    assert rc == 1, err
+    assert "symlink" in err
+    assert not (skills / "coding-linked").exists()
+
+
+# --------------------------------------------------------------------------
+# A UTF-8 BOM before the front matter
+# --------------------------------------------------------------------------
+
+BOM = "\ufeff"
+
+
+@pytest.mark.parametrize("eol", ["\n", "\r\n"], ids=["lf", "crlf"])
+def test_a_bom_before_the_front_matter_keeps_the_credit_below_it(tmp_path, eol):
+    text = BOM + eol.join(["---", "name: up", "description: d", "---", "## Usage", "body", ""])
+    out = _credit(tmp_path, text)
+    assert out.startswith(eol.join(["---", "name: up", "description: d", "---", ""]))
+    assert eol.join(["---", "", "> Adapted from up (upstream) (MIT).", ""]) in out
+    assert BOM not in out
+
+
+@pytest.mark.parametrize("eol", ["\n", "\r\n"], ids=["lf", "crlf"])
+def test_a_bom_skill_md_gets_its_name_rewritten_end_to_end(tmp_path, record_subprocess, eol):
+    repo, skills = _fake_repo(tmp_path)
+    src = tmp_path / "bomskill"
+    src.mkdir()
+    (src / "SKILL.md").write_bytes((BOM + eol.join(
+        ["---", "name: upbom", "description: d", "---", "## Usage", "Run bitranox:upbom.", ""])
+    ).encode("utf-8"))
+    (src / "LICENSE").write_text(MIT, encoding="utf-8")
+    assert AS.main([str(src), "--name", "coding-newbom", "--dest", str(skills)]) == 0
+    out = (skills / "coding-newbom" / "SKILL.md").read_bytes().decode("utf-8")
+    assert out.startswith(eol.join(["---", "name: coding-newbom", "description: d", "---", ""]))
+    assert "bitranox:coding-newbom" in out and "name: upbom" not in out
+    assert BOM not in out
+    assert out.count("> Adapted from") == 1
+
+
+def test_a_bom_skill_md_that_already_carries_a_credit_still_loses_the_bom(tmp_path,
+                                                                           record_subprocess):
+    # add_credit_line writes nothing here (a credit is present), so the BOM must go on the
+    # rewrite pass or it stays in front of the front matter.
+    repo, skills = _fake_repo(tmp_path)
+    src = tmp_path / "bomcredit"
+    src.mkdir()
+    (src / "SKILL.md").write_bytes((BOM + "---\nname: upc\n---\n# T\n\n> Adapted from x (MIT).\n")
+                                   .encode("utf-8"))
+    (src / "LICENSE").write_text(MIT, encoding="utf-8")
+    assert AS.main([str(src), "--name", "coding-bomcredit", "--dest", str(skills)]) == 0
+    out = (skills / "coding-bomcredit" / "SKILL.md").read_bytes().decode("utf-8")
+    assert out.startswith("---\nname: coding-bomcredit\n---\n")
+
+
+def test_rewrite_identity_sees_front_matter_behind_a_bom():
+    out, n = AS.rewrite_identity(BOM + "---\nname: up\n---\n# up\n", "up", "coding-x")
+    assert n == 2 and "name: coding-x" in out and "# coding-x" in out
+
+
+def test_frontmatter_name_reads_through_a_bom(tmp_path):
+    md = tmp_path / "SKILL.md"
+    md.write_bytes((BOM + "---\r\nname: up\r\n---\r\n").encode("utf-8"))
+    assert AS.frontmatter_name(md) == "up"
+
+
+# --------------------------------------------------------------------------
 # Test scaffold must collect for a scripts/ subdir or a hyphenated name
 # --------------------------------------------------------------------------
 

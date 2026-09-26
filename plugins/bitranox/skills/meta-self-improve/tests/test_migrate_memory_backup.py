@@ -176,3 +176,75 @@ def test_a_dry_run_writes_no_backup(env):
     _native(home, slug, {"project-alpha": "Alpha body."})
     M.migrate_store(slug, dry_run=True)
     assert not M._backups_dir().exists()
+
+
+# ---- a store file the engine cannot read fails the store, and the backup is still named ---------
+# The engine raises TreeWalkError (a RuntimeError) for a level file or body that is not UTF-8. It
+# escaped the per-entry handler, so the run died with a traceback AFTER the backup was taken and the
+# "BACKUP ... undo with --restore" line - the only place the user learns where it is - never printed.
+
+NOT_UTF8_LEVEL = [b"my own notes, caf\xe9\n",
+                  b"\xff\xfe" + "my own notes\n".encode("utf-16-le")]
+
+
+@pytest.mark.parametrize("raw", NOT_UTF8_LEVEL)
+def test_an_unreadable_level_file_fails_its_store_and_the_backup_is_still_named(env, capsys, raw):
+    tmp_path, home = env
+    top, proj = _tree(tmp_path, git=False)
+    (proj / "CLAUDE.local.md").write_bytes(raw)
+    proj2 = top / "sub2"                                     # a healthy level in the same run
+    proj2.mkdir()
+    (proj2 / "CLAUDE.md").write_text("# sub2\n", encoding="utf-8")
+    s1, s2 = _slug(proj), _slug(proj2)
+    _native(home, s1, {"project-alpha": "Alpha body."})
+    _native(home, s2, {"project-gamma": "Gamma body."})
+    before = _snapshot(top)
+
+    assert M.main(["--apply", "--slug=" + s1, "--slug=" + s2]) == 1
+    out = capsys.readouterr().out
+    assert "FAILED" in out and "CLAUDE.local.md" in out
+    runs = [p for p in M._backups_dir().iterdir() if p.is_dir()]
+    assert len(runs) == 1, runs
+    assert "BACKUP of everything written: %s" % runs[0] in out
+    assert (proj / "CLAUDE.local.md").read_bytes() == raw          # never rewritten
+    assert "project-gamma" in (proj2 / "CLAUDE.local.md").read_text(encoding="utf-8")
+    assert M.main(["--restore", str(runs[0])]) == 0                # and the named backup undoes it
+    assert _snapshot(top) == before
+
+
+def test_migrate_store_reports_an_unreadable_level_file_as_its_error(env):
+    tmp_path, home = env
+    _top, proj = _tree(tmp_path, git=False)
+    (proj / "CLAUDE.local.md").write_bytes(NOT_UTF8_LEVEL[0])
+    slug = _slug(proj)
+    _native(home, slug, {"project-alpha": "Alpha body.", "project-beta": "Beta body."})
+    rep = M.migrate_store(slug, dry_run=False)
+    assert rep["error"] and "CLAUDE.local.md" in rep["error"]
+    assert rep["backup"] and rep["placed"] == 0
+
+
+@pytest.mark.skipif(not HAVE_GIT, reason="needs git for the repo .gitignore")
+def test_a_non_utf8_gitignore_neither_crashes_the_run_nor_is_rewritten(env, capsys):
+    tmp_path, home = env
+    top, proj = _tree(tmp_path, git=True)
+    raw = b"# caf\xe9\n*.pyc\n"
+    (top / ".gitignore").write_bytes(raw)
+    slug = _slug(proj)
+    _native(home, slug, {"project-alpha": "Alpha body."})
+    rc = M.main(["--apply", "--slug=" + slug])
+    out = capsys.readouterr().out
+    assert "BACKUP of everything written" in out
+    # the engine's own ignore step appends bytes, which is fine; what must survive is the original
+    assert (top / ".gitignore").read_bytes().startswith(raw)
+    assert rc == 0
+    assert M.ensure_gitignore(str(proj)) == "gitignore write failed"
+
+
+@pytest.mark.skipif(not HAVE_GIT, reason="needs git for the repo .gitignore")
+def test_a_utf8_gitignore_holding_non_ascii_is_still_extended(env):
+    """Control for the non-UTF-8 case: real UTF-8 text is read and the ignore lines appended."""
+    tmp_path, _home = env
+    top, proj = _tree(tmp_path, git=True)
+    (top / ".gitignore").write_bytes("# caf\u00e9\n*.pyc\n".encode("utf-8"))
+    assert M.ensure_gitignore(str(proj)) == "gitignored"
+    assert sig.MEMORY_DIRNAME + "/" in (top / ".gitignore").read_text(encoding="utf-8")

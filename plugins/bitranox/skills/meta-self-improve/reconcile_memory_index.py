@@ -50,7 +50,7 @@ def parse_frontmatter(text):
     meta = {}
     # a BOM made the opening delimiter unrecognisable; "\n" only because splitlines() also breaks
     # on U+2028 and \f, which can sit inside a value
-    text = text.lstrip("﻿")
+    text = text.lstrip("\ufeff")
     lines = text.split("\n")
     if not lines or lines[0].strip() != "---":
         return meta, text

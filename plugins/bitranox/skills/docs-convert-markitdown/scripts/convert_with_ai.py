@@ -12,9 +12,10 @@ pictures in PowerPoint decks (.pptx). markitdown sends nothing else to the LLM
 - a PDF's images are never described - so any other input is refused; convert
 it with plain markitdown instead.
 
-A deck whose picture descriptions fail is reported as a failure: markitdown
-itself swallows those errors and would otherwise write a Markdown file with no
-descriptions under an "AI Model" header.
+An input whose picture descriptions fail, or come back without text, is reported
+as a failure: markitdown itself swallows those errors (and skips an empty
+description) and would otherwise write a Markdown file with no descriptions
+under an "AI Model" header.
 
 The OpenRouter API key comes from the OPENROUTER_API_KEY environment variable
 only. A key on the command line (--api-key/-k) is refused with exit 2: argv is
@@ -101,27 +102,43 @@ def _configure_console() -> None:
             pass
 
 
+def _caption_text(response: Any) -> str:
+    """The description text a chat response carries, or "" when it carries none."""
+    choices = getattr(response, "choices", None) or []
+    if not choices:
+        return ""
+    content = getattr(getattr(choices[0], "message", None), "content", None)
+    return content.strip() if isinstance(content, str) else ""
+
+
 class CaptionCounter:
     """An OpenAI-compatible client wrapper that counts image-description calls.
 
     markitdown's PPTX converter catches a failed description call and carries on,
-    so without this count a deck whose every call failed (a bad key, a 401) would
-    convert "successfully" with no descriptions in it.
+    and its ImageConverter silently skips a None description, so without this count
+    a run whose every call failed (a bad key, a 401) or came back with no text
+    (choices=[], an empty or None content) would convert "successfully" with no
+    descriptions in it. A description counts as produced only when non-empty text
+    came back.
     """
 
     def __init__(self, client: Any):
         self._client = client
         self.attempts = 0
-        self.failures = 0
+        self.produced = 0
         self.chat = SimpleNamespace(completions=SimpleNamespace(create=self._create))
+
+    @property
+    def failures(self) -> int:
+        """Calls that raised or returned without description text."""
+        return self.attempts - self.produced
 
     def _create(self, *args: Any, **kwargs: Any) -> Any:
         self.attempts += 1
-        try:
-            return self._client.chat.completions.create(*args, **kwargs)
-        except Exception:
-            self.failures += 1
-            raise
+        response = self._client.chat.completions.create(*args, **kwargs)
+        if _caption_text(response):
+            self.produced += 1
+        return response
 
 
 def _make_client(api_key: str) -> Any:
@@ -190,7 +207,8 @@ def convert_with_ai(
 
     if counter.failures:
         print(
-            f"[FAIL] {counter.failures} of {counter.attempts} image description call(s) failed; "
+            f"[FAIL] {counter.failures} of {counter.attempts} image description call(s) failed or "
+            f"returned no description; "
             f"{output_file} was written without those descriptions",
             file=sys.stderr,
         )

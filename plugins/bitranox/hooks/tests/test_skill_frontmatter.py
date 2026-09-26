@@ -183,7 +183,7 @@ def test_the_raw_field_still_shows_the_form_the_gate_lints():
 
 @pytest.mark.parametrize("text, block, body", [
     ("---\nname: d\n---\nBody.\n", "\nname: d\n", "\nBody.\n"),
-    ("﻿---\nname: d\n---\nBody.\n", "\nname: d\n", "\nBody.\n"),
+    ("\ufeff---\nname: d\n---\nBody.\n", "\nname: d\n", "\nBody.\n"),
     ("# no front matter\n", None, "# no front matter\n"),
     ("---\nname: unclosed\n", "\nname: unclosed\n", ""),
 ])
@@ -195,7 +195,7 @@ def test_split_frontmatter_returns_the_block_and_the_body(text, block, body):
 def test_read_text_decodes_like_the_front_matter_reader(tmp_path):
     path = tmp_path / "SKILL.md"
     path.write_bytes(b"\xef\xbb\xbf---\ndescription: \xff\n---\n")
-    assert F.read_text(path) == "---\ndescription: �\n---\n"
+    assert F.read_text(path) == "---\ndescription: \ufffd\n---\n"
     assert F.read_text(tmp_path / "absent.md") is None
 
 

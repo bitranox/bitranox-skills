@@ -158,6 +158,75 @@ def test_a_failing_suite_exits_2_without_an_improvement(repo, run_script):
     assert "missing_module_xyz" in (root / "tests" / "test_tracked.py").read_text(encoding="utf-8")
 
 
+# c1's suite leaves the tree in a state `git checkout main` refuses to overwrite: a tracked
+# file that differs between c1 and c2 is modified, or a file c2 tracks appears untracked.
+DIRTIES_TRACKED = ("import pathlib\n\n\ndef test_dirty():\n"
+                   "    p = pathlib.Path('version.txt')\n"
+                   "    if p.read_text().strip() == 'c1':\n"
+                   "        p.write_text('changed by the suite\\n')\n")
+CREATES_UNTRACKED = ("import pathlib\n\n\ndef test_dirty():\n"
+                     "    p = pathlib.Path('only_in_head.py')\n"
+                     "    if not p.exists():\n"
+                     "        p.write_text('made by the suite\\n')\n")
+
+
+def _recovery_commands(stderr):
+    """The git commands the error message tells the user to run, in order."""
+    lines = stderr.decode("utf-8").splitlines()
+    return [line.split(":", 1)[1].strip() for line in lines
+            if line.startswith("ERROR:") and line.split(":", 1)[1].strip().startswith("git ")]
+
+
+def _blocked_restore(make_repo, run_script, dirty_test, extra=None):
+    files = {"tests/test_dirty.py": dirty_test}
+    root, env, git = make_repo(files)
+    if extra:  # a third commit adds *extra*, so the BEFORE commit (HEAD~1) lacks it
+        (root / extra).write_text("tracked in HEAD\n", encoding="utf-8")
+        git("add", extra)
+        git("commit", "-q", "-m", "c3")
+    (root / "mod.py").write_text("x = 2\n", encoding="utf-8")              # the user's work
+    before_sha = git("rev-parse", "HEAD~1").stdout.strip()
+    r = run_script(SCRIPT, cwd=str(root), env=env)
+    return root, git, before_sha, r
+
+
+@pytest.mark.parametrize("dirty_test,extra", [(DIRTIES_TRACKED, None),
+                                              (CREATES_UNTRACKED, "only_in_head.py")],
+                         ids=["tracked-file-modified", "untracked-file-in-the-way"])
+def test_a_failed_restore_names_the_branch_and_the_stash_sha(make_repo, run_script,
+                                                             dirty_test, extra):
+    root, git, before_sha, r = _blocked_restore(make_repo, run_script, dirty_test, extra)
+    assert r.returncode == 2, r.stdout + r.stderr
+    assert git("symbolic-ref", "-q", "HEAD", check=False).returncode != 0   # left detached
+    stash_shas = git("stash", "list", "--format=%H").stdout.split()
+    assert len(stash_shas) == 1
+    err = r.stderr.decode("utf-8")
+    assert stash_shas[0] in err                      # the stash, by sha (stash@{n} can shift)
+    assert "git checkout main" in err                # the ref to return to
+    assert before_sha in err and "DETACHED" in err   # where the repository is now
+    assert "Improvement" not in r.stdout.decode("utf-8")
+
+
+def test_a_failed_restore_with_nothing_stashed_says_so_and_names_no_stash(make_repo, run_script):
+    root, env, git = make_repo({"tests/test_dirty.py": DIRTIES_TRACKED})
+    r = run_script(SCRIPT, cwd=str(root), env=env)             # clean tree: nothing to stash
+    assert r.returncode == 2, r.stdout + r.stderr
+    assert b"nothing was stashed" in r.stderr
+    assert _recovery_commands(r.stderr) == ["git checkout main"]
+    assert _stash_list(git) == []
+
+
+def test_the_recovery_the_failed_restore_prints_actually_recovers(make_repo, run_script):
+    root, git, _before_sha, r = _blocked_restore(make_repo, run_script, DIRTIES_TRACKED)
+    commands = _recovery_commands(r.stderr)
+    assert commands, r.stderr
+    git("checkout", "--", "version.txt")             # what the BEFORE run left behind
+    for command in commands:
+        git(*command.split()[1:])
+    assert git("symbolic-ref", "HEAD").stdout.strip() == "refs/heads/main"
+    assert (root / "mod.py").read_text(encoding="utf-8") == "x = 2\n"
+
+
 @pytest.mark.skipif(sys.platform == "win32", reason="POSIX signal delivery; Ctrl-C on Windows is a console event")
 def test_ctrl_c_during_before_run_restores_branch_and_changes(tmp_path, make_repo):
     started = tmp_path / "before_started"

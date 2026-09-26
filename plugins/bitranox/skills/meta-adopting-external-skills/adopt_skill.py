@@ -23,6 +23,7 @@ Pure standard library. Cross-platform: paths via pathlib, git via argv lists (ne
 
 import argparse
 import json
+import os
 import re
 import shutil
 import subprocess
@@ -39,8 +40,11 @@ REJECTED = {"GPL", "LGPL", "AGPL", "MPL"}
 FOREIGN_NAMESPACES = ("superpowers", "obra", "vercel")
 
 _COPYRIGHT_RX = re.compile(r"(?im)^\s*(copyright\s+(?:\(c\)|\xa9|©)?.*?\b\d{4}.*)$")
-_SPDX_RX = re.compile(r"SPDX-License-Identifier:\s*([A-Za-z0-9.\-+]+)")
+# The whole expression, not its first id: "MIT OR GPL-3.0-only" read as "MIT" accepted a GPL
+# file, and "(MIT OR GPL-2.0-only)" matched nothing at all. A comment closer (`*/`, `-->`) ends it.
+_SPDX_RX = re.compile(r"SPDX-License-Identifier:[ \t]*([A-Za-z0-9.\-+() \t]+)")
 _NAME_RX = re.compile(r"^[a-z][a-z0-9-]+$")
+_BOM = "\ufeff"
 
 
 # ---------------------------------------------------------------------------
@@ -75,12 +79,8 @@ def classify_license_text(text):
     return None
 
 
-def classify_license_id(spdx):
-    """Map an SPDX-ish id (from a manifest field or SPDX header) to accept/reject/None."""
-    if not spdx:
-        return None
-    s = spdx.strip().strip('"').strip("'")
-    norm = s.upper().replace("_", "-")
+def _classify_single_id(sid):
+    norm = sid.upper().replace("_", "-")
     for acc in ACCEPTED:
         if norm == acc.upper():
             return acc
@@ -91,124 +91,432 @@ def classify_license_id(spdx):
     return None
 
 
-_MANIFESTS = ("plugin.json", "package.json", "pyproject.toml", ".claude-plugin/plugin.json",
-              ".claude-plugin/marketplace.json")
-_MANIFEST_RXS = (
-    re.compile(r'"license"\s*:\s*"([^"]+)"'),                  # JSON: plugin.json / package.json
-    re.compile(r'(?im)^\s*license\s*=\s*["\']([^"\']+)["\']'),  # TOML: pyproject
-)
-_SPDX_SUFFIXES = {".py", ".js", ".ts", ".sh", ".md"}
+_EXPR_SPLIT_RX = re.compile(r"\s+(?:AND|OR|WITH)\s+|[()]", re.IGNORECASE)
+
+
+def classify_license_id(spdx):
+    """Map an SPDX id or license EXPRESSION (a manifest field, a PEP 639 `license` string, an
+    SPDX header) to an accepted id, 'REJECT', or None.
+
+    Every id in an expression counts: one copyleft id rejects it (an `OR` choice included - which
+    alternative applies is a human's call, never the gate's), any id or exception it does not know
+    leaves it None, and only an expression of accepted ids is accepted, as written.
+    """
+    if not spdx:
+        return None
+    s = " ".join(spdx.strip().strip('"').strip("'").split())
+    leaves = [leaf.strip() for leaf in _EXPR_SPLIT_RX.split(s) if leaf.strip()]
+    if not leaves:
+        return None
+    mapped = [_classify_single_id(leaf) for leaf in leaves]
+    if "REJECT" in mapped:
+        return "REJECT"
+    if None in mapped:
+        return None
+    return mapped[0] if len(leaves) == 1 else s
+
+
+def _accepted(mapped):
+    return mapped not in (None, "REJECT")
+
+
+def _spdx_ids(text):
+    """Every SPDX-License-Identifier expression in `text`, with a trailing `-->` remnant cut."""
+    out = []
+    for raw in _SPDX_RX.findall(text):
+        expr = raw.strip().rstrip("-").strip()
+        if expr:
+            out.append(expr)
+    return out
+
+
+_MANIFEST_NAMES = {"plugin.json", "package.json", "marketplace.json", "pyproject.toml"}
+_SPDX_SUFFIXES = {".py", ".js", ".mjs", ".cjs", ".ts", ".tsx", ".jsx", ".sh", ".ps1", ".md",
+                  ".c", ".h", ".cpp", ".go", ".rs", ".rb", ".java", ".yml", ".yaml", ".toml"}
 _VCS_DIRS = {".git", ".hg", ".svn"}
-_LICENSE_FILES = ("LICENSE", "LICENSE.txt", "LICENSE.md", "COPYING", "COPYING.txt", "LICENCE",
-                  "LICENSE-MIT")
+# A license file by NAME: LICENSE / LICENCE / UNLICENSE / COPYING, bare or with a variant tag
+# (LICENSE-MIT, COPYING.LESSER, LICENSE.md), plus any file in a REUSE-style LICENSES/ dir. A code
+# file that happens to be called license.py is a program, not a license.
+_LICENSE_NAME_RX = re.compile(r"^(?:(?:UN)?LICEN[CS]ES?|COPYING)(?:[-.][A-Za-z0-9.-]*)?$",
+                              re.IGNORECASE)
+_LICENSE_DIRS = {"licenses", "licences"}
+_CODE_SUFFIXES = {".py", ".js", ".mjs", ".cjs", ".ts", ".sh", ".ps1", ".json", ".toml", ".yml",
+                  ".yaml", ".html", ".css", ".go", ".rs", ".rb", ".java", ".c", ".h"}
+
+try:
+    import tomllib
+    _TOML_LOADS = tomllib.loads
+except ImportError:  # Python 3.10 has no stdlib TOML parser; see _pyproject_license_lines
+    _TOML_LOADS = None
 
 
-def _manifest_license_fields(tree):
-    """(license id, manifest name) for every license field in the known manifests."""
-    found = []
-    for mf in _MANIFESTS:
-        fp = tree / mf
-        if not fp.is_file():
-            continue
-        try:
-            txt = fp.read_text(encoding="utf-8", errors="replace")
-        except OSError:
-            continue
-        for rx in _MANIFEST_RXS:
-            found += [(sid, mf) for sid in rx.findall(txt)]
-    return found
+_NOTICE_NAMES = {"NOTICE", "NOTICE.TXT", "NOTICE.MD"}
 
 
-def _spdx_headers(tree):
-    """(license id, 'SPDX header in <file>') for EVERY file carrying one, in a stable order.
+def _root_first(files, tree):
+    return sorted(set(files), key=lambda p: (len(p.relative_to(tree).parts), p.as_posix()))
 
-    Every file, not the first: a tree whose first-walked file says MIT and a later one says GPL
-    is a GPL tree, and the walk order must never decide a legal verdict."""
-    found = []
-    for f in sorted(tree.rglob("*")):
-        if f.suffix.lower() not in _SPDX_SUFFIXES or _VCS_DIRS & set(f.relative_to(tree).parts):
-            continue
-        try:
-            if not f.is_file():
+
+def _subtree_files(tree, base):
+    """(every file under `base` outside VCS dirs; one problem per thing the gate cannot vouch for).
+
+    The skill's subtree is what copytree ships, and copytree(symlinks=False) ships a link's
+    TARGET: a symlinked dir, or a symlinked file pointing out of `base`, would ship content this
+    walk never read, so each is a problem, like a directory that could not be listed."""
+    files, problems = [], []
+
+    def onerror(err):
+        problems.append(f"{getattr(err, 'filename', None) or '?'}: cannot list "
+                        f"({err.strerror or err})")
+
+    for dirpath, dirnames, filenames in os.walk(base, onerror=onerror):
+        here = Path(dirpath)
+        keep = []
+        for d in sorted(dirnames):
+            if d in _VCS_DIRS:
                 continue
-            head = f.read_text(encoding="utf-8", errors="replace")[:2000]
-        except OSError:
+            if (here / d).is_symlink():
+                problems.append(f"{(here / d).relative_to(tree).as_posix()}: a symlinked dir "
+                                "(copying the skill would ship its target, which the gate "
+                                "did not read)")
+            else:
+                keep.append(d)
+        dirnames[:] = keep
+        for name in filenames:
+            path = here / name
+            if path.is_symlink() and not _inside(path, base):
+                problems.append(f"{path.relative_to(tree).as_posix()}: a symlink to a file "
+                                "outside the skill (copying would ship that file)")
+            else:
+                files.append(path)
+    return files, problems
+
+
+def _governing_file(entry, tree):
+    """True for an ancestor-dir entry that governs what sits below it: a license file, a
+    manifest, or a NOTICE. Prose and code in an ancestor dir are not shipped and declare nothing."""
+    return (_is_license_file(entry.relative_to(tree)) or entry.name in _MANIFEST_NAMES
+            or entry.name.upper() in _NOTICE_NAMES)
+
+
+def _ancestor_files(tree, skill_dir):
+    """(the governing files of each dir from the skill dir's parent up to the source root, plus
+    the files of a REUSE LICENSES/ dir beside them; problems). Never their other subtrees: a
+    sibling plugin's LICENSE governs the sibling, not the skill."""
+    files, problems = [], []
+    for d in [p for p in skill_dir.parents if p == tree or tree in p.parents]:
+        try:
+            entries = sorted(d.iterdir())
+        except OSError as exc:
+            problems.append(f"{d}: cannot list ({exc.strerror or exc})")
+            continue
+        for entry in entries:
+            if entry.is_dir() and entry.name.lower() in _LICENSE_DIRS:
+                sub, sub_problems = _subtree_files(tree, entry)
+                files += sub
+                problems += sub_problems
+            elif entry.is_file() and _governing_file(entry, tree):
+                files.append(entry)
+    return files, problems
+
+
+def _scoped_files(tree, skill_dir):
+    """(files, problems) of the license scope: the skill's whole subtree (what ships) plus the
+    governing files of every ancestor dir up to the source root (what licenses it)."""
+    files, problems = _subtree_files(tree, skill_dir)
+    anc_files, anc_problems = _ancestor_files(tree, skill_dir)
+    return _root_first(files + anc_files, tree), anc_problems + problems
+
+
+def _read_text(path):
+    """(text, None), or ("", reason) when the file cannot be read."""
+    try:
+        return path.read_text(encoding="utf-8-sig", errors="replace"), None
+    except OSError as exc:
+        return "", f"unreadable ({exc.strerror or exc})"
+
+
+def _is_license_file(rel):
+    parts = rel.parts
+    if len(parts) > 1 and parts[-2].lower() in _LICENSE_DIRS:
+        return True
+    return bool(_LICENSE_NAME_RX.match(parts[-1])) and rel.suffix.lower() not in _CODE_SUFFIXES
+
+
+def _walk_keys(node):
+    """(key, value) for every mapping key at any depth of a parsed JSON/TOML document."""
+    if isinstance(node, dict):
+        for key, value in node.items():
+            yield key, value
+            yield from _walk_keys(value)
+    elif isinstance(node, list):
+        for item in node:
+            yield from _walk_keys(item)
+
+
+def _license_value(value):
+    """[(kind, value)] for one `license` value: a string is an id or expression; a table names
+    `text`, `file` (pyproject) or `type` (npm); a list holds several. Anything else cannot be read,
+    and says so - a shape the gate does not know must stop it, not be skipped."""
+    if isinstance(value, str):
+        return [("id", value)]
+    if isinstance(value, list):
+        return [decl for item in value for decl in _license_value(item)] or [
+            ("unreadable", "an empty license list")]
+    if isinstance(value, dict):
+        out = [(kind, value[key]) for key, kind in (("type", "id"), ("text", "text"),
+                                                    ("file", "file"))
+               if isinstance(value.get(key), str)]
+        return out or [("unreadable", f"a license table with keys {sorted(value)}")]
+    return [("unreadable", f"a license value of type {type(value).__name__}")]
+
+
+def _license_files_value(value):
+    """[(kind, value)] for a PEP 639 `license-files` value: glob patterns of license files."""
+    if isinstance(value, str):
+        return [("files", value)]
+    if isinstance(value, dict):   # the older setuptools table form
+        value = [p for key in ("paths", "globs") for p in (value.get(key) or [])]
+    if isinstance(value, list) and value and all(isinstance(p, str) for p in value):
+        return [("files", p) for p in value]
+    return [("unreadable", "a license-files value it cannot read")]
+
+
+def _json_license_decls(text):
+    try:
+        doc = json.loads(text)
+    except ValueError as exc:
+        return [("unreadable", f"does not parse as JSON ({exc})")]
+    return [decl for key, value in _walk_keys(doc) if key in ("license", "licenses")
+            for decl in _license_value(value)]
+
+
+_TOML_LICENSE_LINE = re.compile(r"(?m)^[ \t]*(license(?:-files)?)\b[^=\n]*=[ \t]*(.*)$")
+_TOML_LICENSE_TABLE = re.compile(r"(?m)^[ \t]*\[[^\]\n]*\blicense\b[^\]\n]*\]")
+_TOML_PLAIN_STRING = re.compile(r"""(?:"([^"\\]*)"|'([^']*)')[ \t]*(?:#.*)?""")
+
+
+def _pyproject_license_lines(text):
+    """The no-tomllib reading: only `license = "<id>"` on one line is understood. Every other
+    license key, dotted key or [..license..] table is reported unreadable, so the gate stops."""
+    out = []
+    for m in _TOML_LICENSE_LINE.finditer(text):
+        plain = _TOML_PLAIN_STRING.fullmatch(m.group(2).strip())
+        if m.group(1) == "license" and plain and re.match(r"^[ \t]*license[ \t]*=", m.group(0)):
+            out.append(("id", plain.group(1) if plain.group(1) is not None else plain.group(2)))
+        else:
+            out.append(("unreadable", f"`{m.group(0).strip()[:60]}` needs tomllib (Python 3.11+)"))
+    out += [("unreadable", f"`{m.group(0).strip()}` needs tomllib (Python 3.11+)")
+            for m in _TOML_LICENSE_TABLE.finditer(text)]
+    return out
+
+
+def _pyproject_license_decls(text, loads=_TOML_LOADS):
+    """[(kind, value)] for every `license` and `license-files` key in a pyproject.toml, in any
+    table ([project], [tool.poetry], ...). `loads` is the TOML parser; None reads lines instead."""
+    if loads is None:
+        return _pyproject_license_lines(text)
+    try:
+        doc = loads(text)
+    except ValueError as exc:  # tomllib.TOMLDecodeError is a ValueError
+        return [("unreadable", f"does not parse as TOML ({exc})")]
+    out = []
+    for key, value in _walk_keys(doc):
+        if key == "license":
+            out += _license_value(value)
+        elif key == "license-files":
+            out += _license_files_value(value)
+    return out
+
+
+def _text_id(text):
+    """The id a license text field holds: a bare id or expression, else recognised wording."""
+    one_line = " ".join(text.split())
+    mapped = classify_license_id(one_line) if "\n" not in text.strip() and len(one_line) < 200 else None
+    return mapped if mapped is not None else _license_file_id(text)
+
+
+def _inside(path, tree):
+    try:
+        path.resolve().relative_to(tree.resolve())
+        return True
+    except (OSError, ValueError):
+        return False
+
+
+def _named_file_decl(tree, path, label, where):
+    """(mapped, label, where) for a license file a manifest names by path."""
+    if not _inside(path, tree):
+        return (None, f"{label} lies outside the source", where)
+    if not path.is_file():
+        return (None, f"{label} not found", where)
+    text, problem = _read_text(path)
+    if problem:
+        return (None, f"{label} {problem}", where)
+    return (_license_file_id(text), f"{label} text not recognised", where)
+
+
+def _manifest_decl(tree, base, kind, value, where):
+    """(mapped, label, where) entries for one (kind, value) a manifest declared."""
+    if kind == "id":
+        return [(classify_license_id(value), f"unrecognised license id {value!r}", where)]
+    if kind == "text":
+        return [(_text_id(value), "license text not recognised", where)]
+    if kind == "file":
+        return [_named_file_decl(tree, base / value, f"license file {value!r}", where)]
+    if kind == "files":
+        try:
+            matches = sorted(base.glob(value)) if not Path(value).is_absolute() else []
+        except (ValueError, NotImplementedError, OSError):
+            matches = []
+        return [_named_file_decl(tree, m, f"license file {m.name!r}", where) for m in matches] or [
+            (None, f"license-files pattern {value!r} matched no file", where)]
+    return [(None, value, where)]
+
+
+def _manifest_decls(tree, files):
+    """Every license declaration in every manifest anywhere in the tree - a vendored package's
+    package.json ships with it, so it declares a license of what is adopted too."""
+    decls = []
+    for f in files:
+        if f.name not in _MANIFEST_NAMES:
+            continue
+        where = f.relative_to(tree).as_posix()
+        text, problem = _read_text(f)
+        if problem:
+            decls.append((None, problem, where))
+            continue
+        raw = (_pyproject_license_decls(text) if f.name == "pyproject.toml"
+               else _json_license_decls(text))
+        for kind, value in raw:
+            decls += _manifest_decl(tree, f.parent, kind, value, where)
+    return decls
+
+
+def _spdx_decls(tree, files):
+    """Every SPDX-License-Identifier expression in the head of every source file, in a stable
+    order: the walk order must never decide a legal verdict."""
+    decls = []
+    for f in files:
+        if f.suffix.lower() not in _SPDX_SUFFIXES:
             continue
         where = f"SPDX header in {f.relative_to(tree).as_posix()}"
-        found += [(sid, where) for sid in _SPDX_RX.findall(head)]
-    return found
+        text, problem = _read_text(f)
+        if problem:
+            decls.append((None, problem, where))
+            continue
+        decls += [(classify_license_id(e), f"unrecognised license id {e!r}", where)
+                  for e in _spdx_ids(text[:2000])]
+    return decls
 
 
-def _read_license_file(tree):
-    """(text, filename) of the first LICENSE/COPYING file at the tree root, or ("", "")."""
-    for cand in _LICENSE_FILES:
-        fp = tree / cand
-        if fp.is_file():
-            try:
-                return fp.read_text(encoding="utf-8", errors="replace"), cand
-            except OSError:
-                pass
-    return "", ""
+def _license_file_decls(tree, files):
+    """([(mapped, label, where)], [(where, text)]) for EVERY license file in the tree: an MIT
+    LICENSE beside a GPL COPYING is a GPL tree, whichever file a reader opens first."""
+    decls, texts = [], []
+    for f in files:
+        rel = f.relative_to(tree)
+        if not _is_license_file(rel):
+            continue
+        where = rel.as_posix()
+        text, problem = _read_text(f)
+        if problem:
+            decls.append((None, problem, where))
+            continue
+        decls.append((_license_file_id(text), "license text not recognised", where))
+        texts.append((where, text))
+    return decls, texts
 
 
 def _license_file_id(text):
-    """The id a LICENSE file's text states: its recognised wording, else the SPDX ids it holds
-    (REJECT if any rejects, the first when all are accepted), else None."""
+    """The id a license file's text states: its recognised wording, else the SPDX expressions it
+    holds (REJECT if any rejects, all combined when all are accepted), else None."""
     lic_id = classify_license_text(text)
     if lic_id or not text:
         return lic_id
-    mapped = [classify_license_id(sid) for sid in _SPDX_RX.findall(text)]
+    mapped = [classify_license_id(e) for e in _spdx_ids(text)]
     if "REJECT" in mapped:
         return "REJECT"
-    if mapped and all(m in ACCEPTED for m in mapped):
-        return mapped[0]
+    if mapped and all(_accepted(m) for m in mapped):
+        return _combine(mapped)
     return None
+
+
+def _combine(ids):
+    """One id for several accepted ones: the id itself when they agree, else all of them."""
+    unique = sorted(set(ids))
+    if len(unique) == 1:
+        return unique[0]
+    return " AND ".join(f"({i})" if " " in i else i for i in unique)
 
 
 def _verdict(status, lic_id, where, parts):
     return {"id": lic_id, "status": status, "where": where, **parts}
 
 
-def find_license(tree):
-    """Search a fetched tree (repo root) for a license, beyond any skill subdir.
+def _joined(labelled):
+    """One text from [(where, text)]: the text itself when there is one, else each labelled."""
+    if len(labelled) == 1:
+        return labelled[0][1]
+    return "\n\n".join(f"{where}:\n\n{text.strip()}" for where, text in labelled)
 
-    Every declared id counts: the LICENSE file, every SPDX header and every manifest field. ANY
-    copyleft id rejects; a LICENSE file whose text is not recognised, or a declared id that is
-    neither accepted nor rejected, stops the gate for a human ('absent') rather than letting a
-    stray permissive header elsewhere decide. Returns a dict: {id, status, copyright, text,
-    notice, where}; status is 'accept', 'reject', or 'absent'.
+
+def _notice_parts(tree, files, texts):
+    """{copyright, text, notice} for the attribution: every license file's text, labelled when
+    there are several, the first copyright line among them, and every NOTICE in the scope."""
+    notices = []
+    for f in files:
+        if f.name.upper() in _NOTICE_NAMES:
+            text, problem = _read_text(f)
+            if not problem:
+                notices.append((f.relative_to(tree).as_posix(), text))
+    match = next((m for m in (_COPYRIGHT_RX.search(t) for _w, t in texts) if m), None)
+    return {"copyright": match.group(1).strip() if match else "",
+            "text": _joined(texts) if texts else "", "notice": _joined(notices) if notices else ""}
+
+
+def find_license(tree, skill_dir=None):
+    """Search a fetched tree for the license of the skill at `skill_dir` (default: the tree root).
+
+    The scope is what ships plus what governs it: EVERY file of the skill's subtree (what
+    copytree copies), and the license files, manifests and NOTICE of each ANCESTOR dir up to the
+    tree root (not those dirs' other subtrees - a sibling plugin's LICENSE governs the sibling).
+    Within it every declared license counts: every license file (LICENSE, COPYING, LICENSE-*,
+    LICENSES/*), every SPDX header, and every `license` / `license-files` value of every
+    plugin.json, package.json, marketplace.json and pyproject.toml, in whatever form it takes (an
+    SPDX expression, a table with `text` or `file`, an npm `type` object or list). ANY copyleft id
+    rejects. Anything the gate cannot read, classify or vouch for - an unlistable dir, a symlink
+    whose target would ship unread, an unreadable or unparseable file, a license text it does not
+    recognise, an id it can neither accept nor reject, a named license file that is missing -
+    stops it for a human ('absent') rather than letting a permissive declaration decide. Returns
+    a dict: {id, status, copyright, text, notice, where}; status is 'accept', 'reject' or 'absent'.
     """
-    license_text, license_file = _read_license_file(tree)
-    notice_text = ""
-    notice_fp = tree / "NOTICE"
-    if notice_fp.is_file():
-        try:
-            notice_text = notice_fp.read_text(encoding="utf-8", errors="replace")
-        except OSError:
-            pass
-    match = _COPYRIGHT_RX.search(license_text) if license_text else None
-    parts = {"copyright": match.group(1).strip() if match else "", "text": license_text,
-             "notice": notice_text}
+    # abspath collapses a "plugins/b/../a" spelling, so the ancestor walk climbs the real chain.
+    tree = Path(os.path.abspath(tree))
+    skill_dir = tree if skill_dir is None else Path(os.path.abspath(skill_dir))
+    if skill_dir != tree and tree not in skill_dir.parents:
+        return _verdict("absent", None, f"{skill_dir}: the skill lies outside the source",
+                        _notice_parts(tree, [], []))
+    files, walk_errors = _scoped_files(tree, skill_dir)
+    file_decls, texts = _license_file_decls(tree, files)
+    declared = file_decls + _manifest_decls(tree, files) + _spdx_decls(tree, files)
+    parts = _notice_parts(tree, files, texts)
 
-    file_id = _license_file_id(license_text)
-    declared = [(classify_license_id(sid), sid, where)
-                for sid, where in _manifest_license_fields(tree) + _spdx_headers(tree)]
-    if file_id == "REJECT":
-        return _verdict("reject", None, license_file, parts)
-    for mapped, _sid, where in declared:
+    for mapped, _label, where in declared:
         if mapped == "REJECT":
             return _verdict("reject", None, where, parts)
-    if license_text and file_id is None:
-        return _verdict("absent", None, f"{license_file} (license text not recognised)", parts)
-    for mapped, sid, where in declared:
+    if walk_errors:
+        return _verdict("absent", None, walk_errors[0], parts)
+    for mapped, label, where in declared:
         if mapped is None:
-            return _verdict("absent", None, f"unrecognised license id {sid!r} ({where})", parts)
-    if file_id:
-        return _verdict("accept", file_id, license_file, parts)
-    if declared:
-        mapped, _sid, where = declared[0]
-        return _verdict("accept", mapped, where, parts)
-    return _verdict("absent", None, "", parts)
+            return _verdict("absent", None, f"{where}: {label}", parts)
+    if not declared:
+        return _verdict("absent", None, "", parts)
+    # The id credited: the license files' when there are any (they carry the text the notice
+    # reproduces), else every other declaration's.
+    source = file_decls or declared
+    return _verdict("accept", _combine([m for m, _l, _w in source]),
+                    ", ".join(dict.fromkeys(w for _m, _l, w in source)), parts)
 
 
 # ---------------------------------------------------------------------------
@@ -436,8 +744,9 @@ def _closes(line, opener):
 
 
 def _frontmatter_end(lines):
-    """Index of the first line AFTER a leading `---` front matter block, else 0."""
-    if not lines or lines[0].strip() != "---":
+    """Index of the first line AFTER a leading `---` front matter block, else 0. A UTF-8 BOM
+    before the opening `---` does not hide it (str.strip() keeps a BOM: it is not whitespace)."""
+    if not lines or lines[0].lstrip(_BOM).strip() != "---":
         return 0
     for i in range(1, len(lines)):
         if lines[i].strip() == "---":
@@ -460,8 +769,13 @@ def _h1_index(lines, start):
 
 
 def _read_keeping_eol(path):
-    """(text with LF line ends, the file's own line ending) - so a rewrite keeps a CRLF file CRLF."""
+    """(text with LF line ends, the file's own line ending) - so a rewrite keeps a CRLF file CRLF.
+
+    A leading UTF-8 BOM is dropped: it sits in front of the `---` and hides the front matter from
+    every reader that expects the file to start with it, and a rewrite must not carry it on."""
     raw = path.read_bytes().decode("utf-8")
+    if raw.startswith(_BOM):
+        raw = raw[len(_BOM):]
     return raw.replace("\r\n", "\n"), ("\r\n" if "\r\n" in raw else "\n")
 
 
@@ -563,7 +877,8 @@ def validate_category(name, repo_root):
 def frontmatter_name(skill_md):
     """The `name:` value of a SKILL.md's front matter, or "" when it has none."""
     try:
-        lines = skill_md.read_text(encoding="utf-8", errors="replace").replace("\r\n", "\n").split("\n")
+        text = skill_md.read_text(encoding="utf-8-sig", errors="replace")   # -sig: drop a BOM
+        lines = text.replace("\r\n", "\n").split("\n")
     except OSError:
         return ""
     for line in lines[1:_frontmatter_end(lines)]:
@@ -616,11 +931,16 @@ def _rewrite_tree(dest, old_name, new_name):
                 txt = f.read_bytes().decode("utf-8")
             except (OSError, UnicodeDecodeError):
                 continue
+            is_skill_md = f == dest / "SKILL.md"
+            # A BOM in front of SKILL.md's `---` hides the front matter (see _read_keeping_eol).
+            had_bom = is_skill_md and txt.startswith(_BOM)
+            if had_bom:
+                txt = txt[len(_BOM):]
             new_txt, n = rewrite_cross_refs(txt, old_name, new_name)
-            if f == dest / "SKILL.md":
+            if is_skill_md:
                 new_txt, m = rewrite_identity(new_txt, old_name, new_name)
                 n += m
-            if n:
+            if n or had_bom:
                 f.write_bytes(new_txt.encode("utf-8"))
             left = count_bare_mentions(new_txt, old_name) if old_name != new_name else 0
             if n or left:
@@ -631,7 +951,7 @@ def _rewrite_tree(dest, old_name, new_name):
 def adopt(args, workdir):
     tree, src_skill = fetch(args.source, args.subdir, workdir)
 
-    lic = find_license(tree)
+    lic = find_license(tree, src_skill)
     _gate(lic)
 
     new_name = normalize_name(args.name or derive_name(args.source, args.subdir))

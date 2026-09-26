@@ -11,7 +11,8 @@ Usage:
   settings.py reset                restore all knobs to the recommended defaults
 
 Exit codes: 0 done; 1 the config could not be written (nothing was saved); 2 usage error, an
-unknown key or value, or an existing config file that is not a JSON object (left untouched).
+unknown key or value, or an existing config file that is not UTF-8 text or not a JSON object (left
+untouched).
 
 Pure standard library.
 """
@@ -139,6 +140,12 @@ def _config_problem():
         return None
     except OSError as exc:
         return "cannot read %s: %s" % (p, exc)
+    except UnicodeDecodeError as exc:
+        # Decoded exactly as load_config decodes it, so "readable" means the same thing on both
+        # sides: a file the hooks read as the defaults is one this CLI refuses, never one it shows
+        # as the defaults or overwrites with them. A UTF-16 file lands here too.
+        return ("%s is not UTF-8 text (%s); re-save it as UTF-8, or delete the file to start "
+                "from the defaults" % (p, exc))
     try:
         parsed = _json.loads(text)
     except ValueError as exc:

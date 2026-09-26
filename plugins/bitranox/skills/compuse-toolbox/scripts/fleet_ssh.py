@@ -118,7 +118,7 @@ def resolve_key(user: str, candidates=None, home: str | None = None) -> str | No
         # since both ssh and Path accept it, but it is what the tool then PRINTS and returns,
         # so every caller comparing it against a native path sees two different strings.
         path = os.path.normpath(template.format(user=user, home=home))
-        # os.path.isfile, not Path.is_file: before Python 3.12 the latter RAISES PermissionError
+        # os.path.isfile, not Path.is_file: before Python 3.14 the latter RAISES PermissionError
         # for a candidate inside a root-only directory - the very case this function skips.
         if os.path.isfile(path) and _can_open(path):
             return path

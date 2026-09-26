@@ -178,6 +178,58 @@ def test_a_config_with_a_utf8_bom_is_read(home, capsys):
     assert "dream_mode = off" in capsys.readouterr().out
 
 
+# ---- a config that is not UTF-8 text is refused like a corrupt one ----------------------------
+# A lone byte a UTF-8 decoder rejects raised UnicodeDecodeError out of every verb (a traceback,
+# exit 1) where a refusal with exit 2 was promised. load_config reads the same file as defaults,
+# so without the refusal a `set` would also have written those defaults over every choice in it.
+
+NOT_UTF8 = [
+    b'{"dream_mode":"off","note":"\xff"}',                                  # a lone 0xff byte
+    b'{"dream_mode":"off","discovery_roots":["C:\\\\M\xfcller"]}',          # cp1252 u-umlaut
+    b"\xff\xfe" + '{"dream_mode":"off"}'.encode("utf-16-le"),               # PowerShell UTF-16
+]
+
+
+@pytest.mark.parametrize("raw", NOT_UTF8)
+@pytest.mark.parametrize("argv", [["view"], ["set", "promotion", "eager"], ["reset"]])
+def test_a_non_utf8_config_is_refused_with_exit_2_and_left_untouched(home, capsys, argv, raw):
+    cfg = home / ".claude" / ".bitranox-memory.json"
+    cfg.write_bytes(raw)
+    rc = ST.main(argv)
+    err = capsys.readouterr().err
+    assert rc == 2
+    assert str(cfg) in err and "UTF-8" in err
+    assert cfg.read_bytes() == raw
+
+
+def test_a_non_utf8_config_gives_no_traceback_from_the_cli(home):
+    """The refusal reaches the user as one line, not as a UnicodeDecodeError traceback."""
+    cfg = home / ".claude" / ".bitranox-memory.json"
+    cfg.write_bytes(NOT_UTF8[0])
+    env = dict(os.environ, HOME=str(home), USERPROFILE=str(home), PYTHONUTF8="1")
+    r = subprocess.run([sys.executable, str(ST.__file__), "view"], env=env,
+                       capture_output=True, encoding="utf-8", errors="replace")
+    assert r.returncode == 2, r.stderr
+    assert "Traceback" not in r.stderr and str(cfg) in r.stderr
+
+
+def test_the_hooks_still_read_a_non_utf8_config_as_the_defaults_without_raising(home):
+    """The hook side of the same file stays fail-open and silent: only the CLI refuses."""
+    (home / ".claude" / ".bitranox-memory.json").write_bytes(NOT_UTF8[0])
+    assert sig.load_config()["dream_mode"] == "propose"
+
+
+def test_a_utf8_config_holding_non_ascii_text_is_still_read(home, capsys):
+    """Control for the refusal: real UTF-8 (with a BOM and a non-ASCII path) passes."""
+    cfg = home / ".claude" / ".bitranox-memory.json"
+    cfg.write_bytes(b"\xef\xbb\xbf" + '{"dream_mode":"off","discovery_roots":["/data/M\u00fcller"]}'
+                    .encode("utf-8"))
+    assert ST.main(["set", "promotion", "eager"]) == 0
+    got = sig.load_config()
+    assert (got["dream_mode"], got["promotion"], got["discovery_roots"]) == \
+        ("off", "eager", ["/data/M\u00fcller"])
+
+
 # ---- leftover arguments are refused, never silently ignored ------------------------------------
 
 @pytest.mark.parametrize("argv", [
@@ -258,7 +310,7 @@ def _run_cli(home, *args):
 
 
 def test_a_cp1252_console_survives_a_value_it_cannot_encode(home):
-    r = _run_cli(home, "set", "discovery_roots", "/data/日本")
+    r = _run_cli(home, "set", "discovery_roots", "/data/\u65e5\u672c")
     assert r.returncode == 0, r.stderr
     assert "discovery_roots" in r.stdout
     assert "UnicodeEncodeError" not in r.stderr

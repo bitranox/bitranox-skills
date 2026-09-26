@@ -1,6 +1,7 @@
 """Behaviour tests for the pure graders in audit_headers (no network)."""
 
 import audit_headers as a
+import pytest
 
 
 def sev(finding):
@@ -311,6 +312,53 @@ def test_clickjacking_frame_ancestors_self_and_explicit_origins_ok():
     assert sev(a._clickjacking(None, "frame-ancestors 'self'")) == "OK"
     assert sev(a._clickjacking(None, "frame-ancestors 'self' https://partner.example.com")) == "OK"
     assert sev(a._clickjacking(None, "FRAME-ANCESTORS 'NONE'")) == "OK"
+
+
+# CSP 3 host-source = [scheme "://"] host-part [":" port-part] [path-part]. A host-part that is a
+# bare "*" matches EVERY host, whatever scheme, port or path surrounds it.
+_ANY_HOST_SOURCES = [
+    "https://*", "http://*", "HTTPS://*", "wss://*",
+    "*:*", "*:443", "http://*:*", "https://*:443",
+    "*/", "https://*/", "*:*/x",
+]
+
+
+@pytest.mark.parametrize("source", _ANY_HOST_SOURCES)
+def test_clickjacking_frame_ancestors_bare_star_host_source_is_medium(source):
+    finding = a._clickjacking(None, f"frame-ancestors {source}")
+    assert sev(finding) == "MEDIUM", f"{source!r} lets any site frame the page but graded {finding}"
+    assert source.lower() in finding.detail
+
+
+def test_clickjacking_frame_ancestors_bare_star_host_beside_self_is_medium():
+    # one permissive source widens the whole list: 'self' does not narrow it back
+    assert sev(a._clickjacking(None, "frame-ancestors 'self' https://*:443")) == "MEDIUM"
+
+
+def test_clickjacking_frame_ancestors_bare_star_host_is_not_rescued_by_xfo():
+    assert sev(a._clickjacking("DENY", "frame-ancestors https://*")) == "MEDIUM"
+
+
+def test_grade_flags_bare_star_host_frame_ancestors_through_the_response_headers():
+    headers = {"Content-Security-Policy": "default-src 'self'; frame-ancestors https://*:443",
+               "X-Frame-Options": "DENY"}
+    findings = a.grade(headers, [], https=True, http_status=301, http_location="https://h/")
+    clickjacking = [f for f in findings if f.check == "clickjacking"]
+    assert [f.severity for f in clickjacking] == ["MEDIUM"]
+
+
+# Scoped wildcards and explicit origins restrict framing: they must stay OK.
+_RESTRICTING_SOURCES = [
+    "'self'", "'none'", "https://app.example.com", "https://*.example.com", "*.example.com",
+    "https://*.example.com:443", "https://app.example.com:*", "app.example.com:*",
+    "https://app.example.com/*", "'self' https://*.example.com:*",
+]
+
+
+@pytest.mark.parametrize("sources", _RESTRICTING_SOURCES)
+def test_clickjacking_frame_ancestors_scoped_sources_stay_ok(sources):
+    finding = a._clickjacking(None, f"frame-ancestors {sources}")
+    assert sev(finding) == "OK", f"{sources!r} restricts framing but graded {finding}"
 
 
 def test_clickjacking_directive_named_like_frame_ancestors_does_not_count():

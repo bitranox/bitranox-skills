@@ -683,8 +683,8 @@ def test_check_tree_is_clean_when_the_same_level_file_is_utf8(tmp_path, capsys):
 
 
 def test_parse_frontmatter_keeps_a_value_carrying_a_line_separator():
-    meta, _body = R.parse_frontmatter("---\nname: x\ndescription: a b\n---\nbody\n")
-    assert meta["description"] == "a b"
+    meta, _body = R.parse_frontmatter("---\nname: x\ndescription: a\u2028b\n---\nbody\n")
+    assert meta["description"] == "a\u2028b"
 
 
 def test_a_cp1252_console_survives_a_tree_path_it_cannot_encode(tmp_path):
@@ -703,5 +703,5 @@ def test_a_cp1252_console_survives_a_tree_path_it_cannot_encode(tmp_path):
 
 
 def test_parse_frontmatter_reads_through_a_bom():
-    meta, _body = R.parse_frontmatter("﻿---\nname: x\n---\nbody\n")
+    meta, _body = R.parse_frontmatter("\ufeff---\nname: x\n---\nbody\n")
     assert meta["name"] == "x"

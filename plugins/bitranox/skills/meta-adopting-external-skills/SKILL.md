@@ -87,9 +87,17 @@ is exactly the name, a `<namespace>:<name>` reference, and a path segment under 
 word is never rewritten, because a skill named after its tool (`git`) uses that word for the tool
 (`git commit`); the report counts those mentions per file as "left for review" for you to judge.
 
-Its license gate reads EVERY declared id - the LICENSE file, every SPDX header, every manifest
-field - and one copyleft id anywhere rejects. A LICENSE file it does not recognise, or an id it can
-neither accept nor reject, stops it as NO LICENSE FOUND with the reason, for you to decide. Exit
+Its license gate reads every license that applies to what ships: every file of the skill's own
+folder (everything that gets copied), plus the license files, manifests and NOTICE of each folder
+above it up to the source root - never a sibling plugin's files, which govern that plugin, not this
+one. Within that scope it reads EVERY declared license - every license file (LICENSE, COPYING,
+LICENSE-*, LICENSES/*), every SPDX header, and every `license` / `license-files` value of every
+plugin.json, package.json, marketplace.json and pyproject.toml in any form (an SPDX expression, a
+`{text}` or `{file}` table, an npm `type` object) - and one copyleft id rejects, including one
+alternative of an `OR`. Anything it cannot read, classify or vouch for (an unparseable manifest, a
+license text it does not recognise, an unknown id, a named license file that is missing, a
+symlinked folder or a link to a file outside the skill, whose target would be copied unread) stops
+it as NO LICENSE FOUND with the reason, for you to decide. Exit
 codes: 0 adopted, 1 the gate stopped it (nothing written), 2 error.
 
 ## Step 3 - Enhance to bitranox standards

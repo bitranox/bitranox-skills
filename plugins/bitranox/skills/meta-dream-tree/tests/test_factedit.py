@@ -125,9 +125,18 @@ def over_hard_hook(engine: Path) -> str:
     return "When " + "x" * (FE.load_rules(engine).hard_max + 50)
 
 
+def sys_tmp(tmp_path: Path) -> Path:
+    """The temp dir run_cli hands the tool, so a stage dir it leaves behind is visible to a test
+    instead of piling up in the machine's real /tmp (where 1,600+ of them once accumulated)."""
+    d = tmp_path / "systmp"
+    d.mkdir(exist_ok=True)
+    return d
+
+
 def run_cli(args, tmp_path):
     """The tool as a real process, so exit codes and stream separation are measured, not asserted."""
-    env = dict(os.environ)
+    t = str(sys_tmp(tmp_path))
+    env = dict(os.environ, TMPDIR=t, TEMP=t, TMP=t)
     env.pop("BITRANOX_MEMORY_ENGINE", None)
     return subprocess.run([sys.executable, str(TOOL)] + args, capture_output=True, text=True,
                           encoding="utf-8", check=False, env=env, cwd=str(tmp_path))
@@ -309,7 +318,9 @@ def test_default_python_skips_a_venv_interpreter_even_when_it_comes_first_on_pat
     real.mkdir()
     (real / "python3").write_text("#!/bin/sh\n", encoding="utf-8")
     (real / "python3").chmod(0o755)
-    picked = FE.default_python(f"{venv / 'bin'}{os.pathsep}{real}")
+    # Both fakes are layout only (an empty `#!/bin/sh` script "runs" on POSIX and cannot start on
+    # Windows), so the run probe is injected: this test is about the venv skip, nothing else.
+    picked = FE.default_python(f"{venv / 'bin'}{os.pathsep}{real}", runs=lambda p: True)
     assert picked == str(real / "python3")
 
 
@@ -829,14 +840,35 @@ def test_default_python_takes_a_python_exe_on_path(tmp_path):
     exe = d / "python.exe"
     exe.write_text("", encoding="utf-8")
     exe.chmod(0o755)
-    assert FE.default_python(str(d), base_prefix=tmp_path / "nobase") == str(exe)
+    # The layout is faked, so the run probe is too: these tests are about WHERE it looks.
+    assert FE.default_python(str(d), base_prefix=tmp_path / "nobase",
+                             runs=lambda p: True) == str(exe)
 
 
 def test_default_python_falls_back_to_the_windows_base_prefix_root(tmp_path):
     base = tmp_path / "Python313"
     base.mkdir()
     (base / "python.exe").write_text("", encoding="utf-8")
-    assert FE.default_python("", base_prefix=base) == str(base / "python.exe")
+    assert FE.default_python("", base_prefix=base, runs=lambda p: True) == str(base / "python.exe")
+
+
+def test_a_base_prefix_interpreter_that_does_not_run_is_not_chosen(tmp_path):
+    base = tmp_path / "Python313"
+    base.mkdir()
+    (base / "python.exe").write_text("", encoding="utf-8")
+    assert FE.default_python("", base_prefix=base, runs=lambda p: False) == sys.executable
+
+
+def test_the_run_probe_accepts_a_real_interpreter_and_refuses_a_file_that_is_not_one(tmp_path):
+    """The default seam, on every platform: a real interpreter passes, and an empty file named
+    like one - which is_file() and os.access(X_OK) both accept - does not."""
+    assert FE.runs_python3(Path(sys.executable)) is True
+    fake = tmp_path / ("python.exe" if sys.platform == "win32" else "python3")
+    fake.write_text("", encoding="utf-8")
+    fake.chmod(0o755)
+    assert fake.is_file() and os.access(fake, os.X_OK)
+    assert FE.runs_python3(fake) is False
+    assert FE.runs_python3(tmp_path / "missing") is False
 
 
 def test_a_cp1252_stdout_does_not_crash_on_a_non_ascii_hook(tmp_path):
@@ -853,3 +885,110 @@ def test_a_cp1252_stdout_does_not_crash_on_a_non_ascii_hook(tmp_path):
                        capture_output=True, check=False, env=env, cwd=str(tmp_path))
     assert b"Traceback" not in r.stderr, r.stderr.decode("utf-8", "replace")
     assert r.returncode == 0
+
+
+# ---- default_python must RUN a candidate before trusting it -------------------------------------
+
+def _shell_interpreter(path: Path, body: str) -> Path:
+    path.write_text("#!/bin/sh\n" + body + "\n", encoding="utf-8")
+    path.chmod(0o755)
+    return path
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="builds its interpreters as shell scripts")
+def test_default_python_skips_a_store_stub_that_comes_first_on_path(tmp_path):
+    """The Windows Store alias is a file named python3.exe/python.exe that exits 9009 printing
+    "Python was not found". Measured on a real Windows 11 box: with WindowsApps ahead of the real
+    install on PATH, or the real install not on PATH at all (the python.org default), the stub was
+    chosen and every live apply died with engine exit 9009. Existing on disk proves nothing."""
+    stubs = tmp_path / "WindowsApps"
+    stubs.mkdir()
+    for name in ("python3.exe", "python.exe"):
+        _shell_interpreter(stubs / name, "echo 'Python was not found' >&2\nexit 49")
+    real = tmp_path / "Python314"
+    real.mkdir()
+    exe = _shell_interpreter(real / "python.exe", f'exec "{sys.executable}" "$@"')
+    picked = FE.default_python(f"{stubs}{os.pathsep}{real}", base_prefix=tmp_path / "nobase")
+    assert picked == str(exe)
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="builds its interpreters as shell scripts")
+def test_default_python_skips_a_python_2(tmp_path):
+    """The probe asks for Python 3, the same bar run-python.sh sets, not merely a zero exit."""
+    py2 = tmp_path / "py2"
+    py2.mkdir()
+    _shell_interpreter(py2 / "python3", "exit 1")  # what `sys.exit(0 if major >= 3 else 1)` does
+    real = tmp_path / "real"
+    real.mkdir()
+    exe = _shell_interpreter(real / "python3", f'exec "{sys.executable}" "$@"')
+    assert FE.default_python(f"{py2}{os.pathsep}{real}", base_prefix=tmp_path / "nb") == str(exe)
+
+
+# ---- the default stage dir: removed after success, kept (and named) after anything else ---------
+
+def test_a_successful_apply_removes_the_default_stage_dir(tmp_path):
+    eng = make_engine_dir(tmp_path)
+    level = make_tree(tmp_path)
+    hookfile = tmp_path / "new.txt"
+    hookfile.write_text("When the new thing happens, do the new thing.\n", encoding="utf-8")
+    r = run_cli(["apply", "--engine", str(eng), "--json", "--slug", "feedback-demo",
+                 "--from", str(level), "--hook-file", str(hookfile)], tmp_path)
+    assert r.returncode == 0, r.stdout + r.stderr
+    assert (eng.parent / "memory_engine.py.called").is_file(), "the engine must have run"
+    assert list(sys_tmp(tmp_path).glob("factedit-*")) == []
+    assert json.loads(r.stdout)["data"]["stage_kept"] is False
+
+
+def test_a_refused_apply_keeps_the_default_stage_dir_and_names_it(tmp_path):
+    eng = make_engine_dir(tmp_path)
+    eng.write_text("import sys\nprint('refused')\nsys.exit(1)\n", encoding="utf-8")
+    level = make_tree(tmp_path)
+    hookfile = tmp_path / "new.txt"
+    hookfile.write_text("When the new thing happens, do the new thing.\n", encoding="utf-8")
+    r = run_cli(["apply", "--engine", str(eng), "--slug", "feedback-demo",
+                 "--from", str(level), "--hook-file", str(hookfile)], tmp_path)
+    assert r.returncode == 1, r.stdout + r.stderr
+    kept = list(sys_tmp(tmp_path).glob("factedit-*"))
+    assert len(kept) == 1 and (kept[0] / "feedback-demo.hook.txt").is_file()
+    assert str(kept[0]) in r.stdout, "a kept stage dir is only useful if the reader is told where"
+
+
+def test_a_launch_failure_keeps_the_default_stage_dir_and_names_it(tmp_path):
+    level = make_tree(tmp_path)
+    hookfile = tmp_path / "h.txt"
+    hookfile.write_text("When X, do Y.\n", encoding="utf-8")
+    r = run_cli(["apply", "--engine", str(make_engine_dir(tmp_path)), "--json",
+                 "--slug", "feedback-demo", "--from", str(level), "--hook-file", str(hookfile),
+                 "--python", str(tmp_path / "no-such-python")], tmp_path)
+    assert r.returncode == 2, r.stdout + r.stderr
+    kept = list(sys_tmp(tmp_path).glob("factedit-*"))
+    assert len(kept) == 1 and (kept[0] / "feedback-demo.hook.txt").is_file()
+    assert str(kept[0]) in json.loads(r.stdout)["error"]
+
+
+def test_a_dry_run_keeps_the_default_stage_dir_its_printed_command_names(tmp_path):
+    """Control: the printed command is meant to be pasted, so its files must still exist."""
+    eng = make_engine_dir(tmp_path)
+    level = make_tree(tmp_path)
+    hookfile = tmp_path / "new.txt"
+    hookfile.write_text("When the new thing happens, do the new thing.\n", encoding="utf-8")
+    r = run_cli(["apply", "--engine", str(eng), "--json", "--slug", "feedback-demo",
+                 "--from", str(level), "--hook-file", str(hookfile), "--dry-run"], tmp_path)
+    assert r.returncode == 0, r.stdout + r.stderr
+    data = json.loads(r.stdout)["data"]
+    assert Path(data["hook_file"]).is_file()
+    assert Path(data["stage_dir"]).parent == sys_tmp(tmp_path)
+
+
+def test_an_explicit_stage_dir_is_never_removed(tmp_path):
+    """Control: a --stage-dir the caller named is the caller's, success or not."""
+    eng = make_engine_dir(tmp_path)
+    level = make_tree(tmp_path)
+    stage = tmp_path / "mine"
+    hookfile = tmp_path / "new.txt"
+    hookfile.write_text("When the new thing happens, do the new thing.\n", encoding="utf-8")
+    r = run_cli(["apply", "--engine", str(eng), "--json", "--slug", "feedback-demo",
+                 "--from", str(level), "--hook-file", str(hookfile),
+                 "--stage-dir", str(stage)], tmp_path)
+    assert r.returncode == 0, r.stdout + r.stderr
+    assert (stage / "feedback-demo.hook.txt").is_file()

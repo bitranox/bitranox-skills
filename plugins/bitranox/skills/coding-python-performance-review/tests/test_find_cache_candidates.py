@@ -2,6 +2,7 @@
 
 The CLI is driven as a subprocess, the way SKILL.md Step 4a runs it.
 """
+import ast
 import textwrap
 
 import pytest
@@ -117,6 +118,179 @@ def test_impure_functions_are_not_candidates(tmp_path):
     p = tmp_path / "gen.py"
     p.write_text(IMPURE, encoding="utf-8")
     assert _names(p) == {"square_sum"}
+
+
+# A store into a container the function CREATED is invisible to every caller: DP tables and
+# local tallies are the textbook lru_cache candidates. Each function below is pure.
+LOCAL_STORES = textwrap.dedent('''
+    import collections
+
+    def lcs(a, b):
+        n, m = len(a), len(b)
+        dp = [[0] * (m + 1) for _ in range(n + 1)]
+        for i in range(1, n + 1):
+            for j in range(1, m + 1):
+                if a[i - 1] == b[j - 1]:
+                    dp[i][j] = dp[i - 1][j - 1] + 1
+                else:
+                    dp[i][j] = max(dp[i - 1][j], dp[i][j - 1])
+        return dp[n][m]
+
+    def word_count(words):
+        counts = {}
+        for w in words:
+            counts[w] = counts.get(w, 0) + 1
+        return len(counts)
+
+    def fib_table(n):
+        table = [0] * (n + 2)
+        table[1] = 1
+        for i in range(2, n + 1):
+            table[i] = table[i - 1] + table[i - 2]
+        return table[n]
+
+    def tally(xs):
+        seen = dict()
+        for x in xs:
+            seen[x] = True
+        del seen[xs[0]]
+        return len(seen)
+
+    def groups(xs):
+        by_len = collections.defaultdict(list)
+        for x in xs:
+            by_len[len(x)] += [x]
+        return len(by_len)
+
+    def rolling(n):
+        prev, cur = [0] * n, [0] * n
+        for i in range(n):
+            cur[i] = prev[i] + 1
+        return cur[-1]
+
+    def patched(base, n):
+        d = dict(base)
+        e = base.copy()
+        for i in range(n):
+            d[i] = i
+            e[i] = i
+        return len(d) + len(e)
+
+    def squares(n):
+        sq = {i: i * i for i in range(n)}
+        for i in range(n):
+            sq[i] += 1
+        return sum(sq.values())
+
+    def outer(n):
+        memo = {}
+
+        def helper(k):
+            return k * 2
+        for i in range(n):
+            memo[i] = helper(i)
+        return len(memo)
+
+    def closure_owner(n):
+        memo = {}
+
+        def closure_writer(k):
+            for _ in range(k):
+                memo[k] = k
+            return k
+        return closure_writer(n)
+''')
+
+# The same shapes, but the store reaches an object the CALLER can see.
+SHARED_STORES = textwrap.dedent('''
+    CACHE = {}
+
+    def into_param(out, n):
+        for i in range(n):
+            out[i] = i
+
+    def into_global(n):
+        for i in range(n):
+            CACHE[i] = i
+
+    def into_alias(param, n):
+        d = param
+        for i in range(n):
+            d[i] = i
+
+    def rebound(param, n):
+        d = {}
+        d = param
+        for i in range(n):
+            d[i] = i
+
+    def into_row(grid):
+        for row in grid:
+            row[0] = 0
+
+    def into_element(param, n):
+        rows = [param]
+        for i in range(n):
+            rows[0][i] = i
+
+    def unpacked(pair, n):
+        a, b = pair
+        for i in range(n):
+            a[i] = i
+
+    def walrus(param, n):
+        if (d := param):
+            for i in range(n):
+                d[i] = i
+
+    class K:
+        def setter(self, n):
+            for i in range(n):
+                self.total = i
+
+        def into_self_dict(self, n):
+            for i in range(n):
+                self.table[i] = i
+
+    def param_closure_owner(memo, n):
+        def param_closure_writer(k):
+            for _ in range(k):
+                memo[k] = k
+            return k
+        return param_closure_writer(n)
+
+    def shadowed(target, n):
+        memo = {}
+
+        def writer(memo):
+            for i in range(n):
+                memo[i] = i
+        writer(target)
+        return len(memo)
+''')
+
+
+def test_stores_into_a_locally_created_container_keep_a_function_pure(tmp_path):
+    p = tmp_path / "local.py"
+    p.write_text(LOCAL_STORES, encoding="utf-8")
+    # closure_owner's store happens in the nested closure_writer, into the owner's own memo:
+    # the owner is pure, but closure_writer, seen on its own, writes into a closure and is not.
+    assert _names(p) == {"lcs", "word_count", "fib_table", "tally", "groups", "rolling",
+                         "patched", "squares", "outer", "closure_owner"}
+
+
+def test_stores_that_reach_a_caller_visible_object_stay_impure(tmp_path):
+    p = tmp_path / "shared.py"
+    p.write_text(SHARED_STORES, encoding="utf-8")
+    assert _names(p) == set()
+
+
+def test_shared_store_fixture_is_expensive_so_only_purity_excludes_it(tmp_path):
+    """Liveness for the control above: every function there has a loop, so an empty result
+    can only come from the purity check, never from 'not expensive'."""
+    funcs = [n for n in ast.walk(ast.parse(SHARED_STORES)) if isinstance(n, ast.FunctionDef)]
+    assert len(funcs) == 14
+    assert all(fcc.is_expensive_computation(f) for f in funcs)
 
 
 def test_open_makes_a_function_impure_and_file_io_is_not_an_indicator(tmp_path):

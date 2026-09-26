@@ -44,16 +44,18 @@ removed is reported as removed; a directory that failed to delete is reported FA
 ```bash
 uv run scripts/pluginprune.py             # the plan, with sizes and a reason per kept directory
 uv run scripts/pluginprune.py --apply     # re-plan, then remove that plan
-uv run scripts/pluginprune.py --json      # {ok, command, data, skipped}; 0 fine, 1 refused, 2 usage or unusable settings
+uv run scripts/pluginprune.py --json      # {ok, command, data, skipped} on every exit (on 2: ok false, data null, error); 0 fine, 1 refused, 2 usage or unusable settings
 ```
 
 Run `--help` for the rest (`--marketplace`, `--keep`, `--min-age`, `--settings`).
 
 It keeps a version with a live lock (or an `.in_use` directory it cannot list), the
 `installPath` from `installed_plugins.json` (what a fresh session resolves to), anything a
-settings file pins (spelled absolute, or as `~/`, `$HOME/` or `${HOME}/`), anything `--keep`
-names or points inside (so the base path a skill invocation prints works), and the sole version
-of a plugin a settings file's `enabledPlugins` lists. Paths are compared resolved, so a relative
+settings file pins (spelled absolute, or relative to the home or Claude config directory however
+that prefix is written - `~/`, `"$HOME"/`, `${HOME}/`, `%USERPROFILE%\`, `$env:USERPROFILE/`,
+`${CLAUDE_CONFIG_DIR}/`, quoted or not), anything `--keep` names or points inside (so the base
+path a skill invocation prints works), and the sole version of a plugin a settings file's
+`enabledPlugins` lists - a symlinked sibling is refused and never counts as a second version. Paths are compared resolved, so a relative
 `--keep` or `--cache-dir` or a symlinked `~/.claude` still matches; a `--keep` that matches no
 scanned version is a usage error (exit 2), never silently ignored. It reads each `temp_*`
 leftover's own mtime and keeps any younger than `--min-age` (60m), so no separate age check is

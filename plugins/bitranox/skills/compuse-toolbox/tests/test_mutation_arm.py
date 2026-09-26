@@ -622,8 +622,8 @@ def test_a_parametrize_id_containing_the_separator_does_not_cut_the_reason():
 
 def test_a_line_separator_inside_the_reason_does_not_cut_it():
     output = ("=========================== short test summary info ============================\n"
-              "FAILED test_src.py::test_x - AssertionError: a b\n")
-    assert M.failure_reason(output) == "AssertionError: a b"
+              "FAILED test_src.py::test_x - AssertionError: a\u2028b\n")
+    assert M.failure_reason(output) == "AssertionError: a\u2028b"
 
 
 def test_a_non_cp1252_node_id_does_not_crash_a_cp1252_console(tmp_path):

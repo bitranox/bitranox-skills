@@ -16,7 +16,9 @@ a blank line or the start of the file above, and an underline that is itself in 
 
 Output: one `path:line: text` row per marker line, then a summary line.
 Exit codes: 0 = no markers, 1 = markers found, 2 = a path or directory could not be read (or the
-tool itself failed), so "no markers" cannot be claimed for it. Unreadable paths go to stderr.
+tool itself failed), so "no markers" cannot be claimed for it. Unreadable paths go to stderr. A
+dangling or looping symlink is not an error: it resolves to no content, so it is listed on stderr
+as skipped and does not change the exit code.
 
 Run: `uv run scripts/conflict_scan.py [PATH ...]`  (a dir is walked, skipping .git)
 """
@@ -86,18 +88,29 @@ def _read(p) -> str:
     return Path(p).read_bytes().decode("utf-8-sig", errors="replace")
 
 
-def scan_files(paths, unreadable: list[str] | None = None) -> dict[str, list[tuple[int, str]]]:
+def _is_dangling_symlink(p) -> bool:
+    """A symlink that resolves to nothing: its target is gone, or it loops back on itself."""
+    return os.path.islink(p) and not os.path.exists(p)
+
+
+def scan_files(paths, unreadable: list[str] | None = None, *,
+               skipped: list[str] | None = None) -> dict[str, list[tuple[int, str]]]:
     """{path: [(line, text)]} for every file with markers; an unreadable file goes to `unreadable`.
 
     Pass a list as `unreadable` to learn which paths were never read - a missing or unreadable
-    path must not be mistaken for a clean one.
+    path must not be mistaken for a clean one. A dangling or looping symlink goes to `skipped`
+    instead: it has no content, so it cannot hold a marker, and a stale link (a .venv's python)
+    must not make a whole clean tree unprovable.
     """
     out = {}
     for p in paths:
         try:
             text = _read(p)
         except OSError as exc:
-            if unreadable is not None:
+            if _is_dangling_symlink(p):
+                if skipped is not None:
+                    skipped.append(str(p))
+            elif unreadable is not None:
                 unreadable.append("%s (%s)" % (p, exc.strerror or exc))
             continue
         hits = scan_text(text)
@@ -144,12 +157,15 @@ def _main(argv) -> int:
     ap.add_argument("paths", nargs="*", default=["."], help="files or dirs (default: cwd)")
     args = ap.parse_args(argv)
     unreadable: list[str] = []
-    res = scan_files(_expand(args.paths, unreadable), unreadable)
+    skipped: list[str] = []
+    res = scan_files(_expand(args.paths, unreadable), unreadable, skipped=skipped)
     for path, hits in sorted(res.items()):
         for line_no, text in hits:
             print(f"{path}:{line_no}: {text}")
     if res:
         print(f"CONFLICT MARKERS in {len(res)} file(s)")
+    for entry in skipped:
+        print(f"conflict_scan: skipped dangling symlink {entry}", file=sys.stderr)
     for entry in unreadable:
         print(f"conflict_scan: could not read {entry}", file=sys.stderr)
     if unreadable:

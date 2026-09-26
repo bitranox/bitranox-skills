@@ -15,6 +15,7 @@ All content is ASCII.
 
 import io
 import json
+import os
 import sys
 
 import pytest
@@ -288,7 +289,10 @@ def test_a_backgrounded_gate_without_the_jig_is_blocked(monkeypatch, capsys, lab
 @pytest.mark.parametrize(
     ("label", "command", "background"),
     [
-        ("the jig itself", "uv run scripts/gate.py --gate 'make test' --then 'git push'", True),
+        ("the jig itself", 'python3 scripts/gate.py --gate "make test" --then "git push"', True),
+        # Wrongly launched, but still the jig: this guard is about the notice, not the launcher.
+        ("the jig under uv run", "uv run scripts/gate.py --gate 'make test' --then 'git push'",
+         True),
         ("foreground gate", 'make test > log 2>&1; echo "RC=$?" >> log', False),
         ("field absent entirely", "make test", None),
         ("backgrounded non-gate", "rsync -a src/ dst/ > sync.log 2>&1", True),
@@ -302,3 +306,44 @@ def test_what_the_background_block_must_never_refuse(monkeypatch, label, command
     quiet, never start refusing every gate anyone runs.
     """
     assert run_main_bg(monkeypatch, command, background) == 0
+
+
+# ---------------------------------------------------------------------------
+# The remedy the block names must be one that works
+# ---------------------------------------------------------------------------
+
+
+def _suggested_jig_line(err):
+    lines = [line.strip() for line in err.splitlines() if "gate.py" in line]
+    assert lines, err
+    return lines[0]
+
+
+def test_the_background_block_launches_the_jig_the_way_the_jig_says(monkeypatch, capsys):
+    """gate.py's own docstring: plain python3, NOT uv run - under uv run the gate inherits uv's
+    isolated interpreter, so a `python3 -m pytest` gate reads RED. The block told a reader to
+    run exactly that, as the one safe way out of the refusal it had just issued."""
+    assert run_main_bg(monkeypatch, "pytest tests/ -q > out.log", True) == 2
+    line = _suggested_jig_line(capsys.readouterr().err)
+    assert not line.startswith("uv run"), line
+    plain = "python" if os.name == "nt" else "python3"
+    assert line.startswith(plain + " "), line
+
+
+def test_the_background_block_and_the_nudge_name_the_same_launch(monkeypatch, capsys):
+    """Two hooks name the jig; the pin keeps them from drifting apart again."""
+    import toolbox_nudge as N  # noqa: PLC0415 - the sibling hook is the oracle for this test only
+
+    assert run_main_bg(monkeypatch, "pytest tests/ -q > out.log", True) == 2
+    line = _suggested_jig_line(capsys.readouterr().err)
+    nudge_cmd, _note = N.launch_command(N._shipped_dir() / "gate.py")
+    assert line.split()[0] == nudge_cmd.split()[0], (line, nudge_cmd)
+
+
+def test_the_background_block_quotes_the_gate_the_way_every_platform_splits(monkeypatch, capsys):
+    """gate.py: quote --gate with DOUBLE quotes - a Windows command line has no single-quoting, so
+    `--gate '<cmd>'` arrives as broken argv there."""
+    assert run_main_bg(monkeypatch, "pytest tests/ -q > out.log", True) == 2
+    err = capsys.readouterr().err
+    assert "--gate '" not in err and "--then '" not in err, err
+    assert '--gate "' in err, err

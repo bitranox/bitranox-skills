@@ -27,6 +27,7 @@ any error) exits 0, so a broken guard never wedges a turn.
 """
 
 import json
+import os
 import re
 import sys
 
@@ -71,6 +72,11 @@ BACKGROUND_GATE = re.compile(
 
 # The jig that returns the GATE's own status and can chain the follow-up itself.
 JIG = re.compile(r"\bgate\.py\b")
+
+# How the block tells a reader to launch that jig: the plain interpreter gate.py's docstring
+# asks for, never `uv run`. `python` on Windows, where `python3` is usually the Store stub.
+# toolbox-nudge suggests the same launch; a test pins the two together.
+_PLAIN_PYTHON = "python" if os.name == "nt" else "python3"
 
 
 def backgrounded_gate_without_the_jig(command: str, *, background: object) -> str | None:
@@ -219,8 +225,13 @@ def main() -> int:
             "that was relayed as `the gate passed`, and the log said RC=2 with a failing test.",
             "",
             "Run it through the jig, which returns the GATE's status and can chain the action:",
-            "  uv run <plugin>/skills/compuse-toolbox/scripts/gate.py \\",
-            "      --log /tmp/gate.log --gate '<the gate>' [--then '<the action>']",
+            f"  {_PLAIN_PYTHON} <plugin>/skills/compuse-toolbox/scripts/gate.py \\",
+            '      --log /tmp/gate.log --gate "<the gate>" [--then "<the action>"]',
+            "",
+            "Launch the jig with a plain interpreter, never `uv run`: it runs your gate, and",
+            "`uv run` puts its own isolated interpreter first on the PATH the gate inherits, so",
+            "a `python3 -m pytest` gate dies with `No module named pytest` and reads RED. Quote",
+            "the gate with DOUBLE quotes: a Windows command line has no single-quoting.",
             "",
             "Or run it in the FOREGROUND, where the exit status you see is the gate's own.",
         ]), file=sys.stderr)

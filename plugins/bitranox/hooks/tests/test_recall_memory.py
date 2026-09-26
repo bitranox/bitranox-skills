@@ -430,7 +430,7 @@ def test_note_view_reads_frontmatter_behind_a_bom(tmp_path):
 
 
 def test_a_line_separator_char_does_not_start_a_fake_heading():
-    text = "# Real\n\nthe shim line # not a heading\nmore shim text\n"
+    text = "# Real\n\nthe shim line\u2028# not a heading\nmore shim text\n"
     heading, body = R._matched_section(text, ["shim"])
     assert heading == "# Real"
     assert "more shim text" in body

@@ -58,7 +58,10 @@ class MarkItDown:
         has_llm = self._kwargs.get("llm_client") is not None and self._kwargs.get("llm_model")
         suffix = path.suffix.lower()
         if has_llm and suffix in (".png", ".jpg", ".jpeg"):
-            text += "\\n# Description:\\n" + self._caption()
+            # As markitdown 0.1.x: a None description is skipped, not an error.
+            caption = self._caption()
+            if caption is not None:
+                text += "\\n# Description:\\n" + caption.strip()
         elif has_llm and suffix == ".pptx":
             for line in text.splitlines():
                 if line.strip() == "PICTURE":
@@ -69,8 +72,9 @@ class MarkItDown:
         return _Result(text)
 '''
 
-# A stand-in for the openai client. FAKE_OPENAI_MODE=fail makes every call raise;
-# FAKE_OPENAI_LOG names a file that gets one line per call.
+# A stand-in for the openai client. FAKE_OPENAI_MODE=fail makes every call raise; the modes
+# that return without a caption are nochoices (choices=[]), empty (""), blank (whitespace) and
+# null (content None). FAKE_OPENAI_LOG names a file that gets one line per call.
 FAKE_OPENAI_SRC = '''
 """Offline stand-in for openai, used only by the skill-script tests."""
 import os
@@ -83,9 +87,13 @@ class _Completions:
         if log:
             with open(log, "a", encoding="utf-8") as handle:
                 handle.write("call\\n")
-        if os.environ.get("FAKE_OPENAI_MODE") == "fail":
+        mode = os.environ.get("FAKE_OPENAI_MODE")
+        if mode == "fail":
             raise RuntimeError("fake 401 unauthorized")
-        message = SimpleNamespace(content="FAKE-CAPTION")
+        if mode == "nochoices":
+            return SimpleNamespace(choices=[])
+        content = {"empty": "", "blank": "  \\n", "null": None}.get(mode, "FAKE-CAPTION")
+        message = SimpleNamespace(content=content)
         return SimpleNamespace(choices=[SimpleNamespace(message=message)])
 
 

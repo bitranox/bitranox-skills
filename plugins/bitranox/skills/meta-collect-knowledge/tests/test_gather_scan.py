@@ -678,9 +678,108 @@ def test_the_claude_md_walk_reports_an_unreadable_dir_every_time(tmp_path, monke
     try:
         G.discover_claude_md(str(cur))
         first = G.take_walk_errors()
-        G.discover_claude_md(str(cur))          # not served from a cache of the incomplete walk
+        G.discover_claude_md(str(cur))          # served from the cache, which replays the skip
         second = G.take_walk_errors()
     finally:
         locked.chmod(0o755)
     assert [p for p, _ in first] == [str(locked)]
     assert [p for p, _ in second] == [str(locked)]
+
+
+# --------------------------------------------------------------------------
+# A walk that could not list one dir is still cached; the skip is replayed on every read
+# --------------------------------------------------------------------------
+
+_POSIX_NONROOT = pytest.mark.skipif(
+    os.name == "nt" or not hasattr(os, "geteuid") or os.geteuid() == 0,
+    reason="needs POSIX permissions and a non-root user")
+
+
+@_POSIX_NONROOT
+def test_a_claude_md_walk_with_an_unlistable_dir_is_cached_and_still_reports_it(tmp_path,
+                                                                                monkeypatch):
+    ws, cur = _ws(tmp_path, monkeypatch)
+    locked = ws / "lost+found"
+    (locked / "inner").mkdir(parents=True)
+    locked.chmod(0)
+    G.take_walk_errors()
+    try:
+        first = {Path(p).parent.name for p in G.discover_claude_md(str(cur))}
+        first_errors = G.take_walk_errors()
+        (ws / "projC").mkdir()
+        (ws / "projC" / "CLAUDE.md").write_text("projC rules", encoding="utf-8")
+        second = {Path(p).parent.name for p in G.discover_claude_md(str(cur))}
+        second_errors = G.take_walk_errors()
+        retried = {Path(p).parent.name for p in G.discover_claude_md(str(cur), cache_ttl=0)}
+        retried_errors = G.take_walk_errors()
+    finally:
+        locked.chmod(0o755)
+    assert "projB" in first and [p for p, _ in first_errors] == [str(locked)]
+    assert second == first                     # served from the cache: projC unseen, no re-walk
+    assert [p for p, _ in second_errors] == [str(locked)]   # the skip is still reported
+    assert "projC" in retried                  # the TTL retries the walk like any cache
+    assert [p for p, _ in retried_errors] == [str(locked)]
+
+
+@_POSIX_NONROOT
+def test_a_store_walk_with_an_unlistable_dir_is_cached_and_still_reports_it(tmp_path,
+                                                                           monkeypatch):
+    root = _home_root(tmp_path, monkeypatch)
+    _seed_store(root, "projA", "one.md")
+    locked = root / "lost+found"
+    (locked / "inner").mkdir(parents=True)
+    locked.chmod(0)
+    G.take_walk_errors()
+    try:
+        first = G._curated_store_dirs(str(root))
+        first_errors = G.take_walk_errors()
+        _seed_store(root, "projB", "two.md")      # no generation bump: a cache must hide it
+        second = G._curated_store_dirs(str(root))
+        second_errors = G.take_walk_errors()
+        sig.bump_stores_generation()
+        third = G._curated_store_dirs(str(root))
+        G.take_walk_errors()
+    finally:
+        locked.chmod(0o755)
+    assert len(first) == 1 and [p for p, _ in first_errors] == [str(locked)]
+    assert second == first                     # served from the cache, no re-walk
+    assert [p for p, _ in second_errors] == [str(locked)]
+    assert len(third) == 2                     # a generation bump still busts it
+
+
+def test_a_claude_md_cache_without_the_format_header_is_rewalked(tmp_path, monkeypatch):
+    # A cache written before the header existed holds bare paths; read as the new format its
+    # first path would be taken for a header. It must be ignored and rebuilt, never trusted.
+    ws, cur = _ws(tmp_path, monkeypatch)
+    G.discover_claude_md(str(cur))
+    cache = next((tmp_path / "home" / ".claude" / "self-improve-audit").glob("claude-md-paths.*"))
+    bogus = str(ws / "bogus" / "CLAUDE.md")
+    cache.write_text("\n".join([bogus, str(ws / "projB" / "CLAUDE.md")]), encoding="utf-8")
+    got = G.discover_claude_md(str(cur))
+    assert bogus not in got
+    assert "projB" in {Path(p).parent.name for p in got}
+
+
+@pytest.mark.skipif(os.name == "nt", reason="Windows forbids a newline in a file name")
+def test_a_path_holding_the_record_separator_is_not_cached_as_two_paths(tmp_path, monkeypatch):
+    # "\n" separates the cache records, so a path holding one cannot be read back as written:
+    # such a walk is not cached, and every call still answers from a live walk.
+    ws, cur = _ws(tmp_path, monkeypatch)
+    odd = ws / "odd\nname"
+    odd.mkdir()
+    (odd / "CLAUDE.md").write_text("odd", encoding="utf-8")
+    first = sorted(G.discover_claude_md(str(cur)))
+    second = sorted(G.discover_claude_md(str(cur)))
+    assert str(odd / "CLAUDE.md") in first
+    assert second == first
+
+
+def test_a_store_cache_in_the_old_format_is_rewalked(tmp_path, monkeypatch):
+    root = _home_root(tmp_path, monkeypatch)
+    _seed_store(root, "projA", "one.md")
+    G._curated_store_dirs(str(root))
+    cache = next(sig._audit_dir().glob("curated-dirs.*"))
+    stamp = "gen:%d" % sig.stores_generation()
+    cache.write_text("\n".join([stamp, str(root / "bogus" / ".claude-memory")]), encoding="utf-8")
+    got = G._curated_store_dirs(str(root))
+    assert [Path(p).parent.name for p in got] == ["projA"]

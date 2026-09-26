@@ -100,6 +100,32 @@ def _review_response(text):
     return {"choices": [{"message": {"content": text}}]}
 
 
+@pytest.mark.parametrize("text,expected", [
+    # the requested format, and marked-up spellings of it (controls)
+    ("SCORE: 9.0\nSTRENGTHS:\n- clear", 9.0),
+    ("**SCORE:** 9.5/10", 9.5),
+    ("SCORE: **9.5**", 9.5),
+    ("Score - 9.5 / 10", 9.5),
+    ("SCORE: [8]", 8.0),
+    ("## SCORE: 7.5", 7.5),
+    ("SCORE: 9.0\n\nScientific accuracy score: 2/2", 9.0),
+    # a per-criterion score ahead of the total (the arms)
+    ("Accuracy score (2/2) ... SCORE: 9.0", 9.0),
+    ("Accuracy score: 2/2\nClarity score: 2/2\nSCORE: 8", 8.0),
+    ("Scientific Accuracy\nScore: 2/2\n\nTotal Score: 8.5/10", 8.5),
+    ("Overall score: 7/10", 7.0),
+    # the older fallback wording, still read
+    ("Overall quality: 6 / 10. Looks fine.", 6.0),
+    ("Rating: 7", 7.0),
+    # only per-criterion scores, or none at all: no total was stated
+    ("Accuracy score: 2/2\nClarity score: 1/2", None),
+    ("Looks nice overall, clear labels.", None),
+    ("SCORE: 85", None),  # off the 0-10 scale the prompt asks for
+])
+def test_parse_score_reads_the_total_not_a_criterion(gen_ai, text, expected):
+    assert gen_ai._parse_score(text) == expected
+
+
 def test_review_image_parses_score_and_accepts(generator, tmp_path, monkeypatch):
     img = tmp_path / "diagram.png"
     img.write_bytes(b"x")

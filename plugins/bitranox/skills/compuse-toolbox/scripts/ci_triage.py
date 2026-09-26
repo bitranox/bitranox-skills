@@ -8,39 +8,57 @@ Why: `gh run view --log` and `cargo build 2>&1` both dump huge noisy output, and
 re-derives the same ANSI-strip -> step-isolate -> error-grep pipeline by hand. This does it once,
 over any log (a file, stdin, a `gh` run, or a command's output).
 
-Run:
-  `uv run scripts/ci_triage.py --file build.log [--step "Run tests"] [--keywords error FAILED]`
-  `uv run scripts/ci_triage.py --cmd "cargo build"`        (runs it, triages stderr+stdout)
-  `uv run scripts/ci_triage.py --gh 12345 [--repo o/r]`    (fetches the run log via gh)
+Run (plain python3, NOT uv run: `--cmd` inherits the launcher's environment, and under uv run a
+`python3 -m pytest` there fails with No module named pytest):
+  `python3 scripts/ci_triage.py --file build.log [--step "Run tests"] [--keywords error FAILED]`
+  `python3 scripts/ci_triage.py --cmd "cargo build"`        (runs it, triages stderr+stdout)
+  `python3 scripts/ci_triage.py --gh 12345 [--repo o/r]`    (fetches the run log via gh)
 
 Exit codes: 0 = clean; 1 = error/warning lines found, or the `--cmd` command exited non-zero;
 2 = the tool could not do its job (bad argument, unreadable file, command not found, `gh` failed,
 `--step` names no step in the log). Line numbers always count from the top of the whole log, so
 they match `grep -n`, including under `--step`.
+
+`--step NAME` selects, in every job, the lines whose `gh run view --log` step column contains NAME
+(the step name as GitHub lists it); when no line carries such a column, it selects every block from a
+`##[group]`/`Run ` header containing NAME to the next header.
 """
 from __future__ import annotations
+
+# Run with plain python3, never `uv run`: the command this jig runs inherits the launcher's
+# environment, and under uv run a child `python3` resolves to uv's throwaway build env, where
+# pytest and the project's packages are missing - a false RED. toolbox-nudge reads this.
+LAUNCH_WITH = "python3"
 
 import argparse
 import re
 import shutil
 import subprocess
 import sys
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Iterable, Sequence
 
 _ANSI = re.compile(r"\x1b\[[0-9;]*m")
 # `gh run view --log` prefixes each line with "job<TAB>step<TAB>timestamp "; a downloaded job log
 # prefixes it with the timestamp alone. Both hide a header from a ^-anchored match.
 _GH_PREFIX = re.compile(r"^(?:[^\t\n]*\t[^\t\n]*\t)?\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d(?:\.\d+)?Z ?")
+# The same gh prefix with its step column captured; a downloaded job log has no such column.
+_GH_STEP = re.compile(r"^[^\t\n]*\t([^\t\n]*)\t\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d(?:\.\d+)?Z")
 _HEADER = re.compile(r"^##\[group\]|^\s*Run ")
-# Word-bound so a hex sha, a crate named "failure" or "stderr" is not a hit; the scoped
-# case-sensitive arms keep CamelCase exception names (TypeError, DeprecationWarning) and rustc codes.
+# Word-bound so a hex sha or "stderr" is not a hit; the scoped case-sensitive arms keep exception
+# class names, whose "Error"/"Warning" follows any letter or digit (TypeError, OSError, HTTPError),
+# and rustc codes. "failure(s)" and "failing" are maven's BUILD FAILURE and mocha's "1 failing".
 _DEFAULT_KW = [
-    r"\berror(?:s|ed)?\b", r"(?-i:[a-z]Error\b)", r"\bfail(?:ed|s)?\b", r"\btraceback\b",
-    r"\bpanic(?:ked)?\b", r"\bwarnings?\b", r"(?-i:[a-z]Warning\b)", r"\bfatal\b",
-    r"(?-i:\bE\d{3,}\b)",
+    r"\berror(?:s|ed)?\b", r"(?-i:[A-Za-z0-9]Error\b)", r"\bfail(?:ed|s|ures?|ing)?\b",
+    r"\btraceback\b", r"\bpanic(?:s|ked|king)?\b", r"\bwarnings?\b", r"(?-i:[A-Za-z0-9]Warning\b)",
+    r"\bfatal\b", r"(?-i:\bE\d{3,}\b)",
 ]
-# "0 failed", "0 errors", "0 warnings" are a green summary, not a failure.
-_ZERO_COUNT = re.compile(r"\b0 (?:failed|failures?|errors?|warnings?)\b", re.IGNORECASE)
+# A zero count in either order ("0 failed", "Errors: 0", "Failures: 0") is a green summary.
+_COUNTED = r"(?:failed|failures?|failing|errors?|errored|warnings?)"
+_ZERO_COUNT = re.compile(rf"\b0 {_COUNTED}\b|\b{_COUNTED}\s*[:=]\s*0(?![\d.])", re.IGNORECASE)
+# A cargo progress line names a crate, and a crate may be called failure, error-chain or warnings.
+_CARGO_CRATE = re.compile(
+    r"(?-i:\b(?:Compiling|Checking|Downloaded|Downloading|Documenting|Fresh|Installing|Installed|"
+    r"Locking|Adding|Updating|Removing|Unpacking))\s+[A-Za-z0-9_-]+(?=\s+v\d)")
 _BOMS = [(b"\xef\xbb\xbf", "utf-8"), (b"\xff\xfe", "utf-16-le"), (b"\xfe\xff", "utf-16-be")]
 
 Runner = Callable[[Sequence[str]], "tuple[str, int]"]
@@ -69,37 +87,59 @@ def content(line: str) -> str:
 
 def error_lines(text: str, keywords=None) -> list[tuple[int, str]]:
     """[(1-based line, line)] for lines matching any keyword (default: error/warning/panic/...)."""
-    return _hits(log_lines(text), keywords, 0, None)
+    lines = log_lines(text)
+    return _hits(lines, keywords, range(len(lines)))
 
 
-def _hits(lines: list[str], keywords, start: int, end: int | None) -> list[tuple[int, str]]:
+def _scrub(body: str) -> str:
+    """The default keywords' view of a line: zero counts and cargo crate names removed."""
+    return _CARGO_CRATE.sub("", _ZERO_COUNT.sub("", body))
+
+
+def _hits(lines: list[str], keywords, indices: Iterable[int]) -> list[tuple[int, str]]:
     kw = keywords if keywords is not None else _DEFAULT_KW
     rx = re.compile("|".join(kw), re.IGNORECASE)
     scrub = keywords is None
     out = []
-    for i in range(start, len(lines) if end is None else end):
+    for i in indices:
         # Match the content only: a job or step NAMED "Check for errors" must not flag every line.
         body = content(lines[i])
-        if rx.search(_ZERO_COUNT.sub("", body) if scrub else body):
+        if rx.search(_scrub(body) if scrub else body):
             out.append((i + 1, lines[i]))
     return out
 
 
-def locate_step(lines: list[str], step: str) -> tuple[int, int] | None:
-    """(start, end) line indices of the block from the header naming `step` to the next header."""
-    bodies = [content(ln) for ln in lines]
-    start = next((i for i, b in enumerate(bodies) if _HEADER.search(b) and step in b), None)
-    if start is None:
-        return None
-    end = next((j for j in range(start + 1, len(bodies)) if _HEADER.search(bodies[j])), len(bodies))
-    return start, end
+def _gh_step(line: str) -> str | None:
+    """The step column of a `gh run view --log` line, or None for a line without one."""
+    m = _GH_STEP.match(line)
+    return None if m is None else m.group(1)
+
+
+def locate_step(lines: list[str], step: str) -> list[int]:
+    """Indices of the lines belonging to `step`, in every job; empty when no step matches.
+
+    A gh log names each line's step in its 2nd column, so those lines are selected; otherwise each
+    block from a header containing `step` up to the next header is. Every match counts, because a
+    matrix run repeats the step once per job and the failing job need not be the first.
+    """
+    by_column = [i for i, ln in enumerate(lines) if step in (_gh_step(ln) or "")]
+    if by_column:
+        return by_column
+    picked: list[int] = []
+    inside = False
+    for i, ln in enumerate(lines):
+        body = content(ln)
+        if _HEADER.search(body):
+            inside = step in body
+        if inside:
+            picked.append(i)
+    return picked
 
 
 def isolate_step(text: str, step: str) -> str:
-    """The block from the step/group header containing `step` up to the next header (or end)."""
+    """The lines of every block belonging to `step` (see locate_step), joined; "" when absent."""
     lines = log_lines(text)
-    span = locate_step(lines, step)
-    return "" if span is None else "\n".join(lines[span[0]:span[1]])
+    return "\n".join(lines[i] for i in locate_step(lines, step))
 
 
 def decode(data: bytes) -> str:
@@ -184,7 +224,8 @@ def _parser() -> argparse.ArgumentParser:
     src.add_argument("--cmd", help="run this shell-free command (space-split) and triage its output")
     src.add_argument("--gh", metavar="RUN_ID", help="fetch a GitHub Actions run log via gh")
     ap.add_argument("--repo")
-    ap.add_argument("--step", help="isolate only this step/group's block first (exit 2 if absent)")
+    ap.add_argument("--step", help="triage only this step: the gh step name, else the ##[group]/Run "
+                    "header text; every job's copy counts (exit 2 if absent)")
     ap.add_argument("--keywords", nargs="+", help="override the error keyword set (each is a regex)")
     return ap
 
@@ -193,13 +234,12 @@ def triage(args, run: Runner) -> int:
     _validate(args)
     text, cmd_rc = _read_source(args, run)
     lines = log_lines(text)
-    start, end = 0, None
+    indices: Iterable[int] = range(len(lines))
     if args.step:
-        span = locate_step(lines, args.step)
-        if span is None:
+        indices = locate_step(lines, args.step)
+        if not indices:
             raise TriageError(f"step not found in the log: {args.step!r}")
-        start, end = span
-    hits = _hits(lines, args.keywords, start, end)
+    hits = _hits(lines, args.keywords, indices)
     for ln, line in hits:
         print(f"{ln}: {line}")
     print(f"{len(hits)} error/warning line(s)")

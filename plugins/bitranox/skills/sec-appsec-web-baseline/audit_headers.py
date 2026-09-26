@@ -198,13 +198,22 @@ def _nosniff(value: str | None) -> Finding:
     return Finding("x-content-type-options", "MEDIUM", "missing or not 'nosniff'", 'set X-Content-Type-Options: nosniff')
 
 
-# A frame-ancestors source that lets ANY site (or any site on a scheme) frame the page.
-_PERMISSIVE_FRAME_SOURCE = re.compile(r"^(?:\*|[a-z][a-z0-9+.-]*:)$")
+# The two CSP 3 source-expression shapes that let ANY site frame the page:
+# - a scheme-source, ``scheme-part ":"`` (``https:``), matches every host on that scheme;
+# - a host-source, ``[scheme-part "://"] host-part [":" port-part] [path-part]``, whose host-part
+#   is a bare ``*``: that matches every host, and no scheme, port (``*:443``) or path narrows it
+#   to a set of SITES. A path is graded permissive too, so an unusual form fails loud.
+# ``*.example.com`` is a host-part with a ``*.`` prefix - scoped to one domain, so not matched.
+_SCHEME_PART = r"[a-z][a-z0-9+.-]*"
+_PERMISSIVE_FRAME_SOURCE = re.compile(
+    rf"^(?:{_SCHEME_PART}:|(?:{_SCHEME_PART}://)?\*(?::(?:\d+|\*))?(?:/.*)?)$"
+)
 
 
 def _frame_ancestors_finding(sources: str) -> Finding:
-    """Grade an enforced frame-ancestors source list: 'none', 'self' and explicit origins
-    restrict framing; ``*`` or a scheme-only source (``https:``) allows any site to frame it."""
+    """Grade an enforced frame-ancestors source list: 'none', 'self', explicit origins and
+    scoped wildcards (``*.example.com``) restrict framing; a scheme-only source (``https:``) or a
+    host-source whose host is a bare ``*`` (``*``, ``https://*``, ``*:443``) allows any site to."""
     permissive = [s for s in sources.split() if _PERMISSIVE_FRAME_SOURCE.match(s)]
     if permissive:
         return Finding("clickjacking", "MEDIUM",

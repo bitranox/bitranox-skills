@@ -23,8 +23,9 @@ under ~/.claude/self-improve-audit/backups/migrate-<ts>-<random>/ with a manifes
 state AS OF THE BACKUP, so anything written to those paths after the run is lost too.
 
 Exit codes: 0 every entry placed (or would be) / every item restored; 1 something was not (a parked
-store, an entry the engine refused, an unreadable topic file, a failed backup, write or restore);
-2 usage error (--dry-run with --apply, a malformed --redirect or one naming a missing dir, a --slug
+store, an entry the engine refused, an unreadable topic file, a level file or body the engine cannot
+read, a failed backup, write or restore; each of these still ends with the BACKUP line naming the
+undo dir when a backup was taken); 2 usage error (--dry-run with --apply, a malformed --redirect or one naming a missing dir, a --slug
 with no native store, a --restore dir with no migration manifest).
 
 Pure standard library; ASCII output.
@@ -326,7 +327,9 @@ def ensure_gitignore(proj):
                       + "# bitranox curated self-learning memory (local wiring; engine-written)\n"
                       + "\n".join(add) + "\n", encoding="utf-8")
         return "gitignored"
-    except OSError:
+    except (OSError, UnicodeDecodeError):
+        # A .gitignore that is not UTF-8 is left as it is: rewriting it would need its bytes
+        # decoded, and an uncaught decode error ended the run after the backup, unnamed.
         return "gitignore write failed"
 
 
@@ -394,6 +397,12 @@ def migrate_store(slug, dry_run=True, scope_default="", redirect=None, backup_ru
             continue
         except OSError as exc:
             rep["error"] = "write failed at %s: %s" % (e["name"], exc)
+            break
+        except ME.TreeWalkError as exc:
+            # a level file or body the engine cannot read (not UTF-8, unreadable): every entry of
+            # this level would hit it again, so the store stops here. Uncaught, it killed the whole
+            # run after the backup was taken, and the line naming the backup never printed.
+            rep["error"] = "store unreadable at %s: %s" % (e["name"], exc)
             break
         done.add(e["source"])
         rep["placed"] += 1

@@ -36,6 +36,11 @@ uv run --with httpx2 scripts/generate_schematic.py "Data pipeline overview" -o p
 `--doc-type` tunes the acceptance threshold (a poster tolerates less detail than a paper
 figure); `--iterations` caps the regenerate loop.
 
+Exit status of `generate_schematic_ai.py`: 0 the kept image met the `--doc-type` threshold; 1 no
+image, an image whose review failed, or a best image still below the threshold - the image is
+written in those last two cases, so check the exit code, not just the file; 2 a usage error. The
+review is scored by its TOTAL (`SCORE: n/10`), never by a per-criterion score such as `2/2`.
+
 ## Common mistakes
 
 - Expecting deterministic output - image models vary run to run; keep the prompt specific

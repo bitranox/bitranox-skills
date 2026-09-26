@@ -10,7 +10,8 @@ Usage: python compare_performance.py
 Exit codes: 0 both suite runs passed and the delta is reported; 2 no comparison was
 possible - not a git repository, no commits, no parent commit, a git step failed, a suite
 run failed (a failing suite's timing measures nothing), or the working tree could not be
-restored (the message then names the stash that still holds the changes).
+restored (stderr then names the branch or commit to check out again, the sha of the stash
+that holds the uncommitted changes, and the git commands that put both back).
 
 Cross-platform (Windows/macOS/Linux): pure standard library, invoked by the agent
 as `python compare_performance.py`, so it does not depend on bash (Claude Code
@@ -89,9 +90,15 @@ def _stash_changes():
     return after if after and after != before else None
 
 
+def _stash_entries():
+    return _git("stash", "list", "--format=%H").stdout.split()
+
+
 def _pop_stash(sha):
-    """Re-apply and drop OUR stash entry (found by sha, whatever its position now)."""
-    entries = _git("stash", "list", "--format=%H").stdout.split()
+    """Re-apply and drop OUR stash entry (found by sha, whatever its position now).
+
+    Returns None on success, else why the changes are not back in the working tree."""
+    entries = _stash_entries()
     if sha not in entries:
         return f"stash {sha} is gone; nothing to re-apply"
     ref = f"stash@{{{entries.index(sha)}}}"
@@ -99,21 +106,48 @@ def _pop_stash(sha):
         return None
     if _git("stash", "pop", ref).returncode == 0:
         return None
-    return (f"could not re-apply your changes; they are safe in stash {sha} "
-            f"('{STASH_MESSAGE}', see git stash list)")
+    return "could not re-apply your changes"
+
+
+def _first_line(text):
+    """git's first message line, without the colon that introduces its file list."""
+    line = next((line.strip() for line in text.splitlines() if line.strip()), "no message")
+    return line.rstrip(":")
+
+
+def _unrestored_report(ref, stash_sha, reason, *, on_ref):
+    """The lines that tell the user where they are and exactly how to get back.
+
+    The stash is named by its sha, never stash@{n}: that position shifts the moment anything
+    else pushes or drops a stash, and a stale position would apply somebody else's work."""
+    lines = [f"the repository was NOT restored: {reason}."]
+    if not on_ref:
+        lines.append(f"HEAD is left DETACHED at {_rev('HEAD')}; you started on '{ref}'.")
+    stashed = bool(stash_sha) and stash_sha in _stash_entries()
+    if stashed:
+        lines.append(f"your uncommitted changes are safe in stash {stash_sha} ('{STASH_MESSAGE}').")
+    elif not stash_sha:
+        lines.append("you had no uncommitted changes, so nothing was stashed.")
+    lines.append("to recover, review what the BEFORE test run left behind (git status), then run:")
+    if not on_ref:
+        lines.append(f"  git checkout {ref}")
+    if stashed:
+        lines.append(f"  git stash apply --index {stash_sha}")
+        lines.append(f"(if --index refuses, apply without it; afterwards drop the '{STASH_MESSAGE}' "
+                     "entry that git stash list shows)")
+    return lines
 
 
 def _restore(ref, stash_sha):
-    """Put back the branch and the stashed changes; return a list of problems."""
-    problems = []
-    if _git("checkout", "-q", ref, "--").returncode != 0:
-        problems.append(f"could not check out {ref} again; the repository is left at "
-                        f"{_rev('HEAD')}")
-    elif stash_sha:
-        problem = _pop_stash(stash_sha)
-        if problem:
-            problems.append(problem)
-    return problems
+    """Put back the branch and the stashed changes; return the error report (empty = restored)."""
+    checkout = _git("checkout", "-q", ref, "--")
+    if checkout.returncode != 0:
+        reason = f"could not check out '{ref}' again (git: {_first_line(checkout.stderr)})"
+        return _unrestored_report(ref, stash_sha, reason, on_ref=False)
+    problem = _pop_stash(stash_sha) if stash_sha else None
+    if problem:
+        return _unrestored_report(ref, stash_sha, problem, on_ref=True)
+    return []
 
 
 def _time_before(before_sha):

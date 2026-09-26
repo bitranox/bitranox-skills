@@ -25,9 +25,11 @@ cannot reach the file.
   is refused with exit 2.
 - **Arguments:** `view` and `reset` take none, `set` exactly two; a leftover (`reset --dry-run`) is
   refused with exit 2 rather than ignored.
-- **A config that is not a JSON object** (a trailing comma, a hand edit gone wrong) is refused with
-  exit 2 by every verb and left untouched, so a `set` never writes defaults over the choices it
-  still holds. Fix the JSON by hand, or delete the file to start from the defaults.
+- **A config that is not UTF-8 text or not a JSON object** (a trailing comma, a hand edit gone
+  wrong, a file a Windows editor saved as cp1252 or UTF-16) is refused with exit 2 by every verb,
+  naming the file, and left untouched, so a `set` never writes defaults over the choices it still
+  holds. Fix the file by hand (re-save it as UTF-8), or delete it to start from the defaults. The
+  hooks meanwhile read such a file as the defaults, silently, so they never block a turn.
 - **Exit 1** means the write failed (for example `~/.claude` is not a writable directory): nothing
   was saved.
 

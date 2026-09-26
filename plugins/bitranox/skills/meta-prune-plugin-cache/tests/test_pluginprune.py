@@ -642,6 +642,7 @@ def run_cli(
         encoding="utf-8",
         errors="replace",
         timeout=60,
+        check=False,
     )
 
 
@@ -771,10 +772,10 @@ def test_a_pin_spelled_relative_to_home_is_found(tmp_path: Path, prefix: str) ->
     settings = tmp_path / "settings.json"
     command = f"bash {prefix}/.claude/plugins/cache/mkt/plug/1.0.0/hooks/x.sh"
     settings.write_text(json.dumps({"hooks": {"Stop": [{"command": command}]}}), encoding="utf-8")
-    assert P.pinning_settings(pinned, [settings], homes=[home]) == settings.name
+    assert P.pinning_settings(pinned, [settings], anchors=[home]) == settings.name
     other = pinned.parent / "1.0.1"
     other.mkdir()
-    assert P.pinning_settings(other, [settings], homes=[home]) is None
+    assert P.pinning_settings(other, [settings], anchors=[home]) is None
 
 
 def test_a_home_relative_pin_keeps_the_version_end_to_end(tmp_path: Path) -> None:
@@ -1140,7 +1141,9 @@ def test_an_unexpected_crash_exits_two_not_one(cache: Path, tmp_path: Path) -> N
         f"sys.exit(pluginprune.main(['--cache-dir', {str(cache)!r}]))\n",
         encoding="utf-8",
     )
-    done = subprocess.run([sys.executable, str(driver)], capture_output=True, text=True, timeout=60)
+    done = subprocess.run(
+        [sys.executable, str(driver)], capture_output=True, text=True, timeout=60, check=False
+    )
     assert done.returncode == 2
     assert "unplanned" in done.stderr
 
@@ -1156,3 +1159,236 @@ def test_an_unreadable_subtree_is_not_a_silent_size_undercount(cache: Path) -> N
     entry = next(e for e in plan.entries if e.path == target)
     assert entry.size_complete is False
     assert entry.as_dict()["size_complete"] is False
+
+
+# --------------------------------------------------------------------------------------------
+# rank 8: an alias sibling is no version, pins in any home spelling, an envelope on every exit
+# --------------------------------------------------------------------------------------------
+
+
+def _alias_target(cache: Path, tmp_path: Path, kind: str) -> Path:
+    """Where a symlinked sibling of the orphan's only version points."""
+    if kind == "itself":
+        return orphan_of(cache)
+    if kind == "another-plugin":
+        return cache / "own-marketplace" / "own-plugin" / "1.2.0"
+    outside = tmp_path / "outside-version"
+    outside.mkdir()
+    return outside
+
+
+@pytest.mark.parametrize("kind", ["itself", "another-plugin", "outside-the-cache"])
+def test_a_symlinked_sibling_does_not_stop_the_only_real_version_being_sole(
+    cache: Path, tmp_path: Path, kind: str
+) -> None:
+    """An alias beside the only real version is refused, never removed, so it is no version.
+
+    Counted as one, the enabled plugin's only real version read as one of two and --apply
+    deleted it.
+    """
+    write_user_settings(cache, ENABLE_ORPHAN)
+    orphan = orphan_of(cache)
+    link = orphan.parent / "latest"
+    link.symlink_to(_alias_target(cache, tmp_path, kind), target_is_directory=True)
+
+    plan = plan_for(cache)
+    assert kept_reasons(plan).get(str(orphan)) == "only version, enabled in settings.json"
+
+    rc = P.main(["--cache-dir", str(cache), "--apply", "--json"])
+    assert rc == 1  # the alias itself is still refused, loudly
+    assert (orphan / "skills" / "filler.md").exists()
+
+
+def test_a_second_real_version_still_ends_the_sole_rule_beside_an_alias(
+    cache: Path, tmp_path: Path
+) -> None:
+    """Control: two REAL versions are two, however many aliases sit beside them."""
+    write_user_settings(cache, ENABLE_ORPHAN)
+    orphan = orphan_of(cache)
+    newer = make_version(cache, "other-marketplace", "orphan-plugin", "3.1.0")
+    (orphan.parent / "latest").symlink_to(newer, target_is_directory=True)
+    plan = plan_for(cache)
+    assert str(orphan) in paths(plan.prune)
+    assert str(newer) in paths(plan.prune)
+
+
+HOME_SPELLINGS = [
+    '"$HOME"/.claude/plugins/cache/mkt/plug/1.0.0/x.sh',
+    '"${HOME}"/.claude/plugins/cache/mkt/plug/1.0.0/x.sh',
+    "'$HOME'/.claude/plugins/cache/mkt/plug/1.0.0/x.sh",
+    '"~"/.claude/plugins/cache/mkt/plug/1.0.0/x.sh',
+    "%USERPROFILE%/.claude/plugins/cache/mkt/plug/1.0.0/x.sh",
+    "%USERPROFILE%\\.claude\\plugins\\cache\\mkt\\plug\\1.0.0\\x.sh",
+    '"%USERPROFILE%"\\.claude\\plugins\\cache\\mkt\\plug\\1.0.0\\x.sh',
+    "$env:USERPROFILE/.claude/plugins/cache/mkt/plug/1.0.0/x.sh",
+    "$env:USERPROFILE\\.claude\\plugins\\cache\\mkt\\plug\\1.0.0\\x.sh",
+    "${CLAUDE_CONFIG_DIR}/plugins/cache/mkt/plug/1.0.0/x.sh",
+    '"$CLAUDE_CONFIG_DIR"/plugins/cache/mkt/plug/1.0.0/x.sh',
+]
+
+
+def _pin_tree(tmp_path: Path) -> tuple[Path, Path]:
+    home = tmp_path / "home"
+    pinned = home / ".claude" / "plugins" / "cache" / "mkt" / "plug" / "1.0.0"
+    pinned.mkdir(parents=True)
+    return home, pinned
+
+
+@pytest.mark.parametrize("command", HOME_SPELLINGS)
+def test_a_pin_is_found_whatever_names_the_home_or_config_dir(tmp_path: Path, command: str) -> None:
+    """A hook command is shell or PowerShell or cmd text: the prefix before the path under the
+    home or config directory can be quoted or named any way, and the part beneath it cannot."""
+    home, pinned = _pin_tree(tmp_path)
+    settings = tmp_path / "settings.json"
+    settings.write_text(json.dumps({"hooks": {"Stop": [{"command": command}]}}), encoding="utf-8")
+    anchors = [home, home / ".claude"]
+    assert P.pinning_settings(pinned, [settings], anchors=anchors) == settings.name
+
+
+def test_a_pin_is_found_when_the_json_writer_escapes_every_slash(tmp_path: Path) -> None:
+    """JSON allows a slash written as backslash-slash, and some writers emit it for every one."""
+    home, pinned = _pin_tree(tmp_path)
+    settings = tmp_path / "settings.json"
+    raw = (
+        r'{"hooks": {"Stop": [{"command": '
+        r'"bash $HOME\/.claude\/plugins\/cache\/mkt\/plug\/1.0.0\/x"}]}}'
+    )
+    settings.write_text(raw, encoding="utf-8")
+    decoded = json.loads(raw)["hooks"]["Stop"][0]["command"]
+    assert decoded == "bash $HOME/.claude/plugins/cache/mkt/plug/1.0.0/x"  # valid JSON, same path
+    assert P.pinning_settings(pinned, [settings], anchors=[home]) == settings.name
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        "bash ~/.claude/plugins/cache/mkt/plug/1.0.1/x.sh",
+        "bash ~/.claude/plugins/cache/mkt/other/1.0.0/x.sh",
+        "bash ~/.claude/plugins/cache/mkt/plug/x.sh",
+        "bash ~/.claude/plugins/cache/other-mkt/plug/1.0.0/x.sh",
+    ],
+)
+def test_a_home_anchored_needle_does_not_pin_a_neighbour(tmp_path: Path, command: str) -> None:
+    """Control: widening the spellings must not make another version, plugin or marketplace pin
+    this one."""
+    home, pinned = _pin_tree(tmp_path)
+    settings = tmp_path / "settings.json"
+    settings.write_text(json.dumps({"hooks": {"Stop": [{"command": command}]}}), encoding="utf-8")
+    assert P.pinning_settings(pinned, [settings], anchors=[home, home / ".claude"]) is None
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        'bash "$HOME"/.claude/plugins/cache/mkt/plug/1.0.0/x',
+        "bash ${CLAUDE_CONFIG_DIR}/plugins/cache/mkt/plug/1.0.0/x",
+        "%USERPROFILE%\\.claude\\plugins\\cache\\mkt\\plug\\1.0.0\\x.cmd",
+    ],
+)
+def test_a_quoted_or_foreign_home_pin_keeps_the_version_end_to_end(
+    tmp_path: Path, command: str
+) -> None:
+    home = tmp_path / "home"
+    root = home / ".claude" / "plugins" / "cache"
+    pinned = make_version(root, "mkt", "plug", "1.0.0")
+    make_version(root, "mkt", "plug", "1.2.0")
+    (pinned / ".in_use").mkdir()
+    write_installed(root.parent, {"plug@mkt": root / "mkt" / "plug" / "1.2.0"})
+    (home / ".claude" / "settings.json").write_text(
+        json.dumps({"hooks": {"Stop": [{"command": command}]}}), encoding="utf-8"
+    )
+    result = run_cli(["--cache-dir", str(root), "--apply", "--json"], cwd=tmp_path, home=home)
+    assert result.returncode == 0, result.stderr
+    kept = {e["path"]: e["keep_reason"] for e in json.loads(result.stdout)["data"]["keep"]}
+    assert kept.get(str(pinned)) == "pinned in settings.json"
+    assert (pinned / "skills" / "filler.md").exists()
+
+
+def _envelope_of(result: subprocess.CompletedProcess[str]) -> dict[str, object]:
+    assert result.stdout.strip(), f"no envelope on stdout; stderr: {result.stderr}"
+    payload = json.loads(result.stdout)
+    assert isinstance(payload, dict)
+    return payload
+
+
+@pytest.mark.parametrize(
+    ("case", "needle"),
+    [
+        ("missing-cache", "no plugin cache"),
+        ("unmatched-keep", "--keep"),
+        ("unreadable-installed-plugins", "--installed-plugins"),
+        ("missing-settings", "typo.json"),
+        ("malformed-settings", "not valid JSON"),
+        ("bad-min-age", "not a duration"),
+        ("abbreviated-json-flag", "no plugin cache"),
+    ],
+)
+def test_json_prints_an_envelope_on_every_exit_two(
+    cache: Path, tmp_path: Path, case: str, needle: str
+) -> None:
+    """A caller that asked for --json parses stdout; an empty stdout on exit 2 is a parse error
+    in the caller, not the refusal it should have read."""
+    flag = "--json"
+    args = ["--cache-dir", str(cache), "--apply"]
+    if case == "missing-cache":
+        args = ["--cache-dir", str(tmp_path / "nope")]
+    elif case == "abbreviated-json-flag":
+        args, flag = ["--cache-dir", str(tmp_path / "nope")], "--js"
+    elif case == "unmatched-keep":
+        args += ["--keep", str(tmp_path / "typo" / "1.0.0")]
+    elif case == "unreadable-installed-plugins":
+        args += ["--installed-plugins", str(tmp_path / "typo.json")]
+    elif case == "missing-settings":
+        args += ["--settings", str(tmp_path / "typo.json")]
+    elif case == "malformed-settings":
+        write_user_settings(cache, "{bad")
+    elif case == "bad-min-age":
+        args += ["--min-age", "soon"]
+    result = run_cli([*args, flag], cwd=tmp_path, home=tmp_path)
+    assert result.returncode == 2, result.stderr
+    payload = _envelope_of(result)
+    assert payload["ok"] is False
+    assert payload["command"] == "pluginprune"
+    assert payload["skipped"] == []
+    assert payload["data"] is None
+    assert needle in str(payload["error"])
+    assert needle in result.stderr  # the diagnostic still reaches a person on stderr
+    assert orphan_of(cache).exists()
+    assert (cache / "own-marketplace" / "own-plugin" / "1.0.0").exists()
+
+
+def test_an_exit_two_without_json_keeps_stdout_empty(cache: Path, tmp_path: Path) -> None:
+    """Control: the envelope is for a caller that asked for it; text mode leaves stdout empty."""
+    result = run_cli(["--cache-dir", str(tmp_path / "nope")], cwd=tmp_path, home=tmp_path)
+    assert result.returncode == 2
+    assert result.stdout == ""
+    assert "no plugin cache" in result.stderr
+
+
+def test_an_unexpected_crash_with_json_prints_an_envelope(cache: Path, tmp_path: Path) -> None:
+    driver = tmp_path / "drive.py"
+    driver.write_text(
+        "import sys\n"
+        f"sys.path.insert(0, {str(SCRIPT.parent)!r})\n"
+        "import pluginprune\n"
+        "def boom(*a, **k):\n    raise RuntimeError('unplanned')\n"
+        "pluginprune.build_plan = boom\n"
+        f"sys.exit(pluginprune.main(['--cache-dir', {str(cache)!r}, '--json']))\n",
+        encoding="utf-8",
+    )
+    done = subprocess.run(
+        [sys.executable, str(driver)], capture_output=True, text=True, timeout=60, check=False
+    )
+    assert done.returncode == 2
+    payload = _envelope_of(done)
+    assert payload["ok"] is False
+    assert "unplanned" in str(payload["error"])
+
+
+def test_help_is_still_plain_text_with_json(capsys) -> None:
+    """Control: --help is not an error, so it exits 0 with its text and no envelope."""
+    with pytest.raises(SystemExit) as stop:
+        P.main(["--help", "--json"])
+    assert stop.value.code == 0
+    out = capsys.readouterr().out
+    assert out.startswith("usage:")

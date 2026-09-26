@@ -312,7 +312,7 @@ def test_main_replace_out_of_range_exits_1_without_traceback(tmp_path, monkeypat
 
 def test_main_replace_keeps_a_bom_and_does_not_make_it_a_column(tmp_path, monkeypatch, capsys):
     f = tmp_path / "t.md"
-    f.write_bytes(("﻿| a | b |\n| --- | --- |\n| 1 | 2 |\n").encode("utf-8"))
+    f.write_bytes(("\ufeff| a | b |\n| --- | --- |\n| 1 | 2 |\n").encode("utf-8"))
     rc, out, _ = run_main(monkeypatch, capsys, ["read", str(f), "--index", "0"])
     assert rc == 0
     table = json.loads(out)
@@ -320,7 +320,7 @@ def test_main_replace_keeps_a_bom_and_does_not_make_it_a_column(tmp_path, monkey
     rc, _, _ = run_main(monkeypatch, capsys, ["replace", str(f), "--index", "0"], stdin=out)
     assert rc == 0
     raw = f.read_bytes().decode("utf-8")
-    assert raw.startswith("﻿| a ") and raw.count("﻿") == 1
+    assert raw.startswith("\ufeff| a ") and raw.count("\ufeff") == 1
 
 
 def test_main_replace_keeps_crlf_in_the_file(tmp_path, monkeypatch, capsys):

@@ -344,6 +344,43 @@ def test_repo_mode_with_a_missing_root_is_an_error(tmp_path, capsys):
     assert "does not exist" in capsys.readouterr().err
 
 
+def test_files_mode_with_a_missing_root_says_it_does_not_exist(tmp_path, capsys):
+    """Control for the unreadable-parent refusal below: a missing root keeps its own message."""
+    assert G.main(["--files", "CLAUDE.md", "--root", str(tmp_path / "nope")]) == 2
+    assert "does not exist" in capsys.readouterr().err
+
+
+def test_repo_mode_with_a_file_as_root_is_an_error(tmp_path, capsys):
+    """Control: an existing FILE is no --root to walk for repos."""
+    (tmp_path / "f.txt").write_text("x\n", encoding="utf-8")
+    assert G.main(["--root", str(tmp_path / "f.txt")]) == 2
+    assert "not a directory" in capsys.readouterr().err
+
+
+@pytest.mark.skipif(sys.platform == "win32",
+                    reason="Windows has no POSIX mode bits: chmod(0o000) leaves the dir readable")
+@pytest.mark.parametrize("argv", [["--root"], ["--files", "CLAUDE.md", "--root"],
+                                  ["--json", "--root"], ["--json", "--files", "CLAUDE.md", "--root"]])
+def test_a_root_under_an_unreadable_dir_is_exit_2_not_a_traceback(tmp_path, capsys, argv):
+    """Before Python 3.14 Path.exists()/is_dir() RAISE PermissionError here, and the
+    traceback's exit 1 reads as "out of sync" / "0 matched". It must be exit 2 naming why."""
+    locked = tmp_path / "locked"
+    (locked / "sub").mkdir(parents=True)
+    (locked / "sub" / "CLAUDE.md").write_text("x\n", encoding="utf-8")
+    locked.chmod(0o000)
+    try:
+        if os.access(locked, os.R_OK):
+            pytest.skip("running with privileges that read a mode-000 dir (root)")
+        rc = G.main([*argv, str(locked / "sub")])
+    finally:
+        locked.chmod(0o755)
+    captured = capsys.readouterr()
+    assert rc == 2
+    assert "PermissionError" in captured.err and "does not exist" not in captured.err
+    if "--json" in argv:
+        assert json.loads(captured.out)["ok"] is False
+
+
 def test_repo_mode_with_a_root_holding_no_repo_is_not_a_pass(tmp_path, capsys):
     """A pre-push guard that checked nothing must not exit 0."""
     (tmp_path / "empty").mkdir()

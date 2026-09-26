@@ -94,7 +94,9 @@ discovery steps and use the two checker tools directly:
   suite on the previous commit, restore the branch and the changes, time again, and report
   the measured delta as before/after evidence. Exit 2 means there is no valid comparison: a
   suite run failed, there is no previous commit, or a git step failed; never quote its
-  numbers then.
+  numbers then. If stderr says the repository was NOT restored, run the git commands it prints
+  first: they name the branch to check out and the sha of the stash holding your uncommitted
+  changes.
 
 Report findings with measured numbers from the real test suite; never accept a claim on
 synthetic benchmarks.
@@ -455,9 +457,11 @@ Wait for the user's response before proceeding to the next finding.
    `profile_with_cache_template.py` (this skill's own directory) to
    `$BX_PERF_TMPDIR/cache/profile_cache_<function>.py`, set its `MODULE_NAME` and
    `FUNCTION_NAME` to the candidate, and run it with `$PYTHON_CMD` from the project root. After
-   an untimed warm-up run it times the suite without and then with the cache (warm against
-   warm) and prints the hit rate, the improvement, and a RECOMMEND/REJECT verdict against the
-   >20% hit-rate / >5% improvement thresholds.
+   an untimed warm-up run it times the suite `REPEATS` (default 5) times without and 5 times
+   with a fresh cache, interleaved, and prints the hit rate, the median improvement, and a
+   RECOMMEND/REJECT verdict: it recommends only when the hit rate is >20%, the median
+   improvement is >5%, AND every cached run beat every uncached run - otherwise REJECT as
+   run-to-run noise (raise `REPEATS` for a noisy suite).
 2. **On REJECT: do not add the cache.** Report the measured numbers and move on - a measured
    rejection is a successful finding, not a failure. **On ABORT (exit 2)** a suite run failed,
    with or without the cache: there is no measurement, so do not add the cache; if only the

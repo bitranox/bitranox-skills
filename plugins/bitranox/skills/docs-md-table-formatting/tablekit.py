@@ -278,7 +278,7 @@ def _read_text(path: str) -> tuple[str, bool]:
     else:
         with open(path, encoding="utf-8", newline="") as f:
             text = f.read()
-    if text.startswith("﻿"):
+    if text.startswith("\ufeff"):
         return text[1:], True
     return text, False
 
@@ -340,7 +340,7 @@ def _cmd_replace(args: argparse.Namespace) -> int:
     except IndexError as exc:
         return _error(str(exc), 1)
     if bom:
-        new_text = "﻿" + new_text
+        new_text = "\ufeff" + new_text
     if args.stdout:
         sys.stdout.write(new_text)
     else:

@@ -422,7 +422,7 @@ def test_a_torn_log_line_is_skipped_and_counted_not_a_traceback(tmp_path, capsys
 
 def test_report_reads_back_a_row_holding_a_unicode_line_separator(tmp_path, capsys):
     log = tmp_path / "log.jsonl"
-    row = _row("echo a b", None, None)
+    row = _row("echo a\u2028b", None, None)
     log.write_text(json.dumps(row, ensure_ascii=False) + "\n", encoding="utf-8")
     assert jp.main(["report", "--log", str(log), "--json"]) == 0
     assert json.loads(capsys.readouterr().out)["data"]["rows"] == 1

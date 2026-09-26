@@ -29,6 +29,72 @@ than the change, so entries reconstructed from them would read like coverage wit
 a hole nobody has drawn a line under is one that gets rediscovered and half-filled - which is how
 two "versions with no entry" notes came to sit in this file disagreeing with it.
 
+## [7.25.4]
+
+### Fixed
+
+- pluginprune never deletes an enabled plugin's only real version because a symlinked sibling sat
+  beside it (a symlink, anything reached through one, or a dir outside the cache no longer counts
+  toward "sole"); finds a settings pin whatever names the home or Claude config directory
+  (`"$HOME"/`, `%USERPROFILE%\`, `$env:USERPROFILE/`, `${CLAUDE_CONFIG_DIR}/`, quoted or not,
+  slash-escaped JSON); and under `--json` prints an envelope on every exit 2, argparse errors
+  and crashes included.
+- ci_triage catches `OSError`, `IOError`, `EOFError`, `SSLError`, `HTTPError`, `BUILD FAILURE`
+  and mocha's `1 failing` again, reads `Errors: 0` as a zero count, and no longer flags a cargo
+  crate named after a keyword. `--step` matches the gh step-name column of `gh run view --log`
+  and triages that step in EVERY matrix job, where it used to take the first header only and
+  could report a failing second job clean.
+- toolbox-nudge and block-masked-gate-exit suggest each jig the way the jig itself says to launch
+  it (its `LAUNCH_WITH`, else its docstring), so `gate` is suggested with plain `python3`, not
+  `uv run`, whose child `python3` lacks pytest and reports a false RED. `ci_triage`, `transfer`,
+  `diffbehave` and `gate` now declare `LAUNCH_WITH = "python3"`: all four run the caller's
+  commands, and under `uv run` diffbehave compared two identical ImportErrors as AGREE. A test
+  pins every nudged jig's suggestion to its own declaration.
+- meta-memory-settings refuses a config that is not UTF-8 (cp1252, UTF-16) with exit 2 naming the
+  file, instead of a traceback on every verb; the hooks still read it as the defaults.
+  migrate_memory reports an unreadable level file as that store's error and always prints the
+  BACKUP line, and a non-UTF-8 `.gitignore` no longer crashes the run.
+- generate_schematic_ai scores a review by its total, not by the first per-criterion score
+  (`Accuracy score (2/2) ... SCORE: 9.0` read as 2.0 and paid for a regeneration), and exits 1
+  with the score and threshold named when the best image kept is below the `--doc-type`
+  threshold; the image is still written. convert_with_ai counts a caption only when non-empty
+  text came back, so an empty or choice-less AI response fails the run.
+- compare_performance names the branch to return to, the sha of the stash holding the user's
+  changes, and the exact recovery commands when restoring the checkout fails.
+  find_cache_candidates treats a store into a container the function created itself as local,
+  so DP-table and local-dict functions are reported again while stores into a parameter, global,
+  alias, closure or `self` still make it impure. profile_with_cache_template times 5 interleaved
+  rounds per arm with a fresh cache each, compares medians, and rejects a gain inside the
+  run-to-run spread.
+- adopt_skill's license gate reads every license that applies to what ships - the skill's own
+  folder plus the license files, manifests and NOTICE of each folder above it, never a sibling
+  plugin's - and within that scope every license file (COPYING and LICENSE-* too, not only the
+  first), every manifest at any depth, and every form of a declaration: a pyproject `{text}` or
+  `{file}` table, a PEP 639 or SPDX expression (a copyleft `OR` alternative rejects), an npm
+  `type` object. Anything it cannot read or classify, a symlinked folder, or a link out of the
+  skill stops for a human. A BOM before SKILL.md's front matter no longer puts the credit line
+  above `---` or skips the name rewrite. gather_scan caches a walk that had to skip an unlistable
+  directory, replaying the skip on every read, instead of re-walking the tree on every prompt.
+- grep_all reports the ignored count as UNKNOWN (exit 2) when git cannot read a repo (dubious
+  ownership, a broken `.git` file, a missing HEAD) instead of 0, and judges "ignored" from the
+  search root, so a match in a nested repo or linked worktree inside an outer-ignored directory
+  counts as missed. grep_all, enforced and git_state refuse a path under an unreadable directory
+  with exit 2 instead of a traceback (Python 3.10-3.13 raise there).
+- task_brief keeps a task's own same-level sections (`## Steps`, `## Files`) in the brief; a task
+  ends at the next task heading or a higher-level heading. conflict_scan skips a dangling or
+  looping symlink with a stderr note instead of failing the whole scan with exit 2.
+- audit_headers grades a CSP `frame-ancestors` host-source with a bare `*` host (`https://*`,
+  `*:*`, `*:443`, `http://*:*`, `wss://*`, with or without a path) MEDIUM, since it lets any site
+  frame the page; `*.example.com` stays OK.
+- factedit runs each candidate interpreter before choosing it, so the Windows Store `python3.exe`
+  stub no longer wins over a real Python (verified on Windows: a live apply failed with 9009), and
+  `apply` removes the stage dir it created after a successful write, keeping and naming it on
+  failure or dry run.
+- 31 characters that `strip_typographic_tells.py` rewrites (raw BOMs, U+2028, U+FFFD, a verdict
+  emoji) sat inside Python string literals in 17 files; a stripped copy of `reformat_tables.py` or
+  `tablekit.py` tested `startswith("")` and dropped every file's first character. They are escapes
+  now, and `hooks/tests/test_python_source_survives_strip.py` fails on any new one.
+
 ## [7.25.3]
 
 ### Fixed

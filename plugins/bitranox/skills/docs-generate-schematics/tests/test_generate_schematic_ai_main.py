@@ -123,12 +123,13 @@ def test_marked_up_score_is_parsed_and_stops_early(gen_ai, scripted, monkeypatch
 def test_below_threshold_twice_keeps_the_second_image_when_it_scores_higher(
     gen_ai, scripted, monkeypatch, tmp_path
 ):
-    """The control for the arm below: the last image IS the best one here."""
+    """The control for the arm below: the last image IS the best one here. It still misses the
+    journal threshold, so the run exits 1 with the image written."""
     calls = scripted(image("V1"), review("SCORE: 6.0"), image("V2"), review("SCORE: 7.0"))
 
     rc = run_main(gen_ai, monkeypatch, "diagram", "-o", str(_out(tmp_path)), "--doc-type", "journal")
 
-    assert rc == 0
+    assert rc == 1
     assert len(calls) == 4
     assert _out(tmp_path).read_bytes() == b"V2"
     log = json.loads((tmp_path / "out_review_log.json").read_text(encoding="utf-8"))
@@ -145,7 +146,7 @@ def test_below_threshold_twice_keeps_the_best_scoring_image_not_the_last(
     rc = run_main(gen_ai, monkeypatch, "diagram", "-o", str(_out(tmp_path)), "--doc-type", "journal")
 
     stdout = capsys.readouterr().out
-    assert rc == 0
+    assert rc == 1  # the best image still missed the threshold
     assert _out(tmp_path).read_bytes() == b"V1"
     log = json.loads((tmp_path / "out_review_log.json").read_text(encoding="utf-8"))
     assert log["final_score"] == 7.0
@@ -162,7 +163,7 @@ def test_a_failed_first_generation_keeps_the_only_reviewed_image(
     rc = run_main(gen_ai, monkeypatch, "diagram", "-o", str(_out(tmp_path)), "--doc-type", "journal")
 
     stdout = capsys.readouterr().out
-    assert rc == 0
+    assert rc == 1  # 6.0 is below the journal threshold
     assert _out(tmp_path).read_bytes() == b"V2"
     assert "last generation failed" not in stdout
     log = json.loads((tmp_path / "out_review_log.json").read_text(encoding="utf-8"))
@@ -176,12 +177,122 @@ def test_failed_retry_falls_back_to_the_reviewed_first_image(gen_ai, scripted, m
     rc = run_main(gen_ai, monkeypatch, "diagram", "-o", str(_out(tmp_path)), "--doc-type", "journal")
 
     stdout = capsys.readouterr().out
-    assert rc == 0
+    assert rc == 1  # 6.0 is below the journal threshold
     assert _out(tmp_path).read_bytes() == b"V1"
     assert "[WARN]" in stdout and "v1" in stdout
     log = json.loads((tmp_path / "out_review_log.json").read_text(encoding="utf-8"))
     assert log["success"] is True
     assert log["final_score"] == 6.0
+
+
+# ---- a kept image below the threshold is delivered, but the run says no (exit 1) ---------------
+@pytest.mark.parametrize("iterations,script", [
+    ("1", ("V1", "SCORE: 7.0")),
+    ("2", ("V1", "SCORE: 6.0", "V2", "SCORE: 7.0")),
+], ids=["one-iteration", "two-iterations"])
+def test_a_kept_image_below_the_threshold_exits_1_and_names_score_and_threshold(
+    gen_ai, scripted, monkeypatch, capsys, tmp_path, iterations, script
+):
+    """User decision 2026-09-26: the best image is still written, but a run whose best score
+    missed the threshold is a "no", not "[OK] Success!"."""
+    responses = [image(s) if s.startswith("V") else review(s) for s in script]
+    scripted(*responses)
+
+    rc = run_main(gen_ai, monkeypatch, "diagram", "-o", str(_out(tmp_path)), "--doc-type", "journal",
+                  "--iterations", iterations)
+
+    stdout = capsys.readouterr().out
+    assert rc == 1
+    assert _out(tmp_path).read_bytes() == script[-2].encode()
+    assert "[OK] Success" not in stdout
+    verdict = stdout.strip().splitlines()[-1]
+    assert "threshold" in verdict and "7.0/10" in verdict and "8.5/10" in verdict
+    log = json.loads((tmp_path / "out_review_log.json").read_text(encoding="utf-8"))
+    assert log["threshold_met"] is False
+
+
+@pytest.mark.parametrize("script", [
+    ("V1", "SCORE: 8.5"),                          # exactly at the threshold
+    ("V1", "SCORE: 6.0", "V2", "SCORE: 9.0"),      # the retry meets it
+], ids=["at-threshold", "retry-meets-it"])
+def test_a_kept_image_meeting_the_threshold_still_exits_0(
+    gen_ai, scripted, monkeypatch, capsys, tmp_path, script
+):
+    """The control for the arm above."""
+    scripted(*[image(s) if s.startswith("V") else review(s) for s in script])
+
+    rc = run_main(gen_ai, monkeypatch, "diagram", "-o", str(_out(tmp_path)), "--doc-type", "journal")
+
+    stdout = capsys.readouterr().out
+    assert rc == 0
+    assert "[OK] Success!" in stdout
+    assert _out(tmp_path).read_bytes() == script[-2].encode()
+    log = json.loads((tmp_path / "out_review_log.json").read_text(encoding="utf-8"))
+    assert log["threshold_met"] is True
+
+
+def test_a_verdict_forced_retry_above_the_threshold_is_not_called_below_it(
+    gen_ai, scripted, monkeypatch, capsys, tmp_path
+):
+    """A NEEDS_IMPROVEMENT verdict forces a retry even at 9.5 >= 8.5. The kept image then met the
+    numeric threshold, so the report must not say "below" and the exit stays 0."""
+    scripted(image("V1"), review("SCORE: 9.5\nVERDICT: NEEDS_IMPROVEMENT"))
+
+    rc = run_main(gen_ai, monkeypatch, "diagram", "-o", str(_out(tmp_path)), "--doc-type", "journal",
+                  "--iterations", "1")
+
+    stdout = capsys.readouterr().out
+    assert rc == 0
+    assert "below the 8.5/10" not in stdout
+    assert "at or above the 8.5/10 threshold" in stdout
+
+
+def test_exit_status_docs_name_the_missed_threshold(gen_ai):
+    assert "threshold" in gen_ai.__doc__.split("Exit status:", 1)[1].split("Usage:", 1)[0]
+    assert "threshold" in gen_ai.build_parser().epilog.split("Exit status:", 1)[1]
+
+
+# ---- the TOTAL score is parsed, never a per-criterion one ---------------------------------------
+_BREAKDOWN_THEN_TOTAL = (
+    "1. **Scientific Accuracy** score: 2/2\n"
+    "2. **Clarity and Readability** score: 1.5/2\n"
+    "3. **Label Quality** score: 2/2\n"
+    "4. **Layout and Composition** score: 1.5/2\n"
+    "5. **Professional Appearance** score: 2/2\n\n"
+    "SCORE: 9.0\n\nVERDICT: ACCEPTABLE"
+)
+_SUBSCORE_LINES_THEN_TOTAL = (
+    "### Scientific Accuracy\nScore: 2/2\n### Clarity and Readability\nScore: 1.5/2\n"
+    "### Label Quality\nScore: 2/2\n### Layout and Composition\nScore: 1.5/2\n"
+    "### Professional Appearance\nScore: 2/2\n\nTotal Score: 9.0/10\n\nVERDICT: ACCEPTABLE"
+)
+_BULLETED_THEN_BOLD_TOTAL = (
+    "- Scientific Accuracy: Score 2/2\n- Clarity: Score 1.5/2\n- Labels: Score 2/2\n"
+    "- Layout: Score 1.5/2\n- Appearance: Score 2/2\n\n**Score:** 9/10\n\nVERDICT: ACCEPTABLE"
+)
+_POINTS_THEN_TOTAL = (
+    "Scientific Accuracy score: 2 points\nClarity score: 1.5 points\nLabel score: 2 points\n"
+    "Layout score: 1.5 points\nAppearance score: 2 points\nSCORE: 9.0\nVERDICT: ACCEPTABLE"
+)
+_ONE_LINE = "Accuracy score (2/2) ... SCORE: 9.0\nVERDICT: ACCEPTABLE"
+
+
+@pytest.mark.parametrize("text", [
+    _BREAKDOWN_THEN_TOTAL, _SUBSCORE_LINES_THEN_TOTAL, _BULLETED_THEN_BOLD_TOTAL, _POINTS_THEN_TOTAL,
+    _ONE_LINE,
+], ids=["breakdown-then-total", "subscore-lines", "bulleted-bold-total", "points", "one-line"])
+def test_a_multi_criterion_review_is_scored_by_its_total(gen_ai, scripted, monkeypatch, tmp_path, text):
+    """The review prompt grades five criteria 0-2 each and asks for "SCORE: [total score 0-10]".
+    A reviewer that lists the criteria first must not be read as scoring 2/10: that paid for a
+    needless regeneration and fed keep-best a wrong number."""
+    calls = scripted(image("V1"), review(text))
+
+    rc = run_main(gen_ai, monkeypatch, "diagram", "-o", str(_out(tmp_path)), "--doc-type", "journal")
+
+    assert rc == 0
+    assert len(calls) == 2  # one image, one review: no paid regeneration
+    log = json.loads((tmp_path / "out_review_log.json").read_text(encoding="utf-8"))
+    assert log["final_score"] == 9.0
 
 
 def test_every_generation_failing_exits_1_without_output(gen_ai, scripted, monkeypatch, tmp_path):

@@ -17,8 +17,9 @@ Requirements:
       line would sit in the process list for the whole run)
     - httpx2 library
 
-Exit status: 0 an image was written and reviewed, 1 a failure - no image, or an image whose
-review failed so its quality was NOT verified (the image is still written), 2 a usage error.
+Exit status: 0 an image was written, reviewed and met the quality threshold; 1 no image, an
+image whose review failed so its quality was NOT verified, or an image whose best score stayed
+below the threshold (in both of those cases the image is still written); 2 a usage error.
 
 Usage:
     python generate_schematic_ai.py "Create a flowchart showing CONSORT participant flow" -o flowchart.png
@@ -56,16 +57,51 @@ def _configure_console() -> None:
             pass
 
 
-def _parse_score(content: str) -> Optional[float]:
-    """The review's total score, or None when the review states none.
+# A "score" label, markup allowed between it and the number ("**SCORE:** 9.5", "Score - 9.5"),
+# but not a line break, with an optional "/N" denominator.
+_SCORE_LABEL = re.compile(
+    r'\b(?P<label>(?:total|overall|final)\s+score|score)\b[^\w\n]*'
+    r'(?P<num>\d+(?:\.\d+)?)(?:\s*\**\s*/\s*(?P<den>\d+(?:\.\d+)?))?',
+    re.IGNORECASE,
+)
+# What may stand before the label on its own line: indentation, emphasis, heading, quote.
+_LINE_START_MARKUP = re.compile(r'[\s*_#>]*')
 
-    Markup is allowed between the label and the number ("**SCORE:** 9.5", "Score - 9.5"),
-    because a reviewer that bolds the label is still answering the question.
+
+def _score_rank(content: str, match: "re.Match[str]") -> Tuple[int, int, int]:
+    """Lower sorts first: how closely one candidate matches the requested "SCORE: <total>" line."""
+    line_prefix = content[content.rfind("\n", 0, match.start()) + 1:match.start()]
+    at_line_start = _LINE_START_MARKUP.fullmatch(line_prefix) is not None
+    label = match.group("label")
+    return (
+        0 if label.split()[-1] == "SCORE" else 1,
+        0 if at_line_start else 1,
+        0 if label.lower() != "score" else 1,
+    )
+
+
+def _parse_score(content: str) -> Optional[float]:
+    """The review's total score out of 10, or None when the review states none.
+
+    The review prompt grades five criteria 0-2 each and then asks for "SCORE: [total score
+    0-10]", so a review can carry several "score" labels. A candidate out of anything but 10
+    ("Accuracy score (2/2)") or above 10 is a criterion, never the total. Of the rest, the one
+    closest to the requested format wins: the upper-case SCORE label first, then a label that
+    opens its line, then an explicit "total/overall/final score"; ties go to the first.
     """
-    match = re.search(r'SCORE\W*(\d+(?:\.\d+)?)', content, re.IGNORECASE)
-    if match is None:
-        match = re.search(r'(?:rating|quality)[:\s]+(\d+(?:\.\d+)?)\s*(?:/\s*10)?', content, re.IGNORECASE)
-    return float(match.group(1)) if match else None
+    candidates = []
+    for match in _SCORE_LABEL.finditer(content):
+        value = float(match.group("num"))
+        denominator = match.group("den")
+        if value > 10 or (denominator is not None and float(denominator) != 10):
+            continue
+        candidates.append((_score_rank(content, match), match.start(), value))
+    if candidates:
+        return min(candidates)[2]
+    match = re.search(r'(?:rating|quality)[:\s]+(\d+(?:\.\d+)?)\s*(?:/\s*10)?', content, re.IGNORECASE)
+    if match is None or float(match.group(1)) > 10:
+        return None
+    return float(match.group(1))
 
 
 class ScientificSchematicGenerator:
@@ -618,7 +654,10 @@ Generate an improved version that addresses all the critique points while mainta
             "success": False,
             "early_stop": False,
             "early_stop_reason": None,
-            "review_skipped": False
+            "review_skipped": False,
+            # True when the delivered image scored at or above the threshold, False when it
+            # scored below it, None when no score was established (the review failed).
+            "threshold_met": False
         }
         
         current_prompt = f"""{self.SCIENTIFIC_DIAGRAM_GUIDELINES}
@@ -691,6 +730,7 @@ Generate a publication-quality scientific diagram that meets all the guidelines 
                 results["final_score"] = None
                 results["success"] = True
                 results["review_skipped"] = True
+                results["threshold_met"] = None
                 break
             print(f"[OK] Score: {score}/10 (threshold: {threshold}/10)")
             if best is None or score > best["score"]:
@@ -703,6 +743,7 @@ Generate a publication-quality scientific diagram that meets all the guidelines 
                 results["final_image"] = str(iter_path)
                 results["final_score"] = score
                 results["success"] = True
+                results["threshold_met"] = True
                 results["early_stop"] = True
                 results["early_stop_reason"] = f"Quality score {score} meets threshold {threshold} for {doc_type}"
                 break
@@ -722,12 +763,18 @@ Generate a publication-quality scientific diagram that meets all the guidelines 
             # No image met the threshold (or the last generation failed): every reviewed image
             # was paid for, so the one delivered is the best-scoring, never simply the last.
             last_failed = not results["iterations"][-1].get("success")
-            reason = "The last generation failed" if last_failed else "No image met the threshold"
+            # A score at or above the threshold lands here when the reviewer's verdict still
+            # asked for improvement, so "below" is said only when it is true.
+            met = best["score"] >= threshold
+            reason = ("The last generation failed" if last_failed
+                      else "No image was judged acceptable" if met else "No image met the threshold")
+            relation = "at or above" if met else "below"
             print(f"\n[WARN] {reason}; keeping v{best['iteration']}, the best-scoring "
-                  f"(score {best['score']}/10, below the {threshold}/10 threshold)")
+                  f"(score {best['score']}/10, {relation} the {threshold}/10 threshold)")
             results["final_image"] = best["image_path"]
             results["final_score"] = best["score"]
             results["success"] = True
+            results["threshold_met"] = met
             results["kept_iteration"] = best["iteration"]
             if last_failed:
                 results["fallback_iteration"] = best["iteration"]
@@ -792,8 +839,8 @@ Note: Multiple iterations only occur if quality is BELOW the threshold.
 Environment:
   OPENROUTER_API_KEY    OpenRouter API key (required; the only way to pass the key)
 
-Exit status: 0 image written and reviewed, 1 failure or review unavailable
-(the image may still be written), 2 usage error.
+Exit status: 0 image written, reviewed and at or above the threshold; 1 failure, review
+unavailable, or best score below the threshold (the image may still be written); 2 usage error.
         """
     )
     
@@ -851,6 +898,13 @@ def main(argv: Optional[List[str]] = None) -> int:
         if results.get("review_skipped"):
             print(f"\n[WARN] Image saved to {args.output}, but its quality was NOT verified "
                   f"(the review failed); exiting 1")
+            return 1
+        if results.get("threshold_met") is False:
+            # User decision 2026-09-26: the best image is delivered, but a run that never met
+            # the threshold is a "no" (exit 1), not a success.
+            print(f"\n[WARN] Image saved to {args.output}, but it missed the {args.doc_type} "
+                  f"quality threshold: best score {results['final_score']}/10 is below "
+                  f"{results['quality_threshold']}/10; exiting 1")
             return 1
         print(f"\n[OK] Success! Image saved to: {args.output}")
         if results.get("early_stop"):

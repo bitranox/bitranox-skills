@@ -205,9 +205,10 @@ def test_compare_pytest_argv_omits_path_when_no_dir(tmp_path, monkeypatch):
 def test_profile_template_import_safe_and_verdict():
     # importing the module must NOT run pytest / do work (it is guarded by __main__)
     assert hasattr(pwct, "main") and hasattr(pwct, "recommend")
-    assert pwct.recommend(50.0, 90.0).startswith("RECOMMEND")
-    assert "too low" in pwct.recommend(1.0, 90.0)        # improvement below threshold
-    assert "hit rate" in pwct.recommend(50.0, 5.0).lower()  # hit rate below threshold
+    assert pwct.recommend(50.0, 90.0, separated=True).startswith("RECOMMEND")
+    assert "too low" in pwct.recommend(1.0, 90.0, separated=True)  # improvement below threshold
+    assert "hit rate" in pwct.recommend(50.0, 5.0, separated=True).lower()  # hit rate too low
+    assert "noise" in pwct.recommend(50.0, 90.0, separated=False)  # the runs overlap
 
 
 def test_profile_template_pytest_argv_conditional(tmp_path, monkeypatch):

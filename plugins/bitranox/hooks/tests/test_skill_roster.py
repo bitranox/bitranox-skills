@@ -265,7 +265,7 @@ def test_a_skill_file_reads_through_the_shared_front_matter_reader(tmp_path):
 def test_a_missing_or_undecodable_skill_file_never_raises(tmp_path):
     md = tmp_path / "SKILL.md"
     md.write_bytes(b"---\ndescription: \xff\xfe bad\n---\n")
-    assert SR._file_description(md) == "�� bad"  # noqa: SLF001
+    assert SR._file_description(md) == "\ufffd\ufffd bad"  # noqa: SLF001
     assert SR._file_description(tmp_path / "missing.md") == ""  # noqa: SLF001
 
 

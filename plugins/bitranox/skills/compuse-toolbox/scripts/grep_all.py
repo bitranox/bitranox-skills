@@ -13,6 +13,9 @@ doc reference found 1 of 4. Both times the under-count was acted on as if comple
 This walks the filesystem itself, so nothing is skipped for being ignored. It then asks git which
 of the matches ARE ignored and reports that count on stderr, which is the number a gitignore-aware
 search would have missed. A zero there means the two agree and your earlier grep was safe.
+"Ignored" is judged from where the search started: a match in a nested repo or linked worktree
+that sits in a directory the outer repo ignores counts as hidden when you pointed this at the
+outer repo, and as visible when you pointed it inside the nested one.
 
 Exit codes are format-independent: 0 at least one match, 1 no match, 2 the search could not run
 (bad regex, missing path), was incomplete (a file or directory could not be read AND nothing
@@ -68,11 +71,19 @@ class GitUnavailable(Exception):
     """git could not answer, so the gitignored count is UNKNOWN - never zero."""
 
 
-def gitignored(files):
+def gitignored(files, roots=None):
     r"""The subset git would consider ignored, as a set. Empty when nothing is a repo.
 
-    Raises GitUnavailable when git cannot be run, times out, or check-ignore fails outright:
-    "0 of them are gitignored" is the finding, so a count git never gave must not print as one.
+    Raises GitUnavailable when git cannot be run, times out, or fails outright - including a
+    rev-parse that fails beside a `.git` entry (dubious ownership, a broken gitdir file): "0 of
+    them are gitignored" is the finding, so a count git never gave must not print as one.
+
+    `roots` are the paths the search was pointed at. A match is hidden when it is hidden from
+    the view of the DEEPEST root holding it, which is where a gitignore-aware search of those
+    paths would reach it: its own repo is asked, and so is every enclosing repo whose worktree
+    that root spans - a nested repo or linked worktree sitting in a directory the outer repo
+    ignores is never entered from the outer repo. Without `roots` only the file's own repo is
+    asked.
 
     Each path is handed to check-ignore ABSOLUTE (resolved like git's own toplevel). A path
     relative to the caller's cwd means something else to `git -C <toplevel>`: from a
@@ -89,17 +100,44 @@ def gitignored(files):
         "C:\\Users\\..." with the backslashes doubled - so even a corrected stdin would then
         parse into a path that matches nothing.
     """
-    by_root: dict[str, dict[str, Path]] = {}
+    views = [_view_of(r) for r in roots or ()]
+    toplevel = _ToplevelCache()
+    # repo toplevel -> {path sent to that repo's check-ignore -> the matched files it decides}
+    asks: dict[str, dict[str, set]] = {}
     for f in files:
-        root = _toplevel(f)
-        if root is not None:
-            by_root.setdefault(root, {})[_absolute(f)] = f
+        subject = _absolute(f)
+        view = _deepest_view(Path(subject), views)
+        repo = toplevel(Path(subject).parent)
+        while repo is not None:
+            asks.setdefault(repo, {}).setdefault(subject, set()).add(f)
+            if view is None or not _strictly_below(Path(repo), view):
+                break
+            # The search started above this repo, so the enclosing repo's rules decide whether
+            # the walk ever entered it: ask that repo about this repo's own directory.
+            outer = toplevel(Path(repo).parent)
+            if outer is None or not _strictly_below(Path(repo), Path(outer)):
+                break               # no enclosing repo (or GIT_DIR pins one repo): stop climbing
+            subject, repo = repo, outer
     ignored = set()
-    for root, sent in by_root.items():
-        for echoed in _check_ignore(root, list(sent)):
-            if echoed in sent:
-                ignored.add(sent[echoed])
+    for repo, sent in asks.items():
+        for echoed in _check_ignore(repo, list(sent)):
+            ignored |= sent.get(echoed, set())
     return ignored
+
+
+def _view_of(root: Path) -> Path:
+    """A search root spelled the way `_absolute` spells a match, so the two compare."""
+    return Path(_absolute(root)) if root.is_file() else root.resolve()
+
+
+def _deepest_view(subject: Path, views: list[Path]) -> Path | None:
+    """The deepest search root at or above `subject`, or None when none holds it."""
+    holding = [v for v in views if v == subject or v in subject.parents]
+    return max(holding, key=lambda v: len(v.parts)) if holding else None
+
+
+def _strictly_below(repo: Path, view: Path) -> bool:
+    return view in repo.parents
 
 
 def _absolute(f: Path) -> str:
@@ -109,15 +147,45 @@ def _absolute(f: Path) -> str:
     return str(f.parent.resolve() / f.name)
 
 
-def _toplevel(f: Path) -> str | None:
-    """The repo toplevel holding `f`, or None when it is in no repo (git's ordinary exit 128)."""
+class _ToplevelCache:
+    """`_toplevel` per directory, asked once: a nested repo's parent is asked for every match."""
+
+    def __init__(self) -> None:
+        self._seen: dict[str, str | None] = {}
+
+    def __call__(self, directory: Path) -> str | None:
+        key = str(directory)
+        if key not in self._seen:
+            self._seen[key] = _toplevel(directory)
+        return self._seen[key]
+
+
+def _toplevel(directory: Path) -> str | None:
+    """The repo toplevel holding `directory` (already resolved), or None when it is in no repo.
+
+    rev-parse exits 128 both for "no repo here" and for a repo it refuses to read (dubious
+    ownership, a gitdir file pointing nowhere, a .git without HEAD), and its message is
+    localised. So the filesystem decides which: with no `.git` entry at or above the directory
+    it is no repo; with one, a failure is git failing - and a gitignore-aware search still
+    honours the .gitignore beside that `.git`, so the count is unknown, never zero."""
     try:
-        root = subprocess.run(["git", "-C", str(f.parent.resolve()), "rev-parse",
-                               "--show-toplevel"], capture_output=True, text=True,
-                              encoding="utf-8", errors="replace", timeout=30)
+        root = subprocess.run(["git", "-C", str(directory), "rev-parse", "--show-toplevel"],
+                              capture_output=True, text=True, encoding="utf-8",
+                              errors="replace", timeout=30)
     except (OSError, subprocess.SubprocessError) as exc:
         raise GitUnavailable("git rev-parse: %s" % exc) from exc
-    return root.stdout.strip() if root.returncode == 0 else None
+    if root.returncode == 0:
+        return root.stdout.strip()
+    if not _has_git_entry(directory):
+        return None
+    raise GitUnavailable(f"git rev-parse in {directory} exited {root.returncode}: "
+                         f"{root.stderr.strip()}")
+
+
+def _has_git_entry(directory: Path) -> bool:
+    """A `.git` dir or file at or above `directory`. lexists never raises: an unreadable
+    ancestor answers False, as it would for git."""
+    return any(os.path.lexists(os.path.join(p, ".git")) for p in (directory, *directory.parents))
 
 
 def _check_ignore(root: str, paths: list[str]) -> list[str]:
@@ -157,6 +225,22 @@ def search(files, rx, unreadable=None, binary=None):
             if rx.search(line):
                 hits.append((f, n, line.strip()))
     return hits
+
+
+def path_problem(p: Path) -> str | None:
+    """Why `p` cannot be searched, or None when it can be looked at.
+
+    Not Path.exists(): before Python 3.14 it RAISES PermissionError for a path under an
+    unreadable directory, and the traceback's exit 1 reads as "no match". Since 3.14 it answers
+    False, which would print "does not exist" for a path that is merely unreachable. Both halves
+    of the answer must be exit 2, and each must say which it is."""
+    try:
+        os.stat(p)
+    except (FileNotFoundError, NotADirectoryError):
+        return f"path does not exist: {p}"
+    except (OSError, ValueError) as exc:
+        return f"path cannot be accessed ({type(exc).__name__}): {p}"
+    return None
 
 
 def _tolerate_unencodable(stream) -> None:
@@ -199,9 +283,9 @@ def main(argv=None, out=None, err=None) -> int:
         return fail("bad regex %r: %s" % (args.pattern, exc))
 
     paths = [Path(p) for p in (args.paths or ["."])]
-    missing = [str(p) for p in paths if not p.exists()]
-    if missing:
-        return fail("path does not exist: %s" % ", ".join(missing))
+    problems = [problem for problem in map(path_problem, paths) if problem]
+    if problems:
+        return fail("; ".join(problems))
 
     unread_dirs: list[str] = []
     files = walk(paths, args.glob, unreadable=unread_dirs)
@@ -211,7 +295,7 @@ def main(argv=None, out=None, err=None) -> int:
     scanned = len(files) - len(unread_files) - len(binary)      # only files actually searched
     unread = unread_dirs + unread_files
     try:
-        ignored = gitignored({f for f, _, _ in hits})
+        ignored = gitignored({f for f, _, _ in hits}, roots=paths)
         git_problem = None
     except GitUnavailable as exc:
         ignored, git_problem = set(), str(exc)

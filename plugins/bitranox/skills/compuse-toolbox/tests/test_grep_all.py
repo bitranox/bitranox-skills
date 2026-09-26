@@ -8,6 +8,7 @@ import io
 import json
 import os
 from pathlib import PurePath
+import shutil
 import subprocess
 import sys
 
@@ -255,3 +256,169 @@ def test_a_non_utf8_filename_does_not_crash_the_print(tmp_path):
     done = _run_script(["NEEDLE", str(tmp_path)], PYTHONIOENCODING="utf-8")
     assert b"Traceback" not in done.stderr, done.stderr
     assert done.returncode == 0
+
+
+# ---- review fixes (rank-8, group GREPALL) -------------------------------------------------------
+
+
+def _ignored_repo(tmp_path, name="r"):
+    """A repo whose only match is gitignored, so a correct answer is "1 of them"."""
+    root = tmp_path / name
+    root.mkdir(parents=True)
+    (root / ".gitignore").write_text("secret.md\n", encoding="utf-8")
+    (root / "secret.md").write_text("NEEDLE\n", encoding="utf-8")
+    subprocess.run(["git", "init", "-q"], cwd=root, check=True, timeout=60)
+    return root
+
+
+def _break_dangling_gitdir(root):
+    shutil.rmtree(root / ".git")
+    (root / ".git").write_text("gitdir: %s\n" % (root.parent / "gone" / "wt"), encoding="utf-8")
+
+
+def _break_garbage_gitfile(root):
+    shutil.rmtree(root / ".git")
+    (root / ".git").write_text("garbage\n", encoding="utf-8")
+
+
+def _break_missing_head(root):
+    (root / ".git" / "HEAD").unlink()
+
+
+@pytest.mark.parametrize("breaker", [_break_dangling_gitdir, _break_garbage_gitfile,
+                                     _break_missing_head])
+def test_a_repo_git_cannot_read_makes_the_count_unknown_not_zero(tmp_path, breaker):
+    """rev-parse exits 128 for a broken .git as for no repo at all. A gitignore-aware search
+    still honours the .gitignore beside a .git entry, so "0 of them" would be a false clean."""
+    root = _ignored_repo(tmp_path)
+    breaker(root)
+    code, out, err = _run(["NEEDLE", str(root), "--json"])
+    assert "0 of them" not in err
+    assert code == 2 and "unknown" in err.lower()
+    assert json.loads(out)["data"]["ignored_matches"] is None
+
+
+def test_dubious_ownership_makes_the_count_unknown_not_zero(tmp_path, monkeypatch):
+    root = _ignored_repo(tmp_path)
+    monkeypatch.setenv("GIT_TEST_ASSUME_DIFFERENT_OWNER", "1")
+    probe = subprocess.run(["git", "-C", str(root), "rev-parse", "--show-toplevel"],
+                           capture_output=True, timeout=60)
+    if probe.returncode == 0:
+        pytest.skip("this git does not honour GIT_TEST_ASSUME_DIFFERENT_OWNER")
+    code, out, err = _run(["NEEDLE", str(root), "--json"])
+    assert "0 of them" not in err
+    # git's own reason is localised, so assert on ours: the count is unknown, and rev-parse said so.
+    assert code == 2 and "unknown" in err.lower() and "rev-parse" in err
+    assert json.loads(out)["data"]["ignored_matches"] is None
+
+
+def test_no_repo_anywhere_is_still_a_clean_zero(tmp_path):
+    """Control: with no .git entry at or above the file, rev-parse's 128 IS the answer."""
+    plain = tmp_path / "plain"
+    plain.mkdir()
+    (plain / "secret.md").write_text("NEEDLE\n", encoding="utf-8")
+    code, out, err = _run(["NEEDLE", str(plain), "--json"])
+    assert code == 0, err
+    assert "0 of them are gitignored" in err
+    assert json.loads(out)["data"]["ignored_matches"] == 0
+
+
+def _git_ok(*args):
+    subprocess.run(["git", "-c", "user.email=t@example.com", "-c", "user.name=Test", *args],
+                   check=True, timeout=60, capture_output=True)
+
+
+def _outer_with_nested_repos(tmp_path):
+    """Our own layout: an outer repo ignoring .claude/worktrees/, with a LINKED worktree and a
+    plain nested repo inside it, one nested repo the outer does NOT ignore, and one it ignores by
+    a directory-only rule naming the nested repo itself."""
+    outer = tmp_path / "outer"
+    outer.mkdir()
+    _git_ok("init", "-q", str(outer))
+    (outer / ".gitignore").write_text(".claude/worktrees/\n/dironly/\n", encoding="utf-8")
+    (outer / "t.md").write_text("x\n", encoding="utf-8")
+    _git_ok("-C", str(outer), "add", "-A")
+    _git_ok("-C", str(outer), "commit", "-q", "-m", "init")
+    _git_ok("-C", str(outer), "worktree", "add", "-q", str(outer / ".claude" / "worktrees" / "wt"))
+    for nested in (".claude/worktrees/plain", "vis", "dironly"):
+        (outer / nested).mkdir(parents=True)
+        _git_ok("init", "-q", str(outer / nested))
+    for nested in (".claude/worktrees/wt", ".claude/worktrees/plain", "vis", "dironly"):
+        (outer / nested / "hit.md").write_text("NEEDLE\n", encoding="utf-8")
+    return outer
+
+
+def _ignored_flags(out):
+    return {PurePath(m["path"]).parent.name: m["gitignored"]
+            for m in json.loads(out)["data"]["matches"]}
+
+
+def test_a_nested_repo_under_an_outer_ignored_dir_counts_as_ignored(tmp_path):
+    """Searching the OUTER repo, a gitignore-aware search never descends into an ignored dir, so
+    a match in a worktree or nested repo there is hidden - even though its own repo tracks it."""
+    outer = _outer_with_nested_repos(tmp_path)
+    code, out, err = _run(["NEEDLE", str(outer), "--json"])
+    assert code == 0, err
+    assert _ignored_flags(out) == {"wt": True, "plain": True, "vis": False, "dironly": True}
+    assert "3 of them are gitignored" in err
+
+
+def test_searching_from_inside_the_nested_repo_uses_its_own_view(tmp_path):
+    """Control: a search STARTED inside the worktree does not see the outer rule."""
+    outer = _outer_with_nested_repos(tmp_path)
+    code, out, err = _run(["NEEDLE", str(outer / ".claude" / "worktrees" / "wt"), "--json"])
+    assert code == 0, err
+    assert _ignored_flags(out) == {"wt": False}
+    assert "0 of them are gitignored" in err
+
+
+def test_a_match_reachable_from_a_deeper_search_path_is_not_hidden(tmp_path):
+    """Given the outer repo AND the worktree, the worktree search finds its file unfiltered, so
+    only matches that no given path reaches unfiltered count as missed."""
+    outer = _outer_with_nested_repos(tmp_path)
+    wt = outer / ".claude" / "worktrees" / "wt"
+    code, out, err = _run(["NEEDLE", str(outer), str(wt), "--json"])
+    assert code == 0, err
+    assert _ignored_flags(out) == {"wt": False, "plain": True, "vis": False, "dironly": True}
+
+
+def test_a_git_dir_pinned_by_the_environment_does_not_loop_the_climb(tmp_path):
+    """With GIT_DIR/GIT_WORK_TREE set, rev-parse names the SAME repo from any directory, so the
+    climb to an enclosing repo must stop rather than ask it forever. Bounded by a subprocess
+    timeout, so a regression fails with a name instead of hanging the suite."""
+    root = _ignored_repo(tmp_path / "parent")
+    env = {"GIT_DIR": str(root / ".git"), "GIT_WORK_TREE": str(root)}
+    try:
+        done = _run_script(["NEEDLE", str(tmp_path / "parent")], **env)
+    except subprocess.TimeoutExpired:
+        pytest.fail("the climb to an enclosing repo never stopped")
+    assert done.returncode == 0, done.stderr
+    assert b"1 of them are gitignored" in done.stderr
+
+
+@pytest.mark.skipif(sys.platform == "win32",
+                    reason="Windows has no POSIX mode bits: chmod(0o000) leaves the path readable")
+@pytest.mark.parametrize("extra", [[], ["--json"]])
+def test_a_path_under_an_unreadable_dir_is_a_clean_refusal(tmp_path, extra):
+    """Before Python 3.14 Path.exists() RAISES PermissionError here: a traceback and exit 1,
+    which reads as "no match". It must be exit 2 naming why, and never "does not exist"."""
+    locked = tmp_path / "locked"
+    (locked / "sub").mkdir(parents=True)
+    (locked / "sub" / "a.md").write_text("NEEDLE\n", encoding="utf-8")
+    locked.chmod(0o000)
+    try:
+        if os.access(locked, os.R_OK):
+            pytest.skip("running with privileges that read a mode-000 path (root)")
+        code, out, err = _run(["NEEDLE", str(locked / "sub"), *extra])
+    finally:
+        locked.chmod(0o755)
+    assert code == 2
+    assert "PermissionError" in err and "does not exist" not in err
+    if extra:
+        assert json.loads(out)["ok"] is False
+
+
+def test_a_missing_path_still_says_it_does_not_exist(tmp_path):
+    """Control for the refusal above: a genuinely missing path keeps its own message."""
+    code, _, err = _run(["NEEDLE", str(tmp_path / "nope")])
+    assert code == 2 and "does not exist" in err and "nope" in err

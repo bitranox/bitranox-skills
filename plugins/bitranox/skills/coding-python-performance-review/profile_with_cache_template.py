@@ -7,16 +7,20 @@ Usage:
   3. Run it FROM THE PROJECT ROOT: python profile_cache_FUNCTION_NAME.py
 
 What it does: one untimed warm-up run of the test suite (imports, collection, first-run
-caches), then a timed run WITHOUT the cache, then a timed run WITH the function wrapped in
-lru_cache - so the comparison is warm against warm. The copy may live anywhere (SKILL.md
-puts it in the scratch dir): the current directory goes on sys.path first, the way
-``python -m pytest`` would put it there.
+caches), then REPEATS timed runs WITHOUT the cache and REPEATS WITH the function wrapped in
+a fresh lru_cache, interleaved (U C, C U, U C, ...) so anything that drifts during the
+experiment lands on both arms. It compares the medians, and it recommends the cache only
+when the two arms do not overlap at all - every cached run faster than every uncached one.
+One run per arm is not a measurement: on a small suite two identical runs differ by 30%.
+The copy may live anywhere (SKILL.md puts it in the scratch dir): the current directory goes
+on sys.path first, the way ``python -m pytest`` would put it there.
 
 Exit codes: 0 a verdict (RECOMMEND or REJECT) was printed, 2 ABORT - a suite run failed
 (with or without the cache), so there is no valid measurement to judge.
 """
 
 import os
+import statistics
 import sys
 import time
 from functools import lru_cache
@@ -76,6 +80,11 @@ def _run_suite(label, clock=time.perf_counter):
 MIN_HIT_RATE_PERCENT = 20  # Minimum cache hit rate percentage to recommend caching
 MIN_IMPROVEMENT_PERCENT = 5  # Minimum performance improvement percentage to recommend caching
 CACHE_SIZE = 128  # Default LRU cache size
+# Timed runs per arm. Under pure noise every cached run beats every uncached one with
+# probability 1 / C(2*REPEATS, REPEATS): 1/252 at 5. Raise it for a very noisy suite; each
+# repeat costs two suite runs.
+REPEATS = 5
+MIN_REPEATS = 3
 
 # TODO: Update these
 MODULE_NAME = "module.submodule"
@@ -128,29 +137,69 @@ def profile_without_cache(clock=time.perf_counter):
     """Profile test suite without caching."""
     return _run_suite("without the cache", clock)
 
-def recommend(improvement, hit_rate):
-    """Return the RECOMMEND/REJECT verdict string for a cache experiment."""
+def assess(uncached, cached):
+    """Compare the repeated timings of both arms; return (improvement %, separated).
+
+    *improvement* compares the medians. *separated* is True only when the slowest cached run
+    is still faster than the fastest uncached one: a median gap smaller than the spread of
+    the runs is noise, whatever its size."""
+    median_uncached = statistics.median(uncached)
+    median_cached = statistics.median(cached)
+    improvement = ((median_uncached - median_cached) / median_uncached * 100
+                   if median_uncached > 0 else 0)
+    return improvement, max(cached) < min(uncached)
+
+
+def recommend(improvement, hit_rate, *, separated):
+    """Return the RECOMMEND/REJECT verdict string for a cache experiment.
+
+    *separated* is required: a verdict that forgot to ask whether the difference exceeds the
+    run-to-run spread would recommend on noise again."""
     if hit_rate < MIN_HIT_RATE_PERCENT:
         return f"REJECT: Cache hit rate ({hit_rate:.1f}%) too low (minimum {MIN_HIT_RATE_PERCENT}%)"
     if improvement < MIN_IMPROVEMENT_PERCENT:
         return f"REJECT: Performance improvement ({improvement:.1f}%) too low (minimum {MIN_IMPROVEMENT_PERCENT}%)"
+    if not separated:
+        return (f"REJECT: Performance improvement ({improvement:.1f}%) is within run-to-run noise: "
+                f"the cached and uncached runs overlap (raise REPEATS to measure more precisely)")
     return (f"RECOMMEND: Apply @lru_cache(maxsize={CACHE_SIZE})\n"
             f"  Expected speedup: {improvement:.1f}%\n"
             f"  Cache hit rate: {hit_rate:.1f}%")
 
 
+def _timed_uncached(clock):
+    elapsed = profile_without_cache(clock)
+    print(f"  without cache: {elapsed:.3f}s")
+    return elapsed
+
+
+def _timed_cached(clock):
+    elapsed, cache_info, hit_rate = profile_with_cache(clock)
+    print(f"  with cache:    {elapsed:.3f}s")
+    return elapsed, cache_info, hit_rate
+
+
 def _measure(clock):
+    """Warm up, then REPEATS rounds of both arms, alternating which arm goes first."""
     print("\nWarm-up run (imports, collection; not timed)...")
     _run_suite("in the warm-up run", clock)
 
-    print("\nRunning WITHOUT cache...")
-    time_uncached = profile_without_cache(clock)
-    print(f"Time: {time_uncached:.2f}s")
+    uncached, cached = [], []
+    cache_info = hit_rate = None
+    for round_no in range(REPEATS):
+        print(f"\nRound {round_no + 1}/{REPEATS}")
+        if round_no % 2 == 0:
+            uncached.append(_timed_uncached(clock))
+        # every cached run starts from an empty cache, as a fresh process would
+        elapsed, cache_info, hit_rate = _timed_cached(clock)
+        cached.append(elapsed)
+        if round_no % 2 == 1:
+            uncached.append(_timed_uncached(clock))
+    return uncached, cached, cache_info, hit_rate
 
-    print("\nRunning WITH cache...")
-    time_cached, cache_info, hit_rate = profile_with_cache(clock)
-    print(f"Time: {time_cached:.2f}s")
-    return time_uncached, time_cached, cache_info, hit_rate
+
+def _spread(times):
+    return f"median {statistics.median(times):.3f}s, range {min(times):.3f}-{max(times):.3f}s"
 
 
 def main(clock=time.perf_counter):
@@ -160,23 +209,29 @@ def main(clock=time.perf_counter):
     the timer seam, so the arithmetic can be tested with exact timings."""
     print(f"Profiling {MODULE_NAME}.{FUNCTION_NAME}")
     print("=" * 80)
+    if REPEATS < MIN_REPEATS:
+        print(f"ABORT: REPEATS is {REPEATS}; at least {MIN_REPEATS} runs per arm are needed to "
+              "tell a difference from noise.")
+        return 2
     _ensure_cwd_importable()
 
     try:
-        time_uncached, time_cached, cache_info, hit_rate = _measure(clock)
+        uncached, cached, cache_info, hit_rate = _measure(clock)
     except SuiteFailed as exc:
         print("\n" + "=" * 80)
         print(f"ABORT: {exc}. No verdict: fix the suite (or the cache) and re-run.")
         return 2
 
-    improvement = ((time_uncached - time_cached) / time_uncached * 100) if time_uncached > 0 else 0
+    improvement, separated = assess(uncached, cached)
 
     print("\n" + "=" * 80)
-    print("RESULTS")
+    print(f"RESULTS ({REPEATS} interleaved runs per arm)")
     print("=" * 80)
-    print(f"Uncached: {time_uncached:.2f}s")
-    print(f"Cached: {time_cached:.2f}s")
-    print(f"Improvement: {improvement:.1f}%")
+    print(f"Uncached: {_spread(uncached)}")
+    print(f"Cached: {_spread(cached)}")
+    print(f"Improvement: {improvement:.1f}% (of the medians)")
+    print(f"Arms separated: {'yes' if separated else 'no - the runs overlap'}")
+    print("Cache statistics (one cached run; each starts with an empty cache):")
     print(f"Cache hits: {cache_info.hits}")
     print(f"Cache misses: {cache_info.misses}")
     print(f"Cache hit rate: {hit_rate:.1f}%")
@@ -185,7 +240,7 @@ def main(clock=time.perf_counter):
     print("\n" + "=" * 80)
     print("RECOMMENDATION")
     print("=" * 80)
-    print(recommend(improvement, hit_rate))
+    print(recommend(improvement, hit_rate, separated=separated))
     return 0
 
 

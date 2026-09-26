@@ -224,6 +224,64 @@ def _write_lines(path, lines):
         fh.write("\n".join(lines))
 
 
+# A walk cache is: a stamp line, "skipped:<n>", n (path, reason) line pairs, then the result paths.
+# A walk that could not list some dirs is cached like a complete one - otherwise one permanently
+# unlistable dir (lost+found) re-walks the whole tree on every prompt - and the skipped pairs are
+# REPLAYED as walk errors on every read, so the skip is reported each time, never cached away.
+# Such a partial cache is retried on the normal schedule (TTL, or a stores-generation bump), which
+# is also when a dir that became listable is picked up.
+_SKIPPED = "skipped:"
+
+
+def _walk_cache_lines(stamp, errors, paths):
+    """The cache file lines for one walk, or None when a value holds a "\\n" (the record
+    separator): such a record cannot be read back as written, so it is not cached at all."""
+    lines = [stamp, "%s%d" % (_SKIPPED, len(errors))]
+    for path, reason in errors:
+        lines += [str(path), str(reason)]
+    lines += paths
+    return None if any("\n" in ln for ln in lines) else lines
+
+
+def _parse_walk_cache(lines, stamp):
+    """([(path, reason)] skipped by the cached walk, [paths]) or None when `lines` is not a
+    cache of this `stamp` in this format (an older format is rebuilt, never guessed at)."""
+    if len(lines) < 2 or lines[0] != stamp or not lines[1].startswith(_SKIPPED):
+        return None
+    try:
+        n = int(lines[1][len(_SKIPPED):])
+    except ValueError:
+        return None
+    if n < 0 or len(lines) < 2 + 2 * n:
+        return None
+    pairs = lines[2:2 + 2 * n]
+    return list(zip(pairs[0::2], pairs[1::2])), [ln for ln in lines[2 + 2 * n:] if ln]
+
+
+def _cached_walk(cache, stamp, cache_ttl, walk):
+    """The paths `walk()` returns, served from `cache` while it is younger than `cache_ttl` and
+    carries `stamp`. Every dir the walk could not list is in _WALK_ERRORS after this call,
+    whether the walk ran now or its record was read back. Any cache IO error means a live walk."""
+    try:
+        if cache.is_file() and (time.time() - cache.stat().st_mtime) < cache_ttl:
+            cached = _parse_walk_cache(_read_lines(cache), stamp)
+            if cached is not None:
+                _WALK_ERRORS.extend(cached[0])
+                return cached[1]
+    except (OSError, ValueError):
+        pass
+    before = len(_WALK_ERRORS)
+    paths = walk()
+    lines = _walk_cache_lines(stamp, _WALK_ERRORS[before:], paths)
+    if lines is not None:
+        try:
+            cache.parent.mkdir(parents=True, exist_ok=True)
+            _write_lines(cache, lines)
+        except (OSError, ValueError):                 # ValueError: an unencodable path
+            pass
+    return paths
+
+
 def _find_claude_md(root):
     """Every CLAUDE.md under `root`, pruning vendored/build/hidden dirs. os.walk so we can prune."""
     out = []
@@ -259,21 +317,7 @@ def discover_claude_md(self_cwd, cache_ttl=3600):
         pass
     h = hashlib.sha1(str(root).encode("utf-8", "surrogatepass")).hexdigest()[:12]
     cache = Path.home() / ".claude" / "self-improve-audit" / ("claude-md-paths.%s.txt" % h)
-    paths = None
-    try:
-        if cache.is_file() and (time.time() - cache.stat().st_mtime) < cache_ttl:
-            paths = [ln for ln in _read_lines(cache) if ln]
-    except (OSError, ValueError):
-        paths = None
-    if paths is None:
-        before = len(_WALK_ERRORS)
-        paths = _find_claude_md(root)
-        if len(_WALK_ERRORS) == before:           # an incomplete walk is re-done, not cached
-            try:
-                cache.parent.mkdir(parents=True, exist_ok=True)
-                _write_lines(cache, paths)
-            except (OSError, ValueError):             # ValueError: an unencodable path
-                pass
+    paths = _cached_walk(cache, "claude-md:v2", cache_ttl, lambda: _find_claude_md(root))
     return [p for p in paths if p not in chain]
 
 
@@ -310,23 +354,8 @@ def _curated_store_dirs(root, cache_ttl=3600):
     walk entirely. Cache sits with the other recall caches; any IO error falls back to a live walk."""
     key = hashlib.sha1(("dirs:" + str(root)).encode("utf-8", "surrogatepass")).hexdigest()[:12]
     cache = sig._audit_dir() / ("curated-dirs.%s.txt" % key)
-    stamp = "gen:%d" % sig.stores_generation()
-    try:
-        if cache.is_file() and (time.time() - cache.stat().st_mtime) < cache_ttl:
-            lines = _read_lines(cache)
-            if lines and lines[0] == stamp:
-                return [ln for ln in lines[1:] if ln]
-    except (OSError, ValueError):
-        pass
-    before = len(_WALK_ERRORS)
-    dirs = _walk_store_dirs(root)
-    if len(_WALK_ERRORS) == before:               # an incomplete walk is re-done, not cached
-        try:
-            cache.parent.mkdir(parents=True, exist_ok=True)
-            _write_lines(cache, [stamp] + dirs)
-        except (OSError, ValueError):                 # ValueError: an unencodable path
-            pass
-    return dirs
+    stamp = "v2 gen:%d" % sig.stores_generation()
+    return _cached_walk(cache, stamp, cache_ttl, lambda: _walk_store_dirs(root))
 
 
 def _find_curated_stores(root, cache_ttl=3600):

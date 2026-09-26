@@ -445,7 +445,7 @@ def test_a_cp1252_console_survives_a_slug_it_cannot_encode(env):
     _tmp, home = env
     child = {k: v for k, v in os.environ.items() if k not in ("PYTHONUTF8", "PYTHONIOENCODING")}
     child.update(HOME=str(home), USERPROFILE=str(home), PYTHONIOENCODING="cp1252")
-    r = subprocess.run([sys.executable, M.__file__, "--dry-run", "--slug=-data-日本"],
+    r = subprocess.run([sys.executable, M.__file__, "--dry-run", "--slug=-data-\u65e5\u672c"],
                        env=child, capture_output=True, encoding="utf-8", errors="replace")
     assert r.returncode == 2, r.stderr
     assert "UnicodeEncodeError" not in r.stderr

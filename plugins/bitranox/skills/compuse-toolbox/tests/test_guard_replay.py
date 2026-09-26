@@ -737,9 +737,9 @@ def test_a_bom_does_not_cost_the_first_record(tmp_path):
 
 def test_a_line_separator_inside_a_command_does_not_split_the_record():
     """JSONL records are split on newline only; U+2028 and form feed are legal raw in a string."""
-    text = json.dumps(_use("t1", "echo a b\fc"), ensure_ascii=False) + "\n"
+    text = json.dumps(_use("t1", "echo a\u2028b\fc"), ensure_ascii=False) + "\n"
     calls = G.extract_calls(text)
-    assert [c["command"] for c in calls] == ["echo a b\fc"]
+    assert [c["command"] for c in calls] == ["echo a\u2028b\fc"]
 
 
 @pytest.mark.skipif(sys.platform == "win32" or getattr(os, "geteuid", lambda: 1)() == 0,

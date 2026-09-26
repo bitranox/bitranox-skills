@@ -25,13 +25,13 @@ class TestDecode:
     def test_utf8_bom_is_stripped(self):
         out = winlog.decode_windows_text("hello\n".encode("utf-8-sig"))
         assert out == "hello\n"
-        assert not out.startswith("﻿")
+        assert not out.startswith("\ufeff")
 
     def test_utf16le_with_bom(self):
         assert winlog.decode_windows_text("DONE-OK\n".encode("utf-16")) == "DONE-OK\n"
 
     def test_utf16be_with_bom(self):
-        assert winlog.decode_windows_text("﻿DONE-OK\n".encode("utf-16-be")) == "DONE-OK\n"
+        assert winlog.decode_windows_text("\ufeffDONE-OK\n".encode("utf-16-be")) == "DONE-OK\n"
 
     def test_utf16le_without_bom(self):
         """Tee-Object/Out-File append UTF-16 with no BOM - nothing announces the encoding."""
@@ -277,7 +277,7 @@ class TestTrailingNulPadding:
     @pytest.mark.parametrize("encoding", ["utf-16-le", "utf-16-be"])
     def test_a_padded_bom_file(self, encoding, pad):
         text = "DONE-OK 一\n一"
-        raw = "﻿".encode(encoding) + text.encode(encoding) + b"\x00" * pad
+        raw = "\ufeff".encode(encoding) + text.encode(encoding) + b"\x00" * pad
         assert winlog.decode_windows_text(raw) == text
 
     def test_padding_is_named_and_does_not_make_a_narrow_file_mixed(self):
