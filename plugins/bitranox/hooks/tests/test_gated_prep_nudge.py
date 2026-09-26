@@ -6,6 +6,7 @@ at the wrong cause. Recorded six times; this hook is the escalation from prose t
 """
 import json
 import pathlib
+import time
 
 import gated_prep_nudge as N
 
@@ -348,3 +349,86 @@ def test_written_files_does_not_read_a_filename_out_of_a_heredoc_body():
 def test_written_files_still_sees_a_real_redirect():
     """The direction where it must NOT apply."""
     assert "m.txt" in N.written_files("echo hi > m.txt && git commit -F m.txt")
+
+
+# ---- rank 10 re-adjudication, 2026-09-27 ---------------------------------------------------------
+
+def test_a_write_AFTER_the_gated_verb_is_not_prep():
+    # The write arm only checked that SOME gated verb existed, so a status file written after the
+    # push got a nudge claiming the command "WRITES it and then runs a gated verb" - false.
+    assert N.notice("git push origin master && echo pushed > /tmp/status.txt") is None
+    assert N.notice("git commit -m x; cat > /tmp/after.md <<'EOF'\nx\nEOF") is None
+
+
+def test_a_write_BEFORE_the_gated_verb_still_fires():
+    # Control for the ordering rule.
+    ctx = N.notice("echo pushed > /tmp/status.txt && git push origin master")
+    assert ctx is not None and "/tmp/status.txt" in ctx
+
+
+def test_an_interpreter_write_AFTER_the_gated_verb_is_not_prep():
+    assert N.notice('git commit -m x && python3 -c \'open("log.txt","w").write("x")\'') is None
+    assert N.notice("git push\npython3 - <<'PY'\nopen('m.txt', 'w').write('x')\nPY") is None
+
+
+def test_an_interpreter_write_BEFORE_the_gated_verb_still_fires():
+    assert N.notice('python3 -c \'open("m.txt","w").write("x")\' && git commit -F m.txt') is not None
+
+
+def test_a_heredoc_opener_with_the_redirect_AFTER_the_delimiter_is_prep():
+    # `cat <<'EOF' > f` writes f exactly like `cat > f <<'EOF'`; only the second was recognised.
+    ctx = N.notice("cat <<'EOF' > /tmp/msg.txt\nsubject\nEOF\ngit commit -F /tmp/msg.txt")
+    assert ctx is not None and "/tmp/msg.txt" in ctx
+    assert N.written_files("cat <<EOF >> notes/m.txt\nx\nEOF") == ["notes/m.txt"]
+
+
+def test_the_classic_heredoc_redirect_order_still_fires():
+    ctx = N.notice("cat > /tmp/msg.txt <<'EOF'\nsubject\nEOF\ngit commit -F /tmp/msg.txt")
+    assert ctx is not None and "/tmp/msg.txt" in ctx
+
+
+def test_a_quoted_redirect_inside_a_commit_message_is_not_a_write():
+    # The write regexes read quoted DATA, so a message MENTIONING a redirect fired and named a bogus
+    # file (`y.txt"`, quote included).
+    assert N.notice('git commit -m "note: echo x > y.txt"') is None
+    assert N.notice("echo 'a > b.txt' && git commit -m x") is None
+    assert N.notice('git commit -m "note: nothing written"') is None          # control
+
+
+def test_a_quoted_target_is_named_from_the_raw_command():
+    # The structure is read on the masked text; the NAME is sliced from the raw one, quotes and all.
+    ctx = N.notice('printf "msg" > "$MSG" && git commit -F "$MSG"')
+    assert ctx is not None and '"$MSG"' in ctx
+
+
+def test_a_tree_writing_verb_behind_git_dash_C_is_prep():
+    # The verb scan was fixed for `git -C <repo> commit`; the tree arm was still a regex that
+    # needed `git` next to the verb, so `git -C <repo> checkout` was invisible.
+    ctx = N.notice("git -C /repo checkout -- f && git -C /repo commit -m x")
+    assert ctx is not None and "`git checkout`" in ctx
+    assert N.notice("sudo git -c core.x=1 fetch && git push") is not None
+    assert N.notice("git -C /repo status && git -C /repo commit -m x") is None   # control
+
+
+def test_a_tree_writing_verb_behind_git_dash_C_AFTER_the_gate_is_quiet():
+    assert N.notice("git -C /repo commit -m x && git -C /repo checkout -- f") is None
+
+
+def test_a_quoted_git_checkout_is_not_a_tree_write():
+    assert N.notice('echo "git checkout -- f" && git commit -m x') is None
+
+
+def test_a_long_single_line_command_is_scanned_in_linear_time():
+    # `_REDIRECT_TO_FILE` rescanned lazily from every `echo`, so 16,000 echo tokens took about 6 s
+    # through the hook, against 0.13 s for the same length with another word. Measured at the seam
+    # the harness drives, main(), with a same-length control whose words cannot start a write.
+    def timed(word):
+        event = {"tool_name": "Bash",
+                 "tool_input": {"command": (word + " a ") * 16000 + "\ngit commit -m x"}}
+        began = time.perf_counter()
+        assert N.main(json.dumps(event)) == 0
+        return time.perf_counter() - began
+
+    control = timed("xyzw")
+    subject = timed("echo")
+    assert subject < 10 * control + 1.0, (subject, control)

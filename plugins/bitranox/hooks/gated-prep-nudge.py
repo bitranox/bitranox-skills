@@ -70,8 +70,11 @@ in both, so they cannot disagree - but they move TOGETHER: a third escalation pr
 both, and `tests/test_gated_prep_nudge.py` asserts each still points at the other so a rename fails
 the suite instead of rotting quietly.
 
-The gated-verb scan runs over the command with HEREDOC BODIES STRIPPED, because a body is data: a
-guard that reads it fires on prose documenting the very footgun it guards.
+The gated-verb scan runs over the command with HEREDOC BODIES BLANKED, because a body is data: a
+guard that reads it fires on prose documenting the very footgun it guards. The redirect scan also
+masks quoted text, so a commit message that MENTIONS a redirect is not a write. Both blank in place
+rather than delete, so a write's offset and the verb's offset stay comparable: only a write BEFORE
+the gated verb is prep for it.
 """
 from __future__ import annotations
 
@@ -79,8 +82,20 @@ import json
 import re
 import sys
 
-# Shared with the other command-scanning guards - a heredoc body is DATA, not a command.
-from shell_text import is_git_verb, is_shell_tool, iter_segments, strip_heredoc_bodies
+# Shared with the other command-scanning guards - a heredoc body is DATA, not a command. The
+# ALIGNED helpers blank that data in place instead of deleting it, so every offset found on the
+# scanned text is an offset into the raw command: that is what lets the write arm compare a
+# write's position with the gated verb's, and slice a file name out of the raw text.
+from shell_text import (
+    HEREDOC_OPEN,
+    argv_for_match,
+    blank_heredoc_bodies,
+    commands_only_aligned,
+    git_verb_operands,
+    is_git_verb,
+    is_shell_tool,
+    iter_segments,
+)
 
 # Verbs a PreToolUse gate in this plugin can block. Deliberately short: a false nudge on a safe
 # command teaches the reader to ignore the channel, which costs more than the miss it prevents.
@@ -106,9 +121,15 @@ def _gated_start(text, tool_name=None):
             return start + (len(seg) - len(body))
     return None
 
-# A write that CREATES the file a later statement reads. Both shapes seen in practice.
-_HEREDOC_TO_FILE = re.compile(r"""(?:^|[;&|]|\bcat\b)[^\n<>]*?>\s*(?P<f>[^\s;&|<>]+)\s*<<-?\s*['"]?\w+""")
-_REDIRECT_TO_FILE = re.compile(r"""\b(?:printf|echo|tee)\b[^\n;&|]*?>\s*(?P<f>[^\s;&|<>]+)""")
+# A write that CREATES the file a later statement reads. Two shapes seen in practice: a heredoc
+# statement with a redirect on its opener line (`cat > f <<EOF` and `cat <<EOF > f` alike), and a
+# printf/echo/tee statement with a redirect after the program name.
+#
+# Read per STATEMENT with a plain find for `>`, never with one regex over the whole command: the
+# regex this replaced (`\b(?:printf|echo|tee)\b[^\n;&|]*?>`) restarted a lazy scan to the end of
+# the line from every `echo`, which is quadratic - 16,000 echo tokens on one line took 6 s.
+_WRITER_PROGRAM = re.compile(r"\b(?:printf|echo|tee)\b")
+_REDIRECT_TARGET = re.compile(r"\s*(?P<f>[^\s;&|<>]+)")
 
 # An INTERPRETER that writes with an API rather than a redirect - `python3 - <<PY ... PY` or
 # `python3 -c '...'` calling open(f, "w") or Path(f).write_text(). There is no `>` to match, so the
@@ -119,15 +140,24 @@ _WRITE_API = re.compile(
     r"""open\s*\([^)]*['"][wa]|\.write_text\s*\(|\bwriteFileSync\b|\bwrite_bytes\s*\(""")
 
 
-def writes_via_interpreter(command: str) -> bool:
-    """True when an interpreter in this command writes a file through an API, not a redirect.
+def _interpreter_write_at(command: str):
+    """Offset of the first interpreter API write in `command`, or None when there is none.
 
     Scanned over the RAW command, bodies included - asymmetric to the gated-verb scan on purpose.
     The write LIVES in the heredoc body, so stripping bodies here would blind the check; the verb
-    scan strips them because prose must not be able to fake a verb.
+    scan strips them because prose must not be able to fake a verb. The offset is the later of the
+    interpreter's name and the write call, so a caller can ask whether BOTH precede a gated verb.
     """
     text = command or ""
-    return bool(_INTERPRETER.search(text) and _WRITE_API.search(text))
+    interpreter, write = _INTERPRETER.search(text), _WRITE_API.search(text)
+    if not interpreter or not write:
+        return None
+    return max(interpreter.start(), write.start())
+
+
+def writes_via_interpreter(command: str) -> bool:
+    """True when an interpreter in this command writes a file through an API, not a redirect."""
+    return _interpreter_write_at(command) is not None
 
 
 # Git subcommands that change what a gate SEES. There are two families, because repo-gate reads
@@ -151,9 +181,7 @@ _TREE_VERBS = ("checkout", "restore", "switch", "reset", "stash", "clean", "rm",
 _REF_VERBS = ("fetch",)   # moves origin/master without touching the working tree
 _BOTH_VERBS = ("pull",)   # merges into the working tree AND moves the ref
 # Longest-first, so a short alternative can never shadow a longer one sharing its prefix.
-_PREP_VERBS = tuple(sorted(_TREE_VERBS + _REF_VERBS + _BOTH_VERBS, key=len, reverse=True))
-_TREE_WRITING_GIT = re.compile(
-    r"(?:^|[;&|]|\b(?:&&|\|\|)\s*)\s*git\s+(?P<verb>" + "|".join(_PREP_VERBS) + r")\b", re.M)
+_PREP_VERBS = frozenset(_TREE_VERBS + _REF_VERBS + _BOTH_VERBS)
 
 
 def _mechanism(verb: str) -> str:
@@ -165,26 +193,72 @@ def _mechanism(verb: str) -> str:
     return "changes the working tree"
 
 
+def _prep_verb(segment, tool_name):
+    """The tree- or ref-changing git verb `segment` runs, or None.
+
+    Found by the shared token walk, so `git -C <repo> checkout` and `sudo git fetch` count exactly
+    as the gated verbs do: the regex this replaced needed `git` next to the verb and went silent on
+    the very `-C` form the verb scan had already been fixed for.
+    """
+    body = segment.lstrip("( \t").lstrip()
+    tokens = argv_for_match(body, tool_name or "Bash")
+    operands = git_verb_operands(tokens, _PREP_VERBS, tool_name or "Bash")
+    if operands is None:
+        return None
+    return tokens[len(tokens) - len(operands) - 1]
+
+
 def tree_prep_before_gate(command: str, tool_name=None):
     """The tree-writing git verb that PRECEDES a gated verb in this command, or None.
 
-    Scanned with heredoc bodies stripped, like the gated-verb scan: a git command is a command, so
+    Scanned with heredoc bodies blanked, like the gated-verb scan: a git command is a command, so
     prose documenting this footgun must not be able to trip it.
 
     Order is load-bearing. A cleanup AFTER a commit is not prep for it, and nudging on that would be
     a false positive on an ordinary sequence.
     """
-    text = strip_heredoc_bodies(command or "")
+    text = blank_heredoc_bodies(command or "")
     gate_at = _gated_start(text, tool_name)
     if gate_at is None:
         return None
-    for m in _TREE_WRITING_GIT.finditer(text):
-        if m.start() < gate_at:
-            return m.group("verb")
+    for start, segment in iter_segments(text, tool_name):
+        if start >= gate_at:
+            return None
+        verb = _prep_verb(segment, tool_name)
+        if verb:
+            return verb
     return None
 
 
-def written_files(command: str):
+def _writes(command: str, tool_name=None):
+    """(offset of the `>`, file name) for each redirect that creates a file, in order.
+
+    Structure is read on `commands_only_aligned`: heredoc bodies, quoted text, substitutions and
+    comments are masked, so a commit message MENTIONING `echo x > y.txt` is not a write. The name is
+    sliced from the raw command at the same offsets, because on the masked text a quoted target
+    would read as filler.
+    """
+    raw = command or ""
+    masked = commands_only_aligned(raw, tool_name or "Bash")
+    found = []
+    for start, segment in iter_segments(masked, tool_name):
+        if HEREDOC_OPEN.search(segment):
+            scan_from = 0                              # the opener line: `> f` on either side
+        else:
+            program = _WRITER_PROGRAM.search(segment)
+            if not program:
+                continue
+            scan_from = program.end()
+        at = segment.find(">", scan_from)
+        while at != -1:
+            target = _REDIRECT_TARGET.match(segment, at + 1)
+            if target:
+                found.append((start + at, raw[start + target.start("f"):start + target.end("f")]))
+            at = segment.find(">", at + 1)
+    return [(at, name) for at, name in found if not name.strip("'\"").startswith("/dev/")]
+
+
+def written_files(command: str, tool_name=None):
     """Files this command CREATES, in order. Heredoc openers count; the bodies are not scanned.
 
     A `/dev/` target is not a file this command creates: `>/dev/null` discards output rather than
@@ -192,28 +266,33 @@ def written_files(command: str):
     nothing to warn about. Counting it fired on the very common `cmd >/dev/null && git push`
     shape - 7 of 604 real firings in the transcript corpus, every one of them a false nudge.
     """
-    # The opener LINE is kept by strip_heredoc_bodies, so `cat <<EOF > f` is still seen; only
-    # the body goes. Without this the scan invented paths out of prose inside a body - the
-    # docstring above already promised bodies were not scanned, and the code scanned them.
-    command = strip_heredoc_bodies(command or "")
     out = []
-    for rx in (_HEREDOC_TO_FILE, _REDIRECT_TO_FILE):
-        for m in rx.finditer(command):
-            f = m.group("f")
-            if f and f not in out and not f.strip("'\"").startswith("/dev/"):
-                out.append(f)
+    for _at, name in _writes(command, tool_name):
+        if name not in out:
+            out.append(name)
     return out
 
 
 def notice(command, tool_name=None):
-    """The warning text when this command co-locates prep with a gated verb, else None."""
+    """The warning text when this command co-locates prep with a gated verb, else None.
+
+    Only a write that comes BEFORE the gated verb is prep for it. A status file written after a
+    push is lost to no block and cannot make the retry fail, so a nudge claiming the command
+    "writes it and then runs a gated verb" would be false.
+    """
     if not command or not isinstance(command, str):
         return None
-    written = written_files(command)
-    if written or writes_via_interpreter(command):
-        # Strip bodies BEFORE looking for the gated verb: a heredoc that merely documents
-        # `git commit` is prose, and nudging on it is how a guard blocks its own documentation.
-        if _gated_start(strip_heredoc_bodies(command), tool_name) is not None:
+    # Blank bodies BEFORE looking for the gated verb: a heredoc that merely documents `git commit`
+    # is prose, and nudging on it is how a guard blocks its own documentation. Blanking rather than
+    # stripping keeps the verb's offset comparable with the write offsets below.
+    gate_at = _gated_start(blank_heredoc_bodies(command), tool_name)
+    if gate_at is not None:
+        written = []
+        for at, name in _writes(command, tool_name):
+            if at < gate_at and name not in written:
+                written.append(name)
+        interpreter_at = _interpreter_write_at(command)
+        if written or (interpreter_at is not None and interpreter_at < gate_at):
             what = ", ".join(written) if written else "a file (written by an interpreter, not a redirect)"
             return (
                 "This command WRITES %s and then runs a gated verb (git commit/push/tag, gh pr "
