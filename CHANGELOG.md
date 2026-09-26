@@ -29,6 +29,14 @@ than the change, so entries reconstructed from them would read like coverage wit
 a hole nobody has drawn a line under is one that gets rediscovered and half-filled - which is how
 two "versions with no entry" notes came to sit in this file disagreeing with it.
 
+## [7.25.11]
+
+### Fixed
+
+- `store-edit-guard` judges a CRLF `CLAUDE.local.md` with LF line ends again, as the Edit
+  and Write tools present it. 7.25.10 read the file as raw bytes, so on such a file a Write that
+  kept the pointer block was denied and a chained MultiEdit that deleted it was allowed.
+
 ## [7.25.10]
 
 ### Fixed

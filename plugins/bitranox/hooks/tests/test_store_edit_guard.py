@@ -279,6 +279,28 @@ def test_multiedit_chained_pair_that_deletes_the_block_is_denied(tmp_path, run):
     assert run(ev) == 0
 
 
+def test_a_crlf_claude_local_md_is_judged_with_lf_line_ends(tmp_path, run):
+    # Written as bytes so the file is CRLF on every platform: write_text only produces it on
+    # Windows, which is how this regression first showed up - as a Windows-only CI failure.
+    p = tmp_path / "CLAUDE.local.md"
+    blk = _block()
+    p.write_bytes(("user line\n" + blk + "\n").replace("\n", "\r\n").encode("utf-8"))
+    # The Edit and Write tools hand the hook LF text, so a Write that keeps the block and a
+    # chained MultiEdit that deletes it must both be judged against the LF form of the file.
+    ev = _event("Write", str(p), {"content": "user line, edited\n" + blk + "\n"},
+                cwd=str(tmp_path))
+    assert run(ev) == 0
+    ev = {"tool_name": "MultiEdit", "cwd": str(tmp_path),
+          "tool_input": {"file_path": str(p),
+                         "edits": [{"old_string": "user line\n", "new_string": "ZZZ"},
+                                   {"old_string": "ZZZ" + blk, "new_string": ""}]}}
+    assert run(ev) == 2
+    # control: an edit inside the block of the CRLF file is still denied
+    ev = _event("Edit", str(p), {"old_string": "(mem:a-fact)", "new_string": "(mem:x)"},
+                cwd=str(tmp_path))
+    assert run(ev) == 2
+
+
 def test_begin_without_end_protects_the_whole_tail(tmp_path, run):
     p = tmp_path / "CLAUDE.local.md"
     p.write_text("user line\n" + us.INDEX_BEGIN + "\n- [F](mem:f) - hook text\n", encoding="utf-8")

@@ -123,9 +123,13 @@ def _read(path):
         return "", True
     codec = "utf-16" if data[:2] in (b"\xff\xfe", b"\xfe\xff") else "utf-8"
     try:
-        return data.decode(codec), True
+        text, exact = data.decode(codec), True
     except UnicodeDecodeError:
-        return data.decode(codec, errors="replace"), False
+        text, exact = data.decode(codec, errors="replace"), False
+    # Reading bytes skips the newline translation a text-mode read does, and the tools hand the
+    # hook LF text: a CRLF file judged raw never matches an old_string or its own block, which
+    # turns an allowed Write into a deny and a block-deleting MultiEdit into an allow.
+    return text.replace("\r\n", "\n").replace("\r", "\n"), exact
 
 
 def _resolve(raw, cwd):
