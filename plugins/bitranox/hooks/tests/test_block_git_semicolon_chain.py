@@ -120,6 +120,38 @@ def test_errexit_switched_back_off_does_not_protect():
     ]
 
 
+def test_errexit_is_a_state_so_a_repeated_set_e_is_undone_by_one_set_plus_e():
+    """`set -e` is idempotent: bash's errexit is a flag, not a counter.
+
+    Ground truth from bash itself: after `set -e; set -e; set +e`, `$-` carries no `e`. A counter
+    left errexit "on" there, so this real hazard went unblocked.
+    """
+    assert G.chained_state_changes("set -e ; set -e ; set +e ; git commit -m x ; git push") == [
+        "commit",
+        "push",
+    ]
+
+
+def test_errexit_switched_on_after_an_earlier_set_plus_e_protects_the_chain():
+    """`set +e` with errexit already off is a no-op, so the later `set -e` turns it on.
+
+    A counter went to -1 then back to 0 and blocked this correctly-protected command.
+    """
+    assert G.chained_state_changes("set +e ; git status ; set -e ; git commit -m x ; git push") is None
+
+
+def test_an_unbalanced_group_is_not_judged():
+    """A `(` with no closing `)` survives the group masking, and a flat split cannot model it.
+
+    The guard bails (allows) rather than guess; the control shows the same chain without the stray
+    paren is blocked, so it is the unbalanced group that decides. The paren sits AFTER the pair on
+    purpose: `git commit -m x ; ( git push` is allowed even with the bail deleted, because
+    `( git push` never parses as a git verb, so that shape cannot prove the bail is reached.
+    """
+    assert G.chained_state_changes("git commit -m x ; git push ; (") is None
+    assert G.chained_state_changes("git commit -m x ; git push") == ["commit", "push"]
+
+
 def test_or_true_on_an_unrelated_statement_does_not_excuse_the_gap():
     """The `;` right after the commit is the hazard; a `|| true` two statements later is not it."""
     assert G.chained_state_changes("git commit -m x ; rm -f /tmp/log || true ; git push") == [

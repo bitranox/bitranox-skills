@@ -321,7 +321,9 @@ def _git_verb(segment: str) -> str | None:
 
 
 def _errexit_delta(segment: str) -> int:
-    """+1 when this statement enables errexit, -1 when it disables it, 0 when it is not a `set`.
+    """+1 when this statement enables errexit, -1 when it disables it, 0 when it leaves it alone.
+
+    The caller treats the sign as the new flag value, never as an increment.
 
     Positional and revocable on purpose: errexit is shell STATE, not a property of the string, so
     a `set -e` after the chain protects nothing and a later `set +e` takes it away again.
@@ -423,10 +425,14 @@ def chained_state_changes(command: str, tool_name: str = "Bash") -> list[str] | 
         offset += len(part)
     statements = list(range(0, len(parts), 2))
 
-    errexit, active_before = 0, {}
+    # errexit is a FLAG, so the last `set -e` / `set +e` wins: `set -e; set -e; set +e` leaves it
+    # off and `set +e; set -e` leaves it on. A running sum got both of those wrong.
+    errexit, active_before = False, {}
     for index in statements:
-        active_before[index] = errexit > 0
-        errexit += _errexit_delta(parts[index])
+        active_before[index] = errexit
+        delta = _errexit_delta(parts[index])
+        if delta:
+            errexit = delta > 0
 
     found = [(index, _git_verb(parts[index])) for index in statements]
     found = [(index, verb) for index, verb in found if verb]
