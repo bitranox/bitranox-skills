@@ -14,18 +14,41 @@ tuned to stay silent in normal solo / feature-branch work:
     Off by default because "not on the default branch" is expected in a feature-branch workflow and would
     be pure noise there; enable it for repos you work on a single branch directly.
 
-WARN only, fail-open: writes to stderr and exits 0 on every path, so it never blocks a commit and a broken
-guard never wedges a turn. Standard library plus the sibling shell_text helper; launched via run-python.sh
-so it works on Windows too.
+The repository judged is the one the commit TARGETS, not the event cwd: a `git -C <dir>` value, after
+any leading `cd <dir>`, resolved against the event cwd. When that target cannot be read statically (a
+shell variable, `cd -`, a bare `cd` or `~`, `--git-dir`/`GIT_DIR`) the guard stays silent rather than
+warn about a repository the commit may not touch.
+
+WARN only, fail-open: the warning is emitted as `hookSpecificOutput.additionalContext` JSON on stdout
+with exit 0, which is the channel that reaches the model without blocking. Exit-0 STDERR never reaches
+it, so a warning written there - as this guard once did - is read by nobody. Every failure path exits 0,
+so it never blocks a commit and a broken guard never wedges a turn. Standard library plus the sibling
+shell_text helper; launched via run-python.sh so it works on Windows too.
 """
 import json
 import os
+import re
 import subprocess
 import sys
 
-from shell_text import is_git_verb, iter_segments, strip_heredoc_bodies
+from shell_text import (
+    GIT_VALUE_OPTS,
+    argv_for_match,
+    basename_for_tool,
+    blank_heredoc_bodies,
+    git_verb_operands,
+    is_git_verb,
+    iter_segments,
+    strip_heredoc_bodies,
+)
 
 _COMMIT_VERBS = frozenset({"commit"})
+# Programs that move the shell's directory. `popd` returns somewhere this hook does not track.
+_CD_PROGRAMS = frozenset({"cd", "pushd", "chdir", "set-location", "sl"})
+_UNKNOWABLE = re.compile(r"[$`*?<>|]")        # a destination no static read can resolve
+# Ways to point git at another repository than its working directory; this guard does not follow them.
+_REPO_OPTIONS = ("--git-dir", "--work-tree")
+_REPO_ENV = ("GIT_DIR=", "GIT_WORK_TREE=")
 
 
 def _is_git_commit(command, tool_name=None):
@@ -43,10 +66,79 @@ def _is_git_commit(command, tool_name=None):
     return False
 
 
+def _readable_dir(target, base):
+    """Where `cd target` (or `git -C target`) lands from `base`, or None when it cannot be read.
+
+    Unreadable: no target (a bare `cd` goes to HOME), `-` ($OLDPWD), a tilde path (the HOME of the
+    shell that runs it), or a variable, substitution or glob. An absolute target is readable even
+    when `base` is not. A path that does not exist is left for git to refuse.
+    """
+    if not target or target == "-" or target.startswith("~") or _UNKNOWABLE.search(target):
+        return None
+    if os.path.isabs(target):
+        return os.path.normpath(target)
+    return os.path.normpath(os.path.join(base, target)) if base else None
+
+
+def _cd_target(args):
+    """The destination operand of a cd-like command, its own options skipped."""
+    for index, token in enumerate(args):
+        if token == "--":
+            return args[index + 1] if index + 1 < len(args) else None
+        if token == "-" or not token.startswith("-"):
+            return token
+    return None
+
+
+def _apply_git_options(prefix, here, tool):
+    """`here` moved by the `-C` options in `prefix` (the tokens before the verb), or None.
+
+    None when a `--git-dir`/`--work-tree` option or a `GIT_DIR`/`GIT_WORK_TREE` assignment points
+    git elsewhere: this guard does not model them, and guessing would judge the wrong repository.
+    """
+    git_at = next(i for i, token in enumerate(prefix) if basename_for_tool(token, tool) == "git")
+    if any(token.startswith(_REPO_ENV) for token in prefix[:git_at]):
+        return None
+    options, index = prefix[git_at + 1:], 0
+    while index < len(options):
+        token = options[index]
+        if token.startswith(_REPO_OPTIONS):
+            return None
+        if token == "-C":                         # several compose, each relative to the last
+            here = _readable_dir(options[index + 1] if index + 1 < len(options) else None, here)
+        index += 2 if token in GIT_VALUE_OPTS else 1
+    return here
+
+
+def _commit_target(command, cwd, tool_name=None):
+    """The directory the first `git commit` in `command` runs in, or None when it is unreadable.
+
+    Follows every cd-like statement before the commit, then the commit's own `-C` values, starting
+    from the event cwd - the same path the shell and git take.
+    """
+    tool, here = tool_name or "Bash", cwd
+    for _at, segment in iter_segments(blank_heredoc_bodies(command or ""), tool_name):
+        tokens = argv_for_match(segment.strip().lstrip("(").strip(), tool)
+        if not tokens:
+            continue
+        program = basename_for_tool(tokens[0], tool).lower()
+        if program in _CD_PROGRAMS:
+            here = _readable_dir(_cd_target(tokens[1:]), here)
+            continue
+        if program == "popd":
+            here = None
+            continue
+        operands = git_verb_operands(tokens, _COMMIT_VERBS, tool)
+        if operands is not None:
+            return _apply_git_options(tokens[:len(tokens) - len(operands) - 1], here, tool)
+    return None
+
+
 def _git(cwd, *args):
     """Run a git command; return stripped stdout, or None on any failure (fail-open)."""
     try:
-        r = subprocess.run(["git", "-C", cwd, *args], capture_output=True, text=True, timeout=5)
+        r = subprocess.run(["git", "-C", cwd, *args], capture_output=True, text=True,
+                           encoding="utf-8", errors="replace", timeout=5)
     except Exception:  # noqa: BLE001
         return None
     return r.stdout.strip() if r.returncode == 0 else None
@@ -62,9 +154,8 @@ def _default_branch(cwd):
     return ref.split("/", 1)[1] if ref and "/" in ref else None
 
 
-def _behind_count(cwd):
-    """Commits in the upstream not in HEAD (origin advanced under you); None if no upstream."""
-    out = _git(cwd, "rev-list", "--left-right", "--count", "HEAD...@{upstream}")  # 'ahead\tbehind'
+def _parse_behind(out):
+    """The BEHIND half of `rev-list --left-right --count` output ('ahead\tbehind'); None if malformed."""
     if not out:
         return None
     parts = out.replace("\t", " ").split()
@@ -74,15 +165,23 @@ def _behind_count(cwd):
         return None
 
 
+def _behind_count(cwd):
+    """Commits in the upstream not in HEAD (origin advanced under you); None if no upstream."""
+    return _parse_behind(_git(cwd, "rev-list", "--left-right", "--count", "HEAD...@{upstream}"))
+
+
 def main():
     try:
         event = json.load(sys.stdin)
     except Exception:  # noqa: BLE001 - no/invalid stdin: do nothing
         return 0
     command = (event.get("tool_input") or {}).get("command") or ""
-    if not command or not _is_git_commit(command, event.get("tool_name")):
+    tool_name = event.get("tool_name")
+    if not command or not _is_git_commit(command, tool_name):
         return 0
-    cwd = event.get("cwd") or os.getcwd()
+    cwd = _commit_target(command, event.get("cwd") or os.getcwd(), tool_name)
+    if not cwd:
+        return 0  # where the commit runs cannot be read: judging another repo would mislead
 
     toplevel = _git(cwd, "rev-parse", "--show-toplevel")
     if not toplevel:
@@ -107,10 +206,14 @@ def main():
             )
     if not warnings:
         return 0
-    sys.stderr.write(
-        "SHARED-CHECKOUT CHECK: %s\nStage only your own files (not `git add -A`) and confirm branch/HEAD "
-        "before committing.\n" % " ".join(warnings)
+    text = (
+        "SHARED-CHECKOUT CHECK (%s): %s Stage only your own files (not `git add -A`) and confirm "
+        "branch/HEAD before committing." % (toplevel, " ".join(warnings))
     )
+    sys.stdout.write(json.dumps({"hookSpecificOutput": {
+        "hookEventName": "PreToolUse",
+        "additionalContext": text,
+    }}) + "\n")
     return 0  # warn only, never block
 
 
