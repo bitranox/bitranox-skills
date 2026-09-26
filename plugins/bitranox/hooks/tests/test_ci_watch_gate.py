@@ -1,7 +1,9 @@
 """Tests for ci-watch-gate - the Stop hook that refuses to end a turn with unwatched CI."""
 from __future__ import annotations
 
+import errno
 import json
+import os
 import time
 from pathlib import Path
 
@@ -191,5 +193,97 @@ def test_watching_the_ci_stops_the_countdown(tmp_path, capsys):
     hook.main(_event(tmp_path))
     capsys.readouterr()
     state.clear_sha(str(tmp_path), "a" * 40)
+    assert hook.main(_event(tmp_path)) == 0
+    assert capsys.readouterr().out == ""
+
+
+def _refuse_every_replace(monkeypatch):
+    """Make the publishing rename fail the way a root-owned file in a sticky dir fails it (EPERM).
+
+    `os.replace` is the OS edge `_save` publishes through; patching it is the only way to make the
+    rename fail without root while the read and the lock still work, which is what the real
+    trigger looks like. Returns the list of refused destinations so a test can prove it hit it.
+    """
+    refused = []
+
+    def refusing_replace(src, dst):
+        refused.append(str(dst))
+        raise PermissionError(errno.EPERM, "Operation not permitted")
+
+    monkeypatch.setattr(os, "replace", refusing_replace)
+    return refused
+
+
+def test_a_state_file_that_cannot_be_rewritten_goes_silent_rather_than_wedging(tmp_path, capsys,
+                                                                               monkeypatch):
+    """The charge never landed, so the count never advanced and MAX_BLOCKS never released: every
+    stop was blocked for four hours. A gate that cannot write its own bound says nothing."""
+    state.record_push(str(tmp_path), "sess-1", "a" * 40, branch="master")
+    refused = _refuse_every_replace(monkeypatch)
+    for _ in range(state.MAX_BLOCKS + 3):
+        assert hook.main(_event(tmp_path)) == 0
+        assert capsys.readouterr().out == ""
+    assert str(state.state_path(str(tmp_path))) in refused   # the real rename path was hit
+    # Control: the same entry with the rename working again blocks, and its count never moved.
+    monkeypatch.undo()
+    monkeypatch.setattr(Path, "home", classmethod(lambda cls: tmp_path / "home"))
+    assert hook.main(_event(tmp_path)) == 0
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["decision"] == "block"
+    assert "%d further reminder" % (state.MAX_BLOCKS - 1) in payload["reason"]
+
+
+@pytest.mark.parametrize("bad_at", ["not-a-number", [1], {"x": 1}, 10 ** 400, "inf", "nan"],
+                         ids=["text", "list", "dict", "overflow", "inf", "nan"])
+def test_one_entry_with_a_bad_at_does_not_silence_a_valid_push(tmp_path, capsys, bad_at):
+    """`float()` raised inside the gate's try on one poisoned entry, and the fail-open swallowed
+    the block for the valid push beside it; an infinite `at` stayed pending forever instead."""
+    path = state.state_path(str(tmp_path))
+    path.write_text(json.dumps({"pending": [
+        {"sha": "a" * 40, "session": "sess-1", "branch": "master", "at": time.time()},
+        {"sha": "b" * 40, "session": "sess-1", "branch": "other", "at": bad_at},
+    ]}), encoding="utf-8")
+    assert hook.main(_event(tmp_path)) == 0
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["decision"] == "block"
+    assert "a" * 12 in payload["reason"]
+    assert "b" * 12 not in payload["reason"]
+
+
+def test_a_crashing_state_store_fails_open(tmp_path, capsys, monkeypatch):
+    """The gate's last-resort except: a store that raises must not wedge the turn."""
+    state.record_push(str(tmp_path), "sess-1", "a" * 40)
+
+    def broken(*_args, **_kwargs):
+        raise RuntimeError("store bug")
+
+    monkeypatch.setattr(hook.state, "bump_session_blocks", broken)
+    assert hook.main(_event(tmp_path)) == 0
+    assert capsys.readouterr().out == ""
+    monkeypatch.undo()
+    monkeypatch.setattr(Path, "home", classmethod(lambda cls: tmp_path / "home"))
+    assert hook.main(_event(tmp_path)) == 0            # control: the real store blocks
+    assert json.loads(capsys.readouterr().out)["decision"] == "block"
+
+
+def test_a_newest_entry_with_no_sha_says_nothing_through_main(tmp_path, capsys):
+    """`verdict` returns None for a sha-less entry; main must then stay silent, not print None."""
+    state.record_push(str(tmp_path), "sess-1", "")
+    assert hook.main(_event(tmp_path)) == 0
+    assert capsys.readouterr().out == ""
+    state.record_push(str(tmp_path), "sess-1", "a" * 40)   # control: a real sha blocks
+    assert hook.main(_event(tmp_path)) == 0
+    assert json.loads(capsys.readouterr().out)["decision"] == "block"
+
+
+def test_an_undeterminable_home_reads_as_opted_out(tmp_path, capsys, monkeypatch):
+    """Path.home() raises RuntimeError when no home directory can be found."""
+    state.record_push(str(tmp_path), "sess-1", "a" * 40)
+
+    def no_home(cls):
+        raise RuntimeError("Could not determine home directory.")
+
+    monkeypatch.setattr(Path, "home", classmethod(no_home))
+    assert hook.enabled() is False
     assert hook.main(_event(tmp_path)) == 0
     assert capsys.readouterr().out == ""

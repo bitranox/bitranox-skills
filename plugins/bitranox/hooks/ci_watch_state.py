@@ -28,6 +28,7 @@ from __future__ import annotations
 import contextlib
 import hashlib
 import json
+import math
 import os
 import tempfile
 import time
@@ -40,6 +41,7 @@ __all__ = [
     "session_key",
     "clear_session",
     "clear_sha",
+    "entry_at",
     "pending_for",
     "record_push",
     "state_path",
@@ -77,7 +79,22 @@ def state_path(project_dir: str) -> Path:
     return Path(tempfile.gettempdir()) / ("claude-ci-watch-%s.json" % key)
 
 
+def entry_at(entry: dict) -> float:
+    """When this entry was recorded, as a finite float; 0.0 (long expired) when it is unreadable.
+
+    One entry whose `at` is text, a container, an int too large for a float or an infinity must
+    not decide for the others: a raise inside the gate's try dropped the block for every valid
+    push beside it, and an infinite `at` stayed pending, and newest, forever.
+    """
+    try:
+        value = float(entry.get("at") or 0)
+    except (TypeError, ValueError, OverflowError):
+        return 0.0
+    return value if math.isfinite(value) else 0.0
+
+
 def _load(path: Path) -> list[dict]:
+    """The pending entries, each with `at` already coerced by `entry_at`."""
     try:
         raw = path.read_text(encoding="utf-8")
     except (OSError, ValueError):
@@ -87,16 +104,25 @@ def _load(path: Path) -> list[dict]:
     except ValueError:
         return []
     entries = data.get("pending") if isinstance(data, dict) else None
-    return [e for e in entries if isinstance(e, dict)] if isinstance(entries, list) else []
+    if not isinstance(entries, list):
+        return []
+    kept = [e for e in entries if isinstance(e, dict)]
+    for entry in kept:
+        entry["at"] = entry_at(entry)
+    return kept
 
 
-def _save(path: Path, entries: list[dict]) -> None:
-    """Replace the file atomically. The temp name is unique per call: a fixed one is shared by
+def _save(path: Path, entries: list[dict]) -> bool:
+    """Replace the file atomically; True only when the new content is in place. The temp name is unique per call: a fixed one is shared by
     every concurrent writer, so one could rename another's half-written file into place.
 
     The replace is retried over a Windows sharing clash: `pending_for` reads without the lock,
     and on Windows a reader (or a virus scanner) holding the file open makes the rename fail,
-    which would drop this write without a trace."""
+    which would drop this write without a trace.
+
+    The result matters to `_update`: a caller that is told its change landed when it did not
+    acts on a count that was never stored, and the Stop gate's reminder count then never
+    advanced, so its bound never released."""
     import self_improve_signals  # noqa: PLC0415 - kept off the per-shell-call import path, as in _update
 
     tmp = None
@@ -107,17 +133,21 @@ def _save(path: Path, entries: list[dict]) -> None:
         self_improve_signals.retry_while_shared(os.replace, tmp, path)
         tmp = None
     except (OSError, ValueError):
-        return
+        return False
     finally:
         if tmp is not None:
             with contextlib.suppress(OSError):
                 os.unlink(tmp)
+    return True
 
 
 def _update(project_dir: str, change, default=None):
     """Run `change(entries) -> (entries, result)` as one locked read-modify-write; return result.
 
     A lock that cannot be had in time, or any IO failure, skips the write and returns `default`.
+    So does a write that did not land: `result` describes the state AFTER the change, and handing
+    it back when the file still holds the old one is how a caller comes to act on a count that
+    was never stored.
     """
     # Imported here, not at the top: the nudge runs after EVERY shell call and almost never
     # writes, so the lock's module is loaded only on the rare call that does.
@@ -127,8 +157,7 @@ def _update(project_dir: str, change, default=None):
     try:
         with self_improve_signals.memory_lock(path, timeout=_LOCK_TIMEOUT):
             entries, result = change(_load(path))
-            _save(path, entries)
-            return result
+            return result if _save(path, entries) else default
     except (OSError, TimeoutError, ValueError):
         return default
 
@@ -195,4 +224,4 @@ def pending_for(project_dir: str, session: str, now: float | None = None) -> lis
     moment = time.time() if now is None else now
     return [e for e in _load(state_path(project_dir))
             if e.get("session") == session
-            and moment - float(e.get("at") or 0) < MAX_AGE_SECONDS]
+            and moment - entry_at(e) < MAX_AGE_SECONDS]
