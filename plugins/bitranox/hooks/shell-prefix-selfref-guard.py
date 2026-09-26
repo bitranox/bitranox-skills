@@ -74,8 +74,18 @@ TEXT_FLAGS = (
 )
 # A double-quoted argument to one of those flags. Single quotes are NOT this bug: the outer shell
 # does not expand them, which is why the single-quoted form is the documented workaround.
+# The argument may also be ATTACHED to its flag: the shell expands a double-quoted string wherever
+# it sits in a word, so `-m"x $(y)"` and `--message="x $(y)"` run the substitution exactly like
+# the spaced form, and git, gh and argparse all accept those spellings. A long flag takes `=`; the
+# short -m takes its value glued on or after `=`. The separator must be whitespace or `=`, so a
+# longer flag sharing a prefix (`--body-file=`, `--notes=`) is a different flag and never matches.
+_SHORT_TEXT_FLAGS = tuple(f for f in TEXT_FLAGS if not f.startswith("--"))
+_LONG_TEXT_FLAGS = tuple(f for f in TEXT_FLAGS if f.startswith("--"))
 _TEXT_ARG_RX = re.compile(
-    r"(?<![\w-])(?:%s)\s+\"([^\"]*)\"" % "|".join(re.escape(f) for f in TEXT_FLAGS)
+    r"(?<![\w-])(?:(?:%s)(?:\s+|=)|(?:%s)(?:\s*|=))\"([^\"]*)\"" % (
+        "|".join(re.escape(f) for f in _LONG_TEXT_FLAGS),
+        "|".join(re.escape(f) for f in _SHORT_TEXT_FLAGS),
+    )
 )
 _SUBSTITUTION_RX = re.compile(r"`[^`]*`|\$\(")
 

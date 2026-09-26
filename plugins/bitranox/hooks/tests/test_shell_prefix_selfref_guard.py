@@ -275,3 +275,97 @@ def test_a_real_substitution_in_a_double_quoted_message_is_still_blocked():
     """The direction where it must NOT apply: `$( )` DOES expand inside double quotes, which is
     the whole footgun. Blanking those too would delete what this guard looks for."""
     assert guard.substitutes_inside_text_arg('git commit -m "fix $(whoami)"') is True
+
+
+# ------------------------------------------- the hook's verdicts, driven through main()
+
+
+def run_hook(command: str, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> tuple[int, str]:
+    """Feed a PreToolUse Bash event to main() the way production does; return (exit, stderr)."""
+
+    import io
+    import json
+
+    event = {"tool_name": "Bash", "tool_input": {"command": command}}
+    monkeypatch.setattr("sys.stdin", io.StringIO(json.dumps(event)))
+    code = guard.main()
+    return code, capsys.readouterr().err
+
+
+# The shell expands a double-quoted string wherever it sits in a word, so an argument ATTACHED to
+# its flag runs the substitution exactly like a spaced one. git accepts -m"..." and
+# --message="...", gh and argparse accept --flag="...", and all of them see only the result.
+@pytest.mark.parametrize(
+    "command",
+    [
+        'git commit -m"fix $(whoami)"',
+        'git commit -m="fix $(whoami)"',
+        'git commit --message="fix $(whoami)"',
+        'gh pr create --body="see `date`"',
+        'gh pr create --title="x $(y)"',
+        'memory_engine add --hook="run `shutdown -r now`"',
+    ],
+)
+def test_an_attached_text_argument_is_expanded_like_a_spaced_one(
+    command: str, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    code, err = run_hook(command, monkeypatch, capsys)
+    assert code == 2, command
+    assert "PROSE carries a command substitution" in err
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        'git commit -m"fix whoami"',
+        'git commit --message="fix whoami"',
+        'gh pr create --body="see date"',
+        # -F and --body-file take a PATH, and substituting a path in is ordinary work.
+        'git commit -F"$(ls /tmp/msg*)"',
+        'gh pr create --body-file="$(mktemp)"',
+        # A longer flag that merely starts with a text flag's name is a different flag.
+        'tool add --notes="$(date)"',
+    ],
+)
+def test_an_attached_argument_with_nothing_to_run_or_a_path_flag_passes(
+    command: str, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    code, err = run_hook(command, monkeypatch, capsys)
+    assert code == 0, (command, err)
+
+
+def test_the_spaced_text_argument_still_blocks(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    code, err = run_hook('git commit -m "fix $(whoami)"', monkeypatch, capsys)
+    assert code == 2
+    assert "PROSE carries a command substitution" in err
+    assert "git commit -F" in err
+
+
+def test_the_bare_heredoc_verdict_names_its_own_cause_and_fix(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    code, err = run_hook("cat <<EOF\nsee `date`\nEOF", monkeypatch, capsys)
+    assert code == 2
+    assert "An UNQUOTED heredoc body carries a command substitution" in err
+    assert "write <<'EOF', not <<EOF" in err
+    # One message per verdict: the text-arg and prefix explanations would misdirect the fix.
+    assert "PROSE carries" not in err
+    assert "prefix assignment" not in err
+
+
+def test_a_double_quoted_parameter_delimiter_is_a_quoted_heredoc(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """<<"$DELIM" quotes the delimiter, so bash expands nothing in the body.
+
+    Any quoting of the delimiter word disables body expansion, even when the word itself looks
+    like a parameter. Reading the `$` as making it bare would block a correctly quoted heredoc.
+    """
+
+    quoted = 'cat <<"$DELIM"\nsee `date`\n$DELIM'
+    assert not heredoc_blocked(quoted)
+    assert run_hook(quoted, monkeypatch, capsys) == (0, "")
+    # The control: the same body under a BARE parameter delimiter is expanded.
+    assert heredoc_blocked("cat <<$DELIM\nsee `date`\n$DELIM")
