@@ -279,3 +279,24 @@ def test_a_path_that_is_not_config_still_passes(path):
     """The direction the canonicalisation must NOT reach: normalising must not turn an unrelated
     file into a config file."""
     assert G.targets_config(path) is False
+
+
+# --- NotebookEdit names its target in notebook_path; swept from skill-edit-guard ----------------
+
+def test_notebookedit_on_a_config_file_is_blocked(tmp_path):
+    """NotebookEdit is in the tool set and the hooks.json matcher, but it sends `notebook_path`,
+    not `file_path`. Reading only `file_path` left that registration unable to decide anything."""
+    transcript = tmp_path / "t.jsonl"
+    transcript.write_text('{"type":"user","message":{"content":"hello"}}\n', encoding="utf-8")
+    event = {"transcript_path": str(transcript), "tool_name": "NotebookEdit",
+             "tool_input": {"notebook_path": "/home/u/.claude/settings.json", "new_source": "x"}}
+    reason = G.decide(event, {})
+    assert reason is not None
+    assert "/home/u/.claude/settings.json" in reason, "the deny must name the file it refused"
+
+
+def test_notebookedit_on_an_ordinary_notebook_is_allowed():
+    """Control: reading `notebook_path` must not block an unrelated notebook."""
+    event = {"tool_name": "NotebookEdit",
+             "tool_input": {"notebook_path": "/repo/notebooks/Quickstart.ipynb", "new_source": "x"}}
+    assert G.decide(event, {}) is None

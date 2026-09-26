@@ -154,7 +154,10 @@ def decide(event, env):
     """The block reason for this event, or None to allow silently. PURE in `event` and `env`."""
     if not isinstance(event, dict) or event.get("tool_name") not in _TOOLS:
         return None
-    path = (event.get("tool_input") or {}).get("file_path")
+    # NotebookEdit names its target `notebook_path`; without the fallback that registration
+    # could never produce a decision.
+    tool_input = event.get("tool_input") or {}
+    path = tool_input.get("file_path") or tool_input.get("notebook_path")
     if not targets_config(path):
         return None
     if env.get(_BYPASS_ENV):
