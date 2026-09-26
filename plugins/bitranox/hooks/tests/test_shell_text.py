@@ -477,6 +477,52 @@ def test_an_unknown_script_behind_a_launcher_is_not_a_sink():
     assert S.strip_data_sink_statements(cmd, "Bash") == cmd
 
 
+# ---- PowerShell's own printing cmdlets ------------------------------------------------------
+#
+# Under the PowerShell tool `Write-Host` and `Write-Output` are what `echo` is under Bash, and
+# PowerShell resolves a command name without regard to case. Leaving them out made every guard
+# using this helper fire on a line that only PRINTS the footgun.
+
+@pytest.mark.parametrize("cmd", [
+    "Write-Host 'pkill -f x'",
+    "Write-Output 'pkill -f x'",
+    "write-host 'pkill -f x'",
+    "WRITE-OUTPUT 'pkill -f x'",
+])
+def test_a_powershell_print_cmdlet_is_a_sink_under_powershell(cmd):
+    assert "pkill -f x" not in S.strip_data_sink_statements(cmd, "PowerShell")
+
+
+def test_a_powershell_print_cmdlet_is_not_a_sink_under_bash():
+    """Bash has no such program, so the name there is whatever script happens to carry it."""
+    cmd = "Write-Host 'pkill -f x'"
+    assert S.strip_data_sink_statements(cmd, "Bash") == cmd
+
+
+@pytest.mark.parametrize("cmd", [
+    "Write-Host (Stop-Process -Name x)",
+    "echo (Remove-Item -Recurse C:\\x)",
+    "Write-Output @(pkill -f x)",
+    "echo @(pkill -f x)",
+])
+def test_a_powershell_sink_with_a_parenthesised_expression_is_not_a_sink(cmd):
+    """In PowerShell's argument mode `(...)` and `@(...)` are EVALUATED, so the statement runs a
+    command. A bare `(` already ends the segment, but `@(` does not, so it has to be recognised
+    as the substitution it is. Bash has neither form (there `@(...)` is an extglob pattern).
+    """
+    assert S.strip_data_sink_statements(cmd, "PowerShell") == cmd
+
+
+def test_an_at_paren_under_bash_is_a_glob_not_a_substitution():
+    """`@(a|b)` is an extglob pattern in bash, so echo still only prints it."""
+    assert "pkill" not in S.strip_data_sink_statements("echo @(pkill|x)", "Bash")
+
+
+def test_a_parenthesis_inside_a_quoted_powershell_argument_does_not_run_anything():
+    out = S.strip_data_sink_statements("Write-Host 'pkill -f x (again)'", "PowerShell")
+    assert "pkill -f x" not in out
+
+
 # --------------------------------------------------------------------------
 # opens_a_pr: the PR half of is_gated_command on its own
 # --------------------------------------------------------------------------

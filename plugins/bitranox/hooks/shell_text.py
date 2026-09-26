@@ -1109,6 +1109,12 @@ def mask_data_regions(command: str, fill: str = "Q", tool_name="Bash") -> str:
 # posts it to an API. None of them hands the text to a shell.
 _DATA_SINK_PROGRAMS = frozenset({"echo", "printf"})
 
+# PowerShell's own printing cmdlets, which are what `echo` is under Bash (`echo` itself is an alias
+# of Write-Output there). Scoped to the PowerShell tool, and compared case-insensitively because
+# PowerShell resolves command names that way: under Bash these names are whatever script happens
+# to carry them.
+_POWERSHELL_SINK_CMDLETS = frozenset({"write-host", "write-output"})
+
 # Programs where the SUBCOMMAND decides. `git commit -m` stores its text, while `git bisect run`
 # executes its argument - so the program name alone is not enough and matching on it would blank a
 # statement that really does run a command. Each entry is a prefix of the non-flag operands.
@@ -1143,6 +1149,12 @@ _SCRIPT_LAUNCHERS = frozenset({"bash", "sh", "python", "python3", "py", "run-pyt
 # either spelling is therefore left intact: the cost is a false positive that was already there,
 # and the alternative cost is a miss.
 _RUNS_SUBSTITUTION = re.compile(r"\$\(|`")
+
+# PowerShell also EVALUATES `@(...)` (the array subexpression) in argument mode. A bare `(...)`
+# needs no entry because it already ends the segment, so the sink's blanking never reaches it -
+# but `@(` does not, and `echo @(pkill -f x)` was blanked whole. Under Bash `@(...)` is an extglob
+# pattern and runs nothing, so this reading is the PowerShell tool's alone.
+_RUNS_SUBSTITUTION_POWERSHELL = re.compile(r"[$@]\(|`")
 
 
 def _cut_by_substitution(text: str, at: int, segment: str) -> bool:
@@ -1208,7 +1220,8 @@ def _sink_keep_words(segment: str, tool_name=None) -> int:
     For a mapped program the count runs to the end of the matched SUBCOMMAND, skipping flags on the
     way - `git -q commit -m x` keeps three words, not one.
     """
-    if _RUNS_SUBSTITUTION.search(segment):
+    runs = _RUNS_SUBSTITUTION_POWERSHELL if tool_name == "PowerShell" else _RUNS_SUBSTITUTION
+    if runs.search(segment):
         return 0
     head = segment.strip().lstrip("(").strip()
     if not head:
@@ -1225,6 +1238,8 @@ def _sink_keep_words(segment: str, tool_name=None) -> int:
         return 0
     program = basename_for_tool(tokens[at], tool_name or "Bash")
     if program in _DATA_SINK_PROGRAMS:
+        return at + 1
+    if tool_name == "PowerShell" and program.lower() in _POWERSHELL_SINK_CMDLETS:
         return at + 1
     for prefix in _DATA_SINK_SUBCOMMANDS.get(program, ()):
         matched, wanted = 0, len(prefix)
