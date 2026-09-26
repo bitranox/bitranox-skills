@@ -310,3 +310,35 @@ def test_cli_start_end_check_and_usage_as_a_process(home):
     assert _cli(home, THIS, "check", "plan-execution").returncode == 1
     r = _cli(home, THIS, "bogus", "plan-execution")
     assert r.returncode == 2 and "usage:" in r.stdout
+
+
+def test_an_over_range_integer_timestamp_is_stale_not_a_crash(monkeypatch, capsys):
+    """JSON integers are unbounded, so a corrupt `ts` of 401 digits parses as an int whose float()
+    raises OverflowError - _age must say "no usable timestamp", not raise past is_fresh."""
+    monkeypatch.setenv("CLAUDE_CODE_SESSION_ID", THIS)
+    p = SR.start("meta-skill-writer", session_id=THIS)
+    body = '{"skill": "meta-skill-writer", "session_id": "%s", "ts": 1%s}' % (THIS, "0" * 400)
+    p.write_text(body, encoding="utf-8")
+    assert SR._age({"ts": 10 ** 400}, now=0.0) is None       # noqa: SLF001 - the unit under test
+    assert SR.is_fresh("meta-skill-writer", session_id=THIS) is False
+    assert SR.main(["check", "meta-skill-writer"]) == 1
+    assert "stale-or-missing" in capsys.readouterr().out
+
+
+def test_a_pathologically_nested_receipt_is_stale_not_a_crash(monkeypatch, capsys):
+    """json.loads raises RecursionError (not ValueError) on deep nesting; the CLI `check` must
+    still answer stale-or-missing instead of dying with a traceback."""
+    monkeypatch.setenv("CLAUDE_CODE_SESSION_ID", THIS)
+    SR.start("meta-skill-writer", session_id=THIS).write_text("[" * 100000 + "]" * 100000,
+                                                              encoding="utf-8")
+    assert SR.is_fresh("meta-skill-writer", session_id=THIS) is False
+    assert SR.main(["check", "meta-skill-writer"]) == 1
+    assert "stale-or-missing" in capsys.readouterr().out
+
+
+def test_an_ordinary_integer_timestamp_is_still_fresh(monkeypatch):
+    """Control for the over-range case: an in-range int ts (not a float) stays a valid receipt."""
+    p = SR.start("meta-skill-writer", session_id=THIS)
+    p.write_text('{"skill": "meta-skill-writer", "session_id": "%s", "ts": %d}'
+                 % (THIS, int(time.time())), encoding="utf-8")
+    assert SR.is_fresh("meta-skill-writer", session_id=THIS) is True

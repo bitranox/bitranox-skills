@@ -58,20 +58,25 @@ def _read(path):
     """The receipt's data as a dict, or None when absent, unreadable or not a receipt's shape."""
     try:
         data = json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, ValueError):
+    except (OSError, ValueError, RecursionError):
+        # RecursionError: a pathologically nested body is not a receipt either, and letting it
+        # escape would turn `check` into a traceback and every gate caller into its except path.
         return None
     return data if isinstance(data, dict) else None
 
 
 def _age(data, now=None):
     """Seconds since the receipt was written, or None when its timestamp is not a number, is not
-    finite (inf/-inf/NaN - never what `time.time()` writes, so only tampering or corruption
-    produces one), or lies in the future (a negative age - a receipt cannot predate its own
-    write)."""
+    finite (inf/-inf/NaN, or an integer too large for a float - never what `time.time()` writes,
+    so only tampering or corruption produces one), or lies in the future (a negative age - a
+    receipt cannot predate its own write)."""
     ts = data.get("ts")
     if isinstance(ts, bool) or not isinstance(ts, (int, float)):
         return None
-    ts = float(ts)
+    try:
+        ts = float(ts)
+    except OverflowError:
+        return None          # a JSON int beyond float range: as unusable as inf
     if not math.isfinite(ts):
         return None
     age = (time.time() if now is None else now) - ts
