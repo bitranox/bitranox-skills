@@ -1,4 +1,4 @@
-# Handover - 2026-09-27 early, rank 10 guard slice fixed as 7.25.10 + 7.25.11, CI green
+# STALE - read 2026-09-27, work continued
 
 ## In flight
 
