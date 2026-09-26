@@ -635,8 +635,8 @@ def commands_only(command: str, tool_name="Bash") -> str:
     this exists instead of the two-call idiom.
 
     Offsets do NOT survive: the heredoc strip removes lines. A caller that needs POSITIONS (to tell
-    a write before the verb from one after it) must use `mask_data_regions` and handle heredocs
-    itself - `gated-prep-nudge` is the one that does.
+    a write before the verb from one after it, or to slice the raw command at a match) wants
+    `commands_only_aligned`, which masks the same regions and keeps every offset.
 
     NOT for every guard, and the exception is not an edge case. A quoted string is data to the
     LOCAL shell and a COMMAND to a remote one, so a guard whose subject is `ssh host \'...\'`,
@@ -646,6 +646,23 @@ def commands_only(command: str, tool_name="Bash") -> str:
     want `strip_heredoc_bodies` alone. Ask what the guard's subject IS before reaching for this.
     """
     return mask_data_regions(strip_heredoc_bodies(command or ""), tool_name=tool_name)
+
+
+def commands_only_aligned(command: str, tool_name="Bash") -> str:
+    """The offset-preserving twin of `commands_only`: the same data regions, blanked or masked in
+    place, so `len(out) == len(command)` and an offset found on the result indexes the raw command.
+
+    Heredoc bodies and terminators become spaces (`blank_heredoc_bodies`), then quoted text,
+    substitutions and comments are masked by `mask_data_regions` under `tool_name`'s escape rules.
+    Cutting the blanked body lines back out of the result gives exactly `commands_only(command,
+    tool_name)`, so the two never disagree about what is a command; this one only keeps the
+    positions. A `git push` found here at `m.start()` is `command[m.start():m.end()]`.
+
+    Use it when the caller slices the raw command or compares positions; use `commands_only` when
+    it only asks whether something is present. The same caveat applies: a guard whose subject is a
+    string handed to another shell (`ssh host '...'`, `bash -c '...'`) must not mask quotes at all.
+    """
+    return mask_data_regions(blank_heredoc_bodies(command or ""), tool_name=tool_name)
 
 
 # `cd /long/scratch/path && <the command that matters>`. Almost every Bash call in a real session
@@ -872,6 +889,35 @@ def strip_heredoc_bodies(command: str) -> str:
     would treat those lines as data too, so a guard must not judge them as commands.
     """
     return "\n".join(_split_heredocs(command)[0])
+
+
+def blank_heredoc_bodies(command: str) -> str:
+    """`command` with every heredoc body blanked to spaces IN PLACE, so offsets survive.
+
+    Blanks exactly the lines `strip_heredoc_bodies` removes - the body lines and the terminator
+    line, found by the same `iter_heredocs` walk - replacing every character on them with a space,
+    a CRLF's `\\r` included, while every `\\n` stays where it was. Everything else is byte-identical,
+    so `len(out) == len(command)` and any offset found on the result is an offset into the RAW
+    command: `command[m.start():m.end()] == m.group()` for a match `m` of non-blank text.
+
+    Prefer it over `strip_heredoc_bodies` whenever the caller SLICES the raw command, or compares
+    positions, at offsets it found on the scanned text. The stripped text has lost lines, so an
+    offset from it points at a different character in the raw command and nothing raises. The two
+    agree on every match confined to one kept line; only a pattern spanning a body differs, since
+    the stripped text makes the opener line adjacent to the line after the terminator while here
+    the blank lines stay in between.
+
+    `mask_data_regions` knows nothing about heredocs, so running it on the result does not re-open
+    the body: the opener's quoted delimiter is masked like any quoted word, and the blanked body is
+    whitespace to it, so an apostrophe or `(` that was in the body can no longer open a region.
+    `commands_only_aligned` is that pairing in one call.
+    """
+    command = command or ""
+    lines = command.split("\n")
+    for _at, _opener, (start, end) in iter_heredocs(command):
+        for index in range(start, min(end + 1, len(lines))):   # end is the terminator, if any
+            lines[index] = " " * len(lines[index])
+    return "\n".join(lines)
 
 
 def heredoc_bodies(command: str) -> str:
