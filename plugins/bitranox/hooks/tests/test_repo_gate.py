@@ -1004,7 +1004,13 @@ def test_a_commit_in_a_tool_repo_blocks_when_its_mirror_has_drifted(tmp_path, mo
     _tool_repo_commit(monkeypatch, public, public / "libs" / "thing")
 
     assert RG.main() == 2
-    assert "DRIFT" in capsys.readouterr().out
+    # Everything actionable goes to STDERR: on a PreToolUse exit 2 that is the channel the model
+    # reads, and stdout is not shown. The table and the diff used to go to stdout, leaving the
+    # model a generic "blocked" line and no way to see what drifted.
+    printed = capsys.readouterr()
+    assert "DRIFT" in printed.err and "DRIFTED: a capability" in printed.err
+    assert "blocked" in printed.err
+    assert printed.out == ""
 
 
 def test_a_commit_in_a_tool_repo_passes_when_the_mirror_is_in_sync(tmp_path, monkeypatch):
@@ -1427,6 +1433,27 @@ def test_version_bumped_fires_when_a_plugin_file_changes_without_a_bump(tmp_path
     assert RG.check_version_bumped(tmp_path) == []
 
 
+def test_version_bumped_fires_for_a_new_untracked_plugin_file(tmp_path):
+    """A brand-new file under plugins/bitranox is not in `git diff` at all - only the untracked
+    listing sees it. Nothing pinned that branch, so dropping it passed the whole suite."""
+    pj = "plugins/bitranox/.claude-plugin/plugin.json"
+    git_repo_with_origin(tmp_path, {pj: '{"version": "1.0.0"}\n',
+                                    "plugins/bitranox/hooks/x.py": "x = 1\n"})
+    write(tmp_path / "plugins" / "bitranox" / "hooks" / "new_hook.py", "y = 1\n")
+    assert any("still 1.0.0" in f for f in RG.check_version_bumped(tmp_path))
+
+
+def test_version_bumped_ignores_untracked_files_outside_the_plugin_and_ignored_ones(tmp_path):
+    """Control for the untracked branch: it is scoped to plugins/bitranox and honours .gitignore."""
+    pj = "plugins/bitranox/.claude-plugin/plugin.json"
+    git_repo_with_origin(tmp_path, {pj: '{"version": "1.0.0"}\n',
+                                    "plugins/bitranox/hooks/x.py": "x = 1\n",
+                                    ".gitignore": "*.log\n"})
+    write(tmp_path / "notes.txt", "outside the plugin\n")
+    write(tmp_path / "plugins" / "bitranox" / "hooks" / "run.log", "ignored\n")
+    assert RG.check_version_bumped(tmp_path) == []
+
+
 PJ_REL = "plugins/bitranox/.claude-plugin/plugin.json"
 
 
@@ -1773,3 +1800,117 @@ def test_an_exemption_with_an_empty_evidence_half_fails_too(tmp_path, monkeypatc
 def test_every_shipped_exemption_carries_both_halves():
     """The live map must satisfy the rule it enforces on everyone else."""
     assert RG.toolbox_rule_coverage_failures(Path(RG.__file__).resolve().parents[3]) == []
+
+
+# --------------------------------------------------------------------------
+# --mirrors: the full sweep of every mirrored pair (audit_mirrors)
+# --------------------------------------------------------------------------
+
+
+def _marketplace_in(public):
+    root = public / "KI" / "bitranox-skills"
+    write(root / "plugins" / "bitranox" / ".claude-plugin" / "plugin.json",
+          json.dumps({"name": "bitranox", "version": "1.0.0"}))
+    return root
+
+
+def test_audit_mirrors_counts_a_drifted_pair_and_names_it(tmp_path, monkeypatch, capsys):
+    public = _mirror_tree(tmp_path, TWIN_BODY.replace("One paragraph", "A DIFFERENT paragraph"))
+    monkeypatch.setattr(RG, "MIRRORED_SKILLS", {"coding-python-thing": "libs/thing/skills/python-thing"})
+
+    assert RG.audit_mirrors(_marketplace_in(public)) == 1
+    out = capsys.readouterr().out
+    assert "DRIFT   coding-python-thing" in out
+    assert "1 of 1 mirrored pairs have drifted." in out
+
+
+def test_audit_mirrors_reports_in_sync_skipped_and_unlisted_pairs(tmp_path, monkeypatch, capsys):
+    # Control for the count: an in-sync pair and a twin that is not checked out are both zero,
+    # and a twin the manifest does not list is reported without being counted as drift.
+    public = _mirror_tree(tmp_path)
+    write(public / "KI" / "bitranox-skills" / "plugins" / "bitranox" / "skills" / "coding-python-other"
+          / "SKILL.md", MIRROR_BODY.replace("the thing", "the other thing"))
+    write(public / "libs" / "other" / "skills" / "python-other" / "SKILL.md",
+          TWIN_BODY.replace("the thing", "the other thing"))
+    monkeypatch.setattr(RG, "MIRRORED_SKILLS", {"coding-python-thing": "libs/thing/skills/python-thing",
+                                                "coding-python-absent": "libs/absent/skills/python-absent"})
+
+    assert RG.audit_mirrors(_marketplace_in(public)) == 0
+    out = capsys.readouterr().out
+    assert "in sync coding-python-thing" in out
+    assert "SKIP    coding-python-absent" in out
+    assert "UNLISTED coding-python-other" in out
+    assert "0 of 2 mirrored pairs have drifted." in out
+
+
+def test_audit_mirrors_with_no_public_tree_compares_nothing(tmp_path, capsys):
+    assert RG.audit_mirrors(tmp_path / "elsewhere" / "bitranox-skills") == 0
+    assert "no public/ tree" in capsys.readouterr().out
+
+
+@pytest.mark.parametrize("twin_body, expected", [
+    (TWIN_BODY.replace("One paragraph", "A DIFFERENT paragraph"), 1),
+    (TWIN_BODY, 0),
+], ids=["drifted", "in-sync"])
+def test_the_mirrors_flag_exits_on_the_drift_count(tmp_path, monkeypatch, twin_body, expected):
+    public = _mirror_tree(tmp_path, twin_body)
+    monkeypatch.setattr(RG, "MIRRORED_SKILLS", {"coding-python-thing": "libs/thing/skills/python-thing"})
+    root = _marketplace_in(public)
+    monkeypatch.setattr(RG, "repo_root", lambda: root)
+    monkeypatch.setattr(sys, "argv", ["repo-gate.py", "--mirrors"])
+
+    assert RG.main() == expected
+
+
+# --------------------------------------------------------------------------
+# --pytest-only, end to end: the exits CI relies on, driven through a real subprocess
+# --------------------------------------------------------------------------
+
+_GATE = Path(RG.__file__).resolve()
+
+
+def _pytest_only(repo):
+    # A git hook or a linked worktree can export GIT_DIR and friends; git reads them before cwd,
+    # so the child must not inherit them or it would resolve the wrong repo.
+    env = {k: v for k, v in os.environ.items() if not k.startswith(("GIT_", "PYTEST_"))}
+    subprocess.run(["git", "init", "-q"], cwd=repo, check=True, env=env)
+    return subprocess.run([sys.executable, str(_GATE), "--pytest-only"], cwd=repo, env=env,
+                          capture_output=True, text=True, timeout=120)
+
+
+def _suite_repo(tmp_path, tests, floor=None):
+    repo = tmp_path / "repo"
+    for rel, body in tests.items():
+        write(repo / rel, body)
+    if floor is not None:
+        write(repo / "plugins" / "bitranox" / "hooks" / RG.BASELINE_FILE, json.dumps({"collected": floor}))
+    return repo
+
+
+def test_pytest_only_fails_when_the_suite_collects_nothing(tmp_path):
+    # pytest exits 5 on zero collected; passing that through as success is how a renamed dir or
+    # a broken glob reads as a green CI run with nothing tested.
+    proc = _pytest_only(_suite_repo(tmp_path, {"pkg/not_a_test.py": "x = 1\n"}))
+    assert proc.returncode == 1, proc.stderr
+    assert "collected no tests" in proc.stderr
+
+
+def test_pytest_only_fails_when_the_count_is_under_the_floor(tmp_path):
+    proc = _pytest_only(_suite_repo(tmp_path, {"t/test_one.py": "def test_one():\n    assert True\n"},
+                                    floor=500))
+    assert proc.returncode == 1, proc.stderr
+    assert RG.BASELINE_FILE in proc.stderr
+
+
+def test_pytest_only_passes_a_suite_at_the_floor(tmp_path):
+    # Control: the same one-test suite with a floor it meets.
+    proc = _pytest_only(_suite_repo(tmp_path, {"t/test_one.py": "def test_one():\n    assert True\n"},
+                                    floor=1))
+    assert proc.returncode == 0, proc.stderr
+
+
+def test_pytest_only_passes_a_failing_run_s_exit_code_through(tmp_path):
+    proc = _pytest_only(_suite_repo(tmp_path, {"t/test_bad.py": "def test_bad():\n    assert False\n"},
+                                    floor=1))
+    assert proc.returncode == 1
+    assert "collected no tests" not in proc.stderr

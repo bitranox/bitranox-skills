@@ -201,7 +201,8 @@ def test_a_record_whose_message_is_not_a_dict_does_not_lose_the_scan(tmp_path, m
     # One odd record used to raise AttributeError out of the whole scan, dropping every hit in the
     # transcript AND last_assistant_message along with it.
     lines = [json.dumps({"type": "assistant", "message": "oops-a-string"}),
-             json.dumps({"type": "assistant", "message": {"content": "I was wrong - the real cause is the stale venv"}})]
+             json.dumps({"type": "assistant",
+                         "message": {"content": "I was wrong - the real cause is the stale venv"}})]
     _run(monkeypatch, _raw_event(_raw_transcript(tmp_path, lines),
                                  final="it turns out the flag is --check-tree"))
     snippets = [g["snippet"] for g in S.read_subagent_learnings("s1")]
