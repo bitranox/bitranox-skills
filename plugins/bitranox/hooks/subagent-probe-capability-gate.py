@@ -53,7 +53,7 @@ _DECLARATIONS = (
     r"do not read files, run commands",
     r"without using any tools",
 )
-_DECLARATION_RX = re.compile("|".join(_DECLARATIONS), re.I)
+_DECLARATION_RX = re.compile("|".join(_DECLARATIONS), re.IGNORECASE)
 
 # A declaration is an IMPERATIVE opening a sentence or a line. Embedded in a subordinate clause
 # ("it changes how we do not use tools that ...") it is description, not an instruction - caught
@@ -70,14 +70,33 @@ _SENTENCE_SPLIT = re.compile(r"[.!?\n]+")
 # cost is the other way: a sentence whose subject ends in a colon ("The rule we broke last week
 # was: do not use any tools") now reads as a label and DENIES. That is loud, the caller can
 # reword, and there is a test pinning it so it is not rediscovered as a bug.
-_BULLET_OR_LABEL = re.compile(r"^\s*(?:[-*+\u2022]\s+|\d+[.)]\s+)?(?:[A-Za-z][A-Za-z ]*:\s+)?")
+#
+# A politeness lead-in ("Please", "Kindly", with or without a comma) opens the sentence exactly as a
+# bullet does and carries no colon, so without its own alternative the politest spelling of the
+# declaration was the one that got through. Stripping it only EXPOSES what follows: "Please read
+# src/main.py" still has to open with a declaration to match, and it does not.
+_BULLET_OR_LABEL = re.compile(
+    r"^\s*(?:[-*+\u2022]\s+|\d+[.)]\s+)?(?:[A-Za-z][A-Za-z ]*:\s+)?(?:(?:please|kindly)\b,?\s*)?",
+    re.IGNORECASE)
 
 # "Do not use any tools OTHER THAN Read and Grep" says the opposite of a text-only declaration: the
 # dispatch needs tools and names them. Denying it sends the caller to an inert type that has none
 # of what the prompt just asked for. Only phrases that introduce a named exception count - "but" is
 # deliberately absent, because it also opens clauses that grant nothing, and a wrong ALLOW here is
 # the silent direction.
-_EXCEPTION = re.compile(r"\b(other than|except|besides|apart from)\b", re.I)
+#
+# The exception must follow "tools" DIRECTLY (an optional comma aside), because that is where it
+# names the tools granted. Searched over the rest of the sentence, a later, unrelated "except"
+# ("write in English except for code identifiers") turned a genuine text-only declaration into an
+# allow - the silent direction again.
+_EXCEPTION = re.compile(r"\s*,?\s*(other than|except|besides|apart from)\b", re.IGNORECASE)
+
+# "Do not use tools THAT write" is a relative clause, and it reads two ways the gate cannot tell
+# apart: a restriction ("that write", Read still wanted) or every tool there is ("that touch the
+# filesystem"). Allowing it would let the second reading through silently, so it still denies - but
+# with its own message, because the probe deny sends a caller who needs Read to an inert type that
+# has no Read, and tells them not to reword when rewording to a named exception is the remedy.
+_RELATIVE_CLAUSE = re.compile(r"\s*,?\s*(that|which)\b", re.IGNORECASE)
 
 # `don'?t` covered U+0027 alone, so the apostrophe every word processor produces walked past it.
 _APOSTROPHES = {ord(c): "'" for c in (chr(0x2019), chr(0x02BC), chr(0xFF07))}
@@ -96,16 +115,37 @@ _DENY = (
     "and treat anything the agent reports about the real system as contaminating the baseline."
 )
 
+# The suggested spelling sits in the message's only DOUBLE quotes, so a test can lift it out and
+# run it through the gate: a remedy in an error message is untested prose until its route is run.
+_DENY_RESTRICTION = (
+    "TOOL RESTRICTION THE GATE CANNOT READ. This dispatch's prompt limits tools with a relative "
+    "clause ('tools that ...'), which reads either as a restriction or as every tool there is "
+    "('tools that touch the filesystem'), so '{atype}' is refused rather than guessed about. If "
+    "the agent needs some tools, name them as an exception, for example "
+    "\"Do not use any tools other than Read and Grep\" - that spelling passes. If it needs none, "
+    "re-dispatch with subagent_type='bitranox:baseline-probe' (no Bash, Write, Edit or Read)."
+)
 
-def _declares_text_only(prompt):
-    """Pure: True when a SENTENCE of the prompt opens with a no-tools declaration, allowing for a
-    leading list bullet or short label, and not counting one that goes on to name an exception."""
+
+def _text_only_kind(prompt):
+    """Pure: how a prompt declares it needs no tools - "declaration", "restriction", or None.
+
+    A SENTENCE counts when it opens with a no-tools declaration, allowing for a leading list
+    bullet, label or politeness word. A named exception right after the match ("other than Read")
+    is not a declaration at all. A relative clause right after it ("tools that write") is a
+    "restriction". A plain declaration anywhere wins, so it is returned at once.
+    """
+    restricted = False
     for chunk in _SENTENCE_SPLIT.split((prompt or "").translate(_APOSTROPHES)):
         opening = _BULLET_OR_LABEL.sub("", chunk, count=1).strip()
         hit = _DECLARATION_RX.match(opening)
-        if hit and not _EXCEPTION.search(opening[hit.end():]):
-            return True
-    return False
+        if not hit or _EXCEPTION.match(opening, hit.end()):
+            continue
+        if _RELATIVE_CLAUSE.match(opening, hit.end()):
+            restricted = True
+            continue
+        return "declaration"
+    return "restriction" if restricted else None
 
 
 # A NAMED dispatch of a PROBE type is refused whatever its prompt says, because the name alone
@@ -156,9 +196,11 @@ def assess(tool_name, tool_input=None):
         return ("deny", _DENY_NAMED_PROBE.format(atype=atype, name=name))
     if atype.lower() in {t.lower() for t in INERT_AGENT_TYPES}:
         return (None, "")
-    if not _declares_text_only(str(tool_input.get("prompt") or "")):
+    kind = _text_only_kind(str(tool_input.get("prompt") or ""))
+    if kind is None:
         return (None, "")
-    return ("deny", _DENY.format(atype=atype or "the default agent"))
+    template = _DENY_RESTRICTION if kind == "restriction" else _DENY
+    return ("deny", template.format(atype=atype or "the default agent"))
 
 
 def main():
