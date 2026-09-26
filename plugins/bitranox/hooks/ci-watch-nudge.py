@@ -18,10 +18,17 @@ it sees the CI actually being watched, so the two halves cannot drift into disag
 "watched" looks like.
 
 A push is only recorded when it demonstrably LANDED. The test is local and needs no network: after
-a successful push the remote-tracking ref has moved, so `HEAD` and `@{u}` agree. A push that failed
-leaves the tracking ref behind and is not recorded - which matters because the usual shape here is
-`git push 2>&1 | tail -3`, a pipeline that exits 0 whatever git did, so the exit code is not
-evidence and the output is not parsed.
+a successful push the remote-tracking ref has moved. For a plain `git push` that means `HEAD` and
+`@{u}` agree; for a named branch refspec (`git push origin master`, `src:dst`) it means the pushed
+commit equals `refs/remotes/<remote>/<dst>`. A push that failed leaves the tracking ref behind and
+is not recorded - which matters because the usual shape here is `git push 2>&1 | tail -3`, a
+pipeline that exits 0 whatever git did, so the exit code is not evidence and the output is not
+parsed.
+
+Two limits, stated rather than hidden. A TAG push is recorded unverified: git keeps no
+remote-tracking ref for tags, so nothing local changes when one lands, and a rejected tag push is
+recorded like a landed one. A branch pushed to a URL instead of a named remote updates no tracking
+ref either, so it cannot pass the test and is not recorded.
 
 Exits 0 always, and emits nothing when it has no opinion.
 """
@@ -35,7 +42,14 @@ import sys
 from pathlib import Path
 
 import ci_watch_state as state
-from shell_text import LIST_SEP, commands_only, is_shell_tool, iter_segments, strip_heredoc_bodies
+from shell_text import (
+    LIST_SEP,
+    commands_only,
+    commands_only_aligned,
+    is_shell_tool,
+    iter_segments,
+    strip_heredoc_bodies,
+)
 
 __all__ = ["main", "notice"]
 
@@ -113,11 +127,12 @@ def _repo_dir(command: str, cwd: str, tool_name: str = "Bash") -> str | None:
     `cd`-ed to, which is NOT the event's cwd: measured 2026-09-12, a `cd /other/repo && git push`
     recorded the session's own repo and armed the gate on a commit it never pushed.
 
-    Structure is read from the masked form; the VALUE is then taken from the raw text at the same
-    offsets, because masking preserves length. Comparing values on the masked form would decide the
-    path by its filler, not by what it says.
+    Structure is read from the ALIGNED masked form (heredoc bodies blanked in place, not removed);
+    the VALUE is then taken from the raw text at the same offsets, because both steps preserve
+    length. Comparing values on the masked form would decide the path by its filler, not by what it
+    says, and finding them on the heredoc-STRIPPED form shifts every offset after a heredoc.
     """
-    found = _DASH_C.search(commands_only(command, tool_name))
+    found = _DASH_C.search(commands_only_aligned(command, tool_name))
     if not found:
         return _cwd_after_any_cd(command, cwd, tool_name)
     token = command[found.start(1):found.end(1)]
@@ -215,8 +230,10 @@ def _ssh_hostname(alias: str) -> str | None:
 
 def _push_remote(command: str, repo: str, tool_name: str = "Bash") -> str | None:
     """The remote this push targets: the first bare word after `push`, else the branch's
-    configured remote, else `origin`, which is git's own fallback."""
-    rest = _AFTER_PUSH.search(commands_only(command, tool_name))
+    configured remote, else `origin`, which is git's own fallback.
+
+    Found on the offset-preserving `commands_only_aligned` form and sliced from the raw command."""
+    rest = _AFTER_PUSH.search(commands_only_aligned(command, tool_name))
     if rest:
         span = rest.span("rest")
         words = [w for w in command[span[0]:span[1]].split() if not w.startswith("-")]
@@ -275,6 +292,21 @@ def _resolve_ref(repo: str, name: str) -> tuple[str, str] | None:
 
 _STATEMENT_SEP = LIST_SEP
 
+# A named ref that was pushed and did NOT land: record nothing, and do not fall back to the
+# current branch's landed test, which can pass for a commit this command never sent.
+_NOT_LANDED = ("", "")
+
+
+def _short_ref(name: str) -> str:
+    return name.replace("refs/tags/", "").replace("refs/heads/", "")
+
+
+def _branch_landed(repo: str, remote: str, dst: str, sha: str) -> bool:
+    """Did `sha` reach `<remote>/<dst>`? A landed push moves that remote-tracking ref onto it."""
+    tracking = _git(["rev-parse", "--verify", "-q", "refs/remotes/%s/%s^{commit}" % (remote, dst)],
+                    repo)
+    return bool(tracking) and tracking == sha
+
 
 def _statement_around(text: str, index: int) -> str:
     """The single statement containing `index`, so a flag in a NEIGHBOURING statement is not read
@@ -289,26 +321,42 @@ def _statement_around(text: str, index: int) -> str:
 
 
 def _pushed_ref(command: str, repo: str, tool_name: str = "Bash") -> tuple[str, str] | None:
-    """What this push actually built: (sha, display), or None to fall back to the branch test.
+    """What this push actually built: (sha, display); None to fall back to the branch test; or
+    `_NOT_LANDED` when a named branch was pushed and its tracking ref shows it did not arrive.
 
     A refspec is read from the text after `push`; a `src:dst` pair is resolved by its SOURCE, which
-    is the object being sent. Bulk `--tags` names no ref, so the newest local tag by creation date
+    is the object being sent, and a branch is then required to have landed on `<remote>/<dst>`
+    (see the module docstring for why a tag cannot be checked the same way). A leading `+` (force)
+    is not part of the name. Bulk `--tags` names no ref, so the newest local tag by creation date
     stands in - the tag just cut is the one whose run is wanted.
+
+    Found on the offset-preserving `commands_only_aligned` form and sliced from the raw command:
+    the heredoc-stripped form has lost lines, so its offsets point elsewhere in the raw text.
     """
-    rest = _AFTER_PUSH.search(commands_only(command, tool_name))
+    aligned = commands_only_aligned(command, tool_name)
+    rest = _AFTER_PUSH.search(aligned)
     if not rest:
         return None
     span = rest.span("rest")
     words = [w for w in command[span[0]:span[1]].split() if not w.startswith("-")]
     # The first bare word is the remote; the rest are refspecs.
+    unlanded = False
     for spec in words[1:]:
         if any(ch in spec for ch in _UNRESOLVABLE):
             return None
-        source = spec.split(":", 1)[0].replace("refs/tags/", "").replace("refs/heads/", "")
+        src, _, dst = spec.lstrip("+").partition(":")
+        source = _short_ref(src)
         found = _resolve_ref(repo, source) if source and source != "HEAD" else None
-        if found:
-            return found
-    if _BULK_TAGS.search(commands_only(command, tool_name)):
+        if not found:
+            continue
+        if found[1].startswith("branch ") and not _branch_landed(
+                repo, words[0], _short_ref(dst) or source, found[0]):
+            unlanded = True
+            continue
+        return found
+    if unlanded:
+        return _NOT_LANDED
+    if _BULK_TAGS.search(aligned):
         # In `for-each-ref` the LAST --sort key is the PRIMARY one (measured, not assumed), so
         # this reads as: newest by creation date, ties broken by version order. Creation date
         # alone is not enough - tags cut in the same second tie, and the fallback is plain
@@ -360,6 +408,8 @@ def notice(command, cwd: str = "", tool_name: str = "Bash") -> tuple[str, str, s
     if not _targets_a_watchable_forge(command, repo, tool_name):
         return None
     pushed = _pushed_ref(command, repo, tool_name)
+    if pushed == _NOT_LANDED:
+        return None
     if pushed:
         sha, branch = pushed
     else:

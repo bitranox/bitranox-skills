@@ -39,6 +39,21 @@ def repo(tmp_path):
     return work
 
 
+def _landed_on(repo, remote, branch="master"):
+    """Leave the remote-tracking ref a landed `git push <remote> <branch>` leaves behind.
+
+    The forge tests add a remote that is never really pushed to; without this the branch-refspec
+    landed test (rightly) refuses to record them, and each would pass or fail for that reason
+    instead of the forge it is about.
+    """
+    _git(repo, "update-ref", f"refs/remotes/{remote}/{branch}", "HEAD")
+
+
+def _head(repo, ref="HEAD"):
+    return subprocess.run(["git", "rev-parse", ref], cwd=str(repo), capture_output=True,
+                          text=True, check=True).stdout.strip()
+
+
 def _event(command, cwd, session="sess-1", tool="Bash"):
     return json.dumps({"tool_name": tool, "cwd": str(cwd), "session_id": session,
                        "tool_input": {"command": command}})
@@ -316,6 +331,7 @@ def test_a_push_to_a_non_github_forge_is_not_recorded(repo, capsys):
     """Measured on a fork whose pushes go to a private Gitea while `gh` resolves the checkout to
     the upstream repository, whose API answers 422 'No commit found for SHA'."""
     _git(repo, "remote", "add", "forge", "ssh://git.example.invalid/team/thing.git")
+    _landed_on(repo, "forge")   # so the skip below is about the forge, not an unlanded push
     assert hook.main(_event("git push forge master", repo)) == 0
     assert capsys.readouterr().out == ""
     assert state.pending_for(str(repo), "sess-1") == []
@@ -324,6 +340,7 @@ def test_a_push_to_a_non_github_forge_is_not_recorded(repo, capsys):
 def test_a_push_to_github_is_still_recorded(repo, capsys):
     """The control. Without it, a skip-everything bug would pass the test above."""
     _git(repo, "remote", "add", "gh", "https://github.com/owner/thing.git")
+    _landed_on(repo, "gh")
     assert hook.main(_event("git push gh master", repo)) == 0
     assert "ci_wait.py" in capsys.readouterr().out
     assert len(state.pending_for(str(repo), "sess-1")) == 1
@@ -333,6 +350,7 @@ def test_an_scp_style_github_remote_is_still_recorded(repo, capsys):
     """`git@github.com:owner/thing.git` names no scheme, so a URL parser that only splits on
     `://` reads it as a path and would skip a real GitHub push."""
     _git(repo, "remote", "add", "gh", "git@github.com:owner/thing.git")
+    _landed_on(repo, "gh")
     assert hook.main(_event("git push gh master", repo)) == 0
     assert "ci_wait.py" in capsys.readouterr().out
 
@@ -344,6 +362,7 @@ def test_an_enterprise_host_gh_holds_auth_for_is_recorded(repo, capsys, tmp_path
     (cfg / "hosts.yml").write_text("github.example.invalid:\n    user: someone\n", encoding="utf-8")
     monkeypatch.setenv("GH_CONFIG_DIR", str(cfg))
     _git(repo, "remote", "add", "ent", "https://github.example.invalid/owner/thing.git")
+    _landed_on(repo, "ent")
     assert hook.main(_event("git push ent master", repo)) == 0
     assert "ci_wait.py" in capsys.readouterr().out
 
@@ -428,3 +447,95 @@ def test_an_unresolvable_cd_target_refuses_rather_than_guessing():
     """A path built from an expansion cannot be resolved from the text, and guessing is how the
     wrong repository gets asked - the rule `-C` already follows."""
     assert hook._repo_dir("cd $HOME/repo && git push", "/cwd") is None
+
+
+# --- a named branch refspec must have LANDED, like the plain push ------------------------------
+# `_pushed_ref` resolved the LOCAL branch and returned it with no landed test, so a rejected
+# `git push origin master 2>&1 | tail -3` (a pipeline that exits 0) recorded a commit the remote
+# never received, contradicting the module docstring.
+
+
+def _commit_unpushed(repo, text="two"):
+    (repo / "f.txt").write_text(text + "\n", encoding="utf-8")
+    _git(repo, "add", "-A")
+    _git(repo, "commit", "-m", text)
+
+
+def test_a_branch_refspec_push_that_did_not_land_is_not_recorded(repo, capsys):
+    _commit_unpushed(repo)
+    assert hook.main(_event("git push origin master 2>&1 | tail -3", repo)) == 0
+    assert capsys.readouterr().out == ""
+    assert state.pending_for(str(repo), "sess-1") == []
+
+
+def test_a_branch_refspec_push_that_landed_is_recorded(repo, capsys):
+    """Control: the same command after the push really happened records the new commit."""
+    _commit_unpushed(repo)
+    _git(repo, "push", "origin", "master")
+    assert hook.main(_event("git push origin master 2>&1 | tail -3", repo)) == 0
+    assert "branch master" in json.loads(capsys.readouterr().out)["hookSpecificOutput"]["additionalContext"]
+    assert [e["sha"] for e in state.pending_for(str(repo), "sess-1")] == [_head(repo)]
+
+
+def test_an_unlanded_other_branch_does_not_fall_back_to_the_current_one(repo, capsys):
+    """The current branch passes its own landed test, so falling back to it would record a sha
+    this command never pushed."""
+    _git(repo, "checkout", "-q", "-b", "feature")
+    _commit_unpushed(repo, "feature work")
+    _git(repo, "checkout", "-q", "master")
+    assert hook.main(_event("git push origin feature", repo)) == 0
+    assert capsys.readouterr().out == ""
+    assert state.pending_for(str(repo), "sess-1") == []
+
+
+def test_a_src_dst_branch_push_is_judged_by_its_destination(repo, capsys):
+    _commit_unpushed(repo)
+    assert hook.main(_event("git push origin master:release", repo)) == 0
+    assert capsys.readouterr().out == ""                       # not pushed yet
+    _git(repo, "push", "origin", "master:release")
+    assert hook.main(_event("git push origin master:release", repo)) == 0
+    assert _head(repo)[:12] in capsys.readouterr().out          # landed on origin/release
+
+
+def test_a_force_refspec_is_resolved_without_its_plus(repo, capsys):
+    _commit_unpushed(repo)
+    _git(repo, "push", "origin", "+master")
+    assert hook.main(_event("git push origin +master", repo)) == 0
+    assert "branch master" in capsys.readouterr().out
+
+
+# --- a heredoc BEFORE the push must not shift where values are read ----------------------------
+# `_repo_dir`, `_push_remote` and `_pushed_ref` found their match on the heredoc-STRIPPED text and
+# sliced the RAW command at that offset, so every value after a heredoc was read from the wrong
+# characters: a tag push recorded the branch, and a `git -C` push was missed outright.
+
+_NOTES = "cat <<'EOF' > notes.txt\nrelease notes for the tag\nEOF\n"
+
+
+def test_a_heredoc_before_a_tag_push_still_records_the_tag(repo, capsys):
+    tag_sha = _tag(repo, "v9")
+    _commit_unpushed(repo)                   # HEAD moves on, so the branch sha is a wrong answer
+    _git(repo, "push", "origin", "master")
+    assert hook.main(_event(_NOTES + "git push origin v9", repo)) == 0
+    text = json.loads(capsys.readouterr().out)["hookSpecificOutput"]["additionalContext"]
+    assert "tag v9" in text and tag_sha[:12] in text
+    assert [e["sha"] for e in state.pending_for(str(repo), "sess-1")] == [tag_sha]
+
+
+def test_a_heredoc_before_a_dash_c_push_still_finds_the_repo(tmp_path, capsys):
+    other = _sibling_repo(tmp_path, "other")
+    cmd = f"cat <<'EOF' > n.txt\nsome notes\nEOF\ngit -C {other.as_posix()} push"
+    assert hook.main(_event(cmd, tmp_path)) == 0
+    assert _head(other)[:12] in capsys.readouterr().out
+    assert [e["sha"] for e in state.pending_for(str(tmp_path), "sess-1")] == [_head(other)]
+
+
+def test_a_heredoc_before_the_push_does_not_change_the_remote_read():
+    cmd = _NOTES + "git push gh master"
+    assert hook._push_remote(cmd, "/nonexistent-repo") == "gh"
+    assert hook._push_remote("git push gh master", "/nonexistent-repo") == "gh"   # control
+
+
+def test_a_heredoc_before_a_dash_c_names_the_real_repo():
+    cmd = "cat <<'EOF' > n.txt\nsome notes\nEOF\ngit -C /real/repo push"
+    assert _names(hook._repo_dir(cmd, "/cwd"), "/real/repo")
