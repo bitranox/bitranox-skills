@@ -504,3 +504,105 @@ def test_corrupt_state_starts_over_rather_than_crashing(tmp_path):
     state.write_text("{not json", encoding="utf-8")
     assert session.bash("echo again") == ""
     assert json.loads(state.read_text())["v"] == gate.STATE_VERSION
+
+
+# --------------------------------------------------------------- rank 10 regressions
+
+def test_a_powershell_call_names_its_subjects_like_bash():
+    """`mentions` returned nothing for any tool but Bash, while recovery_class and acting_text
+    already accepted PowerShell, so a PowerShell session could never arm or fire."""
+    command = "ssh admin@192.0.2.10 'Get-Item C:\\x'; qm rollback 4242 presnap"
+    assert gate.mentions("PowerShell", {"command": command}) == gate.mentions("Bash", {"command": command})
+    assert "host:192.0.2.10" in gate.mentions("PowerShell", {"command": command})
+    assert gate.mentions("Read", {"command": command}) == set()      # control: not a shell tool
+
+
+def test_a_powershell_session_fires_on_the_retry(tmp_path):
+    session = Session(tmp_path)
+    assert session.call("PowerShell", {"command": DESTROY}) == ""
+    assert session.call("PowerShell", {"command": UNDO}) == ""
+    message = session.call("PowerShell", {"command": RETRY})
+    assert "STOP-CHECK" in message and "host:192.0.2.10" in message and "mirror" in message
+
+
+def test_a_non_dict_tool_input_in_the_transcript_is_read_as_empty():
+    line = json.dumps({"message": {"content": [
+        {"type": "tool_use", "name": "Bash", "input": ["oops"]},
+        {"type": "tool_use", "name": "Bash", "input": "also not a dict"},
+        {"type": "tool_use", "name": "Bash", "input": {"command": "echo ok"}}]}})
+    assert list(gate._tool_calls(line + "\n")) == [("Bash", {}), ("Bash", {}),
+                                                    ("Bash", {"command": "echo ok"})]
+
+
+def test_a_poisoned_transcript_line_does_not_silence_the_session(tmp_path):
+    """One tool_use with a list `input` raised in _absorb before `off` was saved, so every later
+    call re-read the same line, raised again, and the gate was silent for the whole session."""
+    session = Session(tmp_path)
+    with open(session.transcript, "a", encoding="utf-8") as handle:
+        handle.write(json.dumps({"message": {"content": [
+            {"type": "tool_use", "name": "Bash", "input": ["oops"]}]}}) + "\n")
+    assert session.bash(DESTROY) == ""
+    assert session.bash(UNDO) == ""
+    assert "STOP-CHECK" in session.bash(RETRY)
+    assert list(session.home.rglob("*.recovery-gate.json")), "state was never written"
+
+
+@pytest.mark.parametrize("written", [True, False], ids=["in-transcript", "not-yet-written"])
+def test_the_reported_gap_counts_the_events_between_undo_and_retry(tmp_path, written):
+    """Undo is event 2 and the retry event 8, so the gap is 6. It read 7 whenever the gated call
+    was already in the transcript: the gap was taken AFTER absorbing that call."""
+    session = Session(tmp_path)
+    session.bash(DESTROY)
+    session.bash(UNDO)
+    session.filler(5)
+    message = session.bash(RETRY, written=written)
+    assert "event 2 UNDID" in message
+    assert "(about 6 events later)" in message
+
+
+def test_the_seen_ids_are_bounded_on_a_marathon_session():
+    """Past MAX_SEEN_IDS the singletons are dropped and a repeated identifier survives."""
+    records = [("Write", {"file_path": "/w/f%d.txt" % i}) for i in range(gate.MAX_SEEN_IDS + 1)]
+    records += [("Write", {"file_path": "/w/hot.txt"})] * 2
+    state = gate._absorb({}, records)
+    assert state["seen"] == {"f:hot.txt": 2}
+    # Control: at the bound nothing is dropped, so the test above is about crossing it.
+    state = gate._absorb({}, records[:gate.MAX_SEEN_IDS - 2] + records[-2:])
+    assert len(state["seen"]) == gate.MAX_SEEN_IDS - 1 and state["seen"]["f:hot.txt"] == 2
+
+
+NOTEBOOK_DAMAGE = {"notebook_path": "/w/cleanup.ipynb", "cell_id": "c1",
+                   "new_source": "!ssh root@hv.example.com 'zfs destroy tank/scratch'"}
+
+
+def test_a_notebook_edit_names_its_file_and_its_source_is_its_acting_text():
+    assert gate.mentions("NotebookEdit", NOTEBOOK_DAMAGE) == {"f:cleanup.ipynb"}
+    assert gate.acting_text("NotebookEdit", NOTEBOOK_DAMAGE) == NOTEBOOK_DAMAGE["new_source"]
+    assert gate.destructive_ops(gate.acting_text("NotebookEdit", NOTEBOOK_DAMAGE)) == {"destroy"}
+
+
+def test_a_destructive_notebook_cell_arms_an_undo_like_a_written_script(tmp_path):
+    """NotebookEdit is registered and counted, but its acting text was "", so a notebook cell that
+    destroyed something could never be the damage behind an undo."""
+    session = Session(tmp_path)
+    assert session.call("NotebookEdit", NOTEBOOK_DAMAGE) == ""
+    assert session.bash("ssh root@hv.example.com 'zfs rollback tank/scratch@clean'") == ""
+    assert "destroy" in session.bash("ssh root@hv.example.com 'zfs destroy tank/scratch'")
+
+
+def test_a_harmless_notebook_cell_arms_nothing(tmp_path):
+    """Control: the same sequence with a cell that destroys nothing stays silent."""
+    session = Session(tmp_path)
+    session.call("NotebookEdit", dict(NOTEBOOK_DAMAGE, new_source="print('hello')"))
+    session.bash("ssh root@hv.example.com 'zfs rollback tank/scratch@clean'")
+    assert session.bash("ssh root@hv.example.com 'zfs destroy tank/scratch'") == ""
+
+
+def test_a_non_dict_tool_input_on_stdin_is_read_as_empty(tmp_path):
+    """The event's own tool_input gets the guard the transcript's does: the call is counted and
+    the state saved, instead of a raise that skipped the save."""
+    session = Session(tmp_path)
+    session.filler(2)
+    assert session.call("Bash", ["not", "a", "dict"]) == ""
+    state = json.loads(next(iter(session.home.rglob("*.recovery-gate.json"))).read_text())
+    assert state["n"] == 3

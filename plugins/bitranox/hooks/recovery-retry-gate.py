@@ -217,9 +217,10 @@ def mentions(tool: str, tool_input: dict) -> set:
     """
     tool_input = tool_input or {}
     if tool in ("Write", "Edit", "NotebookEdit"):
-        name = _basename(tool_input.get("file_path") or "")
+        # NotebookEdit names its file `notebook_path`; the other two call it `file_path`.
+        name = _basename(tool_input.get("file_path") or tool_input.get("notebook_path") or "")
         return {"f:" + name} if name else set()
-    if tool != "Bash":
+    if not is_shell_tool(tool):
         return set()
     command = _PUBKEY.sub(" ", strip_leading_cd(strip_heredoc_bodies(str(tool_input.get("command") or ""))))
     found = {"vm:" + m.group(1) for m in _GUEST.finditer(command)}
@@ -234,7 +235,13 @@ def mentions(tool: str, tool_input: dict) -> set:
 
 
 def acting_text(tool: str, tool_input: dict) -> str:
-    """The text whose destructive operations count for this call. PURE."""
+    """The text whose destructive operations count for this call. PURE.
+
+    A notebook cell's `new_source` counts as a written script's content does: `!rm -rf` or a
+    `subprocess.run(["zfs", "destroy", ...])` in a cell is where the damage lives. It can supply
+    the DAMAGE behind an undo; like a Write it can never be the retry that fires, because its only
+    subject is a file and a machine undo only matches machine subjects.
+    """
     tool_input = tool_input or {}
     if is_shell_tool(tool):
         return str(tool_input.get("command") or "")
@@ -242,6 +249,8 @@ def acting_text(tool: str, tool_input: dict) -> str:
         return str(tool_input.get("content") or "")
     if tool == "Edit":
         return str(tool_input.get("new_string") or "")
+    if tool == "NotebookEdit":
+        return str(tool_input.get("new_source") or "")
     return ""
 
 
@@ -317,7 +326,9 @@ def _tool_calls(chunk: str):
     """(tool, tool_input) for every MAIN-session tool call in a transcript chunk. PURE.
 
     Sidechain entries are skipped: a subagent's calls are not this session's actions, and folding
-    them in makes one dispatched agent look like a burst of repeats.
+    them in makes one dispatched agent look like a burst of repeats. An `input` that is not an
+    object is read as empty: passed on as-is it raised in `_absorb` before the read offset was
+    saved, so the same line raised on every later call and the gate went silent for the session.
     """
     for raw in chunk.splitlines():
         raw = raw.strip()
@@ -335,7 +346,8 @@ def _tool_calls(chunk: str):
             continue
         for block in blocks:
             if isinstance(block, dict) and block.get("type") == "tool_use":
-                yield block.get("name") or "?", block.get("input") or {}
+                tool_input = block.get("input")
+                yield block.get("name") or "?", tool_input if isinstance(tool_input, dict) else {}
 
 
 def _read_new_lines(transcript: str, offset: int) -> tuple:
@@ -442,7 +454,9 @@ def main() -> int:
     if tool not in GATED_TOOLS or not session or not transcript:
         return 0
 
-    tool_input = event.get("tool_input") or {}
+    tool_input = event.get("tool_input")
+    if not isinstance(tool_input, dict):                  # the same guard `_tool_calls` applies
+        tool_input = {}
     text = acting_text(tool, tool_input)
     state = _load(session) or {"v": STATE_VERSION, "off": 0, "n": 0}
     chunk, offset = _read_new_lines(transcript, int(state.get("off") or 0))
@@ -450,11 +464,13 @@ def main() -> int:
     history, pending_record = split_pending(list(_tool_calls(chunk)), (tool, text))
     state = _absorb(state, history)
 
+    # This call's own event number, taken BEFORE it is absorbed below: read afterwards, `n` already
+    # counts it when it was in the transcript, and the reported gap came out one too high.
+    position = int(state.get("n") or 0) + 1
     hit = None
     if int(state.get("fires") or 0) < FIRE_CAP and not recovery_class(tool, tool_input):
         armed = [a for a in state.get("armed") or [] if int(a[0]) not in set(state.get("cited") or [])]
-        hit = matching_recovery(armed, mentions(tool, tool_input), destructive_ops(text),
-                                int(state.get("n") or 0) + 1)
+        hit = matching_recovery(armed, mentions(tool, tool_input), destructive_ops(text), position)
     if hit:
         index, subjects, ops = hit
         state["fires"] = int(state.get("fires") or 0) + 1
@@ -465,7 +481,7 @@ def main() -> int:
 
     if hit:
         index, subjects, ops = hit
-        message = build_message(index, subjects, ops, int(state.get("n") or 0) + 1 - index)
+        message = build_message(index, subjects, ops, position - index)
         sys.stdout.write(json.dumps({"hookSpecificOutput": {
             "hookEventName": "PreToolUse", "additionalContext": message}}) + "\n")
     return 0
