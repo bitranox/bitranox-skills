@@ -1,4 +1,4 @@
-# Handover - 2026-09-26 late, rank 10's last five targets fixed as 7.25.9, CI green
+# STALE - read 2026-09-26, work continued
 
 ## In flight
 
