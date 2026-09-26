@@ -146,3 +146,113 @@ def test_a_real_pyright_pin_still_counts(tmp_path):
     (tmp_path / ".venv").mkdir()
     toks = mod._tokens("pyright -p pyrightconfig.json")
     assert mod.pyright_without_pinned_interpreter(toks, tmp_path) is False
+
+
+# --- statement boundaries: the tokeniser must see what the shell sees ------------------
+
+
+def test_a_mid_word_hash_is_data_not_a_comment(tmp_path):
+    """`docs#tag` is one word to the shell. Reading its `#` as a comment dropped everything after
+    it, pyright included, so an unpinned run went unnudged."""
+    (tmp_path / ".venv").mkdir()
+    notice = mod.build_notice("curl -s http://localhost:8000/docs#tag && pyright", tmp_path)
+    assert notice is not None and "pyright" in notice
+
+
+def test_a_real_trailing_comment_does_not_pin_pyright(tmp_path):
+    """The direction the mid-word fix must not change: a word-initial `#` still starts a comment,
+    so a pin flag written only in the comment is not a pin."""
+    (tmp_path / ".venv").mkdir()
+    assert mod.build_notice("pyright  # -p pyrightconfig.json", tmp_path) is not None
+
+
+def test_a_newline_ends_the_pyright_statement(tmp_path):
+    """shlex never emits a newline token, so the next line's `-p` was read as pyright's pin."""
+    (tmp_path / ".venv").mkdir()
+    assert mod.build_notice("pyright\nmkdir -p build", tmp_path) is not None
+
+
+def test_a_newline_ends_the_find_statement(tmp_path):
+    """The same gap the other way: another line's `-newermt` was attributed to `find`."""
+    assert mod.build_notice("find . -name x\ngrep -- -newermt '-3 minutes' f", tmp_path) is None
+
+
+def test_a_relative_newermt_before_a_newline_is_still_flagged(tmp_path):
+    notice = mod.build_notice("find . -newermt '-3 minutes'\nls", tmp_path)
+    assert notice is not None and "newermt" in notice
+
+
+def test_a_glued_separator_still_separates(tmp_path):
+    """`sub&&pyright` is one shlex token, so pyright was never seen as a program."""
+    (tmp_path / ".venv").mkdir()
+    assert mod.build_notice("cd sub&&pyright", tmp_path) is not None
+
+
+def test_a_heredoc_body_naming_pyright_is_not_an_invocation(tmp_path):
+    (tmp_path / ".venv").mkdir()
+    assert mod.build_notice("cat > notes.md <<'EOF'\nrun pyright here\nEOF", tmp_path) is None
+
+
+# --- PowerShell: Windows paths and the .exe suffix ------------------------------------
+
+
+@pytest.mark.parametrize(
+    "command",
+    ["C:\\Python312\\Scripts\\pyright.exe --outputjson", "pyright.exe --outputjson", "PYRIGHT.EXE"],
+)
+def test_a_windows_pyright_is_recognised_on_powershell(command, tmp_path):
+    (tmp_path / ".venv").mkdir()
+    notice = mod.build_notice(command, tmp_path, tool_name="PowerShell")
+    assert notice is not None and "pyright" in notice
+
+
+def test_a_pinned_windows_pyright_is_silent_on_powershell(tmp_path):
+    (tmp_path / ".venv").mkdir()
+    command = "C:\\Python312\\Scripts\\pyright.exe --project ."
+    assert mod.build_notice(command, tmp_path, tool_name="PowerShell") is None
+
+
+def test_a_windows_find_with_a_relative_newermt_is_flagged_on_powershell(tmp_path):
+    command = "C:\\Program Files\\Git\\usr\\bin\\find.exe . -newermt '-3 minutes'"
+    notice = mod.build_notice(command, tmp_path, tool_name="PowerShell")
+    assert notice is not None and "-3 minutes" in notice
+
+
+def test_a_windows_find_with_an_iso_newermt_is_silent_on_powershell(tmp_path):
+    command = "find.exe . -newermt '2026-07-31T10:00:00'"
+    assert mod.build_notice(command, tmp_path, tool_name="PowerShell") is None
+
+
+def test_the_hook_reads_tool_name_for_powershell(tmp_path):
+    """End to end: main() must hand the event's tool_name to the tokeniser, or the PowerShell arm
+    is split by POSIX rules and the backslashes are eaten."""
+    (tmp_path / ".venv").mkdir()
+    event = {
+        "tool_name": "PowerShell",
+        "tool_input": {"command": "C:\\Python312\\Scripts\\pyright.exe --outputjson"},
+        "cwd": str(tmp_path),
+    }
+    r = subprocess.run(
+        [sys.executable, str(_HOOK)], input=json.dumps(event), capture_output=True, text=True, check=False
+    )
+    assert r.returncode == 0
+    assert "pyright" in json.loads(r.stdout)["hookSpecificOutput"]["additionalContext"]
+
+
+# --- the venv probe's error path --------------------------------------------------------
+
+
+class _UnreadableTree:
+    """A cwd whose venv probe raises, as `Path.is_dir` does on Python 3.10-3.13 when a parent
+    directory denies search permission (EACCES is not one of the errnos it swallows there)."""
+
+    def __truediv__(self, _other):
+        return self
+
+    def is_dir(self):
+        raise PermissionError(13, "Permission denied")
+
+
+def test_an_unreadable_tree_is_silent_rather_than_raising():
+    statements = mod._tokens("pyright --outputjson")
+    assert mod.pyright_without_pinned_interpreter(statements, _UnreadableTree()) is False
