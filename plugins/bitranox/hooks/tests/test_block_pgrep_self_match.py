@@ -1,8 +1,9 @@
 """Tests for block-pgrep-self-match.py (PreToolUse(Bash|PowerShell) bracket-trick guard).
 
-Contract: reads a PreToolUse event JSON on stdin. Exit 2 (with stderr) blocks only
-when a pgrep/pkill bracket-trick pattern [X]rest has its de-bracketed literal Xrest
-appearing contiguously elsewhere in the same command. Every other path exits 0.
+Contract: reads a PreToolUse event JSON on stdin. Exit 2 (with stderr) blocks when a
+pgrep/pkill call carrying -f/--full either has a plain-literal pattern, or has a
+bracket-trick pattern [X]rest whose de-bracketed literal Xrest appears contiguously
+elsewhere in the same command. Every other path exits 0.
 
 All content is ASCII.
 """
@@ -82,7 +83,7 @@ def test_explicit_self_exclusion_passes(monkeypatch):
 
 def test_git_commit_heredoc_body_not_blocked(monkeypatch):
     # The real false positive: a commit message (heredoc body) that DISCUSSES the pattern.
-    # A heredoc body is stdin data, never the shell's argv, so it cannot self-match.
+    # A heredoc body is stdin data that runs nothing, so no pgrep/pkill call is made from it.
     cmd = "git commit -q -F - <<'MSG'\nnudge: pkill/pgrep -f -> procsig, ip neigh -> guestip\nMSG"
     assert run_main(monkeypatch, cmd) == 0
 
@@ -216,3 +217,105 @@ def test_a_dash_f_with_no_pattern_at_all_is_not_blocked(monkeypatch):
 def test_the_bracket_form_still_passes(monkeypatch):
     """The case this guard was built to allow, kept beside the widening."""
     assert run_main(monkeypatch, 'pgrep -f "[n]ginx"') == 0
+
+
+# --- rank 10 readjudication, 2026-09-26 ----------------------------------------------------------
+
+def run_bash(monkeypatch, command):
+    """Drive main() with the event shape production sends, tool_name included."""
+    payload = json.dumps({"tool_name": "Bash", "tool_input": {"command": command}})
+    monkeypatch.setattr(sys, "stdin", io.StringIO(payload))
+    return B.main()
+
+
+def test_a_substitution_inside_a_commit_message_still_blocks(monkeypatch):
+    """`$(...)` inside a double-quoted message RUNS, so the pgrep in it is a real call. Rewriting
+    every `-m "<text>"` to `-m X` erased it before anything looked."""
+    assert run_bash(monkeypatch, 'git commit -m "$(pgrep -f nginx | wc -l) still up"') == 2
+    assert run_bash(monkeypatch, 'git commit -m "`pgrep -f nginx | wc -l` still up"') == 2
+
+
+def test_a_plain_commit_message_mentioning_the_footgun_still_passes(monkeypatch):
+    """The direction the fix must not reach: message TEXT is stored, never run. The `git -C <dir>`
+    spelling is the reason the message rewrite is narrowed rather than dropped - the shared sink
+    stripper stops at the `-C` value and does not see that statement as a commit."""
+    assert run_bash(monkeypatch, 'git commit -m "pgrep -f nginx is a footgun"') == 0
+    assert run_bash(monkeypatch, 'git -C /repo commit -m "pkill -f nginx is a footgun"') == 0
+
+
+def test_a_heredoc_body_line_starting_with_the_tag_does_not_end_the_body(monkeypatch):
+    """bash ends a heredoc only at a line that IS the delimiter. `EOF is ...` is body text, so the
+    `pkill -f` line after it is still data."""
+    cmd = ("cat > NOTES.md <<'EOF'\nWhy not to use it:\nEOF is only a terminator at column 0\n"
+           "pkill -f nginx  <- never do this\nEOF")
+    assert run_bash(monkeypatch, cmd) == 0
+
+
+def test_a_real_call_after_a_heredoc_still_blocks(monkeypatch):
+    assert run_bash(monkeypatch, "cat > NOTES.md <<'EOF'\nhello\nEOF\npkill -f nginx") == 2
+
+
+def test_a_bracket_pattern_without_dash_f_is_not_a_leak(monkeypatch):
+    """Without -f, pgrep matches comm (the program name), so an echo label naming the process cannot
+    make it match the shell. This is the form the remedy text itself recommends."""
+    assert run_bash(monkeypatch, 'pgrep -x "[s]shd"; echo "sshd up?"') == 0
+    assert run_bash(monkeypatch, 'pgrep "[s]shd"; echo "sshd up?"') == 0
+
+
+def test_a_bracket_leak_with_dash_f_or_full_still_blocks(monkeypatch):
+    assert run_bash(monkeypatch, 'pgrep -f "[s]shd"; echo "=== sshd running? ==="') == 2
+    assert run_bash(monkeypatch, 'pgrep --full "[s]shd"; echo "=== sshd running? ==="') == 2
+
+
+def test_a_commented_out_call_is_not_an_invocation(monkeypatch):
+    """A `#` comment is never executed, so a pkill named in one is not a call."""
+    assert run_bash(monkeypatch, "# pkill -f nginx  <- never do this\nsystemctl stop nginx") == 0
+
+
+def test_a_real_call_with_a_trailing_comment_still_blocks(monkeypatch):
+    assert run_bash(monkeypatch, "pkill -f nginx  # stop it") == 2
+
+
+def test_a_comment_still_counts_as_a_bracket_leak(monkeypatch):
+    """The comment is blanked only where CALLS are read. It is still part of the shell's own
+    command line, so its literal still defeats the bracket trick."""
+    assert run_bash(monkeypatch, 'pgrep -f "[n]ginx"  # is nginx up') == 2
+
+
+def test_a_grep_pattern_naming_the_footgun_is_still_blocked(monkeypatch):
+    """Pinned choice: a quoted argument to grep still reads as a call. Whether an argument is inert
+    is decided by ONE allowlist in shell_text (strip_data_sink_statements), and grep is not on it;
+    a second, hook-local list would drift from it. The false positive is visible and has a cheap
+    way round, which the second assertion pins: bracketing the grep pattern."""
+    assert run_bash(monkeypatch, 'grep -rn "pkill -f nginx" hooks/') == 2
+    assert run_bash(monkeypatch, 'grep -rn "[p]kill -f nginx" hooks/') == 0
+
+
+def test_a_pidfile_option_is_not_the_f_flag(monkeypatch):
+    """--pidfile and --logpidfile read PIDs from a file and match no command line, which is the
+    kind of signal the remedy text recommends. Any long option containing an `f` was read as -f."""
+    assert run_bash(monkeypatch, "pkill --pidfile /run/nginx.pid") == 0
+    assert run_bash(monkeypatch, "pgrep --logpidfile /run/x.log -F /run/nginx.pid") == 0
+
+
+def test_the_full_long_form_and_bundled_short_form_still_block(monkeypatch):
+    assert run_bash(monkeypatch, "pkill --full nginx") == 2
+    assert run_bash(monkeypatch, "pkill -af nginx") == 2
+
+
+def test_a_heredoc_body_counts_as_a_bracket_leak(monkeypatch):
+    """A heredoc body is part of the command string the shell was started with, so it IS in the
+    shell's own /proc/<pid>/cmdline and its literal defeats the bracket trick exactly as an echo
+    label does. Measured on this host: `pgrep -f "[M]ARKER"` followed by a heredoc whose body holds
+    MARKER printed the shell's own PID; without the body it printed nothing."""
+    cmd = "pgrep -f \"[n]ginx\"; cat <<'EOF' > notes.txt\nnginx config\nEOF"
+    assert run_bash(monkeypatch, cmd) == 2
+
+
+def test_a_commit_message_counts_as_a_bracket_leak(monkeypatch):
+    assert run_bash(monkeypatch, 'pgrep -f "[n]ginx"; git commit -m "nginx restart"') == 2
+
+
+def test_a_heredoc_without_the_literal_leaves_the_bracket_trick_intact(monkeypatch):
+    cmd = "pgrep -f \"[n]ginx\"; cat <<'EOF' > notes.txt\nhello\nEOF"
+    assert run_bash(monkeypatch, cmd) == 0

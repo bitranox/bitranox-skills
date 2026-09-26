@@ -6,7 +6,8 @@ line of the shell running the check. So the checker can match itself: pgrep
 reports a false positive, or pkill kills its own shell mid-command (truncated
 output). Over SSH it kills the ssh shell (exit 255); locally it kills the script.
 
-Two shapes cause it, and this hook blocks both.
+Two shapes cause it, and this hook blocks both. Both are read only inside a
+`pgrep`/`pkill` call that carries `-f` (alone or bundled, as in `-af`) or `--full`.
 
 1. BRACKET LEAK.
 
@@ -14,8 +15,9 @@ Two shapes cause it, and this hook blocks both.
 
    The bracket trick `[n]ginx` is meant to stop the pattern from matching the
    checker's own argv (the literal `[n]ginx` is not the regex `nginx`). But the
-   SAME keyword printed verbatim in an echo/printf label (or a comment) in the
-   same command re-introduces the literal, defeating the trick.
+   SAME keyword appearing verbatim anywhere else in the command - an echo/printf
+   label, a comment, a commit message, a heredoc body - re-introduces the literal,
+   because the whole command string is the shell's own cmdline.
 
 2. PLAIN LITERAL.
 
@@ -25,16 +27,23 @@ Two shapes cause it, and this hook blocks both.
    cmdline contains that very literal. No bracket, no leak needed - the pattern
    itself is the leak.
 
-Blocking is precise, so false positives stay near zero. Only commands that call
-pgrep/pkill are inspected, and these forms are NOT blocked because they cannot
-self-match or already handle it:
+A call is looked for only in text the shell will EXECUTE: heredoc bodies, `#`
+comments, plain commit-message text, and the operands of echo/printf and the other
+sinks `shell_text.strip_data_sink_statements` lists are blanked first. A `$(...)`
+or backtick substitution inside a message still runs, so it is kept.
+
+These forms are NOT blocked because they cannot self-match or already handle it:
   - a pattern containing `$` (`pkill -f "$name"`): argv holds the UNEXPANDED text,
     so the expanded value is not in the shell's own cmdline;
   - a bracket-trick pattern whose literal does not appear elsewhere (shape 1 only
     fires on the actual leak);
-  - `pgrep`/`pkill` WITHOUT `-f`: matches comm, not the full cmdline, so a shell
-    named bash/sh cannot match a program-name pattern;
+  - `pgrep`/`pkill` WITHOUT `-f`/`--full`, bracketed or not: matches comm, not the
+    full cmdline, so a shell named bash/sh cannot match a program-name pattern.
+    `-F`/`--pidfile` and `-L`/`--logpidfile` are not `-f` either;
   - a command that already excludes the current shell (`grep -vw "$$"`).
+
+A pgrep/pkill named inside a quoted argument of a program NOT on that sink list -
+`grep -rn "pkill -f x"` - still reads as a call; bracket its first letter to pass.
 
 Pure standard library: no jq, no shell. Reads the PreToolUse event JSON on stdin.
 Exit 2 blocks the call and shows stderr to the model; every other path (including
@@ -45,7 +54,11 @@ import json
 import re
 import sys
 
-from shell_text import strip_data_sink_statements
+from shell_text import (
+    mask_data_regions,
+    strip_data_sink_statements,
+    strip_heredoc_bodies,
+)
 
 # A pgrep/pkill invocation up to the next shell separator, so only the flags and
 # pattern belonging to THIS call are read.
@@ -58,34 +71,57 @@ from shell_text import strip_data_sink_statements
 _PROGRAM = r"(?<![\w-])(?:pgrep|pkill)(?![\w.-])"
 _INVOCATION = re.compile(_PROGRAM + r"[^|;&\n]*")
 
-# `-f`, alone or bundled (e.g. -af) or in its long form (--full), followed by its pattern
-# argument: a double-quoted, single-quoted, or bare token.
+# `-f`, alone or bundled (e.g. -af), or its exact long form `--full`.
 #
 # The FLAG must start at a token boundary. Without that guard the `-` inside a hyphenated word
 # matched: `nudge-detector-footguns reformat-md-tables` was read as the flag `-footguns` carrying
-# the pattern `reformat-md-tables`, inventing an invocation out of two filenames. The dash RUN is
-# `-{1,2}` rather than a single `-` because `--full` is a real self-matcher and is matched today;
-# requiring one dash would have silently dropped it.
-_DASH_F_PATTERN = re.compile(
-    r"(?<![\w-])-{1,2}[a-zA-Z]*f[a-zA-Z]*\s+(?:\"([^\"]*)\"|'([^']*)'|(\S+))")
+# the pattern `reformat-md-tables`, inventing an invocation out of two filenames.
+#
+# The long form is spelled out rather than "any long option containing an f": that reading took
+# `--pidfile` and `--logpidfile` for `-f`, and both read PIDs from a file and match no command line.
+# A bundle is letters only, and pgrep's only lowercase-f short option is -f itself.
+_DASH_F_FLAG = r"(?<![\w-])(?:-[a-zA-Z]*f[a-zA-Z]*|--full)"
+_HAS_DASH_F = re.compile(_DASH_F_FLAG + r"(?=\s|$)")
+
+# The flag followed by its pattern argument: a double-quoted, single-quoted, or bare token.
+_DASH_F_PATTERN = re.compile(_DASH_F_FLAG + r"\s+(?:\"([^\"]*)\"|'([^']*)'|(\S+))")
 
 _BRACKET_TOKEN = re.compile(r"\[[^\]]\][A-Za-z0-9_./@:+-]+")
 
-# A heredoc: `<<TAG` (optionally `<<-`, quoted tag) then its body up to a closing TAG line. The body
-# is stdin DATA, never the shell's own argv, so a pgrep/pkill named in it cannot self-match.
-_HEREDOC = re.compile(r"<<-?\s*(['\"]?)(\w+)\1[^\n]*\n.*?\n[ \t]*\2\b", re.DOTALL)
-
-# A `git commit` message argument (`-m`/`--message`, quoted or bare). git runs git, not pkill, so the
-# message text cannot self-match a pgrep/pkill call; and a real pgrep pattern follows `-f`, never `-m`.
+# A `git commit` message argument (`-m`/`--message`, quoted or bare). Its TEXT is stored, never run.
+# Kept beside the shared sink stripper because that one stops at `git -C <dir> commit` - the `-C`
+# value is not a flag, so the statement is not recognised as a commit there.
 _COMMIT_MSG = re.compile(r"(?:-m|--message)(?:=|\s+)(?:\"[^\"]*\"|'[^']*'|\S+)")
 
+# `$(` and a backtick RUN what they enclose, even inside a double-quoted message, so a message that
+# carries one is left for the invocation search: `git commit -m "$(pgrep -f x | wc -l) up"` runs a
+# real pgrep. A substitution inside SINGLE quotes runs nothing and is kept too, which errs toward a
+# visible false block rather than a silent miss.
+_RUNS_SUBSTITUTION = re.compile(r"\$\(|`")
 
-def strip_data_bodies(cmd):
-    """Blank out text that is DATA, not a command - heredoc bodies and commit-message args - before
-    self-match scanning, so a commit that merely DISCUSSES `pkill -f` is not read as invoking it."""
-    out = _HEREDOC.sub(lambda m: "<<" + m.group(2), cmd)
-    out = _COMMIT_MSG.sub("-m X", out)
-    return out
+
+def _blank_comments(text, tool_name):
+    """`text` with every `#` comment turned into spaces, length preserved.
+
+    `mask_data_regions` already decides which `#` starts a comment (not one inside quotes, not one
+    mid-word) and masks exactly those to SPACES, while everything else it masks becomes filler. So
+    a space in the mask where the text has none is a comment character, and nothing else changes.
+    """
+    masked = mask_data_regions(text, tool_name=tool_name or "Bash")
+    return "".join(" " if mask == " " else char for char, mask in zip(text, masked))
+
+
+def strip_data_bodies(cmd, tool_name=None):
+    """Remove text the shell will not EXECUTE - heredoc bodies, comments, plain commit messages - so a
+    command that merely DISCUSSES `pkill -f` is not read as invoking it.
+
+    Heredoc bodies go through the shared `strip_heredoc_bodies`, which ends a body only at a line that
+    IS the delimiter, as bash does; a body line merely starting with the tag stays body.
+    """
+    out = strip_heredoc_bodies(cmd)
+    out = _blank_comments(out, tool_name)
+    return _COMMIT_MSG.sub(
+        lambda m: m.group(0) if _RUNS_SUBSTITUTION.search(m.group(0)) else "-m X", out)
 
 
 def bracket_leaks(cmd, haystack=None):
@@ -110,6 +146,10 @@ def bracket_leaks(cmd, haystack=None):
     # search pattern, and the bracket form there is correct usage, not a footgun.
     leaked = []
     for call in _INVOCATION.findall(cmd):
+        # Without -f/--full the call matches comm, the program name, never a command line, so no
+        # literal elsewhere in the command can make it match the shell.
+        if not _HAS_DASH_F.search(call):
+            continue
         for tok in _BRACKET_TOKEN.findall(call):
             literal = tok[1] + tok[3:]  # drop the '[' and the ']'
             if literal in haystack:
@@ -150,13 +190,13 @@ def main() -> int:
 
     # Two views of the command, because the two halves of this guard ask different questions.
     #
-    # `haystack` drops only what the shell never puts in its own argv at all - a heredoc body and a
-    # commit message. `commands` additionally blanks statements that merely PRINT or STORE their
-    # argument, and is what the invocation search reads, so `echo \'pkill -f x\'` is no longer
-    # mistaken for a call. The leak search deliberately keeps reading `haystack`: an echo label IS
-    # the leak, so blanking it there would delete the finding rather than a false positive.
-    haystack = strip_data_bodies(cmd)
-    commands = strip_data_sink_statements(haystack, data.get("tool_name"))
+    # `haystack` is where a leaked literal is searched for, and it is the RAW command: the shell is
+    # started with the whole command string, heredoc bodies, comments and commit messages included,
+    # so all of it is in the cmdline `pgrep -f` matches. `commands` is what the invocation search
+    # reads, and it keeps only what EXECUTES, so `echo \'pkill -f x\'` is not mistaken for a call.
+    tool_name = data.get("tool_name")
+    haystack = cmd
+    commands = strip_data_sink_statements(strip_data_bodies(cmd, tool_name), tool_name)
 
     # Fast path: only guard commands that call pgrep/pkill.
     if not re.search(_PROGRAM, commands):
