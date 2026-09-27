@@ -1,4 +1,4 @@
-# Handover - 2026-09-28 01:25, ranks 80 and 82 closed; 7.29.1 pushed, its CI still running
+# STALE - read 2026-09-28, work continued
 
 ## In flight
 
