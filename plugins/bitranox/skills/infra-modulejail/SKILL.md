@@ -61,11 +61,13 @@ Feed each name through `resolve` and re-feed new names until the set stops growi
 the loop, and it has to WRITE the file the next step reads:
 
 ```bash
-export -f resolve
+# Call `resolve` in THIS shell. Never hand it to a child through `xargs sh -c`: on Debian and
+# Proxmox `sh` is dash, which never sees an exported bash function, so every call fails
+# "resolve: not found", the set never grows, and the kept modules' dependencies land in block.list.
 LC_ALL=C sort -u keep.raw > keep.closure
 while :; do
   before=$(wc -l < keep.closure)
-  xargs -a keep.closure -rn1 -I{} sh -c 'resolve "$1"' _ {} \
+  while read -r m; do resolve "$m"; done < keep.closure \
     | cat - keep.closure | LC_ALL=C sort -u > keep.next
   mv keep.next keep.closure
   [ "$(wc -l < keep.closure)" = "$before" ] && break
@@ -267,7 +269,8 @@ refusal list as unfinished work even when the feature looks healthy.
 ## Verify (differential, not by inspection)
 
 ```bash
-modprobe -n -v dccp     # a BLOCKED name -> resolves to /bin/true (or /bin/false); does not load
+modprobe -n -v dccp     # a BLOCKED name -> an `install` line (the step-3 logger command,
+                        #                   or /bin/true), never an insmod path; loads nothing
 modprobe -n -v veth     # a KEPT name    -> resolves to a real insmod path
 ```
 
