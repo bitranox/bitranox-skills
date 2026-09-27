@@ -968,3 +968,135 @@ def test_pending_contributions_in_a_marketplace_repo_are_listed(tmp_path, monkey
     _, out = run_with_stdin(monkeypatch, capsys, make_plugin_root(tmp_path), cwd)
     ctx = _ctx(out)
     assert "check-tree misses sideways refs" in ctx and "skill:meta-self-improve" in ctx
+
+
+# --------------------------------------------------------------------------
+# A checkout that fell BEHIND its upstream must not present its stale backlog as current.
+# All work here runs in worktrees, so nothing fast-forwards the main checkout: measured, it sat
+# 219 commits behind origin/master and the backlog block listed seven items that were closed
+# upstream, with nothing on screen saying so. Real repositories below, no stubbed git.
+# --------------------------------------------------------------------------
+
+import os  # noqa: E402
+import subprocess  # noqa: E402
+
+#: git reads these BEFORE cwd; a push from a linked worktree exports GIT_DIR to its hooks, and
+#: the pre-push gate runs this suite, so an inherited one would aim every call at the real repo.
+_GIT_SCOPE_VARS = ("GIT_DIR", "GIT_WORK_TREE", "GIT_INDEX_FILE", "GIT_OBJECT_DIRECTORY",
+                   "GIT_ALTERNATE_OBJECT_DIRECTORIES", "GIT_COMMON_DIR", "GIT_NAMESPACE",
+                   "GIT_PREFIX", "GIT_QUARANTINE_PATH")
+
+
+def _git_env():
+    env = {k: v for k, v in os.environ.items() if k not in _GIT_SCOPE_VARS}
+    env.update(GIT_AUTHOR_NAME="t", GIT_AUTHOR_EMAIL="t@example.invalid",
+               GIT_COMMITTER_NAME="t", GIT_COMMITTER_EMAIL="t@example.invalid",
+               GIT_CONFIG_NOSYSTEM="1", LC_ALL="C")
+    return env
+
+
+def _g(cwd, *args):
+    return subprocess.run(["git", *args], cwd=str(cwd), env=_git_env(), check=True,
+                          capture_output=True, text=True, encoding="utf-8").stdout.strip()
+
+
+def _commit_open_work(repo, text, msg):
+    _write_open_work(repo, text)
+    _g(repo, "add", "OPEN-WORK.md")
+    _g(repo, "commit", "-q", "-m", msg)
+
+
+_STALE = "- [ ] (2026-09-01) [10] USER: closed upstream long ago\n"
+_FRESH = ("- [x] (2026-09-01) [10] USER: closed upstream long ago | closed: shipped\n"
+          "- [ ] (2026-09-20) [80] FOUND: raised upstream after the clone\n")
+
+
+@pytest.fixture
+def behind_clone(tmp_path, monkeypatch):
+    """A clone whose master is one fetched commit behind origin/master."""
+    for var in _GIT_SCOPE_VARS:
+        monkeypatch.delenv(var, raising=False)
+    origin = tmp_path / "origin"
+    origin.mkdir()
+    _g(origin, "init", "-q", "-b", "master")
+    _commit_open_work(origin, _STALE, "first")
+    clone = tmp_path / "clone"
+    _g(tmp_path, "clone", "-q", str(origin), str(clone))
+    _commit_open_work(origin, _FRESH, "close one, raise one")
+    _g(clone, "fetch", "-q", "origin")
+    return clone
+
+
+def test_a_behind_checkout_lists_the_upstream_backlog(tmp_path, monkeypatch, capsys, behind_clone):
+    _, out = run_with_stdin(monkeypatch, capsys, make_plugin_root(tmp_path), str(behind_clone))
+    ctx = _ctx(out)
+    assert "raised upstream after the clone" in ctx
+    assert "closed upstream long ago" not in ctx
+    assert "1 commit behind origin/master" in ctx
+
+
+def test_a_behind_checkout_with_its_own_backlog_edits_keeps_them_and_warns(
+        tmp_path, monkeypatch, capsys, behind_clone):
+    # Uncommitted local edits are work nobody else has: replacing them with upstream would hide
+    # them, so the local file is listed and the reader is told it may be stale.
+    _write_open_work(behind_clone, _STALE + "- [ ] (2026-09-27) [20] USER: typed here, not pushed\n")
+    _, out = run_with_stdin(monkeypatch, capsys, make_plugin_root(tmp_path), str(behind_clone))
+    ctx = _ctx(out)
+    assert "typed here, not pushed" in ctx
+    assert "1 commit behind origin/master" in ctx
+    assert "may be stale" in ctx
+
+
+def test_a_behind_branch_that_committed_its_own_backlog_change_keeps_it(
+        tmp_path, monkeypatch, capsys, behind_clone):
+    _commit_open_work(behind_clone, _STALE + "- [ ] (2026-09-27) [30] FOUND: committed locally\n",
+                      "local backlog edit")
+    _, out = run_with_stdin(monkeypatch, capsys, make_plugin_root(tmp_path), str(behind_clone))
+    ctx = _ctx(out)
+    assert "committed locally" in ctx
+    assert "may be stale" in ctx
+
+
+def test_an_up_to_date_checkout_adds_no_note(tmp_path, monkeypatch, capsys, behind_clone):
+    _g(behind_clone, "merge", "-q", "--ff-only", "origin/master")
+    _, out = run_with_stdin(monkeypatch, capsys, make_plugin_root(tmp_path), str(behind_clone))
+    ctx = _ctx(out)
+    assert "raised upstream after the clone" in ctx
+    assert "behind" not in ctx
+
+
+def test_a_branch_without_upstream_is_compared_with_origin_head(
+        tmp_path, monkeypatch, capsys, behind_clone):
+    # A worktree branch is created with no upstream; origin/HEAD is what it fell behind.
+    _g(behind_clone, "remote", "set-head", "origin", "master")
+    _g(behind_clone, "checkout", "-q", "-b", "topic", "--no-track", "master")
+    _, out = run_with_stdin(monkeypatch, capsys, make_plugin_root(tmp_path), str(behind_clone))
+    ctx = _ctx(out)
+    assert "raised upstream after the clone" in ctx
+    assert "1 commit behind origin/master" in ctx
+
+
+def test_a_repo_with_no_remote_reads_the_file_on_disk(tmp_path, monkeypatch, capsys):
+    for var in _GIT_SCOPE_VARS:
+        monkeypatch.delenv(var, raising=False)
+    repo = tmp_path / "solo"
+    repo.mkdir()
+    _g(repo, "init", "-q", "-b", "master")
+    _commit_open_work(repo, _STALE, "first")
+    _, out = run_with_stdin(monkeypatch, capsys, make_plugin_root(tmp_path), str(repo))
+    ctx = _ctx(out)
+    assert "closed upstream long ago" in ctx
+    assert "behind" not in ctx
+
+
+def test_a_behind_checkout_whose_upstream_dropped_the_backlog_keeps_the_local_copy(
+        tmp_path, monkeypatch, capsys, behind_clone):
+    origin = tmp_path / "origin"
+    _g(origin, "rm", "-q", "OPEN-WORK.md")
+    _g(origin, "commit", "-q", "-m", "drop backlog")
+    _g(behind_clone, "fetch", "-q", "origin")
+    _, out = run_with_stdin(monkeypatch, capsys, make_plugin_root(tmp_path), str(behind_clone))
+    ctx = _ctx(out)
+    assert "closed upstream long ago" in ctx
+    assert "2 commits behind origin/master" in ctx
+    assert "has no OPEN-WORK.md" in ctx

@@ -21,6 +21,7 @@ import datetime
 import json
 import os
 import re
+import subprocess
 import sys
 import time
 from pathlib import Path
@@ -286,6 +287,72 @@ def _age(raised, today):
     return "raised %d day%s ago" % (days, "" if days == 1 else "s")
 
 
+#: git reads these before cwd, and a push from a linked worktree exports GIT_DIR to its hooks: an
+#: inherited one would answer every question below about some other repository.
+_GIT_SCOPE_VARS = ("GIT_DIR", "GIT_WORK_TREE", "GIT_INDEX_FILE", "GIT_OBJECT_DIRECTORY",
+                   "GIT_ALTERNATE_OBJECT_DIRECTORIES", "GIT_COMMON_DIR", "GIT_NAMESPACE",
+                   "GIT_PREFIX", "GIT_QUARANTINE_PATH")
+_BEHIND_READ_UPSTREAM = ("This checkout is %(n)s behind %(ref)s as of the last fetch, so this list "
+                         "is read from %(ref)s. Other files on disk (handover.md too) are older "
+                         "than %(ref)s: fast-forward the checkout before reading them.\n")
+_BEHIND_KEPT_LOCAL = ("This checkout is %(n)s behind %(ref)s as of the last fetch and has its own "
+                      "changes to OPEN-WORK.md, so this list is the local copy and may be stale: "
+                      "merge %(ref)s before trusting it.\n")
+_BEHIND_NO_UPSTREAM_COPY = ("This checkout is %(n)s behind %(ref)s as of the last fetch, and "
+                            "%(ref)s has no OPEN-WORK.md, so this list is the local copy and may "
+                            "be stale.\n")
+
+
+def _git(proj, *args):
+    """stdout of a read-only git call in `proj`, or None on any failure. Never raises."""
+    env = {k: v for k, v in os.environ.items() if k not in _GIT_SCOPE_VARS}
+    env["LC_ALL"] = "C"
+    try:
+        done = subprocess.run(["git", *args], cwd=str(proj), env=env, capture_output=True,
+                              text=True, encoding="utf-8", errors="replace", timeout=3)
+    except (OSError, subprocess.SubprocessError):
+        return None
+    return done.stdout if done.returncode == 0 else None
+
+
+def _upstream_ref(proj):
+    """The ref this checkout should be compared with: its upstream, else origin/HEAD.
+
+    Worktree branches are created with no upstream, and origin/HEAD is what they fall behind.
+    """
+    for args in (("rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{upstream}"),
+                 ("symbolic-ref", "-q", "--short", "refs/remotes/origin/HEAD")):
+        ref = (_git(proj, *args) or "").strip()
+        if ref:
+            return ref
+    return None
+
+
+def _backlog_text(proj):
+    """(OPEN-WORK.md text, note) - the upstream copy when this checkout only lags behind it.
+
+    Nothing fast-forwards a main checkout while the work happens in worktrees, and a stale file
+    reads exactly like a current one: measured, a checkout 219 commits behind listed seven items
+    closed upstream. Only the LAST FETCH is consulted - a session start never touches the network.
+    When the checkout changed the file itself (committed or not), that change exists nowhere
+    else, so the local copy is kept and the note says it may be stale.
+    """
+    disk = (Path(proj) / "OPEN-WORK.md").read_text(encoding="utf-8", errors="replace")
+    ref = _upstream_ref(proj)
+    behind = (_git(proj, "rev-list", "--count", "HEAD..%s" % ref) or "").strip() if ref else ""
+    if not behind.isdigit() or behind == "0":
+        return disk, ""
+    fill = {"n": "%s commit%s" % (behind, "" if behind == "1" else "s"), "ref": ref}
+    base = (_git(proj, "merge-base", "HEAD", ref) or "").strip()
+    untouched = base and _git(proj, "diff", "--quiet", base, "--", "OPEN-WORK.md") is not None
+    if not untouched:
+        return disk, _BEHIND_KEPT_LOCAL % fill
+    upstream = _git(proj, "show", "%s:./OPEN-WORK.md" % ref)
+    if upstream is None:
+        return disk, _BEHIND_NO_UPSTREAM_COPY % fill
+    return upstream, _BEHIND_READ_UPSTREAM % fill
+
+
 def open_work_context(proj, today=None, budget=None):
     """Surface the STANDING backlog, ranked, and - like the contribution queue - do NOT consume it.
 
@@ -297,11 +364,11 @@ def open_work_context(proj, today=None, budget=None):
     """
     try:
         today = today or datetime.date.today()
-        raw = (Path(proj) / "OPEN-WORK.md").read_text(encoding="utf-8", errors="replace")
+        raw, note = _backlog_text(proj)
         items = _parse_open_work(raw, today)
         if not items:
             return None
-        head = _OPEN_WORK_HEADER % len(items)
+        head = note + _OPEN_WORK_HEADER % len(items)
         allowed = _ESSENTIALS_CEILING_BYTES if budget is None else budget
         # The first item is always shown, however long: one oversized item must not reduce the
         # whole block to a bare count, which would hide the very item ranked most urgent.
@@ -311,7 +378,7 @@ def open_work_context(proj, today=None, budget=None):
         # estimate: the estimate let a budget through that the always-shown first line and the
         # count line then overran together, by up to that count line's own length.
         if allowed < _listing_floor(head, lines, _OPEN_WORK_MORE):
-            return _OPEN_WORK_COMPACT % len(items)
+            return note + _OPEN_WORK_COMPACT % len(items)
         return _fit_listing(head, lines, allowed, _OPEN_WORK_MORE)
     except Exception:  # noqa: BLE001 - never wedge a session start
         return None

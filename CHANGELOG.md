@@ -29,6 +29,20 @@ than the change, so entries reconstructed from them would read like coverage wit
 a hole nobody has drawn a line under is one that gets rediscovered and half-filled - which is how
 two "versions with no entry" notes came to sit in this file disagreeing with it.
 
+## [7.29.0]
+
+### Added
+
+- The session-start backlog block now checks the checkout against its upstream, or against
+  `origin/HEAD` for a branch with none, as of the last fetch (no network call). When the checkout
+  is behind and has not changed `OPEN-WORK.md` itself, the block lists the upstream copy and says
+  how many commits behind the checkout is, and that the other files on disk, `handover.md`
+  included, are older too. When the checkout has its own edits to the file, committed or not, the
+  block keeps the local copy and says it may be stale. The same happens when upstream has no
+  backlog file. A checkout that is current, has no remote, or where git fails gets the old
+  behaviour. Before this, a main checkout that nothing fast-forwarded listed items that had been
+  closed upstream, with nothing saying the list was stale.
+
 ## [7.28.2]
 
 ### Changed
