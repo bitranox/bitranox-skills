@@ -19,8 +19,8 @@ host you cannot reach. This skill is the safe procedure.
    of the tree.
 2. **Keep the block RUNTIME-ONLY. Never bake it into the initramfs.** This is what makes
    a mistake survivable (see "Why runtime-only").
-3. **Prove three invariants against a dry-run before you apply**, and validate the gate
-   against a known-negative.
+3. **Gate the exact file you will install BEFORE it goes near `/etc/modprobe.d`**, and
+   validate the gate against a known-negative.
 4. **A host with no console/OOB power is not hardened until a real reboot proved it while
    you could still recover it.**
 
@@ -117,7 +117,11 @@ find "/lib/modules/$(uname -r)" -name '*.ko*' \
 comm -23 all.mods keep.closure > block.list
 ```
 
-### 3. Apply as a RUNTIME modprobe override - not the initramfs
+### 3. Build the candidate file - in the working directory, NOT in /etc
+
+Write the file you intend to apply into the working directory, and nothing else. Nothing under
+`/etc/modprobe.d` changes until the gate in step 4 has passed on THIS file, so a failing gate
+leaves the host exactly as it was.
 
 ```bash
 # one directive per line; comments on their OWN line (modprobe.d does not parse
@@ -130,26 +134,21 @@ comm -23 all.mods keep.closure > block.list
 # stop condition of the discovery loop, so it terminates on its first pass and reports
 # the jail finished.
 awk '{printf "install %s /bin/sh -c '"'"'/usr/bin/logger -t modulejail \"blocked: %s\" 2>/dev/null; exit 0'"'"'\n", $1, $1}' block.list \
-  > /etc/modprobe.d/modulejail-blacklist.conf
-depmod -a
+  > candidate.conf
 ```
 
-Do **not** run `update-initramfs`/`proxmox-boot-tool refresh` to "make it permanent" - the
-runtime file already blocks every post-boot load. `install` overrides only intercept FUTURE
-loads, so nothing already running is touched and the live host is safe by construction. The
-file takes effect on the NEXT load attempt immediately - `modprobe` re-reads `modprobe.d` on
-every call - so no reboot is needed to START blocking; the reboot in step 5 only proves the
-host still BOOTS with the block in place.
+### 4. The invariant gate - on candidate.conf, BEFORE anything is written
 
-### 4. The invariant gate (run against the dry-run BEFORE trusting it)
+Gate the file step 5 will install, not the list it was built from: read the blocked names back
+OUT of `candidate.conf`, so a generator bug between `block.list` and the file cannot pass
+unseen. Refuse to apply unless ALL hold:
 
-Refuse to apply unless ALL hold:
-
-- **No currently-loaded module is in `block.list`.**
-- **No whitelisted module or anything in its dependency closure is in `block.list`.**
-- **No boot-critical module is in `block.list`** (see the tier below).
-- **`block.list` is non-empty** (an empty list means the pipeline failed and you have a
-  false "success").
+- **No currently-loaded module is blocked by `candidate.conf`.**
+- **No whitelisted module or anything in its dependency closure is blocked.**
+- **No boot-critical module is blocked** (see the tier below).
+- **The file is non-empty, and in the logger form unless `/usr/bin/logger` is absent** (an
+  empty file means the pipeline failed and you have a false "success"; a `/bin/true` file
+  silences the discovery step).
 
 **Capture the dry-run from the right STREAM.** A tool that prints its would-be blacklist to
 STDERR hands a stdout-reading verifier an EMPTY set, and then every invariant above passes
@@ -158,9 +157,17 @@ Measured on one implementation: stdout carried 1 summary line and 0 `install` li
 carried 6725. Redirect both and assert the parsed count is what the summary claims.
 
 ```bash
-# "dry run" = build the file and count it BEFORE moving it into /etc/modprobe.d.
-awk '{print "install", $1, "/bin/true"}' block.list > candidate.conf
-wc -l < block.list; grep -c '^install ' candidate.conf   # must be equal, and non-zero
+# the names this FILE blocks, read back out of it
+awk '$1=="install"{print $2}' candidate.conf | LC_ALL=C sort -u > candidate.names
+wc -l < block.list; wc -l < candidate.names   # must be equal, and non-zero
+grep -c 'logger -t modulejail' candidate.conf  # must be that same number (logger form)
+lsmod | awk 'NR>1{print $1}' | LC_ALL=C sort -u | LC_ALL=C comm -12 - candidate.names  # must print nothing
+LC_ALL=C comm -12 keep.closure candidate.names                                         # must print nothing
+# repeat that comm against your boot-critical list (see the tier below)
+# Dry run of THIS file alone (-C), loads nothing. Use --show-depends, not -n -v: -n -v
+# prints NOTHING for a module that is already loaded, which reads like a missing module.
+modprobe --show-depends -C candidate.conf dccp   # blocked -> the logger `install` line
+modprobe --show-depends -C candidate.conf veth   # kept    -> an insmod path
 # If you drive this with a generator instead, capture BOTH streams and count both - some
 # print the would-be blacklist to stderr:
 #   <your-generator> --dry-run >out.txt 2>err.txt
@@ -168,11 +175,27 @@ wc -l < block.list; grep -c '^install ' candidate.conf   # must be equal, and no
 ```
 
 **Validate the gate against a known-negative:** drop one obviously-required module (e.g.
-`veth` on an LXC host, or your root-disk controller) from the KEEP set and re-run the gate -
-it MUST flag it. A gate that passes your removal is not checking anything. See
-`bitranox:process-review-verification-before-completion`.
+`veth` on an LXC host, or your root-disk controller) from the KEEP set, rebuild
+`candidate.conf`, and re-run the gate - it MUST flag it. A gate that passes your removal is not
+checking anything. See `bitranox:process-review-verification-before-completion`.
 
-### 5. The reboot-while-recoverable gate (mandatory)
+### 5. Apply as a RUNTIME modprobe override - not the initramfs
+
+Only after step 4 passed, install the file the gate checked, unchanged:
+
+```bash
+install -m 0644 candidate.conf /etc/modprobe.d/modulejail-blacklist.conf
+depmod -a
+```
+
+Do **not** run `update-initramfs`/`proxmox-boot-tool refresh` to "make it permanent" - the
+runtime file already blocks every post-boot load. `install` overrides only intercept FUTURE
+loads, so nothing already running is touched and the live host is safe by construction. The
+file takes effect on the NEXT load attempt immediately - `modprobe` re-reads `modprobe.d` on
+every call - so no reboot is needed to START blocking; the reboot in step 6 only proves the
+host still BOOTS with the block in place.
+
+### 6. The reboot-while-recoverable gate (mandatory)
 
 Before the host ever goes somewhere you cannot reach it: `reboot` it for real (at least one
 cold power cycle), while you still have console or power access, and confirm afterward - SSH
@@ -209,10 +232,11 @@ above all, but also filesystem crypto and netfilter helpers - names it by ALIAS 
 use, so no closure of the KEEP set can predict it. Whitelist the feature, watch it still fail,
 and the failure has MOVED rather than resolved.
 
-The block is silent by construction. `install X /bin/true` runs `/bin/true` INSTEAD of inserting
-the module, so `modprobe X` prints nothing and exits 0 while loading nothing - success by every
-signal a caller can test. The symptom then surfaces somewhere else entirely and never mentions a
-module.
+The block is silent to the caller by construction. An `install X <command>` line runs the
+command INSTEAD of inserting the module - the step-3 logger command, or a bare `/bin/true` - so
+`modprobe X` prints nothing and exits 0 while loading nothing - success by every signal a caller
+can test. The logger form leaves one syslog line under the `modulejail` tag; `/bin/true` leaves
+no trace at all. The symptom then surfaces somewhere else entirely and never mentions a module.
 
 Two different failures come out of one jail, and they look nothing alike:
 
@@ -228,9 +252,10 @@ sweep every whitelist entry's own `modinfo -F depends` rather than trusting the 
 
 ```bash
 # Refusals are logged under this syslog tag - the discovery channel. This works ONLY if
-# step 3 generated the logger form; with bare `install X /bin/true` lines nothing is
-# written and the query below is empty on a fully-blocking jail. Verify before you trust
-# an empty result:  grep -c logger /etc/modprobe.d/modulejail-blacklist.conf
+# the installed file is in the logger form (step 3); with bare `install X /bin/true`
+# lines nothing is written and the query below is empty on a fully-blocking jail.
+# Verify before you trust an empty result:
+#   grep -c logger /etc/modprobe.d/modulejail-blacklist.conf
 journalctl -t modulejail --since "-1h" \
   | sed -n 's/.*blocked: \([a-zA-Z0-9_-]*\).*/\1/p' | sort | uniq -c | sort -rn
 ```
@@ -269,13 +294,14 @@ refusal list as unfinished work even when the feature looks healthy.
 ## Verify (differential, not by inspection)
 
 ```bash
-modprobe -n -v dccp     # a BLOCKED name -> an `install` line (the step-3 logger command,
-                        #                   or /bin/true), never an insmod path; loads nothing
-modprobe -n -v veth     # a KEPT name    -> resolves to a real insmod path
+# --show-depends, not -n -v: -n -v prints NOTHING for a module that is already loaded
+modprobe --show-depends dccp   # a BLOCKED name -> an `install` line (the step-3 logger
+                               #                   command, or /bin/true), never an insmod path
+modprobe --show-depends veth   # a KEPT name    -> a real insmod path
 ```
 
-Re-run any whitelist change through steps 1-4 and regenerate the file; the generated
-`/etc/modprobe.d/modulejail-blacklist.conf` is host-specific and per-kernel.
+Re-run any whitelist change through steps 1-5 - rebuild `candidate.conf`, gate it, then install
+it; the generated `/etc/modprobe.d/modulejail-blacklist.conf` is host-specific and per-kernel.
 
 Regenerating alone is not enough: a unit that already failed on the missing module stays failed,
 so the correct fix reads as ineffective. Clear it and retry. Clear the whole chain, not just the
@@ -289,19 +315,20 @@ swapon --show                      # the outcome; the unit going active is not t
 
 ## Common mistakes
 
-| Mistake                                           | Consequence                                                  |
-|---------------------------------------------------|--------------------------------------------------------------|
-| Baking the block into the initramfs               | A wrong entry bricks early boot before SSH - unrecoverable   |
-| Hand-picking a short blocklist                    | Barely reduces attack surface; misses the autoloaded classes |
-| Blocking by name without the dependency closure   | Kills a dependency of a kept module; kept driver breaks      |
-| `blacklist X` instead of `install X /bin/true`    | `blacklist` only stops alias autoload, not an explicit load  |
-| Trailing inline `# comment` on an `install` line  | modprobe.d mis-parses it; block silently wrong               |
-| Empty `block.list` read as success                | Pipeline failed; you hardened nothing and think you did      |
-| Relocating before a real cold-reboot test         | First real boot at the unreachable site is the test          |
-| Trusting the dependency closure to be complete    | Runtime `request_module()` helpers are invisible to it       |
-| Reading a working feature as "nothing is blocked" | A built-in fallback can hide a refusal that breaks elsewhere |
-| Regenerating without clearing the failed unit     | Unit stays failed; the correct fix looks ineffective         |
-| Reading coverage off `lsmod` instead of the lists | Loaded-only modules are kept by accident, lost on a regen    |
+| Mistake                                           | Consequence                                                      |
+|---------------------------------------------------|------------------------------------------------------------------|
+| Baking the block into the initramfs               | A wrong entry bricks early boot before SSH - unrecoverable       |
+| Hand-picking a short blocklist                    | Barely reduces attack surface; misses the autoloaded classes     |
+| Blocking by name without the dependency closure   | Kills a dependency of a kept module; kept driver breaks          |
+| `blacklist X` instead of `install X /bin/true`    | `blacklist` only stops alias autoload, not an explicit load      |
+| Trailing inline `# comment` on an `install` line  | modprobe.d mis-parses it; block silently wrong                   |
+| Empty `block.list` read as success                | Pipeline failed; you hardened nothing and think you did          |
+| Writing to `/etc/modprobe.d` before the gate      | It blocks at once; a failing gate finds the host already changed |
+| Relocating before a real cold-reboot test         | First real boot at the unreachable site is the test              |
+| Trusting the dependency closure to be complete    | Runtime `request_module()` helpers are invisible to it           |
+| Reading a working feature as "nothing is blocked" | A built-in fallback can hide a refusal that breaks elsewhere     |
+| Regenerating without clearing the failed unit     | Unit stays failed; the correct fix looks ineffective             |
+| Reading coverage off `lsmod` instead of the lists | Loaded-only modules are kept by accident, lost on a regen        |
 
 ## Real-world impact
 
