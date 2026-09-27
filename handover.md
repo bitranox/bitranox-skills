@@ -1,106 +1,84 @@
-# STALE - read 2026-09-27, work continued
+# Handover - 2026-09-27 22:10, ranks 30, 40, 60 and 76 closed; nothing part-done
 
 ## In flight
 
-Nothing is part-done in this repo. 7.26.0 and 7.27.0 are released; the commit carrying this file
-also carries the rank 12 update in `OPEN-WORK.md`.
+Nothing is part-done. Four backlog items closed and shipped this session, each pushed with CI
+watched:
 
-Both user decisions from this session are now taken:
+- 7.27.1 `83d7743c` - rank 30: anchor_edit backups `.bak.001` upward, next = highest + 1, widens past 999.
+- 7.28.0 `e94ad1d7` - rank 40: `anchor_edit.py reap FILE [--apply]`, refuses unless git can restore the file.
+- 7.28.1 `e560ddec` - rank 60: lint's "unframed" renamed `unlabelled` (style advisory); no sweep.
+- lib_layered_config 5.7.0 `f019f5f` (on PyPI) + bitranox-skills 7.28.2 `10ef1b8b` - rank 76:
+  `with_overrides` records supplied keys as layer `override`, path None; skill twins updated.
 
-- **Decide mode: DONE on the user's word.** `classifier_skill_router = decide` is set here; it goes
-  live once the installed plugin is 7.27.0 (`/plugin marketplace update bitranox-skills`, then
-  `/reload-plugins`). Until then 7.26.0 reads it as off: keyword nudges as before, no router shadow rows.
-- **igittigitt twin: PUSHED on the user's word** (`3924aea`, plugin 2.2.6); its CI was running at
-  handover time - check it with ci_wait on that sha.
+CI on `10ef1b8b` was still running when this was written - check it first (see "How to verify").
 
 ## Committed, or not
 
-- Pushed, CI green: 7.26.0 `e73574f7` (rank 20 skills fixes + rank 95), `e7ff880e` (OPEN-WORK closes
-  20 and 95), 7.27.0 `ccbb5d43` (skill router decide mode). CI on `ccbb5d43`: see "How to verify".
-- Memory store (tree-top, not this repo): the fact
-  `reference-claude-code-hooks-cannot-read-or-change-the-session-model` was rewritten through the
-  engine at its owning level (this repo's `CLAUDE.local.md`); new title "Claude Code hooks can watch
-  or veto a model switch, never choose one". Not committed to the store's git by this session.
-- Queued in contrib_queue (target hook): `repo-gate.py --mirror-of` reads the main checkout's copy,
-  not the worktree; the repo-gate PreToolUse hook judges the SESSION cwd, not the repo a command
-  targets (confirmed: an OPEN-WORK-only commit blocked for mirror drift from the main checkout, then
-  passed once the cwd was in the worktree).
-- Main checkout: still ~200 commits behind origin/master with another session's `PLAN-JEV-SKILL.md`
-  / `TODO-JEV.md` staged (OPEN-WORK rank 150). Left alone; all work here ran in worktrees.
-- Worktrees left: `.claude/worktrees/rank20-int` and `.claude/worktrees/rank12-jev` (both fully
-  pushed; remove with wtclean), plus `rank20-adj` from the previous session.
+- bitranox-skills: everything above is on origin/master; the commit carrying this file adds the
+  rank 12 and rank 160 notes in `OPEN-WORK.md`.
+- Memory store (tree-top, not this repo): fact
+  `reference-config-with-overrides-keeps-the-replaced-layer-s-provenance` rewritten through the
+  engine at its owning level (`projects/`) to the 5.7.0 behaviour. Not committed to the store's git.
+- Main checkout: still ~220 commits behind with the staged `PLAN-JEV-SKILL.md`/`TODO-JEV.md`
+  (rank 150). Left alone; all work ran in `.claude/worktrees/rank30-bak-pad`.
 
 ## Decided, and why - do not reopen
 
-- Rank 12 order: rank 12 outranked rank 20 once its data block lifted (772 eligible rows); the user
-  chose both in parallel.
-- Router verdict: pre-registered outcome DECIDE-MODE (Jev 17 right / 2 wrong vs keywords 0 right / 70
-  wrong picks, 87 prompts, five blind opus judges). The user chose "build decide mode" over re-testing
-  the gate first.
-- Decide mode scope: typed prompts only (the panel judged 0 notification turns); a Jev "no pick"
-  injects nothing (no keyword fallback - the panel judged keyword picks noise); a stale cached pick
-  falls back to keywords; one dedup identity (the Skill-tool name) across both paths.
-- The PREREG was amended BEFORE any label: the relative-count rule alone chose decide mode on a
-  synthetic all-wrong panel, so absolute floors were added (precision >= 0.6, USEFUL-ITEMS >= 5).
-- Fixers never bump plugin.json; the integrator bumps once and commits blocked follow-ups on the
-  integration branch (B2 and B5 follow-ups landed that way).
+- Rank 30: past 999 keep counting (user). Rank 40: separate verb, not automatic reaping (user) -
+  the tool cannot tell its own `.bak` from a foreign one.
+- Rank 60: no sweep (user). The 5.37.0 probe measured the FRONTMATTER frame; the Why/How labels
+  were never measured, and all 87 remaining bodies carry their reasoning as prose.
+- Rank 76: fix the library default, not 30 copies (user). Label is `override`, a constant
+  `OVERRIDE_LAYER`, deliberately NOT a `Layer` enum member (Layer names loaded sources; callers
+  may iterate it). Provenance changes only at paths the merge REPLACED, so loader entries for list
+  elements and empty tables survive (a leaf-walk version dropped them; a test pins it).
+
+## Decided against, and why
+
+- Committing the formatter's realignment of `coding-python-new-public-library/SKILL.md`: it is a
+  mirrored skill and needs both twins plus a checklist - that is rank 176, not this work.
 
 ## Still open, untouched
 
-`OPEN-WORK.md` is the list; read it first. Rank 12 carries the decide-mode result and its CURRENT
-NEXT; new FOUND line rank 186 holds what the rank 20 fixers noticed and left.
+`OPEN-WORK.md` is the list. Rank 12 waits on about a day of decide rows; next live item by rank is 80.
 
 ## Lessons for the next nap
 
-- When pre-registering a decision rule that compares two arms by relative counts, dry-run it on
-  synthetic all-right / all-wrong / one-arm-right panels first: an arm that picks less wins every
-  relative test, so the rule needs absolute floors.
-- When a bitranox-skills fan-out forbids fixers to touch plugin.json, say in the brief that the
-  version gate will block their plugins/ commits and that they leave the work uncommitted for the
-  integrator.
-- When running repo-gate.py --ci by hand, run it under CI's dependency set (uv run --with ...): under
-  bare python3 whole modules importorskip away (~4.8k tests instead of ~10k) and it still says "all
-  checks passed".
-- When a subagent's report must be harvested, read the transcript's tool_use input: every hand-back
-  in this session came through SubagentHandback or SendMessage, and B5's auditors reported to main
-  because their spawner was between turns.
-- When a backlog line names work by a relative label ("the reviewer half"), write what the thing IS
-  in the line itself: the label outlived every record of its meaning.
-- When a PreToolUse nudge names a shipped jig for a memory fact edit (factedit.py), use it instead of
-  hand-rolling the frontmatter strip and re-add.
-- When a subagent probes a public package index, tell it never to put the user's email in a
-  User-Agent or contact field.
-- When a Windows CI cell fails on tests that build Bash commands from tmp_path, check the command
-  quotes the path before blaming the hook: bash strips unquoted backslashes.
-- Windows Python 3.13: Path.resolve() does not raise on an embedded NUL; os.path.isabs("\\r") is
-  False (drive-relative).
-- tooling: the repo-gate PreToolUse hook judges the SESSION cwd; until fixed, cd into the target
-  worktree in a separate command before committing or pushing from it.
-- tooling: wtclean dry-run then --apply works; `git worktree add -b <b> origin/master` is the pattern
-  while the main checkout is stale.
+- When the reformat-md-tables hook re-dirties a committed file you never touched and the commit
+  gate then blocks, a plain `git checkout --` is undone by the next Bash call (it picks files by
+  mtime within 120 s); restore and `touch -d '1 hour ago'` in ONE command, and fix the file at root.
+- When a backlog item or lint cites a measured multiplier, trace which variable the measurement
+  varied before acting: "unframed" meant no-frontmatter in the probe and missing-labels in the
+  lint, and the shared word moved the 5x onto a 206-item sweep.
+- When one defect sits in N template-copied repos, look for the shared library call first: a
+  library-default fix reaches every consumer through floating floors with zero repo edits.
+- When rebuilding derived metadata after a merge, record what the merge REPLACED rather than
+  re-walking the merged leaves: a leaf walk drops entries the producer keyed on non-leaves.
+- A GitHub run for a push can be created ~25 minutes after the push; a watcher reading
+  "in_progress" with a fresh createdAt is queueing, not hung.
+- tooling: `repo-gate.py --mirror-of` compares against the MAIN checkout's twin, not the
+  worktree's (already queued); diff the two files directly to verify a mirror sync from a worktree.
 
 ## The exact next action
 
-Confirm the installed plugin is 7.27.0 and that decide rows appear in the shadow log
-(`decide_path` field). Rank 12's step 2 waits on about a day of decide sessions; until then the
-next workable item is the top live one in `OPEN-WORK.md`.
+Confirm CI on `10ef1b8b`, then work `OPEN-WORK.md` rank 80 (57 statusrot candidates:
+adjudicate a sample against their source facts before believing the count). Rank 12 comes back
+once about a day of decide rows exists.
 
 ## Files that matter
 
-- `.plan/jev-choicev1-2026-09-27/` (main checkout): PREREG.md, RESULTS.md, labels.json,
-  verdicts-0..4.json, score.py, DECIDE-BRIEF.txt.
-- `.plan/rank20-skills-2026-09-27/fix/` (main checkout): COMMON.txt, B5.report.txt, the four
-  B5-audit-hooks-*.txt reports, LESSONS-FOR-HANDOVER.txt.
-- `plugins/bitranox/hooks/skill-router.py`, `plugins/bitranox/hooks/classifier.py`,
-  `plugins/bitranox/hooks/skill_roster.py`, `plugins/bitranox/hooks/tests/test_skill_router_decide.py`.
+- `plugins/bitranox/skills/compuse-toolbox/scripts/anchor_edit.py` (+ `tests/test_anchor_edit.py`)
+- `plugins/bitranox/hooks/memory_engine.py` (`_body_unlabelled`, `lint_tree`)
+- `plugins/bitranox/skills/coding-python-layered-config/SKILL.md` and its twin
+  `projects/public/libs/lib_layered_config/skills/python-layered-config/SKILL.md`
+- lib_layered_config `src/lib_layered_config/domain/config.py` (`with_overrides`, `_override_provenance`)
 
 ## How to verify this still stands
 
-- `git fetch origin && git log --oneline -4 origin/master` shows this handover's commit on top of
-  `ccbb5d43`.
-- `uv run <plugin>/skills/compuse-toolbox/scripts/ci_wait.py --sha <this commit's full sha>` exits 0.
-- `git status -sb` in that igittigitt checkout shows `ahead 1` until
-  the user says push.
+- `uv run <plugin>/skills/compuse-toolbox/scripts/ci_wait.py --sha 10ef1b8bea12b6b141353f6cf41d8a1cc0ae937a` exits 0.
+- `curl -s https://pypi.org/pypi/lib_layered_config/json` shows `info.version` 5.7.0.
+- `diff` the two layered-config SKILL.md twins: only the `name:` line differs.
 
 Read this, then replace the first line with `# STALE - read <date>, work continued`. Do not delete
 it - if this session ends badly it is the only record of where things stood.
