@@ -18,10 +18,10 @@
       "name": "hooks-sample",
       "url": "https://example.com/docs/en/hooks.md",
       "tier": "api",
-      "raw_bytes": 3320,
-      "normalised_lines": 179,
-      "content_sha256": "36dd3abbc062edb3ef37768c0ff87a07345d5120b9f1021a13f8d5fa63066b96",
-      "structure_sha256": "00a091b42366d14393d1ad05e6227adeac91522416a95e1c857e152eab718f16",
+      "raw_bytes": 3458,
+      "normalised_lines": 187,
+      "content_sha256": "3462d0598b686f6a1fca8195aa03716a7ed3e0011bdd366ebc3003b3a317066c",
+      "structure_sha256": "b8810b3572d30fb2464b124395d6e238b05a244df3a04ce4a16920b66f0693b9",
       "max_cli_version_mentioned": null,
       "control": {
         "min_raw_bytes": 1660,
@@ -34,8 +34,8 @@
         "min_events": 18
       },
       "counts": {
-        "headings": 36,
-        "events": 31,
+        "headings": 38,
+        "events": 33,
         "json_fields": 14,
         "output_fields": 9,
         "handler_types": 5,
@@ -61,10 +61,12 @@
           "H3:PermissionDenied",
           "H3:PermissionRequest",
           "H3:PostCompact",
+          "H3:PostModelSwitch",
           "H3:PostToolBatch",
           "H3:PostToolUse",
           "H3:PostToolUseFailure",
           "H3:PreCompact",
+          "H3:PreModelSwitch",
           "H3:PreToolUse",
           "H3:SessionEnd",
           "H3:SessionStart",
@@ -94,10 +96,12 @@
           "PermissionDenied",
           "PermissionRequest",
           "PostCompact",
+          "PostModelSwitch",
           "PostToolBatch",
           "PostToolUse",
           "PostToolUseFailure",
           "PreCompact",
+          "PreModelSwitch",
           "PreToolUse",
           "SessionEnd",
           "SessionStart",
@@ -317,6 +321,16 @@
           "path": "## Hook events > ### PostCompact",
           "lines": 3,
           "sha256": "a978ccdf55931ae9180abbd3d2eee3721f576ff1dc2e31f07a9716981bdb0a8a"
+        },
+        {
+          "path": "## Hook events > ### PreModelSwitch",
+          "lines": 3,
+          "sha256": "1419d841c8e877dd22fe3a8c8f97a1835cb6637dc9ceb2fb8a3fefaeba33c49b"
+        },
+        {
+          "path": "## Hook events > ### PostModelSwitch",
+          "lines": 3,
+          "sha256": "f078ed7288587b500492f9d44fce1ae23f5774bd5e2790e6fe338b648c261d43"
         },
         {
           "path": "## Hook events > ### SessionEnd",

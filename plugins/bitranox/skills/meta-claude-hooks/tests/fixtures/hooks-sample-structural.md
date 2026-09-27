@@ -167,6 +167,14 @@ Fires for PreCompact. See the table above.
 
 Fires for PostCompact. See the table above.
 
+### PreModelSwitch
+
+Fires for PreModelSwitch. See the table above.
+
+### PostModelSwitch
+
+Fires for PostModelSwitch. See the table above.
+
 ### SessionEnd
 
 Fires for SessionEnd. See the table above.

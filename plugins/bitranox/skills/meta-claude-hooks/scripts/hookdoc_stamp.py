@@ -85,6 +85,8 @@ _FP_KEYS = ("headings", "events", "json_fields", "output_fields", "handler_types
 # ones a hook author actually writes, so they are gated; every other JSON key on the page belongs to a
 # per-tool example and is only reported.
 IO_SECTION = "Hook input and output"
+# The H3 that documents the handler types themselves; its fences may list bare {"type": ...} entries.
+HANDLER_SECTION = "Hook handler fields"
 IDENT_RX = re.compile(r"^[a-z][A-Za-z0-9_]{2,}$")
 DOTTED_RX = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*(?:\.[A-Za-z_][A-Za-z0-9_]*)+$")
 KEYCOLON_RX = re.compile(r"^([a-z][A-Za-z0-9_]{2,})\s*:")
@@ -202,23 +204,35 @@ def fingerprint(text: str, tier: str = "api") -> dict[str, list[str]]:
     """
     acc: dict[str, set[str]] = {k: set() for k in _FP_KEYS}
     h2: str | None = None
+    # A "type" value names a handler only inside a fence that configures hooks, or one under the
+    # handler-fields heading. Input and output examples carry their own "type" keys ("create" on a
+    # Write result, "shell" on a background task), and counting those turns an upstream example
+    # edit into a phantom new handler type.
+    h3: str | None = None
+    fence_types: set[str] = set()
+    fence_configures_hooks = False
     for kind, line, lang in _walk(text):
         if kind == "fenced":
             if lang and lang.startswith("json"):
                 keys = JSONKEY_RX.findall(line)
                 acc["json_fields"].update(keys)
-                acc["handler_types"].update(t for t in TYPEVAL_RX.findall(line) if t not in _SCHEMA_PRIMITIVES)
+                fence_types.update(t for t in TYPEVAL_RX.findall(line) if t not in _SCHEMA_PRIMITIVES)
+                fence_configures_hooks = fence_configures_hooks or "hooks" in keys or h3 == HANDLER_SECTION
                 if h2 == IO_SECTION:
                     acc["output_fields"].update(k for k in keys if IDENT_RX.match(k) and k not in _NOT_A_FIELD)
             acc["env_vars"].update(ENV_RX.findall(line))
             continue
+        if fence_configures_hooks:
+            acc["handler_types"].update(fence_types)
+        fence_types, fence_configures_hooks = set(), False
         m2 = H2_RX.match(line)
         if m2:
-            h2 = m2.group(1)
+            h2, h3 = m2.group(1), None
             acc["headings"].add("H2:" + h2)
             continue
         m3 = H3_RX.match(line)
         if m3:
+            h3 = m3.group(1)
             acc["headings"].add("H3:" + m3.group(1))
             if h2 == "Hook events":
                 acc["events"].add(m3.group(1))
@@ -237,6 +251,8 @@ def fingerprint(text: str, tier: str = "api") -> dict[str, list[str]]:
                 # every upstream copy-edit becomes structural drift and the loud channel dies.
                 acc["table_keys"].update(TICK_RX.findall(cell))
         acc["env_vars"].update(ENV_RX.findall(line))
+    if fence_configures_hooks:
+        acc["handler_types"].update(fence_types)
     if tier == "prose":
         acc = {k: (v if k == "headings" else set()) for k, v in acc.items()}
     return {k: sorted(v) for k, v in acc.items()}
