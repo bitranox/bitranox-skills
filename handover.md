@@ -1,4 +1,4 @@
-# Handover - 2026-09-27 23:58, 7.29.0 shipped; rank 80 parked mid-way; rank 18 planned and deferred
+# STALE - read 2026-09-28, work continued
 
 ## In flight
 
