@@ -61,26 +61,9 @@ def default_log():
 
 DEFAULT_THRESHOLD = 0.5
 
-# The threshold each site is judged at when none is given. One number for all three was always a
-# placeholder: they ask different questions and their answers are distributed differently.
-# Measured over 1,177 recall pair judgements, 0.5 keeps 20% of them (about 5.9 notes a prompt) and
-# 0.8 keeps 4% (about 1.1), which is the order of what a prompt can actually use.
-# `skill_router` was 0.7 and that was measured WRONG on 2026-09-24, against 50 prompts labelled
-# blind by five judges (every pick classified, none sampled). The gate discriminates weakly - AUC
-# about 0.71 on all four arms then measured - so 0.7 sat in the steep part of a shallow curve and
-# discarded correct answers wholesale. Right/defensible/wrong/missed, same run, same prompts:
-#
-#   choice_full          0.70   2 /  7 / 1 / 8        choice_router_text  0.70   4 /  6 / 1 / 8
-#   choice_full          0.50   4 / 13 / 1 / 5        choice_router_text  0.50   6 /  9 / 1 / 5
-#   choice_full          0.30   4 / 15 / 1 / 5        choice_router_text  0.30   9 / 12 / 1 / 2
-#
-# Every arm improves as the gate drops, so this is a property of the gate and not of one arm.
-# 0.5 rather than the better-scoring 0.3 because 0.5 is where the planted controls were actually
-# run and passed on all six arms - positives 0.68-0.72, negatives 0.20-0.23 - so it clears both
-# ways by about 0.2, where 0.3 leaves 0.07 over the negatives and has never been run.
-# `nouls` is not a candidate at any of these: one number gates the turn AND sets its per-skill
-# bar, so at 0.3 it makes 42 outright wrong picks.
-SITE_THRESHOLDS = {"stop_signal": 0.7, "skill_router": 0.5, "recall_rerank": 0.8}
+# The threshold each site is judged at when none is given. It lives in the classifier because a
+# site in decide mode acts on the same number, and the reasoning behind each value is there.
+SITE_THRESHOLDS = cl.SITE_THRESHOLDS
 
 # Families whose score is LOGGED but never counted as a firing. `endorsement` was the only reason
 # to fire on 12 turns across two shadow windows, every one a plain approval ("yes", "go", "lets

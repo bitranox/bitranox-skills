@@ -475,3 +475,22 @@ def test_the_installed_roster_offers_trimmed_skills_resolved_from_the_project(tm
     assert source == SR.SOURCE_TRANSCRIPT
     assert skills == {"compuse-git": "Use when running git.", "provmm-build": "Build provmm.",
                       "loop": "loop"}
+
+
+# ---- how a picked option is named back to the model ----------------------------------------------
+
+@pytest.mark.parametrize("key,roster,expected", [
+    # This plugin's skill is offered bare and invoked with its prefix.
+    ("files-edit-xml", {"files-edit-xml": ""}, "bitranox:files-edit-xml"),
+    # Another plugin's skill, a built-in and a user skill are offered under the name they are
+    # invoked by.
+    ("typesafe:typesafe-ai", {"typesafe:typesafe-ai": ""}, "typesafe:typesafe-ai"),
+    ("update-config", {"update-config": ""}, "update-config"),
+    ("toolbox", {"toolbox": ""}, "toolbox"),
+    # A same-named skill elsewhere keeps this plugin's prefixed, so the bare key is the OTHER one.
+    ("meta-dream-nap", {"meta-dream-nap": "", "bitranox:meta-dream-nap": ""}, "meta-dream-nap"),
+    ("bitranox:meta-dream-nap", {"meta-dream-nap": "", "bitranox:meta-dream-nap": ""},
+     "bitranox:meta-dream-nap"),
+])
+def test_invocation_name_is_what_the_skill_tool_accepts(key, roster, expected):
+    assert SR.invocation_name(key, roster) == expected

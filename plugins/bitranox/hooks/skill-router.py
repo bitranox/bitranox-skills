@@ -13,6 +13,13 @@ letters and digits of any script as word characters), at most MAX_SKILLS NEW ski
 (skills already nudged in this session are dropped before the cap, so they never hold a slot), and
 each skill nudges at most once per session (state file). Fail-open: every error path exits 0. Pure
 standard library; launched via run-python.sh.
+
+With `classifier_skill_router = decide` (and `classifier_backend = jev`) Jev decides instead: the
+hook asks the shadow comparison's own gate-plus-choice question in-process, under the classifier's
+DEFAULT_DEADLINE, and nudges the ONE skill `classifier.choice_pick` returns - or nothing, when Jev
+answered and picked nothing. Only when Jev does not answer does the keyword match decide, exactly
+as with the classifier off. Each decide prompt appends one shadow-log row saying which path
+nudged, so `classifier_eval.py report` reads decide sessions like shadow ones.
 """
 import json
 import os
@@ -142,34 +149,108 @@ def _router_fields(prompt, cwd, sid, transcript):
     return classifier.with_previous(fields, transcript_turns.last_reply(transcript))
 
 
+def _router_request(prompt, sid, triggers, transcript, cwd):
+    """(regex, request, roster): the keyword ranking a log row carries, the ONE request - the
+    new-task gate plus one choice over the installed roster, with the context the prompt needs to
+    be read - and that roster. Shadow and decide both build it here, so they ask the same thing."""
+    ranked = match(prompt, triggers, max_skills=len(triggers) or 1)
+    regex = {"selected": [s for s, _n in ranked[:MAX_SKILLS]],
+             "scores": {s: n for s, n in ranked}, "context_view": classifier.CONTEXT_VIEW,
+             "router_view": ROUTER_VIEW, "matcher_view": MATCHER_VIEW,
+             "question_view": QUESTION_VIEW}
+    notification = bool(prompt_text.notification_fields(prompt))
+    if notification:
+        # Its own field set, so the eval never pools these rows with typed-prompt rows.
+        regex["notify_view"] = classifier.NOTIFY_VIEW
+    # The questions are built from the SAME dict this request will carry, so neither can name
+    # a field the other leaves out.
+    cwd = cwd or os.getcwd()
+    fields = _router_fields(prompt, cwd, sid, transcript)
+    skills, regex["roster"] = skill_roster.installed_skills(transcript, cwd)
+    regex["roster_size"] = len(skills)
+    questions = classifier.skill_router_choice_questions(
+        skills, fields,
+        turn=classifier.TURN_NOTIFICATION if notification else classifier.TURN_PROMPT)
+    return regex, {"fields": fields, "questions": questions}, skills
+
+
 def _shadow_skill_router(prompt, sid, triggers, transcript="", cwd=""):
-    """Hand this prompt to the classifier's detached shadow child: the new-task gate plus one
-    choice over the roster beside the keyword ranking, with the context the prompt needs to be
-    read. Never changes the nudge and never raises; a failure is logged as an error row."""
+    """Hand this prompt to the classifier's detached shadow child. Never changes the nudge and
+    never raises; a failure is logged as an error row."""
     with classifier.shadow_guard("skill_router", sid):
         if not classifier.shadow_enabled(sig.load_config(), "skill_router"):
             return
-        ranked = match(prompt, triggers, max_skills=len(triggers) or 1)
-        regex = {"selected": [s for s, _n in ranked[:MAX_SKILLS]],
-                 "scores": {s: n for s, n in ranked}, "context_view": classifier.CONTEXT_VIEW,
-                 "router_view": ROUTER_VIEW, "matcher_view": MATCHER_VIEW,
-                 "question_view": QUESTION_VIEW}
-        notification = bool(prompt_text.notification_fields(prompt))
-        if notification:
-            # Its own field set, so the eval never pools these rows with typed-prompt rows.
-            regex["notify_view"] = classifier.NOTIFY_VIEW
-        # The questions are built from the SAME dict this request will carry, so neither can name
-        # a field the other leaves out.
-        cwd = cwd or os.getcwd()
-        fields = _router_fields(prompt, cwd, sid, transcript)
-        skills, regex["roster"] = skill_roster.installed_skills(transcript, cwd)
-        regex["roster_size"] = len(skills)
-        questions = classifier.skill_router_choice_questions(
-            skills, fields,
-            turn=classifier.TURN_NOTIFICATION if notification else classifier.TURN_PROMPT)
-        classifier.spawn_shadow("skill_router", sid, regex,
-                                [{"fields": fields, "questions": questions}],
-                                transcript=transcript)
+        regex, request, _skills = _router_request(prompt, sid, triggers, transcript, cwd)
+        classifier.spawn_shadow("skill_router", sid, regex, [request], transcript=transcript)
+
+
+def _ask_jev(prompt, sid, triggers, transcript, cwd, cfg):
+    """(row, path, pick, roster) for decide mode. `path` is "jev" with the option key Jev picked,
+    "none" when it answered and picked nothing, or "fallback-<reason>" when it did not answer."""
+    regex, request, skills = _router_request(prompt, sid, triggers, transcript, cwd)
+    row = classifier.ask_in_hook("skill_router", sid, regex, [request], cfg, transcript=transcript)
+    result = (row.get("results") or [None])[0]
+    if result is None:
+        return row, "fallback-%s" % (row.get("reason") or "no answer"), None, skills
+    gate, winner, probabilities = classifier.choice_answer(result)
+    # The production rule the blind panel scored, at the threshold the eval judges the site at.
+    pick = classifier.choice_pick(gate, winner, probabilities,
+                                  threshold=classifier.SITE_THRESHOLDS["skill_router"],
+                                  bypass=classifier.CHOICE_BYPASS)
+    return row, ("jev" if pick else "none"), pick, skills
+
+
+def _fresh_keyword_hits(hits, already):
+    """The keyword picks to nudge: dedup BEFORE the MAX_SKILLS cap, so skills nudged earlier
+    never hold the slots of a fresh skill that matches this prompt."""
+    return [(s, "bitranox:" + s) for s, _n in hits if s not in already][:MAX_SKILLS]
+
+
+def _nudge(cwd, sid, picks):
+    """Record each (state key, invocation name) in `picks` as nudged this session and print the
+    router block naming them. Nothing is printed for an empty `picks`."""
+    if not picks:
+        return
+    state = _state_file(cwd, sid)
+    state.parent.mkdir(parents=True, exist_ok=True)
+    with state.open("a", encoding="utf-8") as f:
+        for key, _name in picks:
+            f.write(key + "\n")
+    lines = ["<BITRANOX-SKILL-ROUTER>"]
+    for _key, name in picks:
+        lines.append("This prompt matches the skill `%s` - if it applies (even a 1%% "
+                     "chance), invoke it via the Skill tool BEFORE responding." % name)
+    lines.append("</BITRANOX-SKILL-ROUTER>")
+    out = {"hookSpecificOutput": {"hookEventName": "UserPromptSubmit",
+                                  "additionalContext": "\n".join(lines)},
+           "suppressOutput": True}
+    sys.stdout.write(json.dumps(out))
+
+
+def _decide(prompt, sid, triggers, hits, transcript, cwd, cfg):
+    """Decide mode: Jev's pick, nothing when it picked nothing, the keyword hits when it did not
+    answer; then the comparison row, written after the nudge so it adds no latency before it."""
+    failure = None
+    try:
+        row, path, pick, skills = _ask_jev(prompt, sid, triggers, transcript, cwd, cfg)
+    except Exception as exc:  # noqa: BLE001 - a failure to ask is a failure to answer
+        failure = exc
+        row, path, pick, skills = None, "fallback-error: %s" % type(exc).__name__, None, {}
+    already = _already_nudged(cwd, sid)
+    if path == "jev":
+        picks = ([] if pick in already
+                 else [(pick, skill_roster.invocation_name(pick, skills))])
+    elif path == "none":
+        picks = []  # "no skill" is an answer; the keyword hits it overruled were judged noise
+    else:
+        picks = _fresh_keyword_hits(hits, already)
+    _nudge(cwd, sid, picks)
+    try:
+        row = row if failure is None else classifier.error_row("skill_router", sid, failure)
+        row.update(mode="decide", decide_path=path, nudged=[key for key, _name in picks])
+        classifier.append_row(row)
+    except Exception:  # noqa: BLE001 - a comparison row is never worth a failed hook
+        pass
 
 
 def main():
@@ -187,29 +268,17 @@ def main():
         # Every matching skill, uncapped: the per-session dedup runs BEFORE the MAX_SKILLS cap, so
         # skills nudged earlier never hold the slots of a fresh skill that matches this prompt.
         hits = match(prompt, triggers, max_skills=None)
+        transcript = ev.get("transcript_path") or ""
+        cfg = sig.load_config()
+        if classifier.site_mode(cfg, "skill_router") == "decide":
+            _decide(prompt, sid, triggers, hits, transcript, cwd, cfg)
+            return 0
         # Opt-in shadow comparison (off by default), before the per-session dedup so every
         # prompt is compared.
-        _shadow_skill_router(prompt, sid, triggers, ev.get("transcript_path") or "", cwd)
+        _shadow_skill_router(prompt, sid, triggers, transcript, cwd)
         if not hits:
             return 0
-        state = _state_file(cwd, sid)
-        already = _already_nudged(cwd, sid)
-        fresh = [(s, n) for s, n in hits if s not in already][:MAX_SKILLS]
-        if not fresh:
-            return 0
-        state.parent.mkdir(parents=True, exist_ok=True)
-        with state.open("a", encoding="utf-8") as f:
-            for s, _n in fresh:
-                f.write(s + "\n")
-        lines = ["<BITRANOX-SKILL-ROUTER>"]
-        for s, _n in fresh:
-            lines.append("This prompt matches the skill `bitranox:%s` - if it applies (even a 1%% "
-                         "chance), invoke it via the Skill tool BEFORE responding." % s)
-        lines.append("</BITRANOX-SKILL-ROUTER>")
-        out = {"hookSpecificOutput": {"hookEventName": "UserPromptSubmit",
-                                      "additionalContext": "\n".join(lines)},
-               "suppressOutput": True}
-        sys.stdout.write(json.dumps(out))
+        _nudge(cwd, sid, _fresh_keyword_hits(hits, _already_nudged(cwd, sid)))
     except Exception:  # noqa: BLE001 - the router must never wedge a prompt
         return 0
     return 0

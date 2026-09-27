@@ -274,6 +274,29 @@ def test_shadow_enabled_needs_backend_and_site():
     assert not cl.shadow_enabled({"classifier_backend": "jev"}, "skill_router")
 
 
+@pytest.mark.parametrize("backend,knob,mode", [
+    ("jev", "shadow", "shadow"), ("jev", "decide", "decide"), ("jev", "off", "off"),
+    ("jev", "bogus", "off"), ("jev", None, "off"), ("off", "decide", "off"),
+])
+def test_site_mode_reads_the_knob_only_under_the_jev_backend(backend, knob, mode):
+    cfg = {"classifier_backend": backend}
+    if knob is not None:
+        cfg["classifier_skill_router"] = knob
+    assert cl.site_mode(cfg, "skill_router") == mode
+    # Shadow is its own mode: a site set to decide must not ALSO spawn the shadow child.
+    assert cl.shadow_enabled(cfg, "skill_router") is (mode == "shadow")
+
+
+def test_get_classifier_builds_jev_for_a_site_in_decide_mode(tmp_path):
+    cfg = {"classifier_backend": "jev", "classifier_skill_router": "decide"}
+    c = cl.get_classifier(cfg, "skill_router", env={"TYPESAFE_API_KEY": "abc"}, home=tmp_path)
+    assert isinstance(c, cl.JevClassifier) and c.deadline == cl.DEFAULT_DEADLINE
+
+
+def test_the_router_threshold_is_the_one_the_panel_scored():
+    assert cl.SITE_THRESHOLDS["skill_router"] == 0.5 and cl.CHOICE_BYPASS == 0.7
+
+
 # ---- egress preparation ------------------------------------------------------------------
 
 def test_prepare_state_redacts_every_field_and_the_key_itself():

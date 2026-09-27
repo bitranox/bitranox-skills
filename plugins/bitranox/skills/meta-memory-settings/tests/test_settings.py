@@ -53,6 +53,24 @@ def test_reset_restores_defaults(capsys):
     assert cfg["dream_mode"] == "propose" and cfg["privacy"] == "open"
 
 
+def test_skill_router_accepts_decide(capsys):
+    assert ST.main(["set", "classifier_skill_router", "decide"]) == 0
+    assert sig.load_config()["classifier_skill_router"] == "decide"
+
+
+@pytest.mark.parametrize("key,value", [
+    ("classifier_skill_router", "decides"),
+    ("classifier_skill_router", "on"),
+    # decide exists only where a hook implements it; the other sites still log in shadow only.
+    ("classifier_stop_signal", "decide"),
+    ("classifier_recall_rerank", "decide"),
+])
+def test_classifier_site_refuses_a_mode_it_does_not_have(capsys, key, value):
+    assert ST.main(["set", key, value]) == 2
+    assert "must be one of" in capsys.readouterr().err
+    assert sig.load_config()[key] == "off"
+
+
 def test_set_list_knob_json(capsys):
     assert ST.main(["set", "discovery_roots", '["/a", "/b"]']) == 0
     assert sig.load_config()["discovery_roots"] == ["/a", "/b"]

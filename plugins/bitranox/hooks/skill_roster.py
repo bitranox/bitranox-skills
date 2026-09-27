@@ -23,6 +23,7 @@ Names from this plugin are keyed bare (`files-edit-xml`), as the keyword router,
 and every adjudication name them; any other skill keeps its full name, because bare names collide
 across plugins (`code-review` is both a built-in and `code-review:code-review`). When a skill of
 the same bare name is also listed, this plugin's keeps its prefix so neither hides the other.
+`invocation_name` turns a key back into the name the Skill tool takes.
 
 Pure standard library; every failure degrades to the next source, never raises.
 """
@@ -217,6 +218,22 @@ def _keyed(raw, describe):
 def option_name(name):
     """The key a skill is offered under: this plugin's skills bare, every other one in full."""
     return name[len(OWN_PREFIX):] if name.startswith(OWN_PREFIX) else name
+
+
+def invocation_name(key, roster):
+    """The name the Skill tool takes for the option `key` of `roster`: the inverse of
+    `option_name`.
+
+    A key with a plugin separator is already the full name. A bare key is this plugin's skill,
+    which is invoked with its prefix - unless the roster also holds the prefixed name, which is
+    how `_keyed` marks a same-named skill from elsewhere, or this plugin ships no such skill (a
+    built-in, a user or project skill, which are invoked bare).
+    """
+    if ":" in key or OWN_PREFIX + key in roster:
+        return key
+    if (_PLUGIN_ROOT / "skills" / key / "SKILL.md").is_file():
+        return OWN_PREFIX + key
+    return key
 
 
 def parse_listing(content, names, cwd=None):

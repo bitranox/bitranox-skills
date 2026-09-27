@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Opt-in text classifier port for the hooks: TypeSafe's Jev (a "System One" model), in SHADOW mode.
+"""Opt-in text classifier port for the hooks: TypeSafe's Jev (a "System One" model).
 
 Several hooks classify prose with regexes - is this turn a learning signal, which skill does this
 prompt need, is this memory note relevant. Jev answers exactly that kind of question: text goes in
@@ -12,6 +12,10 @@ redacts the text, asks Jev, and appends both verdicts to `~/.claude/self-improve
 classifier-shadow-<UTC date>.jsonl` so a later replay can compare them; each append drops whole
 days older than SHADOW_KEEP_DAYS, then the oldest days past SHADOW_MAX_BYTES. Off unless the user sets
 `classifier_backend = jev` and the site's own knob to `shadow` (meta-memory-settings).
+
+Decide mode (`decide`, skill_router only) asks the same questions INSIDE the hook, under
+DEFAULT_DEADLINE, and lets the answer decide; the hook appends the same row a shadow child would,
+plus how the answer was used, and keeps its regex decision whenever Jev does not answer.
 
 Egress: only the named fields a site passes are sent, each capped, every one through
 `secret_patterns.redact` plus the API key itself as a literal - a secret is replaced, never a
@@ -51,10 +55,11 @@ __all__ = [
     "Answer", "CAP_MARK", "CONTEXT_VIEW", "DEFAULT_BASE_URL", "JevClassifier", "NOTIFY_VIEW",
     "NO_SKILL_KEY", "NullClassifier", "PICK_ID", "PREVIOUS_FIELD", "Question", "Result",
     "SHADOW_DAY_PREFIX", "SHADOW_KEEP_DAYS", "SHADOW_LOG", "SHADOW_MAX_BYTES", "SHORT_DESC_CAP",
-    "SITES", "TURN_NOTIFICATION", "TURN_PROMPT",
+    "SITES", "SITE_MODES", "SITE_THRESHOLDS", "TURN_NOTIFICATION", "TURN_PROMPT",
+    "append_row", "ask_in_hook", "choice_answer", "error_row",
     "detect_language", "get_classifier", "load_key", "load_router_criteria",
     "load_skill_descriptions", "prepare_state", "prune_shadow_logs",
-    "recall_questions", "shadow_enabled", "shadow_log_files", "shadow_log_path",
+    "recall_questions", "shadow_enabled", "shadow_log_files", "shadow_log_path", "site_mode",
     "short_description", "skill_router_choice_questions",
     "shadow_guard", "skill_router_questions", "skill_router_rerank_questions", "spawn_shadow",
     "stop_signal_questions", "with_previous",
@@ -83,8 +88,34 @@ FIELD_CAP = 4000
 # An error row carries the message, not a traceback: enough to group failures by cause.
 ERROR_CAP = 200
 CAP_MARK = "\n[... truncated ...]\n"
-# The first-wave sites. Each has its own config knob `classifier_<site>` (off | shadow).
+# The first-wave sites. Each has its own config knob `classifier_<site>`: off | shadow, plus
+# decide where the site's hook implements it (skill_router; meta-memory-settings validates which).
 SITES = ("stop_signal", "skill_router", "recall_rerank")
+SITE_MODES = ("off", "shadow", "decide")
+# The threshold each site's gate or score is read at - by `classifier_eval.py report` when judging
+# a log, and by a site in decide mode when acting on an answer, so the two can never disagree.
+# One number for all three was always a placeholder: they ask different questions and their
+# answers are distributed differently. Measured over 1,177 recall pair judgements, 0.5 keeps 20%
+# of them (about 5.9 notes a prompt) and 0.8 keeps 4% (about 1.1), which is the order of what a
+# prompt can actually use.
+# `skill_router` was 0.7 and that was measured WRONG on 2026-09-24, against 50 prompts labelled
+# blind by five judges (every pick classified, none sampled). The gate discriminates weakly - AUC
+# about 0.71 on all four arms then measured - so 0.7 sat in the steep part of a shallow curve and
+# discarded correct answers wholesale. Right/defensible/wrong/missed, same run, same prompts:
+#
+#   choice_full          0.70   2 /  7 / 1 / 8        choice_router_text  0.70   4 /  6 / 1 / 8
+#   choice_full          0.50   4 / 13 / 1 / 5        choice_router_text  0.50   6 /  9 / 1 / 5
+#   choice_full          0.30   4 / 15 / 1 / 5        choice_router_text  0.30   9 / 12 / 1 / 2
+#
+# Every arm improves as the gate drops, so this is a property of the gate and not of one arm.
+# 0.5 rather than the better-scoring 0.3 because 0.5 is where the planted controls were actually
+# run and passed on all six arms - positives 0.68-0.72, negatives 0.20-0.23 - so it clears both
+# ways by about 0.2, where 0.3 leaves 0.07 over the negatives and has never been run.
+# `nouls` is not a candidate at any of these: one number gates the turn AND sets its per-skill
+# bar, so at 0.3 it makes 42 outright wrong picks. Decide mode was chosen at 0.5 with the bypass
+# below: on 87 blind-judged live prompts it offered 17 right picks and 2 wrong, where the keyword
+# match offered 0 right and 70 wrong.
+SITE_THRESHOLDS = {"stop_signal": 0.7, "skill_router": 0.5, "recall_rerank": 0.8}
 _LOOPBACK = {"127.0.0.1", "localhost", "::1"}
 
 
@@ -287,8 +318,18 @@ def load_key(env, home):
     return key, None
 
 
+def site_mode(cfg, site):
+    """off | shadow | decide: what the site's knob asks for. Anything but the jev backend, and any
+    value outside SITE_MODES, reads as off."""
+    if cfg.get("classifier_backend") != "jev":
+        return "off"
+    mode = cfg.get("classifier_" + site)
+    return mode if mode in SITE_MODES else "off"
+
+
 def shadow_enabled(cfg, site):
-    return cfg.get("classifier_backend") == "jev" and cfg.get("classifier_" + site) == "shadow"
+    """Only `shadow`: a site in decide mode asks in the hook and must not also spawn a child."""
+    return site_mode(cfg, site) == "shadow"
 
 
 def _base_url(env):
@@ -305,7 +346,7 @@ def get_classifier(cfg, site, env=None, home=None, deadline=DEFAULT_DEADLINE):
     home = Path.home() if home is None else Path(home)
     if cfg.get("classifier_backend") != "jev":
         return NullClassifier("classifier_backend is off")
-    if cfg.get("classifier_" + site) not in ("shadow",):
+    if site_mode(cfg, site) == "off":
         return NullClassifier("classifier_%s is off" % site)
     key, reason = load_key(env, home)
     if key is None:
@@ -675,6 +716,15 @@ def _transcript_location(transcript):
         return {"path": str(transcript), "offset": None}
 
 
+def _payload(site, session_id, regex, requests, transcript):
+    """What a shadow child is handed, and what decide mode asks from inside the hook."""
+    return {"site": site, "session_id": session_id, "regex": regex,
+            "transcript": _transcript_location(transcript),
+            "requests": [{"fields": r["fields"],
+                          "questions": [q.to_json() for q in r["questions"]]}
+                         for r in requests]}
+
+
 def spawn_shadow(site, session_id, regex, requests, transcript=""):
     """Hand one shadow comparison to a detached child and return immediately.
 
@@ -683,11 +733,7 @@ def spawn_shadow(site, session_id, regex, requests, transcript=""):
     buffer until the child starts reading, which is latency on the user's prompt. Never raises.
     """
     try:
-        payload = {"site": site, "session_id": session_id, "regex": regex,
-                   "transcript": _transcript_location(transcript),
-                   "requests": [{"fields": r["fields"],
-                                 "questions": [q.to_json() for q in r["questions"]]}
-                                for r in requests]}
+        payload = _payload(site, session_id, regex, requests, transcript)
         d = _audit_dir()
         d.mkdir(parents=True, exist_ok=True)
         fd, path = tempfile.mkstemp(prefix="classifier-", suffix=".json", dir=str(d))
@@ -765,16 +811,21 @@ def shadow_guard(site, session_id):
         yield
     except Exception as exc:  # noqa: BLE001 - shadow mode must never wedge a hook
         try:
-            _append_log(_error_record({"site": site, "session_id": session_id}, exc))
+            append_row(error_row(site, session_id, exc))
         except Exception:  # noqa: BLE001 - nothing left to report to
             pass
 
 
-def run_shadow(payload, cfg, env=None, home=None):
+def error_row(site, session_id, exc):
+    """The row for a site whose hand-off raised before any request was made."""
+    return _error_record({"site": site, "session_id": session_id}, exc)
+
+
+def run_shadow(payload, cfg, env=None, home=None, deadline=SHADOW_DEADLINE):
     """Ask Jev for one site's comparison and return the log record (the caller appends it)."""
     site = str(payload.get("site") or "")
     requests = payload.get("requests") or []
-    clf = get_classifier(cfg, site, env=env, home=home, deadline=SHADOW_DEADLINE)
+    clf = get_classifier(cfg, site, env=env, home=home, deadline=deadline)
     key = getattr(clf, "key", None)
     states, redactions = [], 0
     for r in requests:
@@ -798,6 +849,32 @@ def run_shadow(payload, cfg, env=None, home=None):
         "results": [r.to_json() if r else None for r in results],
         "states": states,
     }, payload)
+
+
+def ask_in_hook(site, session_id, regex, requests, cfg, transcript=""):
+    """Decide mode: ask Jev from inside the hook, under DEFAULT_DEADLINE, and return the row a
+    shadow child would have logged for the same request - same redaction, same fields. The caller
+    reads the answer from its `results`, adds how it used it, and appends it with `append_row`.
+    An unanswered request comes back with `results` of [None] and the cause in `reason`."""
+    return run_shadow(_payload(site, session_id, regex, requests, transcript), cfg,
+                      deadline=DEFAULT_DEADLINE)
+
+
+def choice_answer(result):
+    """(gate, winner, probabilities) from one logged router result, None for what it lacks."""
+    answers = (result or {}).get("answers") or {}
+    gate = (answers.get(NEW_TASK_ID) or {}).get("value")
+    pick = answers.get(PICK_ID) or {}
+    probabilities = pick.get("probabilities")
+    return gate, pick.get("value"), probabilities if isinstance(probabilities, dict) else {}
+
+
+def append_row(record):
+    """Append one row to today's shadow log (pruning as every append does). Never raises."""
+    try:
+        _append_log(record)
+    except Exception:  # noqa: BLE001 - the log is a comparison, never a reason to wedge a hook
+        pass
 
 
 def shadow_log_path(audit, now):

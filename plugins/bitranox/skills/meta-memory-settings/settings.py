@@ -37,7 +37,8 @@ ENUM_CHOICES = {
     "mcp_search": ("off", "auto"),
     "classifier_backend": ("off", "jev"),
     "classifier_stop_signal": ("off", "shadow"),
-    "classifier_skill_router": ("off", "shadow"),
+    # decide only where the site's hook implements it: skill-router.py does, the other two do not.
+    "classifier_skill_router": ("off", "shadow", "decide"),
     "classifier_recall_rerank": ("off", "shadow"),
 }
 
