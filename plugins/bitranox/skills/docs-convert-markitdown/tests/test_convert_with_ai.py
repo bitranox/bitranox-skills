@@ -259,6 +259,19 @@ def test_help_offers_no_key_flag(script_runner, tmp_path):
     assert "OPENROUTER_API_KEY" in run.stdout
 
 
+def test_help_dates_every_model_it_names(script_runner, tmp_path):
+    # OpenRouter model IDs come and go, so a model named in --help is only true as of a date.
+    run = script_runner("convert_with_ai", ["--help"], cwd=tmp_path, env={"COLUMNS": "200"})
+
+    assert run.returncode == 0, run.output
+    help_text = " ".join(run.stdout.split())
+    assert "Recommended" not in help_text
+    assert "Vision models as of 2026-09" in help_text
+    assert "default: anthropic/claude-sonnet-4.5, a vision model as of 2026-09" in help_text
+    # Listed in --help until it disappeared from openrouter.ai/api/v1/models.
+    assert "google/gemini-3-pro-preview" not in help_text
+
+
 def _png():
     """A valid 1x1 RGB PNG."""
     def chunk(tag, data):

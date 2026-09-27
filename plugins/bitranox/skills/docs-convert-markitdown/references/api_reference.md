@@ -181,52 +181,84 @@ result = md.convert("document.pdf")
 
 ### Creating Plugins
 
-Plugins are Python packages that register converters with MarkItDown.
+A plugin is an installed package that declares an entry point in the group `markitdown.plugin`
+(singular). The entry point names a MODULE, not a converter class. `MarkItDown(enable_plugins=True)`
+(or `markitdown -p` on the command line) loads every such module and calls its
+`register_converters(markitdown, **kwargs)`, which registers converters exactly as in
+"Registering Custom Converters" above; `kwargs` are the ones passed to the `MarkItDown(...)`
+constructor. The converters use the same `accepts()` plus `convert()` interface as any other.
+
+Two mistakes fail differently. A package under any other group name (`markitdown.plugins` with an
+`s` included) is never loaded and nothing warns: conversion silently falls through to a built-in
+converter. An entry point that resolves to something without `register_converters` (a converter
+class, for instance) is loaded, then skipped with a `Plugin ... failed to register converters`
+warning.
 
 **Plugin Structure**:
 ```
-my-markitdown-plugin/
-+-- setup.py
-+-- my_plugin/
-|   +-- __init__.py
-|   +-- converter.py
-+-- README.md
+markitdown-my-plugin/
++-- pyproject.toml
++-- markitdown_my_plugin/
+    +-- __init__.py
 ```
 
-**setup.py**:
-```python
-from setuptools import setup
+**pyproject.toml**:
+```toml
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
 
-setup(
-    name="markitdown-my-plugin",
-    version="0.1.0",
-    packages=["my_plugin"],
-    entry_points={
-        "markitdown.plugins": [
-            "my_plugin = my_plugin.converter:MyConverter",
-        ],
-    },
-)
+[project]
+name = "markitdown-my-plugin"
+version = "0.1.0"
+dependencies = ["markitdown"]
+
+# Group "markitdown.plugin" (singular); the value is the MODULE that defines register_converters.
+[project.entry-points."markitdown.plugin"]
+my_plugin = "markitdown_my_plugin"
+
+[tool.setuptools]
+packages = ["markitdown_my_plugin"]
 ```
 
-**converter.py**:
+**markitdown_my_plugin/__init__.py**:
 ```python
-from markitdown import DocumentConverter, DocumentConverterResult
+from typing import Any, BinaryIO
+
+from markitdown import DocumentConverter, DocumentConverterResult, MarkItDown, StreamInfo
+
+# Declared by the upstream sample plugin; markitdown 0.1.8 does not read it yet.
+__plugin_interface_version__ = 1
+
 
 class MyConverter(DocumentConverter):
-    def convert(self, stream, file_extension):
-        # Your conversion logic
-        content = stream.read()
-        markdown = self.process(content)
-        return DocumentConverterResult(
-            text_content=markdown,
-            title="My Document"
-        )
-    
-    def process(self, content):
-        # Process content
-        return "# Converted Content\n\n..."
+    def accepts(self, file_stream: BinaryIO, stream_info: StreamInfo, **kwargs: Any) -> bool:
+        return (stream_info.extension or "").lower() == ".custom"
+
+    def convert(
+        self, file_stream: BinaryIO, stream_info: StreamInfo, **kwargs: Any
+    ) -> DocumentConverterResult:
+        text = file_stream.read().decode(stream_info.charset or "utf-8")
+        # The result takes markdown= (not text_content=); title is optional and keyword-only.
+        return DocumentConverterResult(markdown=f"# Converted Content\n\n{text}", title="My Document")
+
+
+def register_converters(markitdown: MarkItDown, **kwargs: Any) -> None:
+    """Called once by every MarkItDown(enable_plugins=True)."""
+    markitdown.register_converter(MyConverter())
 ```
+
+**Install and check it is loaded**:
+```bash
+uv pip install -e ./markitdown-my-plugin     # or: pip install -e ./markitdown-my-plugin
+markitdown --list-plugins                    # must list my_plugin
+markitdown -p sample.custom                  # -> "# Converted Content" followed by the file text
+```
+
+`markitdown --list-plugins` is the quickest proof: a plugin missing from that list was registered
+under the wrong entry-point group. The upstream sample plugin
+(https://github.com/microsoft/markitdown/tree/main/packages/markitdown-sample-plugin) is a complete
+working package to copy from.
 
 ## AI-Enhanced Conversions
 
@@ -245,8 +277,7 @@ client = OpenAI(
 # Create MarkItDown with AI support
 md = MarkItDown(
     llm_client=client,
-    llm_model="anthropic/claude-opus-4.5",  # a current vision model as of 2026-08; check
-                                        # openrouter.ai/models for what is current now
+    llm_model="anthropic/claude-opus-4.5",  # a vision model as of 2026-09; see the list below
     llm_prompt="Describe this image in detail for scientific documentation"
 )
 
@@ -256,11 +287,18 @@ result = md.convert("presentation.pptx")
 
 ### Available Models via OpenRouter
 
-Popular models with vision support:
-- `anthropic/claude-opus-4.5` - **Recommended for scientific vision**
-- `google/gemini-3-pro-preview` - Gemini Pro Vision
+Vision-capable model IDs as of 2026-09. OpenRouter adds and retires IDs often, so a name here is
+a starting point, not a guarantee: check https://openrouter.ai/models before relying on one.
 
-See https://openrouter.ai/models for the complete list.
+- `anthropic/claude-sonnet-4.5` - the default of `scripts/convert_with_ai.py`
+- `anthropic/claude-opus-4.5` - for hard figures and dense text
+- `google/gemini-3.1-pro-preview` - a Gemini alternative
+
+To see which IDs accept images right now (the endpoint is public, no key needed):
+
+```bash
+curl -s https://openrouter.ai/api/v1/models | python3 -c "import json,sys; print('\n'.join(sorted(m['id'] for m in json.load(sys.stdin)['data'] if 'image' in m['architecture']['input_modalities'])))"
+```
 
 ### Custom Prompts
 

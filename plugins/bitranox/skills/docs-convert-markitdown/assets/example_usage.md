@@ -143,7 +143,7 @@ Be technical and precise.
 
 md = MarkItDown(
     llm_client=client,
-    llm_model="anthropic/claude-sonnet-4.5",  # recommended for scientific vision
+    llm_model="anthropic/claude-sonnet-4.5",  # a vision model as of 2026-09; see references/api_reference.md
     llm_prompt=scientific_prompt
 )
 
@@ -171,7 +171,7 @@ scientific_md = MarkItDown(
     llm_prompt="Describe scientific figures with technical precision"
 )
 
-# Presentations - use GPT-4o for visual understanding
+# Presentations - same model, a prompt tuned for slides
 presentation_md = MarkItDown(
     llm_client=client,
     llm_model="anthropic/claude-sonnet-4.5",

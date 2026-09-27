@@ -103,7 +103,7 @@ client = OpenAI(
 
 md = MarkItDown(
     llm_client=client,
-    llm_model="anthropic/claude-opus-4.5",  # recommended for scientific vision
+    llm_model="anthropic/claude-opus-4.5",  # a vision model as of 2026-09; see references/api_reference.md
     llm_prompt="Describe this image in detail for scientific documentation"
 )
 
@@ -226,7 +226,7 @@ client = OpenAI(
 
 md = MarkItDown(
     llm_client=client,
-    llm_model="anthropic/claude-opus-4.5",  # recommended for presentations
+    llm_model="anthropic/claude-opus-4.5",  # a vision model as of 2026-09; see references/api_reference.md
     llm_prompt="Describe this slide image in detail, focusing on key visual elements and data"
 )
 

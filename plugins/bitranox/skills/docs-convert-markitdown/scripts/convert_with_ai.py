@@ -171,7 +171,8 @@ def convert_with_ai(
         input_file: Path to input file (.png, .jpg, .jpeg or .pptx)
         output_file: Path to output Markdown file
         api_key: OpenRouter API key
-        model: Model name (default: anthropic/claude-sonnet-4.5; use opus for hard vision/OCR)
+        model: OpenRouter model ID (default: anthropic/claude-sonnet-4.5, a vision model as of
+            2026-09; use opus for hard vision/OCR)
         prompt_type: Type of prompt to use
         custom_prompt: Custom prompt (overrides prompt_type)
 
@@ -250,9 +251,10 @@ Environment Variables:
   OPENROUTER_API_KEY    OpenRouter API key (required; the only way to pass the key - a key on
                         the command line would be visible in the process list)
 
-Popular Models (use with --model):
-  anthropic/claude-opus-4.5 - Recommended for scientific vision
-  google/gemini-3-pro-preview   - Gemini Pro Vision
+Vision models as of 2026-09 (use with --model; IDs change, check openrouter.ai/models):
+  anthropic/claude-sonnet-4.5    - the default
+  anthropic/claude-opus-4.5      - for hard figures and dense text
+  google/gemini-3.1-pro-preview  - a Gemini alternative
 
 Exit status: 0 converted, 1 an error (including a failed image description), 2 a usage error.
         """
@@ -266,7 +268,8 @@ Exit status: 0 converted, 1 an error (including a failed image description), 2 a
     parser.add_argument(
         '--model', '-m',
         default='anthropic/claude-sonnet-4.5',
-        help='Model via OpenRouter (default: anthropic/claude-sonnet-4.5; pass an opus model for hard vision/OCR)'
+        help=('Model via OpenRouter (default: anthropic/claude-sonnet-4.5, a vision model as of '
+              '2026-09; pass an opus model for hard vision/OCR)')
     )
     parser.add_argument(
         '--prompt-type', '-t',
