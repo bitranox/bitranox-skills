@@ -33,6 +33,15 @@ REDIRECT = re.compile(r">>?\s*['\"]?(?P<f>[^\s'\";|&]+\.(?:json|ya?ml|toml|xml))
 
 EDIT_SKILLS = "files-edit-json / files-edit-yml / files-edit-xml / files-edit-toml"
 
+# Launchers that RUN the command after them, so the editor is not argv[0]: `sudo sed -i x.json`,
+# `env LC_ALL=C sed -i ...`. shell_text's git guards step over the same set for the same reason;
+# `command` and `exec` are added because they, too, run the next word as the program.
+_LAUNCHERS = shell_text._COMMAND_PREFIXES | {"command", "exec"}
+
+# Perl switches whose ARGUMENT is the rest of their cluster: in `-Mlib=inc` the `i` belongs to the
+# module name, and in `-I/opt/lib` to the path, so neither is the in-place switch.
+_PERL_ARG_SWITCHES = frozenset("eEMmIxdDFC")
+
 
 def _targets_structured(tokens):
     """True if any argv token names a structured-config file (quotes stripped)."""
@@ -43,12 +52,46 @@ def _targets_structured(tokens):
     return None
 
 
+def _perl_cluster_has(token, wanted):
+    """True if the single-dash switch cluster `token` holds one of the switch letters in `wanted`.
+
+    Perl bundles switches, so `-pi` is `-p -i` and `-lpi` is `-l -p -i`. The walk stops at a switch
+    that takes the rest of the cluster as its argument (`-Mlib=inc`), and at anything that is not a
+    letter or digit, so an `-i` extension (`-pi.bak`) is still read as `-i`.
+    """
+    if not token.startswith("-") or token.startswith("--"):
+        return False
+    for char in token[1:]:
+        if char in wanted:
+            return True
+        if char in _PERL_ARG_SWITCHES or not char.isalnum():
+            return False
+    return False
+
+
 def _has_inplace(cmd, tokens):
     """True if the argv carries an in-place flag for this editor."""
     if cmd == "perl":
-        return any(t == "-i" or t.startswith("-i") for t in tokens) and any("-p" in t or "-n" in t for t in tokens)
+        return (any(_perl_cluster_has(t, "i") for t in tokens)
+                and any(_perl_cluster_has(t, "pn") for t in tokens))
     # sed / gsed: -i, -i.bak, --in-place
     return any(t == "-i" or t.startswith("-i") or t == "--in-place" or t.startswith("--in-place") for t in tokens)
+
+
+def _editor_index(argv, tool_name):
+    """Index of the in-place editor a leading launcher runs (`sudo sed ...`), else 0.
+
+    Only after a KNOWN launcher, and only within the same bounded look-ahead the git guards use, so
+    the scan stays a statement walk: `timeout 30 ssh host 'sed -i x.json'` keeps the quoted remote
+    command as one token, whose basename is never `sed`.
+    """
+    if shell_text.basename_for_tool(argv[0], tool_name) not in _LAUNCHERS:
+        return 0
+    limit = min(len(argv), 1 + shell_text._PREFIX_SCAN_LIMIT)
+    for at in range(1, limit):
+        if shell_text.basename_for_tool(argv[at], tool_name) in INPLACE_CMDS:
+            return at
+    return 0
 
 
 def assess(command, tool_name="Bash"):
@@ -79,6 +122,7 @@ def assess(command, tool_name="Bash"):
         argv = [t for t in tokens if not ASSIGN.match(t)]
         if not argv:
             continue
+        argv = argv[_editor_index(argv, tool_name):]
         cmd = shell_text.basename_for_tool(argv[0], tool_name)
         if cmd in INPLACE_CMDS and _has_inplace(cmd, argv[1:]):
             target = _targets_structured(argv[1:])

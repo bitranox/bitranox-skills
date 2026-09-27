@@ -407,3 +407,87 @@ def test_both_advisories_arrive_as_one_json_document(monkeypatch, capsys):
     assert run_main_bg(monkeypatch, command, False) == 0
     context = json.loads(capsys.readouterr().out)["hookSpecificOutput"]["additionalContext"]
     assert "MASKED EXIT STATUS" in context and "uv run" in context
+
+
+# ---------------------------------------------------------------------------
+# Comments, `|&`, and the handled-status evidence (rank-10 re-adjudication)
+# ---------------------------------------------------------------------------
+
+
+def test_a_comment_line_after_a_piped_gate_is_not_a_consumer(monkeypatch):
+    """A `#` comment is never executed, so `git commit` written in one commits nothing.
+
+    The statement split read the comment line as a statement and CONSUMER matched its prose.
+    """
+    command = "ruff check . 2>&1 " + chr(124) + " tail -5\n# after this, never git commit on a red gate"
+    assert _rc(monkeypatch, command) == 0
+
+
+def test_a_comment_holding_a_separator_is_not_split_into_a_consumer(monkeypatch):
+    command = "pytest -q " + chr(124) + " tail -3  # note; git commit when green"
+    assert _rc(monkeypatch, command) == 0
+
+
+def test_a_real_consumer_after_a_comment_still_blocks(monkeypatch):
+    """The control: the comment is ignored, the real commit on the next line is not."""
+    command = ("ruff check . 2>&1 " + chr(124) + " tail -5\n# after this, commit\n"
+               "git commit -m x")
+    assert _rc(monkeypatch, command) == 2
+
+
+@pytest.mark.parametrize("claim", ['echo "PASS"', "echo 'PASS'", 'echo "CLIPPY-OK"'])
+def test_a_quoted_success_claim_is_still_evidence(monkeypatch, claim):
+    """Only comments are masked for CONSUMER: the claim IS a quoted string, in either quote."""
+    assert _rc(monkeypatch, "cargo clippy 2>&1 " + chr(124) + " head -20 && " + claim) == 2
+
+
+def test_a_pipe_ampersand_masks_a_gate_too(monkeypatch):
+    """`|&` pipes stderr as well; the pipeline still exits with the filter's status."""
+    command = 'cargo clippy -- -D warnings ' + chr(124) + '& head -20 && echo "CLIPPY-OK"'
+    assert _rc(monkeypatch, command) == 2
+    assert B.masks_a_gate("pytest -q " + chr(124) + "& tail -3") is True
+
+
+def test_a_pipe_ampersand_into_the_gate_leaves_the_gate_last(monkeypatch):
+    """The control: `|&` INTO the gate means the gate sets the status, as with a plain pipe."""
+    assert B.masks_a_gate("echo hi " + chr(124) + "& pytest -q --stdin") is False
+
+
+def test_the_status_advisory_sees_a_pipe_ampersand(monkeypatch, capsys):
+    command = "mytool " + chr(124) + '& tail -5; echo "rc=$?"'
+    assert B.reads_masked_status(command) is True
+    assert run_main(monkeypatch, command) == 0
+    output = json.loads(capsys.readouterr().out)["hookSpecificOutput"]
+    assert output["hookEventName"] == "PreToolUse"
+    assert "MASKED EXIT STATUS" in output["additionalContext"]
+
+
+@pytest.mark.parametrize("prose", [
+    'git commit -m "note: add pipefail later"',
+    'git commit -m "note: check PIPESTATUS later"',
+    "git commit -m x  # pipefail is on the todo list",
+])
+def test_the_word_pipefail_in_prose_is_not_the_fix(monkeypatch, prose):
+    """HANDLED was searched on the raw command, so the word in a commit message disabled the block."""
+    assert _rc(monkeypatch, "pytest -q " + chr(124) + " tail -3 && " + prose) == 2
+
+
+@pytest.mark.parametrize("fix", [
+    "set -o pipefail; pytest -q " + chr(124) + " tail -3 && git commit -m x",
+    "set -euo pipefail\npytest -q " + chr(124) + " tail -3 && git commit -m x",
+    "pytest -q " + chr(124) + ' tail -3; [ "${PIPESTATUS[0]}" -eq 0 ] && git commit -m x',
+    "pytest -q " + chr(124) + " tail -3; test $PIPESTATUS -eq 0 && git commit -m x",
+])
+def test_the_real_pipe_status_fixes_still_allow(monkeypatch, fix):
+    assert _rc(monkeypatch, fix) == 0
+
+
+def test_the_status_advisory_ignores_pipefail_prose(monkeypatch):
+    assert B.reads_masked_status('t ' + chr(124) + ' tail -1; echo "rc=$? (pipefail later)"') is True
+    assert B.reads_masked_status('t ' + chr(124) + ' tail -1; echo "${PIPESTATUS[0]}"') is False
+
+
+def test_advisory_json_names_the_pretooluse_event(monkeypatch, capsys):
+    """Claude Code routes additionalContext by hookEventName; a wrong name drops the advisory."""
+    assert run_main_bg(monkeypatch, 'uv run /p/scripts/gate.py --gate "make test"', False) == 0
+    assert json.loads(capsys.readouterr().out)["hookSpecificOutput"]["hookEventName"] == "PreToolUse"

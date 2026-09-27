@@ -300,3 +300,63 @@ def test_notebookedit_on_an_ordinary_notebook_is_allowed():
     event = {"tool_name": "NotebookEdit",
              "tool_input": {"notebook_path": "/repo/notebooks/Quickstart.ipynb", "new_source": "x"}}
     assert G.decide(event, {}) is None
+
+
+# --- malformed text blocks, the content shapes `_texts` accepts, and MultiEdit ------------------
+
+@pytest.mark.parametrize("bad_text", [None, 5, ["# Update Config Skill"], {"t": 1}])
+def test_a_non_string_text_block_does_not_lose_the_block(tmp_path, bad_text):
+    """A text block whose `text` is not a string raised in `.lstrip()`, main() swallowed it, and
+    the edit went through unguarded. It is now skipped like any other non-matching block."""
+    line = json.dumps({"type": "user", "message": {"role": "user",
+                                                   "content": [{"type": "text", "text": bad_text}]}})
+    t = _transcript(tmp_path, line + "\n")
+    assert G.update_config_active(t) is False
+    assert G.decide(_edit_event(t), {}) is not None
+
+
+@pytest.mark.parametrize("message", ["a string", 5, ["x"]])
+def test_a_message_that_is_not_an_object_does_not_lose_the_block(tmp_path, message):
+    t = _transcript(tmp_path, json.dumps({"type": "user", "message": message}) + "\n")
+    assert G.decide(_edit_event(t), {}) is not None
+
+
+def test_a_non_string_block_beside_the_real_body_keeps_the_bypass(tmp_path):
+    """The control: skipping the malformed block must not skip the real skill body next to it."""
+    line = json.dumps({"type": "user", "message": {"role": "user", "content": [
+        {"type": "text", "text": None},
+        {"type": "text", "text": "# Update Config Skill\n\nModify config"}]}})
+    t = _transcript(tmp_path, line + "\n")
+    assert G.decide(_edit_event(t), {}) is None
+
+
+def test_a_string_content_message_starting_with_the_marker_is_the_skill_body():
+    """`_texts` reads a plain-string `content` as one text. Pinned as a MATCH: a user-role record
+    whose whole content begins with the marker is the same shape as the list form, and refusing it
+    would block the sanctioned path on a harness that writes the body as a string."""
+    line = json.dumps({"type": "user", "message": {"role": "user",
+                                                   "content": "# Update Config Skill\n\nModify"}})
+    assert G._is_skill_body(line) is True
+    quoted = json.dumps({"type": "user", "message": {"role": "user",
+                                                     "content": "see # Update Config Skill"}})
+    assert G._is_skill_body(quoted) is False
+
+
+@pytest.mark.parametrize("content", [None, 5, {"type": "text", "text": "# Update Config Skill"}])
+def test_a_content_that_is_neither_a_string_nor_a_list_is_no_skill_body(content):
+    line = json.dumps({"type": "user", "message": {"role": "user", "content": content}})
+    assert G._is_skill_body(line) is False
+
+
+def test_multiedit_on_a_config_file_is_blocked(tmp_path):
+    """MultiEdit is in the hooks.json matcher and `_TOOLS`; no test drove it."""
+    transcript = tmp_path / "t.jsonl"
+    transcript.write_text('{"type":"user","message":{"content":"hello"}}\n', encoding="utf-8")
+    event = {"transcript_path": str(transcript), "tool_name": "MultiEdit",
+             "tool_input": {"file_path": "/home/u/.claude/settings.json", "edits": []}}
+    assert G.decide(event, {}) is not None
+
+
+def test_multiedit_on_an_ordinary_file_is_allowed():
+    event = {"tool_name": "MultiEdit", "tool_input": {"file_path": "/home/u/x.json", "edits": []}}
+    assert G.decide(event, {}) is None

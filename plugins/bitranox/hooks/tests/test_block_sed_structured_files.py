@@ -140,3 +140,49 @@ def test_a_real_sed_on_a_structured_file_is_still_blocked():
     _s.stdin = io.StringIO(json.dumps({"tool_name": "Bash", "tool_input": {
         "command": "sed -i s/a/b/ package.json"}}))
     assert H.main() == 2
+
+
+# ---- perl clustered switches ----
+def test_perl_clustered_pi_is_in_place():
+    """`-pi` is `-p -i` in one cluster; only a token STARTING with `-i` was read as in-place."""
+    assert action("perl -pi -e 's/1.0/2.0/' pyproject.toml") == "block"
+    assert action("perl -lpi -e 's/1.0/2.0/' pyproject.toml") == "block"
+    assert action("perl -pi.bak -e 's/1.0/2.0/' pyproject.toml") == "block"
+    assert action("perl -ni -e 'print unless /x/' config.json") == "block"
+
+
+def test_perl_clusters_without_in_place_are_not_blocked():
+    """Controls: no `i` switch, and an `i` that is part of another switch's argument."""
+    assert action("perl -pe 's/1.0/2.0/' pyproject.toml") is None
+    assert action("perl -lne 'print' config.json") is None
+    assert action("perl -Mlib=inc -pe 's/a/b/' config.json") is None
+    assert action("perl -I/opt/lib -pe 's/a/b/' config.json") is None
+
+
+def test_a_hyphenated_file_name_is_not_a_perl_switch():
+    """`"-p" in t` read `my-plan.json` as the -p switch; `-i` then made it an in-place edit."""
+    assert action("perl -i -e 'print' my-plan.json") is None
+
+
+# ---- a launcher in front of the editor ----
+def test_a_launcher_in_front_of_sed_does_not_hide_it():
+    """`sudo`, `env`, `command`, `nice`, `timeout` run the sed after them; only `argv[0]` was judged."""
+    for prefix in ("sudo", "command", "env LC_ALL=C", "nice -n 19", "timeout 30", "sudo -u root",
+                   "exec", "time"):
+        assert action(prefix + " sed -i s/a/b/ /etc/app/config.json") == "block", prefix
+
+
+def test_a_launcher_without_in_place_is_not_blocked():
+    """Controls: the launcher changes nothing when the editor is not in-place, or not an editor."""
+    assert action("sudo sed s/a/b/ /etc/app/config.json") is None
+    assert action("sudo cat /etc/app/config.json") is None
+    assert action("timeout 30 ssh host 'sed -i s/a/b/ config.json'") is None
+
+
+# ---- a command shlex cannot split ----
+def test_an_unbalanced_quote_falls_back_to_a_whitespace_split_and_still_blocks():
+    """shlex raises ValueError on the stray `"`. The fallback keeps judging the words rather than
+    giving up, so a stray quote cannot switch the guard off for the sed in front of it. Pinned as
+    BLOCK: the program, its `-i` and its target all stand outside the unbalanced quote."""
+    assert action('sed -i s/a/b/ package.json "') == "block"
+    assert action('sed s/a/b/ package.json "') is None
