@@ -27,20 +27,31 @@ from shell_text import (  # noqa: F401
     blank_unexpanded_text, heredoc_bodies, is_shell_tool, strip_heredoc_bodies,
 )
 
+# How far apart the two halves of a two-part rule may sit. These rules also scan AUTHORED text (a
+# Write body, an Edit), so an unbounded `.*` under re.S joined a `cargo build` on line 1 to a
+# `| grep` 200 lines later. A PIPELINE lives on one logical line - a backslash continuation joins
+# lines, nothing else does. A hand-rolled JSONL READER is a few lines of script, so it gets a window
+# of about twenty lines: replayed over the recorded Write/Edit bodies, 800 characters kept 185 of
+# 220 firings, and the ones it dropped were mostly a `.jsonl` mention kilobytes away from a
+# `json.loads` of some other file.
+_ONE_LOGICAL_LINE = r"(?:[^\n\\]|\\.|\\\n)*"
+_SCRIPT_WINDOW = r".{0,800}"
+
 # (regex over the command, tool name, one-line "why"). First match wins. STRONG signatures only, to
 # keep false positives + noise low; the per-session dedup then nudges each tool at most once.
 _RULES = [
     (re.compile(r"<{7}|>{7}"), "conflict_scan", "scanning for git conflict markers"),
-    (re.compile(r"\.jsonl\b.*(?:json\.loads|json\.load|for line in)"
-                r"|(?:json\.loads|json\.load).*\.jsonl", re.S), "jsonl_grep",
+    (re.compile(r"\.jsonl\b" + _SCRIPT_WINDOW + r"(?:json\.loads|json\.load|for line in)"
+                r"|(?:json\.loads|json\.load)" + _SCRIPT_WINDOW + r"\.jsonl", re.S), "jsonl_grep",
      "parsing a JSONL transcript by hand"),
     # Names the SHIPPED tool, not the local `sshf.py` twin it was contributed from: the gate
     # below sweeps shipped scripts, so a rule naming only the local name left `fleet_ssh`
     # reading as unrouted forever, and anyone without that local file got silence.
     (re.compile(r"\bssh\b[^|]*(?:StrictHostKeyChecking|anyhost_nopass|BatchMode=)"), "fleet_ssh",
      "building an ssh fleet one-liner"),
-    (re.compile(r"(?:cargo (?:build|test|clippy)|gh run (?:view|watch))\b.*(?:\|\s*(?:grep|sed|awk)|2>&1)",
-                re.S), "ci_triage", "hand-piping a build/CI log for errors"),
+    (re.compile(r"(?:cargo (?:build|test|clippy)|gh run (?:view|watch))\b" + _ONE_LOGICAL_LINE
+                + r"(?:\|\s*(?:grep|sed|awk)|2>&1)"), "ci_triage",
+     "hand-piping a build/CI log for errors"),
     (re.compile(r"for\b.*\bgit -C\b.*\bstatus\b|git rev-parse --abbrev-ref HEAD"), "git_state",
      "checking git branch/status across repo(s)"),
     (re.compile(r"\b(?:pkill|pgrep)\s+[^\n]*-f\b"), "procsig",
@@ -260,8 +271,10 @@ def match_authored(text):
 
 # Tools whose call we scan, and WHERE each hides the chore. Bash puts it on the command line;
 # Write/Edit/MultiEdit put it in the NEW text being written (never old_string - that is what is
-# being removed, not authored). Anything else (Read, Grep, ...) is not a place a chore is authored.
-_SCANNED_TOOLS = ("Bash", "PowerShell", "Write", "Edit", "MultiEdit")
+# being removed, not authored), and NotebookEdit in the new cell source. Anything else (Read,
+# Grep, ...) is not a place a chore is authored. This list must cover every tool hooks.json
+# registers the hook for, or a registered call is dropped before it is read.
+_SCANNED_TOOLS = ("Bash", "PowerShell", "Write", "Edit", "MultiEdit", "NotebookEdit")
 
 
 def extract_text(tool_name, tool_input):
@@ -283,6 +296,8 @@ def extract_text(tool_name, tool_input):
         return ti.get("new_string", "")
     if tool_name == "MultiEdit":
         return "\n".join(e.get("new_string", "") for e in ti.get("edits", []) if isinstance(e, dict))
+    if tool_name == "NotebookEdit":
+        return ti.get("new_source", "")       # absent for a cell delete: nothing authored
     return None
 
 
@@ -468,7 +483,12 @@ def _nudge_flag(session):
 
 
 def _already_nudged(session, tool):
-    """Per-session dedup: True if `tool` was already nudged this session; else record it. Best-effort."""
+    """Per-session dedup: True if `tool` was already nudged this session; else record it. Best-effort.
+
+    With no session id there is nothing to dedup within, so every matching call nudges. Claude Code
+    always sends one; a fallback key would be shared by every sessionless caller for as long as
+    the state file lives, turning a missing field into permanent silence, and a repeated nudge is
+    the safer failure (pinned by test_without_a_session_id_every_matching_call_nudges)."""
     if not session:
         return False
     try:

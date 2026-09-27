@@ -8,9 +8,11 @@ trigger map (`skill_triggers.json`, built from the skills' own trigger-first des
 match from the weak menu channel into injected context exactly when it is relevant, instead of a
 big always-on banner. It nudges; the deny-hard guards (skill-edit, store-edit, repo-gate) enforce.
 
-Precision rules: a skill fires only on >= MIN_HITS distinct keyword matches (word-boundary), at
-most MAX_SKILLS per prompt, and each skill nudges at most once per session (state file). Fail-open:
-every error path exits 0. Pure standard library; launched via run-python.sh.
+Precision rules: a skill fires only on >= MIN_HITS distinct keyword matches (word-boundary, with
+letters and digits of any script as word characters), at most MAX_SKILLS NEW skills per prompt
+(skills already nudged in this session are dropped before the cap, so they never hold a slot), and
+each skill nudges at most once per session (state file). Fail-open: every error path exits 0. Pure
+standard library; launched via run-python.sh.
 """
 import json
 import os
@@ -41,7 +43,8 @@ QUESTION_VIEW = "choice-v1"
 # was shown; this says what it is being compared AGAINST, and that half changes too. 7.6.0 stopped
 # scoring machine turns and non-prose while the input views stayed the same, which left 15
 # notification rows judged by the old matcher pooling with typed prompts in one report group.
-MATCHER_VIEW = "prose-v1"
+# prose-v2: the word boundary is Unicode-aware, so an umlaut no longer splits a German compound.
+MATCHER_VIEW = "prose-v2"
 PROJECT_CAP = 200
 
 
@@ -58,8 +61,27 @@ def load_triggers():
         return {}
 
 
+# What a keyword may not touch on either side: a letter or digit of ANY script. An ASCII class
+# treated an umlaut as a word break, so "file" matched inside a German compound. Same rule as
+# gather_scan.scan.
+_WORD_CHAR = r"[^\W_]"
+
+
+def _hit_count(keywords, text):
+    """Distinct keywords found in `text` at a word boundary.
+
+    A compound keyword and its own component both count on one token ("lib_layered_config" is
+    also "config", "package.json" also "json"), so one distinctive identifier clears MIN_HITS on
+    its own. That is kept on purpose: a replay of 1,311 typed prompts found no false nudge from it,
+    while counting such a token once dropped real ones ("do we have lib_layered_config implemented
+    here ?" lost coding-python-layered-config)."""
+    return sum(1 for k in set(keywords)
+               if k and re.search("(?<!%s)%s(?!%s)" % (_WORD_CHAR, re.escape(k), _WORD_CHAR), text))
+
+
 def match(prompt, triggers, min_hits=MIN_HITS, max_skills=MAX_SKILLS):
-    """[(skill, hit_count)] for skills whose distinct keyword hits reach min_hits, best first.
+    """[(skill, hit_count)] for skills whose distinct keyword hits reach min_hits, best first
+    (ties alphabetical), at most `max_skills` of them (None: all).
 
     Only the PROSE of a typed prompt is scored (`prompt_text.scorable_prose`): a machine-generated
     turn scores nothing, and a path, an id or a tag inside a real prompt is not a topic. Keeping
@@ -68,8 +90,7 @@ def match(prompt, triggers, min_hits=MIN_HITS, max_skills=MAX_SKILLS):
     low = prompt_text.scorable_prose(prompt).lower()
     scored = []
     for skill, kws in triggers.items():
-        hits = sum(1 for k in kws
-                   if re.search(r"(?<![a-z0-9])" + re.escape(k) + r"(?![a-z0-9])", low))
+        hits = _hit_count(kws, low)
         if hits >= min_hits:
             scored.append((skill, hits))
     scored.sort(key=lambda x: (-x[1], x[0]))
@@ -93,10 +114,13 @@ def _project_line(cwd):
 
 
 def _already_nudged(cwd, sid):
+    """Skills this session was already nudged about. Read with errors="replace": one undecodable
+    byte must not raise and silence the router for the rest of the session."""
     try:
-        return {s for s in _state_file(cwd, sid).read_text(encoding="utf-8").split("\n") if s}
+        text = _state_file(cwd, sid).read_text(encoding="utf-8", errors="replace")
     except OSError:
         return set()
+    return {s for s in text.split("\n") if s}
 
 
 def _turn_fields(prompt):
@@ -160,18 +184,17 @@ def main():
     sid = ev.get("session_id") or "default"
     try:
         triggers = load_triggers()
-        hits = match(prompt, triggers)
+        # Every matching skill, uncapped: the per-session dedup runs BEFORE the MAX_SKILLS cap, so
+        # skills nudged earlier never hold the slots of a fresh skill that matches this prompt.
+        hits = match(prompt, triggers, max_skills=None)
         # Opt-in shadow comparison (off by default), before the per-session dedup so every
         # prompt is compared.
         _shadow_skill_router(prompt, sid, triggers, ev.get("transcript_path") or "", cwd)
         if not hits:
             return 0
         state = _state_file(cwd, sid)
-        try:
-            already = set(state.read_text(encoding="utf-8").split("\n")) if state.exists() else set()
-        except OSError:
-            already = set()
-        fresh = [(s, n) for s, n in hits if s not in already]
+        already = _already_nudged(cwd, sid)
+        fresh = [(s, n) for s, n in hits if s not in already][:MAX_SKILLS]
         if not fresh:
             return 0
         state.parent.mkdir(parents=True, exist_ok=True)

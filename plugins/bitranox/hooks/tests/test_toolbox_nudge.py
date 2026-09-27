@@ -882,3 +882,99 @@ def test_every_nudged_jig_that_spawns_a_computed_argv_is_classified():
 def test_a_nudged_jig_that_runs_your_commands_is_never_suggested_under_uv_run(tool):
     cmd, _note = N.launch_command(_SHIPPED_JIGS[tool])
     assert not cmd.startswith("uv run"), (tool, cmd)
+
+
+# ---- ci_triage and jsonl_grep are bounded, so far-apart lines are not one chore -------------------
+# Both were compiled with re.S and an unbounded `.*`, and they apply to authored text, so a file
+# naming `cargo build` at the top and piping into grep 200 lines later read as a hand-piped build
+# log. ci_triage is a PIPELINE, so it is bounded to one logical line (a backslash continuation still
+# joins lines); jsonl_grep is a script shape, so it keeps a window of about twenty lines.
+
+_FILLER = "x = 1\n" * 200
+
+
+def test_ci_triage_does_not_join_two_far_apart_lines_of_a_written_file():
+    text = "cargo build --release\n" + _FILLER + "cat README | grep install\n"
+    assert N.match_tool(text, "Write") is None
+
+
+def test_ci_triage_does_not_join_two_statements_on_different_lines_of_a_command():
+    assert N.match_tool("cargo build --release\nls | grep x", "Bash") is None
+
+
+def test_ci_triage_still_sees_a_continued_command_line():
+    assert N.match_tool("cargo build \\\n  --release 2>&1 | grep error", "Bash")[0] == "ci_triage"
+
+
+def test_jsonl_grep_does_not_join_a_distant_mention_and_a_plain_json_load():
+    text = "# reads out.jsonl later\n" + _FILLER + "cfg = json.load(open('cfg.json'))\n"
+    assert N.match_tool(text, "Write") is None
+
+
+def test_jsonl_grep_still_sees_a_short_hand_rolled_jsonl_reader():
+    text = ("import json\n\nPATH = 'events.jsonl'\n\nwith open(PATH) as fh:\n"
+            "    for raw in fh:\n        row = json.loads(raw)\n")
+    assert N.match_tool(text, "Write")[0] == "jsonl_grep"
+
+
+def test_main_nudges_on_a_far_apart_write_only_when_the_lines_are_close(home, monkeypatch, capsys):
+    _with_tool(home, "ci_triage")
+    far = "cargo build --release\n" + _FILLER + "cat README | grep install\n"
+    _feed(monkeypatch, {"tool_name": "Write", "session_id": "c4a",
+                        "tool_input": {"file_path": "/tmp/b.sh", "content": far}})
+    N.main()
+    assert capsys.readouterr().out.strip() == ""
+    _feed(monkeypatch, {"tool_name": "Write", "session_id": "c4b",
+                        "tool_input": {"file_path": "/tmp/b.sh",
+                                       "content": "cargo build --release 2>&1 | grep error\n"}})
+    N.main()
+    assert "ci_triage" in capsys.readouterr().out
+
+
+# ---- NotebookEdit is registered for this hook, so its new cell source is scanned ------------------
+
+def test_extract_text_notebookedit_is_the_new_source():
+    assert N.extract_text("NotebookEdit", {"new_source": "print(1)", "cell_id": "c"}) == "print(1)"
+
+
+def test_main_nudges_on_a_notebook_cell_that_hand_rolls_the_chore(home, monkeypatch, capsys):
+    _with_tool(home, "jsonl_grep")
+    _feed(monkeypatch, {"tool_name": "NotebookEdit", "session_id": "nb1",
+                        "tool_input": {"notebook_path": "/tmp/n.ipynb", "cell_id": "c1",
+                                       "new_source": "import json\n[json.loads(l) for l in open('x.jsonl')]"}})
+    assert N.main() == 0
+    assert "jsonl_grep" in capsys.readouterr().out
+
+
+def test_main_silent_on_a_notebook_cell_delete(home, monkeypatch, capsys):
+    _with_tool(home, "jsonl_grep")
+    _feed(monkeypatch, {"tool_name": "NotebookEdit", "session_id": "nb2",
+                        "tool_input": {"notebook_path": "/tmp/n.ipynb", "cell_id": "c1",
+                                       "edit_mode": "delete"}})
+    assert N.main() == 0 and capsys.readouterr().out.strip() == ""
+
+
+# ---- no session_id: no dedup, so every matching call nudges ---------------------------------------
+# Claude Code always sends a session_id. Without one there is no session to dedup within, and a
+# fallback key would be shared by every sessionless caller for as long as the state file lives,
+# turning a missing field into permanent silence. A nudge that repeats is the safer failure.
+
+def test_without_a_session_id_every_matching_call_nudges(home, monkeypatch, capsys):
+    _with_tool(home)
+    outs = []
+    for _ in range(3):
+        _feed(monkeypatch, {"tool_name": "Bash",
+                            "tool_input": {"command": "git rev-parse --abbrev-ref HEAD"}})
+        N.main()
+        outs.append("git_state" in capsys.readouterr().out)
+    assert outs == [True, True, True]
+
+
+def test_control_with_a_session_id_only_the_first_call_nudges(home, monkeypatch, capsys):
+    _with_tool(home)
+    outs = []
+    for _ in range(3):
+        _feed(monkeypatch, _ev("git rev-parse --abbrev-ref HEAD", "dedup-ctl"))
+        N.main()
+        outs.append("git_state" in capsys.readouterr().out)
+    assert outs == [True, False, False]
