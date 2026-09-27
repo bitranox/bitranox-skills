@@ -36,6 +36,17 @@ uv run --with httpx2 scripts/generate_schematic.py "Data pipeline overview" -o p
 `--doc-type` tunes the acceptance threshold (a poster tolerates less detail than a paper
 figure); `--iterations` caps the regenerate loop.
 
+The default models are `google/gemini-3.1-flash-image-preview` (generates) and
+`google/gemini-3.1-pro-preview` (reviews), both present in the OpenRouter catalogue on 2026-09-27.
+Preview IDs get renamed and retired without notice, so when a run fails with
+`API request failed (HTTP ...)`, list the current IDs (the endpoint needs no key) and pass the
+replacement with `--image-model` / `--review-model` (both scripts accept them):
+
+```bash
+curl -s https://openrouter.ai/api/v1/models | python3 -c \
+  "import json,sys; [print(m['id']) for m in json.load(sys.stdin)['data']]"
+```
+
 Exit status of `generate_schematic_ai.py`: 0 the kept image met the `--doc-type` threshold; 1 no
 image, an image whose review failed with no earlier reviewed image to fall back on, or a best
 image still below the threshold - the image is written in those last two cases, so check the

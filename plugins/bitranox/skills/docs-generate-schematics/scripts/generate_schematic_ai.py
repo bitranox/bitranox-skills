@@ -48,6 +48,19 @@ except ImportError:
           file=sys.stderr)
     sys.exit(1)
 
+# Both IDs are preview-tier, which providers rename and retire without notice. Verified present in
+# the live OpenRouter catalogue on 2026-09-27. When a run starts failing with an opaque HTTP error,
+# list the current IDs before debugging anything else, then pass the replacement with
+# --image-model / --review-model:
+#   curl -s https://openrouter.ai/api/v1/models | python3 -c \
+#     "import json,sys; [print(m['id']) for m in json.load(sys.stdin)['data']]"
+# Nano Banana 2 - Google's image generation model
+# https://openrouter.ai/google/gemini-3.1-flash-image-preview
+DEFAULT_IMAGE_MODEL = "google/gemini-3.1-flash-image-preview"
+# Gemini 3.1 Pro Preview reviews the image: vision plus reasoning
+DEFAULT_REVIEW_MODEL = "google/gemini-3.1-pro-preview"
+
+
 def _configure_console() -> None:
     """Replace unencodable characters instead of crashing on a narrow console (cp1252)."""
     for stream in (sys.stdout, sys.stderr):
@@ -184,13 +197,16 @@ IMPORTANT - NO FIGURE NUMBERS:
 - The diagram should contain only the visual content itself
 """
     
-    def __init__(self, api_key: Optional[str] = None, verbose: bool = False):
+    def __init__(self, api_key: Optional[str] = None, verbose: bool = False,
+                 image_model: str = DEFAULT_IMAGE_MODEL, review_model: str = DEFAULT_REVIEW_MODEL):
         """
         Initialize the generator.
         
         Args:
             api_key: OpenRouter API key (default: the OPENROUTER_API_KEY env var)
             verbose: Print detailed progress information
+            image_model: OpenRouter model ID that generates the image
+            review_model: OpenRouter model ID that reviews the image
         """
         self.api_key = api_key or os.getenv("OPENROUTER_API_KEY")
         if not self.api_key:
@@ -203,16 +219,9 @@ IMPORTANT - NO FIGURE NUMBERS:
         self.verbose = verbose
         self._last_error = None  # Track last error for better reporting
         self.base_url = "https://openrouter.ai/api/v1"
-        # Both IDs are preview-tier, which providers rename and retire without notice.
-        # Verified present in the live OpenRouter catalogue on 2026-08-28. When a run starts
-        # failing with an opaque HTTP error, list the current IDs before debugging anything else:
-        #   curl -s https://openrouter.ai/api/v1/models | python3 -c \
-        #     "import json,sys; [print(m['id']) for m in json.load(sys.stdin)['data']]"
-        # Nano Banana 2 - Google's advanced image generation model
-        # https://openrouter.ai/google/gemini-3.1-flash-image-preview
-        self.image_model = "google/gemini-3.1-flash-image-preview"
-        # Gemini 3.1 Pro Preview for quality review - excellent vision and reasoning
-        self.review_model = "google/gemini-3.1-pro-preview"
+        # See DEFAULT_IMAGE_MODEL for why these are overridable and how to list current IDs.
+        self.image_model = image_model
+        self.review_model = review_model
         
     def _log(self, message: str):
         """Log message if verbose mode is enabled."""
@@ -880,6 +889,10 @@ verdict on a score at or above it still exits 0.
                        choices=["journal", "conference", "poster", "presentation", 
                                "report", "grant", "thesis", "preprint", "default"],
                        help="Document type for quality threshold (default: default)")
+    parser.add_argument("--image-model", default=DEFAULT_IMAGE_MODEL, metavar="ID",
+                       help=f"OpenRouter model that generates the image (default: {DEFAULT_IMAGE_MODEL})")
+    parser.add_argument("--review-model", default=DEFAULT_REVIEW_MODEL, metavar="ID",
+                       help=f"OpenRouter model that reviews the image (default: {DEFAULT_REVIEW_MODEL})")
     # Refused in main(), never used: the key comes from OPENROUTER_API_KEY only.
     parser.add_argument("--api-key", help=argparse.SUPPRESS)
     parser.add_argument("-v", "--verbose", action="store_true",
@@ -911,7 +924,9 @@ def main(argv: Optional[List[str]] = None) -> int:
         return 1
 
     try:
-        generator = ScientificSchematicGenerator(api_key=api_key, verbose=args.verbose)
+        generator = ScientificSchematicGenerator(api_key=api_key, verbose=args.verbose,
+                                                 image_model=args.image_model,
+                                                 review_model=args.review_model)
         results = generator.generate_iterative(
             user_prompt=args.prompt,
             output_path=args.output,

@@ -445,3 +445,23 @@ def test_a_missing_httpx2_is_reported_on_stderr(gen_ai, tmp_path):
     assert proc.returncode == 1
     assert b"httpx2 library not found" in proc.stderr
     assert proc.stdout == b""
+
+
+def test_default_models_are_the_documented_ones(gen_ai, scripted, monkeypatch, tmp_path):
+    """The control for the override: with no flag, the pinned defaults are what the requests name."""
+    calls = scripted(image("V1"), review("SCORE: 9.0"))
+
+    rc = run_main(gen_ai, monkeypatch, "diagram", "-o", str(_out(tmp_path)), "--iterations", "1")
+
+    assert rc == 0
+    assert calls == [gen_ai.DEFAULT_IMAGE_MODEL, gen_ai.DEFAULT_REVIEW_MODEL]
+
+
+def test_model_flags_replace_a_retired_id_without_editing_the_script(gen_ai, scripted, monkeypatch, tmp_path):
+    calls = scripted(image("V1"), review("SCORE: 9.0"))
+
+    rc = run_main(gen_ai, monkeypatch, "diagram", "-o", str(_out(tmp_path)), "--iterations", "1",
+                  "--image-model", "vendor/image-x", "--review-model", "vendor/review-y")
+
+    assert rc == 0
+    assert calls == ["vendor/image-x", "vendor/review-y"]

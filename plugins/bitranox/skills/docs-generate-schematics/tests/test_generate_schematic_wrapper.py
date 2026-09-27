@@ -184,3 +184,18 @@ def test_cp1252_console_with_non_ascii_path_prints_its_error(tmp_path):
     assert proc.returncode == 1
     assert b"Traceback" not in proc.stderr
     assert b"not found" in proc.stderr
+
+
+def test_model_overrides_are_forwarded_to_the_child(gen_wrapper, gen_ai, monkeypatch):
+    out = _run_main(gen_wrapper, ["x", "-o", "f.png", "--image-model", "vendor/image-x",
+                                  "--review-model", "vendor/review-y"], monkeypatch)
+    child = gen_ai.build_parser().parse_args(out["cmd"][2:])
+    assert (child.image_model, child.review_model) == ("vendor/image-x", "vendor/review-y")
+
+
+def test_no_model_flag_leaves_the_child_on_its_defaults(gen_wrapper, gen_ai, monkeypatch):
+    out = _run_main(gen_wrapper, ["x", "-o", "f.png"], monkeypatch)
+    assert not any(a.startswith(("--image-model", "--review-model")) for a in out["cmd"])
+    child = gen_ai.build_parser().parse_args(out["cmd"][2:])
+    assert (child.image_model, child.review_model) == (gen_ai.DEFAULT_IMAGE_MODEL,
+                                                       gen_ai.DEFAULT_REVIEW_MODEL)

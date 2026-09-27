@@ -283,3 +283,11 @@ def test_make_request_transport_error_maps_to_runtimeerror(generator, gen_ai, mo
     with pytest.raises(RuntimeError) as e:
         generator._make_request("some/model", [{"role": "user", "content": "hi"}])
     assert "failed" in str(e.value).lower()
+
+
+def test_skill_md_names_the_default_model_ids(gen_ai):
+    """SKILL.md tells the reader which IDs to check when a preview model is retired; it must name
+    the ones the script actually sends, or the reader checks the wrong models."""
+    skill = (SCRIPTS.parent / "SKILL.md").read_text(encoding="utf-8")
+    assert gen_ai.DEFAULT_IMAGE_MODEL in skill
+    assert gen_ai.DEFAULT_REVIEW_MODEL in skill
