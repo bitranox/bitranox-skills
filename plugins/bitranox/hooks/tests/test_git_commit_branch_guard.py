@@ -5,6 +5,7 @@ The hyphenated module is loaded + aliased as `git_commit_branch_guard` by confte
 import io
 import json
 import os
+import shlex
 import shutil
 import subprocess
 import sys
@@ -15,6 +16,11 @@ import pytest
 import git_commit_branch_guard as G
 
 _HOOK = Path(__file__).resolve().parent.parent / "git-commit-branch-guard.py"
+
+
+def _q(path):
+    """``path`` as bash reads it: a bare Windows path loses its backslashes to bash's escapes."""
+    return shlex.quote(str(path))
 
 
 def test_is_git_commit():
@@ -218,14 +224,14 @@ def test_an_in_sync_checkout_is_silent(shared):
 def test_git_dash_C_is_judged_by_the_repo_it_names_not_the_event_cwd(shared):
     # The guard used to ask git about the EVENT cwd, so it warned about an in-sync target and
     # missed a behind one, in both directions.
-    assert _hook(shared, f"git -C {shared['o']} commit -m x", shared["w"]) == ""
-    assert "behind" in _hook(shared, f"git -C {shared['w']} commit -m x", shared["o"])
+    assert _hook(shared, f"git -C {_q(shared['o'])} commit -m x", shared["w"]) == ""
+    assert "behind" in _hook(shared, f"git -C {_q(shared['w'])} commit -m x", shared["o"])
     assert "behind" in _hook(shared, "git -C w commit -m x", shared["root"])      # relative
 
 
 def test_a_leading_cd_is_judged_by_where_it_lands(shared):
-    assert "behind" in _hook(shared, f"cd {shared['w']} && git commit -m x", shared["o"])
-    assert _hook(shared, f"cd {shared['o']} && git add f; git commit -m x", shared["w"]) == ""
+    assert "behind" in _hook(shared, f"cd {_q(shared['w'])} && git commit -m x", shared["o"])
+    assert _hook(shared, f"cd {_q(shared['o'])} && git add f; git commit -m x", shared["w"]) == ""
     assert "behind" in _hook(shared, "cd o && cd ../w && git commit -m x", shared["root"])
 
 
@@ -243,7 +249,7 @@ def test_a_target_that_is_not_a_repository_is_silent(shared):
     plain = shared["root"] / "plain"
     plain.mkdir()
     assert _hook(shared, f"git -C {plain} commit -m x", shared["w"]) == ""
-    assert _hook(shared, f"git -C {shared['root'] / 'missing'} commit -m x", shared["w"]) == ""
+    assert _hook(shared, f"git -C {_q(shared['root'] / 'missing')} commit -m x", shared["w"]) == ""
 
 
 def test_strict_mode_is_silent_on_the_default_branch(shared):
@@ -284,19 +290,21 @@ def test_the_behind_count_parser_refuses_malformed_output():
 
 def test_commit_target_follows_the_shell_and_git_the_way_they_run():
     base = os.path.join(os.sep, "base")
-    top = os.path.join(os.sep, "r")
+    # abspath gives a drive on Windows: a bare '\r' is drive-relative there, so after an unreadable
+    # `cd "$X"` the drive is unknown too and the target rightly stays unreadable.
+    top = os.path.abspath(os.path.join(os.sep, "r"))
     j = os.path.join
     assert G._commit_target("git commit -m x", base) == base
-    assert G._commit_target(f"cd -P {top} && git commit -m x", base) == top
-    assert G._commit_target(f"cd -- {top} && git commit -m x", base) == top
+    assert G._commit_target(f"cd -P {_q(top)} && git commit -m x", base) == top
+    assert G._commit_target(f"cd -- {_q(top)} && git commit -m x", base) == top
     assert G._commit_target("git -C a -C b commit -m x", base) == j(base, "a", "b")
-    assert G._commit_target(f'git -c user.name="A B" -C {top} commit -m x', base) == top
+    assert G._commit_target(f'git -c user.name="A B" -C {_q(top)} commit -m x', base) == top
     assert G._commit_target("cd a; pushd b && git commit -m x", base) == j(base, "a", "b")
     assert G._commit_target("Set-Location sub; git commit -m x", base, "PowerShell") == j(base, "sub")
     assert G._commit_target("cd a && popd && git commit -m x", base) is None
-    assert G._commit_target(f'cd "$X" && cd {top} && git commit -m x', base) == top   # absolute recovers
+    assert G._commit_target(f'cd "$X" && cd {_q(top)} && git commit -m x', base) == top   # absolute recovers
     assert G._commit_target('cd "$X" && cd sub && git commit -m x', base) is None
     assert G._commit_target("git -C", base) is None                                     # no verb
-    assert G._commit_target(f"git commit -m x && cd {top}", base) == base              # cd after
+    assert G._commit_target(f"git commit -m x && cd {_q(top)}", base) == base              # cd after
     assert G._commit_target("cd -P && git commit -m x", base) is None                  # no operand
     assert G._commit_target("; git commit -m x", base) == base                         # empty statement

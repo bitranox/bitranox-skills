@@ -29,6 +29,20 @@ than the change, so entries reconstructed from them would read like coverage wit
 a hole nobody has drawn a line under is one that gets rediscovered and half-filled - which is how
 two "versions with no entry" notes came to sit in this file disagreeing with it.
 
+## [7.25.13]
+
+### Fixed
+
+- `venv-guard` recognises a quoted native Windows path to the project's own venv tool under Bash
+  (`'C:\p\.venv\Scripts\ruff.exe' check .`) as already pinned. It read only `/` as a path
+  separator there, so on Windows such a run drew a false WRONG VENV.
+- `block-partial-typecheck` treats a path argument carrying a NUL byte as undecidable on every
+  platform. Windows `Path.resolve()` returns such a path instead of raising, so it compared as
+  "does not cover tests" and could block.
+- The Windows tests of 7.25.12 quote the native paths they put into Bash commands, as bash needs:
+  unquoted, bash strips the backslashes, so the hooks read a different path and several assertions
+  failed or passed for the wrong reason.
+
 ## [7.25.12]
 
 ### Fixed

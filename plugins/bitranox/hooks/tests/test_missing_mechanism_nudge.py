@@ -8,6 +8,7 @@ where the check belongs - not a broad scan of every markdown file.
 import importlib.util
 import json
 import pathlib
+import shlex
 import subprocess
 import sys
 
@@ -143,7 +144,8 @@ def test_a_hook_file_naming_its_evidence_is_left_alone(tmp_path):
 def test_an_absolute_hook_file_is_read_whatever_the_cwd(tmp_path):
     hook = tmp_path / "h.txt"
     hook.write_text("the opt-in defaults off\n", encoding="utf-8")
-    assert N.notice(_hook_file_command(str(hook)), cwd="/") is not None
+    # Quoted as bash needs it: a bare Windows path loses its backslashes to bash's escapes.
+    assert N.notice(_hook_file_command(shlex.quote(str(hook))), cwd="/") is not None
 
 
 def test_a_hook_file_that_does_not_exist_yet_is_silent(tmp_path):

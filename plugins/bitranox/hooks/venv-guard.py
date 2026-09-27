@@ -228,7 +228,9 @@ def _pinned_by_path(tokens: list[str], at: int, cwd, project_venv: Path, tool_na
     launchers = [t for t in tokens[:at] if basename_for_tool(t, tool_name) in _PYTHONS]
     candidates = [tokens[at], *launchers]
     for token in candidates:
-        if tool_name == "PowerShell":
+        # A backslash separates path components under PowerShell, and on Windows under Bash too:
+        # a quoted native path ('C:\p\.venv\Scripts\ruff.exe') reaches us with its backslashes.
+        if tool_name == "PowerShell" or os.sep == "\\":
             token = token.replace("\\", "/")
         if "/" not in token:
             continue

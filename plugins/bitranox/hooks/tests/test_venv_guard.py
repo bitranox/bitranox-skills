@@ -5,6 +5,7 @@ commands gets ignored, and then it is not a guard.
 """
 import json
 import os
+import shlex
 import subprocess
 import sys
 from pathlib import Path
@@ -167,6 +168,11 @@ def test_hook_never_wedges_a_turn_on_bad_input():
 
 # ---- data is not a command ---------------------------------------------------------------------
 
+def _q(path):
+    """``path`` as bash reads it: a bare Windows path loses its backslashes to bash's escapes."""
+    return shlex.quote(str(path))
+
+
 def _other(tmp_path):
     other = tmp_path / "other"
     other.mkdir()
@@ -218,9 +224,9 @@ def test_the_hooks_own_remediation_is_silent(tmp_path):
 def test_an_explicit_virtual_env_pointing_at_the_project_venv_is_silent(tmp_path):
     proj = _project(tmp_path)
     other = _other(tmp_path)
-    for cmd in (f"VIRTUAL_ENV={proj / '.venv'} pytest -q",
+    for cmd in (f"VIRTUAL_ENV={_q(proj / '.venv')} pytest -q",
                 "VIRTUAL_ENV=.venv pytest -q",
-                f"env VIRTUAL_ENV={proj / '.venv'} pytest"):
+                f"env VIRTUAL_ENV={_q(proj / '.venv')} pytest"):
         assert G.build_notice(cmd, proj, other) is None, cmd
 
 
@@ -228,7 +234,7 @@ def test_an_unset_earlier_in_the_command_carries_forward(tmp_path):
     proj = _project(tmp_path)
     other = _other(tmp_path)
     for cmd in ("unset VIRTUAL_ENV; pytest", "unset VIRTUAL_ENV && make test",
-                f"export VIRTUAL_ENV={proj / '.venv'} && pytest"):
+                f"export VIRTUAL_ENV={_q(proj / '.venv')} && pytest"):
         assert G.build_notice(cmd, proj, other) is None, cmd
 
 
@@ -238,14 +244,14 @@ def test_an_override_reaches_only_its_own_statement(tmp_path):
     other = _other(tmp_path)
     for cmd in ("env -u VIRTUAL_ENV true && pytest",
                 "env -u OTHER_VAR pytest",
-                f"VIRTUAL_ENV={proj / '.venv'} true; pytest"):
+                f"VIRTUAL_ENV={_q(proj / '.venv')} true; pytest"):
         assert G.build_notice(cmd, proj, other), cmd
 
 
 def test_an_explicit_foreign_virtual_env_fires_even_with_none_ambient(tmp_path):
     proj = _project(tmp_path)
     other = _other(tmp_path)
-    notice = G.build_notice(f"VIRTUAL_ENV={other} pytest", proj, None)
+    notice = G.build_notice(f"VIRTUAL_ENV={_q(other)} pytest", proj, None)
     assert notice and other in notice
 
 
@@ -277,14 +283,14 @@ def test_a_tool_inside_the_project_venv_is_already_pinned(tmp_path):
     proj = _project(tmp_path)
     other = _other(tmp_path)
     for cmd in ("./.venv/bin/pytest -q", ".venv/bin/python -m pytest",
-                f"{proj / '.venv' / 'bin' / 'ruff'} check ."):
+                f"{_q(proj / '.venv' / 'bin' / 'ruff')} check ."):
         assert G.build_notice(cmd, proj, other) is None, cmd
 
 
 def test_a_tool_path_outside_the_project_venv_still_fires(tmp_path):
     proj = _project(tmp_path)
     other = _other(tmp_path)
-    assert G.build_notice(f"{other}/bin/pytest -q", proj, other)
+    assert G.build_notice(f"{_q(other + '/bin/pytest')} -q", proj, other)
 
 
 def test_pyright_is_not_pinned_by_its_install_path(tmp_path):

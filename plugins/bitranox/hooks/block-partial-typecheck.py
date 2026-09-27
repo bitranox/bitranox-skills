@@ -169,12 +169,17 @@ def _test_dir(cwd: Path) -> Path | None:
 
 def _covers(path_arg: str, cwd: Path, tests: Path) -> bool:
     """Whether checking ``path_arg`` would reach ``tests``."""
+    if "\0" in path_arg:
+        # Cannot tell -> do not block. Decided here because pathlib is not consistent about it:
+        # POSIX resolve() raises ValueError for an embedded NUL, Windows resolve() returns the path
+        # unchanged, which then compares as "does not cover tests" and blocks.
+        return True
     try:
         target = (cwd / path_arg).resolve()
         tests_resolved = tests.resolve()
     except (OSError, ValueError):
-        # Cannot tell -> do not block. ValueError is what pathlib raises for an embedded NUL; it
-        # escaped here once and ended the whole hook instead of this one path's verdict.
+        # Cannot tell -> do not block. A ValueError escaped here once and ended the whole hook
+        # instead of this one path's verdict.
         return True
     # Either the argument IS/contains the test dir, or it sits inside it.
     return target == tests_resolved or tests_resolved.is_relative_to(target) or target.is_relative_to(tests_resolved)
