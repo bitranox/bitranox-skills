@@ -106,6 +106,10 @@ Machine `A` belongs to network `A`, and it wants to connect to machine `B`, whic
 
 If you have python modules that make use of the `socket` module (say, `telnetlib` or `asyncore`), and you want them to be able to cross networks over such a bridge, you can use the recipe above to "inject" `C`'s socket module into your third-party module, like so:
 
+> Both example modules are gone from the standard library (PEP 594): `asyncore` was removed in
+> Python 3.12 and `telnetlib` in 3.13, so the snippets below that import `telnetlib` run only on
+> 3.12 and older. The pattern itself works with any module that holds a `socket` reference.
+
     import rpyc
     import telnetlib
 
