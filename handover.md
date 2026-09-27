@@ -1,95 +1,81 @@
-# STALE - read 2026-09-27, work continued
+# Handover - 2026-09-27 10:30, rank 20 adjudicated and triaged, fixing not started
 
 ## In flight
 
-Integration of the rank 10 fixes. Everything below is committed on LOCAL branches in the shared
-repo (`git branch --list 'rank10-fix*'`), nothing of it is pushed.
-
-- `rank10-fix` (worktree `.claude/worktrees/rank10-fix`), tip `97dda56d`: the 7.25.12 bump of
-  `plugin.json` + `pyproject.toml`, a CHANGELOG `## [7.25.12]` STUB (one placeholder bullet, to be
-  replaced), and S0's additive `shell_text.blank_heredoc_bodies` / `commands_only_aligned`.
-- `rank10-fix-F1` .. `rank10-fix-F7` (worktrees `.claude/worktrees/rank10-fix-F<n>`), each branched
-  from `97dda56d`, disjoint file ownership, 34 commits in total, each fixer's whole-hooks suite green
-  (4821-4851 passed). Tips: F1 881191c2, F2 b017f711, F3 1c2c293f, F4 89998a39, F5 d362ee44,
-  F6 53bb6bd1, F7 66a718f4.
-- Reports (FIXED / NOT FIXED / NOTICED / CHANGELOG lines / SUITE / COMMITS), harvested verbatim
-  from the transcripts: main checkout `.plan/rank10-passing-2026-09-27/fix/F<n>.report.txt`, with
-  the briefs (`COMMON.txt`, `F<n>.txt`) and `INTEGRATION-TODO.txt` beside them. The adjudication
-  that produced the work is `.plan/rank10-passing-2026-09-27/TRIAGE.md` + `verdicts/`.
+Nothing is part-done. Rank 20 (the skills half of the 2026-08-27 audit directive) is sized,
+re-adjudicated and triaged; the user chose ALL FIVE batches. No fixer has been dispatched.
 
 ## Committed, or not
 
-- Pushed: `8f4960e1` (rank 10 line corrected from "about 7" to 29 reports; CI green) and the commit
-  carrying this file and the OPEN-WORK update.
-- Local only: the 8 branches above. The main checkout is still ~140 commits behind origin/master
-  with another session's `PLAN-JEV-SKILL.md` / `TODO-JEV.md` staged - leave it alone.
+- Pushed this session: 7.25.12 (rank 10 fixes) and 7.25.13 (its Windows follow-up), CI green on
+  f69a23c3; rank 10 closed (1606880b); rank 15 closed (43172d99); this file and the OPEN-WORK update
+  for ranks 20 and 95 (the commit carrying this file).
+- Memory store (the private tree-top store, not this repo): 72fc56b lifts the
+  private-Gitea fact to the tree top and clears the last sideways ref; --check-tree TOTAL 0. Other
+  sessions' uncommitted edits sit in that store too - they are not ours, leave them.
+- Main checkout: still ~140 commits behind origin/master with another session's PLAN-JEV-SKILL.md /
+  TODO-JEV.md staged. Leave it alone; work from worktrees off origin/master.
+- Gitignored, main checkout only: .plan/rank20-skills-2026-09-27/ (TRIAGE.md, input/, verdicts/)
+  and .sweep-2026-08-27/verified.tsv (the August source record).
 
 ## Decided, and why - do not reopen
 
-- The user chose ALL batches (S B H R N D T), H B S R first. Done as one release, 7.25.12 (patch:
-  every change is a fix).
-- skill-router c1 (compound keyword double-counts) is NOT fixed: F5 replayed 1,311 real prompts and
-  the fix removed only true positives. Pinned as intended with a test. It is recorded as a design
-  question for the user in OPEN-WORK 184, not as work.
-- toolbox-nudge NEW 1 (blank double-quoted prose) NOT done: replay showed 12% of firings would
-  change, nearly all real chores.
-- repo-gate c2 (read the blob for CRLF) NOT done: F7 proved it would turn a false block this repo
-  cannot hit into a real false pass.
-- post-compact-nudge now prints nothing and no longer deletes the salvaged audit (PostCompact
-  delivers no context per the official hooks doc; the Stop gate already carries the nap hint).
-- self-improve-gate routing hint now says "this session", because touched-paths evidence is
-  session-cumulative (clear_touched_paths has no production caller).
+- "The reviewer half" (rank 20's old wording) means the SKILLS half of "review all skills and
+  scripts"; the scripts half was rank 10. No record kept the label's meaning; the user confirmed.
+- Scope: re-adjudicate only the 53 August findings whose quote still stood (not a fresh sweep).
+  Result 49 fixed, 1 never true, 3 partial, 8 new.
+- All five batches B1-B5 go in one release; B5 is rank 95 and closes it.
+- Rank 15: the fact's two refs to facts at its old project level were demoted to prose rather than
+  lifted - both targets are project-local, lifting them would put project rules above every project.
+- 7.25.13 test fix: Bash-command tests quote native paths with shlex.quote (bash strips unquoted
+  backslashes); the hooks were right. venv-guard and block-partial-typecheck had real Windows defects.
 
 ## Still open, untouched
 
-`OPEN-WORK.md` is the list; read it before this file. Rank 10 (its `next:` names the integration),
-184 (fixer follow-ups, NEW), 177, 182, 183 as before.
+`OPEN-WORK.md` is the list - read it first. Rank 20 is now top; its line names all five batches.
 
 ## Lessons for the next nap
 
-- When a backlog line carries a count of what is left ("about 7 reports"), recount it from the
-  source record before working it: this one had eroded from 20 to 7 while the real remainder was
-  29.
-- When harvesting a subagent's report, parse its transcript for the SubagentHandback tool_use input
-  (a small marker-keyed script did it: `/tmp/claude-1000/rank10-passing/harvest.py`, markers
-  `FIXED:` `SUITE:` or `VERDICT:` `SUMMARY`), not the delivered message.
-- When an offset-sliced parser strips heredoc bodies, it must slice from a length-preserving copy:
-  three hooks recorded wrong values after a heredoc; shell_text now has blank_heredoc_bodies.
-- When a hook's output must reach the model, check the channel against the event: exit-0 stderr
-  and PostCompact stdout reach nobody (git-commit-branch-guard had never been seen by the model).
-- tooling: the brief-writing heredoc was blocked by shell-prefix-selfref-guard over `$V`; write
-  briefs with the Write tool.
-- tooling: the installed 7.25.9 venv-guard fired WRONG VENV on this session's own printf of quoted
-  text (the defect F6 fixed); expect such noise until 7.25.12 is installed.
+- When a backlog line names work by a relative label ("the reviewer half"), write what the thing IS
+  in the line itself: the label outlived every record of its meaning and cost a transcript hunt.
+- When a PreToolUse nudge names a shipped jig for a memory fact edit (factedit.py), use it instead
+  of hand-rolling the frontmatter strip and re-add.
+- When a subagent probes a public package index (crates.io, PyPI JSON), tell it never to put the
+  user's email in a User-Agent or contact field: G5 did it once on crates.io.
+- The memory fact reference-claude-code-hooks-cannot-read-or-change-the-session-model is partly
+  stale: PreModelSwitch (CLI 2.1.251+) can block a switch, both model-switch events get from/to_model.
+- When a Windows CI cell fails on tests that build Bash commands from tmp_path, check the command
+  quotes the path before blaming the hook: bash strips unquoted backslashes.
+- When a green-looking assertion was built from a mangled input, fixing the input can expose a real
+  defect (venv-guard only counted "/" as a separator on Windows under Bash).
+- Windows Python 3.13: Path.resolve() does not raise on an embedded NUL; os.path.isabs("\\r") is
+  False (drive-relative).
+- tooling: wtclean dry-run then --apply worked cleanly for 12 worktrees; git worktree add -b from
+  origin/master is the pattern for OPEN-WORK-only commits while the main checkout is stale.
 
 ## The exact next action
 
-Integrate, in order, from `.claude/worktrees/rank10-fix`:
-
-1. `git merge --no-ff rank10-fix-F1` ... `rank10-fix-F7` (disjoint files: expect no conflicts; if
-   one appears it is a real overlap - read both sides). Remove the stale `rank10-fix-S0` worktree.
-2. Do the "at integration" items of OPEN-WORK 184 (docs describing the old post-compact-nudge,
-   meta-self-improve SKILL.md "this turn" - SKILL.md edits go through bitranox:meta-skill-writer,
-   self-improve-audit.py snippet via `inert_snippet(..., around=sig.asst_signal_offset(...))`,
-   TRIGGERS entries). Or carry them to 7.25.13 if the release should stay pure.
-3. Replace the CHANGELOG stub with the fixers' CHANGELOG lines (in each report), then
-   `repo-gate.py --ci` with CI's dependency set, commit, push to master (pre-push runs the suite),
-   and watch CI with `ci_wait.py --sha <full sha>` launched from the main checkout.
-4. Close rank 10 in OPEN-WORK, remove the rank10-* worktrees with bitranox:git-worktrees / wtclean.
+Rank 20 (top of OPEN-WORK). Read `.plan/rank20-skills-2026-09-27/TRIAGE.md` in the main checkout,
+then dispatch one TDD fixer per batch (B1-B5), each in its own worktree off origin/master, disjoint
+files, every SKILL.md edit through bitranox:meta-skill-writer with a .skillwriter checklist. B5 also
+rewords the stale memory fact named above (engine add at its owning level, --slug). Integrate, one
+release, repo-gate --ci, push, ci_wait by full sha, close ranks 20 and 95.
 
 ## Files that matter
 
-- `.claude/worktrees/rank10-fix*` - the integration base and the 7 fixer worktrees.
-- `.plan/rank10-passing-2026-09-27/` (main checkout, gitignored) - TRIAGE.md, verdicts/, fix/.
-- `plugins/bitranox/hooks/shell_text.py` - the new aligned helpers.
-- `OPEN-WORK.md` ranks 10 and 184.
+- `.plan/rank20-skills-2026-09-27/TRIAGE.md`, `verdicts/G1..G6.verdicts.txt` (main checkout).
+- `plugins/bitranox/skills/docs-convert-markitdown/references/api_reference.md` (B1)
+- `plugins/bitranox/skills/infra-modulejail/SKILL.md` (B2)
+- `plugins/bitranox/skills/infra-swap-tuning/SKILL.md` (B3)
+- `plugins/bitranox/skills/coding-python-rpyc/docs/howto.md`, `docs-generate-schematics/SKILL.md`,
+  `coding-python-gitignore/SKILL.md` (B4)
+- `plugins/bitranox/skills/meta-claude-hooks/` (B5; `scripts/hookdoc_stamp.py check` is the detector)
 
 ## How to verify this still stands
 
-- `git -C <repo> branch --list 'rank10-fix*' -v` shows the 9 branches at the tips above.
-- In each F worktree: `env -u VIRTUAL_ENV uv run --with pytest --with PyYAML --with lxml --with
-  defusedxml --with ruamel.yaml --with httpx2 python -m pytest plugins/bitranox/hooks/tests/ -q`
-  is green.
+- `git fetch origin && git log --oneline -3 origin/master` shows this handover's commit on top.
+- `gh run list --commit <that sha> --json conclusion` is success.
+- `ls .plan/rank20-skills-2026-09-27/verdicts/` in the main checkout lists G1..G6.
 
 Read this, then replace the first line with `# STALE - read <date>, work continued`. Do not delete
 it - if this session ends badly it is the only record of where things stood.
