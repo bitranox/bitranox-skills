@@ -29,6 +29,16 @@ than the change, so entries reconstructed from them would read like coverage wit
 a hole nobody has drawn a line under is one that gets rediscovered and half-filled - which is how
 two "versions with no entry" notes came to sit in this file disagreeing with it.
 
+## [7.28.2]
+
+### Changed
+
+- `coding-python-layered-config`: lib_layered_config 5.7.0 records every key `with_overrides`
+  supplies as layer `override`, path `None`, so a `--set` value no longer shows the source of the
+  file it replaced. The skill describes that behaviour, with a runnable example, and keeps the
+  provenance-rebuild recipe for callers on an older floor or wanting the layer named `cli`. Kept
+  identical to the library's own copy of the skill.
+
 ## [7.28.1]
 
 ### Fixed
