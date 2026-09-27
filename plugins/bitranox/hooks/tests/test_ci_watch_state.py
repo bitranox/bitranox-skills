@@ -179,3 +179,30 @@ def test_session_key_falls_back_to_the_project_dir_env(monkeypatch):
     assert state.session_key("not a dict") == ""
     monkeypatch.delenv("CLAUDE_PROJECT_DIR")
     assert state.session_key({}) == ""
+
+
+def test_a_write_that_did_not_land_returns_the_default_not_the_unsaved_result(tmp_path, monkeypatch):
+    """`_update` handed back the post-change entries even when the rename failed, so a caller
+    acted on a block count that was never stored."""
+    proj = str(tmp_path)
+    state.record_push(proj, "sess-a", "a" * 40)
+    refused = []
+
+    def refusing_replace(src, dst):
+        refused.append(dst)
+        raise PermissionError(1, "Operation not permitted")
+
+    monkeypatch.setattr(os, "replace", refusing_replace)
+    assert state.bump_session_blocks(proj, "sess-a") == []
+    assert refused
+    monkeypatch.undo()
+    # Control: the same call with the rename working reports the charge it stored.
+    assert [e["blocks"] for e in state.bump_session_blocks(proj, "sess-a")] == [1]
+
+
+@pytest.mark.parametrize(("raw", "expected"), [
+    (12.5, 12.5), ("7", 7.0), (None, 0.0), ("x", 0.0), ([1], 0.0), (10 ** 400, 0.0),
+    ("inf", 0.0), ("-inf", 0.0), ("nan", 0.0),
+])
+def test_entry_at_coerces_every_unreadable_value_to_long_expired(raw, expected):
+    assert state.entry_at({"at": raw}) == expected

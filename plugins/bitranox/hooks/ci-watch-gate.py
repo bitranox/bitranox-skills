@@ -56,7 +56,7 @@ def verdict(pending: list[dict], attempt: int = 1) -> str | None:
     """The block reason for these pending entries, or None when there is nothing to say."""
     if not pending:
         return None
-    newest = max(pending, key=lambda e: float(e.get("at") or 0))
+    newest = max(pending, key=state.entry_at)
     sha = str(newest.get("sha") or "")
     if not sha:
         return None
@@ -118,9 +118,12 @@ def main(raw: str | None = None) -> int:
                                       "released it after %d reminders. It will not ask again."
                                       % (shas, state.MAX_BLOCKS))}}))
             return 0
-        if not live:  # the charge could not be written: say nothing rather than guess
+        if not live:
+            # The charge could not be written. Say nothing rather than block: a block whose count
+            # never advances can never reach MAX_BLOCKS, so it would repeat on every stop until
+            # the entry expired. A deliberate fail-open, the same one every IO error here takes.
             return 0
-        newest = max(live, key=lambda e: float(e.get("at") or 0))
+        newest = max(live, key=state.entry_at)
         reason = verdict(live, int(newest.get("blocks") or 1))
         if reason and spent:
             # A push can be dropped here too, just not ALL of them (that path already returned
