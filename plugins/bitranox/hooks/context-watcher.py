@@ -172,7 +172,9 @@ def read_session(transcript_path, tail_bytes=_TAIL_BYTES):
             continue
         if not isinstance(record, dict):
             continue
-        message = record.get("message") or {}
+        message = record.get("message")
+        if not isinstance(message, dict):
+            continue                          # a string or list message carries no usage
         usage = message.get("usage")
         if not isinstance(usage, dict):
             continue
@@ -217,7 +219,10 @@ def context_tokens(transcript_path, tail_bytes=_TAIL_BYTES):
             continue                          # a tail read can start mid-line
         if not isinstance(record, dict):
             continue
-        usage = (record.get("message") or {}).get("usage")
+        message = record.get("message")
+        if not isinstance(message, dict):
+            continue                          # a string or list message carries no usage
+        usage = message.get("usage")
         if not isinstance(usage, dict):
             continue
         try:
@@ -232,8 +237,11 @@ def context_tokens(transcript_path, tail_bytes=_TAIL_BYTES):
 def threshold(window, pct, cap):
     """The token count at which a handover is offered. PURE.
 
-    Whichever leg bites first. Both are floored at 1 so a nonsensical config cannot produce a
-    threshold of zero, which would fire on every session from its first turn.
+    Whichever leg bites first. The result is floored at 1 so a zero or negative knob cannot make a
+    reading of 0 tokens count as crossed. The floor does NOT stop an early ask: a knob at 0 or 1
+    still asks on the first measured turn, because that is what such a setting asks for. Bounding
+    the knobs to sensible values is the settings CLI's job (it accepts 1..100 and >= 1), and a
+    higher clamp here would silently override a value that tool accepted.
     """
     try:
         by_pct = int(window) * int(pct) // 100
@@ -266,12 +274,31 @@ def _asked_flag(session):
     return sig.touched_file(session).with_suffix(".handover-asked")
 
 
+def _misconfigured_flag(session):
+    """The misconfigured notice's OWN once-per-session latch.
+
+    Kept apart from `_asked_flag` because the two answer different questions. When the notice read
+    "has this session been told anything" off the offer's flag, an earlier offer silenced it for
+    the rest of the session - exactly when a reading past the window proves the window wrong.
+    """
+    return sig.touched_file(session).with_suffix(".handover-misconfigured")
+
+
 def already_reported(session) -> bool:
-    """True once this session has been told anything - the misconfigured notice says itself once."""
+    """True once this session has seen the misconfigured notice - it says itself once."""
     try:
-        return _asked_flag(session).is_file()
+        return _misconfigured_flag(session).is_file()
     except OSError:
         return False
+
+
+def mark_reported(session) -> None:
+    try:
+        flag = _misconfigured_flag(session)
+        flag.parent.mkdir(parents=True, exist_ok=True)
+        flag.write_text("1\n", encoding="utf-8")
+    except OSError:
+        pass                                  # an unwritable latch means it may say it twice
 
 
 def asked_at(session) -> int:
@@ -368,7 +395,14 @@ def _family_known(model_id) -> bool:
 
 
 def decide(event, cfg):
-    """The block reason for this Stop event, or None to stay quiet. IMPURE (reads the transcript)."""
+    """The block reason for this Stop event, or None to stay quiet. IMPURE (reads the transcript).
+
+    `stop_hook_active` means a Stop hook already kept this turn going. Blocking that continuation
+    again would stack a second interruption on one turn and spend the consecutive-block budget, so
+    it stays quiet and marks nothing; the next ordinary Stop asks instead.
+    """
+    if event.get("stop_hook_active"):
+        return None
     session = str(event.get("session_id") or "")
     transcript = event.get("transcript_path") or ""
     if not session or not transcript:
@@ -394,7 +428,7 @@ def decide(event, cfg):
     if state == "misconfigured":
         if already_reported(session):
             return None
-        mark_asked(session, tokens)
+        mark_reported(session)
         return _misconfigured(detail)
     if state == "offer" and due(tokens, detail["limit"], window, asked_at(session)):
         mark_asked(session, tokens)
