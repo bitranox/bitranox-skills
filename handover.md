@@ -5,15 +5,13 @@
 Nothing is part-done in this repo. 7.26.0 and 7.27.0 are released; the commit carrying this file
 also carries the rank 12 update in `OPEN-WORK.md`.
 
-Two things wait on the USER's word, and the next session should ask for them first:
+Both user decisions from this session are now taken:
 
-- **Turn decide mode on here?** `classifier_skill_router = decide` (with `classifier_backend = jev`)
-  via `bitranox:meta-memory-settings`. It shipped default-off; this machine's config was NOT changed.
-- **Push the igittigitt twin?** The igittigitt checkout (the `libs/igittigitt` twin `--mirrors` names) has
-  one unpushed commit, `3924aea` (coding-python-gitignore twin sync, plugin 2.2.6, no PyPI release,
-  same path as the earlier doc-only 2.2.5). It is a public repo outside this marketplace's standing
-  push authorization, so it was held. `repo-gate.py --mirrors` from a current worktree reports the
-  pair in sync.
+- **Decide mode: DONE on the user's word.** `classifier_skill_router = decide` is set here; it goes
+  live once the installed plugin is 7.27.0 (`/plugin marketplace update bitranox-skills`, then
+  `/reload-plugins`). Until then 7.26.0 reads it as off: keyword nudges as before, no router shadow rows.
+- **igittigitt twin: PUSHED on the user's word** (`3924aea`, plugin 2.2.6); its CI was running at
+  handover time - check it with ci_wait on that sha.
 
 ## Committed, or not
 
@@ -83,9 +81,9 @@ NEXT; new FOUND line rank 186 holds what the rank 20 fixers noticed and left.
 
 ## The exact next action
 
-Ask the user the two questions under "In flight", one at a time (decide mode first: it is rank 12's
-CURRENT NEXT step 1, the top-ranked open item). If they enable it, rank 12's step 2 waits on about a
-day of decide sessions; the next workable item after that is the top live one in `OPEN-WORK.md`.
+Confirm the installed plugin is 7.27.0 and that decide rows appear in the shadow log
+(`decide_path` field). Rank 12's step 2 waits on about a day of decide sessions; until then the
+next workable item is the top live one in `OPEN-WORK.md`.
 
 ## Files that matter
 
