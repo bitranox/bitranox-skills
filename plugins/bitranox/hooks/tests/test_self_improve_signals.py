@@ -834,6 +834,19 @@ def test_record_touched_path_roundtrips_dedups_and_caps(home):
     assert len(got) <= 10 and got[-1] == "/p/f29.py"      # capped, newest kept
 
 
+def test_record_touched_path_refuses_a_path_carrying_a_line_break(home):
+    # The file is one path per line, so an embedded newline split one path into bogus fragments
+    # that never deduped - the same path sent 3 times grew the file by 6 lines.
+    for _ in range(3):
+        S.record_touched_path("sessNL", "/repo/weird\nname.py")
+        S.record_touched_path("sessNL", "/repo/weird\rname.py")
+    assert S.read_touched_paths("sessNL") == []
+    # Control: an ordinary path still records, and still dedups.
+    for _ in range(3):
+        S.record_touched_path("sessNL", "/repo/plain.py")
+    assert S.read_touched_paths("sessNL") == ["/repo/plain.py"]
+
+
 def test_clear_touched_paths(home):
     S.record_touched_path("sess3", "/a/x.py")
     S.clear_touched_paths("sess3")
@@ -1845,3 +1858,39 @@ def test_nearest_level_absolute_path_and_no_level(tmp_path):
 
 # The capped transcript read (oldest part first, offset = end of what was returned) is pinned in
 # test_self_improve_signals_state_writes.py.
+
+
+# ---- snippet windowing: where in a long message the quoted evidence starts --------------------
+
+def test_inert_snippet_without_around_is_the_head_as_before():
+    text = "a" * 150 + " I was wrong " + "b" * 150
+    assert S.inert_snippet(text, 100) == text[:100]
+
+
+def test_inert_snippet_around_windows_on_the_offset():
+    text = "a" * 150 + " I was wrong " + "b" * 150
+    at = text.index("I was wrong")
+    snip = S.inert_snippet(text, 100, around=at)
+    assert len(snip) == 100 and snip.startswith("...") and "I was wrong" in snip
+
+
+def test_inert_snippet_around_near_the_end_keeps_the_last_character():
+    text = "a" * 300 + " I was wrong Z"
+    snip = S.inert_snippet(text, 100, around=text.index("I was wrong"))
+    assert len(snip) == 100 and snip.endswith("I was wrong Z")
+
+
+def test_inert_snippet_around_an_early_offset_or_a_short_text_is_unmarked():
+    text = "I was wrong " + "b" * 300
+    assert S.inert_snippet(text, 100, around=0) == text[:100]
+    assert S.inert_snippet("short I was wrong", 100, around=6) == "short I was wrong"
+
+
+def test_asst_signal_offset_names_the_earliest_signal_or_none():
+    text = "Plain narration first. Then I was wrong about it. The root cause is the lock file."
+    assert S.asst_signal_offset(text) == text.index("I was wrong")
+    assert S.asst_signal_offset("Listed the files as requested.") is None
+    # Agrees with the hit predicates: a message they call a hit always has an offset.
+    for hit in ("You're right, my mistake.", "the root cause is the stale venv"):
+        assert S.strict_asst_hit(hit) or S.broad_matches("assistant", hit)
+        assert S.asst_signal_offset(hit) is not None

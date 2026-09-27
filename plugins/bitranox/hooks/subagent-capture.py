@@ -46,9 +46,17 @@ def _messages(path):
         with open(path, "rb") as fh:
             fh.seek(0, 2)
             size = fh.tell()
-            fh.seek(max(0, size - _MAX_BYTES))
-            if size > _MAX_BYTES:
-                fh.readline()                      # drop the partial line after the seek
+            start = max(0, size - _MAX_BYTES)
+            if start:
+                # Drop the partial line the seek landed in - unless it landed exactly on the first
+                # byte of a record, which is only knowable from the byte BEFORE it. Skipping
+                # unconditionally threw away one whole valid record whenever the cut fell on a
+                # boundary.
+                fh.seek(start - 1)
+                if fh.read(1) != b"\n":
+                    fh.readline()
+            else:
+                fh.seek(0)
             data = fh.read().decode("utf-8", "replace")
     except OSError:
         return out
@@ -57,10 +65,15 @@ def _messages(path):
             rec = json.loads(ln)
         except ValueError:
             continue
+        # One odd record (a JSON list, a string `message`) must cost only itself: an
+        # AttributeError here used to abandon the whole scan, `last_assistant_message` included.
+        if not isinstance(rec, dict):
+            continue
         kind = rec.get("type")
         if kind not in ("user", "assistant"):
             continue
-        out.append((kind, _text((rec.get("message") or {}).get("content"))))
+        msg = rec.get("message")
+        out.append((kind, _text(msg.get("content") if isinstance(msg, dict) else None)))
     return out
 
 
@@ -87,14 +100,18 @@ def find_signals(event):
             matched = sorted(set(matched) | {"strict"})
         if not matched:
             continue
-        snippet = sig.inert_snippet(text, _SNIPPET)
+        # Window the snippet on the learning itself. A head cap kept the first 200 characters, so
+        # a learning stated after a long preamble was buffered with the learning cut away.
+        normalised = " ".join(text.split())
+        snippet = sig.inert_snippet(normalised, _SNIPPET, around=sig.asst_signal_offset(normalised))
         escaped = sig.snippet_was_escaped(text)   # control signal, kept OUT of the snippet
         # Containment dedup, not exact-match: `last_assistant_message` is normally the same finding
         # as the transcript's last assistant message (often a substring of it), so an exact-match
-        # check buffers one discovery twice.
-        if any(snippet in s or s in snippet for s in seen):
+        # check buffers one discovery twice. Compared on the FULL normalised text, never on the
+        # capped snippet: two different findings behind the same long opening share a snippet.
+        if any(normalised in s or s in normalised for s in seen):
             continue
-        seen.add(snippet)
+        seen.add(normalised)
         hits.append({"agent_id": event.get("agent_id") or "",
                      "agent_type": event.get("agent_type") or "",
                      "role": role, "matched": matched, "snippet": snippet,

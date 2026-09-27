@@ -14,8 +14,11 @@ set of checks:
 
 CRITICAL: this plugin is installed globally, so the Bash|PowerShell hook fires in EVERY repo the
 user commits in. The gate first verifies it is actually inside the bitranox-skills repo
-(plugins/bitranox/.claude-plugin/plugin.json with name "bitranox"); in any other repo it
-no-ops (exit 0) so it never blocks unrelated commits.
+(plugins/bitranox/.claude-plugin/plugin.json with name "bitranox"). In any other repo it runs
+none of the checks below; the one thing it does there is `gate_tool_repo_mirror`: if that repo
+ships a skill mirrored into the marketplace and the pair has drifted, a commit is blocked (exit
+2). A repo that ships no mirrored skill passes silently (exit 0); one whose twin cannot be
+compared (no marketplace checkout) passes and says so through additionalContext.
 
 Checks:
   1. tests-exist  - every skill/hook package that ships non-demo .py has a tests/ dir
@@ -57,11 +60,6 @@ if str(_HOOKS_DIR) not in sys.path:
 import harness_checks as hc  # noqa: E402
 import shell_text  # noqa: E402
 import secret_patterns  # noqa: E402
-
-# Re-exported: these predicates are shared with the local-harness audit, which applies the same
-# rules to the skills and hooks no plugin ships. One definition, so the two cannot drift apart.
-EXCLUDE_DIRS = hc.EXCLUDE_DIRS
-EXCLUDE_FILES = hc.EXCLUDE_FILES
 
 # git commit / git push / gh pr create detection lives in `shell_text` now: a second hook asks the
 # same question for its own reason (a commit is when work concludes, which is when the
@@ -124,10 +122,6 @@ def _packages(root):
     if skills.is_dir():
         pkgs += [d for d in sorted(skills.iterdir()) if d.is_dir()]
     return [p for p in pkgs if p.is_dir()]
-
-
-_ships_scripts = hc.ships_scripts
-_has_tests = hc.has_tests
 
 
 def check_tests_exist(root):
@@ -800,7 +794,6 @@ def _check_pytest_run(root, target, report, baseline):
 #: relocation cannot leave one check looking in the old place.
 _SKILLS_DIR = "plugins/bitranox/skills"
 _SKILL_MD_RX = re.compile(r"^%s/([^/]+)/SKILL\.md$" % re.escape(_SKILLS_DIR))
-_CSO_STOP = hc.CSO_STOP
 
 
 def _changed_vs_origin(root):
@@ -843,10 +836,6 @@ def check_skill_review(root):
     if changed is None:
         return []
     return skill_review_failures(root, changed)
-
-
-_frontmatter_description = hc.frontmatter_description
-
 
 
 def cso_failures(root, changed):
@@ -1311,10 +1300,13 @@ def gate_tool_repo_mirror(root):
     fails = mirror_failures(marketplace, set(mine))
     if not fails:
         return 0
+    # All of it on STDERR: on a PreToolUse exit 2 that is what the model is shown, and stdout is
+    # not. The table and the diff are the actionable part, so they cannot go anywhere else.
     for name in mine:
-        print("%-8s%-34s %s" % ("DRIFT" if any(name in f for f in fails) else "in sync", name, MIRRORED_SKILLS[name]))
+        print("%-8s%-34s %s" % ("DRIFT" if any(name in f for f in fails) else "in sync", name, MIRRORED_SKILLS[name]),
+              file=sys.stderr)
     for failure in fails:
-        print("\n" + failure)
+        print("\n" + failure, file=sys.stderr)
     print("repo-gate: blocked - a skill this repo ships has drifted from its marketplace twin.", file=sys.stderr)
     return 2
 
