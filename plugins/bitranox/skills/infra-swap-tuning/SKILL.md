@@ -128,11 +128,17 @@ traffic off the deadlock path, and that works at any swappiness.
 ```ini
 # /etc/systemd/zram-generator.conf
 [zram0]
-zram-size = 16384             # MB, uncompressed capacity; about 25% of RAM
+# MB, uncompressed capacity; about 25% of RAM
+zram-size = 16384
 compression-algorithm = zstd
-swap-priority = 100           # above the disk device, so zram fills first
+# above the disk device, so zram fills first
+swap-priority = 100
 fs-type = swap
 ```
+
+**Comments go on their own line.** zram-generator's parser has no trailing comments: in
+`zram-size = 16384  # MB` the `# MB` is part of the value, the generator exits with
+`UnparsedTokensRemaining`, and no zram device is created at all.
 
 **Keep the disk swap as a lower-priority backstop.** It is the real capacity; zram is not. Pages
 parked on disk are cold pages costing nothing - pulling them into RAM at 1.16x would consume
@@ -168,13 +174,20 @@ Two traps, both of which produce a green run and a broken host:
   swapoff/reset the bullet above warns against.
 
   ```bash
-  want_mb=$(awk -F= '/^zram-size/ {gsub(/ /,"",$2); print $2}' /etc/systemd/zram-generator.conf)
+  want_mb=$(awk -F= '/^zram-size/ {gsub(/[[:space:]]/,"",$2); print $2}' /etc/systemd/zram-generator.conf)
+  case $want_mb in
+    ''|*[!0-9]*) echo "zram-size '$want_mb' is not a plain MB number; refusing" >&2; exit 2 ;;
+  esac
   have_bytes=$(cat /sys/block/zram0/disksize)
-  [ "$have_bytes" -eq "$(( want_mb * 1024 * 1024 ))" ] || need_reset=1
+  [ "$have_bytes" -eq "$(( 10#$want_mb * 1024 * 1024 ))" ] || need_reset=1
   ```
 
-  `zram-size` also accepts expressions (`min(ram / 10, 2048)`); resolve one to a number before
-  comparing, or the arithmetic above fails rather than reporting a difference.
+  **Validate before the arithmetic, and refuse on anything but a plain number.** `zram-size`
+  also accepts expressions (`min(ram / 10, 2048)`) and has a default when absent. Without the
+  `case`, bash's arithmetic error aborts the `[ ]` test, `need_reset` stays unset, and a changed
+  size reads as unchanged. Refusing is the only safe answer: skipping ignores the change, and
+  resetting on a value the guard cannot read is the swapoff/reset above. Write the resolved
+  number into the config instead. `10#` keeps a leading zero from being read as octal.
 
 If the host runs a module allowlist, `zram` and its compression backends must be whitelisted, and
 that block is silent - see `bitranox:infra-modulejail`.
