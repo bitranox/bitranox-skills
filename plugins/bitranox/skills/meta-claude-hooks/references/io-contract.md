@@ -14,7 +14,8 @@ reach the user and `terminalSequence` to ring a bell or set a title.
 | `session_id`      | always                          | current session identifier                                                                                                                                                               |
 | `prompt_id`       | after the first user input      | UUID of the prompt being processed; matches the OpenTelemetry `prompt.id` so hook output can be correlated with telemetry. Needs v2.1.196+                                               |
 | `transcript_path` | always                          | path to the conversation JSON. **Written asynchronously and may lag the current turn**                                                                                                   |
-| `cwd`             | always                          | working directory when the hook was invoked                                                                                                                                              |
+| `cwd`             | always                          | working directory when the hook was invoked. Inside a worktree this is the worktree root, while `${CLAUDE_PROJECT_DIR}` stays at the main checkout                                       |
+| `scratchpad_dir`  | when the session has one        | the session's scratchpad directory for temporary files. Needs v2.1.257+                                                                                                                  |
 | `permission_mode` | not all events                  | `default`, `plan`, `acceptEdits`, `auto`, `dontAsk`, `bypassPermissions`. The mode labelled **Manual** arrives as `default`, never `manual`                                              |
 | `effort`          | tool-use context events         | object with `level`: `low`, `medium`, `high`, `xhigh`, `max`. The **downgraded** level if the model does not support the request. Ultracode reports as `xhigh`. Also in `$CLAUDE_EFFORT` |
 | `hook_event_name` | always                          | the event that fired                                                                                                                                                                     |
@@ -26,8 +27,11 @@ Do not read the transcript for the current turn's final assistant text; it may n
 
 Only `SessionStart` can receive a `model` field, and it is **not guaranteed**. There is no `$CLAUDE_MODEL`.
 `$ANTHROPIC_MODEL` is inherited from your shell if set, but does not change when you switch with `/model`.
+`PreModelSwitch` and `PostModelSwitch` receive `from_model` and `to_model` instead (CLI v2.1.251+), so a
+`PostModelSwitch` hook is how to follow the model through a session.
 
-`OTEL_*` exporter variables are **removed** from every subprocess Claude Code spawns, hooks included.
+`OTEL_*` exporter variables are **removed** from every subprocess Claude Code spawns, hooks included, and so are
+the credentials `CLAUDE_CODE_SUBPROCESS_ENV_SCRUB=1` strips (see the environment variables in `authoring.md`).
 
 ## What `tool_input` holds, per tool
 
@@ -75,11 +79,15 @@ A foreground `Agent` call gives `PostToolUse` the subagent's final text plus run
 |----------------------------------------|----------------------------------------------------------------------------------|
 | `status`                               | `completed`, or `async_launched` for a background subagent                       |
 | `agentId`                              | identifier for the run                                                           |
-| `content`                              | array of the subagent's final text blocks                                        |
+| `content`                              | array of the subagent's final text blocks (but see `SubagentHandback` below)     |
 | `resolvedModel`                        | the model it **started** on, which may differ from the requested one (v2.1.174+) |
 | `modelsUsed`                           | models in order with repeats collapsed, set only on a mid-run swap (v2.1.212+)   |
 | `totalTokens`, `usage`                 | the **final API request only**, not a total across the run                       |
 | `totalDurationMs`, `totalToolUseCount` | wall-clock duration and tool-call count                                          |
+
+From v2.1.271 a subagent that runs with the `SubagentHandback` tool (auto mode provides it) delivers its report
+through that tool, so `content` holds only a short note about the hand-back. To read the report itself, match a
+`PreToolUse` or `PostToolUse` hook on `SubagentHandback` and read `tool_input.message`.
 
 As of v2.1.198 subagents run in the background by default, so an omitted `run_in_background` still yields
 `async_launched`. A background launch returns immediately and carries **no usage fields** - only `status`,
@@ -96,12 +104,20 @@ one outcome JSON cannot override.
 Success, and the intended code when printing JSON for structured control.
 
 Stdout goes to the debug log and is **not** shown in the transcript, except on `UserPromptSubmit`,
-`UserPromptExpansion` and `SessionStart`, where plain-text stdout is added as context Claude can see.
+`UserPromptExpansion`, `SessionStart` and `PostModelSwitch`, where plain-text stdout is added as context Claude can
+see.
 
-How stdout is read depends on its **first non-whitespace character**:
+How stdout is read depends on how it **starts and ends**, ignoring surrounding whitespace:
 
-- starts with `{` - parsed as JSON; if invalid, treated as plain text
+- starts with `{` **and** ends with `}` - parsed as JSON. Several lines that each parse as JSON on their own are
+  plain text if none sets an output field, and a parse failure if one does
+- starts with `{` but does not end with `}` - plain text
 - anything else - plain text, **including a JSON array or a quoted JSON string**
+
+**Output that is tried as JSON and fails to parse is an error, not text.** From v2.1.248 it is a non-blocking
+`<hook name> hook error` on every exit code other than 2, and on the stdout-as-context events the text is **not**
+added to context. Before v2.1.248 it was treated as plain text, so a hook that relied on a half-written object
+reaching Claude as text now reaches nobody.
 
 **Stderr from a hook that exits 0 goes to the debug log only. Claude never sees it.** To surface a warning to
 Claude from `PostToolUse` or `PostToolUseFailure`, exit 2 instead.
@@ -132,8 +148,8 @@ Not a block, for most events. What happens depends on stdout:
   of stderr prefixed `Failed with non-blocking status code:`
 
 > **Exit 1 does not block.** It is the conventional Unix failure code and Claude Code treats it as a non-blocking
-> error, proceeding with the action. A policy hook must `exit 2`. The sole exception is `WorktreeCreate`, where
-> **any** non-zero exit aborts creation.
+> error, proceeding with the action. A policy hook must `exit 2`. The exceptions are the worktree events: **any**
+> non-zero exit aborts `WorktreeCreate`, and fails `WorktreeRemove` if the directory still exists afterwards.
 
 A hook that cannot start lands in the same bucket: a missing or non-executable script exits 127 and you get
 `Failed with non-blocking status code: /bin/sh: /path/to/hook.sh: No such file or directory`. **Watch for that
@@ -142,10 +158,15 @@ notice on a policy hook's first run - a mistyped path leaves the gate silently d
 ### Timeouts
 
 A timed-out `command`, `http` or `mcp_tool` hook is cancelled, its output discarded, and it renders no decision.
+A command hook running with `async: true` is exempt: its `timeout` is not enforced once it is running in the
+background (`asyncRewake` hooks still have theirs enforced).
 
 On `PreToolUse` this means a stalled hook **does not block** the call, which continues through the normal
 permission flow. Do not rely on a hook that might hang as a gate. An Agent SDK callback hook is the exception:
-exceeding its timeout does block the tool call.
+exceeding its timeout does block the tool call, and on `UserPromptSubmit` it blocks the prompt (before v2.1.208 it
+ended the turn with an execution error).
+
+**`PreModelSwitch` is the reverse case:** a hook cancelled at its timeout **blocks** the model switch.
 
 ### What exit 2 does, per event
 
@@ -162,9 +183,11 @@ exceeding its timeout does block the tool call.
 | `ConfigChange`        | yes        | blocks the change (except `policy_settings`)              |
 | `PostToolBatch`       | yes        | stops the agentic loop before the next model call         |
 | `PreCompact`          | yes        | blocks compaction                                         |
+| `PreModelSwitch`      | yes        | blocks the model switch, stderr shown to the user         |
 | `Elicitation`         | yes        | denies the elicitation                                    |
 | `ElicitationResult`   | yes        | blocks the response, which becomes a decline              |
 | `WorktreeCreate`      | yes        | **any** non-zero exit fails creation                      |
+| `WorktreeRemove`      | yes        | **any** non-zero exit fails removal if the dir remains    |
 | `PermissionRequest`   | no         | not honoured; deny through the `decision` object instead  |
 | `PermissionDenied`    | no         | ignored, the denial already happened; use `retry: true`   |
 | `PostToolUse`         | no         | shows stderr **to Claude**; the tool already ran          |
@@ -172,19 +195,19 @@ exceeding its timeout does block the tool call.
 | `StopFailure`         | no         | output and exit ignored, except `terminalSequence`        |
 | `Notification`        | no         | exit code and stderr ignored                              |
 | `SessionStart`        | no         | stderr to the user only                                   |
-| `Setup`               | no         | stderr to the user only                                   |
+| `Setup`               | no         | exit code and stderr ignored                              |
 | `SubagentStart`       | no         | stderr to the user only, in the subagent's own transcript |
 | `SessionEnd`          | no         | stderr to the user only                                   |
 | `CwdChanged`          | no         | stderr to the user only                                   |
 | `FileChanged`         | no         | stderr to the user only                                   |
 | `PostCompact`         | no         | stderr to the user only                                   |
+| `PostModelSwitch`     | no         | stderr to the user only; the model already switched       |
 | `DirectoryAdded`      | no         | stderr to the debug log; the directory is already added   |
-| `WorktreeRemove`      | no         | failures logged in debug mode only                        |
 | `InstructionsLoaded`  | no         | exit code ignored                                         |
 | `MessageDisplay`      | no         | the original text is displayed                            |
 
-For `SessionStart`, `Setup` and `SubagentStart`, exit-2 stderr renders as a `<hook name> hook error` notice.
-**Claude does not see it** and the session or subagent proceeds.
+For `SessionStart`, `SubagentStart` and `PostModelSwitch`, exit-2 stderr renders as a `<hook name> hook error`
+notice. **Claude does not see it** and the session or subagent proceeds.
 
 ## HTTP response handling
 
@@ -205,8 +228,10 @@ carrying the decision fields.
 Print the object on stdout and exit 0. **Stdout must contain only the JSON object** - a shell profile that prints
 a banner on startup will break parsing.
 
-Hook output strings, `additionalContext` and `systemMessage` and plain stdout alike, are capped at **10,000
-characters**. Longer output is written to a file and replaced with a preview plus the path.
+Hook output strings - `additionalContext`, `systemMessage`, `initialUserMessage` and plain stdout - are capped at
+**10,000 characters**, each string measured on its own. Longer output is written to a file and replaced with the
+path plus a preview of the first 2,000 characters. No setting raises the cap, and Claude is **not** asked to read
+the file, so anything Claude must always see has to fit.
 
 Three kinds of field: universal ones, top-level `decision`/`reason`, and the nested `hookSpecificOutput` (which
 requires `hookEventName` set to the event name).
@@ -216,7 +241,7 @@ requires `hookEventName` set to the event name).
 | Field              | Default | Description                                                                                                                        |
 |--------------------|---------|------------------------------------------------------------------------------------------------------------------------------------|
 | `continue`         | `true`  | `false` stops Claude processing entirely after the hook runs. **Takes precedence over every event-specific decision field**        |
-| `stopReason`       | none    | shown to the user when `continue` is `false`. **Not shown to Claude**                                                              |
+| `stopReason`       | none    | shown to the user when `continue` is `false`. It stays in the conversation, so Claude sees it if the conversation continues        |
 | `suppressOutput`   | `false` | **has no effect.** Accepted and ignored; successful stdout is never in the transcript anyway                                       |
 | `systemMessage`    | none    | warning shown to the user. Can arrive as an `SDKInformationalMessage` under the Agent SDK or `--output-format stream-json`         |
 | `terminalSequence` | none    | an escape sequence for Claude Code to emit for you. Restricted to OSC `0`/`1`/`2`/`9`/`99`/`777` and BEL; anything else is ignored |
@@ -244,10 +269,11 @@ Where the reminder lands:
 
 | Event                                                              | Position                                           |
 |--------------------------------------------------------------------|----------------------------------------------------|
-| `SessionStart`, `Setup`, `SubagentStart`                           | start of the conversation, before the first prompt |
+| `SessionStart`, `SubagentStart`                                    | start of the conversation, before the first prompt |
 | `UserPromptSubmit`, `UserPromptExpansion`                          | alongside the submitted prompt                     |
 | `PreToolUse`, `PostToolUse`, `PostToolUseFailure`, `PostToolBatch` | next to the tool result                            |
 | `Stop`, `SubagentStop`                                             | end of the turn; the conversation continues        |
+| `PostModelSwitch`                                                  | with the next request after the switch             |
 
 Several hooks returning it for the same event all get through.
 
@@ -293,34 +319,42 @@ application, not from the tool.
 
 ### Decision control, per event
 
-| Events                                                                                                                                                | Pattern                           | Key fields                                                                                                        |
-|-------------------------------------------------------------------------------------------------------------------------------------------------------|-----------------------------------|-------------------------------------------------------------------------------------------------------------------|
-| `UserPromptSubmit`, `UserPromptExpansion`, `PostToolUse`, `PostToolUseFailure`, `PostToolBatch`, `Stop`, `SubagentStop`, `ConfigChange`, `PreCompact` | top-level `decision`              | `decision: "block"` plus `reason`. `Stop`/`SubagentStop` also take `hookSpecificOutput.additionalContext`         |
-| `TeammateIdle`, `TaskCompleted`                                                                                                                       | exit code or `continue: false`    | exit 2 blocks with stderr feedback; `{"continue": false, "stopReason": "..."}` stops the teammate entirely        |
-| `TaskCreated`                                                                                                                                         | exit code or top-level `decision` | exit 2 or `decision: "block"` cancels the task. **`continue: false` is ignored**                                  |
-| `PreToolUse`                                                                                                                                          | `hookSpecificOutput`              | `permissionDecision`: **`allow` / `deny` / `ask` / `defer`**, plus `permissionDecisionReason`                     |
-| `PermissionRequest`                                                                                                                                   | `hookSpecificOutput`              | `decision.behavior`: `allow` / `deny` (an **object**, not a string)                                               |
-| `PermissionDenied`                                                                                                                                    | `hookSpecificOutput`              | `retry: true`; ignored for no-verdict denials                                                                     |
-| `WorktreeCreate`                                                                                                                                      | path return                       | command hook prints the path on **stdout**; HTTP hook returns `hookSpecificOutput.worktreePath`                   |
-| `Elicitation`                                                                                                                                         | `hookSpecificOutput`              | `action`: `accept` / `decline` / `cancel`, plus `content` for accept                                              |
-| `ElicitationResult`                                                                                                                                   | `hookSpecificOutput`              | `action`: `accept` / `decline` / `cancel`, plus `content` to override                                             |
-| `MessageDisplay`                                                                                                                                      | `hookSpecificOutput`              | `displayContent` replaces the text on screen only; transcript and Claude keep the original                        |
-| `SessionStart`, `Setup`, `SubagentStart`                                                                                                              | context only                      | `additionalContext`; `SessionStart` also takes `initialUserMessage`, `watchPaths`, `sessionTitle`, `reloadSkills` |
-| `WorktreeRemove`, `Notification`, `SessionEnd`, `PostCompact`, `InstructionsLoaded`, `StopFailure`, `CwdChanged`, `DirectoryAdded`, `FileChanged`     | none                              | side effects only, such as logging or cleanup                                                                     |
+| Events                                                                                                                                                | Pattern                            | Key fields                                                                                                                                                                                        |
+|-------------------------------------------------------------------------------------------------------------------------------------------------------|------------------------------------|---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
+| `UserPromptSubmit`, `UserPromptExpansion`, `PostToolUse`, `PostToolUseFailure`, `PostToolBatch`, `Stop`, `SubagentStop`, `ConfigChange`, `PreCompact` | top-level `decision`               | `decision: "block"` plus `reason`. `Stop`/`SubagentStop` also take `hookSpecificOutput.additionalContext`                                                                                         |
+| `TeammateIdle`, `TaskCompleted`                                                                                                                       | exit code or `continue: false`     | exit 2 blocks with stderr feedback; `{"continue": false, "stopReason": "..."}` stops the teammate entirely. `TaskCompleted` **ignores** `continue: false` when the `TaskUpdate` tool triggered it |
+| `TaskCreated`                                                                                                                                         | exit code or top-level `decision`  | exit 2 or `decision: "block"` cancels the task. **`continue: false` is ignored**                                                                                                                  |
+| `PreToolUse`                                                                                                                                          | `hookSpecificOutput`               | `permissionDecision`: **`allow` / `deny` / `ask` / `defer`**, plus `permissionDecisionReason`                                                                                                     |
+| `PreModelSwitch`                                                                                                                                      | `hookSpecificOutput` or `decision` | `permissionDecision`: `allow` / `deny` / `ask` (no `defer`), plus `permissionDecisionReason`; `decision: "block"` also cancels                                                                    |
+| `PermissionRequest`                                                                                                                                   | `hookSpecificOutput`               | `decision.behavior`: `allow` / `deny` (an **object**, not a string)                                                                                                                               |
+| `PermissionDenied`                                                                                                                                    | `hookSpecificOutput`               | `retry: true`; ignored for no-verdict denials                                                                                                                                                     |
+| `WorktreeCreate`                                                                                                                                      | path return                        | command hook prints the path on **stdout**; HTTP hook returns `hookSpecificOutput.worktreePath`                                                                                                   |
+| `WorktreeRemove`                                                                                                                                      | exit code                          | any non-zero exit fails the removal if the directory still exists afterwards; JSON output is discarded                                                                                            |
+| `Elicitation`                                                                                                                                         | `hookSpecificOutput`               | `action`: `accept` / `decline` / `cancel`, plus `content` for accept                                                                                                                              |
+| `ElicitationResult`                                                                                                                                   | `hookSpecificOutput`               | `action`: `accept` / `decline` / `cancel`, plus `content` to override                                                                                                                             |
+| `MessageDisplay`                                                                                                                                      | `hookSpecificOutput`               | `displayContent` replaces the text on screen only; transcript and Claude keep the original                                                                                                        |
+| `SessionStart`, `SubagentStart`, `PostModelSwitch`                                                                                                    | context only                       | `additionalContext`; `SessionStart` also takes `initialUserMessage`, `watchPaths`, `sessionTitle`, `reloadSkills`                                                                                 |
+| `Setup`, `Notification`, `SessionEnd`, `PostCompact`, `InstructionsLoaded`, `StopFailure`, `CwdChanged`, `DirectoryAdded`, `FileChanged`              | none                               | side effects only, such as logging or cleanup                                                                                                                                                     |
 
 The only value for a top-level `decision` is `"block"`. To allow, omit it or exit 0 with no JSON.
 
 ### Rewriting content rather than allowing or blocking
 
-| Event               | Field                                                                              |
-|---------------------|------------------------------------------------------------------------------------|
-| `PreToolUse`        | `updatedInput` directly under `hookSpecificOutput`, replacing the tool's arguments |
-| `PermissionRequest` | `updatedInput` **inside** the `decision` object                                    |
-| `PostToolUse`       | `updatedToolOutput`, replacing the tool's result                                   |
-| `PostToolUse`       | `classifierContext`, a note for the auto mode classifier rather than for Claude    |
-| `UserPromptSubmit`  | cannot replace the prompt; only injects `additionalContext` alongside it           |
+| Event               | Field                                                                                |
+|---------------------|--------------------------------------------------------------------------------------|
+| `PreToolUse`        | `updatedInput` directly under `hookSpecificOutput`, replacing the tool's arguments   |
+| `PermissionRequest` | `updatedInput` **inside** the `decision` object                                      |
+| `PostToolUse`       | `updatedToolOutput`, replacing the tool's result. Must match the tool's output shape |
+| `PostToolUse`       | `classifierContext`, a note for the auto mode classifier rather than for Claude      |
+| `UserPromptSubmit`  | cannot replace the prompt; only injects `additionalContext` alongside it             |
 
 For redaction, intercept `PreToolUse` on the way out and `PostToolUse` on the way back.
+
+> **A mis-shaped `updatedToolOutput` is silently ignored.** Built-in tools return structured objects, not strings:
+> `Bash` returns `stdout`, `stderr`, `interrupted` and `isImage`. For a built-in tool a value that does not match
+> the tool's output schema is dropped and the **original output is used**, so a redaction hook that returns a
+> plain string leaks exactly what it meant to hide. MCP tool output is passed through without validation. The
+> rewrite changes only what Claude sees: the tool already ran, and telemetry captured the original.
 
 ### Choose one signalling style
 

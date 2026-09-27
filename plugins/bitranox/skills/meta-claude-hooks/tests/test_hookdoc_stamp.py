@@ -73,7 +73,7 @@ def test_normalise_collapses_long_blank_runs_to_at_most_two():
 
 def test_fingerprint_lists_every_event_heading():
     fp = H.fingerprint(H.normalise(fixture("hooks-sample.md")))
-    assert len(fp["events"]) == 31, "the fixture carries all 31 event headings"
+    assert len(fp["events"]) == 33, "the fixture carries all 33 event headings"
     assert "PreToolUse" in fp["events"]
 
 
@@ -87,7 +87,7 @@ def test_fingerprint_reads_fences_whose_info_string_carries_an_attribute():
     body = H.normalise(fixture("hooks-sample.md"))
     assert "theme={null}" in body, "the fixture must keep the attribute-bearing fence"
     fp = H.fingerprint(body)
-    assert len(fp["events"]) == 31
+    assert len(fp["events"]) == 33
     assert fp["handler_types"], "json fences must be recognised so handler types are extracted"
 
 
@@ -122,10 +122,31 @@ def test_fingerprint_ignores_prose_rewording_and_unbackticked_table_cells():
 
 
 def test_fingerprint_excludes_json_schema_primitives_from_handler_types():
-    text = '# T\n\n## S\n\n```json theme={null}\n{ "type": "object" }\n{ "type": "command" }\n```\n'
+    text = '# T\n\n## S\n\n```json theme={null}\n{ "hooks": [\n{ "type": "object" }\n{ "type": "command" }\n] }\n```\n'
     fp = H.fingerprint(H.normalise(text.encode("utf-8")))
     assert "command" in fp["handler_types"]
     assert "object" not in fp["handler_types"], "a schema example must not look like a new handler type"
+
+
+def test_fingerprint_takes_handler_types_only_from_a_fence_that_configures_hooks():
+    """A ``"type"`` value in an input or output example is not a handler type.
+
+    The live page shows a Write ``tool_response`` carrying ``"type": "create"`` and a Stop
+    ``background_tasks`` entry carrying ``"type": "shell"``. Read as handler types, each became a
+    name ``coverage`` demanded the references document, and an upstream example edit read as a new
+    handler type. Only a fence that configures hooks - it has a ``"hooks"`` key - can name one.
+    """
+    text = (
+        '# T\n\n## S\n\n'
+        '```json theme={null}\n{ "tool_response": {\n    "filePath": "/p",\n    "type": "create"\n  } }\n```\n\n'
+        'Between.\n\n'
+        '```json theme={null}\n{ "background_tasks": [ {\n      "type": "shell"\n  } ] }\n```\n\n'
+        'Between.\n\n'
+        '```json theme={null}\n{\n  "hooks": {\n    "Stop": [ { "hooks": [\n'
+        '      { "type": "command", "command": "x" },\n      { "type": "http", "url": "u" }\n    ] } ]\n  }\n}\n```\n'
+    )
+    fp = H.fingerprint(H.normalise(text.encode("utf-8")))
+    assert fp["handler_types"] == ["command", "http"]
 
 
 def test_prose_tier_keeps_headings_only():
@@ -242,10 +263,12 @@ def test_shipped_stamp_counts_match_its_own_fingerprint():
             assert len(src["fingerprint"][key]) == count, "%s/%s" % (src["name"], key)
 
 
-def test_shipped_stamp_lists_all_thirty_one_events():
+def test_shipped_stamp_lists_all_thirty_three_events():
     api = [s for s in json.loads(SHIPPED_STAMP.read_text(encoding="utf-8"))["sources"] if s["tier"] == "api"]
     assert len(api) == 1
-    assert len(api[0]["fingerprint"]["events"]) == 31
+    events = api[0]["fingerprint"]["events"]
+    assert len(events) == 33
+    assert {"PreModelSwitch", "PostModelSwitch"} <= set(events)
 
 
 def test_shipped_stamp_has_no_recorded_coverage_gaps():

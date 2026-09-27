@@ -41,13 +41,16 @@ Hooks from settings, managed policy and plugins also run **inside subagents**: a
 same `PreToolUse`/`PostToolUse` hooks, with `agent_id` and `agent_type` present in the input.
 
 Cloud sessions on Claude Code on the web do not read your local `~/.claude/settings.json`; hooks there come from
-the repo and from server-managed settings.
+the repo and from server-managed settings. A self-hosted environment also runs the hooks the operator seeded from
+the runner host's `~/.claude/`, and, when it is among the managed sources applied, the runner image's managed
+settings file.
 
 ### Administrator restrictions
 
 `allowManagedHooksOnly` blocks user, project, local and plugin hooks. Plugins force-enabled through managed
 `enabledPlugins` are exempt. It also narrows `statusLine`, `fileSuggestion` and `subagentStatusLine` to managed
 settings, and disables plugins with a `command` source unless `disableCommandPluginSources` is explicitly `false`.
+The same setting blocks marketplace `headersHelper` commands, except for a marketplace managed settings declare.
 
 Two allowlists apply to HTTP hooks from **every** source, managed included:
 
@@ -82,23 +85,24 @@ Adding a `matcher` to an event that has no matcher support is **silently ignored
 
 ### What each event matches on
 
-| Event                                                                                                                                                           | Matcher filters             | Example values                                                                                                                                                                                                                                                                                                          |
-|-----------------------------------------------------------------------------------------------------------------------------------------------------------------|-----------------------------|-------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
-| `PreToolUse`, `PostToolUse`, `PostToolUseFailure`, `PermissionRequest`, `PermissionDenied`                                                                      | tool name                   | `Bash`, `Edit\|Write`, `mcp__.*`                                                                                                                                                                                                                                                                                        |
-| `SessionStart`                                                                                                                                                  | how the session started     | `startup`, `resume`, `clear`, `compact`, `fork`                                                                                                                                                                                                                                                                         |
-| `Setup`                                                                                                                                                         | which CLI flag triggered it | `init`, `maintenance`                                                                                                                                                                                                                                                                                                   |
-| `SessionEnd`                                                                                                                                                    | why the session ended       | `clear`, `resume`, `logout`, `prompt_input_exit`, `other`                                                                                                                                                                                                                                                               |
-| `Notification`                                                                                                                                                  | notification type           | `permission_prompt`, `idle_prompt`, `auth_success`, `elicitation_dialog`, `elicitation_url_dialog`, `elicitation_complete`, `elicitation_response`, `agent_needs_input`, `agent_completed`, `quota_auto_resume_fired`, `quota_auto_resume_stale`, `quota_auto_resume_disabled` (the three quota ones need CLI 2.1.234+) |
-| `SubagentStart`, `SubagentStop`                                                                                                                                 | agent type                  | `general-purpose`, `Explore`, `Plan`, custom names, `^my-plugin:reviewer$`                                                                                                                                                                                                                                              |
-| `PreCompact`, `PostCompact`                                                                                                                                     | what triggered compaction   | `manual`, `auto`                                                                                                                                                                                                                                                                                                        |
-| `ConfigChange`                                                                                                                                                  | configuration source        | `user_settings`, `project_settings`, `local_settings`, `policy_settings`, `skills`                                                                                                                                                                                                                                      |
-| `DirectoryAdded`                                                                                                                                                | how the directory was added | `slash_command`, `register_repo_root`                                                                                                                                                                                                                                                                                   |
-| `FileChanged`                                                                                                                                                   | literal filenames to watch  | `.envrc\|.env`                                                                                                                                                                                                                                                                                                          |
-| `StopFailure`                                                                                                                                                   | error type                  | `rate_limit`, `overloaded`, `authentication_failed`, `oauth_org_not_allowed`, `billing_error`, `invalid_request`, `model_not_found`, `server_error`, `max_output_tokens`, `unknown`                                                                                                                                     |
-| `InstructionsLoaded`                                                                                                                                            | load reason                 | `session_start`, `nested_traversal`, `path_glob_match`, `include`, `compact`                                                                                                                                                                                                                                            |
-| `UserPromptExpansion`                                                                                                                                           | command name                | your skill or command names                                                                                                                                                                                                                                                                                             |
-| `Elicitation`, `ElicitationResult`                                                                                                                              | MCP server name             | your configured server names                                                                                                                                                                                                                                                                                            |
-| `CwdChanged`, `UserPromptSubmit`, `PostToolBatch`, `Stop`, `TeammateIdle`, `TaskCreated`, `TaskCompleted`, `WorktreeCreate`, `WorktreeRemove`, `MessageDisplay` | **no matcher support**      | always fires                                                                                                                                                                                                                                                                                                            |
+| Event                                                                                                                                                           | Matcher filters             | Example values                                                                                                                                                                                                                                                                                                                                       |
+|-----------------------------------------------------------------------------------------------------------------------------------------------------------------|-----------------------------|------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
+| `PreToolUse`, `PostToolUse`, `PostToolUseFailure`, `PermissionRequest`, `PermissionDenied`                                                                      | tool name                   | `Bash`, `Edit\|Write`, `mcp__.*`                                                                                                                                                                                                                                                                                                                     |
+| `SessionStart`                                                                                                                                                  | how the session started     | `startup`, `resume`, `clear`, `compact`, `fork`                                                                                                                                                                                                                                                                                                      |
+| `Setup`                                                                                                                                                         | which CLI flag triggered it | `init`, `maintenance`                                                                                                                                                                                                                                                                                                                                |
+| `SessionEnd`                                                                                                                                                    | why the session ended       | `clear`, `resume`, `logout`, `prompt_input_exit`, `other`                                                                                                                                                                                                                                                                                            |
+| `Notification`                                                                                                                                                  | notification type           | `permission_prompt`, `idle_prompt`, `auth_success`, `elicitation_dialog`, `elicitation_url_dialog`, `elicitation_complete`, `elicitation_response`, `agent_needs_input`, `agent_completed`, `quota_auto_resume_fired`, `quota_auto_resume_stale`, `quota_auto_resume_disabled` (the two agent ones need CLI 2.1.198+, the three quota ones 2.1.234+) |
+| `SubagentStart`, `SubagentStop`                                                                                                                                 | agent type                  | `general-purpose`, `Explore`, `Plan`, custom names, `^my-plugin:reviewer$`                                                                                                                                                                                                                                                                           |
+| `PreCompact`, `PostCompact`                                                                                                                                     | what triggered compaction   | `manual`, `auto`                                                                                                                                                                                                                                                                                                                                     |
+| `ConfigChange`                                                                                                                                                  | configuration source        | `user_settings`, `project_settings`, `local_settings`, `policy_settings`, `skills`                                                                                                                                                                                                                                                                   |
+| `DirectoryAdded`                                                                                                                                                | how the directory was added | `slash_command`, `register_repo_root`                                                                                                                                                                                                                                                                                                                |
+| `FileChanged`                                                                                                                                                   | literal filenames to watch  | `.envrc\|.env`                                                                                                                                                                                                                                                                                                                                       |
+| `StopFailure`                                                                                                                                                   | error type                  | `rate_limit`, `overloaded`, `authentication_failed`, `oauth_org_not_allowed`, `account_on_hold`, `billing_error`, `invalid_request`, `model_not_found`, `server_error`, `max_output_tokens`, `cloud_credential_error` (2.1.267+), `unknown`                                                                                                          |
+| `PreModelSwitch`, `PostModelSwitch`                                                                                                                             | canonical target model name | `claude-opus-5`, `claude-opus-4-6\|claude-opus-5`, `.*opus.*`. A target with no canonical name runs every hook regardless                                                                                                                                                                                                                            |
+| `InstructionsLoaded`                                                                                                                                            | load reason                 | `session_start`, `nested_traversal`, `path_glob_match`, `include`, `compact`                                                                                                                                                                                                                                                                         |
+| `UserPromptExpansion`                                                                                                                                           | command name                | your skill or command names                                                                                                                                                                                                                                                                                                                          |
+| `Elicitation`, `ElicitationResult`                                                                                                                              | MCP server name             | your configured server names                                                                                                                                                                                                                                                                                                                         |
+| `CwdChanged`, `UserPromptSubmit`, `PostToolBatch`, `Stop`, `TeammateIdle`, `TaskCreated`, `TaskCompleted`, `WorktreeCreate`, `WorktreeRemove`, `MessageDisplay` | **no matcher support**      | always fires                                                                                                                                                                                                                                                                                                                                         |
 
 ### Matching MCP tools
 
@@ -128,10 +132,19 @@ Five handler types:
 | `agent`    | spawns a subagent that may use Read, Grep, Glob before deciding. **Experimental, may change**    |
 
 Handlers run **in the current directory**, with Claude Code's environment. A handler that needs the project
-root must use `${CLAUDE_PROJECT_DIR}` rather than assuming a cwd.
+root must use `${CLAUDE_PROJECT_DIR}` rather than assuming a cwd. If the current directory was deleted mid-session,
+command hooks run from the first of these that still exists: the session's start directory, the project root,
+your home directory, the system temp directory (with a warning in the debug log).
 
-All matching hooks run **in parallel**. The same handler defined in more than one settings file runs once; a
-plugin's or skill's copy of the same handler stays separate.
+**In a worktree the two diverge.** `${CLAUDE_PROJECT_DIR}` stays at the project root where the session started, so
+a script path built on it still runs the main checkout's copy, while the input's `cwd` is the worktree root (or
+wherever Claude last `cd`-ed). Read `cwd` when the hook must act on the directory Claude is working in.
+
+All matching hooks run **in parallel**, and every one runs to completion: a `deny` from one does not stop its
+siblings. The most restrictive answer wins (`deny`, then `defer`, `ask`, `allow`). When several `PreToolUse` hooks
+return `updatedInput`, the last to finish wins, which is non-deterministic, so do not let two hooks rewrite the same
+call. The same handler defined in more than one settings file runs once; a plugin's or skill's copy of the same
+handler stays separate.
 
 ### Common fields (all types)
 
@@ -139,13 +152,14 @@ plugin's or skill's copy of the same handler stays separate.
 |-----------------|----------|-----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
 | `type`          | yes      | `"command"`, `"http"`, `"mcp_tool"`, `"prompt"`, `"agent"`                                                                                                                                                                              |
 | `if`            | no       | one permission rule, e.g. `"Bash(git *)"`, `"Edit(*.ts)"`. **Tool events only** (`PreToolUse`, `PostToolUse`, `PostToolUseFailure`, `PermissionRequest`, `PermissionDenied`); on any other event a handler with `if` set **never runs** |
-| `timeout`       | no       | seconds before cancelling. 600 for `command`/`http`/`mcp_tool`, 30 for `prompt`, 60 for `agent`                                                                                                                                         |
+| `timeout`       | no       | seconds before cancelling. 600 for `command`/`http`/`mcp_tool`, 30 for `prompt`, 60 for `agent`. Not enforced on a running `async: true` command hook                                                                                   |
 | `statusMessage` | no       | spinner message shown while it runs                                                                                                                                                                                                     |
-| `once`          | no       | run once per session then remove. **Only honoured in skill frontmatter**; ignored in settings files and agent frontmatter                                                                                                               |
+| `once`          | no       | remove the hook after its first **successful** run; a run that fails, blocks with exit 2 or times out leaves it in place. **Only honoured in skill frontmatter**; ignored in settings files and agent frontmatter                       |
 
-Timeout overrides by event: `UserPromptSubmit` lowers `command`/`http`/`mcp_tool` to 30s, `MessageDisplay` to 10s.
+Timeout overrides by event: `UserPromptSubmit`, `PreModelSwitch` and `PostModelSwitch` lower `command`/`http`/`mcp_tool`
+to 30s, `MessageDisplay` to 10s. On `PreModelSwitch` a timed-out hook **blocks** the switch.
 `SessionEnd` hooks share a **1.5-second budget** across all of them, raised to match a longer per-hook `timeout`
-up to 60s.
+up to 60s; a hook without its own `timeout` still gets 1.5s (details in `events.md`).
 
 `if` holds exactly one rule. There is no `&&`, `||` or list syntax; use a separate handler per condition.
 
@@ -164,7 +178,9 @@ Leading `VAR=value` assignments are stripped before matching.
 | `Bash(rm *)`       | `echo $(date)`         | no    | no subcommand matches                                                                     |
 | `Bash(git push *)` | `echo $(date)`         | yes   | a pattern specifying more than the command name runs anyway on `$()`, backticks or `$VAR` |
 
-The filter **fails open**, running your hook regardless of pattern, when the Bash command cannot be parsed.
+The filter **fails open**, running your hook regardless of pattern, whenever Claude Code cannot tell which commands
+the Bash input runs: an unparseable command, or a command name it cannot resolve, such as `$TOOL git push` against
+`Bash(git *)`.
 Because `if` is best-effort, use the permission system, not a hook, to enforce a hard allow or deny.
 
 ### Command handler fields
@@ -212,8 +228,17 @@ The event JSON is the POST body with `Content-Type: application/json`.
 | `tool`   | yes      | tool name on that server                                                                                                               |
 | `input`  | no       | arguments. String values support `${path}` substitution from the hook input, e.g. `"${tool_input.file_path}"`                          |
 
-`SessionStart` and `Setup` typically fire before servers finish connecting, so hooks on those events should expect
-a "not connected" error on the first run.
+A server that is not connected, or a tool returning `isError: true`, is a **non-blocking error** and execution
+continues, so an `mcp_tool` hook cannot fail closed that way.
+
+`SessionStart` and `Setup` can fire before MCP servers are available to hooks, and then their `mcp_tool` hooks are
+**skipped without a call or an error** (the debug log says `no MCP client context`):
+
+- `SessionStart` at launch, including `--continue` and `--resume`: skipped. After `/clear` or a compaction it fires
+  again with servers available, and the hooks run
+- `Setup`: always skipped
+
+Use a `command` hook for anything the first turn depends on.
 
 ### Prompt and agent handler fields
 
@@ -259,7 +284,7 @@ All hook events are supported. The difference is lifetime:
 - **Subagent hooks** run only while that subagent runs, and are removed when it finishes. A `Stop` hook declared
   here is converted to `SubagentStop`.
 - **Skill hooks** are registered when the skill is invoked and keep running for the rest of the session, including
-  later turns. Use `once: true` for a single run.
+  later turns. Use `once: true` to remove one after its first successful run.
 
 Trust differs between the two. A project **skill's** frontmatter hooks follow the settings-file trust rule and are
 registered even in a `-p` run in an untrusted folder. A project **subagent's** frontmatter hooks run only after
@@ -270,7 +295,7 @@ as accepting it. Before v2.1.218 these could run from untrusted folders.
 
 `/hooks` opens a **read-only** browser of configured hooks: every event with a count, drill-down into matchers,
 and the full detail of each handler. It shows all five types with a `[type]` prefix and the source:
-`User Settings`, `Project Settings`, `Local Settings`, `Plugin Hooks`, `Session Hooks`, `Built-in Hooks`.
+`User Settings`, `Project Settings`, `Local Settings`, `Plugin Hooks`, `Session Hooks`.
 
 Read-only means read-only: to change a hook, edit the settings JSON.
 

@@ -4,13 +4,14 @@
 
 Choosing `prompt` or `agent` on an event that does not support it is a silent no-op. The full split:
 
-| Support                                                     | Events                                                                                                                                                                                                                                                                   |
-|-------------------------------------------------------------|--------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
-| all five (`command`, `http`, `mcp_tool`, `prompt`, `agent`) | `PreToolUse`, `PostToolUse`, `PostToolUseFailure`, `PostToolBatch`, `PermissionRequest`, `PermissionDenied`, `Stop`, `SubagentStop`, `TaskCreated`, `TaskCompleted`, `TeammateIdle`, `UserPromptSubmit`, `UserPromptExpansion`                                           |
-| `command`, `http`, `mcp_tool` only                          | `ConfigChange`, `CwdChanged`, `DirectoryAdded`, `Elicitation`, `ElicitationResult`, `FileChanged`, `InstructionsLoaded`, `MessageDisplay`, `Notification`, `PostCompact`, `PreCompact`, `SessionEnd`, `StopFailure`, `SubagentStart`, `WorktreeCreate`, `WorktreeRemove` |
-| `command` and `mcp_tool` only                               | `SessionStart`, `Setup`                                                                                                                                                                                                                                                  |
+| Support                                                     | Events                                                                                                                                                                                                                                                                                                        |
+|-------------------------------------------------------------|---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
+| all five (`command`, `http`, `mcp_tool`, `prompt`, `agent`) | `PreToolUse`, `PostToolUse`, `PostToolUseFailure`, `PostToolBatch`, `PermissionDenied`, `Stop`, `SubagentStop`, `TaskCreated`, `TaskCompleted`, `TeammateIdle`, `UserPromptSubmit`, `UserPromptExpansion`                                                                                                     |
+| `command`, `http`, `mcp_tool`, `prompt` (no `agent`)        | `PermissionRequest` - an `agent` hook here is skipped and the permission flow proceeds unchanged                                                                                                                                                                                                              |
+| `command`, `http`, `mcp_tool` only                          | `ConfigChange`, `CwdChanged`, `DirectoryAdded`, `Elicitation`, `ElicitationResult`, `FileChanged`, `InstructionsLoaded`, `MessageDisplay`, `Notification`, `PostCompact`, `PostModelSwitch`, `PreCompact`, `PreModelSwitch`, `SessionEnd`, `StopFailure`, `SubagentStart`, `WorktreeCreate`, `WorktreeRemove` |
+| `command` and `mcp_tool` only                               | `SessionStart`, `Setup` - but their `mcp_tool` hooks are skipped whenever MCP servers are not yet available: always on `Setup`, and at launch on `SessionStart`                                                                                                                                               |
 
-13 + 16 + 2 = 31.
+12 + 1 + 18 + 2 = 33.
 
 ## Deterministic or judgment?
 
@@ -65,6 +66,7 @@ Other constraints:
 - output waits for the next turn; if the session is idle it waits for the next user interaction. An
   `asyncRewake` hook exiting 2 is the exception and wakes Claude immediately
 - every firing creates a separate process; there is **no deduplication**
+- `timeout` is **not enforced** once an async hook is running in the background; it still is on `asyncRewake`
 - under `-p`, any async hook still running at teardown is killed and finalized as `cancelled`. Work that must
   outlive the session has to be a fully detached process
 - malformed fields are dropped with a `--debug` warning. Before v2.1.202 malformed async JSON could crash the
@@ -82,12 +84,13 @@ echo '{"hook_event_name":"PreToolUse","tool_name":"Bash","tool_input":{"command"
 
 Assert on **both** the exit code and the parsed stdout. Then check the pieces that a stdin test cannot reach:
 
-| Question                             | How to answer it                                                               |
-|--------------------------------------|--------------------------------------------------------------------------------|
-| does it fire at all?                 | `/hooks` shows every registered handler and the file it came from              |
-| did it match, and what did it print? | `claude --debug`, then read `~/.claude/debug/<session-id>.txt`                 |
-| why did the matcher not match?       | `CLAUDE_CODE_DEBUG_LOG_LEVEL=verbose` adds matcher counts and query matching   |
-| is my JSON being read as JSON?       | the debug log says `Hook output does not start with {, treating as plain text` |
+| Question                             | How to answer it                                                                                                |
+|--------------------------------------|-----------------------------------------------------------------------------------------------------------------|
+| does it fire at all?                 | `/hooks` shows every registered handler and the file it came from                                               |
+| did it match, and what did it print? | `claude --debug`, then read `~/.claude/debug/<session-id>.txt`                                                  |
+| why did the matcher not match?       | `CLAUDE_CODE_DEBUG_LOG_LEVEL=verbose` adds matcher counts and query matching                                    |
+| is my JSON being read as JSON?       | the debug log says `Hook output does not start with {, treating as plain text`                                  |
+| JSON parsed, but had no effect?      | a field at the wrong level is ignored silently; grep the debug log for `Hook JSON output had unrecognized keys` |
 
 `--debug` does **not** print to the terminal; use `--debug-file <path>` to put the log where you want it.
 
@@ -98,8 +101,9 @@ Assert on **both** the exit code and the parsed stdout. Then check the pieces th
 ## Traps worth knowing before you write one
 
 **Exit 1 does not block.** It is a non-blocking error and the action proceeds. Policy hooks use `exit 2`, which
-blocks on the events listed in the exit-code-2 table in [io-contract.md](io-contract.md). `WorktreeCreate` is the
-sole exception in the other direction: there, *any* non-zero exit aborts creation, not only 2.
+blocks on the events listed in the exit-code-2 table in [io-contract.md](io-contract.md). The worktree events are
+the exception in the other direction: *any* non-zero exit aborts `WorktreeCreate`, and fails `WorktreeRemove` when
+the directory still exists afterwards.
 
 **Exit-0 stderr never reaches Claude.** It goes to the debug log. To get a message to Claude, use
 `hookSpecificOutput.additionalContext`, or exit 2 on `PostToolUse`/`PostToolUseFailure`.
@@ -111,9 +115,10 @@ call continues through the normal permission flow. Only `deny` denies.
 
 **Stdout must be only the JSON object.** A shell profile that prints a banner breaks parsing.
 
-**The 10,000 character cap** applies to `additionalContext`, `systemMessage` and plain stdout. Longer output is
-written to a file and replaced with a preview plus path, so anything appended after a long block never reaches
-context.
+**The 10,000 character cap** applies to `additionalContext`, `systemMessage`, `initialUserMessage` and plain
+stdout, each string on its own, and cannot be raised. Longer output is written to a file and replaced with a
+2,000-character preview plus the path, and Claude is not asked to read the file, so anything appended after a long
+block never reaches context.
 
 **A guard judges the whole command it is handed.** A `PreToolUse` Bash hook sees the entire pending command
 string and evaluates state as it was *before* any of it ran. A compound command that prepares state and then acts
@@ -124,8 +129,11 @@ permission system for a hard allow or deny.
 
 **A watcher hook can retrigger itself.** See the `FileChanged` guard note in [events.md](events.md#filechanged).
 
-**Hooks cannot read or set the session model.** Only `SessionStart` may see a `model` field, and not reliably.
-See `bitranox:process-agents-subagent-driven-development`.
+**Hooks cannot set the session model, and see it only at three points.** `SessionStart` may carry a `model`
+field, not reliably. From CLI v2.1.251, `PreModelSwitch` receives `from_model`/`to_model` for a switch you or a
+client requested and can **block** it (exit 2, or `deny`), but it cannot choose a different target; and
+`PostModelSwitch` sees every change, including automatic fallbacks, after the fact. No hook can make a switch
+happen. See `bitranox:process-agents-subagent-driven-development`.
 
 **A retrospective hook cannot prevent anything.** If the point is to stop an action, hook the pending action
 (`PreToolUse`), not the aftermath. Running the retrospective one more often, or widening the stretch it inspects,
@@ -233,28 +241,37 @@ host `update-config` skill rather than hand-editing.
 
 ## Environment variables a hook can read
 
-| Variable                        | Set to                                                                                            |
-|---------------------------------|---------------------------------------------------------------------------------------------------|
-| `CLAUDE_PROJECT_DIR`            | project root                                                                                      |
-| `CLAUDE_PLUGIN_ROOT`            | plugin install dir; changes on every plugin update                                                |
-| `CLAUDE_PLUGIN_DATA`            | plugin data dir; survives updates                                                                 |
-| `CLAUDE_ENV_FILE`               | on `SessionStart` and `FileChanged`: a file whose `export` lines persist into later Bash commands |
-| `CLAUDE_EFFORT`                 | current effort level on tool-use events                                                           |
-| `CLAUDE_CODE_REMOTE`            | `"true"` in remote web environments; unset locally                                                |
-| `CLAUDE_CODE_BRIDGE_SESSION_ID` | Remote Control session id while connected (v2.1.199+)                                             |
-| `CLAUDE_PLUGIN_OPTION_<KEY>`    | a plugin option value, e.g. `CLAUDE_PLUGIN_OPTION_WEBHOOK_URL`                                    |
-| `OTEL_*`                        | **removed** from every subprocess Claude Code spawns                                              |
+| Variable                        | Set to                                                                                                                                                                                      |
+|---------------------------------|---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
+| `CLAUDE_PROJECT_DIR`            | project root                                                                                                                                                                                |
+| `CLAUDE_PLUGIN_ROOT`            | plugin install dir; changes on every plugin update                                                                                                                                          |
+| `CLAUDE_PLUGIN_DATA`            | plugin data dir; survives updates                                                                                                                                                           |
+| `CLAUDE_ENV_FILE`               | on `SessionStart`, `Setup`, `CwdChanged` and `FileChanged`: a file whose `export` lines persist into later Bash commands (from `CwdChanged`/`FileChanged` only until the next `CwdChanged`) |
+| `CLAUDE_EFFORT`                 | current effort level on tool-use events                                                                                                                                                     |
+| `CLAUDE_CODE_REMOTE`            | `"true"` in remote web environments; unset locally                                                                                                                                          |
+| `CLAUDE_CODE_BRIDGE_SESSION_ID` | Remote Control session id while connected (v2.1.199+)                                                                                                                                       |
+| `CLAUDE_PLUGIN_OPTION_<KEY>`    | a plugin option value, e.g. `CLAUDE_PLUGIN_OPTION_WEBHOOK_URL`                                                                                                                              |
+| `OTEL_*`                        | **removed** from every subprocess Claude Code spawns                                                                                                                                        |
+
+With `CLAUDE_CODE_SUBPROCESS_ENV_SCRUB=1`, Claude Code also **strips credentials** from every subprocess it spawns,
+hooks included alongside the Bash tool and stdio MCP servers: Anthropic and cloud-provider credentials, any other variable it
+recognises as a credential, and credentials embedded in package-registry URLs. From v2.1.251 the scrub also removes
+its own configuration-store pointers such as `CLAUDE_CONFIG_DIR`. A hook that needs a cloud token or has to find a
+relocated config directory fails under the scrub even though the same command works in your shell; read the
+secret from a file instead, or leave the scrub unset.
 
 A hook process inherits the environment Claude Code was **launched** with. Exporting a variable inside a session's
 Bash command does not reach the hooks.
 
-Three variables you set to change hook behaviour, rather than read from inside one:
+Variables you set to change hook behaviour, rather than read from inside one:
 
-| Variable                                             | Effect                                                                               |
-|------------------------------------------------------|--------------------------------------------------------------------------------------|
-| `CLAUDE_CODE_SESSIONEND_HOOKS_TIMEOUT_MS`            | overrides the shared `SessionEnd` budget explicitly, in milliseconds                 |
-| `CLAUDE_CODE_DISABLE_PERMISSION_PROMPT_NOTIFY_HOOKS` | set to `1` to turn the `permission_prompt` notification off in `canUseTool` sessions |
-| `CLAUDE_CODE_DEBUG_LOG_LEVEL`                        | `verbose` adds matcher counts and query matching to the debug log                    |
+| Variable                                             | Effect                                                                                                 |
+|------------------------------------------------------|--------------------------------------------------------------------------------------------------------|
+| `CLAUDE_CODE_SESSIONEND_HOOKS_TIMEOUT_MS`            | overrides the shared `SessionEnd` budget explicitly, in milliseconds                                   |
+| `CLAUDE_CODE_DISABLE_PERMISSION_PROMPT_NOTIFY_HOOKS` | set to `1` to turn the `permission_prompt` notification off in `canUseTool` sessions                   |
+| `CLAUDE_CODE_DEBUG_LOG_LEVEL`                        | `verbose` adds matcher counts and query matching to the debug log                                      |
+| `CLAUDE_CODE_STOP_HOOK_BLOCK_CAP`                    | consecutive `Stop`/`SubagentStop` blocks allowed before the turn ends anyway (default 8, `0` disables) |
+| `CLAUDE_CODE_SUBPROCESS_ENV_SCRUB`                   | `1` strips credentials from hook, Bash and MCP subprocess environments (see above)                     |
 
 `CLAUDE_CODE_USE_POWERSHELL_TOOL` is **not** required for a `"shell": "powershell"` hook, because hooks spawn
 PowerShell directly rather than going through the PowerShell tool.

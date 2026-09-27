@@ -165,6 +165,14 @@ This event fires for PreCompact; refer to the table above.
 
 This event fires for PostCompact; refer to the table above.
 
+### PreModelSwitch
+
+This event fires for PreModelSwitch; refer to the table above.
+
+### PostModelSwitch
+
+This event fires for PostModelSwitch; refer to the table above.
+
 ### SessionEnd
 
 This event fires for SessionEnd; refer to the table above.
