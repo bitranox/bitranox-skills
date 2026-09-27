@@ -676,3 +676,86 @@ def test_cli_anchor_from_stdin_with_dry_run(tmp_path):
     assert b"would change" in proc.stdout and b"+1 lines" in proc.stdout
     assert target.read_bytes() == b"alpha\nbravo\n"
     assert not (tmp_path / "f.txt.bak").exists()
+
+
+# ---- reap: delete a file's backups once git can restore the file ------------------------------
+
+def _plant_backups(target, *suffixes):
+    for suffix in suffixes:
+        target.with_name(target.name + suffix).write_text("OLD\n", encoding="utf-8")
+
+
+def test_reap_lists_but_deletes_nothing_without_apply(tmp_path):
+    """Deletion is asked for, never implied: the bare verb is the preview."""
+    target = _git_repo(tmp_path)
+    _plant_backups(target, ".bak", ".bak.001")
+    proc = _run("reap", str(target))
+    assert proc.returncode == 0, proc.stderr
+    assert "f.md.bak.001" in proc.stdout
+    assert (tmp_path / "f.md.bak").exists() and (tmp_path / "f.md.bak.001").exists()
+
+
+def test_reap_apply_deletes_every_backup_spelling_and_nothing_else(tmp_path):
+    """`.bak`, padded and legacy unpadded numbers go; the file, a non-numeric suffix and a
+    directory that happens to carry a backup-shaped name stay."""
+    target = _git_repo(tmp_path)
+    _plant_backups(target, ".bak", ".bak.001", ".bak.2", ".bak.orig")
+    (tmp_path / "f.md.bak.003").mkdir()
+    proc = _run("reap", str(target), "--apply")
+    assert proc.returncode == 0, proc.stderr
+    left = sorted(p.name for p in tmp_path.iterdir() if p.name.startswith("f.md"))
+    assert left == ["f.md", "f.md.bak.003", "f.md.bak.orig"]
+
+
+def test_reap_refuses_a_file_git_cannot_restore(tmp_path):
+    """Untracked: the backups may be the only copies there are."""
+    target = _git_repo(tmp_path, commit=False)
+    _plant_backups(target, ".bak")
+    proc = _run("reap", str(target), "--apply")
+    assert proc.returncode == 1
+    assert (tmp_path / "f.md.bak").exists()
+
+
+def test_reap_refuses_a_tracked_file_with_uncommitted_work(tmp_path):
+    """Tracked is not committed: the working copy holds content git has never seen."""
+    target = _git_repo(tmp_path)
+    target.write_text(SAMPLE + "# local work\n", encoding="utf-8")
+    _plant_backups(target, ".bak")
+    proc = _run("reap", str(target), "--apply")
+    assert proc.returncode == 1
+    assert (tmp_path / "f.md.bak").exists()
+
+
+def test_reap_with_no_backups_is_a_clean_success(tmp_path):
+    target = _git_repo(tmp_path)
+    proc = _run("reap", str(target), "--apply")
+    assert proc.returncode == 0, proc.stderr
+
+
+def test_reap_json_envelope_names_what_it_deleted(tmp_path):
+    target = _git_repo(tmp_path)
+    _plant_backups(target, ".bak", ".bak.001")
+    proc = _run("reap", str(target), "--apply", "--json")
+    assert proc.returncode == 0, proc.stderr
+    data = json.loads(proc.stdout)["data"]
+    assert [Path(p).name for p in data["backups"]] == ["f.md.bak", "f.md.bak.001"]
+    assert data["deleted"] is True
+
+
+def test_reap_refuses_a_relative_path(tmp_path):
+    target = _git_repo(tmp_path)
+    _plant_backups(target, ".bak")
+    proc = _run("reap", "f.md", "--apply", cwd=str(tmp_path))
+    assert proc.returncode == 2
+    assert "relative" in proc.stderr, "exit 2 must come from the path check, not a usage error"
+    assert (tmp_path / "f.md.bak").exists()
+
+
+def test_an_edit_that_writes_a_backup_names_the_reap_command(tmp_path):
+    """The backup line is where the reader learns a backup exists, so it is where they learn how
+    to clear it."""
+    target = tmp_path / "f.py"
+    target.write_text(SAMPLE, encoding="utf-8")
+    proc = _run("replace", str(target), "--anchor", "    return 2", "--new-text", "    return 22")
+    assert proc.returncode == 0, proc.stderr
+    assert "reap" in proc.stdout

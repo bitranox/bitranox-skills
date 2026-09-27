@@ -25,6 +25,7 @@ Run:
   `uv run scripts/anchor_edit.py replace-span F --start-file s.txt --end-file e.txt \\
        --new-text '' --expect-removed-lines 3 --must-keep 'def survivor('`
   add `--json` for an envelope, `--dry-run` to see the line delta without writing
+  `uv run scripts/anchor_edit.py reap F` lists F's backups; `--apply` deletes them
 
 The new text is spliced in VERBATIM - no newline, blank line or indentation is added for you,
 so text meant to land as its own line must carry its own trailing newline. Stated because it
@@ -37,6 +38,11 @@ HEAD, so for a dirty file it discards precisely the content nobody else has. Eve
 OWN copy - `.bak`, then `.bak.001`, `.bak.002` upward, higher number newer and zero-padded so a
 name sort is age order - so no run can destroy the state another one recorded, and the run prints
 the exact path it wrote. The copy is byte-exact.
+
+`reap` deletes those backups once git CAN restore the file (tracked, committed, nothing local),
+and refuses otherwise. It previews unless given `--apply`, because it cannot tell a `.bak` this
+tool wrote from one another tool left, and because the backups hold states from BEFORE each edit
+that git may never have seen: committing keeps the result, not the steps.
 
 Line endings are kept: a file whose every newline is CRLF is matched and edited as LF (so an LF
 anchor still matches) and written back as CRLF, new text with CRLF of its own included; any other
@@ -241,8 +247,8 @@ def is_recoverable_from_git(path: Path) -> bool:
     return status is not None and status.returncode == 0 and not status.stdout.strip()
 
 
-def _backup_indexes(path: Path):
-    """The numbers already taken by `<name>.bak.<digits>`, padded (`.001`) or not (`.1`) alike.
+def _numbered_backups(path: Path):
+    """`(number, path)` for every `<name>.bak.<digits>`, padded (`.001`) or not (`.1`) alike.
 
     Unpadded names are what earlier versions wrote, and they still hold their place in the
     sequence. A suffix that is not all ASCII digits (`.bak.orig`) is somebody else's file.
@@ -251,7 +257,45 @@ def _backup_indexes(path: Path):
     for sibling in path.parent.glob(_glob_escape(prefix) + "*"):
         suffix = sibling.name[len(prefix):]
         if suffix.isascii() and suffix.isdigit():
-            yield int(suffix)
+            yield int(suffix), sibling
+
+
+def _backup_indexes(path: Path):
+    """The numbers already taken, whatever sits at each name: a taken name is never reused."""
+    return (index for index, _ in _numbered_backups(path))
+
+
+def existing_backups(path: Path) -> list[Path]:
+    """This file's backups on disk, oldest first: `.bak`, then the numbered ones by number.
+
+    Regular files only (a symlink to one counts): a directory that happens to carry a
+    backup-shaped name was not written by this tool and is not a copy of anything.
+    """
+    first = path.with_name(path.name + ".bak")
+    found = [first] if first.is_file() else []
+    numbered = sorted((index, sibling) for index, sibling in _numbered_backups(path)
+                      if sibling.is_file())
+    return found + [sibling for _, sibling in numbered]
+
+
+def reap_backups(path: Path, *, apply: bool) -> list[Path]:
+    """The backups of a file git can restore, deleted when `apply` is set; refused otherwise.
+
+    Raises:
+        AnchorError: git cannot restore the file, so its backups may be the only copies left.
+        UsageError: a delete failed; the backups listed before it are already gone.
+    """
+    if not is_recoverable_from_git(path):
+        raise AnchorError(f"git cannot restore {path} (untracked, ignored, or carrying "
+                          "uncommitted work), so its backups may be the only copies")
+    backups = existing_backups(path)
+    for backup in backups if apply else ():
+        try:
+            backup.unlink()
+        except OSError as exc:
+            raise UsageError(f"cannot delete {backup}: {exc}; any listed before it are deleted"
+                             ) from exc
+    return backups
 
 
 def _glob_escape(text: str) -> str:
@@ -424,6 +468,11 @@ def _parser():
                       help="lines the region must cover; a bigger region is a refusal")
     span.add_argument("--must-keep", action="append",
                       help="text that must still be present after the write (repeatable)")
+    reap = subs.add_parser("reap", help="delete a file's backups once git can restore the file")
+    reap.add_argument("file")
+    reap.add_argument("--apply", action="store_true",
+                      help="delete them; without it the backups are only listed")
+    reap.add_argument("--json", action="store_true", help="machine-readable envelope")
     return ap
 
 
@@ -458,29 +507,55 @@ def main(argv=None) -> int:
     if not target.is_file():
         print(f"anchor_edit: no such file: {target}", file=sys.stderr)
         return 2
+    if args.command == "reap":
+        return _run_reap(target, args)
     try:
         result = apply_to_file(target, _build_transform(args), dry_run=args.dry_run,
                                backup=not args.no_backup)
     except AnchorError as exc:
-        if args.json:
-            print(_envelope(False, {"reason": str(exc)}))
-        print(f"anchor_edit: refused, nothing written - {exc}", file=sys.stderr)
-        return 1
+        return _fail(args, 1, f"refused, nothing written - {exc}", exc)
     except UsageError as exc:
         # The message itself says whether anything was written: a failed target write may
         # already have left a backup behind.
-        if args.json:
-            print(_envelope(False, {"reason": str(exc)}))
-        print(f"anchor_edit: error - {exc}", file=sys.stderr)
-        return 2
+        return _fail(args, 2, f"error - {exc}", exc)
     if args.json:
         print(_envelope(True, result.as_data()))
     else:
         verb = "would change" if args.dry_run else "changed"
         # The exact path, because a later run writes .bak.001, .bak.002 and so on - printing a bare
-        # "backup written" would leave the reader to guess which of them this run produced.
-        note = f", backup {result.backup}" if result.backup else ""
+        # "backup written" would leave the reader to guess which of them this run produced. The
+        # reap hint sits here because this line is where the reader learns a backup exists.
+        note = (f", backup {result.backup} (once committed, clear with: "
+                f"anchor_edit.py reap {result.path} --apply)" if result.backup else "")
         print(f"anchor_edit: {verb} {result.path} ({result.line_delta:+d} lines){note}")
+    return 0
+
+
+def _fail(args, code: int, message: str, exc: Exception) -> int:
+    if args.json:
+        print(_envelope(False, {"reason": str(exc)}))
+    print(f"anchor_edit: {message}", file=sys.stderr)
+    return code
+
+
+def _run_reap(target: Path, args) -> int:
+    try:
+        backups = reap_backups(target, apply=args.apply)
+    except AnchorError as exc:
+        return _fail(args, 1, f"refused, nothing deleted - {exc}", exc)
+    except UsageError as exc:
+        return _fail(args, 2, f"error - {exc}", exc)
+    if args.json:
+        print(_envelope(True, {"path": str(target), "backups": [str(b) for b in backups],
+                               "deleted": args.apply}))
+        return 0
+    if not backups:
+        print(f"anchor_edit: no backups of {target}")
+        return 0
+    head = "deleted" if args.apply else "would delete (pass --apply)"
+    print(f"anchor_edit: {head} {len(backups)} backup(s) of {target}:")
+    for backup in backups:
+        print(f"  {backup}")
     return 0
 
 

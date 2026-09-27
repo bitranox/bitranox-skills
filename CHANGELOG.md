@@ -29,6 +29,18 @@ than the change, so entries reconstructed from them would read like coverage wit
 a hole nobody has drawn a line under is one that gets rediscovered and half-filled - which is how
 two "versions with no entry" notes came to sit in this file disagreeing with it.
 
+## [7.28.0]
+
+### Added
+
+- `anchor_edit.py reap FILE` (compuse-toolbox) deletes a file's backups once git can restore the
+  file: tracked, committed, nothing local. It refuses otherwise (exit 1, nothing deleted), and it
+  only lists what it would delete unless given `--apply`, because it cannot tell its own `.bak`
+  from one another tool left. It removes `.bak` and every numbered backup, padded or unpadded, and
+  leaves a non-numeric suffix (`.bak.orig`) and anything that is not a regular file. `--json`
+  gives the usual envelope. The line an edit prints when it writes a backup now names this
+  command.
+
 ## [7.27.1]
 
 ### Changed
