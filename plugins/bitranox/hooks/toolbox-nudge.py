@@ -46,12 +46,16 @@ def _names_referenced(text, names):
 
 # Named because `_RepoSweep` defers to them as well as listing them as rules. A push is a
 # STATEMENT, so it is anchored to where a statement starts: a line start (multi-line, since a
-# command is often several lines), a separator, or `do`. Environment prefixes (`LC_ALL=C`,
-# `env -u X`) and git's own global options (`git -C <repo> -c k=v`) may sit between that anchor
-# and `push`. Measured over 79,213 recorded calls: a push on a later line or behind one of those
-# prefixes was about 30 un-nudged pushes. Quoted option values reach this pattern blanked to
-# spaces, hence the quoted alternatives.
-_PUSHCHECK_RX = re.compile(r"(?m)(?:^|[;&|]\s*|\bdo\s+)\s*"
+# command is often several lines) or a separator, then any run of the words that open a statement
+# without being one - `if`, `then`, `elif`, `else`, `do`, `while`, `until`, `!`, a subshell `(` or
+# a group `{`. Each keyword must itself follow the anchor, so `echo if git push` stays prose; a
+# push under `if` (a loop pushing each repo only when its check passes) was un-nudged while the
+# anchor took `do` alone. Environment prefixes (`LC_ALL=C`, `env -u X`) and git's own global
+# options (`git -C <repo> -c k=v`) may sit between that anchor and `push`. Measured over 79,213
+# recorded calls: a push on a later line or behind one of those prefixes was about 30 un-nudged
+# pushes. Quoted option values reach this pattern blanked to spaces, hence the quoted alternatives.
+_PUSHCHECK_RX = re.compile(r"(?m)(?:^|[;&|])\s*"
+                           r"(?:(?:if|then|elif|else|do|while|until|!)\s+|[({]\s*)*"
                            r"(?:(?:[A-Za-z_]\w*=\S*|env(?:\s+-u\s+\w+)*)\s+)*"
                            r"git(?:\s+-[Cc]\s+(?:[^\s'\"]|'[^']*'|\"[^\"]*\")+)*\s+push\b"
                            r"|\bmake\s+push\b|\bgh\s+pr\s+create\b")

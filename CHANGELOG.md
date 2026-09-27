@@ -29,6 +29,20 @@ than the change, so entries reconstructed from them would read like coverage wit
 a hole nobody has drawn a line under is one that gets rediscovered and half-filled - which is how
 two "versions with no entry" notes came to sit in this file disagreeing with it.
 
+## [7.29.2]
+
+### Fixed
+
+- `toolbox-nudge`: the `pushcheck` nudge now sees a push that opens a statement after a shell
+  keyword - `if`, `then`, `elif`, `else`, `while`, `until`, `!` - or after a subshell `(` or a
+  group `{`. A push was recognised only at a line start, after a separator, or after `do`, so a
+  loop that pushed each repo under `if git -C "$r" push ...; then` got no nudge. Each keyword
+  must itself open the statement, so `echo if git push fails` is still prose, and `do` now has
+  to as well. Replayed over about 91,000 recorded Bash calls against the old rule, 2 verdicts
+  changed: the `if` push loop above, and one false firing on `( git push` inside a
+  double-quoted `python3 -c` program. Double-quoted text is scanned on purpose, since
+  substitutions in it run, so the old rule already fired on `; git push` written the same way.
+
 ## [7.29.1]
 
 ### Fixed

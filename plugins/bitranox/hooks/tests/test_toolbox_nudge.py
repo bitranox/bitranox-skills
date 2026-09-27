@@ -469,10 +469,34 @@ def test_pushcheck_sees_a_push_behind_git_global_options():
         == "pushcheck"
 
 
+@pytest.mark.parametrize("command", [
+    'for r in a b; do if git -C "$r" push origin main; then echo ok; fi; done',
+    "if git push; then echo pushed; fi",
+    "if ! git push origin main; then echo failed; fi",
+    "make test && if true; then git push; fi",
+    "if false; then :; elif git push; then :; fi",
+    "if false; then :; else git push; fi",
+    "! git push origin main",
+    "(cd /repo && git push)",
+    "( git push origin main )",
+    "{ git push; }",
+    "while ! git push; do sleep 5; done",
+    "until git push; do sleep 5; done",
+])
+def test_pushcheck_sees_a_push_after_a_shell_keyword(command):
+    """A push under `if`, `then`, `elif`, `else`, `!`, `while`, `until`, a subshell or a group is
+    still a statement. The anchor once took only a line start, a separator or `do`, so a loop
+    that pushed each repo under `if` went un-nudged."""
+    assert _bash(command) == "pushcheck"
+
+
 def test_pushcheck_still_ignores_prose_that_names_a_push():
     """Mid-sentence text is not a statement: the anchors stay line start or a separator."""
     assert _bash("echo we never git push here") is None
     assert _bash("grep -n 'git push' CLAUDE.md") != "pushcheck"
+    # A keyword spelling inside a longer word is not a keyword: `motif git push` is prose.
+    assert _bash("echo motif git push") is None
+    assert _bash("echo if git push fails, retry") is None
 
 
 def test_backstop_sees_a_polling_loop_with_a_short_sleep():
