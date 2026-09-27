@@ -98,6 +98,11 @@ unavailable, 2 usage error); 1 when the AI script cannot be found or launched.
                        help="Document type for quality threshold (default: default)")
     parser.add_argument("--iterations", type=int, default=2,
                        help="Maximum refinement iterations (default: 2, max: 2)")
+    # No default here: the AI script owns the default IDs, so only an explicit choice is forwarded.
+    parser.add_argument("--image-model", metavar="ID",
+                       help="OpenRouter model that generates the image (default: the AI script's)")
+    parser.add_argument("--review-model", metavar="ID",
+                       help="OpenRouter model that reviews the image (default: the AI script's)")
     # Refused below, never used: the key comes from OPENROUTER_API_KEY only.
     parser.add_argument("--api-key", help=argparse.SUPPRESS)
     parser.add_argument("-v", "--verbose", action="store_true",
@@ -140,6 +145,12 @@ unavailable, 2 usage error); 1 when the AI script cannot be found or launched.
     iterations = min(args.iterations, 2)
     if iterations != 2:
         cmd.extend(["--iterations", str(iterations)])
+    
+    # --flag=VALUE, like --output: a value that starts with a dash stays a value.
+    if args.image_model is not None:
+        cmd.append(f"--image-model={args.image_model}")
+    if args.review_model is not None:
+        cmd.append(f"--review-model={args.review_model}")
     
     if args.verbose:
         cmd.append("-v")
