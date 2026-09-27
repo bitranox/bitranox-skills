@@ -231,9 +231,28 @@ def invocation_name(key, roster):
     """
     if ":" in key or OWN_PREFIX + key in roster:
         return key
-    if (_PLUGIN_ROOT / "skills" / key / "SKILL.md").is_file():
+    if _ships(key):
         return OWN_PREFIX + key
     return key
+
+
+def _ships(bare):
+    """Whether this plugin ships the skill `bare` on disk right now."""
+    return (_PLUGIN_ROOT / "skills" / bare / "SKILL.md").is_file()
+
+
+def is_live(key, roster, source):
+    """Whether the option `key` names a skill this session can invoke NOW.
+
+    A roster read from this session's own listing is the installed set, so any key in it is live.
+    A cached or shipped roster can be stale - a project's cache outlives an uninstalled plugin or
+    a removed skill - and only this plugin's skills can be checked from here, on disk; any other
+    skill it names is unverifiable, which is treated as not live rather than guessed at.
+    """
+    if source == SOURCE_TRANSCRIPT:
+        return key in roster
+    name = invocation_name(key, roster)
+    return name.startswith(OWN_PREFIX) and _ships(name[len(OWN_PREFIX):])
 
 
 def parse_listing(content, names, cwd=None):

@@ -310,7 +310,7 @@ def test_a_state_file_with_undecodable_bytes_does_not_silence_the_router(monkeyp
                                                      "done": ["frobnicating", "widgets"]})
     state = R._state_file("/p/x", "s1")
     state.parent.mkdir(parents=True, exist_ok=True)
-    state.write_bytes(b"\xff\xfe junk\ndone\n")
+    state.write_bytes(b"\xff\xfe junk\nbitranox:done\n")
     rc, out = _run_main(monkeypatch, capsys, "frobnicating the widgets")
     assert rc == 0 and "bitranox:frob" in out and "bitranox:done" not in out
 

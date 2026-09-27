@@ -14,12 +14,14 @@ letters and digits of any script as word characters), at most MAX_SKILLS NEW ski
 each skill nudges at most once per session (state file). Fail-open: every error path exits 0. Pure
 standard library; launched via run-python.sh.
 
-With `classifier_skill_router = decide` (and `classifier_backend = jev`) Jev decides instead: the
-hook asks the shadow comparison's own gate-plus-choice question in-process, under the classifier's
-DEFAULT_DEADLINE, and nudges the ONE skill `classifier.choice_pick` returns - or nothing, when Jev
-answered and picked nothing. Only when Jev does not answer does the keyword match decide, exactly
-as with the classifier off. Each decide prompt appends one shadow-log row saying which path
-nudged, so `classifier_eval.py report` reads decide sessions like shadow ones.
+With `classifier_skill_router = decide` (and `classifier_backend = jev`) Jev decides a typed
+prompt instead: the hook asks the shadow comparison's own gate-plus-choice question in-process,
+under the classifier's DEFAULT_DEADLINE, and nudges the ONE skill `classifier.choice_pick` returns
+- or nothing, when Jev answered and picked nothing. Only when Jev does not answer, or picks a skill
+from a cached roster that cannot be confirmed installed, does the keyword match decide, exactly as
+with the classifier off; a task notification goes that way too. Each decide prompt appends one
+shadow-log row saying which path nudged, so `classifier_eval.py report` reads decide sessions like
+shadow ones.
 """
 import json
 import os
@@ -121,8 +123,11 @@ def _project_line(cwd):
 
 
 def _already_nudged(cwd, sid):
-    """Skills this session was already nudged about. Read with errors="replace": one undecodable
-    byte must not raise and silence the router for the rest of the session."""
+    """Skills this session was already nudged about, by the name the Skill tool takes
+    (`bitranox:<name>` for this plugin's). One identity for both paths: a keyword nudge and a Jev
+    nudge of the same skill spend it once, and a same-named skill from elsewhere, which the
+    listing keeps apart by that prefix, is a different skill. Read with errors="replace": one
+    undecodable byte must not raise and silence the router for the rest of the session."""
     try:
         text = _state_file(cwd, sid).read_text(encoding="utf-8", errors="replace")
     except OSError:
@@ -143,7 +148,9 @@ def _router_fields(prompt, cwd, sid, transcript):
     activity = transcript_turns.recent_activity(transcript)
     if activity:
         fields["recent_activity"] = activity
-    in_use = sorted(_already_nudged(cwd, sid) | set(transcript_turns.skills_used(transcript)))
+    # Bare, the form `skills_used` reports, so one skill reads the same from either source.
+    nudged = {s.rsplit(":", 1)[-1] for s in _already_nudged(cwd, sid)}
+    in_use = sorted(nudged | set(transcript_turns.skills_used(transcript)))
     if in_use:
         fields["skills_already_used"] = ", ".join(in_use)
     return classifier.with_previous(fields, transcript_turns.last_reply(transcript))
@@ -186,7 +193,9 @@ def _shadow_skill_router(prompt, sid, triggers, transcript="", cwd=""):
 
 def _ask_jev(prompt, sid, triggers, transcript, cwd, cfg):
     """(row, path, pick, roster) for decide mode. `path` is "jev" with the option key Jev picked,
-    "none" when it answered and picked nothing, or "fallback-<reason>" when it did not answer."""
+    "none" when it answered and picked nothing, or "fallback-<reason>" when it did not answer -
+    including "fallback-stale pick", a pick from a cached roster the session may no longer have,
+    which would send the model after a skill that does not exist."""
     regex, request, skills = _router_request(prompt, sid, triggers, transcript, cwd)
     row = classifier.ask_in_hook("skill_router", sid, regex, [request], cfg, transcript=transcript)
     result = (row.get("results") or [None])[0]
@@ -197,27 +206,30 @@ def _ask_jev(prompt, sid, triggers, transcript, cwd, cfg):
     pick = classifier.choice_pick(gate, winner, probabilities,
                                   threshold=classifier.SITE_THRESHOLDS["skill_router"],
                                   bypass=classifier.CHOICE_BYPASS)
+    if pick and not skill_roster.is_live(pick, skills, regex.get("roster")):
+        return row, "fallback-stale pick", None, skills
     return row, ("jev" if pick else "none"), pick, skills
 
 
 def _fresh_keyword_hits(hits, already):
     """The keyword picks to nudge: dedup BEFORE the MAX_SKILLS cap, so skills nudged earlier
     never hold the slots of a fresh skill that matches this prompt."""
-    return [(s, "bitranox:" + s) for s, _n in hits if s not in already][:MAX_SKILLS]
+    names = ["bitranox:" + s for s, _n in hits]
+    return [n for n in names if n not in already][:MAX_SKILLS]
 
 
 def _nudge(cwd, sid, picks):
-    """Record each (state key, invocation name) in `picks` as nudged this session and print the
-    router block naming them. Nothing is printed for an empty `picks`."""
+    """Record each skill in `picks` (by the name the Skill tool takes) as nudged this session and
+    print the router block naming them. Nothing is printed for an empty `picks`."""
     if not picks:
         return
     state = _state_file(cwd, sid)
     state.parent.mkdir(parents=True, exist_ok=True)
     with state.open("a", encoding="utf-8") as f:
-        for key, _name in picks:
-            f.write(key + "\n")
+        for name in picks:
+            f.write(name + "\n")
     lines = ["<BITRANOX-SKILL-ROUTER>"]
-    for _key, name in picks:
+    for name in picks:
         lines.append("This prompt matches the skill `%s` - if it applies (even a 1%% "
                      "chance), invoke it via the Skill tool BEFORE responding." % name)
     lines.append("</BITRANOX-SKILL-ROUTER>")
@@ -238,8 +250,8 @@ def _decide(prompt, sid, triggers, hits, transcript, cwd, cfg):
         row, path, pick, skills = None, "fallback-error: %s" % type(exc).__name__, None, {}
     already = _already_nudged(cwd, sid)
     if path == "jev":
-        picks = ([] if pick in already
-                 else [(pick, skill_roster.invocation_name(pick, skills))])
+        name = skill_roster.invocation_name(pick, skills)
+        picks = [] if name in already else [name]
     elif path == "none":
         picks = []  # "no skill" is an answer; the keyword hits it overruled were judged noise
     else:
@@ -247,7 +259,7 @@ def _decide(prompt, sid, triggers, hits, transcript, cwd, cfg):
     _nudge(cwd, sid, picks)
     try:
         row = row if failure is None else classifier.error_row("skill_router", sid, failure)
-        row.update(mode="decide", decide_path=path, nudged=[key for key, _name in picks])
+        row.update(mode="decide", decide_path=path, nudged=picks)
         classifier.append_row(row)
     except Exception:  # noqa: BLE001 - a comparison row is never worth a failed hook
         pass
@@ -270,7 +282,10 @@ def main():
         hits = match(prompt, triggers, max_skills=None)
         transcript = ev.get("transcript_path") or ""
         cfg = sig.load_config()
-        if classifier.site_mode(cfg, "skill_router") == "decide":
+        # A task notification is not a prompt, and no blind judgement has covered one, so decide
+        # mode acts on typed prompts only; a notification goes the way it does with the site off.
+        if (classifier.site_mode(cfg, "skill_router") == "decide"
+                and not prompt_text.notification_fields(prompt)):
             _decide(prompt, sid, triggers, hits, transcript, cwd, cfg)
             return 0
         # Opt-in shadow comparison (off by default), before the per-session dedup so every

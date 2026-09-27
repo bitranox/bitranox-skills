@@ -494,3 +494,21 @@ def test_the_installed_roster_offers_trimmed_skills_resolved_from_the_project(tm
 ])
 def test_invocation_name_is_what_the_skill_tool_accepts(key, roster, expected):
     assert SR.invocation_name(key, roster) == expected
+
+
+@pytest.mark.parametrize("key,roster,source,live", [
+    # The session's own listing is the installed set.
+    ("gone-skill", {"gone-skill": ""}, SR.SOURCE_TRANSCRIPT, True),
+    ("typesafe:typesafe-ai", {"typesafe:typesafe-ai": ""}, SR.SOURCE_TRANSCRIPT, True),
+    # A cached roster can outlive what it names: only this plugin's shipped skills are checkable.
+    ("files-edit-xml", {"files-edit-xml": ""}, SR.SOURCE_CACHE, True),
+    ("gone-skill", {"gone-skill": ""}, SR.SOURCE_CACHE, False),
+    ("typesafe:typesafe-ai", {"typesafe:typesafe-ai": ""}, SR.SOURCE_CACHE, False),
+    ("bitranox:no-such-skill", {"bitranox:no-such-skill": ""}, SR.SOURCE_CACHE, False),
+    # The bare half of a collision is the OTHER skill, unverifiable from a cache.
+    ("files-edit-xml", {"files-edit-xml": "", "bitranox:files-edit-xml": ""}, SR.SOURCE_CACHE,
+     False),
+    ("files-edit-xml", {"files-edit-xml": ""}, SR.SOURCE_SHIPPED, True),
+])
+def test_is_live_trusts_only_the_sessions_listing_or_a_skill_on_disk(key, roster, source, live):
+    assert SR.is_live(key, roster, source) is live
