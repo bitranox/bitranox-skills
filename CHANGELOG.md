@@ -29,6 +29,23 @@ than the change, so entries reconstructed from them would read like coverage wit
 a hole nobody has drawn a line under is one that gets rediscovered and half-filled - which is how
 two "versions with no entry" notes came to sit in this file disagreeing with it.
 
+## [7.29.1]
+
+### Fixed
+
+- `toolbox-nudge`: the `git_state` nudge now recognises a loop over several repos by the loop
+  variable being the `git -C` target, including a target derived from it first
+  (`d=/srv/$r; git -C $d ...`) and a `while read` loop. It used to fire only when the loop ran
+  `status`, so the same sweep asking for the branch, the ahead/behind count or an upstream
+  `log` range got no nudge, and a loop over files or commits inside ONE repo that ran `status`
+  got one. It counts only what `git_state` answers: branch, sync and dirty state, not history,
+  remotes or "which repo is this" (`rev-parse --show-toplevel`). A sweep that also pushes or
+  waits on CI still gets `pushcheck` or `ci_wait`. Replayed over about 91,000 recorded Bash calls
+  against the old rule, 42 verdicts changed and every one was read: 24 sweeps newly nudged,
+  13 taken over from `claim_check` or `newest`, 3 old false firings dropped, and 2 push loops
+  handed to `pushcheck`. Three firings are still wrong: the same sweep run on remote hosts
+  inside an ssh command, which reads identically on the command line.
+
 ## [7.29.0]
 
 ### Added

@@ -37,6 +37,96 @@ from shell_text import (  # noqa: F401
 _ONE_LOGICAL_LINE = r"(?:[^\n\\]|\\.|\\\n)*"
 _SCRIPT_WINDOW = r".{0,800}"
 
+
+def _names_referenced(text, names):
+    """True when `text` expands any of `names` as `$name` or `${name}`."""
+    return bool(names) and re.search(
+        r"\$\{?(?:" + "|".join(map(re.escape, sorted(names))) + r")\b", text) is not None
+
+
+# Named because `_RepoSweep` defers to them as well as listing them as rules. A push is a
+# STATEMENT, so it is anchored to where a statement starts: a line start (multi-line, since a
+# command is often several lines), a separator, or `do`. Environment prefixes (`LC_ALL=C`,
+# `env -u X`) and git's own global options (`git -C <repo> -c k=v`) may sit between that anchor
+# and `push`. Measured over 79,213 recorded calls: a push on a later line or behind one of those
+# prefixes was about 30 un-nudged pushes. Quoted option values reach this pattern blanked to
+# spaces, hence the quoted alternatives.
+_PUSHCHECK_RX = re.compile(r"(?m)(?:^|[;&|]\s*|\bdo\s+)\s*"
+                           r"(?:(?:[A-Za-z_]\w*=\S*|env(?:\s+-u\s+\w+)*)\s+)*"
+                           r"git(?:\s+-[Cc]\s+(?:[^\s'\"]|'[^']*'|\"[^\"]*\")+)*\s+push\b"
+                           r"|\bmake\s+push\b|\bgh\s+pr\s+create\b")
+_CI_WAIT_RX = re.compile(r"\bgh\s+run\s+(?:watch|list|view)\b|\bgh\s+pr\s+checks\b")
+
+
+class _RepoSweep:
+    """A loop over REPOS asking each one for its state - git_state's chore.
+
+    Recognised by the loop variable being the `git -C` target, not by the subcommand: the same
+    sweep asks for the branch or the ahead/behind count as often as for `status`, while a loop
+    over commits or files inside ONE repo uses `git -C` too and is not the chore. The target is
+    usually DERIVED first (`d=/srv/$r; git -C $d status`), so a variable assigned from a loop
+    variable counts as one. Only the questions git_state answers count - branch, sync, dirty -
+    which leaves out history (`log -p`), remotes and "which repo is this" (`rev-parse
+    --show-toplevel`); `log` counts only over an upstream range.
+
+    A sweep that also pushes or waits on CI is left to that rule: the push or the CI result is
+    the question it has to answer. That is decided here rather than by list order because this
+    rule must still outrank `claim_check`, which sits in the same list - replayed, real sweeps
+    carrying an incidental `grep -c` were otherwise handed to it.
+
+    Known wrong shape: the same sweep run on REMOTE hosts inside an ssh command string reads
+    identically from here, and git_state cannot reach those repos. Replayed over the recorded
+    Bash calls it was 3 of the firings; telling it apart needs the quoting, not a pattern.
+
+    Regex-shaped on purpose: `match_tool` needs nothing but `.search(text)`.
+    """
+
+    _LOOP = re.compile(r"\bfor\s+([A-Za-z_]\w*)\s+in\b"
+                       r"|\bwhile\s+(?:IFS=\S*\s+)?read\s+(?:-r\s+)?([A-Za-z_]\w*(?:[ \t]+[A-Za-z_]\w*)*)")
+    _ASSIGN = re.compile(r"(?<![\w$-])([A-Za-z_]\w*)=(\"[^\"]*\"|'[^']*'|[^\s;&|]*)")
+    _GIT_C = re.compile(r"\bgit\s+-C\s+(\"[^\"]*\"|'[^']*'|[^\s;&|]+)\s+(?:-c\s+\S+\s+)*"
+                        r"([a-z][a-z-]*)([^\n;&|]*)")
+    _STATE = frozenset({"status", "rev-parse", "rev-list", "branch", "symbolic-ref"})
+    # A range joins two revisions with no space, so a prose ellipsis (" ...") is not one.
+    _UPSTREAM_RANGE = re.compile(r"@\{u(?:pstream)?\}|[\w}~^]\.{2,3}[\w@]")
+    _REPO_IDENTITY = re.compile(r"--(?:show-toplevel|git-dir|absolute-git-dir|git-common-dir"
+                                r"|is-inside-\w+|show-prefix|show-cdup)\b")
+
+    def __init__(self, defer_to=()):
+        self._defer_to = tuple(defer_to)
+
+    def _loop_names(self, text):
+        names = set()
+        for single, many in self._LOOP.findall(text):
+            names.update((single or many).split())
+        grew = bool(names)
+        while grew:
+            before = len(names)
+            names.update(name for name, value in self._ASSIGN.findall(text)
+                         if _names_referenced(value, names))
+            grew = len(names) > before
+        return names
+
+    def _asks_state(self, sub, rest):
+        if sub == "log":
+            return self._UPSTREAM_RANGE.search(rest) is not None
+        if sub == "rev-parse":
+            return self._REPO_IDENTITY.search(rest) is None
+        return sub in self._STATE
+
+    def search(self, text):
+        if any(rx.search(text) for rx in self._defer_to):
+            return None
+        names = self._loop_names(text)
+        if not names:
+            return None
+        for hit in self._GIT_C.finditer(text):
+            target, sub, rest = hit.groups()
+            if _names_referenced(target, names) and self._asks_state(sub, rest):
+                return hit
+        return None
+
+
 # (regex over the command, tool name, one-line "why"). First match wins. STRONG signatures only, to
 # keep false positives + noise low; the per-session dedup then nudges each tool at most once.
 _RULES = [
@@ -52,7 +142,9 @@ _RULES = [
     (re.compile(r"(?:cargo (?:build|test|clippy)|gh run (?:view|watch))\b" + _ONE_LOGICAL_LINE
                 + r"(?:\|\s*(?:grep|sed|awk)|2>&1)"), "ci_triage",
      "hand-piping a build/CI log for errors"),
-    (re.compile(r"for\b.*\bgit -C\b.*\bstatus\b|git rev-parse --abbrev-ref HEAD"), "git_state",
+    (_RepoSweep(defer_to=(_PUSHCHECK_RX, _CI_WAIT_RX)), "git_state",
+     "checking git branch/status across repo(s)"),
+    (re.compile(r"git rev-parse --abbrev-ref HEAD"), "git_state",
      "checking git branch/status across repo(s)"),
     (re.compile(r"\b(?:pkill|pgrep)\s+[^\n]*-f\b"), "procsig",
      "hand-rolling pgrep/pkill -f (self-match risk)"),
@@ -87,19 +179,9 @@ _RULES = [
 # itself. Unscoped, `git push` sitting in a Write body was the dominant firing of the pushcheck
 # rule. A chore that is equally real when authored belongs in `_ANY_TOOL_RULES` below.
 _SHELL_ONLY_RULES = [
-    # A push is a STATEMENT, so it is anchored to where a statement starts: a line start (multi-
-    # line, since a command is often several lines), a separator, or `do`. Environment prefixes
-    # (`LC_ALL=C`, `env -u X`) and git's own global options (`git -C <repo> -c k=v`) may sit
-    # between that anchor and `push`. Measured over 79,213 recorded calls: a push on a later line
-    # or behind one of those prefixes was about 30 un-nudged pushes. Quoted option values reach
-    # this pattern blanked to spaces, hence the quoted alternatives.
-    (re.compile(r"(?m)(?:^|[;&|]\s*|\bdo\s+)\s*"
-                r"(?:(?:[A-Za-z_]\w*=\S*|env(?:\s+-u\s+\w+)*)\s+)*"
-                r"git(?:\s+-[Cc]\s+(?:[^\s'\"]|'[^']*'|\"[^\"]*\")+)*\s+push\b"
-                r"|\bmake\s+push\b|\bgh\s+pr\s+create\b"),
-     "pushcheck", "about to push - whether this repo is public, and what the push would publish"),
-    (re.compile(r"\bgh\s+run\s+(?:watch|list|view)\b|\bgh\s+pr\s+checks\b"), "ci_wait",
-     "waiting on CI for the commit you just pushed"),
+    (_PUSHCHECK_RX, "pushcheck",
+     "about to push - whether this repo is public, and what the push would publish"),
+    (_CI_WAIT_RX, "ci_wait", "waiting on CI for the commit you just pushed"),
     # Three shapes of one chore. A long `sleep`, a detached job, and the two measured as missing:
     # a polling loop whose `sleep` sits inside its body however short (a poll sleeps 3-6 seconds a
     # turn - about 38 recorded calls), and a process-table check that reads "gone" as "finished"

@@ -34,6 +34,71 @@ def test_match_git_state():
     assert N.match_tool("git rev-parse --abbrev-ref HEAD")[0] == "git_state"
 
 
+# A sweep over REPOS is recognised by the loop variable being the `git -C` target, not by the
+# subcommand: before, only a sweep that ran `status` was seen, so the same sweep asking for the
+# branch, the ahead/behind count or the last commit went un-nudged.
+@pytest.mark.parametrize("command", [
+    'for r in ~/a ~/b; do git -C "$r" status -s; done',
+    'for r in ~/a ~/b; do git -C "$r" log --oneline @{u}..; done',
+    'for r in ~/a ~/b; do echo "$r: $(git -C "$r" rev-parse --abbrev-ref HEAD)"; done',
+    'for repo in a b; do git -C "${repo}" rev-list --count HEAD..@{u}; done',
+    'for r in a b; do git -C "$ROOT/$r" branch --show-current; done',
+    'for r in a b\ndo\n  git -C "$r" rev-list --left-right --count HEAD...@{u}\ndone',
+    'while read -r d; do git -C "$d" status --porcelain; done < repos.txt',
+    'for r in a b; do git -C $r symbolic-ref --short HEAD; done',
+    # the target is derived from the loop variable first - the commonest real spelling
+    'for r in a b; do d=/srv/$r; git -C $d status --porcelain; done',
+    'for a in x y; do w=agent-$a; n=$(git -C $w rev-list --count base..HEAD); echo $n; done',
+])
+def test_git_state_fires_on_a_loop_over_repos_whatever_it_asks(command):
+    assert N.match_tool(command, "Bash")[0] == "git_state"
+
+
+@pytest.mark.parametrize("command", [
+    # the loop runs over COMMITS or FILES inside one repo: not the chore
+    'for c in $(git rev-list HEAD~5..HEAD); do git -C /repo show --stat "$c"; done',
+    'for f in *.py; do git -C . log -1 --format=%h -- "$f"; done',
+    'for f in a b; do git -C /repo status --short -- "$f"; done',
+    # a loop variable that merely shares a prefix with the target's variable
+    'for r in a b; do git -C "$root" log -1; done',
+    # a sweep over repos asking something git_state does not report: history, remotes
+    'for R in a b; do git -C $R log --all -p | grep -c token; done',
+    'for d in a b; do git -C "$d" remote -v; done',
+    # "which repo is this" is not branch/sync/dirty
+    'for d in a b; do git -C "$d/memory" rev-parse --show-toplevel || echo NO; done',
+    'for d in a b; do git -C "$P/$d" rev-parse --absolute-git-dir; done',
+    # an ellipsis is not a revision range
+    'for r in a b; do git -C "$r" log -1 --format="%h ..."; done',
+])
+def test_git_state_silent_on_a_loop_inside_one_repo(command):
+    matched = N.match_tool(command, "Bash")
+    assert matched is None or matched[0] != "git_state"
+
+
+def test_a_loop_pushing_every_repo_still_gets_pushcheck():
+    # git_state's rules run before the shell-only ones, so a sweep rule keyed on the loop variable
+    # alone would take a push loop away from pushcheck - and "is this repo public" is the question
+    # a multi-repo push has to answer first.
+    assert N.match_tool('for r in a b; do git -C "$r" push; done', "Bash")[0] == "pushcheck"
+    # the same holds when the push loop ALSO reads state - replayed, 4 recorded push loops did
+    both = 'for r in a b; do git -C "$r" push -q origin HEAD; git -C "$r" rev-list --count @{u}..HEAD; done'
+    assert N.match_tool(both, "Bash")[0] == "pushcheck"
+
+
+def test_a_repo_sweep_outranks_an_incidental_grep_count():
+    # replayed: three real sweeps carried a `grep -c` for some other count, and claim_check's
+    # answer is not what a dirty/ahead table across repos needs
+    command = ('for r in . a b; do printf "%s dirty=%s\\n" "$r" "$(git -C "$r" status --porcelain | wc -l)"; '
+               'done; grep -c "^- \\[ \\]" OPEN-WORK.md')
+    assert N.match_tool(command, "Bash")[0] == "git_state"
+
+
+def test_a_loop_polling_ci_per_repo_still_gets_ci_wait():
+    command = ('while read -r repo sha; do slug=$(git -C "$repo" rev-parse --show-toplevel); '
+               'gh run list -R "$slug" --commit "$sha"; done < pushed.txt')
+    assert N.match_tool(command, "Bash")[0] == "ci_wait"
+
+
 def test_match_procsig_pkill():
     assert N.match_tool("pkill -f 'vm-79099-disk-0'")[0] == "procsig"
 
