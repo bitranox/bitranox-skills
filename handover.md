@@ -1,94 +1,95 @@
-# STALE - read 2026-09-27, work continued
+# Handover - 2026-09-27 02:00, rank 10 hook-report fixes done on 8 local branches, NOT integrated
 
 ## In flight
 
-Nothing. The old rank 10 guard slice (38 claims from the 2026-08-28 review) and its 5 coverage
-gaps were re-adjudicated against 7.25.9, triaged into batches A-D, and all four batches were fixed
-on the user's choice ("All, A to D") by 8 test-first fixers: 7.25.10 (0094ea68). The windows-latest
-cell then failed on a store-edit-guard regression (CRLF, see lessons), fixed as 7.25.11 (a76f068e).
-CI green on a76f068e in both workflows.
+Integration of the rank 10 fixes. Everything below is committed on LOCAL branches in the shared
+repo (`git branch --list 'rank10-fix*'`), nothing of it is pushed.
+
+- `rank10-fix` (worktree `.claude/worktrees/rank10-fix`), tip `97dda56d`: the 7.25.12 bump of
+  `plugin.json` + `pyproject.toml`, a CHANGELOG `## [7.25.12]` STUB (one placeholder bullet, to be
+  replaced), and S0's additive `shell_text.blank_heredoc_bodies` / `commands_only_aligned`.
+- `rank10-fix-F1` .. `rank10-fix-F7` (worktrees `.claude/worktrees/rank10-fix-F<n>`), each branched
+  from `97dda56d`, disjoint file ownership, 34 commits in total, each fixer's whole-hooks suite green
+  (4821-4851 passed). Tips: F1 881191c2, F2 b017f711, F3 1c2c293f, F4 89998a39, F5 d362ee44,
+  F6 53bb6bd1, F7 66a718f4.
+- Reports (FIXED / NOT FIXED / NOTICED / CHANGELOG lines / SUITE / COMMITS), harvested verbatim
+  from the transcripts: main checkout `.plan/rank10-passing-2026-09-27/fix/F<n>.report.txt`, with
+  the briefs (`COMMON.txt`, `F<n>.txt`) and `INTEGRATION-TODO.txt` beside them. The adjudication
+  that produced the work is `.plan/rank10-passing-2026-09-27/TRIAGE.md` + `verdicts/`.
 
 ## Committed, or not
 
-- **In git and pushed:** everything above, the CHANGELOG entries for 7.25.10 and 7.25.11, the
-  corrected CLAUDE.md lxml note, OPEN-WORK rank 10 progress and the new FOUND line at rank 183.
-- **Not in git, by design (gitignored, main checkout):** `.plan/rank10-guardreadj-2026-09-26/` -
-  `TRIAGE.md` (batches A-D) and `verdicts/*.verdicts.txt` (the 8 adjudications, verbatim).
-- **The main checkout is still 120+ commits behind origin/master** and has `PLAN-JEV-SKILL.md` and
-  `TODO-JEV.md` staged by another session; left alone. Work from a worktree created off
-  `origin/master` explicitly.
+- Pushed: `8f4960e1` (rank 10 line corrected from "about 7" to 29 reports; CI green) and the commit
+  carrying this file and the OPEN-WORK update.
+- Local only: the 8 branches above. The main checkout is still ~140 commits behind origin/master
+  with another session's `PLAN-JEV-SKILL.md` / `TODO-JEV.md` staged - leave it alone.
 
 ## Decided, and why - do not reopen
 
-- block-pgrep: the bracket-leak haystack is now the RAW command (heredoc bodies and commit
-  messages count), because `bash -c` receives the whole string and `pgrep -f` matches it. Gated on
-  a replay over 88.5k real commands: 1 false positive removed, 3 real self-matches newly caught.
-- block-pgrep: `grep "pkill -f x"` still blocks; grep is not in `shell_text._DATA_SINK_PROGRAMS`
-  and adding it changes every guard at once (filed under 183).
-- probe-capability-gate: "Do not use tools that <verb>" stays a DENY (a wrong allow is the silent
-  direction); only its message changed, naming the spelling that passes.
-- subagent-model-gate: a project agent definition shadows a user one of the same name; `inherit`
-  or blank counts as unpinned; bare names do not resolve to plugin agents.
-- validate-structured-files: the `{{` lookahead is narrower than the adjudicator prescribed,
-  because the prescribed one false-blocked Helm `{{ "foo" | quote }}`.
-
-## Decided against, and why
-
-- Removing NotebookEdit from the matchers: the guards now read `notebook_path` instead
-  (store-edit, skill-edit, config-edit, validate); the other NotebookEdit-matched hooks are in 183.
+- The user chose ALL batches (S B H R N D T), H B S R first. Done as one release, 7.25.12 (patch:
+  every change is a fix).
+- skill-router c1 (compound keyword double-counts) is NOT fixed: F5 replayed 1,311 real prompts and
+  the fix removed only true positives. Pinned as intended with a test. It is recorded as a design
+  question for the user in OPEN-WORK 184, not as work.
+- toolbox-nudge NEW 1 (blank double-quoted prose) NOT done: replay showed 12% of firings would
+  change, nearly all real chores.
+- repo-gate c2 (read the blob for CRLF) NOT done: F7 proved it would turn a false block this repo
+  cannot hit into a real false pass.
+- post-compact-nudge now prints nothing and no longer deletes the salvaged audit (PostCompact
+  delivers no context per the official hooks doc; the Stop gate already carries the nap hint).
+- self-improve-gate routing hint now says "this session", because touched-paths evidence is
+  session-cumulative (clear_touched_paths has no production caller).
 
 ## Still open, untouched
 
-`OPEN-WORK.md` is the list; read it before this file.
-
-- Rank 10 (USER): only "about 7 reports named only in passing" is left.
-- Rank 177 (FOUND, blocked on the user): 16 design decisions from the 7.25.6 LOW fixers.
-- Rank 182 and 183 (FOUND): what the 7.25.9 and 7.25.10 fixers noticed and left.
-- Ranks 160, 175, 181 unchanged.
+`OPEN-WORK.md` is the list; read it before this file. Rank 10 (its `next:` names the integration),
+184 (fixer follow-ups, NEW), 177, 182, 183 as before.
 
 ## Lessons for the next nap
 
-- When replacing a text-mode read (`read_text`, `open(..., "r")`) with `read_bytes().decode`,
-  restore newline normalisation: universal-newline translation is lost and a CRLF file stops
-  matching the LF text the tools hand a hook (7.25.10 went red on windows-latest only).
-- When a background watcher (ci_wait) runs with its cwd inside a worktree, do not remove that
-  worktree until it finishes; gh then fails every poll and the watcher reads as a CI failure.
-  Launch watchers from the main checkout.
-- When fanning fixers out into worktrees in bitranox-skills, commit the version bump and a
-  CHANGELOG stub on an integration base first and branch the worktrees from it: the local
-  `check_version_bumped` refuses a `plugins/` commit whose version equals origin/master's.
-- `pgrep -f` matches text inside a heredoc body or a commit message in the same command, because
-  `bash -c` carries the whole command string in its /proc cmdline (measured by the pgrep fixer).
-- tooling: guard_replay reports one predicate's rate; diffing the FIRING SETS of an old and a new
-  predicate took a hand-written script. A `--baseline <module>` option would make that the jig.
-- Carried from the 2026-09-26 handover, in case its nap never ran: take a subagent's handback
-  from the tool_use input, not the last long text; Agent `isolation: worktree` bases on the main
-  checkout's stale HEAD, so create worktrees from origin/master yourself; when a fix changes a
-  shared parser, have the fixer run every consumer's suite; tooling: ci_wait backgrounded inside
-  a compound command is refused by block-masked-gate-exit, background it alone;
-  `~/.claude/settings.json` was rewritten 2026-09-26 22:34:50 by an unidentified writer.
+- When a backlog line carries a count of what is left ("about 7 reports"), recount it from the
+  source record before working it: this one had eroded from 20 to 7 while the real remainder was
+  29.
+- When harvesting a subagent's report, parse its transcript for the SubagentHandback tool_use input
+  (a small marker-keyed script did it: `/tmp/claude-1000/rank10-passing/harvest.py`, markers
+  `FIXED:` `SUITE:` or `VERDICT:` `SUMMARY`), not the delivered message.
+- When an offset-sliced parser strips heredoc bodies, it must slice from a length-preserving copy:
+  three hooks recorded wrong values after a heredoc; shell_text now has blank_heredoc_bodies.
+- When a hook's output must reach the model, check the channel against the event: exit-0 stderr
+  and PostCompact stdout reach nobody (git-commit-branch-guard had never been seen by the model).
+- tooling: the brief-writing heredoc was blocked by shell-prefix-selfref-guard over `$V`; write
+  briefs with the Write tool.
+- tooling: the installed 7.25.9 venv-guard fired WRONG VENV on this session's own printf of quoted
+  text (the defect F6 fixed); expect such noise until 7.25.12 is installed.
 
 ## The exact next action
 
-Rank 10 is still the top open USER item. Find the "about 7 reports named only in passing" in the
-main checkout's `.plan/rank10-review-2026-08-28/TRIAGE.md` (search for the reports it mentions
-without adjudicating), list them, re-check each against current master with a control, then ask
-the user what to fix. The user is usually present, so put the rank 177 decisions to them one at a
-time as well.
+Integrate, in order, from `.claude/worktrees/rank10-fix`:
+
+1. `git merge --no-ff rank10-fix-F1` ... `rank10-fix-F7` (disjoint files: expect no conflicts; if
+   one appears it is a real overlap - read both sides). Remove the stale `rank10-fix-S0` worktree.
+2. Do the "at integration" items of OPEN-WORK 184 (docs describing the old post-compact-nudge,
+   meta-self-improve SKILL.md "this turn" - SKILL.md edits go through bitranox:meta-skill-writer,
+   self-improve-audit.py snippet via `inert_snippet(..., around=sig.asst_signal_offset(...))`,
+   TRIGGERS entries). Or carry them to 7.25.13 if the release should stay pure.
+3. Replace the CHANGELOG stub with the fixers' CHANGELOG lines (in each report), then
+   `repo-gate.py --ci` with CI's dependency set, commit, push to master (pre-push runs the suite),
+   and watch CI with `ci_wait.py --sha <full sha>` launched from the main checkout.
+4. Close rank 10 in OPEN-WORK, remove the rank10-* worktrees with bitranox:git-worktrees / wtclean.
 
 ## Files that matter
 
-- `OPEN-WORK.md` ranks 10, 177, 182, 183.
-- `.plan/rank10-review-2026-08-28/TRIAGE.md` and `.plan/rank10-guardreadj-2026-09-26/` (main
-  checkout, gitignored).
-- `CHANGELOG.md` `## [7.25.10]` and `## [7.25.11]`.
+- `.claude/worktrees/rank10-fix*` - the integration base and the 7 fixer worktrees.
+- `.plan/rank10-passing-2026-09-27/` (main checkout, gitignored) - TRIAGE.md, verdicts/, fix/.
+- `plugins/bitranox/hooks/shell_text.py` - the new aligned helpers.
+- `OPEN-WORK.md` ranks 10 and 184.
 
 ## How to verify this still stands
 
-- `git show origin/master:plugins/bitranox/.claude-plugin/plugin.json | grep version` prints
-  7.25.11 or later.
-- `uv run <plugin>/skills/compuse-toolbox/scripts/ci_wait.py --sha a76f068eecf4fe04bee8c05f0890c9eee504a5fc`
-  reports `workflow=success ci=success`.
+- `git -C <repo> branch --list 'rank10-fix*' -v` shows the 9 branches at the tips above.
+- In each F worktree: `env -u VIRTUAL_ENV uv run --with pytest --with PyYAML --with lxml --with
+  defusedxml --with ruamel.yaml --with httpx2 python -m pytest plugins/bitranox/hooks/tests/ -q`
+  is green.
 
-Read this, then replace the first line with `# STALE - read <date>, work continued`. Do not
-delete it - if this session ends badly it is the only record of where things stood.
+Read this, then replace the first line with `# STALE - read <date>, work continued`. Do not delete
+it - if this session ends badly it is the only record of where things stood.
