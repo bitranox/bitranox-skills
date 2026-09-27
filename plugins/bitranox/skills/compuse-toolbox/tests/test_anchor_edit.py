@@ -207,8 +207,8 @@ def test_a_gitignored_file_is_backed_up(tmp_path):
 def test_every_run_keeps_its_own_backup(tmp_path):
     """The .bak is written only for a file git cannot restore, so it IS the only copy.
 
-    Each run therefore gets its own: `.bak` holds the original, and `.bak.1`, `.bak.2` ... hold
-    the state before each later edit, higher number newer. Nothing is ever overwritten, so no run
+    Each run therefore gets its own: `.bak` holds the original, and `.bak.001`, `.bak.002` ...
+    hold the state before each later edit, higher number newer. Nothing is ever overwritten, so no run
     can destroy the state another run recorded.
     """
     target = tmp_path / "notes.md"
@@ -220,7 +220,7 @@ def test_every_run_keeps_its_own_backup(tmp_path):
     assert first.backup.read_text(encoding="utf-8") == SAMPLE
 
     second = AE.apply_to_file(target, lambda s: s.replace("return 2", "return 22"))
-    assert second.backup.name == "notes.md.bak.1", "a later run must not reuse the .bak name"
+    assert second.backup.name == "notes.md.bak.001", "a later run must not reuse the .bak name"
     assert second.backup.read_text(encoding="utf-8") == after_first
     assert (tmp_path / "notes.md.bak").read_text(encoding="utf-8") == SAMPLE, (
         "the original must survive every later run")
@@ -233,7 +233,7 @@ def test_backups_number_upward_without_a_gap(tmp_path):
     for replacement in ("return 11", "return 22", "return 33"):
         AE.apply_to_file(target, lambda s, r=replacement: s.replace("return 1", r))
     assert sorted(p.name for p in tmp_path.glob("notes.md.bak*")) == [
-        "notes.md.bak", "notes.md.bak.1", "notes.md.bak.2"]
+        "notes.md.bak", "notes.md.bak.001", "notes.md.bak.002"]
 
 
 def test_a_pre_existing_bak_from_another_tool_is_not_overwritten(tmp_path):
@@ -242,8 +242,76 @@ def test_a_pre_existing_bak_from_another_tool_is_not_overwritten(tmp_path):
     target.write_text(SAMPLE, encoding="utf-8")
     (tmp_path / "notes.md.bak").write_text("SOMEBODY ELSE'S BACKUP\n", encoding="utf-8")
     result = AE.apply_to_file(target, lambda s: s.replace("return 1", "return 11"))
-    assert result.backup.name == "notes.md.bak.1"
+    assert result.backup.name == "notes.md.bak.001"
     assert (tmp_path / "notes.md.bak").read_text(encoding="utf-8") == "SOMEBODY ELSE'S BACKUP\n"
+
+
+def test_backup_names_sort_in_the_order_they_were_written(tmp_path):
+    """The number is zero-padded so a plain name sort is age order, past the ninth run too.
+
+    Unpadded, `.bak.10` sorts between `.bak.1` and `.bak.2`, so `ls` and `sorted()` hand back
+    the backups shuffled. Eleven runs cross that point.
+    """
+    target = tmp_path / "notes.md"
+    target.write_text(SAMPLE, encoding="utf-8")
+    written = []
+    for run in range(11):
+        result = AE.apply_to_file(target, lambda s, r=run: s + f"# run {r}\n")
+        written.append(result.backup.name)
+    assert sorted(written) == written
+
+
+def test_numbering_continues_after_unpadded_backups_already_on_disk(tmp_path):
+    """Backups an older version wrote as `.bak.1`, `.bak.2` already hold those numbers.
+
+    Padding must not hand out `.bak.001` beside `.bak.1`: that is two copies claiming one place
+    in the sequence, and the newer one would sort as the older.
+    """
+    target = tmp_path / "notes.md"
+    target.write_text(SAMPLE, encoding="utf-8")
+    for name in ("notes.md.bak", "notes.md.bak.1", "notes.md.bak.2"):
+        (tmp_path / name).write_text("OLD\n", encoding="utf-8")
+    assert AE.next_backup_path(target).name == "notes.md.bak.003"
+
+
+def test_a_deleted_middle_backup_is_not_refilled(tmp_path):
+    """Reusing a freed low number would file the newest state under an old number."""
+    target = tmp_path / "notes.md"
+    target.write_text(SAMPLE, encoding="utf-8")
+    for name in ("notes.md.bak", "notes.md.bak.003"):
+        (tmp_path / name).write_text("OLD\n", encoding="utf-8")
+    assert AE.next_backup_path(target).name == "notes.md.bak.004"
+
+
+def test_numbering_keeps_counting_past_999(tmp_path):
+    """Past 999 the number widens rather than refusing: a refused safety copy blocks the edit.
+
+    Name order breaks again from there (`.bak.1000` sorts before `.bak.101`); a thousand
+    backups of one file means nobody reaped them, and losing the sort is the cheaper failure.
+    """
+    target = tmp_path / "notes.md"
+    target.write_text(SAMPLE, encoding="utf-8")
+    for name in ("notes.md.bak", "notes.md.bak.999"):
+        (tmp_path / name).write_text("OLD\n", encoding="utf-8")
+    assert AE.next_backup_path(target).name == "notes.md.bak.1000"
+
+
+def test_a_file_name_with_glob_characters_finds_its_own_backups(tmp_path):
+    """`a[1].md` as a glob pattern matches `a1.md`, never itself, so its numbers would be missed."""
+    target = tmp_path / "a[1].md"
+    target.write_text(SAMPLE, encoding="utf-8")
+    for name in ("a[1].md.bak", "a[1].md.bak.004"):
+        (tmp_path / name).write_text("OLD\n", encoding="utf-8")
+    assert AE.next_backup_path(target).name == "a[1].md.bak.005"
+
+
+def test_a_non_numeric_bak_suffix_does_not_count_as_a_number(tmp_path):
+    """`.bak.orig` or `.bak.tmp` from another tool is left alone and does not shift the count."""
+    target = tmp_path / "notes.md"
+    target.write_text(SAMPLE, encoding="utf-8")
+    for name in ("notes.md.bak", "notes.md.bak.orig", "notes.md.bak.12x"):
+        (tmp_path / name).write_text("OTHER\n", encoding="utf-8")
+    assert AE.next_backup_path(target).name == "notes.md.bak.001"
 
 
 def test_a_dry_run_does_not_touch_the_file(tmp_path):

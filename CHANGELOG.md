@@ -29,6 +29,17 @@ than the change, so entries reconstructed from them would read like coverage wit
 a hole nobody has drawn a line under is one that gets rediscovered and half-filled - which is how
 two "versions with no entry" notes came to sit in this file disagreeing with it.
 
+## [7.27.1]
+
+### Changed
+
+- `anchor_edit.py` (compuse-toolbox) numbers its backups `.bak.001`, `.bak.002` and upward, so a
+  plain name sort is the order they were written in; unpadded, `.bak.10` sorted between `.bak.1`
+  and `.bak.2`. The next number is one past the highest already present, in either spelling, so
+  backups an earlier version wrote as `.bak.1` keep their place and a deleted middle copy is never
+  refilled with a newer state. Past 999 the number widens to `.bak.1000` rather than refusing the
+  edit. A file name holding glob characters (`a[1].md`) now finds its own backups.
+
 ## [7.27.0]
 
 ### Added

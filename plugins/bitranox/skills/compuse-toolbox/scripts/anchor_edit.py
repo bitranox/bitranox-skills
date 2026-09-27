@@ -34,8 +34,9 @@ insertion onto the anchor's line.
 A file git could not restore is copied to `<name>.bak` first - untracked, gitignored, or tracked
 but carrying uncommitted work. Tracked alone is not enough: `git checkout -- <file>` restores from
 HEAD, so for a dirty file it discards precisely the content nobody else has. Every run gets its
-OWN copy - `.bak`, then `.bak.1`, `.bak.2` upward, higher number newer - so no run can destroy the
-state another one recorded, and the run prints the exact path it wrote. The copy is byte-exact.
+OWN copy - `.bak`, then `.bak.001`, `.bak.002` upward, higher number newer and zero-padded so a
+name sort is age order - so no run can destroy the state another one recorded, and the run prints
+the exact path it wrote. The copy is byte-exact.
 
 Line endings are kept: a file whose every newline is CRLF is matched and edited as LF (so an LF
 anchor still matches) and written back as CRLF, new text with CRLF of its own included; any other
@@ -240,24 +241,51 @@ def is_recoverable_from_git(path: Path) -> bool:
     return status is not None and status.returncode == 0 and not status.stdout.strip()
 
 
+def _backup_indexes(path: Path):
+    """The numbers already taken by `<name>.bak.<digits>`, padded (`.001`) or not (`.1`) alike.
+
+    Unpadded names are what earlier versions wrote, and they still hold their place in the
+    sequence. A suffix that is not all ASCII digits (`.bak.orig`) is somebody else's file.
+    """
+    prefix = path.name + ".bak."
+    for sibling in path.parent.glob(_glob_escape(prefix) + "*"):
+        suffix = sibling.name[len(prefix):]
+        if suffix.isascii() and suffix.isdigit():
+            yield int(suffix)
+
+
+def _glob_escape(text: str) -> str:
+    """Escape glob metacharacters, so a file named `a[1].md` finds its own backups."""
+    return "".join(f"[{c}]" if c in "*?[" else c for c in text)
+
+
 def next_backup_path(path: Path) -> Path:
-    """The first FREE backup name: `<name>.bak`, then `<name>.bak.1`, `.bak.2`, and upward.
+    """The next backup name: `<name>.bak`, then `<name>.bak.001`, `.bak.002`, and upward.
 
     Nothing is ever overwritten. Each copy is the only record of the state before its own edit,
     and the file is being backed up at all precisely because git cannot restore it, so reusing a
     name would destroy a state no other copy holds. `.bak` is the original and a higher number is
-    newer; the run prints the exact path it wrote, so nobody has to sort these by name.
+    newer.
+
+    The number is zero-padded to three digits so a plain name sort is age order, and it is one
+    past the HIGHEST number present rather than the first gap: refilling a deleted `.001` would
+    file the newest state under the oldest number.
 
     A `.bak` some other tool left behind is skipped for the same reason - it is somebody's only
     copy of something, and this tool did not put it there.
 
     The count is unbounded on purpose: a safety copy that deletes itself after N runs is not one.
+    Past 999 the number simply widens (`.bak.1000`), so name order breaks there; a refused edit
+    would be the worse failure.
     """
-    candidate = path.with_name(path.name + ".bak")
-    index = 0
-    while candidate.exists():
+    first = path.with_name(path.name + ".bak")
+    if not first.exists():
+        return first
+    index = max(_backup_indexes(path), default=0) + 1
+    candidate = path.with_name(f"{path.name}.bak.{index:03d}")
+    while candidate.exists():  # a name only a racing run could have taken since the scan
         index += 1
-        candidate = path.with_name(f"{path.name}.bak.{index}")
+        candidate = path.with_name(f"{path.name}.bak.{index:03d}")
     return candidate
 
 
@@ -449,7 +477,7 @@ def main(argv=None) -> int:
         print(_envelope(True, result.as_data()))
     else:
         verb = "would change" if args.dry_run else "changed"
-        # The exact path, because a later run writes .bak.1, .bak.2 and so on - printing a bare
+        # The exact path, because a later run writes .bak.001, .bak.002 and so on - printing a bare
         # "backup written" would leave the reader to guess which of them this run produced.
         note = f", backup {result.backup}" if result.backup else ""
         print(f"anchor_edit: {verb} {result.path} ({result.line_delta:+d} lines){note}")

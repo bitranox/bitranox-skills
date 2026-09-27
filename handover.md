@@ -1,4 +1,4 @@
-# Handover - 2026-09-27 17:30, ranks 20, 95 and 12(a) shipped; two things wait on the user
+# STALE - read 2026-09-27, work continued
 
 ## In flight
 
