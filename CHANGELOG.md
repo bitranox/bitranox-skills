@@ -29,6 +29,17 @@ than the change, so entries reconstructed from them would read like coverage wit
 a hole nobody has drawn a line under is one that gets rediscovered and half-filled - which is how
 two "versions with no entry" notes came to sit in this file disagreeing with it.
 
+## [7.28.1]
+
+### Fixed
+
+- `memory_engine.py lint --tree` called a body missing the `**Why:**`/`**How to apply:**` labels
+  "unframed" and credited it with the ~5x application loss that 5.37.0 measured for bodies without
+  FRONTMATTER. Every engine-written body has the frontmatter, and the labels were never measured.
+  The category is now "bodies without Why/How labels", reported as a style advisory, and the
+  report key is `unlabelled`; "unframed" keeps its one meaning, no frontmatter. The storage spec
+  (`meta-self-improve/references/memory-backend.md`) says which frame the measurement was for.
+
 ## [7.28.0]
 
 ### Added

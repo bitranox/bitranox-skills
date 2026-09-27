@@ -276,7 +276,7 @@ def add_or_update_entry(proj, title, hook, body="", type_=None, pin=False,
     # An empty body is the documented UPDATE path ("keep the stored one"), but on a CREATE there is
     # nothing to keep: it writes the frontmatter frame and stops, leaving a convincing always-loaded
     # hook with nothing behind it. Nothing downstream reports that - heal normalizes grammar, --check
-    # counts refs, --check-tree checks slug uniqueness, lint --tree looks for UNFRAMED bodies, not
+    # counts refs, --check-tree checks slug uniqueness, lint --tree looks for UNLABELLED bodies, not
     # absent ones - so the only signal is a reader walking up to an empty file. Refuse here, while
     # the content still exists to supply. Keyed on the body FILE, so a mover carrying stored text
     # (rehome/migrate, which pass no body) is unaffected.
@@ -409,7 +409,7 @@ def _body_type(text):
     A slug records the type only when it was minted with one (`feedback-...`); for a prefix-less
     slug the body IS the only record, so an update that reframes the body has to read it here or
     it silently re-classifies the fact - and nothing downstream reports that (`store_manifest
-    verify` reads level/slug/title/pin, `lint --tree` looks for UNFRAMED bodies, and the write
+    verify` reads level/slug/title/pin, `lint --tree` looks for UNLABELLED bodies, and the write
     prints its usual success line). Scoped to the LEADING frontmatter block (see `_frontmatter`) so
     a `  type:` line in the prose below cannot answer for it."""
     _head, m = _frontmatter(text)
@@ -1555,9 +1555,12 @@ def curated_levels_under(anchor, unreadable=None):
     return out
 
 
-def _body_unframed(body):
-    """True when a fact body lacks the native-entry reasoning frame (either the `**Why:**` or the
-    `**How to apply:**` line) - the shape the model discounts (~5x lower application)."""
+def _body_unlabelled(body):
+    """True when a fact body lacks the `**Why:**` or the `**How to apply:**` label of the authoring
+    template. A STYLE advisory: the ~5x application lift measured in 5.37.0 was for the frontmatter
+    frame the engine always writes, never for these labels, and a body can carry its reasoning in
+    prose without them. Not called "unframed": that word means no frontmatter everywhere else here,
+    and sharing it is how the frontmatter's number came to be quoted for the labels."""
     return "**Why:**" not in (body or "") or "**How to apply:**" not in (body or "")
 
 
@@ -1566,11 +1569,11 @@ def lint_tree(anchor):
     no sweep verb, so the debt was rediscovered every dream). Reports: hooks over the HARD cap
     (the write path refuses one, so any that exist are hand-edited or legacy), hooks missing a
     trigger phrase (never fire during
-    reasoning), and bodies missing the `**Why:**`/`**How to apply:**` frame. Advisory: a tracked
-    backlog number, never a failure. Also lists pointer lines whose slug is not a plain filename
+    reasoning), and bodies missing the `**Why:**`/`**How to apply:**` labels (style only, see
+    `_body_unlabelled`). Advisory, never a failure. Also lists pointer lines whose slug is not a plain filename
     (`invalid_pointers`): the parser skips them and the next write drops them. Returns a report dict."""
     anchor = _anchor(str(anchor))
-    over_cap, no_trigger, unframed, invalid = [], [], [], []
+    over_cap, no_trigger, unlabelled, invalid = [], [], [], []
     for lvl in curated_levels_under(anchor):
         text = read_store_text(sig.claude_local_md_path(lvl))
         invalid.extend((lvl, raw) for raw in us.invalid_pointer_lines(text))
@@ -1580,9 +1583,10 @@ def lint_tree(anchor):
                 over_cap.append((lvl, e.slug, len(e.hook)))
             if us.hook_missing_trigger(e.hook):
                 no_trigger.append((lvl, e.slug))
-            if _body_unframed(bodies.get(e.slug, "")):
-                unframed.append((lvl, e.slug))
-    return {"anchor": str(anchor), "over_cap": over_cap, "no_trigger": no_trigger, "unframed": unframed,
+            if _body_unlabelled(bodies.get(e.slug, "")):
+                unlabelled.append((lvl, e.slug))
+    return {"anchor": str(anchor), "over_cap": over_cap, "no_trigger": no_trigger,
+            "unlabelled": unlabelled,
             "invalid_pointers": invalid}
 
 
@@ -1821,13 +1825,14 @@ def _main(argv=None):
                   % (n, slug, lvl))
         for lvl, slug in rep["no_trigger"]:
             print("    ~ hook missing trigger: %s [%s]" % (slug, lvl))
-        for lvl, slug in rep["unframed"]:
-            print("    ~ body missing **Why:**/**How to apply:** frame: %s [%s]" % (slug, lvl))
+        for lvl, slug in rep["unlabelled"]:
+            print("    ~ body missing the **Why:**/**How to apply:** labels: %s [%s]" % (slug, lvl))
         for lvl, raw in rep["invalid_pointers"]:
             print("    ! pointer whose slug is not a plain filename (skipped, dropped on the next "
                   "write): %s [%s]" % (raw, lvl))
-        print("TOTAL over-cap hooks: %d | trigger-less hooks: %d | unframed bodies: %d (advisory)"
-              % (len(rep["over_cap"]), len(rep["no_trigger"]), len(rep["unframed"])))
+        print("TOTAL over-cap hooks: %d | trigger-less hooks: %d | bodies without Why/How labels: %d"
+              " (style advisory)" % (len(rep["over_cap"]), len(rep["no_trigger"]),
+                                     len(rep["unlabelled"])))
         return 0
 
     if args.cmd == "move":

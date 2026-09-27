@@ -68,9 +68,11 @@ Each altitude's `CLAUDE.local.md` carries ONE managed, fenced pointer block:
   the surplus detail into the body, and re-run `add`; do not delete detail to fit. The hook must
   stay self-sufficient: keep the load-bearing names, paths, flags, and numbers in it, even if that
   pushes it past the soft cap.
-- **The body is FRAMED as a native memory entry** (probe-verified ~5x application lift over bare
-  prose - the model discounts bodies that do not look like genuine memory entries). The engine
-  frames automatically; write the prose with the reasoning sections:
+- **The body is FRAMED as a native memory entry**: the frontmatter block below, ahead of the prose
+  (probe-verified ~5x application lift over bare prose - the model discounts bodies that do not
+  look like genuine memory entries). The engine writes that frame automatically. The `**Why:**` and
+  `**How to apply:**` labels are the authoring template, not the measured frame: write them, but a
+  body that carries its reasoning in prose without them is not discounted by anything measured.
 
       ---
       name: <slug>
@@ -219,8 +221,8 @@ target drags its own refs up with it.
 `heal` runs every session (skip-fast when healthy), is
 CHAIN-scoped and normalizes drifted grammar only; a pointer whose body is missing is REPORTED, never
 fabricated - it does NOT detect cross-sibling duplicate pointers, which is `--check-tree`'s job.
-`lint --tree` is the read-only voice/frame backlog sweep (over-hard-cap hooks, trigger-less hooks,
-unframed bodies).
+`lint --tree` is the read-only voice/style sweep (over-hard-cap hooks, trigger-less hooks, bodies
+without the Why/How labels - a style advisory, not a backlog to clear).
 
 ## Keeping it lean
 

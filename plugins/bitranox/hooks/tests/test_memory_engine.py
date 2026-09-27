@@ -622,12 +622,12 @@ def test_cli_move_success_and_refusal(tmp_path, capsys):
 
 # ---- lint --tree: voice/frame sweep (defect J) ---------------------------------------------------
 
-def test_lint_tree_reports_over_cap_triggerless_and_unframed(tmp_path, capsys):
+def test_lint_tree_reports_over_cap_triggerless_and_unlabelled(tmp_path, capsys):
     anchor, mid, proj = _three_levels(tmp_path)
     # a within-cap, trigger-first, fully framed entry -> clean, not flagged
     E.add_or_update_entry(proj, "Good", "When X happens, do Y.",
                           body="Prose.\n\n**Why:** reason\n\n**How to apply:** steps", scope_default="p")
-    # trigger-less hook + unframed body (no **Why:**/**How to apply:**)
+    # trigger-less hook + unlabelled body (no **Why:**/**How to apply:**)
     E.add_or_update_entry(mid, "Bad", "just a statement, no trigger", body="bare prose", scope_default="m")
     # over-HARD-cap hook: add() refuses one, so inject directly to simulate a hand-edited/legacy line
     us.add_pointer(anchor, slug="huge", title="Huge", hook="When " + ("x" * 600) + " do z")
@@ -636,9 +636,16 @@ def test_lint_tree_reports_over_cap_triggerless_and_unframed(tmp_path, capsys):
     assert rc == 0
     assert "hook over HARD cap" in out and "huge" in out
     assert "hook missing trigger" in out and "bad" in out
-    assert "body missing" in out
-    # huge (no body) + bad (bare prose) are unframed; good is framed -> exactly 2
-    assert "TOTAL over-cap hooks: 1 | trigger-less hooks: 1 | unframed bodies: 2" in out
+    assert "body missing the **Why:**/**How to apply:** labels" in out
+    # huge (no body) + bad (bare prose) are unlabelled; good carries both labels -> exactly 2
+    assert ("TOTAL over-cap hooks: 1 | trigger-less hooks: 1 | bodies without Why/How labels: 2"
+            " (style advisory)") in out
+    # "unframed" means NO FRONTMATTER everywhere else in the engine; the lint's category is a
+    # different thing and must not share the word, or the frontmatter's measured lift gets
+    # attributed to two labels nobody measured.
+    rep = E.lint_tree(proj)
+    assert "unframed" not in rep
+    assert sorted(slug for _, slug in rep["unlabelled"]) == ["bad", "huge"]
 
 
 def test_lint_tree_clean_store_reports_zeros(tmp_path, capsys):
@@ -647,7 +654,8 @@ def test_lint_tree_clean_store_reports_zeros(tmp_path, capsys):
                           body="P.\n\n**Why:** r\n\n**How to apply:** s", scope_default="p")
     rc = E.main(["lint", "--tree", anchor])
     out = capsys.readouterr().out
-    assert rc == 0 and "TOTAL over-cap hooks: 0 | trigger-less hooks: 0 | unframed bodies: 0" in out
+    assert rc == 0 and ("TOTAL over-cap hooks: 0 | trigger-less hooks: 0 | "
+                        "bodies without Why/How labels: 0") in out
 
 
 # ---- multi-tree: tree-top + ensure-all-trees -----------------------------------------------------
@@ -1053,7 +1061,7 @@ def test_update_with_a_new_body_keeps_the_stored_type(proj):
     # prefix-less facts record a non-project type, and for those the body's frontmatter is the ONLY
     # record of it - so re-deriving the type from the slug on an update silently rewrites the fact's
     # kind. Nothing downstream reports it: store_manifest verify reads (level, slug, title, pin),
-    # lint --tree looks for UNFRAMED bodies, and the engine prints its usual success line.
+    # lint --tree looks for UNLABELLED bodies, and the engine prints its usual success line.
     slug = E.add_or_update_entry(proj, "A configured gate can enforce nothing",
                                  "When you add a tool to a gate, verify what it ENFORCES.",
                                  body="the prose", type_="feedback",
