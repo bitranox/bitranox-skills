@@ -1,4 +1,4 @@
-# Handover - 2026-09-27 02:00, rank 10 hook-report fixes done on 8 local branches, NOT integrated
+# STALE - read 2026-09-27, work continued
 
 ## In flight
 

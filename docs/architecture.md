@@ -89,7 +89,7 @@ same failures exit 3, so a mistyped script path cannot read as a clean pass.
 | `Stop`             | `ci-watch-gate.py`                                                                                                                         | Opt-in (`.bitranox-ci-watch-gate`): block a turn ending with an unchecked push, max 3 |
 | `SessionEnd`       | `self-improve-audit.py`                                                                                                                    | Broad-recall scan for signals the gate missed; surfaced once next session             |
 | `PreCompact`       | `self-improve-audit.py`                                                                                                                    | Salvage learning candidates before compaction discards the detail                     |
-| `PostCompact`      | `post-compact-nudge.py`                                                                                                                    | Point at `/dream-nap` to fold the salvaged candidates in                              |
+| `PostCompact`      | `post-compact-nudge.py`                                                                                                                    | Record that a nap is owed; prints nothing (PostCompact delivers no context)           |
 
 The gate and the audit share their signal patterns
 ([`self_improve_signals.py`](../plugins/bitranox/hooks/self_improve_signals.py)), so precision

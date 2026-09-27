@@ -33,7 +33,76 @@ two "versions with no entry" notes came to sit in this file disagreeing with it.
 
 ### Fixed
 
-- Integration stub for the rank 10 hook-report fixes; replaced before release.
+- The commit-branch guard's shared-checkout warning now reaches Claude. It is sent as additional
+  context instead of stderr, and it judges the repository the commit actually targets (`git -C`, a
+  leading `cd`).
+- The gated-prep nudge no longer fires on a write that comes after the commit or push, or on a
+  redirect mentioned inside a quoted commit message. It now recognises `cat <<'EOF' > file` and `git
+  -C <repo> checkout`, and it scans very long commands in linear time.
+- The wrong-repo and path-not-here nudges read commands correctly after a heredoc. `cd -`, bare
+  `cd`, `~` and `cd -P` are handled, `check-attr -a/--all` and operands after `--` are recognised,
+  and two cds before a single git no longer fire.
+- The rev-parse nudge now states the real behaviour: the name is echoed, and the exit is 128, or 0
+  only when the name is also a file.
+- The git semicolon-chain guard now treats `set -e`/`set +e` as a flag, so the last one wins, and no
+  longer misjudges repeated or re-enabled errexit.
+- The masked-gate-exit guard no longer blocks a comment that mentions git commit, sees `|&`
+  pipelines, and only accepts pipefail or PIPESTATUS where they actually act, not in a commit
+  message.
+- The partial-typecheck guard judges every pyright run in a command, so a narrowed run after
+  `pyright --version` or `which pyright` is caught.
+- The structured-file sed guard now catches `perl -pi` and a sed behind sudo, env, command, nice or
+  timeout. The config-edit guard no longer fails open on a malformed transcript line.
+- The opt-in CI watch gate no longer blocks every stop for four hours when its state file cannot be
+  rewritten, and one malformed entry no longer silences a real unwatched push.
+- The CI watch nudge records a push naming a branch only once it has really landed on the remote,
+  and a heredoc earlier in the command no longer makes it record the wrong commit or miss a git -C
+  push.
+- The recovery retry gate now works for PowerShell sessions and destructive notebook cells, no
+  longer goes silent for a whole session after one malformed transcript entry, and reports the right
+  event gap.
+- The retry-with-a-flag nudge no longer treats a quoted ; or | as a separator, keeps Windows paths
+  intact under PowerShell, and a command failing in a loop no longer pushes the real failure out of
+  its memory.
+- The context watcher now reports a wrong context window even after it has already offered a
+  handover, and no longer blocks a turn another Stop hook already continued.
+- The decision review now notices pull requests opened through the PowerShell tool. It also no
+  longer goes silent or crashes on an odd transcript line, a corrupt state file, a very long
+  transcript line or a non-object hook event.
+- After a compaction, the salvaged candidate learnings are no longer deleted by the PostCompact
+  hook, so SessionStart shows them. The hook now only records that a nap is owed.
+- The self-improve gate no longer goes quiet after the first block in headless sessions, keeps its
+  block reason short when many subagent learnings are queued (the rest stay queued), and treats
+  different spellings of one project path as one project.
+- The skill router no longer lets skills already suggested earlier in a session take the two slots
+  from a new skill that matches the current prompt, and it no longer misreads German compound words
+  as English keywords.
+- Memory recall now shows the part of a long note that actually matched the prompt, instead of
+  stopping at a word that merely contains the keyword.
+- The toolbox nudge now reads notebook cell edits, and it no longer joins two unrelated lines far
+  apart in a written file into one hand-rolled build-log or JSONL chore.
+- The repeated-job nudge now recognises rm -rf, dd, and Python deletions as state-changing, sees
+  heredocs whose redirect comes after the opener, and sees PowerShell here-string script writes.
+- venv-guard no longer fires on its own `env -u VIRTUAL_ENV` advice, on an explicit VIRTUAL_ENV
+  pointing at the project venv, on text inside heredocs or quotes, or on tools run from the
+  project's own .venv. It now catches `make test` behind sudo, timeout, nice or uv run, and gives
+  PowerShell users a PowerShell fix (`Remove-Item Env:VIRTUAL_ENV`).
+- nudge-detector-footguns now sees statement boundaries correctly (newlines, glued `&&`, a `#`
+  inside a URL) and recognises Windows paths and `.exe` names under PowerShell.
+- missing-mechanism-nudge now checks hooks given in single quotes, as `--hook=...`, or through
+  `--hook-file`.
+- reformat-md-tables keeps formatting the other changed markdown files when one of them cannot be
+  read.
+- Subagent learnings stated late in a long message are now kept in the buffered snippet. Two
+  different findings behind the same opening are no longer merged, and one malformed transcript
+  record no longer loses the whole scan.
+- Notebook edits are now recorded as routing evidence for memory capture, and a path containing a
+  line break is refused instead of corrupting the list.
+- The tell sweep now says how many hits it left out past its 20-line cap.
+- When a mirrored skill has drifted in its own tool repo, the commit block now shows the drift table
+  and diff to the model instead of a generic line.
+- The architecture and usage docs describe the PostCompact hook as it now behaves: it records that a
+  nap is owed and prints nothing, and the Stop gate asks for the nap after every compaction.
 
 ## [7.25.11]
 
