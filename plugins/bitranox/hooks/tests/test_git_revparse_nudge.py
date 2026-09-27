@@ -5,7 +5,10 @@ From `feedback-wrong-repo-git-plus-a-plain-rev-parse-fabricates-a-confident-fals
 answer - the string you passed in - so a comparison against it silently succeeds.
 """
 import importlib.util
+import os
 import pathlib
+import shutil
+import subprocess
 
 import pytest
 
@@ -64,3 +67,30 @@ def test_a_redirection_target_is_not_a_revision():
 def test_a_real_bare_rev_parse_is_still_nudged():
     """The direction where it must NOT apply."""
     assert N.notice("git rev-parse master") is not None
+
+
+# --- the mechanism the notice states must be the one git has -------------------------------------
+
+def _git(repo, *args):
+    env = {**os.environ, "GIT_CONFIG_GLOBAL": os.devnull, "GIT_CONFIG_NOSYSTEM": "1",
+           "LC_ALL": "C"}
+    return subprocess.run(["git", *args], cwd=repo, capture_output=True, text=True,
+                          encoding="utf-8", errors="replace", env=env, timeout=60)
+
+
+@pytest.mark.skipif(shutil.which("git") is None, reason="needs a real git to measure")
+def test_the_notice_states_the_exit_codes_real_git_gives(tmp_path):
+    # Both halves measured against real git: an unresolvable name that is NOT a path still prints
+    # the name on stdout but exits 128; it exits 0 only when the name is also a working-tree path.
+    # The notice used to claim "exits 0" for every unresolvable ref, which is wrong for the common
+    # case and invites the reader to disbelieve the rest of it.
+    assert _git(tmp_path, "init", "-q").returncode == 0
+    (tmp_path / "afile").write_text("x", encoding="utf-8")
+    ref = _git(tmp_path, "rev-parse", "nosuchref")
+    path = _git(tmp_path, "rev-parse", "afile")
+    assert (ref.returncode, ref.stdout.strip()) == (128, "nosuchref")
+    assert (path.returncode, path.stdout.strip()) == (0, "afile")
+    for text in (N._NOTICE, N.__doc__):
+        flat = " ".join(text.split())
+        assert "128" in flat and "path" in flat, text
+        assert "verbatim and exits 0" not in flat, text

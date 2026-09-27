@@ -1,4 +1,10 @@
 """Tests for git-wrong-repo-nudge.py - a git answer that is confidently about another repo. ASCII."""
+import json
+import os
+import subprocess
+import sys
+from pathlib import Path
+
 import git_wrong_repo_nudge as G
 
 
@@ -121,3 +127,154 @@ def test_a_missing_cwd_fails_open(tmp_path):
 
 def test_garbage_input_fails_open():
     assert G.notice(None, "/x") is None and G.notice("", "/x") is None
+
+
+# --- a heredoc BEFORE the cds must not move them -----------------------------------------------
+# Statement offsets used to be read on heredoc-STRIPPED text and then used to slice the RAW
+# command. Stripping deletes the body lines, so every statement after a heredoc was sliced from the
+# wrong place: usually the guard went blind, and when a body happened to line up with the real
+# tail it fired on a directory only the heredoc DATA named.
+
+def test_two_repos_after_a_heredoc_still_fire(tmp_path):
+    here, one, two = _repo(tmp_path, "here"), _repo(tmp_path, "one"), _repo(tmp_path, "two")
+    cmd = f"cat <<'EOF' > n.txt\nnote\nline2\nEOF\ncd {one} && git log && cd {two} && git log"
+    msg = G.notice(cmd, str(here))
+    assert msg is not None and str(two) in msg
+
+
+def test_a_heredoc_body_aligned_with_the_tail_is_not_read_as_the_tail(tmp_path):
+    # The body names two repos; the real tail enters ONE repo twice. Same-length names make the
+    # stripped-text offsets of the tail land exactly on the body in the raw command.
+    here, aaa, bbb, ccc = (_repo(tmp_path, n) for n in ("here", "aaa", "bbb", "ccc"))
+    body = f"cd {aaa} && git log && cd {bbb} && git log"
+    tail = f"cd {ccc} && git log && cd {ccc} && git log"
+    assert G.notice(tail, str(here)) is None                      # control: the tail alone
+    assert G.notice(f"cat <<'EOF' > n.txt\n{body}\nEOF\n{tail}", str(here)) is None
+
+
+def test_a_heredoc_after_the_cds_does_not_hide_them(tmp_path):
+    here, one, two = _repo(tmp_path, "here"), _repo(tmp_path, "one"), _repo(tmp_path, "two")
+    cmd = f"cd {one} && git log && cd {two} && git log\ncat <<'EOF' > n.txt\nx\nEOF"
+    assert G.notice(cmd, str(here)) is not None
+
+
+# --- destinations the hook cannot read -----------------------------------------------------------
+
+def test_cd_dash_is_unknowable_not_a_directory_named_dash(tmp_path):
+    # `cd -` goes back to $OLDPWD, which this hook does not track; it used to resolve to
+    # "<previous>/-" and attribute that to the previous directory's repo.
+    # Here `cd -` returns to `two`, so both gits answer about `two`; reading it as "<one>/-" put
+    # the second git in `one` and fired on a single-repository call.
+    here, one, two = _repo(tmp_path, "here"), _repo(tmp_path, "one"), _repo(tmp_path, "two")
+    assert G.notice(f"cd {two} && git log && cd {one} && cd - && git log", str(here)) is None
+
+
+def test_a_bare_cd_is_a_directory_change_with_an_unknowable_target(tmp_path):
+    # A bare `cd` goes to $HOME. It used to be no cd at all, so the landing before it was still
+    # treated as the directory the next git answered from.
+    here, one, two = _repo(tmp_path, "here"), _repo(tmp_path, "one"), _repo(tmp_path, "two")
+    assert G.notice(f"cd {one} && git log && cd && git log && cd {two} && git log",
+                    str(here)) is None
+    assert G.notice(f"cd {one} && git log && cd; git log", str(here)) is None
+
+
+def test_cd_tilde_is_unknowable(tmp_path, monkeypatch):
+    # Tilde expands against the HOME of the shell that runs the command, which this hook only
+    # guesses at. HOME is pointed at a real work tree so a guess would visibly fire.
+    here, one, two = _repo(tmp_path, "here"), _repo(tmp_path, "one"), _repo(tmp_path, "two")
+    (two / "x").mkdir()
+    monkeypatch.setenv("HOME", str(two))
+    assert G.notice(f"cd {one} && git log && cd ~ && git log", str(here)) is None
+    assert G.notice(f"cd {one} && git log && cd ~/x && git log", str(here)) is None
+
+
+def test_two_readable_cds_still_fire_as_the_control_for_the_unknowable_ones(tmp_path):
+    here, one = _repo(tmp_path, "here"), _repo(tmp_path, "one")
+    (one / "sub").mkdir()
+    assert G.notice(f"cd {one / 'sub'} && git log && cd {here} && git log", str(here)) is not None
+
+
+# --- the gits must actually follow two different landings ----------------------------------------
+
+def test_two_cds_but_only_ONE_git_does_not_fire(tmp_path):
+    # Both cds run before the only git, so exactly one answer exists and it has one subject. The
+    # message talks about two answers from two repositories, which would be false here.
+    here, one, two = _repo(tmp_path, "here"), _repo(tmp_path, "one"), _repo(tmp_path, "two")
+    assert G.notice(f"cd {one} && cd {two} && git log", str(here)) is None
+    assert G.notice(f"cd {one} && cd {two} && git log && git status", str(here)) is None
+
+
+def test_a_git_after_each_of_two_different_landings_fires(tmp_path):
+    here, one, two = _repo(tmp_path, "here"), _repo(tmp_path, "one"), _repo(tmp_path, "two")
+    assert G.notice(f"cd {one} && git log && cd {here} && cd {two} && git log",
+                    str(here)) is not None
+
+
+# --- main(): the hook as the harness runs it -----------------------------------------------------
+
+_HOOK = Path(__file__).resolve().parent.parent / "git-wrong-repo-nudge.py"
+
+
+def _run(event, env_extra=None, cwd=None):
+    env = {k: v for k, v in os.environ.items() if k != "CLAUDE_PROJECT_DIR"}
+    env.update(env_extra or {})
+    proc = subprocess.run([sys.executable, str(_HOOK)], input=json.dumps(event).encode("utf-8"),
+                          capture_output=True, env=env, cwd=cwd, timeout=60)
+    return proc.returncode, proc.stdout.decode("utf-8", "replace")
+
+
+def test_main_emits_additional_context_json_for_two_repos(tmp_path):
+    here, one, two = _repo(tmp_path, "here"), _repo(tmp_path, "one"), _repo(tmp_path, "two")
+    rc, out = _run({"tool_name": "Bash", "cwd": str(here),
+                    "tool_input": {"command": f"cd {one} && git log && cd {two} && git log"}})
+    assert rc == 0
+    payload = json.loads(out)["hookSpecificOutput"]
+    assert payload["hookEventName"] == "PreToolUse"
+    assert "TWO DIRECTORY CHANGES" in payload["additionalContext"]
+
+
+def test_main_is_silent_for_a_non_shell_tool(tmp_path):
+    here, one, two = _repo(tmp_path, "here"), _repo(tmp_path, "one"), _repo(tmp_path, "two")
+    rc, out = _run({"tool_name": "Read", "cwd": str(here),
+                    "tool_input": {"command": f"cd {one} && git log && cd {two} && git log"}})
+    assert (rc, out) == (0, "")
+
+
+def test_main_falls_back_to_the_project_dir_when_the_event_has_no_cwd(tmp_path):
+    # Relative cds are resolved against the fallback, so the fallback is what decides the verdict.
+    _repo(tmp_path, "here")
+    _repo(tmp_path / "here", "one")
+    _repo(tmp_path / "here", "two")
+    event = {"tool_name": "Bash", "tool_input": {"command": "cd one && git log && cd ../two && git log"}}
+    rc, out = _run(event, env_extra={"CLAUDE_PROJECT_DIR": str(tmp_path / "here")})
+    assert rc == 0 and "TWO DIRECTORY CHANGES" in out
+    rc, out = _run(event, cwd=str(tmp_path))       # no project dir: the process cwd, where
+    assert (rc, out) == (0, "")                   # neither `one` nor `../two` exists
+
+
+def test_main_fails_open_on_garbage_stdin():
+    proc = subprocess.run([sys.executable, str(_HOOK)], input=b"not json", capture_output=True,
+                          timeout=60)
+    assert (proc.returncode, proc.stdout) == (0, b"")
+
+
+def test_a_cd_with_a_trailing_redirect_is_still_a_cd(tmp_path):
+    # Control for the bare-cd reading: `cd <dir> 2>/dev/null` is a cd to <dir>, not a bare cd.
+    here, one, two = _repo(tmp_path, "here"), _repo(tmp_path, "one"), _repo(tmp_path, "two")
+    cmd = f"cd {one} 2>/dev/null && git log && cd {two} 2>/dev/null && git log"
+    assert G.notice(cmd, str(here)) is not None
+
+
+def test_cd_options_are_not_the_destination(tmp_path):
+    # `cd -P <dir>` used to take `-P` as the target, resolve "<previous>/-P" and attribute it to the
+    # previous landing's repo, so two different repos read as one and the call went unflagged.
+    here, one, two = _repo(tmp_path, "here"), _repo(tmp_path, "one"), _repo(tmp_path, "two")
+    assert G.notice(f"cd {one} && git log && cd -P {two} && git log", str(here)) is not None
+    assert G.notice(f"cd {one} && git log && cd -- {two} && git log", str(here)) is not None
+    assert G.notice(f"cd {one} && git log && cd -L && git log", str(here)) is None      # no operand
+
+
+def test_a_quoted_destination_with_a_space_is_one_destination(tmp_path):
+    here, one, two = _repo(tmp_path, "here"), _repo(tmp_path, "one"), _repo(tmp_path, "t w o")
+    assert G.notice(f'cd {one} && git log && cd "{two}" && git log', str(here)) is not None
+    assert G.notice(f'cd {one} && git log && cd -P "{two}" && git log', str(here)) is not None

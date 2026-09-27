@@ -56,7 +56,7 @@ import os
 import re
 import sys
 
-from shell_text import SEP, is_shell_tool, mask_data_regions, strip_heredoc_bodies
+from shell_text import SEP, commands_only_aligned, is_shell_tool
 
 _CD = re.compile(r"^\s*(?:\w+=\S*\s+)*cd(?:\s|$)")
 _VERB = re.compile(
@@ -69,8 +69,14 @@ _REDIRECT = re.compile(r"^\d*[<>]")
 
 
 def _statements(command, tool_name="Bash"):
-    """(masked_text, [(start, end)]) for each statement, offsets valid in the RAW string too."""
-    masked = mask_data_regions(strip_heredoc_bodies(command), tool_name=tool_name)
+    """(masked_text, [(start, end)]) for each statement, offsets valid in the RAW string too.
+
+    They are valid there only because the mask is ALIGNED: heredoc bodies are blanked in place
+    rather than deleted. A deleting strip shifted every statement after a heredoc onto the body
+    text, so the real question was lost or a name from the body was reported as the path asked
+    about.
+    """
+    masked = commands_only_aligned(command, tool_name)
     spans, start = [], 0
     for hit in SEP.finditer(masked):
         spans.append((start, hit.start()))
@@ -79,21 +85,55 @@ def _statements(command, tool_name="Bash"):
     return masked, spans
 
 
+# check-attr options that consume the following token as their value
+_CHECK_ATTR_VALUE_OPTS = frozenset({"--source"})
+
+
+def _operands(rest):
+    """(operands before `--`, operands after `--` or None, options before `--`).
+
+    Redirections are dropped. After `--` every token is an operand, a leading dash included,
+    because that is what git does.
+    """
+    before, after, options, skip_value = [], None, [], False
+    for token in rest.split():
+        if _REDIRECT.match(token):
+            continue
+        if after is not None:
+            after.append(token)
+        elif skip_value:
+            skip_value = False
+        elif token == "--":
+            after = []
+        elif token.startswith("-"):
+            options.append(token)
+            skip_value = token in _CHECK_ATTR_VALUE_OPTS
+        else:
+            before.append(token)
+    return before, after, options
+
+
 def _path_arguments(rest, verb):
     """The bare path tokens of a path-status verb, in order.
 
     Read from the RAW slice, never the masked one: a quoted `"$FILE"` must keep its `$` so it can
     be rejected as unreadable rather than silently treated as a literal name.
+
+    `check-attr` follows git's own reading of `[-a | --all | <attr>...] [--] <path>...`: with `--`
+    everything before it is an attribute and everything after it a path; with `-a`/`--all` there
+    is no attribute operand at all; otherwise the first operand is the attribute.
     """
-    tokens, skip_attribute = [], (verb == "check-attr")
-    for token in rest.split():
-        if token.startswith("-") or _REDIRECT.match(token):
-            continue
-        if skip_attribute:                 # `check-attr <attr> <path>`: the first bare token names
-            skip_attribute = False         # the attribute, not a file
-            continue
-        tokens.append(token.strip("'\""))
-    return [t for t in tokens if t]
+    before, after, options = _operands(rest)
+    if verb == "check-attr":
+        if after is not None:
+            paths = after
+        elif {"-a", "--all"} & set(options):
+            paths = before
+        else:
+            paths = before[1:]
+    else:
+        paths = before + (after or [])
+    return [t for t in (token.strip("'\"") for token in paths) if t]
 
 
 def _work_tree_root(start):
