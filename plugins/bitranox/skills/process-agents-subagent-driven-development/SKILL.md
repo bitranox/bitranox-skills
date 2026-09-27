@@ -195,8 +195,11 @@ that implementer. Single-file mechanical fixes also take the cheapest tier.
 
 The MAIN (session) agent's model is FIXED for the turn and CANNOT be self-switched. There is no
 read-your-model or set-your-model primitive exposed to the model, no `$CLAUDE_MODEL` env var, and
-hooks cannot help (only a `SessionStart` hook may see a `model` field, not guaranteed, and hooks
-cannot call the model). So the ONLY way to run a sub-task on a different tier is to dispatch a
+no hook can make or choose a switch. Hooks only observe or veto one: `SessionStart` may see `model`
+(not reliably), and from CLI 2.1.251 `PreModelSwitch` can block a switch the user or a client
+REQUESTED, while `PostModelSwitch` sees `from_model`/`to_model` after every change. No hook calls the
+model (see `bitranox:meta-claude-hooks`, `references/events.md` "Model switches").
+So the ONLY way to run a sub-task on a different tier is to dispatch a
 subagent, which carries its own pinned `model`; inline work necessarily runs on the session model.
 "Save the model, switch, switch back" is NOT implementable - never write a skill step that assumes it.
 A USER-driven `/model` switch mid-session, however, PRESERVES the conversation (context is not
