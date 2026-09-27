@@ -29,6 +29,27 @@ than the change, so entries reconstructed from them would read like coverage wit
 a hole nobody has drawn a line under is one that gets rediscovered and half-filled - which is how
 two "versions with no entry" notes came to sit in this file disagreeing with it.
 
+## [7.27.0]
+
+### Added
+
+- The skill router has a decide mode: `classifier_skill_router = decide` (with
+  `classifier_backend = jev`). On a typed prompt the hook asks Jev while the prompt waits (1.5 s at
+  most) and suggests the one skill Jev's gate-plus-choice answer picks, or nothing when it picks
+  nothing. The keyword match is used only when Jev does not answer (timeout, HTTP error, no key,
+  malformed answer) or picks a skill the session may not have installed. Background-task
+  notifications are handled exactly as with `off`. The default stays `off`. A blind panel of five
+  judges over 87 live prompts scored the keyword suggestion 0 right and 70 wrong, and Jev's pick 17
+  right and 2 wrong.
+- Each decide prompt logs a comparison row naming the path that produced the nudge (`jev`, `none`
+  or `fallback-<reason>`), so `classifier_eval.py report` covers decide sessions.
+
+### Changed
+
+- The router's per-session record of suggested skills now stores the name the Skill tool takes
+  (`bitranox:<skill>`), so a skill suggested by either path is not suggested again by the other. A
+  session that spans the upgrade can see one repeated keyword suggestion.
+
 ## [7.26.0]
 
 ### Added
