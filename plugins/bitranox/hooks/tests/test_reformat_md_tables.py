@@ -8,10 +8,8 @@ All content is ASCII.
 import io
 import json
 import sys
-from pathlib import Path
 
 import pytest
-
 import reformat_md_tables as H
 
 MISALIGNED = "# t\n\n| A | Bee |\n|---|---|\n| x | y |\n| longer | z |\n"
@@ -264,3 +262,82 @@ def test_bash_with_no_cwd_returns_zero(monkeypatch):
     monkeypatch.delenv("CLAUDE_PLUGIN_ROOT", raising=False)
     monkeypatch.setattr(sys, "stdin", io.StringIO(json.dumps({"tool_name": "Bash", "cwd": "/nonexistent-xyz"})))
     assert H.main() == 0
+
+
+# ---- one bad target must not cost the others ---------------------------------------------------
+
+def test_an_unreadable_markdown_file_does_not_stop_the_next_target(tmp_path, monkeypatch):
+    """`return 0` inside the target loop meant one non-UTF-8 file cancelled the reformat of every
+    file after it. The bad file sits at the top so the walk reaches it before the good one."""
+    bad = tmp_path / "bad.md"
+    bad.write_bytes(b"\xff\xfe| a | b |\n")
+    sub = tmp_path / "sub"
+    sub.mkdir()
+    good = sub / "good.md"
+    good.write_text(MISALIGNED, encoding="utf-8")
+
+    assert run_bash(monkeypatch, tmp_path) == 0
+
+    assert "| longer | z   |" in good.read_text(encoding="utf-8")
+    assert bad.read_bytes() == b"\xff\xfe| a | b |\n"
+
+
+def test_a_missing_reformat_script_is_still_the_one_early_return(tmp_path, monkeypatch):
+    """The control: when the formatter itself cannot be imported there is nothing to do per file,
+    so giving up at once is right and the file is left as it was."""
+    f = tmp_path / "doc.md"
+    f.write_text(MISALIGNED, encoding="utf-8")
+    event = {"tool_name": "Bash", "cwd": str(tmp_path), "tool_input": {"command": "cat > doc.md"}}
+    monkeypatch.setenv("CLAUDE_PLUGIN_ROOT", str(tmp_path / "no-plugin-here"))
+    monkeypatch.setattr(sys, "stdin", io.StringIO(json.dumps(event)))
+
+    assert H.main() == 0
+
+    assert f.read_text(encoding="utf-8") == MISALIGNED
+
+
+# ---- the scan's bounds -------------------------------------------------------------------------
+
+def _scan(tmp_path):
+    event = {"tool_name": "Bash", "cwd": str(tmp_path), "tool_input": {"command": "true"}}
+    return H._markdown_paths_from_a_command(event)
+
+
+def test_the_scan_stops_at_the_file_cap(tmp_path):
+    """Both breaks: the per-file one inside a directory, and the per-directory one that stops the
+    walk from descending once the cap is reached."""
+    for i in range(H._BASH_FILE_CAP + 1):
+        (tmp_path / f"f{i:03d}.md").write_text("x\n", encoding="utf-8")
+    later = tmp_path / "zz-later"
+    later.mkdir()
+    (later / "late.md").write_text("x\n", encoding="utf-8")
+
+    found = _scan(tmp_path)
+
+    assert len(found) == H._BASH_FILE_CAP
+    assert str(later / "late.md") not in found
+
+
+def test_a_file_that_cannot_be_stat_ed_is_skipped(tmp_path):
+    """A dangling symlink named like markdown makes stat() raise; the scan must step over it and
+    keep the real file beside it."""
+    real = tmp_path / "real.md"
+    real.write_text("x\n", encoding="utf-8")
+    try:
+        (tmp_path / "dangling.md").symlink_to(tmp_path / "gone.md")
+    except (OSError, NotImplementedError):
+        pytest.skip("this platform cannot create a symlink unprivileged")
+
+    found = _scan(tmp_path)
+
+    assert found == [str(real)]
+
+
+def test_the_scan_lists_only_markdown(tmp_path):
+    (tmp_path / "notes.txt").write_text("x\n", encoding="utf-8")
+    (tmp_path / "doc.md").write_text("x\n", encoding="utf-8")
+    assert _scan(tmp_path) == [str(tmp_path / "doc.md")]
+
+
+def test_the_scan_of_a_cwd_that_does_not_exist_is_empty(tmp_path):
+    assert _scan(tmp_path / "gone") == []

@@ -145,7 +145,6 @@ def main():
         event = json.load(sys.stdin)
     except Exception:  # noqa: BLE001
         return 0
-    reformat = None
     path = (event.get("tool_input") or {}).get("file_path") or ""
     if path.lower().endswith(_MD_SUFFIXES) and Path(path).is_file():
         targets = [path]
@@ -153,14 +152,28 @@ def main():
         targets = _markdown_paths_from_a_command(event)
     else:
         return 0  # not a markdown file -> nothing to align
+    if not targets:
+        return 0
+    try:
+        reformat = _reformat_file_fn()
+    except Exception:  # noqa: BLE001 - no formatter means nothing to do for ANY file
+        return 0
     for target in targets:
-        try:
-            if reformat is None:
-                reformat = _reformat_file_fn()
-            reformat(target)  # in-place realign; bails safely on malformed tables
-        except Exception:  # noqa: BLE001 - reformat/import failure must never wedge a turn
-            return 0
+        _reformat_one(reformat, target)
     return 0
+
+
+def _reformat_one(reformat, target) -> bool:
+    """Realign one file in place; False when that file could not be reformatted.
+
+    One file's failure is that file's alone. A non-UTF-8 or unreadable markdown found by the Bash
+    scan used to end the whole loop, so every target after it went unformatted.
+    """
+    try:
+        reformat(target)  # in-place realign; bails safely on malformed tables
+    except Exception:  # noqa: BLE001 - a bad file must never wedge a turn
+        return False
+    return True
 
 
 if __name__ == "__main__":

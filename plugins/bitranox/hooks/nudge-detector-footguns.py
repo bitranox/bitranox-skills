@@ -40,9 +40,15 @@ from __future__ import annotations
 
 import json
 import re
-import shlex
 import sys
 from pathlib import Path
+
+from shell_text import (
+    argv_for_match,
+    basename_for_tool,
+    iter_segments,
+    strip_heredoc_bodies,
+)
 
 # A -newermt value bfs cannot parse. ISO-like stamps are fine; these are not.
 _RELATIVE_TIME_RE = re.compile(
@@ -60,75 +66,104 @@ _PYRIGHT_PIN_FLAGS = frozenset({"--pythonpath", "--venvpath", "-p", "--project"}
 _VENV_DIRS = (".venv", "venv", ".virtualenv")
 
 
-def _tokens(command: str) -> list[str]:
-    """Split a shell line without running it; give up rather than guess."""
-    try:
-        return shlex.split(command, comments=True)
-    except ValueError:
-        return []
+def _tokens(command: str, tool_name: str = "Bash") -> list[list[str]]:
+    """One argv per STATEMENT, split the way the tool's own shell would split it.
+
+    Segmenting comes first because a flat token stream loses the boundaries that decide whose flag
+    is whose: shlex never emits a newline token, keeps `sub&&pyright` as one word, and with
+    `comments=True` cuts at a mid-word `#` (`docs#tag`) and drops the rest of the line. The shared
+    quote-aware walk knows all three. Heredoc bodies are data, so they are dropped before it.
+
+    Each statement's argv comes from `argv_for_match`, which splits by the TOOL's rules - the
+    PowerShell arm keeps `C:\\...\\pyright.exe` intact - and removes a real, word-initial comment.
+    """
+    statements: list[list[str]] = []
+    for _offset, segment in iter_segments(strip_heredoc_bodies(command or ""), tool_name):
+        argv = argv_for_match(segment, tool_name)
+        if argv:
+            statements.append(argv)
+    return statements
 
 
-_STATEMENT_BREAK = frozenset({"&&", "||", ";", "|", "\n"})
+def _invocation_tokens(
+    statements: list[list[str]], program: str, tool_name: str = "Bash"
+) -> list[list[str]]:
+    """The arguments after each invocation of `program`, one list per invocation.
 
+    A flag belongs to the command it FOLLOWS, and only within its own statement. Scanning every
+    token on the line instead attributes another command's flag to this one, in both directions:
+    it invents a `find -newermt` nobody wrote, and it reads `mkdir -p`'s flag as pyright's pin so a
+    genuinely unpinned run goes unnudged. The second is a MISS, which is the worse half.
 
-def _invocation_tokens(tokens: list[str], program: str) -> list[list[str]]:
-    """Each run of tokens belonging to an invocation of `program`, one list per invocation.
-
-    A flag belongs to the command it FOLLOWS. Scanning every token on the line instead attributes
-    another command's flag to this one, in both directions: it invents a `find -newermt` nobody
-    wrote, and it reads `mkdir -p`'s flag as pyright's pin so a genuinely unpinned run goes
-    unnudged. The second is a MISS, which is the worse half.
+    The program is matched by basename with `.exe` dropped, so `/usr/bin/find`,
+    `C:\\Python312\\Scripts\\pyright.exe` and `python -m pyright` all count.
     """
     runs: list[list[str]] = []
-    current: list[str] | None = None
-    for tok in tokens:
-        if tok in _STATEMENT_BREAK:
-            current = None
-            continue
-        if tok == program or tok.endswith("/" + program):
-            current = []
-            runs.append(current)
-            continue
-        if current is not None:
-            current.append(tok)
+    for argv in statements:
+        for at, tok in enumerate(argv):
+            if basename_for_tool(tok, tool_name).lower() == program:
+                runs.append(argv[at + 1:])
+                break
     return runs
 
 
-def find_newermt_relative(tokens: list[str]) -> str | None:
+def _option_value(run: list[str], at: int) -> str | None:
+    """The value at `run[at]`, re-joined when a quote the splitter left in place spans tokens.
+
+    The PowerShell arm splits by C-runtime rules, which know nothing of single quotes, so
+    `-newermt '-3 minutes'` arrives as `'-3` and `minutes'`. An opening quote with no closing one
+    is an unbalanced line: give up rather than guess.
+    """
+    first = run[at]
+    quote = first[:1]
+    if quote not in ("'", '"'):
+        return first
+    for end in range(at, len(run)):
+        joined = " ".join(run[at:end + 1])
+        if len(joined) > 1 and joined.endswith(quote):
+            return joined[1:-1]
+    return None
+
+
+def find_newermt_relative(statements: list[list[str]], tool_name: str = "Bash") -> str | None:
     """Return the offending -newermt value, or None."""
-    for run in _invocation_tokens(tokens, "find"):
+    for run in _invocation_tokens(statements, "find", tool_name):
         for i, tok in enumerate(run):
             if tok == "-newermt" and i + 1 < len(run):
-                value = run[i + 1]
-                if _RELATIVE_TIME_RE.match(value):
+                value = _option_value(run, i + 1)
+                if value is not None and _RELATIVE_TIME_RE.match(value):
                     return value
     return None
 
 
-def pyright_without_pinned_interpreter(tokens: list[str], cwd: Path) -> bool:
+def pyright_without_pinned_interpreter(
+    statements: list[list[str]], cwd: Path, tool_name: str = "Bash"
+) -> bool:
     """True when pyright runs unpinned in a tree that actually has a virtualenv."""
-    runs = _invocation_tokens(tokens, "pyright")
+    runs = _invocation_tokens(statements, "pyright", tool_name)
     if not runs:
         return False
     # A pin flag counts only if it is PYRIGHT's. `-p` is also mkdir's, and reading `mkdir -p build
     # && pyright` as pinned silenced the nudge on an unpinned run.
-    if any(t in _PYRIGHT_PIN_FLAGS or t.startswith("--pythonpath=") or t.startswith("--venvpath=")
+    if any(t in _PYRIGHT_PIN_FLAGS or t.startswith(("--pythonpath=", "--venvpath="))
            for run in runs for t in run):
         return False
+    # `Path.is_dir` swallows only some errnos before Python 3.14: a parent directory that denies
+    # search permission raises PermissionError there (measured on 3.10, 3.12 and 3.13).
     try:
         return any((cwd / d).is_dir() for d in _VENV_DIRS if d)
     except OSError:
         return False
 
 
-def build_notice(command: str, cwd: Path) -> str | None:
+def build_notice(command: str, cwd: Path, tool_name: str = "Bash") -> str | None:
     """The advisory text for one command, or None when nothing applies."""
-    tokens = _tokens(command)
-    if not tokens:
+    statements = _tokens(command, tool_name)
+    if not statements:
         return None
     notes: list[str] = []
 
-    offending = find_newermt_relative(tokens)
+    offending = find_newermt_relative(statements, tool_name)
     if offending is not None:
         notes.append(
             f"`find -newermt {offending!r}`: a relative timestamp is REJECTED by bfs (shipped as "
@@ -138,7 +173,7 @@ def build_notice(command: str, cwd: Path) -> str | None:
             "baseline, or pass an ISO-8601 timestamp."
         )
 
-    if pyright_without_pinned_interpreter(tokens, cwd):
+    if pyright_without_pinned_interpreter(statements, cwd, tool_name):
         notes.append(
             "`pyright` with no interpreter pinned, in a tree that has a virtualenv: pyright takes "
             "its environment from CONFIG, not from the interpreter that launched it, so "
@@ -166,7 +201,7 @@ def main() -> int:
     try:
         command = str(event.get("tool_input", {}).get("command", ""))
         cwd = Path(str(event.get("cwd") or "."))
-        notice = build_notice(command, cwd)
+        notice = build_notice(command, cwd, str(event.get("tool_name") or "Bash"))
         if notice:
             json.dump(
                 {"hookSpecificOutput": {"hookEventName": "PreToolUse", "additionalContext": notice}},
