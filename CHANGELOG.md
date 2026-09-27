@@ -29,6 +29,44 @@ than the change, so entries reconstructed from them would read like coverage wit
 a hole nobody has drawn a line under is one that gets rediscovered and half-filled - which is how
 two "versions with no entry" notes came to sit in this file disagreeing with it.
 
+## [7.26.0]
+
+### Added
+
+- `docs-generate-schematics`: both scripts accept `--image-model` and `--review-model`, so a
+  retired OpenRouter model can be replaced without editing the script. The skill names the two
+  default models with their check date and how to list the current ones.
+
+### Fixed
+
+- `docs-convert-markitdown`: the plugin recipe builds a plugin markitdown actually loads (entry
+  point group `markitdown.plugin`, a module with `register_converters`, converters with `accepts`
+  and `convert`). The documented plugin was silently never loaded. Vision model suggestions are
+  dated and point to one list with a command that prints the current image-capable models; a
+  retired Gemini model ID was replaced.
+- `infra-modulejail`: the dependency-closure loop works on Debian and Proxmox, where `sh` is dash.
+  It handed an exported bash function to `sh -c`, so the closure never grew and dependencies of
+  kept modules landed on the block list.
+- `infra-modulejail`: the invariant gate checks the exact file that will be installed, in the
+  logger form, before anything is written to `/etc/modprobe.d`, so a failing gate leaves the host
+  unchanged. The verify and gate dry runs use `modprobe --show-depends`, because `modprobe -n -v`
+  prints nothing for a module that is already loaded.
+- `infra-swap-tuning`: the example `zram-generator.conf` puts comments on their own lines.
+  zram-generator reads a trailing comment as part of the value, so the old example created no zram
+  device. The idempotency guard refuses (exit 2) a `zram-size` that is not a plain number instead
+  of treating a changed size as unchanged.
+- `meta-claude-hooks` documents the two model-switch events, `PreModelSwitch` (can block a
+  requested switch) and `PostModelSwitch` (follows every model change), and no longer says only
+  `SessionStart` can see the model. It is back in step with the current hooks docs, correcting
+  statements that had become wrong: Setup output, WorktreeRemove exit codes, agent handlers on
+  PermissionRequest, `once`, and stdout JSON parsing; it adds the Stop hook's continuation cap,
+  the credential-scrub variable and silently ignored output rewrites. Its freshness check no longer
+  mistakes a `"type"` value in an example payload for a handler type.
+- `coding-python-gitignore`: confirming the performance defaults uses
+  `igittigitt config --section performance`, which shows all four limits.
+- `coding-python-rpyc`: the howto warns that its `telnetlib` and `asyncore` examples need Python
+  3.12 or older.
+
 ## [7.25.13]
 
 ### Fixed
