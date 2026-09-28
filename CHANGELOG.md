@@ -29,6 +29,19 @@ than the change, so entries reconstructed from them would read like coverage wit
 a hole nobody has drawn a line under is one that gets rediscovered and half-filled - which is how
 two "versions with no entry" notes came to sit in this file disagreeing with it.
 
+## [7.29.6]
+
+### Changed
+
+- `decision-review-nudge`: a RUNNING `/goal` no longer blocks the session. It gets one
+  non-blocking reminder that claims nothing about the goal's state, and the block is kept for a
+  goal whose record says met, or an opened PR. Over every goal session on record, 13 of 16 blocks
+  on a running goal were early - 3 to 160 minutes into the goal and up to 583 minutes before it was
+  met, typically a turn ending to wait on background agents - and each told the model "a /goal
+  objective was met". The block for a met goal arrives at the Stop after the one that ended it,
+  because the verdict is written after the Stop hooks read the transcript.
+- `process-review-uncertain-decisions`: "When it fires on its own" describes that trigger.
+
 ## [7.29.5]
 
 ### Fixed

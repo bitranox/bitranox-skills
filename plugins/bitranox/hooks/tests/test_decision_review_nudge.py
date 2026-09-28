@@ -171,9 +171,11 @@ def test_a_met_goal_concludes_the_work():
     assert DRN.reached_a_conclusion(signals(goal_state=DRN.GOAL_MET)) is True
 
 
-def test_a_running_goal_also_counts_so_the_ask_is_never_missed():
-    """The met verdict is written AFTER this hook reads, so waiting for it costs a whole turn."""
-    assert DRN.reached_a_conclusion(signals([], DRN.GOAL_ACTIVE)) is True
+def test_a_running_goal_is_not_a_conclusion():
+    """Measured over every goal session on record: 13 of 16 blocks fired on a running goal were
+    early - 3 to 160 minutes into it and up to 583 minutes before it was met - and told the model a
+    goal had been met when it had not. A running goal gets a reminder, never the block."""
+    assert DRN.reached_a_conclusion(signals([], DRN.GOAL_ACTIVE)) is False
 
 
 def test_a_met_goal_fires_even_with_no_commit_at_all():
@@ -361,11 +363,35 @@ def test_a_goal_run_is_asked_when_the_objective_is_met(scratch_home, monkeypatch
     assert json.loads(out)["decision"] == "block"
 
 
-def test_a_one_turn_goal_is_asked_without_waiting_a_turn(scratch_home, monkeypatch, capsys):
-    """The lag this fixes: at Stop time the record still reads met=false, and met=true lands after."""
+def test_a_running_goal_is_reminded_without_blocking(scratch_home, monkeypatch, capsys):
+    """At the Stop that ends a goal the record still reads met=false (the verdict lands after this
+    hook reads), so the model is told once, without a block, and the wording claims nothing."""
     path = transcript(scratch_home, goal_line(met=False))
     _, out = run_main({"session_id": "s4", "transcript_path": path}, monkeypatch, capsys)
-    assert json.loads(out)["decision"] == "block"
+    parsed = json.loads(out)
+    assert "decision" not in parsed, "a running goal must never be blocked"
+    context = parsed["hookSpecificOutput"]["additionalContext"]
+    assert parsed["hookSpecificOutput"]["hookEventName"] == "Stop"
+    assert "process-review-uncertain-decisions" in context
+    assert "was met" not in context
+
+
+def test_a_running_goal_is_reminded_once(scratch_home, monkeypatch, capsys):
+    path = transcript(scratch_home, goal_line(met=False))
+    run_main({"session_id": "s4b", "transcript_path": path}, monkeypatch, capsys)
+    later = transcript(scratch_home, goal_line(met=False), bash_line("ls"), name="later.jsonl")
+    _, out = run_main({"session_id": "s4b", "transcript_path": later}, monkeypatch, capsys)
+    assert out == ""
+
+
+def test_a_goal_reminded_while_running_is_blocked_once_met(scratch_home, monkeypatch, capsys):
+    """The reminder is not the block: once met=true is on record the first real conclusion stops."""
+    running = transcript(scratch_home, goal_line(met=False), name="a.jsonl")
+    _, first = run_main({"session_id": "s4c", "transcript_path": running}, monkeypatch, capsys)
+    met = transcript(scratch_home, goal_line(met=False), goal_line(met=True), name="b.jsonl")
+    _, second = run_main({"session_id": "s4c", "transcript_path": met}, monkeypatch, capsys)
+    assert "decision" not in json.loads(first)
+    assert json.loads(second)["decision"] == "block"
 
 
 def test_a_session_is_blocked_once_not_after_every_later_turn(scratch_home, monkeypatch, capsys):

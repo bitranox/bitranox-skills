@@ -93,18 +93,24 @@ questions breaks the run, and the answers interact. If they stop early, name the
 
 ## When it fires on its own
 
-A Stop hook watches for work concluding: a `/goal` in play, or - with no goal - an opened PR. A
-goal counts whether or not it has reported met yet, because the verdict is written while the Stop
-hooks are already running, so at the moment the hook looks the record still says not-met and
-waiting for it costs a whole turn a finished session may never take. A commit or a push does NOT
-count: a commit is a checkpoint the author still owns, and firing on every one of them was
-measured to be the largest single source of end-of-session tooling work in ordinary projects.
+A Stop hook watches for work concluding: a `/goal` whose record says it is met, or an opened PR. A
+commit or a push does NOT count: a commit is a checkpoint the author still owns, and firing on
+every one of them was measured to be the largest single source of end-of-session tooling work in
+ordinary projects.
+
+A RUNNING goal is not a conclusion, because the hook cannot tell the Stop that ends a goal from one
+that only pauses it - a turn that ends to wait for background agents looks the same. It gets one
+non-blocking reminder instead, which claims nothing about the goal's state. Act on it only if you
+are ending the turn because you believe the goal is done; if the turn ends for any other reason,
+ignore it. Blocking on a running goal was measured to be early in 13 of 16 goal sessions, up to
+hours before the goal was met.
 
 It stops the session ONCE, on the first conclusion, because an ask that can be scrolled past is one
-that gets scrolled past. Every conclusion after that only reminds, without blocking. That split is
-what makes the early-versus-late question stop mattering: an early first ask no longer means
-silence for the rest of the session, and a second block would be nagging anyway. Nothing stops you
-asking earlier; the hook exists for the times nobody remembers to.
+that gets scrolled past. Every conclusion after that only reminds, without blocking, since a second
+block would be nagging. A met goal's verdict is written after the Stop hooks have read the
+transcript, so its block arrives at the next Stop rather than the one that ended the goal - and
+once a goal has ended, that next Stop usually comes only after the user's next message. Nothing
+stops you asking earlier; the hook exists for the times nobody remembers to.
 
 ## Where the answer goes
 

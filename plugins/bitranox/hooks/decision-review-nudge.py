@@ -9,18 +9,21 @@ to ask, which is exactly what does not happen at the end of a long session.
 
 **What counts as concluded:**
 
-1. A `/goal` is in play at all - met, or still running. Claude Code records progress in the
-   transcript as an attachment record,
+1. A `/goal` whose record says it is met. Claude Code records progress in the transcript as an
+   attachment record,
    `{"type": "attachment", "attachment": {"type": "goal_status", "met": <bool>, ...}}`,
    and the LAST one is the current state. Only that nested shape is read; a top-level
-   `goal_status` record is not what the CLI writes. Firing on EITHER state is deliberate, and it
-   is the fix for a real lag: the goal's verdict is emitted DURING Stop-hook processing, so at
-   the instant this hook reads the transcript the record still says `met: false` and the
-   `met: true` line lands moments later.
-   Waiting for it costs a whole turn, and a session that ends there never gets asked at all.
-   Since the ask happens once per session, the choice is between sometimes-early and
-   sometimes-never, and early is the better failure.
-2. No goal in play - then an OPENED PR is the conclusion, and a commit or a push is not. Two
+   `goal_status` record is not what the CLI writes. The record is written when the goal is SET
+   (`met: false`, `sentinel: true`) and again when the goal hook judges a Stop, and that verdict
+   lands AFTER this hook has read the transcript - so at the Stop that ends a goal this hook still
+   reads `met: false`, and the block for a met goal comes at the next Stop.
+   A RUNNING goal is not a conclusion. It gets a one-time, non-blocking reminder that claims
+   nothing about the goal's state. Blocking on it was tried, on the argument that sometimes-early
+   beats sometimes-never; measured over every goal session on record (2026-09-28), 13 of 16 such
+   blocks were early - 3 to 160 minutes into the goal and up to 583 minutes before it was met,
+   typically a turn ending to wait on background agents - and each told the model "a /goal
+   objective was met" while it was not. Only 3 landed on the Stop that ended the goal.
+2. Otherwise an OPENED PR is the conclusion, and a commit or a push is not. Two
    proxies were tried before this and both were wrong. A file-count threshold fires mid-edit on a
    session that has concluded nothing and stays silent on a one-line fix that shipped. Firing on
    every commit or push was measured over three weeks of transcripts (2026-09-04): it was the
@@ -30,12 +33,11 @@ to ask, which is exactly what does not happen at the end of a long session.
    while the hook itself never changed. A commit is a checkpoint the author still owns; a PR is
    the moment the choices become somebody else's to live with.
 
-Blocking during a running goal is safe, which an earlier version of this hook got wrong. The CLI
-string "Stop hook prevented continuation" belongs to a hook setting `preventContinuation`, a
-different field this hook never sets; `{"decision": "block"}` feeds a reason back and the turn
-carries on. Measured: the self-improve gate blocked during an active goal in a real session and
-the goal still completed. The once-per-session flag also keeps this far below the consecutive-block
-cap that would end a turn by override.
+A block does not end a goal run: the CLI string "Stop hook prevented continuation" belongs to a
+hook setting `preventContinuation`, a different field this hook never sets; `{"decision": "block"}`
+feeds a reason back and the turn carries on. Measured: the self-improve gate blocked during an
+active goal in a real session and the goal still completed. The once-per-session flag also keeps
+this far below the consecutive-block cap that would end a turn by override.
 
 The command detection is `shell_text.opens_a_pr`, segmented and anchored exactly like the
 predicate the repo gate blocks on (`is_gated_command`), so the two cannot disagree about what a
@@ -179,7 +181,7 @@ def transcript_signals(transcript_path, start=0, max_bytes=_MAX_TRANSCRIPT_BYTES
     return Signals(commands, goal_state, consumed)
 
 
-_GOAL_SCORE = {GOAL_NONE: 0, GOAL_ACTIVE: 1, GOAL_MET: 2}
+_GOAL_STATES = frozenset({GOAL_NONE, GOAL_ACTIVE, GOAL_MET})
 
 
 def conclusion_score(signals, previous=0, previous_goal=GOAL_NONE):
@@ -194,36 +196,45 @@ def conclusion_score(signals, previous=0, previous_goal=GOAL_NONE):
     an old commit, and a falling score can never exceed what was already recorded - the reminder
     would stop for good.
 
-    A goal scores 1 while running and 2 once met, so the running-to-met transition registers as a
-    new conclusion even though no command was run. A commit or a push scores nothing - see the
-    module docstring for the measurement behind that.
+    A goal counts once, when it reaches met, so that transition registers as a new conclusion even
+    though no command was run. A RUNNING goal counts nothing (`goal_started` covers it), and
+    neither does a commit or a push - see the module docstring for the measurements behind both.
     """
-    goal_delta = max(0, _GOAL_SCORE[signals.goal_state] - _GOAL_SCORE[previous_goal])
+    goal_met = signals.goal_state == GOAL_MET and previous_goal != GOAL_MET
     prs = sum(1 for call in signals.commands if shell_text.opens_a_pr(call.command, call.tool))
-    return previous + goal_delta + prs
+    return previous + int(goal_met) + prs
+
+
+def goal_started(signals, previous_goal=GOAL_NONE):
+    """True on the first Stop that sees a goal running which the previous run had not seen."""
+    return signals.goal_state == GOAL_ACTIVE and previous_goal != GOAL_ACTIVE
 
 
 def reached_a_conclusion(signals):
-    """True once the work is somebody else's to live with - a goal in play, or an opened PR."""
+    """True once the work is somebody else's to live with - a met goal, or an opened PR."""
     return conclusion_score(signals) > 0
 
 
 ASK_NONE = "none"
 ASK_BLOCK = "block"
 ASK_REMIND = "remind"
+ASK_GOAL = "goal"
 
 
-def decide(score, last_score):
+def decide(score, last_score, started_goal=False):
     """The whole policy, as one pure decision.
 
     The FIRST conclusion in a session blocks, because an ask that can be scrolled past is an ask
     that gets scrolled past. Every conclusion AFTER it only reminds, without blocking: a second
     block would be nagging, and repeated blocks run into the consecutive-block cap that ends a turn
     by override. So the session is stopped once and nudged thereafter.
+
+    A goal that has just started is not a conclusion and never blocks; it gets its own reminder,
+    once, because this hook cannot tell the Stop that ends a goal from one that merely pauses it.
     """
-    if score <= 0 or score <= last_score:
-        return ASK_NONE
-    return ASK_BLOCK if last_score <= 0 else ASK_REMIND
+    if score > 0 and score > last_score:
+        return ASK_BLOCK if last_score <= 0 else ASK_REMIND
+    return ASK_GOAL if started_goal else ASK_NONE
 
 
 class State(NamedTuple):
@@ -258,7 +269,7 @@ def read_state(session):
     goal = raw.get("goal")
     try:
         return State(int(raw.get("offset") or 0), int(raw.get("score") or 0),
-                     goal if goal in _GOAL_SCORE else GOAL_NONE)
+                     goal if goal in _GOAL_STATES else GOAL_NONE)
     except (TypeError, ValueError):
         return EMPTY_STATE
 
@@ -297,6 +308,16 @@ _REMINDER = (
     "question. Only the unsettled ones; silence is the right answer when there are none."
 )
 
+# A running goal. It claims nothing about the goal's state, because at the Stop that ends a goal
+# the record still reads met=false, and at every other Stop the goal really is unfinished.
+_GOAL_REMINDER = (
+    "A /goal is running. If you are ending this turn because you believe the goal is done, first "
+    "name any decision behind the work that you are NOT confident about - "
+    "`bitranox:process-review-uncertain-decisions` carries the question; only the unsettled ones, "
+    "tooling decisions go to `contrib_queue.py add`. If the turn is ending for any other reason, "
+    "such as waiting on background work, ignore this."
+)
+
 
 def main():
     try:
@@ -315,7 +336,7 @@ def main():
         score = conclusion_score(signals, previous=seen.score, previous_goal=seen.goal)
     except Exception:                                     # noqa: BLE001 - never wedge a turn
         return 0
-    verdict = decide(score, seen.score)
+    verdict = decide(score, seen.score, started_goal=goal_started(signals, seen.goal))
     # The offset advances even on a quiet turn, so the next run scans only what is new. Skipping
     # this when nothing was found would re-scan the same window forever and, once the window hit
     # the cap, never reach anything past it.
@@ -325,8 +346,9 @@ def main():
     if verdict == ASK_BLOCK:
         sys.stdout.write(json.dumps({"decision": "block", "reason": _REASON}))
     else:
+        reminder = _GOAL_REMINDER if verdict == ASK_GOAL else _REMINDER
         sys.stdout.write(json.dumps({"hookSpecificOutput": {
-            "hookEventName": "Stop", "additionalContext": _REMINDER}}))
+            "hookEventName": "Stop", "additionalContext": reminder}}))
     return 0
 
 
