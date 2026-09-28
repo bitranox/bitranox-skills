@@ -1,69 +1,75 @@
-# STALE - read 2026-09-28 12:16, work continued
+# Handover - 2026-09-28 13:05, 7.30.0 shipped and green (judge panel tool; hand-backs not typed)
 
 ## In flight
 
-- Nothing running. 7.29.7 (`13cc6f29`) is green on every CI cell. 7.29.5 and 7.29.6 went red on
-  the Windows cell only, on six new test fixtures (unquoted Windows paths), which 7.29.7 fixes.
-- Two OPEN-WORK commits (`0c047bec`, `c26bdaab`) plus the commit carrying this file are pushed with
-  this handover.
+- Nothing running. 7.30.0 (`67ba5f11`) is green on every CI cell and on origin/master.
+- The installed plugin on this machine is still 7.29.7 until the user runs the marketplace update
+  and reload, so the `<agent-message>` fix is not live in any session yet.
 
 ## Committed, or not
 
-- This repo: all on origin/master.
-- The tree-top memory store holds UNCOMMITTED edits: rank 80's, plus two from this session (rank 120's
-  body edit, rank 121's archive). A worktree-isolated session is refused git there - rank 93 lists
-  every path.
+- This repo: all on origin/master, this handover included once its commit is pushed.
+- The tree-top memory store still holds the uncommitted edits rank 93 lists (untouched here).
 
 ## Decided, and why - do not reopen
 
-- decision-review-nudge (7.29.6): the USER chose "remind, don't block" for a running /goal, after
-  the measurement that 13 of 16 goal-session blocks fired early. A met goal or an opened PR still
-  blocks; the met block lands at the Stop after the one that ended the goal.
-- repo-gate (7.29.5): an unreadable (`cd "$X"`) or nonexistent target falls back to the session's
-  repo, the old behaviour; a readable target outside any repo is not judged. An unquoted Windows
-  backslash path lands in the fallback - bash reads it the same way.
-- repo-gate `--mirror-of` prefers the marketplace checkout it runs from only when that sits in the
-  same `public/` tree as the twin.
-- Rank 110: no merge of the three transcript tools - they answer different questions and must stay
-  single-file (the rank-90 copy rule).
-- Rank 130: closed, not retired - the review file is excluded via `.git/info/exclude` and was never
-  committed.
+- `--alternatives N` counts runners-up AFTER a choice answer's winner, never including it: the
+  flag answers "what would the next pick have been", and the hand-rolled cw2 packet's
+  winner-inclusive top-3 made the count mean two things.
+- A verdict tie in `harvest` is left `None` and listed as unresolved, never broken by order: an
+  arbitrary label in the ground truth is worse than a visible gap.
+- `packet` refuses an `--out` that already holds `key.json`: packets may already be with judges,
+  and a new key would re-map their item ids to other prompts.
+- Only the bare `<agent-message` prefix was added to the not-typed registry. The isMeta scheduled
+  prompts (rank 95) have no text marker, so no prefix was guessed for them.
 
 ## Decided against, and why
 
-- Blocking on a running goal but skipping Stops with pending background work: the first pending-work
-  detector was too noisy to separate the cases (on-time blocks also showed 3-4 "pending").
-- Building the classifier_eval packet/harvest tool inside rank 100: its only consumer is rank 12
-  step (2), so it moved into rank 12's line.
+- Putting the panel logic inside `classifier_eval.py` (1,290 lines already): it lives in the
+  sibling `judge_panel.py`, which `classifier_eval` wires as two subcommands.
+- Fixing the six pre-existing E501/B905 findings in `classifier_eval.py`: B905 (`zip` strict) would
+  change behaviour on unequal lengths and needs its own look; not rot to sweep in passing.
 
 ## Still open, untouched
 
-`OPEN-WORK.md` is the list. Rank 12 waits on about a day of decide rows (190 over 8 h at 01:50
-UTC, fallback 1.1%). Rank 18 is deferred by the user. Ranks 91 and 93 need a session outside this
-worktree.
+`OPEN-WORK.md` is the list. Rank 12 now waits on about a day of decide rows from sessions on 7.30.0+
+(the earlier 190-row count included hand-backs). Rank 18 is deferred by the user. Ranks 91 and 93
+need a session outside this worktree. Rank 95 is new and actionable.
 
 ## Lessons for the next nap
 
-- When a test builds a shell command around a filesystem path, write the path double-quoted in
+- When a prompt-time hook filters turns the person did not type, test the text the HOOK receives,
+  not the transcript's stored form: the transcript wraps a subagent hand-back as "Another Claude
+  session sent a message:", while UserPromptSubmit gets the bare `<agent-message ...>` envelope.
+- When quoting a rate from live router rows, first count how many locate to a typed prompt: of 230
+  answered rows only 57 did (89 hand-backs, 43 isMeta scheduled prompts, 40 gone transcripts).
+- When running compuse-toolbox mutation_arm in bitranox-skills, launch it with system `python3`:
+  the repo's `.venv` has no pytest, and the arm then reads `inconclusive` with `failure: null`.
+- When ruff reports dozens of findings in a repo with no ruff config, compare against the file at
+  HEAD with `--select E,F,W,B` before treating any as yours: ruff 0.16's default set flags this
+  repo's %-format house style everywhere.
+- tooling: the worktree-isolation guard refuses `env -u VIRTUAL_ENV uv run ...` and a
+  `git push ... > file; echo RC` chain; put the first in a scratchpad script and run the push bare.
+- (carried) When a test builds a shell command around a filesystem path, write the path double-quoted in
   forward-slash form: unquoted, Windows backslashes are eaten by bash and by the tokenizer alike, so
   the test silently exercises a fallback on the Windows cell.
-- When a hook must judge the repository a Bash command acts on, resolve it from the event cwd plus
+- (carried) When a hook must judge the repository a Bash command acts on, resolve it from the event cwd plus
   the command's own `cd`/`git -C` (`shell_text.git_verb_dir`), never from the hook's working
   directory, which is where the session sits.
-- When a design note justifies a trigger as "early beats never", measure how early before keeping
+- (carried) When a design note justifies a trigger as "early beats never", measure how early before keeping
   it: the decision-review block on a running goal was early in 13 of 16 sessions, by up to 583 min.
-- When reading Claude Code goal state, know `goal_status` is written at goal SET (`met: false`,
+- (carried) When reading Claude Code goal state, know `goal_status` is written at goal SET (`met: false`,
   `sentinel: true`) and the verdict lands AFTER the Stop hooks read the transcript.
-- When a queued contribution reports a defect, check git log for a same-day fix before building
+- (carried) When a queued contribution reports a defect, check git log for a same-day fix before building
   anything: one entry had been fixed by 9d5586bc the day it was queued.
-- When a backlog line says "offer X upstream", search the upstream tracker by author first: the
+- (carried) When a backlog line says "offer X upstream", search the upstream tracker by author first: the
   issue (gesellix/bose-soundtouch#660) already existed and had been answered.
-- When a CI cell fails only on Windows, reproduce on the local Windows dev box before pushing the fix (its memory fact names it): copy the
+- (carried) When a CI cell fails only on Windows, reproduce on the local Windows dev box before pushing the fix (its memory fact names it): copy the
   whole `plugins/bitranox` tree (the hooks conftest imports skill modules), and read the four
   "real repo" test failures a partial copy produces as copy artifacts.
-- tooling: the sha-literal-nudge caught a full sha I padded from a short one (invented identifier,
+- (carried) tooling: the sha-literal-nudge caught a full sha I padded from a short one (invented identifier,
   recurrence 6); derive shas with `git rev-parse --verify -q HEAD` in its own call.
-- tooling: the worktree-isolation guard refuses `for` loops over a variable, `bash -c` wait loops
+- (carried) tooling: the worktree-isolation guard refuses `for` loops over a variable, `bash -c` wait loops
   and `$(...)` inside gh commands; use a scratchpad script, or `tail --pid=<pid> -f /dev/null` to
   wait on a process.
 - (carried) When a timing-ratio test fails only on a loaded host, fix the instrument before the
@@ -115,30 +121,31 @@ worktree.
 
 ## The exact next action
 
-Rank 12 is the top item (rank 18 is deferred by the user). Its step (2) opens with a tool that can
-be built BEFORE the rows mature: add the `packet` and `harvest` subcommands to
-`plugins/bitranox/skills/meta-self-improve/classifier_eval.py` as rank 12's line specifies (pooled
-candidates from named replay logs, no arm names, a neutral override text; harvest judge JSON from
-subagent transcripts, per-verdict majority, splits printed, labels keyed by row uuid), TDD in its
-sibling `tests/`. Then, from about 2026-09-28 18:00 UTC, count decide rows
-(`~/.claude/self-improve-audit/classifier-shadow*.jsonl`, `site == "skill_router"`, has
-`decide_path`) and run step (2).
+Rank 12 is the top item but waits on data: from about 2026-09-29 13:00, and only once the user has
+updated the installed plugin to 7.30.0, count decide rows from 7.30.0+ sessions
+(`~/.claude/self-improve-audit/classifier-shadow*.jsonl`, `site == "skill_router"`, `decide_path`
+set, `plugin_version >= 7.30.0`) and run step (2) with
+`classifier_eval.py packet --from ~/.claude/self-improve-audit --since <7.30.0 start> --per-session 4`
+after writing its PREREG. Rank 18 is deferred by the user and 91/93 cannot run in this worktree, so
+until then the first actionable item is rank 95: write the scripted UserPromptSubmit payload probe
+its line describes (a throwaway session with a hook that dumps stdin; one typed prompt, one
+ScheduleWakeup prompt) and diff the fields.
 
 ## Files that matter
 
-- `plugins/bitranox/hooks/repo-gate.py` (`hook_root`, `_marketplace_checkout`),
-  `plugins/bitranox/hooks/shell_text.py` (`git_verb_dir`, `GATED_GIT_VERBS`)
-- `plugins/bitranox/hooks/decision-review-nudge.py` (`goal_started`, `_GOAL_REMINDER`)
-- `plugins/bitranox/skills/process-review-uncertain-decisions/SKILL.md` and its
-  `.skillwriter/checklist-20260928-a-running-goal-reminds-not-blocks.md`
-- `plugins/bitranox/skills/meta-self-improve/classifier_eval.py` (rank 12)
+- `plugins/bitranox/skills/meta-self-improve/judge_panel.py` (`pool`, `sample`, `build_packet`,
+  `extract_panel`, `harvest`) and its `tests/test_judge_panel.py`
+- `plugins/bitranox/skills/meta-self-improve/classifier_eval.py` (`_panel_parsers`,
+  `_run_packet`, `_run_harvest`)
+- `plugins/bitranox/hooks/transcript_turns.py` (`NOT_TYPED_PREFIXES`) and
+  `plugins/bitranox/hooks/tests/test_prompt_text.py`
 
 ## How to verify this still stands
 
-- `python3 plugins/bitranox/skills/compuse-toolbox/scripts/ci_wait.py --repo bitranox/bitranox-skills --sha $(git rev-parse --verify -q HEAD)`
-  exits 0 once this handover's push has run.
-- `test_repo_gate.py`, `test_shell_text.py` and `test_decision_review_nudge.py` pass with CI's
-  dependency set.
+- `python3 plugins/bitranox/skills/compuse-toolbox/scripts/ci_wait.py --repo bitranox/bitranox-skills --sha <full sha of HEAD>`
+  exits 0 (derive the sha with `git rev-parse --verify -q HEAD` in its own call).
+- `python3 -m pytest -q plugins/bitranox/skills/meta-self-improve/tests/test_judge_panel.py plugins/bitranox/hooks/tests/test_prompt_text.py`
+  passes.
 
 Read this, then replace the first line with `# STALE - read <date>, work continued`. Do not delete
 it - if this session ends badly it is the only record of where things stood.
