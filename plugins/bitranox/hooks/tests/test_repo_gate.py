@@ -1914,3 +1914,117 @@ def test_pytest_only_passes_a_failing_run_s_exit_code_through(tmp_path):
                                     floor=1))
     assert proc.returncode == 1
     assert "collected no tests" not in proc.stderr
+
+
+# --------------------------------------------------------------------------
+# Which repository the hook judges: the one the gated command TARGETS
+# --------------------------------------------------------------------------
+
+
+def _init_git(root):
+    root.mkdir(parents=True, exist_ok=True)
+    subprocess.run(["git", "init", "-q"], cwd=root, check=True)
+    return root
+
+
+def _hook_event(monkeypatch, cwd, command):
+    """Drive hook mode the way Claude Code does: the session sits in `cwd`, the command may move."""
+    monkeypatch.chdir(cwd)
+    monkeypatch.setattr(RG, "check_pytest", lambda root, paths, **kw: [])
+    monkeypatch.setattr(sys, "argv", ["repo-gate.py"])
+    event = {"cwd": str(cwd), "tool_name": "Bash", "tool_input": {"command": command}}
+    monkeypatch.setattr(sys, "stdin", io.StringIO(json.dumps(event)))
+
+
+def test_a_commit_that_cds_into_the_marketplace_is_judged_there(tmp_path, monkeypatch, capsys):
+    # Measured 2026-09-27: commits made with `cd <worktree> && git commit` from a session sitting in
+    # a stale main checkout were judged against that checkout, so five unbumped plugins/ commits
+    # PASSED and two later ones were blocked for a version they did not carry. The session's cwd
+    # is not where the commit lands; the gate must follow the command.
+    session = _init_git(tmp_path / "elsewhere")
+    target = _init_git(make_repo(tmp_path / "bitranox-skills", bad_skill=True))
+    _hook_event(monkeypatch, session, f"cd {target} && git commit -m x")
+
+    assert RG.main() == 2
+    assert "blocked" in capsys.readouterr().err
+
+
+def test_a_commit_with_dash_c_into_the_marketplace_is_judged_there(tmp_path, monkeypatch):
+    session = _init_git(tmp_path / "elsewhere")
+    target = _init_git(make_repo(tmp_path / "bitranox-skills", bad_skill=True))
+    _hook_event(monkeypatch, session, f"git -C {target} commit -m x")
+
+    assert RG.main() == 2
+
+
+def test_a_commit_that_cds_out_of_the_marketplace_is_not_judged_by_it(tmp_path, monkeypatch):
+    # The other direction: a session sitting in a marketplace checkout with a violation must not
+    # block a commit the command makes in an unrelated repository.
+    session = _init_git(make_repo(tmp_path / "bitranox-skills", bad_skill=True))
+    target = _init_git(tmp_path / "elsewhere")
+    _hook_event(monkeypatch, session, f"cd {target} && git commit -m x")
+
+    assert RG.main() == 0
+
+
+def test_a_push_that_cds_into_the_marketplace_is_judged_there(tmp_path, monkeypatch):
+    session = _init_git(tmp_path / "elsewhere")
+    target = _init_git(make_repo(tmp_path / "bitranox-skills", bad_skill=True))
+    _hook_event(monkeypatch, session, f"cd {target} && git push origin master")
+
+    assert RG.main() == 2
+
+
+def test_a_commit_into_a_directory_outside_any_repo_is_not_judged(tmp_path, monkeypatch):
+    # git fails there by itself; blocking it for the session repo's violations would be noise.
+    session = _init_git(make_repo(tmp_path / "bitranox-skills", bad_skill=True))
+    plain = tmp_path / "plain"
+    plain.mkdir()
+    _hook_event(monkeypatch, session, f"cd {plain} && git commit -m x")
+
+    assert RG.main() == 0
+
+
+def test_a_target_that_does_not_exist_falls_back_to_the_session_repo(tmp_path, monkeypatch):
+    # The shape a Windows path takes once the POSIX tokenizer has eaten its backslashes.
+    session = _init_git(make_repo(tmp_path / "bitranox-skills", bad_skill=True))
+    _hook_event(monkeypatch, session, f"cd {tmp_path / 'no-such-dir'} && git commit -m x")
+
+    assert RG.main() == 2
+
+
+def test_a_commit_that_does_not_move_is_judged_in_the_session_repo(tmp_path, monkeypatch):
+    # Control for the three above: the same violating checkout, no cd, must still block.
+    session = _init_git(make_repo(tmp_path / "bitranox-skills", bad_skill=True))
+    _hook_event(monkeypatch, session, "git commit -m x")
+
+    assert RG.main() == 2
+
+
+def test_an_unreadable_target_falls_back_to_the_session_repo(tmp_path, monkeypatch):
+    # `cd "$X"` cannot be resolved from the text. Guessing would judge a repo the commit may not
+    # touch, so the gate keeps judging the session's own checkout, as it always did.
+    session = _init_git(make_repo(tmp_path / "bitranox-skills", bad_skill=True))
+    _hook_event(monkeypatch, session, 'cd "$X" && git commit -m x')
+
+    assert RG.main() == 2
+
+
+def test_mirror_of_compares_the_checkout_it_is_run_from(tmp_path, monkeypatch, capsys):
+    # Measured 2026-09-27: run from a worktree on origin/master while the main checkout was 194
+    # commits behind, --mirror-of reported DRIFT whose '-' lines were the NEW text, while --mirrors
+    # from the same worktree said in sync. The main checkout is only a fallback for a caller that
+    # is not standing in a marketplace checkout at all (a tool repo's release pipeline).
+    public = _mirror_tree(tmp_path)
+    stale = public / "KI" / "bitranox-skills" / "plugins" / "bitranox" / "skills" / "coding-python-thing" / "SKILL.md"
+    stale.write_text(MIRROR_BODY.replace("One paragraph", "An OLD paragraph"), encoding="utf-8")
+    worktree = make_repo(public / "KI" / "bitranox-skills" / ".claude" / "worktrees" / "wt")
+    write(worktree / "plugins" / "bitranox" / "skills" / "coding-python-thing" / "SKILL.md", MIRROR_BODY)
+    _init_git(worktree)
+    monkeypatch.setitem(RG.MIRRORED_SKILLS, "coding-python-thing", "libs/thing/skills/python-thing")
+    monkeypatch.chdir(worktree)
+
+    rc = RG.audit_mirror_of(public / "libs" / "thing")
+
+    assert "in sync" in capsys.readouterr().out
+    assert rc == 0

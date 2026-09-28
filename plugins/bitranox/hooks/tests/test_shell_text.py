@@ -614,3 +614,26 @@ def test_strip_leading_cd_keeps_a_bare_cd_with_nothing_after_it():
     """Control: a lone `cd /x` has no following command to expose, so nothing is removed."""
     assert S.strip_leading_cd("cd /x") == "cd /x"
     assert S.strip_leading_cd("") == ""
+
+
+# ---- git_verb_dir: where a gated git command lands ----------------------------------------------
+
+
+def test_git_verb_dir_follows_cd_and_dash_c_to_the_first_matching_verb():
+    verbs = S.GATED_GIT_VERBS
+    assert S.git_verb_dir("git push", "/s", verbs) == "/s"
+    assert S.git_verb_dir("cd /r && git push origin master", "/s", verbs) == "/r"
+    assert S.git_verb_dir("git -C /r push", "/s", verbs) == "/r"
+    # only a cd BEFORE the verb moves it; a later one belongs to the next statement
+    assert S.git_verb_dir("git commit -m x && cd /r && git push", "/s", verbs) == "/s"
+    # a verb outside the set is not where the walk stops
+    assert S.git_verb_dir("git -C /a status; cd /r; git commit -m x", "/s", verbs) == "/r"
+
+
+def test_git_verb_dir_refuses_what_the_text_cannot_name():
+    verbs = S.GATED_GIT_VERBS
+    assert S.git_verb_dir('cd "$R" && git push', "/s", verbs) is None
+    assert S.git_verb_dir("popd; git commit -m x", "/s", verbs) is None
+    assert S.git_verb_dir("git --git-dir=/r/.git commit -m x", "/s", verbs) is None
+    assert S.git_verb_dir("GIT_DIR=/r/.git git push", "/s", verbs) is None
+    assert S.git_verb_dir("git status", "/s", verbs) is None

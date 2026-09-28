@@ -27,28 +27,17 @@ shell_text helper; launched via run-python.sh so it works on Windows too.
 """
 import json
 import os
-import re
 import subprocess
 import sys
 
 from shell_text import (
-    GIT_VALUE_OPTS,
-    argv_for_match,
-    basename_for_tool,
-    blank_heredoc_bodies,
-    git_verb_operands,
+    git_verb_dir,
     is_git_verb,
     iter_segments,
     strip_heredoc_bodies,
 )
 
 _COMMIT_VERBS = frozenset({"commit"})
-# Programs that move the shell's directory. `popd` returns somewhere this hook does not track.
-_CD_PROGRAMS = frozenset({"cd", "pushd", "chdir", "set-location", "sl"})
-_UNKNOWABLE = re.compile(r"[$`*?<>|]")        # a destination no static read can resolve
-# Ways to point git at another repository than its working directory; this guard does not follow them.
-_REPO_OPTIONS = ("--git-dir", "--work-tree")
-_REPO_ENV = ("GIT_DIR=", "GIT_WORK_TREE=")
 
 
 def _is_git_commit(command, tool_name=None):
@@ -66,72 +55,13 @@ def _is_git_commit(command, tool_name=None):
     return False
 
 
-def _readable_dir(target, base):
-    """Where `cd target` (or `git -C target`) lands from `base`, or None when it cannot be read.
-
-    Unreadable: no target (a bare `cd` goes to HOME), `-` ($OLDPWD), a tilde path (the HOME of the
-    shell that runs it), or a variable, substitution or glob. An absolute target is readable even
-    when `base` is not. A path that does not exist is left for git to refuse.
-    """
-    if not target or target == "-" or target.startswith("~") or _UNKNOWABLE.search(target):
-        return None
-    if os.path.isabs(target):
-        return os.path.normpath(target)
-    return os.path.normpath(os.path.join(base, target)) if base else None
-
-
-def _cd_target(args):
-    """The destination operand of a cd-like command, its own options skipped."""
-    for index, token in enumerate(args):
-        if token == "--":
-            return args[index + 1] if index + 1 < len(args) else None
-        if token == "-" or not token.startswith("-"):
-            return token
-    return None
-
-
-def _apply_git_options(prefix, here, tool):
-    """`here` moved by the `-C` options in `prefix` (the tokens before the verb), or None.
-
-    None when a `--git-dir`/`--work-tree` option or a `GIT_DIR`/`GIT_WORK_TREE` assignment points
-    git elsewhere: this guard does not model them, and guessing would judge the wrong repository.
-    """
-    git_at = next(i for i, token in enumerate(prefix) if basename_for_tool(token, tool) == "git")
-    if any(token.startswith(_REPO_ENV) for token in prefix[:git_at]):
-        return None
-    options, index = prefix[git_at + 1:], 0
-    while index < len(options):
-        token = options[index]
-        if token.startswith(_REPO_OPTIONS):
-            return None
-        if token == "-C":                         # several compose, each relative to the last
-            here = _readable_dir(options[index + 1] if index + 1 < len(options) else None, here)
-        index += 2 if token in GIT_VALUE_OPTS else 1
-    return here
-
-
 def _commit_target(command, cwd, tool_name=None):
     """The directory the first `git commit` in `command` runs in, or None when it is unreadable.
 
-    Follows every cd-like statement before the commit, then the commit's own `-C` values, starting
-    from the event cwd - the same path the shell and git take.
+    The walk lives in shell_text, shared with the repo gate, so the two hooks cannot judge
+    different repositories for the same commit.
     """
-    tool, here = tool_name or "Bash", cwd
-    for _at, segment in iter_segments(blank_heredoc_bodies(command or ""), tool_name):
-        tokens = argv_for_match(segment.strip().lstrip("(").strip(), tool)
-        if not tokens:
-            continue
-        program = basename_for_tool(tokens[0], tool).lower()
-        if program in _CD_PROGRAMS:
-            here = _readable_dir(_cd_target(tokens[1:]), here)
-            continue
-        if program == "popd":
-            here = None
-            continue
-        operands = git_verb_operands(tokens, _COMMIT_VERBS, tool)
-        if operands is not None:
-            return _apply_git_options(tokens[:len(tokens) - len(operands) - 1], here, tool)
-    return None
+    return git_verb_dir(command, cwd, _COMMIT_VERBS, tool_name)
 
 
 def _git(cwd, *args):

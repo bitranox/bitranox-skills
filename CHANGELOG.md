@@ -29,6 +29,27 @@ than the change, so entries reconstructed from them would read like coverage wit
 a hole nobody has drawn a line under is one that gets rediscovered and half-filled - which is how
 two "versions with no entry" notes came to sit in this file disagreeing with it.
 
+## [7.29.5]
+
+### Fixed
+
+- `repo-gate`: the commit/push gate judges the repository the command lands in, not the one the
+  session sits in. `cd <repo> && git commit` and `git -C <repo> push` were checked against the
+  session's working directory, so from a session parked in a stale checkout unbumped `plugins/`
+  commits passed and later ones were blocked for a version they did not carry. A command whose
+  target the text cannot name (`cd "$X"`) or that does not exist is still judged in the session's
+  repository, as before; a target outside any repository is not judged.
+- `repo-gate --mirror-of` compares the twin against the marketplace checkout it is run from (when
+  that checkout sits in the same `public/` tree), falling back to the main checkout only for a
+  caller outside any marketplace checkout. Run from a current worktree beside a stale main
+  checkout, it reported drift whose removed lines were the new text.
+
+### Changed
+
+- `shell_text.git_verb_dir` is the one reader of where a git command runs (every `cd` before it,
+  then its own `-C` values). `git-commit-branch-guard` and `repo-gate` both use it, so the two
+  hooks cannot judge different repositories for the same commit. `GATED_GIT_VERBS` is now public.
+
 ## [7.29.4]
 
 ### Fixed

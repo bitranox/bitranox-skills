@@ -70,7 +70,8 @@ is_gated_command = shell_text.is_gated_command
 
 def _git(root, *args):
     try:
-        out = subprocess.run(["git", *args], cwd=str(root), capture_output=True, text=True)
+        out = subprocess.run(["git", *args], cwd=str(root), capture_output=True, text=True,
+                             encoding="utf-8", errors="replace")
         return out.returncode, out.stdout, out.stderr
     except Exception:  # noqa: BLE001
         return 1, "", ""
@@ -97,11 +98,33 @@ def _git_paths(root, subcommand, *args):
     return 0, [os.fsdecode(p) for p in out.stdout.split(b"\0") if p]
 
 
-def repo_root():
-    rc, out, _ = _git(Path.cwd(), "rev-parse", "--show-toplevel")
+def repo_root(start=None):
+    rc, out, _ = _git(Path(start) if start else Path.cwd(), "rev-parse", "--show-toplevel")
     if rc == 0 and out.strip():
         return Path(out.strip())
     return None
+
+
+def hook_root(event):
+    """The repository a gated hook command lands in, or None when it lands in no repository.
+
+    A hook runs where the SESSION sits, not where `cd <repo> && git commit` or `git -C <repo> push`
+    lands. Measured 2026-09-27: commits made that way from a session parked in a stale main
+    checkout were judged against that checkout, so five unbumped plugins/ commits passed and two
+    later ones were blocked for a version they did not carry.
+
+    Falls back to the session's own repository when the command does not move, or moves somewhere
+    the text cannot name (`cd "$X"`) or that does not exist (a Windows path whose backslashes the
+    tokenizer ate) - that is the old behaviour, so an unreadable command is no worse than before.
+    A readable target outside any repository gives None: the git command fails there by itself,
+    and there is nothing to judge.
+    """
+    command = (event.get("tool_input") or {}).get("command") or ""
+    base = os.path.normpath(event.get("cwd") or os.getcwd())
+    target = shell_text.git_verb_dir(command, base, shell_text.GATED_GIT_VERBS, event.get("tool_name"))
+    if not target or not os.path.isdir(target) or os.path.normcase(target) == os.path.normcase(base):
+        return repo_root()
+    return repo_root(target)
 
 
 def is_bitranox_skills(root):
@@ -1117,6 +1140,22 @@ def check_skill_mirrors(root):
     return mirror_failures(root, touched & set(MIRRORED_SKILLS))
 
 
+def _marketplace_checkout(public):
+    """The marketplace checkout a mirror is compared against: the one being run from, if any.
+
+    Measured 2026-09-27: run from a worktree on origin/master while the main checkout sat 194
+    commits behind, --mirror-of compared the twin against the MAIN checkout and reported DRIFT whose
+    '-' lines were the new text, while --mirrors from the same worktree said in sync. The main
+    checkout under `public/KI/` stays the answer for a caller not standing in a marketplace checkout
+    at all, such as a tool repo's release pipeline. A checkout outside `public` is not preferred:
+    the twin lives in that tree, so the comparison must too.
+    """
+    here = repo_root()
+    if here is not None and is_bitranox_skills(here) and here.resolve().is_relative_to(public.resolve()):
+        return here
+    return public / "KI" / "bitranox-skills"
+
+
 def audit_mirror_of(tool_repo):
     """Print the state of the mirrored pair belonging to one tool repo.
 
@@ -1132,7 +1171,7 @@ def audit_mirror_of(tool_repo):
     if public is None:
         print("mirror check: no public/ tree above %s - nothing to compare" % tool)
         return 0
-    marketplace = public / "KI" / "bitranox-skills"
+    marketplace = _marketplace_checkout(public)
     if not (marketplace / "plugins" / "bitranox" / "skills").is_dir():
         print("mirror check: no bitranox-skills checkout at %s - nothing to compare" % marketplace)
         return 0
@@ -1257,7 +1296,10 @@ def run_checks(root, ci, full_pytest=None, run_pytest=True, baseline=0):
 
 
 def gate_tool_repo_mirror(root):
-    """Check the mirror of a skill edited in its OWN repo, before it is committed.
+    """Check the mirror of a skill edited in its OWN repo, before it is committed or pushed.
+
+    `main` has already read the event and confirmed it is a gated command, and `root` is the
+    repository that command lands in (`hook_root`), not the session's working directory.
 
     The gate fires on every ``git commit``/``git push`` on the machine, but it used to
     return 0 in any repo that is not the marketplace. That left the tool-repo side of a
@@ -1278,12 +1320,6 @@ def gate_tool_repo_mirror(root):
 
     if root is None:
         return 0
-    try:
-        event = json.load(sys.stdin)
-    except Exception:  # noqa: BLE001
-        return 0
-    if not is_gated_command((event.get("tool_input") or {}).get("command") or "", event.get("tool_name")):
-        return 0
 
     public = _public_tree(root / "x")
     if public is None:
@@ -1292,7 +1328,7 @@ def gate_tool_repo_mirror(root):
     if not mine:
         return 0
 
-    marketplace = public / "KI" / "bitranox-skills"
+    marketplace = _marketplace_checkout(public)
     if not (marketplace / "plugins" / "bitranox" / "skills").is_dir():
         _say_unverifiable(mine, marketplace)
         return 0
@@ -1372,7 +1408,21 @@ def main():
         target = args[index + 1] if len(args) > index + 1 else "."
         return audit_mirror_of(target)
 
-    root = repo_root()
+    hook_mode = not (ci or pre_push or mirrors)
+    if hook_mode:
+        # A real git pre-push hook receives REF LINES on stdin, never a Claude Code event, so only
+        # hook mode parses it - read that way, a pre-push would fail the parse and pass by accident
+        # on the one caller that fires when git runs OUTSIDE Claude Code (a terminal, an IDE, a
+        # script). That blind spot is how a stale generated catalog shipped twice.
+        try:
+            event = json.load(sys.stdin)
+        except Exception:  # noqa: BLE001
+            return 0
+        if not is_gated_command((event.get("tool_input") or {}).get("command") or "", event.get("tool_name")):
+            return 0
+        root = hook_root(event)
+    else:
+        root = repo_root()
     if root is None or not is_bitranox_skills(root):
         if pre_push:
             # Someone pointed core.hooksPath here from another repo. Say so rather than blocking
@@ -1393,19 +1443,6 @@ def main():
         # including the ones no current change touches.
         return 1 if audit_mirrors(root) else 0
 
-    if not (ci or pre_push):
-        try:
-            event = json.load(sys.stdin)
-        except Exception:  # noqa: BLE001
-            return 0
-        command = (event.get("tool_input") or {}).get("command") or ""
-        if not is_gated_command(command, event.get("tool_name")):
-            return 0
-
-    # A real git pre-push hook receives REF LINES on stdin, never a Claude Code event, so it must
-    # not go through the parse above - that read fails and returns 0, passing the gate by accident
-    # on the one caller that fires when git runs OUTSIDE Claude Code (a terminal, an IDE, a
-    # script). That blind spot is how a stale generated catalog shipped twice.
     failures = run_checks(root, ci, full_pytest=ci or pre_push,
                           run_pytest=run_pytest, baseline=expected_collected(root))
 
