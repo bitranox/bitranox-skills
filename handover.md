@@ -1,4 +1,4 @@
-# Handover - 2026-09-28 04:55, 7.29.5-7.29.7 shipped and green; ranks 100, 105, 110, 120, 121, 130 closed
+# STALE - read 2026-09-28 12:16, work continued
 
 ## In flight
 

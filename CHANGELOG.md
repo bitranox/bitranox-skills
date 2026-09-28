@@ -29,6 +29,29 @@ than the change, so entries reconstructed from them would read like coverage wit
 a hole nobody has drawn a line under is one that gets rediscovered and half-filled - which is how
 two "versions with no entry" notes came to sit in this file disagreeing with it.
 
+## [7.30.0]
+
+### Added
+
+- `classifier_eval.py packet` and `harvest` (logic in `meta-self-improve/judge_panel.py`): the
+  blind judge panel that settles whether a skill-router pick was right. `packet` pools every
+  candidate the named replay or shadow logs proposed for a prompt (winner, `--alternatives`
+  runners-up, picks, keyword picks), keyed by prompt uuid so one prompt is judged once, and writes
+  per-judge packets in their own item order that name no arm, log or score, plus the key that maps
+  them back. `--override SKILL=FILE` shows a neutral text for a description under test;
+  `--per-session`, `--limit`, `--seed` and `--since` draw a pre-registrable sample. `harvest` reads
+  each judge's last verdict object from its transcript (assistant records only), takes the unique
+  majority per verdict, leaves a tie unresolved and lists it, and writes labels keyed by uuid.
+
+### Fixed
+
+- A subagent's hand-back (`<agent-message from=...>`) no longer counts as a typed prompt. The
+  UserPromptSubmit hook receives the bare envelope, while the transcript stores it behind
+  "Another Claude session sent a message", which was the only form on the not-typed list. So the
+  skill router, in decide mode, scored hand-backs as requests: 136 decide rows since 7.27.0, 13 of
+  them given a pick. Replayed over the whole shadow history, every state the new prefix reclassifies
+  is a hand-back, and no human-origin transcript record starts with it.
+
 ## [7.29.7]
 
 ### Fixed

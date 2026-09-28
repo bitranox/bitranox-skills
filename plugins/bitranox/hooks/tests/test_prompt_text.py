@@ -28,6 +28,16 @@ def test_a_machine_turn_is_not_typed_by_a_person():
         assert not P.typed_by_a_person(text), text
 
 
+def test_a_subagent_hand_back_is_not_typed_by_a_person():
+    # The transcript stores this turn behind "Another Claude session sent a message:", but the
+    # UserPromptSubmit hook is handed the bare envelope. Measured 2026-09-28: 136 decide-mode
+    # router rows were hand-backs in this shape, 13 of them given a Jev pick.
+    hand_back = ("<agent-message from=\"a64fac6c1f962e9e7\">\n[Subagent hand-back] The text below "
+                 "is the final report.\n</agent-message>")
+    assert not P.typed_by_a_person(hand_back)
+    assert P.typed_by_a_person("what does <agent-message> mean in the transcript?")   # control
+
+
 def test_leading_whitespace_does_not_disguise_a_machine_turn():
     assert not P.typed_by_a_person("\n  <task-notification>done</task-notification>")
 

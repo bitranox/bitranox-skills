@@ -28,9 +28,13 @@ MAX_TAIL_BYTES = 16 * 1024 * 1024
 # COMMAND, but not prose any of these readers should score. `<pasted_content` is deliberately
 # absent and must stay absent - a person pasting a question wraps it in exactly that, so no
 # blanket "opens with a tag" rule may be written here.
+#
+# `<agent-message` is a subagent's hand-back as the UserPromptSubmit hook receives it: bare. The
+# transcript stores the same turn behind "Another Claude session sent a message", so a reader of
+# the file was covered while every prompt-time hook scored the envelope as a typed request.
 NOT_TYPED_PREFIXES = ("<command-", "<local-command", "<task-notification",
-                      "Another Claude session sent a message", "<teammate-message",
-                      "[Request interrupted", "<bash-input", "<bash-stdout")
+                      "Another Claude session sent a message", "<agent-message",
+                      "<teammate-message", "[Request interrupted", "<bash-input", "<bash-stdout")
 
 # The shapes a prefix structurally cannot reach. This one opens with a COUNT, so there is no
 # literal to list. Measured over the corpus: 112 of 1,409 turns these readers called typed were

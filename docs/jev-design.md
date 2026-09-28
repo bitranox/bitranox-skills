@@ -223,7 +223,11 @@ Each site gets one wrapper, and its regex function is not touched.
   - recall: pair requests vs one request with `candidates[i]`.
 - **Accuracy:** a disagreement is not a Jev error, so every decide-mode question is settled by a
   blind panel (five judges who never see which side fired) over the rows, with the outcome per
-  branch pre-registered before any judge runs.
+  branch pre-registered before any judge runs. `classifier_eval.py packet` builds the panel's
+  packets from any mix of replay and shadow logs (candidates pooled per prompt uuid, no arm names,
+  a neutral override text for a description under test), and `harvest` turns the judges'
+  transcripts into majority labels keyed by prompt uuid, with every split listed; the logic is in
+  `judge_panel.py` beside it.
 - **Output:** a results doc giving go/no-go per site and per language, cost and latency
   percentiles, and the privacy posture from finding 11.
 

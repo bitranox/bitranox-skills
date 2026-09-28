@@ -29,9 +29,20 @@ Usage:
                               [--description SKILL=FILE ...] [--limit N] [--out LOG] [--json]
   classifier_eval.py size     [--limit N] [--json]          what a replay would cost, calls nothing
   classifier_eval.py controls [--arm ARM] [--json]          ask only the planted controls
+  classifier_eval.py packet   --from LOG [--from LOG ...] --out DIR [--alternatives 3]
+                              [--override SKILL=FILE ...] [--always SKILL ...] [--judges 5]
+                              [--per-session N] [--limit N] [--seed N] [--since ISO] [--json]
+  classifier_eval.py harvest  --key DIR/key.json --transcript JUDGE.jsonl [...] --out LABELS.json
 
-Exit codes: 0 done; 1 nothing to report (no usable rows, no prompts); 2 usage or IO error, or no
-API key; 3 a planted control answered the wrong way, so no number from the run may be read.
+`packet` and `harvest` are the blind panel that decides whether picks were RIGHT, which no log can
+say (judge_panel.py): `packet` pools every candidate the named replay or shadow logs proposed for a
+prompt into blind judge packets plus a key, and `harvest` reads each judge's verdict object from its
+transcript and writes majority labels keyed by prompt uuid, printing every split. Both read and
+write local files only.
+
+Exit codes: 0 done; 1 nothing to report (no usable rows, no prompts, a judge transcript with no
+verdict object); 2 usage or IO error, or no API key; 3 a planted control answered the wrong way, so
+no number from the run may be read.
 """
 from __future__ import annotations
 
@@ -52,6 +63,7 @@ for _d in (str(_HOOKS), str(_JIGS)):
         sys.path.insert(0, _d)
 
 import classifier as cl  # noqa: E402 - the sys.path above is what makes this importable
+import judge_panel as jp  # noqa: E402 - a sibling module; imported after the sys.path setup
 import skill_roster  # noqa: E402 - same sys.path
 import transcript_turns  # noqa: E402 - same sys.path
 
@@ -1176,7 +1188,49 @@ def _parser():
     r.add_argument("--disagreements", type=Path, metavar="OUT",
                    help="write every disagreement as JSONL to OUT")
     r.add_argument("--json", action="store_true", help="print a JSON envelope")
+    _panel_parsers(sub)
     return p
+
+
+def non_negative_int(value):
+    """argparse type for a count that may be 0 (no alternatives beyond the winner)."""
+    try:
+        number = int(value)
+    except ValueError as exc:
+        raise argparse.ArgumentTypeError("expected an integer, got %r" % value) from exc
+    if number < 0:
+        raise argparse.ArgumentTypeError("must be 0 or more, got %d" % number)
+    return number
+
+
+def _panel_parsers(sub):
+    k = sub.add_parser("packet", help="build blind judge packets from replay or shadow logs")
+    k.add_argument("--from", dest="sources", type=Path, action="append", required=True,
+                   metavar="LOG", help="a replay log, a shadow log, or the audit directory "
+                                       "(repeatable; rows sharing a prompt uuid are pooled)")
+    k.add_argument("--out", type=Path, required=True, help="directory for items, key, packets")
+    k.add_argument("--alternatives", type=non_negative_int, default=3,
+                   help="runners-up of each choice answer to pool beside its winner (default 3)")
+    k.add_argument("--override", type=description_override, action="append", default=None,
+                   metavar="SKILL=FILE", help="show SKILL with the neutral text of FILE, for a "
+                                              "skill whose description is under test")
+    k.add_argument("--always", action="append", default=None, metavar="SKILL",
+                   help="make SKILL a candidate on every item (repeatable)")
+    k.add_argument("--judges", type=positive_int, default=5)
+    k.add_argument("--per-session", type=positive_int, default=None)
+    k.add_argument("--limit", type=positive_int, default=None)
+    k.add_argument("--seed", type=int, default=0)
+    k.add_argument("--since", default=None, metavar="ISO",
+                   help="only shadow rows logged at or after this UTC timestamp")
+    k.add_argument("--instructions", type=Path, default=None,
+                   help="judge instructions (default: the built-in router instructions)")
+    k.add_argument("--json", action="store_true", help="print a JSON envelope")
+    h = sub.add_parser("harvest", help="majority labels from the judges' transcripts")
+    h.add_argument("--key", type=Path, required=True, help="the key.json `packet` wrote")
+    h.add_argument("--transcript", type=Path, action="append", required=True,
+                   help="one judge's transcript (repeatable, one per judge)")
+    h.add_argument("--out", type=Path, required=True, help="labels JSON, keyed by prompt uuid")
+    h.add_argument("--json", action="store_true", help="print a JSON envelope")
 
 
 def render_replay(data):
@@ -1217,6 +1271,91 @@ def render_replay(data):
     return "\n".join(lines)
 
 
+def render_panel(data):
+    if "packets" in data:
+        return ("%d items, %d candidates, %d descriptions; %d packets in %s; skipped rows: %s"
+                % (data["items"], data["candidates"], data["glossary"], data["packets"],
+                   data["out"], data["skipped_rows"] or "none"))
+    lines = ["%d prompts labelled by %d judges -> %s; unjudged %d, invalid %d, splits %d "
+             "(%d unresolved)" % (data["labelled"], data["judges"], data["out"],
+                                  len(data["unjudged"]), len(data["invalid"]), len(data["splits"]),
+                                  sum(1 for s in data["splits"] if s["unresolved"]))]
+    lines += ["  %s %s %s: %s%s" % (s["item"], s["uuid"], s["candidate"], s["votes"],
+                                    "  UNRESOLVED" if s["unresolved"] else "")
+              for s in data["splits"]]
+    return "\n".join(lines)
+
+
+def _panel_logs(args):
+    """[(log name, rows)] for `packet`, probe sessions and rows before --since dropped."""
+    logs = []
+    for src in args.sources:
+        rows, _bad = load_rows(src, exclude_sessions=DEFAULT_EXCLUDE)
+        if args.since:
+            rows = [r for r in rows if "arms" in r or str(r.get("ts") or "") >= args.since]
+        logs.append((src.name, rows))
+    return logs
+
+
+def _panel_descriptions(pooled, skills):
+    """(descriptions, all skill names): the shipped set, overlaid by each prompt's own session
+    listing, which is what that session's router was actually offered."""
+    descriptions = dict(skills)
+    for item in pooled.values():
+        try:
+            listing = skill_roster.listing_from_transcript(item.get("transcript") or "")
+        except OSError:
+            listing = None
+        descriptions.update(listing or {})
+    return descriptions, sorted(descriptions)
+
+
+def _run_packet(args, skills):
+    """(exit code, data, error). Refuses an --out that already holds a key: packets may already
+    be with judges, and a new key would silently re-map their item ids to other prompts."""
+    if (args.out / "key.json").exists():
+        return 2, None, "%s already holds a key.json - pick a new --out" % args.out
+    pooled, skipped = jp.pool(_panel_logs(args), alternatives=args.alternatives,
+                              locate=locate_prompt, always=args.always or ())
+    pooled = jp.sample(pooled, per_session=args.per_session, limit=args.limit, seed=args.seed)
+    if not pooled:
+        return 1, None, "no prompts to judge in %s" % ", ".join(map(str, args.sources))
+    skills = cl.load_skill_descriptions() if skills is None else skills
+    descriptions, names = _panel_descriptions(pooled, skills)
+    instructions = (args.instructions.read_text(encoding="utf-8") if args.instructions
+                    else jp.DEFAULT_INSTRUCTIONS)
+    built = jp.build_packet(pooled, descriptions=descriptions, all_names=names,
+                            overrides=dict(args.override or []), judges=args.judges,
+                            seed=args.seed, instructions=instructions)
+    args.out.mkdir(parents=True, exist_ok=True)
+    for name in ("items", "key"):
+        (args.out / (name + ".json")).write_text(
+            json.dumps(built[name], ensure_ascii=False, indent=1), encoding="utf-8")
+    for j, text in enumerate(built["packets"]):
+        (args.out / ("packet-%d.txt" % j)).write_text(text, encoding="utf-8")
+    (args.out / "skipped.json").write_text(json.dumps(skipped, indent=1), encoding="utf-8")
+    return 0, {"items": len(built["items"]), "packets": len(built["packets"]),
+               "candidates": sum(len(i["candidates"]) for i in built["items"].values()),
+               "glossary": len({c for i in built["items"].values() for c in i["candidates"]}),
+               "out": str(args.out),
+               "skipped_rows": dict(Counter(s["reason"] for s in skipped))}, None
+
+
+def _run_harvest(args):
+    key = json.loads(args.key.read_text(encoding="utf-8"))
+    panels = []
+    for path in args.transcript:
+        panel = jp.extract_panel(path, set(key))
+        if panel is None:
+            return 1, None, "no verdict object for these items in %s" % path
+        panels.append(panel)
+    out = jp.harvest(key, panels)
+    args.out.write_text(json.dumps(out["labels"], ensure_ascii=False, indent=1), encoding="utf-8")
+    return 0, {"labelled": len(out["labels"]), "judges": out["judges"], "out": str(args.out),
+               "splits": out["splits"], "unjudged": out["unjudged"],
+               "invalid": out["invalid"]}, None
+
+
 def _emit(args, ok, data=None, error=None, skipped=None):
     if args.json:
         env = {"ok": ok, "command": args.command, "data": data, "skipped": skipped or {}}
@@ -1227,8 +1366,12 @@ def _emit(args, ok, data=None, error=None, skipped=None):
         # A failure that carries data prints it: for `controls` the rows ARE the diagnosis, and a
         # verdict line alone would say a control failed while withholding which one and at what
         # score. The error still goes to stderr, so the exit code and the stream stay separable.
-        print(render_replay(data) if args.command in ("replay", "size", "controls")
-              else render_text(data))
+        if args.command in ("replay", "size", "controls"):
+            print(render_replay(data))
+        elif args.command in ("packet", "harvest"):
+            print(render_panel(data))
+        else:
+            print(render_text(data))
     if error and not args.json:
         print("classifier_eval: %s" % error, file=sys.stderr)
 
@@ -1249,6 +1392,15 @@ def main(argv=None, *, clf=None, skills=None):
                     "unreadable_corpus_paths": len(data["corpus"].get("unreadable", []))}
                    if data and "skipped_prompts" in data else None)
         _emit(args, code == 0, data=data, error=error, skipped=skipped)
+        return code
+    if args.command in ("packet", "harvest"):
+        try:
+            code, data, error = (_run_packet(args, skills) if args.command == "packet"
+                                 else _run_harvest(args))
+        except (OSError, ValueError) as exc:
+            _emit(args, False, error="%s: %s" % (type(exc).__name__, exc))
+            return 2
+        _emit(args, code == 0, data=data, error=error)
         return code
     exclude = tuple(args.exclude_session if args.exclude_session is not None else DEFAULT_EXCLUDE)
     args.log = args.log or default_log()
