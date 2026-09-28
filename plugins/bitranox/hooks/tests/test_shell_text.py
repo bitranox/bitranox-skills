@@ -4,6 +4,7 @@ This module exists so the command-scanning guards agree about what counts as DAT
 are the corpus that proved the two former copies behaviourally identical before they were merged;
 keeping them here is what stops the next edit from splitting the behaviour again.
 """
+import os
 import subprocess
 import pytest
 import shell_text as S
@@ -621,13 +622,14 @@ def test_strip_leading_cd_keeps_a_bare_cd_with_nothing_after_it():
 
 def test_git_verb_dir_follows_cd_and_dash_c_to_the_first_matching_verb():
     verbs = S.GATED_GIT_VERBS
+    moved = os.path.normpath("/r")        # a path the walk resolved is normalised: `\r` on Windows
     assert S.git_verb_dir("git push", "/s", verbs) == "/s"
-    assert S.git_verb_dir("cd /r && git push origin master", "/s", verbs) == "/r"
-    assert S.git_verb_dir("git -C /r push", "/s", verbs) == "/r"
+    assert S.git_verb_dir("cd /r && git push origin master", "/s", verbs) == moved
+    assert S.git_verb_dir("git -C /r push", "/s", verbs) == moved
     # only a cd BEFORE the verb moves it; a later one belongs to the next statement
     assert S.git_verb_dir("git commit -m x && cd /r && git push", "/s", verbs) == "/s"
     # a verb outside the set is not where the walk stops
-    assert S.git_verb_dir("git -C /a status; cd /r; git commit -m x", "/s", verbs) == "/r"
+    assert S.git_verb_dir("git -C /a status; cd /r; git commit -m x", "/s", verbs) == moved
 
 
 def test_git_verb_dir_refuses_what_the_text_cannot_name():

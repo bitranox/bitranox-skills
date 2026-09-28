@@ -1927,6 +1927,15 @@ def _init_git(root):
     return root
 
 
+def _sh(path):
+    """`path` as a Bash command operand: double-quoted, forward slashes.
+
+    Unquoted, a Windows path loses its backslashes to the shell - bash reads `cd C:\\a\\b` as
+    `cd C:ab` - and the gate's tokenizer reads it the same way, so a fixture written with the raw
+    path tests the fallback instead of the move on Windows."""
+    return '"%s"' % path.as_posix()
+
+
 def _hook_event(monkeypatch, cwd, command):
     """Drive hook mode the way Claude Code does: the session sits in `cwd`, the command may move."""
     monkeypatch.chdir(cwd)
@@ -1943,7 +1952,7 @@ def test_a_commit_that_cds_into_the_marketplace_is_judged_there(tmp_path, monkey
     # is not where the commit lands; the gate must follow the command.
     session = _init_git(tmp_path / "elsewhere")
     target = _init_git(make_repo(tmp_path / "bitranox-skills", bad_skill=True))
-    _hook_event(monkeypatch, session, f"cd {target} && git commit -m x")
+    _hook_event(monkeypatch, session, f"cd {_sh(target)} && git commit -m x")
 
     assert RG.main() == 2
     assert "blocked" in capsys.readouterr().err
@@ -1952,7 +1961,7 @@ def test_a_commit_that_cds_into_the_marketplace_is_judged_there(tmp_path, monkey
 def test_a_commit_with_dash_c_into_the_marketplace_is_judged_there(tmp_path, monkeypatch):
     session = _init_git(tmp_path / "elsewhere")
     target = _init_git(make_repo(tmp_path / "bitranox-skills", bad_skill=True))
-    _hook_event(monkeypatch, session, f"git -C {target} commit -m x")
+    _hook_event(monkeypatch, session, f"git -C {_sh(target)} commit -m x")
 
     assert RG.main() == 2
 
@@ -1962,7 +1971,7 @@ def test_a_commit_that_cds_out_of_the_marketplace_is_not_judged_by_it(tmp_path, 
     # block a commit the command makes in an unrelated repository.
     session = _init_git(make_repo(tmp_path / "bitranox-skills", bad_skill=True))
     target = _init_git(tmp_path / "elsewhere")
-    _hook_event(monkeypatch, session, f"cd {target} && git commit -m x")
+    _hook_event(monkeypatch, session, f"cd {_sh(target)} && git commit -m x")
 
     assert RG.main() == 0
 
@@ -1970,7 +1979,7 @@ def test_a_commit_that_cds_out_of_the_marketplace_is_not_judged_by_it(tmp_path, 
 def test_a_push_that_cds_into_the_marketplace_is_judged_there(tmp_path, monkeypatch):
     session = _init_git(tmp_path / "elsewhere")
     target = _init_git(make_repo(tmp_path / "bitranox-skills", bad_skill=True))
-    _hook_event(monkeypatch, session, f"cd {target} && git push origin master")
+    _hook_event(monkeypatch, session, f"cd {_sh(target)} && git push origin master")
 
     assert RG.main() == 2
 
@@ -1980,15 +1989,23 @@ def test_a_commit_into_a_directory_outside_any_repo_is_not_judged(tmp_path, monk
     session = _init_git(make_repo(tmp_path / "bitranox-skills", bad_skill=True))
     plain = tmp_path / "plain"
     plain.mkdir()
-    _hook_event(monkeypatch, session, f"cd {plain} && git commit -m x")
+    _hook_event(monkeypatch, session, f"cd {_sh(plain)} && git commit -m x")
 
     assert RG.main() == 0
 
 
 def test_a_target_that_does_not_exist_falls_back_to_the_session_repo(tmp_path, monkeypatch):
-    # The shape a Windows path takes once the POSIX tokenizer has eaten its backslashes.
     session = _init_git(make_repo(tmp_path / "bitranox-skills", bad_skill=True))
-    _hook_event(monkeypatch, session, f"cd {tmp_path / 'no-such-dir'} && git commit -m x")
+    _hook_event(monkeypatch, session, f"cd {_sh(tmp_path / 'no-such-dir')} && git commit -m x")
+
+    assert RG.main() == 2
+
+
+def test_an_unquoted_backslash_path_falls_back_to_the_session_repo(tmp_path, monkeypatch):
+    # Bash reads `cd C:\a\b` as `cd C:ab`, and so does the tokenizer; the mangled name exists
+    # nowhere, so the gate judges the session's repository rather than guess.
+    session = _init_git(make_repo(tmp_path / "bitranox-skills", bad_skill=True))
+    _hook_event(monkeypatch, session, "cd C:\\no\\such\\repo && git commit -m x")
 
     assert RG.main() == 2
 

@@ -29,6 +29,16 @@ than the change, so entries reconstructed from them would read like coverage wit
 a hole nobody has drawn a line under is one that gets rediscovered and half-filled - which is how
 two "versions with no entry" notes came to sit in this file disagreeing with it.
 
+## [7.29.7]
+
+### Fixed
+
+- Tests only: the 7.29.5 repo-gate tests wrote a fixture path into the command unquoted, and on
+  Windows its backslashes were eaten exactly as bash would eat them, so the tests exercised the
+  fallback instead of the move and failed there. Fixture paths are now double-quoted in forward-slash
+  form, and a new test pins the unquoted-backslash case as the documented fallback to the session's
+  repository. The gate itself is unchanged.
+
 ## [7.29.6]
 
 ### Changed
