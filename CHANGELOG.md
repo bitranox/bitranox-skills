@@ -29,6 +29,21 @@ than the change, so entries reconstructed from them would read like coverage wit
 a hole nobody has drawn a line under is one that gets rediscovered and half-filled - which is how
 two "versions with no entry" notes came to sit in this file disagreeing with it.
 
+## [7.29.4]
+
+### Fixed
+
+- `compuse-toolbox`: the skill now says how a script committed to a repository finds a jig. It
+  said only "give the full path", and the one path a session shows is a version directory in the
+  plugin cache, which changes on every update and is deleted 14 days after it is superseded.
+  Without the rule, agents hard-coded or globbed that cache (`sort -V`, `find -quit`), or fetched
+  the jig from a branch at run time for CI. A committed script now names the marketplace clone
+  (`<plugins root>/marketplaces/bitranox-skills/...`, root movable by
+  `CLAUDE_CODE_PLUGIN_CACHE_DIR`) and fails with the install command when it is missing; a script
+  that must run where no marketplace exists copies the one file into the repository with its
+  source and version and runs that copy everywhere. The preamble also states that the jigs live in
+  `scripts/`.
+
 ## [7.29.3]
 
 ### Fixed

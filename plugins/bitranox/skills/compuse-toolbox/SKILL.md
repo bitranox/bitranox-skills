@@ -11,7 +11,33 @@ edge cases (self-match, exit-code traps, wrapper argv) that the one-liner gets w
 
 Each jig is a self-contained PEP 723 script: run it with `uv run` (uv provisions its deps) - the
 one exception is `gate`, which must be launched with plain `python3`, see its row below - and get
-its full arguments from `--help`. Run from the skill directory, or give the full path.
+its full arguments from `--help`. Run from the skill directory, or give the full path. The jigs sit
+in the skill's `scripts/` directory.
+
+**From a script you commit, name the marketplace clone, never the plugin cache.** The base
+directory a session announces is a version directory under `<plugins root>/cache/`: it names one
+plugin version, changes on every update, and is deleted 14 days after it is superseded. A script
+that hard-codes it, globs across its versions or picks one (`sort -V`, `tail -1`, `find -quit`)
+breaks, or quietly runs a stale copy - or a copy of a skill that has since moved to another
+plugin. The marketplace clone has no version in its path:
+
+```bash
+TOOLBOX="${CLAUDE_CODE_PLUGIN_CACHE_DIR:-$HOME/.claude/plugins}/marketplaces/bitranox-skills/plugins/bitranox/skills/compuse-toolbox/scripts"
+[ -f "$TOOLBOX/ci_wait.py" ] || { echo "compuse-toolbox not found at $TOOLBOX - add it: /plugin marketplace add bitranox/bitranox-skills" >&2; exit 2; }
+uv run "$TOOLBOX/ci_wait.py" --sha "$(git rev-parse HEAD)"
+```
+
+The plugins root is `~/.claude/plugins` unless `CLAUDE_CODE_PLUGIN_CACHE_DIR` moves it; in Python
+build the same path from that variable or `Path.home()`. The clone is what `/plugin marketplace
+update` pulls, so it can be AHEAD of the version a running session loaded. A marketplace added from
+a local directory has no clone there: read its `installLocation` from `known_marketplaces.json` in
+the plugins root.
+
+Where no marketplace exists - CI, a server, a machine without Claude Code - copy the one file into
+the repository with a header naming its source path and plugin version, and refresh it on purpose.
+Such a script then runs that copy everywhere, workstations included - preferring the clone where it
+exists makes local runs and CI run different versions of the same jig. Never download it from a
+branch when the script runs: that executes whatever the branch holds at that moment.
 
 ## Tools
 
