@@ -29,6 +29,20 @@ than the change, so entries reconstructed from them would read like coverage wit
 a hole nobody has drawn a line under is one that gets rediscovered and half-filled - which is how
 two "versions with no entry" notes came to sit in this file disagreeing with it.
 
+## [7.29.3]
+
+### Fixed
+
+- Tests: the linearity check in `test_secret_patterns.py` no longer fails on a loaded host. It
+  timed with the wall clock and measured every small pass before every large one, so time spent
+  preempted by other processes - and any load change during the test - landed on the larger arm:
+  a linear scan read 9-12x against a bound of 8 at load ~26 on 16 cores, blocking unrelated
+  commits and failing a macOS CI cell. It now times this thread's CPU time, alternates the two
+  arms, and sizes the small arm to at least ten ticks of the clock, because Windows' CPU clock
+  advances in 15.625 ms steps and a 50 ms arm there inflated a true 6x to 7.67x. Under the same
+  load, 33 alternated measurements per instrument: the old one failed once (8.60), the new one
+  never (worst 6.09); a real quadratic regex still reads 16.1x. Passes on Windows as well.
+
 ## [7.29.2]
 
 ### Fixed

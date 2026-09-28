@@ -5,6 +5,8 @@ realistic secret and requires that its VALUE is gone from the output, not merely
 appeared somewhere.
 """
 
+import inspect
+import math
 import time
 
 import pytest
@@ -598,16 +600,10 @@ def _scan(text):
     sp.holds_a_credential(text)
 
 
-def _fastest_of(text, scan=_scan, repeats=3, clock=time.monotonic):
-    """The minimum of a few timed passes, which filters a transient scheduling stall without
-    hiding real quadratic growth - a slow pass recurs on every repeat, a stall does not."""
-    best = None
-    for _ in range(repeats):
-        start = clock()
-        scan(text)
-        elapsed = clock() - start
-        best = elapsed if best is None else min(best, elapsed)
-    return best
+def _timed(text, scan, clock):
+    start = clock()
+    scan(text)
+    return clock() - start
 
 
 # The small arm must run long enough that scheduler noise is a small share of it. At a fixed
@@ -617,22 +613,58 @@ def _fastest_of(text, scan=_scan, repeats=3, clock=time.monotonic):
 _SMALL_ARM_FLOOR_S = 0.05
 _START_LEN = 50_000
 _MAX_SMALL_LEN = 1_600_000
+_REPEATS = 3
+# A timing can be off by one tick either way. Ten ticks per small arm keeps that under ~13% of a
+# linear ratio. The floor above is already hundreds of ticks on Linux and macOS, but Windows'
+# thread_time advances in 15.625 ms steps (GetThreadTimes; get_clock_info claims 1e-7 s), which
+# made a 50 ms arm 3 ticks long and read a true 6.0x as 7.67x.
+_TICKS_PER_ARM = 10
+_TICK_PROBE_BUDGET_S = 0.2
 
 
-def _growth_ratio(prefix, unit, suffix, scan=_scan, clock=time.monotonic):
-    """Time `scan` on the shape at a calibrated size n and at 4n; return (t_n, t_4n)."""
+def _clock_tick(clock, budget_s=_TICK_PROBE_BUDGET_S):
+    """The step by which `clock` advances, found by spinning until it has moved twice - the
+    first move ends a partial tick, the second spans a whole one. The spin is bounded by the
+    wall, not by `clock`: a clock that never advances returns 0.0 instead of hanging."""
+    deadline = time.monotonic() + budget_s
+    moves = []
+    last = clock()
+    while len(moves) < 2 and time.monotonic() < deadline:
+        now = clock()
+        if now != last:
+            moves.append(now - last)
+            last = now
+    return moves[1] if len(moves) == 2 else 0.0
+
+
+def _growth_ratio(prefix, unit, suffix, scan=_scan, clock=time.thread_time):
+    """Time `scan` on the shape at a calibrated size n and at 4n; return (t_n, t_4n).
+
+    The clock is this thread's CPU time, not the wall: on a loaded host the wall also counts
+    every interval the scan sat preempted, and the longer arm absorbs more of that, so a linear
+    scan read 9-12x at load ~26 on 16 cores. The two arms then ALTERNATE, each keeping its fastest
+    pass: measured one after the other, a load that changes during the test lands on one arm only.
+    The minimum filters a transient stall without hiding real quadratic growth - a slow pass
+    recurs on every repeat, a stall does not."""
+    floor = max(_SMALL_ARM_FLOOR_S, _TICKS_PER_ARM * _clock_tick(clock))
     length = _START_LEN
-    t_n = _fastest_of(_sized_case(prefix, unit, suffix, length), scan, clock=clock)
-    while t_n < _SMALL_ARM_FLOOR_S and length < _MAX_SMALL_LEN:
+    while (_timed(_sized_case(prefix, unit, suffix, length), scan, clock) < floor
+           and length < _MAX_SMALL_LEN):
         length *= 2
-        t_n = _fastest_of(_sized_case(prefix, unit, suffix, length), scan, clock=clock)
-    t_4n = _fastest_of(_sized_case(prefix, unit, suffix, 4 * length), scan, clock=clock)
+    small = _sized_case(prefix, unit, suffix, length)
+    large = _sized_case(prefix, unit, suffix, 4 * length)
+    t_n = t_4n = None
+    for _ in range(_REPEATS):
+        s, b = _timed(small, scan, clock), _timed(large, scan, clock)
+        t_n = s if t_n is None else min(t_n, s)
+        t_4n = b if t_4n is None else min(t_4n, b)
     return t_n, t_4n
 
 
-# A 4x input costs a linear scan ~4x (measured 3.9-4.1x locally); a quadratic scan costs ~16x.
-# 8 sits well clear of both, so it survives a noisy shared runner without going blind to the
-# defect it exists to catch.
+# A 4x input costs a linear scan ~4x and a quadratic one ~16x. Linear can read up to ~6x: the
+# per-char cost steps up ~1.4-1.5x once the text outgrows a cache (for escaped_json between 50k
+# and 100k chars, flattened_pem between 400k and 800k), so arms on either side of the step carry
+# it. 8 still sits clear of both, and a real quadratic regex read 16.1x through this instrument.
 _MAX_LINEAR_RATIO = 8
 
 
@@ -682,6 +714,86 @@ def test_growth_ratio_flags_a_planted_quadratic_and_passes_a_planted_linear():
     l_n, l_4n = _growth_ratio("", "a", "", scan=linear, clock=clock)
     assert q_4n / q_n == pytest.approx(16.0) and q_4n / q_n > _MAX_LINEAR_RATIO, (q_n, q_4n)
     assert l_4n / l_n == pytest.approx(4.0) and l_4n / l_n < _MAX_LINEAR_RATIO, (l_n, l_4n)
+
+
+def test_the_default_clock_does_not_count_time_the_thread_is_not_running():
+    """Wall-clock time counts every interval the scan sat preempted by other processes, so on a
+    loaded host (load ~26 on 16 cores) the longer arm absorbed more of it and a linear scan read
+    9-12x. The default clock must be one a stall does not advance; a sleep stands in for one."""
+    clock = inspect.signature(_growth_ratio).parameters["clock"].default
+    start = clock()
+    time.sleep(0.2)
+    assert clock() - start < 0.05, clock
+
+
+def test_a_linear_scan_measured_while_load_rises_still_reads_linear():
+    """Measuring every small pass before every large one confounds the arm with the moment it
+    ran: a load that climbs during the test inflates only the later, larger arm. Here each scan
+    costs 1.3x the one before it; interleaved arms keep a true 4x under the bound, sequential
+    ones read it as 8.8x."""
+    clock = _VirtualClock()
+    load = [1.0]
+
+    def linear_under_rising_load(text):
+        clock.spend(_PLANTED_BASE_S * (len(text) / _START_LEN) * load[0])
+        load[0] *= 1.3
+
+    t_n, t_4n = _growth_ratio("", "a", "", scan=linear_under_rising_load, clock=clock)
+    assert t_4n / t_n < _MAX_LINEAR_RATIO, (t_n, t_4n)
+
+
+_WINDOWS_TICK_S = 0.015625
+
+
+class _TickingClock:
+    """A virtual clock read through a coarse tick, as Windows' thread_time is: GetThreadTimes
+    advances in 15.625 ms steps while get_clock_info claims 1e-7 s. Each read also moves time
+    by a microsecond, so a spin over it sees the tick the way it would on the real clock."""
+
+    def __init__(self, offset=0.0, tick=_WINDOWS_TICK_S):
+        self.now = offset
+        self.tick = tick
+
+    def __call__(self):
+        self.now += 1e-6
+        return math.floor(self.now / self.tick) * self.tick
+
+    def spend(self, seconds):
+        self.now += seconds
+
+
+def test_the_tick_of_a_coarse_clock_is_measured():
+    assert _clock_tick(_TickingClock()) == pytest.approx(_WINDOWS_TICK_S)
+
+
+def test_a_clock_that_never_advances_measures_no_tick_and_returns():
+    """The spin is bounded by the wall, not by the clock it measures, so a clock that only moves
+    when a scan spends time cannot hang the suite."""
+    assert _clock_tick(_VirtualClock()) == 0.0
+
+
+@pytest.mark.parametrize("step", [1.0, 1.5])
+def test_a_coarse_clock_does_not_inflate_a_linear_ratio(step):
+    """Through a 15.625 ms tick a ~50 ms small arm loses up to a tick to rounding, which inflated
+    a linear ratio by 28% (6.0 read as 7.67, one tick from the bound). `step` is the per-char cost
+    jump measured when a string outgrows a cache (1.4-1.5x): real, linear, and already costing
+    part of the margin. The small arm must be long in TICKS, not only in seconds."""
+    worst = 0.0
+    for base_ms in range(5, 60, 5):
+        for offset_ms in range(0, 16, 3):
+            clock = _TickingClock(offset=offset_ms / 1000.0)
+            cost_by_len = {}
+
+            def linear_with_cache_step(text, clock=clock, base=base_ms / 1000.0):
+                cost = base * len(text) / _START_LEN * (step if len(text) > 300_000 else 1.0)
+                cost_by_len[len(text)] = cost
+                clock.spend(cost)
+
+            t_n, t_4n = _growth_ratio("", "a", "", scan=linear_with_cache_step, clock=clock)
+            small, large = sorted(cost_by_len)[-2:]
+            true_ratio = cost_by_len[large] / cost_by_len[small]
+            worst = max(worst, (t_4n / t_n) / true_ratio)
+    assert worst < 1.15, worst
 
 
 def test_the_calibration_grows_the_small_arm_until_it_clears_the_floor():
