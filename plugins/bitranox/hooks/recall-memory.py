@@ -275,6 +275,10 @@ def main():
     sid = ev.get("session_id") or "default"
 
     try:
+        # A CronCreate / ScheduleWakeup fire is the harness talking, not somebody asking; its
+        # payload looks typed, so the scheduling call in this session's transcript decides.
+        if transcript_turns.scheduled_by_the_session(prompt, ev.get("transcript_path")):
+            return 0
         # Only the prose of a typed prompt: a path carries project and tool names, and a machine
         # turn (a task notification, a slash-command echo) is not somebody asking for anything -
         # the skill router had the same input and the same defect. An empty result recalls nothing.

@@ -245,3 +245,82 @@ def test_human_text_uses_the_whole_not_typed_registry():
     assert T.human_text(_user("3 background agents were stopped by the user.")) == ""
     assert T.human_text(_user("<task-notification>x</task-notification>")) == ""
     assert T.human_text(_user("the 3 background agents were fine")) != ""   # control
+
+
+# ---- scheduled prompts ------------------------------------------------------------------------
+# A CronCreate or ScheduleWakeup fire reaches UserPromptSubmit as bare text, with the same payload
+# keys as a typed prompt (probed on CLI 2.1.283), and its transcript record is written only AFTER
+# the hook ran. The scheduling call is the one thing on disk in time: its `prompt` argument is the
+# text that later arrives. The record shapes below are copied from that probe's transcript.
+
+def _schedule(tool, prompt, **extra):
+    return {"type": "assistant", "message": {"role": "assistant", "content": [
+        {"type": "tool_use", "id": "toolu_01", "name": tool,
+         "input": dict({"prompt": prompt}, **extra), "caller": {"type": "direct"}}]}}
+
+
+def _fired(prompt):
+    return {"type": "user", "message": {"content": prompt}, "isMeta": True,
+            "promptSource": "system", "scheduledTaskId": "e4ce11db", "turnOrigin": "scheduled",
+            "promptId": "2daa3028-7220-4fe1-ac39-2d8f3a323374", "entrypoint": "cli"}
+
+
+CRON_TEXT = "probe95-cron-tick: reply with the single word OK"
+
+
+def test_a_prompt_a_croncreate_call_scheduled_is_recognised(tmp_path):
+    t = _write(tmp_path, [_user("schedule it"),
+                          _schedule("CronCreate", CRON_TEXT, cron="43 13 28 09 *", recurring=False),
+                          _asst("DONE")])
+    assert T.scheduled_by_the_session(CRON_TEXT, t) is True
+
+
+def test_a_prompt_a_schedulewakeup_call_scheduled_is_recognised(tmp_path):
+    t = _write(tmp_path, [_schedule("ScheduleWakeup", "check the CI run", delaySeconds=600)])
+    assert T.scheduled_by_the_session("check the CI run", t) is True
+
+
+def test_surrounding_whitespace_does_not_hide_a_scheduled_prompt(tmp_path):
+    t = _write(tmp_path, [_schedule("CronCreate", "  " + CRON_TEXT + "\n")])
+    assert T.scheduled_by_the_session(CRON_TEXT + " ", t) is True
+
+
+def test_a_typed_prompt_is_not_scheduled_even_when_it_quotes_the_scheduled_text(tmp_path):
+    t = _write(tmp_path, [_schedule("CronCreate", CRON_TEXT)])
+    assert T.scheduled_by_the_session("why did '%s' fire twice?" % CRON_TEXT, t) is False
+    assert T.scheduled_by_the_session("schedule it", t) is False
+
+
+def test_another_tools_prompt_argument_does_not_count(tmp_path):
+    # Agent and Task carry a `prompt` too; a subagent brief is not a scheduled prompt.
+    t = _write(tmp_path, [_schedule("Agent", CRON_TEXT)])
+    assert T.scheduled_by_the_session(CRON_TEXT, t) is False
+
+
+def test_no_transcript_or_no_scheduling_call_means_not_scheduled(tmp_path):
+    assert T.scheduled_by_the_session(CRON_TEXT, str(tmp_path / "missing.jsonl")) is False
+    assert T.scheduled_by_the_session(CRON_TEXT, "") is False
+    assert T.scheduled_by_the_session(CRON_TEXT, None) is False
+    t = _write(tmp_path, [_user("hello"), _asst("hi")])
+    assert T.scheduled_by_the_session(CRON_TEXT, t) is False
+
+
+def test_a_scheduling_call_early_in_a_long_transcript_is_still_found(tmp_path):
+    # A cron fires long after it was created, so the call can sit far outside any turn tail.
+    filler = [_asst("x" * 2000) for _ in range(200)]
+    t = _write(tmp_path, [_schedule("CronCreate", CRON_TEXT)] + filler)
+    assert T.scheduled_by_the_session(CRON_TEXT, t) is True
+
+
+def test_is_scheduled_record_reads_the_record_the_harness_writes_afterwards():
+    assert T.is_scheduled_record(_fired(CRON_TEXT)) is True
+    assert T.is_scheduled_record(_user(CRON_TEXT)) is False
+    meta = {"type": "user", "isMeta": True, "message": {"content": "Stop hook feedback: x"}}
+    assert T.is_scheduled_record(meta) is False
+    assert T.is_scheduled_record(None) is False
+
+
+def test_scheduled_text_is_the_fired_prompt_and_empty_for_anything_else():
+    assert T.scheduled_text(_fired(CRON_TEXT)) == CRON_TEXT
+    assert T.scheduled_text(_user(CRON_TEXT)) == ""
+    assert T.scheduled_text(None) == ""

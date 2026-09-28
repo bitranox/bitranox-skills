@@ -535,3 +535,35 @@ def test_control_the_same_native_note_is_recalled_for_that_cwd_when_not_walled(
     _mem("/p/other", "make-test.md", "Run make test with VIRTUAL_ENV=$PWD/.venv before committing")
     rc, out = run(monkeypatch, capsys, "run make test", cwd=str(loose))
     assert rc == 0 and "VIRTUAL_ENV" in out
+
+
+# ---- a scheduled prompt is not somebody asking ---------------------------------------------------
+# A CronCreate/ScheduleWakeup fire reaches this hook as bare text with a typed prompt's payload, so
+# the only way to know is the scheduling call earlier in the same transcript (probed on 2.1.283:
+# recall injected 4 notes into a cron tick). Identical prompt and store in both arms.
+
+def _cron_transcript(tmp_path, prompt):
+    call = {"type": "assistant", "message": {"content": [
+        {"type": "tool_use", "id": "toolu_01", "name": "CronCreate",
+         "input": {"cron": "0 9 * * *", "prompt": prompt, "recurring": True}}]}}
+    t = tmp_path / "session.jsonl"
+    t.write_text(json.dumps(call) + "\n", encoding="utf-8")
+    return str(t)
+
+
+def test_a_scheduled_prompt_recalls_nothing(monkeypatch, capsys, tmp_path):
+    _mem("/p/other", "make-test.md", "Run make test with VIRTUAL_ENV=$PWD/.venv before committing")
+    monkeypatch.setattr(sys, "stdin", io.StringIO(json.dumps(
+        {"prompt": "run make test", "cwd": "/p/cur", "session_id": "t1",
+         "transcript_path": _cron_transcript(tmp_path, "run make test")})))
+    assert R.main() == 0
+    assert capsys.readouterr().out == ""
+
+
+def test_control_the_same_prompt_typed_is_recalled(monkeypatch, capsys, tmp_path):
+    _mem("/p/other", "make-test.md", "Run make test with VIRTUAL_ENV=$PWD/.venv before committing")
+    monkeypatch.setattr(sys, "stdin", io.StringIO(json.dumps(
+        {"prompt": "run make test", "cwd": "/p/cur", "session_id": "t1",
+         "transcript_path": _cron_transcript(tmp_path, "run a different job")})))
+    assert R.main() == 0
+    assert "VIRTUAL_ENV" in capsys.readouterr().out

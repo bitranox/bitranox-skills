@@ -339,3 +339,37 @@ def test_shipped_map_control_routes_a_real_json_editing_prompt():
     triggers = R.load_triggers()
     picked = [s for s, _n in R.match("editing package.json and validating the json file", triggers)]
     assert picked and picked[0] == "files-edit-json"
+
+
+# ---- a scheduled prompt is not somebody asking ---------------------------------------------------
+# Same input defect as recall: a CronCreate/ScheduleWakeup fire has a typed prompt's payload, and
+# decide mode, the shadow and the keyword nudge all acted on it. Identical triggers in both arms.
+
+def _scheduling_transcript(tmp_path, prompt):
+    call = {"type": "assistant", "message": {"content": [
+        {"type": "tool_use", "id": "toolu_01", "name": "ScheduleWakeup",
+         "input": {"delaySeconds": 600, "prompt": prompt, "reason": "watching CI"}}]}}
+    t = tmp_path / "session.jsonl"
+    t.write_text(json.dumps(call) + "\n", encoding="utf-8")
+    return str(t)
+
+
+def _run_with_transcript(monkeypatch, capsys, prompt, transcript):
+    monkeypatch.setattr(sys, "stdin", io.StringIO(json.dumps(
+        {"prompt": prompt, "cwd": "/p/x", "session_id": "s1", "transcript_path": transcript})))
+    rc = R.main()
+    return rc, capsys.readouterr().out
+
+
+def test_a_scheduled_prompt_is_not_routed(monkeypatch, capsys, tmp_path):
+    monkeypatch.setattr(R, "load_triggers", lambda: {"aa": ["alpha", "beta"]})
+    rc, out = _run_with_transcript(monkeypatch, capsys, "alpha beta check",
+                                   _scheduling_transcript(tmp_path, "alpha beta check"))
+    assert rc == 0 and out == ""
+
+
+def test_control_the_same_prompt_typed_is_routed(monkeypatch, capsys, tmp_path):
+    monkeypatch.setattr(R, "load_triggers", lambda: {"aa": ["alpha", "beta"]})
+    rc, out = _run_with_transcript(monkeypatch, capsys, "alpha beta check",
+                                   _scheduling_transcript(tmp_path, "something else"))
+    assert rc == 0 and "bitranox:aa" in out

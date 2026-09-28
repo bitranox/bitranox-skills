@@ -256,6 +256,74 @@ def skills_used(transcript_path, tail_bytes=SKILLS_TAIL_BYTES):
     return sorted(n for n in names if n)
 
 
+# A CronCreate or ScheduleWakeup fire reaches UserPromptSubmit as bare text, and on CLI 2.1.283
+# its payload carries the same keys as a typed prompt while its transcript record (isMeta,
+# promptSource "system") is written only AFTER the hook ran. The scheduling call is the one thing
+# already on disk: its `prompt` argument is the text that later arrives. Measured over the corpus,
+# that call sits in the receiving transcript for 46 of 51 fires; the rest were scheduled by an
+# earlier session and are not reachable from here.
+SCHEDULING_TOOLS = ("CronCreate", "ScheduleWakeup")
+# A cron fires long after it was created, so the WHOLE transcript is searched, not a turn tail.
+# The file is scanned for the tool name as bytes and only those lines are parsed, which keeps a
+# prompt with no scheduling call in its session (nearly all of them) at one byte search. The cap
+# bounds a pathological file; the largest transcript here was 12.6 MB.
+SCHEDULE_MAX_BYTES = 64 * 1024 * 1024
+
+
+def _lines_naming(data, needle):
+    """Every complete line of `data` (bytes) that contains `needle`, each once."""
+    seen, start = set(), data.find(needle)
+    while start != -1:
+        begin = data.rfind(b"\n", 0, start) + 1
+        end = data.find(b"\n", start)
+        end = len(data) if end == -1 else end
+        if begin not in seen:
+            seen.add(begin)
+            yield data[begin:end]
+        start = data.find(needle, end)
+
+
+def scheduled_prompts(transcript_path, max_bytes=SCHEDULE_MAX_BYTES):
+    """The `prompt` argument of every CronCreate / ScheduleWakeup call in the transcript,
+    stripped. Empty when the file is missing or unreadable."""
+    try:
+        data, _size = _tail(transcript_path, max_bytes)
+    except (OSError, TypeError, ValueError):
+        return set()
+    found = set()
+    for tool in SCHEDULING_TOOLS:
+        for obj in _records(b"\n".join(_lines_naming(data, tool.encode("ascii")))):
+            content = _content(obj) if obj.get("type") == "assistant" else None
+            for block in content if isinstance(content, list) else []:
+                if (isinstance(block, dict) and block.get("type") == "tool_use"
+                        and block.get("name") == tool and isinstance(block.get("input"), dict)):
+                    prompt = str(block["input"].get("prompt") or "").strip()
+                    if prompt:
+                        found.add(prompt)
+    return found
+
+
+def scheduled_by_the_session(prompt, transcript_path):
+    """True when `prompt` is exactly the text a CronCreate / ScheduleWakeup call in this session
+    scheduled: the harness is talking, not the person. A prompt that merely QUOTES that text is
+    typed, so the comparison is whole-text, not a substring."""
+    text = (prompt or "").strip()
+    return bool(text) and bool(transcript_path) and text in scheduled_prompts(transcript_path)
+
+
+def is_scheduled_record(obj):
+    """True for the record the harness writes for a scheduled fire, AFTER the prompt-time hooks
+    ran: a `user` record with promptSource "system" and a scheduledTaskId. For reading a
+    transcript afterwards; a prompt-time hook cannot see it yet (use scheduled_by_the_session)."""
+    return (isinstance(obj, dict) and obj.get("type") == "user"
+            and obj.get("promptSource") == "system" and bool(obj.get("scheduledTaskId")))
+
+
+def scheduled_text(obj):
+    """The prompt text of a scheduled-fire record (see is_scheduled_record), else ""."""
+    return text_of(_content(obj)) if is_scheduled_record(obj) else ""
+
+
 def excerpt(text, cap):
     """`text` trimmed to about `cap` characters, keeping both ends: a reply's opening says what
     it is about and its end usually holds the question a short answer like "yes" refers to."""

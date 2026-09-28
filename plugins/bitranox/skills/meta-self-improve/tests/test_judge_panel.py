@@ -343,3 +343,29 @@ def test_cli_packet_since_drops_older_shadow_rows(tmp_path, capsys):
     key = json.loads((out / "key.json").read_text(encoding="utf-8"))
     assert [k["uuid"] for k in key.values()] == ["p2"]
     assert json.loads((out / "skipped.json").read_text(encoding="utf-8")) == []
+
+
+def test_cli_packet_names_why_each_live_row_could_not_be_located(tmp_path, capsys):
+    # A scheduled (CronCreate / ScheduleWakeup) fire is written as an isMeta record with
+    # promptSource "system" - no typed prompt to join, and not the same thing as a transcript that
+    # is gone. Both used to share one reason, so the scheduled share had to be counted by hand.
+    t = tmp_path / "t.jsonl"
+    recs = [{"type": "user", "uuid": "p1", "origin": {"kind": "human"},
+             "message": {"content": "typed ask"}},
+            {"type": "user", "uuid": "p2", "isMeta": True, "promptSource": "system",
+             "scheduledTaskId": "e4ce11db", "message": {"content": "cron tick: check CI"}}]
+    data = "".join(json.dumps(r) + "\n" for r in recs).encode("utf-8")
+    t.write_bytes(data)
+    rows = [live_row("typed ask", [], "none_needed", {}, 0.1, path=str(t), offset=len(data)),
+            live_row("cron tick: check CI", [], "none_needed", {}, 0.1, path=str(t),
+                     offset=len(data)),
+            live_row("lost ask", [], "none_needed", {}, 0.1, path=str(tmp_path / "gone.jsonl"),
+                     offset=10),
+            live_row("never written", [], "none_needed", {}, 0.1, path=str(t), offset=len(data))]
+    log = tmp_path / "day.jsonl"
+    log.write_text("".join(json.dumps(r) + "\n" for r in rows), encoding="utf-8")
+    out = tmp_path / "panel"
+    assert ce.main(["packet", "--from", str(log), "--out", str(out), "--json"], skills={}) == 0
+    reasons = [s["reason"] for s in json.loads((out / "skipped.json").read_text(encoding="utf-8"))]
+    assert reasons == [ce.UNLOCATED_SCHEDULED, ce.UNLOCATED_GONE, ce.UNLOCATED_NOT_FOUND]
+    assert len(set(reasons)) == 3

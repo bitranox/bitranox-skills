@@ -29,6 +29,23 @@ than the change, so entries reconstructed from them would read like coverage wit
 a hole nobody has drawn a line under is one that gets rediscovered and half-filled - which is how
 two "versions with no entry" notes came to sit in this file disagreeing with it.
 
+## [7.30.1]
+
+### Fixed
+
+- A scheduled prompt (a `CronCreate` or `ScheduleWakeup` fire) no longer counts as a typed
+  request. On CLI 2.1.283 it reaches UserPromptSubmit with exactly the payload keys of a typed
+  prompt, and its transcript record (`isMeta`, `promptSource: "system"`) is written only after the
+  hook ran, so recall injected memory notes into it and the skill router scored it, in decide mode
+  too. Both hooks now skip a prompt whose whole text is the `prompt` argument of a scheduling call
+  earlier in the same transcript (`transcript_turns.scheduled_by_the_session`). Replayed over the
+  corpus: 47 of 52 scheduled fires caught, 0 of 2,355 typed prompts skipped, 12 ms on a 12.6 MB
+  transcript. The 5 misses were scheduled by an earlier session and are not visible from the
+  receiving one.
+- `classifier_eval.py packet` names why a shadow row could not be located: a gone transcript, a
+  scheduled prompt, or no matching typed prompt. They shared one reason, so the scheduled share of
+  a sample had to be counted by hand.
+
 ## [7.30.0]
 
 ### Added

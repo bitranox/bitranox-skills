@@ -184,6 +184,44 @@ def locate_prompt(row):
     return min(spans, key=lambda s: offset - s[1] if s[1] <= offset else s[0] - offset)[2]
 
 
+# Why `locate_prompt` answered None, kept apart because they mean different things to a count: a
+# gone transcript is missing data, while a scheduled prompt (CronCreate / ScheduleWakeup) is a
+# row that should never have been scored as a typed request at all.
+UNLOCATED_GONE = "its transcript is gone"
+UNLOCATED_SCHEDULED = "a scheduled prompt (CronCreate / ScheduleWakeup), not typed"
+UNLOCATED_NOT_FOUND = jp.UNLOCATED
+
+
+def _scheduled_texts(path):
+    """The text of every scheduled-fire record in a transcript."""
+    texts = []
+    with open(path, "rb") as fh:
+        for raw in fh:
+            if b"scheduledTaskId" not in raw:
+                continue
+            try:
+                obj = json.loads(raw.decode("utf-8", "replace"))
+            except ValueError:
+                continue
+            text = transcript_turns.scheduled_text(obj)
+            if text:
+                texts.append(text)
+    return texts
+
+
+def unlocated_reason(row):
+    """Why a live row has no typed prompt to join: one of the UNLOCATED_* reasons."""
+    path, want = row.get("transcript_path"), _logged_prompt(row)
+    if not path or not os.path.exists(path):
+        return UNLOCATED_GONE
+    try:
+        if want and any(want in text for text in _scheduled_texts(path)):
+            return UNLOCATED_SCHEDULED
+    except OSError:
+        return UNLOCATED_GONE
+    return UNLOCATED_NOT_FOUND
+
+
 def _scores(result):
     """{question id: numeric value} from one logged result, or None when it was unanswered."""
     if not isinstance(result, dict):
@@ -1316,7 +1354,8 @@ def _run_packet(args, skills):
     if (args.out / "key.json").exists():
         return 2, None, "%s already holds a key.json - pick a new --out" % args.out
     pooled, skipped = jp.pool(_panel_logs(args), alternatives=args.alternatives,
-                              locate=locate_prompt, always=args.always or ())
+                              locate=locate_prompt, always=args.always or (),
+                              explain=unlocated_reason)
     pooled = jp.sample(pooled, per_session=args.per_session, limit=args.limit, seed=args.seed)
     if not pooled:
         return 1, None, "no prompts to judge in %s" % ", ".join(map(str, args.sources))

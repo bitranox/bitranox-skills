@@ -159,7 +159,10 @@ def _prompt_tail(text):
     return (text or "").split(cl.CAP_MARK)[-1].strip()[-MATCH_TAIL:]
 
 
-def _row_parts(log, row, alternatives, locate):
+UNLOCATED = "cannot locate its prompt in its transcript"
+
+
+def _row_parts(log, row, alternatives, locate, explain=None):
     """(uuid, state, session, transcript, candidates, origins), or (None, reason) to skip."""
     if "arms" in row:
         uuid = row.get("uuid")
@@ -172,7 +175,7 @@ def _row_parts(log, row, alternatives, locate):
         return None, "unanswered skill_router row"
     uuid = locate(row) if locate else None
     if not uuid:
-        return None, "cannot locate its prompt in its transcript"
+        return None, (explain(row) if explain else UNLOCATED)
     states = row.get("states") or [{}]
     return uuid, (states[0], row.get("session_id"), row.get("transcript_path"),
                   _live_candidates(log, row, alternatives), [_live_origin(log, row)])
@@ -187,20 +190,22 @@ def _merge(item, uuid, parts):
     item["origins"] += origins
 
 
-def pool(logs, *, alternatives, locate=None, always=()):
+def pool(logs, *, alternatives, locate=None, always=(), explain=None):
     """({uuid: item}, skipped) over every row of every named log, in first-seen order.
 
     `logs` is [(log name, rows)]. A replay row is keyed by its recorded uuid; a live shadow row by
     `locate(row)`, the prompt uuid its transcript holds. A row that cannot be keyed is skipped and
-    reported rather than judged on a guessed identity. Raises ValueError when one uuid carries two
-    different prompts, which means the logs are not about the same prompts at all.
+    reported rather than judged on a guessed identity, with `explain(row)` as the reason when one
+    is given (else UNLOCATED), so a gone transcript and a scheduled prompt are counted apart.
+    Raises ValueError when one uuid carries two different prompts, which means the logs are not
+    about the same prompts at all.
     """
     items, skipped = {}, []
     for log, rows in logs:
         for index, row in enumerate(rows):
             if "arms" not in row and row.get("site") != "skill_router":
                 continue    # another site's row: never a candidate, so not a skip either
-            uuid, parts = _row_parts(log, row, alternatives, locate)
+            uuid, parts = _row_parts(log, row, alternatives, locate, explain)
             if uuid is None:
                 skipped.append({"log": log, "index": index, "reason": parts})
                 continue

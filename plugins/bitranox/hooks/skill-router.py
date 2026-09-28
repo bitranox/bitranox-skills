@@ -276,6 +276,10 @@ def main():
     cwd = ev.get("cwd") or os.environ.get("CLAUDE_PROJECT_DIR") or os.getcwd()
     sid = ev.get("session_id") or "default"
     try:
+        # A CronCreate / ScheduleWakeup fire is the harness talking; its payload looks typed, so
+        # the scheduling call in this session's transcript is the only way to know.
+        if transcript_turns.scheduled_by_the_session(prompt, ev.get("transcript_path")):
+            return 0
         triggers = load_triggers()
         # Every matching skill, uncapped: the per-session dedup runs BEFORE the MAX_SKILLS cap, so
         # skills nudged earlier never hold the slots of a fresh skill that matches this prompt.
