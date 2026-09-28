@@ -1,4 +1,4 @@
-# Handover - 2026-09-28 13:05, 7.30.0 shipped and green (judge panel tool; hand-backs not typed)
+# STALE - read 2026-09-28 13:30, work continued
 
 ## In flight
 
