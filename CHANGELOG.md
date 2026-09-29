@@ -29,6 +29,18 @@ than the change, so entries reconstructed from them would read like coverage wit
 a hole nobody has drawn a line under is one that gets rediscovered and half-filled - which is how
 two "versions with no entry" notes came to sit in this file disagreeing with it.
 
+## [7.30.4]
+
+### Fixed
+
+- `coding-python-layered-config`: synced with lib_layered_config 6.0.0. The env-var-overrides
+  section documents that a value starting with `[` or `{` parses as JSON in the environment AND
+  unquoted in `.env`, that a quoted `.env` value is always literal text, that a number converts
+  only when it reads back as the same text, and that `.env` scalars otherwise stay strings; the
+  `deploy` command table documents `--dir-mode`/`--file-mode`, and the common-mistakes table gained
+  rows for a bare TOML integer file mode, `--no-permissions`, and building `permission_overrides`
+  from the application's own `read_config(...)` result.
+
 ## [7.30.3]
 
 ### Fixed
