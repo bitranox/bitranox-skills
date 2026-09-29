@@ -29,6 +29,18 @@ than the change, so entries reconstructed from them would read like coverage wit
 a hole nobody has drawn a line under is one that gets rediscovered and half-filled - which is how
 two "versions with no entry" notes came to sit in this file disagreeing with it.
 
+## [7.30.2]
+
+### Fixed
+
+- `coding-python-send-mail`: synced with btx_lib_mail 1.6.0. `send()` never raises
+  `smtplib.SMTPNotSupportedError` for a LOGIN-only server refusing a non-ASCII credential; the
+  per-host failure is logged and `send()` raises `RuntimeError` once every host failed, so the
+  skill now says to catch that. A settings model that subclasses `ConfMail` must extend the
+  inherited `credential_fields` as a `ClassVar` for every secret field it adds, or validation
+  errors keep that field's value. Also documents `send(config=...)`, UTF-8 AUTH PLAIN for
+  non-ASCII credentials, and reads the example password from `BTX_MAIL_SMTP_PASSWORD`.
+
 ## [7.30.1]
 
 ### Fixed
