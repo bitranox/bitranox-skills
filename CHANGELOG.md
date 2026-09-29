@@ -29,6 +29,16 @@ than the change, so entries reconstructed from them would read like coverage wit
 a hole nobody has drawn a line under is one that gets rediscovered and half-filled - which is how
 two "versions with no entry" notes came to sit in this file disagreeing with it.
 
+## [7.30.5]
+
+### Fixed
+
+- `coding-python-send-mail`: synced with btx_lib_mail 1.8.0. The skill teaches the EHLO name
+  (`send(local_hostname=...)`, `ConfMail.smtp_local_hostname`, `--local-hostname`,
+  `BTX_MAIL_SMTP_LOCAL_HOSTNAME`) for a send that stalls before the first byte or a relay that
+  rejects the greeting, that every recipient gets its own connection, and that `ConfMail` field
+  names carry an `smtp_` prefix while an unknown `ConfMail` key is silently ignored.
+
 ## [7.30.4]
 
 ### Fixed
