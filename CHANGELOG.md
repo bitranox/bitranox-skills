@@ -29,6 +29,17 @@ than the change, so entries reconstructed from them would read like coverage wit
 a hole nobody has drawn a line under is one that gets rediscovered and half-filled - which is how
 two "versions with no entry" notes came to sit in this file disagreeing with it.
 
+## [7.30.3]
+
+### Fixed
+
+- `coding-python-send-mail`: synced with the btx_lib_mail release after 1.6.0. The `send()`
+  example loads the password at runtime instead of a literal; the skill names
+  `redact_validation_error`, `AttachmentViolation` and `violation_type`; it teaches that
+  `ConfMail` refuses an empty blocked extension or directory set without an allowlist unless
+  `attachment_allow_empty_blocklists=True`, and that `credential_fields` is checked at class
+  definition.
+
 ## [7.30.2]
 
 ### Fixed
