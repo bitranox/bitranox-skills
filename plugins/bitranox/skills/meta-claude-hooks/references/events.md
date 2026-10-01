@@ -109,8 +109,9 @@ that it raised only the overall budget). Do cleanup that fits, or accept being c
 
 ### UserPromptSubmit
 
-Fires when a prompt is submitted, before Claude processes it. **Can block**: exit 2 blocks processing and
-**erases the prompt**.
+Fires when a prompt is submitted, before Claude processes it. **Can block**: exit 2 (or `decision: "block"`)
+stops the prompt before it reaches Claude - but see "What a blocked prompt leaves behind" below: the text is NOT
+erased.
 
 No matcher support. Input adds `prompt` (the submitted text). Note the field is `prompt`, not `user_input`.
 Pasted text arrives expanded in place, and in sessions that mark pasted text for Claude it sits between
@@ -118,9 +119,16 @@ Pasted text arrives expanded in place, and in sessions that mark pasted text for
 
 Plain-text stdout **is** added to Claude's context. Decision control is the top-level `decision: "block"` plus
 `reason`; `additionalContext` is injected alongside the prompt. It **cannot replace** the prompt. The block
-`reason`, like exit-2 stderr, is shown **to the user only** and never reaches Claude's context. Two more outputs:
-`sessionTitle` names the session, and `suppressOriginalPrompt: true` on a block omits the prompt text from the
-block message.
+`reason`, like exit-2 stderr, is shown **to the user only** and never reaches Claude's context. Two more outputs,
+both inside `hookSpecificOutput`: `sessionTitle` names the session, and `suppressOriginalPrompt` (below).
+
+**What a blocked prompt leaves behind.** A blocked prompt never reaches Claude, but by default the block message
+shown to the user ENDS with `Original prompt:` followed by the submitted text, and that message is written to the
+session's transcript file on disk. To leave the text out, print JSON with
+`"hookSpecificOutput": {"hookEventName": "UserPromptSubmit", "suppressOriginalPrompt": true}`. It works whether the
+hook blocks with `decision: "block"` or by exiting 2 - but an exit-2 hook that prints **no JSON** always gets the
+prompt text in its block message. It changes only the block message: the text can still sit in the transcript and
+prompt history, so a blocking hook is **not** a way to keep a pasted secret off disk.
 
 Default `timeout` is lowered to 30 seconds for `command`, `http` and `mcp_tool` handlers. A timed-out one is
 cancelled and its `additionalContext` discarded, and the prompt still goes through.

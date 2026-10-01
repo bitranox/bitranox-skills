@@ -5,7 +5,7 @@ description: Use when writing, editing, debugging or reviewing a Claude Code hoo
 
 # Claude Code hooks
 
-Reference baseline: hooks.md, fetched 2026-09-27, 33 events, content 093402aa4d3b
+Reference baseline: hooks.md, fetched 2026-10-01, 33 events, content b902cbe857cb
 
 Hooks are the deterministic layer around the agent: Claude Code runs your handler at a fixed point in its
 lifecycle, so a rule holds whether or not the model decides to honour it.

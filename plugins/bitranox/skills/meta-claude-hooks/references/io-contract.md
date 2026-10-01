@@ -173,7 +173,7 @@ ended the turn with an execution error).
 | Event                 | Can block? | Effect of exit 2                                          |
 |-----------------------|------------|-----------------------------------------------------------|
 | `PreToolUse`          | yes        | blocks the tool call                                      |
-| `UserPromptSubmit`    | yes        | blocks prompt processing and **erases the prompt**        |
+| `UserPromptSubmit`    | yes        | blocks the prompt; its text stays in the block message    |
 | `UserPromptExpansion` | yes        | blocks the expansion                                      |
 | `Stop`                | yes        | prevents stopping, continues the conversation             |
 | `SubagentStop`        | yes        | prevents the subagent stopping                            |

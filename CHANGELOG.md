@@ -29,6 +29,20 @@ than the change, so entries reconstructed from them would read like coverage wit
 a hole nobody has drawn a line under is one that gets rediscovered and half-filled - which is how
 two "versions with no entry" notes came to sit in this file disagreeing with it.
 
+## [7.31.1]
+
+### Fixed
+
+- `meta-claude-hooks`: a blocked `UserPromptSubmit` prompt is no longer described as erased. By
+  default the block message ends with `Original prompt:` and the text, and is written to the
+  transcript; `suppressOriginalPrompt` sits inside `hookSpecificOutput`, works for `decision:
+  "block"` and for exit 2 only when JSON is printed, and never keeps the text out of the transcript
+  or prompt history.
+- `meta-claude-hooks`: an `mcp_tool` hook no longer requires an already-connected server. On events
+  that can block it waits for a connecting server (at most `MCP_TIMEOUT`, within its own `timeout`);
+  on observational events it does not wait; a `cached` server connects on the call.
+- `meta-claude-hooks`: reference re-stamped against the current `hooks.md`.
+
 ## [7.31.0]
 
 ### Added

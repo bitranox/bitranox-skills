@@ -123,13 +123,13 @@ written against the bare server key never fires. For plugin `my-plugin` bundling
 
 Five handler types:
 
-| Type       | What it does                                                                                     |
-|------------|--------------------------------------------------------------------------------------------------|
-| `command`  | runs a shell command; input on stdin, results via exit code and stdout                           |
-| `http`     | POSTs the event JSON to a URL; the response body uses the same JSON output format                |
-| `mcp_tool` | calls a tool on an **already-connected** MCP server; its text output is read like command stdout |
-| `prompt`   | sends a prompt to a model for single-turn evaluation, returning JSON                             |
-| `agent`    | spawns a subagent that may use Read, Grep, Glob before deciding. **Experimental, may change**    |
+| Type       | What it does                                                                                                                              |
+|------------|-------------------------------------------------------------------------------------------------------------------------------------------|
+| `command`  | runs a shell command; input on stdin, results via exit code and stdout                                                                    |
+| `http`     | POSTs the event JSON to a URL; the response body uses the same JSON output format                                                         |
+| `mcp_tool` | calls a tool on a configured MCP server (waits for a connecting one only on blocking events); its text output is read like command stdout |
+| `prompt`   | sends a prompt to a model for single-turn evaluation, returning JSON                                                                      |
+| `agent`    | spawns a subagent that may use Read, Grep, Glob before deciding. **Experimental, may change**                                             |
 
 Handlers run **in the current directory**, with Claude Code's environment. A handler that needs the project
 root must use `${CLAUDE_PROJECT_DIR}` rather than assuming a cwd. If the current directory was deleted mid-session,
@@ -222,14 +222,21 @@ The event JSON is the POST body with `Content-Type: application/json`.
 
 ### MCP tool handler fields
 
-| Field    | Required | Description                                                                                                                            |
-|----------|----------|----------------------------------------------------------------------------------------------------------------------------------------|
-| `server` | yes      | a configured server name, or the scoped `plugin:<plugin-name>:<server-name>`. Must already be connected; the hook never triggers OAuth |
-| `tool`   | yes      | tool name on that server                                                                                                               |
-| `input`  | no       | arguments. String values support `${path}` substitution from the hook input, e.g. `"${tool_input.file_path}"`                          |
+| Field    | Required | Description                                                                                                                                 |
+|----------|----------|---------------------------------------------------------------------------------------------------------------------------------------------|
+| `server` | yes      | a configured server name, or the scoped `plugin:<plugin-name>:<server-name>`. The hook never triggers OAuth: authenticate from `/mcp` first |
+| `tool`   | yes      | tool name on that server                                                                                                                    |
+| `input`  | no       | arguments. String values support `${path}` substitution from the hook input, e.g. `"${tool_input.file_path}"`                               |
 
-A server that is not connected, or a tool returning `isError: true`, is a **non-blocking error** and execution
-continues, so an `mcp_tool` hook cannot fail closed that way.
+The tool's text content is parsed exactly like command-hook stdout on exit 0 (JSON decision or plain text). A tool
+returning `isError: true` is a **non-blocking error** and execution continues.
+
+**A server that is still connecting** is waited for only where the hook can block or change the result
+(`PreToolUse`, `Stop` and the like): at most `MCP_TIMEOUT`, and within the hook's own `timeout`. On observational
+events (`Notification`, `SessionEnd`) there is no wait. A server in the `cached` state connects when the hook calls
+it. If the server is not connected when the tool is called - the wait ran out, or the event never waited - the
+hook is a **non-blocking error**: the action proceeds and the transcript shows a hook error, so an `mcp_tool` hook
+cannot fail closed on a missing server.
 
 `SessionStart` and `Setup` can fire before MCP servers are available to hooks, and then their `mcp_tool` hooks are
 **skipped without a call or an error** (the debug log says `no MCP client context`):
