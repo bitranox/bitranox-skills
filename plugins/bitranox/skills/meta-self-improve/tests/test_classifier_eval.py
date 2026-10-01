@@ -384,7 +384,9 @@ def test_a_non_firing_family_keeps_its_score_in_the_row():
 
 def test_each_site_is_judged_at_its_own_default_threshold():
     assert ce.SITE_THRESHOLDS["recall_rerank"] == 0.8
-    assert ce.SITE_THRESHOLDS["stop_signal"] == 0.7
+    # 0.8, the threshold decide mode blocks at: on the blind adjudication of 158 live turns it kept
+    # 90% recall at 82% precision for the firings beyond the keywords, against 94% at 70% for 0.7.
+    assert ce.SITE_THRESHOLDS["stop_signal"] == 0.8
     # 0.5, not the 0.7 this shipped with: measured 2026-09-24 against 50 blind-labelled prompts,
     # 0.7 lost 8 of 13 needed skills on every arm, and 0.5 is where the planted controls were run
     # and passed. The reasoning is at SITE_THRESHOLDS; this line is what makes a silent change to

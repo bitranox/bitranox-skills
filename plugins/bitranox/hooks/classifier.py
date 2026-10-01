@@ -89,7 +89,8 @@ FIELD_CAP = 4000
 ERROR_CAP = 200
 CAP_MARK = "\n[... truncated ...]\n"
 # The first-wave sites. Each has its own config knob `classifier_<site>`: off | shadow, plus
-# decide where the site's hook implements it (skill_router; meta-memory-settings validates which).
+# decide where the site's hook implements it (skill_router, stop_signal; meta-memory-settings
+# validates which).
 SITES = ("stop_signal", "skill_router", "recall_rerank")
 SITE_MODES = ("off", "shadow", "decide")
 # The threshold each site's gate or score is read at - by `classifier_eval.py report` when judging
@@ -115,7 +116,16 @@ SITE_MODES = ("off", "shadow", "decide")
 # bar, so at 0.3 it makes 42 outright wrong picks. Decide mode was chosen at 0.5 with the bypass
 # below: on 87 blind-judged live prompts it offered 17 right picks and 2 wrong, where the keyword
 # match offered 0 right and 70 wrong.
-SITE_THRESHOLDS = {"stop_signal": 0.7, "skill_router": 0.5, "recall_rerank": 0.8}
+# `stop_signal` was adjudicated blind on 158 live turns (five judges, 51 learning signals): the
+# keyword patterns catch 9 of 51 at 90% precision, Jev's firings beyond them are 70% precise at
+# 0.7 (recall 94%) and 82% at 0.8 (recall 90%). Decide mode blocks on keywords OR Jev, and 0.8
+# was chosen for it: recall barely moves, while every false block costs the person a turn.
+SITE_THRESHOLDS = {"stop_signal": 0.8, "skill_router": 0.5, "recall_rerank": 0.8}
+# Stop-gate families whose score is LOGGED but never counted as a firing. `endorsement` was the
+# only reason to fire on 12 turns across two shadow windows, every one a plain approval ("yes",
+# "go", "lets try 1-4"): approving a proposal the assistant made is not a learning signal. The
+# question stays in the set, so the score keeps being recorded and can be revisited on data.
+NON_FIRING_FAMILIES = frozenset({"endorsement"})
 _LOOPBACK = {"127.0.0.1", "localhost", "::1"}
 
 
@@ -858,6 +868,26 @@ def ask_in_hook(site, session_id, regex, requests, cfg, transcript=""):
     An unanswered request comes back with `results` of [None] and the cause in `reason`."""
     return run_shadow(_payload(site, session_id, regex, requests, transcript), cfg,
                       deadline=DEFAULT_DEADLINE)
+
+
+def decided_row(site, session_id, regex, transcript=""):
+    """The row for a decide-mode turn settled WITHOUT asking Jev (the keywords already decided):
+    the regex verdict, no answers. The caller adds how it decided and appends it."""
+    payload = _payload(site, session_id, regex, [], transcript)
+    return _stamp({"ts": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+                   "site": site, "session_id": session_id, "regex": regex, "reason": None,
+                   "redactions": 0, "input_tokens": 0, "latency_ms": 0, "results": [],
+                   "states": []}, payload)
+
+
+def stop_signal_firings(result, threshold=None):
+    """The learning families one Stop-gate answer fires on, sorted: each scored at least
+    `threshold` (the site's own by default), `NON_FIRING_FAMILIES` excluded."""
+    threshold = SITE_THRESHOLDS["stop_signal"] if threshold is None else threshold
+    answers = (result or {}).get("answers") or {}
+    return sorted(k for k, a in answers.items()
+                  if k not in NON_FIRING_FAMILIES and isinstance(a, dict)
+                  and isinstance(a.get("value"), (int, float)) and a["value"] >= threshold)
 
 
 def choice_answer(result):

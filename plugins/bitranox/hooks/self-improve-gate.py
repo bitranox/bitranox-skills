@@ -15,6 +15,10 @@ injected skill body) has no message to key on, so it neither reads nor writes
 that hash and relies on stop_hook_active alone: keying it on the empty string
 made every such turn after the first read as "already blocked".
 
+With `classifier_stop_signal = decide`, a turn the patterns leave quiet is also asked of the Jev
+classifier under a 1.5 s deadline, and blocks when a learning family scores at least the site
+threshold; the patterns alone still block, and an unanswered request leaves their verdict standing.
+
 Pure standard library: no jq, no cksum, no shell. Reads the Stop event JSON on
 stdin and, when it fires, prints a {"decision":"block",...} JSON on stdout.
 """
@@ -200,27 +204,67 @@ def _consume_subagent_hint(session):
         pass
 
 
+def _regex_verdict(last_user, last_asst):
+    """The keyword patterns' verdict per family, and whether any fires - what blocks the stop
+    with the classifier off, and the baseline every classifier row records."""
+    regex = {"user_pattern": bool(_USER_PATTERN.search(last_user)),
+             "asst_pattern": bool(_ASST_PATTERN.search(last_asst)),
+             "realization": bool(_REALIZATION_PATTERN.search(last_asst)),
+             "endorse_user": bool(_ENDORSE_PATTERN.search(last_user)),
+             "endorse_asst": bool(_ENDORSE_PATTERN.search(last_asst))}
+    regex["fires"] = any(regex.values())
+    regex["context_view"] = _classifier.CONTEXT_VIEW
+    return regex
+
+
+def _request(last_user, last_asst, previous):
+    """The Stop gate's one classifier request. `previous` is the reply the prompt answered, which
+    a bare "yes" or "go" needs to be judged at all."""
+    fields = _classifier.with_previous(
+        {"user_message": last_user, "assistant_reply": last_asst}, previous)
+    return {"fields": fields, "questions": _classifier.stop_signal_questions()}
+
+
 def _shadow_stop_signal(event, last_user, last_asst, previous=""):
     """Hand this turn to the classifier's detached shadow child. Never changes the decision
-    and never raises: the regex verdict per family is logged beside Jev's. `previous` is the
-    reply the prompt answered, which a bare "yes" or "go" needs to be judged at all. A failure
-    is logged as an error row."""
+    and never raises: the regex verdict per family is logged beside Jev's. A failure is logged
+    as an error row."""
     with _classifier.shadow_guard("stop_signal", event.get("session_id") or ""):
         if not _classifier.shadow_enabled(_sig.load_config(), "stop_signal"):
             return
-        regex = {"user_pattern": bool(_USER_PATTERN.search(last_user)),
-                 "asst_pattern": bool(_ASST_PATTERN.search(last_asst)),
-                 "realization": bool(_REALIZATION_PATTERN.search(last_asst)),
-                 "endorse_user": bool(_ENDORSE_PATTERN.search(last_user)),
-                 "endorse_asst": bool(_ENDORSE_PATTERN.search(last_asst))}
-        regex["fires"] = any(regex.values())
-        regex["context_view"] = _classifier.CONTEXT_VIEW
-        fields = _classifier.with_previous(
-            {"user_message": last_user, "assistant_reply": last_asst}, previous)
-        _classifier.spawn_shadow("stop_signal", event.get("session_id") or "", regex,
-                                 [{"fields": fields,
-                                   "questions": _classifier.stop_signal_questions()}],
+        _classifier.spawn_shadow("stop_signal", event.get("session_id") or "",
+                                 _regex_verdict(last_user, last_asst),
+                                 [_request(last_user, last_asst, previous)],
                                  transcript=event.get("transcript_path") or "")
+
+
+def _decide_stop_signal(event, regex, request, cfg):
+    """Decide mode: True when Jev's answer blocks a turn the keywords left quiet.
+
+    Keywords OR Jev - the union adjudicated blind on 2026-09-25 - so a turn the keywords already
+    block is not asked about. Jev not answering leaves the keyword verdict standing. One row per
+    turn either way, naming the path: regex, jev, none or fallback-<reason>."""
+    sid, transcript = event.get("session_id") or "", event.get("transcript_path") or ""
+    families = []
+    if regex["fires"]:
+        row, path = _classifier.decided_row("stop_signal", sid, regex, transcript), "regex"
+    else:
+        try:
+            row = _classifier.ask_in_hook("stop_signal", sid, regex, [request], cfg,
+                                          transcript=transcript)
+        except Exception as exc:  # noqa: BLE001 - a failure to ask is a failure to answer
+            row = _classifier.error_row("stop_signal", sid, exc)
+            path = "fallback-error: %s" % type(exc).__name__
+        else:
+            result = (row.get("results") or [None])[0]
+            if result is None:
+                path = "fallback-%s" % (row.get("reason") or "no answer")
+            else:
+                families = _classifier.stop_signal_firings(result)
+                path = "jev" if families else "none"
+    row.update(mode="decide", decide_path=path, families=families)
+    _classifier.append_row(row)
+    return path == "jev"
 
 
 def main():
@@ -294,9 +338,15 @@ def main():
     nap_hint = _nap_owed_hint(proj, event.get("session_id") or "")
 
     out = {"systemMessage": dropped_note} if dropped_note else {}
-    if (nap_hint or sub_hint or _USER_PATTERN.search(last_user) or _ASST_PATTERN.search(last_asst)
-            or _REALIZATION_PATTERN.search(last_asst)
-            or _ENDORSE_PATTERN.search(last_user) or _ENDORSE_PATTERN.search(last_asst)):
+    regex = _regex_verdict(last_user, last_asst)
+    fires = bool(nap_hint or sub_hint or regex["fires"])
+    # After the once-per-message dedup, so a message already blocked is never asked about again;
+    # a turn a hint already blocks needs no answer to decide it.
+    cfg = _sig.load_config()
+    if not (nap_hint or sub_hint) and _classifier.site_mode(cfg, "stop_signal") == "decide":
+        fires = _decide_stop_signal(event, regex, _request(last_user, last_asst,
+                                                           turn.reply_before_prompt), cfg) or fires
+    if fires:
         if sig:
             try:
                 with open(state, "w", encoding="utf-8") as fh:

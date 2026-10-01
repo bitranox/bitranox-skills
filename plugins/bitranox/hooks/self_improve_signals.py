@@ -1133,7 +1133,7 @@ DEFAULT_CONFIG = {
     # skill router only) lets Jev's answer choose the nudge, the keywords only when Jev is silent.
     "classifier_backend": "off",       # off | jev
     "classifier_model": "jev-latest",  # the TypeSafe model id sent with every request
-    "classifier_stop_signal": "off",   # off | shadow - self-improve Stop gate learning signal
+    "classifier_stop_signal": "off",   # off | shadow | decide - self-improve Stop gate signal
     "classifier_skill_router": "off",  # off | shadow | decide - UserPromptSubmit skill router
     "classifier_recall_rerank": "off",  # off | shadow - UserPromptSubmit memory recall ranking
 }

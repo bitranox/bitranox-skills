@@ -29,6 +29,28 @@ than the change, so entries reconstructed from them would read like coverage wit
 a hole nobody has drawn a line under is one that gets rediscovered and half-filled - which is how
 two "versions with no entry" notes came to sit in this file disagreeing with it.
 
+## [7.31.0]
+
+### Added
+
+- `self-improve-gate.py`: `classifier_stop_signal = decide`. The keyword patterns still block on
+  their own and Jev is not asked then; a turn they leave quiet is asked while the stop waits (1.5 s
+  at most) and blocks when a correction, a lasting rule, a self-admitted miss or a realization
+  scores 0.8 or more. An approval alone never blocks. When Jev does not answer, the keyword verdict
+  stands. Each decide turn logs one row naming the path (`regex`, `jev`, `none`,
+  `fallback-<reason>`) and the families that fired. This is the union adjudicated blind on 158 live
+  turns: the keywords catch 9 of 51 learning signals at 90% precision, and Jev's firings beyond
+  them are 82% precise at 0.8 with 90% recall.
+- `meta-memory-settings` accepts `decide` for `classifier_stop_signal`.
+
+### Changed
+
+- `classifier.SITE_THRESHOLDS["stop_signal"]` is 0.8 (was 0.7), so `classifier_eval.py report`
+  judges the site at the threshold decide mode acts on. `NON_FIRING_FAMILIES` moved from
+  `classifier_eval` to `classifier`, where the gate reads it too.
+- `meta-memory-settings` and `docs/reference.md` list everything the Stop gate sends: the reply the
+  user message answered (300 characters at most) was sent but not listed.
+
 ## [7.30.10]
 
 ### Fixed

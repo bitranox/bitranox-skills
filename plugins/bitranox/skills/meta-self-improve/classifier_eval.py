@@ -77,11 +77,9 @@ DEFAULT_THRESHOLD = 0.5
 # site in decide mode acts on the same number, and the reasoning behind each value is there.
 SITE_THRESHOLDS = cl.SITE_THRESHOLDS
 
-# Families whose score is LOGGED but never counted as a firing. `endorsement` was the only reason
-# to fire on 12 turns across two shadow windows, every one a plain approval ("yes", "go", "lets
-# try 1-4"): approving a proposal the assistant made is not a learning signal. The question stays
-# in the set, so the score keeps being recorded and the judgement can be revisited on data.
-NON_FIRING_FAMILIES = frozenset({"endorsement"})
+# Families whose score is logged but never counted as a firing; the reason is beside the set in the
+# classifier, which the Stop gate's decide mode reads too, so the eval and the gate cannot differ.
+NON_FIRING_FAMILIES = cl.NON_FIRING_FAMILIES
 DEFAULT_TOP = 2
 # Rows written by a hand-run probe of a hook, not by a real session.
 DEFAULT_EXCLUDE = ("probe-",)
