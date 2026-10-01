@@ -13,7 +13,8 @@ What decide mode promises:
 * Jev answers and picks nothing: nothing is nudged - "no skill" is an answer, not a failure;
 * Jev does not answer (deadline, HTTP error, no key, malformed answer), or picks a skill the
   session may no longer have: the keyword nudge, byte for byte;
-* a task notification is not a prompt: the hook behaves as with the classifier off;
+* a task notification is not a prompt: it is nudged as with the classifier off, and still handed
+  to the shadow child, so Jev's answers on notifications keep being logged;
 * one skill is nudged at most once per session whichever path nudged it;
 * one comparison row per prompt lands in the shadow log, saying which path decided.
 """
@@ -228,15 +229,31 @@ def test_control_a_cached_pick_of_this_plugins_shipped_skill_is_still_nudged(env
 
 # ---- a task notification is not a prompt ------------------------------------------------------
 
-def test_decide_leaves_a_task_notification_exactly_as_off_does(env, monkeypatch, capsys,
+def test_decide_nudges_a_task_notification_exactly_as_off_does(env, monkeypatch, capsys,
                                                                 spawned):
     env["fake"].body = _answer(0.9, JEV_PICK, 0.95)
     _config(env["home"])
     off = _run(monkeypatch, capsys, "s-note-off", prompt=NOTIFICATION)
-    _decide(env["home"])
-    assert _run(monkeypatch, capsys, "s-note", prompt=NOTIFICATION) == off == ""
     assert env["fake"].requests == [] and _shadow_children(spawned) == []
-    assert _rows(env["home"]) == []
+    _decide(env["home"])
+    # A confident Jev pick, and still nothing: decide acts on typed prompts only.
+    assert _run(monkeypatch, capsys, "s-note", prompt=NOTIFICATION) == off == ""
+
+
+def test_decide_still_shadows_a_task_notification_so_its_evidence_keeps_accruing(
+        env, monkeypatch, capsys, spawned):
+    env["fake"].body = _answer(0.9, JEV_PICK, 0.95)
+    _decide(env["home"])
+    _run(monkeypatch, capsys, "s-note-shadow", prompt=NOTIFICATION)
+    assert len(_shadow_children(spawned)) == 1
+    end = time.monotonic() + 20  # the detached child writes the row
+    while not _rows(env["home"]) and time.monotonic() < end:
+        time.sleep(0.1)
+    [row] = _rows(env["home"])
+    assert row.get("mode") is None and "decide_path" not in row  # a comparison, not a decision
+    assert row["regex"]["notify_view"] == cl.NOTIFY_VIEW
+    assert row["states"][0]["task_status"] == "failed"
+    assert row["results"][0] is not None
 
 
 # ---- one identity per skill, whichever path nudged it ------------------------------------------

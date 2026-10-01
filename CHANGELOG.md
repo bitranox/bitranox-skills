@@ -29,6 +29,17 @@ than the change, so entries reconstructed from them would read like coverage wit
 a hole nobody has drawn a line under is one that gets rediscovered and half-filled - which is how
 two "versions with no entry" notes came to sit in this file disagreeing with it.
 
+## [7.30.9]
+
+### Changed
+
+- `skill-router.py`: with `classifier_skill_router = decide`, a background-task notification is
+  still handed to the classifier's shadow child, so Jev's answer on it is logged as a comparison
+  row. Its nudge is unchanged (as with `off`). Decide mode had switched the shadow off for every
+  turn, so no notification evidence was collected after decide was turned on, and a later decision
+  on routing notifications had nothing new to rest on. `meta-memory-settings` and
+  `docs/reference.md` say what is sent.
+
 ## [7.30.8]
 
 ### Changed

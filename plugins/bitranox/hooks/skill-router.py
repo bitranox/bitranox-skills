@@ -26,9 +26,10 @@ prompt instead: the hook asks the shadow comparison's own gate-plus-choice quest
 under the classifier's DEFAULT_DEADLINE, and nudges the ONE skill `classifier.choice_pick` returns
 - or nothing, when Jev answered and picked nothing. Only when Jev does not answer, or picks a skill
 from a cached roster that cannot be confirmed installed, does the keyword match decide, exactly as
-with the classifier off; a task notification goes that way too. Each decide prompt appends one
-shadow-log row saying which path nudged, so `classifier_eval.py report` reads decide sessions like
-shadow ones.
+with the classifier off; a task notification goes that way too, and is still handed to the shadow
+child, so Jev's answers on notifications keep being logged without nudging anything. Each decide
+prompt appends one shadow-log row saying which path nudged, so `classifier_eval.py report` reads
+decide sessions like shadow ones.
 """
 import json
 import os
@@ -188,11 +189,20 @@ def _router_request(prompt, sid, triggers, transcript, cwd):
     return regex, {"fields": fields, "questions": questions}, skills
 
 
+def _shadows(cfg, prompt):
+    """True when this turn gets a shadow comparison: every turn in shadow mode, and in decide mode
+    the task notifications decide leaves alone. No blind judgement covers a notification yet, and
+    this log is the only evidence a later decision to act on them can rest on - with decide
+    switching the shadow off, it stopped growing the day decide was turned on."""
+    mode = classifier.site_mode(cfg, "skill_router")
+    return mode == "shadow" or (mode == "decide" and bool(prompt_text.notification_fields(prompt)))
+
+
 def _shadow_skill_router(prompt, sid, triggers, transcript="", cwd=""):
     """Hand this prompt to the classifier's detached shadow child. Never changes the nudge and
     never raises; a failure is logged as an error row."""
     with classifier.shadow_guard("skill_router", sid):
-        if not classifier.shadow_enabled(sig.load_config(), "skill_router"):
+        if not _shadows(sig.load_config(), prompt):
             return
         regex, request, _skills = _router_request(prompt, sid, triggers, transcript, cwd)
         classifier.spawn_shadow("skill_router", sid, regex, [request], transcript=transcript)
