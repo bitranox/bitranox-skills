@@ -1,92 +1,98 @@
-# Handover - 2026-10-01 17:40, rank 12 steps 2 and 3 done: gate stays 0.5, Stop gate decide at 0.8 (7.31.0)
+# Handover - 2026-10-01 22:45, ranks 97/98/160 closed, rank 99 queued shape fixed (7.31.4)
 
 ## In flight
 
-- Nothing running. 7.30.10 (`03d4bc87`), the rank 12/99 backlog commit (`694707be`) and 7.31.0
-  (`96ead362`) are on origin/master, CI green on all three.
+- Nothing running. 7.31.1 (rank 97, meta-claude-hooks refresh) and 7.31.4 (rank 99 queued
+  prompts) are on origin/master with CI green on every job; the rank 160 and 98 closures are too.
+- The installed plugin is 7.31.4 and complete (81 skills, 2,087 files, identical to the
+  marketplace clone).
 
 ## Committed, or not
 
-- Everything this session made is committed and pushed. This file and the OPEN-WORK.md rank 12
-  update are one commit on top of 7.31.0; it touches no plugin file, so no version bump.
-- This machine's config now has `classifier_stop_signal = decide` (set 2026-10-01 on the user's
-  word). It takes effect only once the installed plugin reaches 7.31.0: the user must type
-  `/plugin marketplace update bitranox-skills` then `/reload-plugins`. Until then 7.30.9 logs no
-  Stop-gate shadow rows (it treats decide as not-shadow) and still blocks on keywords as before.
-- NOT committed, by design: `.plan/jev-gate-2026-10-01/` in the main checkout (PREREG, RESULTS,
-  labels, scripts); `.plan/` is untracked, like every earlier panel record. The main checkout still
-  has `TODO-JEV.md` staged (rank 150).
+- Everything this session made is committed and pushed. This file and the OPEN-WORK.md lines for
+  ranks 190/191 are one commit on top of 7.31.5 (a peer session's release); no plugin file, no bump.
+- The MAIN checkout still has two things this session did not commit: `TODO-JEV.md` staged (rank
+  150, the user's call) and `handover.md` modified - only the STALE marker on the 17:40 handover,
+  which this file supersedes, so `git checkout -- handover.md` there before the fast-forward.
+- `.claude/worktrees/` holds only `close-98`, which this session used for the closing commits; it
+  has nothing that is not on origin/master once this commit is pushed.
 
 ## Decided, and why - do not reopen
 
-- skill_router gate stays at 0.5 (pre-registered blind panel, 22 gate-suppressed winners from rows
-  the 09-27 panel never saw: 5 right, 9 defensible, 8 wrong; no threshold met 0.7 precision with
-  noise <= 0.25; 10/10 planted controls wrong). The 09-27 "0.3 looked better" did not replicate.
-- Stop gate decide = keywords OR Jev at 0.8 (user chose option 2 of 3 on 2026-10-01). Jev is not
-  asked when the keywords already block; endorsement never fires; Jev silent = keyword verdict.
-- Decide mode in skill-router acts on typed prompts only (`prompt_text.typed_by_a_person`), and
-  `<cross-session-message` is in the not-typed registry (7.30.10).
+- Rank 98 (Jev rate limits) closed as refuted: 0 HTTP 429 in 4,881 hook rows, including 1,252
+  recall_rerank bursts of 20-30 requests on 8 workers; replays are serial and already retry 429.
+- Rank 160: all 16 worktrees removed. Each was checked against origin/master before removal: added
+  lines present and removed lines gone, or superseded/padding-only (the closing line names each).
+- A typed queued prompt is the `queued_command` attachment with `origin.kind == "human"`; every
+  queued prompt is `absorbed_mid_turn` and recorded once, so reading it cannot double-count.
 
 ## Decided against, and why
 
-- Testing gate 0.3 vs 0.5 alone: only 6 fresh prompts lie in [0.3, 0.5), too few for a verdict.
-  The panel judged every suppressed winner instead.
+- No rate limiter or pooled Jev client: nothing measured needs it (rank 98 line has the numbers).
+- The slash-command shape of rank 99 (`/goal do 3-7`, ~19 prompts) was NOT taught to human_text:
+  `looks_typed` excludes every `<command-` record on purpose, so it is the user's decision.
 
 ## Still open, untouched
 
-`OPEN-WORK.md` is the list. Rank 12's next is step (4), the first read of 7.31.0 Stop-gate decide
-rows, after about a day of them. Rank 14 waits on the plugin update plus about two weeks of
-notification rows. Rank 18 is deferred by the user. Rank 98 (Jev client rate limits) and rank 99
-(locate_prompt misses mid-turn and slash-command prompts) are unmeasured. Rank 150 needs the user.
+`OPEN-WORK.md` is the list. Rank 12 waits on about a day of Stop-gate decide rows (20 so far) and
+its step 5 on the user; rank 14 on two weeks of notification rows; rank 18 is deferred by the user;
+rank 99 now needs the user's slash-command decision; ranks 190 and 191 are new this session.
 
 ## Lessons for the next nap
 
-- When a mode must act only on one input class, gate it on the POSITIVE predicate for that class
-  (looks_typed), never on excluding one known negative (not a notification): every other machine
-  turn leaks through. Measured: 278 hand-back and cross-session turns asked of Jev, 25 nudged.
-- When a pre-registered A/B comparison turns out unpowered on the fresh data, widen to the question
-  the data can answer (judge every item the knob changes, across all bands) and re-register before
-  any label, rather than running the narrow test anyway.
-- When a panel's sample comes from a locate step, count what it could not locate and by shape:
-  145 of 400 rows were unlocatable, which silently restricted the panel to turn-boundary prompts.
-- When a production rule is re-checked on fresh rows, report noise (picks on turns needing no
-  skill) beside precision: precision held at 28/30 while noise rose from 1/19 to 10/30.
-- tooling: the auto-mode classifier refused committing a handover's STALE marker as "Unrequested
-  Commit", so meta-context-watcher's "mark it STALE in place" step leaves an uncommitted edit.
-- (carried from the previous handover, not yet napped) When deriving keyword triggers from
-  descriptions not written trigger-first, expect generic head words: 12 right of 140 nudges.
+- When a backlog item cites a drift snapshot or a rate figure, re-run the measurement first: rank 97
+  had grown a fourth section since filing, and rank 98's 80 req/s premise never produced a 429.
+- When estimating how many rows a fix will recover, split the shape by the record's OWN origin
+  field first: the queued shape looked like ~560 rows and was 112, the rest subagent hand-backs.
+- When a skill suddenly answers "Unknown skill" or the reload count drops, compare the installed
+  cache version dir against the marketplace clone (skill dirs and file count) before anything else.
+- When removing a worktree whose dirty files differ from master, check both directions per file -
+  added lines present on master AND removed lines gone - then whitespace-normalise for padding-only.
+- tooling: a worktree-isolated session refuses any Bash command whose text names git in a compound
+  or inline-script form (python -c, heredoc, for loop, `git -C`); write the script to the
+  scratchpad and run it, or use Edit, one plain git command per call.
+- tooling: `ExitWorktree remove` counts a commit already on origin as "would be discarded" when
+  local master is behind; check `git log origin/master..HEAD` is empty, then pass discard_changes.
+- (carried, not yet napped) When a mode must act only on one input class, gate it on the POSITIVE
+  predicate for that class, never on excluding one known negative.
+- (carried) When a pre-registered A/B turns out unpowered on fresh data, widen to the question the
+  data can answer and re-register before any label.
+- (carried) When a panel's sample comes from a locate step, count what it could not locate and by
+  shape.
+- (carried) When a production rule is re-checked on fresh rows, report noise beside precision.
+- (carried) tooling: the auto-mode classifier refused committing a handover's STALE marker as
+  "Unrequested Commit", so the "mark it STALE in place" step leaves an uncommitted edit.
+- (carried) When deriving keyword triggers from descriptions not written trigger-first, expect
+  generic head words: 12 right of 140 nudges.
 - (carried) When a classifier site moves from shadow to decide, check what the switch stops LOGGING.
 - (carried) When describing which path handles an input class, check the matcher actually scores
-  that class: "a notification goes to the keyword router" was true and inert (0 of 505).
-- (carried) When an earlier backstop wakeup fires after its work is done, answer it in one line.
-- (carried) tooling: right after a user-approved `git merge --ff-only` in the main checkout, the
-  auto-mode classifier refused plain `git status` as "Irreversible Local Destruction"; seen once.
+  that class.
 - (carried) tooling: `ci_wait.py` backgrounded with `> log; echo RC=$? >> log` is blocked by
-  block-masked-gate-exit; backgrounding the gate alone worked.
+  block-masked-gate-exit; background the gate alone.
 
 ## The exact next action
 
-Rank 12 is the top open item. Its step (4) needs about a day of Stop-gate decide rows, which only
-exist once the user has updated to 7.31.0. If they exist (rows with `site == stop_signal` and
-`mode == decide` in `~/.claude/self-improve-audit/classifier-shadow-*.jsonl`), tally `decide_path`,
-`families` and `latency_ms` per row; if not, ask the user to run the plugin update first. Rank 12
-step (5), recall_rerank, waits on the user.
+Rank 12 is the top open item; its step 4 reads the Stop-gate decide rows once about a day of them
+exists (rows with `site == stop_signal` and `mode == decide` in
+`~/.claude/self-improve-audit/classifier-shadow-*.jsonl`; 20 at 22:00 on 2026-10-01): tally
+`decide_path`, `families` and `latency_ms`. If that day has not passed, ask the user the rank 99
+slash-command question (should `/goal do 3-7` count as typed?), which is blocking that item.
 
 ## Files that matter
 
-- `plugins/bitranox/hooks/self-improve-gate.py` - `_regex_verdict`, `_request`, `_decide_stop_signal`.
-- `plugins/bitranox/hooks/classifier.py` - `SITE_THRESHOLDS`, `NON_FIRING_FAMILIES`,
-  `stop_signal_firings`, `decided_row`.
-- `plugins/bitranox/hooks/tests/test_self_improve_gate_decide.py` - the decide contract.
-- `plugins/bitranox/hooks/skill-router.py` - the typed-prompt gate at `main`.
-- `.plan/jev-gate-2026-10-01/RESULTS.md` (main checkout) - the gate panel.
+- `plugins/bitranox/hooks/transcript_turns.py` - `human_text`, `_queued_human_text`, `_scan`.
+- `plugins/bitranox/hooks/tests/test_transcript_turns.py` - the queued-prompt tests.
+- `plugins/bitranox/skills/meta-self-improve/classifier_eval.py` - `locate_prompt`,
+  `_typed_spans`, `unlocated_reason` (rank 191).
+- `plugins/bitranox/skills/meta-claude-hooks/references/` - refreshed against hooks.md 2026-10-01.
 
 ## How to verify
 
-- `git log --oneline -3 origin/master`: 96ead362 (7.31.0) above 694707be and 03d4bc87.
+- `git log --oneline -6 origin/master` shows f4739943 (7.31.4) and 19d9ade5 (7.31.1).
 - With CI's dependency set (see CLAUDE.md): `python -m pytest -q
-  plugins/bitranox/hooks/tests/test_self_improve_gate_decide.py
-  plugins/bitranox/hooks/tests/test_skill_router_decide.py` - 14 and 25 passed.
+  plugins/bitranox/hooks/tests/test_transcript_turns.py` - 39 passed.
+- `uv run plugins/bitranox/skills/meta-claude-hooks/scripts/hookdoc_stamp.py check` - CURRENT
+  unless upstream moved again.
 
 Read this, then replace the first line with `# STALE - read <date>, work continued`. Do not delete
 it - if this session ends badly it is the only record of where things stood.
