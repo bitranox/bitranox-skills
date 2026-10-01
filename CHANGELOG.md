@@ -29,6 +29,15 @@ than the change, so entries reconstructed from them would read like coverage wit
 a hole nobody has drawn a line under is one that gets rediscovered and half-filled - which is how
 two "versions with no entry" notes came to sit in this file disagreeing with it.
 
+## [7.31.3]
+
+### Changed
+
+- `coding-python-send-mail`: synced with btx_lib_mail 3.0.0. `ConfMail` checks every `smtphosts`
+  entry with `validate_smtp_host` when it is built or assigned, so a bad port, an unclosed or
+  missing IPv6 bracket, a port with no host name or two hosts in one entry raise
+  `ValidationError` at load time; a blank entry is dropped.
+
 ## [7.31.2]
 
 ### Fixed
