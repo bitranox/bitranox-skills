@@ -100,13 +100,20 @@ def human_text(obj):
     task brief is damage, not a learning signal. Headless runs that write no `origin` key at all
     are told apart by `entrypoint: sdk-*`. A transcript old enough to have neither falls back to
     excluding the known injected shapes.
+
+    A prompt typed while the assistant is busy is written only as an `attachment` record of type
+    `queued_command`, never as a `user` record; its `origin` tells it apart from the task
+    notifications, subagent hand-backs and coordinator messages the same queue carries. Measured
+    over the corpus: 368 such prompts, each recorded once (every one `absorbed_mid_turn`).
     """
     if not isinstance(obj, dict):
         return ""
-    if obj.get("type") != "user" or obj.get("isMeta") or obj.get("isCompactSummary"):
-        return ""
     # A headless SDK run writes no `origin` key; its records name the entrypoint instead.
     if str(obj.get("entrypoint") or "").startswith("sdk"):
+        return ""
+    if obj.get("type") == "attachment":
+        return _queued_human_text(obj.get("attachment"))
+    if obj.get("type") != "user" or obj.get("isMeta") or obj.get("isCompactSummary"):
         return ""
     if "origin" in obj:
         origin = obj["origin"]
@@ -114,6 +121,19 @@ def human_text(obj):
             return ""
     text = text_of(_content(obj))
     if not text.strip() or not looks_typed(text):
+        return ""
+    return text
+
+
+def _queued_human_text(attachment):
+    """The prompt of a `queued_command` attachment the person typed, else ""."""
+    if not isinstance(attachment, dict) or attachment.get("type") != "queued_command":
+        return ""
+    origin = attachment.get("origin")
+    if not (isinstance(origin, dict) and origin.get("kind") == "human"):
+        return ""
+    text = attachment.get("prompt")
+    if not isinstance(text, str) or not text.strip() or not looks_typed(text):
         return ""
     return text
 

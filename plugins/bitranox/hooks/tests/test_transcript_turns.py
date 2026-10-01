@@ -247,6 +247,83 @@ def test_human_text_uses_the_whole_not_typed_registry():
     assert T.human_text(_user("the 3 background agents were fine")) != ""   # control
 
 
+# ---- prompts typed while the assistant was busy -------------------------------------------------
+# Such a prompt is written ONLY as an `attachment` record of type `queued_command` (plus two
+# `queue-operation` bookkeeping records), never as a `user` record. The shapes below are copied
+# from real transcripts (CLI 2.1.282); the queue also carries task notifications, subagent
+# hand-backs and coordinator messages, told apart by the same `origin.kind` a user record has.
+
+def _queued(prompt, origin=None, **extra):
+    attachment = dict({"type": "queued_command", "prompt": prompt,
+                       "source_uuid": "55e23c39-7704-415f-b4a8-81cdba3ae6f3",
+                       "timestamp": "2026-09-25T01:41:02.873Z"}, **extra)
+    if origin is not None:
+        attachment["origin"] = origin
+    return {"type": "attachment", "attachment": attachment, "uuid": "4d91b542",
+            "entrypoint": "cli"}
+
+
+def _queued_human(prompt):
+    return _queued(prompt, {"kind": "human"}, commandMode="prompt", humanTurn=True)
+
+
+def _queue_op(op, content):
+    return {"type": "queue-operation", "operation": op, "content": content,
+            "timestamp": "2026-09-25T01:41:02.873Z"}
+
+
+def test_a_prompt_typed_while_busy_is_human_text():
+    assert T.human_text(_queued_human("use agent teams to keep main context free")) == \
+        "use agent teams to keep main context free"
+
+
+def test_a_queued_record_the_person_did_not_type_is_not_human_text():
+    # Every non-human shape the queue was measured to carry.
+    assert T.human_text(_queued("<task-notification>x</task-notification>", None,
+                                commandMode="task-notification")) == ""
+    assert T.human_text(_queued("<task-notification>y</task-notification>",
+                                {"kind": "task-notification"},
+                                commandMode="task-notification")) == ""
+    assert T.human_text(_queued("<agent-message from=\"a1\">done</agent-message>",
+                                {"kind": "peer", "from": "a1"}, commandMode="prompt")) == ""
+    assert T.human_text(_queued("Your worktree was created at c77d0f1", {"kind": "coordinator"})) == ""
+    # The bookkeeping records carry the same text and must never count a second time.
+    assert T.human_text(_queue_op("enqueue", "go")) == ""
+    assert T.human_text(_queue_op("remove", "go")) == ""
+
+
+def test_a_queued_human_record_still_obeys_the_not_typed_registry():
+    assert T.human_text(_queued_human("<bash-input>ls</bash-input>")) == ""
+
+
+def test_a_queued_record_in_a_headless_sdk_run_is_not_human_text():
+    record = _queued_human("summarise the repo")
+    record["entrypoint"] = "sdk-py"
+    assert T.human_text(record) == ""
+
+
+def test_a_prompt_typed_while_busy_becomes_the_turns_prompt(tmp_path):
+    # The real order: the prompt is queued mid-turn, after the assistant has already written.
+    t = _write(tmp_path, [_user("fix the gate"), _asst("Running the suite now."),
+                          _queue_op("enqueue", "no - stop, wrong repo"),
+                          _queue_op("remove", "no - stop, wrong repo"),
+                          _queued_human("no - stop, wrong repo"), _tool_use(), _tool_result(),
+                          _asst("Stopped.")])
+    turn = T.read_turn(t)
+    assert turn.prompt == "no - stop, wrong repo"
+    assert turn.reply_before_prompt == "Running the suite now."
+    assert turn.reply == "Stopped."
+
+
+def test_a_queued_notification_does_not_displace_the_typed_prompt(tmp_path):
+    t = _write(tmp_path, [_asst("Ready."), _user("go"),
+                          _queued("<task-notification>done</task-notification>",
+                                  {"kind": "task-notification"}, commandMode="task-notification"),
+                          _asst("Done.")])
+    turn = T.read_turn(t)
+    assert turn.prompt == "go" and turn.reply_before_prompt == "Ready."
+
+
 # ---- scheduled prompts ------------------------------------------------------------------------
 # A CronCreate or ScheduleWakeup fire reaches UserPromptSubmit as bare text, with the same payload
 # keys as a typed prompt (probed on CLI 2.1.283), and its transcript record is written only AFTER

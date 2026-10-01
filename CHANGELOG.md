@@ -29,6 +29,19 @@ than the change, so entries reconstructed from them would read like coverage wit
 a hole nobody has drawn a line under is one that gets rediscovered and half-filled - which is how
 two "versions with no entry" notes came to sit in this file disagreeing with it.
 
+## [7.31.4]
+
+### Fixed
+
+- `transcript_turns.human_text` reads a prompt typed while the assistant was busy. Claude Code
+  writes such a prompt only as a `queued_command` attachment, never as a user record, so the Stop
+  gate judged the turn against the prompt BEFORE it - a correction typed mid-turn was never what
+  it read - and `classifier_eval.locate_prompt` could not place it, leaving it out of every blind
+  panel. The attachment counts when its `origin.kind` is `human`; the task notifications,
+  subagent hand-backs and coordinator messages on the same queue still do not, and neither do the
+  `queue-operation` bookkeeping records. Replayed over the live shadow logs, every typed queued
+  prompt now locates (112 more rows); the 1,281 rows still unlocated are subagent hand-backs.
+
 ## [7.31.3]
 
 ### Changed

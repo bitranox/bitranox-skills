@@ -338,6 +338,30 @@ def test_a_capped_prompt_is_matched_on_its_tail(tmp_path):
     assert ce.locate_prompt(_located(router_row([], {}, prompt=capped), t, ends[1])) == "p2"
 
 
+def _queued_typed(uuid, text, origin=None):
+    """A prompt typed while the assistant was busy: an attachment, never a user record."""
+    return {"type": "attachment", "uuid": uuid,
+            "attachment": {"type": "queued_command", "prompt": text, "commandMode": "prompt",
+                           "origin": origin or {"kind": "human"}, "humanTurn": True}}
+
+
+def test_a_prompt_typed_while_the_assistant_was_busy_is_located(tmp_path):
+    t = tmp_path / "t.jsonl"
+    ends = _write(t, [_typed("p1", "fix the gate"), _said("a1", "Running the suite."),
+                      {"type": "queue-operation", "operation": "enqueue", "content": "wrong repo"},
+                      _queued_typed("q1", "wrong repo"), _said("a2", "Stopped.")])
+    row = _located(router_row([], {}, prompt="wrong repo"), t, ends[3])
+    assert ce.locate_prompt(row) == "q1"
+
+
+def test_a_queued_subagent_hand_back_is_still_not_located(tmp_path):
+    t = tmp_path / "t.jsonl"
+    hand_back = '<agent-message from="a1">done</agent-message>'
+    ends = _write(t, [_typed("p1", "go"), _queued_typed("q1", hand_back, {"kind": "peer"})])
+    row = _located(router_row([], {}, prompt=hand_back), t, ends[1])
+    assert ce.locate_prompt(row) is None
+
+
 @pytest.mark.parametrize("change", [
     {"transcript_path": None},
     {"transcript_offset": None},
