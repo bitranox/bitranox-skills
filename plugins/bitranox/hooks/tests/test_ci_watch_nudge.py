@@ -539,3 +539,38 @@ def test_a_heredoc_before_the_push_does_not_change_the_remote_read():
 def test_a_heredoc_before_a_dash_c_names_the_real_repo():
     cmd = "cat <<'EOF' > n.txt\nsome notes\nEOF\ngit -C /real/repo push"
     assert _names(hook._repo_dir(cmd, "/cwd"), "/real/repo")
+
+
+# --- a heredoc BEFORE a leading `cd` ---------------------------------------------------------------
+# `_cwd_after_any_cd` stripped the heredoc bodies and then masked with `commands_only`, which strips
+# them AGAIN. On the already-stripped text the opener has no terminator, so the second pass reads the
+# rest of the command as an unterminated body and drops the `cd` and the push with it; the walk then
+# fell through to the event's cwd. Measured 2026-10-01: a commit message written by heredoc, then
+# `cd <sibling> && git commit ... && git push -q origin main`, recorded the SESSION repo's already
+# pushed and green HEAD, and the Stop gate demanded a CI watch for a push that never happened there.
+
+
+def test_a_heredoc_before_a_leading_cd_still_moves_the_repo():
+    cmd = _NOTES + "cd /other/repo && git push -q origin master"
+    assert _names(hook._repo_dir(cmd, "/cwd"), "/other/repo")
+    assert _names(hook._repo_dir("cd /other/repo && git push -q origin master", "/cwd"), "/other/repo")
+
+
+def test_a_heredoc_then_cd_into_a_repo_without_ci_records_nothing(tmp_path, repo, capsys):
+    """The incident shape end to end: the session sits in a CI repo whose HEAD already landed, and
+    pushes a SIBLING that has no workflows. Nothing is owed, so nothing may be recorded."""
+    plain = _sibling_repo(tmp_path, "plain", with_workflows=False)
+    cmd = (_NOTES + f"cd {plain.as_posix()} && git status --porcelain"
+           " && git push -q origin master && git status -sb | head -1")
+    assert hook.main(_event(cmd, repo)) == 0
+    assert capsys.readouterr().out == ""
+    assert state.pending_for(str(repo), "sess-1") == []
+
+
+def test_a_heredoc_then_cd_into_a_ci_repo_records_that_repos_sha(tmp_path, repo, capsys):
+    other = _sibling_repo(tmp_path, "other")
+    cmd = _NOTES + f"cd {other.as_posix()} && git push -q origin master"
+    assert hook.main(_event(cmd, repo)) == 0
+    out = capsys.readouterr().out
+    assert _head(other)[:12] in out and _head(repo)[:12] not in out
+    assert [e["sha"] for e in state.pending_for(str(repo), "sess-1")] == [_head(other)]

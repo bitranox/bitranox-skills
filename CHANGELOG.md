@@ -29,6 +29,21 @@ than the change, so entries reconstructed from them would read like coverage wit
 a hole nobody has drawn a line under is one that gets rediscovered and half-filled - which is how
 two "versions with no entry" notes came to sit in this file disagreeing with it.
 
+## [7.31.2]
+
+### Fixed
+
+- `ci-watch-nudge.py`: a heredoc before a leading `cd` no longer sends the push to the session's
+  repo. `_cwd_after_any_cd` masked text it had already heredoc-stripped, so the masking stripped
+  it a second time; on that text the opener has no terminator, the `cd` and the push read as one
+  unterminated body, and the walk fell back to the event's cwd. A commit message written by
+  heredoc followed by `cd <other repo> && git commit ... && git push` recorded the session repo's
+  already-pushed HEAD, and the Stop gate then demanded a CI watch for a push that never happened
+  there. It now reads structure from `commands_only_aligned` and the `cd` target from the raw
+  command, as `_repo_dir`'s `-C` branch already did. Over 1,088 recorded push commands this
+  changes 11 answers, every one a heredoc before the first `cd`: nine now name the `cd` target,
+  two (`cd $VAR`) now refuse instead of naming the session repo.
+
 ## [7.31.1]
 
 ### Fixed

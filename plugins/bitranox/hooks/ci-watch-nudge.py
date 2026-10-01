@@ -48,7 +48,6 @@ from shell_text import (
     commands_only_aligned,
     is_shell_tool,
     iter_segments,
-    strip_heredoc_bodies,
 )
 
 __all__ = ["main", "notice"]
@@ -96,18 +95,19 @@ _GIT_PUSH = re.compile(r"\bgit\b[^\n;|&]*\bpush\b")
 def _cwd_after_any_cd(command: str, cwd: str, tool_name: str = "Bash") -> str | None:
     """The directory the push actually runs in, following any `cd` that precedes it.
 
-    Heredoc bodies are stripped first: a `cd` inside one is stdin DATA and moves nothing, the
-    same trap the `-C` reader already guards. Structure is read from the masked form and the
-    VALUE from the stripped text at the same offsets, because masking preserves length - and
-    both come from the stripped text, so the two offset spaces agree.
+    A `cd` inside a heredoc body is stdin DATA and moves nothing, the same trap the `-C` reader
+    guards. Structure is read from the ALIGNED masked form (bodies blanked in place) and the VALUE
+    from the raw command at the same offsets, like `_repo_dir`'s `-C` branch. Heredocs are handled
+    exactly once: masking text that was already heredoc-stripped strips it AGAIN, and on that text
+    the opener has lost its terminator, so the rest of the command - the `cd` and the push - read
+    as one unterminated body and the walk fell through to the event's cwd.
     """
-    stripped = strip_heredoc_bodies(command)
-    masked = commands_only(stripped, tool_name)
+    masked = commands_only_aligned(command, tool_name)
     here = cwd
     for at, seg in iter_segments(masked, tool_name):
         moved = _CD_AT_START.match(seg)
         if moved:
-            token = stripped[at + moved.start("target"):at + moved.end("target")]
+            token = command[at + moved.start("target"):at + moved.end("target")]
             if not token or any(ch in token for ch in _UNRESOLVABLE):
                 return None
             try:
