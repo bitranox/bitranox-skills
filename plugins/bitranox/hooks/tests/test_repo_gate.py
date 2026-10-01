@@ -2045,3 +2045,15 @@ def test_mirror_of_compares_the_checkout_it_is_run_from(tmp_path, monkeypatch, c
 
     assert "in sync" in capsys.readouterr().out
     assert rc == 0
+
+
+def test_a_continued_line_push_with_a_quoted_dash_c_is_judged_where_it_lands(tmp_path, monkeypatch):
+    # The verb walk lost a `git -c credential.helper='!gh auth git-credential' push` written on
+    # continued lines, git_verb_dir returned None, and the gate fell back to judging the SESSION repo.
+    session = _init_git(make_repo(tmp_path / "bitranox-skills", bad_skill=True))
+    target = _init_git(tmp_path / "elsewhere")
+    cmd = (f"cd {_sh(target)} \\\n && git add f \\\n"
+           " && git -c credential.helper='!gh auth git-credential' push origin main")
+    _hook_event(monkeypatch, session, cmd)
+
+    assert RG.main() == 0

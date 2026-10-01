@@ -402,12 +402,31 @@ def argv_for_match(segment, tool_name="Bash"):
     Left in, the apostrophe of `# don't force` made shlex refuse the whole segment, and the
     fallback then split the raw text: the continuation of `git \\<newline> push` stayed a token and
     `-c user.name="A B"` fell into two, so the verb walk found no push to gate.
+
+    A lone trailing backslash is a continuation whose newline the CALLER cut: the separator walk
+    keeps `\\<newline>` inside the segment, and a `segment.strip()` then leaves the backslash with
+    nothing to escape. shlex refused it, and the same fallback split a quoted `-c` value - measured
+    on 18 of 1,091 recorded pushes. It is dropped here rather than at each caller, because a caller
+    that strips gets no error, only a verb it can no longer see.
     """
-    text = _without_comments(segment, tool_name)
+    text = _drop_severed_continuation(_without_comments(segment, tool_name), tool_name)
     try:
         return split_for_tool(text, tool_name)
     except ValueError:
         return text.split()
+
+
+def _drop_severed_continuation(text, tool_name):
+    """`text` without a final UNESCAPED backslash, under the POSIX reading only.
+
+    An odd run of trailing backslashes ends in one that escapes nothing; an even run is escaped
+    data and stays. Under PowerShell a trailing backslash is a path (`cd C:\\`), never an escape.
+    """
+    if tool_name == "PowerShell":
+        return text
+    body = text.rstrip(" \t")
+    run = len(body) - len(body.rstrip("\\"))
+    return body[:-1] if run % 2 else text
 
 
 def _without_comments(segment, tool_name):

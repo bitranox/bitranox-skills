@@ -29,6 +29,21 @@ than the change, so entries reconstructed from them would read like coverage wit
 a hole nobody has drawn a line under is one that gets rediscovered and half-filled - which is how
 two "versions with no entry" notes came to sit in this file disagreeing with it.
 
+## [7.31.5]
+
+### Fixed
+
+- `shell_text.argv_for_match` drops a lone trailing backslash under the POSIX reading. The separator
+  walk keeps a `\<newline>` continuation inside its segment, and `git_verb_dir` `strip()`s the
+  segment before tokenizing, which cut the newline and left a backslash that escapes nothing. shlex
+  refused it, and the whitespace fallback split a quoted `-c` value apart, so in
+  `cd <repo> \<newline> && git -c credential.helper='!gh auth git-credential' push origin main`
+  neither `is_gated_command` nor `git_verb_dir` saw the push. With no commit earlier in the chain,
+  the commit gate did not fire at all. Latent in the recorded corpus: every one of the 3,635 gated
+  commands keeps its verdict, because each such push followed a commit the gate already resolved.
+  An even run of trailing backslashes is escaped data and stays, and under PowerShell a trailing
+  backslash is a path (`cd C:\`) and stays.
+
 ## [7.31.4]
 
 ### Fixed

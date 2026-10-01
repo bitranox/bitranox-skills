@@ -639,3 +639,14 @@ def test_git_verb_dir_refuses_what_the_text_cannot_name():
     assert S.git_verb_dir("git --git-dir=/r/.git commit -m x", "/s", verbs) is None
     assert S.git_verb_dir("GIT_DIR=/r/.git git push", "/s", verbs) is None
     assert S.git_verb_dir("git status", "/s", verbs) is None
+
+
+def test_git_verb_dir_reads_a_continued_line_with_a_quoted_dash_c_value():
+    # Each statement here ends in `\<newline>`; git_verb_dir strip()s the segment before tokenizing,
+    # which used to leave a lone backslash, split the quoted -c value and hide the push.
+    moved = os.path.normpath("/r")
+    cmd = ("S=/tmp/x\ncd /r \\\n && git add f \\\n"
+           " && git -c credential.helper='!gh auth git-credential' push origin main \\\n"
+           " && git status --porcelain")
+    for tool in ("Bash", None):
+        assert S.git_verb_dir(cmd, "/s", S.GATED_GIT_VERBS, tool) == moved

@@ -283,3 +283,23 @@ def test_the_walks_stay_linear_on_a_long_command(unit):
     S.strip_heredoc_bodies(command)
     S.commands_only(command)
     assert time.perf_counter() - started < 20
+
+
+# ---- a continuation severed by the caller's strip() -----------------------------------------------
+# The separator walk keeps `\<newline>` inside the segment, as bash does. A caller that strip()s the
+# segment cuts the newline and leaves a lone trailing backslash, shlex refuses it ("No escaped
+# character"), and the whitespace fallback splits a quoted `-c` value apart, so the verb walk never
+# reaches the verb. Measured 2026-10-01: 18 of 1,091 recorded push commands, each a
+# `cd <repo> \<newline> && ... git -c credential.helper='!gh auth git-credential' push`.
+
+def test_a_severed_continuation_does_not_split_a_quoted_value():
+    assert S.argv_for_match("git -c a.b='x y' push origin main " + _B) == [
+        "git", "-c", "a.b=x y", "push", "origin", "main"]
+
+
+def test_control_an_escaped_trailing_backslash_is_still_data():
+    assert S.argv_for_match("echo a" + _B + _B) == ["echo", "a" + _B]
+
+
+def test_control_a_powershell_trailing_backslash_is_a_path():
+    assert S.argv_for_match("cd C:" + _B, "PowerShell") == ["cd", "C:" + _B]
