@@ -1,122 +1,92 @@
-# Handover - 2026-09-28 23:55, ranks 91/93 closed, 160 down to 14, three bose containers deployed
+# Handover - 2026-10-01 14:50, rank 4 measured and closed (7.30.8), notifications shadowed in decide mode (7.30.9)
 
 ## In flight
 
-- Nothing running. Everything this session made is committed and pushed.
+- Nothing running. Everything this session made is committed and pushed; CI is green on both
+  releases (`50fb6599` 7.30.8, `5338ce82` 7.30.9).
 
 ## Committed, or not
 
-- bitranox-skills: 7.30.1 (`f39f7e17`) shipped and green on every CI cell; backlog commits up to
-  this handover on origin/master. This machine still RUNS plugin 7.30.0 until the user types
-  `/plugin marketplace update bitranox-skills` then `/reload-plugins`.
-- kct-bose `12ebef3`, rct-bose `2051c12`, wct-bose `23cefae`: pushed AND deployed (see rank 91).
-- Tree-top memory store: `9f25c66` pushed; since then 4 more uncommitted changes have appeared in
-  it (not from this session's work) - the next dream commits them.
-- NOT committed, by design: the main checkout still has `TODO-JEV.md` and `PLAN-JEV-SKILL.md`
-  staged plus a one-line STALE-marker edit to `handover.md`, and sits behind origin (rank 150).
+- bitranox-skills 7.30.8 and 7.30.9 are on origin/master. This machine still RUNS plugin 7.30.0
+  until the user types `/plugin marketplace update bitranox-skills` then `/reload-plugins`; until
+  then neither the 7.30.9 notification logging nor anything since 7.30.0 is live here.
+- The backlog edits (ranks 4, 14, 98, 150) and this file were committed from the
+  `.claude/worktrees/openwork-upstream` worktree, which tracks origin/master.
+- NOT committed, by design: the main checkout still has `TODO-JEV.md` staged (`AM`), rank 150.
+- Outside this repo: `KI/btx-skill-jev/PLAN-JEV-SKILL.md` got a "Packaging" section; that directory
+  is not a git repo yet, and the btx-skill-jev session owns it now.
 
 ## Decided, and why - do not reopen
 
-- Rank 91 container route is a plain git clone at `/opt/soundtouch-decloud`, kept current by each
-  machine's deploy hook, NOT the Claude Code plugin (user decision in the decision review): the
-  containers should not need Claude Code to run a Python script. `SOUNDTOUCH_DECLOUD_DIR` overrides
-  the path on a dev box.
-- The three bose machines are kept identical (user: "they should work the same with the latest
-  version"): same shim blob in all three; the clone step is bash in kct-bose, Python in rct/wct.
-- A dirty worktree counts as landed when every dirty file's blob is SOME version of that path in
-  origin/master's history, not only the current one (user confirmed). Checker:
-  `.plan/wt_landed_check.py` in the main checkout (gitignored, read-only).
-- `PLAN-JEV-SKILL.md` is kept (moved to `.plan/`), not deleted, when rank 150 is done: a 1,114-line
-  plan for an unstarted `compuse-jev-judge` skill that no backlog line records.
-- pytest/httpx2/PyYAML/lxml/defusedxml/ruamel.yaml installed into the Python 3.14 user site (user
-  choice), so the repo-gate commit hook works in a session launched without a venv.
+- The Jev judgment skill will NEVER ship in bitranox-skills: not mirrored, not listed in
+  marketplace.json (user decision 2026-10-01, relayed by the btx-skill-jev session; it superseded
+  this session's earlier "standalone now, listed later"). It lives in `KI/btx-skill-jev`.
+- The keyword skill router keeps a map of this plugin's skills only (rank 4, user chose option 1):
+  keywords derived from other plugins' descriptions were 12 right of 140 nudges on 1,317 typed
+  prompts, about 5 of 37 with prompt-common words dropped. The reason is in the skill-router.py
+  docstring.
+- In decide mode a task notification is shadowed, never nudged (user chose option 1 of 4 on
+  2026-10-01): too few rows to decide it, and decide had stopped the log from growing.
 
 ## Decided against, and why
 
-- Running the rank-150 discard and the rank-160 `--discard-uncommitted` removals past an auto-mode
-  refusal: the refusals said to stop and let the user decide. The user later asked for the 25
-  landed worktrees to go, which is the only reason those were removed.
-- Deleting the 14 worktrees whose content never reached master: nothing proves it landed.
+- Routing notifications through Jev now: about 20 of 42 picks plausibly right, and the one strong
+  kind (failed background commands, 12 of 12) is 12 rows from 9 sessions. Rank 14 holds the
+  re-measurement.
 
 ## Still open, untouched
 
-`OPEN-WORK.md` is the list. Rank 12 waits on a day of 7.30.0 router rows (7.30.0 shipped 13:41
-today). Rank 18 is deferred by the user. Rank 150 waits on the user running its four commands
-(in its line). Rank 160 has 14 worktrees to read with the user one at a time. Ranks 175/177/178
-are user decisions.
+`OPEN-WORK.md` is the list. Rank 12 is no longer waiting on data (7.30.0 router rows exist since
+2026-09-28). Rank 14 waits on the plugin update plus about two weeks of notification rows. Rank 18
+is deferred by the user. Rank 98 (Jev client rate limits) is new and unmeasured. Rank 150 needs the
+user or a session the classifier lets run git in the main checkout.
 
 ## Lessons for the next nap
 
-- When a /goal's remaining step is refused by the auto-mode classifier, say so once and ask the
-  user to clear or unblock it: the goal Stop hook re-blocks every turn and cannot be satisfied.
-- When a doc says a script runs inside a container, check the container has what the script needs
-  before fixing a path: CT 11000 had neither the plugin the fix assumed nor `uv` on the
-  `pct exec` PATH (`/sbin:/bin:/usr/sbin:/usr/bin`).
-- When the user asks whether sibling machines got the same change, search the sibling REPOS by
-  machine name, not the changed file name: a find for `bose_onboard.py` missed that rct/wct share
-  the runbook and lacked the capability entirely.
-- When judging whether a dirty worktree's content landed, compare each file's blob to every
-  version of that path in master's history, not to current master: 25 of 39 had landed and been
-  superseded, and a current-master diff called all 39 unlanded.
-- When RED-running tests against an old version of code that calls `os.execv`, expect the test
-  process to be REPLACED mid-run: the log truncates and reads like a crash.
-- tooling: the message file for `git commit -F` was again written in the same command as the
-  commit; the gate blocked both and the file never existed (recurrence of
-  feedback-repo-gate-pre-evaluates-the-pending-commit-command).
-- (carried) When a prompt-time hook filters turns the person did not type, test the text the HOOK
-  receives, not the transcript's stored form: the transcript wraps a subagent hand-back as
-  "Another Claude session sent a message:", while UserPromptSubmit gets the bare `<agent-message`
-  envelope.
-- (carried) When quoting a rate from live router rows, first count how many locate to a typed
-  prompt: of 230 answered rows only 57 did (89 hand-backs, 43 isMeta scheduled prompts, 40 gone
-  transcripts).
-- (carried) When running compuse-toolbox mutation_arm in bitranox-skills, launch it with system
-  `python3`: the repo's `.venv` has no pytest, and the arm then reads `inconclusive` with
-  `failure: null`.
-- (carried) When ruff reports dozens of findings in a repo with no ruff config, compare against the
-  file at HEAD with `--select E,F,W,B` before treating any as yours: ruff 0.16's default set flags
-  this repo's %-format house style everywhere.
-- (carried) tooling: the worktree-isolation guard refuses `env -u VIRTUAL_ENV uv run ...` and a
-  `git push ... > file; echo RC` chain; put the first in a scratchpad script and run the push bare.
-- (carried) When a test builds a shell command around a filesystem path, write the path
-  double-quoted in forward-slash form: unquoted, Windows backslashes are eaten by bash and by the
-  tokenizer alike, so the test silently exercises a fallback on the Windows cell.
-- (carried) When a hook must judge the repository a Bash command acts on, resolve it from the
-  event cwd plus the command's own `cd`/`git -C` (`shell_text.git_verb_dir`), never from the
-  hook's working directory, which is where the session sits.
-- (carried) When a design note justifies a trigger as "early beats never", measure how early
-  before keeping it: the decision-review block on a running goal was early in 13 of 16 sessions,
-  by up to 583 min.
+- When deriving keyword triggers from descriptions not written trigger-first (another plugin's
+  skills), expect generic head words: measured 12 right of 140 nudges, so measure on real prompts
+  before building any keyword matcher over such text.
+- When a classifier site moves from shadow to decide, check what the switch stops LOGGING: decide
+  turned the shadow off for notifications it never acted on, so their evidence silently stopped.
+- When describing which path handles an input class, check the matcher actually scores that class:
+  "a notification goes to the keyword router" was true and inert, since it scores machine turns as
+  nothing (0 of 505).
+- When an earlier backstop wakeup fires after its work is done, answer it in one line: two stale
+  re-fires restated finished steps here.
+- tooling: right after a user-approved `git merge --ff-only` in the main checkout, the auto-mode
+  classifier refused plain `git status` and `repo-gate.py --mirrors` as "Irreversible Local
+  Destruction"; seen once, cause unknown.
+- tooling: `ci_wait.py` backgrounded with `> log; echo RC=$? >> log` is blocked by
+  block-masked-gate-exit; backgrounding the gate alone worked.
 
 ## The exact next action
 
-Rank 97 is the top-ranked item that is not waiting on data, a deferral or the user (12, 18 are
-ahead of it and cannot move). Start with:
+Rank 12 is the top-ranked open item and is no longer blocked: 7.30.0+ router rows exist since
+2026-09-28. Its step (2) is a blind panel over decide rows from sessions on 7.30.0 or later:
 
 ```
-python3 plugins/bitranox/skills/meta-claude-hooks/scripts/hookdoc_stamp.py check
+python3 plugins/bitranox/skills/meta-self-improve/classifier_eval.py packet --help
 ```
 
-then read the three new upstream H4 sections in code.claude.com/docs/en/hooks.md, update
-`plugins/bitranox/skills/meta-claude-hooks/references/configuration.md` (and `events.md` for the
-dropped SessionStart field) through bitranox:meta-skill-writer's checklist, run `coverage`, then
-`stamp --write`. If the user is present first, settle rank 150 (their four commands) and rank 175
-(three decisions) with them.
+then build packets from the decide rows since 2026-09-28 13:41 (the `packet` verb drops rows it
+cannot locate to a typed prompt and reports why), dispatch the judges, and `harvest`. Rank 4,
+ranked above it, is closed.
 
 ## Files that matter
 
-- `OPEN-WORK.md` - the backlog; ranks 91, 150, 160 carry today's detail.
-- `plugins/bitranox/skills/meta-claude-hooks/references/` - rank 97's target.
-- the three bose machine repos in the private tree (`kct-bose`, `rct-bose`, `wct-bose`):
-  `bose_onboard.py` and `upd_posthook_local.{sh,py}` - rank 91's shipped change.
-- `.plan/wt_landed_check.py` (main checkout, gitignored) - rank 160's checker.
+- `OPEN-WORK.md` - ranks 12, 14, 98 and 150 carry today's detail.
+- `plugins/bitranox/hooks/skill-router.py` - `_shadows`, the decide-mode notification shadow.
+- `plugins/bitranox/hooks/tests/test_skill_router_decide.py` - the two notification tests.
+- `plugins/bitranox/skills/meta-memory-settings/SKILL.md`, `docs/reference.md` - the
+  `classifier_skill_router` row.
+- `~/.claude/self-improve-audit/classifier-shadow-*.jsonl` - the router rows; notification rows
+  carry `regex.notify_view`.
 
 ## How to verify
 
-- `git -C <repo> log --oneline -1` on the three bose repos: 12ebef3 / 2051c12 / 23cefae.
-- `python3 .plan/wt_landed_check.py` from the main checkout: 14 worktrees, each with a non-empty
-  list of unlanded files.
-- `git worktree list | wc -l` in the main checkout: 16 (main, openwork-upstream, the 14).
+- `git log --oneline -3 origin/master`: 5338ce82 (7.30.9) on top of 50fb6599 (7.30.8).
+- `python3 -m pytest -q plugins/bitranox/hooks/tests/test_skill_router_decide.py` with CI's
+  dependency set (see CLAUDE.md): 22 passed.
 
 Read this, then replace the first line with `# STALE - read <date>, work continued`. Do not delete
 it - if this session ends badly it is the only record of where things stood.
