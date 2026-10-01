@@ -29,6 +29,15 @@ than the change, so entries reconstructed from them would read like coverage wit
 a hole nobody has drawn a line under is one that gets rediscovered and half-filled - which is how
 two "versions with no entry" notes came to sit in this file disagreeing with it.
 
+## [7.30.7]
+
+### Fixed
+
+- `coding-python-send-mail`: synced with btx_lib_mail 2.0.0. `ConfMail` refuses a key that is not
+  one of its fields (one `ValidationError`, each entry `extra_forbidden`); before 2.0.0 such a key
+  was silently ignored, which the skill used to state as current behaviour. The skill shows a
+  loader that maps config keys onto field names instead of passing the rest through.
+
 ## [7.30.6]
 
 ### Fixed
