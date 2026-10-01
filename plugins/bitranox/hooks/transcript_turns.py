@@ -32,8 +32,11 @@ MAX_TAIL_BYTES = 16 * 1024 * 1024
 # `<agent-message` is a subagent's hand-back as the UserPromptSubmit hook receives it: bare. The
 # transcript stores the same turn behind "Another Claude session sent a message", so a reader of
 # the file was covered while every prompt-time hook scored the envelope as a typed request.
+# `<cross-session-message` is the same gap for a message from another session: the hook receives
+# the bare envelope, the transcript the "Another Claude session" form.
 NOT_TYPED_PREFIXES = ("<command-", "<local-command", "<task-notification",
                       "Another Claude session sent a message", "<agent-message",
+                      "<cross-session-message",
                       "<teammate-message", "[Request interrupted", "<bash-input", "<bash-stdout")
 
 # The shapes a prefix structurally cannot reach. This one opens with a COUNT, so there is no

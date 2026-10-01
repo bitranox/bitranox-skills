@@ -38,6 +38,16 @@ def test_a_subagent_hand_back_is_not_typed_by_a_person():
     assert P.typed_by_a_person("what does <agent-message> mean in the transcript?")   # control
 
 
+def test_a_message_from_another_session_is_not_typed_by_a_person():
+    # The hook receives this bare envelope; the transcript the "Another Claude session" form.
+    # Measured 2026-10-01: 18 router rows on 7.30.0+ were this shape, 7 given a Jev pick.
+    message = ('<cross-session-message from="uds:/run/user/1000/cc-socks/1.sock" '
+               'from-name="peer" from-mode="prompting">\nplease update your clone\n'
+               '</cross-session-message>')
+    assert not P.typed_by_a_person(message)
+    assert P.typed_by_a_person("why did a <cross-session-message> reach the router?")   # control
+
+
 def test_leading_whitespace_does_not_disguise_a_machine_turn():
     assert not P.typed_by_a_person("\n  <task-notification>done</task-notification>")
 

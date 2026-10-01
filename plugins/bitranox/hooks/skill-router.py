@@ -303,10 +303,12 @@ def main():
         hits = match(prompt, triggers, max_skills=None)
         transcript = ev.get("transcript_path") or ""
         cfg = sig.load_config()
-        # A task notification is not a prompt, and no blind judgement has covered one, so decide
-        # mode acts on typed prompts only; a notification goes the way it does with the site off.
+        # No blind judgement has covered a turn the person did not type, so decide mode acts on
+        # typed prompts only. Every other turn goes the way it does with the site off: a task
+        # notification is still shadowed (`_shadows`), and a hand-back from a subagent or another
+        # session gets neither a Jev request nor, scoring no prose, a keyword nudge.
         if (classifier.site_mode(cfg, "skill_router") == "decide"
-                and not prompt_text.notification_fields(prompt)):
+                and prompt_text.typed_by_a_person(prompt)):
             _decide(prompt, sid, triggers, hits, transcript, cwd, cfg)
             return 0
         # Opt-in shadow comparison (off by default), before the per-session dedup so every

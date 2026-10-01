@@ -15,6 +15,7 @@ What decide mode promises:
   session may no longer have: the keyword nudge, byte for byte;
 * a task notification is not a prompt: it is nudged as with the classifier off, and still handed
   to the shadow child, so Jev's answers on notifications keep being logged;
+* a hand-back from a subagent or another session is not a prompt either: no request, no nudge;
 * one skill is nudged at most once per session whichever path nudged it;
 * one comparison row per prompt lands in the shadow log, saying which path decided.
 """
@@ -254,6 +255,33 @@ def test_decide_still_shadows_a_task_notification_so_its_evidence_keeps_accruing
     assert row["regex"]["notify_view"] == cl.NOTIFY_VIEW
     assert row["states"][0]["task_status"] == "failed"
     assert row["results"][0] is not None
+
+
+# ---- a hand-back from another agent or session is not a prompt either --------------------------
+
+# Both envelopes carry PROMPT's text, so a typed reading of either would match `compuse-git` and
+# a confident Jev pick: "nothing happened" can only mean the turn was recognised as not typed.
+ENVELOPES = {
+    "subagent": '<agent-message from="a06d1c">\n%s\n</agent-message>' % PROMPT,
+    "session": ('<cross-session-message from="uds:/run/user/1000/cc-socks/1.sock" '
+                'from-name="peer" from-mode="prompting">\n%s\n</cross-session-message>' % PROMPT),
+}
+
+
+@pytest.mark.parametrize("kind", sorted(ENVELOPES))
+def test_decide_neither_asks_jev_nor_nudges_on_a_hand_back(env, monkeypatch, capsys, spawned,
+                                                           kind):
+    env["fake"].body = _answer(0.9, JEV_PICK, 0.95)
+    _decide(env["home"])
+    assert _run(monkeypatch, capsys, "s-hand-" + kind, prompt=ENVELOPES[kind]) == ""
+    assert env["fake"].requests == [] and _shadow_children(spawned) == [] and _rows(env["home"]) == []
+
+
+def test_control_the_same_text_typed_is_decided(env, monkeypatch, capsys):
+    env["fake"].body = _answer(0.9, JEV_PICK, 0.95)
+    _decide(env["home"])
+    assert _nudged(_run(monkeypatch, capsys, "s-typed")) == ["bitranox:" + JEV_PICK]
+    assert len(env["fake"].requests) == 1
 
 
 # ---- one identity per skill, whichever path nudged it ------------------------------------------

@@ -29,6 +29,20 @@ than the change, so entries reconstructed from them would read like coverage wit
 a hole nobody has drawn a line under is one that gets rediscovered and half-filled - which is how
 two "versions with no entry" notes came to sit in this file disagreeing with it.
 
+## [7.30.10]
+
+### Fixed
+
+- `skill-router.py`: with `classifier_skill_router = decide`, only a typed prompt is decided, as the
+  documentation already said. The check let through every turn that was not a task notification,
+  so a subagent's hand-back (`<agent-message>`) and a message from another session
+  (`<cross-session-message>`) were sent to Jev while the prompt waited, and could be nudged: on
+  7.30.0 and later, 278 such turns were asked and 25 nudged. They now get neither a request nor a
+  nudge.
+- `transcript_turns.NOT_TYPED_PREFIXES` lists `<cross-session-message`, the bare envelope the
+  prompt-time hooks receive for a message from another session; only its transcript form was
+  listed.
+
 ## [7.30.9]
 
 ### Changed
