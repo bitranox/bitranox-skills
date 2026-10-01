@@ -29,6 +29,15 @@ than the change, so entries reconstructed from them would read like coverage wit
 a hole nobody has drawn a line under is one that gets rediscovered and half-filled - which is how
 two "versions with no entry" notes came to sit in this file disagreeing with it.
 
+## [7.30.8]
+
+### Changed
+
+- `skill-router.py`: the docstring says why the keyword trigger map holds this plugin's skills only.
+  Keywords derived from other plugins' descriptions were measured over 1,317 typed prompts at about
+  12 right nudges of 140, and about 5 of 37 with prompt-common words dropped; skills from elsewhere
+  reach the router through the Jev decide path instead.
+
 ## [7.30.7]
 
 ### Fixed

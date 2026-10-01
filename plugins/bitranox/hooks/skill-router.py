@@ -14,6 +14,13 @@ letters and digits of any script as word characters), at most MAX_SKILLS NEW ski
 each skill nudges at most once per session (state file). Fail-open: every error path exits 0. Pure
 standard library; launched via run-python.sh.
 
+The trigger map holds this plugin's skills only, on purpose. Another plugin's description is not
+written trigger-first, so the keywords `build_skill_triggers` would derive from it are generic
+words. Measured 2026-10-01 over 1,317 typed prompts, deriving them for every installed skill from
+elsewhere added 140 nudges of which about 12 were right; dropping words common in typed prompts
+still left about 5 right of 37. A skill from elsewhere reaches the router through the decide path
+below, which offers the whole installed roster.
+
 With `classifier_skill_router = decide` (and `classifier_backend = jev`) Jev decides a typed
 prompt instead: the hook asks the shadow comparison's own gate-plus-choice question in-process,
 under the classifier's DEFAULT_DEADLINE, and nudges the ONE skill `classifier.choice_pick` returns
