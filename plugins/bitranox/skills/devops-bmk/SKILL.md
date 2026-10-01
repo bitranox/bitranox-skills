@@ -140,9 +140,12 @@ If uv cannot say what it would provide, your venv is left alone; bmk never rebui
 Declare no `:: Python :: X.Y` classifier and bmk picks no version at all - uv's default stands.
 
 The same classifiers drive `make test-all`: it provisions one `.venv-<minor>` per declared version
-and runs pytest + pyright in each, in parallel, so you can reproduce CI's matrix locally before you
-push. Plain `make test` stays on the newest version only; with no `:: Python :: X.Y` classifier,
-`test-all` tests the default interpreter once and prints a WARNING naming the version it used.
+and runs pytest + pyright in each, in parallel by default, so you can reproduce CI's matrix locally
+before you push. A project whose suite binds fixed ports or shares a test database sets
+`[tool.scripts.test-all] workers = 1` in its `pyproject.toml` (or `BMK_TEST_ALL_WORKERS=1` for one
+run) to run the version cells serially instead. Plain `make test` stays on the newest version only;
+with no `:: Python :: X.Y` classifier, `test-all` tests the default interpreter once and prints a
+WARNING naming the version it used.
 
 The sync is exact *and* upgrading: it removes packages the manifest no longer asks for and
 re-resolves the ones it does. A venv left to drift makes the gates lie -- pip-audit reports CVEs for
@@ -185,24 +188,24 @@ elevated shell. bmk itself needs no shell.
 Drive these with `make <target>` (or call `bmk <command>` directly). Arguments after the target are
 forwarded (e.g. `make push fix login bug`). Most have short aliases.
 
-| Target / command                        | What it does                                                                   |
-|-----------------------------------------|--------------------------------------------------------------------------------|
-| `make test` \| `t`                      | Full test pipeline: lint, format-check, type-check, security, tests + coverage |
-| `make test-human` \| `th`               | Same, forced human-readable (verbose) output                                   |
-| `make test-all`                         | Run pytest + pyright on EVERY declared Python version in parallel (the matrix) |
-| `make testintegration` \| `ti`          | Integration tests only (`pytest -m integration`)                               |
-| `make bump-patch` / `-minor` / `-major` | Bump version in `pyproject.toml` and update the changelog (rules below)        |
-| `make commit` \| `c` `[MESSAGE...]`     | Git commit with a timestamped message                                          |
-| `make push` \| `p` `[MESSAGE...]`       | Run tests, commit, then push to the remote                                     |
-| `make release` \| `r`                   | Tag `v` + the current version, push, create the GitHub release via `gh`        |
-| `make ship` \| `sh`                     | push -> wait for CI -> release -> wait for the release workflow                |
-| `make build` \| `bld`                   | Build wheel + sdist                                                            |
-| `make clean` \| `cl`                    | Remove build artifacts and caches                                              |
-| `make clean-all`                        | Remove build artifacts, caches AND every virtualenv (`.venv*`)                 |
-| `make dependencies` \| `deps` `[-u]`    | Check (or `--update`) project dependencies                                     |
-| `make ensure`                           | Install missing external tools for this OS (see section 5)                     |
-| `make custom <name> [args...]`          | Run a user-defined pipeline (section 6)                                        |
-| `make help`                             | List available targets                                                         |
+| Target / command                        | What it does                                                                                  |
+|-----------------------------------------|-----------------------------------------------------------------------------------------------|
+| `make test` \| `t`                      | Full test pipeline: lint, format-check, type-check, security, tests + coverage                |
+| `make test-human` \| `th`               | Same, forced human-readable (verbose) output                                                  |
+| `make test-all`                         | Run pytest + pyright on EVERY declared Python version (the matrix), in parallel unless capped |
+| `make testintegration` \| `ti`          | Integration tests only (`pytest -m integration`)                                              |
+| `make bump-patch` / `-minor` / `-major` | Bump version in `pyproject.toml` and update the changelog (rules below)                       |
+| `make commit` \| `c` `[MESSAGE...]`     | Git commit with a timestamped message                                                         |
+| `make push` \| `p` `[MESSAGE...]`       | Run tests, commit, then push to the remote                                                    |
+| `make release` \| `r`                   | Tag `v` + the current version, push, create the GitHub release via `gh`                       |
+| `make ship` \| `sh`                     | push -> wait for CI -> release -> wait for the release workflow                               |
+| `make build` \| `bld`                   | Build wheel + sdist                                                                           |
+| `make clean` \| `cl`                    | Remove build artifacts and caches                                                             |
+| `make clean-all`                        | Remove build artifacts, caches AND every virtualenv (`.venv*`)                                |
+| `make dependencies` \| `deps` `[-u]`    | Check (or `--update`) project dependencies                                                    |
+| `make ensure`                           | Install missing external tools for this OS (see section 5)                                    |
+| `make custom <name> [args...]`          | Run a user-defined pipeline (section 6)                                                       |
+| `make help`                             | List available targets                                                                        |
 
 ### What version `bump` and `release` accept, and what they produce
 

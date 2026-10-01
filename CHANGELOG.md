@@ -29,6 +29,15 @@ than the change, so entries reconstructed from them would read like coverage wit
 a hole nobody has drawn a line under is one that gets rediscovered and half-filled - which is how
 two "versions with no entry" notes came to sit in this file disagreeing with it.
 
+## [7.30.6]
+
+### Fixed
+
+- `devops-bmk`: synced with bmk 3.18.0. The skill documents the per-project `test-all` worker cap
+  (`[tool.scripts.test-all] workers` in `pyproject.toml`, or `BMK_TEST_ALL_WORKERS` for one run)
+  for a project whose suite binds fixed ports or shares a test database, and the target table notes
+  that `test-all` runs its version cells in parallel unless capped.
+
 ## [7.30.5]
 
 ### Fixed
