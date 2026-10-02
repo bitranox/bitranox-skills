@@ -834,3 +834,77 @@ def test_the_cli_firings_flag_writes_the_file(tmp_path, capsys):
     assert len(lines) == 1
     assert lines[0]["id"] == "t1"
     assert lines[0]["command"] == "fire"
+
+
+def test_an_unwritable_firings_path_is_a_clean_refusal_not_a_traceback(tmp_path, capsys):
+    """A missing parent directory must fail the same readable way as a bad --block-pattern: one
+    stderr line, no traceback, exit 2 - and through the SAME refusal mechanism (`_refuse`), not
+    main()'s generic catch-all. That distinction is not cosmetic: the generic catch-all never
+    prints the --json envelope, so a scripted caller in --json mode would see exit 2 and an empty
+    stdout with nothing to parse, instead of the usual {"ok": false, ...} every other usage
+    refusal here produces."""
+    mod = _module(tmp_path, FIRE_ON_FIRE)
+    root = _corpus(tmp_path, [_use("t1", "fire")])
+    bad_out = tmp_path / "no-such-dir" / "firings.jsonl"
+    rc = G.main(["--module", mod, "--root", root, "--firings", str(bad_out)])
+    err = capsys.readouterr().err
+    assert rc == 2
+    assert "Traceback" not in err
+    assert "internal error" not in err, "must go through _refuse, not main()'s generic catch-all"
+    assert str(bad_out) in err
+    assert not bad_out.exists()
+
+
+def test_an_unwritable_firings_path_still_emits_the_json_envelope(tmp_path, capsys):
+    """The behavioural difference the mechanism choice above actually causes: --json mode must
+    still print a parseable {"ok": false, ...} envelope, the same as every other usage refusal."""
+    mod = _module(tmp_path, FIRE_ON_FIRE)
+    root = _corpus(tmp_path, [_use("t1", "fire")])
+    bad_out = tmp_path / "no-such-dir" / "firings.jsonl"
+    rc = G.main(["--module", mod, "--root", root, "--firings", str(bad_out), "--json"])
+    cap = capsys.readouterr()
+    assert rc == 2
+    env = json.loads(cap.out)
+    assert env["ok"] is False and env["data"] is None
+
+
+def test_write_firings_raises_usage_error_not_oserror(tmp_path):
+    """The library-level contract behind the CLI refusal above."""
+    bad_out = tmp_path / "no-such-dir" / "firings.jsonl"
+    try:
+        G.write_firings(str(bad_out), [{"id": "a", "command": "x", "cwd": "/r", "error": None,
+                                        "transcript": "/t.jsonl"}])
+    except G.UsageError as exc:
+        assert str(bad_out) in str(exc)
+    else:
+        raise AssertionError("expected UsageError, not a silent write or a raw OSError")
+
+
+# --- classify() never carries fire_calls unless explicitly asked, and replay() never carries it
+# at all: a future direct caller who serializes the report must not leak every firing's command,
+# cwd and error just because --firings happened to be requested.
+
+def test_classify_does_not_carry_fire_calls_by_default():
+    calls = [{"id": "a", "command": "fire", "cwd": "/r", "error": None}]
+    report = G.classify(calls, lambda cmd: "fire" in cmd)
+    assert "fire_calls" not in report
+
+
+def test_classify_carries_fire_calls_only_when_asked():
+    calls = [{"id": "a", "command": "fire", "cwd": "/r", "error": None}]
+    report = G.classify(calls, lambda cmd: "fire" in cmd, collect_fires=True)
+    assert report["fire_calls"][0]["id"] == "a"
+
+
+def test_replay_never_leaves_fire_calls_in_its_report_even_with_firings(tmp_path):
+    (tmp_path / "one.jsonl").write_text(_mk([_use("t1", "fire")]), encoding="utf-8")
+    out = tmp_path / "firings.jsonl"
+    report = G.replay(str(tmp_path), lambda cmd: "fire" in cmd, firings_path=str(out))
+    assert "fire_calls" not in report
+    assert out.exists()
+
+
+def test_replay_never_leaves_fire_calls_in_its_report_without_firings(tmp_path):
+    (tmp_path / "one.jsonl").write_text(_mk([_use("t1", "fire")]), encoding="utf-8")
+    report = G.replay(str(tmp_path), lambda cmd: "fire" in cmd)
+    assert "fire_calls" not in report

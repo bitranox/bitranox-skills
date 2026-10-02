@@ -152,7 +152,7 @@ def _records(text: str):
     return text.split("\n")
 
 
-def _extract(text: str, tool: str, field: str, transcript: str = None):
+def _extract(text: str, tool: str, field: str, transcript: str | None = None):
     """`(calls, calls_without_field)` for one transcript - see `extract_calls`.
 
     `transcript` is carried onto every call unchanged: it is the path Task 3's
@@ -197,7 +197,8 @@ def _extract(text: str, tool: str, field: str, transcript: str = None):
     return calls, without_field
 
 
-def extract_calls(text: str, tool: str = "Bash", field: str = None, transcript: str = None):
+def extract_calls(text: str, tool: str = "Bash", field: str | None = None,
+                  transcript: str | None = None):
     """Every call of `tool` in one transcript, each with the cwd it ran under and its error.
 
     `field` overrides which input field is handed to the predicate. The default is the tool's
@@ -315,7 +316,7 @@ def _spread_sample(fires, n):
 
 
 def classify(calls, predicate, sample: int = 0, block_pattern: str = DEFAULT_BLOCK_PATTERN,
-             tool: str = "Bash"):
+             tool: str = "Bash", collect_fires: bool = False):
     """Run the predicate over every call and split the firings by what actually happened.
 
     A predicate that raises is COUNTED, never swallowed into the quiet bucket: a guard crashing on
@@ -328,6 +329,12 @@ def classify(calls, predicate, sample: int = 0, block_pattern: str = DEFAULT_BLO
     verdict, and counting it as quiet made a guard that crashed on 99 of 100 read as a 1% rate.
     A `SystemExit` raised by the predicate is a crash too - a guard's `sys.exit` must not end the
     replay with whatever code it chose.
+
+    `collect_fires` is OFF by default: the returned report never carries a `fire_calls` key unless
+    a caller explicitly asks for it (`replay` does, only when `firings_path` was given, and pops it
+    out again before returning). Without that, a future direct caller who serializes this report -
+    logs it, JSON-dumps it, hands it to another tool - would silently leak every firing command,
+    cwd and error it never asked to carry.
     """
     second, by_keyword = _forwarding(predicate)
     declared = _second_param_name(predicate)
@@ -362,7 +369,7 @@ def classify(calls, predicate, sample: int = 0, block_pattern: str = DEFAULT_BLO
     samples = _spread_sample(fires, sample)
     total = len(calls)
     judged = total - predicate_errors
-    return {
+    report = {
         "commands": total,
         "judged": judged,
         "fires": len(fires),
@@ -377,11 +384,12 @@ def classify(calls, predicate, sample: int = 0, block_pattern: str = DEFAULT_BLO
         # guard was measured. Leaving this implicit is what let a cwd-as-tool_name run pass as real.
         "forwarded_second_arg": second,
         "samples": samples,
-        # The full firing calls, for `write_firings` - never printed: `_run` pops this before
-        # rendering or JSON-dumping the report, so it cannot bloat the envelope or double as the
-        # (deliberately narrow) `samples` view.
-        "fire_calls": fires,
     }
+    if collect_fires:
+        # Only built on request, and only ever read by `replay`, which pops it straight back out
+        # before returning - the key never survives into a report a caller can hold onto.
+        report["fire_calls"] = fires
+    return report
 
 
 def load_predicate(path: str, func_name: str):
@@ -421,8 +429,8 @@ def load_predicate(path: str, func_name: str):
 
 
 def replay(root: str, predicate, tool: str = "Bash", sample: int = 0,
-           block_pattern: str = DEFAULT_BLOCK_PATTERN, field: str = None,
-           firings_path: str = None):
+           block_pattern: str = DEFAULT_BLOCK_PATTERN, field: str | None = None,
+           firings_path: str | None = None):
     """Walk every *.jsonl below `root` and classify every DISTINCT call of `tool` found in them.
 
     Distinct matters: resuming or forking a session copies the earlier transcript into a new file,
@@ -461,7 +469,8 @@ def replay(root: str, predicate, tool: str = "Bash", sample: int = 0,
         raise UnreadableField(
             "no %s call carries an input field %r (%d call(s) of that tool lack it) - check "
             "--field" % (tool, field, without_field))
-    report = classify(calls, predicate, sample=sample, block_pattern=block_pattern, tool=tool)
+    report = classify(calls, predicate, sample=sample, block_pattern=block_pattern, tool=tool,
+                      collect_fires=bool(firings_path))
     report["files_read"] = files_read
     report["duplicates_skipped"] = duplicates
     report["calls_without_field"] = without_field
@@ -470,7 +479,9 @@ def replay(root: str, predicate, tool: str = "Bash", sample: int = 0,
     report["skipped"] = skipped
     report["root"] = str(base)
     if firings_path:
-        write_firings(firings_path, report["fire_calls"])
+        # Popped straight back out: `fire_calls` exists only long enough to reach `write_firings`,
+        # never in the dict this function hands back to its caller.
+        write_firings(firings_path, report.pop("fire_calls"))
     return report
 
 
@@ -481,14 +492,21 @@ def write_firings(path: str, fire_calls) -> None:
     Exactly the keys `id`, `transcript`, `cwd`, `command`, `error` - no more, no less, so a reader
     on the other end of this file can rely on the shape without knowing this script's internals.
     One compact object per line (no indentation): this is JSONL, not a pretty-printed report.
+
+    An unwritable path (a missing parent directory, a permission refusal) is reported through the
+    same `UsageError` refusal every other usage mistake here uses, never a raw traceback - this is
+    a CLI flag like `--block-pattern`, and a bad value for it must fail the same readable way.
     """
-    with open(path, "w", encoding="utf-8") as fh:
-        for call in fire_calls:
-            record = {"id": call.get("id"), "transcript": call.get("transcript"),
-                      "cwd": call.get("cwd"), "command": call.get("command"),
-                      "error": call.get("error")}
-            fh.write(json.dumps(record, ensure_ascii=False))
-            fh.write("\n")
+    try:
+        with open(path, "w", encoding="utf-8") as fh:
+            for call in fire_calls:
+                record = {"id": call.get("id"), "transcript": call.get("transcript"),
+                          "cwd": call.get("cwd"), "command": call.get("command"),
+                          "error": call.get("error")}
+                fh.write(json.dumps(record, ensure_ascii=False))
+                fh.write("\n")
+    except OSError as exc:
+        raise UsageError("cannot write --firings %r: %s" % (path, exc)) from exc
 
 
 def _corpus_files(base: Path, skipped: list):
@@ -595,12 +613,11 @@ def _run(args) -> int:
                         firings_path=args.firings)
     except (UsageError, UnsupportedTool, UnreadableField) as exc:
         # A refusal the caller can read, not a traceback: the whole point of raising here is that
-        # an unreadable tool or field must not be reported as an empty corpus.
+        # an unreadable tool, an unwritable --firings path, or a bad field must not surface as a
+        # bare exception, nor (the tool/field cases) be reported as an empty corpus.
         return _refuse(args, exc)
-    # Never printed or JSON-dumped: the full firing list is for `write_firings` alone, written
-    # inside `replay` itself. Keeping it in the report past this point would bloat the envelope
-    # with exactly the detail `samples` exists to keep narrow.
-    report.pop("fire_calls", None)
+    # `report` never carries `fire_calls` at this point - `replay` only ever builds it when asked
+    # and pops it back out before returning, so there is nothing left to strip here.
     rc = exit_code(report)
     if rc == 3:
         print("guard_replay: read %d file(s) and found no %s calls - nothing was replayed"
