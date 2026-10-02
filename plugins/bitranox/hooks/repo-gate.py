@@ -982,6 +982,7 @@ def check_cso(root):
 #: dropped. Measured 2026-07-30: the coding-python-network-probe mirror still told an agent
 #: that a default sweep refuses to run, two ipscout releases after it stopped doing that.
 MIRRORED_SKILLS = {
+    "ai-llm-jev-judge": "KI/btx-skill-jev-judge/skills/jev-judge",
     "coding-python-gitignore": "libs/igittigitt/skills/python-gitignore",
     "coding-python-layered-config": "libs/lib_layered_config/skills/python-layered-config",
     "coding-python-network-probe": "libs/ipscout/skills/python-network-probe",

@@ -3,7 +3,7 @@
 
 # Skill catalog
 
-All 81 skills shipped by the `bitranox` plugin, grouped by taxonomy category
+All 82 skills shipped by the `bitranox` plugin, grouped by taxonomy category
 ([`skill-taxonomy.json`](../plugins/bitranox/skill-taxonomy.json)). Invoke any of them as
 `/bitranox:<skill>`; Claude also picks one up automatically when a task matches its
 description. Each description below is the skill's own trigger description - it states WHEN
@@ -40,6 +40,12 @@ Web app development: frontend UI, backend services, HTTP APIs, fullstack.
 - [`web-frontend-pagespeed`](../plugins/bitranox/skills/web-frontend-pagespeed/SKILL.md) - Use when verifying or fixing how a site caches and compresses its assets - bandwidth or CDN cost up with flat request volume, a bundle refetched on every navigation, an asset that will not pick up a new deploy, compression that looks enabled but is not, or a header check that came back clean and you need to know whether to believe it. Keywords - Cache-Control, max-age, immutable, ETag, 304, revalidation, gzip, Content-Encoding, gzip_types, add_header inheritance.
 - [`web-frontend-responsive-ux`](../plugins/bitranox/skills/web-frontend-responsive-ux/SKILL.md) - Use when a web page must work across mobile/tablet/desktop and the layout or usability is off - horizontal scrollbar on mobile, content not fitting vertically on phone portrait/landscape, cramped or tiny tap targets, swipe/carousel galleries, viewport/breakpoint issues, notch/safe-area overlap, sparse layouts on big screens, or RTL/long-translation layout breakage. NOT for performance/SEO scoring (use a pagespeed/Lighthouse skill) or full localization infra.
 - [`web-seo-crawl-indexing`](../plugins/bitranox/skills/web-seo-crawl-indexing/SKILL.md) - Use before changing robots.txt or deciding what crawlers may fetch - pages that stay in search results after being blocked, crawler load you want to cut, an asset or image host you are tempted to block, a URL space multiplied by language or filter parameters, or a stale sitemap. Keywords - robots.txt, Disallow, Allow, noindex, deindex, crawl budget, crawl trap, Googlebot, image search, Merchant Center, sitemap.
+
+## ai
+
+ML/AI/LLM systems: model building, prompting, agents, RAG, LLM APIs.
+
+- [`ai-llm-jev-judge`](../plugins/bitranox/skills/ai-llm-jev-judge/SKILL.md) - Use when the same bounded judgment has to be made over many items during your own work - labelling, triage, duplicate or entity matching, relevance, a yes/no or a 1-5 rating across dozens to thousands of issues, tickets, log lines, records, search hits or names - and you are about to read them all into context, loop an LLM call per item, or hand-write a TypeSafe Jev client for it. Not for building Jev into an application.
 
 ## devops
 

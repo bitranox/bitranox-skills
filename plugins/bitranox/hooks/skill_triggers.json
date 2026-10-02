@@ -1,4 +1,21 @@
 {
+ "ai-llm-jev-judge": [
+  "same",
+  "bounded",
+  "judgment",
+  "made",
+  "over",
+  "many",
+  "items",
+  "during",
+  "work",
+  "labelling",
+  "triage",
+  "duplicate",
+  "entity",
+  "matching",
+  "hand-write"
+ ],
  "coding-bash-clean-architecture": [
   "structuring",
   "bash",

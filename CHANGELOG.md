@@ -29,6 +29,16 @@ than the change, so entries reconstructed from them would read like coverage wit
 a hole nobody has drawn a line under is one that gets rediscovered and half-filled - which is how
 two "versions with no entry" notes came to sit in this file disagreeing with it.
 
+## [7.32.0]
+
+### Added
+
+- `ai-llm-jev-judge`: hands a bounded judgment repeated over many items (labelling, triage,
+  matching, relevance, yes/no or 1-5 ratings) to TypeSafe's Jev through the `jev-judge` CLI
+  (PyPI `btx-skill-jev-judge`, run with `uvx`), instead of reading every item into context. It is a
+  mirror of the `jev-judge` skill in `bitranox/btx-skill-jev-judge`, kept in sync by
+  `repo-gate.py --mirrors`. Hooks keep using `hooks/classifier.py` for their own Jev calls.
+
 ## [7.31.5]
 
 ### Fixed
