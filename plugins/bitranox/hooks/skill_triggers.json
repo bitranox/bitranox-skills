@@ -247,6 +247,8 @@
   "authentication",
   "multi-host",
   "utf-8",
+  "machine-readable",
+  "mail-sending",
   "btx_lib_mail",
   "btx-lib-mail",
   "zero-install",

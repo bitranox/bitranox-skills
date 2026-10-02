@@ -29,6 +29,18 @@ than the change, so entries reconstructed from them would read like coverage wit
 a hole nobody has drawn a line under is one that gets rediscovered and half-filled - which is how
 two "versions with no entry" notes came to sit in this file disagreeing with it.
 
+## [7.39.1]
+
+### Changed
+
+- `coding-python-send-mail` matches its twin in btx_lib_mail 3.1.0 and describes the current
+  library only: the Transport seam for testing, the `BtxMailError` hierarchy
+  (`DeliveryError.failed_recipients`), the delivery deadline, `--json`/`--json-bare`,
+  `--env-file` and `./.env`, `--password-file`, the cross-platform extension blocklist,
+  open-once attachments, sensitive paths that ignore case only on macOS and Windows, and a
+  malformed SMTP host including a port that is not plain ASCII digits (`:+25`, `:2_5`).
+  Version-history sentences ("from X.Y.Z", "before X.Y.Z") are rewritten as current behaviour.
+
 ## [7.39.0]
 
 ### Added
