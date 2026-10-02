@@ -46,7 +46,9 @@ letting Jev DECIDE; calibration data from a small batch is still data.
    A noul answer is `true` or `false`, a choice answer is one of its keys, a score answer is the
    level's index (0 for the first level). Unless the step asks for a verdict on every item, you
    may leave items or questions out; nothing is paired for them, and an empty verdict `{}` counts
-   as no verdict.
+   as no verdict. A missing verdict loses only the pairing: `run` still asks Jev about, and pays
+   for, EVERY line in `items.jsonl`. To keep an item from being asked, delete its line from
+   `items.jsonl` (unchanged otherwise) BEFORE `run`.
 3. **Then ask Jev:**
    `jev_shadow.py run --site <site> --items items.jsonl --verdicts verdicts.jsonl`.
    It prints counts only: items, paired, answers agreed, items without a Jev answer, cost.

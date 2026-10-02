@@ -303,8 +303,10 @@ the success line, abort-and-show on a miss).
 11. **Done + report + /clear nudge.** `dream_state.py done` (records the fact signature). Report
     counts + one line each: merges, placements (with direction), voice rewrites, prunes, skill
     changes, toolbox proposals (merges/flags), pinned facts reported not rewritten, and
-    `jev shadow:` the counts line `run` printed per site (`off (<reason>)` when `status` was not 0,
-    or `run`'s one-line error).
+    `jev shadow:` followed by `<site> <counts>` per site, joined by `; `. The counts are what
+    `run` printed after its own `shadow:` prefix; a site whose `status` was not 0 reads
+    `<site> off (<reason>)`, and one whose `run` exited non-zero reads `<site> error <message>`.
+    Example: `jev shadow: dream-firing 20 items, 20 paired, 18 of 20 answers agreed, ...`.
     CLAUDE.md edits are APPLIED, so the report is the only place the user sees them: per RULE,
     name every file touched, the ANCESTOR covering home it now relies on, and the transformation
     (removed / rewritten in place); a rule left alone for want of an ancestor is listed too, never

@@ -144,6 +144,34 @@ changed, so the derived docs and triggers do not move.
       `gh-exit-4` to the tree top although `should-promote` printed `hold`, the corroboration gate
       in the existing step 5 text. Same in RED, so not caused by this edit.
 
+## Fix round 1 (review findings)
+
+- [x] `meta-self-improve/references/jev-shadow.md` procedure step 2 said items may be left out
+      ("nothing is paired for them") without saying that `run` asks Jev about, and pays for, every
+      line of `items.jsonl` whatever the verdicts hold (`cmd_run` and `_ask_and_log` build the
+      request from all parsed items; verdicts only feed the log). Step 2 now adds: "A missing
+      verdict loses only the pairing: `run` still asks Jev about, and pays for, EVERY line in
+      `items.jsonl`. To keep an item from being asked, delete its line from `items.jsonl`
+      (unchanged otherwise) BEFORE `run`." The placement bullet's step (3) already says the same
+      ("BEFORE `run`, which asks Jev about every line in the file"), so it reads consistently and
+      is unchanged.
+- [x] Step 11's "`jev shadow:` the counts line `run` printed per site" could produce
+      `jev shadow: shadow: N items, ...`. It now reads: `jev shadow:` followed by `<site> <counts>`
+      per site, joined by `; `, the counts being what `run` printed after its own `shadow:`
+      prefix, `<site> off (<reason>)` when `status` was not 0, `<site> error <message>` on a
+      non-zero `run`, with an example line. The verification contract in `references/dream-core.md`
+      says the same: one `jev shadow:` line naming each shadow site with the counts `run` printed
+      after its own `shadow:` prefix, or `off (<reason>)`.
+- [x] Quote-back, one haiku `bitranox:baseline-probe` arm given the final procedure section and
+      the final step 11 rule, 500 items of which 40 judged. Q1 (are the 460 unjudged asked and
+      paid for?): quoted "`run` still asks Jev about, and pays for, EVERY line in `items.jsonl`."
+      - yes. Q2 (how to avoid it?): quoted "delete its line from `items.jsonl` (unchanged
+      otherwise) BEFORE `run`." Q3 (may the kept lines be tidied?): "No ... 'unchanged otherwise'
+      forbids it." Q4 wrote `jev shadow: dream-prune 40 items, 40 paired, 31 of 40 answers agreed,
+      0 without a Jev answer, ~$0.001760; dream-firing off (no key)`, no doubled prefix.
+      `Skill gaps`: the site table and the other report categories were not in the excerpt it was
+      given, both probe-scope artifacts; declined.
+
 ## Security and hygiene
 
 - [x] Diff reviewed: prose only, no secret, credential, hostname, address or real user path; the
