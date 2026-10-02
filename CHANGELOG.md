@@ -46,6 +46,10 @@ two "versions with no entry" notes came to sit in this file disagreeing with it.
 - `meta-collect-knowledge` stage 2 carries a Jev shadow (site `collect-relevance`): the stage-2
   subagent writes `items.jsonl` and returns keep or discard for every candidate; the main agent
   records that as the verdict before `run` and imports what the subagent kept.
+- `coding-python-enforce-data-architecture-strict` STEP D carries a Jev shadow (site
+  `data-arch-dict`): the agent builds `items.jsonl` itself, one item per grep hit (`hit`,
+  `context`), writes its own `real_violation` verdict for every hit to `verdicts.jsonl` before
+  `jev_shadow.py run`, and decides which hits send STEP D back to STEP A from those verdicts.
 
 ## [7.39.2]
 
