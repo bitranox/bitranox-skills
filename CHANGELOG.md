@@ -29,6 +29,18 @@ than the change, so entries reconstructed from them would read like coverage wit
 a hole nobody has drawn a line under is one that gets rediscovered and half-filled - which is how
 two "versions with no entry" notes came to sit in this file disagreeing with it.
 
+## [7.38.1]
+
+### Fixed
+
+- `coding-python-layered-config` describes lib_layered_config 7.0.0: an unquoted `.env` value
+  converts exactly like an environment value (a quoted one stays literal text), a sensitive key
+  keeps `null`/`none` as text, and an unquoted YAML key that is not a string refuses the file. The
+  skill said `.env` scalars stay strings.
+- `coding-python-layered-config`: Linux reads both `/etc/xdg/<slug>/` and `/etc/<slug>/` for the app
+  and host layers, the latter winning; the skill called `/etc/<slug>/` a fallback. It also states
+  that a `.env` key carries no `<SLUG>___` prefix.
+
 ## [7.38.0]
 
 ### Added
