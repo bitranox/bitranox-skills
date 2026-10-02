@@ -29,6 +29,19 @@ than the change, so entries reconstructed from them would read like coverage wit
 a hole nobody has drawn a line under is one that gets rediscovered and half-filled - which is how
 two "versions with no entry" notes came to sit in this file disagreeing with it.
 
+## [7.35.1]
+
+### Fixed
+
+- `ensure_gitignored` (`hooks/self_improve_signals.py`, reached on every per-turn capture through
+  the memory engine) asks git whether each pattern is already ignored (`git check-ignore
+  --no-index`) instead of looking for a literal line in the root `.gitignore`, and writes what is
+  missing to the repo's own exclude file (`git rev-parse --git-path info/exclude`, shared by a
+  linked worktree) instead of the TRACKED `.gitignore`. A public repo that kept `CLAUDE.local.md`
+  in `.git/info/exclude` had two lines naming the tool appended to its tracked `.gitignore` on
+  every capture, re-added after each revert, and its own private-name guard then failed its test
+  gate.
+
 ## [7.35.0]
 
 ### Added

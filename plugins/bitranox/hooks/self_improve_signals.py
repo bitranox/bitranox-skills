@@ -271,15 +271,37 @@ def claude_local_md_path(proj):
     return Path(proj) / "CLAUDE.local.md"
 
 
+def _git_in(proj, *args):
+    """One git call from `proj`: (returncode, stdout as a path string), or None when git could not
+    run. git prints paths as raw filename bytes; text mode decoded them with the locale's codec
+    (ASCII under LANG=C) and raised UnicodeDecodeError, which no OSError guard catches, so the
+    output goes through os.fsdecode, the exact inverse of how this interpreter opens a path."""
+    import subprocess
+    try:
+        r = subprocess.run(["git", "-C", str(proj), *args], capture_output=True, timeout=5)
+    except (OSError, subprocess.SubprocessError):
+        return None
+    return r.returncode, os.fsdecode(r.stdout).strip()
+
+
 def ensure_gitignored(proj, *patterns):
-    """Best-effort: on a git repo, ensure each `pattern` is in the repo-root `.gitignore`. Honors
-    `track_private` (skip if set - the user wants memory committed). Used by per-turn capture so a
-    fresh untracked `CLAUDE.local.md` + curated store are never accidentally staged into a public
-    repo.
+    """Best-effort: on a git repo, make sure git ignores each `pattern`. Honors `track_private`
+    (skip if set - the user wants memory committed). Used by per-turn capture so a fresh untracked
+    `CLAUDE.local.md` + curated store are never accidentally staged into a public repo.
+
+    git is ASKED whether each pattern is already ignored (`check-ignore --no-index`, so a tracked
+    file still counts by its rules), and one that is - from the exclude file, a nested
+    `.gitignore`, a global excludes file - is left alone. Reading only the root `.gitignore` for a
+    literal line re-added it on every capture in a repo that kept it in `.git/info/exclude`.
+
+    What is missing goes into the repo's own exclude file (`git rev-parse --git-path
+    info/exclude`, which a linked worktree shares with its main checkout), never the TRACKED
+    `.gitignore`: the files are per-clone, and a tracked ignore line is what a public repo would
+    then publish - the memory wiring never touches tracked git.
 
     Never raises (a hook reaches it through the memory engine). Returns True when nothing is left
-    to do - the patterns are listed, `track_private` is set, or `proj` is not in a git repo - and
-    False when it could not make sure: git did not answer, or the `.gitignore` could not be read
+    to do - the patterns are ignored, `track_private` is set, or `proj` is not in a git repo - and
+    False when it could not make sure: git did not answer, or the exclude file could not be read
     or written. A caller that goes on to rely on the files being ignored reads that, rather than
     assuming a write it cannot see.
 
@@ -288,28 +310,32 @@ def ensure_gitignored(proj, *patterns):
     escaped every fail-open handler here); the file's own line ending is kept."""
     if load_config().get("track_private"):
         return True
-    import subprocess
-    try:
-        # git prints the path as raw filename bytes. Text mode decoded them with the locale's
-        # codec (ASCII under LANG=C) and raised UnicodeDecodeError, which no OSError guard
-        # catches; os.fsdecode is the exact inverse of how this interpreter opens that path.
-        top = os.fsdecode(subprocess.run(["git", "-C", str(proj), "rev-parse", "--show-toplevel"],
-                                         capture_output=True, timeout=5).stdout).strip()
-    except (OSError, subprocess.SubprocessError):
+    top = _git_in(proj, "rev-parse", "--show-toplevel")
+    if top is None:
         return False
-    if not top:
+    if not top[1]:
         return True
+    add = []
+    for pattern in patterns:
+        asked = _git_in(proj, "check-ignore", "-q", "--no-index", pattern)
+        if asked is None or asked[0] not in (0, 1):
+            return False
+        if asked[0] == 1:
+            add.append(pattern)
+    if not add:
+        return True
+    where = _git_in(proj, "rev-parse", "--git-path", "info/exclude")
+    if where is None or where[0] != 0 or not where[1]:
+        return False
     try:
-        gi = Path(top) / ".gitignore"
-        cur = gi.read_bytes().decode("utf-8", "surrogateescape") if os.path.lexists(gi) else ""
-        have = set(cur.lstrip("\ufeff").splitlines())
-        add = [p for p in patterns if p not in have and p.rstrip("/") not in have]
-        if add:
-            nl = "\r\n" if "\r\n" in cur else "\n"
-            text = ((cur.rstrip("\r\n") + nl if cur.strip() else "")
-                    + "# bitranox curated memory (local; CLAUDE.local.md @imports it)" + nl
-                    + nl.join(add) + nl)
-            gi.write_bytes(text.encode("utf-8", "surrogateescape"))
+        exclude = Path(where[1]) if os.path.isabs(where[1]) else Path(proj) / where[1]
+        cur = exclude.read_bytes().decode("utf-8", "surrogateescape") if os.path.lexists(exclude) else ""
+        nl = "\r\n" if "\r\n" in cur else "\n"
+        text = ((cur.rstrip("\r\n") + nl if cur.strip() else "")
+                + "# bitranox curated memory (local; CLAUDE.local.md @imports it)" + nl
+                + nl.join(add) + nl)
+        exclude.parent.mkdir(parents=True, exist_ok=True)
+        exclude.write_bytes(text.encode("utf-8", "surrogateescape"))
     except OSError:
         return False
     return True

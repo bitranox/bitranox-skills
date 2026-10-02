@@ -1106,6 +1106,21 @@ def test_a_word_list_write_that_lands_raises_nothing_and_keeps_its_format(home):
     assert text == json.dumps({"topical": ["eta", "zeta"]}, indent=2) + "\n"
 
 
+def _git_exclude(repo):
+    """The repo's own exclude file, where git itself says it is (a linked worktree shares its main
+    checkout's)."""
+    import subprocess
+    out = subprocess.run(["git", "-C", str(repo), "rev-parse", "--git-path", "info/exclude"],
+                         capture_output=True, check=True).stdout
+    path = Path(os.fsdecode(out).strip())
+    return path if path.is_absolute() else Path(repo) / path
+
+
+def _ignored(repo, path):
+    import subprocess
+    return subprocess.run(["git", "-C", str(repo), "check-ignore", "-q", "--no-index", path]).returncode == 0
+
+
 def test_ensure_gitignored_reports_whether_the_patterns_are_ignored(home, tmp_path):
     """A non-hook caller (the memory engine's ensure_level) relies on the private files being
     ignored before anything stages them, so the outcome is returned rather than swallowed."""
@@ -1113,30 +1128,80 @@ def test_ensure_gitignored_reports_whether_the_patterns_are_ignored(home, tmp_pa
     repo = tmp_path / "repo"
     subprocess.run(["git", "init", "-q", str(repo)], check=True)
     assert S.ensure_gitignored(str(repo), "CLAUDE.local.md") is True
-    (repo / ".gitignore").unlink()
-    (repo / ".gitignore").mkdir()                          # cannot be read or written as a file
-    assert S.ensure_gitignored(str(repo), "CLAUDE.local.md") is False
+    other = tmp_path / "other"
+    subprocess.run(["git", "init", "-q", str(other)], check=True)
+    exclude = _git_exclude(other)
+    exclude.unlink()
+    exclude.mkdir()                                        # cannot be read or written as a file
+    assert S.ensure_gitignored(str(other), "CLAUDE.local.md") is False
 
 
-def test_ensure_gitignored_keeps_a_non_utf8_gitignore_and_never_raises(home, tmp_path):
+def test_ensure_gitignored_never_touches_the_tracked_gitignore(home, tmp_path):
+    """The private files are per-clone, so their ignore entries are too: written to the repo's own
+    exclude file, never to the TRACKED .gitignore, which a public repo would then publish (its own
+    name guard refused a test run over exactly these two lines)."""
+    import subprocess
+    repo = tmp_path / "repo"
+    subprocess.run(["git", "init", "-q", str(repo)], check=True)
+    (repo / ".gitignore").write_bytes(b"dist/\n")
+    (repo / S.CURATED_DIRNAME).mkdir()
+    assert S.ensure_gitignored(str(repo), S.CURATED_DIRNAME + "/", "CLAUDE.local.md") is True
+    assert (repo / ".gitignore").read_bytes() == b"dist/\n"
+    assert _ignored(repo, "CLAUDE.local.md") and _ignored(repo, S.CURATED_DIRNAME)
+    exclude = _git_exclude(repo).read_text(encoding="utf-8").splitlines()
+    assert "CLAUDE.local.md" in exclude and S.CURATED_DIRNAME + "/" in exclude
+
+
+def test_ensure_gitignored_asks_git_whether_a_pattern_is_already_ignored(home, tmp_path):
+    """A pattern git already ignores - from the exclude file, a nested .gitignore, anywhere - is
+    left alone. Reading only the root .gitignore for a literal line re-added it on every capture
+    in a repo that kept it in .git/info/exclude."""
+    import subprocess
+    repo = tmp_path / "repo"
+    subprocess.run(["git", "init", "-q", str(repo)], check=True)
+    (repo / ".gitignore").write_bytes(b"dist/\n")
+    exclude = _git_exclude(repo)
+    exclude.write_bytes(exclude.read_bytes() + b"CLAUDE.local.md\n")
+    before = exclude.read_bytes()
+    assert S.ensure_gitignored(str(repo), "CLAUDE.local.md") is True
+    assert S.ensure_gitignored(str(repo), "CLAUDE.local.md") is True
+    assert (repo / ".gitignore").read_bytes() == b"dist/\n"
+    assert exclude.read_bytes() == before
+
+
+def test_ensure_gitignored_in_a_linked_worktree_uses_the_shared_exclude(home, tmp_path):
+    """A linked worktree has no info/ of its own; git reads the main checkout's exclude file."""
+    import subprocess
+    main = tmp_path / "main"
+    subprocess.run(["git", "init", "-q", str(main)], check=True)
+    subprocess.run(["git", "-C", str(main), "-c", "user.name=t", "-c", "user.email=t@example.test",
+                    "commit", "-q", "--allow-empty", "-m", "base"], check=True)
+    linked = tmp_path / "linked"
+    subprocess.run(["git", "-C", str(main), "worktree", "add", "-q", str(linked)], check=True)
+    assert S.ensure_gitignored(str(linked), "CLAUDE.local.md") is True
+    assert not (linked / ".gitignore").exists()
+    assert _ignored(linked, "CLAUDE.local.md") and _ignored(main, "CLAUDE.local.md")
+
+
+def test_ensure_gitignored_keeps_a_non_utf8_exclude_and_never_raises(home, tmp_path):
     """One byte in another encoding raised UnicodeDecodeError out of a best-effort function (it
     caught OSError only); the file is now read and written back byte for byte."""
     import subprocess
     repo = tmp_path / "repo"
     subprocess.run(["git", "init", "-q", str(repo)], check=True)
-    (repo / ".gitignore").write_bytes(b"caf\xe9\n")
+    _git_exclude(repo).write_bytes(b"caf\xe9\n")
     assert S.ensure_gitignored(str(repo), "CLAUDE.local.md") is True
-    data = (repo / ".gitignore").read_bytes()
+    data = _git_exclude(repo).read_bytes()
     assert data.startswith(b"caf\xe9\n") and b"\nCLAUDE.local.md\n" in data
 
 
-def test_ensure_gitignored_keeps_a_crlf_gitignore_crlf(home, tmp_path):
+def test_ensure_gitignored_keeps_a_crlf_exclude_crlf(home, tmp_path):
     import subprocess
     repo = tmp_path / "repo"
     subprocess.run(["git", "init", "-q", str(repo)], check=True)
-    (repo / ".gitignore").write_bytes(b"a\r\nb\r\n")
+    _git_exclude(repo).write_bytes(b"a\r\nb\r\n")
     assert S.ensure_gitignored(str(repo), "CLAUDE.local.md") is True
-    data = (repo / ".gitignore").read_bytes()
+    data = _git_exclude(repo).read_bytes()
     assert data.startswith(b"a\r\nb\r\n") and data.endswith(b"\r\nCLAUDE.local.md\r\n")
     assert b"\n" not in data.replace(b"\r\n", b"")
 
@@ -1157,7 +1222,7 @@ def test_ensure_gitignored_reads_a_non_ascii_repo_path_under_an_ascii_locale(hom
                        encoding="utf-8", errors="replace")
     assert r.returncode == 0, r.stderr
     assert r.stdout.strip() == "True", (r.stdout, r.stderr)
-    assert b"\nCLAUDE.local.md\n" in b"\n" + (repo / ".gitignore").read_bytes()
+    assert b"\nCLAUDE.local.md\n" in b"\n" + _git_exclude(repo).read_bytes()
 
 
 # ---- curated-store relocation and cross-platform lock (Phase 1) ----------------------------------
@@ -1177,15 +1242,18 @@ def test_ensure_gitignored(home, tmp_path):
     proj = tmp_path / "repo"; proj.mkdir()
     subprocess.run(["git", "init", "-q", str(proj)], check=False)
     S.ensure_gitignored(str(proj), S.CURATED_DIRNAME + "/", "CLAUDE.local.md")
-    gi = (proj / ".gitignore").read_text(encoding="utf-8")
-    assert ".claude-bx-selflearning/" in gi and "CLAUDE.local.md" in gi
+    ex = _git_exclude(proj).read_text(encoding="utf-8")
+    assert ".claude-bx-selflearning/" in ex and "CLAUDE.local.md" in ex
+    assert not (proj / ".gitignore").exists()
     assert subprocess.run(["git", "-C", str(proj), "check-ignore", "-q", "CLAUDE.local.md"]).returncode == 0
-    # track_private on -> leaves the repo tracked (no gitignore write)
+    # track_private on -> leaves the repo tracked (no ignore write anywhere)
     S.save_config({"track_private": True})
     proj2 = tmp_path / "repo2"; proj2.mkdir()
     subprocess.run(["git", "init", "-q", str(proj2)], check=False)
+    before = _git_exclude(proj2).read_bytes()
     S.ensure_gitignored(str(proj2), "CLAUDE.local.md")
     assert not (proj2 / ".gitignore").exists()
+    assert _git_exclude(proj2).read_bytes() == before
     # non-git dir -> skip, no crash
     plain = tmp_path / "plain"; plain.mkdir()
     S.ensure_gitignored(str(plain), "CLAUDE.local.md")
