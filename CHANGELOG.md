@@ -40,6 +40,13 @@ two "versions with no entry" notes came to sit in this file disagreeing with it.
   `verdicts.jsonl`, and only then runs `jev_shadow.py run`. The reported precision comes from the
   agent's verdicts alone. The `guard_replay` row of the Tools table lists `--firings OUT.jsonl`
   in its Run column.
+- `process-review-enhance-code-quality`: two steps carry a Jev shadow. "Cap it when the sites are
+  many" (site `quality-polarity`) and the call-site resolution bullet (site `quality-param-hit`):
+  with `jev_shadow.py status` on, the agent writes one item per `file:line` with the site's state
+  fields, its own `agrees` or `is_parameter` verdict for every item to `verdicts.jsonl`, and only
+  then runs `jev_shadow.py run`. The quotes, counts and kept call sites come from the agent's
+  verdicts alone. The `parameter` field is the parameter under review, the same on every hit, so
+  the item does not carry its own answer.
 
 ### Changed
 
