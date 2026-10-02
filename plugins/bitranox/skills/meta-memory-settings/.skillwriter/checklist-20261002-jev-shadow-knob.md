@@ -25,3 +25,19 @@ shadow" skill-steps pipeline alongside `classifier_backend`.
 - [x] Description unchanged - no routing keyword moved, cap not in play.
 - [x] No address, MAC, hostname or machine path added beyond the documented user-home locations.
 - [x] Present tense, no session narrative, no private provenance.
+
+## Final-review fixes (2026-10-02)
+
+Scope: the `classifier_skills` row now says what is SENT, as the other classifier rows do: the
+hook and body of every fact in the swept tree(s), other projects' note texts, guard commands with
+their error output, code lines, CLAUDE.md section bodies, each redacted and capped. It is the
+consent text for the knob. `docs/reference.md` carries the same list.
+
+- [x] Text check against the source of truth: each listed kind is the state of a shipped site in
+      `meta-self-improve/jev_sites/` (hook/body: dream-*, crosstree-misplaced; candidate:
+      collect-relevance; command/error: guard-firing; hit/context/source_line: data-arch-dict,
+      quality-*; variants: consolidate-cause), and every one passes `prepare_state` in `run`.
+- [x] No behaviour changed: the knob's values, default and effect are as before; this row is
+      reference text, so the check is the text against the site files rather than a pressure
+      arm.
+- [x] Diff reviewed: prose only, ASCII, no secret, address, hostname or real user path.
