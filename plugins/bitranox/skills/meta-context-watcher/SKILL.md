@@ -56,6 +56,15 @@ a list is retyped, and it breaks ties within an origin, so it is not optional. I
 ranking key - see below, where reading it as one is a named failure. Closing an item is `- [x]` plus
 `| closed: <reason>`; the line stays. A SessionStart hook prints the top ranks with their age.
 
+**An item belongs in the `OPEN-WORK.md` of the repo whose code needs the change, not the repo you
+found it from.** A bug found in a sibling repo, a template, or a project that depends on this
+one goes into THAT repo's backlog, its line carried over unchanged with its first-raised date -
+create the file there if it has none, tracked or excluded the way that repo keeps its own working
+files - and this file keeps at most a closed line, `| closed: moved to <repo>/OPEN-WORK.md`.
+Where a line sits reads as who owns the work: the next session picks the top item of its own
+backlog and starts editing another repo's code from here, so a general-purpose library ends up
+doing an application's work.
+
 **Rank in TENS** - 10, 20, 30. An insertion is then a new number instead of a renumbering of
 every line below it, which keeps a reorder out of the diff of an unrelated change.
 
@@ -126,9 +135,10 @@ goes for `size`: `size: unknown` is a usable line, an invented count is not.
 2. **RECONCILE the outgoing handover into `OPEN-WORK.md` BEFORE you overwrite it.** Read the file
    you are about to destroy and take every item in it that is not finished. Each one either
    already has a line in `OPEN-WORK.md`, or you add it now with its first-raised date, its size
-   and its next action; an item you believe is finished gets `- [x]` and a reason, in the file,
-   not in your head. What you do not carry across goes SILENTLY, because a missing item looks
-   exactly like an item that was closed - and nobody diffs a handover against its predecessor
+   and its next action - in the `OPEN-WORK.md` of the repo that owns the fix, which is not
+   always this one (see "Two files"); an item you believe is finished gets `- [x]` and a reason,
+   in the file, not in your head. What you do not carry across goes SILENTLY, because a missing
+   item looks exactly like an item that was closed - and nobody diffs a handover against its predecessor
    looking for absences. Being able to recover the old text from git is not the same as noticing
    there was something to recover. Do this reconcile FIRST, while the outgoing file is still in
    front of you: afterwards you are auditing from memory, which is the failure itself.
@@ -194,6 +204,11 @@ holds two moments with no way to tell them apart.
 stopped; the backlog tells you what is actually worth doing, and the two answers are routinely
 different. A handover's next action is one session's view of one moment, and the item that has
 been waiting longest is the one least likely to be in it.
+
+**Before working an item, check which repo its fix lands in.** If that is not the repo you are in,
+the item is misfiled: move it to the owning repo's `OPEN-WORK.md`, close it here as moved, and take
+the next item that is this repo's own. Work the moved one only from a session in that repo, or
+when the user asks for it here.
 
 ## When it fires on its own
 

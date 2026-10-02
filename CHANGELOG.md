@@ -29,6 +29,18 @@ than the change, so entries reconstructed from them would read like coverage wit
 a hole nobody has drawn a line under is one that gets rediscovered and half-filled - which is how
 two "versions with no entry" notes came to sit in this file disagreeing with it.
 
+## [7.36.0]
+
+### Added
+
+- `meta-context-watcher`: an `OPEN-WORK.md` item belongs in the backlog of the repo whose code
+  needs the change, not the repo it was found from. Writing a handover files such an item in the
+  owning repo's `OPEN-WORK.md` (created there if missing, its line unchanged with its first-raised
+  date) and leaves at most a closed `moved to <repo>/OPEN-WORK.md` line behind; reading one checks
+  each item's owning repo before working it, and moves a misfiled item instead of working it from
+  the wrong repo. Template and dependent-application items filed in a general-purpose library's
+  backlog had led the next session to edit the application's code from the library.
+
 ## [7.35.1]
 
 ### Fixed
