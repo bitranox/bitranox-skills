@@ -74,6 +74,25 @@ shim. Technique edit; no name, description, trigger or table row changed.
 - [x] DECLINED, report format and `note`: the step requires the ratio from own verdicts; format
       is the caller's, and the reference already marks `note` optional.
 
+## Fix round 1
+
+- [x] The `guard_replay` Tools-table row's Run column lists `--firings OUT.jsonl`, which the
+      shadow bullet depends on. Row width kept (padding reduced by the inserted length).
+- [x] Second independent GREEN arm on haiku, same scenario, final text (the step with "none left
+      out", the reference step 2 with "Unless the step asks for a verdict on every item"). It ran
+      `items --site guard-firing --firings firings.jsonl --hazard "..." --out items.jsonl`, wrote
+      `verdicts.jsonl` with "exactly 20 JSON lines ... No items left out", then `run`, and computed
+      precision from its own true verdicts over 20, quoting "Report the ratio from your own
+      verdicts, whatever `run` printed or exited with". No Jev decision, verdicts before `run`.
+- [x] Divergence from GREEN arm 1: arm 2 did not call `jev_shadow.py status` first. DECLINED as a
+      text change: the scenario states both knobs on and a key present, and `run` itself prints
+      `shadow: off (<reason>)`, exits 0 and writes nothing when shadow is off, so skipping the
+      status check sends nothing and changes no outcome. The step already names the gate.
+- [x] Arm 2 `Skill gaps`: it cannot judge without the firing data (expected, text-only probe);
+      `<plugin>` resolution (the step and reference both give the home and shim); what to do with
+      `items.jsonl` and `verdicts.jsonl` after `run`. DECLINED: they are working files of the
+      step, and the durable record is the shadow log the reference names.
+
 ## Security and hygiene
 
 - [x] Diff reviewed: prose only, no secret, credential, hostname, address or real user path; the

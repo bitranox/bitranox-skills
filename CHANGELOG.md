@@ -38,7 +38,8 @@ two "versions with no entry" notes came to sit in this file disagreeing with it.
   replays with `--firings`, builds the items with `jev_shadow.py items --site guard-firing
   --firings ... --hazard ...`, writes its own `real_hazard` verdict for every firing to
   `verdicts.jsonl`, and only then runs `jev_shadow.py run`. The reported precision comes from the
-  agent's verdicts alone.
+  agent's verdicts alone. The `guard_replay` row of the Tools table lists `--firings OUT.jsonl`
+  in its Run column.
 
 ### Changed
 
