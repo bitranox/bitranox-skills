@@ -42,7 +42,9 @@ letting Jev DECIDE; calibration data from a small batch is still data.
    in the cwd. Both files hold UNREDACTED text (fact bodies, other projects' notes, commands and
    their errors, code lines); redaction happens only inside `run`, and a file left in a project
    checkout is one `git add -A` away from being committed. After `run`, and after you have taken
-   its counts for the report, `rm -rf "$D"`. The paths below are relative to `$D`.
+   its counts for the report, `rm -rf "$D"`. A shell variable does not survive from one tool call
+   to the next, so use the literal path `mktemp -d` printed in every later command and file
+   write. The paths below are relative to that dir.
 1. **Items.** For a store-based site, build them:
    `jev_shadow.py items --site <site> --anchor <tree anchor> --out items.jsonl`
    (`guard-firing` takes `--firings <guard_replay --firings output> --hazard "<what the guard

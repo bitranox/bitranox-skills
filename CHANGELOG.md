@@ -39,7 +39,7 @@ two "versions with no entry" notes came to sit in this file disagreeing with it.
   `--check-misplaced` candidate; exit 1 means none and no run), writes its own `wrong_tree`
   verdict for every candidate to `verdicts.jsonl`, and only then runs `jev_shadow.py run`. It
   relocates or rejects by its own verdicts. Crosstree step 8 adds the `jev shadow:` report line
-  with its `off`, `no candidates` and `error` forms.
+  in its counts, `off (<reason>)`, `no items` and `error <message>` forms.
 - `meta-consolidate-claude-md` step 1 carries a Jev shadow (site `consolidate-cause`): one item
   per heading group with 3+ copies and more than one variant, the agent's own cause for every
   group written to `verdicts.jsonl` before `run`, each group routed by the agent's cause.
@@ -76,7 +76,7 @@ two "versions with no entry" notes came to sit in this file disagreeing with it.
 - The dream skills' `jev shadow:` report line has four forms, defined once in
   `references/jev-shadow.md`, "The report line": counts (also for a `run` exit 1, whose counts say
   Jev answered none), `off (<reason>)`, `no items`, `error <message>`. meta-dream-tree step 11,
-  meta-dream-crosstree step 8 (`no candidates` is now `no items`) and the verification contract in
+  meta-dream-crosstree step 8 and the verification contract in
   `meta-dream-tree/references/dream-core.md` point at it; the contract scopes the line to runs that
   have shadow sites.
 - The `classifier_skills` knob row in `docs/reference.md` and `meta-memory-settings` lists what is
