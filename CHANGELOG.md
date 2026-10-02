@@ -29,6 +29,23 @@ than the change, so entries reconstructed from them would read like coverage wit
 a hole nobody has drawn a line under is one that gets rediscovered and half-filled - which is how
 two "versions with no entry" notes came to sit in this file disagreeing with it.
 
+## [7.39.2]
+
+### Fixed
+
+- `repo-gate.py`'s mirror check reads each side of a mirrored pair at its newest text instead of
+  at whatever a checkout holds: a file edited locally (uncommitted, untracked, or committed since
+  the fork point) is read from disk, every other file from the published `origin` ref. A
+  marketplace checkout behind origin no longer blocks a tool repo whose skill matches origin with
+  a false DRIFT, and no longer hides real drift by agreeing with an equally stale twin. Applies to
+  the commit gates, `--mirrors` and `--mirror-of`; without git or an `origin` ref the working
+  tree is compared, as before.
+- The test suite can no longer write into the repository that launched it. A root `conftest.py`
+  removes `GIT_DIR` and the other repository-locating git variables before any test runs, so a
+  fixture's `git config user.name t` lands in its fixture. One such leak, from a push out of a
+  linked worktree, set `user.name t` / `user.email t@example.com` in this repo's shared config,
+  and commits made here were authored by that identity until it was found.
+
 ## [7.39.1]
 
 ### Changed

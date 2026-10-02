@@ -873,6 +873,131 @@ def test_no_public_tree_means_no_comparison(tmp_path):
     assert RG.mirror_failures(root, set(RG.MIRRORED_SKILLS)) == []
 
 
+
+# --- each side is compared at its NEWEST text, not at whatever a checkout happens to hold --------
+#
+# Measured 2026-10-02: the main marketplace checkout sat 16 commits behind origin under another
+# session's uncommitted work, so a tool repo whose skill matched origin/master exactly was blocked
+# with DRIFT, no bypass. The same staleness also hides real drift: a stale checkout agrees with a
+# stale twin while origin has moved on. A file edited locally (uncommitted, or committed since the
+# fork point) is the newest text; every other file is read from the published origin ref.
+
+NEW_TEXT = MIRROR_BODY.replace("One paragraph", "The NEWER paragraph")
+NEW_TWIN = TWIN_BODY.replace("One paragraph", "The NEWER paragraph")
+
+
+def _g(cwd, *args):
+    out = subprocess.run(["git", "-c", "user.email=t@example.invalid", "-c", "user.name=t", *args],
+                         cwd=str(cwd), capture_output=True, text=True)
+    assert out.returncode == 0, out.stderr
+    return out.stdout.strip()
+
+
+def _repo_behind_origin(top, rel, old, new):
+    """A repo whose HEAD holds ``old`` at ``rel`` while its origin/master already holds ``new``."""
+    write(top / rel, old)
+    _g(top, "init", "-q", ".")
+    _g(top, "add", "-A")
+    _g(top, "commit", "-qm", "old")
+    write(top / rel, new)
+    _g(top, "commit", "-qam", "new")
+    _g(top, "update-ref", "refs/remotes/origin/master", "HEAD")
+    _g(top, "reset", "-q", "--hard", "HEAD~1")
+
+
+def _stale_pair(tmp_path, monkeypatch, twin_body):
+    public = tmp_path / "public"
+    root = public / "KI" / "bitranox-skills"
+    _repo_behind_origin(root, "plugins/bitranox/skills/coding-python-thing/SKILL.md", MIRROR_BODY, NEW_TEXT)
+    write(public / "libs" / "thing" / "skills" / "python-thing" / "SKILL.md", twin_body)
+    monkeypatch.setitem(RG.MIRRORED_SKILLS, "coding-python-thing", "libs/thing/skills/python-thing")
+    return public, root
+
+
+def test_a_marketplace_checkout_behind_origin_does_not_report_false_drift(tmp_path, monkeypatch):
+    _public, root = _stale_pair(tmp_path, monkeypatch, NEW_TWIN)
+
+    assert RG.mirror_failures(root, {"coding-python-thing"}) == []
+
+
+def test_a_stale_checkout_cannot_hide_drift_from_the_published_text(tmp_path, monkeypatch):
+    _public, root = _stale_pair(tmp_path, monkeypatch, TWIN_BODY)
+
+    fails = RG.mirror_failures(root, {"coding-python-thing"})
+
+    assert len(fails) == 1 and "NEWER" in fails[0]
+
+
+def test_an_uncommitted_marketplace_edit_is_the_newest_text(tmp_path, monkeypatch):
+    # The sync in progress: the twin was edited and the marketplace copy is being edited to match,
+    # in a checkout that is behind. The local edit wins over origin for that file.
+    _public, root = _stale_pair(tmp_path, monkeypatch, TWIN_BODY.replace("One paragraph", "LOCAL paragraph"))
+    write(root / "plugins" / "bitranox" / "skills" / "coding-python-thing" / "SKILL.md",
+          MIRROR_BODY.replace("One paragraph", "LOCAL paragraph"))
+
+    assert RG.mirror_failures(root, {"coding-python-thing"}) == []
+
+
+def test_a_file_published_upstream_but_missing_from_a_stale_checkout_is_compared(tmp_path, monkeypatch):
+    public = tmp_path / "public"
+    root = public / "KI" / "bitranox-skills"
+    skill = "plugins/bitranox/skills/coding-python-thing"
+    write(root / skill / "SKILL.md", MIRROR_BODY)
+    _g(root, "init", "-q", ".")
+    _g(root, "add", "-A")
+    _g(root, "commit", "-qm", "old")
+    write(root / skill / "references" / "extra.md", "published later\n")
+    _g(root, "add", "-A")
+    _g(root, "commit", "-qm", "new")
+    _g(root, "update-ref", "refs/remotes/origin/master", "HEAD")
+    _g(root, "reset", "-q", "--hard", "HEAD~1")
+    write(public / "libs" / "thing" / "skills" / "python-thing" / "SKILL.md", TWIN_BODY)
+    write(public / "libs" / "thing" / "skills" / "python-thing" / "references" / "extra.md", "published later\n")
+    monkeypatch.setitem(RG.MIRRORED_SKILLS, "coding-python-thing", "libs/thing/skills/python-thing")
+
+    assert RG.mirror_failures(root, {"coding-python-thing"}) == []
+
+
+def test_a_tool_repo_checkout_behind_its_origin_is_read_at_its_newest_text(tmp_path, monkeypatch):
+    # The same staleness on the other side of the pair.
+    public = tmp_path / "public"
+    root = public / "KI" / "bitranox-skills"
+    write(root / "plugins" / "bitranox" / "skills" / "coding-python-thing" / "SKILL.md", NEW_TEXT)
+    _repo_behind_origin(public / "libs" / "thing", "skills/python-thing/SKILL.md", TWIN_BODY, NEW_TWIN)
+    monkeypatch.setitem(RG.MIRRORED_SKILLS, "coding-python-thing", "libs/thing/skills/python-thing")
+
+    assert RG.mirror_failures(root, {"coding-python-thing"}) == []
+
+
+def test_a_file_moved_locally_is_not_read_back_under_its_old_name(tmp_path, monkeypatch):
+    # With rename detection on, a diff lists only the NEW name of a moved file, so the old name
+    # looked unedited and was read back from origin as a file that still exists.
+    public = tmp_path / "public"
+    root = public / "KI" / "bitranox-skills"
+    skill = root / "plugins" / "bitranox" / "skills" / "coding-python-thing"
+    write(skill / "SKILL.md", MIRROR_BODY)
+    write(skill / "references" / "old.md", "moved\n")
+    _g(root, "init", "-q", ".")
+    _g(root, "add", "-A")
+    _g(root, "commit", "-qm", "base")
+    _g(root, "update-ref", "refs/remotes/origin/master", "HEAD")
+    _g(root, "mv", "plugins/bitranox/skills/coding-python-thing/references/old.md",
+       "plugins/bitranox/skills/coding-python-thing/references/new.md")
+    write(public / "libs" / "thing" / "skills" / "python-thing" / "SKILL.md", TWIN_BODY)
+    write(public / "libs" / "thing" / "skills" / "python-thing" / "references" / "new.md", "moved\n")
+    monkeypatch.setitem(RG.MIRRORED_SKILLS, "coding-python-thing", "libs/thing/skills/python-thing")
+
+    assert RG.mirror_failures(root, {"coding-python-thing"}) == []
+
+
+def test_the_tool_repo_commit_gate_passes_a_pair_in_sync_on_origin(tmp_path, monkeypatch, capsys):
+    # The measured incident, through the entry point that blocked it.
+    public, _root = _stale_pair(tmp_path, monkeypatch, NEW_TWIN)
+
+    assert RG.gate_tool_repo_mirror(public / "libs" / "thing") == 0
+    assert "DRIFT" not in capsys.readouterr().err
+
+
 def test_every_mirrored_entry_names_a_real_marketplace_skill():
     # A manifest key that no longer matches a skill dir would silently stop checking that
     # pair - the exact rot this check exists to catch.

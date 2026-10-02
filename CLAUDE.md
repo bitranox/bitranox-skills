@@ -78,6 +78,11 @@ Three differences are by convention and are never drift, and all three are scope
 the `name:` field, that same name echoed in the H1, and the tool repo's self-install blockquote
 (true there, nonsense here). Every other file must match byte for byte.
 
+Each side is read at its NEWEST text, never at whatever a checkout holds: a file edited locally
+(uncommitted, untracked, or committed since the fork point) comes from disk, every other file from
+the published `origin` ref. A checkout behind origin therefore neither reports false drift nor
+hides real drift; one level with or ahead of origin reads exactly as its working tree.
+
 - The commit gate checks the twin of any mirrored skill the current change touches. Pre-existing
   drift elsewhere does not block an unrelated commit.
 - `python3 plugins/bitranox/hooks/repo-gate.py --mirrors` audits every pair, changed or not, and

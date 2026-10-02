@@ -1058,18 +1058,87 @@ def normalise_mirror(text):
 MIRROR_IGNORED_DIRS = {".skillwriter", "__pycache__", ".pytest_cache", ".git", ".ruff_cache"}
 
 
-def mirror_files(skill_dir):
-    """Map every comparable file in a mirrored skill dir to its path, keyed by relative posix path."""
+#: The refs naming a repository's PUBLISHED text, most specific first: the remote's own default
+#: branch, then the two names a default branch has in this tree.
+_PUBLISHED_REFS = ("origin/HEAD", "origin/master", "origin/main")
 
+
+def _mirror_ignored(rel):
+    return bool(MIRROR_IGNORED_DIRS & set(rel.split("/")))
+
+
+def _working_tree_files(skill_dir):
     found = {}
     for path in sorted(Path(skill_dir).rglob("*")):
         if not path.is_file():
             continue
-        rel = path.relative_to(skill_dir)
-        if MIRROR_IGNORED_DIRS & set(rel.parts):
-            continue
-        found[rel.as_posix()] = path
+        rel = path.relative_to(skill_dir).as_posix()
+        if not _mirror_ignored(rel):
+            found[rel] = path.read_bytes()
     return found
+
+
+def _published_commit(directory):
+    for ref in _PUBLISHED_REFS:
+        rc, out, _ = _git(directory, "rev-parse", "--verify", "-q", ref + "^{commit}")
+        if rc == 0 and out.strip():
+            return out.strip()
+    return None
+
+
+def _checked_out_bytes(directory, commit, rel):
+    """A file of ``commit`` exactly as a checkout here would write it (eol and filters applied)."""
+    try:
+        out = subprocess.run(["git", "cat-file", "--filters", "%s:./%s" % (commit, rel)],
+                             cwd=str(directory), capture_output=True)
+    except Exception:  # noqa: BLE001
+        return None
+    return out.stdout if out.returncode == 0 else None
+
+
+def mirror_files(skill_dir):
+    """Map every comparable file of a mirrored skill to its NEWEST bytes, by relative posix path.
+
+    A checkout is not the newest text of anything it has not edited. Measured 2026-10-02: the main
+    marketplace checkout sat 16 commits behind origin under another session's uncommitted work, and
+    a tool repo whose skill matched origin/master exactly was blocked as DRIFT with no bypass. The
+    same staleness hides real drift too, when a stale checkout agrees with a stale twin.
+
+    So a file edited here - uncommitted, untracked, or committed since this checkout forked from
+    the published ref - is read from disk, because that is the change in progress; every other
+    file is read from the published ref, because that is what installs get. A checkout level with
+    or ahead of origin therefore reads exactly as its working tree. Without git, a published ref or
+    a fork point, the working tree is all there is, and that is what is compared.
+    """
+
+    skill_dir = Path(skill_dir)
+    published = _published_commit(skill_dir)
+    if published is None:
+        return _working_tree_files(skill_dir)
+    rc, base, _ = _git(skill_dir, "merge-base", "HEAD", published)
+    rc_up, upstream = _git_paths(skill_dir, "ls-tree", "-r", "--name-only", published, "--", ".")
+    # --no-renames: with rename detection on, a moved file lists only its NEW name, and the old one
+    # would be read back from the published ref as a file that still exists.
+    rc_ed, edited = _git_paths(skill_dir, "diff", "--name-only", "--relative", "--no-renames",
+                               base.strip(), "--", ".") if rc == 0 else (1, [])
+    rc_un, untracked = _git_paths(skill_dir, "ls-files", "--others", "--exclude-standard", "--", ".")
+    if rc or rc_up or rc_ed or rc_un or not base.strip():
+        return _working_tree_files(skill_dir)
+
+    local = set(edited) | set(untracked)
+    found = {}
+    for rel in upstream:
+        if rel in local or _mirror_ignored(rel):
+            continue
+        data = _checked_out_bytes(skill_dir, published, rel)
+        if data is None:
+            return _working_tree_files(skill_dir)
+        found[rel] = data
+    for rel in local:
+        path = skill_dir / rel
+        if path.is_file() and not _mirror_ignored(rel):
+            found[rel] = path.read_bytes()
+    return dict(sorted(found.items()))
 
 
 def mirror_failures(root, names):
@@ -1082,6 +1151,8 @@ def mirror_failures(root, names):
 
     `SKILL.md` is compared through `normalise_mirror`, which erases the three by-convention
     divergences. Every other file must match byte for byte: nothing about them is per-repo.
+
+    Each side is read at its newest text (`mirror_files`), never at whatever a checkout holds.
     """
 
     public = _public_tree(root)
@@ -1107,12 +1178,12 @@ def mirror_failures(root, names):
             elif theirs is None:
                 differing.append("%s (only in the marketplace)" % rel)
             elif rel == "SKILL.md":
-                a = normalise_mirror(theirs.read_text(encoding="utf-8"))
-                b = normalise_mirror(mine.read_text(encoding="utf-8"))
+                a = normalise_mirror(theirs.decode("utf-8"))
+                b = normalise_mirror(mine.decode("utf-8"))
                 if a != b:
                     differing.append(rel)
                     sample = [line for line in difflib.unified_diff(a.splitlines(), b.splitlines(), "twin", "marketplace", lineterm="", n=0) if line[:1] in "+-" and line[:3] not in ("---", "+++")]
-            elif mine.read_bytes() != theirs.read_bytes():
+            elif mine != theirs:
                 differing.append(rel)
         if not differing:
             continue
