@@ -1,84 +1,97 @@
-# STALE - read 2026-10-02, work continued
+# Handover - 2026-10-02 18:55, rank 16 Jev shadow plan: Tasks 1-7 of 10 shipped (7.39.0)
 
 ## In flight
 
 - Executing the approved plan `/home/srvadmin/.claude/plans/write-a-plan-for-piped-starfish.md`
-  (Jev shadow mode for 8 skill judgment sites, 5 FIT + 3 MAYBE, logging per-item data) with
-  bitranox:process-agents-subagent-driven-development, in the worktree
-  `.claude/worktrees/jev-shadow` (branch `worktree-jev-shadow`).
-- Task 1 (settings knob `classifier_skills`, off/shadow) is committed, reviewed clean and pushed to
-  origin/master as 346dd075 (7.35.0). CI was still running at handover time:
-  `ci_wait.py --sha 346dd075d7e9bd5102a8fddba4f53c6e61d696f0`.
-- Progress ledger: `.claude/worktrees/jev-shadow/.bitranox/sdd/progress.md`; task briefs for
-  Tasks 1-3 sit beside it (`task-N-36114b73-brief.md`). Tasks 2-10 are open.
+  with bitranox:process-agents-subagent-driven-development in the worktree
+  `.claude/worktrees/jev-shadow` (branch `worktree-jev-shadow`, pushed to master as each batch
+  passed review).
+- Tasks 1-7 are done, reviewed clean and on origin/master. 7.39.0 (Tasks 5-7) was pushed as
+  e1f093b0; its CI was still running at handover time - confirm it:
+  `ci_wait.py --sha e1f093b0ebfe605d5b461f85b387341b65d21d24 --repo bitranox/bitranox-skills`.
+- Left: Task 8 (crosstree 4b + crosstree-deep 3b, consolidate-claude-md step 1,
+  collect-knowledge stage 2), Task 9 (enforce-data-architecture-strict STEP D), Task 10 (the
+  pre-registered decide-criteria OPEN-WORK line), then the final whole-branch review.
+- Ledger: `.claude/worktrees/jev-shadow/.bitranox/sdd/progress.md` (gitignored). It lists every
+  completed task with its commit range, the Minors carried to the final review, and the binding
+  lessons for Tasks 8-9. Briefs and every task/review report sit beside it.
 
 ## Committed, or not
 
-- This file and OPEN-WORK.md (ranks 16, 193) are committed together on top of 346dd075.
-- The MAIN checkout has `TODO-JEV.md` staged (rank 150, the user's call) and `handover.md` carrying
-  only a STALE marker on the 2026-10-01 handover: `git checkout -- handover.md` there before
-  fast-forwarding. It also has a gitignored `EXECUTION-USER-REVIEW.md` entry for the
-  `ai-llm-jev-judge` name.
+- Everything of Tasks 1-7 is committed and pushed. This file and OPEN-WORK.md (rank 16 updated)
+  are committed together after e1f093b0.
+- Uncommitted by design: the gitignored ledger, reports and `EXECUTION-USER-REVIEW.md` in this
+  worktree.
+- The model gate (`skill_receipt.py start plan-execution`) was armed in the old session; re-arm it
+  before dispatching, and run `end plan-execution` after the final review.
+- Leftover worktree `.claude/worktrees/agent-a26b133c84c5141bb` (the 7.37.1 Windows fix, all
+  pushed) can be removed; a worktree-isolated session cannot do it.
 
 ## Decided, and why - do not reopen
 
-- jev-judge is MIRRORED as `bitranox:ai-llm-jev-judge` (7.32.0), reversing the 2026-10-01
-  "standalone" decision: bitranox skills must be able to rely on it being installed. Hooks keep
-  `hooks/classifier.py`; skills call the `jev-judge` CLI.
-- Every site starts in SHADOW, MAYBE sites included, so the data decides; decide mode is a later,
-  pre-registered decision (plan Task 10).
-- The mirror keeps the twin's H1 `# jev-judge`: the gate erases only a trailing `(<name>)`.
-- Each push needs its own version bump: the commit gate diffs plugins/ against origin/master, so
-  the plan's "one release at the end" became one bump per pushed batch.
+- `classifier_skills = shadow` is ON on this machine (set for Task 4, logged in
+  EXECUTION-USER-REVIEW.md); the installed 7.31.5 hooks ignore the key. Reverse with
+  `settings.py set classifier_skills off`.
+- `jev_shadow.py run` passes the `classifier_model` knob as `--model` (the hooks honour it; a
+  shadow run on another model measures the wrong thing).
+- The shared reference now states: a missing verdict loses only the pairing; `run` still asks
+  and bills EVERY line of items.jsonl, so cut lines BEFORE `run` to avoid sending them.
+- dream-placement keeps at most 2 lines per fact (current and routed-to level): the raw build is
+  ~46k items. Firing and prune judge every fact because those steps already review every fact.
+- One minor bump per pushed batch; a concurrent session pushed twice during gates today, so expect
+  to fetch, rebase, and resolve CHANGELOG/plugin.json/pyproject with the newer entry on top.
 
 ## Decided against, and why
 
-- No bitranox-side scripts inside `ai-llm-jev-judge/`: the mirror must stay byte-identical, so the
-  shadow tool lives in `skills/meta-self-improve/jev_shadow.py` (plan Task 3).
+- No "verdict on every item" by default in the reference: a step that needs full coverage says
+  so itself (Tasks 5-7 all do).
 
 ## Still open, untouched
 
-`OPEN-WORK.md` is the list. Rank 12 waits on Stop-gate decide rows and rank 99 on the user's
-slash-command decision; rank 16 is this plan; rank 192 teaches the twin repo about the mirror;
-rank 193 is a CLAUDE.md wording fix waiting on the user's go.
+`OPEN-WORK.md` is the list. Rank 12 waits on Stop-gate decide rows; rank 16 is this plan; new
+today: 220 (perf-test flake), 230 (dream step 5 promotes on hold), 240 (send-mail mirror drift).
+A peer session asked for the MAIN checkout to be fast-forwarded (rank 150); this session could not
+touch it.
 
 ## Lessons for the next nap
 
-- When a commit in this repo touches plugins/, bump plugin.json AND pyproject.toml first: the gate
-  refuses version drift between them and refuses an unbumped plugins/ change, so an implementer
-  told "do not bump" ends BLOCKED with everything staged.
-- When the router's trigger map is regenerated for a new skill, replay it over the typed-prompt
-  corpus before shipping: ai-llm-jev-judge matched 10 of 1,814 prompts, all on head words
-  (`items`, `same`, `work`).
-- When a mirrored skill is added, check `normalise_mirror` before renaming its H1: only a trailing
-  `(<name>)` is a by-convention difference.
-- tooling: a worktree-isolated session refuses `$(git ...)` inside another command; resolve the
-  sha in its own call first.
+- When a skill text adds a shadow or second-opinion step, a haiku RED shows it hands the decision
+  to the second opinion unless the text says plainly that the agent's own verdict is the result.
+- When a tool sends every line of an input file to a paid service, document that leaving an item
+  unlabelled does not stop it being sent; say how to cut it before the call.
+- When a probe or report says "judged all N", count the verdict lines against the items before
+  believing it: the Task 4 agent left one unjudged and reported 30 of 30.
+- When an error message prints a path, use %s not %r: repr doubles every backslash on Windows and
+  only the windows-latest cell catches it.
+- tooling: subagents sharing one scratchpad overwrite each other's same-named files (bump.py was
+  clobbered); give each dispatch its own scratch subdirectory in the prompt.
 
 ## The exact next action
 
-Rank 12 is the top-ranked item but waits on data (a day of Stop-gate decide rows), so the next
-action is rank 16, which the user is actively waiting on: `EnterWorktree` with path
-`.claude/worktrees/jev-shadow`, read `.bitranox/sdd/progress.md`, confirm 346dd075's CI is green,
-then dispatch the Task 2 implementer (`guard_replay.py --firings`) from
-`.bitranox/sdd/task-2-36114b73-brief.md`, re-arming the model gate first
-(`skill_receipt.py start plan-execution`).
+Rank 12 is top-ranked but blocked on data, so rank 16, which the user is waiting on: in
+`.claude/worktrees/jev-shadow` read `.bitranox/sdd/progress.md`, confirm e1f093b0's CI is green,
+re-arm the model gate, then dispatch the Task 8 implementer (opus) from
+`.bitranox/sdd/task-5to9-36114b73-brief.md` with the ledger's lessons, the worked examples
+(grep `jev_shadow` in compuse-toolbox, process-review-enhance-code-quality and meta-dream-tree
+SKILL.md) and a private scratch subdirectory.
 
 ## Files that matter
 
-- `plugins/bitranox/skills/meta-memory-settings/settings.py`, `plugins/bitranox/hooks/self_improve_signals.py` - the knob.
-- `plugins/bitranox/skills/compuse-toolbox/scripts/guard_replay.py` - Task 2.
-- `plugins/bitranox/skills/meta-self-improve/` - Task 3 home (`jev_shadow.py`, `jev_sites/`, `references/jev-shadow.md`).
-- `plugins/bitranox/hooks/classifier.py` - `prepare_state`, `_plugin_version` to reuse.
-- `plugins/bitranox/skills/ai-llm-jev-judge/SKILL.md` - the `jev-judge` floor (0.2.4) the shadow tool pins to.
+- `plugins/bitranox/skills/meta-self-improve/jev_shadow.py` (+ `jev_shadow_sites.py`,
+  `jev_shadow_log.py`, `jev_shadow_report.py`, `jev_shadow_ports.py`) - the tool.
+- `plugins/bitranox/skills/meta-self-improve/jev_sites/*.json` - the 10 site question files.
+- `plugins/bitranox/skills/meta-self-improve/references/jev-shadow.md` - the shared procedure.
+- `plugins/bitranox/skills/{compuse-toolbox,process-review-enhance-code-quality,meta-dream-tree}/SKILL.md`
+  and their `.skillwriter/checklist-2026-10-02-jev-shadow.md` - the worked examples.
+- `plugins/bitranox/skills/meta-dream-tree/references/dream-core.md` - the `jev shadow:` report line.
 
 ## How to verify
 
-- `git log --oneline -3 origin/master` shows 346dd075 (7.35.0) under this handover commit.
+- `git log --oneline -3 origin/master` shows e1f093b0 (7.39.0) under this handover commit.
+- `python3 plugins/bitranox/skills/meta-self-improve/jev_shadow.py status` - `shadow: on`.
 - `env -u VIRTUAL_ENV uv run --with pytest --with PyYAML --with lxml --with defusedxml --with
-  ruamel.yaml --with httpx2 python -m pytest plugins/bitranox/skills/meta-memory-settings/tests/ -q`
-  - green.
-- `python3 plugins/bitranox/hooks/repo-gate.py --mirrors` - 0 of 11 pairs drifted.
+  ruamel.yaml --with httpx2 python -m pytest plugins/bitranox/skills/meta-self-improve/tests/
+  plugins/bitranox/skills/compuse-toolbox/tests/ -q` - green.
 
 Read this, then replace the first line with `# STALE - read <date>, work continued`. Do not delete
 it - if this session ends badly it is the only record of where things stood.
