@@ -201,16 +201,18 @@ the success line, abort-and-show on a miss).
    separate approval step.
    - **Jev shadow on placement** (only when `jev_shadow.py status` exits 0; home
      `<plugin>/skills/meta-self-improve/`, launch via `hooks/run-python.sh`; procedure in its
-     `references/jev-shadow.md`), in this order: (1) `jev_shadow.py items --site dream-placement
-     --anchor <anchor> --out items.jsonl`, one line per fact AND level on its chain (id
-     `<slug>|<level>`, the level relative to the anchor, `.` for the anchor) - tens of thousands on
-     a large tree; (2) YOU route every fact; (3) cut `items.jsonl` down to each fact's line for its
-     current level and for the level you routed it to (one line when it stays), lines unchanged -
-     BEFORE `run`, which asks Jev about every line in the file; (4) write YOUR score for every
-     remaining line to `verdicts.jsonl` (`{"id": "<slug>|<level>", "verdict": {"fits_level": 2}}`:
-     2 belongs here, 1 could live here but is narrower or broader, 0 does not belong); (5)
-     `jev_shadow.py run --site dream-placement --items items.jsonl --verdicts verdicts.jsonl`. It
-     prints counts only. Move by your own routing, whatever `run` printed or exited with.
+     `references/jev-shadow.md`; both files in a fresh `D=$(mktemp -d)` outside any repo, since
+     they hold unredacted fact text), in this order: (1) `jev_shadow.py items --site
+     dream-placement --anchor <anchor> --out "$D/items.jsonl"`, one line per fact AND level on its
+     chain (id `<slug>|<level>`, the level relative to the anchor, `.` for the anchor) - tens of
+     thousands on a large tree; (2) YOU route every fact; (3) cut `$D/items.jsonl` down to each
+     fact's line for its current level and for the level you routed it to (one line when it stays),
+     lines unchanged - BEFORE `run`, which asks Jev about every line in the file; (4) write YOUR
+     score for every remaining line to `$D/verdicts.jsonl` (`{"id": "<slug>|<level>", "verdict":
+     {"fits_level": 2}}`: 2 belongs here, 1 could live here but is narrower or broader, 0 does not
+     belong); (5) `jev_shadow.py run --site dream-placement --items "$D/items.jsonl" --verdicts
+     "$D/verdicts.jsonl"`, then `rm -rf "$D"`. `run` prints counts only. Move by your own routing,
+     whatever `run` printed or exited with.
 
 6. **Voice + firing check (maintenance).** The engine lints new hooks at add-time; here, sweep the
    whole store for residue with `memory_engine.py lint --tree "<cwd>"` (reports, tree-wide, hooks over
@@ -225,14 +227,15 @@ the success line, abort-and-show on a miss).
    the level that OWNS the pointer - a title-derived slug mints a duplicate when the fact was
    retitled, and any other level is refused as a collision), propose-diff, apply.
    Bodies missing the frame or the **Why:**/**How to apply:** sections get the same treatment.
-   - **Jev shadow on the firing check** (only when `jev_shadow.py status` exits 0; home, launch
-     and procedure as in step 5's shadow bullet): `jev_shadow.py items --site dream-firing --anchor
-     <anchor> --out items.jsonl` writes one line per fact in the tree. YOU judge every hook; write
-     YOUR verdict for every fact to `verdicts.jsonl` FIRST (`{"id": "<slug>", "verdict":
-     {"trigger_fires": false}}` for each hook whose trigger is missing or does not name what its
-     body covers, `true` for the rest; none left out, since the check sweeps the whole store), then
-     `jev_shadow.py run --site dream-firing --items items.jsonl --verdicts verdicts.jsonl`. It
-     prints counts only. Queue rewrites by your own verdicts, whatever `run` printed or exited with.
+   - **Jev shadow on the firing check** (only when `jev_shadow.py status` exits 0; home, launch and
+     procedure as in step 5's shadow bullet; a fresh `D=$(mktemp -d)` of its own outside any repo):
+     `jev_shadow.py items --site dream-firing --anchor <anchor> --out "$D/items.jsonl"` writes one
+     line per fact in the tree. YOU judge every hook; write YOUR verdict for every fact to
+     `$D/verdicts.jsonl` FIRST (`{"id": "<slug>", "verdict": {"trigger_fires": false}}` for each
+     hook whose trigger is missing or does not name what its body covers, `true` for the rest; none
+     left out, since the check sweeps the whole store), then `jev_shadow.py run --site dream-firing
+     --items "$D/items.jsonl" --verdicts "$D/verdicts.jsonl"`, then `rm -rf "$D"`. `run` prints
+     counts only. Queue rewrites by your own verdicts, whatever `run` printed or exited with.
 
 7. **Prune (content-based only, tree-wide).** Archive obsolete/superseded/task-state entries at
    EVERY level of the tree (siblings included) per the removal policy in
@@ -249,12 +252,13 @@ the success line, abort-and-show on a miss).
       labelling it unsolved? If so, relabel it as unsolved.
 
    - **Jev shadow on those two questions** (only when `jev_shadow.py status` exits 0; home, launch
-     and procedure as in step 5's shadow bullet): `jev_shadow.py items --site dream-prune --anchor
-     <anchor> --out items.jsonl` writes one line per fact in the tree. YOU answer both questions
-     for every fact; write YOUR answers to `verdicts.jsonl` FIRST (`{"id": "<slug>", "verdict":
-     {"untestable_negative": false, "unlabelled_unsolved": false}}`, `true` for each question the
-     fact trips; none left out, since both are asked of every entry), then `jev_shadow.py run
-     --site dream-prune --items items.jsonl --verdicts verdicts.jsonl`. It prints counts only.
+     and procedure as in step 5's shadow bullet; a fresh `D=$(mktemp -d)` of its own outside any
+     repo): `jev_shadow.py items --site dream-prune --anchor <anchor> --out "$D/items.jsonl"` writes
+     one line per fact in the tree. YOU answer both questions for every fact; write YOUR answers to
+     `$D/verdicts.jsonl` FIRST (`{"id": "<slug>", "verdict": {"untestable_negative": false,
+     "unlabelled_unsolved": false}}`, `true` for each question the fact trips; none left out, since
+     both are asked of every entry), then `jev_shadow.py run --site dream-prune --items
+     "$D/items.jsonl" --verdicts "$D/verdicts.jsonl"`, then `rm -rf "$D"`. `run` prints counts only.
      Re-test, delete or relabel by your own answers, whatever `run` printed or exited with.
 
 8. **Re-dedup, then verify.** Sweep the entries placement touched (a lifted general now overlaps
@@ -303,10 +307,10 @@ the success line, abort-and-show on a miss).
 11. **Done + report + /clear nudge.** `dream_state.py done` (records the fact signature). Report
     counts + one line each: merges, placements (with direction), voice rewrites, prunes, skill
     changes, toolbox proposals (merges/flags), pinned facts reported not rewritten, and
-    `jev shadow:` followed by `<site> <counts>` per site, joined by `; `. The counts are what
-    `run` printed after its own `shadow:` prefix; a site whose `status` was not 0 reads
-    `<site> off (<reason>)`, and one whose `run` exited non-zero reads `<site> error <message>`.
-    Example: `jev shadow: dream-firing 20 items, 20 paired, 18 of 20 answers agreed, ...`.
+    `jev shadow:` followed by one `<site> <form>` entry per site, joined by `; `, each in one of
+    the four forms defined in meta-self-improve's `references/jev-shadow.md`, "The report line":
+    the counts `run` printed, `off (<reason>)`, `no items`, or `error <message>`. Example:
+    `jev shadow: dream-firing 20 items, 20 paired, 18 of 20 answers agreed, ...`.
     CLAUDE.md edits are APPLIED, so the report is the only place the user sees them: per RULE,
     name every file touched, the ANCESTOR covering home it now relies on, and the transformation
     (removed / rewritten in place); a rule left alone for want of an ancestor is listed too, never

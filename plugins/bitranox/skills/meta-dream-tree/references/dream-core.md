@@ -237,9 +237,10 @@ TREE-WIDE run (meta-dream-tree and the crosstree variants) ALSO run
 `reconcile_memory_index.py --check-tree <anchor>` and require `TOTAL tree problems: 0` - the
 chain-only `--check` structurally cannot see a slug DUPLICATED across sibling chains (slugs are
 tree-unique), which `heal` also misses. Report counts (merges, placements with direction, prunes,
-pinned untouched, and one `jev shadow:` line naming each shadow site with the counts `run`
-printed after its own `shadow:` prefix, or `off (<reason>)`) and, for
-nap/project, run `dream_state.py done` when the run covered what the nudge asked for.
+pinned untouched) and, for nap/project, run `dream_state.py done` when the run covered what the
+nudge asked for. A run that has Jev shadow sites (meta-dream-tree and the crosstree variants; a nap
+has none) also reports one `jev shadow:` line, one entry per site in one of the four forms defined
+once in `bitranox:meta-self-improve` -> references/jev-shadow.md, "The report line".
 
 ## Tier note (inline deep judgments)
 

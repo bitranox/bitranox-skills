@@ -269,13 +269,15 @@ Per-tool arguments live in each tool's `--help` (loaded only when used, so this 
   you report comes from your verdicts.
   - **Jev shadow on that classification** (only when `jev_shadow.py status` exits 0; home
     `<plugin>/skills/meta-self-improve/`, launch via `hooks/run-python.sh`; procedure in its
-    `references/jev-shadow.md`): replay with `--firings firings.jsonl`, build the items with
-    `jev_shadow.py items --site guard-firing --firings firings.jsonl --hazard "<what the guard
-    warns about>" --out items.jsonl`, write YOUR verdict for every firing to `verdicts.jsonl`
-    FIRST (`{"id": "<firing id>", "verdict": {"real_hazard": true}}`, `false` for a false
-    alarm; none left out, since the ratio counts every firing), then `jev_shadow.py run --site
-    guard-firing --items items.jsonl --verdicts verdicts.jsonl`. It prints counts only. Report
-    the ratio from your own verdicts, whatever `run` printed or exited with.
+    `references/jev-shadow.md`; all three files in a fresh `D=$(mktemp -d)` outside any repo, since
+    they hold raw commands and their error output): replay with `--firings "$D/firings.jsonl"`,
+    build the items with `jev_shadow.py items --site guard-firing --firings "$D/firings.jsonl"
+    --hazard "<what the guard warns about>" --out "$D/items.jsonl"`, write YOUR verdict for every
+    firing to `$D/verdicts.jsonl` FIRST (`{"id": "<firing id>", "verdict": {"real_hazard": true}}`,
+    `false` for a false alarm; none left out, since the ratio counts every firing), then
+    `jev_shadow.py run --site guard-firing --items "$D/items.jsonl" --verdicts "$D/verdicts.jsonl"`,
+    then `rm -rf "$D"`. `run` prints counts only. Report the ratio from your own verdicts, whatever
+    `run` printed or exited with.
 - **`guard_replay` asks the second question too.** A guard's unit tests are written from the same
   imagination as the guard, so they cannot report its rate on real work or its precision when it
   speaks. Both have been measured wrong here after the tests were green: one arm fired on 7.8% of

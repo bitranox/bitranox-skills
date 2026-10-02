@@ -179,3 +179,46 @@ changed, so the derived docs and triggers do not move.
       user turned both knobs on, and the tool redacts secrets before sending.
 - [x] Added lines ASCII only and within 100 columns.
 - [x] No session narrative or scratch path in the skill text or this artifact.
+
+## Final-review fixes (2026-10-02)
+
+Scope: the shadow bullets put `items.jsonl` and `verdicts.jsonl` in a fresh
+`D=$(mktemp -d)` outside any repo, and end the command sequence with `rm -rf "$D"` after `run`,
+because both files hold unredacted text and redaction happens only inside `run`. Every path in
+the bullet reads `$D/...`, and the counts sentence names `run` ("`run` prints counts only") so it
+cannot be read as the `rm`. The shared detail (why, one dir per site and per tree, delete after
+the counts are taken) lives once in meta-self-improve's `references/jev-shadow.md`, procedure
+step 0.
+
+Also: step 11's `jev shadow:` report line now names the four forms (counts, `off (<reason>)`,
+`no items`, `error <message>`) and points at their single definition, `references/jev-shadow.md`
+"The report line"; `references/dream-core.md`'s verification contract scopes the line to runs
+that have shadow sites (a nap has none) and points at the same definition.
+
+- [x] Quote-back (haiku): given step 11, crosstree step 8 and "The report line", the arm rendered
+      five entries correctly - counts for a `run` exit 0, `off (no Jev key)` for `status` exit
+      1, counts ending `30 without a Jev answer` for a `run` exit 1, `error <stderr line without
+      the prefix>` for a `run` exit 2, `no items` for an `items` exit 1 - and quoted the
+      governing table row or sentence for each. Gaps reported: none.
+
+- [x] RED (meta-dream-tree step 6 bullet, the representative one, haiku, inert probe): on the
+      text before this change the arm wrote `--out /work/acme-app/items.jsonl` and
+      `/work/acme-app/verdicts.jsonl` into the project checkout and reported "Both .jsonl files
+      remain in /work/acme-app/". Its own gap list: "Post-step file cleanup policy not stated;
+      files left in working directory."
+- [x] GREEN 1 (same scenario, a first draft with the `rm` in the bullet's opening parenthetical,
+      plus procedure step 0): ran `D=$(mktemp -d)`, wrote `/tmp/tmp.Qx7/items.jsonl` and
+      `/tmp/tmp.Qx7/verdicts.jsonl`, ran `run` on those paths, then `rm -rf /tmp/tmp.Qx7`.
+- [x] REFACTOR: a data-arch-dict arm on that same draft, given the bullet alone, used the temp
+      dir but kept it ("Both retained for audit trail"): a cleanup stated up front in a
+      parenthetical is skipped by a reader acting step by step. The `rm` moved to the end of the
+      sequence, after `run`, in every bullet.
+- [x] GREEN 2 (final text, the step 6 bullet ALONE, without procedure step 0): `D=$(mktemp -d)`,
+      both files under `/tmp/tmp.Qx7`, `run` on them, then `rm -rf /tmp/tmp.Qx7`; "The
+      directory and all its contents no longer exist when step 6 completes." The data-arch-dict
+      arm on the final text likewise ended with `rm -rf /tmp/tmp.K2p`.
+- [x] Remaining gaps (where to read a hook's text, whether to inspect items.jsonl, how much
+      `context` is enough) are pre-existing judgement in the steps, untouched here: DECLINED.
+- [x] Every bullet in this skill checked by grep: no `--out items.jsonl`, `--items items.jsonl`
+      or bare `verdicts.jsonl` left.
+- [x] Diff reviewed: prose only, ASCII, no secret, address, hostname or real user path.

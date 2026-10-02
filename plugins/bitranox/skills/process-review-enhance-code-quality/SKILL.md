@@ -165,13 +165,14 @@ complete-sounding summary. YOU read every site; the quotes and counts come from 
 
 - **Jev shadow on that reading** (only when `jev_shadow.py status` exits 0; home
   `<plugin>/skills/meta-self-improve/`, launch via `hooks/run-python.sh`; procedure in its
-  `references/jev-shadow.md`): write `items.jsonl`, one `{"id": "<file:line>", "state":
-  {"function": ..., "source_line": ..., "convention": "<what true means here>"}}` per site, and
-  YOUR verdict for every site to `verdicts.jsonl` FIRST (`{"id": "<file:line>", "verdict":
-  {"agrees": false}}` where boolean and message disagree, `true` where they agree; none left out,
-  since the cap counts every site), then `jev_shadow.py run --site quality-polarity --items
-  items.jsonl --verdicts verdicts.jsonl`. It prints counts only. Quote and count from your own
-  verdicts, whatever `run` printed or exited with.
+  `references/jev-shadow.md`; both files in a fresh `D=$(mktemp -d)` outside the repo, since they
+  hold the code lines unredacted): write `$D/items.jsonl`, one `{"id": "<file:line>", "state":
+  {"function": ..., "source_line": ..., "convention": "<what true means here>"}}` per site, and YOUR
+  verdict for every site to `$D/verdicts.jsonl` FIRST (`{"id": "<file:line>", "verdict": {"agrees":
+  false}}` where boolean and message disagree, `true` where they agree; none left out, since the cap
+  counts every site), then `jev_shadow.py run --site quality-polarity --items "$D/items.jsonl"
+  --verdicts "$D/verdicts.jsonl"`, then `rm -rf "$D"`. `run` prints counts only. Quote and count
+  from your own verdicts, whatever `run` printed or exited with.
 
 **Why quotes and not a verdict.** A verdict is an assertion ABOUT the work; a quote is a
 BYPRODUCT of it. Measured twice on the same fixture. First: a reviewer counted 26 instances
@@ -215,15 +216,15 @@ The rest of the judgement, applied to what the counts turned up:
   every hit; what you keep and the count you give come from your verdicts.
   - **Jev shadow on that resolution** (only when `jev_shadow.py status` exits 0; home
     `<plugin>/skills/meta-self-improve/`, launch via `hooks/run-python.sh`; procedure in its
-    `references/jev-shadow.md`): write `items.jsonl`, one `{"id": "<file:line>", "state":
-    {"parameter": "<the name under review and where it is declared>", "hit": "<the line>",
-    "context": "<code around it>"}}` per hit, `parameter` the same on every hit (never what the
-    hit resolved to: that is the answer), and YOUR verdict for every hit to `verdicts.jsonl`
-    FIRST (`{"id": "<file:line>", "verdict": {"is_parameter": true}}`, `false` for a builtin or
-    framework call sharing the name; none left out, since every hit is resolved), then
-    `jev_shadow.py run --site quality-param-hit --items items.jsonl --verdicts verdicts.jsonl`. It
-    prints counts only. Keep or drop each hit by your own verdict, whatever `run` printed or
-    exited with.
+    `references/jev-shadow.md`; both files in a fresh `D=$(mktemp -d)` of its own outside the repo):
+    write `$D/items.jsonl`, one `{"id": "<file:line>", "state": {"parameter": "<the name under
+    review and where it is declared>", "hit": "<the line>", "context": "<code around it>"}}` per
+    hit, `parameter` the same on every hit (never what the hit resolved to: that is the answer), and
+    YOUR verdict for every hit to `$D/verdicts.jsonl` FIRST (`{"id": "<file:line>", "verdict":
+    {"is_parameter": true}}`, `false` for a builtin or framework call sharing the name; none left
+    out, since every hit is resolved), then `jev_shadow.py run --site quality-param-hit --items
+    "$D/items.jsonl" --verdicts "$D/verdicts.jsonl"`, then `rm -rf "$D"`. `run` prints counts only.
+    Keep or drop each hit by your own verdict, whatever `run` printed or exited with.
 - **Ask what would catch a positional mistake.** A type checker catches a swap between different
   types and catches NOTHING between two same-typed fields, which is where the expensive bugs are.
 - **Prefer the named type that already exists** - extending one usually beats adding a sibling.

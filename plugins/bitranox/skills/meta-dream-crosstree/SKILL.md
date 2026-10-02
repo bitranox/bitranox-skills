@@ -128,14 +128,15 @@ Create one todo per step.
    leaves the stale original, which is the bug). Propose-first in `propose`; apply in `auto`.
    - **Jev shadow on that judgement** (only when `jev_shadow.py status` exits 0; home
      `<plugin>/skills/meta-self-improve/`, launch via `hooks/run-python.sh`; procedure in its
-     `references/jev-shadow.md`), per tree, each with its own files: `jev_shadow.py items --site
-     crosstree-misplaced --anchor <anchor> --out items.jsonl` writes one line per
-     `--check-misplaced` candidate (id = slug; exit 1 means no candidates, so skip `run`). The
-     verdict is yours: judge every candidate and write YOUR verdict for each to `verdicts.jsonl`
-     FIRST (`{"id": "<slug>", "verdict": {"wrong_tree": true}}` for a confirmed misfile, `false`
-     for one you reject; none left out, since every candidate is judged), then `jev_shadow.py run
-     --site crosstree-misplaced --items items.jsonl --verdicts verdicts.jsonl`. It prints counts
-     only. Relocate or reject by your own verdicts, whatever `run` printed or exited with.
+     `references/jev-shadow.md`), per tree, each in a fresh `D=$(mktemp -d)` of its own outside any
+     repo (the files hold unredacted fact text): `jev_shadow.py items --site crosstree-misplaced
+     --anchor <anchor> --out "$D/items.jsonl"` writes one line per `--check-misplaced` candidate (id
+     = slug; exit 1 means no candidates, so skip `run`). The verdict is yours: judge every candidate
+     and write YOUR verdict for each to `$D/verdicts.jsonl` FIRST (`{"id": "<slug>", "verdict":
+     {"wrong_tree": true}}` for a confirmed misfile, `false` for one you reject; none left out,
+     since every candidate is judged), then `jev_shadow.py run --site crosstree-misplaced --items
+     "$D/items.jsonl" --verdicts "$D/verdicts.jsonl"`, then `rm -rf "$D"`. `run` prints counts only.
+     Relocate or reject by your own verdicts, whatever `run` printed or exited with.
 
 5. **Outbound cross-pollination.** When a learning is useful BEYOND its project, do not write into other
    projects - **promote it to the lowest common ancestor WITHIN ITS TREE** (often the tree's top) and let the native
@@ -178,12 +179,12 @@ Create one todo per step.
    cross-pollinations, normalizations, any skill change,
    toolbox proposals (contribute / new tool), and any contribution still queued (only those blocked
    on user input or `off`-mode - deliverable ones are shipped THIS run, not left pending), and
-   `jev shadow:` followed by `crosstree-misplaced <anchor> <counts>` per tree, joined by `; `: the
-   counts are what `run` printed after its own `shadow:` prefix, `off (<reason>)` when `status`
-   was not 0, `no candidates` when `items` exited 1, `error <message>` on a non-zero `run`. Your
-   own relocated and rejected counts go on a line of their own, never on this one. Example:
-   `jev shadow: crosstree-misplaced /work 20 items, 20 paired, 18 of 20 answers agreed, ...;
-   crosstree-misplaced /lab no candidates`.
+   `jev shadow:` followed by one `crosstree-misplaced <anchor> <form>` entry per tree, joined by
+   `; `, each in one of the four forms defined in meta-self-improve's `references/jev-shadow.md`,
+   "The report line": the counts `run` printed, `off (<reason>)`, `no items` (when `items`
+   exited 1), or `error <message>`. Your own relocated and rejected counts go on a line of their
+   own, never on this one. Example: `jev shadow: crosstree-misplaced /work 20 items, 20 paired,
+   18 of 20 answers agreed, ...; crosstree-misplaced /lab no items`.
    **CLAUDE.md edits are applied, so the report is the only place the user sees them:** per RULE,
    list every file touched, the ANCESTOR covering home the rule now relies on, and the
    transformation (removed / rewritten in place). A rule left alone because no ancestor covered it

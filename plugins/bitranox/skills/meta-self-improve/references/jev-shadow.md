@@ -24,15 +24,25 @@ bash <plugin>/hooks/run-python.sh <plugin>/skills/meta-self-improve/jev_shadow.p
 | `classifier_model`                        | `jev-latest` | Passed to jev-judge as `--model`; empty lets jev-judge choose | The user, through `meta-memory-settings`   |
 
 Shadow runs only with BOTH knobs on and a key present. Turning it on is the user's consent to send
-these items (memory facts, commands, code lines) to TypeSafe; secrets are redacted before sending.
-With either knob off, no `uvx` on PATH, or no key, `run` prints `shadow: off (<reason>)`, exits 0
-and writes nothing. `status` answers the same question without running anything that costs money.
+these items to TypeSafe: the hook and body of every fact in the swept tree or trees, other
+projects' note texts, guard commands with their error output, code lines, and CLAUDE.md section
+bodies - each redacted (secrets replaced) and capped before sending. With either knob off, no
+`uvx` on PATH, or no key, `run` prints `shadow: off (<reason>)`, exits 0 and writes nothing.
+`status` answers the same question: while a knob is off it starts nothing at all, and with both on
+it asks `jev-judge check-key`, which spends nothing. With the knobs on, `run` holds the step for as
+long as Jev takes to answer, up to its 3600-second timeout.
 
 Shadow runs whatever the item count. The ~50-item floor in the `ai-llm-jev-judge` skill is for
 letting Jev DECIDE; calibration data from a small batch is still data.
 
 ## The procedure, for every site
 
+0. **Work in a fresh temp dir, outside any repo.** `D=$(mktemp -d)`, one per site (and per tree
+   where a step sweeps several), and write `$D/items.jsonl` and `$D/verdicts.jsonl` there - never
+   in the cwd. Both files hold UNREDACTED text (fact bodies, other projects' notes, commands and
+   their errors, code lines); redaction happens only inside `run`, and a file left in a project
+   checkout is one `git add -A` away from being committed. After `run`, and after you have taken
+   its counts for the report, `rm -rf "$D"`. The paths below are relative to `$D`.
 1. **Items.** For a store-based site, build them:
    `jev_shadow.py items --site <site> --anchor <tree anchor> --out items.jsonl`
    (`guard-firing` takes `--firings <guard_replay --firings output> --hazard "<what the guard
@@ -53,14 +63,32 @@ letting Jev DECIDE; calibration data from a small batch is still data.
    `jev_shadow.py run --site <site> --items items.jsonl --verdicts verdicts.jsonl`.
    It prints counts only: items, paired, answers agreed, items without a Jev answer, cost.
 4. **Carry on with the step on your own verdicts.** Whatever `run` printed or exited with, the
-   step's outcome is yours. A non-zero exit is reported in the step's output in one line and
-   changes nothing else.
+   step's outcome is yours. A non-zero exit is reported in the step's output in one line (see
+   "The report line") and changes nothing else.
 
 The verdicts file must exist BEFORE `run`; without it `run` exits 2 and asks nothing. That and the
 counts-only output keep the agent blind: knowing which items Jev disagreed on mid-task would pull
 the agent's own judgments toward Jev's, and the comparison would measure nothing. Read the
 disagreements afterwards, with `report`. With `--workdir`, jev-judge's `rows.jsonl` stays there:
 do not open it until your own step is finished, for the same reason.
+
+## The report line
+
+A step whose skill reports its shadow sites (the dream skills' `jev shadow:` line) gives each site
+one entry, `<site> <form>`, in exactly one of four forms:
+
+| Form              | When                                                                                  |
+|-------------------|---------------------------------------------------------------------------------------|
+| `<counts>`        | `run` exited 0 or 1: what it printed after its own `shadow: ` prefix, verbatim        |
+| `off (<reason>)`  | `status` was not 0, or `run` printed `shadow: off (<reason>)`                         |
+| `no items`        | `items` exited 1: nothing to judge, so `run` was skipped                              |
+| `error <message>` | `items` or `run` exited 2: its one `jev_shadow: ...` stderr line, without that prefix |
+
+Exit 1 from `run` means Jev answered no item; its counts say so themselves (they end in
+`<N> without a Jev answer`), so they are reported as counts, not as an error. A site swept once per
+tree names the tree after the site: `crosstree-misplaced /work no items`. Example line:
+`jev shadow: dream-firing 20 items, 20 paired, 18 of 20 answers agreed, 0 without a Jev answer;
+dream-prune off (classifier_skills is not shadow)`.
 
 ## Sites
 
@@ -110,6 +138,11 @@ lets a later, better question be replayed over logged items without re-running t
 0.5, a choice compares keys, a score compares the agent's index with Jev's score rounded half up to
 the nearest level. It is null when either side has no answer.
 
+If another writer holds the lock past its wait, Jev has already been paid, so the run's records
+go to a side file of their own, `jev-skill-shadow-YYYY-MM-<run id>.jsonl`, and `run` says so on
+stderr. `report` reads side files, and retention treats each as part of its month. `agent_note`
+is redacted and capped like the state.
+
 Retention: on every append, months whose last day is more than 400 days ago are deleted, then the
 oldest months while the rest exceed 100 MB. The current month is never deleted. Skill sites fire
 weekly at most, so the hook shadow's 30 days would throw the evidence away.
@@ -147,4 +180,6 @@ reading by hand. Either side can be the wrong one; deciding which is the point.
 | `run`    | records logged, shadow off, or an empty items file | logged, but Jev answered none | missing verdicts file, malformed items or verdicts, unwritable log, workdir or output |
 | `report` | records summarized                                 | no records match              | bad `--since`, unwritable `--disagreements`                                           |
 
-`--json` prints `{ok, command, data, skipped}` on stdout; diagnostics go to stderr.
+`--json` prints `{ok, command, data, skipped}` on stdout; diagnostics go to stderr. A jev-judge
+run that fails (it could not start, timed out, or exited other than 0 or 1) after writing some
+rows still logs every record and exits by the answers it got; the failure is named on stderr.

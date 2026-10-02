@@ -50,16 +50,17 @@ lifting any one variant leaves most repos double-loaded.
 
 - **Jev shadow on the cause split** (only when `jev_shadow.py status` exits 0; home
   `<plugin>/skills/meta-self-improve/`, launch via `hooks/run-python.sh`; procedure in its
-  `references/jev-shadow.md`): write `items.jsonl`, one line per heading group with 3+ copies and
-  more than one variant (a single variant has no difference to explain), `{"id": "<heading>",
-  "state": {"heading": "<heading>", "copies": "<N> copies, <V> variants, largest <P>%",
-  "variants": "<each variant's body once, from one member file>"}}`, the bodies separated by a
-  `---` line. The cause is yours: assign every group its cause and write it to `verdicts.jsonl`
-  FIRST (`{"id": "<heading>", "verdict": {"cause": "substantive_drift"}}`, one of `names_project`,
+  `references/jev-shadow.md`; both files in a fresh `D=$(mktemp -d)` outside any repo, since they
+  hold section bodies unredacted): write `$D/items.jsonl`, one line per heading group with 3+ copies
+  and more than one variant (a single variant has no difference to explain), `{"id": "<heading>",
+  "state": {"heading": "<heading>", "copies": "<N> copies, <V> variants, largest <P>%", "variants":
+  "<each variant's body once, from one member file>"}}`, the bodies separated by a `---` line. The
+  cause is yours: assign every group its cause and write it to `$D/verdicts.jsonl` FIRST (`{"id":
+  "<heading>", "verdict": {"cause": "substantive_drift"}}`, one of `names_project`,
   `whitespace_only`, `substantive_drift`, `pointer_only`, `all_unique` or `none`, in table order;
   none left out, since every group is split), then `jev_shadow.py run --site consolidate-cause
-  --items items.jsonl --verdicts verdicts.jsonl`. It prints counts only. Route each group by your
-  own cause, whatever `run` printed or exited with.
+  --items "$D/items.jsonl" --verdicts "$D/verdicts.jsonl"`, then `rm -rf "$D"`. `run` prints counts
+  only. Route each group by your own cause, whatever `run` printed or exited with.
 
 ## 2. Verify - a correctness review, not a popularity contest
 

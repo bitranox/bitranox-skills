@@ -395,13 +395,15 @@ STEP D - FINAL VERIFICATION:
     count.
   - **Jev shadow on that judgment** (only when `jev_shadow.py status` exits 0; home
     `<plugin>/skills/meta-self-improve/`, launch via `hooks/run-python.sh`; procedure in its
-    `references/jev-shadow.md`): write `items.jsonl`, one `{"id": "<file:line>", "state": {"hit":
-    "<the grep line>", "context": "<the code around it>"}}` per hit, and YOUR verdict for every
-    hit to `verdicts.jsonl` FIRST (`{"id": "<file:line>", "verdict": {"real_violation": true}}`
-    for a real violation crossing a function or module boundary, `false` for a permitted
+    `references/jev-shadow.md`; both files in a fresh `D=$(mktemp -d)` outside the repo, since they
+    hold the code lines unredacted): write `$D/items.jsonl`, one `{"id": "<file:line>", "state":
+    {"hit": "<the grep line>", "context": "<the code around it>"}}` per hit, and YOUR verdict for
+    every hit to `$D/verdicts.jsonl` FIRST (`{"id": "<file:line>", "verdict": {"real_violation":
+    true}}` for a real violation crossing a function or module boundary, `false` for a permitted
     exception; none left out, since every hit is judged), then `jev_shadow.py run --site
-    data-arch-dict --items items.jsonl --verdicts verdicts.jsonl`. It prints counts only. Decide
-    which hits are real violations from your own verdicts, whatever `run` printed or exited with.
+    data-arch-dict --items "$D/items.jsonl" --verdicts "$D/verdicts.jsonl"`, then `rm -rf "$D"`.
+    `run` prints counts only. Decide which hits are real violations from your own verdicts, whatever
+    `run` printed or exited with.
   - If a real violation is found: GOTO STEP A
   - If clean:
     * Update state file: all files status = "clean"

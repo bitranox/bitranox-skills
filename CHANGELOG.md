@@ -69,6 +69,19 @@ two "versions with no entry" notes came to sit in this file disagreeing with it.
   `jev_shadow_sites.py`.
 - `guard_replay.py` docstrings describe the current code: `write_firings` says which keys
   `jev_shadow.py items` reads and what `transcript` and `cwd` are for.
+- All eleven Jev shadow bullets, across nine skills, put `items.jsonl` and `verdicts.jsonl` (and
+  `guard-firing`'s `firings.jsonl`) in a fresh `mktemp -d` directory outside any repo and remove
+  it after `run`. The files hold unredacted text and were written to the cwd, which can be a
+  project checkout. `meta-self-improve/references/jev-shadow.md` gains the matching procedure step.
+- The dream skills' `jev shadow:` report line has four forms, defined once in
+  `references/jev-shadow.md`, "The report line": counts (also for a `run` exit 1, whose counts say
+  Jev answered none), `off (<reason>)`, `no items`, `error <message>`. meta-dream-tree step 11,
+  meta-dream-crosstree step 8 (`no candidates` is now `no items`) and the verification contract in
+  `meta-dream-tree/references/dream-core.md` point at it; the contract scopes the line to runs that
+  have shadow sites.
+- The `classifier_skills` knob row in `docs/reference.md` and `meta-memory-settings` lists what is
+  sent, as the other classifier rows do. `references/jev-shadow.md` says `run` holds the step for as
+  long as Jev takes, up to 3600 seconds.
 
 ## [7.39.2]
 
