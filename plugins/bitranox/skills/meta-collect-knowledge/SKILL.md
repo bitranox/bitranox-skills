@@ -43,6 +43,20 @@ unknown, defer - a blind gather pulls noise.
 2. **Stage 2 - inspect (model, context-isolated).** Dispatch a `sonnet` subagent to read the
    candidate files and return only what is genuinely useful to THIS project, privacy-scrubbed;
    discard near-misses. (Tier per `bitranox:process-agents-subagent-driven-development`.)
+   - **Jev shadow on that keep/discard** (only when `jev_shadow.py status` exits 0; home
+     `<plugin>/skills/meta-self-improve/`, launch via `hooks/run-python.sh`; procedure in its
+     `references/jev-shadow.md`): the dispatch asks the subagent for three things. (1) Its reply
+     as above: the useful knowledge, privacy-scrubbed - what stage 3 imports. (2) `items.jsonl`,
+     written by the SUBAGENT itself at a path you give it, one line per candidate, `{"id":
+     "<candidate path>", "state": {"project": "<the scope descriptor or topic>", "candidate":
+     "<the note's full text as read, not a summary>"}}` (the tool redacts secrets and caps it
+     before sending), so full texts never pass through your context. (3) Keep or discard for
+     EVERY candidate. The subagent's keep/discard is the verdict: you, the main agent, write it
+     to `verdicts.jsonl` FIRST (`{"id": "<candidate path>", "verdict": {"useful_here": true}}`
+     for keep, `false` for discard; none left out, since every candidate is judged), then
+     `jev_shadow.py run --site collect-relevance --items <that path> --verdicts verdicts.jsonl`.
+     It prints counts only. Import what the subagent kept, whatever `run` printed or exited
+     with; `report` waits until the gather is finished.
 3. **Stage 3 - import by the tree rules:**
    - **Same tree, useful beyond this project** -> LIFT to the lowest common ancestor level
      (engine `move`/`add` at that level; honor the promotion corroboration gate; keep it
