@@ -69,7 +69,7 @@ two "versions with no entry" notes came to sit in this file disagreeing with it.
   `jev_shadow_sites.py`.
 - `guard_replay.py` docstrings describe the current code: `write_firings` says which keys
   `jev_shadow.py items` reads and what `transcript` and `cwd` are for.
-- All eleven Jev shadow bullets, across nine skills, put `items.jsonl` and `verdicts.jsonl` (and
+- All eleven Jev shadow bullets, across eight skills, put `items.jsonl` and `verdicts.jsonl` (and
   `guard-firing`'s `firings.jsonl`) in a fresh `mktemp -d` directory outside any repo and remove
   it after `run`. The files hold unredacted text and were written to the cwd, which can be a
   project checkout. `meta-self-improve/references/jev-shadow.md` gains the matching procedure step.
