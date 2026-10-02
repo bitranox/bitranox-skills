@@ -775,3 +775,62 @@ def test_an_unreadable_subdirectory_is_listed_as_skipped(tmp_path):
         locked.chmod(0o755)
     assert report["files_read"] == 1
     assert any("locked" in s for s in report["skipped"]), report["skipped"]
+
+
+# --- --firings writes every firing as JSONL: the interface Task 3 reads -------------------------
+# Task 3's `jev_shadow.py items --site guard-firing` reads this file, so its line shape is an
+# interface, not a convenience: exactly the keys id, transcript, cwd, command, error.
+
+def test_firings_writes_exactly_the_firing_ids_with_their_transcript_paths(tmp_path):
+    """A two-transcript corpus, a predicate firing on 3 of the calls across both files."""
+    one = tmp_path / "one.jsonl"
+    two = tmp_path / "two.jsonl"
+    one.write_text(_mk([_use("a1", "fire alpha"), _use("a2", "quiet")]), encoding="utf-8")
+    two.write_text(_mk([_use("b1", "fire beta"), _use("b2", "fire gamma"),
+                        _use("b3", "quiet too")]), encoding="utf-8")
+    out = tmp_path / "firings.jsonl"
+
+    report = G.replay(str(tmp_path), lambda cmd: cmd.startswith("fire"),
+                      firings_path=str(out))
+
+    assert report["fires"] == 3
+    lines = [json.loads(line) for line in out.read_text(encoding="utf-8").splitlines() if line]
+    assert len(lines) == 3
+    assert {rec["id"] for rec in lines} == {"a1", "b1", "b2"}
+    by_id = {rec["id"]: rec for rec in lines}
+    assert by_id["a1"]["transcript"] == str(one)
+    assert by_id["b1"]["transcript"] == str(two)
+    assert by_id["b2"]["transcript"] == str(two)
+    for rec in lines:
+        assert set(rec.keys()) == {"id", "transcript", "cwd", "command", "error"}
+        assert rec["cwd"] == "/repo"
+        assert rec["error"] is None
+
+
+def test_firings_is_optional_and_writes_nothing_when_not_requested(tmp_path):
+    (tmp_path / "one.jsonl").write_text(_mk([_use("a1", "fire")]), encoding="utf-8")
+    report = G.replay(str(tmp_path), lambda cmd: cmd.startswith("fire"))
+    assert "fires" in report
+    assert not (tmp_path / "firings.jsonl").exists()
+
+
+def test_sample_output_is_unchanged_when_firings_is_also_requested(tmp_path):
+    (tmp_path / "one.jsonl").write_text(_mk([_use("a1", "fire one"), _use("a2", "fire two")]),
+                                        encoding="utf-8")
+    out = tmp_path / "firings.jsonl"
+    without = G.replay(str(tmp_path), lambda cmd: cmd.startswith("fire"), sample=2)
+    with_firings = G.replay(str(tmp_path), lambda cmd: cmd.startswith("fire"), sample=2,
+                            firings_path=str(out))
+    assert with_firings["samples"] == without["samples"]
+
+
+def test_the_cli_firings_flag_writes_the_file(tmp_path, capsys):
+    mod = _module(tmp_path, FIRE_ON_FIRE)
+    root = _corpus(tmp_path, [_use("t1", "fire"), _use("t2", "quiet")])
+    out = tmp_path / "firings.jsonl"
+    rc = G.main(["--module", mod, "--root", root, "--firings", str(out)])
+    assert rc == 0
+    lines = [json.loads(line) for line in out.read_text(encoding="utf-8").splitlines() if line]
+    assert len(lines) == 1
+    assert lines[0]["id"] == "t1"
+    assert lines[0]["command"] == "fire"

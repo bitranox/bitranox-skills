@@ -56,6 +56,7 @@ import argparse
 import fnmatch
 import importlib.util
 import inspect
+import json
 import os
 import re
 import sys
@@ -151,8 +152,13 @@ def _records(text: str):
     return text.split("\n")
 
 
-def _extract(text: str, tool: str, field: str):
-    """`(calls, calls_without_field)` for one transcript - see `extract_calls`."""
+def _extract(text: str, tool: str, field: str, transcript: str = None):
+    """`(calls, calls_without_field)` for one transcript - see `extract_calls`.
+
+    `transcript` is carried onto every call unchanged: it is the path Task 3's
+    `items --site guard-firing` needs to find the surrounding turn again, and `_extract` is the
+    only place that knows which file a call came from.
+    """
     calls, errors, without_field = [], {}, 0
     for line in _records(text):
         if not line.strip():
@@ -180,7 +186,7 @@ def _extract(text: str, tool: str, field: str):
                 command = payload.get(field)
                 if isinstance(command, str):
                     calls.append({"id": block.get("id"), "command": command,
-                                  "cwd": cwd, "error": None})
+                                  "cwd": cwd, "error": None, "transcript": transcript})
                 else:
                     without_field += 1
             elif block.get("type") == "tool_result" and block.get("is_error"):
@@ -191,17 +197,20 @@ def _extract(text: str, tool: str, field: str):
     return calls, without_field
 
 
-def extract_calls(text: str, tool: str = "Bash", field: str = None):
+def extract_calls(text: str, tool: str = "Bash", field: str = None, transcript: str = None):
     """Every call of `tool` in one transcript, each with the cwd it ran under and its error.
 
     `field` overrides which input field is handed to the predicate. The default is the tool's
     WRITTEN payload; a guard about WHERE a write lands is judged on `file_path` instead, and
     pricing it on the content would measure the wrong question while reporting a confident rate.
 
+    `transcript` is the path this text came from, carried onto every call unchanged (see
+    `write_firings`); it is `None` when a caller hands in raw text with no file behind it.
+
     A malformed line is skipped rather than fatal: a transcript being written while it is read
     routinely ends mid-line, and aborting there would silently truncate the corpus.
     """
-    return _extract(text, tool, field or payload_field(tool))[0]
+    return _extract(text, tool, field or payload_field(tool), transcript=transcript)[0]
 
 
 # What a predicate's SECOND positional parameter may be filled with, keyed by its NAME. Anything
@@ -368,6 +377,10 @@ def classify(calls, predicate, sample: int = 0, block_pattern: str = DEFAULT_BLO
         # guard was measured. Leaving this implicit is what let a cwd-as-tool_name run pass as real.
         "forwarded_second_arg": second,
         "samples": samples,
+        # The full firing calls, for `write_firings` - never printed: `_run` pops this before
+        # rendering or JSON-dumping the report, so it cannot bloat the envelope or double as the
+        # (deliberately narrow) `samples` view.
+        "fire_calls": fires,
     }
 
 
@@ -408,7 +421,8 @@ def load_predicate(path: str, func_name: str):
 
 
 def replay(root: str, predicate, tool: str = "Bash", sample: int = 0,
-           block_pattern: str = DEFAULT_BLOCK_PATTERN, field: str = None):
+           block_pattern: str = DEFAULT_BLOCK_PATTERN, field: str = None,
+           firings_path: str = None):
     """Walk every *.jsonl below `root` and classify every DISTINCT call of `tool` found in them.
 
     Distinct matters: resuming or forking a session copies the earlier transcript into a new file,
@@ -419,6 +433,9 @@ def replay(root: str, predicate, tool: str = "Bash", sample: int = 0,
     The tool is checked BEFORE the walk, so an unknown `--tool` is refused whatever the corpus -
     not only when a file happened to be read. A `field` that NONE of the tool's calls carry is
     refused too (`UnreadableField`): a typo must not read as an empty corpus.
+
+    `firings_path`, when given, writes every firing to that path as JSONL (see `write_firings`) -
+    independently of `sample`, which stays a human spot-check and is unchanged by this.
     """
     field = field or payload_field(tool)
     base = Path(root).expanduser()
@@ -431,7 +448,7 @@ def replay(root: str, predicate, tool: str = "Bash", sample: int = 0,
             skipped.append("%s: %s" % (f, exc))
             continue
         files_read += 1
-        file_calls, missing = _extract(text, tool, field)
+        file_calls, missing = _extract(text, tool, field, transcript=str(f))
         without_field += missing
         for call in file_calls:
             if call["id"] is not None:
@@ -452,7 +469,26 @@ def replay(root: str, predicate, tool: str = "Bash", sample: int = 0,
     report["field"] = field
     report["skipped"] = skipped
     report["root"] = str(base)
+    if firings_path:
+        write_firings(firings_path, report["fire_calls"])
     return report
+
+
+def write_firings(path: str, fire_calls) -> None:
+    """Write every firing as one JSON object per line: the interface Task 3's
+    `jev_shadow.py items --site guard-firing` reads.
+
+    Exactly the keys `id`, `transcript`, `cwd`, `command`, `error` - no more, no less, so a reader
+    on the other end of this file can rely on the shape without knowing this script's internals.
+    One compact object per line (no indentation): this is JSONL, not a pretty-printed report.
+    """
+    with open(path, "w", encoding="utf-8") as fh:
+        for call in fire_calls:
+            record = {"id": call.get("id"), "transcript": call.get("transcript"),
+                      "cwd": call.get("cwd"), "command": call.get("command"),
+                      "error": call.get("error")}
+            fh.write(json.dumps(record, ensure_ascii=False))
+            fh.write("\n")
 
 
 def _corpus_files(base: Path, skipped: list):
@@ -500,6 +536,10 @@ def _parse(argv):
                          "classify every firing for that.")
     ap.add_argument("--block-pattern", default=DEFAULT_BLOCK_PATTERN,
                     help="regex marking a tool_result as a GATE block (default: %(default)s)")
+    ap.add_argument("--firings", default=None, metavar="OUT.jsonl",
+                    help="write every firing to this path, one JSON object per line "
+                         "({id, transcript, cwd, command, error}) - independent of --sample, "
+                         "which stays a human spot-check")
     ap.add_argument("--json", action="store_true", help="emit the report as a JSON envelope")
     return ap.parse_args(argv)
 
@@ -551,11 +591,16 @@ def _run(args) -> int:
     try:
         predicate = load_predicate(args.module, args.func)
         report = replay(args.root, predicate, tool=args.tool, sample=args.sample,
-                        block_pattern=args.block_pattern, field=args.field)
+                        block_pattern=args.block_pattern, field=args.field,
+                        firings_path=args.firings)
     except (UsageError, UnsupportedTool, UnreadableField) as exc:
         # A refusal the caller can read, not a traceback: the whole point of raising here is that
         # an unreadable tool or field must not be reported as an empty corpus.
         return _refuse(args, exc)
+    # Never printed or JSON-dumped: the full firing list is for `write_firings` alone, written
+    # inside `replay` itself. Keeping it in the report past this point would bloat the envelope
+    # with exactly the detail `samples` exists to keep narrow.
+    report.pop("fire_calls", None)
     rc = exit_code(report)
     if rc == 3:
         print("guard_replay: read %d file(s) and found no %s calls - nothing was replayed"

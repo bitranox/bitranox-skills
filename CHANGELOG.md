@@ -29,6 +29,15 @@ than the change, so entries reconstructed from them would read like coverage wit
 a hole nobody has drawn a line under is one that gets rediscovered and half-filled - which is how
 two "versions with no entry" notes came to sit in this file disagreeing with it.
 
+## [7.37.0]
+
+### Added
+
+- `compuse-toolbox`'s `guard_replay.py` gained `--firings OUT.jsonl`: writes every firing to that
+  path as JSONL, one object per line (`id`, `transcript`, `cwd`, `command`, `error`), independent
+  of `--sample`. Each call extracted from a transcript now carries the path of the transcript it
+  came from, so a firing can be traced back to its surrounding turn.
+
 ## [7.36.0]
 
 ### Added
