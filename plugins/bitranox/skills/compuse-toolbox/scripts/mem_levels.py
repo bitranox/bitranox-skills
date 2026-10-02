@@ -132,6 +132,20 @@ def slugs_in(text: str) -> list[str]:
     return [p.slug for p in _pointers_in(text)]
 
 
+def _carries_block(text: str) -> bool:
+    """Whether a level file holds a managed pointer block, current or legacy - the engine's own
+    curated-level test (`memory_engine._carries_pointer_block`)."""
+    return uuid_store.INDEX_BEGIN in text or uuid_store.LEGACY_INDEX_BEGIN in text
+
+
+def _is_level(text: str, pointers: list) -> bool:
+    """A level carries a managed block (even an empty one) or at least one pointer the engine's
+    parser reads. A file with neither - a harness pre-creating a stub `CLAUDE.local.md` in a
+    scratch workspace - is not a level: counting it put this tool's level total out of step with
+    `reconcile_memory_index.py --check-tree` (113 against 109 on a real tree)."""
+    return bool(pointers) or _carries_block(text)
+
+
 def _read_levels(root: Path, report: Report) -> None:
     for lf in sorted(_iter_level_files(root, report.unreadable)):
         rel = lf.parent.relative_to(root).as_posix() or "."
@@ -142,6 +156,8 @@ def _read_levels(root: Path, report: Report) -> None:
             report.unreadable.append("%s: %s" % (lf, exc.strerror or exc))
             continue
         pointers = _pointers_in(text)
+        if not _is_level(text, pointers):
+            continue
         report.levels[rel] = [p.slug for p in pointers]
         report.legacy.update({p.slug: p.uuid for p in pointers if p.legacy})
         report.legacy_uuids.update(p.uuid for p in pointers if p.legacy)

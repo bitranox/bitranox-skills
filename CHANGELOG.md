@@ -29,6 +29,27 @@ than the change, so entries reconstructed from them would read like coverage wit
 a hole nobody has drawn a line under is one that gets rediscovered and half-filled - which is how
 two "versions with no entry" notes came to sit in this file disagreeing with it.
 
+## [7.34.0]
+
+### Added
+
+- `statusrot.py scan --tree <dir>` (and `clear --tree`): sweeps every curated level of the tree
+  holding `<dir>`, siblings included, through the engine's own tree walk
+  (`memory_engine.curated_levels_under`). A tree dream previously had to hand-build one `--level`
+  flag per level from a slow `find`. A dir with no memory store above it, or a tree with a path the
+  walk could not read, exits 2 rather than scanning less.
+
+### Fixed
+
+- `mem_levels.py` no longer counts a `CLAUDE.local.md` that holds neither a managed block nor a
+  pointer (a harness pre-creating stub files in scratch workspaces). It reported 113 levels on a
+  real tree where `reconcile_memory_index.py --check-tree` reported 109.
+- `audit_skills.py --skills-dir` on a project-local `<repo>/.claude/skills`: the room now carries
+  `REPO_FILES.txt`, the owning repository's paths (names only, no content), and the reviewer is told
+  a repo-relative path listed there resolves. Staging only the skills dir made every `scripts/`,
+  `tests/` or `docs/` path the skill names read as DANGLING (5 of 11 findings on one real skill).
+  `~/.claude/skills` has the same shape but is not a git work tree root, so it gets no manifest.
+
 ## [7.33.0]
 
 ### Added

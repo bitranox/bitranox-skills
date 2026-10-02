@@ -270,3 +270,54 @@ class TestLevelEncoding:
                               capture_output=True, check=False, env=env)
         assert b"Traceback" not in proc.stderr, proc.stderr.decode("utf-8", "replace")
         assert proc.returncode == 0
+
+
+def _curated(level_dir: Path, *lines: str) -> None:
+    """A level carrying a managed pointer block, which is what the engine counts as a level."""
+    level_dir.mkdir(parents=True, exist_ok=True)
+    (level_dir / "CLAUDE.md").write_text("x\n", encoding="utf-8")
+    (level_dir / "CLAUDE.local.md").write_text(
+        statusrot.uuid_store.INDEX_BEGIN + "\n## Memory index\n" + "\n".join(lines)
+        + "\n" + statusrot.uuid_store.INDEX_END + "\n", encoding="utf-8")
+
+
+class TestTreeMode:
+    """A tree dream sweeps the WHOLE tree, siblings included. With only --level and --chain, a
+    caller had to enumerate every level by hand (109 --level flags from a slow find), which is
+    the hand-rolled walk the engine's single tree walk exists to replace."""
+
+    def _tree(self, tmp_path: Path) -> Path:
+        anchor = tmp_path / "anchor"
+        _curated(anchor, "- [T](mem:top-fact) - When X, know it is deployed.")
+        _curated(anchor / "a", "- [T](mem:a-fact) - When X, know it is shipped.")
+        _curated(anchor / "b", "- [T](mem:b-fact) - When X, do Y.")
+        (anchor / ".claude-memory" / "facts").mkdir(parents=True)
+        stub = anchor / "runs" / "w"
+        stub.mkdir(parents=True)
+        (stub / "CLAUDE.local.md").write_text("<!-- stub -->\n", encoding="utf-8")
+        return anchor
+
+    def test_tree_scans_every_curated_level_from_any_dir_inside_it(self, tmp_path):
+        anchor = self._tree(tmp_path)
+        proc = _cli("scan", "--tree", str(anchor / "a"), "--json")
+        assert proc.returncode == 0, proc.stderr
+        data = json.loads(proc.stdout)["data"]
+        assert data["total_pointers"] == 3, data
+        flagged = {c["slug"] for kind in data["candidates"].values() for c in kind}
+        assert flagged == {"top-fact", "a-fact"}
+
+    def test_tree_without_a_memory_store_is_refused(self, tmp_path):
+        bare = tmp_path / "bare"
+        _curated(bare, "- [T](mem:s) - When X, it is deployed.")
+        proc = _cli("scan", "--tree", str(bare), "--json")
+        assert proc.returncode == 2
+        assert json.loads(proc.stdout)["ok"] is False
+
+    def test_clear_tree_records_a_slug_from_a_sibling_level(self, tmp_path):
+        anchor = self._tree(tmp_path)
+        before = json.loads(_cli("scan", "--tree", str(anchor / "b"), "--json").stdout)["data"]
+        assert "a-fact" in before["new_or_changed"], before
+        proc = _cli("clear", "--tree", str(anchor / "b"), "--slug", "a-fact")
+        assert proc.returncode == 0, proc.stderr
+        after = json.loads(_cli("scan", "--tree", str(anchor), "--json").stdout)["data"]
+        assert "a-fact" not in after["new_or_changed"] and "top-fact" in after["new_or_changed"]

@@ -251,3 +251,57 @@ def test_audit_all_accepts_a_skills_dir_instead_of_a_plugin(tmp_path):
 def audit_all_via(tmp_path, claude, runner):
     return A.audit_all(None, tmp_path / "room", runner=runner, log=lambda *a: None,
                                   skills_dir=claude / "skills")
+
+
+# ---- project-local skills: the repo they run in is reachable ------------------------------------
+
+def _project_repo(tmp_path):
+    """A git repo carrying a project-local skill that names a repo script and a missing doc."""
+    import subprocess
+    repo = tmp_path / "proj"
+    skill = repo / ".claude" / "skills" / "bench"
+    skill.mkdir(parents=True)
+    (skill / "SKILL.md").write_text(
+        "# bench\nRun `python scripts/run_bench.py`, then read docs/missing.md.\n", encoding="utf-8")
+    (repo / "scripts").mkdir()
+    (repo / "scripts" / "run_bench.py").write_text("SECRET_CONTENT = 1\n", encoding="utf-8")
+    subprocess.run(["git", "init", "-q", str(repo)], check=True)
+    return repo
+
+
+def test_a_project_local_skills_dir_stages_the_repo_path_manifest(tmp_path):
+    """A project-local skill runs from its repo root, so `scripts/run_bench.py` resolves there.
+    Staging only the skills dir made every such path read DANGLING (5 of 11 findings on one real
+    skill were this). The room carries the repo's PATHS - never their content - so the reviewer
+    can tell a real dangling path from one that simply was not copied."""
+    repo = _project_repo(tmp_path)
+    room = A.prepare_room_from_skills(repo / ".claude" / "skills", tmp_path / "room")
+    manifest = (room / A.REPO_MANIFEST).read_text(encoding="utf-8")
+    assert "scripts/run_bench.py" in manifest.splitlines()
+    assert "docs/missing.md" not in manifest
+    assert "SECRET_CONTENT" not in manifest
+    assert not (room / "scripts").exists(), "the clean room still holds no repo content"
+
+
+def test_a_skills_dir_outside_a_repo_gets_no_manifest(tmp_path):
+    """`~/.claude/skills` also ends in `.claude/skills`; its owner is a home dir, not a repo."""
+    claude = _loose(tmp_path)
+    room = A.prepare_room_from_skills(claude / "skills", tmp_path / "room")
+    assert not (room / A.REPO_MANIFEST).exists()
+
+
+def test_a_project_local_review_is_told_the_repo_paths_resolve(tmp_path):
+    repo = _project_repo(tmp_path)
+    prompts = []
+
+    def runner(prompt, cwd, model, timeout):
+        prompts.append(prompt)
+        return "NO FINDINGS"
+
+    A.audit_all(None, tmp_path / "room", runner=runner, log=lambda *a: None,
+                skills_dir=repo / ".claude" / "skills")
+    flat = " ".join(prompts[0].split())
+    assert A.REPO_MANIFEST in flat
+    assert "PROJECT-LOCAL" in flat
+    # Control: a plugin review keeps the install-unit contract and never mentions a manifest.
+    assert A.REPO_MANIFEST not in A.build_prompt("x")

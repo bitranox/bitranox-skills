@@ -31,6 +31,7 @@ see tree_support), never merely the nearest one.
 
 Run (from the plugin root):
   `uv run skills/meta-dream-tree/statusrot.py scan --chain /path/to/project`
+  `uv run skills/meta-dream-tree/statusrot.py scan --tree /path/to/project`   # whole tree
   `uv run skills/meta-dream-tree/statusrot.py scan --level a/CLAUDE.local.md --json`
 It needs no third-party package, runs no command of the caller's, and sets UTF-8 on its own output
 streams, so any Python 3.10+ runs it identically - the plugin's run-python.sh launcher, which the
@@ -362,6 +363,32 @@ def chain_levels(start: Path) -> list[Path]:
         cur = cur.parent
 
 
+class TreeUnusable(Exception):
+    """`--tree` cannot be answered: no store to anchor it, or part of the tree could not be read."""
+
+
+def tree_levels(start: Path) -> list[Path]:
+    """Every curated level file in the tree holding `start`, siblings included.
+
+    The anchor is the store the engine uses (tree_support.store_anchor), and the levels come from
+    the engine's own tree walk (`memory_engine.curated_levels_under`) - a managed block makes a
+    level, so a harness stub does not count, and the total agrees with
+    `reconcile_memory_index.py --check-tree`. A path the walk could not read raises rather than
+    shrinking the scan: a sweep missing a subtree reads exactly like a clean one.
+    """
+    # Imported here, not at module top: the engine is heavy and only this mode needs it.
+    import memory_engine
+
+    anchor = store_anchor(start, uuid_store.resolve_anchor)
+    if anchor is None:
+        raise TreeUnusable(f"--tree {start}: no memory store above it (no .claude-memory/)")
+    unreadable: list[str] = []
+    dirs = memory_engine.curated_levels_under(anchor, unreadable)
+    if unreadable:
+        raise TreeUnusable("--tree could not read: " + ", ".join(sorted(map(str, unreadable))))
+    return sorted(Path(d).resolve() / "CLAUDE.local.md" for d in dirs)
+
+
 def _clear_error(msg: str, as_json: bool) -> int:
     if as_json:
         print(json.dumps({"ok": False, "command": "clear", "error": msg}, indent=2))
@@ -508,6 +535,8 @@ def _add_level_args(p: argparse.ArgumentParser) -> None:
                    help="a CLAUDE.local.md to scan (repeatable)")
     p.add_argument("--chain", type=Path,
                    help="walk UP from this dir, scanning every CLAUDE.local.md found")
+    p.add_argument("--tree", type=Path,
+                   help="scan every curated level of the tree holding this dir, siblings included")
     p.add_argument("--json", action="store_true", help="emit a JSON envelope")
 
 
@@ -533,15 +562,22 @@ def main(argv: list[str] | None = None) -> int:
     levels: list[Path] = list(dict.fromkeys(Path(p).resolve() for p in args.level))
     if args.chain:
         levels += [p for p in chain_levels(args.chain) if p not in levels]
+    if args.tree:
+        if not Path(args.tree).is_dir():
+            return _usage_error(args, f"--tree {args.tree} is not an existing directory")
+        try:
+            levels += [p for p in tree_levels(args.tree) if p not in levels]
+        except TreeUnusable as exc:
+            return _usage_error(args, str(exc))
     if not levels:
-        return _usage_error(args, "no levels given (--level or --chain)")
+        return _usage_error(args, "no levels given (--level, --chain or --tree)")
 
     try:
         result = scan(levels)
     except LevelUnreadable as exc:
         return _usage_error(args, str(exc))
 
-    anchor = args.chain or levels[0].parent
+    anchor = args.chain or args.tree or levels[0].parent
     bl_path = baseline_path(anchor)
     if args.cmd == "clear":
         return _do_clear(result, bl_path, args)

@@ -132,6 +132,52 @@ Then end with a section headed "Skill gaps": what you could not turn into a conc
 you had to guess, and anywhere the text was silent or said two different things.
 """
 
+# The file a project-local review room carries: the owning repo's paths, one per line, no content.
+REPO_MANIFEST = "REPO_FILES.txt"
+
+PROJECT_LOCAL_NOTE = """
+PROJECT-LOCAL SKILL: this skill is not shipped in a plugin. It lives in a repository's
+`.claude/skills/` and runs from that repository's root, so a repo-relative path it names
+(`scripts/x.py`, `tests/`, `docs/y.md`, `CHANGELOG.md`) IS reachable when it exists there. Only
+the skills were copied here; `{manifest}` lists every path in that repository, one per line.
+Before reporting a repo-relative path as DANGLING, look it up in `{manifest}`: listed means it
+resolves (do not report it), absent means it is DANGLING. The files' contents are not available,
+so do not report on what a listed file does or contains.
+"""
+
+
+def owning_repo(skills_dir):
+    """The repository a project-local `<repo>/.claude/skills` dir runs in, else None.
+
+    `~/.claude/skills` has the same shape, so the shape alone is not enough: the dir above
+    `.claude` must be the root of a git work tree, which a home dir is not."""
+    p = Path(skills_dir).resolve()
+    if p.name != "skills" or p.parent.name != ".claude":
+        return None
+    repo = p.parent.parent
+    top = _git(repo, "rev-parse", "--show-toplevel")
+    if top is None or Path(top.strip()).resolve() != repo:
+        return None
+    return repo
+
+
+def _git(repo, *args):
+    """stdout of a git command in `repo`, or None when git is absent or the command fails."""
+    try:
+        proc = subprocess.run(["git", "-C", str(repo), *args], capture_output=True, text=True,
+                              encoding="utf-8", errors="replace",
+                              env={**os.environ, "LC_ALL": "C"}, check=False)
+    except OSError:
+        return None
+    return proc.stdout if proc.returncode == 0 else None
+
+
+def repo_paths(repo):
+    """Every path a checkout of `repo` holds: tracked, plus untracked files git does not ignore
+    (a script added but not yet committed is still there for the skill to run)."""
+    out = _git(repo, "ls-files", "-z", "--cached", "--others", "--exclude-standard")
+    return sorted({p for p in (out or "").split("\0") if p})
+
 # ---------------------------------------------------------------------------------------------
 # Script sweep
 # ---------------------------------------------------------------------------------------------
@@ -284,9 +330,13 @@ run anything must say so here rather than return a clean report.
 """
 
 
-def build_prompt(name, prefix="bitranox"):
-    """The reviewer contract for one skill. `prefix` is the plugin's skill namespace."""
-    return PROMPT.format(name=name, prefix=prefix)
+def build_prompt(name, prefix="bitranox", project_local=False):
+    """The reviewer contract for one skill. `prefix` is the plugin's skill namespace;
+    `project_local` adds the note that the owning repo's paths resolve (see REPO_MANIFEST)."""
+    prompt = PROMPT.format(name=name, prefix=prefix)
+    if project_local:
+        prompt += PROJECT_LOCAL_NOTE.format(manifest=REPO_MANIFEST)
+    return prompt
 
 
 def _bullets(items, empty="(none)"):
@@ -791,7 +841,8 @@ def _subprocess_runner(prompt, cwd, model, timeout):
 def audit_one(name, room, reports_dir, model="sonnet", timeout=900, prefix="bitranox",
               runner=_subprocess_runner):
     """Review one skill and write its report. `runner` is the injectable reviewer seam."""
-    out = runner(build_prompt(name, prefix), room, model, timeout)
+    project_local = (Path(room) / REPO_MANIFEST).is_file()
+    out = runner(build_prompt(name, prefix, project_local), room, model, timeout)
     path = Path(reports_dir) / ("%s.audit.txt" % name)
     stored = store_report(path, name, out)
     return name, count_findings(stored)
@@ -841,6 +892,14 @@ def prepare_room_from_skills(skills_dir, room_root, hooks_dir=None, reuse=False)
         shutil.copytree(Path(skills_dir), room / "skills", ignore=ignore)
     if hooks_dir and Path(hooks_dir).is_dir() and not (room / "hooks").exists():
         shutil.copytree(Path(hooks_dir), room / "hooks", ignore=ignore)
+    repo = owning_repo(skills_dir)
+    if repo is not None:
+        # Paths only: the room stays clean of repo content, yet a repo-relative path the skill
+        # names can be told apart from one that does not exist.
+        (room / REPO_MANIFEST).write_text("\n".join(repo_paths(repo)) + "\n", encoding="utf-8")
+    else:
+        # A reused room may hold the manifest of an earlier project review.
+        (room / REPO_MANIFEST).unlink(missing_ok=True)
     return room
 
 

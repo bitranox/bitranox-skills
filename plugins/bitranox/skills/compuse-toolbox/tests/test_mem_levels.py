@@ -381,3 +381,22 @@ def test_an_unexpected_crash_exits_2_not_the_gate_answer_1(tmp_path, capsys, mon
     monkeypatch.setattr(sys, "stdout", Broken())
     rc = mem_levels.main(["--root", str(root), "--slug", "top-fact"])
     assert rc == 2 and "stream gone" in capsys.readouterr().err
+
+
+def test_a_level_file_without_a_managed_block_is_not_a_level(tmp_path):
+    """A harness can pre-create a stub CLAUDE.local.md (a comment, no pointer block) in a scratch
+    workspace. The engine's curated-level predicate (a managed block, current or legacy) does not
+    count it, so neither may this tool: counting it made the level total disagree with
+    `reconcile_memory_index.py --check-tree` (113 against 109 on a real tree), a gap a dream then
+    had to chase by hand. A block with no pointers is still a level - the control below."""
+    root = _tree(tmp_path / "t", {".": ["top-fact"], "empty": []})
+    stub = root / "runs" / "r1" / "workspace"
+    stub.mkdir(parents=True)
+    (stub / "CLAUDE.local.md").write_text("<!-- pre-created by the swarm harness -->\n",
+                                          encoding="utf-8")
+
+    report = mem_levels.scan(root)
+
+    assert "runs/r1/workspace" not in report.levels
+    assert report.levels["empty"] == []
+    assert set(report.levels) == {".", "empty"}
