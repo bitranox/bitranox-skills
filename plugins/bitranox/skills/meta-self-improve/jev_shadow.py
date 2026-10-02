@@ -50,7 +50,7 @@ import uuid
 from collections.abc import Generator, Iterator, Mapping
 from contextlib import contextmanager
 from dataclasses import dataclass
-from datetime import UTC, date, datetime
+from datetime import date, datetime, timezone
 from pathlib import Path
 from typing import Any
 
@@ -178,8 +178,13 @@ def gate_without_key(cfg: Mapping[str, object]) -> Gate:
 
 
 def with_key(gate: Gate) -> Gate:
-    """Add the key check (one subprocess, spends nothing) to a gate that has uvx."""
-    if gate.uvx is None:
+    """Add the key check (one subprocess, spends nothing) to a gate that is otherwise on.
+
+    A gate already off for the knob or for uvx is returned unchanged, its key unknown (None):
+    `status` opens every wired step, and on a machine that never opted in it must not start uvx,
+    which would resolve jev-judge from PyPI.
+    """
+    if gate.reason is not None or gate.uvx is None:
         return gate
     present, why = check_key(gate.uvx)
     reason = gate.reason
@@ -214,8 +219,8 @@ def _state_text(value: object) -> str:
 
 
 def _item(raw: object, site: sites.Site, where: str) -> sites.ShadowItem:
-    rec = rpt.as_record(raw)
-    state = None if rec is None else rpt.as_record(rec.get("state"))
+    rec = sites.as_record(raw)
+    state = None if rec is None else sites.as_record(rec.get("state"))
     if rec is None or state is None or "id" not in rec:
         raise ShadowError(f'{where} is not {{"id": ..., "state": {{...}}}}')
     if set(state) != set(site.state_fields):
@@ -259,8 +264,8 @@ def _valid_value(question: Mapping[str, Any], value: object) -> bool:
 
 
 def _verdict(site: sites.Site, raw: object, where: str) -> tuple[str, slog.Verdict]:
-    rec = rpt.as_record(raw)
-    answers = None if rec is None else rpt.as_record(rec.get("verdict"))
+    rec = sites.as_record(raw)
+    answers = None if rec is None else sites.as_record(rec.get("verdict"))
     if rec is None or answers is None or "id" not in rec:
         raise ShadowError(f'{where} is not {{"id": ..., "verdict": {{...}}}}')
     types = site.types()
@@ -317,7 +322,7 @@ def _read_rows(path: Path) -> dict[str, dict[str, Any]]:
         return {}
     rows: dict[str, dict[str, Any]] = {}
     for line in lines:
-        row = rpt.as_record(_decoded(line))
+        row = sites.as_record(_decoded(line))
         if row is not None and "id" in row:
             rows[str(row["id"])] = row
     return rows
@@ -326,8 +331,8 @@ def _read_rows(path: Path) -> dict[str, dict[str, Any]]:
 def _envelope_data(stdout: str) -> dict[str, Any]:
     """The `data` of jev-judge's --json envelope (its last stdout line), or {}."""
     lines = sites.jsonl_lines(stdout)
-    env = rpt.as_record(_decoded(lines[-1])) if lines else None
-    data = None if env is None else rpt.as_record(env.get("data"))
+    env = sites.as_record(_decoded(lines[-1])) if lines else None
+    data = None if env is None else sites.as_record(env.get("data"))
     return data or {}
 
 
@@ -342,6 +347,14 @@ def _failure(proc: subprocess.CompletedProcess[str] | None) -> str:
         return "jev-judge run could not start or timed out"
     detail = slog.short_reason(proc.stderr or proc.stdout)
     return f"jev-judge run exited {proc.returncode}: {detail}"
+
+
+def _run_failure(proc: subprocess.CompletedProcess[str] | None) -> str | None:
+    """How the run itself failed, or None for exit 0, and for exit 1 (a row failed: each row's
+    own reason records that, and the counts show it)."""
+    if proc is not None and proc.returncode in (0, 1):
+        return None
+    return _failure(proc)
 
 
 @dataclass(frozen=True)
@@ -378,6 +391,7 @@ def ask_jev(uvx: str, req: JevRequest) -> slog.JevRun:
         cost_usd=float(cost) if isinstance(cost, int | float) else None,
         input_tokens=tokens if isinstance(tokens, int) else 0,
         reason=None if rows else _failure(proc),
+        failure=_run_failure(proc),
     )
 
 
@@ -564,18 +578,25 @@ def _ask_and_log(args: argparse.Namespace, uvx: str, plan: _RunPlan) -> int:
         jev = ask_jev(
             uvx, JevRequest(plan.site, [i for i, _n in prepared], workdir, plan.model)
         )
-    now = datetime.now(UTC)
+    now = datetime.now(timezone.utc)
     ctx = _context(plan.site, uvx, jev, now)
     records = [
         slog.build_record(ctx, i, n, plan.verdicts.get(i.id)) for i, n in prepared
     ]
-    slog.append_records(records, now)
+    written = slog.append_records(records, now, run_id=ctx.run_id)
+    if written != slog.log_path(written.parent, now):
+        print(
+            f"jev_shadow: the shadow log was locked by another writer; this run's records "
+            f"went to {written.name}, which report reads too",
+            file=sys.stderr,
+        )
     counts = _counts(records, jev)
     answered = counts["jev_failed"] != counts["items"]
     if not answered:
         print(f"jev_shadow: {_no_answer_reason(records, jev)}", file=sys.stderr)
-    elif jev.reason:
-        print(f"jev_shadow: {jev.reason}", file=sys.stderr)
+    # A run that failed after writing some rows still answered; say how it failed all the same.
+    if jev.failure and jev.failure != jev.reason:
+        print(f"jev_shadow: {jev.failure}", file=sys.stderr)
     _emit(args, "run", answered, counts, _human_counts(counts))
     return EXIT_OK if answered else EXIT_NO
 

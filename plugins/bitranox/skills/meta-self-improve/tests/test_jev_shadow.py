@@ -13,7 +13,7 @@ import os
 import re
 import stat
 import sys
-from datetime import UTC, datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 import pytest
@@ -85,6 +85,10 @@ data = {"rows": len(rows), "answered": len(rows) - len(failed), "failed": failed
         "out": opt("--out"), "input_tokens": tokens, "cost_usd": tokens * 0.042 / 1e6,
         "redactions": 0, "models": ["jev-1.13"], "seconds": 0.1}
 print(json.dumps({"ok": not failed, "command": "run", "data": data, "skipped": []}))
+forced = os.environ.get("FAKE_JEV_EXIT")
+if forced:
+    sys.stderr.write("rate limit hit, stopped early\n")
+    sys.exit(int(forced))
 sys.exit(1 if failed else 0)
 """
 
@@ -554,7 +558,7 @@ def test_retention_drops_a_month_past_400_days_and_never_the_current_one(
     tmp_path, fake, home
 ):
     knob(home)
-    today = datetime.now(UTC).date()
+    today = datetime.now(timezone.utc).date()
     d = audit(home)
     d.mkdir(parents=True)
     old = d / _month_name(
@@ -577,7 +581,7 @@ def test_retention_drops_oldest_past_the_size_cap_but_not_the_current_month(
     tmp_path, fake, home
 ):
     knob(home)
-    today = datetime.now(UTC).date()
+    today = datetime.now(timezone.utc).date()
     d = audit(home)
     d.mkdir(parents=True)
     big = d / _month_name(today - timedelta(days=70))
@@ -596,7 +600,7 @@ def test_the_current_month_survives_even_when_it_alone_is_over_the_cap(
     tmp_path, fake, home
 ):
     knob(home)
-    today = datetime.now(UTC).date()
+    today = datetime.now(timezone.utc).date()
     d = audit(home)
     d.mkdir(parents=True)
     current = d / _month_name(today)
@@ -986,6 +990,20 @@ def test_status_says_whether_a_run_would_happen(fake, home, capsys):
     assert js.main(["status", "--json"]) == 0
     env = json.loads(capsys.readouterr().out)
     assert env["data"]["would_run"] is True and env["data"]["key"] is True
+
+
+@posix_only
+def test_status_with_the_knob_off_starts_nothing_and_reports_no_key_answer(
+    fake, home, capsys
+):
+    """Every wired step starts with `status`: with the default config it must not start uvx,
+    which would resolve jev-judge from PyPI on a machine that never opted in."""
+    knob(home, on=False)
+    assert js.main(["status", "--json"]) == 1
+    env = json.loads(capsys.readouterr().out)
+    assert calls(fake) == []
+    assert env["data"]["key"] is None
+    assert env["data"]["reason"] == "classifier_backend is not jev"
 
 
 # ---- fix round 1 ----------------------------------------------------------------------------
@@ -1444,3 +1462,131 @@ def test_a_record_without_a_logged_type_is_still_inferred(home, capsys):
     _rc, env = _report_json(capsys)
     q = env["data"]["sites"]["dream-placement"]["shas"]["pre"]["questions"]
     assert q["fits_level"]["type"] == "score"
+
+
+# ---- final review fixes -------------------------------------------------------------------------
+
+
+@posix_only
+def test_a_secret_in_the_agent_note_reaches_neither_the_log_nor_the_disagreements_file(
+    tmp_path, fake, home, capsys
+):
+    knob(home)
+    verdicts = [
+        {**PRUNE_VERDICTS[0], "note": "the body leaks " + TOKEN},
+        PRUNE_VERDICTS[1],
+    ]
+    assert run_prune(tmp_path, fake, verdicts=verdicts) == 0
+    assert TOKEN not in shadow_logs(home)[0].read_text(encoding="utf-8")
+    alpha = next(
+        r for r in read_jsonl(shadow_logs(home)[0]) if r["item_id"] == "slug-alpha"
+    )
+    assert alpha["agent_note"].startswith("the body leaks ")
+    capsys.readouterr()
+    out = tmp_path / "dis.jsonl"
+    assert js.main(["report", "--disagreements", str(out)]) == 0
+    text = out.read_text(encoding="utf-8")
+    assert "slug-alpha" in text  # the control: the disagreeing item IS in the file
+    assert TOKEN not in text
+
+
+@posix_only
+@pytest.mark.parametrize("bad", ["high", {"p": 0.9}, None, True])
+def test_a_malformed_jev_value_is_no_answer_and_every_record_is_still_logged(
+    tmp_path, fake, home, bad
+):
+    knob(home)
+    rows = {
+        **PRUNE_ROWS,
+        "slug-alpha": {
+            "untestable_negative": {"type": "noul", "value": bad},
+            "unlabelled_unsolved": noul(0.7),
+        },
+    }
+    assert run_prune(tmp_path, fake, rows=rows) == 0
+    recs = {r["item_id"]: r for r in read_jsonl(shadow_logs(home)[0])}
+    assert set(recs) == {"slug-alpha", "slug-beta", "slug-gamma"}
+    assert recs["slug-alpha"]["agree"] == {
+        "untestable_negative": None,
+        "unlabelled_unsolved": False,
+    }
+
+
+@posix_only
+def test_a_malformed_score_value_is_no_answer(tmp_path, fake, home):
+    knob(home)
+    item = {"id": "a|.", "state": {"hook": "h", "body": "b", "level_scope": "s"}}
+    items = write_jsonl(tmp_path / "items.jsonl", [item])
+    vpath = write_jsonl(
+        tmp_path / "verdicts.jsonl", [{"id": "a|.", "verdict": {"fits_level": 2}}]
+    )
+    fake["rows"].write_text(
+        json.dumps({"a|.": {"fits_level": {"type": "score", "value": "two"}}}),
+        encoding="utf-8",
+    )
+    argv = ["run", "--site", "dream-placement", "--items", str(items)]
+    assert js.main([*argv, "--verdicts", str(vpath)]) == 0
+    rec = read_jsonl(shadow_logs(home)[0])[0]
+    assert rec["agree"] == {"fits_level": None}
+
+
+@posix_only
+def test_a_failing_jev_judge_exit_with_rows_written_is_surfaced(
+    tmp_path, fake, home, capsys, monkeypatch
+):
+    knob(home)
+    monkeypatch.setenv("FAKE_JEV_EXIT", "2")
+    assert run_prune(tmp_path, fake) == 0
+    cap = capsys.readouterr()
+    assert "jev-judge run exited 2" in cap.err
+    assert "rate limit hit" in cap.err
+    assert len(read_jsonl(shadow_logs(home)[0])) == 3
+
+
+@posix_only
+def test_a_row_failure_exit_1_is_already_in_the_counts_and_not_repeated(
+    tmp_path, fake, home, capsys
+):
+    """jev-judge exits 1 when a row failed; the counts carry that, so stderr stays quiet."""
+    knob(home)
+    rows = {k: v for k, v in PRUNE_ROWS.items() if k != "slug-beta"}
+    assert run_prune(tmp_path, fake, rows=rows) == 0
+    cap = capsys.readouterr()
+    assert "1 without a Jev answer" in cap.out
+    assert cap.err == ""
+
+
+@posix_only
+def test_a_locked_log_after_a_paid_run_keeps_the_records_in_a_side_file(
+    tmp_path, fake, home, capsys
+):
+    """Jev was already paid when the append finds the lock held: the records must survive,
+    and `report` must read them."""
+    knob(home)
+    month = slog.log_path(audit(home), datetime.now(timezone.utc))
+    month.parent.mkdir(parents=True, exist_ok=True)
+    Path(str(month) + ".lock").write_text("held by another writer", encoding="utf-8")
+    assert run_prune(tmp_path, fake) == 0
+    cap = capsys.readouterr()
+    assert "locked" in cap.err
+    assert not month.exists()
+    logged = [r for p in shadow_logs(home) for r in read_jsonl(p)]
+    assert {r["item_id"] for r in logged} == {"slug-alpha", "slug-beta", "slug-gamma"}
+    rc, env = _report_json(capsys)
+    assert rc == 0 and env["data"]["records"] == 3
+
+
+def test_retention_counts_a_side_file_as_its_own_month(home):
+    """A side file of an old month expires with that month; one of this month never does."""
+    d = audit(home)
+    d.mkdir(parents=True, exist_ok=True)
+    now = datetime.now(timezone.utc)
+    old = d / f"jev-skill-shadow-2000-01-{'a' * 32}.jsonl"
+    new = slog.log_path(d, now).with_name(
+        slog.log_path(d, now).stem + f"-{'b' * 32}.jsonl"
+    )
+    for p in (old, new):
+        p.write_text("{}\n", encoding="utf-8")
+    removed = slog.prune_logs(d, now)
+    assert removed == [old]
+    assert new.exists()

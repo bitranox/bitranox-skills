@@ -25,9 +25,9 @@ from collections import Counter
 from collections.abc import Iterable
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, cast
+from typing import Any
 
-from jev_shadow_sites import jsonl_lines
+from jev_shadow_sites import as_number, as_record, jev_index, jsonl_lines
 
 __all__ = [
     "BAND",
@@ -38,9 +38,7 @@ __all__ = [
     "LogRead",
     "SiteSpec",
     "answer_label",
-    "as_record",
     "disagreements",
-    "jev_index",
     "jev_label",
     "read_records",
     "render",
@@ -115,30 +113,12 @@ def _keep(rec: Record, *, site: str | None, since: str | None) -> bool:
     return since is None or str(rec.get("ts") or "")[:10] >= since
 
 
-def as_record(value: object) -> Record | None:
-    """A decoded JSON object with its key type stated; None for any other JSON value."""
-    return cast("Record", value) if isinstance(value, dict) else None
-
-
 def _parse(line: str) -> Record | None:
     try:
         rec: object = json.loads(line)
     except ValueError:
         return None
     return as_record(rec)
-
-
-def _number(value: object) -> float | None:
-    """A JSON number as a float; None for anything else (a bool is not a number here)."""
-    if isinstance(value, bool) or not isinstance(value, int | float):
-        return None
-    return float(value)
-
-
-def jev_index(value: float, levels: int | None = None) -> int:
-    """A score's position rounded half up to the nearest level index, clamped to the levels."""
-    idx = int(value + 0.5)
-    return max(0, min(idx, levels - 1)) if levels else max(0, idx)
 
 
 def jev_label(
@@ -152,7 +132,7 @@ def jev_label(
     value: object = answer.get("value")
     if qtype == "choice":
         return None if value is None else str(value)
-    number = _number(value)
+    number = as_number(value)
     if number is None:
         return None
     return number >= 0.5 if qtype == "noul" else jev_index(number, levels)
@@ -167,9 +147,9 @@ def answer_label(value: object) -> str:
 
 def _in_band(qtype: str, answer: Record) -> bool:
     if qtype == "noul":
-        number = _number(answer.get("value"))
+        number = as_number(answer.get("value"))
         return number is not None and BAND[0] < number < BAND[1]
-    confidence = _number(answer.get("confidence"))
+    confidence = as_number(answer.get("confidence"))
     return confidence is not None and confidence < MIN_CONFIDENCE
 
 
@@ -179,7 +159,7 @@ def _is_flat(qtype: str, answers: list[Record]) -> bool:
     if qtype == "choice":
         top = Counter(str(a.get("value")) for a in answers).most_common(1)[0][1]
         return top / len(answers) >= FLAT_SHARE
-    numbers = [n for n in (_number(a.get("value")) for a in answers) if n is not None]
+    numbers = [n for n in (as_number(a.get("value")) for a in answers) if n is not None]
     return len(numbers) >= FLAT_MIN_ANSWERS and statistics.pstdev(numbers) < FLAT_STDEV
 
 
@@ -323,7 +303,7 @@ def _sha_summary(
 
 
 def _cost(recs: list[Record]) -> float:
-    return round(sum(_number(r.get("cost_usd")) or 0.0 for r in recs), 6)
+    return round(sum(as_number(r.get("cost_usd")) or 0.0 for r in recs), 6)
 
 
 def summarize(records: list[Record], specs: dict[str, SiteSpec]) -> dict[str, object]:

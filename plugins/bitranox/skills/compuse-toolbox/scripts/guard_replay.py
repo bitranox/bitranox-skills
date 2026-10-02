@@ -155,9 +155,9 @@ def _records(text: str):
 def _extract(text: str, tool: str, field: str, transcript: str | None = None):
     """`(calls, calls_without_field)` for one transcript - see `extract_calls`.
 
-    `transcript` is carried onto every call unchanged: it is the path Task 3's
-    `items --site guard-firing` needs to find the surrounding turn again, and `_extract` is the
-    only place that knows which file a call came from.
+    `transcript` is carried onto every call unchanged, so a written firing names the file it came
+    from (for a person tracing it by hand); `_extract` is the only place that knows which file a
+    call came from.
     """
     calls, errors, without_field = [], {}, 0
     for line in _records(text):
@@ -486,16 +486,17 @@ def replay(root: str, predicate, tool: str = "Bash", sample: int = 0,
 
 
 def write_firings(path: str, fire_calls) -> None:
-    """Write every firing as one JSON object per line: the interface Task 3's
-    `jev_shadow.py items --site guard-firing` reads.
+    """Write every firing to `path` as one JSON object per line.
 
     Exactly the keys `id`, `transcript`, `cwd`, `command`, `error` - no more, no less, so a reader
-    on the other end of this file can rely on the shape without knowing this script's internals.
-    One compact object per line (no indentation): this is JSONL, not a pretty-printed report.
+    of the file can rely on the shape without knowing this script's internals.
+    `jev_shadow.py items --site guard-firing` reads `id`, `command` and `error`; `transcript` and
+    `cwd` locate the firing for a person reading it by hand. One compact object per line (no
+    indentation): this is JSONL, not a pretty-printed report.
 
-    An unwritable path (a missing parent directory, a permission refusal) is reported through the
-    same `UsageError` refusal every other usage mistake here uses, never a raw traceback - this is
-    a CLI flag like `--block-pattern`, and a bad value for it must fail the same readable way.
+    Raises:
+        UsageError: `path` cannot be written (a missing parent directory, a permission refusal),
+            the same readable refusal every other bad argument here gets.
     """
     try:
         with open(path, "w", encoding="utf-8") as fh:

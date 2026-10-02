@@ -8,7 +8,9 @@ refers to a field only as a backticked name, and every backticked name is a stat
 Five sites build their items here from a source the skill step already has: the curated memory
 store under an anchor, or a `guard_replay.py --firings` file. The other five are agent-built: the
 step's agent writes the items itself, and `jev_shadow.py run` checks their fields against the site
-file. Standard library only; the store readers come from hooks/ and meta-self-improve/.
+file. It also holds the small JSON helpers the log writer and the report reader share, so neither
+of those two imports the other. Standard library only; the store readers come from hooks/ and
+meta-self-improve/.
 """
 
 from __future__ import annotations
@@ -30,7 +32,10 @@ __all__ = [
     "ShadowItem",
     "Site",
     "SiteError",
+    "as_number",
+    "as_record",
     "build_items",
+    "jev_index",
     "jsonl_lines",
     "load_site",
     "site_names",
@@ -231,6 +236,24 @@ def _misplaced(req: BuildRequest) -> list[ShadowItem]:
         }
         items.append(ShadowItem(cand["slug"], state))
     return items
+
+
+def as_record(value: object) -> dict[str, Any] | None:
+    """A decoded JSON object with its key type stated; None for any other JSON value."""
+    return cast("dict[str, Any]", value) if isinstance(value, dict) else None
+
+
+def as_number(value: object) -> float | None:
+    """A JSON number as a float; None for anything else (a bool is not a number here)."""
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return None
+    return float(value)
+
+
+def jev_index(value: float, levels: int | None = None) -> int:
+    """A score's position rounded half up to the nearest level index, clamped to the levels."""
+    idx = int(value + 0.5)
+    return max(0, min(idx, levels - 1)) if levels else max(0, idx)
 
 
 def jsonl_lines(text: str) -> list[str]:

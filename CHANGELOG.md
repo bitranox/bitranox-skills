@@ -51,6 +51,25 @@ two "versions with no entry" notes came to sit in this file disagreeing with it.
   `context`), writes its own `real_violation` verdict for every hit to `verdicts.jsonl` before
   `jev_shadow.py run`, and decides which hits send STEP D back to STEP A from those verdicts.
 
+### Fixed
+
+- `jev_shadow.py status` starts no `uvx` and reports `key` as null while the knobs keep shadow
+  off. It asked `jev-judge check-key` on every machine, so each wired step resolved jev-judge from
+  PyPI where the user never opted in.
+- `jev_shadow.py` runs on Python 3.10: it imported `datetime.UTC`, which is 3.11+.
+- The agent's `note` is redacted and capped before it is logged or written to `--disagreements`.
+- A Jev answer of the wrong shape (a non-number for a noul or score, a non-string for a choice)
+  counts as no answer. It raised after Jev was paid and lost every record of the run.
+- A jev-judge run that fails (exit other than 0 or 1, or a timeout) after writing some rows is
+  named on stderr; only a run with no rows at all was reported.
+- When the shadow log's lock is held past its wait, the run's records go to a side file of their
+  own, `jev-skill-shadow-YYYY-MM-<run id>.jsonl`, which `report` reads and retention ages with its
+  month. They were dropped with exit 2 after Jev was paid.
+- The log writer no longer imports the report reader: the JSON helpers both use live in
+  `jev_shadow_sites.py`.
+- `guard_replay.py` docstrings describe the current code: `write_firings` says which keys
+  `jev_shadow.py items` reads and what `transcript` and `cwd` are for.
+
 ## [7.39.2]
 
 ### Fixed

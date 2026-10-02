@@ -7,6 +7,10 @@ deletes the months whose last day is more than LOG_KEEP_DAYS ago, and after that
 while the rest exceed LOG_MAX_BYTES. The current month is never deleted. Skill sites fire weekly at
 most, which is why this keeps 400 days where the hook shadow keeps 30.
 
+Jev has already been paid when the records are appended, so a lock held past its wait does not
+drop them: they go to a side file of their own, `jev-skill-shadow-YYYY-MM-<run id>.jsonl`, which
+no other writer can be using. The report reads side files and retention ages them with their month.
+
 A record keeps the item's state, redacted and capped exactly as it was sent, so a later and better
 question can be replayed over logged items without re-running the skill. Standard library only.
 """
@@ -22,7 +26,6 @@ from pathlib import Path
 from typing import Any
 
 import jev_shadow_ports as ports
-import jev_shadow_report as rpt
 import jev_shadow_sites as sites
 
 __all__ = [
@@ -30,7 +33,6 @@ __all__ = [
     "LOG_MAX_BYTES",
     "LOG_PREFIX",
     "JevRun",
-    "LogLocked",
     "RunContext",
     "Verdict",
     "agrees",
@@ -41,17 +43,15 @@ __all__ = [
     "log_path",
     "prune_logs",
     "short_reason",
+    "side_path",
 ]
 
 LOG_PREFIX = "jev-skill-shadow-"
-_LOG_RE = re.compile(r"^jev-skill-shadow-(\d{4})-(\d{2})\.jsonl$")
+# The monthly file, or a side file of that month written when the monthly one was locked.
+_LOG_RE = re.compile(r"^jev-skill-shadow-(\d{4})-(\d{2})(?:-[0-9a-f]{32})?\.jsonl$")
 LOG_KEEP_DAYS = 400
 LOG_MAX_BYTES = 100 * 1024 * 1024
 _REASON_CAP = 200
-
-
-class LogLocked(OSError):
-    """Another writer held the log's lock past the wait."""
 
 
 @dataclass(frozen=True)
@@ -64,12 +64,23 @@ class Verdict:
 
 @dataclass(frozen=True)
 class JevRun:
-    """What one jev-judge run returned: rows by item id, the run's totals, and why it failed."""
+    """What one jev-judge run returned.
+
+    Attributes:
+        rows: jev-judge's rows by item id.
+        cost_usd: The run's total cost, when jev-judge reported it.
+        input_tokens: The run's total input tokens.
+        reason: Why no row came back at all; None when any row did.
+        failure: How the run itself failed (it could not start, timed out, or exited other than
+            0 or 1), whether or not rows came back; None otherwise. Exit 1 means a row failed,
+            which each row's own reason already records.
+    """
 
     rows: dict[str, dict[str, Any]]
     cost_usd: float | None
     input_tokens: int
     reason: str | None
+    failure: str | None = None
 
 
 @dataclass(frozen=True)
@@ -103,10 +114,10 @@ def short_reason(text: str) -> str:
 def _jev_answers(row: dict[str, Any] | None) -> dict[str, Any] | None:
     if not row or not row.get("ok"):
         return None
-    answers = rpt.as_record(row.get("answers")) or {}
+    answers = sites.as_record(row.get("answers")) or {}
     out: dict[str, Any] = {}
     for qid, raw in answers.items():
-        answer = rpt.as_record(raw)
+        answer = sites.as_record(raw)
         if answer is not None:
             out[qid] = {
                 k: answer.get(k)
@@ -126,16 +137,21 @@ def agrees(
         answer: Jev's answer, or None when Jev gave none.
 
     Returns:
-        Whether they agree, or None when either side is absent.
+        Whether they agree, or None when either side is absent - a Jev value of the wrong shape
+        (a non-number for a noul or score, a non-string for a choice) counts as absent, so one
+        malformed answer never costs the run's records after Jev was paid.
     """
-    if agent is None or answer is None or answer.get("value") is None:
+    if agent is None or answer is None:
         return None
-    value = answer["value"]
+    value: object = answer.get("value")
+    if question["type"] == "choice":
+        return agent == value if isinstance(value, str) else None
+    number = sites.as_number(value)
+    if number is None:
+        return None
     if question["type"] == "noul":
-        return agent == (float(value) >= 0.5)
-    if question["type"] == "score":
-        return agent == rpt.jev_index(float(value), len(question["criteria"]))
-    return agent == value
+        return agent == (number >= 0.5)
+    return agent == sites.jev_index(number, len(question["criteria"]))
 
 
 def _item_cost(ctx: RunContext, tokens: int) -> float | None:
@@ -151,6 +167,13 @@ def _jev_reason(ctx: RunContext, row: dict[str, Any] | None) -> str | None:
     if row.get("ok"):
         return None
     return short_reason(str(row.get("reason") or "failed"))
+
+
+def _note(verdict: Verdict | None) -> str | None:
+    """The agent's note as logged: redacted and capped like every other free text here."""
+    if verdict is None or verdict.note is None:
+        return None
+    return short_reason(verdict.note)
 
 
 def build_record(
@@ -196,7 +219,7 @@ def build_record(
         "jev": jev,
         "jev_reason": _jev_reason(ctx, row),
         "agent": agent,
-        "agent_note": verdict.note if verdict else None,
+        "agent_note": _note(verdict),
         "agree": agree,
         "latency_ms": (row or {}).get("latency_ms"),
         "input_tokens": tokens,
@@ -212,8 +235,16 @@ def log_path(audit: Path, now: datetime) -> Path:
     return audit / f"{LOG_PREFIX}{now:%Y-%m}.jsonl"
 
 
+def side_path(audit: Path, now: datetime, run_id: str) -> Path:
+    """The side file one run writes to when the monthly file's lock is held past the wait."""
+    return audit / f"{LOG_PREFIX}{now:%Y-%m}-{run_id}.jsonl"
+
+
 def log_files(audit: Path) -> list[Path]:
-    """Every monthly shadow log in `audit`, oldest first (the fixed-width name sorts by month)."""
+    """Every shadow log in `audit`, monthly and side files, oldest month first.
+
+    The fixed-width name sorts by month, and a side file sorts beside its month's file.
+    """
     try:
         names = os.listdir(audit)
     except OSError:
@@ -241,16 +272,20 @@ def _unlink(path: Path) -> bool:
     return True
 
 
+def _is_current(path: Path, now: datetime) -> bool:
+    """True for a file of `now`'s month, the monthly file or a side file of it."""
+    return path.name.startswith(f"{LOG_PREFIX}{now:%Y-%m}")
+
+
 def _drop_expired(
     audit: Path, now: datetime
 ) -> tuple[list[Path], list[tuple[Path, int]]]:
     """Delete months past LOG_KEEP_DAYS; return the removed paths and the survivors' sizes."""
-    current = log_path(audit, now)
     cutoff = now.date() - timedelta(days=LOG_KEEP_DAYS)
     removed: list[Path] = []
     sized: list[tuple[Path, int]] = []
     for path in log_files(audit):
-        if path != current and _month_end(path) < cutoff:
+        if not _is_current(path, now) and _month_end(path) < cutoff:
             if _unlink(path):
                 removed.append(path)
             continue
@@ -271,31 +306,51 @@ def prune_logs(audit: Path, now: datetime) -> list[Path]:
     Returns:
         The paths removed.
     """
-    current = log_path(audit, now)
     removed, sized = _drop_expired(audit, now)
     total = sum(size for _p, size in sized)
     for path, size in sized:
         if total <= LOG_MAX_BYTES:
             break
-        if path != current and _unlink(path):
+        if not _is_current(path, now) and _unlink(path):
             removed.append(path)
             total -= size
     return removed
 
 
-def append_records(records: list[dict[str, Any]], now: datetime) -> None:
+def _write(path: Path, records: list[dict[str, Any]], mode: str) -> None:
+    with path.open(mode, encoding="utf-8") as fh:
+        fh.writelines(json.dumps(r, ensure_ascii=False) + "\n" for r in records)
+
+
+def append_records(
+    records: list[dict[str, Any]], now: datetime, *, run_id: str
+) -> Path:
     """Append the records to the current month under the memory lock, then prune.
 
+    Jev has been paid by now, so a lock held past its wait does not lose the records: they are
+    written, unlocked, to this run's own side file, which no other writer can be using (created
+    exclusively, named by the run id). Retention waits for the next locked append.
+
+    Args:
+        records: One record per item, as `build_record` made them.
+        now: The aware UTC time the run is logged at; it picks the month.
+        run_id: The run's id, which names the side file.
+
+    Returns:
+        The file the records went to: the monthly log, or the side file.
+
     Raises:
-        LogLocked: Another writer held the lock past the wait.
+        OSError: The audit directory or the file cannot be written.
     """
     audit = audit_dir()
     audit.mkdir(parents=True, exist_ok=True)
     path = log_path(audit, now)
     try:
         with ports.memory_lock(path):
-            with path.open("a", encoding="utf-8") as fh:
-                fh.writelines(json.dumps(r, ensure_ascii=False) + "\n" for r in records)
+            _write(path, records, "a")
             prune_logs(audit, now)
-    except TimeoutError as exc:
-        raise LogLocked(f"the shadow log is locked by another writer: {exc}") from exc
+    except TimeoutError:
+        side = side_path(audit, now, run_id)
+        _write(side, records, "x")
+        return side
+    return path
