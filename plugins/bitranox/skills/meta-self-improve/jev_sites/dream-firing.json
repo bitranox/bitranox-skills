@@ -1,0 +1,19 @@
+{
+  "site": "dream-firing",
+  "version": 1,
+  "questions": [
+    {
+      "id": "trigger_fires",
+      "type": "noul",
+      "instructions": "`hook` is the one line always shown for a stored memory note and `body` is the full note. Does the trigger in `hook`, the situation it says the note applies to, name the situations `body` actually covers, so a reader in one of those situations would recognise the hook as meant for them?",
+      "criteria": {
+        "true": "the trigger names the situations the body covers",
+        "false": "the trigger is missing, too vague, or names other situations than the body covers"
+      }
+    }
+  ],
+  "state_fields": [
+    "hook",
+    "body"
+  ]
+}

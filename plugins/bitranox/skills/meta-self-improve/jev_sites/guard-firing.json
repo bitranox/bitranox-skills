@@ -1,0 +1,20 @@
+{
+  "site": "guard-firing",
+  "version": 1,
+  "questions": [
+    {
+      "id": "real_hazard",
+      "type": "noul",
+      "instructions": "A guard printed a warning before the shell command in `command` ran. `hazard` describes the problem the guard warns about. `error` is the error output the command produced when it ran, and is empty when it succeeded. Would `command`, as written, actually hit the problem described in `hazard`? Answer yes only when this specific command is an instance of that problem, not when it merely has a similar shape.",
+      "criteria": {
+        "true": "a real instance: run as written, the command hits the problem the guard describes",
+        "false": "a false alarm: the command only resembles the hazard and does not hit the problem"
+      }
+    }
+  ],
+  "state_fields": [
+    "hazard",
+    "command",
+    "error"
+  ]
+}

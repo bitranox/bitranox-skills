@@ -1,0 +1,20 @@
+{
+  "site": "quality-param-hit",
+  "version": 1,
+  "questions": [
+    {
+      "id": "is_parameter",
+      "type": "noul",
+      "instructions": "`parameter` names a parameter under review and where it is declared. `hit` is one line a text search returned for that name, and `context` is the code around it. Does `hit` pass or read that same project parameter, rather than an argument of a builtin, standard library or framework call that merely shares its spelling, such as the key argument of a sort call?",
+      "criteria": {
+        "true": "the line passes or reads the parameter under review",
+        "false": "the line belongs to a builtin, standard library or framework call that shares the name"
+      }
+    }
+  ],
+  "state_fields": [
+    "parameter",
+    "hit",
+    "context"
+  ]
+}

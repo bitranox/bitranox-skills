@@ -1,0 +1,28 @@
+{
+  "site": "dream-prune",
+  "version": 1,
+  "questions": [
+    {
+      "id": "untestable_negative",
+      "type": "noul",
+      "instructions": "`hook` is the one-line summary of a stored memory note and `body` is the full note. Does the note assert that a tool, command or feature does NOT work, or cannot do something, without naming a version or a date that would let a reader re-test the claim?",
+      "criteria": {
+        "true": "it makes a negative claim about a tool with no version or date to re-test it against",
+        "false": "it makes no such claim, or the claim names a version or a date"
+      }
+    },
+    {
+      "id": "unlabelled_unsolved",
+      "type": "noul",
+      "instructions": "`hook` is the one-line summary of a stored memory note and `body` is the full note. Does the note describe a session or attempt that never reached a working end state, without labelling the problem as unsolved or open?",
+      "criteria": {
+        "true": "the attempt it describes never worked, and nothing in the note marks it unsolved",
+        "false": "it describes a working end state, or it is explicitly labelled unsolved or open"
+      }
+    }
+  ],
+  "state_fields": [
+    "hook",
+    "body"
+  ]
+}

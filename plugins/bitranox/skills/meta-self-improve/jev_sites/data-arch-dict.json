@@ -1,0 +1,19 @@
+{
+  "site": "data-arch-dict",
+  "version": 1,
+  "questions": [
+    {
+      "id": "real_violation",
+      "type": "noul",
+      "instructions": "`hit` is a line a search for raw dict annotations returned in a Python codebase whose rule is typed models instead of raw dicts, and `context` is the code around it. Is it a real violation, a function signature that accepts or returns a raw dict or a dict passed between functions or modules, rather than a permitted exception: a small local dict that stays inside one function, or an annotation that is not a function signature at all?",
+      "criteria": {
+        "true": "a real violation: a raw dict crosses a function or module boundary",
+        "false": "a permitted exception: a small local dict, or not a signature"
+      }
+    }
+  ],
+  "state_fields": [
+    "hit",
+    "context"
+  ]
+}

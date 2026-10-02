@@ -1,0 +1,20 @@
+{
+  "site": "quality-polarity",
+  "version": 1,
+  "questions": [
+    {
+      "id": "agrees",
+      "type": "noul",
+      "instructions": "`source_line` is a line from the check function `function` that returns a boolean together with a message. `convention` states what the boolean means in this codebase. Under that convention, do the boolean and the message say the same thing?",
+      "criteria": {
+        "true": "they agree: what the boolean means under the convention matches what the message says",
+        "false": "they disagree: the boolean reports health where the message describes a fault, or the reverse"
+      }
+    }
+  ],
+  "state_fields": [
+    "function",
+    "source_line",
+    "convention"
+  ]
+}

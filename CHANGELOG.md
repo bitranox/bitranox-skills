@@ -29,6 +29,23 @@ than the change, so entries reconstructed from them would read like coverage wit
 a hole nobody has drawn a line under is one that gets rediscovered and half-filled - which is how
 two "versions with no entry" notes came to sit in this file disagreeing with it.
 
+## [7.38.0]
+
+### Added
+
+- `meta-self-improve` ships `jev_shadow.py`, the Jev shadow tool for skill judgment sites: the
+  agent running a skill step keeps judging items itself, and Jev answers the same items beside it
+  through the published `jev-judge` CLI. `status` says whether a run would happen, `items` builds
+  the items for the store-based sites (`--anchor`, or `--firings` plus `--hazard` for
+  `guard-firing`), `run` refuses unless the agent's verdicts file already exists and prints counts
+  only, and `report` gives agreement, confusion, the uncertainty-band share and a FLAT flag per
+  site and question. Off unless `classifier_backend = jev` and `classifier_skills = shadow`; with
+  no key it logs nothing. One record per item goes to
+  `~/.claude/self-improve-audit/jev-skill-shadow-YYYY-MM.jsonl`, with the redacted state that was
+  sent, kept 400 days and 100 MB.
+- Ten site question files in `meta-self-improve/jev_sites/`, and
+  `meta-self-improve/references/jev-shadow.md`, the procedure the skill steps cite.
+
 ## [7.37.1]
 
 ### Fixed

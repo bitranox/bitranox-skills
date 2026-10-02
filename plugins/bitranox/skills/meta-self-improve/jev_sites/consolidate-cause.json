@@ -1,0 +1,24 @@
+{
+  "site": "consolidate-cause",
+  "version": 1,
+  "questions": [
+    {
+      "id": "cause",
+      "type": "choice",
+      "instructions": "`heading` is a section heading repeated across several CLAUDE.md files. `copies` says how many files carry it and how many distinct variants of its body exist, and `variants` holds the variant bodies. Which cause best explains why the copies differ?",
+      "criteria": {
+        "names_project": "the section embeds the package or repo name, so each copy is about its own project",
+        "whitespace_only": "the copies differ only in whitespace or line wrapping",
+        "substantive_drift": "the copies differ in substance: the same guidance drifted apart",
+        "pointer_only": "the copies share only a closing pointer sentence; each body is unique",
+        "all_unique": "every copy is unique; nothing is shared",
+        "none": "none of these explains the difference"
+      }
+    }
+  ],
+  "state_fields": [
+    "heading",
+    "copies",
+    "variants"
+  ]
+}

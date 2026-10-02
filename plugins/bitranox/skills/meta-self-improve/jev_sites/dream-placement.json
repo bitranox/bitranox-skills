@@ -1,0 +1,21 @@
+{
+  "site": "dream-placement",
+  "version": 1,
+  "questions": [
+    {
+      "id": "fits_level",
+      "type": "score",
+      "instructions": "A stored memory note, summarised by `hook` with full text `body`, could be filed at a level whose scope descriptor is `level_scope`. The descriptor says what that level is for and what belongs elsewhere. How well does this level fit the note?",
+      "criteria": [
+        "does not belong here: the note's subject is outside this level's scope, or the descriptor sends it elsewhere",
+        "could live here, but its subject is narrower or broader than this level's scope",
+        "belongs here: the note's subject matches this level's scope"
+      ]
+    }
+  ],
+  "state_fields": [
+    "hook",
+    "body",
+    "level_scope"
+  ]
+}

@@ -1,0 +1,19 @@
+{
+  "site": "collect-relevance",
+  "version": 1,
+  "questions": [
+    {
+      "id": "useful_here",
+      "type": "noul",
+      "instructions": "`project` describes the project being worked on. `candidate` is a note or file found in another project. Is `candidate` genuinely useful to this project, knowledge its work would apply, rather than a near miss that only shares vocabulary with it?",
+      "criteria": {
+        "true": "useful: the project's work would apply this knowledge",
+        "false": "a near miss: it shares words with the project but not a use"
+      }
+    }
+  ],
+  "state_fields": [
+    "project",
+    "candidate"
+  ]
+}

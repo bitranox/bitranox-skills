@@ -1,0 +1,21 @@
+{
+  "site": "crosstree-misplaced",
+  "version": 1,
+  "questions": [
+    {
+      "id": "wrong_tree",
+      "type": "noul",
+      "instructions": "A stored memory note, summarised by `hook` with full text `body`, is filed at a level whose scope descriptor is `level_scope`. Every absolute path `body` cites lies in a different project tree; those paths are `cited_paths`. Is the note genuinely about that other tree, so it was filed in the wrong place, rather than a note about the subject of `level_scope` that only cites a neighbouring path?",
+      "criteria": {
+        "true": "the note is about the other tree: it is filed in the wrong tree",
+        "false": "the note belongs where it is; the foreign paths are only references"
+      }
+    }
+  ],
+  "state_fields": [
+    "hook",
+    "body",
+    "level_scope",
+    "cited_paths"
+  ]
+}
