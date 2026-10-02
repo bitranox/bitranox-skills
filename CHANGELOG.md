@@ -47,6 +47,14 @@ two "versions with no entry" notes came to sit in this file disagreeing with it.
   then runs `jev_shadow.py run`. The quotes, counts and kept call sites come from the agent's
   verdicts alone. The `parameter` field is the parameter under review, the same on every hit, so
   the item does not carry its own answer.
+- `meta-dream-tree`: placement (site `dream-placement`), the firing check (`dream-firing`) and the
+  prune questions (`dream-prune`) carry a Jev shadow, and the step 11 report gains a
+  `jev shadow:` line per site. With `jev_shadow.py status` on, the agent builds the items with
+  `jev_shadow.py items --site <site> --anchor <anchor>`, writes its own verdicts to
+  `verdicts.jsonl`, and only then runs `jev_shadow.py run`; moves, rewrites and prunes come from
+  the agent's verdicts alone. Firing and prune judge every fact. Placement pairs every fact with
+  every level on its chain, so the agent cuts `items.jsonl` to each fact's current level and the
+  level it routed the fact to before `run`, which asks Jev about every line in the file.
 
 ### Changed
 
