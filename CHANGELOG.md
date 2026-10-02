@@ -29,6 +29,19 @@ than the change, so entries reconstructed from them would read like coverage wit
 a hole nobody has drawn a line under is one that gets rediscovered and half-filled - which is how
 two "versions with no entry" notes came to sit in this file disagreeing with it.
 
+## [7.33.0]
+
+### Added
+
+- `coding-python-enforce-data-architecture-strict` checks the error surface before a refactor is
+  called done. Moving validation into a boundary model changes the exception type (and through a
+  CLI wrapper the exit code), the message (pydantic's tags and docs URL, redaction of
+  secret-bearing fields) and the order several faults are reported in, while every test stays
+  green because the tests assert on the new path. STEP C item 5 reads the docs that promise an
+  error contract and diffs a single-fault malformed-input corpus through HEAD's source and the
+  working tree, with one input whose result changed on purpose as the control; every input the
+  old code refused keeps its type, exit code and message, or the CHANGELOG lists the change.
+
 ## [7.32.0]
 
 ### Added

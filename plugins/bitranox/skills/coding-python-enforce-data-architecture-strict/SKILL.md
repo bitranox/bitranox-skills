@@ -193,6 +193,9 @@ output = OutputModel(**asdict(internal))
    **Verification:**
    - [ ] Run `make test` OR pyproject.toml tools (pytest, ruff, mypy, etc.) - fix all errors until passing
    - [ ] Verify type checking passes and Pydantic validation works
+   - [ ] If the refactor moved WHERE input is validated: every single-fault input the old code
+     refused keeps its exception type, exit code and message, or each change is listed in the
+     CHANGELOG (STEP C item 5)
 
 2. **Analyze the Code** and identify violations:
    - Functions accepting `dict` parameters instead of typed models
@@ -351,7 +354,38 @@ STEP C - RUN TESTS:
      - Re-run the failed command
      - REPEAT until all commands pass
 
-  >>> DO NOT proceed to STEP D until all tests/linters pass
+  5. ERROR SURFACE - required whenever the refactor moved WHERE input is validated (a boundary
+     model now refuses what a deeper call used to refuse). A green suite cannot see this: the
+     tests assert on the new path, and a model's refusal changes what a caller observes.
+     The test is whether any refusal now comes from a different place than before - a check
+     moved into the model, or a model check added in front of one that still exists (the first
+     one to refuse is the one the caller sees). A refactor that leaves every refusal where it
+     was, such as renaming internal fields, does not need this item.
+     What changes:
+     - the exception TYPE, and through a CLI wrapper the EXIT CODE - a `ValidationError`, or the
+       framework error you wrap it in, is not the `ValueError` the old call raised;
+     - the MESSAGE - pydantic adds its own error-type tags and a versioned docs URL, and a model
+       that redacts secret-bearing fields hides a value the old message quoted;
+     - the ORDER - with several faults in one input, the setting the boundary checks first is
+       now the one reported.
+     Check it two ways:
+     a. Read every doc that promises an error contract and hold the new code to it:
+        `grep -rniE 'exit code|raises|refused' docs/ README*`
+     b. Run ONE malformed value at a time through the real entry point of HEAD's code and of the
+        working tree, and diff exception type / exit code / last error line per input. Get HEAD's
+        source without touching the checkout: `git archive HEAD src | tar -x -C <tmpdir>`, then
+        run with `PYTHONPATH=<tmpdir>/src`. Include one input whose result you changed on
+        purpose: if it does not show up as different, the harness is broken, not the code.
+     Every single-fault input the old code refused keeps its type, exit code and message, or the
+     change is listed in the CHANGELOG with the input, the old result and the new one. To keep
+     it, re-raise the model's refusal as the old exception type carrying the validator's own
+     text (`error.errors()[i]["msg"]`, minus pydantic's `Value error, ` prefix; one line per
+     entry when there are several), and run a check ahead of the model where the model would
+     redact what the old message quoted.
+     Multi-fault ORDER is inherent to parsing at the boundary: document it, do not fight it.
+
+  >>> DO NOT proceed to STEP D until all tests/linters pass and the error-surface diff shows no
+      unlisted change
 
 STEP D - FINAL VERIFICATION:
   - Read `.data_arch_violations.json` and confirm total_violations == 0
@@ -602,6 +636,7 @@ exactly these excuses - two baseline subjects shipped incomplete conversions usi
 | "A StrEnum on the wire is risky - keep a shim accepting both"                       | StrEnum members ARE str: the wire bytes are identical. The shim adds no safety, silently swallows stray raw strings, and becomes permanent. Pin the wire value with a test instead. (True for `enum.StrEnum`. The `class X(str, Enum)` fallback formats as `C.A` on 3.11+ when interpolated - use `.value` there, not a shim.) |
 | "Enum internally, but DB/API stay raw strings - feels safer"                        | That leaves the write path and response body - where a status typo causes the incident - unprotected. Backwards.                                                                                                                                                                                                               |
 | "Tests pass, so the conversion chain does not matter"                               | The defect is architectural, not behavioral - "tests pass" was never in question. Green tests do not make Model->dict->Model round-trips acceptable.                                                                                                                                                                           |
+| "0 violations and the gate is green, so behaviour is unchanged"                     | The suite tests the NEW path. Moving validation into a model changes who raises: exception type, exit code, message wording and redaction - and no existing test pins those for the old entry point. Run the STEP C item 5 diff.                                                                                               |
 | "TODO + follow-up ticket, clean it after the demo"                                  | A TODO on shipped code has no forcing function. If a genuine freeze (a live demo in minutes) blocks the fix, do it immediately AFTER in the SAME working session - never a ticket.                                                                                                                                             |
 
 Catch yourself forming these phrases mid-run - "basically done", "internal helpers are fine",
@@ -614,7 +649,8 @@ of stopping.
 ```
 1. INIT: Read files, read pyproject.toml, create todos, create .data_arch_violations.json
 2. LOOP: Parallel analyze (subagents) -> Update state -> Parallel fix (subagents) -> Re-analyze
-3. TEST: Run make test OR pyproject.toml tools (loop until all pass)
+3. TEST: Run make test OR pyproject.toml tools (loop until all pass); diff the error surface
+   against HEAD when validation moved (STEP C item 5)
 4. VERIFY: Final grep check, confirm state file shows 0 violations
 5. DONE: Delete state file, report "[OK] Complete after N passes"
 ```
@@ -622,6 +658,8 @@ of stopping.
 **DO NOT STOP** until:
 - `.data_arch_violations.json` shows total_violations == 0
 - All tests/linters pass
+- The error-surface diff (STEP C item 5) shows no change that is not listed in the CHANGELOG,
+  whenever the refactor moved where input is validated
 - Final verification finds no remaining REAL violation - judge each grep hit as STEP D
   requires ("a hit is a lead, not proof"); a raw match count is not the gate
 
