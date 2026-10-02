@@ -29,6 +29,24 @@ than the change, so entries reconstructed from them would read like coverage wit
 a hole nobody has drawn a line under is one that gets rediscovered and half-filled - which is how
 two "versions with no entry" notes came to sit in this file disagreeing with it.
 
+## [7.40.0]
+
+### Added
+
+- `meta-dream-crosstree` step 4b and `meta-dream-crosstree-deep` step 3b carry a Jev shadow
+  (site `crosstree-misplaced`): with `jev_shadow.py status` on, the agent builds the items per
+  tree with `jev_shadow.py items --site crosstree-misplaced --anchor <tree>` (one line per
+  `--check-misplaced` candidate; exit 1 means none and no run), writes its own `wrong_tree`
+  verdict for every candidate to `verdicts.jsonl`, and only then runs `jev_shadow.py run`. It
+  relocates or rejects by its own verdicts. Crosstree step 8 adds the `jev shadow:` report line
+  with its `off`, `no candidates` and `error` forms.
+- `meta-consolidate-claude-md` step 1 carries a Jev shadow (site `consolidate-cause`): one item
+  per heading group with 3+ copies and more than one variant, the agent's own cause for every
+  group written to `verdicts.jsonl` before `run`, each group routed by the agent's cause.
+- `meta-collect-knowledge` stage 2 carries a Jev shadow (site `collect-relevance`): the stage-2
+  subagent writes `items.jsonl` and returns keep or discard for every candidate; the main agent
+  records that as the verdict before `run` and imports what the subagent kept.
+
 ## [7.39.2]
 
 ### Fixed

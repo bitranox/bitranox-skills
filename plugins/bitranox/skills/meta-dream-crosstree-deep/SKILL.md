@@ -56,6 +56,11 @@ duplication to avoid. Everything else, do not duplicate: follow crosstree.
    routine dream until a full sweep finds it. Judge each candidate (a cited neighbour path is not a
    misfile) and `relocate` only the confirmed ones. Report the candidates rejected as well as the
    ones moved - a rejected candidate is a result, not a non-event.
+   - **Jev shadow:** crosstree 4b's Jev shadow bullet applies on EVERY tree swept, its own files
+     per tree (only when `jev_shadow.py status` exits 0): `items --site crosstree-misplaced
+     --anchor <anchor>`, YOUR `wrong_tree` verdict for every candidate in `verdicts.jsonl` FIRST,
+     then `run`. It prints counts only. Relocate or reject by your own verdicts, whatever `run`
+     printed or exited with; the counts go on crosstree's `jev shadow:` report line.
 
 4. **Org-chart audit (deep dream only - propose, never apply).** With the cross-tree view, assess whether
    the directory structure still fits. Using each project's scope descriptor + what it has learned, look
