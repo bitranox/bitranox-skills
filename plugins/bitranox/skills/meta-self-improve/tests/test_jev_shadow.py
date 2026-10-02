@@ -1383,3 +1383,64 @@ def test_an_empty_classifier_model_lets_jev_judge_choose(tmp_path, fake, home):
     knob(home, model="")
     assert run_prune(tmp_path, fake) == 0
     assert "--model" not in _run_argv(fake)
+
+
+# ---- fix round 2 ----------------------------------------------------------------------------
+
+
+@posix_only
+def test_each_logged_jev_answer_carries_the_type_jev_judge_reported(
+    tmp_path, fake, home
+):
+    knob(home)
+    assert run_prune(tmp_path, fake) == 0
+    alpha = next(
+        r for r in read_jsonl(shadow_logs(home)[0]) if r["item_id"] == "slug-alpha"
+    )
+    assert alpha["jev"]["untestable_negative"]["type"] == "noul"
+
+
+def test_a_logged_type_wins_over_inference_for_an_older_wording(home, capsys):
+    """A noul answer that carries probabilities would be inferred a score; its logged type says
+    noul, and the logged type is what the report uses."""
+    probs = {"true": 0.9, "false": 0.1}
+    recs = [
+        _record(
+            f"o{i}",
+            "untestable_negative",
+            0.9,
+            True,
+            True,
+            sha="0lder0lder0lder0",
+            type="noul",
+            probabilities=probs,
+        )
+        for i in range(3)
+    ]
+    _write_log(home, recs)
+    _rc, env = _report_json(capsys, "--site", "dream-prune")
+    q = env["data"]["sites"]["dream-prune"]["shas"]["0lder0lder0lder0"]["questions"]
+    assert q["untestable_negative"]["type"] == "noul"
+
+
+def test_a_record_without_a_logged_type_is_still_inferred(home, capsys):
+    """Records written before answers carried their type keep the inference (the control)."""
+    probs = {"0": 0.1, "1": 0.8, "2": 0.1}
+    recs = [
+        _record(
+            f"o{i}",
+            "fits_level",
+            1.0,
+            1,
+            True,
+            site="dream-placement",
+            sha="pre",
+            probabilities=probs,
+            confidence=0.8,
+        )
+        for i in range(3)
+    ]
+    _write_log(home, recs)
+    _rc, env = _report_json(capsys)
+    q = env["data"]["sites"]["dream-placement"]["shas"]["pre"]["questions"]
+    assert q["fits_level"]["type"] == "score"

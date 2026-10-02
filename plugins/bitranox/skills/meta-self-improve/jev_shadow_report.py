@@ -254,15 +254,35 @@ def _qids(rec: Record) -> list[str]:
     return list(_agree(rec))
 
 
-def _inferred(qid: str, recs: list[Record]) -> tuple[str, int | None]:
-    """A question's type and score level count from its own answers, for an older wording."""
-    answers = [a for a in (_answer(r, qid) for r in recs) if a is not None]
-    if any(isinstance(a.get("value"), str) for a in answers):
-        return "choice", None
+_TYPES = frozenset({"noul", "choice", "score"})
+
+
+def _score_levels(answers: list[Record]) -> int | None:
+    """The level count a score's probabilities name, or None when no answer carries them."""
     probs = (as_record(a.get("probabilities")) for a in answers)
     levels = [len(p) for p in probs if p is not None]
-    if levels:
-        return "score", max(levels)
+    return max(levels) if levels else None
+
+
+def _logged_type(answers: list[Record]) -> str | None:
+    """The one question type the answers were logged with, or None when they carry none (a
+    record written before answers kept their type) or disagree."""
+    logged = {a.get("type") for a in answers} & _TYPES
+    return str(next(iter(logged))) if len(logged) == 1 else None
+
+
+def _inferred(qid: str, recs: list[Record]) -> tuple[str, int | None]:
+    """A question's type and score level count for an older wording: the type its answers
+    were logged with, else (records from before that) a guess from the answers' shape."""
+    answers = [a for a in (_answer(r, qid) for r in recs) if a is not None]
+    logged = _logged_type(answers)
+    if logged is not None:
+        return logged, _score_levels(answers) if logged == "score" else None
+    if any(isinstance(a.get("value"), str) for a in answers):
+        return "choice", None
+    levels = _score_levels(answers)
+    if levels is not None:
+        return "score", levels
     agents = [_agent(r, qid) for r in recs]
     if any(isinstance(a, str) for a in agents):
         return "choice", None

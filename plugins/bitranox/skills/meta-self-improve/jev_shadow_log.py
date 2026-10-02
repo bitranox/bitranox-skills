@@ -109,7 +109,8 @@ def _jev_answers(row: dict[str, Any] | None) -> dict[str, Any] | None:
         answer = rpt.as_record(raw)
         if answer is not None:
             out[qid] = {
-                k: answer.get(k) for k in ("value", "probabilities", "confidence")
+                k: answer.get(k)
+                for k in ("type", "value", "probabilities", "confidence")
             }
     return out
 

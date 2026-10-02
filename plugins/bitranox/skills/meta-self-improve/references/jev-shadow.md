@@ -90,9 +90,12 @@ the anchor (`.` for the anchor). Pick the best level per fact in code; Jev score
 One record per item in `~/.claude/self-improve-audit/jev-skill-shadow-YYYY-MM.jsonl`, appended
 under the memory lock: `ts`, `run_id`, `site`, `site_version`, `questions_sha`, `plugin_version`,
 `jev_judge_version`, `model`, `cwd`, `git_head` (of the cwd, or null), `item_id`, `state`,
-`redactions`, `jev` (`{question id: {value, probabilities, confidence}}`, or null), `jev_reason`
-(why there is no Jev answer), `agent` (the verdict, or null when there is none or it is empty), `agent_note`, `agree`, `latency_ms`,
-`input_tokens`, `cost_usd` (this item's share of the run).
+`redactions`, `jev` (`{question id: {type, value, probabilities, confidence}}`, or null),
+`jev_reason` (why there is no Jev answer), `agent` (the verdict, or null when there is none or
+it is empty), `agent_note`, `agree`, `latency_ms`, `input_tokens`, `cost_usd` (this item's
+share of the run). Each Jev answer keeps the `type` jev-judge reported, so `report` types an
+older wording from it; records logged before answers carried a type are typed from their
+answers' shape.
 
 `state` is what was SENT: each field redacted (`classifier.prepare_state`) and capped. Keeping it
 lets a later, better question be replayed over logged items without re-running the skill.
@@ -131,11 +134,11 @@ reading by hand. Either side can be the wrong one; deciding which is the point.
 
 ## Exit codes and output
 
-| Command  | 0                             | 1                             | 2                                                  |
-|----------|-------------------------------|-------------------------------|----------------------------------------------------|
-| `status` | a run would happen            | it would not (reason printed) | usage error                                        |
-| `items`  | items written                 | none built (empty file)       | unknown site, agent-built site, missing source     |
-| `run`    | records logged, or shadow off | logged, but Jev answered none | missing verdicts file, malformed items or verdicts |
-| `report` | records summarized            | no records match              | bad `--since`, unwritable `--disagreements`        |
+| Command  | 0                                                  | 1                             | 2                                                                                     |
+|----------|----------------------------------------------------|-------------------------------|---------------------------------------------------------------------------------------|
+| `status` | a run would happen                                 | it would not (reason printed) | usage error                                                                           |
+| `items`  | items written                                      | none built (empty file)       | unknown site, agent-built site, missing source                                        |
+| `run`    | records logged, shadow off, or an empty items file | logged, but Jev answered none | missing verdicts file, malformed items or verdicts, unwritable log, workdir or output |
+| `report` | records summarized                                 | no records match              | bad `--since`, unwritable `--disagreements`                                           |
 
 `--json` prints `{ok, command, data, skipped}` on stdout; diagnostics go to stderr.
