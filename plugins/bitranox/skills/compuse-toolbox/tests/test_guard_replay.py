@@ -880,6 +880,21 @@ def test_write_firings_raises_usage_error_not_oserror(tmp_path):
         raise AssertionError("expected UsageError, not a silent write or a raw OSError")
 
 
+def test_write_firings_error_shows_the_path_as_given_not_repr_quoted(tmp_path):
+    """`%r` doubles every backslash in a Windows path (`'C:\\\\Users\\\\...'`), so a user reads a
+    mangled path - this pins the fix on POSIX too, where `%r` differs from `%s` only by the
+    surrounding quotes, so the regression is visible without a Windows path at all."""
+    bad_out = tmp_path / "no-such-dir" / "firings.jsonl"
+    try:
+        G.write_firings(str(bad_out), [{"id": "a", "command": "x", "cwd": "/r", "error": None,
+                                        "transcript": "/t.jsonl"}])
+    except G.UsageError as exc:
+        message = str(exc)
+        assert repr(str(bad_out)) not in message, "path must not be repr-quoted"
+    else:
+        raise AssertionError("expected UsageError, not a silent write or a raw OSError")
+
+
 # --- classify() never carries fire_calls unless explicitly asked, and replay() never carries it
 # at all: a future direct caller who serializes the report must not leak every firing's command,
 # cwd and error just because --firings happened to be requested.

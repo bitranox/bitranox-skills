@@ -506,7 +506,7 @@ def write_firings(path: str, fire_calls) -> None:
                 fh.write(json.dumps(record, ensure_ascii=False))
                 fh.write("\n")
     except OSError as exc:
-        raise UsageError("cannot write --firings %r: %s" % (path, exc)) from exc
+        raise UsageError("cannot write --firings %s: %s" % (path, exc.strerror or exc)) from exc
 
 
 def _corpus_files(base: Path, skipped: list):
