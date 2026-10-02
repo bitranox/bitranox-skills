@@ -65,11 +65,20 @@ def test_a_site_whose_hook_implements_decide_accepts_it(capsys, key):
     ("classifier_stop_signal", "decides"),
     # decide exists only where a hook implements it; recall still logs in shadow only.
     ("classifier_recall_rerank", "decide"),
+    # classifier_skills gates the Jev-shadow skill-steps pipeline; "decide" is a later task
+    # (per-site decide mode), not yet implemented here.
+    ("classifier_skills", "decide"),
 ])
 def test_classifier_site_refuses_a_mode_it_does_not_have(capsys, key, value):
     assert ST.main(["set", key, value]) == 2
     assert "must be one of" in capsys.readouterr().err
     assert sig.load_config()[key] == "off"
+
+
+def test_classifier_skills_defaults_to_off_and_accepts_shadow(capsys):
+    assert sig.load_config()["classifier_skills"] == "off"
+    assert ST.main(["set", "classifier_skills", "shadow"]) == 0
+    assert sig.load_config()["classifier_skills"] == "shadow"
 
 
 def test_set_list_knob_json(capsys):

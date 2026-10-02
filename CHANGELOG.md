@@ -29,6 +29,14 @@ than the change, so entries reconstructed from them would read like coverage wit
 a hole nobody has drawn a line under is one that gets rediscovered and half-filled - which is how
 two "versions with no entry" notes came to sit in this file disagreeing with it.
 
+## [7.35.0]
+
+### Added
+
+- Settings knob `classifier_skills` (`off` by default, or `shadow`). With `classifier_backend`
+  set to `jev` and this set to `shadow`, skill steps wired for Jev shadow send their items to Jev
+  beside the agent's own judgment and log both; nothing acts on Jev's answer.
+
 ## [7.34.0]
 
 ### Added

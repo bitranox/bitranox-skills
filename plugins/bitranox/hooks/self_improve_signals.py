@@ -1136,6 +1136,7 @@ DEFAULT_CONFIG = {
     "classifier_stop_signal": "off",   # off | shadow | decide - self-improve Stop gate signal
     "classifier_skill_router": "off",  # off | shadow | decide - UserPromptSubmit skill router
     "classifier_recall_rerank": "off",  # off | shadow - UserPromptSubmit memory recall ranking
+    "classifier_skills": "off",        # off | shadow - skill-step Jev shadow (needs classifier_backend=jev too)
 }
 
 
