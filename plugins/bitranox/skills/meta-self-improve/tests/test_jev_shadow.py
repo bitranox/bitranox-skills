@@ -7,6 +7,7 @@ temporary directory, so the knob file, the key lookup and the audit log all reso
 the same `Path.home()` seam the hooks use. Nothing inside jev_shadow is patched.
 """
 
+import importlib
 import json
 import os
 import re
@@ -21,9 +22,9 @@ import jev_shadow as js
 import jev_shadow_log as slog
 import jev_shadow_sites as sites
 
-# The store writer, from the module that put hooks/ on sys.path: a top-level import of it
-# would depend on import order, which the import sorter does not preserve.
-ME = sites.ME
+# The store writer. hooks/ is on sys.path once jev_shadow is imported; a top-level import of
+# memory_engine would depend on import order, which the import sorter does not preserve.
+ME = importlib.import_module("memory_engine")
 SKILL_DIR = Path(__file__).resolve().parent.parent
 SITES_DIR = SKILL_DIR / "jev_sites"
 JEV_SKILL = SKILL_DIR.parent / "ai-llm-jev-judge" / "SKILL.md"
@@ -126,8 +127,10 @@ def fake(tmp_path, monkeypatch, home):
     return {"log": log, "rows": rows, "seen": tmp_path / "seen.json"}
 
 
-def knob(home, on=True):
+def knob(home, on=True, model=None):
     cfg = {"classifier_backend": "jev", "classifier_skills": "shadow"} if on else {}
+    if model is not None:
+        cfg["classifier_model"] = model
     (home / ".claude" / ".bitranox-memory.json").write_text(
         json.dumps(cfg), encoding="utf-8"
     )
@@ -141,7 +144,7 @@ def write_jsonl(path, rows):
 def read_jsonl(path):
     return [
         json.loads(line)
-        for line in path.read_text(encoding="utf-8").splitlines()
+        for line in path.read_text(encoding="utf-8").split("\n")
         if line.strip()
     ]
 
@@ -668,7 +671,7 @@ def test_report_counts_agreement_band_and_flags_only_the_flat_question(home, cap
     rc = js.main(["report", "--site", "dream-prune", "--json"])
     env = json.loads(capsys.readouterr().out)
     assert rc == 0 and env["ok"] is True and env["command"] == "report"
-    q = env["data"]["sites"]["dream-prune"]["questions"]
+    q = env["data"]["sites"]["dream-prune"]["shas"]["x"]["questions"]
     q1, q2 = q["untestable_negative"], q["unlabelled_unsolved"]
     assert q1["n"] == 6 and q1["paired"] == 6
     assert q1["agreement_pct"] == pytest.approx(500 / 6, abs=0.1)
@@ -983,3 +986,400 @@ def test_status_says_whether_a_run_would_happen(fake, home, capsys):
     assert js.main(["status", "--json"]) == 0
     env = json.loads(capsys.readouterr().out)
     assert env["data"]["would_run"] is True and env["data"]["key"] is True
+
+
+# ---- fix round 1 ----------------------------------------------------------------------------
+
+
+def _record(item, qid, value, agent, agree, *, site="dream-prune", sha="x", **answer):
+    """A log record with one question, any answer shape (choice values are strings)."""
+    jev = (
+        None
+        if value is None
+        else {
+            qid: {"value": value, "probabilities": None, "confidence": None, **answer}
+        }
+    )
+    return {
+        "ts": "2026-10-01T10:00:00+00:00",
+        "run_id": "r",
+        "site": site,
+        "site_version": 1,
+        "questions_sha": sha,
+        "item_id": item,
+        "state": {"s": item},
+        "jev": jev,
+        "agent": None if agent is None else {qid: agent},
+        "agent_note": None,
+        "agree": {qid: agree},
+        "cost_usd": 0.0,
+    }
+
+
+def _write_log(home, records):
+    d = audit(home)
+    d.mkdir(parents=True, exist_ok=True)
+    write_jsonl(d / "jev-skill-shadow-2026-10.jsonl", records)
+
+
+def _report_json(capsys, *argv):
+    rc = js.main(["report", "--json", *argv])
+    return rc, json.loads(capsys.readouterr().out)
+
+
+def test_report_keeps_each_questions_sha_apart_and_types_each_from_its_own_answers(
+    home, capsys
+):
+    """A question that was a choice under an older wording must not be read as today's noul."""
+    current = sites.load_site("dream-prune").questions_sha
+    new = [
+        _record(f"n{i}", "untestable_negative", 0.9, True, True, sha=current)
+        for i in range(5)
+    ]
+    old = [
+        _record(
+            f"o{i}", "untestable_negative", "yes", "yes", True, sha="0ld0ld0ld0ld0ld0"
+        )
+        for i in range(5)
+    ]
+    _write_log(home, new + old)
+    rc, env = _report_json(capsys, "--site", "dream-prune")
+    assert rc == 0
+    shas = env["data"]["sites"]["dream-prune"]["shas"]
+    assert set(shas) == {current, "0ld0ld0ld0ld0ld0"}
+    assert (
+        shas[current]["current"] is True
+        and shas["0ld0ld0ld0ld0ld0"]["current"] is False
+    )
+    assert shas[current]["questions"]["untestable_negative"]["type"] == "noul"
+    assert shas[current]["questions"]["untestable_negative"]["n"] == 5
+    assert (
+        shas["0ld0ld0ld0ld0ld0"]["questions"]["untestable_negative"]["type"] == "choice"
+    )
+    assert shas["0ld0ld0ld0ld0ld0"]["questions"]["untestable_negative"]["n"] == 5
+
+
+def test_report_flat_fires_on_a_choice_at_95_percent_and_not_at_90(home, capsys):
+    flat = [
+        _record(
+            f"f{i}",
+            "cause",
+            "whitespace_only" if i else "none",
+            "none",
+            i == 0,
+            site="consolidate-cause",
+            sha="flat",
+        )
+        for i in range(20)
+    ]
+    varied = [
+        _record(
+            f"v{i}",
+            "cause",
+            "whitespace_only" if i > 1 else "none",
+            "none",
+            i <= 1,
+            site="consolidate-cause",
+            sha="varied",
+        )
+        for i in range(20)
+    ]
+    _write_log(home, flat + varied)
+    _rc, env = _report_json(capsys)
+    shas = env["data"]["sites"]["consolidate-cause"]["shas"]
+    assert shas["flat"]["questions"]["cause"]["flat"] is True  # 19 of 20 = 95%
+    assert shas["varied"]["questions"]["cause"]["flat"] is False  # 18 of 20 = 90%
+
+
+def test_report_flat_fires_on_a_constant_score_and_not_on_a_varied_one(home, capsys):
+    probs = {"0": 0.1, "1": 0.8, "2": 0.1}
+    flat = [
+        _record(
+            f"f{i}",
+            "fits_level",
+            1.0,
+            1,
+            True,
+            site="dream-placement",
+            sha="flat",
+            probabilities=probs,
+            confidence=0.8,
+        )
+        for i in range(6)
+    ]
+    varied = [
+        _record(
+            f"v{i}",
+            "fits_level",
+            0.4 * i,
+            1,
+            None,
+            site="dream-placement",
+            sha="varied",
+            probabilities=probs,
+            confidence=0.8,
+        )
+        for i in range(6)
+    ]
+    _write_log(home, flat + varied)
+    _rc, env = _report_json(capsys)
+    shas = env["data"]["sites"]["dream-placement"]["shas"]
+    assert shas["flat"]["questions"]["fits_level"]["type"] == "score"
+    assert shas["flat"]["questions"]["fits_level"]["flat"] is True
+    assert shas["varied"]["questions"]["fits_level"]["flat"] is False
+
+
+def test_report_confusion_uses_the_same_clamped_score_index_as_agree(home, capsys):
+    site = sites.load_site("dream-placement")
+    probs = {"0": 0.0, "1": 0.4, "2": 0.6}
+    rec = _record(
+        "s|.",
+        "fits_level",
+        2.6,
+        2,
+        True,
+        site="dream-placement",
+        sha=site.questions_sha,
+        probabilities=probs,
+        confidence=0.6,
+    )
+    _write_log(home, [rec])
+    _rc, env = _report_json(capsys)
+    q = env["data"]["sites"]["dream-placement"]["shas"][site.questions_sha]["questions"]
+    assert q["fits_level"]["confusion"] == {"agent=2/jev=2": 1}
+
+
+UNICODE_SEPARATORS = "line\u2028para\u2029next\u0085end"
+
+
+@posix_only
+def test_line_separator_characters_survive_items_run_log_and_report(
+    store, tmp_path, fake, home
+):
+    knob(home)
+    ME.add_or_update_entry(
+        str(store["proj"]),
+        "Sep fact",
+        "When separators, keep them.",
+        body=UNICODE_SEPARATORS,
+    )
+    items = tmp_path / "items.jsonl"
+    assert (
+        js.main(
+            [
+                "items",
+                "--site",
+                "dream-prune",
+                "--anchor",
+                str(store["anchor"]),
+                "--out",
+                str(items),
+            ]
+        )
+        == 0
+    )
+    assert "sep-fact" in {i["id"] for i in read_jsonl(items)}
+    fake["rows"].write_text(
+        json.dumps(
+            {
+                "sep-fact": {
+                    "untestable_negative": noul(0.1),
+                    "unlabelled_unsolved": noul(0.1),
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+    vpath = write_jsonl(
+        tmp_path / "v.jsonl",
+        [{"id": "sep-fact", "verdict": {"untestable_negative": True}}],
+    )
+    assert (
+        js.main(
+            [
+                "run",
+                "--site",
+                "dream-prune",
+                "--items",
+                str(items),
+                "--verdicts",
+                str(vpath),
+            ]
+        )
+        == 0
+    )
+    dis = tmp_path / "dis.jsonl"
+    assert js.main(["report", "--disagreements", str(dis)]) == 0
+    rows = [r for r in read_jsonl(dis) if r["item_id"] == "sep-fact"]
+    assert rows and rows[0]["state"]["body"] == UNICODE_SEPARATORS
+
+
+@posix_only
+def test_an_unwritable_log_is_exit_2_with_one_line_not_a_traceback(
+    tmp_path, fake, home, capsys
+):
+    knob(home)
+    audit(home).parent.mkdir(parents=True, exist_ok=True)
+    audit(home).write_text("a file where the audit dir should be", encoding="utf-8")
+    assert run_prune(tmp_path, fake) == 2
+    err = capsys.readouterr().err
+    assert err.startswith("jev_shadow: ") and "Traceback" not in err
+
+
+@pytest.mark.parametrize(
+    "line",
+    [
+        '"just a string"',
+        '{"command": "c"}',
+        '{"id": "", "command": "c"}',
+        '{"id": null, "command": "c"}',
+    ],
+)
+def test_a_firing_without_a_usable_id_is_a_usage_error(tmp_path, home, capsys, line):
+    firings = tmp_path / "f.jsonl"
+    firings.write_text(line + "\n", encoding="utf-8")
+    rc = js.main(
+        [
+            "items",
+            "--site",
+            "guard-firing",
+            "--firings",
+            str(firings),
+            "--hazard",
+            "h",
+            "--out",
+            str(tmp_path / "i.jsonl"),
+        ]
+    )
+    assert rc == 2
+    assert "jev_shadow: " in capsys.readouterr().err
+
+
+@posix_only
+def test_a_null_state_value_is_sent_and_logged_as_empty_not_none(tmp_path, fake, home):
+    knob(home)
+    fake["rows"].write_text(
+        json.dumps({"a": PRUNE_ROWS["slug-alpha"]}), encoding="utf-8"
+    )
+    items = write_jsonl(
+        tmp_path / "i.jsonl", [{"id": "a", "state": {"hook": "h", "body": None}}]
+    )
+    vpath = write_jsonl(tmp_path / "v.jsonl", [])
+    assert (
+        js.main(
+            [
+                "run",
+                "--site",
+                "dream-prune",
+                "--items",
+                str(items),
+                "--verdicts",
+                str(vpath),
+            ]
+        )
+        == 0
+    )
+    assert read_jsonl(shadow_logs(home)[0])[0]["state"]["body"] == ""
+
+
+@posix_only
+def test_an_empty_items_file_launches_nothing(tmp_path, fake, home, capsys):
+    knob(home)
+    items = tmp_path / "i.jsonl"
+    items.write_text("", encoding="utf-8")
+    vpath = write_jsonl(tmp_path / "v.jsonl", [])
+    assert (
+        js.main(
+            [
+                "run",
+                "--site",
+                "dream-prune",
+                "--items",
+                str(items),
+                "--verdicts",
+                str(vpath),
+            ]
+        )
+        == 0
+    )
+    assert calls(fake) == []
+    assert shadow_logs(home) == []
+
+
+@posix_only
+def test_an_empty_verdict_does_not_count_as_paired(tmp_path, fake, home, capsys):
+    knob(home)
+    assert (
+        run_prune(
+            tmp_path,
+            fake,
+            verdicts=[{"id": "slug-alpha", "verdict": {}}],
+            extra=("--json",),
+        )
+        == 0
+    )
+    env = json.loads(capsys.readouterr().out)
+    assert env["data"]["paired"] == 0
+    alpha = next(
+        r for r in read_jsonl(shadow_logs(home)[0]) if r["item_id"] == "slug-alpha"
+    )
+    assert alpha["agent"] is None
+
+
+@posix_only
+def test_jev_answering_no_item_is_exit_1_with_the_reason_on_stderr(
+    tmp_path, fake, home, capsys
+):
+    knob(home)
+    assert run_prune(tmp_path, fake, rows={}) == 1
+    cap = capsys.readouterr()
+    assert "canned failure" in cap.err
+    assert len(read_jsonl(shadow_logs(home)[0])) == 3  # still logged, with jev null
+
+
+@posix_only
+def test_jev_judge_failing_outright_is_exit_1_with_its_exit_on_stderr(
+    tmp_path, fake, home, capsys, monkeypatch
+):
+    knob(home)
+    monkeypatch.setenv(
+        "FAKE_JEV_ROWS", str(tmp_path / "missing.json")
+    )  # the fake crashes
+    items = write_jsonl(tmp_path / "items.jsonl", PRUNE_ITEMS)
+    vpath = write_jsonl(tmp_path / "verdicts.jsonl", PRUNE_VERDICTS)
+    assert (
+        js.main(
+            [
+                "run",
+                "--site",
+                "dream-prune",
+                "--items",
+                str(items),
+                "--verdicts",
+                str(vpath),
+            ]
+        )
+        == 1
+    )
+    assert "jev-judge run exited" in capsys.readouterr().err
+    recs = read_jsonl(shadow_logs(home)[0])
+    assert all(r["jev"] is None and "exited" in r["jev_reason"] for r in recs)
+
+
+def _run_argv(fake):
+    return next(argv for argv in calls(fake) if "run" in argv)
+
+
+@posix_only
+def test_the_classifier_model_knob_is_passed_to_jev_judge(tmp_path, fake, home):
+    knob(home, model="jev-9.9.9")
+    assert run_prune(tmp_path, fake) == 0
+    argv = _run_argv(fake)
+    assert argv[argv.index("--model") + 1] == "jev-9.9.9"
+
+
+@posix_only
+def test_an_empty_classifier_model_lets_jev_judge_choose(tmp_path, fake, home):
+    knob(home, model="")
+    assert run_prune(tmp_path, fake) == 0
+    assert "--model" not in _run_argv(fake)

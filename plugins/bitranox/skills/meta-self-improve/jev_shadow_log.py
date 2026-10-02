@@ -16,23 +16,12 @@ from __future__ import annotations
 import json
 import os
 import re
-import sys
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta
 from pathlib import Path
 from typing import Any
 
-# The hooks dir holds classifier and self_improve_signals; put it on sys.path before importing
-# them, the same setup classifier_eval.py uses, so this module imports on its own too.
-_HERE = Path(__file__).resolve().parent
-_HOOKS = _HERE.parent.parent / "hooks"
-for _d in (str(_HOOKS), str(_HERE)):
-    if _d not in sys.path:
-        sys.path.insert(0, _d)
-
-import classifier as cl
-import self_improve_signals as sig
-
+import jev_shadow_ports as ports
 import jev_shadow_report as rpt
 import jev_shadow_sites as sites
 
@@ -104,7 +93,7 @@ def audit_dir() -> Path:
 
 def short_reason(text: str) -> str:
     """A failure reason fit for the log: one line, redacted, capped."""
-    state, _n = cl.prepare_state({"t": " ".join(text.split())}, cap=_REASON_CAP)
+    state, _n = ports.prepare_state({"t": " ".join(text.split())}, cap=_REASON_CAP)
     return state["t"]
 
 
@@ -114,12 +103,15 @@ def short_reason(text: str) -> str:
 def _jev_answers(row: dict[str, Any] | None) -> dict[str, Any] | None:
     if not row or not row.get("ok"):
         return None
-    answers = row.get("answers") or {}
-    return {
-        qid: {k: a.get(k) for k in ("value", "probabilities", "confidence")}
-        for qid, a in answers.items()
-        if isinstance(a, dict)
-    }
+    answers = rpt.as_record(row.get("answers")) or {}
+    out: dict[str, Any] = {}
+    for qid, raw in answers.items():
+        answer = rpt.as_record(raw)
+        if answer is not None:
+            out[qid] = {
+                k: answer.get(k) for k in ("value", "probabilities", "confidence")
+            }
+    return out
 
 
 def agrees(
@@ -179,7 +171,8 @@ def build_record(
     """
     row = ctx.jev.rows.get(item.id)
     jev = _jev_answers(row)
-    agent = verdict.answers if verdict else None
+    # An empty verdict judged nothing: it is no verdict, so it can never count as paired.
+    agent = verdict.answers if verdict and verdict.answers else None
     agree = {
         q["id"]: agrees(q, (agent or {}).get(q["id"]), (jev or {}).get(q["id"]))
         for q in ctx.site.questions
@@ -253,7 +246,8 @@ def _drop_expired(
     """Delete months past LOG_KEEP_DAYS; return the removed paths and the survivors' sizes."""
     current = log_path(audit, now)
     cutoff = now.date() - timedelta(days=LOG_KEEP_DAYS)
-    removed, sized = [], []
+    removed: list[Path] = []
+    sized: list[tuple[Path, int]] = []
     for path in log_files(audit):
         if path != current and _month_end(path) < cutoff:
             if _unlink(path):
@@ -298,7 +292,7 @@ def append_records(records: list[dict[str, Any]], now: datetime) -> None:
     audit.mkdir(parents=True, exist_ok=True)
     path = log_path(audit, now)
     try:
-        with sig.memory_lock(path):
+        with ports.memory_lock(path):
             with path.open("a", encoding="utf-8") as fh:
                 fh.writelines(json.dumps(r, ensure_ascii=False) + "\n" for r in records)
             prune_logs(audit, now)

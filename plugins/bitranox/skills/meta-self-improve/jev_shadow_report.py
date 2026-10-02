@@ -7,6 +7,12 @@ paired, the agent-by-Jev confusion counts, the share of Jev answers inside the u
 agreement with that band excluded, and a FLAT flag. A constant answer is a broken instrument, not
 consensus, so FLAT is a finding about the question, never about the items.
 
+Records are never pooled across question wordings: every figure is reported per `questions_sha`,
+the hash of the exact questions the records were asked. The current site file decides question
+types and score level counts only for the records carrying ITS sha; records from an older wording
+have their types read from their own answers, so a question that changed type (a choice that
+became a noul) is reported as what it was when it was asked.
+
 The band is the one the jev-judge skill reads by hand: a noul strictly between 0.2 and 0.8, a
 choice or score with confidence below 0.6. Standard library only.
 """
@@ -19,7 +25,9 @@ from collections import Counter
 from collections.abc import Iterable
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
+
+from jev_shadow_sites import jsonl_lines
 
 __all__ = [
     "BAND",
@@ -28,7 +36,9 @@ __all__ = [
     "FLAT_STDEV",
     "MIN_CONFIDENCE",
     "LogRead",
+    "SiteSpec",
     "answer_label",
+    "as_record",
     "disagreements",
     "jev_index",
     "jev_label",
@@ -36,6 +46,8 @@ __all__ = [
     "render",
     "summarize",
 ]
+
+Record = dict[str, Any]
 
 BAND = (0.2, 0.8)
 MIN_CONFIDENCE = 0.6
@@ -45,12 +57,21 @@ FLAT_STDEV = 0.05
 FLAT_SHARE = 0.95
 
 
+@dataclass(frozen=True)
+class SiteSpec:
+    """What a site file says today: its questions hash, question types and score level counts."""
+
+    sha: str
+    types: dict[str, str]
+    levels: dict[str, int]
+
+
 @dataclass
 class LogRead:
     """Records read from the log files, and the lines that could not be read (`file:line`)."""
 
-    records: list[dict[str, Any]] = field(default_factory=list)
-    skipped: list[str] = field(default_factory=list)
+    records: list[Record] = field(default_factory=list[Record])
+    skipped: list[str] = field(default_factory=list[str])
 
 
 def read_records(
@@ -76,30 +97,42 @@ def read_records(
 def _read_file(path: Path, out: LogRead) -> None:
     """Add a file's records to `out`; an unreadable file or line goes to `out.skipped`."""
     try:
-        lines = path.read_text(encoding="utf-8").splitlines()
+        lines = jsonl_lines(path.read_text(encoding="utf-8"))
     except (OSError, UnicodeError):
         out.skipped.append(path.name)
         return
     for number, line in enumerate(lines, start=1):
         rec = _parse(line)
-        if rec is not None:
-            out.records.append(rec)
-        elif line.strip():
+        if rec is None:
             out.skipped.append(f"{path.name}:{number}")
+        else:
+            out.records.append(rec)
 
 
-def _keep(rec: dict[str, Any], *, site: str | None, since: str | None) -> bool:
+def _keep(rec: Record, *, site: str | None, since: str | None) -> bool:
     if site is not None and rec.get("site") != site:
         return False
     return since is None or str(rec.get("ts") or "")[:10] >= since
 
 
-def _parse(line: str) -> dict[str, Any] | None:
+def as_record(value: object) -> Record | None:
+    """A decoded JSON object with its key type stated; None for any other JSON value."""
+    return cast("Record", value) if isinstance(value, dict) else None
+
+
+def _parse(line: str) -> Record | None:
     try:
-        rec = json.loads(line)
+        rec: object = json.loads(line)
     except ValueError:
         return None
-    return rec if isinstance(rec, dict) else None
+    return as_record(rec)
+
+
+def _number(value: object) -> float | None:
+    """A JSON number as a float; None for anything else (a bool is not a number here)."""
+    if isinstance(value, bool) or not isinstance(value, int | float):
+        return None
+    return float(value)
 
 
 def jev_index(value: float, levels: int | None = None) -> int:
@@ -108,92 +141,101 @@ def jev_index(value: float, levels: int | None = None) -> int:
     return max(0, min(idx, levels - 1)) if levels else max(0, idx)
 
 
-def jev_label(qtype: str, answer: dict[str, Any]) -> Any:
-    """The comparable form of one Jev answer: a bool, a choice key or a score index."""
-    value = answer.get("value")
-    if qtype == "noul":
-        return float(value) >= 0.5
-    if qtype == "score":
-        return jev_index(float(value))
-    return value
+def jev_label(
+    qtype: str, answer: Record, levels: int | None = None
+) -> bool | int | str | None:
+    """The comparable form of one Jev answer: a bool, a choice key or a score index.
+
+    The score index is clamped to `levels` exactly as the record's `agree` was, so the confusion
+    table and the agreement figure count the same thing. None for an answer of the wrong shape.
+    """
+    value: object = answer.get("value")
+    if qtype == "choice":
+        return None if value is None else str(value)
+    number = _number(value)
+    if number is None:
+        return None
+    return number >= 0.5 if qtype == "noul" else jev_index(number, levels)
 
 
-def answer_label(value: Any) -> str:
+def answer_label(value: object) -> str:
     """A confusion-table label: `true`/`false` for a bool, the plain value otherwise."""
     if isinstance(value, bool):
         return "true" if value else "false"
     return str(value)
 
 
-def _in_band(qtype: str, answer: dict[str, Any]) -> bool:
+def _in_band(qtype: str, answer: Record) -> bool:
     if qtype == "noul":
-        return BAND[0] < float(answer.get("value") or 0.0) < BAND[1]
-    confidence = answer.get("confidence")
-    return isinstance(confidence, (int, float)) and confidence < MIN_CONFIDENCE
+        number = _number(answer.get("value"))
+        return number is not None and BAND[0] < number < BAND[1]
+    confidence = _number(answer.get("confidence"))
+    return confidence is not None and confidence < MIN_CONFIDENCE
 
 
-def _is_flat(qtype: str, answers: list[dict[str, Any]]) -> bool:
+def _is_flat(qtype: str, answers: list[Record]) -> bool:
     if len(answers) < FLAT_MIN_ANSWERS:
         return False
     if qtype == "choice":
         top = Counter(str(a.get("value")) for a in answers).most_common(1)[0][1]
         return top / len(answers) >= FLAT_SHARE
-    return statistics.pstdev(float(a.get("value") or 0.0) for a in answers) < FLAT_STDEV
-
-
-def _infer_type(answer: dict[str, Any]) -> str:
-    if isinstance(answer.get("value"), str):
-        return "choice"
-    return "score" if answer.get("probabilities") else "noul"
+    numbers = [n for n in (_number(a.get("value")) for a in answers) if n is not None]
+    return len(numbers) >= FLAT_MIN_ANSWERS and statistics.pstdev(numbers) < FLAT_STDEV
 
 
 def _pct(part: int, whole: int) -> float | None:
     return round(100.0 * part / whole, 1) if whole else None
 
 
+def _answer(rec: Record, qid: str) -> Record | None:
+    jev = as_record(rec.get("jev"))
+    return None if jev is None else as_record(jev.get(qid))
+
+
+def _agent(rec: Record, qid: str) -> object:
+    agent = as_record(rec.get("agent"))
+    return None if agent is None else agent.get(qid)
+
+
+def _agree(rec: Record) -> Record:
+    return as_record(rec.get("agree")) or {}
+
+
 @dataclass
 class _Tally:
     qtype: str
+    levels: int | None
     n: int = 0
     paired: int = 0
     agreed: int = 0
-    answers: list[dict[str, Any]] = field(default_factory=list)
+    answers: list[Record] = field(default_factory=list[Record])
     in_band: int = 0
     paired_out: int = 0
     agreed_out: int = 0
-    confusion: Counter[str] = field(default_factory=Counter)
+    confusion: Counter[str] = field(default_factory=Counter[str])
 
-    def add(self, rec: dict[str, Any], qid: str) -> None:
+    def add(self, rec: Record, qid: str) -> None:
         self.n += 1
-        answer = ((rec.get("jev") or {}).get(qid)) or None
-        band = False
-        if answer is not None:
-            self.answers.append(answer)
-            band = _in_band(self.qtype, answer)
-            self.in_band += band
-        agree = (rec.get("agree") or {}).get(qid)
-        if agree is None or answer is None:
+        answer = _answer(rec, qid)
+        label = None if answer is None else jev_label(self.qtype, answer, self.levels)
+        if answer is None or label is None:
             return
-        self._pair(rec, qid, answer, bool(agree), band)
+        self.answers.append(answer)
+        band = _in_band(self.qtype, answer)
+        self.in_band += band
+        agree: object = _agree(rec).get(qid)
+        if isinstance(agree, bool):
+            self._pair(_agent(rec, qid), label, agree, band)
 
-    def _pair(
-        self,
-        rec: dict[str, Any],
-        qid: str,
-        answer: dict[str, Any],
-        agree: bool,
-        band: bool,
-    ) -> None:
+    def _pair(self, agent: object, label: object, agree: bool, band: bool) -> None:
         self.paired += 1
         self.agreed += agree
         if not band:
             self.paired_out += 1
             self.agreed_out += agree
-        agent = (rec.get("agent") or {}).get(qid)
-        key = f"agent={answer_label(agent)}/jev={answer_label(jev_label(self.qtype, answer))}"
-        self.confusion[key] += 1
+        self.confusion[f"agent={answer_label(agent)}/jev={answer_label(label)}"] += 1
 
-    def result(self) -> dict[str, Any]:
+    def result(self) -> dict[str, object]:
         return {
             "type": self.qtype,
             "n": self.n,
@@ -208,75 +250,93 @@ class _Tally:
         }
 
 
-def _qids(rec: dict[str, Any]) -> list[str]:
-    return list((rec.get("agree") or {}).keys())
+def _qids(rec: Record) -> list[str]:
+    return list(_agree(rec))
 
 
-def _qtype(qid: str, types: dict[str, str], recs: list[dict[str, Any]]) -> str:
-    if qid in types:
-        return types[qid]
-    for rec in recs:
-        answer = (rec.get("jev") or {}).get(qid)
-        if answer:
-            return _infer_type(answer)
-    return "noul"
+def _inferred(qid: str, recs: list[Record]) -> tuple[str, int | None]:
+    """A question's type and score level count from its own answers, for an older wording."""
+    answers = [a for a in (_answer(r, qid) for r in recs) if a is not None]
+    if any(isinstance(a.get("value"), str) for a in answers):
+        return "choice", None
+    probs = (as_record(a.get("probabilities")) for a in answers)
+    levels = [len(p) for p in probs if p is not None]
+    if levels:
+        return "score", max(levels)
+    agents = [_agent(r, qid) for r in recs]
+    if any(isinstance(a, str) for a in agents):
+        return "choice", None
+    if any(isinstance(a, int) and not isinstance(a, bool) for a in agents):
+        return "score", None
+    return "noul", None
 
 
 def _tally(
-    tallies: dict[str, _Tally],
-    qid: str,
-    types: dict[str, str],
-    recs: list[dict[str, Any]],
+    tallies: dict[str, _Tally], qid: str, spec: SiteSpec | None, recs: list[Record]
 ) -> _Tally:
+    """The tally for `qid`, created on first use. `spec` is the current site file only when it
+    was written for these very records; otherwise the shape comes from the records."""
     if qid not in tallies:
-        tallies[qid] = _Tally(_qtype(qid, types, recs))
+        if spec is not None and qid in spec.types:
+            tallies[qid] = _Tally(spec.types[qid], spec.levels.get(qid))
+        else:
+            tallies[qid] = _Tally(*_inferred(qid, recs))
     return tallies[qid]
 
 
-def _site_summary(recs: list[dict[str, Any]], types: dict[str, str]) -> dict[str, Any]:
+def _sha_summary(
+    recs: list[Record], spec: SiteSpec | None, sha: str
+) -> dict[str, object]:
+    current = spec is not None and spec.sha == sha
+    own_spec = spec if current else None
     tallies: dict[str, _Tally] = {}
     for rec in recs:
         for qid in _qids(rec):
-            _tally(tallies, qid, types, recs).add(rec, qid)
-    cost = sum(float(r.get("cost_usd") or 0.0) for r in recs)
+            _tally(tallies, qid, own_spec, recs).add(rec, qid)
     return {
+        "site_version": recs[0].get("site_version"),
+        "current": current,
         "records": len(recs),
-        "cost_usd": round(cost, 6),
+        "cost_usd": _cost(recs),
         "questions": {qid: t.result() for qid, t in tallies.items()},
     }
 
 
-def summarize(
-    records: list[dict[str, Any]], types_by_site: dict[str, dict[str, str]]
-) -> dict[str, Any]:
-    """Per site, per question: the agreement figures described in the module docstring.
+def _cost(recs: list[Record]) -> float:
+    return round(sum(_number(r.get("cost_usd")) or 0.0 for r in recs), 6)
+
+
+def summarize(records: list[Record], specs: dict[str, SiteSpec]) -> dict[str, object]:
+    """Per site, per questions sha, per question: the figures described in the module docstring.
 
     Args:
         records: The log records to summarize.
-        types_by_site: Question id -> type per site, from the current site files; a question no
-            longer in its site file has its type inferred from Jev's answer.
+        specs: The current site files, by site; each applies only to records of its own sha.
 
     Returns:
-        `{"records": n, "sites": {site: {"records", "cost_usd", "questions": {qid: {...}}}}}`.
+        `{"records": n, "sites": {site: {"records", "cost_usd", "shas": {sha: {"site_version",
+        "current", "records", "cost_usd", "questions": {qid: {...}}}}}}}`; shas in the order
+        their first record was logged.
     """
-    by_site: dict[str, list[dict[str, Any]]] = {}
+    grouped: dict[str, dict[str, list[Record]]] = {}
     for rec in records:
-        by_site.setdefault(str(rec.get("site") or ""), []).append(rec)
-    return {
-        "records": len(records),
-        "sites": {
-            s: _site_summary(r, types_by_site.get(s, {}))
-            for s, r in sorted(by_site.items())
-        },
-    }
+        site, sha = str(rec.get("site") or ""), str(rec.get("questions_sha") or "")
+        grouped.setdefault(site, {}).setdefault(sha, []).append(rec)
+    sites: dict[str, object] = {}
+    for site, by_sha in sorted(grouped.items()):
+        recs = [r for group in by_sha.values() for r in group]
+        shas = {sha: _sha_summary(g, specs.get(site), sha) for sha, g in by_sha.items()}
+        sites[site] = {"records": len(recs), "cost_usd": _cost(recs), "shas": shas}
+    return {"records": len(records), "sites": sites}
 
 
-def disagreements(records: list[dict[str, Any]]) -> list[dict[str, Any]]:
+def disagreements(records: list[Record]) -> list[Record]:
     """The paired records where any question disagrees, with their state, for reading by hand."""
     keep = (
         "ts",
         "run_id",
         "site",
+        "questions_sha",
         "item_id",
         "state",
         "agent",
@@ -287,29 +347,38 @@ def disagreements(records: list[dict[str, Any]]) -> list[dict[str, Any]]:
     return [
         {k: rec.get(k) for k in keep}
         for rec in records
-        if any(v is False for v in (rec.get("agree") or {}).values())
+        if any(v is False for v in _agree(rec).values())
     ]
 
 
 def _question_line(qid: str, q: dict[str, Any]) -> str:
     flat = "  FLAT - a constant answer, check the question" if q["flat"] else ""
     return (
-        f"  {qid} ({q['type']}): {q['n']} items, {q['paired']} paired, "
+        f"    {qid} ({q['type']}): {q['n']} items, {q['paired']} paired, "
         f"agreement {q['agreement_pct']}%, band {q['band_pct']}%, "
         f"outside band {q['agreement_outside_band_pct']}% ({q['paired_outside_band']} paired)"
         f"{flat}"
     )
 
 
+def _sha_lines(sha: str, s: dict[str, Any]) -> list[str]:
+    age = "current" if s["current"] else "older wording"
+    head = f"  questions {sha} (site version {s['site_version']}, {age}): "
+    lines = [head + f"{s['records']} records, cost ${s['cost_usd']:.6f}"]
+    for qid, q in s["questions"].items():
+        lines.append(_question_line(qid, q))
+        if q["confusion"]:
+            lines.append(
+                "      " + ", ".join(f"{k} {n}" for k, n in q["confusion"].items())
+            )
+    return lines
+
+
 def render(summary: dict[str, Any]) -> str:
-    """The human form of `summarize`'s result: one line per site, two per question."""
+    """The human form of `summarize`'s result: per site, per questions sha, per question."""
     lines = [f"{summary['records']} records"]
     for name, s in summary["sites"].items():
         lines.append(f"{name}: {s['records']} records, cost ${s['cost_usd']:.6f}")
-        for qid, q in s["questions"].items():
-            lines.append(_question_line(qid, q))
-            if q["confusion"]:
-                lines.append(
-                    "    " + ", ".join(f"{k} {n}" for k, n in q["confusion"].items())
-                )
+        for sha, by_sha in s["shas"].items():
+            lines.extend(_sha_lines(sha, by_sha))
     return "\n".join(lines)

@@ -16,11 +16,12 @@ bash <plugin>/hooks/run-python.sh <plugin>/skills/meta-self-improve/jev_shadow.p
 
 ## When it runs
 
-| Setting                                   | Default | Effect when set                                     | Who changes it and when                    |
-|-------------------------------------------|---------|-----------------------------------------------------|--------------------------------------------|
-| `classifier_backend = jev`                | `off`   | Master switch for every Jev site, hooks and skills  | The user, through `meta-memory-settings`   |
-| `classifier_skills = shadow`              | `off`   | The skill sites below run their shadow step         | The user, through `meta-memory-settings`   |
-| A Jev key (`jev-judge check-key` exits 0) | none    | Without one, shadow stays off and nothing is logged | The user, per the `ai-llm-jev-judge` Setup |
+| Setting                                   | Default      | Effect when set                                               | Who changes it and when                    |
+|-------------------------------------------|--------------|---------------------------------------------------------------|--------------------------------------------|
+| `classifier_backend = jev`                | `off`        | Master switch for every Jev site, hooks and skills            | The user, through `meta-memory-settings`   |
+| `classifier_skills = shadow`              | `off`        | The skill sites below run their shadow step                   | The user, through `meta-memory-settings`   |
+| A Jev key (`jev-judge check-key` exits 0) | none         | Without one, shadow stays off and nothing is logged           | The user, per the `ai-llm-jev-judge` Setup |
+| `classifier_model`                        | `jev-latest` | Passed to jev-judge as `--model`; empty lets jev-judge choose | The user, through `meta-memory-settings`   |
 
 Shadow runs only with BOTH knobs on and a key present. Turning it on is the user's consent to send
 these items (memory facts, commands, code lines) to TypeSafe; secrets are redacted before sending.
@@ -37,13 +38,14 @@ letting Jev DECIDE; calibration data from a small batch is still data.
    (`guard-firing` takes `--firings <guard_replay --firings output> --hazard "<what the guard
    warns about>"` instead of `--anchor`). For an agent-built site, write `items.jsonl` yourself:
    one `{"id": ..., "state": {...}}` per line, the state carrying EXACTLY the site's fields (table
-   below), each a string. `run` refuses any other field set.
+   below), each a string; a null is sent and logged as an empty field. `run` refuses any other
+   field set, and an empty items file asks nothing and exits 0.
 2. **Judge every item yourself**, as the step says, and write `verdicts.jsonl`, one line per item
    you judged:
    `{"id": "<item id>", "verdict": {"<question id>": <answer>}, "note": "<one line why, optional>"}`.
    A noul answer is `true` or `false`, a choice answer is one of its keys, a score answer is the
    level's index (0 for the first level). You may leave items or questions out; nothing is paired
-   for them.
+   for them, and an empty verdict `{}` counts as no verdict.
 3. **Then ask Jev:**
    `jev_shadow.py run --site <site> --items items.jsonl --verdicts verdicts.jsonl`.
    It prints counts only: items, paired, answers agreed, items without a Jev answer, cost.
@@ -54,7 +56,8 @@ letting Jev DECIDE; calibration data from a small batch is still data.
 The verdicts file must exist BEFORE `run`; without it `run` exits 2 and asks nothing. That and the
 counts-only output keep the agent blind: knowing which items Jev disagreed on mid-task would pull
 the agent's own judgments toward Jev's, and the comparison would measure nothing. Read the
-disagreements afterwards, with `report`.
+disagreements afterwards, with `report`. With `--workdir`, jev-judge's `rows.jsonl` stays there:
+do not open it until your own step is finished, for the same reason.
 
 ## Sites
 
@@ -75,8 +78,8 @@ The questions themselves are in `jev_sites/<site>.json` beside the tool: `{"site
 "questions", "state_fields"}`, the questions in jev-judge's format. A question names a state field
 only as a backticked name, and every backticked name is a state field (a test holds both
 directions). Change a question by editing its file and bumping that file's `version`; each log
-record carries the version and a hash of the questions, so records from different wordings never
-pool by accident.
+record carries the version and a hash of the questions (`questions_sha`), and `report` keeps
+every sha apart, so records from different wordings never pool.
 
 `dream-placement` pairs each fact with every curated level on its own chain: its level, the levels
 above it up to the anchor, and the levels below it. The level id is the level's path relative to
@@ -88,7 +91,7 @@ One record per item in `~/.claude/self-improve-audit/jev-skill-shadow-YYYY-MM.js
 under the memory lock: `ts`, `run_id`, `site`, `site_version`, `questions_sha`, `plugin_version`,
 `jev_judge_version`, `model`, `cwd`, `git_head` (of the cwd, or null), `item_id`, `state`,
 `redactions`, `jev` (`{question id: {value, probabilities, confidence}}`, or null), `jev_reason`
-(why there is no Jev answer), `agent` (the verdict, or null), `agent_note`, `agree`, `latency_ms`,
+(why there is no Jev answer), `agent` (the verdict, or null when there is none or it is empty), `agent_note`, `agree`, `latency_ms`,
 `input_tokens`, `cost_usd` (this item's share of the run).
 
 `state` is what was SENT: each field redacted (`classifier.prepare_state`) and capped. Keeping it
@@ -108,9 +111,16 @@ weekly at most, so the hook shadow's 30 days would throw the evidence away.
 jev_shadow.py report [--site S] [--since YYYY-MM-DD] [--disagreements OUT.jsonl] [--json]
 ```
 
-Per site and question: items, paired items, agreement among the paired, the agent-by-Jev confusion
-counts, the share of Jev answers inside the uncertainty band (a noul strictly between 0.2 and 0.8,
-a choice or score with confidence below 0.6), agreement with the band excluded, and cost per site.
+Per site, per questions sha (`questions_sha`), per question: items, paired items, agreement among
+the paired, the agent-by-Jev confusion counts, the share of Jev answers inside the uncertainty band
+(a noul strictly between 0.2 and 0.8, a choice or score with confidence below 0.6), agreement with
+the band excluded, and cost per site and per sha.
+
+Every sha is reported separately, oldest first, marked `current` when it matches today's site
+file. Only the current sha takes its question types and score levels from the site file; an
+older sha takes them from its own logged answers, so a question whose type changed is reported
+as what it was when it was asked. Compare a question across wordings by reading the shas side
+by side, never by adding them up.
 
 `FLAT` marks a question whose Jev answers barely vary: a standard deviation below 0.05 for a noul
 or score, or one choice taking 95% or more, over at least 5 answers. A constant answer is a broken

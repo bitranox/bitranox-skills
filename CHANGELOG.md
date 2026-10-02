@@ -39,8 +39,9 @@ two "versions with no entry" notes came to sit in this file disagreeing with it.
   the items for the store-based sites (`--anchor`, or `--firings` plus `--hazard` for
   `guard-firing`), `run` refuses unless the agent's verdicts file already exists and prints counts
   only, and `report` gives agreement, confusion, the uncertainty-band share and a FLAT flag per
-  site and question. Off unless `classifier_backend = jev` and `classifier_skills = shadow`; with
-  no key it logs nothing. One record per item goes to
+  site, per question wording (`questions_sha`, never pooled) and per question. Off unless
+  `classifier_backend = jev` and `classifier_skills = shadow`; with no key it logs nothing. A
+  non-empty `classifier_model` is passed to jev-judge as `--model`. One record per item goes to
   `~/.claude/self-improve-audit/jev-skill-shadow-YYYY-MM.jsonl`, with the redacted state that was
   sent, kept 400 days and 100 MB.
 - Ten site question files in `meta-self-improve/jev_sites/`, and

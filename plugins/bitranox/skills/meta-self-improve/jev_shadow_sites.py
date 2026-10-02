@@ -15,21 +15,12 @@ from __future__ import annotations
 
 import hashlib
 import json
-import sys
 from collections.abc import Callable, Iterable
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, NamedTuple
+from typing import Any, NamedTuple, cast
 
-_HERE = Path(__file__).resolve().parent
-_HOOKS = _HERE.parent.parent / "hooks"
-for _d in (str(_HOOKS), str(_HERE)):
-    if _d not in sys.path:
-        sys.path.insert(0, _d)
-
-import memory_engine as ME
-
-import reconcile_memory_index as R
+import jev_shadow_ports as ports
 
 __all__ = [
     "AGENT_BUILT",
@@ -40,11 +31,12 @@ __all__ = [
     "Site",
     "SiteError",
     "build_items",
+    "jsonl_lines",
     "load_site",
     "site_names",
 ]
 
-SITES_DIR = _HERE / "jev_sites"
+SITES_DIR = Path(__file__).resolve().parent / "jev_sites"
 
 # Sites whose items the step's agent writes itself: there is nothing on disk to build them from.
 AGENT_BUILT = frozenset(
@@ -158,7 +150,7 @@ class _Fact(NamedTuple):
 
 def _body_text(body: str) -> str:
     """A stored body without its frontmatter frame: Jev reads the note, not its metadata."""
-    _meta, text = R.parse_frontmatter(body or "")
+    _meta, text = ports.parse_frontmatter(body or "")
     return text.strip()
 
 
@@ -166,8 +158,8 @@ def _facts(anchor: Path) -> tuple[list[_Fact], dict[str, str]]:
     """Every fact under `anchor`, plus each level's scope descriptor by level path."""
     facts: list[_Fact] = []
     scopes: dict[str, str] = {}
-    for level in ME.curated_levels_under(str(anchor)):
-        scope, entries, bodies = ME.read_store(level)
+    for level in ports.curated_levels_under(str(anchor)):
+        scope, entries, bodies = ports.read_store(level)
         scopes[level] = scope or ""
         facts.extend(
             _Fact(level, e.slug, e.hook, _body_text(bodies.get(e.slug) or ""))
@@ -200,7 +192,7 @@ def _level_label(anchor: Path, level: str) -> str:
 def _candidate_levels(level: str, levels: Iterable[str]) -> list[str]:
     """The fact's own level, its curated ancestors, and its curated descendants (up AND down)."""
     here = Path(level).resolve()
-    out = []
+    out: list[str] = []
     for other in levels:
         o = Path(other).resolve()
         if o == here or o in here.parents or here in o.parents:
@@ -212,7 +204,7 @@ def _placement(req: BuildRequest) -> list[ShadowItem]:
     """dream-placement: one item per (fact, candidate level), id `slug|<level relative to anchor>`."""
     anchor = _require_anchor(req)
     facts, scopes = _facts(anchor)
-    items = []
+    items: list[ShadowItem] = []
     for f in facts:
         for lvl in _candidate_levels(f.level, scopes):
             state = {"hook": f.hook, "body": f.body, "level_scope": scopes[lvl]}
@@ -225,8 +217,8 @@ def _misplaced(req: BuildRequest) -> list[ShadowItem]:
     anchor = _require_anchor(req)
     facts, scopes = _facts(anchor)
     by_key = {(str(Path(f.level).resolve()), f.slug): f for f in facts}
-    items = []
-    for cand in R.find_misplaced(str(anchor)):
+    items: list[ShadowItem] = []
+    for cand in ports.find_misplaced(str(anchor)):
         level = str(Path(cand["level"]).resolve())
         f = by_key.get((level, cand["slug"]))
         if f is None:
@@ -241,12 +233,34 @@ def _misplaced(req: BuildRequest) -> list[ShadowItem]:
     return items
 
 
-def _read_firings(path: Path) -> list[dict[str, Any]]:
+def jsonl_lines(text: str) -> list[str]:
+    """The non-blank lines of a JSONL text, split on "\\n" ONLY.
+
+    The files are written with `ensure_ascii=False` so they stay readable, which leaves U+2028,
+    U+2029 and U+0085 raw inside strings; `str.splitlines` breaks lines on those too, cutting a
+    record in half. A trailing "\\r" from a Windows text-mode write is JSON whitespace.
+    """
+    return [line for line in text.split("\n") if line.strip()]
+
+
+def _firing(raw: object, where: str) -> tuple[str, dict[str, Any]]:
+    """(id, record) of one firing line, refusing a non-object or a missing or empty id."""
+    if not isinstance(raw, dict):
+        raise SiteError(f"{where} is not a JSON object")
+    rec = cast("dict[str, Any]", raw)
+    item_id = rec.get("id")
+    if not isinstance(item_id, str) or not item_id:
+        raise SiteError(f"{where} has no usable id")
+    return item_id, rec
+
+
+def _read_firings(path: Path) -> list[tuple[str, dict[str, Any]]]:
     try:
-        lines = path.read_text(encoding="utf-8").splitlines()
-        return [json.loads(line) for line in lines if line.strip()]
+        lines = jsonl_lines(path.read_text(encoding="utf-8"))
+        decoded: list[object] = [json.loads(line) for line in lines]
     except (OSError, ValueError) as exc:
         raise SiteError(f"cannot read --firings {path}: {exc}") from exc
+    return [_firing(raw, f"{path.name} record {n}") for n, raw in enumerate(decoded, 1)]
 
 
 def _guard_firings(req: BuildRequest) -> list[ShadowItem]:
@@ -256,14 +270,14 @@ def _guard_firings(req: BuildRequest) -> list[ShadowItem]:
             "guard-firing builds from guard_replay output: pass --firings F and "
             "--hazard TEXT (what the guard warns about)"
         )
-    items = []
-    for rec in _read_firings(req.firings):
+    items: list[ShadowItem] = []
+    for item_id, rec in _read_firings(req.firings):
         state = {
             "hazard": req.hazard,
             "command": str(rec.get("command") or ""),
             "error": str(rec.get("error") or ""),
         }
-        items.append(ShadowItem(str(rec.get("id")), state))
+        items.append(ShadowItem(item_id, state))
     return items
 
 
@@ -299,5 +313,5 @@ def build_items(site: Site, req: BuildRequest) -> list[ShadowItem]:
         )
     try:
         return builder(req)
-    except ME.TreeWalkError as exc:
+    except ports.TreeWalkError as exc:
         raise SiteError(f"cannot read the memory store: {exc}") from exc
