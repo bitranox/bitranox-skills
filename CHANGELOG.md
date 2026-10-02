@@ -29,6 +29,26 @@ than the change, so entries reconstructed from them would read like coverage wit
 a hole nobody has drawn a line under is one that gets rediscovered and half-filled - which is how
 two "versions with no entry" notes came to sit in this file disagreeing with it.
 
+## [7.39.0]
+
+### Added
+
+- `compuse-toolbox`: when the answer is a ratio and every `guard_replay` firing is classified, the
+  step carries a Jev shadow (site `guard-firing`): with `jev_shadow.py status` on, the agent
+  replays with `--firings`, builds the items with `jev_shadow.py items --site guard-firing
+  --firings ... --hazard ...`, writes its own `real_hazard` verdict for every firing to
+  `verdicts.jsonl`, and only then runs `jev_shadow.py run`. The reported precision comes from the
+  agent's verdicts alone.
+
+### Changed
+
+- `meta-self-improve/references/jev-shadow.md`, "What is logged": a noul answer carries its
+  probability in `value` and logs `probabilities` and `confidence` as null, since those two belong
+  to choice and score answers, so a reader of raw records does not take the nulls for missing data.
+- `meta-self-improve/references/jev-shadow.md`, procedure step 2: leaving items out of
+  `verdicts.jsonl` is allowed only where the step does not ask for a verdict on every item. A step
+  whose figure is a ratio over every item (the `guard-firing` precision) says so and wins.
+
 ## [7.38.1]
 
 ### Fixed

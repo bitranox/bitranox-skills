@@ -44,8 +44,9 @@ letting Jev DECIDE; calibration data from a small batch is still data.
    you judged:
    `{"id": "<item id>", "verdict": {"<question id>": <answer>}, "note": "<one line why, optional>"}`.
    A noul answer is `true` or `false`, a choice answer is one of its keys, a score answer is the
-   level's index (0 for the first level). You may leave items or questions out; nothing is paired
-   for them, and an empty verdict `{}` counts as no verdict.
+   level's index (0 for the first level). Unless the step asks for a verdict on every item, you
+   may leave items or questions out; nothing is paired for them, and an empty verdict `{}` counts
+   as no verdict.
 3. **Then ask Jev:**
    `jev_shadow.py run --site <site> --items items.jsonl --verdicts verdicts.jsonl`.
    It prints counts only: items, paired, answers agreed, items without a Jev answer, cost.
@@ -96,6 +97,9 @@ it is empty), `agent_note`, `agree`, `latency_ms`, `input_tokens`, `cost_usd` (t
 share of the run). Each Jev answer keeps the `type` jev-judge reported, so `report` types an
 older wording from it; records logged before answers carried a type are typed from their
 answers' shape.
+
+A noul answer carries its probability in `value` and logs `probabilities` and `confidence` as
+null: those two belong to choice and score answers, so a null there is not missing data.
 
 `state` is what was SENT: each field redacted (`classifier.prepare_state`) and capped. Keeping it
 lets a later, better question be replayed over logged items without re-running the skill.

@@ -265,7 +265,17 @@ Per-tool arguments live in each tool's `--help` (loaded only when used, so this 
   sample is still a sample. Measured 2026-08-30: 40 of 557 firings put a residual at ~10 percent
   and all 557 put it at ~2, and the unread remainder held four firings that were a live regression
   in the guard being measured. Read the sample to learn what the firings look like, then classify
-  the whole set when the answer is a ratio or a residual.
+  the whole set when the answer is a ratio or a residual. YOU classify every firing; the figure
+  you report comes from your verdicts.
+  - **Jev shadow on that classification** (only when `jev_shadow.py status` exits 0; home
+    `<plugin>/skills/meta-self-improve/`, launch via `hooks/run-python.sh`; procedure in its
+    `references/jev-shadow.md`): replay with `--firings firings.jsonl`, build the items with
+    `jev_shadow.py items --site guard-firing --firings firings.jsonl --hazard "<what the guard
+    warns about>" --out items.jsonl`, write YOUR verdict for every firing to `verdicts.jsonl`
+    FIRST (`{"id": "<firing id>", "verdict": {"real_hazard": true}}`, `false` for a false
+    alarm; none left out, since the ratio counts every firing), then `jev_shadow.py run --site
+    guard-firing --items items.jsonl --verdicts verdicts.jsonl`. It prints counts only. Report
+    the ratio from your own verdicts, whatever `run` printed or exited with.
 - **`guard_replay` asks the second question too.** A guard's unit tests are written from the same
   imagination as the guard, so they cannot report its rate on real work or its precision when it
   speaks. Both have been measured wrong here after the tests were green: one arm fired on 7.8% of
