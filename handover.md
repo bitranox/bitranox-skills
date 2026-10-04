@@ -1,4 +1,4 @@
-# Handover - 2026-10-03 00:10, rank 16 Jev shadow plan shipped in full (7.40.0); nothing in flight
+# STALE - read 2026-10-03, work continued
 
 ## In flight
 
