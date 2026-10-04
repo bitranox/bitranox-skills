@@ -613,7 +613,14 @@ def _timed(text, scan, clock):
 _SMALL_ARM_FLOOR_S = 0.05
 _START_LEN = 50_000
 _MAX_SMALL_LEN = 1_600_000
-_REPEATS = 3
+# 3 repeats still let flattened_pem_run read 8.29 against the < 8 bound under real CI load
+# (2026-10-02, a run that otherwise touched nothing under hooks/). 25 repeats under a sustained
+# 16-way CPU burner on this host never exceeded 6.43 for that shape (median ~5.9), so the single
+# 8.29 reading was a one-off stall rather than the steady-state ratio - exactly what the minimum
+# is supposed to filter, just not often enough at 3 draws. Each extra repeat is an independent
+# chance for a stall to miss that arm's minimum, so 5 repeats cuts the odds of a stall surviving
+# into BOTH arms' minima roughly in half again relative to 3, for ~67% more wall time on this test.
+_REPEATS = 5
 # A timing can be off by one tick either way. Ten ticks per small arm keeps that under ~13% of a
 # linear ratio. The floor above is already hundreds of ticks on Linux and macOS, but Windows'
 # thread_time advances in 15.625 ms steps (GetThreadTimes; get_clock_info claims 1e-7 s), which
