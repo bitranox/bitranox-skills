@@ -280,3 +280,15 @@ def test_an_unrelated_tool_is_ignored(scratch_home, rooms, monkeypatch, capsys):
     _, out = run_main({"session_id": "s5", "cwd": str(work), "tool_name": "Read",
                        "tool_input": {"file_path": _hook_file(rooms)}}, monkeypatch, capsys)
     assert out == ""
+
+
+def test_a_notebookedit_target_is_read_from_notebook_path(scratch_home, rooms, monkeypatch, capsys):
+    """NotebookEdit names its target `notebook_path`, not `file_path` - `decide()` must read it
+    too, the way every sibling path-reading guard in this plugin does (store-edit-guard.py,
+    skill-edit-guard.py, config-edit-guard.py, touched-paths.py, validate-structured-files.py)."""
+    _, work = rooms
+    rc, out = run_main({"session_id": "s6", "cwd": str(work), "tool_name": "NotebookEdit",
+                        "tool_input": {"notebook_path": _hook_file(rooms), "cell_id": "c1",
+                                       "new_source": "print(1)"}}, monkeypatch, capsys)
+    assert rc == 0
+    assert out and "contrib_queue" in out

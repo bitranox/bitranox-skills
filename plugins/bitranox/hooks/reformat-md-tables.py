@@ -14,6 +14,12 @@ with no declared path in exactly the same way. The scan never parses the command
 changed on disk - so it keys on the event CARRYING a command rather than on the tool being a shell,
 and any command-carrying tool the matcher admits is covered.
 
+NotebookEdit is in the matcher but a notebook edit is never reformatted: the event names its
+target `notebook_path`, which this hook deliberately does not read, because that path always ends
+in `.ipynb`, never in `_MD_SUFFIXES` - so there is nothing for the suffix check to match even if
+it were read. Until a notebook cell's own markdown content is worth reformatting in place, the
+registration is a no-op for that tool, same as `tell-sweep.py`'s NotebookEdit entry.
+
 Silent by design: it just fixes the file. `reformat_tables` is safe-by-design (it bails on tables
 with inconsistent column counts and skips non-markdown fenced code blocks), so a normal edit is left
 alone. Pure standard library plus the shipped reformat script. Every failure path exits 0, so a
@@ -26,6 +32,7 @@ import sys
 import time
 from pathlib import Path
 
+import self_improve_signals as sig
 from shell_text import is_git_verb, iter_segments, strip_heredoc_bodies
 
 _MD_SUFFIXES = (".md", ".markdown", ".mdown", ".mkd")
@@ -80,6 +87,35 @@ def _rewrites_the_tree(command: str, tool_name=None) -> bool:
     return False
 
 
+def _git_rewrite_marker(cwd):
+    """Where the last-git-tree-write time for `cwd` is recorded. Keyed per project (not per
+    session): the mtime scan below is itself per-cwd, so the marker must be too."""
+    return sig._audit_dir() / (sig.proj_key(cwd) + ".reformat-md-git-rewrite.txt")
+
+
+def _record_git_rewrite(cwd):
+    """Note that a git command just rewrote the tree at `cwd`. `_rewrites_the_tree` only stops
+    the SAME event's own mtime scan from picking the restamped files up; without this record, the
+    NEXT, unrelated, non-git Bash call within `_BASH_WINDOW_SECONDS` has no memory of the git
+    write and reformats the file anyway, because its mtime alone looks just-written. Never raises."""
+    try:
+        marker = _git_rewrite_marker(cwd)
+        marker.parent.mkdir(parents=True, exist_ok=True)
+        marker.write_text(repr(time.time()), encoding="utf-8")
+    except OSError:
+        pass
+
+
+def _last_git_rewrite(cwd):
+    """time.time() of the last recorded git-tree-write at `cwd`, else None. Never raises. A
+    marker older than `_BASH_WINDOW_SECONDS` needs no special handling: it only ever excludes a
+    file whose own mtime is just as old, which the `cutoff` test below already drops."""
+    try:
+        return float(_git_rewrite_marker(cwd).read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+
+
 def _reformat_file_fn():
     """Import reformat_file() from the docs-md-table-formatting skill (resolved from the plugin root)."""
     root = os.environ.get("CLAUDE_PLUGIN_ROOT")
@@ -114,12 +150,18 @@ def _markdown_paths_from_a_command(event) -> list[str]:
     style they never adopted, so any directory below the working directory that
     holds its own `.git` is pruned. The working directory's own repo stays in scope.
     """
+    raw_cwd = event.get("cwd") or "."
     if _rewrites_the_tree((event.get("tool_input") or {}).get("command") or "", event.get("tool_name")):
+        _record_git_rewrite(raw_cwd)
         return []
-    cwd = Path(event.get("cwd") or ".")
+    cwd = Path(raw_cwd)
     if not cwd.is_dir():
         return []
     cutoff = time.time() - _BASH_WINDOW_SECONDS
+    # Files git itself restamped (tracked by cwd, above) are excluded even when their mtime is
+    # inside the window: a file genuinely written by THIS command always has a newer mtime than
+    # an earlier git write, so this never drops a real target.
+    git_rewrite = _last_git_rewrite(raw_cwd)
     found: list[str] = []
     for dirpath, dirnames, filenames in os.walk(cwd):
         if len(found) >= _BASH_FILE_CAP:
@@ -133,10 +175,14 @@ def _markdown_paths_from_a_command(event) -> list[str]:
                 continue
             path = here / name
             try:
-                if path.stat().st_mtime >= cutoff:
-                    found.append(str(path))
+                mtime = path.stat().st_mtime
             except OSError:
                 continue
+            if mtime < cutoff:
+                continue
+            if git_rewrite is not None and mtime <= git_rewrite:
+                continue
+            found.append(str(path))
     return found
 
 

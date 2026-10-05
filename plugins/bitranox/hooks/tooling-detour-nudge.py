@@ -237,7 +237,10 @@ def decide(event):
         return None
     cwd = event.get("cwd") or ""
     if tool in _EDIT_TOOLS:
-        text = notice_path(inp.get("file_path"), cwd)
+        # NotebookEdit names its target `notebook_path`; every other tool in _EDIT_TOOLS uses
+        # `file_path`. Without the fallback a notebook edit inside the marketplace was silently
+        # never noticed - the field this rule reads simply did not exist on that event.
+        text = notice_path(inp.get("file_path") or inp.get("notebook_path"), cwd)
     elif is_shell_tool(tool):
         text = notice_bash(inp.get("command"), cwd, tool_name=tool)
     else:
