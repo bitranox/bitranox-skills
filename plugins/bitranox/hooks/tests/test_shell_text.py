@@ -159,6 +159,42 @@ def test_blank_unexpanded_text_still_leaves_double_quotes_alone():
     assert "$?" not in S.mask_data_regions('echo "rc=$?"')
 
 
+# blank_unexpanded_text under PowerShell: the escape character is the BACKTICK and a backslash is a
+# path separator, the same mirror image mask_data_regions and the separator walk already honour.
+_PS_PATH_THEN_LITERAL = 'Write-Host "C:' + chr(92) + 'temp' + chr(92) + '"; Write-Host ' + "'$?'"
+
+
+def test_blank_unexpanded_text_closes_a_powershell_string_at_a_trailing_backslash():
+    """Read as Bash, `\\"` keeps the double quote open, so the single-quoted `$?` after it is never
+    blanked and a guard reads a literal as a status check. PowerShell closes the string there."""
+    assert "$?" not in S.blank_unexpanded_text(_PS_PATH_THEN_LITERAL, tool_name="PowerShell")
+    assert "$?" in S.blank_unexpanded_text(_PS_PATH_THEN_LITERAL)       # the Bash reading
+
+
+def test_blank_unexpanded_text_honours_the_powershell_backtick_escape():
+    """`` `' `` is an escaped quote in PowerShell, so the `$?` between two of them is a real
+    expansion - blanking it is the silent-miss direction. Under Bash the same text is a quote."""
+    command = "Write-Host `'$?`'"
+    assert "$?" in S.blank_unexpanded_text(command, tool_name="PowerShell")
+    assert "$?" not in S.blank_unexpanded_text(command)
+
+
+def test_blank_unexpanded_text_has_no_ansi_c_string_under_powershell():
+    """`$'...'` is Bash only; in PowerShell `$` then a single-quoted string, blanked like one."""
+    out = S.blank_unexpanded_text("echo $'a;b'; x", tool_name="PowerShell")
+    assert out.endswith("; x") and "a;b" not in out
+
+
+@pytest.mark.parametrize("command", [
+    "echo 'rc=$?' # $? here", 'echo "rc=$?"', "a\\ #b; echo $?", "echo $'it\\'s' $?",
+])
+def test_blank_unexpanded_text_defaults_to_the_bash_reading(command):
+    """Existing callers pass no tool: the default and an explicit None must equal the Bash arm."""
+    bash = S.blank_unexpanded_text(command, tool_name="Bash")
+    assert S.blank_unexpanded_text(command) == bash
+    assert S.blank_unexpanded_text(command, tool_name=None) == bash
+
+
 # --------------------------------------------------------------------------
 # split_for_tool: a Bash|PowerShell matcher delivers command strings in two
 # different languages, and the TOOL decides which, never the host OS.
@@ -223,6 +259,25 @@ def test_split_for_tool_inverts_list2cmdline(argv):
     argument - and it fails if either side drifts.
     """
     assert S.split_for_tool(subprocess.list2cmdline(argv), "PowerShell") == argv
+
+
+@pytest.mark.parametrize("command,expected", [
+    ("find . -newermt '-3 minutes'", ["find", ".", "-newermt", "-3 minutes"]),
+    ("x --hook='a b' y", ["x", "--hook=a b", "y"]),         # a quote mid-word still opens one
+    ("x 'it''s'", ["x", "it's"]),                           # '' is one literal quote
+    ("x 'C:" + _B + "temp" + _B + "' y", ["x", "C:" + _B + "temp" + _B, "y"]),  # no escape inside
+    ("x '\"q\"' y", ["x", '"q"', "y"]),                      # a double quote inside is literal
+    ("x \"it's\" y", ["x", "it's", "y"]),                    # an apostrophe in double quotes
+    ("x it's", ["x", "it's"]),                              # an unterminated quote stays literal
+    ("x '' y", ["x", "", "y"]),                              # an empty string is an argument
+])
+def test_split_for_tool_reads_powershell_single_quotes(command, expected):
+    """A PowerShell single-quoted string is verbatim (about_Quoting_Rules), which the C-runtime
+    rules know nothing about: `-newermt '-3 minutes'` arrived as `'-3` and `minutes'`, and two
+    hooks each grew a private re-join to undo it. An apostrophe with no closing quote is kept as
+    a character rather than raising, because no PowerShell caller of this splitter catches a
+    ValueError - the Windows arm never raised one before."""
+    assert S.split_for_tool(command, "PowerShell") == expected
 
 
 @pytest.mark.parametrize("token,tool,expected", [

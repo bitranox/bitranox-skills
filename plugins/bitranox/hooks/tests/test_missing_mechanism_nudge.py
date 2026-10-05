@@ -110,7 +110,8 @@ def test_single_quoted_and_equals_forms_still_respect_the_negatives(hook):
 
 
 def test_a_single_quoted_hook_is_read_on_powershell():
-    """PowerShell strings are single-quoted too, and its argv splitter does not know that."""
+    """PowerShell strings are single-quoted too. The shared splitter reads them; before it did,
+    this hook kept a private re-join, and removing that against the old splitter turns this red."""
     command = "python memory_engine.py add --title T --hook 'the retry is missing entirely'"
     assert N.notice(command, tool_name="PowerShell") is not None
 

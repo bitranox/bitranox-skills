@@ -69,24 +69,6 @@ _NOTICE = (
 )
 
 
-def _option_value(argv, at):
-    """`argv[at]`, re-joined when a quote the splitter left in place spans several tokens.
-
-    The PowerShell arm splits by C-runtime rules, which know nothing of PowerShell's single-quoted
-    strings, so `--hook 'a b'` arrives as `'a` and `b'`. An opening quote that never closes is
-    returned as it stands.
-    """
-    first = argv[at]
-    quote = first[:1]
-    if quote not in ("'", '"'):
-        return first
-    for end in range(at, len(argv)):
-        joined = " ".join(argv[at:end + 1])
-        if len(joined) > 1 and joined.endswith(quote):
-            return joined[1:-1]
-    return first
-
-
 def _memory_add_args(argv, tool_name):
     """The arguments after `add` when `argv` runs `memory_engine[.py] ... add`, else None."""
     for at, token in enumerate(argv):
@@ -117,9 +99,9 @@ def _hook_texts(args, cwd):
         if name not in ("--hook", "--hook-file"):
             continue
         if eq:
-            value = _option_value([inline] + args[at + 1:], 0)
+            value = inline
         elif at + 1 < len(args):
-            value = _option_value(args, at + 1)
+            value = args[at + 1]
         else:
             continue
         text = value if name == "--hook" else _read_hook_file(value, cwd)

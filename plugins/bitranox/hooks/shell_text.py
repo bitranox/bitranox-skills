@@ -554,6 +554,10 @@ def _windows_command_argv(command):
     the quote still toggles, 2n+1 are n backslashes and a LITERAL quote, and a run with no quote
     after it is literal throughout. That last rule is the one that matters here - it is what keeps
     `C:\dir\file.txt` intact.
+
+    PowerShell's own single-quoted string is read on top of those rules, because the tool's
+    string is PowerShell before any C runtime sees it: `-newermt '-3 minutes'` is one argument,
+    and splitting it at the space made two hooks each keep a private re-join.
     """
     args, cur, in_quotes, started, i, n = [], [], False, False, 0, len(command)
     while i < n:
@@ -577,6 +581,12 @@ def _windows_command_argv(command):
         if ch == '"':
             in_quotes, started, i = not in_quotes, True, i + 1
             continue
+        if ch == "'" and not in_quotes:
+            verbatim, stop = _powershell_single_quoted(command, i)
+            if verbatim is not None:
+                cur.append(verbatim)
+                started, i = True, stop
+                continue
         if ch in " \t" and not in_quotes:
             if started:
                 args.append("".join(cur))
@@ -588,6 +598,27 @@ def _windows_command_argv(command):
     if started:
         args.append("".join(cur))
     return args
+
+
+def _powershell_single_quoted(command, start):
+    """(text, index past the closing quote) of the PowerShell single-quoted string at `start`.
+
+    A single-quoted string is VERBATIM (about_Quoting_Rules): no escape, no expansion, and `''`
+    is one literal quote. `(None, start)` when no closing quote follows, so the caller keeps the
+    apostrophe as an ordinary character - the Windows arm has never raised, and none of its
+    callers catches a ValueError.
+    """
+    out, i, n = [], start + 1, len(command)
+    while i < n:
+        if command[i] != "'":
+            out.append(command[i])
+            i += 1
+        elif command.startswith("''", i):
+            out.append("'")
+            i += 2
+        else:
+            return "".join(out), i + 1
+    return None, start
 
 
 def split_for_tool(command, tool_name="Bash", comments=False):
@@ -1034,7 +1065,7 @@ def heredoc_bodies(command: str) -> str:
     return "\n".join(_split_heredocs(command)[1])
 
 
-def blank_unexpanded_text(command: str) -> str:
+def blank_unexpanded_text(command: str, *, tool_name="Bash") -> str:
     """Blank the regions the shell will neither execute nor expand, keeping structure intact.
 
     A heredoc is not the only data region in a command. These three are just as inert, and a guard
@@ -1053,7 +1084,16 @@ def blank_unexpanded_text(command: str) -> str:
 
     Blanking to spaces rather than deleting keeps offsets, line structure and every pipe, `;` and
     `&&` outside the quotes, so callers that split on those still see the same command shape.
+
+    `tool_name` picks the escape character, by the rule `mask_data_regions` states: under
+    PowerShell a BACKTICK escapes (inside double quotes too), a backslash is a path separator and
+    there is no ANSI-C string. Read as Bash, `"C:\\temp\\"` never closed, so a single-quoted `$?`
+    after it stayed visible, and the escaped quotes of `` `'$?`' `` were read as a single-quoted
+    string, blanking a status read that really expands. Any other value, None included, is the
+    Bash reading - what every caller got before the keyword existed.
     """
+    powershell = tool_name == "PowerShell"
+    escape = "`" if powershell else "\\"
     out: list[str] = []
     index, size = 0, len(command)
     in_single = in_double = False
@@ -1071,7 +1111,7 @@ def blank_unexpanded_text(command: str) -> str:
             out.append(char if char in "'\n" else " ")
             in_single = char != "'"
             index += 1
-        elif char == "\\" and index + 1 < size and not in_double:
+        elif char == escape and index + 1 < size and not in_double:
             if command[index + 1] == "\n":
                 cont_prev = cont_prev if len(out) == cont_at else (out[-1][-1:] if out else "")
                 out.append(" \n")
@@ -1083,7 +1123,7 @@ def blank_unexpanded_text(command: str) -> str:
         elif command.startswith("$$", index):
             out.append("$$")                   # the PID: its second `$` does not open `$'...'`
             index += 2
-        elif not in_double and command.startswith("$'", index):
+        elif not powershell and not in_double and command.startswith("$'", index):
             # ANSI-C `$'...'` expands nothing either, and its `\'` does not close it.
             stop = _ansi_c_end(command, index + 2)
             closed = stop > index + 2 and command[stop - 1] == "'"
@@ -1091,7 +1131,7 @@ def blank_unexpanded_text(command: str) -> str:
             out.append("$'" + "".join(c if c == "\n" else " " for c in body) + ("'" if closed else ""))
             index = stop
         elif in_double:
-            if char == "\\" and index + 1 < size:
+            if char == escape and index + 1 < size:
                 out.append("  " if command[index + 1] != "\n" else " \n")
                 index += 2
                 continue
@@ -1114,7 +1154,7 @@ def blank_unexpanded_text(command: str) -> str:
             out.append(" " * (stop - index))
             index = stop
         else:
-            in_backtick ^= char == "`"
+            in_backtick ^= char == "`" and not powershell
             out.append(char)
             index += 1
     return "".join(out)

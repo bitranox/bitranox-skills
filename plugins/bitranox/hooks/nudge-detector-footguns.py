@@ -107,31 +107,13 @@ def _invocation_tokens(
     return runs
 
 
-def _option_value(run: list[str], at: int) -> str | None:
-    """The value at `run[at]`, re-joined when a quote the splitter left in place spans tokens.
-
-    The PowerShell arm splits by C-runtime rules, which know nothing of single quotes, so
-    `-newermt '-3 minutes'` arrives as `'-3` and `minutes'`. An opening quote with no closing one
-    is an unbalanced line: give up rather than guess.
-    """
-    first = run[at]
-    quote = first[:1]
-    if quote not in ("'", '"'):
-        return first
-    for end in range(at, len(run)):
-        joined = " ".join(run[at:end + 1])
-        if len(joined) > 1 and joined.endswith(quote):
-            return joined[1:-1]
-    return None
-
-
 def find_newermt_relative(statements: list[list[str]], tool_name: str = "Bash") -> str | None:
     """Return the offending -newermt value, or None."""
     for run in _invocation_tokens(statements, "find", tool_name):
         for i, tok in enumerate(run):
             if tok == "-newermt" and i + 1 < len(run):
-                value = _option_value(run, i + 1)
-                if value is not None and _RELATIVE_TIME_RE.match(value):
+                value = run[i + 1]
+                if _RELATIVE_TIME_RE.match(value):
                     return value
     return None
 
