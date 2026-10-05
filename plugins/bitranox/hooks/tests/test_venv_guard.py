@@ -238,6 +238,41 @@ def test_an_unset_earlier_in_the_command_carries_forward(tmp_path):
         assert G.build_notice(cmd, proj, other) is None, cmd
 
 
+def test_activating_the_project_venv_earlier_in_the_command_is_silent(tmp_path):
+    """An activate script SETS VIRTUAL_ENV to its venv for every later statement, so a gate after
+    `source .venv/bin/activate` runs in the project's own venv - nudging there is a false positive."""
+    proj = _project(tmp_path)
+    other = _other(tmp_path)
+    for cmd in ("source .venv/bin/activate && pytest", ". .venv/bin/activate && pytest -q",
+                "source .venv/bin/activate\npytest", "source ./.venv/bin/activate; make test",
+                "source .venv/Scripts/activate && pytest",
+                f"source {_q(proj / '.venv' / 'bin' / 'activate')} && pytest"):
+        assert G.build_notice(cmd, proj, other) is None, cmd
+
+
+def test_activating_a_foreign_venv_still_fires(tmp_path):
+    """The control: the activate rule reads WHICH venv is activated, it does not excuse any."""
+    proj = _project(tmp_path)
+    other = _other(tmp_path)
+    for cmd in (f"source {_q(Path(other) / 'bin' / 'activate')} && pytest",
+                "pytest && source .venv/bin/activate",
+                "source .venv/bin/activate.fish && pytest",
+                "bash .venv/bin/activate && pytest"):
+        assert G.build_notice(cmd, proj, other), cmd
+    # With nothing ambient, the activation alone is what makes the run foreign. The path is shown
+    # as the command wrote it, so compare a separator-free part of it.
+    notice = G.build_notice(f"source {_q(Path(other) / 'bin' / 'activate')} && pytest", proj, None)
+    assert notice and "WRONG VENV" in notice and Path(other).name in notice
+
+
+def test_powershell_activate_script_sets_the_venv(tmp_path):
+    proj = _project(tmp_path)
+    other = _other(tmp_path)
+    for cmd in (". .venv\\Scripts\\Activate.ps1; pytest", "& .venv\\Scripts\\Activate.ps1; pytest",
+                ".venv\\Scripts\\Activate.ps1; pytest"):
+        assert G.build_notice(cmd, proj, other, tool_name="PowerShell") is None, cmd
+
+
 def test_an_override_reaches_only_its_own_statement(tmp_path):
     """The direction the fix must not change: `env -u` on ANOTHER statement unsets nothing here."""
     proj = _project(tmp_path)
