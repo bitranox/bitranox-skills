@@ -40,12 +40,23 @@ by sha (`gh run list --commit`), so newer runs of other commits cannot push them
 A run concluding `skipped` (a workflow whose jobs were all `if:`-gated off) does not fail the push;
 a push on which every run was skipped tested nothing and is reported `failed`, never green.
 
+Only runs of one EVENT count, `push` by default (`--event`, `any` for all): a scheduled run that
+GitHub queues on the same head sha otherwise holds a push's verdict open until the deadline. A run
+concluding `action_required` (a fork pull request awaiting a maintainer's approval) is reported at
+once as `pending-approval`, exit 2: no wait resolves it, and it is not a failure.
+
+The repository is resolved ONCE, before the first poll (`--repo`, else `gh repo view` from the
+cwd), and named on every poll: a cwd removed mid-wait - a worktree deleted while CI runs - would
+otherwise turn every later poll into a gh failure.
+
 Run: `uv run scripts/ci_wait.py --sha $(git rev-parse HEAD)`
      `uv run scripts/ci_wait.py --sha $(git rev-parse HEAD) --repo OWNER/REPO --json`
      `uv run scripts/ci_wait.py --sha $(git rev-parse HEAD) --timeout 1800 --interval 30`
 Exit 0 = every run for that sha succeeded (or was skipped), 1 = at least one did not, 2 = could
-not tell (bad sha, a bad flag value, no runs for it, timed out, `gh` failed, or the tool itself
-crashed).
+not tell (bad sha, a bad flag value, no runs for it, a run awaiting approval, timed out, `gh`
+failed, or the tool itself crashed). `--json` prints the envelope
+`{ok, command, data: {state, summary, runs}, skipped}` on every exit, a usage error included;
+`ok` is false exactly on exit 2, with `error` repeating the summary.
 """
 from __future__ import annotations
 
@@ -61,9 +72,11 @@ import traceback
 from dataclasses import dataclass, replace
 from typing import Callable, Iterable, Sequence
 
+from _cli_envelope import EnvelopeArgumentParser, emit
+
 FULL_SHA_RE = re.compile(r"^[0-9a-f]{40}$")
 
-_FIELDS = "headSha,workflowName,status,conclusion,databaseId"
+_FIELDS = "headSha,workflowName,status,conclusion,databaseId,event"
 _TERMINAL = "completed"
 #: Conclusions that do not fail a push. `skipped` is a workflow whose jobs were all if:-gated off.
 _PASSING = frozenset({"success", "skipped"})
@@ -79,7 +92,13 @@ MIN_INTERVAL_S = 5.0
 #: config gives 4 and tells you to run `gh auth login`). Local configuration, so it is fatal here
 #: rather than retried. A REJECTED credential is exit 1, not this - see GhUnavailable.
 _GH_EXIT_AUTH_REQUIRED = 4
-_EXIT_CODES = {"success": 0, "failed": 1, "timeout": 2, "no-runs": 2, "error": 2}
+#: A fork pull request's run waiting for a maintainer to approve it. Terminal for a waiter: no
+#: amount of polling changes it, and it is not a failure of the code.
+_AWAITING_APPROVAL = "action_required"
+#: `--event` value meaning "do not filter on the event".
+ANY_EVENT = "any"
+_EXIT_CODES = {"success": 0, "failed": 1, "timeout": 2, "no-runs": 2, "error": 2,
+               "pending-approval": 2}
 
 
 class BadSha(ValueError):
@@ -186,11 +205,13 @@ def sha_is_known_locally(sha: str, *, run: Callable[..., object] = subprocess.ru
     return getattr(proc, "returncode", 1) == 0
 
 
-def verdict(runs: Sequence[dict[str, object]]) -> Verdict:
+def verdict(runs: Sequence[dict[str, object]], *, event: str | None = None) -> Verdict:
     """Classify one poll's run list. PURE.
 
     Args:
         runs: The rows for ONE sha, as `gh run list --json` returns them.
+        event: The event the runs were filtered to, named in a ``no-runs`` summary so the reader
+            sees the filter that may have emptied the list.
 
     Returns:
         ``no-runs`` when the list is empty - never ``success``, because "nothing matched" and
@@ -201,16 +222,25 @@ def verdict(runs: Sequence[dict[str, object]]) -> Verdict:
         jobs were all ``if:``-gated off: nothing ran and nothing failed, so it does not fail the
         push. ``success`` only when every run completed successfully or was skipped AND at
         least one actually succeeded - a push where everything was skipped tested nothing, so
-        it is reported ``failed`` rather than green.
+        it is reported ``failed`` rather than green. ``pending-approval`` when the only runs that
+        did not pass are ``action_required`` (awaiting a maintainer's approval): a real failure
+        beside one still reads ``failed``.
     """
     if not runs:
+        if event and event != ANY_EVENT:
+            return Verdict("no-runs", f"no {event} runs found for that sha (runs of another event "
+                                      f"are not counted: pass --event any to see every run)")
         return Verdict("no-runs", "no runs found for that sha")
     unfinished = [r for r in runs if r.get("status") != _TERMINAL]
     if unfinished:
         return Verdict("pending", _named(unfinished, "status"), tuple(runs))
     bad = [r for r in runs if r.get("conclusion") not in _PASSING]
+    failed = [r for r in bad if r.get("conclusion") != _AWAITING_APPROVAL]
+    if failed:
+        return Verdict("failed", _named(failed, "conclusion"), tuple(runs))
     if bad:
-        return Verdict("failed", _named(bad, "conclusion"), tuple(runs))
+        return Verdict("pending-approval", _named(bad, "conclusion")
+                       + " (awaiting a maintainer's approval; no wait resolves it)", tuple(runs))
     if not any(r.get("conclusion") == "success" for r in runs):
         return Verdict("failed", _named(runs, "conclusion") + " (nothing ran)", tuple(runs))
     return Verdict("success", _named(runs, "conclusion"), tuple(runs))
@@ -234,6 +264,7 @@ def _named(runs: Iterable[dict[str, object]], field: str) -> str:
 def wait_for(
     fetch: Callable[[], list[dict[str, object]]],
     *,
+    event: str | None = None,
     deadline_polls: int | None = None,
     sleep: Callable[[float], None],
     interval_s: float = 30.0,
@@ -309,6 +340,7 @@ def wait_for(
         settle_s: How long to wait before CONFIRMING an all-green result, so a run created after
             the first all-terminal poll is still counted. ``0`` returns on the first one.
         report: Where a per-poll progress line goes.
+        event: The event ``fetch`` filters to, so a ``no-runs`` verdict can name the filter.
         deadline_s: A wall-clock bound on the whole wait, checked after every poll. A sleep is
             cut to the time left, so the last poll lands on the deadline instead of an interval
             past it. ``None`` leaves only ``deadline_polls``.
@@ -364,7 +396,7 @@ def wait_for(
             continue
         errors_seen = 0
         error_since = None
-        current = verdict(rows)
+        current = verdict(rows, event=event)
         last_summary = current.summary
         if current.state == "no-runs":
             empty_since = timer.now() if empty_since is None else empty_since
@@ -461,6 +493,7 @@ def gh_runs(
     repo: str | None = None,
     limit: int = 30,
     timeout_s: float = GH_CALL_TIMEOUT_S,
+    event: str | None = None,
 ) -> list[dict[str, object]]:
     """Fetch the runs whose ``headSha`` is ``sha``: asked for SERVER-side, checked client-side.
 
@@ -469,6 +502,9 @@ def gh_runs(
     older runs out of it - a failing CI run vanished that way while a green CodeQL run remained,
     and the push read as green. `--commit` needs the full sha and fails silently without it; this
     tool has already refused a short one. The client-side filter stays as a second check.
+
+    ``event`` (anything but ``None`` or ``any``) is passed as `--event` and checked client-side on
+    the rows that carry the field.
 
     Raises:
         GhFailed: `gh` exited non-zero, did not answer within ``timeout_s``, or returned
@@ -479,6 +515,9 @@ def gh_runs(
     argv = ["gh", "run", "list", "--commit", sha, "--json", _FIELDS, "--limit", str(limit)]
     if repo:
         argv += ["--repo", repo]
+    filtered = event not in (None, ANY_EVENT)
+    if filtered:
+        argv += ["--event", str(event)]
     try:
         proc = subprocess.run(
             argv, capture_output=True, text=True, encoding="utf-8", errors="replace", check=False,
@@ -498,7 +537,31 @@ def gh_runs(
         raise GhFailed(f"gh returned unparseable output: {exc}") from exc
     if not isinstance(rows, list):
         raise GhFailed(f"gh returned {type(rows).__name__}, not a list")
-    return [r for r in rows if isinstance(r, dict) and r.get("headSha") == sha]
+    return [r for r in rows if isinstance(r, dict) and r.get("headSha") == sha
+            and (not filtered or r.get("event", event) == event)]
+
+
+def resolve_repo(*, timeout_s: float = GH_CALL_TIMEOUT_S) -> str:
+    """OWNER/NAME of the cwd's repository, as gh resolves it, asked ONCE before the wait.
+
+    Raises:
+        GhFailed: gh answered without a repository (a non-zero exit, or an empty answer).
+        GhUnavailable: gh could not be spawned, or is not logged in.
+    """
+    argv = ["gh", "repo", "view", "--json", "nameWithOwner", "-q", ".nameWithOwner"]
+    try:
+        proc = subprocess.run(argv, capture_output=True, text=True, encoding="utf-8",
+                              errors="replace", check=False, timeout=timeout_s)
+    except subprocess.TimeoutExpired as exc:
+        raise GhFailed(f"gh repo view did not answer within {timeout_s:g}s") from exc
+    except OSError as exc:
+        raise GhUnavailable(f"could not run gh: {exc}") from exc
+    if proc.returncode == _GH_EXIT_AUTH_REQUIRED:
+        raise GhUnavailable(f"gh is not authenticated: {(proc.stderr or '').strip()}")
+    name = (proc.stdout or "").strip()
+    if proc.returncode != 0 or not name:
+        raise GhFailed(f"gh repo view exited {proc.returncode}: {(proc.stderr or '').strip()}")
+    return name
 
 
 def _seconds(*, allow_zero: bool) -> Callable[[str], float]:
@@ -542,7 +605,8 @@ def _positive_int(text: str) -> int:
 
 
 def _parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    parser = EnvelopeArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter,
+                                    envelope_command="ci_wait")
     positive, non_negative = _seconds(allow_zero=False), _seconds(allow_zero=True)
     parser.add_argument("--sha", required=True, help="the FULL 40-character commit sha (git rev-parse HEAD)")
     parser.add_argument("--repo", default=None, help="OWNER/NAME; default is the cwd's repo")
@@ -575,6 +639,11 @@ def _parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
              "verdict from the first all-terminal poll can be computed over a partial set. Only "
              "a success is confirmed: a failure is reported at once, since a later run cannot "
              "rescue it",
+    )
+    parser.add_argument(
+        "--event", default="push",
+        help="count only runs of this event (default push; 'any' counts every run). A scheduled "
+             "run GitHub queues on the same head sha otherwise holds a push's verdict open",
     )
     parser.add_argument("--json", action="store_true", help="emit a JSON envelope instead of text")
     return parser.parse_args(argv)
@@ -626,12 +695,17 @@ def _run(args: argparse.Namespace) -> int:
             file=sys.stderr,
         )
     started = time.monotonic()
+    try:
+        repo = args.repo or _resolve_repo_once(args.timeout)
+    except GhUnavailable as exc:
+        return _emit(Verdict("error", str(exc)), as_json=args.json)
 
     def fetch() -> list[dict[str, object]]:
         # A single gh call may not outlive the whole wait: bound it by what is left, too.
         left = args.timeout - (time.monotonic() - started)
         return gh_runs(
-            sha, repo=args.repo, limit=args.limit, timeout_s=max(1.0, min(GH_CALL_TIMEOUT_S, left))
+            sha, repo=repo, limit=args.limit, timeout_s=max(1.0, min(GH_CALL_TIMEOUT_S, left)),
+            event=args.event,
         )
 
     try:
@@ -645,18 +719,36 @@ def _run(args: argparse.Namespace) -> int:
             report=lambda line: print(line, file=sys.stderr, flush=True),
             deadline_s=args.timeout,
             clock=time.monotonic,
+            event=args.event,
         )
     except (GhFailed, GhUnavailable) as exc:
         return _emit(Verdict("error", str(exc)), as_json=args.json)
     return _emit(result, as_json=args.json)
 
 
+def _resolve_repo_once(timeout_s: float) -> str | None:
+    """The cwd's repo, so every poll names it; None (polling from the cwd) when gh answered badly.
+
+    A failed lookup falls back rather than ending the wait: it may be the same 502 weather the
+    poll loop sits through, and polling from the cwd is what this tool did before the lookup.
+    GhUnavailable propagates - no poll can succeed without gh either.
+    """
+    try:
+        return resolve_repo(timeout_s=max(1.0, min(GH_CALL_TIMEOUT_S, timeout_s)))
+    except GhFailed as exc:
+        print(f"warning: could not resolve the repository once ({exc}); polling from the "
+              f"current directory, so removing it mid-wait fails the polls. Pass --repo OWNER/NAME.",
+              file=sys.stderr)
+        return None
+
+
 def _emit(result: Verdict, *, as_json: bool) -> int:
     """Print the verdict and return its exit code; diagnostics to stderr, never into the data."""
     code = exit_code_for(result.state)
     if as_json:
-        print(json.dumps({"ok": code == 0, "state": result.state, "summary": result.summary,
-                          "runs": list(result.runs)}))
+        emit(code, "ci_wait", {"state": result.state, "summary": result.summary,
+                               "runs": list(result.runs)},
+             error=result.summary if code == 2 else None, indent=None)
     elif code == 0:
         print(result.summary)
     else:
