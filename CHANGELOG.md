@@ -33,9 +33,10 @@ two "versions with no entry" notes came to sit in this file disagreeing with it.
 
 ### Fixed
 
-- The `repo-gate` end-to-end table re-pad test passes on a stock Windows machine, not only under
-  CI's git config: its temporary repo now pins `core.autocrlf=false` and `core.eol=lf`, so Git for
-  Windows' default `autocrlf=true` no longer hands back a CRLF origin text against the LF edit.
+- The `repo-gate` tests pass on a stock Windows machine, not only under CI's git config: they now
+  pin `core.autocrlf=false` and `core.eol=lf` for every git run, so Git for Windows' default
+  `autocrlf=true` no longer hands back CRLF origin text against their LF fixtures (it failed the
+  end-to-end table re-pad test and the stale-checkout mirror test).
 
 ## [7.41.2]
 

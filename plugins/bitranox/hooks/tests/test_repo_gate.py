@@ -27,9 +27,27 @@ import repo_gate as RG
 # --------------------------------------------------------------------------
 
 
+@pytest.fixture(autouse=True)
+def _lf_git_eol_config(monkeypatch):
+    """Pin git's eol conversion for every git run in this module, the gate's own included.
+
+    write() puts LF bytes into the work tree, as a checkout with no eol conversion would, and
+    several tests compare such a file with git's view of a commit (`git cat-file --filters`).
+    That view follows the machine's config: LF under CI's core.autocrlf=false/core.eol=lf, but
+    CRLF under Git for Windows' default core.autocrlf=true, so the same test passed on the runner
+    and failed on a stock Windows box. GIT_CONFIG_* outranks every config file, so each run sees
+    CI's settings.
+    """
+    monkeypatch.setenv("GIT_CONFIG_COUNT", "2")
+    monkeypatch.setenv("GIT_CONFIG_KEY_0", "core.autocrlf")
+    monkeypatch.setenv("GIT_CONFIG_VALUE_0", "false")
+    monkeypatch.setenv("GIT_CONFIG_KEY_1", "core.eol")
+    monkeypatch.setenv("GIT_CONFIG_VALUE_1", "lf")
+
+
 def write(path, text):
     # Byte-exact (newline=""): a checkout writes a file and its origin/master text through the
-    # same eol filter, and the CI git config makes that LF. Text mode would make every fixture
+    # same eol filter, which _lf_git_eol_config pins to LF. Text mode would make every fixture
     # CRLF on Windows while git hands back LF, so a comparison against origin fails on line 1.
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(text, encoding="utf-8", newline="")
@@ -778,12 +796,6 @@ def test_the_waiver_reads_origin_master_through_the_real_entry_point(tmp_path):
     """End to end through check_skill_review: the default reader is git, not the seam."""
     _skill_with_formatter(tmp_path, PAD_ORIG)
     _g(tmp_path, "init", "-q", ".")
-    # write() puts LF bytes straight into the work tree, as a checkout with no eol conversion
-    # would. Pin that in this repo: otherwise the machine's git config decides the line endings
-    # git hands back for origin/master - LF under CI's autocrlf=false/eol=lf, but CRLF under Git
-    # for Windows' default autocrlf=true - and the test fails on a stock Windows box.
-    _g(tmp_path, "config", "core.autocrlf", "false")
-    _g(tmp_path, "config", "core.eol", "lf")
     _g(tmp_path, "add", "-A")
     _g(tmp_path, "commit", "-qm", "base")
     _g(tmp_path, "update-ref", "refs/remotes/origin/master", "HEAD")
