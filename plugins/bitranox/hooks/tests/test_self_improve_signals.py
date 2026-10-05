@@ -812,7 +812,7 @@ def test_a_line_longer_than_the_cap_is_never_cut_inside_a_utf8_character(home, t
     in the file. Every part must decode cleanly, and the parts together must be the file."""
     tp = tmp_path / "t.jsonl"
     line = ("\u00e9\u20ac\U0001f600a" * 6) + "\n"     # 2-, 3- and 4-byte characters, no newline inside
-    tp.write_text(line, encoding="utf-8")
+    tp.write_bytes(line.encode("utf-8"))                # text mode would write "\r\n" on Windows
     parts = _walk_parts(tp, cap)
     assert all("\ufffd" not in p.text for p in parts)
     assert "".join(p.text for p in parts) == line       # nothing lost, nothing repeated

@@ -7,7 +7,10 @@ line reading PICTURE is one picture. The one test against the REAL markitdown
 builds a genuine deck with python-pptx and is skipped when either is missing.
 """
 
+import errno
+import os
 import struct
+import sys
 import zlib
 
 import pytest
@@ -154,14 +157,30 @@ def test_cp1252_console_with_non_ascii_output_name(script_runner, tmp_path, fake
     assert (tmp_path / out_name).is_file()
 
 
+def _non_utf8_named_file(directory, raw_name):
+    """Create a file whose name is the raw bytes `raw_name`, returning that name as a str.
+
+    Such a name exists only where the filesystem stores names as bytes. Windows stores UTF-16
+    text, so the bytes cannot even be decoded into a name; APFS on macOS refuses the name with
+    EILSEQ. There the case under test cannot arise, so it is skipped rather than faked.
+    """
+    if sys.platform == "win32":
+        pytest.skip("Windows filenames are UTF-16 text: no name can hold a byte that is not UTF-8")
+    name = os.fsdecode(raw_name)
+    try:
+        (directory / name).write_bytes(b"PNG")
+    except OSError as error:
+        if error.errno != errno.EILSEQ:
+            raise
+        pytest.skip("this filesystem refuses a filename that is not valid UTF-8 (EILSEQ)")
+    return name
+
+
 def test_input_filename_with_non_utf8_bytes_is_reported_not_crashed(script_runner, tmp_path, fakes):
     """A POSIX filename may carry bytes that are not valid UTF-8 (surrogate-escaped on decode).
     That text then flows into the written Markdown's "Source" line, where it cannot be UTF-8
     encoded; the run must report that as [FAIL], never as an uncaught traceback."""
-    import os
-
-    bad_name = os.fsdecode(b"bad_\xff_pic.png")
-    (tmp_path / bad_name).write_bytes(b"PNG")
+    bad_name = _non_utf8_named_file(tmp_path, b"bad_\xff_pic.png")
 
     run = _ai(script_runner, tmp_path, fakes, [bad_name, "out.md"])
 

@@ -687,7 +687,13 @@ def _skill_with_formatter(root, text):
     tool_dir = "plugins/bitranox/skills/docs-md-table-formatting"
     (root / tool_dir).mkdir(parents=True)
     shutil.copy(_REAL_ROOT / tool_dir / "reformat_tables.py", root / tool_dir / "reformat_tables.py")
-    write(root / "plugins/bitranox/skills/alpha/SKILL.md", text)
+    # Byte-exact (no newline translation): the tests hand `read_original` the LF string, and a
+    # real checkout writes the file and its origin text through the same eol filter, so both
+    # sides must carry the same line endings. Text mode would make this file CRLF on Windows.
+    skill_md = root / "plugins/bitranox/skills/alpha/SKILL.md"
+    skill_md.parent.mkdir(parents=True, exist_ok=True)
+    with open(skill_md, "w", encoding="utf-8", newline="") as handle:
+        handle.write(text)
     return ["plugins/bitranox/skills/alpha/SKILL.md"]
 
 

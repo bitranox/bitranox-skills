@@ -29,6 +29,18 @@ than the change, so entries reconstructed from them would read like coverage wit
 a hole nobody has drawn a line under is one that gets rediscovered and half-filled - which is how
 two "versions with no entry" notes came to sit in this file disagreeing with it.
 
+## [7.41.1]
+
+### Fixed
+
+- The `repo-gate` table re-pad tests pass on Windows: their SKILL.md fixture was written in text
+  mode, so it carried CRLF line endings against an LF origin text; it is now written byte-exact.
+- The transcript-part UTF-8 cap test passes on Windows: its fixture is written as bytes, so the
+  file holds the `\n` the test compares against instead of `\r\n`.
+- The `convert_with_ai` test for an input filename holding non-UTF-8 bytes is skipped where no
+  such filename can exist: on Windows (UTF-16 names) and on filesystems that refuse it with
+  EILSEQ, such as APFS on macOS. Any other error creating the fixture still fails the test.
+
 ## [7.41.0]
 
 ### Changed
