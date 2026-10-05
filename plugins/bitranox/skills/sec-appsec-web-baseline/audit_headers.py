@@ -30,6 +30,7 @@ import sys
 from collections.abc import Callable
 from dataclasses import asdict, dataclass
 from html.parser import HTMLParser
+from typing import NoReturn
 from urllib.parse import urlsplit, urlunsplit
 
 SEVERITIES = ("SEVERE", "MEDIUM", "MINOR", "OK")
@@ -243,11 +244,31 @@ _SCHEME_PART = r"[a-z][a-z0-9+.-]*"
 _PERMISSIVE_FRAME_SOURCE = re.compile(
     rf"^(?:{_SCHEME_PART}:|(?:{_SCHEME_PART}://)?\*(?::(?:\d+|\*))?(?:/.*)?)$"
 )
+# A ``*.`` wildcard over ONE label (``*.com``, ``https://*.co:443``) is scoped in form only: it
+# lets every site under a whole top-level domain frame the page. A public suffix with two labels
+# (``*.co.uk``) reads exactly like the scoped ``*.example.com`` without the Public Suffix List,
+# which this dependency-free check does not carry; the finding says so.
+_SINGLE_LABEL_FRAME_SOURCE = re.compile(
+    rf"^(?:{_SCHEME_PART}://)?\*\.[a-z0-9-]+(?::(?:\d+|\*))?(?:/.*)?$"
+)
+_FRAME_ANCESTORS_FIX = "restrict frame-ancestors to 'none', 'self' or explicit origins"
 
 
 def _permissive_frame_sources(sources: str) -> list[str]:
     """The sources in one frame-ancestors list that let ANY site frame the page."""
-    return [s for s in sources.split() if _PERMISSIVE_FRAME_SOURCE.match(s)]
+    return [s for s in sources.split() if _PERMISSIVE_FRAME_SOURCE.match(s.lower())]
+
+
+def _single_label_frame_sources(sources: str) -> list[str]:
+    """The sources in one frame-ancestors list that are a wildcard over a single label."""
+    return [s for s in sources.split() if _SINGLE_LABEL_FRAME_SOURCE.match(s.lower())]
+
+
+def _frame_list_rank(sources: str) -> int:
+    """How widely one list lets the page be framed: 0 restricted, 1 a whole TLD, 2 any site."""
+    if _permissive_frame_sources(sources):
+        return 2
+    return 1 if _single_label_frame_sources(sources) else 0
 
 
 def _frame_ancestors_finding(source_lists: list[str]) -> Finding:
@@ -255,16 +276,25 @@ def _frame_ancestors_finding(source_lists: list[str]) -> Finding:
 
     Within one list, 'none', 'self', explicit origins and scoped wildcards (``*.example.com``)
     restrict framing; a scheme-only source (``https:``) or a host-source whose host is a bare
-    ``*`` (``*``, ``https://*``, ``*:443``) allows any site to. Across policies a frame loads only
-    when EVERY list allows it, so one restricting list protects the page."""
-    for sources in source_lists:
-        if not _permissive_frame_sources(sources):
-            # An empty source list means 'none' in CSP.
-            return Finding("clickjacking", "OK", "CSP frame-ancestors " + (sources or "(empty list = 'none')"))
+    ``*`` (``*``, ``https://*``, ``*:443``) allows any site to (MEDIUM), and a wildcard over one
+    label (``*.com``) allows a whole top-level domain to (MINOR). Across policies a frame loads
+    only when EVERY list allows it, so the most restrictive list decides."""
+    tightest = min(source_lists, key=_frame_list_rank)
+    rank = _frame_list_rank(tightest)
+    if rank == 0:
+        # An empty source list means 'none' in CSP.
+        return Finding("clickjacking", "OK", "CSP frame-ancestors " + (tightest or "(empty list = 'none')"))
+    if rank == 1:
+        broad = " ".join(s.lower() for s in _single_label_frame_sources(tightest))
+        return Finding("clickjacking", "MINOR",
+                       f"CSP frame-ancestors {broad} lets every site under a whole top-level "
+                       "domain frame the page; only a one-label wildcard is detected, so a "
+                       "two-label public suffix such as *.co.uk still grades OK (no Public "
+                       "Suffix List check)", _FRAME_ANCESTORS_FIX)
     permissive = [s for sources in source_lists for s in _permissive_frame_sources(sources)]
     return Finding("clickjacking", "MEDIUM",
                    f"CSP frame-ancestors allows any site to frame the page ({' '.join(permissive)})",
-                   "restrict frame-ancestors to 'none', 'self' or explicit origins")
+                   _FRAME_ANCESTORS_FIX)
 
 
 # The X-Frame-Options values the HTML algorithm acts on; anything else is ignored.
@@ -574,15 +604,42 @@ def _make_console_safe() -> None:
             pass  # a detached or non-reconfigurable stream keeps its own error handling
 
 
+COMMAND = "audit_headers"
+
+
+def _envelope(*, ok: bool, data: object, error: str | None = None) -> str:
+    """The plugin-wide ``--json`` envelope; ``ok`` means "ran without error" (false only on exit 2),
+    so a gate failure (exit 1) is still ok and its answer lives in the exit code and ``data``."""
+    doc: dict[str, object] = {"ok": ok, "command": COMMAND, "data": data, "skipped": []}
+    if error is not None:
+        doc["error"] = error
+    return json.dumps(doc, indent=2)
+
+
+class _Parser(argparse.ArgumentParser):
+    """argparse, except that a usage error under ``--json`` still prints the envelope."""
+
+    json_requested = False
+
+    def error(self, message: str) -> NoReturn:
+        if self.json_requested:
+            print(_envelope(ok=False, data=None, error=message))
+        super().error(message)
+
+
 def main(argv: list[str] | None = None, *, fetcher: Callable[..., list[Finding]] | None = None) -> int:
     """CLI entry: exit 0 when the gate (0 SEVERE / 0 MEDIUM) is met, 1 when it is not, 2 when
-    the URL could not be fetched at all. ``fetcher`` replaces :func:`fetch` (tests inject a
-    network-free one)."""
+    the URL could not be fetched at all (or the arguments are wrong). ``--json`` prints the
+    ``{ok, command, data, skipped}`` envelope on every exit, 2 included. ``fetcher`` replaces
+    :func:`fetch` (tests inject a network-free one)."""
     _make_console_safe()
     fetcher = fetcher or fetch
-    parser = argparse.ArgumentParser(description="Audit a URL's HTTP web-security baseline.")
+    parser = _Parser(description="Audit a URL's HTTP web-security baseline.")
+    parser.json_requested = "--json" in (sys.argv[1:] if argv is None else argv)
     parser.add_argument("url")
-    parser.add_argument("--json", action="store_true", help="emit findings as JSON")
+    parser.add_argument("--json", action="store_true",
+                        help="emit a {ok, command, data, skipped} envelope; data holds url, counts "
+                             "and findings")
     parser.add_argument("--proxy", help="route the fetch through this proxy URL to egress outside the "
                                         "internal network (public sites; see the net-rotating-proxies skill)")
     args = parser.parse_args(argv)
@@ -593,14 +650,17 @@ def main(argv: list[str] | None = None, *, fetcher: Callable[..., list[Finding]]
         warning = internal_target_warning(args.url, args.proxy)
         findings = fetcher(args.url, proxy=args.proxy)
     except Exception as exc:  # noqa: BLE001 - any fetch failure is "not measured", never a gate verdict
-        sys.stderr.write(f"could not fetch {args.url}: {type(exc).__name__}: {exc}\n")
+        message = f"could not fetch {args.url}: {type(exc).__name__}: {exc}"
+        sys.stderr.write(message + "\n")
+        if args.json:
+            print(_envelope(ok=False, data=None, error=message))
         return 2
     counts = summarize(findings)
     if args.json:
         out: dict[str, object] = {"url": args.url, "counts": counts, "findings": [asdict(f) for f in findings]}
         if warning:
             out["internal_target_warning"] = warning
-        print(json.dumps(out, indent=2))
+        print(_envelope(ok=True, data=out))
     else:
         if warning:
             sys.stderr.write("WARNING: " + warning + "\n")

@@ -335,6 +335,39 @@ def test_clickjacking_frame_ancestors_bare_star_host_beside_self_is_medium():
     assert sev(a._clickjacking(None, "frame-ancestors 'self' https://*:443")) == "MEDIUM"
 
 
+# ---- D12: a wildcard over ONE label (*.com) lets a whole top-level domain frame the page ----
+@pytest.mark.parametrize("source", ["*.com", "*.co", "https://*.com", "*.COM", "*.com:443",
+                                    "https://*.io:*", "*.com/"])
+def test_clickjacking_frame_ancestors_single_label_wildcard_is_minor(source):
+    finding = a._clickjacking(None, f"frame-ancestors {source}")
+    assert sev(finding) == "MINOR", f"{source!r} graded {finding}"
+    assert source.lower() in finding.detail
+    # The finding states its own blind spot: a two-label public suffix is not detected.
+    assert "*.co.uk" in finding.detail and "Public Suffix List" in finding.detail
+
+
+@pytest.mark.parametrize("source", ["*.example.com", "https://*.example.com", "*.co.uk"])
+def test_clickjacking_frame_ancestors_multi_label_wildcard_stays_ok(source):
+    """The control, and the stated gap: *.co.uk is a public suffix with two labels, and without
+    the Public Suffix List it reads exactly like the scoped *.example.com."""
+    assert sev(a._clickjacking(None, f"frame-ancestors {source}")) == "OK"
+
+
+def test_clickjacking_single_label_wildcard_beside_self_is_minor():
+    assert sev(a._clickjacking(None, "frame-ancestors 'self' *.com")) == "MINOR"
+
+
+def test_clickjacking_any_site_source_outranks_a_single_label_wildcard():
+    assert sev(a._clickjacking(None, "frame-ancestors *.com *")) == "MEDIUM"
+
+
+def test_clickjacking_across_policies_the_most_restrictive_list_decides():
+    # A frame loads only when EVERY enforced list allows it.
+    assert sev(a._frame_ancestors_finding(["*.com", "'none'"])) == "OK"
+    assert sev(a._frame_ancestors_finding(["*", "*.com"])) == "MINOR"
+    assert sev(a._frame_ancestors_finding(["*", "https:"])) == "MEDIUM"
+
+
 def test_clickjacking_frame_ancestors_bare_star_host_is_not_rescued_by_xfo():
     assert sev(a._clickjacking("DENY", "frame-ancestors https://*")) == "MEDIUM"
 
