@@ -37,14 +37,31 @@ is the one outcome worse than a wrong verdict.
   the arm and reports the hang as its own verdict, never as `killed`. The restore still runs when
   the timeout fires: the copy is taken before the first edit and put back in a `finally`.
 
-Run it with the PROJECT's interpreter - the one that has pytest and the project installed - since
-the arm is `<this interpreter> -m pytest`. `uv run scripts/mutation_arm.py` gives an interpreter
-with neither; an arm whose pytest exits 1 without naming a failure is reported INCONCLUSIVE, never
-KILLED, so that mistake shows as a column of exit-2 arms rather than a battery of perfect tests.
+WHICH INTERPRETER RUNS THE ARM decides whether the verdict means anything: the arm is
+`<runner> -m pytest`, and a runner without pytest or the project's dependencies fails every arm for
+an environment reason. It is chosen, and named in the report as `runner` / `runner_source`, as:
+`--python PATH` when given; `--with DEP` (repeatable) for `uv run --no-project --with pytest
+--with DEP ... python -m pytest`; else `.venv/bin/python` (`.venv\\Scripts\\python.exe` on Windows)
+under the current directory when it exists; else the interpreter running this tool - which under
+`uv run scripts/mutation_arm.py` has neither pytest nor the project. An arm whose pytest exits 1
+without naming a failure is reported INCONCLUSIVE, never KILLED, so that mistake shows as a column
+of exit-2 arms rather than a battery of perfect tests.
   `.venv/bin/python scripts/mutation_arm.py --mutate src/x.py old.txt new.txt --test tests/t.py::test_y --timeout 90`
   `... --mutate a.py o1.txt n1.txt --mutate b.py o2.txt n2.txt --test tests/t.py::test_y`
-  add `--json` for an envelope; its "ok" is false exactly when the exit code is 2, and a
-  refusal prints one too (`"data": null` and an `"error"`)
+  add `--json` for the `{ok, command, data, skipped}` envelope; "ok" is false exactly when the
+  exit code is 2, and a refusal prints one too (`"data": {}` and an `"error"`)
+
+A BATTERY runs many labelled arms in one go, so it is not hand-rolled per session (it was, four
+times in one session, each copy re-deriving the cache purge, the summary parse and the restore):
+  `.venv/bin/python scripts/mutation_arm.py --battery arms.json [--timeout 90] [--json]`
+where arms.json is `{"tests": [NODEID, ...], "arms": [{"label": L, "file": F, "old": TEXT,
+"new": TEXT}, ...]}` (an arm may carry `"mutations": [{file, old, new}, ...]` to apply several
+together, and its own `"tests"`). Every anchor is checked before anything is written; the tests
+must pass UNMUTATED first (a red baseline refuses the battery, since then every arm reads KILLED);
+each arm is applied, run, and restored in turn, reporting WHICH tests caught it (`caught_by`); and
+the baseline is run again at the end to prove the restores left a green tree. Exit 0 every arm
+killed, 1 some arm survived (the finding), 2 any arm inconclusive, timed out or in error, a red
+baseline at either end, a failed restore, or a refused spec.
 
 Sources and anchor files are UTF-8 (an anchor file's BOM is ignored); a CRLF source keeps its
 CRLF while mutated, and an LF anchor file matches it.
@@ -52,9 +69,11 @@ CRLF while mutated, and an LF anchor file matches it.
 Exit codes: 0 = KILLED (the arm noticed the mutation), 1 = SURVIVED (it did not - the finding),
 2 = INCONCLUSIVE, TIMEOUT, ERROR (a source that could not be written, or an arm that could not
 be started), a failed restore, cached bytecode that survived the purge AFTER the arm (the arm ran
-and was restored; the verdict is still reported, and the leftover files are named), or a
-usage error (an absent anchor, a file that is not UTF-8, a test that never ran, a pytest that
-exited 1 without reporting a failure, or an arm still running at --timeout).
+and was restored; the verdict is still reported, and the leftover files are named), a usage
+error (an absent anchor, a file that is not UTF-8, a test that never ran, a pytest that exited 1
+without reporting a failure, an arm still running at --timeout, a runner that does not exist), a
+sibling anchor_edit.py that cannot be imported, or an internal error - never Python's traceback
+exit 1, which would read as SURVIVED.
 """
 from __future__ import annotations
 
@@ -68,7 +87,26 @@ import sys
 import tempfile
 from pathlib import Path
 
-from anchor_edit import AnchorError, replace_exact, require_unique
+from _cli_envelope import (EXIT_ERROR, EXIT_NO, EXIT_YES, EnvelopeArgumentParser, emit,
+                           envelope_for_exit, guarded, render)
+
+# The sibling that finds and replaces anchors. A failed import is held, never raised: its
+# traceback exits 1, which is this tool's SURVIVED - so main() refuses with 2 instead, and the
+# stand-ins below make every anchor operation refuse the same way.
+try:
+    from anchor_edit import AnchorError, replace_exact, require_unique
+    _ANCHOR_IMPORT_ERROR: ImportError | None = None
+except ImportError as _exc:
+    _ANCHOR_IMPORT_ERROR = _exc
+
+    class AnchorError(ValueError):  # type: ignore[no-redef]
+        """Stand-in raised by every anchor operation when anchor_edit could not be imported."""
+
+    def require_unique(*_args, **_kwargs):  # type: ignore[no-redef]
+        raise AnchorError(f"anchor_edit could not be imported: {_ANCHOR_IMPORT_ERROR}")
+
+    def replace_exact(*_args, **_kwargs):  # type: ignore[no-redef]
+        raise AnchorError(f"anchor_edit could not be imported: {_ANCHOR_IMPORT_ERROR}")
 
 #: How this tool must be launched, read by hooks/toolbox-nudge.py from the source without importing
 #: it: the arm is `<this interpreter> -m pytest`, so only the PROJECT's interpreter (which has
@@ -76,6 +114,39 @@ from anchor_edit import AnchorError, replace_exact, require_unique
 LAUNCH_WITH = "project-python"
 
 _SUMMARY_HEADER = "short test summary info"
+
+#: The project interpreter looked for under the current directory when no runner is named.
+VENV_PYTHON = Path(".venv") / ("Scripts/python.exe" if os.name == "nt" else "bin/python")
+
+
+class RunnerError(ValueError):
+    """The runner the caller asked for cannot be used; refused before anything is written."""
+
+
+def resolve_runner(python=None, with_deps=(), *, cwd=None, which=shutil.which):
+    """`(argv prefix, source)` of the interpreter that runs the arm as `<prefix> <nodeids>`.
+
+    Order: an explicit `--python`, then `--with` deps through uv, then the project's
+    `.venv` under `cwd`, then the interpreter running this tool. `which` is the PATH-lookup
+    seam. A named interpreter that cannot be found is refused here, before any mutation: launched
+    after the mutation it would surface as an arm that could not start.
+    """
+    if python:
+        if which(python) is None and not Path(python).is_file():
+            raise RunnerError(f"--python {python}: no such interpreter")
+        return [python, "-m", "pytest"], "--python"
+    if with_deps:
+        uv = which("uv")
+        if uv is None:
+            raise RunnerError("--with needs uv on PATH (it runs uv run --no-project --with ...)")
+        argv = [uv, "run", "--no-project", "--with", "pytest"]
+        for dep in with_deps:
+            argv += ["--with", dep]
+        return argv + ["python", "-m", "pytest"], "--with"
+    venv = Path(os.getcwd() if cwd is None else cwd) / VENV_PYTHON
+    if venv.is_file():
+        return [str(venv), "-m", "pytest"], "cwd .venv"
+    return [sys.executable, "-m", "pytest"], "this interpreter"
 
 
 def _partial_output(expired) -> str:
@@ -112,6 +183,29 @@ def failure_reason(output: str) -> str | None:
         rest = line.split(" ", 1)[1]
         return _reason_after_nodeid(rest) or line.strip()
     return None
+
+
+def failed_nodeids(output: str) -> list[str]:
+    """Every node id the SHORT TEST SUMMARY reports as FAILED or ERROR, in order, de-duplicated.
+
+    This is "which test caught the mutation". Read from the summary for the same reason as
+    `failure_reason`: the traceback body echoes test source and proves nothing.
+    """
+    lines = [line.rstrip("\r") for line in output.split("\n")]
+    start = next((i for i, line in enumerate(lines) if _SUMMARY_HEADER in line), None)
+    if start is None:
+        return []
+    found: list[str] = []
+    for line in lines[start + 1:]:
+        if not line.startswith(("FAILED ", "ERROR ")):
+            continue
+        rest = line.split(" ", 1)[1]
+        reason = _reason_after_nodeid(rest)
+        cut = rest.rfind(" - " + reason) if reason else -1
+        nodeid = (rest[:cut] if cut != -1 else rest).strip()
+        if nodeid and nodeid not in found:
+            found.append(nodeid)
+    return found
 
 
 def _reason_after_nodeid(rest: str) -> str:
@@ -257,17 +351,24 @@ def _read_anchor(path_arg, crlf: bool) -> str:
     return text.replace("\n", "\r\n") if crlf else text
 
 
-def plan_mutations(specs):
+def _match_endings(text: str, crlf: bool) -> str:
+    """An inline anchor text with its line endings matched to the source's."""
+    lf = text.replace("\r\n", "\n")
+    return lf.replace("\n", "\r\n") if crlf else lf
+
+
+def _plan(specs, load):
     """Validate every anchor BEFORE writing anything, returning (path, old, new) triples.
 
     All or nothing: one absent or ambiguous anchor refuses the whole arm. A partly-applied arm
     would run the tests against a state nobody described. Each anchor is checked against the text
     as the EARLIER mutations to the same file leave it, which is the text the arm will edit -
     checking against the original accepted a chain that then failed half-way through writing.
+    `load(spec, crlf)` turns an anchor spec (a file path or an inline text) into the text.
     """
     planned = []
     texts: dict[Path, str] = {}
-    for path_arg, old_file, new_file in specs:
+    for path_arg, old_spec, new_spec in specs:
         path = Path(path_arg)
         if not path.is_file():
             raise AnchorError(f"not a file: {path}")
@@ -275,11 +376,21 @@ def plan_mutations(specs):
         if key not in texts:
             texts[key] = _read_source(path)
         crlf = "\r\n" in texts[key]
-        old, new = _read_anchor(old_file, crlf), _read_anchor(new_file, crlf)
+        old, new = load(old_spec, crlf), load(new_spec, crlf)
         require_unique(texts[key], old, label=f"anchor for {path}")
         texts[key] = replace_exact(texts[key], old, new)
         planned.append((path, old, new))
     return planned
+
+
+def plan_mutations(specs):
+    """`_plan` for `--mutate FILE OLD_FILE NEW_FILE` triples, whose anchors live in files."""
+    return _plan(specs, _read_anchor)
+
+
+def plan_text_mutations(specs):
+    """`_plan` for (file, old text, new text) triples, as a battery spec carries them."""
+    return _plan(specs, _match_endings)
 
 
 def run_arm(planned, nodeid, *, runner=None, timeout=None):
@@ -289,7 +400,7 @@ def run_arm(planned, nodeid, *, runner=None, timeout=None):
     this tool instead of being reported, and a battery of arms stops dead on the first such
     mutation - measured 2026-09-02, where killing the hung run by hand also skipped the restore
     and left a mutated file on disk. The restore is in a `finally`, so a killed arm still
-    restores.
+    restores. `nodeid` is one node id or a list of them; `caught_by` names those that failed.
     """
     runner = runner or [sys.executable, "-m", "pytest"]
     # Before anything is written: a cache predating the mutation can be served IN PLACE of it when
@@ -338,6 +449,7 @@ def run_arm(planned, nodeid, *, runner=None, timeout=None):
         "timeout_s": timeout,
         "verdict": verdict,
         "failure": error or failure_reason(output),
+        "caught_by": [] if error else failed_nodeids(output),
         "restored": restored,
         "bytecode_purged": purged,
         "bytecode_left": left,
@@ -352,9 +464,10 @@ def _run_pytest(runner, nodeid, timeout):
     narrow default width. Widening COLUMNS instead would reach the tests themselves, whose
     rendering can depend on it.
     """
+    nodeids = [nodeid] if isinstance(nodeid, str) else list(nodeid)
     try:
         proc = subprocess.run(
-            [*runner, nodeid, "-vv", "--no-header", "-rfE", "--tb=no", "-p", "no:cacheprovider"],
+            [*runner, *nodeids, "-vv", "--no-header", "-rfE", "--tb=no", "-p", "no:cacheprovider"],
             capture_output=True, text=True, encoding="utf-8", errors="replace",
             timeout=timeout,
             # Merged onto the real environment, never a fresh dict: on Windows a child without
@@ -387,20 +500,59 @@ def _restore(saved) -> bool:
     return restored
 
 
-def main(argv=None) -> int:
-    ap = argparse.ArgumentParser(
-        description="Mutate by exact anchor, run one test arm, restore from a copy taken first.")
+def _parse(argv):
+    ap = EnvelopeArgumentParser(
+        envelope_command="mutation_arm",
+        description="Mutate by exact anchor, run one test arm (or a battery of labelled arms), "
+                    "restore from a copy taken first.")
     ap.add_argument("--mutate", nargs=3, action="append", metavar=("FILE", "OLD_FILE", "NEW_FILE"),
                     help="repeatable; every mutation is applied together as ONE arm")
-    ap.add_argument("--test", required=True, metavar="NODEID", help="the pytest node id to run")
+    ap.add_argument("--test", default=None, metavar="NODEID",
+                    help="the pytest node id to run (required with --mutate; with --battery it "
+                         "replaces the spec's tests)")
+    ap.add_argument("--battery", default=None, metavar="SPEC.json",
+                    help="run every labelled arm in this JSON spec, baseline green first and last")
     ap.add_argument("--timeout", type=float, default=None, metavar="SECONDS",
-                    help="bound the arm; a mutation can make a test SPIN rather than fail")
+                    help="bound each arm; a mutation can make a test SPIN rather than fail")
+    runner = ap.add_mutually_exclusive_group()
+    runner.add_argument("--python", default=None, metavar="PATH",
+                        help="interpreter that runs the arm as PATH -m pytest "
+                             "[default: ./.venv's python, else this interpreter]")
+    runner.add_argument("--with", dest="with_deps", action="append", default=[], metavar="DEP",
+                        help="run the arm under uv run --no-project --with pytest --with DEP "
+                             "(repeatable), for a project with no venv of its own")
     ap.add_argument("--json", action="store_true", help="machine-readable envelope")
-    args = ap.parse_args(argv)
+    return ap.parse_args(argv)
+
+
+@guarded("mutation_arm")
+def main(argv=None) -> int:
+    """Run one arm or a battery. An uncaught exception exits 2 (with the envelope under --json),
+    never Python's traceback exit 1, which is this tool's SURVIVED."""
+    args = _parse(argv)
     _tolerate_unencodable_output()
 
+    if _ANCHOR_IMPORT_ERROR is not None:
+        return _refuse(f"cannot import the sibling anchor_edit.py: {_ANCHOR_IMPORT_ERROR}",
+                       as_json=args.json)
+    if args.battery and args.mutate:
+        return _refuse("--battery and --mutate are separate modes; give one", as_json=args.json)
+    try:
+        runner, source = resolve_runner(args.python, args.with_deps)
+    except RunnerError as exc:
+        return _refuse(f"refused, nothing written - {exc}", as_json=args.json)
+    if not args.json:
+        print(f"mutation_arm: runner {' '.join(runner)} ({source})", file=sys.stderr)
+    if args.battery:
+        return _main_battery(args, runner, source)
+    return _main_single(args, runner, source)
+
+
+def _main_single(args, runner, source) -> int:
     if not args.mutate:
         return _refuse("no --mutate given", as_json=args.json)
+    if not args.test:
+        return _refuse("--test is required with --mutate", as_json=args.json)
 
     try:
         planned = plan_mutations(args.mutate)
@@ -411,10 +563,23 @@ def main(argv=None) -> int:
         return _refuse(f"refused, nothing written - {exc}", as_json=args.json)
 
     try:
-        report = run_arm(planned, args.test, timeout=args.timeout)
+        report = run_arm(planned, args.test, runner=runner, timeout=args.timeout)
     except (AnchorError, OSError) as exc:
         return _refuse(f"refused before mutating - {exc}", as_json=args.json)
+    report["runner"], report["runner_source"] = runner, source
 
+    _warn_restore(report)
+    if args.json:
+        print(json_envelope(report))
+    else:
+        print(f"{report['verdict'].upper()}: {args.test}")
+        if report["failure"]:
+            print(f"  reason: {report['failure']}")
+        _explain_unfinished(report, runner)
+    return outcome_code(report)
+
+
+def _warn_restore(report) -> None:
     if not report["restored"]:
         print("mutation_arm: RESTORE FAILED - the files on disk are NOT the originals",
               file=sys.stderr)
@@ -422,24 +587,20 @@ def main(argv=None) -> int:
         print("mutation_arm: the arm ran and the sources were restored, but cached bytecode "
               "survived removal and a later run could execute it instead of the source - delete "
               "it before the next run: " + ", ".join(report["bytecode_left"]), file=sys.stderr)
-    if args.json:
-        print(json_envelope(report))
-    else:
-        print(f"{report['verdict'].upper()}: {args.test}")
-        if report["failure"]:
-            print(f"  reason: {report['failure']}")
-        if report["verdict"] == "inconclusive":
-            print(f"  pytest exit {report['pytest_returncode']} - the arm did not run",
-                  file=sys.stderr)
-            if report["pytest_returncode"] == 1:
-                print("  no FAILED/ERROR line in pytest's summary: is pytest installed for "
-                      f"{sys.executable}? Run this tool with the project's own interpreter.",
-                      file=sys.stderr)
-        if report["verdict"] == "timeout":
-            print(f"  killed at {report['timeout_s']}s - the arm did not finish, so this says "
-                  "nothing about whether it would have noticed; the mutation may make it SPIN",
-                  file=sys.stderr)
-    return outcome_code(report)
+
+
+def _explain_unfinished(report, runner) -> None:
+    if report["verdict"] == "inconclusive":
+        print(f"  pytest exit {report['pytest_returncode']} - the arm did not run",
+              file=sys.stderr)
+        if report["pytest_returncode"] == 1:
+            print("  no FAILED/ERROR line in pytest's summary: does "
+                  f"{runner[0]} have pytest and the project? Name the project's interpreter "
+                  "with --python.", file=sys.stderr)
+    if report["verdict"] == "timeout":
+        print(f"  killed at {report['timeout_s']}s - the arm did not finish, so this says "
+              "nothing about whether it would have noticed; the mutation may make it SPIN",
+              file=sys.stderr)
 
 
 def outcome_code(report) -> int:
@@ -448,7 +609,7 @@ def outcome_code(report) -> int:
     The one place the code is decided, so the envelope's "ok" and the process exit cannot disagree.
     """
     if not report["restored"] or report["bytecode_left"]:
-        return 2
+        return EXIT_ERROR
     return exit_code_for(report["verdict"])
 
 
@@ -456,8 +617,7 @@ def json_envelope(report) -> str:
     """The --json envelope. "ok" is false exactly when the exit code is 2 (an error): SURVIVED
     exits 1 as the FINDING, so it is still ok. Derived from outcome_code, never set on its own -
     a literal true here reported every inconclusive, timed-out and unrestored arm as ok."""
-    return json.dumps({"ok": outcome_code(report) != 2, "command": "mutation_arm",
-                       "data": report}, indent=2)
+    return render(envelope_for_exit(outcome_code(report), "mutation_arm", report))
 
 
 def _refuse(message: str, *, as_json: bool) -> int:
@@ -466,9 +626,170 @@ def _refuse(message: str, *, as_json: bool) -> int:
     rather than as the refusal it was."""
     print(f"mutation_arm: {message}", file=sys.stderr)
     if as_json:
-        print(json.dumps({"ok": False, "command": "mutation_arm", "data": None,
-                          "error": message}, indent=2))
-    return 2
+        emit(EXIT_ERROR, "mutation_arm", error=message)
+    return EXIT_ERROR
+
+
+# ---- battery --------------------------------------------------------------------------------
+
+
+class BatteryError(ValueError):
+    """A battery spec that cannot be run as written; refused before anything is written."""
+
+
+def _str_list(value, what: str) -> list[str]:
+    items = [value] if isinstance(value, str) else value
+    if not isinstance(items, list) or not items or not all(
+            isinstance(item, str) and item.strip() for item in items):
+        raise BatteryError(f"{what} must be a node id or a non-empty list of them")
+    return list(items)
+
+
+def _arm_mutations(arm: dict, label: str) -> list[tuple[str, str, str]]:
+    raw = arm.get("mutations")
+    if raw is None:
+        raw = [{key: arm[key] for key in ("file", "old", "new") if key in arm}]
+    if not isinstance(raw, list) or not raw:
+        raise BatteryError(f"arm {label!r}: mutations must be a non-empty list")
+    out = []
+    for mutation in raw:
+        if not isinstance(mutation, dict):
+            raise BatteryError(f"arm {label!r}: a mutation must be an object")
+        missing = [key for key in ("file", "old", "new")
+                   if not isinstance(mutation.get(key), str)]
+        if missing:
+            raise BatteryError(f"arm {label!r}: a mutation lacks {', '.join(missing)}")
+        out.append((mutation["file"], mutation["old"], mutation["new"]))
+    return out
+
+
+def load_battery(path, override_tests=None):
+    """`(tests, [(label, [(file, old, new)], arm_tests or None)])` from a battery spec file.
+
+    The spec is `{"tests": [...], "arms": [...]}` or a bare list of arms (then `--test` names the
+    tests). Labels must be unique: the report is read BY label, and two arms sharing one would
+    make a surviving arm read as its killed twin.
+    """
+    try:
+        spec = json.loads(Path(path).read_text(encoding="utf-8-sig"))
+    except OSError as exc:
+        raise BatteryError(f"cannot read --battery {path}: {exc}") from exc
+    except (ValueError, UnicodeDecodeError) as exc:
+        raise BatteryError(f"--battery {path} is not JSON: {exc}") from exc
+    arms_raw = spec if isinstance(spec, list) else spec.get("arms") if isinstance(spec, dict) else None
+    if not isinstance(arms_raw, list) or not arms_raw:
+        raise BatteryError("the battery has no arms (want {\"tests\": [...], \"arms\": [...]})")
+    tests_raw = override_tests or (spec.get("tests") if isinstance(spec, dict) else None)
+    if not tests_raw:
+        raise BatteryError("the battery names no tests: give \"tests\" in the spec or --test")
+    tests = _str_list(tests_raw, "tests")
+    arms, seen = [], set()
+    for arm in arms_raw:
+        if not isinstance(arm, dict) or not isinstance(arm.get("label"), str) or not arm["label"]:
+            raise BatteryError("every arm needs a non-empty string \"label\"")
+        label = arm["label"]
+        if label in seen:
+            raise BatteryError(f"duplicate arm label {label!r}")
+        seen.add(label)
+        arm_tests = _str_list(arm["tests"], f"arm {label!r} tests") if "tests" in arm else None
+        arms.append((label, _arm_mutations(arm, label), arm_tests))
+    return tests, arms
+
+
+def _baseline(runner, tests, timeout) -> dict:
+    """The tests run UNMUTATED. Green only on exit 0: 5 (nothing collected) is not green."""
+    try:
+        returncode, output = _run_pytest(runner, tests, timeout)
+    except OSError as exc:
+        return {"green": False, "pytest_returncode": None, "failure": f"could not start: {exc}"}
+    return {"green": returncode == 0, "pytest_returncode": returncode,
+            "failure": None if returncode == 0 else (
+                failure_reason(output) or f"pytest exit {returncode}")}
+
+
+def run_battery(arms, tests, *, runner, timeout=None) -> dict:
+    """Baseline, then every arm in turn (each restored before the next), then the baseline again.
+
+    `arms` holds (label, planned, arm_tests) with every anchor already validated. A red baseline
+    runs no arm at all: every arm would then read KILLED by a failure that predates it. A failed
+    restore stops the battery - the next arm would mutate a file that is not the original.
+    """
+    purge_bytecode([path for _, planned, _ in arms for path, _, _ in planned])
+    result = {"tests": tests, "baseline": _baseline(runner, tests, timeout), "arms": [],
+              "final_baseline": None}
+    if not result["baseline"]["green"]:
+        return result
+    for label, planned, arm_tests in arms:
+        try:
+            report = run_arm(planned, arm_tests or tests, runner=runner, timeout=timeout)
+        except (AnchorError, OSError) as exc:
+            report = {"verdict": "error", "failure": f"refused before mutating - {exc}",
+                      "caught_by": [], "restored": True, "bytecode_left": []}
+        result["arms"].append({"label": label, **report})
+        if not report["restored"]:
+            break
+    result["final_baseline"] = _baseline(runner, tests, timeout)
+    return result
+
+
+def battery_code(result) -> int:
+    """0 every arm killed, 1 some arm survived, 2 anything that leaves the answer unknown.
+
+    2 wins over 1: a battery with an inconclusive arm has not measured that arm, so its survivors
+    are a partial answer at best.
+    """
+    if not result["baseline"]["green"] or not (result["final_baseline"] or {}).get("green"):
+        return EXIT_ERROR
+    codes = [outcome_code(arm) for arm in result["arms"]]
+    if EXIT_ERROR in codes:
+        return EXIT_ERROR
+    return EXIT_NO if EXIT_NO in codes else EXIT_YES
+
+
+def _main_battery(args, runner, source) -> int:
+    try:
+        tests, arms_spec = load_battery(args.battery, [args.test] if args.test else None)
+        arms = []
+        for label, mutations, arm_tests in arms_spec:
+            try:
+                arms.append((label, plan_text_mutations(mutations), arm_tests))
+            except (AnchorError, OSError, UnicodeDecodeError) as exc:
+                raise BatteryError(f"arm {label!r}: {exc}") from exc
+    except BatteryError as exc:
+        return _refuse(f"refused, nothing written - {exc}", as_json=args.json)
+
+    try:
+        result = run_battery(arms, tests, runner=runner, timeout=args.timeout)
+    except (AnchorError, OSError) as exc:
+        return _refuse(f"refused before mutating - {exc}", as_json=args.json)
+    result.update(mode="battery", runner=runner, runner_source=source)
+    code = battery_code(result)
+    for arm in result["arms"]:
+        _warn_restore(arm)
+    if not result["baseline"]["green"]:
+        print(f"mutation_arm: the baseline is RED before any mutation "
+              f"({result['baseline']['failure']}); no arm was run", file=sys.stderr)
+    elif not (result["final_baseline"] or {}).get("green"):
+        print("mutation_arm: the baseline is RED after the battery - check the sources",
+              file=sys.stderr)
+    if args.json:
+        print(render(envelope_for_exit(code, "mutation_arm", result)))
+    else:
+        _print_battery(result)
+    return code
+
+
+def _print_battery(result) -> None:
+    print(f"baseline: {'GREEN' if result['baseline']['green'] else 'RED'}")
+    for arm in result["arms"]:
+        line = f"{arm['verdict'].upper():<12} {arm['label']}"
+        if arm["caught_by"]:
+            line += "  caught by: " + ", ".join(arm["caught_by"])
+        elif arm["verdict"] != "survived" and arm.get("failure"):
+            line += f"  ({arm['failure']})"
+        print(line)
+    if result["final_baseline"] is not None:
+        print(f"final baseline: {'GREEN' if result['final_baseline']['green'] else 'RED'}")
 
 
 def _tolerate_unencodable_output() -> None:

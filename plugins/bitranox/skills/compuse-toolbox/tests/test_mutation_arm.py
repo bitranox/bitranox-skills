@@ -791,9 +791,246 @@ def test_a_json_refusal_still_prints_an_envelope(tmp_path):
     assert envelope["command"] == "mutation_arm"
     assert "nothing written" in envelope["error"]
     assert "nothing written" in proc.stderr
+    assert envelope["data"] == {} and envelope["skipped"] == []
 
 
 def test_a_json_usage_error_still_prints_an_envelope(tmp_path):
     proc = run(make_project(tmp_path), "--test", "test_src.py::test_zero", "--json")
     assert proc.returncode == 2
     assert json.loads(proc.stdout)["ok"] is False
+
+
+
+# --------------------------------------------------------------------------
+# Wave D: the crash boundary, the import guard, the envelope's skipped key
+# --------------------------------------------------------------------------
+
+
+def _zero_anchors(p):
+    (p / "old.txt").write_text('return "zero"', encoding="utf-8")
+    (p / "new.txt").write_text('return "ZERO"', encoding="utf-8")
+
+
+def test_an_internal_crash_exits_2_never_the_survived_1(tmp_path, capsys, monkeypatch):
+    """A traceback exits 1, which is this tool's SURVIVED - the worst lie it can tell."""
+    p = make_project(tmp_path)
+    _zero_anchors(p)
+    monkeypatch.chdir(p)
+
+    def explode(*_a, **_k):
+        raise RuntimeError("kaboom")
+
+    # The process boundary is under test, so the crash is injected at the arm main runs.
+    monkeypatch.setattr(M, "run_arm", explode)
+    rc = M.main(["--mutate", "src.py", "old.txt", "new.txt", "--test", "test_src.py::test_zero",
+                 "--json"])
+    cap = capsys.readouterr()
+    assert rc == 2
+    assert json.loads(cap.out)["ok"] is False and "internal error" in cap.err
+
+
+def test_a_missing_anchor_edit_sibling_is_exit_2_not_a_traceback(tmp_path):
+    p = make_project(tmp_path)
+    _zero_anchors(p)
+    shim = ("import os, runpy, sys; sys.modules['anchor_edit'] = None; script = sys.argv[1]; "
+            "sys.path.insert(0, os.path.dirname(script)); "
+            "sys.argv = sys.argv[1:]; runpy.run_path(script, run_name='__main__')")
+    proc = subprocess.run(
+        [sys.executable, "-c", shim, str(TOOL), "--mutate", "src.py", "old.txt", "new.txt",
+         "--test", "test_src.py::test_zero", "--json"],
+        capture_output=True, text=True, encoding="utf-8", errors="replace", cwd=str(p))
+    assert proc.returncode == 2, (proc.stdout, proc.stderr)
+    assert "anchor_edit" in proc.stderr and "Traceback" not in proc.stderr
+    assert json.loads(proc.stdout)["ok"] is False
+    assert (p / "src.py").read_text(encoding="utf-8") == SOURCE
+
+
+def test_a_finished_arm_envelope_carries_skipped_and_names_the_runner(tmp_path):
+    p = make_project(tmp_path)
+    _zero_anchors(p)
+    proc = run(p, "--mutate", "src.py", "old.txt", "new.txt", "--test", "test_src.py::test_zero",
+               "--json")
+    envelope = json.loads(proc.stdout)
+    assert list(envelope)[:4] == ["ok", "command", "data", "skipped"]
+    assert envelope["data"]["runner"] == [sys.executable, "-m", "pytest"]
+    assert envelope["data"]["runner_source"] == "this interpreter"
+    assert envelope["data"]["caught_by"] == ["test_src.py::test_zero"]
+
+
+# --------------------------------------------------------------------------
+# C13: which interpreter runs the arm is a flag, and the envelope says which
+# --------------------------------------------------------------------------
+
+
+def test_python_flag_runs_the_arm_under_that_interpreter(tmp_path):
+    p = make_project(tmp_path)
+    _zero_anchors(p)
+    proc = run(p, "--mutate", "src.py", "old.txt", "new.txt", "--test", "test_src.py::test_zero",
+               "--python", sys.executable, "--json")
+    assert proc.returncode == 0, (proc.stdout, proc.stderr)
+    data = json.loads(proc.stdout)["data"]
+    assert data["runner"][0] == sys.executable and data["runner_source"] == "--python"
+
+
+def test_a_python_that_does_not_exist_is_refused_before_mutating(tmp_path):
+    p = make_project(tmp_path)
+    _zero_anchors(p)
+    proc = run(p, "--mutate", "src.py", "old.txt", "new.txt", "--test", "test_src.py::test_zero",
+               "--python", str(tmp_path / "no-such-python"))
+    assert proc.returncode == 2 and "no-such-python" in proc.stderr
+    assert (p / "src.py").read_text(encoding="utf-8") == SOURCE
+
+
+def test_a_venv_beside_the_cwd_is_used_when_no_runner_is_named(tmp_path):
+    venv_python = tmp_path / M.VENV_PYTHON
+    venv_python.parent.mkdir(parents=True)
+    venv_python.write_bytes(b"")
+    runner, source = M.resolve_runner(cwd=tmp_path)
+    assert runner == [str(venv_python), "-m", "pytest"] and source == "cwd .venv"
+
+
+def test_without_a_venv_the_arm_runs_under_this_interpreter(tmp_path):
+    assert M.resolve_runner(cwd=tmp_path) == ([sys.executable, "-m", "pytest"], "this interpreter")
+
+
+def test_with_deps_runs_under_uv_with_pytest_and_each_dep(tmp_path):
+    runner, source = M.resolve_runner(with_deps=["httpx", "protobuf"], cwd=tmp_path,
+                                      which=lambda name: "/opt/uv" if name == "uv" else None)
+    assert source == "--with"
+    assert runner == ["/opt/uv", "run", "--no-project", "--with", "pytest", "--with", "httpx",
+                      "--with", "protobuf", "python", "-m", "pytest"]
+
+
+def test_with_deps_without_uv_is_refused(tmp_path):
+    with pytest.raises(M.RunnerError, match="uv"):
+        M.resolve_runner(with_deps=["httpx"], cwd=tmp_path, which=lambda _name: None)
+
+
+def test_python_and_with_together_are_a_usage_error(tmp_path):
+    p = make_project(tmp_path)
+    proc = run(p, "--mutate", "src.py", "a", "b", "--test", "t", "--python", sys.executable,
+               "--with", "httpx", "--json")
+    assert proc.returncode == 2 and json.loads(proc.stdout)["ok"] is False
+
+
+# --------------------------------------------------------------------------
+# C39: a battery - labelled arms, baseline green first and last, who caught each
+# --------------------------------------------------------------------------
+
+# SOURCE's classify() has three branches; TEST covers negative and zero only, so a mutation of the
+# positive branch is the known SURVIVED arm and the other two are known KILLED ones.
+
+
+def _battery(tmp_path, arms, tests=("test_src.py",)):
+    spec = tmp_path / "battery.json"
+    spec.write_text(json.dumps({"tests": list(tests), "arms": arms}), encoding="utf-8",
+                    newline="")
+    return spec
+
+
+def test_a_battery_reports_which_test_caught_each_arm(tmp_path):
+    p = make_project(tmp_path)
+    spec = _battery(p, [
+        {"label": "zero-branch", "file": "src.py", "old": 'return "zero"', "new": 'return "ZERO"'},
+        {"label": "negative-branch", "file": "src.py", "old": 'return "negative"',
+         "new": 'return "NEG"'},
+    ])
+    proc = run(p, "--battery", str(spec), "--json")
+    assert proc.returncode == 0, (proc.stdout, proc.stderr)
+    data = json.loads(proc.stdout)["data"]
+    assert data["baseline"]["green"] is True and data["final_baseline"]["green"] is True
+    by_label = {arm["label"]: arm for arm in data["arms"]}
+    assert by_label["zero-branch"]["verdict"] == "killed"
+    assert by_label["zero-branch"]["caught_by"] == ["test_src.py::test_zero"]
+    assert by_label["negative-branch"]["caught_by"] == ["test_src.py::test_negative"]
+    assert (p / "src.py").read_text(encoding="utf-8") == SOURCE
+
+
+def test_a_battery_with_a_surviving_arm_exits_1_and_names_it(tmp_path):
+    p = make_project(tmp_path)
+    spec = _battery(p, [
+        {"label": "zero-branch", "file": "src.py", "old": 'return "zero"', "new": 'return "ZERO"'},
+        {"label": "uncovered-positive", "file": "src.py", "old": 'return "positive"',
+         "new": 'return "POS"'},
+    ])
+    proc = run(p, "--battery", str(spec))
+    assert proc.returncode == 1, (proc.stdout, proc.stderr)
+    assert "SURVIVED" in proc.stdout and "uncovered-positive" in proc.stdout
+    assert (p / "src.py").read_text(encoding="utf-8") == SOURCE
+
+
+def test_a_battery_refuses_to_mutate_when_the_baseline_is_red(tmp_path):
+    p = make_project(tmp_path)
+    (p / "test_src.py").write_text(TEST + "\n\ndef test_red():\n    assert False\n",
+                                   encoding="utf-8")
+    spec = _battery(p, [{"label": "zero", "file": "src.py", "old": 'return "zero"',
+                         "new": 'return "ZERO"'}])
+    proc = run(p, "--battery", str(spec), "--json")
+    assert proc.returncode == 2, (proc.stdout, proc.stderr)
+    data = json.loads(proc.stdout)["data"]
+    assert data["baseline"]["green"] is False and data["arms"] == []
+    assert "baseline" in proc.stderr
+
+
+def test_a_battery_with_an_absent_anchor_runs_no_arm_at_all(tmp_path):
+    p = make_project(tmp_path)
+    spec = _battery(p, [
+        {"label": "good", "file": "src.py", "old": 'return "zero"', "new": 'return "ZERO"'},
+        {"label": "bad", "file": "src.py", "old": "not in the file", "new": "x"},
+    ])
+    proc = run(p, "--battery", str(spec), "--json")
+    assert proc.returncode == 2
+    assert "bad" in json.loads(proc.stdout)["error"]
+    assert (p / "src.py").read_text(encoding="utf-8") == SOURCE
+
+
+def test_a_battery_arm_may_carry_several_mutations(tmp_path):
+    """Layered validation absorbs a single break, so one arm can hold several, applied together."""
+    p = make_project(tmp_path)
+    spec = _battery(p, [{"label": "both", "mutations": [
+        {"file": "src.py", "old": 'return "zero"', "new": 'return "ZERO"'},
+        {"file": "src.py", "old": 'return "negative"', "new": 'return "NEG"'}]}])
+    proc = run(p, "--battery", str(spec), "--json")
+    assert proc.returncode == 0, (proc.stdout, proc.stderr)
+    arm = json.loads(proc.stdout)["data"]["arms"][0]
+    assert sorted(arm["caught_by"]) == ["test_src.py::test_negative", "test_src.py::test_zero"]
+
+
+@pytest.mark.parametrize("spec_text,needle", [
+    ("[]", "no arms"),
+    ('{"tests": ["t"], "arms": [{"label": "x", "file": "src.py", "old": "a"}]}', "new"),
+    ('{"arms": [{"label": "x", "file": "src.py", "old": "a", "new": "b"}]}', "tests"),
+    ('{"tests": ["t"], "arms": [{"label": "x", "file": "src.py", "old": "a", "new": "b"}, '
+     '{"label": "x", "file": "src.py", "old": "c", "new": "d"}]}', "duplicate"),
+    ("{not json", "JSON"),
+])
+def test_a_malformed_battery_is_refused(tmp_path, spec_text, needle):
+    p = make_project(tmp_path)
+    spec = p / "battery.json"
+    spec.write_text(spec_text, encoding="utf-8")
+    proc = run(p, "--battery", str(spec))
+    assert proc.returncode == 2, (proc.stdout, proc.stderr)
+    assert needle in proc.stderr
+
+
+def test_battery_and_mutate_together_are_refused(tmp_path):
+    p = make_project(tmp_path)
+    spec = _battery(p, [{"label": "z", "file": "src.py", "old": 'return "zero"',
+                         "new": 'return "ZERO"'}])
+    _zero_anchors(p)
+    proc = run(p, "--battery", str(spec), "--mutate", "src.py", "old.txt", "new.txt")
+    assert proc.returncode == 2 and "--battery" in proc.stderr
+
+
+def test_battery_code_is_2_when_any_arm_is_inconclusive():
+    result = {"baseline": {"green": True}, "final_baseline": {"green": True},
+              "arms": [{"verdict": "killed", "restored": True, "bytecode_left": []},
+                       {"verdict": "survived", "restored": True, "bytecode_left": []},
+                       {"verdict": "timeout", "restored": True, "bytecode_left": []}]}
+    assert M.battery_code(result) == 2
+    result["arms"].pop()
+    assert M.battery_code(result) == 1
+    result["arms"].pop()
+    assert M.battery_code(result) == 0
+    result["final_baseline"] = {"green": False}
+    assert M.battery_code(result) == 2
