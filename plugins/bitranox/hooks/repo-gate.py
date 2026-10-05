@@ -12,6 +12,12 @@ set of checks:
     and exits 1 on any violation (0 otherwise). Meant for GitHub Actions as a reporting
     check.
 
+Exit codes of the CLI modes (--ci, --pre-push, --mirrors, --mirror-of, --pytest-only,
+--print-test-deps): 0 clean, 1 a finding, 2 the gate could not run - it crashed, ran outside the
+repo, lacked CI's test dependencies, or pytest did not produce a test result (could not start,
+collected nothing, a collection/usage/internal error). 2 wins over 1: a run that could not finish
+is not a complete list of findings. Only hook mode keeps the never-wedge rule that a crash exits 0.
+
 CRITICAL: this plugin is installed globally, so the Bash|PowerShell hook fires in EVERY repo the
 user commits in. The gate first verifies it is actually inside the bitranox-skills repo
 (plugins/bitranox/.claude-plugin/plugin.json with name "bitranox"). In any other repo it runs
@@ -49,6 +55,7 @@ import os
 import re
 import subprocess
 import tempfile
+import traceback
 import xml.etree.ElementTree as ET
 import sys
 from pathlib import Path
@@ -554,9 +561,12 @@ def check_attribution(root):
 def _load_taxonomy(root):
     tax = root / "plugins" / "bitranox" / "skill-taxonomy.json"
     try:
-        return json.loads(tax.read_text(encoding="utf-8"))
+        data = json.loads(tax.read_text(encoding="utf-8"))
     except Exception:  # noqa: BLE001 - missing/invalid registry: caller fail-opens
         return None
+    # Valid JSON of the wrong shape (a list) is as invalid as a parse error; read as a dict it
+    # crashed the whole gate on `.get`.
+    return data if isinstance(data, dict) else None
 
 
 def check_skill_naming(root):
@@ -681,6 +691,26 @@ def module_installed(module):
         return False  # a missing PARENT raises here rather than returning None (ruamel.yaml)
 
 
+class _CouldNotRun(str):
+    """A failure line that means the check could not run, not that it found something.
+
+    Every check returns plain message lines, and the CLI modes have to tell the two kinds apart:
+    a gate that could not run exits 2, one that found a violation exits 1. Tagging the line keeps
+    the one list every check already returns, so the hook-mode printer needs no change."""
+
+
+def could_not_run(lines):
+    """Mark `lines` as a could-not-run failure (the first line carries the tag)."""
+    if not lines:
+        return []
+    return [_CouldNotRun(lines[0]), *lines[1:]]
+
+
+def is_could_not_run(lines):
+    """True when any line in `lines` was marked by `could_not_run`."""
+    return any(isinstance(line, _CouldNotRun) for line in lines)
+
+
 def check_test_dependencies(root, is_installed=None):
     """Name a missing test dependency, rather than letting it surface as somebody's failed assert."""
     probe = is_installed or module_installed
@@ -688,14 +718,14 @@ def check_test_dependencies(root, is_installed=None):
     missing = [n for n in declared if not probe(_PIP_TO_IMPORT.get(n.lower(), n))]
     if not missing:
         return []
-    return [
+    return could_not_run([
         "Test dependencies missing from %s - this gate cannot match CI without them:" % sys.executable,
         "  missing: " + " ".join(missing),
         "  install: pip install " + " ".join(missing),
         "  or run the gate with the full CI set:",
         "    uv run " + " ".join("--with " + n for n in declared)
         + " python plugins/bitranox/hooks/repo-gate.py --ci",
-    ]
+    ])
 
 
 # A run that collects nothing exits 5 and used to be treated as success, so a broken glob, a
@@ -765,8 +795,9 @@ def floor_problems(report, baseline):
         return []  # no baseline recorded yet, so there is nothing to compare against
     total = junit_total(report)
     if total is None:
-        return ["Could not read the pytest junit report at %s - test count unverified." % report,
-                "  An unknown count fails closed; it is not evidence the suite ran."]
+        return could_not_run([
+            "Could not read the pytest junit report at %s - test count unverified." % report,
+            "  An unknown count fails closed; it is not evidence the suite ran."])
     floor = int(baseline * (1.0 - PYTEST_SLACK))
     if total < floor:
         return ["pytest collected only %d tests; the recorded baseline is %d (floor %d)."
@@ -794,14 +825,19 @@ def _check_pytest_run(root, target, report, baseline):
         out = subprocess.run(cmd, cwd=str(root), capture_output=True, text=True,
                              encoding="utf-8", errors="replace")
     except Exception as exc:  # noqa: BLE001
-        return [f"Could not run pytest: {exc}"]
+        return could_not_run([f"Could not run pytest: {exc}"])
     text = out.stdout or out.stderr or ""
     if out.returncode == 5:
-        return ["pytest collected no tests - the suite did not run.",
-                "  An empty run is a defect, not a pass: check the target paths and conftest imports."]
+        return could_not_run([
+            "pytest collected no tests - the suite did not run.",
+            "  An empty run is a defect, not a pass: check the target paths and conftest imports."])
     if out.returncode != 0:
-        tail = text.strip().splitlines()[-15:]
-        return ["pytest failed:"] + [f"  {ln}" for ln in tail]
+        tail = [f"  {ln}" for ln in text.strip().splitlines()[-15:]]
+        if out.returncode == 1:
+            return ["pytest failed:"] + tail  # tests ran and some failed: a finding
+        # 2 interrupted (a module that cannot be imported lands here), 3 internal error, 4 usage
+        # error, negative a signal: pytest produced no test result to judge.
+        return could_not_run(["pytest did not complete (exit %d):" % out.returncode] + tail)
     problems = floor_problems(report, baseline)
     if problems:
         return problems
@@ -1379,7 +1415,10 @@ def audit_mirror_of(tool_repo):
 
 
 def audit_mirrors(root):
-    """Print the state of every mirrored pair. Returns the number that have drifted."""
+    """Print the state of every mirrored pair. Returns the number of findings.
+
+    A finding is a drifted pair or a twin MIRRORED_SKILLS does not list: unlisted, that pair is
+    never compared by any gate, so it is as much a defect as drift and counts toward the exit."""
 
     public = _public_tree(root)
     if public is None:
@@ -1399,10 +1438,15 @@ def audit_mirrors(root):
             print("        " + fails[0].split("First lines:\n")[-1].strip()[:400])
         else:
             print("in sync %-34s %s" % (name, relative))
-    for unlisted in unlisted_mirrors(root, public):
-        print("UNLISTED %-33s %s" % unlisted)
+    unlisted = unlisted_mirrors(root, public)
+    for pair in unlisted:
+        print("UNLISTED %-33s %s" % pair)
     print("\n%d of %d mirrored pairs have drifted." % (drifted, len(MIRRORED_SKILLS)))
-    return drifted
+    if unlisted:
+        print("%d twin%s not listed in MIRRORED_SKILLS - add %s so the gates compare %s."
+              % (len(unlisted), " is" if len(unlisted) == 1 else "s are",
+                 "it" if len(unlisted) == 1 else "them", "it" if len(unlisted) == 1 else "them"))
+    return drifted + len(unlisted)
 
 
 def _description(path):
@@ -1563,7 +1607,8 @@ def main():
         # shell script that would drift the first time CI gains a package.
         root = repo_root()
         if root is None:
-            return 1
+            print("repo-gate: not inside a git repository - no CI workflow to read", file=sys.stderr)
+            return 2
         print("\n".join(ci_test_dependencies(root)))
         return 0
 
@@ -1573,7 +1618,8 @@ def main():
         # test had run. The count is then read from the junit report and held to the floor.
         root = repo_root()
         if root is None:
-            return 1
+            print("repo-gate: not inside a git repository - no suite to run", file=sys.stderr)
+            return 2
         # The report goes to a temp dir, never the repo root: a stray junit.xml there would
         # dirty the working tree and could be committed by a pathspec-less `git add`.
         with tempfile.TemporaryDirectory() as tmp:
@@ -1583,13 +1629,19 @@ def main():
             problems = floor_problems(report, expected_collected(root)) if rc == 0 else []
         if rc == 5:
             print("repo-gate: pytest collected no tests - the suite did not run.", file=sys.stderr)
-            return 1
+            return 2
+        if rc == 1:
+            return 1  # tests ran and some failed
         if rc != 0:
-            return rc
+            # 2 interrupted (an unimportable test module), 3 internal, 4 usage, negative a signal:
+            # none of them is a test result, so none may read as a finding or a pass.
+            print("repo-gate: pytest did not complete (exit %d) - the suite did not run." % rc,
+                  file=sys.stderr)
+            return 2
         if problems:
             for line in problems:
                 print(line, file=sys.stderr)
-            return 1
+            return 2 if is_could_not_run(problems) else 1
         return 0
 
     if "--mirror-of" in args:
@@ -1622,8 +1674,8 @@ def main():
                   file=sys.stderr)
             return 0
         if ci or mirrors:
-            print("repo-gate: not inside the bitranox-skills repo", file=sys.stderr)
-            return 1
+            print("repo-gate: not inside the bitranox-skills repo - nothing to check", file=sys.stderr)
+            return 2
         # Hook mode outside the marketplace. Not "never interfere" any more: if THIS repo
         # ships a skill mirrored into the marketplace, the pair is checked from this side
         # too. Everything else still passes untouched.
@@ -1646,11 +1698,30 @@ def main():
               "repo-gate: push blocked - fix these first:" if pre_push else
               "repo-gate: commit/push blocked - fix these first:")
     print("\n".join([header, *failures]), file=sys.stderr)
-    return 2 if not (ci or pre_push) else 1
+    if not (ci or pre_push):
+        return 2  # the PreToolUse block code, whatever kind the failure was
+    return 2 if is_could_not_run(failures) else 1
+
+
+#: Flags that start a CLI mode. Anything else is hook mode, the one mode a crash may not fail.
+_CLI_FLAGS = ("--ci", "--pre-push", "--mirrors", "--mirror-of", "--pytest-only", "--print-test-deps")
+
+
+def entry():
+    """Run `main` under the exit contract of the mode it was started in.
+
+    Hook mode must never wedge a turn, so a crash there passes (0). A CLI mode is read by CI and
+    by the git pre-push hook, where the same 0 reads as "all checks passed" for a run that checked
+    nothing - so a crash there is 2, could not run, with the traceback on stderr."""
+    try:
+        return main()
+    except Exception:  # noqa: BLE001 - the mode decides what a crash means, not the exception
+        if not any(flag in sys.argv[1:] for flag in _CLI_FLAGS):
+            return 0
+        traceback.print_exc()
+        print("repo-gate: crashed - the checks did not complete; this is not a pass.", file=sys.stderr)
+        return 2
 
 
 if __name__ == "__main__":
-    try:
-        sys.exit(main())
-    except Exception:  # noqa: BLE001 - a broken gate must never wedge a turn
-        sys.exit(0)
+    sys.exit(entry())
