@@ -447,7 +447,8 @@ def test_repo_mode_honours_json(tmp_path, capsys):
     rc = G.main([str(clone), "--json"])
     payload = json.loads(capsys.readouterr().out)
     assert rc == 1
-    assert payload["command"] == "git-state" and payload["ok"] is False
+    # ok means "ran without error": an out-of-sync answer is exit 1 with ok true.
+    assert payload["command"] == "git-state" and payload["ok"] is True
     [repo] = payload["data"]["repos"]
     assert repo["ahead"] == 1 and repo["in_sync"] is False
 
@@ -519,3 +520,35 @@ def test_repo_mode_survives_a_cp1252_stdout(tmp_path):
                           timeout=60)
     assert b"Traceback" not in done.stderr, done.stderr
     assert done.returncode == 1          # no upstream: checked and out of sync
+
+
+# ---- wave D: unified exit codes and the D2 envelope ---------------------------------------------
+
+
+def test_files_mode_none_matched_is_exit_1_with_ok_true(tmp_path, capsys):
+    """--files with nothing matching ran fine and the answer is no: exit 1, ok true."""
+    (tmp_path / "a.txt").write_text("x\n", encoding="utf-8")
+    rc = G.main(["--files", "*.md", "--root", str(tmp_path), "--json"])
+    payload = json.loads(capsys.readouterr().out)
+    assert rc == 1
+    assert payload["ok"] is True and payload["data"]["files"] == []
+
+
+def test_an_argparse_error_under_json_prints_the_envelope(capsys):
+    with pytest.raises(SystemExit) as exc:
+        G.main(["--json", "--no-such-flag"])
+    assert exc.value.code == 2
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["ok"] is False and payload["command"] == "git-state"
+
+
+def test_a_crash_under_json_is_exit_2_with_an_envelope(tmp_path, monkeypatch, capsys):
+    def boom(*_a, **_k):
+        raise RuntimeError("classifier broke")
+    monkeypatch.setattr(G, "classify_files", boom)
+    rc = G.main(["--files", "*.md", "--root", str(tmp_path), "--json"])
+    cap = capsys.readouterr()
+    assert rc == 2
+    payload = json.loads(cap.out)
+    assert payload["ok"] is False and "classifier broke" in payload["error"]
+    assert "Traceback" not in cap.err

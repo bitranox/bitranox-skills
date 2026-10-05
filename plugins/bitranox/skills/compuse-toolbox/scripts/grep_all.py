@@ -26,18 +26,21 @@ never as 0) - because "nothing matched" and "the pattern never compiled" must no
 Every unread path is listed on stderr and in the JSON `skipped` list, beside the binary files
 that were skipped by rule; `files_scanned` counts only the files actually searched. A search that
 could not run still emits the same envelope, with `ignored_matches` null (unknown) and an `error`.
+`ok` in the envelope means the search ran (exit 0 or 1) and is false only on exit 2; whether
+anything matched is the exit code. A usage error or a crash under `--json` prints the envelope too.
 
     uv run scripts/grep_all.py PATTERN [PATH ...] [--glob '*.md'] [--json] [-i]
 """
 from __future__ import annotations
 
-import argparse
 import json
 import os
 import re
 import subprocess
 import sys
 from pathlib import Path
+
+from _cli_envelope import EnvelopeArgumentParser, run_guarded
 
 # Never worth searching: git's own object store, vendored trees, caches. Kept small and explicit -
 # a broad skip list would reintroduce exactly the silent under-reporting this tool exists to stop.
@@ -270,11 +273,16 @@ def _tolerate_unencodable(stream) -> None:
 
 
 def main(argv=None, out=None, err=None) -> int:
+    """The CLI. An uncaught exception exits 2 (envelope under --json), never 1 ("no match")."""
+    return run_guarded(lambda a: _main(a, out, err), argv, command="grep-all")
+
+
+def _main(argv, out, err) -> int:
     out = out or sys.stdout
     err = err or sys.stderr
     _tolerate_unencodable(out)
     _tolerate_unencodable(err)
-    ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
+    ap = EnvelopeArgumentParser(description=__doc__.splitlines()[0], envelope_command="grep-all")
     ap.add_argument("pattern", help="python regex")
     ap.add_argument("paths", nargs="*", default=["."], help="files or dirs (default: .)")
     ap.add_argument("--glob", help="only files matching this glob, e.g. '*.md'")
@@ -317,8 +325,10 @@ def main(argv=None, out=None, err=None) -> int:
                 "gitignored": None if git_problem else f in ignored} for f, n, t in hits]
     hidden = None if git_problem else sum(1 for m in matches if m["gitignored"])
 
+    code = 2 if git_problem or (unread and not matches) else (0 if matches else 1)
     if args.json:
-        print(json.dumps({"ok": bool(matches) and not git_problem, "command": "grep-all",
+        # ok is "ran without error" (exit != 2); the yes/no answer is the exit code.
+        print(json.dumps({"ok": code != 2, "command": "grep-all",
                           "data": {"matches": matches, "ignored_matches": hidden,
                                    "files_scanned": scanned},
                           "skipped": unread + binary}, indent=2), file=out)
@@ -326,9 +336,7 @@ def main(argv=None, out=None, err=None) -> int:
         for m in matches:
             print("%s:%d:%s" % (m["path"], m["line"], m["text"]), file=out)
     _report(err, matches, scanned, hidden, git_problem, unread, binary)
-    if git_problem or (unread and not matches):
-        return 2
-    return 0 if matches else 1
+    return code
 
 
 def _report(err, matches, scanned, hidden, git_problem, unread, binary) -> None:
