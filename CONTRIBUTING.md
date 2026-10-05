@@ -216,7 +216,12 @@ Hooks and helper scripts must run on Windows, macOS, and Linux.
 Any commit that changes a `skills/<name>/SKILL.md` must co-change a review artifact
 `skills/<name>/.skillwriter/checklist-<date>.md` with ALL boxes checked - the committed receipt of
 the `bitranox:meta-skill-writer` procedure (RED baseline, pressure scenarios, CSO check, security
-scan). The local pre-commit gate blocks the commit otherwise. Additionally, a skill's frontmatter
+scan). The local pre-commit gate blocks the commit otherwise. The gate waives the checklist itself
+for one change only, and only when it can PROVE it against `origin/master`: whitespace-only table
+re-padding (the same line count, every changed line a table row on both sides with the same
+indentation and blockquote prefix, every cell equal after stripping, every separator keeping its
+alignment, and the tables canonical per `reformat_tables`), which is what the reformat-md-tables
+hook writes into a fresh worktree for a skill nobody edited. Additionally, a skill's frontmatter
 description must be trigger-first ("Use when <situations>...") and yield at least 3 distinctive
 keywords - the skill router derives its trigger map from descriptions
 (`hooks/build_skill_triggers.py`; rebuild it when a description changes, the test suite checks the
