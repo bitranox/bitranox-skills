@@ -28,8 +28,11 @@ import repo_gate as RG
 
 
 def write(path, text):
+    # Byte-exact (newline=""): a checkout writes a file and its origin/master text through the
+    # same eol filter, and the CI git config makes that LF. Text mode would make every fixture
+    # CRLF on Windows while git hands back LF, so a comparison against origin fails on line 1.
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(text, encoding="utf-8")
+    path.write_text(text, encoding="utf-8", newline="")
 
 
 def make_repo(root, *, version="1.6.0", good_skill=True, bad_skill=False,
@@ -687,13 +690,7 @@ def _skill_with_formatter(root, text):
     tool_dir = "plugins/bitranox/skills/docs-md-table-formatting"
     (root / tool_dir).mkdir(parents=True)
     shutil.copy(_REAL_ROOT / tool_dir / "reformat_tables.py", root / tool_dir / "reformat_tables.py")
-    # Byte-exact (no newline translation): the tests hand `read_original` the LF string, and a
-    # real checkout writes the file and its origin text through the same eol filter, so both
-    # sides must carry the same line endings. Text mode would make this file CRLF on Windows.
-    skill_md = root / "plugins/bitranox/skills/alpha/SKILL.md"
-    skill_md.parent.mkdir(parents=True, exist_ok=True)
-    with open(skill_md, "w", encoding="utf-8", newline="") as handle:
-        handle.write(text)
+    write(root / "plugins/bitranox/skills/alpha/SKILL.md", text)
     return ["plugins/bitranox/skills/alpha/SKILL.md"]
 
 

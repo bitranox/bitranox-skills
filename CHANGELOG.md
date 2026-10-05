@@ -29,6 +29,14 @@ than the change, so entries reconstructed from them would read like coverage wit
 a hole nobody has drawn a line under is one that gets rediscovered and half-filled - which is how
 two "versions with no entry" notes came to sit in this file disagreeing with it.
 
+## [7.41.2]
+
+### Fixed
+
+- The `repo-gate` test suite passes on Windows: its shared file-writing helper wrote in text
+  mode, so a SKILL.md edited by the end-to-end table re-pad test was CRLF on Windows while its
+  origin/master side was LF. The helper now writes the exact bytes it is given.
+
 ## [7.41.1]
 
 ### Fixed
