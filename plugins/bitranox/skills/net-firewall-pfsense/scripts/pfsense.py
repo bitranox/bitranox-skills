@@ -1165,16 +1165,44 @@ def cmd_snort_check(args) -> int:
     return 1 if blocked else 0
 
 
+CLOCK_MARKER = "PFSENSE_CLOCK"
+_CLOCK_RX = re.compile(rf"^{CLOCK_MARKER} (\d{{4}}-\d{{2}}-\d{{2}}T\d{{2}}:\d{{2}}:\d{{2}})\s*$", re.MULTILINE)
+
+
+def split_firewall_clock(out: str) -> tuple[datetime | None, str]:
+    """(the firewall's local time from the clock line, the output without that line).
+
+    Snort stamps are the firewall's local time with no year, so the year is inferred against
+    the FIREWALL's clock: this machine's clock differs by its time zone and skew, and an alert a
+    few minutes old there could read as 'in the future' here and be pushed a year back."""
+    match = _CLOCK_RX.search(out)
+    if match is None:
+        return None, out
+    try:
+        moment = datetime.fromisoformat(match.group(1))
+    except ValueError:
+        moment = None
+    return moment, out[:match.start()] + out[match.end():]
+
+
 def cmd_snort_why(args) -> int:
     target = _target_from_args(args)
     # The alert files ROTATE, so read the whole set: a block laid down yesterday is not in the
-    # current file. Read once for every IP rather than per IP - these logs are large.
-    rc, out, err = run_remote(target, "cat /var/log/snort/*/alert /var/log/snort/*/alert.* 2>/dev/null",
+    # current file. Read once for every IP rather than per IP - these logs are large. The clock
+    # is read in the same command, so it is the time the logs were read at.
+    rc, out, err = run_remote(target, f"date '+{CLOCK_MARKER} %Y-%m-%dT%H:%M:%S'; "
+                                      "cat /var/log/snort/*/alert /var/log/snort/*/alert.* 2>/dev/null",
                               run=args.run, timeout=max(target.timeout, 60))
-    if rc != 0 and not out:
+    firewall_now, out = split_firewall_clock(out)
+    if rc != 0 and not out.strip():
         raise PfsenseError(f"could not read the snort alert logs on {target.host}: {err.strip()[:200]}")
     found = {ip: [asdict(a) for a in parse_alerts(out, ip=ip)] for ip in args.ips}
-    now = datetime.now()  # the stamps are the firewall's local time and carry no year
+    skipped = []
+    now = firewall_now
+    if now is None:
+        now = datetime.now()
+        skipped.append("the firewall clock could not be read; a missing stamp year was inferred "
+                       "from the local clock")
 
     lines = []
     for ip, alerts in found.items():
@@ -1187,8 +1215,11 @@ def cmd_snort_why(args) -> int:
         latest = asdict(latest_alert([Alert(**a) for a in alerts], now=now))
         lines.append(f"  {ip}: {len(alerts)} alert(s), SID(s) {', '.join(sids)}")
         lines.append(f"      latest: {latest['timestamp']}  {latest['message']}")
+    for note in skipped:
+        print(f"pfsense: note: {note}", file=sys.stderr)
     any_found = any(found.values())
-    _emit(envelope(command="snort why", data=found, ok=any_found), args.json, "\n".join(lines))
+    _emit(envelope(command="snort why", data=found, ok=any_found, skipped=skipped), args.json,
+          "\n".join(lines))
     return 0 if any_found else 1
 
 
