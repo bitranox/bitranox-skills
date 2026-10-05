@@ -225,13 +225,15 @@ def test_cli_refuses_both_modes_at_once(tmp_path, capsys):
 
 SCRIPT = Path(__file__).resolve().parent.parent / "scripts" / "transcript_tail.py"
 
-# Runs the real script with orjson either blocked (the stdlib fallback) or required.
-_LAUNCH = ("import runpy, sys\n"
+# Runs the real script with orjson either blocked (the stdlib fallback) or required. The script's
+# own directory goes first on sys.path, as `uv run` puts it, so its sibling imports resolve.
+_LAUNCH = ("import os, runpy, sys\n"
            "if sys.argv[1] == 'stdlib':\n"
            "    sys.modules['orjson'] = None\n"
            "else:\n"
            "    import orjson\n"
            "script = sys.argv[2]\n"
+           "sys.path.insert(0, os.path.dirname(os.path.abspath(script)))\n"
            "sys.argv = [script] + sys.argv[3:]\n"
            "runpy.run_path(script, run_name='__main__')\n")
 
@@ -373,3 +375,46 @@ def test_plain_all_output_labels_a_tool_result_row(tmp_path, capsys):
     out = capsys.readouterr().out
     assert "== line 1 user ==\nplease list files\n" in out
     assert "== line 3 user tool_result ==\na.txt\nb.txt\n" in out
+
+
+
+# --- wave D: ok means "ran without error", on every exit -------------------------------------
+
+@pytest.mark.parametrize("mode", [["--tool", "NoSuchTool"], ["--all", "--role", "user",
+                                                             "--prompts-only"]])
+def test_a_whole_transcript_miss_under_json_is_ok_true_with_exit_1(tmp_path, capsys, mode):
+    p = tmp_path / "t.jsonl"
+    p.write_text('{"type": "assistant", "message": {"role": "assistant", "content": "hi"}}\n',
+                 encoding="utf-8", newline="")
+    rc = T.main([str(p), *mode, "--json"])
+    envelope = json.loads(capsys.readouterr().out)
+    assert rc == 1 and envelope["ok"] is True and envelope["data"] == []
+
+
+def test_tail_mode_with_no_record_of_the_role_stays_exit_0(tmp_path, capsys):
+    """NU-3: tail mode is a report, so a role never seen is an empty field, not a "no"."""
+    p = tmp_path / "t.jsonl"
+    p.write_text('{"type": "assistant", "message": {"role": "assistant", "content": "hi"}}\n',
+                 encoding="utf-8", newline="")
+    rc = T.main([str(p), "--role", "user", "--json"])
+    envelope = json.loads(capsys.readouterr().out)
+    assert rc == 0 and envelope["ok"] is True and envelope["data"] == {"user": ""}
+
+
+def test_an_argparse_usage_error_under_json_prints_the_envelope(tmp_path, capsys):
+    with pytest.raises(SystemExit) as exc:
+        T.main([str(tmp_path / "t.jsonl"), "--prompts-only", "--json"])
+    assert exc.value.code == 2
+    assert json.loads(capsys.readouterr().out)["ok"] is False
+
+
+def test_an_internal_crash_under_json_prints_the_envelope(tmp_path, capsys, monkeypatch):
+    def explode(*_a, **_k):
+        raise RuntimeError("kaboom")
+
+    # The process boundary is under test, so the crash is injected at the call the mode makes.
+    monkeypatch.setattr(T, "tool_uses", explode)
+    rc = T.main([_write(tmp_path, FOUR_TURNS), "--tool", "Agent", "--json"])
+    cap = capsys.readouterr()
+    assert rc == 2
+    assert json.loads(cap.out)["ok"] is False and "internal error" in cap.err

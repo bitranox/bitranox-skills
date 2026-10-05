@@ -26,9 +26,13 @@ Run:
   `uv run scripts/transcript_tail.py <transcript.jsonl> --all [--role user [--prompts-only]] [--json]`
   `uv run scripts/transcript_tail.py <transcript.jsonl> --tool Agent [--json]`
 
-Exit codes: 0 = a result, 1 = the whole-transcript mode matched nothing, 2 = usage error or an
-unreadable transcript. The default tail mode exits 0 on any readable file (a role never seen is
-reported as empty, not as no-match).
+Exit codes: 0 = a result, 1 = the whole-transcript mode matched nothing, 2 = usage error, an
+unreadable transcript or an internal error. The default tail mode is a report and exits 0 on any
+readable file (a role never seen is reported as empty, not as no-match).
+
+`--json` prints `{ok, command, data, skipped}` on every exit, 2 included; `ok` is false exactly
+when the exit is 2, so a whole-transcript miss (exit 1) is `ok: true` with `data: []`. `skipped`
+lists the line numbers of unparseable lines.
 """
 from __future__ import annotations
 
@@ -36,6 +40,8 @@ import argparse
 import json
 import sys
 from pathlib import Path
+
+from _cli_envelope import EXIT_ERROR, EXIT_NO, EXIT_YES, EnvelopeArgumentParser, emit, guarded
 
 try:                                                     # fast path when available (uv run installs it)
     import orjson
@@ -55,9 +61,9 @@ except ModuleNotFoundError:                              # stdlib fallback so th
 _BOM = b"\xef\xbb\xbf"
 
 
-def _envelope(obj) -> str:
-    """The --json envelope, ASCII-escaped so any console encoding can carry it unchanged."""
-    return json.dumps(obj)
+def _emit(code: int, command: str, data, skipped=(), error: str | None = None) -> int:
+    """The --json envelope on one line, ASCII-escaped so any console encoding can carry it."""
+    return emit(code, command, data, skipped=skipped, error=error, indent=None)
 
 
 def _content(obj):
@@ -230,13 +236,12 @@ def _run_tail(args, skip_sidechain: bool, skip_meta: bool) -> int:
                         malformed=malformed)
     _warn_malformed(malformed)
     sides = [r for r in ("user", "assistant") if args.role in (r, "both")]
+    # A report, not a question: a role never seen is an empty field, so tail mode is always 0.
     if args.json:
-        data = {r: out[r] for r in sides}
-        print(_envelope({"ok": True, "command": "tail_messages", "skipped": malformed, "data": data}))
-        return 0
+        return _emit(EXIT_YES, "tail_messages", {r: out[r] for r in sides}, malformed)
     for r in sides:
         print("== last %s ==\n%s" % (r, out[r]))
-    return 0
+    return EXIT_YES
 
 
 def _run_rows(args, skip_sidechain: bool, skip_meta: bool) -> int:
@@ -251,16 +256,17 @@ def _run_rows(args, skip_sidechain: bool, skip_meta: bool) -> int:
         rows = all_messages(args.transcript, role=role, prompts_only=args.prompts_only,
                             skip_sidechain=skip_sidechain, skip_meta=skip_meta, malformed=malformed)
     _warn_malformed(malformed)
+    code = EXIT_YES if rows else EXIT_NO
     if args.json:
-        print(_envelope({"ok": bool(rows), "command": command, "skipped": malformed, "data": rows}))
-    else:
-        _print_rows(rows, command)
-    return 0 if rows else 1
+        return _emit(code, command, rows, malformed)
+    _print_rows(rows, command)
+    return code
 
 
 def _build_parser() -> argparse.ArgumentParser:
-    ap = argparse.ArgumentParser(description="Read a Claude Code JSONL transcript: the last texts, "
-                                             "every text turn, or every call of one tool.")
+    ap = EnvelopeArgumentParser(envelope_command="transcript_tail",
+                                description="Read a Claude Code JSONL transcript: the last texts, "
+                                            "every text turn, or every call of one tool.")
     ap.add_argument("transcript", type=Path, help="path to a *.jsonl transcript")
     ap.add_argument("--role", choices=["user", "assistant", "both"], default="both")
     ap.add_argument("--include-sidechain", action="store_true", help="do not skip subagent (sidechain) records")
@@ -274,7 +280,9 @@ def _build_parser() -> argparse.ArgumentParser:
     return ap
 
 
+@guarded("transcript_tail")
 def main(argv=None) -> int:
+    """Read the transcript; an uncaught exception exits 2, never Python's 1 ("matched nothing")."""
     _tolerate_console_encoding()
     ap = _build_parser()
     args = ap.parse_args(argv)
@@ -289,9 +297,8 @@ def main(argv=None) -> int:
         message = "transcript_tail: cannot read %s: %s" % (args.transcript, exc.strerror or exc)
         print(message, file=sys.stderr)
         if args.json:
-            print(_envelope({"ok": False, "command": "transcript_tail", "skipped": [], "data": [],
-                             "error": message}))
-        return 2
+            _emit(EXIT_ERROR, "transcript_tail", [], error=message)
+        return EXIT_ERROR
 
 
 if __name__ == "__main__":
