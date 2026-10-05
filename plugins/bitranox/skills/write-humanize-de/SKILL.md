@@ -61,11 +61,11 @@ enthalten solche Zeichen absichtlich. Deshalb steht jedes solche Beispiel in ein
 Code-Span oder Codeblock: Hook (`tell_chars.find_tell_lines`) und `strip_typographic_tells.py`
 (`tell_chars.transform_outside_code`) sind zwei Läufe über dieselben `tell_chars`-Regeln für
 Fences und Inline-Spans, sodass ein Geviertstrich in einem Span oder Codeblock beide übersteht.
-Es sind Zwillinge, keine gemeinsame Funktion, und für eine Zeichenklasse macht das einen
-Unterschied: ein Codepoint, der SELBST ein Zeilenumbruch ist (U+2028, U+2029, U+0085), bleibt
-für den Detektor unsichtbar und wird vom Skript trotzdem umgeschrieben, weil `str.splitlines()`
-genau an diesen Zeichen trennt. Ein sauberer Sweep garantiert also nicht, dass das Skript die
-Datei unverändert lässt. Neue Beispiele
+Es sind Zwillinge, keine gemeinsame Funktion, aber beide zerlegen Zeilen inzwischen mit derselben
+`tell_chars.split_lines` (nie an U+2028, U+2029 oder U+0085, nur an `\r\n`, `\r` und `\n`), was
+eine frühere Falle schloss: die beiden Läufe waren sich uneinig, wo eine Zeile endet, und eine
+Datei, die der Sweep für sauber erklärte, konnte trotzdem umgeschrieben werden und dabei einen
+Code-Span über zwei Zeilen zerreißen. Neue Beispiele
 ebenfalls in Backticks setzen. Danach die inhaltlichen Umschreibungen vornehmen.
 
 ---

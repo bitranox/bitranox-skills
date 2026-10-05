@@ -238,13 +238,13 @@ requires `hookEventName` set to the event name).
 
 ### Universal fields
 
-| Field              | Default | Description                                                                                                                        |
-|--------------------|---------|------------------------------------------------------------------------------------------------------------------------------------|
-| `continue`         | `true`  | `false` stops Claude processing entirely after the hook runs. **Takes precedence over every event-specific decision field**        |
-| `stopReason`       | none    | shown to the user when `continue` is `false`. It stays in the conversation, so Claude sees it if the conversation continues        |
-| `suppressOutput`   | `false` | **has no effect.** Accepted and ignored; successful stdout is never in the transcript anyway                                       |
-| `systemMessage`    | none    | warning shown to the user. Can arrive as an `SDKInformationalMessage` under the Agent SDK or `--output-format stream-json`         |
-| `terminalSequence` | none    | an escape sequence for Claude Code to emit for you. Restricted to OSC `0`/`1`/`2`/`9`/`99`/`777` and BEL; anything else is ignored |
+| Field              | Default | Description                                                                                                                                                                                         |
+|--------------------|---------|-----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
+| `continue`         | `true`  | `false` stops Claude processing entirely after the hook runs, even for `PreToolUse`/`PostToolUse` when a response is still streaming. **Takes precedence over every event-specific decision field** |
+| `stopReason`       | none    | shown to the user when `continue` is `false`. It stays in the conversation, so Claude sees it if the conversation continues                                                                         |
+| `suppressOutput`   | `false` | **has no effect.** Accepted and ignored; successful stdout is never in the transcript anyway                                                                                                        |
+| `systemMessage`    | none    | warning shown to the user. Can arrive as an `SDKInformationalMessage` under the Agent SDK or `--output-format stream-json`                                                                          |
+| `terminalSequence` | none    | an escape sequence for Claude Code to emit for you. Restricted to OSC `0`/`1`/`2`/`9`/`99`/`777` and BEL; anything else is ignored                                                                  |
 
 ### `terminalSequence`
 

@@ -50,11 +50,11 @@ one second of `ast.parse` over the catalogue, against several minutes of reviewe
 
 ## Procedure
 
-Launch every script below through the plugin's shim with strict mode on:
-`BITRANOX_RUN_PYTHON_STRICT=1 bash hooks/run-python.sh <script> [args]`. The shim finds a working
-Python on every platform, and a mistyped script path prints one stderr line naming the shim and
-exits 3 rather than reading as a clean run (only a `--hook` launch fails open, unless that
-variable is set).
+Launch every script below through the plugin's shim: `bash hooks/run-python.sh <script> [args]`.
+The shim finds a working Python on every platform, and a mistyped script path prints one stderr
+line naming the shim and exits 3 rather than reading as a clean run - this is already the default
+for a CLI call with no `--hook` flag; `BITRANOX_RUN_PYTHON_STRICT=1` is only needed to force the
+same loud behaviour on a `--hook` launch, which these scripts never use.
 
 1. **Wall recall and record the old value.** Use the shipped front door - `settings.py` (home:
    `skills/meta-memory-settings/`), which validates the value and

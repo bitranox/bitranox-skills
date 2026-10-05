@@ -170,8 +170,8 @@ then upserts (keeps the pin). New entry only when nothing covers it.
   `move`), never capture's - a routine capture never touches a parent level.
 - **Route `--proj` by SUBJECT, not blindly by cwd.** You often work FROM one repo while fixing
   another (a sibling project, or a repo in a different tree). The learning belongs to the repo it is
-  ABOUT. The Stop-gate nudge carries ROUTING EVIDENCE - the other levels this turn actually edited
-  (from the `touched-paths` recorder) - so use it:
+  ABOUT. The Stop-gate nudge carries ROUTING EVIDENCE - the other levels this session actually
+  edited (from the `touched-paths` recorder) - so use it:
   - the learning is about a repo you EDITED -> `--proj "<that level>"`;
   - the learning is about the cwd's own workflow/tooling (even though you edited elsewhere) -> cwd;
   - genuinely both or unclear -> ask the user.
