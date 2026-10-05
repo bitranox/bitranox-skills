@@ -15,6 +15,7 @@ import os
 import shutil
 import subprocess
 import sys
+import time
 from pathlib import Path
 
 import pytest
@@ -1246,7 +1247,7 @@ NEW_TWIN = TWIN_BODY.replace("One paragraph", "The NEWER paragraph")
 
 def _g(cwd, *args):
     out = subprocess.run(["git", "-c", "user.email=t@example.invalid", "-c", "user.name=t", *args],
-                         cwd=str(cwd), capture_output=True, text=True)
+                         cwd=str(cwd), capture_output=True, text=True, encoding="utf-8")
     assert out.returncode == 0, out.stderr
     return out.stdout.strip()
 
@@ -1540,6 +1541,219 @@ def test_a_missing_marketplace_checkout_says_so_instead_of_passing_silently(tmp_
     printed = capsys.readouterr().out
     assert "additionalContext" in printed, "an unverifiable mirror must reach the model, not exit 0 in silence"
     assert "could not" in printed.lower() or "nothing to compare" in printed.lower()
+
+
+# --- the commit and push gates read what the change SHIPS, never another session's edit ---------
+#
+# User decision 2026-10-05 (contribs #78/#84, #110/#111): the side being committed is read at its
+# index on a commit and at HEAD on a push; the OTHER side at its published ref plus what it
+# committed since forking from it. Newest text on both sides (the audits' reading) judged a
+# tool-repo commit against another session's half-done marketplace edit (#84), and judged the
+# committing repo by an unstaged edit its commit does not even carry (#111).
+
+MP_SKILL = "plugins/bitranox/skills/coding-python-thing/SKILL.md"
+TW_SKILL = "skills/python-thing/SKILL.md"
+IN_PROGRESS = "An IN-PROGRESS paragraph nobody committed."
+
+
+def _published_pair(tmp_path, monkeypatch):
+    """Marketplace and tool repo, both git, committed in sync and published (origin/master)."""
+    public = tmp_path / "public"
+    root, tool = public / "KI" / "bitranox-skills", public / "libs" / "thing"
+    for top, rel, body in ((root, MP_SKILL, MIRROR_BODY), (tool, TW_SKILL, TWIN_BODY)):
+        write(top / rel, body)
+        _g(top, "init", "-q", ".")
+        _g(top, "add", "-A")
+        _g(top, "commit", "-qm", "base")
+        _g(top, "update-ref", "refs/remotes/origin/master", "HEAD")
+    monkeypatch.setitem(RG.MIRRORED_SKILLS, "coding-python-thing", "libs/thing/skills/python-thing")
+    return public, root, tool
+
+
+def _drift(path, body):
+    write(path, body.replace("One paragraph of content.", IN_PROGRESS))
+
+
+def _touch_marketplace_skill(root):
+    """Stage a change to the marketplace skill that is not drift (the H1 parenthetical is erased)."""
+    write(root / MP_SKILL, MIRROR_BODY.replace("(coding-python-thing)", "(renamed)"))
+    _g(root, "add", "-A")
+
+
+def test_a_marketplace_commit_is_not_judged_against_an_uncommitted_tool_repo_edit(tmp_path, monkeypatch,
+                                                                                   capsys):
+    _public, root, tool = _published_pair(tmp_path, monkeypatch)
+    _drift(tool / TW_SKILL, TWIN_BODY)                      # another session, mid-edit, uncommitted
+    _touch_marketplace_skill(root)
+
+    assert RG.check_skill_mirrors(root) == []
+    # The audit still reads newest text on both sides, so the edit in progress is reported there.
+    assert RG.audit_mirrors(root) == 1
+    assert IN_PROGRESS in capsys.readouterr().out
+
+
+def test_a_tool_repo_edit_committed_since_its_fork_does_count(tmp_path, monkeypatch):
+    # Control for the arm above: COMMITTED work in the other repo is part of what it ships.
+    _public, root, tool = _published_pair(tmp_path, monkeypatch)
+    _drift(tool / TW_SKILL, TWIN_BODY)
+    _g(tool, "commit", "-qam", "drift")
+    _touch_marketplace_skill(root)
+
+    fails = RG.check_skill_mirrors(root)
+
+    assert len(fails) == 1 and IN_PROGRESS in fails[0]
+
+
+def test_a_tool_repo_commit_is_not_judged_against_an_uncommitted_marketplace_edit(tmp_path, monkeypatch,
+                                                                                   capsys):
+    public, root, tool = _published_pair(tmp_path, monkeypatch)
+    _drift(root / MP_SKILL, MIRROR_BODY)                    # the #84 incident: the marketplace mid-edit
+    _tool_repo_commit(monkeypatch, public, tool)
+
+    assert RG.main() == 0
+    assert "DRIFT" not in capsys.readouterr().err
+    monkeypatch.setattr(RG, "repo_root", lambda: root)
+    monkeypatch.setattr(sys, "argv", ["repo-gate.py", "--mirror-of", str(tool)])
+    assert RG.main() == 1                                   # the audit still sees it
+
+
+def test_the_tool_repo_commit_gate_reads_the_index_not_an_unstaged_edit(tmp_path, monkeypatch, capsys):
+    public, root, tool = _published_pair(tmp_path, monkeypatch)
+    _drift(tool / TW_SKILL, TWIN_BODY)                      # unstaged: this commit does not carry it
+    _tool_repo_commit(monkeypatch, public, tool)
+    assert RG.main() == 0
+
+    _g(tool, "add", "-A")                                   # staged: it does
+    write(tool / TW_SKILL, TWIN_BODY)                       # and the working tree no longer shows it
+    _tool_repo_commit(monkeypatch, public, tool)
+    assert RG.main() == 2
+    assert IN_PROGRESS in capsys.readouterr().err
+
+
+def test_the_marketplace_commit_gate_reads_the_index_not_an_unstaged_edit(tmp_path, monkeypatch):
+    _public, root, _tool = _published_pair(tmp_path, monkeypatch)
+    _drift(root / MP_SKILL, MIRROR_BODY)
+    assert RG.check_skill_mirrors(root) == []
+
+    _g(root, "add", "-A")
+    write(root / MP_SKILL, MIRROR_BODY)
+    fails = RG.check_skill_mirrors(root)
+    assert len(fails) == 1 and IN_PROGRESS in fails[0]
+
+
+def test_the_push_gate_reads_head_not_the_index(tmp_path, monkeypatch, capsys):
+    public, _root, tool = _published_pair(tmp_path, monkeypatch)
+    _drift(tool / TW_SKILL, TWIN_BODY)
+    _g(tool, "add", "-A")                                   # staged but not committed: not pushed
+    _tool_repo_commit(monkeypatch, public, tool, command="git push")
+    assert RG.main() == 0
+
+    _g(tool, "commit", "-qm", "drift")
+    _tool_repo_commit(monkeypatch, public, tool, command="git push")
+    assert RG.main() == 2
+    assert IN_PROGRESS in capsys.readouterr().err
+
+
+def test_pre_push_reads_the_marketplace_at_head(tmp_path, monkeypatch, capsys):
+    _public, root, _tool = _published_pair(tmp_path, monkeypatch)
+    make_repo(root)
+    _g(root, "add", "-A")
+    _g(root, "commit", "-qm", "repo")
+    _g(root, "update-ref", "refs/remotes/origin/master", "HEAD")
+    _drift(root / MP_SKILL, MIRROR_BODY)
+    _g(root, "add", "-A")                                   # staged, not committed: not pushed
+    monkeypatch.setattr(RG, "repo_root", lambda: root)
+    monkeypatch.setattr(sys, "argv", ["repo-gate.py", "--pre-push", "--no-pytest"])
+    monkeypatch.setattr(sys, "stdin", io.StringIO(""))
+
+    RG.main()
+    assert "drifted from its twin" not in capsys.readouterr().err
+    _g(root, "commit", "-qm", "drift")
+    RG.main()
+    assert "drifted from its twin" in capsys.readouterr().err
+
+
+@pytest.mark.parametrize("command, stage", [
+    ("git commit -m x", "index"),
+    ("git commit -m x && git push", "index"),
+    ("git push", "HEAD"),
+    ("git -C somewhere push origin master", "HEAD"),
+    ("gh pr create --fill", "HEAD"),
+    ("git push <<'EOF'\ngit commit -m data\nEOF", "HEAD"),
+])
+def test_the_hook_reads_index_for_a_commit_and_head_for_a_push(command, stage):
+    assert RG.mirror_stage(command, "Bash") == stage
+
+
+# --- the audits name a published ref that has not been fetched for over a week -------------------
+
+def _fetched(repo, days, gitdir=None):
+    """Write a FETCH_HEAD into `gitdir` (default the repo's own) dated `days` ago."""
+    path = (gitdir or repo / ".git") / "FETCH_HEAD"
+    path.write_bytes(b"0000000000000000000000000000000000000000\t\tbranch 'master' of x\n")
+    stamp = time.time() - days * 86400
+    os.utime(path, (stamp, stamp))
+
+
+def test_ref_age_is_the_newest_fetch_head_a_linked_worktree_included(tmp_path):
+    repo = tmp_path / "r"
+    write(repo / "f", "x\n")
+    _g(repo, "init", "-q", ".")
+    _g(repo, "add", "-A")
+    _g(repo, "commit", "-qm", "a")
+    assert RG.ref_age_days(repo) is None                    # never fetched, never cloned: unknown
+
+    _fetched(repo, 40)
+    assert 39.9 < RG.ref_age_days(repo) < 40.1
+
+    # A fetch run from a linked worktree writes ITS OWN FETCH_HEAD and leaves the common one alone.
+    _g(repo, "worktree", "add", "-q", "-b", "side", str(tmp_path / "wt"))
+    _fetched(repo, 2, gitdir=repo / ".git" / "worktrees" / "wt")
+    assert 1.9 < RG.ref_age_days(repo) < 2.1
+    assert 1.9 < RG.ref_age_days(tmp_path / "wt") < 2.1
+
+
+def test_a_fresh_clone_dates_its_ref_from_the_clone(tmp_path):
+    src = tmp_path / "src"
+    write(src / "f", "x\n")
+    _g(src, "init", "-q", ".")
+    _g(src, "add", "-A")
+    _g(src, "commit", "-qm", "a")
+    _g(tmp_path, "clone", "-q", str(src), "cl")
+
+    age = RG.ref_age_days(tmp_path / "cl")
+
+    assert age is not None and age < 0.1
+
+
+def test_the_audits_name_a_ref_older_than_seven_days_and_not_a_younger_one(tmp_path, monkeypatch, capsys):
+    _public, root, tool = _published_pair(tmp_path, monkeypatch)
+    _fetched(tool, 6)
+    assert RG.audit_mirrors(root) == 0
+    assert "last fetched" not in capsys.readouterr().out
+
+    _fetched(tool, 8)
+    assert RG.audit_mirrors(root) == 0
+    out = capsys.readouterr().out
+    assert "last fetched 8.0 days ago" in out and str(tool) in out
+
+    _drift(tool / TW_SKILL, TWIN_BODY)
+    _g(tool, "commit", "-qam", "drift")
+    assert RG.audit_mirror_of(tool) == 1
+    drift_message = capsys.readouterr().out.split("has drifted from its twin")[-1]
+    assert "last fetched 8.0 days ago" in drift_message
+
+
+def test_a_gate_drift_block_names_the_other_side_s_stale_ref(tmp_path, monkeypatch, capsys):
+    public, root, tool = _published_pair(tmp_path, monkeypatch)
+    _fetched(root, 9)
+    _drift(tool / TW_SKILL, TWIN_BODY)
+    _g(tool, "add", "-A")
+    _tool_repo_commit(monkeypatch, public, tool)
+
+    assert RG.main() == 2
+    err = capsys.readouterr().err
+    assert "last fetched 9.0 days ago" in err and str(root) in err
 
 
 # ---- duplicate .py basenames ---------------------------------------------------------------------
