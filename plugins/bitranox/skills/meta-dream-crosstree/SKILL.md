@@ -50,7 +50,9 @@ Create one todo per step.
    `dream_state.py session-reviewed "<cwd>"`; a stretch over 2 MB comes in parts, so while the
    review prints a `TRUNCATED` line, repeat `session-review` and `session-reviewed` until it prints
    `NOTHING NEW`. It is incremental and the watermark is shared with the
-   other dream modes, so if a nap already reviewed this session this costs nothing.
+   other dream modes, so if a nap already reviewed this session this costs nothing. Earlier
+   sessions it lists under `OTHER UNREVIEWED TRANSCRIPTS` are read and marked with the same
+   `--transcript <path>` on both verbs (dream-core "Capture-first").
 1. **Back up first.** Snapshot every store this run may touch - each affected tree's TOP store and, for any level you will write, the anchor's central
    `.claude-memory/` note bodies + that level's `CLAUDE.local.md` pointer block (+ native `memory/`) - to
    timestamped copies OUT of the project trees (`~/.claude/self-improve-audit/backups/`, so a backup is

@@ -60,7 +60,8 @@ ONLY there).
 
 Nudged when due (SessionStart), around compaction (PreCompact salvages, you dream), or manual
 ("dream", "/dream-tree"). Check `dream_state.py due` (the script lives in THIS skill's dir; launch
-recipe in references/dream-core.md "Script homes"). **A MANUAL dream ALWAYS captures -
+recipe in references/dream-core.md "Script homes"): it prints `due` with exit 0 or `not-due` with
+exit 1, and that 1 is the answer no, not a failure. **A MANUAL dream ALWAYS captures -
 `not-due` never suppresses capture.** An absent store is the trigger to CREATE one (the first
 engine `add` bootstraps it), never a reason to skip; routing a learning only into a CLAUDE.md is
 NOT capture. Verify "nothing durable" - never assume it.
@@ -172,6 +173,14 @@ the success line, abort-and-show on a miss).
    entries with `[[slug]]`. Dedup runs TWICE - here, and again in step 8, because placement
    creates new overlap.
 
+   **A clean scan is a clean LEXICAL scan, never a clean tree.** It scores shared words, so two
+   facts teaching one lesson in different vocabulary score low and never appear: one tree measured
+   0 pairs at or above 0.30 while a reader found 5 real duplicates. So after the scan, make a
+   SEMANTIC pass over the pointer blocks loaded in step 3: group the hooks by the situation their
+   trigger names, and read both bodies of every group holding two or more facts; fold what is a
+   duplicate exactly as above. Zero candidates never skips this pass, and the report gives the
+   duplicates each pass found.
+
 5. **PLACEMENT (re-level every entry, pinned included; up AND down).** Route each fact through
    THE routing prompt in references/dream-core.md against the descriptor ladder (leaf -> anchor);
    the tier note (inline judgment at opus-class or above; switch-model-or-continue) is in the
@@ -195,7 +204,8 @@ the success line, abort-and-show on a miss).
      cannot tell - is a PROMOTION, and passes the corroboration gate (user-stated: eager;
      model-inferred: >= 2 DISTINCT PROJECTS). Record the sighting with
      `dream_state.py saw-promotable <slug> <project the fact came from>`, ask
-     `dream_state.py should-promote <slug>`, and obey the word it prints. `promote`: move it to
+     `dream_state.py should-promote <slug>`, and obey the word it prints (`promote` exits 0,
+     `hold` exits 1 - an answer, not a failure). `promote`: move it to
      the tree top, then run `dream_state.py promoted <slug>` to clear every project's sighting.
      `hold`: it STAYS at its project level - no move to the tree top and no move part-way up as
      a compromise, however general its body reads; report it as held. A fact that looks
