@@ -472,9 +472,20 @@ def _readable_dir(target, base):
     """
     if not target or target == "-" or target.startswith("~") or _UNKNOWABLE_DIR.search(target):
         return None
-    if os.path.isabs(target):
+    if _is_rooted(target):
         return os.path.normpath(target)
     return os.path.normpath(os.path.join(base, target)) if base else None
+
+
+def _is_rooted(path):
+    """True when `cd path` lands in the same place whatever directory the shell is in.
+
+    Not `os.path.isabs` alone: from Python 3.13 it answers False on Windows for a root with no
+    drive (`/r`, `\\r`), yet the shell still lands at that root (Git Bash's `/`, PowerShell's
+    current-drive root), and `os.path.join` already treats it as one - so with a base the same
+    statement read `\\r`, without a base it read "unknown", decided by the host's Python version.
+    """
+    return os.path.isabs(path) or (os.sep == "\\" and path[:1] in ("/", "\\"))
 
 
 def _cd_target(args):
