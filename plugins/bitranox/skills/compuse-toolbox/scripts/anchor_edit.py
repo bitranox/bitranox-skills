@@ -49,6 +49,13 @@ OWN copy - `.bak`, then `.bak.001`, `.bak.002` upward, higher number newer and z
 name sort is age order - so no run can destroy the state another one recorded, and the run prints
 the exact path it wrote. The copy is byte-exact.
 
+Inside a git work tree the copy is written under the repository's own git directory,
+`<git-dir>/anchor_edit-backups/<path in the work tree>.bak`, never beside the file: a sibling
+`.bak` is an untracked file, so `git add -A`, an editor's auto-add or a release tool's blanket
+stage puts the pre-image - of a gitignored secrets file, too - into the next commit. That was
+measured: a 2846-line `.bak` sat staged in a repo one push away from a public pull request.
+Outside any work tree (and for a file inside the git dir itself) the copy sits beside the file.
+
 `reap` deletes those backups once git CAN restore the file (tracked, committed, nothing local),
 and refuses otherwise. It previews unless given `--apply`, because it cannot tell a `.bak` this
 tool wrote from one another tool left, and because the backups hold states from BEFORE each edit
@@ -281,6 +288,34 @@ def is_recoverable_from_git(path: Path) -> bool:
     return status is not None and status.returncode == 0 and not status.stdout.strip()
 
 
+_BACKUP_STORE = "anchor_edit-backups"
+
+
+def backup_stem(path: Path) -> Path:
+    """The path this file's backups are named from: `<stem>.bak`, `<stem>.bak.001`, ...
+
+    Inside a git work tree that is `<git-dir>/anchor_edit-backups/<path in the work tree>`, which
+    no `git add` can stage; anywhere else it is the file itself, so the backups sit beside it.
+    Any answer git cannot give cleanly (no git, not a work tree, a path outside the top level as
+    a different spelling sees it) falls back to beside the file: a backup that exists somewhere
+    visible beats none.
+    """
+    out = _git(path, "rev-parse", "--show-toplevel", "--git-path", _BACKUP_STORE)
+    if out is None or out.returncode != 0:
+        return path
+    lines = out.stdout.splitlines()
+    if len(lines) != 2 or not lines[0] or not lines[1]:
+        return path
+    store = Path(lines[1])
+    if not store.is_absolute():         # --git-path answers relative to the directory it ran in
+        store = path.parent / store
+    try:
+        relative = path.resolve().relative_to(Path(lines[0]).resolve())
+    except ValueError:
+        return path
+    return store.resolve() / relative
+
+
 def _numbered_backups(path: Path):
     """`(number, path)` for every `<name>.bak.<digits>`, padded (`.001`) or not (`.1`) alike.
 
@@ -302,12 +337,22 @@ def _backup_indexes(path: Path):
 def existing_backups(path: Path) -> list[Path]:
     """This file's backups on disk, oldest first: `.bak`, then the numbered ones by number.
 
+    Both places are searched: beside the file, where versions before the git-dir store wrote them
+    (and where a file outside any work tree still gets them), then the git-dir store.
+
     Regular files only (a symlink to one counts): a directory that happens to carry a
     backup-shaped name was not written by this tool and is not a copy of anything.
     """
-    first = path.with_name(path.name + ".bak")
+    found: list[Path] = []
+    for stem in dict.fromkeys((path, backup_stem(path))):
+        found += [b for b in _backups_at(stem) if b not in found]
+    return found
+
+
+def _backups_at(stem: Path) -> list[Path]:
+    first = stem.with_name(stem.name + ".bak")
     found = [first] if first.is_file() else []
-    numbered = sorted((index, sibling) for index, sibling in _numbered_backups(path)
+    numbered = sorted((index, sibling) for index, sibling in _numbered_backups(stem)
                       if sibling.is_file())
     return found + [sibling for _, sibling in numbered]
 
@@ -355,7 +400,10 @@ def next_backup_path(path: Path) -> Path:
     The count is unbounded on purpose: a safety copy that deletes itself after N runs is not one.
     Past 999 the number simply widens (`.bak.1000`), so name order breaks there; a refused edit
     would be the worse failure.
+
+    The name is taken at `backup_stem(path)`: under the git dir inside a work tree.
     """
+    path = backup_stem(path)
     first = path.with_name(path.name + ".bak")
     if not first.exists():
         return first
@@ -432,6 +480,11 @@ def commit_plan(plan: _Plan, *, backup: bool = True) -> EditResult:
     saved = None
     if backup and not is_recoverable_from_git(plan.path):
         saved = next_backup_path(plan.path)
+        try:
+            saved.parent.mkdir(parents=True, exist_ok=True)
+        except OSError as exc:
+            raise UsageError(f"cannot create the backup directory {saved.parent}: {exc}; "
+                             "nothing written") from exc
         _write_bytes(saved, plan.raw, f"cannot write the backup {saved}, nothing written")
     out = _back_to_crlf(plan.before, plan.after) if plan.crlf else plan.after
     where = f"the pre-edit content is in {saved}" if saved else "restore it from git"

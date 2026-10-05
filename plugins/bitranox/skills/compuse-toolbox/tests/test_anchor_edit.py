@@ -957,3 +957,72 @@ def test_batch_keeps_crlf_and_backs_up_an_untracked_file(tmp_path):
     assert a.read_bytes() == b"one\r\nhalf\r\ntwo\r\n"
     assert AE.existing_backups(a), "an untracked file must be backed up before the write"
 
+
+# ---- C90: inside a git work tree the backup lives OUTSIDE it, where no `git add` reaches -------
+
+def _porcelain(root):
+    return subprocess.run(["git", "status", "--porcelain", "--untracked-files=all"],
+                          cwd=str(root), check=True, capture_output=True, text=True).stdout
+
+
+@pytest.mark.parametrize("kind", ["untracked", "ignored", "dirty"])
+def test_a_backup_in_a_work_tree_is_never_stageable(tmp_path, kind):
+    """A sibling .bak is an untracked file: `git add -A`, an IDE's auto-add or a release tool's
+    blanket stage puts the pre-image into the next commit (measured: a 2846-line .bak staged in a
+    repo one push away from a public PR). Under the git dir no `git add` can reach it."""
+    target = _git_repo(tmp_path, commit=(kind == "dirty"), ignore=(kind == "ignored"))
+    if kind == "dirty":
+        target.write_text(SAMPLE + "local\n", encoding="utf-8")
+    before = target.read_bytes()
+    result = AE.apply_to_file(target, lambda s: s.replace("return 2", "return 22"))
+    assert result.backup is not None and result.backup.read_bytes() == before
+    git_dir = Path(_git(tmp_path, "rev-parse", "--absolute-git-dir").stdout.strip())
+    assert git_dir in result.backup.resolve().parents
+    assert ".bak" not in _porcelain(tmp_path)
+    _git(tmp_path, "add", "-A")
+    staged = _git(tmp_path, "diff", "--cached", "--name-only").stdout
+    assert ".bak" not in staged
+
+
+def test_a_backup_outside_any_work_tree_stays_beside_the_file(tmp_path):
+    """Control: with no git dir to hold it, the sibling .bak is still the place."""
+    target = tmp_path / "plain.md"
+    target.write_bytes(b"one\n")
+    result = AE.apply_to_file(target, lambda s: s.replace("one", "two"))
+    assert result.backup == tmp_path / "plain.md.bak"
+
+
+def test_backups_in_the_git_dir_are_numbered_and_never_overwritten(tmp_path):
+    (tmp_path / "sub").mkdir()
+    _git_repo(tmp_path, name="other.md")
+    target = tmp_path / "sub" / "f.md"
+    target.write_bytes(b"v1\n")
+    first = AE.apply_to_file(target, lambda s: s.replace("v1", "v2")).backup
+    second = AE.apply_to_file(target, lambda s: s.replace("v2", "v3")).backup
+    assert first.name == "f.md.bak" and second.name == "f.md.bak.001"
+    assert first.parent.name == "sub", "the work-tree layout is mirrored, so names cannot collide"
+    assert first.read_bytes() == b"v1\n" and second.read_bytes() == b"v2\n"
+
+
+def test_reap_deletes_git_dir_backups_and_legacy_sibling_ones(tmp_path):
+    target = _git_repo(tmp_path, commit=False)
+    _plant_backups(target, ".bak")                       # one an older version left beside it
+    AE.apply_to_file(target, lambda s: s.replace("return 2", "return 22"))
+    _git(tmp_path, "add", "f.md")
+    _git(tmp_path, "commit", "-qm", "now restorable")
+    found = AE.existing_backups(target)
+    assert len(found) == 2 and (tmp_path / "f.md.bak") in found
+    proc = _run("reap", str(target), "--apply")
+    assert proc.returncode == 0, proc.stderr
+    assert not any(b.exists() for b in found)
+
+
+def test_a_file_inside_the_git_dir_falls_back_to_a_sibling_backup(tmp_path):
+    """No work tree contains .git/info/exclude, so there is nothing to keep the backup out of."""
+    _git_repo(tmp_path)
+    exclude = tmp_path / ".git" / "info" / "exclude"
+    exclude.parent.mkdir(parents=True, exist_ok=True)
+    exclude.write_bytes(b"# x\n")
+    result = AE.apply_to_file(exclude, lambda s: s + "*.log\n")
+    assert result.backup == exclude.with_name("exclude.bak")
+
