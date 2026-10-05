@@ -209,13 +209,15 @@ def test_cli_json_sample_holds_n_firings(tmp_path, capsys):
     assert cp.main(["--root", str(root), "--module", str(pred), "--func", "b",
                     "--sample", "1", "--json"]) == 0
     payload = json.loads(capsys.readouterr().out)
-    assert [p["uuid"] for p in payload["prompts"]] == ["u3"]
+    assert payload["ok"] is True and payload["command"] == "corpus_prompts"
+    assert [p["uuid"] for p in payload["data"]["prompts"]] == ["u3"]
 
 
 def test_cli_json_sample_without_a_predicate_holds_the_first_n_prompts(tmp_path, capsys):
     root, _ = _corpus(tmp_path)
     assert cp.main(["--root", str(root), "--sample", "2", "--json"]) == 0
-    assert [p["uuid"] for p in json.loads(capsys.readouterr().out)["prompts"]] == ["u1", "u2"]
+    assert [p["uuid"] for p in json.loads(capsys.readouterr().out)["data"]["prompts"]] == [
+        "u1", "u2"]
 
 
 def test_cli_sample_with_two_predicates_covers_both_firing_sets(tmp_path, capsys):
@@ -224,7 +226,7 @@ def test_cli_sample_with_two_predicates_covers_both_firing_sets(tmp_path, capsys
                     "--module-b", str(pred), "--func-b", "a", "--sample", "9", "--json"]) == 0
     payload = json.loads(capsys.readouterr().out)
     # the first predicate (b) fires on u3 only, the second (a) on 'beta' (u2) only
-    assert sorted(p["uuid"] for p in payload["prompts"]) == ["u2", "u3"]
+    assert sorted(p["uuid"] for p in payload["data"]["prompts"]) == ["u2", "u3"]
 
 
 @pytest.mark.parametrize("argv", [
@@ -306,3 +308,58 @@ def test_cli_a_prompt_the_console_cannot_encode_is_printed_not_a_crash(tmp_path)
                        capture_output=True, env=env, check=False)
     assert r.returncode == 0, r.stderr
     assert b"u1 | smile" in r.stdout
+
+
+# ---- wave D: unified exit codes and the D2 envelope ---------------------------------------------
+
+
+def test_cli_json_empty_corpus_is_exit_1_with_ok_true(tmp_path, capsys):
+    root = tmp_path / "empty"
+    root.mkdir()
+    assert cp.main(["--root", str(root), "--json"]) == 1
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["ok"] is True and payload["data"]["prompts"] == []
+    assert list(payload)[:4] == ["ok", "command", "data", "skipped"]
+
+
+def test_cli_json_usage_error_prints_the_envelope(tmp_path, capsys):
+    assert cp.main(["--root", str(tmp_path / "nope"), "--json"]) == 2
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["ok"] is False and "does not exist" in payload["error"]
+
+
+def test_cli_json_argparse_error_prints_the_envelope(capsys):
+    with pytest.raises(SystemExit) as exc:
+        cp.main(["--json", "--sample", "notanint"])
+    assert exc.value.code == 2
+    assert json.loads(capsys.readouterr().out)["ok"] is False
+
+
+def test_cli_json_crash_prints_the_envelope(tmp_path, monkeypatch, capsys):
+    def boom(*_a, **_k):
+        raise RuntimeError("reader broke")
+    monkeypatch.setattr(cp, "collect_prompts", boom)
+    root = tmp_path / "c"
+    root.mkdir()
+    assert cp.main(["--root", str(root), "--json"]) == 2
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["ok"] is False and "reader broke" in payload["error"]
+
+
+@pytest.mark.skipif(sys.platform == "win32",
+                    reason="Windows has no POSIX mode bits: chmod(0) leaves the file readable")
+def test_cli_json_unreadable_transcript_is_ok_false_with_skipped(tmp_path, capsys):
+    root, _ = _corpus(tmp_path)
+    locked = root / "b.jsonl"
+    locked.write_text("{}\n", encoding="utf-8")
+    locked.chmod(0)
+    try:
+        if os.access(locked, os.R_OK):
+            pytest.skip("running with privileges that read a mode-000 file (root)")
+        rc = cp.main(["--root", str(root), "--json"])
+    finally:
+        locked.chmod(0o644)
+    payload = json.loads(capsys.readouterr().out)
+    assert rc == 2 and payload["ok"] is False
+    assert any("b.jsonl" in item for item in payload["skipped"])
+

@@ -41,20 +41,23 @@ Run:
   corpus_prompts.py --count            # how many prompts the corpus holds, calls no predicate
 
 `--sample N` shows N of the prompts a predicate FIRED on (either predicate, when two are given),
-or the first N prompts when no predicate is given; `--json` carries the same N. Unreadable
-transcripts and directories are listed on stderr.
+or the first N prompts when no predicate is given; `--json` carries the same N, as the report under
+`data` of the envelope `{ok, command, data, skipped}`. Unreadable transcripts and directories are
+listed on stderr and in the envelope's `skipped`.
 
 Exit codes: 0 fine, 1 the corpus held no prompt, 2 usage or IO error - a --root that does not
 exist, a predicate option without its module, --count together with --module (--count calls no
 predicate; drop it to get the firing counts), or any transcript or directory that could not be
-read (the counts printed then cover only what was read).
+read (the counts printed then cover only what was read), or a crash. Under --json the envelope is
+printed on every exit, 2 included; `ok` is false exactly on exit 2.
 """
 
-import argparse
 import json
 import os
 import sys
 from pathlib import Path
+
+from _cli_envelope import EnvelopeArgumentParser, emit, wants_json
 
 __all__ = [
     "DEFAULT_ROOT", "TYPED_ENTRYPOINTS", "UsageError", "collect_prompts", "diff_predicates",
@@ -252,7 +255,8 @@ def _load(module, func):
 
 
 def _parse(argv):
-    p = argparse.ArgumentParser(description="Replay typed prompts through a predicate.")
+    p = EnvelopeArgumentParser(description="Replay typed prompts through a predicate.",
+                               envelope_command="corpus_prompts")
     p.add_argument("--root", default=DEFAULT_ROOT, help="transcript corpus (default %(default)s)")
     p.add_argument("--module", help="file defining the predicate")
     p.add_argument("--func", help="name of the predicate (default %s)" % DEFAULT_FUNC)
@@ -333,24 +337,34 @@ def _run(args):
         report["diff"] = diff_predicates(report["prompts"], first, second)
         sample = _firings(report["prompts"], report["diff"])
     sample = sample[:args.sample] if args.sample > 0 else []
-    payload = dict(report, prompts=sample)
-    print(json.dumps(payload, indent=2) if args.as_json else _render(report, sample))
+    # A partial corpus is an IO error, not a count.
+    code = 2 if report["skipped"] else (0 if report["prompts"] else 1)
+    if args.as_json:
+        emit(code, "corpus_prompts", dict(report, prompts=sample), skipped=report["skipped"],
+             error=("%d transcript(s) or directory(ies) could not be read" % len(report["skipped"])
+                    if code == 2 else None))
+    else:
+        print(_render(report, sample))
     for line in report["skipped"]:
         print("corpus_prompts: skipped: %s" % line, file=sys.stderr)
-    if report["skipped"]:
-        return 2                                         # a partial corpus is an IO error, not a count
-    return 0 if report["prompts"] else 1
+    return code
 
 
 def main(argv=None):
+    argv = sys.argv[1:] if argv is None else argv
     try:
-        return _run(_parse(sys.argv[1:] if argv is None else argv))
+        return _run(_parse(argv))
     except UsageError as exc:
-        print("corpus_prompts: %s" % exc, file=sys.stderr)
-        return 2
+        return _fail(str(exc), argv)
     except Exception as exc:                             # noqa: BLE001 - a CLI reports, never traces
-        print("corpus_prompts: %s: %s" % (type(exc).__name__, exc), file=sys.stderr)
-        return 2
+        return _fail("%s: %s" % (type(exc).__name__, exc), argv)
+
+
+def _fail(message, argv):
+    if wants_json(argv):
+        emit(2, "corpus_prompts", error=message)
+    print("corpus_prompts: %s" % message, file=sys.stderr)
+    return 2
 
 
 if __name__ == "__main__":
