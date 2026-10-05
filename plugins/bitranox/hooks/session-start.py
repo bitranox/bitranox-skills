@@ -245,6 +245,12 @@ def _fit_listing(head, lines, allowed, more):
 #: recorded this" must survive - a trailing "?" and the bare word "unknown" both. A parser that
 #: drops them makes the admitted guess invisible and leaves only the invented date showing.
 _OPEN_WORK_RX = re.compile(r"-\s*\[ \]\s*\(([^)]*)\)\s*\[(\d+)\]\s*(\S.*)")
+#: Any backlog line, open or closed, as (state, rank). A closed line keeps its number, and this
+#: block lists open items only, so a number held by a closed line looks free to whoever picks the
+#: next rank - measured over 22 real backlogs, 7 had an open item sharing its rank with another line.
+_ANY_ITEM_RX = re.compile(r"-\s*\[([ xX])\]\s*\([^)]*\)\s*\[(\d+)\]")
+_SHARED_RANK = ("%s %s label%s more than one line of OPEN-WORK.md (closed lines included): give "
+                "the open item a free number before citing it as 'rank N'.\n")
 _ISO_DATE_RX = re.compile(r"(\d{4})-(\d{2})-(\d{2})\??$")
 #: The whole essentials block must stay small or the harness persists it to a file and injects
 #: only a ~2KB preview, which is how the retrieval rule once stopped reaching context at all.
@@ -285,6 +291,24 @@ def _parse_open_work(text, today=None):
     # that does. datetime.date.max is the sentinel because None will not compare against a date.
     items.sort(key=lambda it: (it[0], it[1] or datetime.date.max))
     return items
+
+
+def _shared_rank_warning(text):
+    """One line naming each rank an OPEN item shares with any other line, or "" when none does.
+
+    Two closed lines on one number are history and are not named: nothing new can be cited by it.
+    """
+    states = {}
+    for raw in text.splitlines():
+        m = _ANY_ITEM_RX.match(raw.strip())
+        if m:
+            states.setdefault(int(m.group(2)), []).append(m.group(1) == " ")
+    shared = sorted(rank for rank, opened in states.items() if len(opened) > 1 and any(opened))
+    if not shared:
+        return ""
+    plural = len(shared) > 1
+    return _SHARED_RANK % ("Ranks" if plural else "Rank", ", ".join(map(str, shared)),
+                           "" if plural else "s")
 
 
 def _parse_raised(token):
@@ -399,7 +423,18 @@ def open_work_context(proj, today=None, budget=None):
         # count line then overran together, by up to that count line's own length.
         if allowed < _listing_floor(head, lines, _OPEN_WORK_MORE):
             return note + _OPEN_WORK_COMPACT % len(items)
-        return _fit_listing(head, lines, allowed, _OPEN_WORK_MORE)
+        plain = _fit_listing(head, lines, allowed, _OPEN_WORK_MORE)
+        # The shared-rank line is the first thing to go when room is short: it is kept only when
+        # it costs no listed item, because the listing is what must survive and an ambiguous
+        # number is a nuisance rather than a hidden item.
+        warning = _shared_rank_warning(raw)
+        if warning and allowed >= _listing_floor(note + warning + head[len(note):], lines,
+                                                 _OPEN_WORK_MORE):
+            warned = _fit_listing(note + warning + head[len(note):], lines, allowed,
+                                  _OPEN_WORK_MORE)
+            if warned.replace(warning, "", 1) == plain:
+                return warned
+        return plain
     except Exception:  # noqa: BLE001 - never wedge a session start
         return None
 

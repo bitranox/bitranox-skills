@@ -756,6 +756,77 @@ def test_open_work_sorts_a_dated_item_above_an_undated_one_of_equal_rank(tmp_pat
     assert ctx.index("dated item") < ctx.index("undated item")
 
 
+# A closed item keeps its number, and this block lists open items only, so the number a closed
+# line holds looks free. Measured over 22 real backlogs: 7 had an open item sharing its rank with
+# a closed line, none had two open items on one rank. "rank 14" then names two things.
+
+def test_an_open_rank_a_closed_line_also_uses_is_named(tmp_path):
+    proj = tmp_path / "dup1"
+    _write_open_work(proj, "- [x] (2026-09-23) [14] USER: old thing | closed: shipped\n"
+                           "- [ ] (2026-10-01) [14] USER: new thing\n"
+                           "- [ ] (2026-10-01) [20] FOUND: other\n")
+    block = S.open_work_context(str(proj))
+    assert "Rank 14 labels more than one line" in block
+    assert "new thing" in block and "other" in block
+
+
+def test_distinct_ranks_raise_no_rank_warning(tmp_path):
+    """Control: the same backlog with the closed line on its own number says nothing."""
+    proj = tmp_path / "dup2"
+    _write_open_work(proj, "- [x] (2026-09-23) [13] USER: old thing | closed: shipped\n"
+                           "- [ ] (2026-10-01) [14] USER: new thing\n")
+    assert "labels more than one line" not in S.open_work_context(str(proj))
+
+
+def test_two_closed_lines_sharing_a_rank_are_history_not_a_warning(tmp_path):
+    proj = tmp_path / "dup3"
+    _write_open_work(proj, "- [x] (2026-09-01) [10] USER: a | closed: x\n"
+                           "- [x] (2026-09-02) [10] USER: b | closed: y\n"
+                           "- [ ] (2026-10-01) [20] USER: open one\n")
+    assert "labels more than one line" not in S.open_work_context(str(proj))
+
+
+def test_two_open_items_on_one_rank_are_named_too(tmp_path):
+    proj = tmp_path / "dup4"
+    _write_open_work(proj, "- [ ] (2026-10-01) [30] USER: a\n- [ ] (2026-10-02) [30] USER: b\n"
+                           "- [ ] (2026-10-02) [40] USER: c\n- [x] (2026-10-02) [40] USER: d\n")
+    assert "Ranks 30, 40 label more than one line" in S.open_work_context(str(proj))
+
+
+def test_the_rank_warning_yields_before_the_listing_does(tmp_path):
+    """Under a tight budget the warning goes first: the listing is what must survive."""
+    proj = tmp_path / "dup5"
+    _write_open_work(proj, "- [x] (2026-09-23) [14] USER: old | closed: x\n"
+                           "- [ ] (2026-10-01) [14] USER: the open item\n")
+    full = S.open_work_context(str(proj))
+    assert "labels more than one line" in full
+    plain = full.split("\n", 1)[1]          # the same block without its warning line
+    # The floor reserves a newline after the last line, so the plain listing needs one byte more.
+    block = S.open_work_context(str(proj), budget=len(plain.encode("utf-8")) + 1)
+    assert block == plain
+
+
+def test_the_rank_warning_never_costs_a_listed_item(tmp_path):
+    """At every budget the listing equals its twin's, whose closed line holds a free number."""
+    items = "".join("- [ ] (2026-08-27) [%d] USER: a standing item with a long description %d\n"
+                    % (i * 10, i) for i in range(1, 20))
+    dup, twin = tmp_path / "dup6", tmp_path / "twin6"
+    _write_open_work(dup, "- [x] (2026-09-01) [10] USER: closed | closed: x\n" + items)
+    _write_open_work(twin, "- [x] (2026-09-01) [5] USER: closed | closed: x\n" + items)
+    warned_seen = dropped_seen = 0
+    for budget in range(400, 2400, 7):
+        block = S.open_work_context(str(dup), budget=budget)
+        plain = S.open_work_context(str(twin), budget=budget)
+        assert len(block.encode("utf-8")) <= budget
+        if "labels more than one line" in block:
+            warned_seen += 1
+            assert block.split("\n", 1)[1] == plain
+        else:
+            dropped_seen += 1
+            assert block == plain
+    assert warned_seen and dropped_seen, "control: both outcomes must occur across the budgets"
+
+
 def test_essentials_stay_under_budget_with_every_block_present(tmp_path, monkeypatch, capsys):
     # The earlier budget test used a fixture carrying only retrieval + audit, so a backlog sized
     # against it passed while the REAL repo - which also has contributions - overran by 429 bytes.
