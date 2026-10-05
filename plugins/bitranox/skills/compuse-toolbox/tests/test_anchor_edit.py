@@ -976,7 +976,8 @@ def test_a_backup_in_a_work_tree_is_never_stageable(tmp_path, kind):
     before = target.read_bytes()
     result = AE.apply_to_file(target, lambda s: s.replace("return 2", "return 22"))
     assert result.backup is not None and result.backup.read_bytes() == before
-    git_dir = Path(_git(tmp_path, "rev-parse", "--absolute-git-dir").stdout.strip())
+    # Both resolved: a Windows temp dir can be spelled with 8.3 short names on one side only.
+    git_dir = Path(_git(tmp_path, "rev-parse", "--absolute-git-dir").stdout.strip()).resolve()
     assert git_dir in result.backup.resolve().parents
     assert ".bak" not in _porcelain(tmp_path)
     _git(tmp_path, "add", "-A")

@@ -564,9 +564,8 @@ def test_getuser_failing_is_exit_2(monkeypatch, capsys):
     assert "local user" in capsys.readouterr().err
 
 
-@pytest.mark.skipif(sys.platform == "win32",
-                    reason="a file in the way of a directory is the portable way to make mkdir fail")
 def test_an_uncreatable_known_hosts_directory_is_exit_2(tmp_path, capsys):
+    """A FILE where the directory must go makes mkdir fail on every platform, unlike a mode bit."""
     blocker = tmp_path / "file"
     blocker.write_bytes(b"x")
     r = _Runner(_FakeProc(0))
