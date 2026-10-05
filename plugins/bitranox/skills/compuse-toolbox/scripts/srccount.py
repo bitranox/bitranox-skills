@@ -46,18 +46,26 @@ Exit, --audit:  answers "is the NAME list complete for this tree". 0 = yes, 1 = 
                 2 = could not read the tree. Unused members are reported but never set the
                 code: on a partial tree nearly every member is unused, and a gate that always
                 fires is one nobody reads.
+
+An unreadable directory INSIDE an excluded tree (by name or by content) is not a 2: nothing
+first-party can sit there, so the source count is still exact and only the EXCLUDED count is a
+floor. It is named on stderr with that warning and in `skipped`, and the exit is what it would
+have been. Both modes, --audit too.
+
+`--json` prints `{ok, command, data, skipped}` on every exit, 2 included; `ok` is false exactly
+when the exit is 2.
 """
 from __future__ import annotations
 
 import argparse
 import fnmatch
-import json
 import os
 import sys
-import traceback
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
+
+from _cli_envelope import EXIT_ERROR, EXIT_NO, EXIT_YES, EnvelopeArgumentParser, emit, guarded
 
 # The exclusion list IS the instrument. Every shape, not the one you type first: the filter
 # that produced 271423 had exactly `.venv` and nothing else. Matched against whole path
@@ -195,6 +203,9 @@ class TreeCount:
     # Directories the walk could not list. Non-empty means the count is a FLOOR, which the
     # command line reports as "could not count" (exit 2) rather than as a smaller number.
     unreadable: list[str] = field(default_factory=list)
+    # Unlistable directories INSIDE an excluded tree: the source count is still exact, only the
+    # excluded count is a floor, so these warn and never set exit 2.
+    unreadable_excluded: list[str] = field(default_factory=list)
 
     @property
     def total(self) -> int:
@@ -236,15 +247,38 @@ def _proven_marker(dirpath: Path, filenames: list[str]) -> str | None:
     return None
 
 
-def _walk_error_sink(sink: list[str]) -> Callable[[OSError], None]:
+@dataclass
+class _WalkContext:
+    """What the onerror sink needs to tell an unreadable dir inside an excluded tree from one
+    in first-party territory. The sink fires BEFORE the walk would have classified that dir, so
+    it resolves the reason itself, from the same two sources the walk uses."""
+
+    root_str: str
+    extra: tuple[str, ...]
+    content_excluded: dict[str, str]
+    unreadable: list[str]
+    unreadable_excluded: list[str]
+
+    def reason_for(self, dirpath: str) -> str | None:
+        rel = os.path.relpath(dirpath, self.root_str)
+        parts = () if rel == os.curdir else tuple(rel.split(os.sep))
+        return excluded_reason(parts, self.extra) or self.content_excluded.get(
+            os.path.dirname(dirpath))
+
+
+def _walk_error_sink(ctx: _WalkContext) -> Callable[[OSError], None]:
     """An os.walk onerror that RECORDS the directory it could not list.
 
     Without one, os.walk silently drops that subtree - an unreadable directory, the root
     included, became a smaller count (or "nothing matched, check --ext") with nothing to notice.
+    A directory inside an excluded tree goes to its own list: it costs the excluded count only.
     """
 
     def record(exc: OSError) -> None:
-        sink.append(f"{exc.filename}: {exc.strerror or exc}")
+        entry = f"{exc.filename}: {exc.strerror or exc}"
+        filename = exc.filename if isinstance(exc.filename, str) else None
+        inside_excluded = filename is not None and ctx.reason_for(filename) is not None
+        (ctx.unreadable_excluded if inside_excluded else ctx.unreadable).append(entry)
 
     return record
 
@@ -272,7 +306,9 @@ def count_tree(
     # already classified by scandir, so the per-file stat disappears. The excluded subtree
     # is still walked - not pruned - because its COUNT is the whole point of the tool.
     content_excluded: dict[str, str] = {}
-    for dirpath, _dirnames, filenames in os.walk(root_str, onerror=_walk_error_sink(result.unreadable)):
+    sink = _walk_error_sink(_WalkContext(root_str, extra, content_excluded, result.unreadable,
+                                         result.unreadable_excluded))
+    for dirpath, _dirnames, filenames in os.walk(root_str, onerror=sink):
         rel = os.path.relpath(dirpath, root_str)
         parts = () if rel == os.curdir else tuple(rel.split(os.sep))
         reason = excluded_reason(parts, extra)
@@ -315,6 +351,7 @@ class AuditReport:
     top_counted_dirs: list[tuple[str, int]] = field(default_factory=list)
     ranked_total: int = 0
     unreadable: list[str] = field(default_factory=list)
+    unreadable_excluded: list[str] = field(default_factory=list)
 
 
 def audit(
@@ -348,7 +385,9 @@ def audit(
         if not root.is_dir():
             raise FileNotFoundError(f"not a directory: {root}")
         root_str = str(root)
-        for dirpath, dirnames, filenames in os.walk(root_str, onerror=_walk_error_sink(report.unreadable)):
+        sink = _walk_error_sink(_WalkContext(root_str, extra, content_excluded, report.unreadable,
+                                             report.unreadable_excluded))
+        for dirpath, dirnames, filenames in os.walk(root_str, onerror=sink):
             seen_dirnames.update(dirnames)
             rel = os.path.relpath(dirpath, root_str)
             parts = () if rel == os.curdir else tuple(rel.split(os.sep))
@@ -473,20 +512,32 @@ def _report_unreadable(unreadable: list[str]) -> None:
     print("srccount: the count would be a floor, not a total - reporting could-not-count", file=sys.stderr)
 
 
+_EXCLUDED_FLOOR_NOTE = "inside an excluded tree; the excluded count is a floor"
+
+
+def _report_unreadable_excluded(unreadable_excluded: list[str]) -> None:
+    for item in unreadable_excluded:
+        print(f"srccount: could not read {item} ({_EXCLUDED_FLOOR_NOTE})", file=sys.stderr)
+    if unreadable_excluded:
+        print("srccount: warning: the source count is exact, but the excluded count is a floor",
+              file=sys.stderr)
+
+
+def _skipped(unreadable: list[str], unreadable_excluded: list[str]) -> list[str]:
+    return unreadable + [f"{item} ({_EXCLUDED_FLOOR_NOTE})" for item in unreadable_excluded]
+
+
+@guarded("srccount")
 def main(argv: list[str] | None = None) -> int:
     """Exit 2 for a crash as well: 1 means "nothing matched", and a crash must never read so."""
     _tolerant_streams()
-    try:
-        return _main(argv)
-    except Exception as exc:  # noqa: BLE001 - the boundary that keeps a crash off exit code 1
-        traceback.print_exc(file=sys.stderr)
-        print(f"srccount: unexpected {type(exc).__name__}: {exc}", file=sys.stderr)
-        return 2
+    return _main(argv)
 
 
 def _main(argv: list[str] | None) -> int:
-    p = argparse.ArgumentParser(
-        description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter
+    p = EnvelopeArgumentParser(
+        description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter,
+        envelope_command="srccount",
     )
     p.add_argument("--root", action="append", default=None, help="tree to count, repeatable [.]")
     p.add_argument("--ext", action="append", default=None,
@@ -504,46 +555,20 @@ def _main(argv: list[str] | None) -> int:
     exts = normalise_extensions(args.ext)
 
     if args.audit:
-        try:
-            report = audit(list(roots), extensions=args.ext,
-                           extra_excludes=args.exclude, top=args.top)
-        except (FileNotFoundError, PermissionError, OSError) as exc:
-            print(f"srccount: {exc}", file=sys.stderr)
-            return 2
-        if args.json:
-            print(json.dumps({
-                "ok": not report.unreadable,
-                "command": "srccount --audit",
-                "data": {
-                    "roots": [str(r) for r in report.roots],
-                    "unused_members": report.unused_members,
-                    "content_only": [str(p) for p in report.content_only],
-                    "ranked_total": report.ranked_total,
-                    "top_counted_dirs": [{"name": n, "source": c} for n, c in report.top_counted_dirs],
-                },
-                "skipped": report.unreadable,
-            }, indent=1))
-        else:
-            print(render_audit(report))
-        if report.unreadable:
-            _report_unreadable(report.unreadable)
-            return 2
-        return 1 if report.content_only else 0
+        return _run_audit(args, roots)
 
     counts: list[TreeCount] = []
     for r in roots:
         try:
             counts.append(count_tree(r, extensions=args.ext, extra_excludes=args.exclude))
         except (FileNotFoundError, PermissionError, OSError) as exc:
-            print(f"srccount: {exc}", file=sys.stderr)
-            return 2
+            return _refuse(args, "srccount", exc)
 
     unreadable = [item for c in counts for item in c.unreadable]
+    unreadable_excluded = [item for c in counts for item in c.unreadable_excluded]
+    code = _count_code(counts, unreadable)
     if args.json:
-        print(json.dumps({
-            "ok": not unreadable,
-            "command": "srccount",
-            "data": {
+        emit(code, "srccount", {
                 "extensions": exts,
                 "roots": [
                     {
@@ -555,29 +580,72 @@ def _main(argv: list[str] | None) -> int:
                         "by_pattern": c.by_pattern,
                         "by_ext": c.by_ext,
                         "by_top_dir": c.by_top_dir,
+                        "excluded_is_floor": bool(c.unreadable_excluded),
                     }
                     for c in counts
                 ],
             },
-            "skipped": unreadable,
-        }, indent=1))
+            skipped=_skipped(unreadable, unreadable_excluded), indent=1,
+            error="%d director(ies) could not be listed" % len(unreadable) if unreadable else None)
     else:
         print(render_table(counts, exts))
 
+    _report_unreadable_excluded(unreadable_excluded)
     if unreadable:
         _report_unreadable(unreadable)
-        return 2
-
-    # 0 yes / 1 no: nothing matched in ANY root almost always means a wrong --ext or path.
-    # Gated on ALL roots, not any: a genuinely empty tree among several is a real answer.
-    if not any(c.source for c in counts):
+    elif code == EXIT_NO:
         print(
             f"srccount: no source files matched {' '.join(exts[:8])} in any root - "
             "check --ext and the paths before reading this as 'no code here'",
             file=sys.stderr,
         )
-        return 1
-    return 0
+    return code
+
+
+def _count_code(counts: list[TreeCount], unreadable: list[str]) -> int:
+    """2 a directory could not be listed, else 0 yes / 1 no.
+
+    Nothing matched in ANY root almost always means a wrong --ext or path. Gated on ALL roots,
+    not any: a genuinely empty tree among several is a real answer.
+    """
+    if unreadable:
+        return EXIT_ERROR
+    return EXIT_YES if any(c.source for c in counts) else EXIT_NO
+
+
+def _refuse(args: argparse.Namespace, command: str, exc: OSError) -> int:
+    print(f"srccount: {exc}", file=sys.stderr)
+    if args.json:
+        emit(EXIT_ERROR, command, error=str(exc), indent=1)
+    return EXIT_ERROR
+
+
+def _run_audit(args: argparse.Namespace, roots: list[str]) -> int:
+    try:
+        report = audit(list(roots), extensions=args.ext,
+                       extra_excludes=args.exclude, top=args.top)
+    except (FileNotFoundError, PermissionError, OSError) as exc:
+        return _refuse(args, "srccount --audit", exc)
+    if report.unreadable:
+        code = EXIT_ERROR
+    else:
+        code = EXIT_NO if report.content_only else EXIT_YES
+    if args.json:
+        emit(code, "srccount --audit", {
+            "roots": [str(r) for r in report.roots],
+            "unused_members": report.unused_members,
+            "content_only": [str(p) for p in report.content_only],
+            "ranked_total": report.ranked_total,
+            "top_counted_dirs": [{"name": n, "source": c} for n, c in report.top_counted_dirs],
+        }, skipped=_skipped(report.unreadable, report.unreadable_excluded), indent=1,
+            error="%d director(ies) could not be listed" % len(report.unreadable)
+            if report.unreadable else None)
+    else:
+        print(render_audit(report))
+    _report_unreadable_excluded(report.unreadable_excluded)
+    if report.unreadable:
+        _report_unreadable(report.unreadable)
+    return code
 
 
 if __name__ == "__main__":

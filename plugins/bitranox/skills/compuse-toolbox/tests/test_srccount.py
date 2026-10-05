@@ -845,6 +845,76 @@ def test_an_unexpected_crash_is_exit_two_not_nothing_matched(tmp_path: Path) -> 
         f"sys.exit(srccount.main(['--root', {str(tmp_path)!r}]))\n",
         encoding="utf-8",
     )
-    done = subprocess.run([sys.executable, str(driver)], capture_output=True, text=True, timeout=60)
+    done = subprocess.run([sys.executable, str(driver)], capture_output=True, text=True,
+                          encoding="utf-8", errors="replace", timeout=60)
     assert done.returncode == 2
     assert "unplanned" in done.stderr
+
+
+
+# --- wave D: the envelope on every exit; an unreadable dir INSIDE an excluded tree (D14) ------
+
+def test_a_missing_root_under_json_prints_the_exit_2_envelope(tmp_path: Path) -> None:
+    for extra in ([], ["--audit"]):
+        done = run_cli(*extra, "--root", str(tmp_path / "nope"), "--json")
+        assert done.returncode == 2
+        env = json.loads(done.stdout)
+        assert env["ok"] is False and "nope" in env["error"]
+        assert list(env)[:4] == ["ok", "command", "data", "skipped"]
+
+
+def test_an_internal_crash_under_json_prints_the_envelope(tmp_path: Path, capsys,
+                                                           monkeypatch) -> None:
+    def boom(*_a, **_k):
+        raise RuntimeError("unplanned")
+
+    # The process boundary is under test, so the crash is injected at the call main makes.
+    monkeypatch.setattr(srccount, "count_tree", boom)
+    rc = srccount.main(["--root", str(tmp_path), "--json"])
+    cap = capsys.readouterr()
+    assert rc == 2
+    env = json.loads(cap.out)
+    assert env["ok"] is False and "unplanned" in env["error"]
+
+
+@needs_posix_perms
+@pytest.mark.parametrize("locked_rel", ["node_modules/pkg", "node_modules"])
+def test_an_unreadable_dir_inside_an_excluded_tree_is_a_floor_warning_not_an_error(
+        tmp_path: Path, locked_rel: str) -> None:
+    """D14: nothing first-party can sit inside node_modules, so a dir there that cannot be listed
+    leaves the SOURCE count exact and only the EXCLUDED count a floor. Exit 0 with a warning."""
+    root = tmp_path / "t"
+    plant(root, ["src/a.py", "node_modules/pkg/x.py", "node_modules/pkg/y.py"])
+    locked = root / locked_rel
+    locked.chmod(0)
+    try:
+        counted = srccount.count_tree(root, extensions=[".py"])
+        done = run_cli("--root", str(root), "--ext", ".py", "--json")
+        audited = run_cli("--audit", "--root", str(root), "--ext", ".py")
+    finally:
+        locked.chmod(0o755)
+    assert counted.unreadable == [] and counted.source == 1
+    assert any(locked_rel in item for item in counted.unreadable_excluded)
+    assert done.returncode == 0, done.stderr
+    env = json.loads(done.stdout)
+    assert env["ok"] is True and any(locked_rel in item for item in env["skipped"])
+    assert "floor" in done.stderr
+    assert audited.returncode == 0, audited.stderr
+    assert "floor" in audited.stderr
+
+
+@needs_posix_perms
+def test_an_unreadable_dir_inside_a_content_excluded_tree_is_a_floor_warning(
+        tmp_path: Path) -> None:
+    """The same for a tree excluded by CONTENT (a venv named like nothing in the list)."""
+    root = tmp_path / "t"
+    plant(root, ["src/a.py", "myenv/lib/x.py"])
+    mark_venv(root / "myenv")
+    locked = root / "myenv" / "lib"
+    locked.chmod(0)
+    try:
+        done = run_cli("--root", str(root), "--ext", ".py")
+    finally:
+        locked.chmod(0o755)
+    assert done.returncode == 0, done.stderr
+    assert "floor" in done.stderr
