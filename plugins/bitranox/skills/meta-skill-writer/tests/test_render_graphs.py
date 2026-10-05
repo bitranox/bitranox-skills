@@ -71,6 +71,7 @@ def test_all_good_blocks_exit_0_with_a_summary(tmp_path):
 
 
 def test_a_failed_combine_exits_1(tmp_path):
+    """A block's dot SYNTAX error is a finding about the input (1), in --combine too."""
     skill = make_skill(tmp_path, "mixed", [GOOD, BROKEN])
     proc = run(skill, "--combine")
     assert proc.returncode == 1, proc.stdout + proc.stderr
@@ -123,9 +124,10 @@ def test_a_suffix_never_lands_on_a_name_a_later_block_owns(tmp_path):
 # --- 3. --combine with node ids shared between blocks (D6: detect, name, refuse) -----------------
 
 def test_combine_refuses_node_ids_shared_between_blocks(tmp_path):
+    """--combine refusing the whole action is "could not run" (2), not a finding (1)."""
     skill = make_skill(tmp_path, "shared", ["digraph one { start -> a; }", "digraph two { start -> b; }"])
     proc = run(skill, "--combine")
-    assert proc.returncode == 1, proc.stdout + proc.stderr
+    assert proc.returncode == 2, proc.stdout + proc.stderr
     assert "start" in proc.stderr and "one" in proc.stderr and "two" in proc.stderr
     assert not [n for n in outputs(skill) if n.endswith(".svg")]
 
@@ -134,7 +136,7 @@ def test_combine_sees_a_shared_id_however_it_is_spelled(tmp_path):
     # "start" and start are one node to graphviz; a regex over the source would call them two.
     skill = make_skill(tmp_path, "spelled", ['digraph one { "start" -> a; }', "digraph two { start -> b; }"])
     proc = run(skill, "--combine")
-    assert proc.returncode == 1, proc.stdout + proc.stderr
+    assert proc.returncode == 2, proc.stdout + proc.stderr
     assert "start" in proc.stderr
 
 
@@ -172,7 +174,7 @@ def test_combine_extracts_every_digraph_header_form(tmp_path, block):
 def test_combine_refuses_an_undirected_graph_block(tmp_path):
     skill = make_skill(tmp_path, "undirected", [GOOD, "graph G { x -- y; }"])
     proc = run(skill, "--combine")
-    assert proc.returncode == 1, proc.stdout + proc.stderr
+    assert proc.returncode == 2, proc.stdout + proc.stderr
     assert "undirected" in proc.stderr
     assert not [n for n in outputs(skill) if n.endswith(".svg")]
 
@@ -187,12 +189,13 @@ def test_separate_mode_still_renders_an_undirected_graph(tmp_path):
 def test_combine_fails_loudly_on_a_bare_statements_block(tmp_path):
     skill = make_skill(tmp_path, "bare", [GOOD, BARE])
     proc = run(skill, "--combine")
-    assert proc.returncode == 1, proc.stdout + proc.stderr
+    assert proc.returncode == 2, proc.stdout + proc.stderr
     assert "graph_2" in proc.stderr
     assert not [n for n in outputs(skill) if n.endswith(".svg")]
 
 
 def test_separate_mode_fails_on_a_bare_statements_block(tmp_path):
+    """The control: in separate mode the same block is a dot syntax error, a finding (1)."""
     skill = make_skill(tmp_path, "bare", [GOOD, BARE])
     proc = run(skill)
     assert proc.returncode == 1
@@ -245,13 +248,63 @@ def test_runs_where_dot_is_on_path_but_which_is_not(tmp_path):
 
 
 @pytest.mark.skipif(os.name == "nt", reason="symlinked PATH fixture is POSIX-only")
-def test_missing_dot_exits_1_with_install_advice_for_every_os(tmp_path):
+def test_missing_dot_exits_2_with_install_advice_for_every_os(tmp_path):
     env = _path_with(tmp_path, "node")
     skill = make_skill(tmp_path, "nodot", [GOOD])
     proc = run(skill, env=env)
-    assert proc.returncode == 1
+    assert proc.returncode == 2
     assert "graphviz" in proc.stderr and "Windows" in proc.stderr, proc.stderr
     assert not (skill / "diagrams").exists()
+
+
+@pytest.mark.skipif(os.name == "nt", reason="a POSIX shell-script dot stand-in")
+def test_a_dot_that_dies_mid_render_exits_2_not_1(tmp_path):
+    """dot answers the -V probe, then is killed while rendering: nothing was learned about the
+    block, so this is "could not run" (2), not the block's syntax error (1)."""
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    (bin_dir / "node").symlink_to(NODE or "node")
+    fake = bin_dir / "dot"
+    fake.write_text('#!/bin/sh\n[ "$1" = "-V" ] && exit 0\nkill -9 $$\n', encoding="utf-8",
+                    newline="\n")
+    fake.chmod(0o755)
+    skill = make_skill(tmp_path, "killed", [GOOD])
+    proc = run(skill, env={**os.environ, "PATH": str(bin_dir)})
+    assert proc.returncode == 2, proc.stdout + proc.stderr
+    assert "could not run dot" in proc.stderr
+
+
+# --- 7b. could not run: usage, input, output --------------------------------------------------------
+
+def test_no_skill_directory_is_a_usage_error_exit_2(tmp_path):
+    proc = subprocess.run([NODE or "node", str(SCRIPT)], capture_output=True, text=True,
+                          encoding="utf-8", errors="replace", timeout=60, check=False)
+    assert proc.returncode == 2, proc.stdout + proc.stderr
+    assert "Usage" in proc.stderr
+
+
+def test_a_directory_without_skill_md_exits_2(tmp_path):
+    proc = run(tmp_path)
+    assert proc.returncode == 2, proc.stdout + proc.stderr
+    assert "not found" in proc.stderr
+
+
+def test_an_unwritable_diagrams_dir_exits_2_without_a_stack_trace(tmp_path):
+    """A regular FILE where diagrams/ goes: the mkdir threw an uncaught exception (exit 1 and a
+    node stack trace), which reads as a failed diagram."""
+    skill = make_skill(tmp_path, "blocked", [GOOD])
+    (skill / "diagrams").write_text("not a directory", encoding="utf-8")
+    proc = run(skill)
+    assert proc.returncode == 2, proc.stdout + proc.stderr
+    assert "    at " not in proc.stderr  # no stack trace
+    assert "diagrams" in proc.stderr
+
+
+def test_combine_refuses_an_empty_digraph_body_with_exit_2(tmp_path):
+    skill = make_skill(tmp_path, "empty", [GOOD, "digraph hollow { }"])
+    proc = run(skill, "--combine")
+    assert proc.returncode == 2, proc.stdout + proc.stderr
+    assert "empty graph body" in proc.stderr
 
 
 # --- 8. every shipped skill renders in both modes ------------------------------------------------
@@ -308,7 +361,7 @@ def test_combine_refuses_a_mix_of_strict_and_plain_blocks(tmp_path):
     """One merged graph is strict or not as a whole, so a mix cannot be drawn faithfully."""
     skill = make_skill(tmp_path, "mixed", [STRICT_DUP, "digraph p { c -> d; c -> d; }"])
     proc = run(skill, "--combine")
-    assert proc.returncode == 1, proc.stdout + proc.stderr
+    assert proc.returncode == 2, proc.stdout + proc.stderr
     assert "strict" in proc.stderr
     assert not [n for n in outputs(skill) if n.endswith(".svg")]
 
