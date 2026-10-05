@@ -106,11 +106,12 @@ def test_task_brief_main_writes_outfile(tmp_path, capsys):
     assert str(out) in capsys.readouterr().out
 
 
-def test_task_brief_main_task_not_found_exit_3(tmp_path, capsys):
+def test_task_brief_main_task_not_found_exit_1(tmp_path, capsys):
+    """'Is there a Task 99?' is a question about existence: the answer no is exit 1, not 2/3."""
     plan = tmp_path / "plan.md"
     plan.write_text(PLAN, encoding="utf-8")
     out = tmp_path / "brief.md"
-    assert TB.main([str(plan), "99", str(out)]) == 3
+    assert TB.main([str(plan), "99", str(out)]) == 1
     assert "not found" in capsys.readouterr().err
     assert not out.exists() or out.read_text(encoding="utf-8") == ""
 

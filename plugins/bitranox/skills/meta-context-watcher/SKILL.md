@@ -56,6 +56,12 @@ a list is retyped, and it breaks ties within an origin, so it is not optional. I
 ranking key - see below, where reading it as one is a named failure. Closing an item is `- [x]` plus
 `| closed: <reason>`; the line stays. A SessionStart hook prints the top ranks with their age.
 
+That closing rule is the default, not an override: when a backlog file's own header states a
+different one ("a solved item is DELETED"), the header governs that file. Before deleting a line,
+ask git whether the file is tracked (`git ls-files --error-unmatch OPEN-WORK.md` exits 0 when it
+is): in an untracked or gitignored backlog a deleted line is gone for good, with nothing to diff it
+back from, so name what you deleted in your reply.
+
 **An item belongs in the `OPEN-WORK.md` of the repo whose code needs the change, not the repo you
 found it from.** A bug found in a sibling repo, a template, or a project that depends on this
 one goes into THAT repo's backlog, its line carried over unchanged with its first-raised date -
@@ -67,6 +73,12 @@ doing an application's work.
 
 **Rank in TENS** - 10, 20, 30. An insertion is then a new number instead of a renumbering of
 every line below it, which keeps a reorder out of the diff of an unrelated change.
+
+**A free rank is free over EVERY line of the file, closed `[x]` lines included.** A closed item
+keeps its number and the SessionStart listing shows open items only, so a number a closed line
+holds looks free; take it and "rank 40" names two items in every handover and commit after. Read
+the whole file before picking. The SessionStart block names any rank an open item shares with
+another line - give the open item a free number before citing it.
 
 **How rank is decided, in this order:**
 
@@ -147,7 +159,15 @@ goes for `size`: `size: unknown` is a usable line, an invented count is not.
    words. A request that lives only in the sentence they typed is one re-ask away from being lost,
    and they will not know to re-ask.
 
-3. **Write `handover.md` at the repo root, OVERWRITING whatever is there.** A stale handover from an
+3. **Copy the outgoing `handover.md` to `handover.prev.md` first, unless git already holds it
+   exactly.** Git holds it exactly when `git ls-files --error-unmatch handover.md` and
+   `git diff --quiet HEAD -- handover.md` both exit 0. In every other case - gitignored, never
+   added, or edited since its last commit - copy it, replacing any older copy, and keep the copy out
+   of commits (ignore it beside `handover.md`, or list it in `.git/info/exclude` where `handover.md`
+   is tracked). An overwrite is a one-way step: a rewrite that truncates the old lessons
+   mid-sentence leaves nothing showing it unless an earlier text survives to diff against. After
+   writing, diff the new file against that earlier text and account for every item that vanished.
+4. **Write `handover.md` at the repo root, OVERWRITING whatever is there.** A stale handover from an
    earlier session is superseded the moment you write yours - replace it wholesale, never append to
    it and never keep both. There is exactly one `handover.md`, and it describes one moment; two of
    them, or one with two moments in it, leaves the reader deciding which half is true. Commit it
@@ -155,19 +175,19 @@ goes for `size`: `size: unknown` is a usable line, an invented count is not.
    one file that is destroyed on purpose every time, so a dropped item can be recovered once
    somebody notices. Check first that neither carries a secret, an internal hostname or a private
    address, because a tracked file in a public repo publishes all three permanently.
-4. **End the file with its own expiry instruction:**
+5. **End the file with its own expiry instruction:**
 
    > Read this, then replace the first line with `# STALE - read <date>, work continued`. Do not
    > delete it - if this session ends badly it is the only record of where things stood.
 
-5. **Re-read it as the next session.** Any line the repo could have told them is a line to cut.
-6. **STOP. The handover is the LAST thing you do in this session.** Writing it ends the session's
+6. **Re-read it as the next session.** Any line the repo could have told them is a line to cut.
+7. **STOP. The handover is the LAST thing you do in this session.** Writing it ends the session's
    work. Do NOT start a new task, resume the one you were part-way through, or "just finish" the
    small thing first - not even the next action you have just written into the file. Every edit made
    after the handover is work the handover does not describe, so the next session inherits a file
    that is already wrong about the state it exists to report, which is worse than no handover at all.
    If the user asks for something new, write the handover, stop, and let them re-ask after the clear.
-7. **Make the `/clear` nudge the last line, then stop.** Say the handover is written, name the file,
+8. **Make the `/clear` nudge the last line, then stop.** Say the handover is written, name the file,
    and tell the user to type `/clear`. It is an instruction, not an invitation: "type `/clear` when
    you're ready" hands back a decision nobody asked them to make. You cannot run it yourself -
    built-in slash commands are not invocable by the model - and that is the half that goes missing
@@ -188,7 +208,7 @@ goes for `size`: `size: unknown` is a usable line, an invented count is not.
 
    Anything you genuinely owe the user goes BEFORE that line, in one sentence. A question they asked
    while you were writing is the case that matters: say you are not answering it in this session and
-   that they should re-ask after the clear, then send the nudge. Step 6 sends them back to re-ask,
+   that they should re-ask after the clear, then send the nudge. Step 7 sends them back to re-ask,
    which only works if they know the question was heard - dropping it in silence reads as ignored.
 
 ## When you are the one READING a handover
@@ -196,6 +216,13 @@ goes for `size`: `size: unknown` is a usable line, an invented count is not.
 Absorb it, then **mark it STALE in place**. Both alternatives fail: left untouched, the session
 after next reads a passed moment as current; deleted, the record is gone the instant it is read, so
 a crash mid-task leaves nothing saying where the work stood.
+
+The STALE line is a working-tree edit and stays one: never make a commit just for it (auto mode
+refuses an unrequested commit, and a standalone "mark stale" commit is noise). Where `handover.md`
+is tracked, the line goes into the next commit the user asks for, or is replaced by the next
+handover; where it is gitignored there is nothing to commit. Say in your reply that `handover.md`
+now carries an uncommitted STALE line, so the dirty tree has an owner instead of tripping the next
+gate or session.
 
 Never amend a stale handover to update it - write a NEW one and replace the file. An edited handover
 holds two moments with no way to tell them apart.
@@ -224,6 +251,9 @@ reads it from its own environment. A model that is neither known nor declared fa
 200k window that errs small on purpose. In one rule: family table first, then the launcher's
 declaration, then 200k - a known family always wins, so a globally exported declaration left over
 from another model cannot override a measured family window.
+
+Its warning about the overwrite asks git whether `handover.md` is tracked in the repo it fires in
+and says which case applies, because some repos commit the file and others ignore it.
 
 Declining is not permanent: the next ask waits until context has grown another tenth of the window,
 because a decline at 40% is "not yet" while 90% is a different question.

@@ -84,6 +84,7 @@ from __future__ import annotations
 import json
 import os
 import pathlib
+import subprocess
 import sys
 
 import self_improve_signals as sig
@@ -332,8 +333,64 @@ def due(tokens, limit, window, last_asked) -> bool:
     return tokens >= last_asked + max(1, int(window) // _RE_ASK_FRACTION)
 
 
-def _offer(detail) -> str:
-    return (
+#: git reads these before cwd, and a hook launched under a linked-worktree push inherits GIT_DIR: an
+#: inherited one would answer the tracking question below about some other repository.
+_GIT_SCOPE_VARS = ("GIT_DIR", "GIT_WORK_TREE", "GIT_INDEX_FILE", "GIT_OBJECT_DIRECTORY",
+                   "GIT_ALTERNATE_OBJECT_DIRECTORIES", "GIT_COMMON_DIR", "GIT_NAMESPACE",
+                   "GIT_PREFIX", "GIT_QUARANTINE_PATH")
+
+
+def _git(proj, *args):
+    """(returncode, stdout) of a read-only git call in `proj`. Raises OSError/SubprocessError."""
+    env = {k: v for k, v in os.environ.items() if k not in _GIT_SCOPE_VARS}
+    env["LC_ALL"] = "C"
+    done = subprocess.run(["git", *args], cwd=str(proj), env=env, capture_output=True,
+                          text=True, encoding="utf-8", errors="replace", timeout=3)
+    return done.returncode, done.stdout
+
+
+def handover_tracking(proj) -> str:
+    """Whether the handover.md a session would overwrite has earlier versions in git. IMPURE.
+
+    "tracked" (git holds its history), "untracked" (it exists but git has no copy: gitignored,
+    never added, or no repository at all), "absent" (nothing to overwrite), or "unknown" (git
+    could not be asked). It is a per-repo fact - some repos gitignore the file, others commit it -
+    so the offer tests it instead of asserting either. Never raises.
+    """
+    try:
+        rc, top = _git(proj, "rev-parse", "--show-toplevel")
+        if rc != 0:
+            return "untracked" if (pathlib.Path(proj) / "handover.md").exists() else "absent"
+        root = top.strip()
+        rc, _out = _git(root, "ls-files", "--error-unmatch", "--", "handover.md")
+        if rc == 0:
+            return "tracked"
+        return "untracked" if (pathlib.Path(root) / "handover.md").exists() else "absent"
+    except Exception:                         # noqa: BLE001 - a missing git must not wedge a turn
+        return "unknown"
+
+
+_OVERWRITE_WARNING = {
+    "tracked": (
+        "The handover is written by OVERWRITING the outgoing one. `handover.md` is tracked here, "
+        "so its earlier versions are in git history - but nobody diffs a handover against its "
+        "predecessor looking for what went missing, so carry anything still open into "
+        "`OPEN-WORK.md` before you overwrite it, not after."),
+    "untracked": (
+        "The handover is written by OVERWRITING the outgoing one, and git holds no copy of "
+        "`handover.md` here, so anything still open that you do not first carry into "
+        "`OPEN-WORK.md` is gone with no earlier version to recover it from. Reconcile before you "
+        "overwrite, not after."),
+    "unknown": (
+        "The handover is written by OVERWRITING the outgoing one, and whether git keeps its "
+        "earlier versions could not be checked here (`git ls-files --error-unmatch handover.md` "
+        "answers it). If it does not, anything still open that you do not first carry into "
+        "`OPEN-WORK.md` is gone for good. Reconcile before you overwrite, not after."),
+}
+
+
+def _offer(detail, tracking="unknown") -> str:
+    text = (
         "This session is carrying %(tokens)s tokens of context, past the %(limit)s at which a "
         "handover is worth writing (%(pct)s%% of a %(window)s window, %(source)s, capped at "
         "%(cap)s). Quality degrades well before the window fills, and the harness will not compact "
@@ -343,11 +400,9 @@ def _offer(detail) -> str:
         "invoke bitranox:meta-context-watcher, which says what the file must contain. If they "
         "decline, carry on - the next ask waits until context has grown another tenth of the "
         "window, so declining costs one interruption, not a stream of them."
-        "\n\n"
-        "The handover is written by OVERWRITING the outgoing one, and it is gitignored, so anything "
-        "still open that you do not first carry into `OPEN-WORK.md` is gone with no earlier version "
-        "to recover it from. Reconcile before you overwrite, not after."
     ) % {k: format(v, ",") if isinstance(v, int) and k != "pct" else v for k, v in detail.items()}
+    warning = _OVERWRITE_WARNING.get(tracking)
+    return text + "\n\n" + warning if warning else text
 
 
 def _misconfigured(detail) -> str:
@@ -432,7 +487,8 @@ def decide(event, cfg):
         return _misconfigured(detail)
     if state == "offer" and due(tokens, detail["limit"], window, asked_at(session)):
         mark_asked(session, tokens)
-        return _offer(detail)
+        # Asked only here, on the rare turn that offers, so an ordinary Stop never pays for git.
+        return _offer(detail, handover_tracking(proj))
     return None
 
 

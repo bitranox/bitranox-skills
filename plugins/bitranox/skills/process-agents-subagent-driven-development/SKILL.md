@@ -319,7 +319,19 @@ and is re-read on every later turn. Hand artifacts over as files:
 
 - **Task brief:** before dispatching an implementer, run this skill's
   `python3 "$CLAUDE_PLUGIN_ROOT/skills/process-agents-subagent-driven-development/scripts/task_brief.py" PLAN_FILE N` (from the repo under review)  -  it extracts the task's full text to a
-  uniquely named file and prints the path. Compose the dispatch so the
+  uniquely named file and prints the path. The brief opens with the plan's
+  `Global Constraints` section, verbatim: a constraint that names the
+  tasks it binds ("applies to Tasks 1, 2 and 6, so tests/test_launch.py is
+  in scope") lives there and not in the task, so without it the task's
+  Files list reads complete and is wrong. A plan that files constraints
+  under any other heading gets none of them carried: reconcile the brief's
+  Files list against those constraints yourself and forward each one that
+  names this task. Exit 1 means no such task; exit 2 with a list of
+  `line N:` headings means two headings share the id (a plan whose phases
+  restart numbering) - never dispatch the pair as one task: ask the human
+  which heading is meant, as for any plan contradiction, and re-run once
+  the plan gives each its own id.
+  Compose the dispatch so the
   brief stays the single source of requirements. Your dispatch should
   contain: (1) one line on where this task fits in the project; (2) the
   brief path, introduced as "read this first  -  it is your requirements,

@@ -77,6 +77,21 @@ Subagent (general-purpose):
     The controller can provide more context, re-dispatch with a more capable model,
     or break the task into smaller pieces.
 
+    ## Proving a Test Can Fail by Mutating Code
+
+    If you show RED by temporarily breaking source code rather than by writing
+    the test first, run the mutation through compuse-toolbox's mutation_arm
+    (`"$CLAUDE_PLUGIN_ROOT/skills/compuse-toolbox/scripts/mutation_arm.py"`,
+    launched with the project's own Python; it copies the file before the edit and restores it
+    in a `finally`), or copy the file into a directory you created with
+    `mktemp -d` for this run. Never restore from a `.orig` or any copy you did
+    not make in this run: subagents dispatched one after another share the
+    session's scratchpad, so a copy with the right name can be an earlier
+    agent's stale file, and a `cmp` against it proves only that you copied it
+    back. After restoring a file that was committed before you touched it,
+    `git diff --quiet HEAD -- <file>` must exit 0; if it does not, stop and
+    report it rather than restoring again.
+
     ## Before Reporting Back: Self-Review
 
     Review your work with fresh eyes. Ask yourself:

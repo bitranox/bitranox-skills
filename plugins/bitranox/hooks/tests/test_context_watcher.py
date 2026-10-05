@@ -14,6 +14,7 @@ threshold can never be crossed, which is indistinguishable from a watcher that w
 """
 
 import json
+import os
 import subprocess
 import sys
 import uuid
@@ -327,6 +328,103 @@ def test_the_misconfigured_message_says_which_knob_to_set():
     # told the reader to set it outright - and that stale text shipped live for 28 versions behind a
     # duplicate definition of this function.
     assert "derived from the model" in msg
+
+
+# ---------------------------------------------------------------- is handover.md in git here?
+# Whether the outgoing handover.md has an earlier version is a per-repo fact: some repos gitignore
+# it, others track it. The offer used to assert the gitignored case everywhere.
+
+def _git(cwd, *args):
+    subprocess.run(["git", "-c", "user.name=t", "-c", "user.email=t@t", *args], cwd=cwd,
+                   check=True, capture_output=True, env=_git_env())
+
+
+def _git_env():
+    return {k: v for k, v in os.environ.items() if not k.startswith("GIT_")}
+
+
+@pytest.fixture
+def repo(tmp_path, monkeypatch):
+    for name in W._GIT_SCOPE_VARS:
+        monkeypatch.delenv(name, raising=False)
+    root = tmp_path / "repo"
+    (root / "sub").mkdir(parents=True)
+    _git(root, "init", "-q")
+    return root
+
+
+def test_a_committed_handover_reads_as_tracked_even_from_a_subdirectory(repo):
+    (repo / "handover.md").write_bytes(b"# handover\n")
+    _git(repo, "add", "handover.md")
+    _git(repo, "commit", "-qm", "h")
+    assert W.handover_tracking(repo / "sub") == "tracked"
+
+
+def test_a_gitignored_handover_reads_as_untracked(repo):
+    (repo / ".gitignore").write_bytes(b"handover.md\n")
+    (repo / "handover.md").write_bytes(b"# handover\n")
+    assert W.handover_tracking(repo) == "untracked"
+
+
+def test_a_handover_never_added_reads_as_untracked(repo):
+    (repo / "handover.md").write_bytes(b"# handover\n")
+    assert W.handover_tracking(repo) == "untracked"
+
+
+def test_no_handover_at_all_reads_as_absent(repo):
+    assert W.handover_tracking(repo) == "absent"
+
+
+def test_outside_any_repo_an_existing_handover_has_no_history(tmp_path, monkeypatch):
+    loose = tmp_path / "loose"
+    loose.mkdir()
+    (loose / "handover.md").write_bytes(b"# handover\n")
+    monkeypatch.setenv("GIT_CEILING_DIRECTORIES", str(tmp_path))
+    assert W.handover_tracking(loose) == "untracked"
+
+
+def test_git_that_cannot_run_reads_as_unknown(repo, monkeypatch):
+    def no_git(*_a, **_k):
+        raise FileNotFoundError("git")
+    monkeypatch.setattr(W.subprocess, "run", no_git)
+    assert W.handover_tracking(repo) == "unknown"
+
+
+def _offer_text(tracking):
+    _s, detail = W.verdict(140_000, 200_000, 70, 400_000)
+    detail["source"] = "detected"
+    return W._offer(detail, tracking)
+
+
+def test_the_offer_does_not_claim_a_tracked_handover_is_unrecoverable():
+    msg = _offer_text("tracked")
+    assert "gitignored" not in msg and "no earlier version" not in msg
+    assert "git history" in msg and "OPEN-WORK.md" in msg
+
+
+def test_the_offer_warns_an_untracked_handover_has_no_earlier_version():
+    msg = _offer_text("untracked")
+    assert "no earlier version" in msg and "OPEN-WORK.md" in msg
+
+
+def test_the_offer_names_the_check_when_tracking_is_unknown():
+    msg = _offer_text("unknown")
+    assert "git ls-files --error-unmatch handover.md" in msg
+    assert "it is gitignored" not in msg
+
+
+def test_the_offer_skips_the_overwrite_warning_when_there_is_no_handover():
+    msg = _offer_text("absent")
+    assert "OVERWRITING" not in msg and "meta-context-watcher" in msg
+
+
+def test_decide_words_the_offer_for_the_repo_it_is_in(tmp_path, repo, session):
+    (repo / "handover.md").write_bytes(b"# handover\n")
+    _git(repo, "add", "handover.md")
+    _git(repo, "commit", "-qm", "h")
+    t = _transcript(tmp_path, _usage_line(cache_read=150_000))
+    reason = W.decide(_event(session, t, repo), CFG)
+    assert reason is not None and "git history" in reason
 
 
 def test_no_top_level_name_is_defined_twice():
