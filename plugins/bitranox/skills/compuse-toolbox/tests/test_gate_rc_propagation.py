@@ -85,3 +85,39 @@ class TestAZeroExitRefusalNeverPropagatesZero:
         rc = gate.main(["--gate", emits("running 0 tests"), "--gate", code(2),
                         "--log", str(tmp_path / "g.log")])
         assert rc == 1
+
+
+class TestTheRunnersOwnFailuresAreTwo:
+    """Wave D (NU-2): the wrapped command's code passes through; the RUNNER's own failures are 2."""
+
+    def test_a_gate_that_could_not_start_exits_2_not_127(self, tmp_path):
+        rc = gate.main(["--gate", "definitely-not-a-real-binary-xyz", "--log",
+                        str(tmp_path / "g.log")])
+        assert rc == 2, "a gate that never started could not run; 127 reads as its own verdict"
+
+    def test_a_gate_that_ran_and_exited_127_still_passes_it_through(self, tmp_path):
+        """Control: only a SPAWN failure is mapped, never a gate's own 127."""
+        rc = gate.main(["--gate", code(127), "--log", str(tmp_path / "g.log")])
+        assert rc == 127
+
+    def test_an_unstartable_gate_beside_a_red_one_is_still_2(self, tmp_path):
+        rc = gate.main(["--gate", code(1), "--gate", "definitely-not-a-real-binary-xyz",
+                        "--log", str(tmp_path / "g.log")])
+        assert rc == 2
+
+    def test_an_unwritable_log_exits_2_without_a_traceback(self, tmp_path, capsys):
+        blocker = tmp_path / "file"
+        blocker.write_bytes(b"x")
+        rc = gate.main(["--gate", code(0), "--log", str(blocker / "sub" / "g.log")])
+        err = capsys.readouterr().err
+        assert rc == 2
+        assert "Traceback" not in err and "log" in err
+
+    def test_a_crash_in_the_runner_exits_2(self, tmp_path, monkeypatch, capsys):
+        def boom(*_a, **_k):
+            raise RuntimeError("runner broke")
+        monkeypatch.setattr(gate, "run_gates", boom)
+        rc = gate.main(["--gate", code(0), "--log", str(tmp_path / "g.log")])
+        assert rc == 2
+        assert "runner broke" in capsys.readouterr().err
+

@@ -48,6 +48,19 @@ A malformed invocation - an empty gate (`--gate ""` or `-- ""`), an unclosed quo
 (which gate it labels is ambiguous) - is a usage error, exit 2, never a traceback. On Windows a bare `npm`/`yarn`/`pnpm` (a `.cmd` shim) that
 CreateProcess cannot find is retried through PATHEXT instead of reading as rc=127.
 
+Gates run WITHOUT a shell, so `cd sub && pytest` or `FOO=1 pytest` is not a gate. Say it with
+options instead: `--cwd DIR` and `--env K=V` (repeatable) apply to every gate and to `--then`;
+`--gate-cwd DIR` and `--gate-env K=V` written AFTER a --gate apply to that gate only and override
+the global ones. An env value is ADDED to the inherited environment, never a replacement for it.
+A missing directory or a malformed K=V is a usage error, exit 2.
+
+Exit codes: 0 every gate passed (or, with --then, the follow-up's own code); a red run exits the
+single failing gate's OWN code where that is unambiguous (a taxonomy code such as 2 survives),
+else 1; 2 when the runner itself could not do its job - a gate that could not be STARTED (not
+found, not executable; a gate that ran and exited 127 keeps its 127), a log it cannot write, a
+usage error, or a crash. Note the overlap: a gate's own 2 passes through as 2 too, and the report
+lines say which it was.
+
 Run (plain python3, NOT uv run: this jig declares no dependencies, and uv run puts its own
 ephemeral interpreter on the environment the CHILD gates inherit - measured, a gate shelling
 out to `python3 -m pytest` then died with `No module named pytest` and reported a false RED):
@@ -56,6 +69,7 @@ out to `python3 -m pytest` then died with `No module named pytest` and reported 
       --gate "pytest -q" --name "unit tests" \\
       --gate "ruff check src" \\
       --then "git push origin HEAD"
+  python3 scripts/gate.py --cwd sub/project --env PYTHONUTF8=1 --gate "python3 -m pytest -q"
 """
 from __future__ import annotations
 
@@ -74,6 +88,8 @@ import sys
 import tempfile
 from dataclasses import dataclass, field
 from pathlib import Path
+
+from _cli_envelope import run_guarded
 
 
 _NAME_WIDTH = 56                                                # keeps one report line readable
@@ -350,6 +366,8 @@ class GateResult:
     returncode: int
     summary_lines: list[str] = field(default_factory=list)
     test_count: int | None = None
+    started: bool = True
+    """False when the gate could not be spawned at all: the RUNNER failed, not the gate."""
 
     @property
     def ok(self) -> bool:
@@ -387,7 +405,27 @@ def resolve_argv0(argv: list[str], *, windows: bool = os.name == "nt", which=shu
     return [found, *argv[1:]] if found else list(argv)
 
 
-def _run_one(argv: list[str]) -> tuple[str, int]:
+@dataclass(frozen=True)
+class GateSettings:
+    """Where a gate runs and what it adds to the environment it inherits.
+
+    `env` holds only the ADDED variables: a subprocess `env=` replaces the whole environment, and
+    on Windows a lost SystemRoot kills the child with empty output, so the merge with os.environ
+    happens at the spawn and nowhere else.
+    """
+
+    cwd: str | None = None
+    env: tuple[tuple[str, str], ...] = ()
+
+    def over(self, base: "GateSettings") -> "GateSettings":
+        """These settings on top of `base`: a cwd replaces, env entries merge (these win)."""
+        return GateSettings(self.cwd or base.cwd, (*base.env, *self.env))
+
+    def child_env(self) -> dict[str, str] | None:
+        return {**os.environ, **dict(self.env)} if self.env else None
+
+
+def _run_one(argv: list[str], settings: GateSettings = GateSettings()) -> tuple[str, int]:
     """Run one gate; (combined output, exit status). Raises OSError when it cannot start.
 
     The PATHEXT lookup is a RETRY after CreateProcess could not find the name, never the first
@@ -395,26 +433,29 @@ def _run_one(argv: list[str]) -> tuple[str, int]:
     PATH, so resolving every name up front could pick a different `python` than it would.
     """
     try:
-        proc = _spawn(argv)
+        proc = _spawn(argv, settings)
     except FileNotFoundError:
         resolved = resolve_argv0(argv)
         if resolved == list(argv):
             raise
-        proc = _spawn(resolved)
+        proc = _spawn(resolved, settings)
     return (proc.stdout or "") + (proc.stderr or ""), proc.returncode
 
 
-def _spawn(argv: list[str]) -> subprocess.CompletedProcess[str]:
+def _spawn(argv: list[str], settings: GateSettings = GateSettings()
+           ) -> subprocess.CompletedProcess[str]:
     return subprocess.run(argv, capture_output=True, text=True, encoding="utf-8",
-                          errors="replace", check=False)
+                          errors="replace", check=False, cwd=settings.cwd,
+                          env=settings.child_env())
 
 
 def run_gates(gates, log_path, summary: str = "") -> GateReport:
     """Run `gates` in order, appending all output to `log_path`; return the real statuses.
 
-    `gates` is [(name, argv_list)]. argv is a LIST, never a shell string, so no quoting or
-    globbing surprises and no shell to swallow the status. `summary` is an optional regex;
-    matching lines from that gate's own output are kept for a compact report.
+    `gates` is [(name, argv_list)] or [(name, argv_list, GateSettings)]. argv is a LIST, never a
+    shell string, so no quoting or globbing surprises and no shell to swallow the status.
+    `summary` is an optional regex; matching lines from that gate's own output are kept for a
+    compact report.
     """
     log_path = Path(log_path)
     log_path.parent.mkdir(parents=True, exist_ok=True)
@@ -422,15 +463,18 @@ def run_gates(gates, log_path, summary: str = "") -> GateReport:
     results: list[GateResult] = []
 
     with log_path.open("a", encoding="utf-8") as log:
-        for name, argv in gates:
+        for name, argv, *rest in gates:
+            settings = rest[0] if rest else GateSettings()
             log.write(f"\n=== gate: {name} :: {' '.join(argv)} ===\n")
             log.flush()
+            started = True
             try:
-                out, rc = _run_one(argv)
+                out, rc = _run_one(argv, settings)
             except OSError as e:
                 # A missing/unrunnable binary is a FAILED gate, not a crash of the runner:
-                # the caller's follow-up must still be blocked.
-                out, rc = f"could not run {argv!r}: {e}\n", 127
+                # the caller's follow-up must still be blocked. 127 is what a shell reports for
+                # it, kept for the report line; the RUN exits 2, since the gate never ran.
+                out, rc, started = f"could not run {argv!r}: {e}\n", 127, False
             log.write(out)
             log.flush()
             # "\n" only: splitlines() also breaks on a form feed or U+2028 inside one output line
@@ -440,7 +484,8 @@ def run_gates(gates, log_path, summary: str = "") -> GateReport:
             # opened in append mode and may already hold earlier gates, so reading it back
             # would attribute a previous gate's tests to this one.
             results.append(GateResult(name=name, argv=list(argv), returncode=rc,
-                                      summary_lines=lines, test_count=observed_test_count(out)))
+                                      summary_lines=lines, test_count=observed_test_count(out),
+                                      started=started))
 
     return GateReport(results=results)
 
@@ -452,7 +497,8 @@ def format_report(report: GateReport, log_path) -> str:
         # The count is printed for EVERY recognised test run, not only the zero one: a reader
         # who never sees the number cannot notice it halving between two runs either.
         counted = "" if r.test_count is None else f" [{r.test_count} tests]"
-        out.append(f"  [{mark}] {r.name} (rc={r.returncode}){counted}")
+        unstarted = "" if r.started else ", could not start"
+        out.append(f"  [{mark}] {r.name} (rc={r.returncode}{unstarted}){counted}")
         if r.test_count == 0:
             out.append("         REFUSED: ran 0 tests. A filter matching nothing exits 0, so "
                        "this gate's status is not evidence that anything was checked.")
@@ -478,9 +524,14 @@ def red_status(report: GateReport) -> int:
     anyway (it ran zero tests). Handing back its 0 would report success for the single failure
     mode an exit code cannot express, which is the reason that refusal exists.
 
+    A gate that could not be STARTED makes the run 2 whatever else failed: the runner could not
+    do its job, and its 127 is a shell convention, not the gate's verdict.
+
     Note the overlap with argparse's usage exit of 2: a usage error prints argparse's message and
     no report at all, so the two stay distinguishable in the output though the code is shared.
     """
+    if any(not r.started for r in report.results):
+        return 2
     codes = {r.returncode for r in report.results if not r.ok}
     if len(codes) == 1 and 0 not in codes:
         return codes.pop()
@@ -499,7 +550,8 @@ def _usage_checked(parser: argparse.ArgumentParser, parse, value):
         raise                                                   # unreachable: error() exits
 
 
-_VALUED_OPTIONS = ("--gate", "--name", "--log", "--summary", "--then")
+_VALUED_OPTIONS = ("--gate", "--name", "--log", "--summary", "--then", "--cwd", "--env",
+                   "--gate-cwd", "--gate-env")
 """Every option main() declares that takes a value - _name_follows_positional must skip it."""
 
 
@@ -520,7 +572,9 @@ def _name_follows_positional(raw: list[str]) -> bool:
             return False
         if token.startswith("--"):
             flag = token.split("=", 1)[0]
-            matches = [opt for opt in valued if opt.startswith(flag)]
+            # An exact name wins over the prefixes it is itself a prefix of, as in argparse:
+            # `--gate` would otherwise also match `--gate-cwd` and read as ambiguous.
+            matches = [flag] if flag in valued else [opt for opt in valued if opt.startswith(flag)]
             if positional_is_nearest and matches == ["--name"]:
                 return True
             if matches == ["--gate"]:
@@ -543,7 +597,49 @@ def _tolerate_unencodable_stdout() -> None:
         pass
 
 
+def _env_pair(parser: argparse.ArgumentParser, option: str, text: str) -> tuple[str, str]:
+    key, sep, value = text.partition("=")
+    if not sep or not key or any(c.isspace() for c in key):
+        parser.error(f"{option} wants KEY=VALUE with a non-empty KEY, got {text!r}")
+    return key, value
+
+
+def _directory(parser: argparse.ArgumentParser, option: str, text: str) -> str:
+    if not os.path.isdir(text):
+        parser.error(f"{option} {text!r} is not an existing directory")
+    return text
+
+
+def gate_settings(parser: argparse.ArgumentParser, written) -> list[GateSettings]:
+    """One GateSettings per --gate, from the --gate-cwd / --gate-env written AFTER it.
+
+    Written order pairs them, as with --name: a setting written before any --gate has nothing to
+    apply to and is a usage error rather than a guess.
+    """
+    per_gate: list[GateSettings] = []
+    for option, value in written:
+        if option == "gate":
+            per_gate.append(GateSettings())
+            continue
+        if option not in ("gate_cwd", "gate_env"):
+            continue
+        flag = "--" + option.replace("_", "-")
+        if not per_gate:
+            parser.error(f"{flag} must be written after the --gate it applies to")
+        last = per_gate[-1]
+        if option == "gate_cwd":
+            per_gate[-1] = GateSettings(_directory(parser, flag, value), last.env)
+        else:
+            per_gate[-1] = GateSettings(last.cwd, (*last.env, _env_pair(parser, flag, value)))
+    return per_gate
+
+
 def main(argv=None) -> int:
+    """The CLI. A crash exits 2 (the runner could not run), never a traceback exiting 1."""
+    return run_guarded(_main, argv, command="gate", json_flags=())
+
+
+def _main(argv=None) -> int:
     _tolerate_unencodable_stdout()
     raw = list(sys.argv[1:] if argv is None else argv)
     p = argparse.ArgumentParser(description="run gates, keep their real exit status")
@@ -567,6 +663,17 @@ def main(argv=None) -> int:
                         "could not tell whose output was whose]")
     p.add_argument("--summary", default="", help="regex; matching output lines are shown per gate")
     p.add_argument("--then", default="", help="run ONLY if every gate passed")
+    p.add_argument("--cwd", default=None,
+                   help="run every gate (and --then) in this directory; gates have no shell, so "
+                        "this is how to say `cd DIR && ...`")
+    p.add_argument("--env", action="append", default=[], metavar="K=V",
+                   help="add K=V to every gate's (and --then's) environment (repeatable); added "
+                        "to the inherited environment, never a replacement for it")
+    p.add_argument("--gate-cwd", action=_WrittenOrder, default=None, metavar="DIR",
+                   help="the working directory of the --gate written BEFORE it (overrides --cwd)")
+    p.add_argument("--gate-env", action=_WrittenOrder, default=None, metavar="K=V",
+                   help="add K=V for the --gate written BEFORE it only (repeatable; wins over "
+                        "--env)")
     # NOT argparse.REMAINDER: it swallows every option that follows the first positional, so
     # `gate.py "pytest -q" --then "git push"` collapsed into ONE nonsense gate and failed
     # rc=127 naming the whole command line - a usage error wearing a broken-gate costume.
@@ -608,8 +715,13 @@ def main(argv=None) -> int:
         # `--gate A <B> --name x` means B. Neither reading is safe to guess.
         p.error("a --name written after the positional gate is ambiguous beside --gate: write "
                 "that gate as --gate too, or put its --name before the positional")
+    if args.cwd is not None:
+        _directory(p, "--cwd", args.cwd)
+    shared = GateSettings(args.cwd, tuple(_env_pair(p, "--env", e) for e in args.env))
+    per_gate = gate_settings(p, written)
+    naming = [(option, value) for option, value in written if option in ("gate", "name")]
     try:
-        pairs, leading = pair_names_with_gates(written, positional is not None)
+        pairs, leading = pair_names_with_gates(naming, positional is not None)
     except ValueError as exc:
         # A mispaired name is a USAGE error (exit 2), never a gate result: reporting it as a
         # red gate would be the misattribution this tool exists to prevent.
@@ -618,18 +730,24 @@ def main(argv=None) -> int:
     _usage_checked(p, re.compile, args.summary)
 
     gates = []
-    for explicit, spec in pairs:
+    for (explicit, spec), own in zip(pairs, per_gate):
         derived, gate_argv = _usage_checked(p, gate_spec, spec)
-        gates.append((explicit or derived, gate_argv))
+        gates.append((explicit or derived, gate_argv, own.over(shared)))
     if positional is not None:
         name, gate_argv = positional
-        gates.append((leading[0] if leading else name, gate_argv))
+        gates.append((leading[0] if leading else name, gate_argv, shared))
 
     # Resolved HERE, not as an argparse default: an argparse default is evaluated once at
     # parser-construction time, which would hand every gate run in one process the same file
     # and reintroduce the sharing this fixes one scope further in.
-    log_path = args.log or default_log_path()
-    report = run_gates(gates, log_path, args.summary)
+    try:
+        log_path = args.log or default_log_path()
+        report = run_gates(gates, log_path, args.summary)
+    except OSError as exc:
+        # The LOG, not a gate: run_gates turns a gate that cannot start into a red result, so an
+        # OSError reaching here is the runner unable to write where it was told to.
+        print(f"gate: cannot write the log {args.log or '(temp dir)'}: {exc}", file=sys.stderr)
+        return 2
     print(format_report(report, log_path))
     if not report.ok:
         return red_status(report)
@@ -643,7 +761,8 @@ def main(argv=None) -> int:
         # The child writes straight to the shared descriptor while print() sits in Python's
         # buffer, which is block-sized on a pipe - unflushed, the follow-up's output came FIRST.
         sys.stdout.flush()
-        return subprocess.run(args.then, shell=True, check=False).returncode
+        return subprocess.run(args.then, shell=True, check=False, cwd=shared.cwd,
+                              env=shared.child_env()).returncode
     return 0
 
 
