@@ -104,7 +104,8 @@ def test_the_hook_exits_zero_and_emits_context(tmp_path: Path) -> None:
     (tmp_path / ".venv").mkdir()
     event = {"tool_input": {"command": "pyright"}, "cwd": str(tmp_path)}
     r = subprocess.run(
-        [sys.executable, str(_HOOK)], input=json.dumps(event), capture_output=True, text=True, check=False
+        [sys.executable, str(_HOOK)], input=json.dumps(event), capture_output=True, text=True,
+        encoding="utf-8", check=False,
     )
     assert r.returncode == 0
     payload = json.loads(r.stdout)
@@ -115,7 +116,8 @@ def test_the_hook_exits_zero_and_emits_context(tmp_path: Path) -> None:
 def test_garbage_stdin_exits_zero_and_says_nothing() -> None:
     # A nudge must never wedge a turn, whatever it is handed.
     r = subprocess.run(
-        [sys.executable, str(_HOOK)], input="not json at all", capture_output=True, text=True, check=False
+        [sys.executable, str(_HOOK)], input="not json at all", capture_output=True, text=True,
+        encoding="utf-8", check=False,
     )
     assert r.returncode == 0
     assert r.stdout.strip() == ""
@@ -233,7 +235,8 @@ def test_the_hook_reads_tool_name_for_powershell(tmp_path):
         "cwd": str(tmp_path),
     }
     r = subprocess.run(
-        [sys.executable, str(_HOOK)], input=json.dumps(event), capture_output=True, text=True, check=False
+        [sys.executable, str(_HOOK)], input=json.dumps(event), capture_output=True, text=True,
+        encoding="utf-8", check=False,
     )
     assert r.returncode == 0
     assert "pyright" in json.loads(r.stdout)["hookSpecificOutput"]["additionalContext"]
@@ -256,3 +259,77 @@ class _UnreadableTree:
 def test_an_unreadable_tree_is_silent_rather_than_raising():
     statements = mod._tokens("pyright --outputjson")
     assert mod.pyright_without_pinned_interpreter(statements, _UnreadableTree()) is False
+
+
+# --- grep -c ... || echo 0 (contrib #1) -----------------------------------------------------------
+# grep -c PRINTS 0 and EXITS 1 when nothing matches, so the fallback adds a second 0. Corpus replay:
+# 29 firings in 103,932 shell commands, and 23 of those outputs visibly carry the doubled "0\n0".
+
+
+@pytest.mark.parametrize("command", [
+    'n=$(grep -c "x" f.txt || echo 0)',
+    "n=$(grep -c 'x' f.txt 2>/dev/null || echo 0); [ \"$n\" -gt 0 ]",
+    'echo "$f: $(grep -c 141 "$f" 2>/dev/null || echo 0)"',
+    "n=$(grep --count x f || echo '0')",
+    "n=$(grep -ic x f || echo 0)",
+    "cat f | grep -c x || echo 0",
+])
+def test_grep_count_with_an_echo_0_fallback_is_flagged(command, tmp_path):
+    notice = mod.build_notice(command, tmp_path)
+    assert notice is not None and "0\\n0" in notice
+
+
+@pytest.mark.parametrize("command", [
+    "n=$(grep -c x f || true); n=${n:-0}",            # the prescribed form
+    "grep -c x f || echo none",                       # a different fallback value
+    "grep -l x f || echo 0",                          # not a count
+    "grep -c x f | head -1 || echo 0",                # the fallback reads head's status
+    "cat > notes.md <<'EOF'\nn=$(grep -c x f || echo 0)\nEOF",  # heredoc body is data
+])
+def test_grep_count_shapes_that_cannot_double_are_silent(command, tmp_path):
+    assert mod.build_notice(command, tmp_path) is None
+
+
+def test_a_count_inside_a_quoted_remote_command_is_still_flagged(tmp_path):
+    """A single-quoted command line is CODE for the shell it is handed to. 5 of 29 replayed
+    firings were exactly this, and a quote-aware view dropped every one of them."""
+    command = "ssh host 'for f in /var/log/*.log; do n=$(grep -c TPM \"$f\" || echo 0); done'"
+    assert mod.build_notice(command, tmp_path) is not None
+
+
+# --- a success label on a command whose exit status does not encode it (contrib #2) ---------------
+# Corpus replay: 323 `<cmd> && echo <state word>` matches; 249 were reading hints such as
+# "(no output = clean)" and are left alone, 74 were bare claims, several printed CLEAN directly
+# under ` M` lines.
+
+
+@pytest.mark.parametrize("command", [
+    'git status --porcelain && echo "TREE CLEAN"',
+    "git status --porcelain && echo CLEAN",
+    "cd repo && git status --short && echo clean",
+    'git -C /r diff --stat && echo "tree identical"',
+    'git log origin/main..HEAD --oneline && echo "PUSHED-CLEAN"',
+    'git ls-files docs/x.md && echo TRACKED',
+    "find . -name '*.orig' && echo FOUND",
+    "gh run list --commit abc && echo OK",
+])
+def test_a_label_the_exit_status_cannot_vouch_for_is_flagged(command, tmp_path):
+    notice = mod.build_notice(command, tmp_path)
+    assert notice is not None and "exits 0" in notice
+
+
+@pytest.mark.parametrize("command", [
+    'git status --porcelain && echo "(no output = clean)"',   # a reading hint, not a claim
+    'git status --porcelain && echo "--- (empty above = clean) ---"',
+    "git diff --quiet && echo CLEAN",                        # --quiet encodes it
+    "git diff --exit-code && echo SAME",
+    "git ls-files --error-unmatch x && echo TRACKED",
+    "git status --porcelain | grep -q . && echo DIRTY",      # grep -q decides
+    'test -z "$(git status --porcelain)" && echo CLEAN',
+    "git commit -m x && echo OK",                            # commit's status is the claim
+    "echo 'git status && echo CLEAN'",                       # quoted data
+    "git status --porcelain && echo CLEAN-CHECK-DONE",       # a progress marker, not a claim
+    'git log -3 -- gone.py || echo "path not found"',        # git log errors on a bad path
+])
+def test_labels_the_status_does_vouch_for_or_that_only_explain_are_silent(command, tmp_path):
+    assert mod.build_notice(command, tmp_path) is None
