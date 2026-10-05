@@ -636,6 +636,158 @@ def test_skill_review_rejects_unchecked_boxes(tmp_path):
     assert fails and "unchecked" in fails[0]
 
 
+# --------------------------------------------------------------------------
+# Table-padding waiver: a SKILL.md change that only re-pads tables needs no checklist
+# --------------------------------------------------------------------------
+#
+# The reformat-md-tables hook rewrites a non-canonical table in every fresh worktree, and the
+# checklist requirement then fires for a skill nobody edited. A re-pad changes nothing a reader or
+# the router sees, so it is waived - but only when the gate PROVES it, line by line, against
+# origin/master. Every test below that expects a refusal is a control for that proof.
+
+_REAL_ROOT = Path(RG.__file__).resolve().parents[3]
+
+PAD_ORIG = """---
+name: alpha
+description: Use when testing alpha widgets fail
+---
+
+# alpha
+
+| Mistake | Fix |
+|---|:---|
+| a long cell here | short |
+| b | the fix |
+
+Prose line.
+
+```text
+| x | y |
+|---|---|
+```
+"""
+
+PAD_NEW = PAD_ORIG.replace(
+    "| Mistake | Fix |\n|---|:---|\n| a long cell here | short |\n| b | the fix |\n",
+    "| Mistake          | Fix     |\n"
+    "|------------------|:--------|\n"
+    "| a long cell here | short   |\n"
+    "| b                | the fix |\n",
+)
+
+
+def _tool():
+    tool = RG._table_checker(_REAL_ROOT)
+    assert tool is not None, "the shipped reformat_tables.py must load"
+    return tool
+
+
+def _skill_with_formatter(root, text):
+    make_repo(root)
+    tool_dir = "plugins/bitranox/skills/docs-md-table-formatting"
+    (root / tool_dir).mkdir(parents=True)
+    shutil.copy(_REAL_ROOT / tool_dir / "reformat_tables.py", root / tool_dir / "reformat_tables.py")
+    write(root / "plugins/bitranox/skills/alpha/SKILL.md", text)
+    return ["plugins/bitranox/skills/alpha/SKILL.md"]
+
+
+def test_the_fixture_re_pad_is_what_the_formatter_writes(tmp_path):
+    # Control for every test below: PAD_NEW is canonical and PAD_ORIG is not, by the real tool.
+    _skill_with_formatter(tmp_path, PAD_NEW)
+    tool = _tool()
+    assert tool.reformat_file(tmp_path / "plugins/bitranox/skills/alpha/SKILL.md", check_only=True) is False
+    write(tmp_path / "plugins/bitranox/skills/alpha/SKILL.md", PAD_ORIG)
+    assert tool.reformat_file(tmp_path / "plugins/bitranox/skills/alpha/SKILL.md", check_only=True) is True
+
+
+def test_a_pure_table_re_pad_is_padding_only():
+    assert RG.table_padding_problem(PAD_ORIG, PAD_NEW, _tool()) is None
+
+
+def test_identical_text_is_padding_only():
+    assert RG.table_padding_problem(PAD_ORIG, PAD_ORIG, _tool()) is None
+
+
+@pytest.mark.parametrize("old,new,reason", [
+    # A changed cell is content, however small: the control the user's decision asked for.
+    (PAD_ORIG, PAD_NEW.replace("| b                |", "| c                |"), "cell"),
+    # A cell whose words stay but whose inner spacing changes still renders differently.
+    (PAD_ORIG, PAD_NEW.replace("| the fix |", "| the  fix|"), "cell"),
+    # Alignment is rendering: a dropped colon moves the column.
+    (PAD_ORIG, PAD_NEW.replace("|:--------|", "|---------|"), "alignment"),
+    # A prose line is not a table row, padded or not.
+    (PAD_ORIG, PAD_NEW.replace("Prose line.", "Prose  line."), "not a table row"),
+    # A row moved into a blockquote or an indent changes the document's structure.
+    (PAD_ORIG, PAD_NEW.replace("| b                |", "> | b              |"), "prefix"),
+    # A table inside a non-markdown fence is literal text, so its spacing IS what the reader sees.
+    (PAD_ORIG, PAD_NEW.replace("| x | y |", "| x   | y |"), "not a table row"),
+    # An added row changes the line count.
+    (PAD_ORIG, PAD_NEW.replace("| b                | the fix |\n",
+                               "| b                | the fix |\n| c                | more    |\n"),
+     "line count"),
+    # Front matter is YAML the router reads, never a table, even when a line looks like a row.
+    (PAD_ORIG.replace("---\n\n# alpha", "notes: |\n  | k | v |\n---\n\n# alpha"),
+     PAD_NEW.replace("---\n\n# alpha", "notes: |\n  | k  | v |\n---\n\n# alpha"),
+     "not a table row"),
+], ids=["changed-cell", "inner-spacing", "alignment", "prose-line", "blockquote-prefix",
+        "fenced-literal-table", "added-row", "front-matter-row"])
+def test_anything_but_padding_is_reported_with_its_reason(old, new, reason):
+    problem = RG.table_padding_problem(old, new, _tool())
+    assert problem is not None and reason in problem, problem
+
+
+def test_a_padded_change_is_waived_by_the_skill_review(tmp_path):
+    changed = _skill_with_formatter(tmp_path, PAD_NEW)
+    assert RG.skill_review_failures(tmp_path, changed, read_original=lambda rel: PAD_ORIG) == []
+
+
+def test_a_changed_cell_still_demands_the_checklist_and_says_why(tmp_path):
+    changed = _skill_with_formatter(tmp_path, PAD_NEW.replace("| short   |", "| shorter |"))
+    fails = RG.skill_review_failures(tmp_path, changed, read_original=lambda rel: PAD_ORIG)
+    assert len(fails) == 1
+    assert "checklist" in fails[0] and "cell" in fails[0]
+
+
+def test_a_re_pad_that_is_still_not_canonical_is_not_waived(tmp_path):
+    # Padding-only against the original, yet not what the formatter writes: the hook would
+    # rewrite it again in the next worktree, so it fixes nothing and is not the waived case.
+    half = PAD_ORIG.replace("| b | the fix |", "| b  | the fix |")
+    changed = _skill_with_formatter(tmp_path, half)
+    fails = RG.skill_review_failures(tmp_path, changed, read_original=lambda rel: PAD_ORIG)
+    assert len(fails) == 1 and "canonical" in fails[0]
+
+
+def test_a_new_skill_with_no_original_is_not_waived(tmp_path):
+    changed = _skill_with_formatter(tmp_path, PAD_NEW)
+    fails = RG.skill_review_failures(tmp_path, changed, read_original=lambda rel: None)
+    assert len(fails) == 1 and "origin/master" in fails[0]
+
+
+def test_without_the_formatter_nothing_is_waived(tmp_path):
+    make_repo(tmp_path)
+    write(tmp_path / "plugins/bitranox/skills/alpha/SKILL.md", PAD_NEW)
+    fails = RG.skill_review_failures(tmp_path, ["plugins/bitranox/skills/alpha/SKILL.md"],
+                                     read_original=lambda rel: PAD_ORIG)
+    assert len(fails) == 1 and "checklist" in fails[0]
+
+
+def test_the_waiver_reads_origin_master_through_the_real_entry_point(tmp_path):
+    """End to end through check_skill_review: the default reader is git, not the seam."""
+    _skill_with_formatter(tmp_path, PAD_ORIG)
+    _g(tmp_path, "init", "-q", ".")
+    _g(tmp_path, "add", "-A")
+    _g(tmp_path, "commit", "-qm", "base")
+    _g(tmp_path, "update-ref", "refs/remotes/origin/master", "HEAD")
+    skill = tmp_path / "plugins/bitranox/skills/alpha/SKILL.md"
+
+    write(skill, PAD_NEW)
+    assert RG.check_skill_review(tmp_path) == []
+
+    write(skill, PAD_NEW.replace("| short   |", "| shorter |"))  # control: same route, one cell
+    fails = RG.check_skill_review(tmp_path)
+    assert len(fails) == 1 and "cell" in fails[0]
+
+
 def test_frontmatter_gate_sweeps_skills_the_change_never_touched(tmp_path):
     """Changed-only would reproduce the blind spot this check exists to close: the defects that
     prompted it survived precisely because nothing ever swept the whole set."""
@@ -760,6 +912,38 @@ def test_a_multi_line_self_install_blockquote_is_dropped_whole():
     assert "One paragraph of content." in normalised
 
 
+def test_only_a_trailing_parenthetical_on_a_hash_line_is_erased_not_a_renamed_h1():
+    """Pins the rule CLAUDE.md states: the H1's TEXT must match its twin verbatim.
+
+    A mirror author who reads "the name echoed in the H1" renames the H1 to the skill's own
+    name, and the gate then reports drift. What is erased is a trailing parenthetical, on
+    every `# ` line and whatever it holds; anything else on that line is content.
+    """
+    base = "---\nname: a\n---\n\n# Doing it (a)\n\nbody\n\n```bash\n# install it (optional)\n```\n"
+    same = RG.normalise_mirror(base)
+
+    assert RG.normalise_mirror(base.replace("# Doing it (a)", "# b")) != same
+    assert RG.normalise_mirror(base.replace(" (a)", "")) != same
+    assert RG.normalise_mirror(base.replace("Doing it (a)", "Done it (a)")) != same
+    assert RG.normalise_mirror(base.replace("(a)", "(any words at all)")) == same
+    assert RG.normalise_mirror(base.replace("(optional)", "(required)")) == same
+    assert RG.normalise_mirror(base.replace("body", "BODY")) != same  # control: content is drift
+
+
+def test_the_drift_message_names_the_h1_divergence_as_the_code_applies_it(tmp_path, monkeypatch):
+    public = tmp_path / "public"
+    root = public / "KI" / "bitranox-skills"
+    write(root / "plugins" / "bitranox" / "skills" / "coding-python-thing" / "SKILL.md", MIRROR_BODY)
+    write(public / "libs" / "thing" / "skills" / "python-thing" / "SKILL.md",
+          TWIN_BODY.replace("One paragraph", "A DIFFERENT paragraph"))
+    monkeypatch.setitem(RG.MIRRORED_SKILLS, "coding-python-thing", "libs/thing/skills/python-thing")
+
+    fails = RG.mirror_failures(root, {"coding-python-thing"})
+
+    assert "a trailing `(<name>)` on the H1" in fails[0]
+    assert "name/H1/self-install" not in fails[0]
+
+
 def test_a_blockquote_that_is_not_the_self_install_note_is_kept() -> None:
     quoted = TWIN_BODY.replace("> The `thing` repo", "> A quote worth keeping").replace(
         "> anywhere with `/plugin marketplace add bitranox/thing` then `/plugin install thing`.\n", ""
@@ -772,7 +956,8 @@ def test_changed_content_is_reported_as_drift(tmp_path, monkeypatch):
     public = tmp_path / "public"
     root = public / "KI" / "bitranox-skills"
     write(root / "plugins" / "bitranox" / "skills" / "coding-python-thing" / "SKILL.md", MIRROR_BODY)
-    write(public / "libs" / "thing" / "skills" / "python-thing" / "SKILL.md", TWIN_BODY.replace("One paragraph", "A DIFFERENT paragraph"))
+    write(public / "libs" / "thing" / "skills" / "python-thing" / "SKILL.md",
+          TWIN_BODY.replace("One paragraph", "A DIFFERENT paragraph"))
     monkeypatch.setitem(RG.MIRRORED_SKILLS, "coding-python-thing", "libs/thing/skills/python-thing")
 
     fails = RG.mirror_failures(root, {"coding-python-thing"})
@@ -1010,7 +1195,8 @@ def test_every_mirrored_entry_names_a_real_marketplace_skill():
 def _mirror_tree(tmp_path, twin_body=TWIN_BODY):
     """A public/ tree with the marketplace and one tool repo that mirrors a skill."""
     public = tmp_path / "public"
-    write(public / "KI" / "bitranox-skills" / "plugins" / "bitranox" / "skills" / "coding-python-thing" / "SKILL.md", MIRROR_BODY)
+    write(public / "KI" / "bitranox-skills" / "plugins" / "bitranox" / "skills" / "coding-python-thing" / "SKILL.md",
+          MIRROR_BODY)
     write(public / "libs" / "thing" / "skills" / "python-thing" / "SKILL.md", twin_body)
     return public
 
@@ -1089,7 +1275,8 @@ def test_a_repo_skill_with_its_own_description_is_not_a_mirror(tmp_path, monkeyp
     # Matching on the description is what makes this reliable; an unrelated skill that
     # merely lives in a tool repo must not be reported as somebody's twin.
     public = _mirror_tree(tmp_path)
-    write(public / "libs" / "other" / "skills" / "unrelated" / "SKILL.md", "---\nname: unrelated\ndescription: Use when doing something else entirely.\n---\n")
+    write(public / "libs" / "other" / "skills" / "unrelated" / "SKILL.md",
+          "---\nname: unrelated\ndescription: Use when doing something else entirely.\n---\n")
     monkeypatch.setattr(RG, "MIRRORED_SKILLS", {"coding-python-thing": "libs/thing/skills/python-thing"})
 
     assert RG.unlisted_mirrors(public / "KI" / "bitranox-skills", public) == []
@@ -1124,7 +1311,8 @@ def test_a_commit_in_a_tool_repo_blocks_when_its_mirror_has_drifted(tmp_path, mo
     # return 0 in any repo that is not the marketplace - so editing a mirrored skill in
     # its OWN repo was unguarded. Measured twice in practice: the network-probe mirror
     # described a subsystem as absent two releases after it shipped.
-    public = _mirror_tree(tmp_path, twin_body=TWIN_BODY.replace("One paragraph of content.", "DRIFTED: a capability the mirror never heard of."))
+    public = _mirror_tree(tmp_path, twin_body=TWIN_BODY.replace(
+        "One paragraph of content.", "DRIFTED: a capability the mirror never heard of."))
     monkeypatch.setattr(RG, "MIRRORED_SKILLS", {"coding-python-thing": "libs/thing/skills/python-thing"})
     _tool_repo_commit(monkeypatch, public, public / "libs" / "thing")
 
@@ -1157,7 +1345,8 @@ def test_a_repo_that_ships_no_mirrored_skill_is_still_silent(tmp_path, monkeypat
 
 
 def test_a_non_commit_command_in_a_tool_repo_is_not_checked(tmp_path, monkeypatch):
-    public = _mirror_tree(tmp_path, twin_body=TWIN_BODY.replace("One paragraph of content.", "DRIFTED: a capability the mirror never heard of."))
+    public = _mirror_tree(tmp_path, twin_body=TWIN_BODY.replace(
+        "One paragraph of content.", "DRIFTED: a capability the mirror never heard of."))
     monkeypatch.setattr(RG, "MIRRORED_SKILLS", {"coding-python-thing": "libs/thing/skills/python-thing"})
     _tool_repo_commit(monkeypatch, public, public / "libs" / "thing", command="git status")
 

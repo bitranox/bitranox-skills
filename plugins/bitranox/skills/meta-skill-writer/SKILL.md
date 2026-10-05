@@ -785,10 +785,10 @@ Edit skill without testing? Same violation.
 - Delete means delete
 
 Every item on that list is a JUDGEMENT - "this one is small enough to skip". The list forbids the
-judgement, not the existence of a carve-out, and there is exactly one carve-out, decided by a proof
-you can run rather than by how the change feels:
+judgement, not the existence of a carve-out, and there are exactly two carve-outs, each decided by
+a proof you can run rather than by how the change feels:
 
-**One named exception, defined by a mechanical proof rather than by judgement: a SYNTAX-ONLY
+**The first named exception, defined by a mechanical proof rather than by judgement: a SYNTAX-ONLY
 FRONT-MATTER REPAIR.** A change that makes the front matter parse while altering nothing a reader
 or the router sees is tested by a parser and the derived artifacts, not by a pressure scenario.
 There is no behaviour to watch an agent get wrong, so a RED run has nothing to fail on - the RED
@@ -807,6 +807,27 @@ Fail any one of the three and the Iron Law applies unchanged. The byte-identical
 the test; "the change is obviously inert" is not, and neither is a unit test you wrote yourself.
 Rewording a description to say something DIFFERENT is never this exception, however small the edit
 looks - that changes what the router matches, which is behaviour.
+
+**The second named exception: WHITESPACE-ONLY TABLE RE-PADDING, proven cell by cell.** A change
+that only re-pads markdown tables - the output of a table formatter - renders the same table and
+leaves the router's input untouched, so there is again nothing for a RED run to fail on. It
+applies ONLY when all four hold:
+
+- the line count is unchanged;
+- every changed line is a table row on both sides - not in the front matter, a non-markdown code
+  fence or an indented code block - with the same indentation and blockquote prefix;
+- every cell is equal after stripping its surrounding whitespace, and every separator cell keeps
+  its alignment colons;
+- the result is canonical: the formatter's own check reports nothing left to change.
+
+Where the repository's commit gate proves all four itself and then waives the review artifact,
+that proof is the record; a gate that proves only some of them is not. Anywhere else the review
+artifact states each one, under the same rule
+as the first exception: conditions true but never written down do not count. A re-pad that also
+fixes one word, a cell whose inner spacing changed, or a table inside a code fence is not this
+exception, and neither is a re-pad that leaves the table still not canonical - the Iron Law
+applies unchanged, to the whole change. To keep the exception for the re-pad, commit it on its
+own and make the word fix a separate, ordinary edit.
 
 **REQUIRED BACKGROUND:** The bitranox:process-test-driven-development skill explains why this matters. Same principles apply to documentation.
 
@@ -956,6 +977,14 @@ The skill-edit guard denies SKILL.md edits without a fresh receipt - holding one
 procedure was ENTERED, not merely listed. A marketplace repo may additionally require a committed
 review artifact (a `.skillwriter/checklist-<date>.md` next to the SKILL.md, all boxes checked)
 co-changed with any SKILL.md change - its commit gate enforces that; see the repo's CONTRIBUTING.
+
+**Last step - close the receipt when the procedure is finished** (the change and its review
+artifact committed): run
+`bash <plugin>/hooks/run-python.sh <plugin>/hooks/skill_receipt.py end meta-skill-writer`.
+It removes this session's receipt, so a later SKILL.md edit in the same session is denied until the
+procedure is entered again, instead of riding on this receipt until it expires (8 hours after
+`start`).
+`skill_receipt.py check meta-skill-writer` reports whether this session holds a fresh one.
 
 **Before writing any skill, plan the work.** Use your task/todo tooling (e.g. TodoWrite) to build a task list, then execute it step by step. This prevents skipping steps and makes progress visible.
 
@@ -1288,6 +1317,8 @@ Deploying untested skills = deploying untested code. It's a violation of quality
 - [ ] Push to remote (if configured): `git push`
 - [ ] **Verify discoverability:** Start a fresh Claude session, describe a problem the skill should match, and confirm Claude selects and loads the skill
 - [ ] Consider contributing back via PR (if broadly useful)
+- [ ] Close the session receipt: `skill_receipt.py end meta-skill-writer` (see "Last step" under
+      Planning Before You Start)
 
 ## Discovery Workflow
 
