@@ -17,7 +17,9 @@ Usage:
     migrate_memory.py --restore <backup-dir>       # undo an --apply run from the dir it printed
 
 The backup is taken before any write and covers everything the run can write: the anchor's
-central store, each level's CLAUDE.local.md and CLAUDE.md, and the repo .gitignore files. It lives
+central store, each level's CLAUDE.local.md and CLAUDE.md, and the repo's git exclude file
+(.git/info/exclude), where the ignore lines for the memory wiring go - the tracked .gitignore is
+never written. It lives
 under ~/.claude/self-improve-audit/backups/migrate-<ts>-<random>/ with a manifest.json;
 `--restore` puts each path back byte for byte and removes what the run created. It restores the
 state AS OF THE BACKUP, so anything written to those paths after the run is lost too.
@@ -314,18 +316,29 @@ def _git(proj, *args):
         return 1, ""
 
 
+def _ignore_targets(proj):
+    """(dir to ask git from, pattern) for every piece of memory wiring migrating `proj` creates:
+    the level's CLAUDE.local.md, the anchor's live store and the level's retired curated dir."""
+    anchor = str(ME._anchor(proj))  # noqa: SLF001 - the engine's anchor resolution
+    return ((proj, "CLAUDE.local.md"),
+            (anchor, sig.MEMORY_DIRNAME + "/"),
+            (proj, sig.CURATED_DIRNAME + "/"))
+
+
 def ensure_gitignore(proj):
-    """Ensure the memory wiring - the LIVE store (`.claude-memory/`), the legacy store dir, and
-    `CLAUDE.local.md` - is gitignored in the repo owning `proj`. Honors `track_private` (if set,
-    the user WANTS it tracked -> do nothing). Checks: non-git dir -> skip; already ignored ->
-    no-op; a store already TRACKED -> WARN (a possible existing leak) and do NOT append; else
-    append the ignore lines to the repo-root `.gitignore`. Returns a status string. Fail-open."""
+    """Ensure git ignores the memory wiring - the LIVE store (`.claude-memory/`), the legacy store
+    dir, and `CLAUDE.local.md` - in the repo owning `proj`. Honors `track_private` (if set, the
+    user WANTS it tracked -> do nothing). Checks: non-git dir -> skip; a store already TRACKED ->
+    WARN (a possible existing leak) and add nothing; else hand each pattern to the shared
+    `ensure_gitignored`, which asks git first and writes only the repo's own exclude file
+    (`.git/info/exclude`). The tracked `.gitignore` is never opened: memory wiring never touches
+    tracked git, and an ignore line there is one a public repo then publishes. Returns a status
+    string. Fail-open."""
     if sig.load_config().get("track_private"):
         return "track_private: left tracked"
     rc, top = _git(proj, "rev-parse", "--show-toplevel")
     if rc != 0 or not top:
         return "not a git repo: skipped"
-    root = Path(top)
     # The live store sits at the ANCHOR, usually above `proj`: a pathspec relative to `proj` looked
     # for `<proj>/.claude-memory/`, which never exists below the tree top, so a committed store
     # was never reported. Absolute pathspecs name the real dirs.
@@ -333,31 +346,16 @@ def ensure_gitignore(proj):
               sig.claude_memory_dir(proj))
     for store in stores:
         if _git(proj, "ls-files", "--error-unmatch", "--", str(store))[0] == 0:
-            return "WARNING: %s is TRACKED (possible existing leak) - not modifying .gitignore" % store
-    gi = root / ".gitignore"
-    try:
-        raw = gi.read_bytes() if gi.is_file() else b""
-        # read_bytes/write_bytes do no newline translation at all, unlike the platform-dependent
-        # read_text/write_text pair this replaces, which silently mangled a Windows-authored
-        # file's CRLF line endings into the host's own os.linesep on the way through. A file whose
-        # bytes are not valid UTF-8 is still left exactly alone (OSError/UnicodeDecodeError both
-        # land on "gitignore write failed" below), the same refusal as before.
-        nl = "\r\n" if b"\r\n" in raw else "\n"
-        cur = raw.decode("utf-8").replace("\r\n", "\n")
-        have = set(cur.splitlines())
-        wanted = [sig.MEMORY_DIRNAME + "/", sig.CURATED_DIRNAME + "/", "CLAUDE.local.md"]
-        add = [w for w in wanted if w not in have and w.rstrip("/") not in have]
-        if not add:
-            return "already ignored"
-        new_text = ((cur.rstrip("\n") + "\n" if cur.strip() else "")
-                   + "# bitranox curated self-learning memory (local wiring; engine-written)\n"
-                   + "\n".join(add) + "\n")
-        if nl == "\r\n":
-            new_text = new_text.replace("\n", "\r\n")
-        gi.write_bytes(new_text.encode("utf-8"))
-        return "gitignored"
-    except (OSError, UnicodeDecodeError):
-        return "gitignore write failed"
+            return "WARNING: %s is TRACKED (possible existing leak) - not adding ignore lines" % store
+    by_dir = {}                       # one call per dir: the helper writes one header per call
+    for where, pattern in _ignore_targets(proj):
+        by_dir.setdefault(where, []).append(pattern)
+    unsure = [p for where, patterns in by_dir.items()
+              if not sig.ensure_gitignored(where, *patterns) for p in patterns]
+    if unsure:
+        return ("could not make sure git ignores %s (git did not answer, or its exclude file "
+                "could not be read or written)" % ", ".join(unsure))
+    return "gitignored"
 
 
 # ---- migrate one store -------------------------------------------------------------------------
@@ -444,7 +442,8 @@ def migrate_store(slug, dry_run=True, scope_default="", redirect=None, backup_ru
 # ---- backup + restore: everything the migration WRITES, replayable from a manifest -------------
 # The migration writes through the engine: the anchor's central store (bodies, receipts, archive),
 # the level's CLAUDE.local.md, the level's CLAUDE.md (a legacy scope block is moved out of it), and
-# the repo .gitignore of the level and of the anchor. The backup copies each of those as it was,
+# the git exclude file (.git/info/exclude) of the level's and the anchor's repo - never the tracked
+# .gitignore, which the migration does not open. The backup copies each of those as it was,
 # records whether it existed at all (a restore must REMOVE what the run created), and copies the
 # native store and the retired curated dir for reference only - the migration never writes them.
 # One backup per RUN: every level under one anchor shares its store, so copying it per level would
@@ -453,10 +452,18 @@ def migrate_store(slug, dry_run=True, scope_default="", redirect=None, backup_ru
 _MANIFEST = "manifest.json"
 
 
-def _repo_gitignore(path):
-    """The .gitignore at the root of the git repo holding `path`, or None outside a repo."""
+def _repo_exclude(path):
+    """The exclude file of the git repo holding `path` - the one `ensure_gitignored` writes - or
+    None outside a repo. git prints it relative to `path` (absolute for a linked worktree, whose
+    exclude file is its main checkout's) and prints it whether or not it exists yet. Resolved, so
+    the level and the anchor of one repo name the same file and it is backed up once."""
     rc, top = _git(path, "rev-parse", "--show-toplevel")
-    return Path(top) / ".gitignore" if rc == 0 and top else None
+    if rc != 0 or not top:
+        return None
+    rc, where = _git(path, "rev-parse", "--git-path", "info/exclude")
+    if rc != 0 or not where:
+        return None
+    return Path(os.path.realpath(os.path.join(str(path), where)))
 
 
 def _written_paths(proj):
@@ -466,9 +473,9 @@ def _written_paths(proj):
            (sig.claude_local_md_path(proj), "file"),
            (sig.claude_md_path(proj), "file")]
     for where in (proj, anchor):
-        gi = _repo_gitignore(where)
-        if gi is not None:
-            out.append((gi, "file"))
+        exclude = _repo_exclude(where)
+        if exclude is not None:
+            out.append((exclude, "file"))
     return out
 
 
@@ -639,9 +646,8 @@ def _usage_problems(args):
 
 
 # The ensure_gitignore answers that need no attention; any other one (a store already tracked by
-# git, a .gitignore it could not rewrite) is printed, so a new status is loud by default.
-_GITIGNORE_FINE = ("gitignored", "already ignored", "not a git repo: skipped",
-                   "track_private: left tracked")
+# git, an exclude file it could not rewrite) is printed, so a new status is loud by default.
+_GITIGNORE_FINE = ("gitignored", "not a git repo: skipped", "track_private: left tracked")
 
 
 def _report_store_problems(rep):

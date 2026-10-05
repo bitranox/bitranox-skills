@@ -152,46 +152,54 @@ def test_main_dry_run_reports(env, capsys):
 
 # ---- gitignore safety (R11) --------------------------------------------------------------------
 
-def test_ensure_gitignore_in_git_repo(env):
+def _git_init(proj):
     import subprocess
+    subprocess.run(["git", "init", "-q", str(proj)], check=True, capture_output=True)
+    exclude = proj / ".git" / "info" / "exclude"
+    exclude.parent.mkdir(parents=True, exist_ok=True)   # `git init` templates may not create it
+    return exclude
+
+
+def test_ensure_gitignore_in_git_repo(env):
+    """The ignore lines go into the repo's own exclude file; no .gitignore is created."""
     tmp_path, _ = env
     proj = tmp_path / "gitrepo"
     proj.mkdir()
-    subprocess.run(["git", "init", "-q", str(proj)], check=False)
+    exclude = _git_init(proj)
     assert M.ensure_gitignore(str(proj)) == "gitignored"
-    assert ".claude-bx-selflearning/" in (proj / ".gitignore").read_text(encoding="utf-8")
-    assert M.ensure_gitignore(str(proj)) == "already ignored"      # idempotent
+    assert ".claude-bx-selflearning/" in exclude.read_bytes().decode("utf-8").splitlines()
+    assert not (proj / ".gitignore").exists()
+    once = exclude.read_bytes()
+    assert M.ensure_gitignore(str(proj)) == "gitignored"           # idempotent: git already ignores
+    assert exclude.read_bytes() == once
 
 
 def test_ensure_gitignore_preserves_crlf(env):
-    """A Windows-authored .gitignore keeps its own CRLF line endings after the append - the
-    hand-rolled read_text/write_text round trip normalized them to the host's os.linesep."""
-    import subprocess
+    """A CRLF exclude file keeps its own line endings after the append, and a CRLF .gitignore is
+    not touched at all."""
     tmp_path, _ = env
     proj = tmp_path / "gitrepo-crlf"
     proj.mkdir()
-    subprocess.run(["git", "init", "-q", str(proj)], check=False)
+    exclude = _git_init(proj)
+    exclude.write_bytes(b"*.tmp\r\n")
     (proj / ".gitignore").write_bytes(b"*.pyc\r\nbuild/\r\n")
     assert M.ensure_gitignore(str(proj)) == "gitignored"
-    raw = (proj / ".gitignore").read_bytes()
-    assert b"\r\n" in raw and b"\n\r" not in raw.replace(b"\r\n", b"")
+    raw = exclude.read_bytes()
+    assert raw.startswith(b"*.tmp\r\n") and b"CLAUDE.local.md" in raw
     assert raw.count(b"\n") == raw.count(b"\r\n"), "a bare LF slipped into a CRLF file"
+    assert (proj / ".gitignore").read_bytes() == b"*.pyc\r\nbuild/\r\n"
 
 
-def test_ensure_gitignore_still_refuses_a_non_utf8_file(env):
-    """Unchanged: a .gitignore holding bytes that are not valid UTF-8 (e.g. a latin-1 comment) is
-    still left exactly alone, pinned by test_migrate_memory_backup.py's
-    test_a_non_utf8_gitignore_neither_crashes_the_run_nor_is_rewritten - the CRLF-preservation fix
-    only changes how a readable UTF-8 file's own line endings are kept, never what counts as
-    readable."""
-    import subprocess
+def test_ensure_gitignore_never_rewrites_a_non_utf8_gitignore(env):
+    """A .gitignore holding bytes that are not valid UTF-8 (a latin-1 comment) is left exactly
+    alone - the tracked file is never opened - and the patterns are still ignored."""
     tmp_path, _ = env
     proj = tmp_path / "gitrepo-latin1"
     proj.mkdir()
-    subprocess.run(["git", "init", "-q", str(proj)], check=False)
+    _git_init(proj)
     raw = b"# commentaire \xe9t\xe9\n*.pyc\n"   # latin-1 'ete', not valid UTF-8
     (proj / ".gitignore").write_bytes(raw)
-    assert M.ensure_gitignore(str(proj)) == "gitignore write failed"
+    assert M.ensure_gitignore(str(proj)) == "gitignored"
     assert (proj / ".gitignore").read_bytes() == raw               # left untouched
 
 
@@ -203,14 +211,15 @@ def test_ensure_gitignore_non_git_skips(env):
 
 
 def test_ensure_gitignore_track_private_leaves_tracked(env):
-    import subprocess
     tmp_path, _ = env
     sig.save_config({"track_private": True})
     proj = tmp_path / "gitrepo2"
     proj.mkdir()
-    subprocess.run(["git", "init", "-q", str(proj)], check=False)
+    exclude = _git_init(proj)
+    exclude.write_bytes(b"*.tmp\n")
     assert "left tracked" in M.ensure_gitignore(str(proj))
     assert not (proj / ".gitignore").exists()
+    assert exclude.read_bytes() == b"*.tmp\n"
 
 
 def test_migrate_redirect_forces_target(env):
