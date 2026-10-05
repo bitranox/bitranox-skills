@@ -30,7 +30,7 @@ from __future__ import annotations
 import json
 import os
 import sys
-from pathlib import Path
+from pathlib import Path, PurePosixPath, PureWindowsPath
 
 from shell_text import (
     argv_for_match,
@@ -156,6 +156,9 @@ def _session_change(tokens: list[str], tool_name: str):
     `Remove-Item Env:VIRTUAL_ENV` and `$env:VIRTUAL_ENV = ...`, which is the remediation this hook
     gives on that tool.
     """
+    activated = _activated_venv(tokens, tool_name)
+    if activated is not None:
+        return activated
     head = tokens[0].lower()
     if tool_name == "PowerShell":
         if head in _REMOVE_ITEM and any(_names_env_var(t) for t in tokens[1:]):
@@ -173,6 +176,29 @@ def _session_change(tokens: list[str], tool_name: str):
         if values:
             return values[-1] or None
     return _KEEP
+
+
+def _activated_venv(tokens: list[str], tool_name: str) -> str | None:
+    """The venv directory a statement ACTIVATES, as written, or None when it activates nothing.
+
+    An activate script exports VIRTUAL_ENV as its own venv for every later statement, so
+    `source .venv/bin/activate && pytest` runs in the project venv whatever the ambient value was.
+    Bash must SOURCE it (`source` or `.`): run as a program it sets the variable in a child that
+    exits at once. PowerShell's `Activate.ps1` writes `$env:VIRTUAL_ENV`, which is process-wide, so
+    it counts dot-sourced, behind `&`, or run bare. The venv is the directory holding the script's
+    `bin`/`Scripts` dir; a path that names no such dir is not a venv this hook can judge.
+    """
+    if tool_name == "PowerShell":
+        args = tokens[1:] if tokens[0] in (".", "&") else tokens
+        script_name, path = "activate.ps1", PureWindowsPath(args[0]) if args else None
+    else:
+        args = tokens[1:] if tokens[0] in ("source", ".") else []
+        script_name, path = "activate", PurePosixPath(args[0].replace("\\", "/")) if args else None
+    if path is None or path.name.lower() != script_name:
+        return None
+    if path.parent.name.lower() not in ("bin", "scripts"):
+        return None
+    return str(path.parent.parent)
 
 
 def _names_env_var(token: str) -> bool:

@@ -792,6 +792,23 @@ def test_changes_state_controls_still_hold():
         assert not mod.changes_state(text), text
 
 
+def test_a_plain_rm_of_a_file_changes_state():
+    """`rm <file>` deletes as surely as `rm -f`; only the flagged spellings were counted, so a
+    lineage of scripts each removing a file stayed on the observe track."""
+    for text in ("rm notes.txt", 'rm "$TMP/out.json"', "rm -i stale.lock", "rm -- -odd.txt",
+                 "git rm old_module.py", "rm $f", "subprocess.run(['rm', path])",
+                 'subprocess.run(["rm", str(p)])'):
+        assert mod.changes_state(text), text
+
+
+def test_plain_rm_controls_stay_read_only():
+    """The `--rm` of `docker run` is a flag, and an identifier or word merely ending in rm is not
+    the program."""
+    for text in ("docker run --rm alpine true", "rm_count = 3", "alarm x", "perm y", "confirm z",
+                 "self.rm", "rm\n", "'rm'"):
+        assert not mod.changes_state(text), text
+
+
 def test_a_rm_rf_lineage_lands_on_the_change_track(tmp_path):
     sess = "sess-rmrf"
     for i in (1, 2, 3):

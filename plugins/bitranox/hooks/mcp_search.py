@@ -24,10 +24,28 @@ import self_improve_signals as sig
 
 _CLI = "basic-memory"
 
+# A batch-file shim runs under cmd.exe, which re-parses its command line: `&`, `|` and `%VAR%` in
+# the free-text query would be read by cmd rather than handed to the CLI. No quoting makes that
+# safe for arbitrary text, so such a shim is not used and the caller keeps its keyword scan.
+_BATCH_SUFFIXES = (".bat", ".cmd")
+
+
+def _executable():
+    """Absolute path of the CLI to run, or None when it is absent or only a batch-file shim.
+
+    Resolved by the same lookup that decides availability, and RUN by that path: handed the bare
+    name, Windows' CreateProcess searches PATH on its own and finds only an `.exe`, so the lookup
+    could say "available" for a program the run then cannot start.
+    """
+    path = shutil.which(_CLI)
+    if path is None or path.lower().endswith(_BATCH_SUFFIXES):
+        return None
+    return path
+
 
 def available():
-    """True if the basic-memory CLI is on PATH."""
-    return shutil.which(_CLI) is not None
+    """True if a runnable basic-memory CLI (not a batch-file shim) is on PATH."""
+    return _executable() is not None
 
 
 def enabled():
@@ -80,7 +98,8 @@ def search(query, limit=10, timeout=20):
 
     `query` is a string or an iterable of keywords. It goes after a `--`, so a query that starts
     with `-` (`--no-verify hook bypass`) is searched for rather than parsed as an option."""
-    if not query or not available():
+    executable = _executable() if query else None
+    if executable is None:
         return None
     try:
         q = query if isinstance(query, str) else " ".join(str(k) for k in query if k)
@@ -90,7 +109,7 @@ def search(query, limit=10, timeout=20):
     if not q.strip():
         return None
     try:
-        r = subprocess.run([_CLI, "tool", "search-notes", "--page-size", page_size, "--", q],
+        r = subprocess.run([executable, "tool", "search-notes", "--page-size", page_size, "--", q],
                            capture_output=True, text=True, encoding="utf-8", errors="replace",
                            timeout=timeout)
     except (OSError, subprocess.SubprocessError, ValueError):
