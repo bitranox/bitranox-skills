@@ -176,6 +176,57 @@ def test_rtl_an_element_past_the_left_edge_scrolls_and_is_the_offender(page, whe
     assert _offenders(raw) == ["#x"]
 
 
+# --- containing blocks: which ancestor a fixed or absolute box really belongs to -------------
+# Every case asserts Chrome's own scroll width beside the offender list, so a property counts as
+# a containing block only where the browser really keeps the box inside the clipping ancestor.
+
+def _positioned_in_clip(position, ancestor_style, clip="overflow-x:hidden;"):
+    return (META + "<body style='margin:0'><div style='" + clip + "width:200px;height:50px;"
+            + ancestor_style + "'><div id=x style='position:" + position
+            + ";left:300px;top:0;width:400px;height:20px'>x</div></div>")
+
+
+_CONTAINING_BLOCK = ["transform:translateX(0)", "translate:0px", "rotate:0deg", "scale:1",
+                     "perspective:100px", "filter:blur(0)", "backdrop-filter:blur(0)",
+                     "contain:paint", "contain:layout", "contain:strict", "contain:content",
+                     "will-change:transform", "will-change:filter", "will-change:perspective",
+                     "content-visibility:auto"]
+
+
+@pytest.mark.parametrize("prop", _CONTAINING_BLOCK)
+@pytest.mark.parametrize("position", ["absolute", "fixed"])
+def test_a_box_held_by_a_clipping_containing_block_is_not_an_offender(page, position, prop):
+    """Each property makes the clipping ancestor the box's containing block, so the box is
+    clipped and the page does not scroll. Only transform counted before."""
+    raw = _measure(page, _positioned_in_clip(position, prop))
+    assert raw["scroll_width"] == 375
+    assert _offenders(raw) == []
+
+
+@pytest.mark.parametrize("prop", ["contain:size", "will-change:opacity", "container-type:inline-size"])
+def test_control_properties_that_make_no_containing_block_leave_the_absolute_box_an_offender(page, prop):
+    raw = _measure(page, _positioned_in_clip("absolute", prop))
+    assert raw["scroll_width"] == 700
+    assert _offenders(raw) == ["#x"]
+
+
+def test_a_box_fixed_to_the_viewport_never_widens_the_page_and_is_not_an_offender(page):
+    """A fixed box whose containing block is the viewport stays put while the page scrolls, so
+    it adds nothing to the scroll width, past a clipping parent or not."""
+    for html in (_positioned_in_clip("fixed", ""), _positioned_in_clip("fixed", "", clip="")):
+        raw = _measure(page, html)
+        assert raw["scroll_width"] == 375
+        assert _offenders(raw) == []
+
+
+def test_control_a_fixed_box_in_a_transformed_unclipped_ancestor_widens_the_page(page):
+    """The transform makes the ancestor its containing block; nothing clips it there, so it
+    scrolls with the page and widens it like any other box."""
+    raw = _measure(page, _positioned_in_clip("fixed", "transform:translateX(0)", clip=""))
+    assert raw["scroll_width"] == 700
+    assert _offenders(raw) == ["#x"]
+
+
 @pytest.mark.parametrize("where", list(_RTL))
 def test_rtl_an_element_past_the_right_edge_does_not_scroll_and_is_not_an_offender(page, where):
     raw = _measure(page, META + _RTL[where]

@@ -15,7 +15,8 @@
  * "N rendered, M failed".
  *
  * --combine merges only `digraph` blocks, and refuses (renders nothing) when two blocks share a
- * node id, because graphviz would silently fuse them into one node across the clusters.
+ * node id, because graphviz would silently fuse them into one node across the clusters. The
+ * merged graph is `strict` when every block is; a mix of strict and plain blocks is refused too.
  *
  * Requires: graphviz (dot) on PATH. Runs `dot` directly, never through a shell, so it behaves the
  * same from cmd.exe, PowerShell, Git Bash and any POSIX shell.
@@ -45,17 +46,77 @@ function fileStem(name) {
   return name.replace(/[^A-Za-z0-9_]/g, '_') || 'graph';
 }
 
+// Where a construct that may hold a brace ends: a quoted string (backslash escapes), an HTML
+// string (nested < >), a // or /* */ comment, or a # line (C preprocessor output, column 0).
+// Each returns the index just past it, or the text's length when it never ends.
+function skipQuoted(text, i) {
+  for (let j = i + 1; j < text.length; j += 1) {
+    if (text[j] === '\\') j += 1;
+    else if (text[j] === '"') return j + 1;
+  }
+  return text.length;
+}
+
+function skipHtml(text, i) {
+  let depth = 0;
+  for (let j = i; j < text.length; j += 1) {
+    if (text[j] === '<') depth += 1;
+    else if (text[j] === '>' && --depth === 0) return j + 1;
+  }
+  return text.length;
+}
+
+function skipToLineEnd(text, i) {
+  const end = text.indexOf('\n', i);
+  return end < 0 ? text.length : end;
+}
+
+function skipBlockComment(text, i) {
+  const end = text.indexOf('*/', i + 2);
+  return end < 0 ? text.length : end + 2;
+}
+
+function skipNonCode(text, i) {
+  const ch = text[i];
+  if (ch === '"') return skipQuoted(text, i);
+  if (ch === '<') return skipHtml(text, i);
+  if (text.startsWith('//', i)) return skipToLineEnd(text, i);
+  if (text.startsWith('/*', i)) return skipBlockComment(text, i);
+  if (ch === '#' && (i === 0 || text[i - 1] === '\n')) return skipToLineEnd(text, i);
+  return i;
+}
+
+// The index of the `}` that closes the brace opened just before `start`, or -1. Taking the LAST
+// `}` in the block instead read a trailing comment holding one into the body, which broke the
+// combined render.
+function closingBrace(text, start) {
+  let depth = 1;
+  let i = start;
+  while (i < text.length) {
+    const next = skipNonCode(text, i);
+    if (next !== i) {
+      i = next;
+      continue;
+    }
+    if (text[i] === '{') depth += 1;
+    else if (text[i] === '}' && --depth === 0) return i;
+    i += 1;
+  }
+  return -1;
+}
+
 function parseBlock(content, index) {
   const fallback = `graph_${index + 1}`;
   const header = HEADER.exec(content);
-  if (!header) return { index, content, name: fallback, kind: null, body: '' };
+  if (!header) return { index, content, name: fallback, kind: null, strict: false, body: '' };
   const bodyStart = header.index + header[0].length;
-  const bodyEnd = content.lastIndexOf('}');
+  const bodyEnd = closingBrace(content, bodyStart);
   return {
     index,
     content,
     name: header[3] ? unquote(header[3]) : fallback,
     kind: header[2].toLowerCase(),
+    strict: Boolean(header[1]),
     body: bodyEnd > bodyStart ? content.slice(bodyStart, bodyEnd).trim() : '',
   };
 }
@@ -156,6 +217,13 @@ function combineProblems(blocks) {
       problems.push(`${where} yielded an empty graph body, so its cluster would be empty.`);
     }
   }
+  // `strict` belongs to a whole graph, never a cluster: the merged graph is strict when every
+  // block is, and a mix would either draw a strict block's duplicate edges or merge a plain one's.
+  const strict = blocks.filter(b => b.kind === 'digraph' && b.strict).map(b => b.label);
+  if (strict.length > 0 && strict.length < blocks.length) {
+    problems.push(`blocks mix strict and plain digraphs (strict: ${strict.join(', ')}); ` +
+                  'one merged graph is strict or not as a whole. Render without --combine.');
+  }
   return problems;
 }
 
@@ -170,8 +238,9 @@ function combineGraphs(blocks, graphName) {
       '  }',
     ].join('\n');
   });
+  const strict = blocks.every(block => block.strict) ? 'strict ' : '';
   return [
-    `digraph ${quoteId(`${graphName}_combined`)} {`,
+    `${strict}digraph ${quoteId(`${graphName}_combined`)} {`,
     '  rankdir=TB;',
     '  compound=true;',
     '  newrank=true;',

@@ -140,25 +140,44 @@
     return best === Infinity ? 9999 : best;
   }
 
-  // Whether an ancestor that clips or scrolls sideways contains `el`. Only ancestors on its
-  // containing-block chain count: an absolutely positioned box escapes a clipping parent that
-  // is not positioned, and a fixed one escapes everything but a transformed ancestor - both
-  // can still widen the page. <html> and <body> are not asked: their overflow applies to the
-  // viewport itself, and whether THAT scrolls is what scroll_width already reports.
+  // Whether `el` cannot widen the page: an ancestor that clips or scrolls sideways contains it,
+  // or it is fixed to the viewport itself. Only ancestors on its containing-block chain count:
+  // an absolutely positioned box escapes a clipping parent that is not positioned and does not
+  // establish a containing block (see establishesContainingBlock), and a fixed one escapes every
+  // ancestor but such a block. A fixed box whose containing block IS the viewport never moves
+  // with the page, so it adds nothing to the document's scroll width (measured in Chrome 148).
+  // <html> and <body> are not asked about clipping: their overflow applies to the viewport,
+  // and whether THAT scrolls is what scroll_width already reports.
   function clippedByAncestor(el) {
     let position = getComputedStyle(el).position;
     for (let a = el.parentElement; a && a !== document.body && a !== doc; a = a.parentElement) {
       const s = getComputedStyle(a);
-      const transformed = s.transform !== "none";
+      const block = establishesContainingBlock(s);
       const contains =
-        position === "fixed" ? transformed
-        : position === "absolute" ? s.position !== "static" || transformed
+        position === "fixed" ? block
+        : position === "absolute" ? s.position !== "static" || block
         : true;
       if (!contains) continue;
       if (s.overflowX !== "visible") return true;
       position = s.position;
     }
-    return false;
+    if (position !== "fixed") return false;
+    const roots = [document.body, doc].filter(Boolean);
+    return !roots.some((r) => establishesContainingBlock(getComputedStyle(r)));
+  }
+
+  // Whether an element is the containing block for its fixed and absolute descendants even when
+  // it is not positioned. Measured in Chrome 148 against the page's own scroll width: transform,
+  // translate, rotate, scale, perspective, filter, backdrop-filter, contain paint/layout/strict/
+  // content, will-change naming one of those, and content-visibility:auto do; contain:size,
+  // container-type and will-change:opacity do not.
+  function establishesContainingBlock(s) {
+    const props = ["transform", "translate", "rotate", "scale", "perspective", "filter", "backdropFilter"];
+    if (props.some((p) => s[p] && s[p] !== "none")) return true;
+    if (/\b(paint|layout|strict|content)\b/.test(s.contain || "")) return true;
+    const willChange = /\b(transform|translate|rotate|scale|perspective|filter|backdrop-filter)\b/;
+    if (willChange.test(s.willChange || "")) return true;
+    return s.contentVisibility === "auto";
   }
 
   function cssPath(el) {

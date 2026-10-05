@@ -196,6 +196,14 @@ def _csp(value: str | None, *, enforced: bool = True) -> Finding:
         return Finding("csp", "MINOR", "CSP is report-only (a rollout phase, not enforced - it protects nothing yet)",
                        "promote to an enforced Content-Security-Policy once violations are clear")
     policies = _csp_policies(value)
+    # No policy holds script-src or default-src: scripts are not restricted at all, which is
+    # worse than 'unsafe-inline' in a list, so it must not fall through to OK. Checking
+    # script-src covers -elem and -attr too: both fall back to it, so they are unrestricted
+    # only when it is, and a policy with only script-src-elem still leaves inline handlers
+    # (script-src-attr) and every CSP 2 browser unrestricted.
+    if all(_effective_sources(p, "script-src") is None for p in policies):
+        return Finding("csp", "MEDIUM", "no script-src or default-src: scripts are unrestricted "
+                       "(XSS not mitigated)", "add default-src 'self' (or a script-src)")
     for name in _INLINE_SCRIPT_DIRECTIVES:
         if _every_policy_allows(policies, name, _allows_inline):
             return Finding("csp", "MEDIUM", f"{name} allows 'unsafe-inline' (XSS not mitigated)",
@@ -528,12 +536,22 @@ def internal_target_warning(url: str, proxy: str | None) -> str | None:
     """
     if proxy:
         return None
-    host = re.sub(r"^https?://", "", url).split("/")[0].split(":")[0]
+    # urlsplit, never a regex: userinfo (user:pw@host), a bracketed IPv6 literal and an
+    # upper-case scheme all made a hand-cut host resolve to nothing, which skipped the warning.
+    host = urlsplit(url).hostname
+    if not host:
+        return None
+    if "\x00" in host:
+        # getaddrinfo hands the name to C, which stops at the NUL and resolves the prefix; such
+        # a URL cannot be fetched either, so it is refused here like an unencodable one (exit 2).
+        raise ValueError("the host holds a NUL character")
     try:
-        ip = socket.gethostbyname(host)
+        # getaddrinfo, not gethostbyname: the latter is IPv4-only and fails on "::1".
+        addresses = [info[4][0] for info in socket.getaddrinfo(host, None)]
     except OSError:
         return None
-    if _is_internal_ip(ip):
+    ip = next((addr for addr in addresses if _is_internal_ip(addr)), None)
+    if ip is not None:
         return (f"{host} resolves to an INTERNAL address ({ip}) and no --proxy was given - this measures the "
                 f"internal path (origin / split-horizon edge), NOT what external visitors get. For a public "
                 f"site, re-run through an external egress: --proxy http://<proxy> (get a few via the "

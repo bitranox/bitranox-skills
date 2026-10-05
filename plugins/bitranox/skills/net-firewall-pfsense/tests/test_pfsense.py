@@ -957,6 +957,43 @@ def test_snort_why_labels_the_newest_alert_latest_whatever_the_file_order(capsys
     assert "latest: 08/02-10:00:00.000000  NEW alert" in capsys.readouterr().out
 
 
+def _snort_line(moment: datetime.datetime, message: str) -> str:
+    return (moment.strftime("%m/%d-%H:%M:%S.000000")
+            + f',1,2071408,1,"{message}",TCP,192.0.2.7,443,198.51.100.9,80\n')
+
+
+def test_snort_why_infers_the_year_from_the_firewall_clock_not_the_local_one(capsys):
+    """The stamps are the FIREWALL's local time. With the firewall two hours ahead of this
+    machine, an alert 30 minutes old there is 'in the future' here, so a local-clock inference
+    put it a year back and labelled an older alert latest."""
+    firewall_now = datetime.datetime.now().replace(microsecond=0) + datetime.timedelta(hours=2)
+    recent = _snort_line(firewall_now - datetime.timedelta(minutes=30), "RECENT alert")
+    older = _snort_line(firewall_now - datetime.timedelta(hours=3), "OLDER alert")
+    clock = firewall_now.strftime(f"{P.CLOCK_MARKER} %Y-%m-%dT%H:%M:%S\n")
+    fake = FakeRun([("/var/log/snort", (0, clock + older + recent, ""))])
+    assert P.main(["--host", "192.0.2.1", "snort", "why", "198.51.100.9"], run=fake) == 0
+    assert "RECENT alert" in capsys.readouterr().out.split("latest:")[1]
+    assert "date " in fake.calls[0]["remote"]
+
+
+def test_snort_why_without_a_firewall_clock_says_it_used_the_local_one(capsys):
+    """Control: no clock line, so the local clock decides - and the envelope says so."""
+    fake = FakeRun([("/var/log/snort", (0, ALERT_NEW + ALERT_OLD, ""))])
+    assert P.main(["--host", "192.0.2.1", "--json", "snort", "why", "198.51.100.9"], run=fake) == 0
+    result = json.loads(capsys.readouterr().out)
+    assert any("local clock" in s for s in result["skipped"])
+    assert [a["message"] for a in result["data"]["198.51.100.9"]] == ["NEW alert", "OLD alert"]
+
+
+def test_snort_why_with_the_firewall_clock_skips_nothing(capsys):
+    clock = f"{P.CLOCK_MARKER} 2026-08-03T12:00:00\n"
+    fake = FakeRun([("/var/log/snort", (0, clock + ALERT_NEW, ""))])
+    assert P.main(["--host", "192.0.2.1", "--json", "snort", "why", "198.51.100.9"], run=fake) == 0
+    result = json.loads(capsys.readouterr().out)
+    assert result["skipped"] == []
+    assert len(result["data"]["198.51.100.9"]) == 1
+
+
 def _alert(stamp: str, message: str) -> P.Alert:
     return P.Alert(timestamp=stamp, sid="1", message=message, src="192.0.2.7", dst="198.51.100.9")
 

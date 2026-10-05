@@ -295,9 +295,13 @@ def replace_table(text: str, index: int, table: dict) -> str:
 
 
 def _read_text(path: str) -> tuple[str, bool]:
-    """(text without BOM, had_bom). newline="" keeps CRLF so a rewrite can reproduce it."""
+    """(text without BOM, had_bom). newline="" keeps CRLF so a rewrite can reproduce it.
+
+    Stdin is read as bytes for the same reason: a Windows stdin is a universal-newline stream,
+    so a lone CR became a line break and `read -` found tables `read FILE` does not."""
     if path == "-":
-        text = sys.stdin.read()
+        buffer = getattr(sys.stdin, "buffer", None)
+        text = sys.stdin.read() if buffer is None else buffer.read().decode("utf-8")
     else:
         with open(path, encoding="utf-8", newline="") as f:
             text = f.read()
@@ -412,7 +416,9 @@ def main(argv=None) -> int:
         if args.cmd == "read":
             return _cmd_read(args)
         if args.cmd == "render":
-            print(render_table(_load_table_json()))
+            # The same bytes on every OS: print() through a Windows stdout wrote CRLF, so a table
+            # redirected into an LF file arrived with CRLF rows.
+            _write_stdout_exact(render_table(_load_table_json()) + "\n")
             return 0
         if args.cmd == "replace":
             return _cmd_replace(args)

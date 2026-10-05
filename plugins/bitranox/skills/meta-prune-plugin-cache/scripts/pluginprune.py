@@ -87,7 +87,9 @@ one holding only whitespace, is ordinary and holds nothing.
 `--json` emits the machine-readable envelope `{ok, command, skipped, data}` on every exit code:
 on exit 2 (including a command line argparse rejects, and a crash) it is `ok: false`,
 `data: null` and an `error` naming the reason. Diagnostics always go to stderr as well, so
-stdout stays parseable.
+stdout stays parseable. Each `skipped` item starts with its kind, as the text report does:
+`REFUSED: ` (the plan never touched it; also in `data.refused`) or `FAILED: ` (an --apply tried
+and it is still there; also in `data.failed` as `{path, reason}`).
 """
 
 from __future__ import annotations
@@ -109,6 +111,7 @@ from typing import NoReturn
 __all__ = [
     "ApplyResult",
     "Entry",
+    "Failure",
     "InstallRecord",
     "Plan",
     "SettingsError",
@@ -116,6 +119,7 @@ __all__ = [
     "SettingsSources",
     "apply_plan",
     "build_plan",
+    "json_payload",
     "live_lock_holder",
     "load_settings",
     "main",
@@ -343,11 +347,22 @@ class InstallRecord:
 
 
 @dataclass(frozen=True)
+class Failure:
+    """A directory an apply tried to remove and did not, with the reason."""
+
+    path: Path
+    reason: str
+
+    def __str__(self) -> str:
+        return f"{self.path}: {self.reason}"
+
+
+@dataclass(frozen=True)
 class ApplyResult:
     """What an apply actually removed, and what it could not, with the reason."""
 
     removed: tuple[Entry, ...]
-    failures: tuple[str, ...]
+    failures: tuple[Failure, ...]
 
 
 def canonical(path: str | Path) -> str:
@@ -1060,16 +1075,16 @@ def apply_plan(plan: Plan) -> ApplyResult:
     Only the safe direction is re-read, never a fresh scan for new candidates.
     """
     removed: list[Entry] = []
-    failures: list[str] = []
+    failures: list[Failure] = []
     for entry in plan.prune:
         blocker = _blocker_now(entry, base=plan.cache_dir)
         if blocker is not None:
-            failures.append(f"{entry.path}: {blocker}")
+            failures.append(Failure(entry.path, blocker))
             continue
         try:
             _remove_tree(entry.path)
         except OSError as exc:
-            failures.append(f"{entry.path}: could not be removed: {exc}")
+            failures.append(Failure(entry.path, f"could not be removed: {exc}"))
             continue
         removed.append(entry)
     return ApplyResult(removed=tuple(removed), failures=tuple(failures))
@@ -1365,31 +1380,39 @@ def _run(args: argparse.Namespace) -> int:
         )
 
     applied = apply_plan(plan) if args.apply else None
-    failures = list(applied.failures) if applied is not None else []
-    refusals = [f"{entry.path}: {entry.refusal}" for entry in plan.refused]
-    blocked = refusals + failures
+    blocked = _blocked(plan, applied)
 
     if args.json:
-        data: dict[str, object] = {"applied": args.apply, **plan.as_dict()}
-        if applied is not None:
-            data["removed"] = [str(entry.path) for entry in applied.removed]
-            data["removed_bytes"] = sum(entry.size_bytes for entry in applied.removed)
-        print(
-            json.dumps(
-                {"ok": not blocked, "command": "pluginprune", "skipped": blocked, "data": data},
-                indent=2,
-            )
-        )
+        print(json.dumps(json_payload(plan, applied), indent=2))
     else:
         for line in _render(plan, applied=applied):
             print(line)
-        # REFUSED was never attempted; FAILED was attempted and is still there. One word for
-        # both sent a reader of an --apply run hunting a removal fault that never happened.
-        for item in refusals:
-            print(f"  REFUSED: {item}", file=sys.stderr)
-        for item in failures:
-            print(f"  FAILED: {item}", file=sys.stderr)
+        for item in blocked:
+            print(f"  {item}", file=sys.stderr)
     return 1 if blocked else 0
+
+
+def _blocked(plan: Plan, applied: ApplyResult | None) -> list[str]:
+    """Every directory left in place against the plan, each labelled with its kind.
+
+    REFUSED was never attempted; FAILED was attempted and is still there. One word for both sent
+    a reader of an --apply run hunting a removal fault that never happened, so the text report
+    and the JSON `skipped` list carry the same label."""
+    refusals = [f"REFUSED: {entry.path}: {entry.refusal}" for entry in plan.refused]
+    failures = [f"FAILED: {failure}" for failure in (applied.failures if applied else ())]
+    return refusals + failures
+
+
+def json_payload(plan: Plan, applied: ApplyResult | None) -> dict[str, object]:
+    """The --json envelope. `data.refused` and (after --apply) `data.failed` list the two kinds
+    apart, with the path and the reason as separate fields."""
+    blocked = _blocked(plan, applied)
+    data: dict[str, object] = {"applied": applied is not None, **plan.as_dict()}
+    if applied is not None:
+        data["removed"] = [str(entry.path) for entry in applied.removed]
+        data["removed_bytes"] = sum(entry.size_bytes for entry in applied.removed)
+        data["failed"] = [{"path": str(f.path), "reason": f.reason} for f in applied.failures]
+    return {"ok": not blocked, "command": "pluginprune", "skipped": blocked, "data": data}
 
 
 if __name__ == "__main__":

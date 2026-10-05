@@ -16,6 +16,7 @@ Rules applied:
 - Recognises fences the CommonMark way: an opener or closer sits less than four columns into its
   block, a backtick fence's info string holds no backtick (so a line opening with an inline span
   such as ```x``` is prose), and a closer is bare and at least as long as its opener
+- Recognises a fence inside a blockquote (> ```), which ends with the quote at the latest
 - Keeps the file's line endings (CRLF stays CRLF) and a leading UTF-8 BOM
 
 Usage:
@@ -367,13 +368,30 @@ def classify_lines(lines):
     A fence tagged `markdown` or `md` holds a document of its own, so its lines are TEXT and a
     fence nested in it is tracked too. Its own closer is checked FIRST, as a renderer of the outer
     document does: a nested fence can never outlive the markdown fence it sits in.
+
+    A blockquote is a document of its own too: a run of `>` lines is classified by the same
+    scanner with one quote level removed, so `> ```` opens a fence there, and that fence ends
+    with the quote at the latest. Inside an open code fence a `>` line is code, never a quote.
     """
     classes = []
     fence = None   # the open outer fence
     inner = None   # a fence opened inside a markdown fence
     floor = -1     # index of the last fence line, where the indented-code walk stops
 
-    for index, line in enumerate(lines):
+    index = 0
+    while index < len(lines):
+        base = fence.columns if fence is not None else 0
+        block_may_start = fence is None or (fence.markdown and inner is None)
+        if block_may_start and _opens_quote(lines, index, floor, base):
+            end = _quote_run_end(lines, index)
+            quoted = classify_lines([_unquote_once(text) for text in lines[index:end]])
+            for offset, cls in enumerate(quoted):
+                classes.append(LineClass(cls.kind, floor, base if cls.kind != FENCE else 0))
+                if cls.kind == FENCE:
+                    floor = index + offset
+            index = end
+            continue
+        line = lines[index]
         kind = TEXT
         if fence is None:
             opener = _fence_opener(lines, index, floor, 0)
@@ -395,7 +413,31 @@ def classify_lines(lines):
         classes.append(LineClass(kind, floor, base))
         if kind == FENCE:
             floor = index
+        index += 1
     return classes
+
+
+def _opens_quote(lines, index, floor, base_columns):
+    """Whether the line at `index` starts a blockquote: a `>` at most three columns into its
+    block. Deeper, it is indented code (or list content) as it was before quotes were tracked."""
+    line = lines[index]
+    if not line.lstrip(" \t").startswith(">"):
+        return False
+    return not is_indented_code(lines, index, floor, base_columns)
+
+
+def _quote_run_end(lines, start):
+    """The index just past the run of consecutive `>` lines starting at `start`. A line without
+    the marker ends the run: a lazy continuation only continues a paragraph, never a code block."""
+    end = start + 1
+    while end < len(lines) and lines[end].lstrip(" \t").startswith(">"):
+        end += 1
+    return end
+
+
+def _unquote_once(line):
+    """The line with one quote level removed: the `>` and one optional space after it."""
+    return line.lstrip(" \t")[1:].removeprefix(" ")
 
 
 def _ragged_messages(filepath, first_line, contents):

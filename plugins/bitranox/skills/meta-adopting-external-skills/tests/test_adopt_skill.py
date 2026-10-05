@@ -914,7 +914,8 @@ def test_report_says_skipped_when_the_notice_entry_already_existed(tmp_path, rec
                                                                   capsys):
     repo, skills = _fake_repo(tmp_path)
     notices = repo / "plugins/bitranox/THIRD_PARTY_NOTICES.md"
-    notices.write_text("# Third-Party Notices\n\n---\n\n### coding-up\n\nold\n", encoding="utf-8")
+    notices.write_text("# Third-Party Notices\n\n---\n\n### coding-up\n\n"
+                       "- Source: upstream-skill (upstream)\n- License: MIT\n", encoding="utf-8")
     AS.main([str(_fake_source(tmp_path)), "--name", "coding-up", "--dest", str(skills)])
     assert "notice entry SKIPPED (already present)" in capsys.readouterr().out
 
@@ -1136,3 +1137,53 @@ def test_npm_see_license_in_reads_the_named_file(tmp_path, named, text, status, 
     (tmp_path / "outside.txt").write_text(MIT, encoding="utf-8")
     lic = AS.find_license(tree, tree / "skill")
     assert (lic["status"], lic["id"]) == (status, lic_id), lic["where"]
+
+
+# ---- a notice entry under the same heading is ours only when it credits the same source ----
+def test_a_notice_entry_crediting_another_source_is_never_taken_for_ours(tmp_path, record_subprocess,
+                                                                          capsys):
+    """Skipping on the name alone left the new skill credited to whatever an older entry of that
+    name says: another upstream, another licence. The adoption refuses and undoes itself."""
+    repo, skills = _fake_repo(tmp_path)
+    notices = repo / "plugins/bitranox/THIRD_PARTY_NOTICES.md"
+    before = ("# Third-Party Notices\n\n---\n\n### coding-up\n\n"
+              "- Source: someone-else/other-skill (upstream)\n- License: Apache-2.0\n")
+    notices.write_text(before, encoding="utf-8")
+    rc = AS.main([str(_fake_source(tmp_path)), "--name", "coding-up", "--dest", str(skills)])
+    err = capsys.readouterr().err
+    assert rc == 2
+    assert "someone-else/other-skill (upstream)" in err and "upstream-skill (upstream)" in err
+    assert notices.read_text(encoding="utf-8") == before
+    assert not (skills / "coding-up").exists()
+
+
+def test_a_deeper_heading_with_the_name_is_not_a_notice_entry(tmp_path):
+    """Only a `### <name>` line opens an entry; a `#### <name>` inside another entry does not."""
+    notices = tmp_path / "THIRD_PARTY_NOTICES.md"
+    notices.write_text("# Third-Party Notices\n\n---\n\n### other\n\n#### foo\n", encoding="utf-8")
+    assert AS.append_notice(notices, "foo", "Foo upstream", "", "MIT", "", MIT, "") is True
+    assert "\n### foo\n" in notices.read_text(encoding="utf-8")
+
+
+def test_the_same_source_with_a_url_is_still_the_same_entry(tmp_path):
+    notices = tmp_path / "THIRD_PARTY_NOTICES.md"
+    notices.write_text("# Third-Party Notices\n", encoding="utf-8")
+    args = (notices, "foo", "Foo upstream", "https://x/foo", "MIT", "", MIT, "")
+    assert AS.append_notice(*args) is True
+    assert AS.append_notice(*args) is False
+
+
+# ---- a SKILL.md that is not UTF-8 is refused before anything is copied ----
+def test_a_non_utf8_skill_md_is_refused_up_front_naming_the_file(tmp_path, record_subprocess,
+                                                                  capsys):
+    repo, skills = _fake_repo(tmp_path)
+    src = _fake_source(tmp_path)
+    (src / "SKILL.md").write_bytes("# Upstream Skill\n\nCafé au lait.\n".encode("latin-1"))
+    notices = repo / "plugins/bitranox/THIRD_PARTY_NOTICES.md"
+    before = notices.read_bytes()
+    rc = AS.main([str(src), "--name", "coding-up", "--dest", str(skills)])
+    err = capsys.readouterr().err
+    assert rc == 2
+    assert "SKILL.md" in err and "not UTF-8" in err and "byte 21" in err
+    assert not (skills / "coding-up").exists()
+    assert notices.read_bytes() == before

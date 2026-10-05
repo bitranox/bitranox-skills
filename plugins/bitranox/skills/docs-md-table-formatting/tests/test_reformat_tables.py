@@ -11,6 +11,7 @@ from pathlib import Path
 import pytest
 
 import reformat_tables as R
+import tablekit
 
 SKILL_DIR = Path(__file__).resolve().parent.parent
 SCRIPT = SKILL_DIR / "reformat_tables.py"
@@ -755,3 +756,58 @@ def test_this_groups_skill_docs_stay_canonical(skill, tmp_path):
     warnings = []
     assert R.reformat_file(copy, check_only=True, warnings=warnings) is False
     assert warnings == []
+
+
+# ---- a fence inside a blockquote is a fence ----
+# CommonMark parses a blockquote's content as a document of its own: "> ```" opens a code
+# block there, and that block ends with the quote at the latest. Read as plain text, the code
+# block's table example was realigned and counted.
+QUOTED = "> | a | b |\n> |---|---|\n> | long | y |\n"
+QUOTED_ALIGNED = "> | a    | b |\n> |------|---|\n> | long | y |\n"
+
+
+@pytest.mark.parametrize("opener, closer", [("```", "```"), ("~~~", "~~~"), ("```text", "```")])
+def test_a_table_in_a_fence_inside_a_blockquote_is_left_alone(tmp_path, opener, closer):
+    src = f"> {opener}\n" + QUOTED + f"> {closer}\n"
+    proc, out = run_file(tmp_path, src)
+    assert out == src
+    assert "Unchanged" in proc.stdout
+
+
+def test_a_quoted_table_outside_a_fence_is_still_formatted(tmp_path):
+    """Control: the same quoted table with no fence around it is realigned."""
+    _, out = run_file(tmp_path, QUOTED)
+    assert out == QUOTED_ALIGNED
+
+
+def test_a_table_in_a_fence_two_quote_levels_deep_is_left_alone(tmp_path):
+    src = "> > ```\n" + QUOTED.replace("> ", "> > ") + "> > ```\n"
+    _, out = run_file(tmp_path, src)
+    assert out == src
+
+
+def test_a_quoted_markdown_fence_still_formats_its_table(tmp_path):
+    src = "> ```markdown\n" + QUOTED + "> ```\n"
+    _, out = run_file(tmp_path, src)
+    assert out == "> ```markdown\n" + QUOTED_ALIGNED + "> ```\n"
+
+
+def test_an_unclosed_quoted_fence_ends_with_its_quote(tmp_path):
+    """The quoted block closes when the quote does, so a table after it is formatted; a fence
+    left open past its quote would swallow every later table."""
+    src = "> ```\n> code\n\n" + MISALIGNED
+    _, out = run_file(tmp_path, src)
+    assert out == "> ```\n> code\n\n" + ALIGNED
+
+
+def test_a_quote_inside_a_top_level_fence_stays_code(tmp_path):
+    """Control: inside an open code fence a ">" line is code, never a quote of its own."""
+    src = "```\n> ```\n" + QUOTED + "```\n"
+    _, out = run_file(tmp_path, src)
+    assert out == src
+
+
+def test_tablekit_does_not_count_a_table_in_a_quoted_fence():
+    """tablekit is the second consumer of classify_lines, so it must agree."""
+    assert tablekit.parse_tables("> ```\n" + QUOTED + "> ```\n") == []
+    assert len(tablekit.parse_tables(QUOTED)) == 1
