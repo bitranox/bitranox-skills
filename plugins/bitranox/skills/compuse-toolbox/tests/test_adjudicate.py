@@ -118,10 +118,11 @@ def test_all_refuted_is_still_ok_because_the_instrument_worked():
     assert A.summarize(results)["ok"] is True
 
 
-def test_cli_exits_1_when_a_control_did_not_discriminate(tmp_path):
+def test_cli_exits_2_when_a_control_did_not_discriminate(tmp_path):
+    """UNUSABLE means the run could not answer (R-a), the same class as claim_check BROKEN."""
     hook = _fake_hook(tmp_path, 'sys.stdin.read()\nprint("always")\n')
     rc = A.main(["--hook", str(hook), "--name", "c1", "--probe", "TRAP", "--control", "clean"])
-    assert rc == 1
+    assert rc == 2
 
 
 def test_cli_exits_0_when_every_claim_was_adjudicable(tmp_path):
@@ -186,7 +187,8 @@ def test_json_still_emitted_on_failure(tmp_path, capsys):
     rc = A.main(["--hook", str(hook), "--name", "c1", "--probe", "TRAP", "--control", "clean",
                  "--json"])
     payload = json.loads(capsys.readouterr().out)
-    assert rc == 1 and payload["ok"] is False
+    assert rc == 2 and payload["ok"] is False
+    assert payload["data"]["summary"]["unusable"] == 1
 
 
 def test_the_unusable_warning_goes_to_stderr_not_stdout(tmp_path, capsys):
@@ -504,3 +506,29 @@ def test_the_subjects_output_keeps_universal_newlines_and_survives_bad_utf8(tmp_
     hook = _fake_hook(tmp_path, "sys.stdout.buffer.write(b'x\\r\\ny\\rz\\xff\\n')\n")
     run = A.run_once(A.subject_for_hook(hook), "", [])
     assert run.stdout == "x\ny\nz" + chr(0xFFFD) + "\n"
+
+
+# ---- wave D: unified exit codes and the D2 envelope ---------------------------------------------
+
+def test_all_refuted_is_exit_0_with_ok_true(tmp_path, capsys):
+    hook = _fake_hook(tmp_path, 'sys.stdin.read()\n')
+    rc = A.main(["--hook", str(hook), "--name", "c1", "--probe", "TRAP", "--control", "clean",
+                 "--json"])
+    payload = json.loads(capsys.readouterr().out)
+    assert rc == 0 and payload["ok"] is True
+    assert payload["data"]["summary"]["refuted"] == 1
+
+
+def test_a_crash_under_json_is_exit_2_with_an_envelope(tmp_path, monkeypatch, capsys):
+    def boom(*_a, **_k):
+        raise RuntimeError("harness broke")
+    monkeypatch.setattr(A, "adjudicate", boom)
+    hook = _fake_hook(tmp_path, 'sys.stdin.read()\n')
+    rc = A.main(["--hook", str(hook), "--name", "c1", "--probe", "TRAP", "--control", "clean",
+                 "--json"])
+    cap = capsys.readouterr()
+    assert rc == 2
+    payload = json.loads(cap.out)
+    assert payload["ok"] is False and "harness broke" in payload["error"]
+    assert "Traceback" not in cap.err
+
