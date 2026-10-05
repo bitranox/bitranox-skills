@@ -17,8 +17,12 @@ would break resolution):
     a timestamped dir under the anchor, with a `manifest.txt` mapping each copy back to its file),
     then move each body `facts/<sh>/<uuid>.md` -> `facts/<slug>.md` and rewrite each pointer block
     (new fence, `mem:` lines, retrieval recipe, pinned-first sections). When any backup step fails
-    the apply stops before touching anything and the CLI exits 1. Idempotent: a second run finds
-    nothing legacy.
+    the apply stops before touching anything. Idempotent: a second run finds nothing legacy.
+
+Exit codes: 0 the run covered everything it was pointed at; 2 it could not - a --root that is not
+a directory, a CLAUDE.local.md it could not read (dry run and apply), a tree --apply refused for
+that reason, a backup that failed (nothing applied), or a write that failed part-way through the
+apply (the report, with the backup to restore from, is still printed first).
 
 Pure standard library; mtime-neutral writers; ASCII output.
 """
@@ -251,10 +255,12 @@ def _poisoned_anchors(unreadable):
 def migrate(roots, apply=False):
     """Migrate every tree under `roots`. Returns a report dict; `backup_failed` is set (and nothing
     was written) when --apply could not back up first. `refused_trees` lists every tree --apply
-    skipped because one of its pointer files could not be read (nothing is written for it)."""
+    skipped because one of its pointer files could not be read (nothing is written for it).
+    `apply_failed` is set when a write failed AFTER the backup: the run stops there, and the
+    backups already taken are in `backups`."""
     report = {"files": 0, "legacy_lines": 0, "moved": 0, "collisions": 0, "missing": 0,
               "backups": [], "items": [], "unreadable": [], "backup_failed": None,
-              "refused_trees": []}
+              "refused_trees": [], "apply_failed": None}
     levels = []
     for root in roots:
         for local in find_pointer_files(root, report["unreadable"]):
@@ -283,7 +289,10 @@ def migrate(roots, apply=False):
     except OSError as exc:
         report["backup_failed"] = str(exc)
         return report
-    _apply(apply_levels, report)
+    try:
+        _apply(apply_levels, report)
+    except OSError as exc:                 # TimeoutError from a held level lock is one
+        report["apply_failed"] = str(exc)
     return report
 
 
@@ -293,11 +302,18 @@ def main(argv=None):
                     help="tree root(s) to scan (repeatable)")
     ap.add_argument("--apply", action="store_true", help="write (default: DRY-RUN, writes nothing)")
     args = ap.parse_args(sys.argv[1:] if argv is None else argv)
+    # A typo'd --root walks nothing and reported "0 pointer file(s)" with exit 0, which reads
+    # exactly like a tree with nothing left to migrate.
+    missing = [r for r in args.roots if not Path(r).is_dir()]
+    if missing:
+        for r in missing:
+            print("! error: no such directory: %s" % r, file=sys.stderr)
+        return 2
     rep = migrate(args.roots, apply=args.apply)
     if rep["backup_failed"]:
         print("ABORTED: backup failed, nothing was moved or rewritten: %s" % rep["backup_failed"],
               file=sys.stderr)
-        return 1
+        return 2
     tag = "APPLIED" if args.apply else "DRY-RUN"
     print("%s: %d pointer file(s); %d legacy line(s); %d body move(s); %d collision(s); %d missing;"
           " %d unreadable"
@@ -312,7 +328,12 @@ def main(argv=None):
         print("    REFUSED (unreadable pointer file in this tree, nothing applied): %s" % tree)
     for b in rep["backups"]:
         print("    backup: %s" % b)
-    return 0
+    if rep["apply_failed"]:
+        print("! error: the apply stopped part-way (%s) - restore from the backup listed above"
+              % rep["apply_failed"], file=sys.stderr)
+        return 2
+    # an unread file or a refused tree is part of the job this run could not do
+    return 2 if rep["unreadable"] or rep["refused_trees"] else 0
 
 
 if __name__ == "__main__":
