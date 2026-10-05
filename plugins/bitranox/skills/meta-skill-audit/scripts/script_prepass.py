@@ -723,25 +723,44 @@ def room_problem(room):
     return ""
 
 
+def _envelope(ok, data, skipped, error=None):
+    """The plugin-wide --json shape: {ok, command, data, skipped}, plus `error` on a failure.
+    ok means 'ran without error'; hits are data, never a reason for ok to be false."""
+    env = {"ok": ok, "command": "script_prepass", "data": data, "skipped": skipped}
+    if error is not None:
+        env["error"] = error
+    return json.dumps(env, indent=2, sort_keys=True)
+
+
+def _refuse(args, message):
+    print("script_prepass: %s" % message, file=sys.stderr)
+    if args.json:
+        print(_envelope(False, {}, [], error=message))
+    return 2
+
+
 def main(argv=None):
-    """Exit 0 after a scan (hits or not), 2 when the room is refused or the scan crashes."""
+    """Exit 0 after a scan (hits or not: a report), 2 when the room is refused or the scan
+    crashes. Under --json every exit prints the envelope, the exit-2 one with ok false."""
     _tolerant_stdio()
     ap = argparse.ArgumentParser(
         description="Deterministic pre-pass over a shipped-script corpus.",
-        epilog="Exit codes: 0 the scan ran (with or without hits); 2 refused or crashed.")
+        epilog="Exit codes: 0 the scan ran (with or without hits); 2 refused or crashed. "
+               "--json prints {ok, command, data, skipped} on every exit.")
     ap.add_argument("--room", required=True, help="the room's plugin dir")
-    ap.add_argument("--json", action="store_true", help="emit the per-file map as JSON")
+    ap.add_argument("--json", action="store_true",
+                    help="emit the envelope {ok, command, data: {facts, leads, unmeasured}, "
+                         "skipped}")
     args = ap.parse_args(sys.argv[1:] if argv is None else argv)
     problem = room_problem(args.room)
     if problem:
-        print("script_prepass: %s" % problem, file=sys.stderr)
-        return 2
+        return _refuse(args, problem)
     try:
         return _scan(args)
-    except Exception:
+    except Exception as exc:
         traceback.print_exc()
-        print("script_prepass: crashed before a result (exit 2)", file=sys.stderr)
-        return 2
+        return _refuse(args, "crashed before a result (exit 2): %s: %s"
+                       % (type(exc).__name__, exc))
 
 
 def _scan(args):
@@ -754,8 +773,10 @@ def _scan(args):
                                         vendored=vendored_targets(audit_skills, args.room),
                                         unmeasured=unmeasured)
     if args.json:
-        print(json.dumps({"facts": facts, "leads": leads, "unmeasured": unmeasured},
-                         indent=2, sort_keys=True))
+        skipped = ["%s: %s: %s" % (check, entry[0], entry[1] if len(entry) > 1 else "")
+                   for check, entries in sorted(unmeasured.items()) for entry in entries]
+        print(_envelope(True, {"facts": facts, "leads": leads, "unmeasured": unmeasured},
+                        skipped))
         return 0
     for line in summary:
         print(line)

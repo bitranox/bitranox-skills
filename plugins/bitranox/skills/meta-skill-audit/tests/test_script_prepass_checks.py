@@ -221,8 +221,16 @@ def test_main_on_a_plugin_reports_its_hits_and_target_count(tmp_path, capsys):
 
 
 def test_main_json_on_a_plugin(tmp_path, capsys):
+    import json
+
     rc = P.main(["--room", str(_fixture_plugin(tmp_path)), "--json"])
-    assert rc == 0 and '"hooks/h.py"' in capsys.readouterr().out
+    out = json.loads(capsys.readouterr().out)
+    assert rc == 0
+    # The plugin-wide envelope: ok = ran without error, true even though the scan has hits (a
+    # report: hits never change the exit code).
+    assert set(out) >= {"ok", "command", "data", "skipped"}
+    assert out["ok"] is True and out["command"] == "script_prepass"
+    assert "hooks/h.py" in out["data"]["facts"]
 
 
 def test_main_json_carries_an_unmeasured_key(tmp_path, capsys):
@@ -236,8 +244,8 @@ def test_main_json_carries_an_unmeasured_key(tmp_path, capsys):
     rc = P.main(["--room", str(_fixture_plugin(tmp_path)), "--json"])
     out = json.loads(capsys.readouterr().out)
     assert rc == 0
-    assert "unmeasured" in out
-    assert "js_parse" in out["unmeasured"]
+    assert "unmeasured" in out["data"]
+    assert "js_parse" in out["data"]["unmeasured"]
 
 
 def test_main_json_unmeasured_names_the_file_node_could_not_check(tmp_path, capsys):
@@ -249,8 +257,11 @@ def test_main_json_unmeasured_names_the_file_node_could_not_check(tmp_path, caps
     assert rc == 0
     # node is not guaranteed to be on PATH in CI; either it ran (unmeasured empty) or it could
     # not be launched (the js file is named as unmeasured) - both are a well-formed envelope.
-    js_unmeasured = out["unmeasured"]["js_parse"]
+    js_unmeasured = out["data"]["unmeasured"]["js_parse"]
     assert js_unmeasured == [] or js_unmeasured[0][0] == "skills/a/broken.js"
+    # What could not be judged is also named in `skipped`, the envelope's place for it.
+    assert all("skills/a/broken.js" in s for s in out["skipped"])
+    assert len(out["skipped"]) == len(js_unmeasured)
 
 
 @pytest.mark.parametrize("json_flag", [[], ["--json"]])
@@ -258,6 +269,13 @@ def test_main_on_a_missing_room_exits_2(tmp_path, capsys, json_flag):
     rc = P.main(["--room", str(tmp_path / "does-not-exist")] + json_flag)
     captured = capsys.readouterr()
     assert rc == 2 and "TOTAL" not in captured.out and "does-not-exist" in captured.err
+    if json_flag:   # an exit 2 under --json still prints the envelope, ok false
+        import json
+
+        out = json.loads(captured.out)
+        assert out["ok"] is False and "does-not-exist" in out["error"]
+    else:
+        assert captured.out == ""
 
 
 def test_main_on_a_dir_that_is_not_a_plugin_exits_2(tmp_path, capsys):
@@ -302,7 +320,7 @@ def test_the_fail_open_launch_detector_tells_the_hook_mode_from_a_flag_named_hoo
 
 def test_no_skill_md_sends_a_cli_through_the_fail_open_launcher():
     """run-python.sh is strict by default: a CLI launch that cannot run its script (a mistyped
-    path, no Python 3) exits 3 with a stderr line. Only `--hook` - the mode hooks.json registers
+    path, no Python 3) exits non-zero with a stderr line. Only `--hook` - the mode hooks.json registers
     hooks with - turns that into exit 0, so a skill step launched that way reads a typo as a clean
     run. BITRANOX_RUN_PYTHON_STRICT=1 does not rescue it: `--hook` also honours the
     BITRANOX_HOOKS_OFF kill-switch, which exits 0 before the script is even looked for.

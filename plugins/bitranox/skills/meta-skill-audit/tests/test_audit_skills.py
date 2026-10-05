@@ -3,6 +3,8 @@
 The reviewer is injected at the `runner` seam, so these exercise the real module end to end with a
 substitute reviewer rather than patching internals."""
 
+import os
+
 import audit_skills as A
 
 
@@ -265,7 +267,16 @@ def _project_repo(tmp_path):
         "# bench\nRun `python scripts/run_bench.py`, then read docs/missing.md.\n", encoding="utf-8")
     (repo / "scripts").mkdir()
     (repo / "scripts" / "run_bench.py").write_text("SECRET_CONTENT = 1\n", encoding="utf-8")
-    subprocess.run(["git", "init", "-q", str(repo)], check=True)
+    # A push from a linked worktree exports GIT_DIR, which git reads before -C: strip it.
+    env = {k: v for k, v in os.environ.items() if k not in ("GIT_DIR", "GIT_WORK_TREE",
+                                                          "GIT_INDEX_FILE")}
+    git = ["git", "-C", str(repo), "-c", "user.name=t", "-c", "user.email=t@example.com",
+           "-c", "commit.gpgsign=false"]
+    subprocess.run(["git", "init", "-q", str(repo)], check=True, env=env)
+    subprocess.run([*git, "add", "scripts/run_bench.py", ".claude"], check=True, env=env)
+    subprocess.run([*git, "commit", "-q", "-m", "x"], check=True, env=env)
+    # Untracked and not ignored: a clone does not have it, so it must not resolve.
+    (repo / "scripts" / "draft.py").write_text("X = 1\n", encoding="utf-8")
     return repo
 
 
@@ -279,6 +290,9 @@ def test_a_project_local_skills_dir_stages_the_repo_path_manifest(tmp_path):
     manifest = (room / A.REPO_MANIFEST).read_text(encoding="utf-8")
     assert "scripts/run_bench.py" in manifest.splitlines()
     assert "docs/missing.md" not in manifest
+    # Tracked only: a skill naming a script that was never committed must read DANGLING, since
+    # every other clone lacks it.
+    assert "scripts/draft.py" not in manifest
     assert "SECRET_CONTENT" not in manifest
     assert not (room / "scripts").exists(), "the clean room still holds no repo content"
 

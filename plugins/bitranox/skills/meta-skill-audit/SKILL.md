@@ -52,7 +52,7 @@ one second of `ast.parse` over the catalogue, against several minutes of reviewe
 
 Launch every script below through the plugin's shim: `bash hooks/run-python.sh <script> [args]`.
 The shim finds a working Python on every platform, and a mistyped script path prints one stderr
-line naming the shim and exits 3 rather than reading as a clean run - this is already the default
+line naming the shim and exits 2 rather than reading as a clean run - this is already the default
 for a CLI call with no `--hook` flag; `BITRANOX_RUN_PYTHON_STRICT=1` is only needed to force the
 same loud behaviour on a `--hook` launch, which these scripts never use.
 
@@ -75,11 +75,12 @@ same loud behaviour on a `--hook` launch, which these scripts never use.
      message, which is the report; SessionStart hooks write `CLAUDE.md` into the shared room; the
      recall hook is the contamination step 1 walls off. Keep step 1 anyway - it also covers a
      reviewer you start by hand to re-check a finding.
-   - **A target with no report is a finding, never a clean zero.** Its report file starts
+   - **A target with no report is an error, never a clean zero.** Its report file starts
      `REPORT MISSING:` and says why: the CLI failed, timed out or was not found, or the reply
-     carried no report block.
-   - **Exit codes:** 0 every target has a report; 1 at least one has none; 2 refused or crashed
-     before a verdict - a source inside the room, a room inside the source, an unknown `--kind`, a
+     carried no report block. Nothing judged that target, so re-run it (`--skip-existing`).
+   - **Exit codes:** 0 every target has a report; 2 at least one has none, or the run was refused
+     or crashed before a verdict. Findings live in the reports, never in the exit code, so 1 is
+     never returned. Refusals: a source inside the room, a room inside the source, an unknown `--kind`, a
      flag the mode would ignore, or a selection that matches nothing. `--kind`, `--skip-existing`
      and `--include-vendored` belong to the `--scripts` sweep, so each is refused without
      `--scripts`; `--hooks-dir` is refused without `--skills-dir`.
@@ -134,8 +135,10 @@ script sweep needs `--plugin`; `--skills-dir` is refused there.
 `script_prepass.py` (home: `skills/meta-skill-audit/scripts/`)
 scans the whole corpus deterministically before any reviewer starts, and `--scripts` runs it for you
 - it is not a separate step. Run it alone with `--room <plugin dir>` to see the corpus summary, or
-`--json` for the per-file map. A room that is missing or has neither `hooks/` nor `skills/` exits 2
-rather than printing a clean zero. A check that could not judge a file says so on its summary line:
+`--json` for the per-file map, printed as `{ok, command, data, skipped}` with the map under `data`
+and every file a check could not judge in `skipped`. Hits never change the exit code: a scan that
+ran exits 0 (`ok` true), hits or not. A room that is missing or has neither `hooks/` nor `skills/`
+exits 2 (`ok` false, with an `error`) rather than printing a clean zero. A check that could not judge a file says so on its summary line:
 with no `node` on PATH, or a `node --check` that timed out, the `js_parse` line reads `UNMEASURED
 for N file(s)` instead of a bare `0 hit(s)`.
 

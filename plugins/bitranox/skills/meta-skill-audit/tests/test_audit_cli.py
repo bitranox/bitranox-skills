@@ -91,11 +91,13 @@ def test_every_reviewer_is_launched_with_all_hooks_disabled(tmp_path, monkeypatc
     assert argv[:2] == ["-p", "--model"]
 
 
-def test_a_failing_cli_makes_the_run_exit_1_and_says_why(tmp_path, monkeypatch):
+def test_a_failing_cli_makes_the_run_exit_2_and_says_why(tmp_path, monkeypatch):
+    # A target with no report is one the reviewer could not judge: 'could not run' (2), never a
+    # 'no' about the skill (1) - the findings live in the reports.
     _fake_claude(tmp_path, monkeypatch, mode="fail")
     rc = A.main(["--plugin", str(_plugin(tmp_path)), "--room", str(tmp_path / "room")])
     body = _report(tmp_path, "alpha")
-    assert rc == 1
+    assert rc == 2
     assert "claude exited 1" in body.splitlines()[0] and "Invalid API key" in body
 
 
@@ -106,10 +108,10 @@ def test_a_clean_run_exits_0(tmp_path, monkeypatch):
     assert _report(tmp_path, "alpha") == "NO FINDINGS"
 
 
-def test_a_reviewer_that_ends_on_prose_makes_the_run_exit_1(tmp_path, monkeypatch):
+def test_a_reviewer_that_ends_on_prose_makes_the_run_exit_2(tmp_path, monkeypatch):
     _fake_claude(tmp_path, monkeypatch, mode="prose")
     rc = A.main(["--scripts", "--plugin", str(_plugin(tmp_path)), "--room", str(tmp_path / "room")])
-    assert rc == 1
+    assert rc == 2
     assert _report(tmp_path, "hooks__my-guard").startswith(A.REPORT_MISSING_MARKER)
 
 
@@ -118,14 +120,14 @@ def test_a_missing_cli_is_recorded_as_not_found(tmp_path, monkeypatch):
     empty.mkdir()
     monkeypatch.setenv("PATH", str(empty))
     rc = A.main(["--plugin", str(_plugin(tmp_path)), "--room", str(tmp_path / "room")])
-    assert rc == 1 and "not found" in _report(tmp_path, "alpha").splitlines()[0]
+    assert rc == 2 and "not found" in _report(tmp_path, "alpha").splitlines()[0]
 
 
 def test_a_timed_out_reviewer_is_recorded_as_a_timeout(tmp_path, monkeypatch):
     _fake_claude(tmp_path, monkeypatch, mode="sleep")
     rc = A.main(["--plugin", str(_plugin(tmp_path)), "--room", str(tmp_path / "room"),
                  "--timeout", "1"])
-    assert rc == 1 and "timed out" in _report(tmp_path, "alpha").splitlines()[0]
+    assert rc == 2 and "timed out" in _report(tmp_path, "alpha").splitlines()[0]
 
 
 # ---- listing what a run would review ------------------------------------------------------------
