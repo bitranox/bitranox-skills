@@ -156,6 +156,54 @@ def test_a_git_command_that_rewrites_the_tree_is_skipped(tmp_path, monkeypatch):
         assert f.read_text(encoding="utf-8") == MISALIGNED, command
 
 
+def _isolate_home(tmp_path, monkeypatch):
+    """The git-rewrite marker lives under Path.home(); isolate it so a test run never reads or
+    writes the real machine's ~/.claude/self-improve-audit."""
+    home = tmp_path / "home"
+    home.mkdir()
+    monkeypatch.setenv("HOME", str(home))
+    monkeypatch.setenv("USERPROFILE", str(home))
+
+
+def test_a_git_rewrite_is_not_reformatted_by_the_next_unrelated_bash_call(tmp_path, monkeypatch):
+    """The gap: `_rewrites_the_tree` only protects the SAME event's own scan. A git checkout
+    restamps the file's mtime, and the NEXT, unrelated, non-git Bash call within the 120 s window
+    re-scans by mtime with no memory of the git event, so it reformats a file it never wrote -
+    measured on a mirrored SKILL.md, where the mirror gate then blocked the commit.
+    """
+    _isolate_home(tmp_path, monkeypatch)
+    cwd = tmp_path / "repo"
+    cwd.mkdir()
+    f = cwd / "doc.md"
+    f.write_text(MISALIGNED, encoding="utf-8")
+
+    assert run_bash(monkeypatch, cwd, command="git checkout -B x origin/main") == 0
+    assert f.read_text(encoding="utf-8") == MISALIGNED  # the git event itself: already covered
+
+    assert run_bash(monkeypatch, cwd, command="true") == 0  # unrelated, non-git, same window
+
+    assert f.read_text(encoding="utf-8") == MISALIGNED, (
+        "the next unrelated Bash call must not reformat a file git just restamped")
+
+
+def test_a_git_rewrite_marker_does_not_leak_across_a_different_cwd(tmp_path, monkeypatch):
+    """The marker is keyed per cwd: a git rewrite in one project must not suppress a genuine
+    table write in an unrelated one running in the same window."""
+    _isolate_home(tmp_path, monkeypatch)
+    other = tmp_path / "other"
+    other.mkdir()
+    mine = tmp_path / "mine"
+    mine.mkdir()
+
+    assert run_bash(monkeypatch, other, command="git checkout -B x origin/main") == 0
+
+    f = mine / "doc.md"
+    f.write_text(MISALIGNED, encoding="utf-8")
+    assert run_bash(monkeypatch, mine, command="true") == 0
+
+    assert "| longer | z   |" in f.read_text(encoding="utf-8")
+
+
 def test_a_read_only_git_command_still_realigns(tmp_path, monkeypatch):
     """Verify the skip is scoped to git commands that WRITE the working tree.
 
