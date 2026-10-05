@@ -56,7 +56,7 @@ import os
 import re
 import sys
 
-from shell_text import SEP, commands_only_aligned, is_shell_tool
+from shell_text import commands_only_aligned, is_shell_tool, iter_segments
 
 _CD = re.compile(r"^\s*(?:\w+=\S*\s+)*cd(?:\s|$)")
 _VERB = re.compile(
@@ -75,13 +75,14 @@ def _statements(command, tool_name="Bash"):
     rather than deleted. A deleting strip shifted every statement after a heredoc onto the body
     text, so the real question was lost or a name from the body was reported as the path asked
     about.
+
+    Statements come from the quote-aware walk, which also ends one at a subshell paren: read with
+    a regex that knows no parens, `(git check-ignore -q x)` was the program `(git` and was never
+    asked about, and `(cd X && ...)` carried no cd. The walk runs on the MASKED text, so a paren
+    inside a quoted label is filler and cannot cut a statement.
     """
     masked = commands_only_aligned(command, tool_name)
-    spans, start = [], 0
-    for hit in SEP.finditer(masked):
-        spans.append((start, hit.start()))
-        start = hit.end()
-    spans.append((start, len(masked)))
+    spans = [(at, at + len(segment)) for at, segment in iter_segments(masked, tool_name)]
     return masked, spans
 
 

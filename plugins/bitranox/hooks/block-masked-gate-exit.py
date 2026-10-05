@@ -41,6 +41,7 @@ from shell_text import (
     LIST_SEP,
     blank_heredoc_bodies,
     blank_unexpanded_text,
+    iter_segments,
     mask_data_regions,
     strip_heredoc_bodies,
 )
@@ -57,8 +58,9 @@ GATE = re.compile(
     r")\b"
 )
 
-# Filters that swallow the upstream status by becoming the pipeline's exit code.
-FILTER = re.compile(r"^\s*(?:head|tail|grep|egrep|wc|cut|awk|sed|sort|uniq|tee)\b")
+# Filters that swallow the upstream status by becoming the pipeline's exit code. A filter written
+# as a subshell element (`gate | (tail -3)`) still sets the status - the subshell's is tail's.
+FILTER = re.compile(r"^[\s(]*(?:head|tail|grep|egrep|wc|cut|awk|sed|sort|uniq|tee)\b")
 
 # Statements that assert the gate passed, or act as though it did.
 CONSUMER = re.compile(
@@ -249,20 +251,107 @@ def reads_masked_status(command: str) -> bool:
     and all three false-fired this guard on the day it shipped. A `$?` inside DOUBLE quotes still
     counts, because it genuinely expands there - `echo "rc=$?"` is the exact mistake this catches,
     so prose in double quotes is knowingly left as a false positive rather than lose the real case.
+
+    Two views of the same text, because the two questions need different ones. STRUCTURE - where a
+    statement ends, where a pipe joins - comes from the masked text, where every quoted region is
+    filler: read on the expansion view, which keeps double quotes, `echo "x | head ; rc=$?"` (one
+    echo) was a pipe into head followed by a status read. The `$?` is then looked for on the
+    expansion view at the same offsets; both views preserve length.
+
+    A command substitution is where the two views part company, and two rules settle it (both
+    pinned by a corpus replay): an ASSIGNMENT-only statement exits with its substitution's status,
+    so `o=$(tool | head -c 4000); rc=$?` reads head's; and a `$?` inside a later substitution reads
+    whatever ran before it THERE, so `$(tool; echo $?)` is about tool, while `$(echo $?)` still
+    reads the pipe.
     """
-    text = blank_unexpanded_text(strip_heredoc_bodies(command or ""))
     if handles_pipe_status(command):
         return False
-    statements = [s for s in SPLIT.split(text) if s.strip()]
-    for index, statement in enumerate(statements):
-        elements = [e for e in _PIPE.split(statement) if e.strip()]
-        piped = len(elements) >= 2 and any(FILTER.match(e) for e in elements[1:])
-        if not piped:
+    base = blank_heredoc_bodies(command or "")
+    masked = mask_data_regions(base)
+    expanding = blank_unexpanded_text(base)
+    reads = _status_reads(expanding)
+    spans = [(a, b) for a, b in _spans(masked) if masked[a:b].strip()]
+    for index, (start, end) in enumerate(spans):
+        if not _ends_in_a_filter(base, masked, start, end):
             continue
-        following = statements[index + 1] if index + 1 < len(statements) else ""
-        if _STATUS_READ.search(following):
+        following = spans[index + 1] if index + 1 < len(spans) else (end, end)
+        if any(following[0] <= at < following[1] for at in reads):
             return True
     return False
+
+
+def _spans(masked: str) -> list[tuple[int, int]]:
+    """(start, end) of each statement of an already-masked command, pipelines kept whole."""
+    spans, start = [], 0
+    for sep in SPLIT.finditer(masked):
+        spans.append((start, sep.start()))
+        start = sep.end()
+    spans.append((start, len(masked)))
+    return spans
+
+
+# A statement made only of `NAME=value` words: it runs no program, so its exit status is the one
+# its last command substitution left.
+_ASSIGNMENTS_ONLY = re.compile(r"^\s*(?:[A-Za-z_]\w*=\S*\s*)+$")
+
+
+def _ends_in_a_filter(base: str, masked: str, start: int, end: int) -> bool:
+    """True when the statement at [start, end) leaves a swallowing filter's status in `$?`."""
+    structure = masked[start:end]
+    if _ASSIGNMENTS_ONLY.match(structure):
+        bodies = [b for b in _substitution_bodies(base) if start <= b[0] < end]
+        if not bodies:
+            return False
+        body = base[bodies[-1][0]:bodies[-1][1]]
+        inner = mask_data_regions(body)
+        last = [(a, b) for a, b in _spans(inner) if inner[a:b].strip()]
+        structure = inner[last[-1][0]:last[-1][1]] if last else ""
+    elements = [e for e in _PIPE.split(structure) if e.strip()]
+    return len(elements) >= 2 and any(FILTER.match(e) for e in elements[1:])
+
+
+def _walk(text: str):
+    """(start, end, separator_before, openers) for each segment of the quote-aware walk.
+
+    `openers` is the stack of group openers (`$(`, a backtick, `(` ...) the segment sits inside.
+    """
+    stack: list[str] = []
+    previous_end = 0
+    for at, segment in iter_segments(text):
+        separator = text[previous_end:at]
+        if stack and (separator == ")" or (separator == "`" and stack[-1] == "`")):
+            stack.pop()
+        elif separator in ("$(", "(", "<(", ">(", "`"):
+            stack.append(separator)
+        previous_end = at + len(segment)
+        yield at, previous_end, separator, tuple(stack)
+
+
+def _substitution_bodies(text: str) -> list[tuple[int, int]]:
+    """(start, end) of each outermost `$(...)` / backtick body in `text`."""
+    bodies, open_at = [], None
+    for at, _end, separator, openers in _walk(text):
+        if separator in ("$(", "`") and len(openers) == 1:
+            open_at = at
+        elif not openers and open_at is not None:
+            bodies.append((open_at, at - len(separator)))
+            open_at = None
+    return bodies
+
+
+def _status_reads(expanding: str) -> list[int]:
+    """Offsets of every `$?` that reads the status left BEFORE its statement.
+
+    Outside a substitution that is every one. Inside a `$(...)` only a read in the substitution's
+    FIRST statement qualifies; after `$(tool; echo $?)` has run tool, the read is about tool.
+    """
+    reads = []
+    for at, end, separator, openers in _walk(expanding):
+        substituted = any(o in ("$(", "`") for o in openers)
+        if substituted and separator not in ("$(", "`"):
+            continue
+        reads += [m.start() for m in _STATUS_READ.finditer(expanding, at, end)]
+    return reads
 
 
 def masks_a_gate(statement: str, tool_name: str = "Bash") -> bool:

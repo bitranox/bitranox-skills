@@ -51,23 +51,20 @@ import sys
 from pathlib import Path
 
 from shell_text import (
-    LIST_SEP,
     basename_for_tool,
     blank_heredoc_bodies,
     is_shell_tool,
+    iter_segments,
     mask_data_regions,
     split_for_tool,
 )
 
-# Statement separators (`shell_text.LIST_SEP`), NOT including `|`. A pipeline is ONE statement:
-# its last element is usually a filter, and `shell_text.SEP` splits on `|` because the guards that use it ask
-# "does any segment run a forbidden command". Asking "what command is being retried" is a
-# different question, and splitting on `|` answers it wrongly - `grep ... | head -60` becomes
-# the command `head` with the flag `-60` and NO operands, so any two pipeline tails compare
-# equal. Measured over 181 real sessions before this was fixed: 536 firings, 216 of them in a
-# single session, essentially all of them pipeline tails rather than retries.
-# Applied to the MASKED text only: on the raw text a quoted `;` split a sed script in two.
-_STATEMENT_SEP = LIST_SEP
+# The separators that continue a PIPELINE rather than start a statement. A pipeline is ONE
+# statement here: its last element is usually a filter, and asking "what command is being
+# retried" of `grep ... | head -60` must not answer `head` with the flag `-60` and NO operands, or
+# any two pipeline tails compare equal. Measured over 181 real sessions before this was fixed: 536
+# firings, 216 of them in a single session, essentially all of them pipeline tails, not retries.
+_PIPE_SEPARATORS = frozenset({"|", "|&"})
 
 STATE_VERSION = 1
 MAX_RECORDED = 60          # bound the state file on a marathon session
@@ -101,25 +98,77 @@ def _save(session: str, state: dict) -> None:
 def _command_head(command: str, tool_name: str) -> str:
     """The raw text of the first pipeline element of the LAST statement, or "". PURE.
 
-    Separators are FOUND on the masked text - heredoc bodies blanked in place, quoted text,
-    substitutions and comments masked, every step length-preserving - and the command is SLICED
-    from the unmasked text at the same offsets, so a quoted `;` or `|` is data, not structure.
+    Separators are FOUND by shell_text's quote-aware walk on the masked text - heredoc bodies
+    blanked in place, quoted text, substitutions and comments masked, every step length-preserving
+    - and the command is SLICED from the unmasked text at the same offsets, so a quoted `;` or `|`
+    is data, not structure.
+
+    The answer is the FIRST element of the last pipeline - the command being run, where the rest
+    only shapes its output - and the walk's parens are read by what they open (`_HeadWalk`): a
+    subshell that IS that element contributes its own last statement, so `(sed -n 1p f) | head`
+    is `sed` with the operand `f`, not `(sed` with `f)`; a process substitution is an ARGUMENT, so
+    `diff <(sed a x) <(sed b y)` stays the command `diff`.
     """
     text = blank_heredoc_bodies(command)
     masked = mask_data_regions(text, tool_name=tool_name)
-    spans, start = [], 0
-    for sep in _STATEMENT_SEP.finditer(masked):
-        spans.append((start, sep.start()))
-        start = sep.end()
-    spans.append((start, len(masked)))
-    spans = [(a, b) for a, b in spans if masked[a:b].strip()]
-    if not spans:
-        return ""
-    begin, end = spans[-1]
-    # Within the last statement take the FIRST pipeline element: that is the command being run,
-    # where the rest of the pipeline only shapes its output.
-    pipe = masked.find("|", begin, end)
-    return text[begin:end if pipe < 0 else pipe]
+    walk = _HeadWalk()
+    previous_end = 0
+    for at, segment in iter_segments(masked, tool_name):
+        walk.separator(masked[previous_end:at])
+        previous_end = at + len(segment)
+        walk.segment(at, previous_end, bool(segment.strip()))
+    span = walk.frames[0].head
+    return text[span[0]:span[1]] if span else ""
+
+
+# A paren the walk reports that opens an ARGUMENT, not a statement: its contents are part of the
+# enclosing command's words.
+_SUBSTITUTION_OPENERS = frozenset({"$(", "<(", ">(", "`"})
+
+
+class _HeadWalk:
+    """Track, per open group, the span of its last statement's first pipeline element.
+
+    One frame per open group: the command itself, a subshell, or a substitution. Inside a frame a
+    list separator starts a statement, a pipe continues one, and the segments of the element that
+    started a statement extend its span - across a substitution, whose text is part of its words.
+    """
+
+    class _Frame:
+        def __init__(self, kind, heads_parent):
+            self.kind = kind                  # "top", "subshell" or "substitution"
+            self.heads_parent = heads_parent  # this group IS the element the parent is waiting for
+            self.head = None                  # (start, end) of the current statement's first element
+            self.expect_head = True           # the next non-blank segment starts a statement
+            self.in_head = False              # still inside that first element
+
+    def __init__(self):
+        self.frames = [self._Frame("top", False)]
+
+    def separator(self, sep):
+        frame = self.frames[-1]
+        if sep in _SUBSTITUTION_OPENERS and not (sep == "`" and frame.kind == "backtick"):
+            self.frames.append(self._Frame("backtick" if sep == "`" else "substitution", False))
+        elif sep == "(":
+            self.frames.append(self._Frame("subshell", frame.expect_head))
+            frame.expect_head = False
+        elif sep in (")", "`") and len(self.frames) > 1:
+            closed = self.frames.pop()
+            if closed.kind == "subshell" and closed.heads_parent:
+                self.frames[-1].head, self.frames[-1].in_head = closed.head, False
+        elif sep in _PIPE_SEPARATORS:
+            frame.in_head = False
+        elif sep:
+            frame.expect_head, frame.in_head = True, False
+
+    def segment(self, start, end, has_text):
+        frame = self.frames[-1]
+        if frame.kind in ("substitution", "backtick"):
+            return                            # an argument's insides: part of the enclosing words
+        if has_text and frame.expect_head:
+            frame.head, frame.expect_head, frame.in_head = (start, end), False, True
+        elif frame.in_head and frame.head:
+            frame.head = (frame.head[0], end)
 
 
 def shape(command, tool_name="Bash"):

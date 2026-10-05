@@ -369,3 +369,53 @@ def test_a_double_quoted_parameter_delimiter_is_a_quoted_heredoc(
     assert run_hook(quoted, monkeypatch, capsys) == (0, "")
     # The control: the same body under a BARE parameter delimiter is expanded.
     assert heredoc_blocked("cat <<$DELIM\nsee `date`\n$DELIM")
+
+
+# ------------------------------------------- a subshell is a statement boundary
+
+@pytest.mark.parametrize("command", [
+    '(MSG="$(cat f)" make push MSG="$MSG")',
+    'cd x && (MSG=1 make push MSG="$MSG")',
+    'echo start; (FOO=1 tool --arg "$FOO")',
+])
+def test_a_prefix_self_reference_inside_a_subshell_is_blocked(command: str) -> None:
+    """Statements were cut on a regex that knows no parens, so the first word read `(MSG=...`,
+    which is no assignment, and the reference inside the subshell went unjudged."""
+    assert blocked('MSG="$(cat f)" make push MSG="$MSG"')                      # control
+    assert blocked(command)
+
+
+def test_a_quoted_paren_label_does_not_split_a_statement() -> None:
+    """The replay lesson from 7.23.3: a paren split on raw text cut `echo "(must PASS)"` labels."""
+    assert blocked('echo "=== (must PASS) ===" ; MSG=1 make MSG="$MSG"')
+    assert not blocked('MSG="(a; b)" make push')
+
+
+# ------------------------------------------- gh's short text flags, scoped to gh
+
+@pytest.mark.parametrize("command", [
+    'gh pr create -t "Fix" -b "see $(whoami)"',
+    'gh pr create -b"see `date`"',
+    'gh issue create -t "x $(y)" -b body',
+    'cd repo && gh pr edit 12 -b "now $(cat body.md)"',
+    'gh pr comment 12 -b "ran `make test`"',
+])
+def test_gh_short_text_flags_carry_prose_too(command: str) -> None:
+    """`-t`/`-b` are gh's spellings of --title/--body, and the shell runs a substitution in them
+    exactly as it does in the long form, which was already blocked."""
+    assert guard.substitutes_inside_text_arg('gh pr create --body "see $(whoami)"') is True  # control
+    assert guard.substitutes_inside_text_arg(command) is True
+
+
+@pytest.mark.parametrize("command", [
+    'git checkout -b "feat-$(date +%s)"',
+    'docker build -t "img:$(git rev-parse --short HEAD)" .',
+    'tar -b "$(nproc)" -cf x.tar dir',
+    "gh pr create -t 'single $(quoted)' -b body",
+    'gh pr view 12 -t "$(x)"',
+    'echo "gh pr create -b"; docker build -t "img:$(git rev-parse HEAD)" .',
+])
+def test_short_b_and_t_elsewhere_are_ordinary_work(command: str) -> None:
+    """Outside gh's prose-carrying subcommands, -b and -t take branch names, image tags, sizes:
+    substituting one in is ordinary, and a guard that fired there would be disabled."""
+    assert guard.substitutes_inside_text_arg(command) is False

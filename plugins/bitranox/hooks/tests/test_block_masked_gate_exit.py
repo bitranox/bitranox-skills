@@ -213,6 +213,60 @@ def test_double_quoted_status_read_still_fires():
     assert B.reads_masked_status('tool verify | tail -5; echo "rc=$?"') is True
 
 
+@pytest.mark.parametrize("command", [
+    'echo "x | head ; rc=$?"',
+    'echo "a | tail -3"; echo "rc=$?"',
+    'printf "%s\\n" "one | head -1 ; two $?"',
+])
+def test_a_separator_or_pipe_inside_double_quotes_is_not_structure(command):
+    """The status read is found where `$?` expands (double quotes kept), but STRUCTURE must come
+    from the masked text: split on the expansion view, `echo "x | head ; rc=$?"` - one echo - read
+    as a pipe into head followed by a status read."""
+    assert B.reads_masked_status('tool verify | head ; echo "rc=$?"') is True     # control
+    assert B.reads_masked_status(command) is False
+
+
+def test_a_quoted_separator_before_the_pipe_does_not_shift_the_adjacency():
+    assert B.reads_masked_status('echo "a;b" | tail -3; echo "rc=$?"') is True
+
+
+# The corpus replay of the structure fix (100,216 real commands) changed 9 verdicts. Five were
+# false positives removed - a pipe inside a `$(...)` that only builds an argument, whose `$?` then
+# reads the OUTER command. The other four pinned these two rules.
+
+@pytest.mark.parametrize("command", [
+    'o=$(tool --x 2>&1 </dev/null | head -c 4000)\nrc=$?',
+    'out=$(E --p x config 2>&1 >/dev/null | grep -iE "error" | head -1)\nrc=$?',
+])
+def test_an_assignment_from_a_piped_substitution_hands_on_the_filters_status(command):
+    """An assignment-only statement exits with its substitution's status, which is the inner
+    pipeline's LAST element - the filter. Two such loops in the corpus read `rc=$?` exactly so."""
+    assert B.reads_masked_status(command) is True
+
+
+@pytest.mark.parametrize("command", [
+    'tool --sha a$(git rev-parse x | cut -c9-) > log 2>&1; echo "RC=$?"',
+    'out=$(app $(env | grep -o X | sed s/^/-u/) 2>err); rc=$?',
+])
+def test_a_pipe_that_only_builds_an_argument_does_not_set_the_status(command):
+    assert B.reads_masked_status(command) is False
+
+
+def test_a_status_read_inside_a_later_substitution_reads_that_substitutions_command():
+    """`$(tool ...; echo $?)` reports tool's status, not the pipe's before it - the corpus shape
+    `... | tail -1; echo "exit=$(lsdsk ... >/dev/null 2>&1; echo $?)"`."""
+    assert B.reads_masked_status('x | tail -1; echo "exit=$(tool >/dev/null 2>&1; echo $?)"') is False
+    # A read that runs FIRST in its substitution still sees the pipe's status.
+    assert B.reads_masked_status('x | tail -1; echo "exit=$(echo $?)"') is True
+
+
+def test_a_filter_written_as_a_subshell_element_still_masks_the_gate(monkeypatch):
+    """`gate | (tail -3)` runs tail in a subshell, and the subshell's status is still tail's."""
+    assert B.masks_a_gate("pytest -q | tail -3") is True                          # control
+    assert B.masks_a_gate("pytest -q | (tail -3)") is True
+    assert run_main(monkeypatch, "pytest -q | ( tail -3 ) && git commit -m x") == 2
+
+
 def test_blanking_preserves_the_command_shape():
     """Structure outside the inert regions must survive, or the pipeline split changes meaning."""
     import shell_text
