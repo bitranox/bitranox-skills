@@ -90,6 +90,34 @@ def test_every_command_carrying_tool_the_matcher_admits_is_realigned(tmp_path, m
     assert "| longer | z   |" in f.read_text(encoding="utf-8"), tool_name
 
 
+@pytest.mark.parametrize("stem", ["reformat-md-tables", "tell-sweep"])
+def test_a_file_hook_that_never_reads_notebook_path_is_not_registered_for_notebookedit(stem):
+    """Neither hook reads `notebook_path`, so a NotebookEdit registration only spawned a no-op.
+
+    Both docstrings used to admit it ("the registration is a no-op for that tool"), and every
+    notebook edit still paid two interpreter starts for nothing. The PostToolUse group is split so
+    these two run for Write|Edit|MultiEdit only; the hooks that DO read `notebook_path`
+    (validate-structured-files, touched-paths) keep NotebookEdit. Control: they still have it.
+    """
+    from pathlib import Path
+
+    hooks_json = Path(H.__file__).resolve().parent / "hooks.json"
+    groups = json.loads(hooks_json.read_text(encoding="utf-8"))["hooks"]["PostToolUse"]
+
+    def tools_for(name):
+        found = set()
+        for group in groups:
+            for handler in group["hooks"]:
+                if handler["command"].endswith('/hooks/%s.py"' % name):
+                    found |= set((group.get("matcher") or "").split("|"))
+        return found
+
+    assert {"Write", "Edit", "MultiEdit"} <= tools_for(stem)
+    assert "NotebookEdit" not in tools_for(stem)
+    assert "NotebookEdit" in tools_for("validate-structured-files")
+    assert "NotebookEdit" in tools_for("touched-paths")
+
+
 def test_an_event_carrying_no_command_is_left_alone(tmp_path, monkeypatch):
     """Control: the widening keys on the command, so an event without one still does nothing."""
     f = tmp_path / "doc.md"

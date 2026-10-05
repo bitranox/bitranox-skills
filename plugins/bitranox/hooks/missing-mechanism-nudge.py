@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""PreToolUse(Bash|PowerShell) nudge: a memory hook asserting a mechanism is MISSING needs the init path read.
+"""PreToolUse(Bash|PowerShell|AskUserQuestion) nudge: a MISSING-mechanism premise needs its evidence.
 
 "X is missing" / "X defaults off" / "X is never called" is the shape of claim that is easiest to
 infer and hardest to verify: a doc comment is not a constructor, and a feature that ships OFF
@@ -18,6 +18,14 @@ The hook text is read from every spelling the engine's argparse accepts: `--hook
 docs prescribe for long hooks. A hook file is read only when it already exists and is small: this
 runs BEFORE the command, so a file the same command writes is not there yet and is skipped rather
 than guessed at.
+
+The second enshrining moment is a QUESTION to the user: an option built on "X cannot" or "Y is
+missing" gets chosen on that premise, and the choice outlives the session. So every AskUserQuestion
+call gets one fixed line, with no wording match (the user chose that over a premise detector, which
+would miss every shape nobody listed). Probe-verified on CLI 2.1.289: the line is recorded as a
+`hook_additional_context` attachment on the tool use, but the model first reads it together with
+the user's ANSWER, so it cannot reshape the question it rides on. The text therefore says what to
+do once answered (flag an unmeasured premise and re-ask) and primes the next question.
 
 NON-BLOCKING: emits additionalContext and exits 0. Fail-open on any error. ASCII only.
 """
@@ -66,6 +74,15 @@ _NOTICE = (
     "OFF behind an opt-in reads exactly like a dead path, so say whether the opt-in was set. "
     "Recorded five times. If you have checked, name where (the file, the symbol, the line) in the "
     "hook itself - that turns the claim into a finding and silences this nudge."
+)
+
+
+QUESTION_REMINDER = (
+    "QUESTION PREMISES: an option that rests on a tool/OS/library premise ('X cannot', 'Y is "
+    "missing', 'Z defaults off') must have been measured with a named instrument first, or say "
+    "'unverified' in the option itself. This reaches you with the answer: if the question you "
+    "already answered offered such a premise unmeasured, tell the user now and re-ask after "
+    "measuring; apply it before the next question."
 )
 
 
@@ -141,6 +158,9 @@ def main() -> int:
         event = json.load(sys.stdin)
     except Exception:  # noqa: BLE001 - no/invalid stdin: do nothing
         return 0
+    if isinstance(event, dict) and event.get("tool_name") == "AskUserQuestion":
+        _emit(QUESTION_REMINDER)
+        return 0
     if not isinstance(event, dict) or not is_shell_tool(event.get("tool_name")):
         return 0
     message = notice(
@@ -149,11 +169,15 @@ def main() -> int:
         cwd=event.get("cwd") if isinstance(event.get("cwd"), str) else None,
     )
     if message:
-        sys.stdout.write(json.dumps({"hookSpecificOutput": {
-            "hookEventName": "PreToolUse",
-            "additionalContext": message,
-        }}) + "\n")
+        _emit(message)
     return 0
+
+
+def _emit(message):
+    sys.stdout.write(json.dumps({"hookSpecificOutput": {
+        "hookEventName": "PreToolUse",
+        "additionalContext": message,
+    }}) + "\n")
 
 
 if __name__ == "__main__":

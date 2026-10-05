@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""PostToolUse(Write|Edit|MultiEdit|NotebookEdit|Bash|PowerShell|Monitor) hook: auto-realign markdown tables after a write.
+"""PostToolUse(Write|Edit|MultiEdit|Bash|PowerShell|Monitor) hook: auto-realign markdown tables after a write.
 
 Formatter-on-save for markdown tables (Mode A). When a markdown file is written or edited, reuse the
 docs-md-table-formatting skill's `reformat_tables.reformat_file()` to realign its tables in place, so a
@@ -14,11 +14,10 @@ with no declared path in exactly the same way. The scan never parses the command
 changed on disk - so it keys on the event CARRYING a command rather than on the tool being a shell,
 and any command-carrying tool the matcher admits is covered.
 
-NotebookEdit is in the matcher but a notebook edit is never reformatted: the event names its
-target `notebook_path`, which this hook deliberately does not read, because that path always ends
-in `.ipynb`, never in `_MD_SUFFIXES` - so there is nothing for the suffix check to match even if
-it were read. Until a notebook cell's own markdown content is worth reformatting in place, the
-registration is a no-op for that tool, same as `tell-sweep.py`'s NotebookEdit entry.
+NotebookEdit is deliberately NOT registered: its event names the target `notebook_path`, which
+always ends in `.ipynb`, never in `_MD_SUFFIXES`, so there is nothing to reformat. hooks.json
+keeps this hook and `tell-sweep.py` in their own PostToolUse group without NotebookEdit, while the
+hooks that do read `notebook_path` keep it.
 
 Silent by design: it just fixes the file. `reformat_tables` is safe-by-design (it bails on tables
 with inconsistent column counts and skips non-markdown fenced code blocks), so a normal edit is left

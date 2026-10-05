@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""PostToolUse(Write|Edit|MultiEdit|NotebookEdit) guard against AI-writing typographic / invisible
+"""PostToolUse(Write|Edit|MultiEdit) guard against AI-writing typographic / invisible
 tells in prose files.
 
 Flags em/en-dashes, curly quotes, ellipsis, guillemets, and invisible blanks
@@ -15,11 +15,10 @@ examples. A genuine reference to the character itself belongs in backticks anywa
 Code files are skipped (legit unicode in test data / identifiers); commit messages
 and code comments rely on the manual sweep plus the humanizer skill.
 
-NotebookEdit is in the matcher but notebooks are not swept: the event names its target
-`notebook_path`, which this hook deliberately does not read, and a notebook is JSON whose code
-cells and outputs carry legitimate unicode that a line scan of the raw file cannot tell from prose.
-Sweeping one would need a JSON-aware reader of its markdown cells; until then the registration is
-a no-op for that tool.
+NotebookEdit is deliberately NOT registered: notebooks are not swept. Its event names the target
+`notebook_path`, and a notebook is JSON whose code cells and outputs carry legitimate unicode that
+a line scan of the raw file cannot tell from prose. Sweeping one would need a JSON-aware reader of
+its markdown cells; until then hooks.json leaves this hook out of the NotebookEdit group.
 
 The tell codepoints and the ignore-code-span scanner live in the shared `tell_chars` module
 (so the `commit-tell-sweep` PreToolUse hook uses the exact same set). This source stays pure ASCII.
