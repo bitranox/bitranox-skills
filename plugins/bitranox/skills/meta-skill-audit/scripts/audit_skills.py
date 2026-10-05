@@ -1013,7 +1013,16 @@ def audit_scripts(plugin_src, room_root, model="opus", jobs=4, timeout=1500, onl
         log("WARNING: the room changed under the sweep - later reviewers read a different program:")
         for line in drift[:20]:
             log("  " + line)
-    log("DONE: %d finding(s) across %d script(s)" % (sum(results.values()), len(targets)))
+    by_class = {c: 0 for c in SCRIPT_CLASSES}
+    for rel, _kind in targets:
+        report_path = reports / ("%s.audit.txt" % report_stem(rel))
+        if not report_path.is_file():
+            continue
+        for cls, n in count_by_class(report_path.read_text(encoding="utf-8")).items():
+            by_class[cls] = by_class.get(cls, 0) + n
+    breakdown = ", ".join("%s=%d" % (c, n) for c, n in by_class.items() if n)
+    log("DONE: %d finding(s) across %d script(s)%s"
+        % (sum(results.values()), len(targets), " (%s)" % breakdown if breakdown else ""))
     return results
 
 

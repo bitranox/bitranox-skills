@@ -30,6 +30,22 @@ def test_multiplier_claim_is_still_found(tmp_path):
     assert _claims(tmp_path, "+gives a 3x speedup\n") == ["3x speedup"]
 
 
+def test_overlapping_patterns_report_one_claim_not_two(tmp_path):
+    """The keyword-first pattern ("speedup ... 2x") and the bare multiplier pattern ("2x") both
+    match inside "speedup of 2x" - one performance assertion in the source, so it must be
+    reported once, as the longer, more informative phrase, not as two overlapping claims."""
+    assert _claims(tmp_path, "+speedup of 2x\n") == ["speedup of 2x"]
+
+
+def test_a_number_first_and_keyword_first_overlap_report_one_claim(tmp_path):
+    """"reduced latency 40% improvement" has two overlapping matches: the number-first pattern
+    catches "40% improvement" (span 16-31) and the keyword-first pattern catches "reduced
+    latency 40%" (span 0-19, the longer of the two) - only the longer one must survive."""
+    claims = _claims(tmp_path, "+reduced latency 40% improvement\n")
+    assert len(claims) == 1
+    assert claims[0] == "reduced latency 40%"
+
+
 def test_keywords_do_not_match_inside_other_words(tmp_path):
     assert _claims(tmp_path, "+cursor.execute(sql, flags=0x1)\n+    cut_width: 50%\n") == []
 
