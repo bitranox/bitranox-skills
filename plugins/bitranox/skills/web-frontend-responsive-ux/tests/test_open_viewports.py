@@ -56,12 +56,12 @@ def test_window_titles_name_the_profile():
     assert launch.browser.pages[0].title == "Laptop 1440  1440x900"
 
 
-def test_failed_loads_are_counted_separately_and_exit_1_when_none_loaded(capsys):
+def test_failed_loads_are_counted_separately_and_exit_2_when_none_loaded(capsys):
     script = Script(goto_error=RuntimeError("Page.goto: net::ERR_CONNECTION_REFUSED"))
     launch = fake_launcher(script)
     rc = ov.main([URL, "--profiles", "Laptop 1440", "iPad mini (portrait)", "--delay", "0"], launch=launch)
     out = capsys.readouterr()
-    assert rc == 1
+    assert rc == 2
     assert "ERR_CONNECTION_REFUSED" in out.err
     assert "Opened 0 interactive windows (2 failed to load)" in out.out
 
@@ -96,22 +96,22 @@ def test_a_browser_that_is_gone_ends_the_wait():
     assert ov.open_windows(URL, [_laptop()], delay=0, launch=launch) == (1, 0)
 
 
-def test_missing_browser_exits_3(capsys):
+def test_missing_browser_exits_2(capsys):
     rc = ov.main([URL, "--profiles", "Laptop 1440"], launch=fake_launcher(error=RuntimeError(MISSING_EXECUTABLE)))
-    assert rc == 3
+    assert rc == 2
     assert "playwright install chromium" in capsys.readouterr().err
 
 
-def test_missing_host_libraries_exit_3_naming_install_deps(capsys):
+def test_missing_host_libraries_exit_2_naming_install_deps(capsys):
     rc = ov.main([URL, "--profiles", "Laptop 1440"], launch=fake_launcher(error=RuntimeError(MISSING_HOST_DEPS)))
     err = capsys.readouterr().err
-    assert rc == 3
+    assert rc == 2
     assert "install-deps" in err and "Chromium not installed" not in err
 
 
-def test_unrelated_launch_failure_exits_1(capsys):
+def test_unrelated_launch_failure_exits_2(capsys):
     rc = ov.main([URL, "--profiles", "Laptop 1440"], launch=fake_launcher(error=RuntimeError("boom")))
-    assert rc == 1
+    assert rc == 2
     assert "boom" in capsys.readouterr().err
 
 

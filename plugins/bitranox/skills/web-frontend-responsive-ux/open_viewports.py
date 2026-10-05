@@ -14,8 +14,8 @@ overlay, so you can drive the LIVE remote page with your local edited CSS/JS - n
       --route "**/static/js/app.js=src/.../app.js"
 
 It blocks while the windows are open and exits when you have closed them all, when the browser
-is quit, or on Ctrl-C. Exit 0 when at least one window loaded, 1 when none did (or the browser
-failed), 2 for bad arguments, 3 when Chromium cannot start.
+is quit, or on Ctrl-C. Exit 0 when at least one window loaded, 2 when nothing could be opened:
+no window loaded, the browser failed, Chromium cannot start, or bad arguments.
 Import-safe: the browser only opens under ``__main__``.
 """
 
@@ -109,19 +109,21 @@ def parse_args(argv):
 
 def main(argv=None, *, launch=None):
     """CLI entry. ``launch`` replaces the real Chromium launch (tests inject a scripted browser)."""
-    from audit_responsive import launch_failure, make_console_safe, parse_route_specs, select_profiles
+    from audit_responsive import (
+        EXIT_CANNOT_RUN, launch_failure, make_console_safe, parse_route_specs, select_profiles,
+    )
 
     make_console_safe()
     args = parse_args(argv if argv is not None else sys.argv[1:])
     profiles = select_profiles(args.profiles, include_landscape=not args.no_landscape)
     if profiles is None:
-        return 2
+        return EXIT_CANNOT_RUN
 
     try:
         rules = parse_route_specs(args.route)
     except ValueError as exc:
         print(str(exc), file=sys.stderr)
-        return 2
+        return EXIT_CANNOT_RUN
 
     try:
         loaded, _failed = open_windows(
@@ -135,8 +137,9 @@ def main(argv=None, *, launch=None):
             print(failure[1], file=sys.stderr)
             return failure[0]
         print(f"Could not open windows: {exc}", file=sys.stderr)
-        return 1
-    return 0 if loaded else 1
+        return EXIT_CANNOT_RUN
+    # No window loaded at all is nothing opened - the same "could not run" as an unreachable page.
+    return 0 if loaded else EXIT_CANNOT_RUN
 
 
 if __name__ == "__main__":

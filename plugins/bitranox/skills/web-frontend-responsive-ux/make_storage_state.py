@@ -14,6 +14,9 @@ No credentials are ever passed on the command line or stored by this tool - you 
 into the real login form, and only the resulting session token is saved. Treat the output
 file as a secret (it is git-ignored by convention; never commit it).
 
+Exit status: 0 the session was saved, 2 it could not be (Chromium cannot start, or the
+navigation or the write failed).
+
 Import-safe: logic lives in functions; the browser only opens under ``__main__``.
 """
 
@@ -66,8 +69,8 @@ def parse_args(argv):
 
 
 def main(argv=None, *, launch=None):
-    """CLI entry: 0 saved, 1 capture failed, 3 Chromium cannot start."""
-    from audit_responsive import launch_failure, make_console_safe
+    """CLI entry: 0 saved, 2 not saved (Chromium cannot start, or the capture failed)."""
+    from audit_responsive import EXIT_CANNOT_RUN, launch_failure, make_console_safe
 
     make_console_safe()
     args = parse_args(argv if argv is not None else sys.argv[1:])
@@ -79,7 +82,7 @@ def main(argv=None, *, launch=None):
             print(failure[1], file=sys.stderr)
             return failure[0]
         print(f"Could not capture session: {exc}", file=sys.stderr)
-        return 1
+        return EXIT_CANNOT_RUN
     print(f"Saved session to {path} - pass it as --storage-state to audit_responsive.py")
     return 0
 
