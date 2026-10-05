@@ -130,6 +130,23 @@ def test_main_returns_two_without_project(tmp_path, monkeypatch, capsys):
     assert "pyproject.toml" in err
 
 
+def test_main_returns_two_when_the_scratch_dir_cannot_be_created(tmp_path, monkeypatch, capsys):
+    """A temp root that cannot hold a directory (here a path under a regular FILE) raised an
+    uncaught traceback, exit 1, which reads like a finding rather than "could not start"."""
+    proj = tmp_path / "proj"
+    proj.mkdir()
+    (proj / "pyproject.toml").write_text("[project]\n", encoding="utf-8")
+    blocker = tmp_path / "not-a-dir"
+    blocker.write_text("x", encoding="utf-8")
+    monkeypatch.setattr(tempfile, "tempdir", str(blocker / "tmp"))
+    monkeypatch.chdir(proj)
+    rc = se.main(version_info=(3, 13, 0))
+    captured = capsys.readouterr()
+    assert rc == 2
+    assert "ERROR" in captured.err and "scratch" in captured.err
+    assert "Session file:" not in captured.out
+
+
 def test_main_refuses_an_interpreter_below_the_minimum(tmp_path, monkeypatch, capsys):
     """The version gate itself, which only became reachable in a test once main() grew the
     same version_info seam python_version_ok() already had."""

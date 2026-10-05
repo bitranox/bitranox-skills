@@ -42,9 +42,9 @@ def _run_main(mod, argv, monkeypatch, env_key="env-key"):
     return captured
 
 
-def test_missing_api_key_exits_1(gen_wrapper, monkeypatch, capsys):
+def test_missing_api_key_exits_2(gen_wrapper, monkeypatch, capsys):
     out = _run_main(gen_wrapper, ["a diagram", "-o", "x.png"], monkeypatch, env_key=None)
-    assert out["exit"] == 1
+    assert out["exit"] == 2
     assert "cmd" not in out  # never reached subprocess
     captured = capsys.readouterr()
     assert "OPENROUTER_API_KEY" in captured.err
@@ -152,7 +152,7 @@ def test_dash_prefixed_values_reach_the_child_intact(gen_wrapper, gen_ai, monkey
     assert (child.prompt, child.output) == (prompt, output)
 
 
-def test_launch_error_exits_1(gen_wrapper, monkeypatch, capsys):
+def test_launch_error_exits_2(gen_wrapper, monkeypatch, capsys):
     def refuse(*args, **kwargs):
         raise OSError("cannot launch")
 
@@ -161,7 +161,7 @@ def test_launch_error_exits_1(gen_wrapper, monkeypatch, capsys):
     monkeypatch.setenv("OPENROUTER_API_KEY", "FAKE-KEY-NOT-REAL")
     with pytest.raises(SystemExit) as exc:
         gen_wrapper.main()
-    assert exc.value.code == 1
+    assert exc.value.code == 2
     captured = capsys.readouterr()
     assert "cannot launch" in captured.err
     assert captured.out == ""
@@ -184,15 +184,29 @@ def _run_copy(wrapper, tmp_path, encoding="utf-8"):
     )
 
 
-def test_child_exit_code_is_propagated(tmp_path):
-    wrapper = _copy_wrapper(tmp_path, "import sys\nsys.exit(3)\n")
-    assert _run_copy(wrapper, tmp_path).returncode == 3
+@pytest.mark.parametrize("code", [0, 1, 2, 3])
+def test_child_exit_code_is_propagated(tmp_path, code):
+    wrapper = _copy_wrapper(tmp_path, f"import sys\nsys.exit({code})\n")
+    assert _run_copy(wrapper, tmp_path).returncode == code
 
 
-def test_missing_ai_script_exits_1(tmp_path):
+def test_wrapper_documents_its_exit_codes(gen_wrapper, monkeypatch, capsys):
+    """The wrapper had no exit table in its docstring; its own failures are 2 and the child's
+    code passes through, so both the docstring and --help must say that."""
+    monkeypatch.setattr(gen_wrapper.sys, "argv", ["generate_schematic.py", "--help"])
+    with pytest.raises(SystemExit):
+        gen_wrapper.main()
+    for text in (gen_wrapper.__doc__, capsys.readouterr().out):
+        status = " ".join(text.split("Exit status:", 1)[1].split())
+        assert "below the threshold" in status, status
+        assert "cannot be found or launched" in status, status
+        assert " 1 when" not in status, status
+
+
+def test_missing_ai_script_exits_2(tmp_path):
     wrapper = _copy_wrapper(tmp_path, None)
     proc = _run_copy(wrapper, tmp_path)
-    assert proc.returncode == 1
+    assert proc.returncode == 2
     assert b"not found" in proc.stderr
     assert proc.stdout == b""
 
@@ -202,7 +216,7 @@ def test_cp1252_console_with_non_ascii_path_prints_its_error(tmp_path):
     home.mkdir()
     wrapper = _copy_wrapper(home, None)
     proc = _run_copy(wrapper, home, encoding="cp1252")
-    assert proc.returncode == 1
+    assert proc.returncode == 2
     assert b"Traceback" not in proc.stderr
     assert b"not found" in proc.stderr
 

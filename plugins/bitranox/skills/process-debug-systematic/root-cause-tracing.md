@@ -106,9 +106,10 @@ python find_polluter.py .git "src/**/*.test.ts"
 ```
 
 Runs tests one-by-one through `npm test <file>`, stops at first polluter. Exit 0 = no test
-created the path, 1 = found it, 2 = error (bad usage, a glob that matches nothing, or npm never
-ran the tests - missing, no `test` script, or every run failed), 3 = the path already exists
-before the first test, so remove it and run again. See script for usage.
+created the path, 1 = found it, 2 = could not check (bad usage, a glob that matches nothing, npm
+never ran the tests - missing, no `test` script, or every run failed - or the path already
+exists before the first test, so remove it and run again; stderr says which). See script for
+usage.
 
 ## Real Example: Empty projectDir
 

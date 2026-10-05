@@ -1,8 +1,8 @@
 """audit_responsive.main() end to end with a scripted browser at the ``launch`` seam.
 
 Everything above the seam is the real code: profile selection, route parsing, the per-profile
-collection, analysis, report.json and the exit code (0 pass, 1 failure, 2 usage, 3 browser
-not installed, 4 findings).
+collection, analysis, report.json and the exit code (0 pass, 1 findings, 2 could not audit:
+bad arguments, a browser that cannot start, any other failure, an unwritable report).
 """
 
 import io
@@ -21,7 +21,7 @@ def run(tmp_path, *extra, script=None, error=None):
     out = tmp_path / "out"
     launch = fake_launcher(script, error=error)
     rc = ar.main([URL, "--out", str(out), "--profiles", "iPhone SE (portrait)", *extra], launch=launch)
-    report = json.loads((out / "report.json").read_text(encoding="utf-8")) if (out / "report.json").exists() else None
+    report = json.loads((out / "report.json").read_text(encoding="utf-8")) if (out / "report.json").is_file() else None
     return rc, report, launch.browser
 
 
@@ -34,10 +34,10 @@ def test_clean_page_passes_with_exit_0(tmp_path, capsys):
     assert (tmp_path / "out" / "iphone-se-portrait.png").exists()
 
 
-def test_findings_fail_with_exit_4(tmp_path):
+def test_findings_fail_with_exit_1(tmp_path):
     script = Script(raw={"scroll_width": 500, "client_width": 375})
     rc, report, _ = run(tmp_path, "--no-axe", script=script)
-    assert rc == 4
+    assert rc == 1
     assert report["totals"]["SEVERE"] == 1
 
 
@@ -45,7 +45,7 @@ def test_axe_that_fails_to_load_fails_the_audit(tmp_path):
     script = Script(axe_tag_error=RuntimeError("Page.add_script_tag: net::ERR_ABORTED 404"))
     rc, report, _ = run(tmp_path, script=script)
     device = report["devices"][0]
-    assert rc == 4
+    assert rc == 1
     assert "404" in device["axe_error"]
     assert device["findings"][0]["check"] == "a11y-not-measured"
 
@@ -59,14 +59,14 @@ def test_i18n_pass_that_throws_is_not_a_pass(tmp_path):
     script = Script(i18n=RuntimeError("NodeFilter is not defined"))
     rc, report, _ = run(tmp_path, "--no-axe", "--i18n", script=script)
     device = report["devices"][0]
-    assert rc == 4
+    assert rc == 1
     assert device["i18n_error"] == "NodeFilter is not defined"
     assert "text_expansion_overflow" not in json.dumps(device["findings"])
 
 
 def test_i18n_overflow_is_reported(tmp_path):
     rc, report, _ = run(tmp_path, "--no-axe", "--i18n", script=Script(i18n=True))
-    assert rc == 4
+    assert rc == 1
     assert [f["check"] for f in report["devices"][0]["findings"]] == ["i18n-layout"]
 
 
@@ -97,25 +97,36 @@ def test_routes_are_registered_on_every_page(tmp_path):
     assert [glob for glob, _ in browser.pages[0].routes] == ["**/app.css"]
 
 
-def test_missing_browser_exits_3_with_the_install_command(tmp_path, capsys):
+def test_missing_browser_exits_2_with_the_install_command(tmp_path, capsys):
     rc, _, _ = run(tmp_path, error=RuntimeError(MISSING_EXECUTABLE))
     err = capsys.readouterr().err
-    assert rc == 3
+    assert rc == 2
     assert "playwright install chromium" in err
 
 
-def test_missing_host_libraries_exit_3_naming_install_deps(tmp_path, capsys):
+def test_missing_host_libraries_exit_2_naming_install_deps(tmp_path, capsys):
     rc, _, _ = run(tmp_path, error=RuntimeError(MISSING_HOST_DEPS))
     err = capsys.readouterr().err
-    assert rc == 3
+    assert rc == 2
     assert "install-deps" in err
     assert "Chromium not installed" not in err
 
 
-def test_unrelated_failure_exits_1(tmp_path, capsys):
+def test_unrelated_failure_exits_2(tmp_path, capsys):
     rc, _, _ = run(tmp_path, script=Script(goto_error=RuntimeError("net::ERR_CONNECTION_REFUSED")))
-    assert rc == 1
+    assert rc == 2
     assert "ERR_CONNECTION_REFUSED" in capsys.readouterr().err
+
+
+def test_an_unwritable_report_exits_2_not_a_traceback(tmp_path, capsys):
+    """report.json could not be written: the audit ran, but its result reached nobody, so the
+    run could not deliver an answer. It raised an uncaught traceback (exit 1)."""
+    (tmp_path / "out" / "report.json").mkdir(parents=True)  # a directory where the file goes
+    rc, _, _ = run(tmp_path, "--no-axe")
+    captured = capsys.readouterr()
+    assert rc == 2
+    assert "report.json" in captured.err
+    assert "Traceback" not in captured.err
 
 
 def test_cp1252_stdout_does_not_crash_on_a_non_cp1252_out_dir(tmp_path, monkeypatch):

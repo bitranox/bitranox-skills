@@ -59,9 +59,10 @@ uv run audit_responsive.py "$URL" --profiles "iPhone SE (landscape)" "iPad mini 
 
 `report.json` is `{ url, totals:{SEVERE,MEDIUM,MINOR}, passed, devices:[...] }`; exit code is
 0 only when `passed` (no SEVERE/MEDIUM anywhere) - the "100%" bar for the owned dimensions.
-Other exits: 4 findings, 2 bad arguments (an unknown `--profiles` name, a `--route` whose
-LOCALPATH is not a readable file), 3 Chromium cannot start (not downloaded, or host libraries
-missing - the message names the fix), 1 any other failure. A requested pass that could not run
+Other exits: 1 findings, 2 the audit could not run or deliver its report - bad arguments (an
+unknown `--profiles` name, a `--route` whose LOCALPATH is not a readable file), Chromium cannot
+start (not downloaded, or host libraries missing - the message names the fix), any other failure,
+or a `report.json` that cannot be written. A requested pass that could not run
 is a finding, not a silent pass: axe failing to load (a wrong `--axe-url`, offline, a page CSP
 blocking it) is SEVERE `a11y-not-measured`, a throwing `--i18n` pass is MEDIUM
 `i18n-layout-not-measured`, and the device carries `axe_error` / `i18n_error`.
@@ -128,8 +129,8 @@ uv run open_viewports.py https://app.example.com/view/ABC123 \
 ```
 
 It opens a headed window per profile and stays up until you close them all (or quit the browser,
-or press Ctrl-C). Windows that failed to load are counted separately; if none loaded it exits 1
-at once. Prefer this for manual interaction; keep the headless `audit_responsive.py` run as the
+or press Ctrl-C). Windows that failed to load are counted separately; if none loaded it exits 2
+at once (nothing could be opened), as it does when Chromium cannot start. Prefer this for manual interaction; keep the headless `audit_responsive.py` run as the
 pass/fail gate.
 
 **C. Capture representative fixtures for fast offline iteration.** Drawing sample content from

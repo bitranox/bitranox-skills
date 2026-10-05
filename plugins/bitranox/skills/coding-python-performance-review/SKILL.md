@@ -93,8 +93,8 @@ discovery steps and use the two checker tools directly:
 - `compare_performance.py` - stash the working changes (untracked files too), time the test
   suite on the previous commit, restore the branch and the changes, time again, and report
   the measured delta as before/after evidence. Exit 2 means there is no valid comparison: a
-  suite run failed, there is no previous commit, or a git step failed; never quote its
-  numbers then. If stderr says the repository was NOT restored, run the git commands it prints
+  suite run failed, there is no previous commit, git is missing, or a git step failed; never
+  quote its numbers then. If stderr says the repository was NOT restored, run the git commands it prints
   first: they name the branch to check out and the sha of the stash holding your uncommitted
   changes. When the BEFORE run created a file where the stash puts back one of your untracked
   files, it re-applies nothing and names that file: move it out of the way before those
@@ -484,9 +484,11 @@ Wait for the user's response before proceeding to the next finding.
    improvement is >5%, AND every cached run beat every uncached run - otherwise REJECT as
    run-to-run noise (raise `REPEATS` for a noisy suite).
 2. **On REJECT: do not add the cache.** Report the measured numbers and move on - a measured
-   rejection is a successful finding, not a failure. **On ABORT (exit 2)** a suite run failed,
-   with or without the cache: there is no measurement, so do not add the cache; if only the
-   cached run failed, the cache changes behaviour - report that instead.
+   rejection is a successful finding, not a failure. **On ABORT (exit 2)** there is no
+   measurement, so do not add the cache. Either a suite run failed, with or without the cache
+   (if only the cached run failed, the cache changes behaviour - report that instead), or the
+   copy could not start: pytest is missing from that interpreter, or `MODULE_NAME` /
+   `FUNCTION_NAME` do not import. The ABORT line names which; fix the copy and re-run.
 3. On RECOMMEND: add `from functools import lru_cache` if missing
 4. Add `@lru_cache` decorator above function
 5. If mutable args (list/dict), convert to tuples or use wrapper

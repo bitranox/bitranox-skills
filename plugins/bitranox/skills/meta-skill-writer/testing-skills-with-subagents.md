@@ -126,8 +126,8 @@ uv run scripts/redcheck.py --scenario scenario.txt --corpus-cascade . --json
 Read the two directions differently, because they are not worth the same. A hit is STRONG: the
 lesson is demonstrably in reachable context and the report names the file. A clean result is WEAK:
 the check compares distinctive terms, so it cannot see a paraphrase, and "no hit" means not caught
-rather than absent. Exit 3 means the corpus came back empty and nothing was checked at all, which
-is the one result that would otherwise read as a pass.
+rather than absent. Exit 2 with `data.unchecked` true means the corpus came back empty and
+nothing was checked at all, which is the one result that would otherwise read as a pass.
 
 Two honest routes when it IS already inherited. The review artifact must say which one you took:
 

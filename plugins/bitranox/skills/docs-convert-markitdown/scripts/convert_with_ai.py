@@ -21,7 +21,9 @@ The OpenRouter API key comes from the OPENROUTER_API_KEY environment variable
 only. A key on the command line (--api-key/-k) is refused with exit 2: argv is
 visible in the process list, shell history and CI logs for the whole run.
 
-Exit status: 0 converted, 1 an error, 2 a usage error.
+Exit status: 0 converted, 2 it could not be: a usage error, no API key, an input that is missing,
+not a file or not a supported format, or a conversion or image description that failed.
+Converting has no "no" answer, so no run exits 1.
 """
 
 from __future__ import annotations
@@ -32,6 +34,9 @@ import sys
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
+
+# Every failure is "could not run": converting has no "no" answer, so nothing exits 1.
+EXIT_CANNOT_RUN = 2
 
 # The inputs markitdown 0.1.x asks the LLM about: ImageConverter and PptxConverter.
 AI_DESCRIBED_SUFFIXES = (".png", ".jpg", ".jpeg", ".pptx")
@@ -259,7 +264,8 @@ Vision models as of 2026-09 (use with --model; IDs change, check openrouter.ai/m
   anthropic/claude-opus-4.5      - for hard figures and dense text
   google/gemini-3.1-pro-preview  - a Gemini alternative
 
-Exit status: 0 converted, 1 an error (including a failed image description), 2 a usage error.
+Exit status: 0 converted, 2 it could not be (a usage error, no API key, a missing or unsupported
+input, or a failed conversion or image description); no run exits 1.
         """
     )
 
@@ -321,17 +327,17 @@ def main(argv: list[str] | None = None) -> int:
         print("Error: OpenRouter API key required. Set the OPENROUTER_API_KEY environment variable "
               "(the only way to pass the key).", file=sys.stderr)
         print("Get your API key at: https://openrouter.ai/keys", file=sys.stderr)
-        return 1
+        return EXIT_CANNOT_RUN
 
     # Validate input file. Errors go to stderr: stdout carries the progress lines.
     if not args.input.exists():
         print(f"Error: Input file '{args.input}' does not exist", file=sys.stderr)
-        return 1
+        return EXIT_CANNOT_RUN
     if not args.input.is_file():
         # A directory named like an image otherwise reaches markitdown, whose failure names the
         # converter rather than the input.
         print(f"Error: Input '{args.input}' is not a file", file=sys.stderr)
-        return 1
+        return EXIT_CANNOT_RUN
 
     if args.input.suffix.lower() not in AI_DESCRIBED_SUFFIXES:
         print(
@@ -340,7 +346,7 @@ def main(argv: list[str] | None = None) -> int:
             "markitdown instead",
             file=sys.stderr,
         )
-        return 1
+        return EXIT_CANNOT_RUN
 
     # Convert file
     success = convert_with_ai(
@@ -352,7 +358,7 @@ def main(argv: list[str] | None = None) -> int:
         custom_prompt=args.custom_prompt
     )
 
-    return 0 if success else 1
+    return 0 if success else EXIT_CANNOT_RUN
 
 
 if __name__ == '__main__':

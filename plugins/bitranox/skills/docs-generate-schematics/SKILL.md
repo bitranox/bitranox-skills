@@ -19,7 +19,7 @@ quality threshold or the iteration cap is hit.
   and fetches the dependency. Plain `python3` only works if httpx2 is already installed. The
   wrapper script imports only stdlib, but it re-launches the AI script with the SAME
   interpreter (`sys.executable`), so it needs `httpx2` just as much - run it under
-  `uv run --with httpx2` too, or the child exits 1 on its first import.
+  `uv run --with httpx2` too, or the child exits 2 (could not run) on its first import.
 
 ## Usage
 
@@ -47,13 +47,17 @@ curl -s https://openrouter.ai/api/v1/models | python3 -c \
   "import json,sys; [print(m['id']) for m in json.load(sys.stdin)['data']]"
 ```
 
-Exit status of `generate_schematic_ai.py`: 0 the kept image met the `--doc-type` threshold; 1 no
-image, an image whose review failed with no earlier reviewed image to fall back on, or a best
-image still below the threshold - the image is written in those last two cases, so check the
-exit code, not just the file; 2 a usage error. The image kept is the best-scoring REVIEWED one:
-a retry whose review failed never displaces it. The threshold is numeric, so a kept image scoring
-at or above it exits 0 even when the reviewer's verdict said NEEDS_IMPROVEMENT. The review is
-scored by its TOTAL (`SCORE: n/10`), never by a per-criterion score such as `2/2`.
+Exit status of `generate_schematic_ai.py`: 0 the kept image met the `--doc-type` threshold; 1 the
+best image is still below the threshold; 2 the quality question could not be answered - no image
+at all, an image whose review failed with no earlier reviewed image to fall back on, no API key,
+`httpx2` missing, an unexpected error, or a usage error. The image is written in the exit-1 case
+and in the failed-review case, so check the exit code, not just the file. `generate_schematic.py`
+passes the AI script's code through unchanged, and exits 2 itself when the key is missing or the
+AI script cannot be found or launched. The image kept is the best-scoring REVIEWED one: a retry
+whose review failed never displaces it. The threshold is numeric, so a kept image scoring at or
+above it exits 0 even when the reviewer's verdict said NEEDS_IMPROVEMENT; that verdict is printed
+as a `[WARN]` on stderr. The review is scored by its TOTAL (`SCORE: n/10`), never by a
+per-criterion score such as `2/2`.
 
 ## Common mistakes
 

@@ -130,6 +130,24 @@ def test_no_commits_exits_2(tmp_path, git_env, run_script):
     assert b"Improvement" not in r.stdout
 
 
+def test_a_missing_git_exits_2_not_a_traceback(monkeypatch, capsys):
+    """git not on PATH raised FileNotFoundError outside CompareError: a traceback and exit 1,
+    which reads like a finding. Spawning the program is the external edge, so it is the one
+    replaced; everything above it is the real main()."""
+    import compare_performance as cp
+
+    def no_git(argv, **kwargs):
+        if argv[0] == "git":
+            raise FileNotFoundError(2, "No such file or directory", "git")
+        raise AssertionError(f"unexpected spawn {argv!r}")
+
+    monkeypatch.setattr(cp.subprocess, "run", no_git)
+    rc = cp.main()
+    err = capsys.readouterr().err
+    assert rc == 2
+    assert "git" in err and "Traceback" not in err
+
+
 def test_not_a_repository_exits_2(tmp_path, git_env, run_script):
     env = dict(git_env, GIT_CEILING_DIRECTORIES=str(tmp_path.parent))
     r = run_script(SCRIPT, cwd=str(tmp_path), env=env)

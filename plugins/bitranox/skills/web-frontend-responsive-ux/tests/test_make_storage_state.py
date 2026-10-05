@@ -70,24 +70,24 @@ def test_main_exit_0_names_the_saved_file(tmp_path, capsys, monkeypatch):
     assert out.exists()
 
 
-def test_main_missing_browser_exits_3(tmp_path, capsys):
+def test_main_missing_browser_exits_2(tmp_path, capsys):
     rc = mss.main(["http://x/", "--out", str(tmp_path / "s.json")],
                   launch=fake_launcher(error=RuntimeError(MISSING_EXECUTABLE)))
-    assert rc == 3
+    assert rc == 2
     assert "playwright install chromium" in capsys.readouterr().err
 
 
-def test_main_missing_host_libraries_exit_3_naming_install_deps(tmp_path, capsys):
+def test_main_missing_host_libraries_exit_2_naming_install_deps(tmp_path, capsys):
     rc = mss.main(["http://x/", "--out", str(tmp_path / "s.json")],
                   launch=fake_launcher(error=RuntimeError(MISSING_HOST_DEPS)))
     err = capsys.readouterr().err
-    assert rc == 3
+    assert rc == 2
     assert "install-deps" in err and "Chromium not installed" not in err
 
 
-def test_main_other_failure_exits_1(tmp_path, capsys):
+def test_main_other_failure_exits_2(tmp_path, capsys):
     script = Script(goto_error=RuntimeError("net::ERR_NAME_NOT_RESOLVED"))
     rc = mss.main(["http://x/", "--out", str(tmp_path / "s.json")], launch=fake_launcher(script))
-    assert rc == 1
+    assert rc == 2
     assert "ERR_NAME_NOT_RESOLVED" in capsys.readouterr().err
     assert not (tmp_path / "s.json").exists()

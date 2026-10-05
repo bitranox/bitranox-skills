@@ -78,9 +78,60 @@ def test_json_output_keys(capsys):
     rc, out = run_main([f"https://{SITE}/", "--json"], FakeSite(CLEAN_HEADERS), capsys)
     doc = json.loads(out.out)
     assert rc == 0
-    assert doc["url"] == f"https://{SITE}/"
-    assert set(doc["counts"]) == {"SEVERE", "MEDIUM", "MINOR", "OK"}
-    assert all({"check", "severity", "detail", "fix"} <= set(f) for f in doc["findings"])
+    assert set(doc) == {"ok", "command", "data", "skipped"}
+    assert (doc["ok"], doc["command"], doc["skipped"]) == (True, "audit_headers", [])
+    data = doc["data"]
+    assert data["url"] == f"https://{SITE}/"
+    assert set(data["counts"]) == {"SEVERE", "MEDIUM", "MINOR", "OK"}
+    assert all({"check", "severity", "detail", "fix"} <= set(f) for f in data["findings"])
+
+
+def test_json_envelope_ok_is_true_on_a_gate_failure(capsys):
+    """ok means "ran without error", so a finding (exit 1) is still ok: the answer is in the
+    exit code and in data, never in ok."""
+    headers = dict(CLEAN_HEADERS)
+    del headers["X-Content-Type-Options"]
+    rc, out = run_main([f"https://{SITE}/", "--json"], FakeSite(headers), capsys)
+    doc = json.loads(out.out)
+    assert rc == 1
+    assert doc["ok"] is True
+    assert doc["data"]["counts"]["MEDIUM"] >= 1
+
+
+def test_json_envelope_is_printed_when_the_url_cannot_be_fetched(capsys):
+    """Exit 2 printed nothing on stdout, so a --json caller parsing stdout crashed on an empty
+    document instead of reading "could not run"."""
+    def refuse(request):
+        raise httpx.ConnectError("connection refused", request=request)
+
+    rc = a.main([f"https://{SITE}/", "--json"],
+                fetcher=functools.partial(a.fetch, transport=httpx.MockTransport(refuse)))
+    out = capsys.readouterr()
+    doc = json.loads(out.out)
+    assert rc == 2
+    assert doc["ok"] is False and doc["command"] == "audit_headers" and doc["data"] is None
+    assert "could not fetch" in doc["error"]
+    assert "could not fetch" in out.err
+
+
+def test_json_envelope_is_printed_on_a_usage_error(capsys):
+    with pytest.raises(SystemExit) as exc:
+        a.main(["--json", "--no-such-flag", f"https://{SITE}/"])
+    out = capsys.readouterr()
+    assert exc.value.code == 2
+    doc = json.loads(out.out)
+    assert doc["ok"] is False and doc["data"] is None
+    assert "--no-such-flag" in doc["error"]
+
+
+def test_a_usage_error_without_json_prints_no_envelope(capsys):
+    """The control: argparse's own usage error, on stderr only."""
+    with pytest.raises(SystemExit) as exc:
+        a.main(["--no-such-flag", f"https://{SITE}/"])
+    out = capsys.readouterr()
+    assert exc.value.code == 2
+    assert out.out == ""
+    assert "usage" in out.err
 
 
 def test_http_url_redirected_to_https_is_graded_as_https(capsys):
@@ -89,7 +140,7 @@ def test_http_url_redirected_to_https_is_graded_as_https(capsys):
     site = FakeSite(headers, html='<script src="http://cdn.example/a.js"></script>',
                     cookies=["sid=abc; HttpOnly; SameSite=Lax"])
     rc, out = run_main([f"http://{SITE}/", "--json"], site, capsys)
-    by = {f["check"]: f["severity"] for f in json.loads(out.out)["findings"]}
+    by = {f["check"]: f["severity"] for f in json.loads(out.out)["data"]["findings"]}
     assert rc == 1
     assert by["hsts"] == "SEVERE"
     assert by["cookie:sid"] == "SEVERE"
@@ -154,7 +205,7 @@ def test_two_csp_headers_are_graded_as_two_policies(capsys):
     headers += [("Content-Security-Policy", "frame-ancestors *"),
                 ("Content-Security-Policy", "default-src 'self'; object-src 'none'")]
     rc, out = run_main([f"https://{SITE}/", "--json"], FakeSite(headers), capsys)
-    by = {f["check"]: f["severity"] for f in json.loads(out.out)["findings"]}
+    by = {f["check"]: f["severity"] for f in json.loads(out.out)["data"]["findings"]}
     assert by["clickjacking"] == "MEDIUM"
     assert rc == 1
 

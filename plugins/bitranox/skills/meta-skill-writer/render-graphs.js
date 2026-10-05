@@ -10,13 +10,16 @@
  * Extracts all ```dot blocks from SKILL.md and renders them to SVG in <skill-directory>/diagrams/.
  * Useful for helping your human partner visualize the process flows.
  *
- * Exit status: 0 when every diagram rendered (or the file holds no ```dot block), 1 when any
- * diagram failed, graphviz is missing, or the arguments are wrong. The last line of a run reads
- * "N rendered, M failed".
+ * Exit status: 0 when every diagram rendered (or the file holds no ```dot block); 1 when a block
+ * has a dot error (a finding about SKILL.md: the other blocks still render); 2 when the run
+ * could not do its job - wrong arguments, no SKILL.md, graphviz missing, dot could not be run or
+ * was killed, diagrams/ or SKILL.md not writable or readable, or a --combine refusal. 2 wins over
+ * 1. A run that reached the blocks ends with a line reading "N rendered, M failed".
  *
- * --combine merges only `digraph` blocks, and refuses (renders nothing) when two blocks share a
- * node id, because graphviz would silently fuse them into one node across the clusters. The
- * merged graph is `strict` when every block is; a mix of strict and plain blocks is refused too.
+ * --combine merges only `digraph` blocks, and refuses (renders nothing, exit 2) a block with no
+ * digraph wrapper, an undirected `graph` block, an empty body, and two blocks that share a node
+ * id, because graphviz would silently fuse them into one node across the clusters. The merged
+ * graph is `strict` when every block is; a mix of strict and plain blocks is refused too.
  *
  * Requires: graphviz (dot) on PATH. Runs `dot` directly, never through a shell, so it behaves the
  * same from cmd.exe, PowerShell, Git Bash and any POSIX shell.
@@ -33,6 +36,9 @@ const HEADER = new RegExp(
   String.raw`(?:^|\n)[ \t]*(strict\s+)?(digraph|graph)\s*(` + DOT_ID + String.raw`)?\s*\{`, 'i');
 const PLAIN_NODE = new RegExp(String.raw`^node (` + DOT_ID + String.raw`|\S+) `, 'gm');
 const MAX_BUFFER = 64 * 1024 * 1024;
+// 1 = a block has a dot error (a finding about the input); 2 = the run could not do its job.
+const EXIT_FINDING = 1;
+const EXIT_CANNOT_RUN = 2;
 
 function unquote(id) {
   return id.startsWith('"') ? id.slice(1, -1).replace(/\\"/g, '"') : id;
@@ -151,11 +157,14 @@ function assignStems(blocks) {
   }
 }
 
+// `broken` marks a failure that says nothing about the block: dot could not be started, its
+// output overflowed, or it was killed. Only a dot that ran and rejected the input is a finding.
 function runDot(format, input) {
   const result = spawnSync('dot', [`-T${format}`], {
     input, encoding: 'utf-8', maxBuffer: MAX_BUFFER, stdio: ['pipe', 'pipe', 'pipe'],
   });
-  if (result.error) return { ok: false, error: `could not run dot: ${result.error.message}` };
+  if (result.error) return { ok: false, broken: true, error: `could not run dot: ${result.error.message}` };
+  if (result.signal) return { ok: false, broken: true, error: `could not run dot: killed by ${result.signal}` };
   const stderr = (result.stderr || '').trim();
   if (result.status !== 0) return { ok: false, error: stderr || `dot exited ${result.status}` };
   return { ok: true, out: result.stdout, warnings: stderr };
@@ -186,10 +195,12 @@ function ensureDir(dir) {
 function renderSeparately(blocks, outputDir) {
   let rendered = 0;
   let failed = 0;
+  let broken = 0;
   for (const block of blocks) {
     const result = runDot('svg', block.content);
     if (!result.ok) {
       failed += 1;
+      if (result.broken) broken += 1;
       reportFailure(`block ${block.index + 1} (${block.label})`, result.error);
       continue;
     }
@@ -199,7 +210,7 @@ function renderSeparately(blocks, outputDir) {
     console.log(`  Rendered: ${block.stem}.svg`);
     rendered += 1;
   }
-  return { rendered, failed };
+  return { rendered, failed, broken };
 }
 
 // What --combine cannot merge, decided from the source alone before anything is written.
@@ -255,10 +266,12 @@ function combineGraphs(blocks, graphName) {
 function nodeIdsByBlock(blocks) {
   const owners = new Map();
   let failed = 0;
+  let broken = 0;
   for (const block of blocks) {
     const result = runDot('plain', block.content);
     if (!result.ok) {
       failed += 1;
+      if (result.broken) broken += 1;
       reportFailure(`block ${block.index + 1} (${block.label})`, result.error);
       continue;
     }
@@ -268,7 +281,7 @@ function nodeIdsByBlock(blocks) {
       owners.get(id).add(block.label);
     }
   }
-  return { owners, failed };
+  return { owners, failed, broken };
 }
 
 function reportSharedIds(owners) {
@@ -281,11 +294,13 @@ function reportSharedIds(owners) {
 }
 
 function renderCombined(blocks, skillDir, outputDir) {
-  const failure = { rendered: 0, failed: 1 };
+  // A refusal to merge, and a merged render that fails although every block parsed alone, are the
+  // whole action not happening (2). Only a block's own dot error stays a finding (1).
+  const refused = { rendered: 0, failed: 1, broken: 1 };
   const problems = combineProblems(blocks);
   if (problems.length > 0) {
     for (const problem of problems) console.error(`  Failed: ${problem}`);
-    return failure;
+    return refused;
   }
 
   const graphName = path.basename(skillDir);
@@ -296,18 +311,19 @@ function renderCombined(blocks, skillDir, outputDir) {
   fs.writeFileSync(path.join(outputDir, `${stem}.dot`), combined);
   console.log(`  Source: ${stem}.dot`);
 
-  const { owners, failed } = nodeIdsByBlock(blocks);
-  if (failed > 0 || reportSharedIds(owners)) return failure;
+  const { owners, failed, broken } = nodeIdsByBlock(blocks);
+  if (failed > 0) return { rendered: 0, failed: 1, broken: broken > 0 ? 1 : 0 };
+  if (reportSharedIds(owners)) return refused;
 
   const result = runDot('svg', combined);
   if (!result.ok) {
     reportFailure(`combined diagram (source: ${stem}.dot)`, result.error);
-    return failure;
+    return refused;
   }
   reportWarnings(`${stem}.dot`, result.warnings);
   fs.writeFileSync(path.join(outputDir, `${stem}.svg`), result.out);
   console.log(`  Rendered: ${stem}.svg`);
-  return { rendered: 1, failed: 0 };
+  return { rendered: 1, failed: 0, broken: 0 };
 }
 
 function usage() {
@@ -319,7 +335,7 @@ function usage() {
   console.error('Example:');
   console.error('  ./render-graphs.js ../subagent-driven-development');
   console.error('  ./render-graphs.js ../subagent-driven-development --combine');
-  process.exit(1);
+  process.exit(EXIT_CANNOT_RUN);
 }
 
 function main() {
@@ -332,7 +348,7 @@ function main() {
   const skillFile = path.join(skillDir, 'SKILL.md');
   if (!fs.existsSync(skillFile)) {
     console.error(`Error: ${skillFile} not found`);
-    process.exit(1);
+    process.exit(EXIT_CANNOT_RUN);
   }
 
   if (!dotAvailable()) {
@@ -341,7 +357,7 @@ function main() {
     console.error('  apt install graphviz     # Debian/Ubuntu Linux');
     console.error('  Windows: the installer from https://graphviz.org/download/ with "add to PATH",');
     console.error('           then open a new shell so dot is found');
-    process.exit(1);
+    process.exit(EXIT_CANNOT_RUN);
   }
 
   // A Windows checkout with core.autocrlf=true gives SKILL.md CRLF line endings.
@@ -356,13 +372,21 @@ function main() {
   assignStems(blocks);
 
   const outputDir = path.join(skillDir, 'diagrams');
-  const { rendered, failed } = combine
+  const { rendered, failed, broken } = combine
     ? renderCombined(blocks, skillDir, outputDir)
     : renderSeparately(blocks, outputDir);
 
   if (fs.existsSync(outputDir)) console.log(`\nOutput: ${outputDir}${path.sep}`);
   console.log(`${rendered} rendered, ${failed} failed`);
-  process.exit(failed > 0 ? 1 : 0);
+  if (broken > 0) process.exit(EXIT_CANNOT_RUN);
+  process.exit(failed > 0 ? EXIT_FINDING : 0);
 }
 
-main();
+// An unreadable SKILL.md or an unwritable diagrams/ throws from fs: report it as "could not run"
+// (2) in one line, never as a stack trace with node's exit 1, which reads as a failed diagram.
+try {
+  main();
+} catch (err) {
+  console.error(`Error: ${err && err.message ? err.message : err}`);
+  process.exit(EXIT_CANNOT_RUN);
+}

@@ -512,11 +512,14 @@ digraph when_flowchart {
 ./render-graphs.js ../some-skill           # Each diagram separately
 ./render-graphs.js ../some-skill --combine # All diagrams in one SVG
 ```
-It exits 1 when any diagram fails to render, after an `N rendered, M failed` line. `--combine`
-merges only `digraph` blocks and refuses, with exit 1, a block of bare statements with no wrapper,
-an undirected `graph` block, and two blocks that share a node id (dot node names are global, so a
-`start` in both would become one node with the edges of both). Render those without `--combine`:
-separate mode renders every `digraph` block, shared node ids included.
+It exits 1 when a block has a dot error, in either mode (separately, the other blocks still
+render), after an `N rendered, M failed` line, and 2 when the run could not do its job: wrong arguments, no
+SKILL.md, graphviz missing, a dot that could not run, an unwritable `diagrams/`, or a `--combine`
+refusal. `--combine` merges only `digraph` blocks and refuses, with exit 2, a block of bare
+statements with no wrapper, an undirected `graph` block, and two blocks that share a node id (dot
+node names are global, so a `start` in both would become one node with the edges of both).
+Render those without `--combine`: separate mode renders every `digraph` block, shared node ids
+included.
 
 ## Code Examples
 
@@ -1096,8 +1099,8 @@ when the lesson under test is ALREADY recorded there, the RED cannot fail honest
 before trusting it with `redcheck --corpus-cascade <dir>` from
 `bitranox:process-test-driven-development`, which assembles that machine's cascade and memory fact
 bodies itself and names the document that already teaches your scenario. Read a hit as strong
-evidence, a clean result as only "not caught", and exit 3 as "the corpus was empty, nothing was
-checked". If it is inherited, either make the coverage check against the skill FILE the
+evidence, a clean result as only "not caught", and exit 2 with `data.unchecked` true as "the
+corpus was empty, nothing was checked". If it is inherited, either make the coverage check against the skill FILE the
 evidence (a text check of the artifact, immune to inherited context) or de-telegraph the
 behavioural arm into a domain that text does not teach - and state in the review artifact which
 route you took. A RED that does not flip is a reportable outcome, not a reason to escalate the

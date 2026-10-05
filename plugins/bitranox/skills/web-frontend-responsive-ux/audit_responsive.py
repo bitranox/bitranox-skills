@@ -20,6 +20,10 @@ First run needs the browser binary once:
 Authenticated (user-gated) pages: pass a Playwright storageState JSON saved by
 ``make_storage_state.py`` via ``--storage-state state.json``.
 
+Exit status: 0 passed (no SEVERE or MEDIUM finding on any profile), 1 findings, 2 the audit
+could not run or could not deliver its report (bad arguments, Chromium cannot start, any other
+failure, report.json not writable).
+
 This module is import-safe: all work is inside functions guarded by ``__main__`` so the
 helpers can be imported in tests; the heavy browser path is only reached when run directly.
 """
@@ -259,17 +263,22 @@ def make_console_safe():
             pass  # a detached or non-reconfigurable stream keeps its own error handling
 
 
+# Shared by open_viewports.py and make_storage_state.py, which import these.
+EXIT_PASS, EXIT_FINDINGS, EXIT_CANNOT_RUN = 0, 1, 2
+
+
 def launch_failure(exc):
     """``(exit_code, message)`` for a browser that cannot start at all, else None.
 
-    The two causes need different fixes: a missing browser download, and missing host
+    The exit code is EXIT_CANNOT_RUN: nothing was opened, so there is no answer. The two causes
+    need different fixes, so the messages differ: a missing browser download, and missing host
     libraries (Playwright's own message then names ``install-deps``)."""
     msg = str(exc)
     if "Executable doesn't exist" in msg:
-        return 3, "Chromium not installed. Run: uv run --with playwright playwright install chromium"
+        return EXIT_CANNOT_RUN, "Chromium not installed. Run: uv run --with playwright playwright install chromium"
     if "install-deps" in msg or "missing dependencies" in msg:
-        return 3, ("Chromium's host libraries are missing. Install them as root: "
-                   "uv run --with playwright playwright install-deps chromium")
+        return EXIT_CANNOT_RUN, ("Chromium's host libraries are missing. Install them as root: "
+                                 "uv run --with playwright playwright install-deps chromium")
     return None
 
 
@@ -287,20 +296,21 @@ def select_profiles(names, *, include_landscape=True):
 
 
 def main(argv=None, *, launch=None):
-    """CLI entry: 0 passed, 4 findings, 2 bad arguments, 3 browser cannot start, 1 other failure.
+    """CLI entry: 0 passed, 1 findings, 2 could not audit (bad arguments, a browser that cannot
+    start, any other failure, an unwritable report.json).
 
     ``launch`` replaces :func:`launch_chromium` (tests inject a scripted browser)."""
     make_console_safe()
     args = parse_args(argv if argv is not None else sys.argv[1:])
     profiles = select_profiles(args.profiles, include_landscape=not args.no_landscape)
     if profiles is None:
-        return 2
+        return EXIT_CANNOT_RUN
 
     try:
         route_rules = parse_route_specs(args.route)
     except ValueError as exc:
         print(str(exc), file=sys.stderr)
-        return 2
+        return EXIT_CANNOT_RUN
 
     try:
         report = run_audit(
@@ -315,15 +325,20 @@ def main(argv=None, *, launch=None):
             print(failure[1], file=sys.stderr)
             return failure[0]
         print(f"Audit failed: {exc}", file=sys.stderr)
-        return 1
+        return EXIT_CANNOT_RUN
 
     out_dir = Path(args.out)
-    (out_dir / "report.json").write_text(json.dumps(report, indent=2), encoding="utf-8")
+    try:
+        (out_dir / "report.json").write_text(json.dumps(report, indent=2), encoding="utf-8")
+    except OSError as exc:
+        # The audit ran, but a verdict nobody can read is no answer: could not deliver, not a finding.
+        print(f"Could not write {out_dir / 'report.json'}: {exc}", file=sys.stderr)
+        return EXIT_CANNOT_RUN
     t = report["totals"]
     verdict = "PASS" if report["passed"] else "FAIL"
     print(f"Audit {verdict}: SEVERE={t['SEVERE']} MEDIUM={t['MEDIUM']} MINOR={t['MINOR']}")
     print(f"Report: {out_dir / 'report.json'}  (screenshots alongside)")
-    return 0 if report["passed"] else 4
+    return EXIT_PASS if report["passed"] else EXIT_FINDINGS
 
 
 if __name__ == "__main__":

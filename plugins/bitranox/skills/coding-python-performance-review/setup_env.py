@@ -39,7 +39,8 @@ Later steps read session.json instead of the /tmp side-channel files, e.g.:
 `python` is missing on most Linux boxes and on macOS.)
 
 Exit codes: 0 session created, 2 it could not be (no pyproject.toml, or the recorded
-interpreter cannot run or is older than MIN_PYTHON; nothing is created then).
+interpreter cannot run or is older than MIN_PYTHON - nothing is created then - or the scratch
+dir or session.json cannot be written).
 """
 
 from __future__ import annotations
@@ -211,7 +212,11 @@ def main(argv=None, version_info=None):
         print(f"ERROR: {problem}.", file=sys.stderr)
         return 2
 
-    session = create_session(start=root)
+    try:
+        session = create_session(start=root)
+    except OSError as exc:
+        print(f"ERROR: could not create the scratch dir or session.json: {exc}", file=sys.stderr)
+        return 2
 
     if project_python(session["project_root"]) is None:
         print(

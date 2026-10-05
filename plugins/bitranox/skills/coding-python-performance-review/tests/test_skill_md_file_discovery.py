@@ -14,6 +14,7 @@ import json
 import os
 import re
 import shutil
+import site
 import stat
 import subprocess
 import sys
@@ -79,6 +80,9 @@ def _shim_env(root, session):
     env = {k: v for k, v in os.environ.items() if not k.startswith(("GIT_", "BX_PERF_"))}
     env.update(PATH=f"{shim}{os.pathsep}{env.get('PATH', '')}", TMPDIR=str(root / "tmp"),
                HOME=str(root / "home"))
+    # The private HOME would move the user site-packages dir on POSIX and hide a --user pytest
+    # from the child (see conftest._clean_env); keep the running interpreter's.
+    env.setdefault("PYTHONUSERBASE", site.getuserbase())
     (root / "tmp").mkdir(exist_ok=True)
     if session is not None:
         env["BX_PERF_SESSION"] = str(session)

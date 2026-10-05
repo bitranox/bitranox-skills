@@ -36,7 +36,7 @@ is giving you:
   * CLEAN is WEAK. This compares distinctive terms, so it cannot see a paraphrase. "No hit" means
     NOT CAUGHT, never "absent from the agent's context" - a clean run is not a sealed fixture.
 A corpus of zero documents makes every scenario look clean, so asking for one and getting nothing
-is a distinct outcome (`unchecked`, exit 3), never a quiet pass. EITHER flag arms it: naming a
+is a distinct outcome (`unchecked`, exit 2), never a quiet pass. EITHER flag arms it: naming a
 directory is the caller promising a corpus, whether through `--corpus-cascade` or `--corpus`.
 Passing neither flag promises nothing and stays exit 0.
 
@@ -46,11 +46,14 @@ Run:
   `uv run scripts/redcheck.py --scenario scenario.txt --answer conclusion.txt --corpus docs/`
 
 Exit codes: 0 = clean (neither leak found - this does NOT prove the RED can fail, only that
-these two specific reasons it might not have been ruled out), 1 = a leak was found, 2 =
-usage/IO error, 3 = unchecked (a corpus flag was given and assembled nothing, so the
-inherited-coverage check never ran - passing no corpus flag at all stays 0 - or an --answer was
-given that yields no distinctive terms, so the answer-leak check never ran). `--json` emits the
-machine-readable envelope. A document reached by several flags is read once.
+these two specific reasons it might not have been ruled out), 1 = a leak was found, 2 = the
+check could not run: a usage/IO error, or unchecked (a corpus flag was given and assembled
+nothing, so the inherited-coverage check never ran - passing no corpus flag at all stays 0 - or
+an --answer was given that yields no distinctive terms, so the answer-leak check never ran). A
+leak outranks unchecked: it is a finding whatever else could not run. `--json` emits the
+`{ok, command, data, skipped}` envelope on every exit; ok is false exactly on exit 2, and
+`data.unchecked` tells an unchecked run from a usage/IO error (whose data is null). A document
+reached by several flags is read once.
 
 Installed plugin/marketplace skills are deliberately NOT assembled: their on-disk location is a
 function of the reader's plugin cache and installed versions, so any built-in path would be a
@@ -84,7 +87,9 @@ __all__ = [
 ]
 
 # Format-independent, so a caller can branch on the result without parsing text.
-EXIT_CLEAN, EXIT_LEAK, EXIT_ERROR, EXIT_UNCHECKED = 0, 1, 2, 3
+# Unchecked is "could not answer", so it shares EXIT_ERROR's code; data.unchecked keeps it apart.
+EXIT_CLEAN, EXIT_LEAK, EXIT_ERROR = 0, 1, 2
+EXIT_UNCHECKED = EXIT_ERROR
 
 # The always-loaded context files an agent inherits from the directory it is dispatched in.
 CASCADE_FILENAMES = ("CLAUDE.md", "CLAUDE.local.md")
@@ -245,6 +250,7 @@ class Audit:
             "corpus_documents": self.corpus_documents,
             "corpus_empty": self.corpus_empty,
             "answer_unchecked": self.answer_unchecked,
+            "unchecked": self.unchecked,
             # Travels with the machine-readable result, so a caller parsing JSON cannot end up
             # with a bare "clean" and no idea how far that goes.
             "inherited_evidence": {
@@ -624,7 +630,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             "plus every memory fact body under a .claude-memory/facts/ on that chain. Walks the "
             "filesystem, so gitignored files are included (most project CLAUDE.md and every "
             "memory store are gitignored, and a search tool would drop them silently). "
-            "Repeatable. Assembling nothing is exit 3, not a clean pass."
+            "Repeatable. Assembling nothing is exit 2 (unchecked), not a clean pass."
         ),
     )
     parser.add_argument(
@@ -706,18 +712,22 @@ def main(argv: Sequence[str] | None = None) -> int:
             warn(f"redcheck: {exc}")
         return EXIT_ERROR
 
+    if result.has_leak:
+        code = EXIT_LEAK
+    elif result.unchecked:
+        code = EXIT_UNCHECKED
+    else:
+        code = EXIT_CLEAN
     if args.json:
+        # ok = "ran without error": false exactly when the exit is 2, true on a leak.
         print(json.dumps(
-            {"ok": True, "command": "redcheck", "skipped": warnings, "data": result.as_dict()},
+            {"ok": code != EXIT_ERROR, "command": "redcheck", "skipped": warnings,
+             "data": result.as_dict()},
             indent=2,
         ))
     else:
         print(_render(result))
-    if result.has_leak:
-        return EXIT_LEAK
-    if result.unchecked:
-        return EXIT_UNCHECKED
-    return EXIT_CLEAN
+    return code
 
 
 if __name__ == "__main__":
