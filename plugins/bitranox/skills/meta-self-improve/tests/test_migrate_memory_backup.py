@@ -4,7 +4,8 @@ ASCII only.
 The backup used to copy the native store (which the migration only reads) and the retired
 `.claude-bx-selflearning` dir (which it never touches), and nothing it actually mutates: the
 anchor's central store, the level's CLAUDE.local.md, the CLAUDE.md a legacy scope block is moved
-out of, and the repo .gitignore. A backup that misses what the migration mutates is not a backup.
+out of, and the repo's .git/info/exclude. A backup that misses what the migration mutates is not a
+backup.
 """
 import json
 import os
@@ -225,7 +226,90 @@ def test_migrate_store_reports_an_unreadable_level_file_as_its_error(env):
     assert rep["backup"] and rep["placed"] == 0
 
 
-@pytest.mark.skipif(not HAVE_GIT, reason="needs git for the repo .gitignore")
+# ---- the memory wiring never touches tracked git: ignore lines go to .git/info/exclude ------------
+# 7.35.1 moved the engine's ignore step to the repo's exclude file; the migration kept appending to
+# the TRACKED .gitignore, which a public repo then publishes (user decision W-D3, 2026-10-05).
+
+IGNORED = ("CLAUDE.local.md", sig.MEMORY_DIRNAME + "/", sig.CURATED_DIRNAME + "/")
+
+
+def _exclude(top):
+    return top / ".git" / "info" / "exclude"
+
+
+def _own_exclude(top, raw=b"# own rules\n*.tmp\n"):
+    """Give the repo an exclude file with known bytes: whether `git init` creates one depends on
+    the installed templates."""
+    _exclude(top).parent.mkdir(parents=True, exist_ok=True)
+    _exclude(top).write_bytes(raw)
+    return raw
+
+
+def _git_ignores(where, pattern):
+    r = subprocess.run(["git", "-C", str(where), "check-ignore", "-q", "--no-index", pattern],
+                       capture_output=True, encoding="utf-8", errors="replace")
+    return r.returncode == 0
+
+
+@pytest.mark.skipif(not HAVE_GIT, reason="needs git for the exclude file")
+def test_a_migration_leaves_the_tracked_gitignore_byte_identical(env):
+    tmp_path, home = env
+    top, proj = _tree(tmp_path, git=True)
+    raw = b"*.pyc\r\nbuild/\r\n"
+    (top / ".gitignore").write_bytes(raw)
+    slug = _slug(proj)
+    _native(home, slug, {"project-alpha": "Alpha body."})
+    assert M.main(["--apply", "--slug=" + slug]) == 0
+    assert (top / ".gitignore").read_bytes() == raw
+    lines = _exclude(top).read_bytes().decode("utf-8").splitlines()
+    for pattern in IGNORED:
+        assert pattern in lines, (pattern, lines)
+        assert _git_ignores(proj, pattern), pattern
+
+
+@pytest.mark.skipif(not HAVE_GIT, reason="needs git for the exclude file")
+def test_the_backup_covers_the_exclude_file_not_the_gitignore(env):
+    tmp_path, home = env
+    top, proj = _tree(tmp_path, git=True)
+    slug = _slug(proj)
+    _native(home, slug, {"project-alpha": "Alpha body."})
+    excl_before = _own_exclude(top, b"# own rules\r\n*.tmp\r\n")
+    gi_before = (top / ".gitignore").read_bytes()
+    rep = M.migrate_store(slug, dry_run=False)
+    assert rep["error"] is None and rep["placed"] == 1
+    assert _exclude(top).read_bytes() != excl_before      # control: the run did write it
+    items = json.loads((Path(rep["backup"]) / "manifest.json").read_text(encoding="utf-8"))["items"]
+    paths = [os.path.realpath(i["path"]) for i in items]
+    want = os.path.realpath(str(_exclude(top)))
+    assert paths.count(want) == 1, paths                  # level and anchor share ONE repo
+    assert os.path.realpath(str(top / ".gitignore")) not in paths
+    assert M.restore_backup(rep["backup"]) == []
+    assert _exclude(top).read_bytes() == excl_before
+    assert (top / ".gitignore").read_bytes() == gi_before
+
+
+@pytest.mark.skipif(not HAVE_GIT, reason="needs git for the exclude file")
+def test_a_repo_without_git_info_still_migrates_and_restores(env):
+    tmp_path, home = env
+    top, proj = _tree(tmp_path, git=True)
+    shutil.rmtree(top / ".git" / "info")
+    slug = _slug(proj)
+    _native(home, slug, {"project-alpha": "Alpha body."})
+    before = _snapshot(top)
+    assert M.main(["--apply", "--slug=" + slug]) == 0
+    assert (top / ".gitignore").read_bytes() == b"*.pyc\n"
+    assert sig.MEMORY_DIRNAME + "/" in _exclude(top).read_bytes().decode("utf-8").splitlines()
+    run = [p for p in M._backups_dir().iterdir() if p.is_dir()][0]
+    items = json.loads((run / "manifest.json").read_text(encoding="utf-8"))["items"]
+    want = os.path.realpath(str(_exclude(top)))
+    excl = [i for i in items if os.path.realpath(i["path"]) == want]
+    assert len(excl) == 1 and excl[0]["existed"] is False
+    assert M.main(["--restore", str(run)]) == 0
+    assert not _exclude(top).exists()                     # the run created it, the undo removes it
+    assert _snapshot(top) == before
+
+
+@pytest.mark.skipif(not HAVE_GIT, reason="needs git for the exclude file")
 def test_a_non_utf8_gitignore_neither_crashes_the_run_nor_is_rewritten(env, capsys):
     tmp_path, home = env
     top, proj = _tree(tmp_path, git=True)
@@ -236,20 +320,35 @@ def test_a_non_utf8_gitignore_neither_crashes_the_run_nor_is_rewritten(env, caps
     rc = M.main(["--apply", "--slug=" + slug])
     out = capsys.readouterr().out
     assert "BACKUP of everything written" in out
-    # the engine's own ignore step appends bytes, which is fine; what must survive is the original
-    assert (top / ".gitignore").read_bytes().startswith(raw)
+    assert (top / ".gitignore").read_bytes() == raw
     assert rc == 0
-    assert M.ensure_gitignore(str(proj)) == "gitignore write failed"
+    assert M.ensure_gitignore(str(proj)) == "gitignored"
 
 
-@pytest.mark.skipif(not HAVE_GIT, reason="needs git for the repo .gitignore")
-def test_a_utf8_gitignore_holding_non_ascii_is_still_extended(env):
-    """Control for the non-UTF-8 case: real UTF-8 text is read and the ignore lines appended."""
+@pytest.mark.skipif(not HAVE_GIT, reason="needs git for the exclude file")
+def test_a_non_utf8_exclude_file_keeps_its_bytes(env):
+    """The exclude file is rewritten, so a byte in another encoding must survive the round trip."""
     tmp_path, _home = env
     top, proj = _tree(tmp_path, git=True)
-    (top / ".gitignore").write_bytes("# caf\u00e9\n*.pyc\n".encode("utf-8"))
+    raw = _own_exclude(top, b"# caf\xe9\n*.log\n")
     assert M.ensure_gitignore(str(proj)) == "gitignored"
-    assert sig.MEMORY_DIRNAME + "/" in (top / ".gitignore").read_text(encoding="utf-8")
+    assert _exclude(top).read_bytes().startswith(raw)
+    assert (top / ".gitignore").read_bytes() == b"*.pyc\n"
+
+
+@pytest.mark.skipif(not HAVE_GIT, reason="needs git for the exclude file")
+def test_an_exclude_file_that_cannot_be_written_is_named(env):
+    """A directory where the exclude file belongs cannot be read or written on any platform; the
+    status names what git could not be made to ignore instead of claiming success."""
+    tmp_path, _home = env
+    top, proj = _tree(tmp_path, git=True)
+    _own_exclude(top)
+    _exclude(top).unlink()
+    _exclude(top).mkdir()
+    status = M.ensure_gitignore(str(proj))
+    assert status not in M._GITIGNORE_FINE
+    assert "CLAUDE.local.md" in status
+    assert (top / ".gitignore").read_bytes() == b"*.pyc\n"
 
 
 @pytest.mark.skipif(not HAVE_GIT, reason="needs git to track the store")
@@ -270,7 +369,7 @@ def test_a_tracked_store_warning_reaches_the_output(env, capsys):
 
 # ---- git output is decoded as UTF-8, whatever the locale -----------------------------------------
 
-@pytest.mark.skipif(not HAVE_GIT, reason="needs git for the repo .gitignore")
+@pytest.mark.skipif(not HAVE_GIT, reason="needs git for the exclude file")
 def test_a_non_ascii_repo_path_under_an_ascii_locale_is_still_gitignored(env):
     """git prints the repo path in UTF-8. Decoded with the LOCALE codec, an ASCII locale raised
     UnicodeDecodeError out of the git helper - past its OSError guard - for any repo whose path
@@ -289,7 +388,8 @@ def test_a_non_ascii_repo_path_under_an_ascii_locale_is_still_gitignored(env):
                        encoding="utf-8", errors="replace")
     assert r.returncode == 0, r.stderr
     assert r.stdout.strip() == "gitignored", (r.stdout, r.stderr)
-    assert sig.MEMORY_DIRNAME + "/" in (top / ".gitignore").read_text(encoding="utf-8")
+    assert sig.MEMORY_DIRNAME + "/" in _exclude(top).read_bytes().decode("utf-8").splitlines()
+    assert not (top / ".gitignore").exists()
 
 
 def test_a_restore_that_cannot_put_an_item_back_exits_2(env, capsys):
