@@ -564,7 +564,8 @@ def test_mark_of_an_already_marked_pair_still_exits_zero(tmp_path, monkeypatch):
 
 
 def test_no_usable_keywords_prints_an_explicit_zero_candidates_line(home, capsys):
-    assert G.main(["--topic", "the rules", "--self", "/p/self"]) == 0
+    # Not scanned is "could not run" (2), unlike a scan that matched nothing (0, a report).
+    assert G.main(["--topic", "the rules", "--self", "/p/self"]) == 2
     out = capsys.readouterr().out
     assert "CANDIDATES: 0 (not scanned: no usable keywords from topic)" in out
 
@@ -573,9 +574,18 @@ def test_walled_without_an_anchor_prints_an_explicit_zero_candidates_line(home, 
     _cfg(home, cross_tree_search=False)
     lonely = home / "nowhere"
     lonely.mkdir()
-    assert G.main(["--topic", "zorblax", "--self", str(lonely)]) == 0
+    assert G.main(["--topic", "zorblax", "--self", str(lonely)]) == 2
     out = capsys.readouterr().out
     assert "CANDIDATES: 0 (not scanned: no tree anchor" in out
+
+
+def test_a_scan_that_matches_nothing_still_exits_zero(home, capsys, tmp_path):
+    """The control for the two not-scanned tests: a scan that RAN and found nothing is a report
+    with zero rows, so it stays 0 - only 'not scanned' moved to 2."""
+    lonely = home / "nowhere"
+    lonely.mkdir()
+    assert G.main(["--topic", "zorblaxquux", "--self", str(lonely)]) == 0
+    assert "CANDIDATES: 0 in" in capsys.readouterr().out
 
 
 def test_an_unexpected_error_exits_two_not_one(home, capsys, monkeypatch):
