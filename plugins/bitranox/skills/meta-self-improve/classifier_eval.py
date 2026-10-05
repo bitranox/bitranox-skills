@@ -1144,6 +1144,57 @@ def _replay_report(rows, threshold):
     return out
 
 
+def roster_fingerprint(roster):
+    """A stable key for a roster: its names and texts, order-free."""
+    import hashlib  # noqa: PLC0415 - only a --roster installed run fingerprints
+
+    blob = json.dumps(sorted(roster.items()), ensure_ascii=False)
+    return hashlib.sha1(blob.encode("utf-8")).hexdigest()
+
+
+class InstalledRosterVetting:
+    """The planted controls, asked once per distinct installed roster before a row uses it.
+
+    The run-wide vetting covers the shipped roster only, while `--roster installed` offers each
+    prompt the listing of its own session, which can lack the skill a planted positive needs or
+    carry a trimmed description. Each distinct roster (with the --description overrides applied,
+    as the row will see it) is asked the controls of every replayed arm once, cached by
+    fingerprint; a prompt whose roster fails is skipped before any arm is asked about it.
+    """
+
+    def __init__(self, ask, args, bodies, router_text):
+        self.ask, self.args, self.bodies, self.router_text = ask, args, bodies, router_text
+        self.verdicts = {}
+
+    def failure_for(self, prompt, shipped):
+        """None when this prompt's roster may be replayed, else why not."""
+        if getattr(self.args, "roster", "shipped") != "installed":
+            return None
+        offered, source = roster_for(prompt, shipped, "installed")
+        if source != skill_roster.SOURCE_TRANSCRIPT:
+            return None  # fell back to the shipped roster, which the run already vetted
+        offered, _applied = with_descriptions(
+            offered, dict(getattr(self.args, "description", None) or []))
+        key = roster_fingerprint(offered)
+        if key not in self.verdicts:
+            self.verdicts[key] = self._vet(offered)
+        return self.verdicts[key]
+
+    def _vet(self, offered):
+        try:
+            for arm in selected_arms(getattr(self.args, "arm", None)):
+                check_controls(arm, self.ask, offered, threshold=self.args.threshold,
+                               shortlist=self.args.shortlist, bodies=self.bodies,
+                               router_text=self.router_text)
+        except ControlFailed as exc:
+            return "its installed roster failed a planted control: %s" % exc
+        return None
+
+    def summary(self):
+        return {"vetted": len(self.verdicts),
+                "failed": sum(1 for v in self.verdicts.values() if v)}
+
+
 def _run_replay(args, clf=None, skills=None):
     """(exit code, data, error) for replay / size / controls. Raises ControlFailed (exit 2).
 
@@ -1203,10 +1254,19 @@ def _run_replay(args, clf=None, skills=None):
                        bodies=bodies, router_text=router_text)
     triggers = router.load_triggers()
     rows, replayed, skipped = [], [], []
+    vet = InstalledRosterVetting(ask, args, bodies, router_text)
     # Written as they come, not at the end: a run costs real money and several minutes, and a
     # crash on the last prompt would otherwise discard every row before it.
     with open(args.out, "a", encoding="utf-8") as fh:
         for prompt in picked:
+            failure = vet.failure_for(prompt, skills)
+            if failure:
+                # Skipped before any arm is asked: a row bought on a roster the planted controls
+                # reject measures the roster's defect, not the arm.
+                skipped.append({"uuid": prompt.get("uuid"), "source": prompt.get("source"),
+                                "line": prompt.get("line"), "reason": failure})
+                print("classifier_eval: skipped a prompt - %s" % failure, file=sys.stderr)
+                continue
             try:
                 row = _replay_one(prompt, ask, skills, bodies, router, triggers, args,
                                   router_text)
@@ -1228,6 +1288,7 @@ def _run_replay(args, clf=None, skills=None):
               "failures": dict(ask.reasons), "log": str(args.out),
               "roster": getattr(args, "roster", "shipped"),
               "rosters_used": dict(Counter(r["roster"] for r in rows)),
+              "installed_rosters": vet.summary(),
               "arms": _replay_report(rows, args.threshold)}
     if getattr(args, "description", None):
         # Rows each override reached, per skill: 0 means the run was its own control.

@@ -1235,6 +1235,94 @@ def _replay(tmp_path, *extra, clf=None, skills=None):
     return ce.main(argv, clf=clf or FakeClassifier(), skills=SKILLS if skills is None else skills)
 
 
+# ---- an installed roster is vetted too (D13) ----------------------------------------------------
+# The controls ran on the SHIPPED roster only, so a run over `--roster installed` bought rows on a
+# roster nobody had checked: one missing the skill a planted positive needs, say. Each distinct
+# installed roster is now vetted once, keyed by a fingerprint of its names and texts.
+
+class RosterAware(FakeClassifier):
+    """Picks the table skill only when the roster offers it, so a roster without it fails the
+    planted positive exactly as a real classifier would."""
+
+    def ask(self, state, questions):
+        result = super().ask(state, questions)
+        pick = next((q for q in questions if q.id == ce.cl.PICK_ID), None)
+        if result is not None and pick is not None and \
+                "docs-md-table-formatting" not in (pick.criteria or {}):
+            result.answers[ce.cl.PICK_ID] = ce.cl.Answer("choice", ce.cl.NO_SKILL_KEY)
+        return result
+
+
+def _installed_log(tmp_path, rows):
+    """A pinned log whose rows name their source transcripts: [(uuid, prompt, source), ...]."""
+    log = tmp_path / "earlier.jsonl"
+    log.write_text("".join(json.dumps({"uuid": u, "source": src, "line": 1,
+                                       "state": {"user_prompt": p, "project": "p"}, "arms": {}})
+                           + "\n" for u, p, src in rows), encoding="utf-8")
+    return log
+
+
+def _listing(path, names_descs):
+    rec = {"type": "attachment", "attachment": {
+        "type": "skill_listing", "isInitial": True, "names": [n for n, _d in names_descs],
+        "content": "\n".join("- %s: %s" % nd for nd in names_descs)}}
+    path.write_text(json.dumps(rec) + "\n", encoding="utf-8")
+    return str(path)
+
+
+def _installed_replay(tmp_path, log, clf):
+    return ce.main(["replay", "--prompts", str(log), "--out", str(tmp_path / "out.jsonl"),
+                    "--json", "--arm", "choice_full", "--roster", "installed"],
+                   clf=clf, skills=SKILLS)
+
+
+def _asked_prompts(clf):
+    return [state.get("user_prompt") for state, _q in clf.asked]
+
+
+def test_an_installed_roster_is_vetted_once_however_many_prompts_use_it(tmp_path, capsys):
+    good = _listing(tmp_path / "good.jsonl", sorted(SKILLS.items()))
+    log = _installed_log(tmp_path, [("a", "reformat the markdown table", good),
+                                    ("b", "align the table columns", good)])
+    clf = RosterAware()
+    assert _installed_replay(tmp_path, log, clf) == 0
+    env = json.loads(capsys.readouterr().out)
+    # Each vetting asks the two planted "go ahead" negatives: the shipped vetting plus ONE
+    # vetting of the installed roster, however many prompts share it. (The fake key "k" is
+    # redacted out of the table prompt as a literal, so the negatives are what is counted.)
+    assert _asked_prompts(clf).count("go ahead") == 2 * 2
+    assert env["data"]["installed_rosters"] == {"vetted": 1, "failed": 0}
+    assert env["data"]["sampled"] == 2
+
+
+def test_a_broken_installed_roster_buys_no_row(tmp_path, capsys):
+    good = _listing(tmp_path / "good.jsonl", sorted(SKILLS.items()))
+    broken = _listing(tmp_path / "broken.jsonl", [("compuse-bash", "Use when running shell")])
+    log = _installed_log(tmp_path, [("a", "reformat the markdown table", good),
+                                    ("b", "fix the table please", broken)])
+    clf = RosterAware()
+    assert _installed_replay(tmp_path, log, clf) == 0
+    env = json.loads(capsys.readouterr().out)
+    assert "fix the table please" not in _asked_prompts(clf), "a paid row on an unvetted roster"
+    assert env["data"]["sampled"] == 1
+    assert env["data"]["installed_rosters"] == {"vetted": 2, "failed": 1}
+    skipped = env["data"]["skipped_prompts"]
+    assert [s["uuid"] for s in skipped] == ["b"] and "planted control" in skipped[0]["reason"]
+    rows = [json.loads(x) for x in (tmp_path / "out.jsonl").read_text(encoding="utf-8").split("\n")
+            if x.strip()]
+    assert [r["uuid"] for r in rows] == ["a"]
+
+
+def test_a_shipped_roster_run_vets_no_installed_roster(tmp_path, capsys):
+    good = _listing(tmp_path / "good.jsonl", sorted(SKILLS.items()))
+    log = _installed_log(tmp_path, [("a", "reformat the markdown table", good)])
+    clf = RosterAware()
+    assert ce.main(["replay", "--prompts", str(log), "--out", str(tmp_path / "out.jsonl"),
+                    "--json", "--arm", "choice_full"], clf=clf, skills=SKILLS) == 0
+    env = json.loads(capsys.readouterr().out)
+    assert env["data"]["installed_rosters"] == {"vetted": 0, "failed": 0}
+
+
 def test_replay_vets_the_arm_it_replays_not_a_fixed_one(tmp_path, capsys):
     assert _replay(tmp_path, "--arm", "choice_full") == 0
     env = json.loads(capsys.readouterr().out)
