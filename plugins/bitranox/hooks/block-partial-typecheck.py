@@ -96,6 +96,37 @@ _NON_CHECK = frozenset({"--version", "--help", "-h", "--stats", "--verifytypes"}
 
 _TEST_DIR_NAMES = ("tests", "test")
 
+# A statement need not BEGIN with pyright to run it: these RUN a command named by a later operand.
+# Only behind one of them may pyright sit anywhere but first. Any OTHER program in front - grep,
+# rg, which, test, ls, cat - is handed the word as DATA: a search pattern, a name to look up, a file
+# to stat. Reading that word as the executable is what blocked `grep -rn "pyright" pyproject.toml`,
+# with the file after the pattern taken as the path pyright was narrowed to.
+#
+# A fixed list on purpose: "any leading token is a launcher" is the bag-of-tokens reading this
+# replaced. A launcher missing from here makes a real narrowed run behind it pass unblocked, so a
+# replay over the real corpus, not this list, decides whether it is complete enough.
+_LAUNCHERS = frozenset({
+    # run the command they are handed (the same set the git guards walk past in shell_text)
+    "nice", "ionice", "timeout", "sudo", "doas", "env", "stdbuf", "nohup", "setsid", "chrt",
+    "taskset", "time", "exec", "command", "xargs",
+    # project and package runners
+    "uv", "uvx", "pipx", "poetry", "pdm", "hatch", "rye", "pixi", "conda", "mamba", "micromamba",
+    "npx", "pnpm", "npm", "yarn", "bunx", "bun",
+})
+
+# A python launcher runs pyright only as `-m pyright`; `python check.py pyright` hands it a word.
+_PYTHON = re.compile(r"^(?:python|pypy)\d*(?:\.\d+)*$|^py$")
+
+# Shell words that open a statement ahead of its program: a loop or branch body, a condition, a
+# brace group, a negation. `{` and `(` arrive as their own tokens only when spaced, as bash needs.
+_STATEMENT_KEYWORDS = frozenset({"if", "while", "until", "do", "then", "else", "elif", "{", "(", "!"})
+
+# `command -v pyright` and `command -V pyright` LOOK UP the program; `command pyright` runs it.
+_LOOKUP_OPTIONS = frozenset({"-v", "-V"})
+
+# PowerShell's call operator: `& C:\venv\Scripts\pyright.exe src` runs the program after it.
+_CALL_OPERATOR = "&"
+
 
 def _pyright_invocations(cmd: str, tool_name: str = "Bash") -> list[list[str]]:
     r"""The positional paths of EVERY pyright check run in `cmd`, one list per invocation.
@@ -103,37 +134,97 @@ def _pyright_invocations(cmd: str, tool_name: str = "Bash") -> list[list[str]]:
     An invocation that is not a check (`--version`, `--help`, ...) contributes nothing and the scan
     goes on: ending the whole scan there let `pyright --version && pyright src` through, and judging
     only the first invocation let `pyright tests && pyright src` through. An empty list for an
-    invocation means no paths were given, which is the full project. Unbalanced quotes give `[]`.
+    invocation means no paths were given, which is the full project. A statement whose quotes do
+    not balance contributes nothing.
+
+    Only pyright in COMMAND position counts, statement by statement - see `_LAUNCHERS`. Statements
+    are cut by the shared quote-aware walk, because a newline or an unspaced `;` ends one just as a
+    spaced `&&` does, and a command-position test over one undivided token list would read
+    `cd sub\npyright src` as a `cd` and miss the run.
 
     `tool_name` picks the splitting language AND the path-separator rules, because both decide
     whether argv names pyright at all: POSIX shlex eats the separators out of a PowerShell
     `C:\venv\Scripts\pyright.exe`, and a POSIX basename over what survives still never matches.
     Either half missing lets a partial typecheck through the gate that exists to catch it.
     """
-    try:
-        # Heredoc bodies first: a body is stdin DATA, so a doc or script that merely CONTAINS a
-        # narrow pyright invocation is not one, and blocking it stops the footgun being written
-        # down - the guard-blocks-its-own-documentation shape this gate has hit before.
-        tokens = shell_text.split_for_tool(
-            shell_text.strip_heredoc_bodies(cmd), tool_name, comments=True)
-    except ValueError:
-        return []  # unbalanced quotes: not ours to judge
-
+    # Heredoc bodies first: a body is stdin DATA, so a doc or script that merely CONTAINS a narrow
+    # pyright invocation is not one, and blocking it stops the footgun being written down - the
+    # guard-blocks-its-own-documentation shape this gate has hit before.
+    text = shell_text.strip_heredoc_bodies(cmd)
     invocations: list[list[str]] = []
-    for index, token in enumerate(tokens):
-        # Match the executable itself, not a substring of some other word.
-        if shell_text.basename_for_tool(token, tool_name) not in {"pyright", "pyright.exe"}:
+    for _offset, segment in shell_text.iter_segments(text, tool_name):
+        try:
+            tokens = shell_text.split_for_tool(segment, tool_name, comments=True)
+        except ValueError:
+            continue  # unbalanced quotes: not ours to judge
+        index = _pyright_index(tokens, tool_name)
+        if index is None:
             continue
-        # ...and not a token that merely spells it, as the value of another
-        # tool's flag. Keep scanning: a real invocation may follow in the same
-        # line (`find -name pyright | ...; python -m pyright src tests`).
-        if index and tokens[index - 1] in _NAME_VALUE_FLAGS:
-            continue
-
         positionals = _invocation_positionals(tokens[index + 1 :])
         if positionals is not None:
             invocations.append(positionals)
     return invocations
+
+
+def _is_pyright(token: str, tool_name: str) -> bool:
+    return shell_text.basename_for_tool(token, tool_name) in {"pyright", "pyright.exe"}
+
+
+def _pyright_index(tokens: list[str], tool_name: str) -> int | None:
+    """Index of the pyright executable this ONE statement runs, or None when it runs another program.
+
+    Leading keywords and `NAME=value` assignments are skipped. Then the program is pyright itself,
+    or a known launcher with pyright later in its argv (never as another tool's flag value: the
+    `--with pyright` of `uv run --with pyright pyright`), or a python launcher's `-m pyright`.
+    """
+    at = 0
+    while at < len(tokens) and (tokens[at] in _STATEMENT_KEYWORDS or _is_assignment(tokens[at])):
+        at += 1
+    if at >= len(tokens):
+        return None
+    head = shell_text.basename_for_tool(tokens[at], tool_name)
+    if head == _CALL_OPERATOR and tool_name == "PowerShell":
+        at += 1
+        if at >= len(tokens):
+            return None
+        head = shell_text.basename_for_tool(tokens[at], tool_name)
+    if _is_pyright(tokens[at], tool_name):
+        return at
+    if _PYTHON.match(head):
+        return _module_run(tokens, at)
+    if head not in _LAUNCHERS:
+        return None
+    if head == "command" and at + 1 < len(tokens) and tokens[at + 1] in _LOOKUP_OPTIONS:
+        return None
+    for index in range(at + 1, len(tokens)):
+        if _PYTHON.match(shell_text.basename_for_tool(tokens[index], tool_name)):
+            # The launcher hands its command to python, which then decides alone: `uv run python
+            # -m pyright` runs it, `env python3 gate.py --gate .venv/bin/pyright` hands a WORD to a
+            # script (measured in the corpus: a gate runner told which tool to run).
+            return _module_run(tokens, index)
+        if not _is_pyright(tokens[index], tool_name):
+            continue
+        # A token that merely spells it, as the value of another tool's flag, is not the program.
+        if tokens[index - 1] in _NAME_VALUE_FLAGS:
+            continue
+        return index
+    return None
+
+
+def _module_run(tokens: list[str], at: int) -> int | None:
+    """Index of `pyright` in a python launcher's `-m pyright`, else None."""
+    for index in range(at + 1, len(tokens) - 1):
+        if tokens[index] == "-m":
+            return index + 1 if tokens[index + 1] == "pyright" else None
+        if not tokens[index].startswith("-"):
+            return None  # a script operand: python runs that file, and the rest is its argv
+    return None
+
+
+def _is_assignment(token: str) -> bool:
+    """True for a `NAME=value` shell assignment in front of a command."""
+    name, eq, _value = token.partition("=")
+    return bool(eq) and name.isidentifier()
 
 
 def _invocation_positionals(args: list[str]) -> list[str] | None:

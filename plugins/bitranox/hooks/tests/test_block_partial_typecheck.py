@@ -253,6 +253,71 @@ def test_a_shell_operator_ends_the_invocation():
     assert B._pyright_invocations("pyright --version && pyright src") == [["src"]]
 
 
+# --- pyright counts only in COMMAND position ---------------------------------
+
+
+@pytest.mark.parametrize("command", [
+    'grep -rn "pyright" pyproject.toml',
+    "grep -n 'pyright' -A 30 pyproject.toml",
+    "grep -n pyright Makefile | head -20",
+    "rg pyright src",
+    "cat pyproject.toml | grep pyright src",
+    "python tools/check.py pyright src",
+    'env NO_COLOR=1 python3 gate.py --gate ".venv/bin/pyright" --name pyright --gate "ruff check ."',
+    "uv run python pyright src",
+])
+def test_a_word_pyright_handed_to_another_program_is_not_a_run(monkeypatch, project, command):
+    """A positional pattern spelling pyright was read as the executable, and the file after it as
+    the path pyright was narrowed to - 1 in 3 of this guard's real corpus blocks was this shape.
+    The cwd here HAS a tests dir, so the positive control below fires in the same fixture."""
+    assert run_main(monkeypatch, command, project) == 0
+
+
+@pytest.mark.parametrize("command", [
+    "which pyright", "command -v pyright", "command -V pyright", "test -x .venv/bin/pyright",
+    "type pyright", "ls .venv/bin/pyright", "[ -x .venv/bin/pyright ]",
+])
+def test_looking_up_the_pyright_executable_is_not_a_run(command):
+    """These name the program to FIND it; parsing them as a no-paths run was harmless only because
+    an empty path list never blocks."""
+    assert B._pyright_invocations(command) == []
+
+
+@pytest.mark.parametrize("command", [
+    "pyright src",
+    ".venv/bin/pyright src",
+    "python -m pyright src",
+    "python3.12 -m pyright src",
+    "env -u VIRTUAL_ENV .venv/bin/python -m pyright --outputjson src/pkg/a.py",
+    "uv run python -m pyright src",
+    "py -3 -m pyright src",
+    "timeout 600 pyright src",
+    "nice -n 19 pyright src",
+    "sudo -u me pyright src",
+    "command pyright src",
+    "npx pyright src",
+    "poetry run pyright src",
+    "FORCE_COLOR=0 pyright src",
+    "cd sub\npyright src",
+    "cd sub; pyright src",
+    "if pyright src; then echo ok; fi",
+    "for f in a; do pyright src; done",
+    "{ pyright src; echo done; }",
+    "! pyright src",
+    "test -x .venv/bin/pyright && .venv/bin/pyright src",
+    "grep -n pyright pyproject.toml; pyright src",
+])
+def test_a_real_narrowed_run_still_blocks_in_command_position(monkeypatch, project, command):
+    """The control for the command-position rule: launchers, keywords, assignments and every
+    statement separator must still lead to the executable."""
+    assert run_main(monkeypatch, command, project) == 2
+
+
+def test_a_powershell_call_operator_run_still_blocks(monkeypatch, project):
+    cmd = "& C:" + _BS + "venv" + _BS + "Scripts" + _BS + "pyright.exe src"
+    assert run_main(monkeypatch, cmd, project, tool_name="PowerShell") == 2
+
+
 # --- a path pathlib cannot resolve -------------------------------------------
 
 
