@@ -294,6 +294,26 @@ def test_a_real_write_beside_a_dev_null_redirect_still_fires():
     assert "commitmsg.txt" in text
 
 
+def test_tee_writes_its_file_operands_without_any_redirect():
+    """`tee FILE` creates FILE by itself; only a `>` after tee was counted, so the plainest way to
+    compose a message through a pipe gave no notice."""
+    text = N.notice("printf x | tee msg.txt && git commit -F msg.txt")
+    assert text is not None and "msg.txt" in text
+    assert N.written_files("echo x | tee -a log.txt >/dev/null") == ["log.txt"]
+    assert N.written_files("printf x | tee one.txt two.txt") == ["one.txt", "two.txt"]
+    assert N.written_files("printf x | sudo tee /etc/x.conf") == ["/etc/x.conf"]
+    assert N.written_files("printf x | tee -- -odd.txt") == ["-odd.txt"]
+    assert N.written_files("printf x | tee 'my msg.txt'") == ["my msg.txt"]
+
+
+def test_tee_that_is_not_a_write_stays_quiet():
+    """Controls: tee as a WORD, tee into /dev/, and a tee after the gated verb are not prep."""
+    assert N.notice("echo tee notes.txt; git push") is None
+    assert N.notice("echo x | tee /dev/stderr && git push") is None
+    assert N.notice("git commit -F m && printf x | tee after.txt") is None
+    assert N.written_files("tee") == []
+
+
 def test_the_dev_skip_does_not_swallow_a_similarly_named_real_path():
     """Control: only the /dev/ directory is exempt, not a path that merely starts with those letters."""
     assert N.written_files('printf x > devnotes.txt') == ["devnotes.txt"]

@@ -230,6 +230,32 @@ def tree_prep_before_gate(command: str, tool_name=None):
     return None
 
 
+# `tee FILE` creates FILE with no redirect at all, so the `>` scan never saw the plainest way to
+# compose a message through a pipe: `printf x | tee msg.txt && git commit -F msg.txt`. Matched only
+# as the statement's PROGRAM (optionally behind sudo), on the masked text, so `echo tee notes.txt`
+# and a quoted mention are not writes.
+_TEE_STATEMENT = re.compile(r"^[\s(]*(?:sudo\s+(?:-\S+\s+)*)?(?P<tee>tee)(?=\s|$)")
+
+
+def _tee_operands(statement, tool_name):
+    """The files one `tee` statement writes: its operands, never its options or a redirect."""
+    tokens = argv_for_match(statement, tool_name or "Bash")
+    at = next((i for i, token in enumerate(tokens) if token == "tee"), None)
+    if at is None:
+        return []
+    names, options_done = [], False
+    for token in tokens[at + 1:]:
+        if not options_done and token == "--":
+            options_done = True
+            continue
+        if not options_done and token.startswith("-"):
+            continue
+        if token[:1] in "<>" or token[:2] in ("1>", "2>", "&>"):
+            break                                  # a redirect: the operands ended before it
+        names.append(token)
+    return names
+
+
 def _writes(command: str, tool_name=None):
     """(offset of the `>`, file name) for each redirect that creates a file, in order.
 
@@ -242,6 +268,10 @@ def _writes(command: str, tool_name=None):
     masked = commands_only_aligned(raw, tool_name or "Bash")
     found = []
     for start, segment in iter_segments(masked, tool_name):
+        tee = _TEE_STATEMENT.match(segment)
+        if tee:
+            found.extend((start + tee.start("tee"), name)
+                         for name in _tee_operands(raw[start:start + len(segment)], tool_name))
         if HEREDOC_OPEN.search(segment):
             scan_from = 0                              # the opener line: `> f` on either side
         else:
