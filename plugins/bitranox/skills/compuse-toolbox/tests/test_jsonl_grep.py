@@ -125,10 +125,11 @@ def test_cli_reports_the_file_count_on_stderr_not_in_the_parsed_stream(tmp_path,
     assert "file" not in cap.out.lower()
 
 
-def test_cli_exits_3_when_the_corpus_is_empty(tmp_path, capsys):
+def test_cli_exits_2_when_the_corpus_is_empty(tmp_path, capsys):
+    # Nothing read is "could not answer", never the "no" a filter that matched nothing gives.
     rc = J.main(["--field", "message.model", "--count", str(tmp_path / "missing")])
     capsys.readouterr()
-    assert rc == 3
+    assert rc == 2
 
 
 def test_cli_count_without_a_field_is_a_usage_error(tmp_path, capsys):
@@ -213,8 +214,8 @@ def test_list_reports_a_missing_path_beside_a_good_one(tmp_path, capsys):
     assert "typo.jsonl" in cap.err
 
 
-def test_list_mode_on_only_a_missing_path_exits_3(tmp_path, capsys):
-    assert J.main([str(tmp_path / "nope.jsonl"), "--field", "v"]) == 3
+def test_list_mode_on_only_a_missing_path_exits_2(tmp_path, capsys):
+    assert J.main([str(tmp_path / "nope.jsonl"), "--field", "v"]) == 2
     assert "nope.jsonl" in capsys.readouterr().err
 
 
@@ -228,13 +229,13 @@ def test_list_mode_reports_unparseable_lines(tmp_path, capsys):
     p.write_text(PRETTY, encoding="utf-8")
     rc = J.main([str(p), "--field", "message.model"])
     cap = capsys.readouterr()
-    assert rc == 0 and cap.out == ""
+    assert rc == 1 and cap.out == ""
     assert "5 unparseable line(s)" in cap.err
 
 
 def test_stdin_list_mode_reports_unparseable_lines():
     proc = _run(["--field", "message.model"], stdin=PRETTY.encode("utf-8"))
-    assert proc.returncode == 0 and proc.stdout == b""
+    assert proc.returncode == 1 and proc.stdout == b""
     assert b"5 unparseable line(s)" in proc.stderr
 
 
@@ -367,8 +368,10 @@ def test_an_invalid_pattern_is_a_usage_error(tmp_path, capsys, extra):
 
 # Runs the script with orjson unimportable, so the stdlib fallback is the reader - the arm CI takes,
 # since CI does not install orjson. Blocking the import is the one seam: the script picks its
-# backend at import time.
-_STDLIB_SHIM = ("import runpy, sys; sys.modules['orjson'] = None; script = sys.argv[1]; "
+# backend at import time. The script's own directory goes first on sys.path, as `uv run` and
+# `python3 script.py` put it, so its sibling `_cli_envelope` imports the same way.
+_STDLIB_SHIM = ("import os, runpy, sys; sys.modules['orjson'] = None; script = sys.argv[1]; "
+                "sys.path.insert(0, os.path.dirname(os.path.abspath(script))); "
                 "sys.argv = sys.argv[1:]; runpy.run_path(script, run_name='__main__')")
 
 
@@ -445,3 +448,81 @@ def test_a_named_pipe_is_read_not_reported_missing(tmp_path, capsys, extra):
     assert rc == 0, cap.err
     assert "no such file" not in cap.err
     assert sorted(cap.out.split()) == (["1", "1", "a", "b"] if extra else ["a", "b"])
+
+
+# --- exit codes: 0 matched, 1 matched nothing, 2 could not answer --------------------------------
+
+def test_a_filter_that_matches_nothing_exits_1(tmp_path, capsys):
+    p = _write(tmp_path, "a.jsonl", [{"type": "user", "v": "a"}])
+    rc = J.main([str(p), "--type", "assistant"])
+    assert rc == 1 and capsys.readouterr().out == ""
+
+
+def test_a_filter_that_matches_exits_0(tmp_path, capsys):
+    p = _write(tmp_path, "a.jsonl", [{"type": "user", "v": "a"}])
+    assert J.main([str(p), "--type", "user", "--field", "v"]) == 0
+    assert capsys.readouterr().out.split() == ["a"]
+
+
+def test_a_tally_that_counts_nothing_exits_1(tmp_path, capsys):
+    p = _write(tmp_path, "a.jsonl", [{"other": 1}])
+    rc = J.main([str(p), "--field", "v", "--count"])
+    assert rc == 1 and capsys.readouterr().out == ""
+
+
+def test_stdin_with_no_match_exits_1_and_with_a_match_exits_0():
+    data = _mk([{"type": "user"}]).encode("utf-8")
+    assert _run(["--type", "assistant"], stdin=data).returncode == 1
+    assert _run(["--type", "user"], stdin=data).returncode == 0
+
+
+@pytest.mark.skipif(sys.platform == "win32" or getattr(os, "geteuid", lambda: 1)() == 0,
+                    reason="needs POSIX mode bits and a non-root user to make a file unreadable")
+@pytest.mark.parametrize("count", [False, True])
+def test_a_named_file_that_cannot_be_opened_fails_the_run_beside_a_good_one(tmp_path, capsys, count):
+    good = _write(tmp_path, "a.jsonl", [{"m": "opus"}])
+    bad = _write(tmp_path, "b.jsonl", [{"m": "haiku"}])
+    bad.chmod(0)
+    try:
+        rc = J.main([str(good), str(bad), "--field", "m", *(["--count"] if count else [])])
+    finally:
+        bad.chmod(0o644)
+    cap = capsys.readouterr()
+    assert rc == 2 and "opus" in cap.out and "b.jsonl" in cap.err
+
+
+def test_an_internal_crash_exits_2_not_1(tmp_path, capsys, monkeypatch):
+    def explode(*_a, **_k):
+        raise RuntimeError("kaboom")
+
+    # The process boundary is under test, so the crash is injected at the one call main makes.
+    monkeypatch.setattr(J, "scan_corpus", explode)
+    rc = J.main([str(_write(tmp_path, "a.jsonl", [{"v": 1}])), "--field", "v", "--count"])
+    assert rc == 2 and "internal error" in capsys.readouterr().err
+
+
+# --- --raw prints strings bare (jq -r), list mode only --------------------------------------------
+
+def test_raw_prints_json_looking_strings_bare(tmp_path, capsys):
+    p = _write(tmp_path, "t.jsonl", TYPES)
+    assert J.main([str(p), "--field", "v", "--raw"]) == 0
+    assert capsys.readouterr().out.splitlines() == ["1", "1", "true", "true", "null"]
+
+
+def test_default_output_keeps_json_looking_strings_quoted(tmp_path, capsys):
+    p = _write(tmp_path, "t.jsonl", TYPES)
+    assert J.main([str(p), "--field", "v"]) == 0
+    assert capsys.readouterr().out.splitlines() == ['"1"', "1", '"true"', "true", "null"]
+
+
+def test_raw_leaves_non_strings_as_json(tmp_path, capsys):
+    p = _write(tmp_path, "t.jsonl", [{"v": {"a": "b"}}, {"v": "plain text"}])
+    assert J.main([str(p), "--field", "v", "--raw"]) == 0
+    first, second = capsys.readouterr().out.splitlines()
+    assert json.loads(first) == {"a": "b"} and second == "plain text"
+
+
+def test_raw_with_count_is_a_usage_error(tmp_path, capsys):
+    p = _write(tmp_path, "t.jsonl", TYPES)
+    assert J.main([str(p), "--field", "v", "--count", "--raw"]) == 2
+    assert "--raw" in capsys.readouterr().err
