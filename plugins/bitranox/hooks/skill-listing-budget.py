@@ -199,7 +199,7 @@ def _bare_entries(content, names):
     "- " stays part of its entry. Without them, a `- ` line with no ": " is the best reading left.
     """
     if isinstance(names, list) and names:
-        return [name for name, text in skill_roster._raw_listing(content, names).items() if not text]
+        return [name for name, text in skill_roster.raw_listing(content, names).items() if not text]
     return [ln[2:].strip() for ln in content.splitlines() if ln.startswith("- ") and ": " not in ln]
 
 

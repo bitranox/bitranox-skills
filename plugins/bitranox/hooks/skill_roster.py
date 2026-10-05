@@ -79,11 +79,13 @@ def _really_opens(lines, index, names):
     return nxt is None or _opener(nxt, names) is not None
 
 
-def _raw_listing(content, names):
+def raw_listing(content, names):
     """{full listed name: description, "" where the listing carries none}, in listing order.
 
     Every listed name gets an entry, including one with no line at all: `names` is the installed
-    set, and the text is only how it is described.
+    set, and the text is only how it is described. Unlike `parse_listing`, a trimmed entry stays
+    "" here rather than taking its file's description, which is what a caller asking "which
+    entries arrived bare?" needs (skill-listing-budget).
     """
     names = [n for n in names if isinstance(n, str) and n]
     nameset = set(names)
@@ -110,6 +112,10 @@ def _raw_listing(content, names):
     for name in names:
         out.setdefault(name, "")
     return out
+
+
+# The private spelling predates the public one; kept so a caller written against it still works.
+_raw_listing = raw_listing
 
 
 # ---- a trimmed skill's own file ------------------------------------------------------------------
@@ -262,7 +268,7 @@ def parse_listing(content, names, cwd=None):
     bare `- <name>` the harness trimmed. A trimmed name, or a listed name with no line at all,
     takes its own file's description (a project skill is looked up from `cwd`), else its name.
     """
-    return _keyed(_raw_listing(content, names), _Describer(cwd))
+    return _keyed(raw_listing(content, names), _Describer(cwd))
 
 
 def listing_records(transcript_path):
@@ -308,7 +314,7 @@ def listing_from_transcript(transcript_path, cwd=None):
     """
     raw = None
     for att in _listings(transcript_path) if transcript_path else ():
-        parsed = _raw_listing(att.get("content"), att.get("names") or [])
+        parsed = raw_listing(att.get("content"), att.get("names") or [])
         if att.get("isInitial") is False:
             if raw is not None:
                 raw.update({k: v for k, v in parsed.items() if v or k not in raw})

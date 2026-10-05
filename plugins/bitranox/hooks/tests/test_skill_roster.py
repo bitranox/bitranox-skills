@@ -512,3 +512,12 @@ def test_invocation_name_is_what_the_skill_tool_accepts(key, roster, expected):
 ])
 def test_is_live_trusts_only_the_sessions_listing_or_a_skill_on_disk(key, roster, source, live):
     assert SR.is_live(key, roster, source) is live
+
+
+def test_the_names_aware_listing_parser_is_public_and_keeps_its_old_name():
+    """skill-listing-budget reads listings with this parser, so it is public API; the private
+    spelling stays an alias for any caller written before it was."""
+    listing = "- files-edit-xml: Use when\n- editing XML\n- bare-skill"
+    parsed = SR.raw_listing(listing, ["files-edit-xml", "bare-skill"])
+    assert parsed == {"files-edit-xml": "Use when - editing XML", "bare-skill": ""}
+    assert SR._raw_listing is SR.raw_listing
