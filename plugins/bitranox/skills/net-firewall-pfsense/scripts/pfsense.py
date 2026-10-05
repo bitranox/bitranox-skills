@@ -27,20 +27,23 @@ key policy and no host names:
     pfsense.py --host 192.0.2.1 --user admin --ssh "ssh -i /path/key" info
     pfsense.py --fw home dhcp list                  # named target from ~/.config/bitranox/pfsense.ini
 
-Mutating verbs are dry-run until `--apply`. The four that edit config.xml (`dhcp rm`,
-`dhcp rm-static-arp`, `dns add`, `dns rm`) snapshot it first. `table del` and `snort unblock`
+Mutating verbs are dry-run until `--apply`. The six that edit config.xml (`dhcp add`,
+`dhcp rename`, `dhcp rm`, `dhcp rm-static-arp`, `dns add`, `dns rm`) snapshot it first. `table del` and `snort unblock`
 change LIVE pf state, which a config.xml snapshot neither captures nor restores, so they take
 none - re-add the entry to undo them:
 
     pfsense.py --fw home dns add --name nas.example.com --ip 192.0.2.10 --apply
     pfsense.py --fw home dhcp rm --mac 00:11:22:33:44:55 --apply
+    pfsense.py --fw home dhcp add --mac 00:11:22:33:44:56 --ip 192.0.2.56 --hostname printer --apply
+    pfsense.py --fw home dhcp rename --mac 00:11:22:33:44:56 --hostname office-printer --apply
 
 Audit a box, or a snapshot file with no network at all:
 
     pfsense.py --fw home doctor
     pfsense.py doctor --config configs/config-20260809.xml
 
-Add `--json` for a machine-readable envelope (emitted on failure too).
+Add `--json` for a machine-readable envelope {ok, command, data, skipped}, emitted on failure
+too; `ok` means the command ran without error, so it is true on exit 0 and exit 1.
 Exit codes: 0 = yes/clean, 1 = well-formed no/findings, 2 = error.
 """
 from __future__ import annotations
@@ -733,6 +736,74 @@ echo json_encode(array("changed" => $changed));
 """
 
 
+def php_add_reservation(interface: str, mac: str, ip: str, hostname: str, descr: str) -> str:
+    """Append one DHCP reservation to an interface's DHCP server.
+
+    Refuses, writing nothing, when that interface has no DHCP server or when the MAC or the
+    address is already reserved anywhere: a second reservation for either is a conflict the
+    daemon resolves silently in favour of whichever entry it reads first.
+    """
+    i, m, a, h, d = (php_str(v) for v in (interface, mac, ip, hostname, descr))
+    reason = php_str(f"pfsense.py: add DHCP reservation {ip} for {mac}")
+    return f"""
+$added = null;
+$if = {i};
+if (config_get_path("dhcpd/{{$if}}") === null) {{
+    echo json_encode(array("added" => null, "error" => "interface " . $if . " has no DHCP server"));
+    exit;
+}}
+foreach (config_get_path("dhcpd", array()) as $other => $conf) {{
+    foreach (($conf["staticmap"] ?? array()) as $sm) {{
+        if (strtolower($sm["mac"] ?? "") === {m}) {{
+            echo json_encode(array("added" => null, "error" => "a reservation for that MAC already exists"));
+            exit;
+        }}
+        if (($sm["ipaddr"] ?? "") === {a}) {{
+            echo json_encode(array("added" => null, "error" => "that address is already reserved"));
+            exit;
+        }}
+    }}
+}}
+$maps = config_get_path("dhcpd/{{$if}}/staticmap", array());
+$maps[] = array("mac" => {m}, "cid" => "", "ipaddr" => {a}, "hostname" => {h}, "descr" => {d});
+config_set_path("dhcpd/{{$if}}/staticmap", $maps);
+write_config({reason});
+{_php_reconfigure_dhcp()}
+$added = array("interface" => $if, "mac" => {m}, "ip" => {a}, "hostname" => {h});
+echo json_encode(array("added" => $added));
+"""
+
+
+def php_rename_reservation(mac: str, hostname: str) -> str:
+    """Set the hostname of the one reservation for a MAC; write only when exactly one matched."""
+    m, h = php_str(mac), php_str(hostname)
+    reason = php_str(f"pfsense.py: rename DHCP reservation for {mac} to {hostname}")
+    return f"""
+$renamed = array();
+$plan = array();
+foreach (config_get_path("dhcpd", array()) as $if => $conf) {{
+    $maps = $conf["staticmap"] ?? array();
+    $touched = false;
+    foreach ($maps as $n => $sm) {{
+        if (strtolower($sm["mac"] ?? "") === {m}) {{
+            $maps[$n]["hostname"] = {h};
+            $renamed[] = array("interface" => $if, "ip" => $sm["ipaddr"] ?? "");
+            $touched = true;
+        }}
+    }}
+    if ($touched) {{ $plan[$if] = $maps; }}
+}}
+if (count($renamed) == 1) {{
+    foreach ($plan as $if => $maps) {{ config_set_path("dhcpd/{{$if}}/staticmap", $maps); }}
+    write_config({reason});
+    {_php_reconfigure_dhcp()}
+}} else {{
+    $renamed = array();
+}}
+echo json_encode(array("renamed" => $renamed));
+"""
+
+
 def php_list_overrides() -> str:
     """Host overrides. The path is unbound/hosts; unbound/hostoverride silently returns nothing."""
     return """
@@ -788,7 +859,8 @@ echo json_encode(array("removed" => $removed));
 
 # ---- output -------------------------------------------------------------------------------------
 def envelope(*, command: str, data: object, ok: bool, skipped: list[str] | None = None) -> dict:
-    """The machine-readable result envelope."""
+    """The machine-readable result envelope. `ok` means "ran without error": true for every
+    answer a command gives (exit 0 or 1), false only on exit 2. The yes/no is the exit code's."""
     return {"ok": ok, "command": command, "data": data, "skipped": skipped or []}
 
 
@@ -943,6 +1015,88 @@ def cmd_dhcp_list(args) -> int:
     return 0
 
 
+_HOSTNAME_RX = re.compile(r"^[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?$")
+
+
+def valid_hostname(name: str) -> str:
+    """The name a reservation's hostname field takes: one DNS label (letters, digits, inner
+    hyphens, at most 63 characters). A dot, an underscore or a leading hyphen is refused here
+    rather than by the GUI's validator, which this tool bypasses."""
+    if not _HOSTNAME_RX.match(name):
+        raise PfsenseError(f"{name!r} is not a valid reservation hostname (one label: letters, "
+                           "digits and inner hyphens, at most 63 characters)")
+    return name
+
+
+def interface_for_ip(interfaces: list[dict], ip: str) -> str:
+    """The interface whose static subnet holds `ip`, or a refusal when none or several do."""
+    address = ipaddress.ip_address(ip)
+    hits = []
+    for iface in interfaces:
+        try:
+            network = ipaddress.ip_interface(f"{iface.get('ipaddr', '')}/{iface.get('subnet', '')}").network
+        except ValueError:
+            continue                     # dhcp, track6, none: no static subnet to hold anything
+        if address in network:
+            hits.append(iface["name"])
+    if len(hits) != 1:
+        found = "no interface" if not hits else f"{len(hits)} interfaces ({', '.join(hits)})"
+        raise PfsenseError(f"{found} has a static subnet holding {ip}; pass --interface")
+    return hits[0]
+
+
+def cmd_dhcp_add(args) -> int:
+    target = _target_from_args(args)
+    mac = normalize_mac(args.mac)
+    ipaddress.ip_address(args.ip)
+    hostname = valid_hostname(args.hostname)
+    reservations = run_php(target, php_list_reservations(), run=args.run)
+    taken = [r for r in reservations if r["mac"] == mac or r["ip"] == args.ip]
+    if taken:
+        raise PfsenseError(f"already reserved: {taken[0]['ip']} {taken[0]['mac']} "
+                           f"({taken[0]['hostname'] or taken[0]['descr']}) - rename or rm it instead")
+    interfaces = run_php(target, php_info(), run=args.run)["interfaces"]
+    if args.interface:
+        # A named interface must still hold the address: the GUI checks this, and this tool
+        # bypasses the GUI, so a reservation outside the subnet would be stored and never served.
+        interfaces = [i for i in interfaces if i.get("name") == args.interface]
+    interface = interface_for_ip(interfaces, args.ip)
+    entry = {"interface": interface, "mac": mac, "ip": args.ip, "hostname": hostname}
+    if not args.apply:
+        _emit(envelope(command="dhcp add", data={"would_add": entry}, ok=True, skipped=["--apply not given"]),
+              args.json, f"  DRY RUN: would reserve {args.ip} for {mac} ({hostname}) on {interface}.  "
+                         "Re-run with --apply.")
+        return 0
+    _guard_mutation(args, target, f"adding the reservation {args.ip} for {mac}")
+    result = run_php(target, php_add_reservation(interface, mac, args.ip, hostname, args.descr), run=args.run)
+    if not result.get("added"):
+        raise PfsenseError(str(result.get("error") or "the reservation was not added"))
+    _emit(envelope(command="dhcp add", data=result, ok=True), args.json,
+          f"  reserved {args.ip} for {mac} ({hostname}) on {interface}")
+    return 0
+
+
+def cmd_dhcp_rename(args) -> int:
+    target = _target_from_args(args)
+    mac = normalize_mac(args.mac)
+    hostname = valid_hostname(args.hostname)
+    reservations = run_php(target, php_list_reservations(), run=args.run)
+    entry = select_one(reservations, "mac", mac, what="reservation")
+    if not args.apply:
+        _emit(envelope(command="dhcp rename", data={"would_rename": entry, "to": hostname}, ok=True,
+                       skipped=["--apply not given"]),
+              args.json, f"  DRY RUN: would rename {entry['ip']} {mac} from "
+                         f"{entry['hostname'] or '(no hostname)'} to {hostname}.  Re-run with --apply.")
+        return 0
+    _guard_mutation(args, target, f"renaming the reservation for {mac}")
+    result = run_php(target, php_rename_reservation(mac, hostname), run=args.run)
+    if len(result.get("renamed") or []) != 1:
+        raise PfsenseError(f"the reservation for {mac} was not renamed (it changed since it was listed)")
+    _emit(envelope(command="dhcp rename", data=result, ok=True), args.json,
+          f"  renamed {entry['ip']} {mac} to {hostname}")
+    return 0
+
+
 def cmd_dhcp_rm(args) -> int:
     target = _target_from_args(args)
     mac = normalize_mac(args.mac)
@@ -956,7 +1110,7 @@ def cmd_dhcp_rm(args) -> int:
     _guard_mutation(args, target, f"removing the reservation for {mac}")
     result = run_php(target, php_rm_reservation(mac), run=args.run)
     removed = result.get("removed") or []
-    _emit(envelope(command="dhcp rm", data=result, ok=bool(removed)), args.json,
+    _emit(envelope(command="dhcp rm", data=result, ok=True), args.json,
           f"  removed {len(removed)} reservation(s) for {mac}")
     return 0 if removed else 1
 
@@ -979,7 +1133,7 @@ def cmd_dhcp_rm_static_arp(args) -> int:
     _guard_mutation(args, target, f"clearing static ARP for {mac}")
     result = run_php(target, php_rm_static_arp(mac), run=args.run)
     changed = result.get("changed") or []
-    _emit(envelope(command="dhcp rm-static-arp", data=result, ok=bool(changed)), args.json,
+    _emit(envelope(command="dhcp rm-static-arp", data=result, ok=True), args.json,
           f"  cleared static ARP on {len(changed)} reservation(s) for {mac}")
     return 0 if changed else 1
 
@@ -1041,7 +1195,7 @@ def cmd_dns_rm(args) -> int:
     stored_domain = (entry.get("domain") or "").lower()
     result = run_php(target, php_rm_override(stored_host, stored_domain), run=args.run)
     removed = result.get("removed") or []
-    _emit(envelope(command="dns rm", data=result, ok=bool(removed)), args.json,
+    _emit(envelope(command="dns rm", data=result, ok=True), args.json,
           f"  removed {len(removed)} override(s) for {host}.{domain}")
     return 0 if removed else 1
 
@@ -1103,7 +1257,7 @@ def cmd_table(args) -> int:
         present = blocked_among(out, args.ips)
         data = {"table": args.table, "present": present,
                 "absent": [ip for ip in args.ips if ip not in present]}
-        _emit(envelope(command="table test", data=data, ok=bool(present)), args.json,
+        _emit(envelope(command="table test", data=data, ok=True), args.json,
               "\n".join(f"  {'IN ' if ip in present else 'not'}  {ip}  ({args.table})" for ip in args.ips))
         return 0 if present else 1
 
@@ -1119,7 +1273,7 @@ def cmd_table(args) -> int:
     if rc != 0:
         raise PfsenseError(f"could not re-read table {args.table} to confirm: {err.strip()[:200]}")
     still = blocked_among(out, args.ips)
-    _emit(envelope(command="table del", data={"requested": args.ips, "still_present": still}, ok=not still),
+    _emit(envelope(command="table del", data={"requested": args.ips, "still_present": still}, ok=True),
           args.json, f"  deleted {len(args.ips) - len(still)} of {len(args.ips)} from {args.table}" +
                      (f"\n  STILL PRESENT: {', '.join(still)}" if still else ""))
     return 1 if still else 0
@@ -1161,7 +1315,7 @@ def cmd_snort_check(args) -> int:
     if blocked:
         lines.append("")
         lines.append(f"Next: pfsense.py snort why {blocked[0]}   then snort fixsteps --sid <SID>")
-    _emit(envelope(command="snort check", data=data, ok=not blocked), args.json, "\n".join(lines))
+    _emit(envelope(command="snort check", data=data, ok=True), args.json, "\n".join(lines))
     return 1 if blocked else 0
 
 
@@ -1218,7 +1372,7 @@ def cmd_snort_why(args) -> int:
     for note in skipped:
         print(f"pfsense: note: {note}", file=sys.stderr)
     any_found = any(found.values())
-    _emit(envelope(command="snort why", data=found, ok=any_found, skipped=skipped), args.json,
+    _emit(envelope(command="snort why", data=found, ok=True, skipped=skipped), args.json,
           "\n".join(lines))
     return 0 if any_found else 1
 
@@ -1242,7 +1396,7 @@ def cmd_snort_unblock(args) -> int:
         human += f"\n  STILL BLOCKED: {', '.join(still)}"
     human += ("\n\nThis is temporary. Clearing the table does NOT stop the rule re-adding the "
               "address on the next packet: suppress the SID too, with snort fixsteps --sid <SID>.")
-    _emit(envelope(command="snort unblock", data=data, ok=not still), args.json, human)
+    _emit(envelope(command="snort unblock", data=data, ok=True), args.json, human)
     return 1 if still else 0
 
 
@@ -1275,7 +1429,7 @@ def cmd_snort_verify(args) -> int:
          f"  sid {args.sid} suppressed: {'yes' if checks['sid_suppressed'] else 'NO'}"]
         + ([f"  {args.cidr} in pass list: {'yes' if checks.get('cidr_passlisted') else 'NO'}"] if args.cidr else [])
     )
-    _emit(envelope(command="snort verify", data=checks, ok=ok), args.json, human)
+    _emit(envelope(command="snort verify", data=checks, ok=True), args.json, human)
     return 0 if ok else 1
 
 
@@ -1353,7 +1507,7 @@ def cmd_doctor(args) -> int:
         lines.append(f"  [{finding.severity.upper():<4}] {finding.check}: {finding.subject}")
         lines.append(f"         {finding.detail}")
     lines.append(f"  ({len(warns)} to act on, {len(findings) - len(warns)} informational)")
-    _emit(envelope(command="doctor", data=[asdict(f) for f in findings], ok=not warns),
+    _emit(envelope(command="doctor", data=[asdict(f) for f in findings], ok=True),
           args.json, "\n".join(lines))
     return 1 if warns else 0
 
@@ -1418,6 +1572,18 @@ def build_parser() -> argparse.ArgumentParser:
 
     dhcp = sub.add_parser("dhcp", help="DHCP reservations").add_subparsers(dest="action", required=True)
     dhcp.add_parser("list", help="every reservation, with the static-ARP flag").set_defaults(func=cmd_dhcp_list)
+    p = dhcp.add_parser("add", parents=[mut], help="add one reservation (MAC -> address)")
+    p.add_argument("--mac", required=True)
+    p.add_argument("--ip", required=True)
+    p.add_argument("--hostname", required=True, help="one label, e.g. printer")
+    p.add_argument("--interface", help="pfSense interface name, e.g. lan or opt1 (default: the "
+                                       "one whose static subnet holds --ip)")
+    p.add_argument("--descr", default="added by pfsense.py")
+    p.set_defaults(func=cmd_dhcp_add)
+    p = dhcp.add_parser("rename", parents=[mut], help="set the hostname of one reservation, selected by MAC")
+    p.add_argument("--mac", required=True)
+    p.add_argument("--hostname", required=True, help="one label, e.g. office-printer")
+    p.set_defaults(func=cmd_dhcp_rename)
     p = dhcp.add_parser("rm", parents=[mut], help="delete one reservation, selected by MAC")
     p.add_argument("--mac", required=True)
     p.set_defaults(func=cmd_dhcp_rm)

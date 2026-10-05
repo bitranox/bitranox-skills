@@ -888,6 +888,135 @@ def test_dns_add_without_apply_sends_nothing():
     assert fake.calls == []
 
 
+# ---- dhcp add / rename: the two edits that otherwise need the GUI ---------------------------------
+INFO_JSON = json.dumps({
+    "version": "2.8.0", "dhcp_backend": "isc", "resolver": "unbound", "packages": [],
+    "interfaces": [
+        {"name": "wan", "if": "igb0", "descr": "WAN", "ipaddr": "dhcp", "subnet": ""},
+        {"name": "lan", "if": "igb1", "descr": "LAN", "ipaddr": "192.0.2.1", "subnet": "24"},
+        {"name": "opt1", "if": "igb2", "descr": "IOT", "ipaddr": "198.51.100.1", "subnet": "24"},
+    ],
+})
+
+
+def _dhcp_edit_fake():
+    # The edit payloads also read config_get_path("dhcpd"), so their markers come first.
+    return FakeRun([
+        ("$added", (0, '{"added":{"interface":"lan","mac":"00:11:22:33:44:50","ip":"192.0.2.50"}}', "")),
+        ("$renamed", (0, '{"renamed":[{"interface":"lan","ip":"192.0.2.31"}]}', "")),
+        ('"dhcp_backend"', (0, INFO_JSON, BANNER)),
+        ('config_get_path("dhcpd"', (0, RESERVATIONS_JSON, BANNER)),
+        ("cat /conf/config.xml", (0, CONFIG_XML, BANNER)),
+    ])
+
+
+def _writes(fake):
+    return [body for body in fake.php_bodies() if "write_config" in body]
+
+
+def test_the_interface_for_an_address_is_the_one_whose_subnet_holds_it():
+    interfaces = json.loads(INFO_JSON)["interfaces"]
+    assert P.interface_for_ip(interfaces, "192.0.2.50") == "lan"
+    assert P.interface_for_ip(interfaces, "198.51.100.9") == "opt1"
+    with pytest.raises(P.PfsenseError, match="no interface"):
+        P.interface_for_ip(interfaces, "203.0.113.5")
+
+
+def test_dhcp_add_refuses_an_address_outside_the_named_interface(capsys):
+    """--interface opt1 with a LAN address would be stored and never served."""
+    fake = _dhcp_edit_fake()
+    rc = P.main(["--host", "192.0.2.1", "dhcp", "add", "--mac", "00:11:22:33:44:50",
+                 "--ip", "192.0.2.50", "--hostname", "printer", "--interface", "opt1"], run=fake)
+    assert rc == 2
+    assert "192.0.2.50" in capsys.readouterr().err
+    assert _writes(fake) == []
+
+
+def test_dhcp_add_accepts_the_named_interface_that_holds_the_address():
+    fake = _dhcp_edit_fake()
+    rc = P.main(["--host", "192.0.2.1", "dhcp", "add", "--mac", "00:11:22:33:44:50",
+                 "--ip", "198.51.100.9", "--hostname", "sensor", "--interface", "opt1"], run=fake)
+    assert rc == 0
+
+
+def test_dhcp_add_without_apply_writes_nothing():
+    fake = _dhcp_edit_fake()
+    rc = P.main(["--host", "192.0.2.1", "dhcp", "add", "--mac", "00:11:22:33:44:50",
+                 "--ip", "192.0.2.50", "--hostname", "printer"], run=fake)
+    assert rc == 0
+    assert _writes(fake) == []
+
+
+def test_dhcp_add_apply_snapshots_and_sends_the_reservation_on_the_inferred_interface(tmp_path):
+    fake = _dhcp_edit_fake()
+    rc = P.main(["--host", "192.0.2.1", "--json", "--apply", "--snapshot-dir", str(tmp_path),
+                 "dhcp", "add", "--mac", "00-11-22-33-44-50", "--ip", "192.0.2.50",
+                 "--hostname", "printer"], run=fake)
+    assert rc == 0
+    (body,) = _writes(fake)
+    assert "'lan'" in body and "'00:11:22:33:44:50'" in body and "'192.0.2.50'" in body
+    assert "'printer'" in body
+    assert list(tmp_path.glob("config-192.0.2.1-*.xml")), "no snapshot before the write"
+
+
+@pytest.mark.parametrize("mac, ip", [("00:11:22:33:44:31", "192.0.2.50"),   # MAC taken
+                                     ("00:11:22:33:44:50", "192.0.2.31")])  # address taken
+def test_dhcp_add_refuses_a_duplicate_before_anything_is_written(tmp_path, mac, ip, capsys):
+    fake = _dhcp_edit_fake()
+    rc = P.main(["--host", "192.0.2.1", "--apply", "--snapshot-dir", str(tmp_path),
+                 "dhcp", "add", "--mac", mac, "--ip", ip, "--hostname", "printer"], run=fake)
+    assert rc == 2
+    assert "already" in capsys.readouterr().err
+    assert _writes(fake) == []
+    assert not list(tmp_path.glob("*.xml")), "a refused add took a snapshot"
+
+
+@pytest.mark.parametrize("hostname", ["has.dot", "-lead", "bad_char", "x" * 64])
+def test_dhcp_add_refuses_a_hostname_pfsense_would_reject(hostname):
+    fake = _dhcp_edit_fake()
+    rc = P.main(["--host", "192.0.2.1", "dhcp", "add", "--mac", "00:11:22:33:44:50",
+                 "--ip", "192.0.2.50", f"--hostname={hostname}"], run=fake)
+    assert rc == 2
+    assert fake.calls == []
+
+
+def test_dhcp_rename_dry_run_names_old_and_new(capsys):
+    fake = _dhcp_edit_fake()
+    rc = P.main(["--host", "192.0.2.1", "dhcp", "rename", "--mac", "00:11:22:33:44:31",
+                 "--hostname", "storage"], run=fake)
+    assert rc == 0
+    out = capsys.readouterr().out
+    assert "nas" in out and "storage" in out
+    assert _writes(fake) == []
+
+
+def test_dhcp_rename_apply_sends_only_the_new_name(tmp_path):
+    fake = _dhcp_edit_fake()
+    rc = P.main(["--host", "192.0.2.1", "--apply", "--snapshot-dir", str(tmp_path),
+                 "dhcp", "rename", "--mac", "00:11:22:33:44:31", "--hostname", "storage"], run=fake)
+    assert rc == 0
+    (body,) = _writes(fake)
+    assert "'storage'" in body and "'00:11:22:33:44:31'" in body
+
+
+def test_dhcp_rename_of_an_unknown_mac_is_refused():
+    fake = _dhcp_edit_fake()
+    rc = P.main(["--host", "192.0.2.1", "--apply", "dhcp", "rename", "--mac", "aa:bb:cc:dd:ee:ff",
+                 "--hostname", "storage"], run=fake)
+    assert rc == 2
+    assert _writes(fake) == []
+
+
+# ---- the envelope's ok means "ran without error", also on a well-formed no -----------------------
+def test_a_doctor_with_findings_exits_1_with_ok_true(tmp_path, capsys):
+    config = tmp_path / "config.xml"
+    config.write_text(CONFIG_XML, encoding="utf-8", newline="")
+    rc = P.main(["--json", "doctor", "--config", str(config)])
+    payload = json.loads(capsys.readouterr().out)
+    assert rc == 1
+    assert payload["ok"] is True and payload["data"]
+
+
 # ---- table: missing operands are usage errors, not verdicts -------------------------------------
 @pytest.mark.parametrize("argv", [
     ["table", "show"],
