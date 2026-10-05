@@ -27,6 +27,13 @@ between its two ends: a value added in one commit and removed in the next is sti
 that first commit. A symmetric range `A...B` scans only B's side, the commits B adds since it
 forked from A.
 
+Every commit MESSAGE in the range is scanned too, since the push publishes it with its commit; a
+finding there is attributed to `commit <sha> message` and its line, and on a public repo it
+refuses even a removal-only range. A binary file's CONTENT is never scanned (a byte search of
+images and archives would bury the real findings in noise), so each one is NAMED instead: listed
+in the JSON `skipped` list and on a `not scanned` line, and a range adding nothing but binary
+content is refused as unscanned rather than passed.
+
 Documentation-safe values are deliberately NOT findings: the RFC5737 ranges (192.0.2.0/24,
 198.51.100.0/24, 203.0.113.0/24), `example.com`/`.test`/`.invalid`, loopback, and placeholder
 home paths like `/home/user/`. Flagging those trains a reader to skim the report, which is how a
@@ -55,7 +62,8 @@ from dataclasses import dataclass, field
 from fnmatch import fnmatch
 from pathlib import Path
 
-__all__ = ["Finding", "Verdict", "parse_remote", "scan_text", "scan_diff", "decide"]
+__all__ = ["Finding", "Verdict", "parse_remote", "scan_text", "scan_diff", "scan_messages",
+           "decide"]
 
 # A remote URL in any of the shapes git accepts. Owner and repo are what the visibility lookup
 # needs; the host decides whether we can ask at all.
@@ -112,6 +120,8 @@ class Verdict:
     visibility: str | None = None
     findings: list[Finding] = field(default_factory=list)
     unused_exclusions: list[str] = field(default_factory=list)
+    examined_message_lines: int = 0
+    unscanned_binary: list[str] = field(default_factory=list)
 
 
 def parse_remote(url: str) -> tuple[str, str, str] | None:
@@ -322,13 +332,44 @@ def removed_line_count(diff: str) -> int:
     return sum(1 for _, _, sign, _ in _changed_lines(diff) if sign == "-")
 
 
-_BINARY_RX = re.compile(r"^Binary files .* differ$")
+_BINARY_RX = re.compile(r"^Binary files (?P<old>.+) and (?P<new>.+) differ$")
 
 
 def changes_binary_content(diff: str) -> bool:
     """Whether any file in the range is binary. Its content is never scanned, so a range whose
     only readable change is a removal is not known to add nothing when one is present."""
-    return any(_BINARY_RX.match(line) for line in _lines(diff))
+    return bool(binary_files(diff))
+
+
+def binary_files(diff: str) -> list[str]:
+    """Every binary file the range touches, once each, by its new name (its old one if deleted).
+
+    Their content is never scanned - a byte-level search of images and archives would flood the
+    report with noise - so they are NAMED in the verdict instead of passing unmentioned."""
+    names: list[str] = []
+    for line in _lines(diff):
+        match = _BINARY_RX.match(line)
+        if match:
+            side = match.group("new") if match.group("new") != "/dev/null" else match.group("old")
+            names.append(_header_path(side))
+    return list(dict.fromkeys(names))
+
+
+def scan_messages(messages: list[tuple[str, str]],
+                  denylist: tuple[str, ...] | list[str] = ()) -> list[Finding]:
+    """Findings in each commit MESSAGE, attributed to `commit <sha12> message` and its line.
+
+    A push publishes every message in the range as surely as its diff, and a message is where a
+    local path or host is most often pasted ("port the fix from /home/...")."""
+    found: list[Finding] = []
+    for sha, message in messages:
+        found.extend(scan_text(message, f"commit {sha[:12]} message", denylist))
+    return list(dict.fromkeys(found))
+
+
+def message_line_count(messages: list[tuple[str, str]]) -> int:
+    """How many message lines the scan read - reported beside the added-line count."""
+    return sum(len(_lines(message)) for _, message in messages)
 
 
 def exclude_findings(findings: list[Finding], patterns: list[str]) -> tuple[list[Finding],
@@ -351,35 +392,47 @@ def exclude_findings(findings: list[Finding], patterns: list[str]) -> tuple[list
 
 
 def decide(*, visibility: str | None, findings: list[Finding], examined_lines: int,
-           unused_exclusions: list[str] | None = None, removed_lines: int = 0) -> Verdict:
+           unused_exclusions: list[str] | None = None, removed_lines: int = 0,
+           examined_message_lines: int = 0, unscanned_binary: list[str] | None = None) -> Verdict:
     """The verdict. PURE, and every non-answer fails closed.
 
     Zero added lines is a refusal only when the range removed nothing either: a range that only
     REMOVES lines is a cleanup, which publishes nothing new, and refusing it would make a leak
     unfixable through this gate. A caller that does not pass `removed_lines` gets the refusal.
+
+    A finding on a public repo refuses BEFORE that cleanup rule: a commit message is published
+    with its commit, so a cleanup whose message names the value it removes publishes it again.
+    A range whose only content is binary is refused as unscanned, not called empty.
     """
     unused = list(unused_exclusions or [])
+    binary = list(unscanned_binary or [])
+
+    def verdict(ok: bool, code: int, reason: str, vis: str | None = visibility) -> Verdict:
+        return Verdict(ok, code, reason, examined_lines, vis, findings, unused,
+                       examined_message_lines, binary)
+
+    read = f"{examined_lines} added line(s)" + (
+        f" and {examined_message_lines} commit-message line(s)" if examined_message_lines else "")
     if visibility is None:
-        return Verdict(False, 2, "could not resolve the repository's visibility from its remote; "
-                                 "refusing rather than guessing from the directory name",
-                       examined_lines, None, findings, unused)
-    if examined_lines <= 0 and removed_lines > 0:
-        return Verdict(True, 0, f"the range only removes {removed_lines} line(s) and adds none, "
-                                f"so it publishes no new content", examined_lines, visibility,
-                       findings, unused)
-    if examined_lines <= 0:
-        return Verdict(False, 2, "the range is empty, so nothing was examined - that is a broken "
-                                 "check, not a clean one", examined_lines, visibility, findings, unused)
+        return verdict(False, 2, "could not resolve the repository's visibility from its remote; "
+                                 "refusing rather than guessing from the directory name", None)
     if visibility == "public" and findings:
-        return Verdict(False, 1, f"{len(findings)} private-looking value(s) in {examined_lines} "
-                                 f"added line(s) bound for a PUBLIC repo", examined_lines,
-                       visibility, findings, unused)
+        return verdict(False, 1, f"{len(findings)} private-looking value(s) in {read} bound for "
+                                 f"a PUBLIC repo")
+    if examined_lines <= 0 and removed_lines > 0:
+        return verdict(True, 0, f"the range only removes {removed_lines} line(s) and adds none, "
+                                f"so it publishes no new content")
+    if examined_lines <= 0 and binary:
+        return verdict(False, 2, f"the range adds no text, only binary content ({len(binary)} "
+                                 f"file(s)), which is never scanned - refusing rather than "
+                                 f"calling it clean")
+    if examined_lines <= 0:
+        return verdict(False, 2, "the range is empty, so nothing was examined - that is a broken "
+                                 "check, not a clean one")
     if findings:
-        return Verdict(True, 0, f"{len(findings)} finding(s) in {examined_lines} added line(s), "
-                                f"but the repo is {visibility} - reported, not refused",
-                       examined_lines, visibility, findings, unused)
-    return Verdict(True, 0, f"clean across {examined_lines} added line(s)", examined_lines,
-                   visibility, findings, unused)
+        return verdict(True, 0, f"{len(findings)} finding(s) in {read}, but the repo is "
+                                f"{visibility} - reported, not refused")
+    return verdict(True, 0, f"clean across {read}")
 
 
 # ---- adapters ----------------------------------------------------------------------------------
@@ -444,6 +497,20 @@ def range_diff(repo: Path, rev_range: str) -> str:
                  rev_range, "--"], repo)
 
 
+def range_messages(repo: Path, rev_range: str) -> list[tuple[str, str]]:
+    """(sha, full message) for every commit in the range - the same commits `range_diff` reads.
+
+    `-z` ends each record with a NUL, which no commit message can hold, so a message that itself
+    contains a line looking like a sha cannot be split into two records."""
+    out = _run(["git", "log", "-z", "--format=%H%n%B", "--right-only", rev_range, "--"], repo)
+    records = []
+    for record in out.split("\x00"):
+        sha, _, message = record.lstrip("\n").partition("\n")
+        if sha:
+            records.append((sha, message))
+    return records
+
+
 def gh_visibility(host: str, owner: str, repo: str, gh: str = "gh") -> str | None:
     """The repo's visibility per the forge API, or None when it cannot be established."""
     if host.lower() != "github.com":
@@ -462,7 +529,11 @@ def gh_visibility(host: str, owner: str, repo: str, gh: str = "gh") -> str | Non
 def _render(verdict: Verdict) -> str:
     head = ("SAFE TO PUSH" if verdict.ok else "REFUSED") + f": {verdict.reason}"
     lines = [head, f"visibility  {verdict.visibility or '(unresolved)'}",
-             f"examined    {verdict.examined_lines} added line(s)"]
+             f"examined    {verdict.examined_lines} added line(s), "
+             f"{verdict.examined_message_lines} commit-message line(s)"]
+    if verdict.unscanned_binary:
+        lines.append(f"not scanned {len(verdict.unscanned_binary)} binary file(s): "
+                     + ", ".join(verdict.unscanned_binary))
     if verdict.unused_exclusions:
         lines.append("! these --exclude patterns matched nothing: "
                      + ", ".join(verdict.unused_exclusions))
@@ -475,10 +546,12 @@ def _emit(as_json: bool, verdict: Verdict) -> None:
         print(json.dumps({"ok": verdict.ok, "command": "pushcheck",
                           "data": {"visibility": verdict.visibility,
                                    "examined_lines": verdict.examined_lines,
+                                   "examined_message_lines": verdict.examined_message_lines,
                                    "reason": verdict.reason,
                                    "unused_exclusions": verdict.unused_exclusions,
                                    "findings": [f.as_dict() for f in verdict.findings]},
-                          "skipped": []}, indent=2))
+                          "skipped": [f"{name}: binary content is not scanned"
+                                      for name in verdict.unscanned_binary]}, indent=2))
     else:
         print(_render(verdict))
 
@@ -541,12 +614,16 @@ def main(argv: list[str] | None = None) -> int:
             visibility = gh_visibility(*parsed, gh=args.gh) if parsed else None
         rev_range = args.rev_range or default_range(repo)
         diff = range_diff(repo, rev_range)
-        findings = scan_diff(diff, _denylist(args.denylist_file))
+        messages = range_messages(repo, rev_range)
+        denylist = _denylist(args.denylist_file)
+        findings = scan_diff(diff, denylist) + scan_messages(messages, denylist)
         findings, unused = exclude_findings(findings, list(args.exclude))
+        binary = binary_files(diff)
         verdict = decide(visibility=visibility, findings=findings,
                          examined_lines=added_line_count(diff), unused_exclusions=unused,
-                         removed_lines=0 if changes_binary_content(diff)
-                         else removed_line_count(diff))
+                         removed_lines=0 if binary else removed_line_count(diff),
+                         examined_message_lines=message_line_count(messages),
+                         unscanned_binary=binary)
     except PushCheckError as exc:
         verdict = Verdict(False, 2, str(exc), 0, None, [])
         _emit(args.as_json, verdict)

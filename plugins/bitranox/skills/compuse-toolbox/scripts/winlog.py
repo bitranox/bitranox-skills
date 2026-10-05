@@ -89,12 +89,20 @@ class _Segmenter:
 
     def __init__(self, data: bytes) -> None:
         self.data = data
-        self._nul = -1  # cached index of the next NUL at or after the scan position
+        self._nul = -1  # cached index of the next NUL at or after self._nul_from
+        self._nul_from = 0
 
     def _next_nul(self, start: int) -> int:
-        if self._nul < start:
+        """Index of the first NUL at or after `start` (len(data) when there is none).
+
+        The cached answer covers only starts in [where its search began, the NUL it found]: for
+        an EARLIER start it would skip every NUL in between. The scan only moves forward today,
+        so the cache is what keeps the per-line probe linear; the re-search keeps it correct for
+        a caller that does not."""
+        if start < self._nul_from or self._nul < start:
             found = self.data.find(b"\x00", start)
             self._nul = len(self.data) if found < 0 else found
+            self._nul_from = start
         return self._nul
 
     def _wide_without_nul_before_lf(self, pos: int, lf: int) -> bool:
@@ -144,8 +152,8 @@ class _Segmenter:
             return True
         lf = self.data.find(b"\n", start)
         after_lf = len(self.data) if lf < 0 else lf + 2
-        # A bounded find, not _next_nul: that cache only moves forward, and the caller's next
-        # line starts BEFORE `start`.
+        # A bounded find, not _next_nul: the caller's next line starts BEFORE `start`, so moving
+        # the cache up here would only make that next query search again.
         if self.data.find(b"\x00", start, after_lf) < 0:
             return True
         return _wide_line_aligned(self.data, start)

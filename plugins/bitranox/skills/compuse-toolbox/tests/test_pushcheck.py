@@ -598,3 +598,86 @@ def test_with_an_upstream_the_default_range_is_the_unpushed_commits(tmp_path):
     r = run_cli(["--repo", str(repo), "--visibility", "public", "--json"], tmp_path)
     assert r.returncode == 1, r.stdout + r.stderr
     assert json.loads(r.stdout)["data"]["examined_lines"] == 1
+
+
+# ---- commit messages and binary files (rank 181, L3a) ----------------------------------------
+
+def _scan(repo: Path, tmp_path: Path, rev_range: str = "HEAD~1..HEAD"):
+    r = run_cli(["--repo", str(repo), "--range", rev_range, "--visibility", "public", "--json"],
+                tmp_path)
+    return r.returncode, json.loads(r.stdout), r
+
+
+def test_a_private_value_in_a_commit_MESSAGE_is_refused(tmp_path):
+    """A push publishes each commit's message as surely as its diff. Scanning only the diff
+    passed a public push whose message named a local home path."""
+    repo = _repo(tmp_path)
+    _commit_file(repo, "doc.md", "nothing private here\n", "port the fix from /home/alice/project")
+    rc, env, r = _scan(repo, tmp_path)
+    assert rc == 1, r.stdout + r.stderr
+    (finding,) = env["data"]["findings"]
+    assert finding["kind"] == "abs_path"
+    assert finding["file"].startswith("commit ") and finding["file"].endswith(" message")
+    assert finding["line"] == 1
+    assert env["data"]["examined_message_lines"] == 1
+
+
+def test_a_message_finding_on_a_later_message_line_names_that_line(tmp_path):
+    repo = _repo(tmp_path)
+    _commit_file(repo, "doc.md", "fine\n", "subject\n\nbody line\nsee db01.internal for it")
+    rc, env, _ = _scan(repo, tmp_path)
+    assert rc == 1
+    assert [(f["kind"], f["line"]) for f in env["data"]["findings"]] == [("hostname", 4)]
+
+
+def test_a_cleanup_commit_whose_message_names_the_leak_is_still_refused(tmp_path):
+    """Removing a value in a commit that NAMES it in its message publishes it again."""
+    repo = _repo(tmp_path)
+    _commit_file(repo, "doc.md", "run it from /home/alice/project\nkeep\n", "leak")
+    _commit_file(repo, "doc.md", "keep\n", "drop /home/alice/project from the doc")
+    rc, env, r = _scan(repo, tmp_path)
+    assert rc == 1, r.stdout + r.stderr
+
+
+def test_control_a_clean_message_and_diff_still_pass(tmp_path):
+    repo = _repo(tmp_path)
+    _commit_file(repo, "doc.md", "nothing private here\n", "add the doc")
+    rc, env, _ = _scan(repo, tmp_path)
+    assert rc == 0
+    assert env["data"]["findings"] == [] and env["data"]["examined_message_lines"] == 1
+
+
+def test_a_message_on_a_private_repo_is_reported_not_refused(tmp_path):
+    repo = _repo(tmp_path)
+    _commit_file(repo, "doc.md", "fine\n", "from /home/alice/project")
+    r = run_cli(["--repo", str(repo), "--range", "HEAD~1..HEAD", "--visibility", "private",
+                 "--json"], tmp_path)
+    assert r.returncode == 0
+    assert len(json.loads(r.stdout)["data"]["findings"]) == 1
+
+
+def test_a_binary_file_beside_text_is_named_as_not_scanned(tmp_path):
+    """A binary file's content is never scanned. Passing the push is still right when the text
+    is clean, but the report must say which file it did not read, not just "clean"."""
+    repo = _repo(tmp_path)
+    (repo / "doc.md").write_text("fine\n", encoding="utf-8")
+    (repo / "blob.bin").write_bytes(b"\x00\x01/home/alice/secret\x00")
+    _git(repo, "add", "doc.md", "blob.bin")
+    _git(repo, "commit", "-qm", "doc and blob")
+    rc, env, r = _scan(repo, tmp_path)
+    assert rc == 0, r.stdout + r.stderr
+    assert env["skipped"] == ["blob.bin: binary content is not scanned"]
+    text = run_cli(["--repo", str(repo), "--range", "HEAD~1..HEAD", "--visibility", "public"],
+                   tmp_path).stdout
+    assert "not scanned" in text and "blob.bin" in text
+
+
+def test_a_range_of_only_binary_changes_is_refused_as_unscanned_not_as_empty(tmp_path):
+    repo = _repo(tmp_path)
+    (repo / "blob.bin").write_bytes(b"\x00\x01/home/alice/secret\x00")
+    _git(repo, "add", "blob.bin")
+    _git(repo, "commit", "-qm", "blob")
+    rc, env, _ = _scan(repo, tmp_path)
+    assert rc == 2
+    assert "binary" in env["data"]["reason"] and "empty" not in env["data"]["reason"]
+    assert env["skipped"] == ["blob.bin: binary content is not scanned"]

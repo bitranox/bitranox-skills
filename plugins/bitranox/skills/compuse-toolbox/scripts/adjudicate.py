@@ -159,11 +159,17 @@ def subject_for_hook(path) -> list[str]:
 
 
 def run_once(subject: list[str], stdin: str, args: list[str], timeout: float = 60.0) -> Run:
-    """Run the subject once, feeding `stdin`, and capture everything it did."""
+    """Run the subject once, feeding `stdin`, and capture everything it did.
+
+    `stdin` goes over as UTF-8 BYTES: a text-mode pipe translates every \\n to os.linesep, so on
+    Windows the subject would read "a\\r" where "a" was written, and a line-fed subject then
+    matches nothing - a different answer with no error. The output is decoded here instead, with
+    the universal newlines and the U+FFFD replacement that text mode gave the capture side.
+    """
     try:
         completed = subprocess.run(
-            [*subject, *args], input=stdin, capture_output=True, text=True,
-            encoding="utf-8", errors="replace", timeout=timeout, env={**os.environ, **_SHIM_ENV})
+            [*subject, *args], input=stdin.encode("utf-8", errors="replace"), capture_output=True,
+            timeout=timeout, env={**os.environ, **_SHIM_ENV})
     except subprocess.TimeoutExpired:
         # A hung subject is neither "fired" nor "did not fire": mark it so the claim scores ERROR.
         message = f"adjudicate: timed out after {timeout}s"
@@ -171,7 +177,14 @@ def run_once(subject: list[str], stdin: str, args: list[str], timeout: float = 6
     except OSError as exc:
         message = f"adjudicate: cannot run subject: {exc}"
         return Run(returncode=126, stderr=message, harness_error=message)
-    return Run(completed.returncode, completed.stdout or "", completed.stderr or "")
+    return Run(completed.returncode, _decoded(completed.stdout), _decoded(completed.stderr))
+
+
+def _decoded(raw: bytes | None) -> str:
+    """Captured bytes as text-mode capture would have read them: UTF-8 with U+FFFD for an
+    undecodable byte, CRLF and a lone CR read as LF."""
+    text = (raw or b"").decode("utf-8", errors="replace")
+    return text.replace("\r\n", "\n").replace("\r", "\n")
 
 
 def adjudicate(subject: list[str], claims: list[Claim], mode: str, pattern: str | None,

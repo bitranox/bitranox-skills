@@ -297,7 +297,9 @@ def _own_nodes(scope: ast.AST):
     """Nodes belonging to THIS scope, not descending into nested def/class bodies.
 
     A nested function's `for mac in ...` binds `mac` in the NESTED scope, so folding it into the
-    parent would report a binding the parent does not have.
+    parent would report a binding the parent does not have. It does descend into lambdas and
+    comprehensions, because a `:=` there binds in THIS scope (PEP 572); their own parameters and
+    `for` targets are never collected here, and `_with_expression_binding` places them per site.
     """
     body = getattr(scope, "body", [])
     stack: list[ast.AST] = list(body)
@@ -331,9 +333,6 @@ def _bindings_in(scope: ast.AST, name: str) -> tuple[Binding, ...]:
         if isinstance(node, (ast.For, ast.AsyncFor)):
             if any(n.id == name for n in _stored_names(node.target)):
                 found.add(Binding.LOOP_VAR)
-        elif isinstance(node, ast.comprehension):
-            if any(n.id == name for n in _stored_names(node.target)):
-                found.add(Binding.COMPREHENSION_VAR)
         elif isinstance(node, ast.withitem):
             if any(n.id == name for n in _stored_names(node.optional_vars)):
                 found.add(Binding.WITH_VAR)
@@ -721,44 +720,58 @@ def _inside(spans: tuple[_Span, ...], pos: tuple[int, int]) -> bool:
 
 
 @dataclass(frozen=True)
-class _Lambda:
+class _ExpressionScope:
+    """A scope that lives INSIDE an expression - a lambda or a comprehension - with its span."""
+
     start: tuple[int, int]
     end: tuple[int, int]
-    params: frozenset[str]
+    names: frozenset[str]
+    """What it binds: a lambda's parameters, a comprehension's `for` targets."""
     outside: tuple[_Span, ...]
-    """Default expressions: inside the lambda's text, evaluated in the scope around it."""
+    """Parts inside its text that are evaluated in the scope AROUND it: a lambda's defaults, a
+    comprehension's first iterable."""
+    binding: Binding
 
 
-def _lambdas(tree: ast.Module, lines: list[str]) -> list[_Lambda]:
-    """Every lambda with its CHARACTER span: a lambda binds its parameters inside that span only."""
-    found: list[_Lambda] = []
+def _expression_scopes(tree: ast.Module, lines: list[str]) -> list[_ExpressionScope]:
+    """Every lambda and comprehension with its CHARACTER span: each binds its names inside that
+    span only, so the function around it never has them."""
+    found: list[_ExpressionScope] = []
     for node in ast.walk(tree):
-        span = _char_span(node, lines) if isinstance(node, ast.Lambda) else None
+        if isinstance(node, ast.Lambda):
+            names, outside, binding = (frozenset(_parameter_names(node)),
+                                       _outer_evaluated_spans(node, lines), Binding.PARAMETER)
+        elif isinstance(node, (ast.ListComp, ast.SetComp, ast.DictComp, ast.GeneratorExp)):
+            names = frozenset(n.id for gen in node.generators for n in _stored_names(gen.target))
+            first_iter = _char_span(node.generators[0].iter, lines)
+            outside, binding = (first_iter,) if first_iter else (), Binding.COMPREHENSION_VAR
+        else:
+            continue
+        span = _char_span(node, lines)
         if span is not None:
-            found.append(
-                _Lambda(
-                    start=span[0],
-                    end=span[1],
-                    params=frozenset(_parameter_names(node)),
-                    outside=_outer_evaluated_spans(node, lines),
-                )
-            )
+            found.append(_ExpressionScope(span[0], span[1], names, outside, binding))
     return found
 
 
-def _with_lambda_binding(
-    bindings: tuple[Binding, ...], word: str, line: int, col: int, lambdas: list[_Lambda]
+def _with_expression_binding(
+    bindings: tuple[Binding, ...], word: str, line: int, col: int,
+    scopes: list[_ExpressionScope],
 ) -> tuple[Binding, ...]:
-    """A name inside `lambda mac: mac` is that lambda's PARAMETER, whatever the def around it has.
+    """A name inside `lambda mac: mac` is that lambda's PARAMETER, and one inside
+    `[mac for mac in xs]` that comprehension's variable, whatever the def around it has.
 
-    Its default (`lambda mac=mac: ...`) is not: that is read from the scope around the lambda.
+    The INNERMOST expression scope binding the name decides, so `lambda x: [x for x in y]` reads
+    the comprehension's x. A lambda default (`lambda mac=mac: ...`) and a comprehension's first
+    iterable (`[mac for mac in mac]`) are not inside: they are read from the scope around it.
     """
     pos = (line, col)
-    if not any(lam.start <= pos < lam.end and word in lam.params and not _inside(lam.outside, pos)
-               for lam in lambdas):
+    holders = [s for s in scopes
+               if s.start <= pos < s.end and word in s.names and not _inside(s.outside, pos)]
+    if not holders:
         return bindings
-    rest = tuple(b for b in bindings if b not in (Binding.PARAMETER, Binding.FREE))
-    return (Binding.PARAMETER, *rest)
+    innermost = max(holders, key=lambda s: s.start).binding
+    rest = tuple(b for b in bindings if b not in (innermost, Binding.FREE))
+    return (innermost, *rest)
 
 
 def _binding_holder(
@@ -810,7 +823,7 @@ def scan_source(
 
     starts = _line_starts(source)
     spans = _token_spans(source)
-    lambdas = _lambdas(tree, lines)
+    expression_scopes = _expression_scopes(tree, lines)
     signature_outer = {s.qualname: _outer_evaluated_spans(s.node, lines) for s in scopes}
     binding_cache: dict[str, tuple[Binding, ...]] = {}
     occ_cache: dict[str, list[_Occ]] = {}
@@ -842,7 +855,8 @@ def scan_source(
         cache_key = f"{holder_key}\0{word}"
         if cache_key not in binding_cache:
             binding_cache[cache_key] = _bindings_in(holder, word) if word else (Binding.FREE,)
-        bindings = _with_lambda_binding(binding_cache[cache_key], word, line, col, lambdas)
+        bindings = _with_expression_binding(binding_cache[cache_key], word, line, col,
+                                            expression_scopes)
 
         sites.append(
             Site(

@@ -473,3 +473,26 @@ def test_a_linked_worktree_gitdir_file_is_not_searched(tmp_path):
     code, out, err = _run(["NEEDLE", str(plain)])
     assert code == 1, (out, err)
     assert ".git" not in out
+
+
+@pytest.mark.parametrize("venv", [".venv", ".venv-win", ".venv-3.12", ".venv-bmk"])
+def test_every_dot_venv_variant_is_skipped_like_dot_venv(tmp_path, venv):
+    """The skip list named .venv and .venv-win only, so a .venv-3.12 or .venv-bmk was searched as
+    if it were project files while enforced and srccount treat every `.venv*` as a venv."""
+    (tmp_path / venv).mkdir()
+    (tmp_path / venv / "lib.py").write_text("NEEDLE\n", encoding="utf-8")
+    (tmp_path / "own.py").write_text("NEEDLE\n", encoding="utf-8")
+    code, out, err = _run(["NEEDLE", str(tmp_path)])
+    assert code == 0, (out, err)
+    assert "own.py" in out
+    assert venv not in out, out
+
+
+def test_a_dir_merely_containing_venv_in_its_name_is_still_searched(tmp_path):
+    """The rule is a PREFIX: `myvenv-notes` and `venvs` are project directories."""
+    for name in ("myvenv-notes", "venvs"):
+        (tmp_path / name).mkdir()
+        (tmp_path / name / "a.md").write_text("NEEDLE\n", encoding="utf-8")
+    code, out, err = _run(["NEEDLE", str(tmp_path)])
+    assert code == 0, (out, err)
+    assert "myvenv-notes" in out and "venvs" in out
