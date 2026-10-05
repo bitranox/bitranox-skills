@@ -182,14 +182,29 @@ the success line, abort-and-show on a miss).
    citer blocking a down-move belongs at the target TOO, move them in ONE call by repeating
    `--slug`: the guard then judges each member by where the WHOLE set lands, which is the only way
    a mutually-citing pair goes down at all (no ordering releases it). Never reach for `--force`
-   there - it strands the ref. Low/UNSURE never moves. Tree-top promotion additionally passes the
-   corroboration gate (user-stated: eager;
-   model-inferred: >= 2 DISTINCT PROJECTS): record each model-inferred tree-top candidate with
-   `dream_state.py saw-promotable <slug> <project the fact came from>`, gate the promotion on
-   `dream_state.py should-promote <slug>` (`promote`/`hold`), and after an applied promotion run
-   `dream_state.py promoted <slug>` to clear every project's sighting. Repeat sightings from ONE
-   project count once, so re-running a dream over unchanged facts corroborates nothing. HOLD keeps
-   the fact at the project level until a SECOND project sights it. After moving, normalize
+   there - it strands the ref. Low/UNSURE never moves. **A fact your routing sends to the tree
+   top is a MISPLACEMENT or a PROMOTION - decide which first**, from the fact's hook and its
+   current level's PLACE-HERE, and write the class down per fact BEFORE reading its
+   `should-promote` verdict: a verdict on record says nothing about which class a fact is (the
+   full test: references/dream-core.md, "The corroboration gate answers a PROMOTION question"):
+   - a hook written generally, at a level whose PLACE-HERE EXCLUDES it, is a MISPLACEMENT:
+     re-home it to the level the routing prompt picks, whatever `should-promote` says (a `hold`
+     answers the promotion question, not this one), and still record the sighting with
+     `saw-promotable`;
+   - anything else - the hook names its project, or its level's PLACE-HERE covers it, or you
+     cannot tell - is a PROMOTION, and passes the corroboration gate (user-stated: eager;
+     model-inferred: >= 2 DISTINCT PROJECTS). Record the sighting with
+     `dream_state.py saw-promotable <slug> <project the fact came from>`, ask
+     `dream_state.py should-promote <slug>`, and obey the word it prints. `promote`: move it to
+     the tree top, then run `dream_state.py promoted <slug>` to clear every project's sighting.
+     `hold`: it STAYS at its project level - no move to the tree top and no move part-way up as
+     a compromise, however general its body reads; report it as held. A fact that looks
+     universal on ONE project's evidence is exactly what the gate exists to stop, so "it plainly
+     applies everywhere" is why the hold binds, never a reason to override it. A `promote` never
+     picks the level, routing does: it only lets a fact go to the tree top when routing sent it
+     there; if routing picked a lower level, that is where it goes, and no `promoted` runs.
+   Repeat sightings from ONE project count once, so re-running a dream over unchanged facts
+   corroborates nothing. After moving, normalize
    reference+delta
    UPWARD-ONLY: the general lives once at its altitude, lower entries cite `[[general]]` + delta.
    **A pinned fact is out of reach for an ordinary write, not for placement.** The engine REFUSES
@@ -363,15 +378,17 @@ An ended run missing any box is not done - finish it or say plainly what was ski
 
 ## Rationalizations (pressure-tested; these do not fly)
 
-| Excuse                                                         | Reality                                                                                                                                                                                          |
-|----------------------------------------------------------------|--------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
-| "not-due / no store exists -> nothing to consolidate"          | not-due never suppresses capture; an absent store is the TRIGGER to create one. Two learnings uncaptured = work exists.                                                                          |
-| "Only N entries changed -> grep their keywords over CLAUDE.md" | The named prohibited shortcut. Reconciliation is rule-by-rule, BOTH directions, every dream - pre-existing overlap is the point.                                                                 |
-| "auto mode + 'stop asking' covers the pinned entry"            | Auto mode changes nothing here: the engine REFUSES an ordinary `add` on a pinned slug regardless of mode, and the dream never calls `amend-pinned` (human-only) to push a change through anyway. |
-| "I'm 90% sure, despite CONFIDENCE low"                         | The router's confidence gates the move, not your certainty. Evidence beats wording; UNSURE stays put.                                                                                            |
-| "Writing it into CLAUDE.md is faster than the engine"          | Routing into CLAUDE.md is not capture; the store is the system of record.                                                                                                                        |
-| "The store is empty/unchanged, so the passes no-op"            | Only counter-gated passes no-op on emptiness; chain-gated passes (reconciliation, dedup, placement) run EVERY dream.                                                                             |
-| "No time for the full pass - I'll note it for next dream"      | Say it out loud in the report as INCOMPLETE and flagged; never silently downgrade a pass and call the dream done.                                                                                |
+| Excuse                                                         | Reality                                                                                                                                                                                           |
+|----------------------------------------------------------------|---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
+| "not-due / no store exists -> nothing to consolidate"          | not-due never suppresses capture; an absent store is the TRIGGER to create one. Two learnings uncaptured = work exists.                                                                           |
+| "Only N entries changed -> grep their keywords over CLAUDE.md" | The named prohibited shortcut. Reconciliation is rule-by-rule, BOTH directions, every dream - pre-existing overlap is the point.                                                                  |
+| "auto mode + 'stop asking' covers the pinned entry"            | Auto mode changes nothing here: the engine REFUSES an ordinary `add` on a pinned slug regardless of mode, and the dream never calls `amend-pinned` (human-only) to push a change through anyway.  |
+| "I'm 90% sure, despite CONFIDENCE low"                         | The router's confidence gates the move, not your certainty. Evidence beats wording; UNSURE stays put.                                                                                             |
+| "`hold`, but the body says it applies to every project"        | A fact that reads universal on ONE project's evidence is exactly what the gate stops. For a PROMOTION, `hold` binds: no tree-top move, and no part-way move up to a middle level as a compromise. |
+| "`should-promote` printed `hold`, so this misfiled fact stays" | A `hold` answers the promotion question only. Classify first: a general hook at a level whose PLACE-HERE excludes it is a MISPLACEMENT and is re-homed whatever the verdict says.                 |
+| "Writing it into CLAUDE.md is faster than the engine"          | Routing into CLAUDE.md is not capture; the store is the system of record.                                                                                                                         |
+| "The store is empty/unchanged, so the passes no-op"            | Only counter-gated passes no-op on emptiness; chain-gated passes (reconciliation, dedup, placement) run EVERY dream.                                                                              |
+| "No time for the full pass - I'll note it for next dream"      | Say it out loud in the report as INCOMPLETE and flagged; never silently downgrade a pass and call the dream done.                                                                                 |
 
 ## Common mistakes
 
