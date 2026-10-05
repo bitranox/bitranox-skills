@@ -689,7 +689,7 @@ class TestAMoveInsideTheDeclaredBand:
                 "compiler",
             ]
         )
-        assert rc == 3  # its own code: neither supported (0) nor refuted (1)
+        assert rc == 2  # could not answer: neither supported (0) nor refuted (1)
         out = capsys.readouterr().out
         assert "INCONCLUSIVE" in out
         assert "2" in out
@@ -804,9 +804,11 @@ class TestTheRefusalMessageShowsTheOffendingText:
             compare_arms(arms, outcome_tolerance="1")
 
 
-class TestInconclusiveHasItsOwnExitCode:
+class TestInconclusiveIsCouldNotAnswer:
     """The report distinguishes refuted from too-close-to-call; the exit code has to as well, or
-    anything automated re-makes the conflation the distinction was added to end."""
+    anything automated re-makes the conflation the distinction was added to end. Under the 0/1/2
+    standard too-close-to-call is "could not answer" (2), kept apart from a usage error by
+    data.inconclusive and the envelope's error."""
 
     REFUTED: ClassVar[list[str]] = [
         "--arm",
@@ -837,8 +839,8 @@ class TestInconclusiveHasItsOwnExitCode:
         "compiler",
     ]
 
-    def test_too_close_to_call_exits_3(self) -> None:
-        assert main(self.TOO_CLOSE) == 3
+    def test_too_close_to_call_exits_2(self) -> None:
+        assert main(self.TOO_CLOSE) == 2
 
     def test_refuted_still_exits_1(self) -> None:
         assert main(self.REFUTED) == 1
@@ -860,11 +862,22 @@ class TestInconclusiveHasItsOwnExitCode:
         )
         assert rc == 1
 
-    def test_the_exit_code_is_the_same_in_json_mode(self) -> None:
-        assert main([*self.TOO_CLOSE, "--json"]) == 3
+    def test_the_exit_code_is_the_same_in_json_mode(self, capsys: pytest.CaptureFixture[str]
+                                                    ) -> None:
+        assert main([*self.TOO_CLOSE, "--json"]) == 2
+        payload = json.loads(capsys.readouterr().out)
+        assert payload["ok"] is False
+        assert payload["data"]["inconclusive"] == [["gcc12", "gcc13"]]
+        assert "INCONCLUSIVE" in payload["error"]
 
-    def test_exit_3_needs_no_claim_to_be_meaningless(self) -> None:
-        """With no --claim there is no claim to be inconclusive about, so 3 must never appear."""
+    def test_refuted_in_json_mode_is_ok_true(self, capsys: pytest.CaptureFixture[str]) -> None:
+        """ok is "ran without error": REFUTED is an answer (exit 1)."""
+        assert main([*self.REFUTED, "--json"]) == 1
+        payload = json.loads(capsys.readouterr().out)
+        assert payload["ok"] is True and "error" not in payload
+
+    def test_no_claim_cannot_be_inconclusive(self) -> None:
+        """With no --claim there is no claim to be inconclusive about, so the band never yields 2."""
         rc = main(
             [
                 "--arm",
@@ -1098,3 +1111,32 @@ class TestWhatReachesTheReader:
         rc = main(["--arm", "a model=opus outcome=1", "--arm", "b model=fable outcome=2"])
         assert rc == 2
         assert "No space left" in capsys.readouterr().err
+
+
+class TestUnifiedEnvelope:
+    """Wave D: every exit 2 prints the envelope under --json, a usage error and a crash included."""
+
+    def test_an_argparse_error_under_json_prints_the_envelope(
+        self, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        with pytest.raises(SystemExit) as exc:
+            main(["--json", "--no-such-flag"])
+        assert exc.value.code == 2
+        payload = json.loads(capsys.readouterr().out)
+        assert payload["ok"] is False and payload["command"] == "confound"
+
+    def test_a_crash_under_json_is_exit_2_with_an_envelope(
+        self, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        import confound
+
+        def boom(*_a: object, **_k: object) -> None:
+            raise RuntimeError("compare broke")
+
+        monkeypatch.setattr(confound, "compare_arms", boom)
+        rc = main(["--arm", "a m=1 outcome=1", "--arm", "b m=2 outcome=2", "--json"])
+        cap = capsys.readouterr()
+        assert rc == 2
+        payload = json.loads(cap.out)
+        assert payload["ok"] is False and "compare broke" in payload["error"]
+

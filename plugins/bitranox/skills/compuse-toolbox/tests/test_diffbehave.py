@@ -176,7 +176,7 @@ def test_warnings_go_to_stderr_not_the_parsed_stream():
     r = _run(["--a", hello, "--b", hello, "--case", "x", "--expect-differ", "1", "--json"])
     assert r.returncode == 1
     payload = json.loads(r.stdout)  # must still parse even though a diagnostic was emitted
-    assert payload["ok"] is False
+    assert payload["ok"] is True  # ok means "ran without error"; the "no" is the exit 1
     assert "FAILED" in r.stderr
 
 
@@ -498,3 +498,44 @@ def test_a_script_named_after_dash_c_is_an_argument_not_the_script():
     assert D._script_operand([sys.executable, "-m", "pkg", "out.py"]) is None
     assert D._script_operand(["uv", "run", "--with", "x", "tool.py", "out.py"]) == "tool.py"
     assert D._script_operand([sys.executable, "-X", "utf8", "old.py"]) == "old.py"
+
+
+# --- wave D: unified exit codes and the D2 envelope ------------------------------------------
+
+def test_cli_json_usage_error_prints_the_envelope(tmp_path):
+    r = _run(["--a", f"{sys.executable} {tmp_path / 'missing.py'}", "--b", _py("pass"),
+              "--case", "x", "--json"])
+    assert r.returncode == 2
+    payload = json.loads(r.stdout)
+    assert payload["ok"] is False and payload["error"]
+
+
+def test_cli_json_no_cases_prints_the_envelope():
+    r = _run(["--a", _py("pass"), "--b", _py("pass"), "--json"])
+    assert r.returncode == 2
+    payload = json.loads(r.stdout)
+    assert payload["ok"] is False and "no cases" in payload["error"]
+
+
+def test_cli_json_argparse_error_prints_the_envelope():
+    r = _run(["--json", "--a", "x"])               # --b missing
+    assert r.returncode == 2
+    payload = json.loads(r.stdout)
+    assert payload["ok"] is False and payload["command"] == "diffbehave"
+
+
+def test_cli_json_crash_prints_the_envelope(monkeypatch, capsys):
+    def boom(*_a, **_k):
+        raise RuntimeError("runner broke")
+    monkeypatch.setattr(D, "compare", boom)
+    rc = D.main(["--a", _py("pass"), "--b", _py("pass"), "--case", "x", "--json"])
+    assert rc == 2
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["ok"] is False and "runner broke" in payload["error"]
+
+
+def test_cli_json_a_side_that_did_not_run_carries_an_error():
+    r = _run(["--a", "pyhton3-typo", "--b", "pyhton3-typo", "--case", "x", "--json"])
+    assert r.returncode == 2
+    assert "could not run" in json.loads(r.stdout)["error"]
+

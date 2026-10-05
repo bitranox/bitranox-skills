@@ -25,8 +25,9 @@ prints counts as firing. The report says which of the two it is, because the fix
 
 UNUSABLE is the bucket that keeps getting lost. Folding it into REFUTED reads as a clean sweep and
 is how one pass reported 10 claims refuted where the truth was 7 refuted plus 3 never actually
-tested. The exit code is built around that: any UNUSABLE claim makes the whole run exit 1, so a
-report cannot be read as "all clear" when its controls were broken.
+tested. The exit code is built around that: any UNUSABLE claim makes the whole run exit 2 - the run
+could not answer, the same class as claim_check's BROKEN - so a report cannot be read as "all
+clear" when its controls were broken.
 
 Re-run it after every fix. A fix that makes the suite green has not necessarily closed the finding -
 that has happened twice - and this is the instrument that tells the difference.
@@ -50,9 +51,11 @@ PYTHONIOENCODING=utf-8). `--timeout` is seconds per side and must be a positive 
 In a claim file, `probe`/`control` are a string or a JSON object (sent as its JSON text), and the
 optional `probe_args`/`control_args` are lists of strings.
 
-Exit codes: 0 = every claim adjudicated (confirmed or refuted), 1 = at least one UNUSABLE,
-2 = usage or IO error, or at least one ERROR claim. `--json` emits the machine-readable envelope
-on every path; a usage error gives `{"ok": false, "data": {"reason": ...}}`.
+Exit codes: 0 = every claim adjudicated (confirmed or refuted), 2 = the run could not answer: at
+least one UNUSABLE or ERROR claim, a usage or IO error, or a crash. There is no 1: a refuted claim
+is an adjudicated one. `--json` emits the envelope `{ok, command, data, skipped}` on every path,
+`ok` false exactly on exit 2 with an `error` saying why; a usage error gives
+`data: {"reason": ...}`.
 """
 from __future__ import annotations
 
@@ -69,6 +72,8 @@ import subprocess
 import sys
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
+
+from _cli_envelope import emit, run_guarded
 
 FIRED_MODES = ("output", "nonzero", "match")
 
@@ -338,7 +343,7 @@ class _Parser(argparse.ArgumentParser):
 
 def _positive_seconds(text: str) -> float:
     """--timeout as a positive finite float. nan and inf crashed inside subprocess with a traceback
-    and exit 1 - the code this tool reserves for UNUSABLE - and 0 or a negative ran every side
+    and exit 1 - a code this tool never means - and 0 or a negative ran every side
     into an instant timeout that was then reported as ERROR claims rather than a bad argument."""
     try:
         value = float(text)
@@ -393,8 +398,7 @@ def _validate(args) -> list[Claim]:
 def _usage_failure(reason: str, as_json: bool) -> int:
     print(f"adjudicate: {reason}", file=sys.stderr)
     if as_json:
-        print(json.dumps({"ok": False, "command": "adjudicate", "skipped": [],
-                          "data": {"reason": reason}}, indent=2))
+        emit(2, "adjudicate", {"reason": reason}, error=reason)
     return 2
 
 
@@ -410,6 +414,11 @@ def _reconfigure_streams() -> None:
 
 
 def main(argv=None) -> int:
+    """The CLI. An uncaught exception exits 2 with the envelope under --json, never a traceback."""
+    return run_guarded(_main, argv, command="adjudicate")
+
+
+def _main(argv=None) -> int:
     _reconfigure_streams()
     raw = list(sys.argv[1:] if argv is None else argv)
     try:
@@ -427,15 +436,23 @@ def main(argv=None) -> int:
     summary = summarize(results)
     _warn(summary)
 
+    code = 0 if summary["ok"] else 2
     if args.json:
-        print(json.dumps({"ok": summary["ok"], "command": "adjudicate", "skipped": [],
-                          "data": {"summary": summary,
-                                   "results": [asdict(r) for r in results]}}, indent=2))
+        emit(code, "adjudicate", {"summary": summary, "results": [asdict(r) for r in results]},
+             error=_failure_reason(summary))
     else:
         _report(results, summary)
+    return code
+
+
+def _failure_reason(summary: dict) -> str | None:
+    """Why the run could not answer, for the envelope's `error`; None when it did."""
+    parts = []
     if summary["error"]:
-        return 2
-    return 0 if summary["ok"] else 1
+        parts.append(f"{summary['error']} claim(s) ERROR (a side could not run)")
+    if summary["unusable"]:
+        parts.append(f"{summary['unusable']} claim(s) UNUSABLE (the control did not discriminate)")
+    return "; ".join(parts) or None
 
 
 if __name__ == "__main__":

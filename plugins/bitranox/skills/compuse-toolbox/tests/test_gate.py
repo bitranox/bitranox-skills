@@ -868,3 +868,97 @@ class TestTheFollowUpPrintsAfterTheReport:
         out = done.stdout
         assert "THEN-MARK" in out and "ALL GATES PASSED" in out
         assert out.index("ALL GATES PASSED") < out.index("gates green") < out.index("THEN-MARK")
+
+
+# ---- C89: a gate's working directory and environment, still with no shell ----------------------
+
+def _writes_cwd_and_env(out_file):
+    """A gate that records its own cwd and the GATE_PROBE variable into `out_file`."""
+    code = ("import os, pathlib; pathlib.Path(%r).write_text(os.getcwd() + '|' + "
+            "os.environ.get('GATE_PROBE', '-') + '|' + str('PATH' in os.environ), "
+            "encoding='utf-8')" % str(out_file))
+    return quoted(sys.executable, "-c", code)
+
+
+class TestCwdAndEnv:
+    def test_global_cwd_and_env_reach_every_gate(self, tmp_path):
+        work = tmp_path / "work"
+        work.mkdir()
+        out1, out2 = tmp_path / "o1", tmp_path / "o2"
+        rc = gate.main(["--cwd", str(work), "--env", "GATE_PROBE=yes",
+                        "--gate", _writes_cwd_and_env(out1), "--gate", _writes_cwd_and_env(out2),
+                        "--log", str(tmp_path / "g.log")])
+        assert rc == 0
+        for out in (out1, out2):
+            cwd, probe, has_path = out.read_text(encoding="utf-8").split("|")
+            assert Path(cwd).resolve() == work.resolve()
+            assert probe == "yes"
+            assert has_path == "True", "env= must ADD to the environment, never replace it"
+
+    def test_per_gate_settings_apply_to_the_gate_written_before_them(self, tmp_path):
+        a, b = tmp_path / "a", tmp_path / "b"
+        a.mkdir()
+        b.mkdir()
+        out1, out2 = tmp_path / "o1", tmp_path / "o2"
+        rc = gate.main(["--cwd", str(a), "--env", "GATE_PROBE=global",
+                        "--gate", _writes_cwd_and_env(out1),
+                        "--gate", _writes_cwd_and_env(out2), "--gate-cwd", str(b),
+                        "--gate-env", "GATE_PROBE=mine",
+                        "--log", str(tmp_path / "g.log")])
+        assert rc == 0
+        cwd1, probe1, _ = out1.read_text(encoding="utf-8").split("|")
+        cwd2, probe2, _ = out2.read_text(encoding="utf-8").split("|")
+        assert Path(cwd1).resolve() == a.resolve() and probe1 == "global"
+        assert Path(cwd2).resolve() == b.resolve() and probe2 == "mine"
+
+    def test_a_relative_gate_resolves_against_its_cwd(self, tmp_path):
+        """The point of --cwd: `python3 -m pytest` in a sub-project with no wrapper .sh."""
+        work = tmp_path / "proj"
+        work.mkdir()
+        (work / "marker.py").write_text("raise SystemExit(0)\n", encoding="utf-8")
+        rc = gate.main(["--cwd", str(work), "--gate", quoted(sys.executable, "marker.py"),
+                        "--log", str(tmp_path / "g.log")])
+        assert rc == 0
+
+    def test_then_runs_in_the_global_cwd(self, tmp_path):
+        work = tmp_path / "work"
+        work.mkdir()
+        follow = quoted(sys.executable, "-c",
+                        "import pathlib; pathlib.Path('then-ran').write_text('x')")
+        rc = gate.main(["--cwd", str(work), "--gate", OK, "--then", follow,
+                        "--log", str(tmp_path / "g.log")])
+        assert rc == 0 and (work / "then-ran").exists()
+
+    @pytest.mark.parametrize("argv,needle", [
+        (["--cwd", "{missing}", "--gate", "{ok}"], "--cwd"),
+        (["--env", "NOEQUALS", "--gate", "{ok}"], "--env"),
+        (["--env", "=v", "--gate", "{ok}"], "--env"),
+        (["--gate-cwd", "{tmp}", "--gate", "{ok}"], "after the --gate"),
+        (["--gate", "{ok}", "--gate-env", "BAD"], "--gate-env"),
+        (["--gate", "{ok}", "--gate-cwd", "{missing}"], "--gate-cwd"),
+    ])
+    def test_bad_settings_are_usage_errors(self, tmp_path, capsys, argv, needle):
+        subst = {"{missing}": str(tmp_path / "nope"), "{ok}": OK, "{tmp}": str(tmp_path)}
+        argv = [subst.get(a, a) for a in argv]
+        with pytest.raises(SystemExit) as exc:
+            gate.main([*argv, "--log", str(tmp_path / "g.log")])
+        assert exc.value.code == 2
+        assert needle in capsys.readouterr().err
+
+    def test_a_gate_after_double_dash_still_takes_the_global_cwd(self, tmp_path):
+        work = tmp_path / "work"
+        work.mkdir()
+        out = tmp_path / "o"
+        code = ("import os, pathlib; pathlib.Path(%r).write_text(os.getcwd(), encoding='utf-8')"
+                % str(out))
+        rc = gate.main(["--cwd", str(work), "--log", str(tmp_path / "g.log"), "--",
+                        sys.executable, "-c", code])
+        assert rc == 0 and Path(out.read_text(encoding="utf-8")).resolve() == work.resolve()
+
+    def test_a_name_beside_a_per_gate_setting_still_pairs(self, tmp_path, capsys):
+        work = tmp_path / "w"
+        work.mkdir()
+        rc = gate.main(["--gate", OK, "--gate-cwd", str(work), "--name", "unit",
+                        "--log", str(tmp_path / "g.log")])
+        assert rc == 0 and "[PASS] unit" in capsys.readouterr().out
+

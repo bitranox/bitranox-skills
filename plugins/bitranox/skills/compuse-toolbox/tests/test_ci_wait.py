@@ -17,6 +17,17 @@ import pytest
 
 import ci_wait
 
+#: The real lookup, kept before the autouse stub below replaces it, for the tests that exercise it.
+REAL_RESOLVE_REPO = getattr(ci_wait, "resolve_repo", None)
+
+
+@pytest.fixture(autouse=True)
+def _no_real_repo_lookup(monkeypatch):
+    """Never ask the real `gh repo view`: main resolves the repo once when --repo is absent, and a
+    test that stubs only gh_runs would otherwise reach the network. gh is a true external edge."""
+    if REAL_RESOLVE_REPO is not None:
+        monkeypatch.setattr(ci_wait, "resolve_repo", lambda **kw: "o/r")
+
 
 def run(workflow: str, status: str, conclusion: str | None, sha: str = "a" * 40) -> dict[str, object]:
     """One `gh run list --json` row."""
@@ -794,8 +805,10 @@ class TestMainEnvelopeAndRepo:
         rc = ci_wait.main(["--sha", "abc1234", "--json"])
         payload = json.loads(capsys.readouterr().out)
         assert rc == 2
-        assert payload["ok"] is False and payload["state"] == "error"
-        assert "40-character" in payload["summary"]
+        assert payload["ok"] is False and payload["command"] == "ci_wait"
+        assert payload["data"]["state"] == "error"
+        assert "40-character" in payload["data"]["summary"]
+        assert "40-character" in payload["error"]
 
     def test_repo_is_passed_to_gh_and_skips_the_local_sha_check(self, monkeypatch, capsys):
         calls: list[list[str]] = []
@@ -806,7 +819,7 @@ class TestMainEnvelopeAndRepo:
         assert rc == 0
         assert all(argv[0] == "gh" for argv in calls), "no git call when --repo names another repo"
         assert calls[0][calls[0].index("--repo") + 1] == "o/r"
-        assert json.loads(capsys.readouterr().out)["state"] == "success"
+        assert json.loads(capsys.readouterr().out)["data"]["state"] == "success"
 
     def test_a_json_object_from_gh_is_a_retryable_failure(self, monkeypatch):
         monkeypatch.setattr(
@@ -823,7 +836,7 @@ class TestMainEnvelopeAndRepo:
         monkeypatch.setattr(ci_wait.subprocess, "run", boom)
         rc = ci_wait.main(["--sha", SHA, "--repo", "o/r", "--json"])
         assert rc == 2
-        assert json.loads(capsys.readouterr().out)["state"] == "error"
+        assert json.loads(capsys.readouterr().out)["data"]["state"] == "error"
 
 
 class TestASkippedRunIsNotAFailure:
@@ -918,3 +931,181 @@ class TestASettleCutByTheDeadlineIsSaid:
                                   settle_s=20.0, deadline_s=1000.0)
         assert result.state == "success"
         assert result.summary == "ci=success"
+
+
+# --------------------------------------------------------------------------------------------
+# Wave D: the shared envelope, --event (#41), action_required (#92), the repo resolved once (#109)
+# --------------------------------------------------------------------------------------------
+
+def evrun(workflow: str, status: str, conclusion: str | None, event: str) -> dict[str, object]:
+    return {**run(workflow, status, conclusion), "event": event}
+
+
+class TestTheEnvelope:
+    def test_a_failed_run_is_exit_1_with_ok_true(self, monkeypatch, capsys):
+        """ok means "ran without error": a red CI is an answer, exit 1."""
+        monkeypatch.setattr(ci_wait, "sha_is_known_locally", lambda sha, **kw: True)
+        monkeypatch.setattr(ci_wait, "gh_runs", lambda sha, **kw: [run("CI", "completed", "failure")])
+        rc = ci_wait.main(["--sha", SHA, "--settle", "0", "--json"])
+        payload = json.loads(capsys.readouterr().out)
+        assert rc == 1
+        assert list(payload)[:4] == ["ok", "command", "data", "skipped"]
+        assert payload["ok"] is True and payload["data"]["state"] == "failed"
+        assert payload["data"]["runs"][0]["conclusion"] == "failure"
+
+    def test_an_argparse_error_under_json_prints_the_envelope(self, capsys):
+        with pytest.raises(SystemExit) as info:
+            ci_wait.main(["--json", "--sha", SHA, "--interval", "1"])
+        assert info.value.code == 2
+        payload = json.loads(capsys.readouterr().out)
+        assert payload["ok"] is False and payload["command"] == "ci_wait"
+
+    def test_a_missing_sha_under_json_prints_the_envelope(self, capsys):
+        with pytest.raises(SystemExit):
+            ci_wait.main(["--json"])
+        assert json.loads(capsys.readouterr().out)["ok"] is False
+
+
+class TestAnEventFilter:
+    """#41: a SCHEDULED run queued on the same head sha held a push's verdict open until timeout."""
+
+    def test_the_default_asks_gh_for_push_runs_only(self, monkeypatch):
+        calls: list[list[str]] = []
+        monkeypatch.setattr(ci_wait.subprocess, "run", emulated_gh([run("CI", "completed", "success")],
+                                                                    calls))
+        ci_wait.main(["--sha", SHA, "--repo", "o/r", "--settle", "0"])
+        assert calls[0][calls[0].index("--event") + 1] == "push"
+
+    def test_a_scheduled_run_on_the_same_sha_cannot_hold_the_verdict(self, monkeypatch):
+        rows = [evrun("CI", "completed", "success", "push"),
+                evrun("nightly", "in_progress", None, "schedule")]
+        monkeypatch.setattr(ci_wait.subprocess, "run",
+                            lambda argv, **kw: subprocess.CompletedProcess(
+                                argv, 0, stdout=json.dumps(rows), stderr=""))
+        kept = ci_wait.gh_runs(SHA, event="push")
+        assert [r["workflowName"] for r in kept] == ["CI"]
+        assert ci_wait.verdict(kept).state == "success"
+
+    def test_event_any_asks_for_every_run(self, monkeypatch):
+        calls: list[list[str]] = []
+        monkeypatch.setattr(ci_wait.subprocess, "run", emulated_gh([run("CI", "completed", "success")],
+                                                                    calls))
+        ci_wait.main(["--sha", SHA, "--repo", "o/r", "--settle", "0", "--event", "any"])
+        assert "--event" not in calls[0]
+
+    def test_the_cli_value_reaches_gh(self, monkeypatch):
+        seen: list[object] = []
+
+        def fake(sha, **kw):
+            seen.append(kw.get("event"))
+            return [run("CI", "completed", "success")]
+
+        monkeypatch.setattr(ci_wait, "sha_is_known_locally", lambda sha, **kw: True)
+        monkeypatch.setattr(ci_wait, "gh_runs", fake)
+        ci_wait.main(["--sha", SHA, "--settle", "0", "--event", "pull_request"])
+        assert seen == ["pull_request"]
+
+    def test_no_runs_under_a_filter_names_the_way_out(self):
+        assert "--event any" in ci_wait.verdict([], event="push").summary
+
+
+class TestAwaitingApproval:
+    """#92: a fork PR's run waiting for approval is not a failure, and no wait resolves it."""
+
+    def test_action_required_is_its_own_state_and_exit_2(self):
+        result = ci_wait.verdict([run("CI", "completed", "action_required")])
+        assert result.state == "pending-approval"
+        assert ci_wait.exit_code_for(result.state) == 2
+
+    def test_a_real_failure_beside_it_still_reads_failed(self):
+        rows = [run("CI", "completed", "action_required"), run("lint", "completed", "failure")]
+        assert ci_wait.verdict(rows).state == "failed"
+
+    def test_the_wait_returns_at_once_rather_than_spinning(self):
+        polls: list[int] = []
+
+        def fetch():
+            polls.append(1)
+            return [run("CI", "completed", "action_required")]
+
+        result = ci_wait.wait_for(fetch, deadline_polls=50, sleep=lambda _s: None)
+        assert result.state == "pending-approval" and len(polls) == 1
+
+    def test_the_cli_says_so_in_the_envelope(self, monkeypatch, capsys):
+        monkeypatch.setattr(ci_wait, "sha_is_known_locally", lambda sha, **kw: True)
+        monkeypatch.setattr(ci_wait, "gh_runs",
+                            lambda sha, **kw: [run("CI", "completed", "action_required")])
+        rc = ci_wait.main(["--sha", SHA, "--json"])
+        payload = json.loads(capsys.readouterr().out)
+        assert rc == 2 and payload["ok"] is False
+        assert payload["data"]["state"] == "pending-approval"
+
+
+class TestTheRepoIsResolvedOnce:
+    """#109: a worktree deleted mid-wait turned every later poll into a gh failure, because each
+    poll re-resolved the repo from the cwd."""
+
+    def test_every_poll_gets_the_repo_resolved_at_start(self, monkeypatch):
+        seen: list[object] = []
+        rows = iter([[run("CI", "in_progress", None)], [run("CI", "completed", "success")]])
+
+        def fake(sha, **kw):
+            seen.append(kw.get("repo"))
+            return next(rows)
+
+        monkeypatch.setattr(ci_wait, "sha_is_known_locally", lambda sha, **kw: True)
+        monkeypatch.setattr(ci_wait, "gh_runs", fake)
+        monkeypatch.setattr(ci_wait.time, "sleep", lambda _s: None)
+        rc = ci_wait.main(["--sha", SHA, "--settle", "0"])
+        assert rc == 0 and seen == ["o/r", "o/r"]
+
+    def test_the_local_sha_check_still_runs_without_an_explicit_repo(self, monkeypatch):
+        asked: list[str] = []
+        monkeypatch.setattr(ci_wait, "sha_is_known_locally", lambda sha, **kw: asked.append(sha))
+        monkeypatch.setattr(ci_wait, "gh_runs", lambda sha, **kw: [run("CI", "completed", "success")])
+        ci_wait.main(["--sha", SHA, "--settle", "0"])
+        assert asked == [SHA]
+
+    def test_a_failed_lookup_falls_back_to_the_cwd_with_a_warning(self, monkeypatch, capsys):
+        def lookup(**kw):
+            raise ci_wait.GhFailed("gh exited 1: HTTP 502")
+
+        seen: list[object] = []
+        monkeypatch.setattr(ci_wait, "resolve_repo", lookup)
+        monkeypatch.setattr(ci_wait, "sha_is_known_locally", lambda sha, **kw: True)
+        monkeypatch.setattr(ci_wait, "gh_runs",
+                            lambda sha, **kw: seen.append(kw.get("repo")) or [
+                                run("CI", "completed", "success")])
+        rc = ci_wait.main(["--sha", SHA, "--settle", "0"])
+        assert rc == 0 and seen == [None]
+        assert "warning:" in capsys.readouterr().err
+
+    def test_gh_missing_at_lookup_is_could_not_tell(self, monkeypatch, capsys):
+        def lookup(**kw):
+            raise ci_wait.GhUnavailable("could not run gh: not found")
+
+        monkeypatch.setattr(ci_wait, "resolve_repo", lookup)
+        monkeypatch.setattr(ci_wait, "sha_is_known_locally", lambda sha, **kw: True)
+        assert ci_wait.main(["--sha", SHA, "--json"]) == 2
+        assert json.loads(capsys.readouterr().out)["data"]["state"] == "error"
+
+    def test_resolve_repo_asks_gh_repo_view(self, monkeypatch):
+        calls: list[list[str]] = []
+
+        def fake(argv, **kw):
+            calls.append(list(argv))
+            return subprocess.CompletedProcess(argv, 0, stdout="owner/name\n", stderr="")
+
+        monkeypatch.setattr(ci_wait.subprocess, "run", fake)
+        assert REAL_RESOLVE_REPO() == "owner/name"
+        assert calls[0][:3] == ["gh", "repo", "view"]
+
+    @pytest.mark.parametrize("rc,stdout,exc", [(1, "", "GhFailed"), (0, "\n", "GhFailed"),
+                                               (4, "", "GhUnavailable")])
+    def test_resolve_repo_failures_are_typed(self, monkeypatch, rc, stdout, exc):
+        monkeypatch.setattr(ci_wait.subprocess, "run",
+                            lambda argv, **kw: subprocess.CompletedProcess(argv, rc, stdout=stdout,
+                                                                           stderr="x"))
+        with pytest.raises(getattr(ci_wait, exc)):
+            REAL_RESOLVE_REPO()
+

@@ -51,7 +51,8 @@ it cannot enter is listed as UNREAD like an unparsable file.
 Run: `uv run scripts/enforced.py planner_kinds --root src/`
      `uv run scripts/enforced.py on_auth_failure --root . --json`
 Exit 0 = enforced (a decision exists), 1 = parsed but never enforced, 2 = not found, or incomplete
-(a file or directory could not be read and no decision was found elsewhere).
+(a file or directory could not be read and no decision was found elsewhere), a usage error, or
+a crash. Under --json the envelope is printed on every exit; `ok` is false only on exit 2.
 """
 
 from __future__ import annotations
@@ -59,7 +60,6 @@ from __future__ import annotations
 import argparse
 import ast
 import io
-import json
 import os
 import re
 import sys
@@ -67,6 +67,8 @@ import tokenize
 from dataclasses import asdict, dataclass
 from enum import Enum
 from pathlib import Path
+
+from _cli_envelope import EnvelopeArgumentParser, emit, run_guarded
 
 __all__ = ["Hit", "HitKind", "Verdict", "classify_source", "classify_tree", "verdict_of"]
 
@@ -596,8 +598,14 @@ def _root_problem(root: Path) -> str | None:
 
 
 def main(argv: list[str] | None = None) -> int:
+    """The CLI. An uncaught exception exits 2 (envelope under --json), never 1 ("never enforced")."""
+    return run_guarded(_main, argv, command="enforced")
+
+
+def _main(argv: list[str] | None = None) -> int:
     _tolerate_unencodable_stdout()
-    parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    parser = EnvelopeArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter,
+                                    envelope_command="enforced")
     parser.add_argument("identifier", help="the exact name to classify (a config key, a field, a flag)")
     parser.add_argument("--root", default=".", help="file or directory to scan [.]")
     parser.add_argument("--json", action="store_true", help="emit a JSON envelope on stdout")
@@ -609,39 +617,36 @@ def main(argv: list[str] | None = None) -> int:
         # JSON mode must still emit JSON when it FAILS, or a caller parsing stdout gets an empty
         # string and reports "no hits" for what was actually a bad path.
         if args.json:
-            print(json.dumps({"ok": False, "command": "enforced",
-                              "data": {"identifier": args.identifier, "error": problem},
-                              "skipped": []}, indent=1))
+            emit(2, "enforced", {"identifier": args.identifier, "error": problem}, error=problem,
+                 indent=1)
         else:
             print(problem, file=sys.stderr)
         return 2
     hits, unreadable = classify_tree(root, args.identifier)
     verdict = verdict_of(hits)
+    code, error = _outcome(args.identifier, verdict, unreadable)
     if args.json:
-        print(
-            json.dumps(
-                {
-                    "ok": verdict.found,
-                    "command": "enforced",
-                    "data": {
-                        "identifier": args.identifier,
-                        "verdict": asdict(verdict),
-                        "hits": [{**asdict(h), "kind": h.kind.value} for h in hits],
-                    },
-                    "skipped": unreadable,
-                },
-                indent=1,
-            )
-        )
+        # ok is "ran without error" (exit != 2): "parsed, never enforced" is an answer (exit 1).
+        emit(code, "enforced", {
+            "identifier": args.identifier,
+            "verdict": asdict(verdict),
+            "hits": [{**asdict(h), "kind": h.kind.value} for h in hits],
+        }, skipped=unreadable, error=error, indent=1)
     else:
         print(_render(args.identifier, hits, verdict, unreadable))
+    if error and unreadable and not verdict.enforced:
+        print(f"\n{error}", file=sys.stderr)
+    return code
+
+
+def _outcome(identifier: str, verdict, unreadable: list[str]) -> tuple[int, str | None]:
+    """(exit code, error for an exit 2). Not-found is 2: the question presupposes the identifier."""
     if unreadable and not verdict.enforced:
         # An unread file could hold the only enforcer, so "never enforced" is not safe to assert.
-        print(f"\nincomplete: {len(unreadable)} path(s) unread; treat the verdict as unproven", file=sys.stderr)
-        return 2
+        return 2, f"incomplete: {len(unreadable)} path(s) unread; treat the verdict as unproven"
     if not verdict.found:
-        return 2
-    return 0 if verdict.enforced else 1
+        return 2, f"identifier not found under --root: {identifier}"
+    return (0 if verdict.enforced else 1), None
 
 
 if __name__ == "__main__":

@@ -30,15 +30,18 @@ exist, holds no repo, or has a directory the walk could not read. Exit status (`
 format-independent: 0 at least one file matched the glob, 1 none matched, 2 the walk or every
 matched repo's git calls failed outright, or the walk hit an unreadable directory and matched
 nothing - because "nothing matched" and "could not classify anything" must not look alike.
+Under --json, `ok` means the check ran (exit 0 or 1) and is false only on exit 2; a usage error
+or a crash prints the envelope too, and exits 2.
 """
 from __future__ import annotations
 
-import argparse
 import json
 import os
 import subprocess
 import sys
 from pathlib import Path
+
+from _cli_envelope import EnvelopeArgumentParser, run_guarded
 
 
 def parse_branch_status(text: str) -> dict:
@@ -328,9 +331,10 @@ def classify_files(pattern, root=".") -> dict:
             "files": results, "skipped": skipped, "walk_errors": len(walk_errors)}
 
 
-def _print_files_result(pattern, root, data, as_json) -> None:
+def _print_files_result(pattern, root, data, as_json, rc) -> None:
     if as_json:
-        print(json.dumps({"ok": bool(data["files"]), "command": "git-state",
+        # ok is "ran without error" (exit != 2); "none matched" is exit 1 with ok true.
+        print(json.dumps({"ok": rc != 2, "command": "git-state",
                           "data": data, "skipped": data["skipped"]}, indent=2))
     else:
         for f in data["files"]:
@@ -369,7 +373,12 @@ def _main_files(pattern, root, as_json) -> int:
                               "skipped": [], "error": msg}, indent=2))
         return 2
     data = classify_files(pattern, root)
-    _print_files_result(pattern, root, data, as_json)
+    rc = _files_exit(data)
+    _print_files_result(pattern, root, data, as_json, rc)
+    return rc
+
+
+def _files_exit(data) -> int:
     if data["candidates"] == 0:
         # "none matched" is only an answer if the walk could see everything it was asked to.
         return 2 if data["walk_errors"] else 1
@@ -379,7 +388,12 @@ def _main_files(pattern, root, as_json) -> int:
 
 
 def main(argv=None) -> int:
-    ap = argparse.ArgumentParser(description="Report git branch / sync / dirty state for repos, "
+    """The CLI. An uncaught exception exits 2 (envelope under --json), never 1 ("out of sync")."""
+    return run_guarded(_main, argv, command="git-state")
+
+
+def _main(argv=None) -> int:
+    ap = EnvelopeArgumentParser(envelope_command="git-state", description="Report git branch / sync / dirty state for repos, "
                                               "or (--files) classify every matching file under a "
                                               "tree as tracked-clean/tracked-modified/ignored/"
                                               "untracked/no-repo.")
@@ -451,7 +465,7 @@ def _main_repos(repos, root, as_json) -> int:
         if not s["in_sync"]:
             rc = max(rc, 1)
     if as_json:
-        print(json.dumps({"ok": rc == 0, "command": "git-state",
+        print(json.dumps({"ok": rc != 2, "command": "git-state",
                           "data": {"root": root, "repos": states}, "skipped": problems}, indent=2))
     else:
         for s in states:

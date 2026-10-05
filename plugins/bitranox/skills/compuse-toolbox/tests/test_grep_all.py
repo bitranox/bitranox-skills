@@ -496,3 +496,38 @@ def test_a_dir_merely_containing_venv_in_its_name_is_still_searched(tmp_path):
     code, out, err = _run(["NEEDLE", str(tmp_path)])
     assert code == 0, (out, err)
     assert "myvenv-notes" in out and "venvs" in out
+
+
+# ---- wave D: unified exit codes and the D2 envelope ---------------------------------------------
+
+
+def test_no_match_is_ok_true_with_exit_1(tmp_path):
+    """ok means "ran without error": a search that ran and found nothing is ok, exit 1."""
+    (tmp_path / "a.md").write_text("nothing here\n", encoding="utf-8")
+    code, out, _ = _run(["NOSUCHTOKEN", str(tmp_path), "--json"])
+    payload = json.loads(out)
+    assert code == 1
+    assert payload["ok"] is True
+    assert list(payload)[:4] == ["ok", "command", "data", "skipped"]
+
+
+def test_an_argparse_error_under_json_prints_the_envelope(capsys):
+    with pytest.raises(SystemExit) as exc:
+        grep_all.main(["--json", "--no-such-flag", "X"])
+    assert exc.value.code == 2
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["ok"] is False and payload["command"] == "grep-all"
+    assert "unrecognized arguments" in payload["error"]
+
+
+def test_a_crash_under_json_is_exit_2_with_an_envelope(tmp_path, monkeypatch, capsys):
+    """An uncaught exception exits 2 with the envelope, never a traceback exiting 1 ("no match")."""
+    def boom(*_a, **_k):
+        raise RuntimeError("walker broke")
+    monkeypatch.setattr(grep_all, "walk", boom)
+    code = grep_all.main(["NEEDLE", str(tmp_path), "--json"])
+    cap = capsys.readouterr()
+    assert code == 2
+    payload = json.loads(cap.out)
+    assert payload["ok"] is False and "walker broke" in payload["error"]
+    assert "Traceback" not in cap.err
