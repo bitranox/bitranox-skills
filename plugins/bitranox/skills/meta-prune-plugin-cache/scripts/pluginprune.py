@@ -59,7 +59,11 @@ deletes the real one it points at), a path that resolves outside the cache, and 
 directory itself are refused outright. So is every version directory when NOT ONE of them
 carries an `.in_use` directory - an idle machine leaves that directory behind empty, so its total
 absence means the mechanism was renamed or dropped and every version would silently read as
-unused. `--allow-missing-locks` overrides that.
+unused. `--allow-missing-locks` overrides that. A symlinked marketplace or plugin directory is
+reported ONCE, as the alias itself, however many version directories are reached through it.
+Every refused entry carries a `reason_code`: `symlink`, `alias`, `outside_cache`, `cache_root`,
+`filesystem_root`, `unresolvable`, `no_lock_mechanism`, `install_record_unusable` or
+`settings_unusable`.
 
 Run:
   `uv run scripts/pluginprune.py`                        # the plan, with sizes
@@ -73,9 +77,11 @@ prints is inside its version), relative paths resolved against the working direc
 that names no scanned version directory is a usage error, never silently ignored.
 
 Exit codes: 0 = nothing blocked (a dry-run plan that can be carried out as-is, or an `--apply`
-that removed everything it listed), 1 = something was refused or could not be removed, 2 = usage
-error (including a `--keep` that matches nothing and an explicit `--installed-plugins` that
-cannot be read), a settings source it must consult that cannot be used, or an unexpected crash.
+that removed everything it listed), 1 = something was refused (by the plan, or at apply time
+because a session claimed it since) and the rest went ahead, 2 = an `--apply` removal that was
+attempted and FAILED on I/O (still on disk; a 2 wins over any refusal), a usage error (including
+a `--keep` that matches nothing and an explicit `--installed-plugins` that cannot be read), a
+settings source it must consult that cannot be used, or an unexpected crash.
 
 A settings source that cannot be used - a settings file or `~/.claude.json` that exists but
 cannot be read, is not UTF-8, is not valid JSON or has the wrong shape, or a `--settings` /
@@ -84,12 +90,15 @@ or removed, naming the file and the reason. Skipping it would lose the pin or `e
 entry it holds and plan that version for deletion. A discovered file that is simply absent, or
 one holding only whitespace, is ordinary and holds nothing.
 
-`--json` emits the machine-readable envelope `{ok, command, skipped, data}` on every exit code:
-on exit 2 (including a command line argparse rejects, and a crash) it is `ok: false`,
-`data: null` and an `error` naming the reason. Diagnostics always go to stderr as well, so
-stdout stays parseable. Each `skipped` item starts with its kind, as the text report does:
-`REFUSED: ` (the plan never touched it; also in `data.refused`) or `FAILED: ` (an --apply tried
-and it is still there; also in `data.failed` as `{path, reason}`).
+`--json` emits the machine-readable envelope `{ok, command, skipped, data}` on every exit code.
+`ok` means the run finished without error: true on exit 0 and exit 1, false on exit 2. On an
+exit 2 before a plan exists (including a command line argparse rejects, and a crash) `data` is
+null and an `error` names the reason. Diagnostics always go to stderr as well, so stdout stays
+parseable. Each `skipped` item starts with its kind, as the text report does: `REFUSED: ` (the
+plan never touched it; also in `data.refused`, each with its `reason_code`) or `FAILED: ` (an
+--apply did not remove it; also in `data.failed` as `{path, reason, reason_code}`, where
+`io_error` is a removal that was tried and failed and any other code a refusal found at apply
+time, such as `in_use`).
 """
 
 from __future__ import annotations
@@ -119,6 +128,8 @@ __all__ = [
     "SettingsSources",
     "apply_plan",
     "build_plan",
+    "classify_refusal",
+    "exit_code",
     "json_payload",
     "live_lock_holder",
     "load_settings",
@@ -270,6 +281,9 @@ class Entry:
     plugin: str | None = None
     version: str | None = None
     size_complete: bool = True  # False: part of the tree could not be read, size is a floor
+    # A stable word for WHY it is refused (alias, symlink, outside_cache, ...), so a caller keys
+    # on a value rather than on message text that may be reworded.
+    reason_code: str | None = None
 
     def as_dict(self) -> dict[str, object]:
         return {
@@ -279,6 +293,7 @@ class Entry:
             "size_complete": self.size_complete,
             "keep_reason": self.keep_reason,
             "refusal": self.refusal,
+            "reason_code": self.reason_code,
             "marketplace": self.marketplace,
             "plugin": self.plugin,
             "version": self.version,
@@ -346,12 +361,20 @@ class InstallRecord:
     problem: str | None = None
 
 
+REASON_IO_ERROR = "io_error"
+
+
 @dataclass(frozen=True)
 class Failure:
-    """A directory an apply tried to remove and did not, with the reason."""
+    """A directory an apply did not remove, with the reason and its code.
+
+    `io_error` is a removal that was attempted and failed (exit 2: the requested action could not
+    run). Any other code is a refusal found at apply time - a session claimed the version since
+    the plan, or it became an alias - which is a partial outcome (exit 1)."""
 
     path: Path
     reason: str
+    reason_code: str = REASON_IO_ERROR
 
     def __str__(self) -> str:
         return f"{self.path}: {self.reason}"
@@ -399,25 +422,80 @@ def directory_size(path: Path) -> tuple[int, bool]:
 
 def refusal_for(path: Path, *, base: Path) -> str | None:
     """Why this directory must not be deleted, or None when it may be."""
+    found = classify_refusal(path, base=base)
+    return None if found is None else found[1]
+
+
+def classify_refusal(path: Path, *, base: Path) -> tuple[str, str] | None:
+    """(reason_code, reason) for a directory that must not be deleted, or None when it may be."""
     if path.is_symlink():
-        return "is a symlink - removing through it can destroy data outside it"
+        return "symlink", "is a symlink - removing through it can destroy data outside it"
     try:
         resolved = path.resolve()
         base_resolved = base.resolve()
     except (OSError, RuntimeError) as exc:
-        return f"cannot be resolved: {exc}"
+        return "unresolvable", f"cannot be resolved: {exc}"
     if resolved.parent == resolved:
-        return "is a filesystem root"
+        return "filesystem_root", "is a filesystem root"
     if resolved == base_resolved:
-        return "is the cache directory itself"
+        return "cache_root", "is the cache directory itself"
     if not resolved.is_relative_to(base_resolved):
-        return f"resolves outside {base_resolved}"
+        return "outside_cache", f"resolves outside {base_resolved}"
     if _through_a_symlink(path, base=base, base_resolved=base_resolved, resolved=resolved):
-        return (
+        return "alias", (
             "is reached through a symlinked directory - removing through the alias deletes the"
             f" real directory {resolved}"
         )
     return None
+
+
+def _alias_above(path: Path, *, base: Path) -> Path | None:
+    """The first symlinked directory strictly between the cache root and `path`, or None."""
+    try:
+        parts = Path(os.path.abspath(path)).relative_to(os.path.abspath(base)).parts
+    except ValueError:
+        return None
+    current = Path(os.path.abspath(base))
+    for part in parts[:-1]:
+        current = current / part
+        if current.is_symlink():
+            return current
+    return None
+
+
+def _one_entry_per_alias(entries: list[Entry], *, base: Path) -> list[Entry]:
+    """Fold every refused entry reached through one symlinked marketplace or plugin dir into ONE
+    refusal naming that alias. Listed per version, one alias read as N separate problems."""
+    folded: dict[Path, list[Entry]] = {}
+    order: list[Entry | Path] = []
+    for entry in entries:
+        alias = _alias_above(entry.path, base=base) if entry.refusal is not None else None
+        if alias is None:
+            order.append(entry)
+            continue
+        if alias not in folded:
+            folded[alias] = []
+            order.append(alias)
+        folded[alias].append(entry)
+    return [item if isinstance(item, Entry) else _alias_entry(item, folded[item]) for item in order]
+
+
+def _alias_entry(alias: Path, beneath: list[Entry]) -> Entry:
+    try:
+        target = f" ({alias.resolve()})"
+    except (OSError, RuntimeError):
+        target = ""
+    return Entry(
+        path=alias,
+        kind=KIND_VERSION,
+        size_bytes=0,
+        refusal=(
+            f"is a symlinked directory{target} - removing through it deletes the real directories"
+            f" it points at, so the {len(beneath)} version dir(s) reached through it are refused"
+        ),
+        reason_code="alias",
+        marketplace=beneath[0].marketplace,
+    )
 
 
 def _through_a_symlink(path: Path, *, base: Path, base_resolved: Path, resolved: Path) -> bool:
@@ -805,6 +883,7 @@ def build_plan(
         entries = [_without_readable_settings(entry, sources.problems) for entry in entries]
     if marketplaces is None:
         entries.extend(_temp_entries(root, min_age_seconds=min_age_seconds, now=moment))
+    entries = _one_entry_per_alias(entries, base=root)
     return Plan(
         cache_dir=root,
         entries=tuple(entries),
@@ -880,6 +959,7 @@ def _without_the_install_record(entry: Entry, problem: str) -> Entry:
             **entry.__dict__,
             "refusal": f"the installed version cannot be identified: {problem}"
             " (restore the file, or name a readable one with --installed-plugins)",
+            "reason_code": "install_record_unusable",
         }
     )
 
@@ -898,6 +978,7 @@ def _without_readable_settings(entry: Entry, problems: Sequence[str]) -> Entry:
             "refusal": "a settings source that may pin or enable it cannot be used: "
             + "; ".join(problems)
             + " (repair it, or choose the files with --settings or --no-project-settings)",
+            "reason_code": "settings_unusable",
         }
     )
 
@@ -950,6 +1031,7 @@ def _without_the_lock_mechanism(entry: Entry) -> Entry:
             **entry.__dict__,
             "refusal": "no .in_use lock directory anywhere: the lock mechanism is absent or has"
             " changed, so no version can be shown free (override with --allow-missing-locks)",
+            "reason_code": "no_lock_mechanism",
         }
     )
 
@@ -957,7 +1039,7 @@ def _without_the_lock_mechanism(entry: Entry) -> Entry:
 def _version_entry(version_dir: Path, *, holder: str | None, context: _KeepContext) -> Entry:
     marketplace = version_dir.parent.parent.name
     plugin = version_dir.parent.name
-    refusal = refusal_for(version_dir, base=context.root)
+    code, refusal = classify_refusal(version_dir, base=context.root) or (None, None)
     size, complete = (0, True) if refusal else directory_size(version_dir)
     entry = Entry(
         path=version_dir,
@@ -965,6 +1047,7 @@ def _version_entry(version_dir: Path, *, holder: str | None, context: _KeepConte
         size_bytes=size,
         size_complete=complete,
         refusal=refusal,
+        reason_code=code,
         marketplace=marketplace,
         plugin=plugin,
         version=version_dir.name,
@@ -1040,7 +1123,7 @@ def _temp_entries(root: Path, *, min_age_seconds: float, now: float) -> list[Ent
     for path in _child_dirs(root):
         if not path.name.startswith(TEMP_PREFIX):
             continue
-        refusal = refusal_for(path, base=root)
+        code, refusal = classify_refusal(path, base=root) or (None, None)
         age = _age_seconds(path, now=now)
         keep_reason = None
         if refusal is None and age is not None and age < min_age_seconds:
@@ -1054,6 +1137,7 @@ def _temp_entries(root: Path, *, min_age_seconds: float, now: float) -> list[Ent
                 size_complete=complete,
                 keep_reason=keep_reason,
                 refusal=refusal,
+                reason_code=code,
             )
         )
     return entries
@@ -1079,7 +1163,7 @@ def apply_plan(plan: Plan) -> ApplyResult:
     for entry in plan.prune:
         blocker = _blocker_now(entry, base=plan.cache_dir)
         if blocker is not None:
-            failures.append(Failure(entry.path, blocker))
+            failures.append(Failure(entry.path, blocker[1], reason_code=blocker[0]))
             continue
         try:
             _remove_tree(entry.path)
@@ -1114,15 +1198,16 @@ def _retry_writable(func: Callable[[str], object], path: str, exc: object) -> No
     func(path)
 
 
-def _blocker_now(entry: Entry, *, base: Path) -> str | None:
-    """What has changed since the plan was built that must stop this removal."""
-    refusal = refusal_for(entry.path, base=base)
+def _blocker_now(entry: Entry, *, base: Path) -> tuple[str, str] | None:
+    """(reason_code, reason) for what changed since the plan was built that must stop this
+    removal, or None."""
+    refusal = classify_refusal(entry.path, base=base)
     if refusal is not None:
         return refusal
     if entry.kind != KIND_VERSION:
         return None
     holder = live_lock_holder(entry.path)
-    return None if holder is None else f"{holder} since the plan was built"
+    return None if holder is None else ("in_use", f"{holder} since the plan was built")
 
 
 # --------------------------------------------------------------------------------------------
@@ -1389,7 +1474,16 @@ def _run(args: argparse.Namespace) -> int:
             print(line)
         for item in blocked:
             print(f"  {item}", file=sys.stderr)
-    return 1 if blocked else 0
+    return exit_code(plan, applied)
+
+
+def exit_code(plan: Plan, applied: ApplyResult | None) -> int:
+    """0 nothing blocked; 1 refusals only (the run acted on the rest - a partial outcome); 2 when a
+    removal that was attempted FAILED (the requested action could not run). 2 wins when mixed."""
+    failures = applied.failures if applied else ()
+    if any(failure.reason_code == REASON_IO_ERROR for failure in failures):
+        return 2
+    return 1 if _blocked(plan, applied) else 0
 
 
 def _blocked(plan: Plan, applied: ApplyResult | None) -> list[str]:
@@ -1411,8 +1505,11 @@ def json_payload(plan: Plan, applied: ApplyResult | None) -> dict[str, object]:
     if applied is not None:
         data["removed"] = [str(entry.path) for entry in applied.removed]
         data["removed_bytes"] = sum(entry.size_bytes for entry in applied.removed)
-        data["failed"] = [{"path": str(f.path), "reason": f.reason} for f in applied.failures]
-    return {"ok": not blocked, "command": "pluginprune", "skipped": blocked, "data": data}
+        data["failed"] = [{"path": str(f.path), "reason": f.reason, "reason_code": f.reason_code}
+                          for f in applied.failures]
+    # ok = ran without error (exit 0 or 1): a refusal is an answer, an I/O failure is not.
+    ok = exit_code(plan, applied) != 2
+    return {"ok": ok, "command": "pluginprune", "skipped": blocked, "data": data}
 
 
 if __name__ == "__main__":
