@@ -29,7 +29,13 @@ from datetime import datetime
 from pathlib import Path
 
 import skill_frontmatter
-import skill_roster
+
+# The listing reader is the skill router's, and it pulls in the router's classifier and signal
+# modules. An import error there may cost the correction it feeds, never the disk estimate.
+try:
+    import skill_roster
+except Exception:  # noqa: BLE001 - any failure to import it means "no listing to read"
+    skill_roster = None
 
 # The harness truncates a single description at this many characters (skillListingMaxDescChars).
 MAX_DESC_CHARS = 1536
@@ -125,6 +131,17 @@ def required_fraction(demand, floor=DENOMINATOR_FLOOR, safety=SAFETY, cap=FRACTI
     return min(cap, math.ceil(wanted * 100) / 100)
 
 
+def _fraction(value):
+    """`value` when it is a finite number, else the harness default.
+
+    Python's json reads NaN and Infinity, and a bool is an int to isinstance; none of them is a
+    fraction the harness could apply, and NaN would make every comparison below answer False.
+    """
+    if isinstance(value, bool) or not isinstance(value, (int, float)) or not math.isfinite(value):
+        return HARNESS_DEFAULT_FRACTION
+    return value
+
+
 def stored_fraction(settings_path):
     """Return the configured fraction, or the harness default when it is unset or unreadable."""
     try:
@@ -133,8 +150,7 @@ def stored_fraction(settings_path):
         return HARNESS_DEFAULT_FRACTION
     if not isinstance(settings, dict):
         return HARNESS_DEFAULT_FRACTION
-    value = settings.get("skillListingBudgetFraction")
-    return value if isinstance(value, (int, float)) else HARNESS_DEFAULT_FRACTION
+    return _fraction(settings.get("skillListingBudgetFraction"))
 
 
 def raise_fraction(settings_path, wanted):
@@ -153,8 +169,7 @@ def raise_fraction(settings_path, wanted):
         return None  # a settings file we cannot parse is one we must not rewrite
     if not isinstance(settings, dict):
         return None
-    current = settings.get("skillListingBudgetFraction")
-    current = current if isinstance(current, (int, float)) else HARNESS_DEFAULT_FRACTION
+    current = _fraction(settings.get("skillListingBudgetFraction"))
     if wanted <= current:
         return None
     settings["skillListingBudgetFraction"] = wanted
@@ -176,6 +191,18 @@ def _epoch(stamp):
         return None
 
 
+def _bare_entries(content, names):
+    """The listed skills that arrived as a bare `- <name>`, with no description.
+
+    With the listing's `names` (the installed set, which every measured listing carries) the
+    router's own names-aware parser decides, so a description that continues on a line starting
+    "- " stays part of its entry. Without them, a `- ` line with no ": " is the best reading left.
+    """
+    if isinstance(names, list) and names:
+        return [name for name, text in skill_roster._raw_listing(content, names).items() if not text]
+    return [ln[2:].strip() for ln in content.splitlines() if ln.startswith("- ") and ": " not in ln]
+
+
 def _last_full_listing(transcript):
     """Return the transcript's LAST full listing as a summary dict, or None when it has none.
 
@@ -183,6 +210,8 @@ def _last_full_listing(transcript):
     (`isInitial: false`) carries only the skills added since, so it is not the listing the budget
     packed and never stands in for one.
     """
+    if skill_roster is None:
+        return None
     found = None
     for record, attachment in skill_roster.listing_records(transcript):
         if attachment.get("isInitial") is False:
@@ -192,10 +221,9 @@ def _last_full_listing(transcript):
             content = "\n".join(str(part) for part in content)
         if not isinstance(content, str) or not content:
             continue
-        lines = [ln for ln in content.splitlines() if ln.startswith("- ")]
         found = {
             "total": len(content),
-            "bare": [ln[2:].strip() for ln in lines if ": " not in ln],
+            "bare": _bare_entries(content, attachment.get("names")),
             "timestamp": _epoch(record.get("timestamp")),
             "cwd": record.get("cwd"),
         }
