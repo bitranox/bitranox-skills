@@ -923,7 +923,8 @@ def test_batch_two_spellings_of_one_file_are_one_file(tmp_path):
 
 @pytest.mark.parametrize("doc,needle", [
     ([{"file": "rel.md", "old": "a", "new": "b"}], "absolute"),
-    ([{"file": "/no/such/abs/file.md", "old": "a", "new": "b"}], "no such file"),
+    # Filled in with an absolute path under tmp_path: "/no/such" is DRIVE-relative on Windows.
+    ([{"file": "{missing}", "old": "a", "new": "b"}], "no such file"),
     ([{"file": "/x", "old": "a"}], "new"),
     ([{"file": "/x", "old": "", "new": "b"}], "empty"),
     ([{"file": "/x", "old": "a", "new": "b", "count": 0}], "count"),
@@ -931,6 +932,8 @@ def test_batch_two_spellings_of_one_file_are_one_file(tmp_path):
     ({"edits": [{"file": "/x", "old": "a", "new": "b"}], "bogus": 1}, "bogus"),
 ])
 def test_batch_a_malformed_spec_is_a_usage_error(tmp_path, doc, needle):
+    if isinstance(doc, list) and doc and doc[0].get("file") == "{missing}":
+        doc = [{**doc[0], "file": str(tmp_path / "no-such-file.md")}]
     proc = _run("batch", "--spec", str(_spec(tmp_path, doc)), "--json")
     assert proc.returncode == 2
     payload = json.loads(proc.stdout)
