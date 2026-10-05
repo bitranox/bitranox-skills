@@ -11,7 +11,10 @@ DETACHED child (`python3 classifier.py --shadow <payload-file>`) and returns at 
 redacts the text, asks Jev, and appends both verdicts to `~/.claude/self-improve-audit/
 classifier-shadow-<UTC date>.jsonl` so a later replay can compare them; each append drops whole
 days older than SHADOW_KEEP_DAYS, then the oldest days past SHADOW_MAX_BYTES. Off unless the user sets
-`classifier_backend = jev` and the site's own knob to `shadow` (meta-memory-settings).
+`classifier_backend = jev` and the site's own knob to `shadow` (meta-memory-settings). The child
+exits 0 when it logged its row and 2 when it could not run (an unreadable or malformed payload, an
+internal error), having appended an error row; no hook waits for it, so the code is for a person
+running it by hand. Without `--shadow` the script prints its usage and exits 2.
 
 Decide mode (`decide`, skill_router only) asks the same questions INSIDE the hook, under
 DEFAULT_DEADLINE, and lets the answer decide; the hook appends the same row a shadow child would,
@@ -982,6 +985,9 @@ def _append_log(record, audit=None, now=None):
 
 
 def _shadow_main(argv):
+    """0 when the row was logged, 2 when the child could not run (an unreadable or malformed
+    payload, an internal error): the error row is still appended, since the log is the only
+    reader that sees it."""
     import self_improve_signals as sig  # noqa: PLC0415 - only the child needs the config reader
     payload = {}
     try:
@@ -992,6 +998,7 @@ def _shadow_main(argv):
             _append_log(_error_record(payload if isinstance(payload, dict) else {}, exc))
         except Exception:  # noqa: BLE001 - nothing left to report to
             pass
+        return 2
     return 0
 
 
