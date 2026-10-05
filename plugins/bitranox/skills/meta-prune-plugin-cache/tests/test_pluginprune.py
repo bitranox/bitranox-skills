@@ -555,7 +555,7 @@ def test_apply_refuses_a_directory_that_gained_a_live_lock_after_the_plan(cache:
     result = P.apply_plan(plan)
 
     assert latecomer.exists()
-    assert any(str(latecomer) in item and "in use" in item for item in result.failures)
+    assert any(f.path == latecomer and "in use" in f.reason for f in result.failures)
     assert str(latecomer) not in paths(result.removed)
     assert not (cache / "own-marketplace" / "own-plugin" / "1.1.0").exists()
 
@@ -1453,3 +1453,58 @@ def test_a_posix_pin_in_another_letter_case_is_not_the_same_directory(tmp_path: 
         Path("settings.json"), json.dumps({"command": f"bash {other}/x.sh"}), frozenset()
     )
     assert P.pinning_settings(version, [settings], fold_case=False) is None
+
+
+# --------------------------------------------------------------------------------------------
+# --json tells a refusal (never attempted) from a failure (attempted, still there)
+# --------------------------------------------------------------------------------------------
+
+
+def _late_failure(plan: P.Plan) -> P.ApplyResult:
+    """An apply in which the first planned directory could not be removed."""
+    entry = plan.prune[0]
+    return P.ApplyResult(removed=(), failures=(P.Failure(entry.path, "could not be removed: denied"),))
+
+
+def test_json_skipped_names_the_kind_of_each_entry(cache: Path, tmp_path: Path) -> None:
+    """The text report says REFUSED or FAILED; the JSON `skipped` list held both as bare
+    "path: reason" strings, so a caller could not tell an alias the plan never touched from a
+    removal that was tried and did not happen."""
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    link = cache / "own-marketplace" / "own-plugin" / "latest"
+    link.symlink_to(outside, target_is_directory=True)
+    plan = plan_for(cache)
+    applied = _late_failure(plan)
+    payload = P.json_payload(plan, applied)
+    failed_path = applied.failures[0].path
+    assert f"REFUSED: {link}: is a symlink" in " ".join(payload["skipped"])
+    assert f"FAILED: {failed_path}: could not be removed: denied" in payload["skipped"]
+    assert len(payload["skipped"]) == 2
+    assert payload["data"]["failed"] == [{"path": str(failed_path), "reason": "could not be removed: denied"}]
+    assert [entry["path"] for entry in payload["data"]["refused"]] == [str(link)]
+    assert payload["ok"] is False
+
+
+def test_json_without_apply_has_no_failed_list(cache: Path) -> None:
+    """Control: a dry run attempted nothing, so it reports no `failed` (nor `removed`)."""
+    payload = P.json_payload(plan_for(cache), None)
+    assert "failed" not in payload["data"] and "removed" not in payload["data"]
+    assert payload["skipped"] == [] and payload["ok"] is True
+
+
+@pytest.mark.skipif(not hasattr(os, "geteuid") or os.geteuid() == 0,
+                    reason="needs a POSIX user a read-only directory actually stops")
+def test_json_apply_reports_a_real_removal_failure_as_failed(cache: Path, capsys) -> None:
+    """End to end: a planned directory whose parent is read-only stays, and says FAILED."""
+    parent = cache / "own-marketplace" / "own-plugin"
+    parent.chmod(0o555)
+    try:
+        rc = P.main(["--cache-dir", str(cache), "--apply", "--json"])
+    finally:
+        parent.chmod(0o755)
+    payload = json.loads(capsys.readouterr().out)
+    assert rc == 1
+    assert payload["skipped"] and all(item.startswith("FAILED: ") for item in payload["skipped"])
+    assert {entry["path"] for entry in payload["data"]["failed"]} <= {
+        str(p) for p in parent.iterdir()}
