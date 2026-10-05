@@ -707,6 +707,83 @@ def test_git_verb_dir_reads_a_continued_line_with_a_quoted_dash_c_value():
         assert S.git_verb_dir(cmd, "/s", S.GATED_GIT_VERBS, tool) == moved
 
 
+def test_git_verb_dir_sees_a_cd_behind_an_env_prefix_or_a_keyword():
+    """The shared cd reader skips what stands in front of the program, as the git walk does."""
+    moved = os.path.normpath("/r")
+    assert S.git_verb_dir("X=1 cd /r && git push", "/s", S.GATED_GIT_VERBS) == moved
+    assert S.git_verb_dir("if cd /r; then git push; fi", "/s", S.GATED_GIT_VERBS) == moved
+
+
+# ---- directory_change: THE cd reader every cd-tracking hook shares ----------------------------
+#
+# Four nudges once carried a private `_CD` regex each; they disagreed on anchoring, env prefixes,
+# a bare `cd` and quoted paths with spaces. One reader, one answer.
+
+_HERE = os.path.normpath("/s")
+
+
+def _norm(path):
+    return os.path.normpath(path)
+
+
+@pytest.mark.parametrize("statement,expected", [
+    ("cd /r", "/r"),
+    ("cd r", "/s/r"),
+    ("cd ../r", "/r"),
+    ('cd "/a b"', "/a b"),                  # quoted with a space: ONE word, kept whole
+    ("cd '/a b'", "/a b"),
+    ("cd -P /r", "/r"),                     # cd's own options are not the target
+    ("cd -- /r", "/r"),
+    ("X=1 cd /r", "/r"),                    # behind an env assignment
+    ("  (cd /r", "/r"),                     # a subshell's opening paren
+    ("then cd /r", "/r"),                   # a branch body
+    ("cd /r  # go there", "/r"),            # a trailing comment is not an operand
+    ("pushd /r", "/r"),
+    ("/usr/bin/cd /r", "/r"),
+])
+def test_directory_change_reads_where_a_cd_lands(statement, expected):
+    assert S.directory_change(statement, _HERE) == (True, _norm(expected))
+
+
+@pytest.mark.parametrize("statement", [
+    "cd", "cd -", "cd ~", "cd ~/x", 'cd "$R"', "cd $R/x", "cd `pwd`", "cd *", "popd",
+    "pushd +1", "cd $(git rev-parse --show-toplevel)",
+])
+def test_directory_change_refuses_a_destination_no_static_read_can_name(statement):
+    """A change it cannot follow is still a CHANGE: (True, None), never (False, here)."""
+    assert S.directory_change(statement, _HERE) == (True, None)
+
+
+@pytest.mark.parametrize("statement", [
+    "echo cd /r", "git -C /r log", "cdx /r", "abcd /r", "ls", "", "   ",
+    "git commit -m 'cd /r'", "grep -rn 'cd /r' .",
+])
+def test_directory_change_leaves_a_non_cd_statement_alone(statement):
+    assert S.directory_change(statement, _HERE) == (False, _HERE)
+
+
+def test_directory_change_needs_a_base_for_a_relative_target():
+    assert S.directory_change("cd r", None) == (True, None)
+    assert S.directory_change("cd /r", None) == (True, _norm("/r"))
+
+
+def test_directory_change_expands_home_only_when_asked(monkeypatch):
+    home = os.path.normpath("/home/someone")
+    monkeypatch.setenv("HOME", home)
+    monkeypatch.setenv("USERPROFILE", home)
+    assert S.directory_change("cd ~/proj", _HERE) == (True, None)
+    assert S.directory_change("cd ~/proj", _HERE, expand_home=True) == (True, _norm(home + "/proj"))
+    assert S.directory_change("cd ~", _HERE, expand_home=True) == (True, home)
+    # `~user` is another account's home: not this process's to expand
+    assert S.directory_change("cd ~other/x", _HERE, expand_home=True) == (True, None)
+
+
+@pytest.mark.parametrize("statement", ["Set-Location r", "sl r", "cd r", "chdir r"])
+def test_directory_change_knows_the_powershell_spellings(statement):
+    changed, landing = S.directory_change(statement, _HERE, "PowerShell")
+    assert changed is True and landing == _norm("/s/r")
+
+
 # ---- past_command_prefix: the launcher walk, public -------------------------------------------
 #
 # A guard asking "which program does this statement really run?" had to read the private

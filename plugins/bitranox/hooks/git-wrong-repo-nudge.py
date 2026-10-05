@@ -58,11 +58,14 @@ import os
 import re
 import sys
 
-from shell_text import commands_only_aligned, is_shell_tool, iter_segments
+from shell_text import (
+    blank_heredoc_bodies,
+    commands_only_aligned,
+    directory_change,
+    is_shell_tool,
+    iter_segments,
+)
 
-# `cd` as the statement's own verb, optionally behind env assignments. The operands are optional: a
-# bare `cd` is still a directory change, to $HOME, and must not read as "no cd happened".
-_CD = re.compile(r"^\s*(?:\w+=\S*\s+)*cd(?P<args>\s.*)?$")
 _GIT = re.compile(r"^\s*(?:\w+=\S*\s+)*(?:sudo\s+|timeout\s+\S+\s+)*git\b")
 
 
@@ -73,7 +76,9 @@ def _statements(command, tool_name="Bash"):
     path compared on masked text would be compared as filler characters. That slicing is only
     sound because the mask is ALIGNED: heredoc bodies are blanked in place rather than deleted, so
     an offset here is an offset into the raw command. A deleting strip shifted every statement after
-    a heredoc onto the body text, which blinded the guard or made it fire on the body's data.
+    a heredoc onto the body text, which blinded the guard or made it fire on the body's data. The
+    raw text the caller slices has its bodies blanked the same way, so a `cd` written into a body
+    is spaces there too, never a statement.
 
     Statements come from the quote-aware walk, which ends one at a subshell paren too; a regex
     that knows no parens read `(cd X` as a program named `(cd`. `separator` is the text that ended
@@ -92,34 +97,6 @@ def _statements(command, tool_name="Bash"):
 
 # A separator that opens a subshell, whose `cd` ends with it, and the one that closes it.
 _SUBSHELL_OPENERS = frozenset({"(", "$(", "<(", ">("})
-
-
-_UNKNOWABLE = re.compile(r"[$`<>|\n*?]")          # a destination no static read can resolve
-
-
-def _cd_target(args):
-    """The destination among `cd`'s operands: its own options (`-P`, `-L`, `--`) are skipped.
-
-    Taking the first word as the target read `cd -P <dir>` as a cd into "<previous>/-P".
-    """
-    for index, token in enumerate(args):
-        if token == "--":
-            return args[index + 1] if index + 1 < len(args) else None
-        if token == "-" or not token.startswith("-"):
-            return token
-    return None
-
-
-def _unknowable(target):
-    """True when `cd target` lands somewhere this hook cannot read.
-
-    A variable, substitution or glob; `cd -`, which returns to $OLDPWD; and a bare `cd` or a tilde
-    path, which expand against the HOME of the shell that runs the command, not this hook's.
-    """
-    if target is None:
-        return True
-    bare = target.strip().strip("'\"")
-    return bare == "-" or bare.startswith("~") or bool(_UNKNOWABLE.search(target))
 
 
 def _repo_root(path):
@@ -141,14 +118,6 @@ def _repo_root(path):
         current = parent
 
 
-def _resolve(target, base):
-    """Where `cd target` lands, starting from `base`."""
-    expanded = os.path.expanduser(target.strip().strip("'\""))
-    if os.path.isabs(expanded):
-        return os.path.normpath(expanded)
-    return os.path.normpath(os.path.join(base, expanded))
-
-
 def notice(command, cwd, tool_name="Bash"):
     """The nudge text when two gits answer about DIFFERENT work trees, else None.
 
@@ -166,9 +135,11 @@ def notice(command, cwd, tool_name="Bash"):
     if not command or not isinstance(command, str) or not cwd:
         return None
     masked, spans = _statements(command, tool_name)
+    raw = blank_heredoc_bodies(command)
     here, landed, answered, saved = str(cwd), [], [], []
     for start, end, separator in spans:
-        message, here = _judge_statement(command, masked[start:end], start, here, landed, answered)
+        message, here = _judge_statement(
+            raw[start:end], masked[start:end], here, landed, answered, tool_name)
         if message is not False:
             return message
         if separator in _SUBSHELL_OPENERS:
@@ -178,26 +149,19 @@ def notice(command, cwd, tool_name="Bash"):
     return None
 
 
-def _judge_statement(command, statement, start, here, landed, answered):
+def _judge_statement(raw, statement, here, landed, answered, tool_name="Bash"):
     """(verdict, directory in force after it) for one statement.
 
-    The verdict is False to carry on, None to stop silently (an unreadable destination), or the
-    notice text. `landed` and `answered` are appended to in place.
+    `raw` is the statement's own text and `statement` its masked twin. The verdict is False to
+    carry on, None to stop silently (an unreadable destination), or the notice text. `landed` and
+    `answered` are appended to in place.
     """
-    cd_hit = _CD.match(statement)
-    if cd_hit:
-        target = None
-        if cd_hit.group("args") is not None:
-            # Words are found on the MASKED text, where a quoted path is one word however many
-            # spaces it holds, and each is then sliced from the raw statement.
-            raw, offset = command[start:start + len(statement)], cd_hit.start("args")
-            target = _cd_target([raw[offset + w.start():offset + w.end()]
-                                 for w in re.finditer(r"\S+", cd_hit.group("args"))])
-        if _unknowable(target):
+    changed, landing = directory_change(raw, here, tool_name)
+    if changed:
+        if landing is None:
             return None, here          # where it lands is not readable here
-        here = _resolve(target, here)
-        landed.append(here)
-        return False, here
+        landed.append(landing)
+        return False, landing
     if not _GIT.match(statement) or not landed:
         return False, here
     answered.append(here)              # a git after a cd: it answers from this landing

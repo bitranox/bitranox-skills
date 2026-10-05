@@ -56,9 +56,14 @@ import os
 import re
 import sys
 
-from shell_text import commands_only_aligned, is_shell_tool, iter_segments
+from shell_text import (
+    blank_heredoc_bodies,
+    commands_only_aligned,
+    directory_change,
+    is_shell_tool,
+    iter_segments,
+)
 
-_CD = re.compile(r"^\s*(?:\w+=\S*\s+)*cd(?:\s|$)")
 _VERB = re.compile(
     r"^\s*(?:\w+=\S*\s+)*(?:sudo\s+|timeout\s+\S+\s+)*git\s+"
     r"(?P<verb>ls-files|check-ignore|check-attr)(?P<rest>\s.*)?$"
@@ -205,7 +210,8 @@ def notice(command, cwd, tool_name="Bash"):
     if _in_linked_worktree(cwd):
         return None                        # a worktree's file set legitimately differs; no signal
     masked, spans = _statements(command, tool_name)
-    if any(_CD.match(masked[start:end]) for start, end in spans):
+    raw = blank_heredoc_bodies(command)    # aligned with `masked`: a cd in a body stays blank
+    if any(directory_change(raw[start:end], cwd, tool_name)[0] for start, end in spans):
         return None                        # an explicit cd states the subject
     for start, end in spans:
         hit = _VERB.match(masked[start:end])

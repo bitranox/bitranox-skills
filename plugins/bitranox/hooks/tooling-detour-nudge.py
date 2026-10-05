@@ -35,7 +35,13 @@ import sys
 from pathlib import Path
 
 import self_improve_signals as sig
-from shell_text import is_shell_tool, iter_segments, mask_data_regions, strip_heredoc_bodies
+from shell_text import (
+    directory_change,
+    is_shell_tool,
+    iter_segments,
+    mask_data_regions,
+    strip_heredoc_bodies,
+)
 
 _MARKETPLACE_MARKER = Path(".claude-plugin") / "marketplace.json"
 _EDIT_TOOLS = frozenset({"Write", "Edit", "MultiEdit", "NotebookEdit"})
@@ -65,7 +71,6 @@ _PATH_TOKEN = re.compile(
     r"(?<![\w./-])(/[^\s'\";|&()<>]+|~/[^\s'\";|&()<>]+|\.{0,2}/[^\s'\";|&()<>]+"
     r"|[A-Za-z]:[\\/][^\s'\";|&()<>]+)"
 )
-_CD = re.compile(r"cd\s+(['\"]?[^\s'\";|&]+)")
 _GIT_VERB = re.compile(r"(?:^|[\s;&|(])git\b")
 
 _NOTICE = (
@@ -130,11 +135,15 @@ def in_dream_room(cwd, is_root=_is_marketplace_root) -> bool:
 
 
 def _resolve(token, cwd):
+    """`token` as a path from `cwd`; None for a relative token when `cwd` is unknown (a `cd` this
+    hook could not follow), which `marketplace_root` then reads as "not in a marketplace"."""
     t = token.strip("'\"")
     if t.startswith("~/"):
         return Path.home() / t[2:]
     p = Path(t)
-    return p if p.is_absolute() else Path(cwd) / p
+    if p.is_absolute():
+        return p
+    return None if cwd is None else Path(cwd) / p
 
 
 def notice_path(path, cwd, is_root=_is_marketplace_root):
@@ -162,12 +171,14 @@ def notice_bash(command, cwd, is_root=_is_marketplace_root, tool_name="Bash"):
     if not command or not isinstance(command, str) or not cwd or in_dream_room(cwd, is_root):
         return None
     # A `cd` earlier in the same command moves every later statement: `cd <mkt> && git commit`
-    # names no path in the statement that writes, so the effective cwd is what gets judged.
+    # names no path in the statement that writes, so the effective cwd is what gets judged. A cd
+    # whose destination cannot be read leaves `here` unknown, and a relative path after it is then
+    # not attributed anywhere. The hook runs as the user whose shell runs the command, so `~` is
+    # that user's home.
     here = cwd
     for _at, seg in iter_segments(strip_heredoc_bodies(command), tool_name):
-        moved = _CD.match(seg.strip())
-        if moved:
-            here = str(_resolve(moved.group(1), here))
+        changed, here = directory_change(seg, here, tool_name, expand_home=True)
+        if changed:
             continue
         root = None
         for target in _redirect_targets(seg, tool_name):

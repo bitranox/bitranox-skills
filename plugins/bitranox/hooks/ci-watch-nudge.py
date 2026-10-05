@@ -44,8 +44,10 @@ from pathlib import Path
 import ci_watch_state as state
 from shell_text import (
     LIST_SEP,
+    blank_heredoc_bodies,
     commands_only,
     commands_only_aligned,
+    directory_change,
     is_shell_tool,
     iter_segments,
 )
@@ -85,40 +87,49 @@ _DASH_C = re.compile(r"\bgit\b(?:\s+-c[= ]\S+)*\s+-C[= ]\s*(\S+)")
 _UNRESOLVABLE = ("$", "`", '"', "'")
 
 
-# A leading `cd` moves every later statement: `cd /other/repo && git push` pushes THAT repo,
-# not the event's cwd. Read at statement start, like `git-wrong-repo-nudge` does, so a `cd` in
-# an argument is not mistaken for one.
-_CD_AT_START = re.compile(r"^\s*(?:\w+=\S*\s+)*cd\s+(?P<target>[^\s;&|]+)")
-# Only a push BEFORE which the `cd` ran is moved by it, so the walk stops at the first one.
+# Only a push BEFORE which a `cd` ran is moved by it, so the walk stops at the first one.
 _GIT_PUSH = re.compile(r"\bgit\b[^\n;|&]*\bpush\b")
 
 
 def _cwd_after_any_cd(command: str, cwd: str, tool_name: str = "Bash") -> str | None:
     """The directory the push actually runs in, following any `cd` that precedes it.
 
+    A leading `cd` moves every later statement: `cd /other/repo && git push` pushes THAT repo, not
+    the event's cwd. Each statement is read by `shell_text.directory_change`, the cd reader every
+    cd-tracking hook shares; a cd it cannot follow (a variable, `cd -`, a bare `cd`) makes the
+    answer None rather than a guess.
+
     A `cd` inside a heredoc body is stdin DATA and moves nothing, the same trap the `-C` reader
     guards. Structure is read from the ALIGNED masked form (bodies blanked in place) and the VALUE
-    from the raw command at the same offsets, like `_repo_dir`'s `-C` branch. Heredocs are handled
+    from the raw command, bodies blanked the same way, at the same offsets. Heredocs are handled
     exactly once: masking text that was already heredoc-stripped strips it AGAIN, and on that text
     the opener has lost its terminator, so the rest of the command - the `cd` and the push - read
     as one unterminated body and the walk fell through to the event's cwd.
     """
     masked = commands_only_aligned(command, tool_name)
-    here = cwd
+    raw = blank_heredoc_bodies(command)
+    here: str | None = cwd
+    moved = False
     for at, seg in iter_segments(masked, tool_name):
-        moved = _CD_AT_START.match(seg)
-        if moved:
-            token = command[at + moved.start("target"):at + moved.end("target")]
-            if not token or any(ch in token for ch in _UNRESOLVABLE):
+        changed, here = directory_change(raw[at:at + len(seg)], here, tool_name)
+        if changed:
+            if here is None:
                 return None
-            try:
-                here = str((Path(here) / token).resolve())
-            except (OSError, ValueError):
-                return None
+            moved = True
             continue
         if _GIT_PUSH.search(seg):
-            return here
-    return here
+            break
+    return _resolved(here) if moved else here
+
+
+def _resolved(path: str | None) -> str | None:
+    """`path` with symlinks resolved, as the `-C` branch records a repository, or None."""
+    if path is None:
+        return None
+    try:
+        return str(Path(path).resolve())
+    except (OSError, ValueError):
+        return None
 
 
 def _repo_dir(command: str, cwd: str, tool_name: str = "Bash") -> str | None:

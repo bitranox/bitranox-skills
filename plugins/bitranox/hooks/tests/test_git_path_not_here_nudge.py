@@ -17,6 +17,12 @@ def _repo(tmp_path, name):
     return root
 
 
+def _sh(path):
+    """`path` as a Bash command operand: double-quoted, forward slashes (bash eats an unquoted
+    Windows path's backslashes)."""
+    return '"%s"' % Path(path).as_posix()
+
+
 # --- must fire -------------------------------------------------------------------------------
 
 def test_error_unmatch_about_a_file_that_lives_in_the_parent_project_fires(tmp_path):
@@ -64,7 +70,19 @@ def test_a_call_that_cds_first_is_silent(tmp_path):
     outer = _repo(tmp_path, "outer")
     (outer / "f.md").write_text("x")
     inner = _repo(outer, "inner")
-    assert G.notice(f"cd {outer} && git ls-files --error-unmatch f.md", str(inner)) is None
+    assert G.notice(f"cd {_sh(outer)} && git ls-files --error-unmatch f.md", str(inner)) is None
+
+
+def test_a_cd_in_a_loop_body_or_a_pushd_states_the_subject_too(tmp_path):
+    # The private regex this hook carried knew `cd` only at statement start: `do cd X` and
+    # `pushd X` both moved the shell while the hook judged the question as if nothing had.
+    outer = _repo(tmp_path, "outer")
+    (outer / "f.md").write_text("x")
+    inner = _repo(outer, "inner")
+    question = "git ls-files --error-unmatch f.md"
+    assert G.notice(question, str(inner)) is not None                      # control: it fires
+    assert G.notice(f"for i in 1; do cd {_sh(outer)} && {question}; done", str(inner)) is None
+    assert G.notice(f"pushd {_sh(outer)} && {question}", str(inner)) is None
 
 
 def test_an_absolute_path_is_silent(tmp_path):
@@ -228,7 +246,7 @@ def test_a_question_inside_a_subshell_still_fires(tmp_path):
 
 def test_a_cd_inside_a_subshell_states_the_subject(tmp_path):
     outer, inner = _umbrella(tmp_path)
-    assert G.notice(f"(cd {outer} && git check-ignore -q handover.md)", str(inner)) is None
+    assert G.notice(f"(cd {_sh(outer)} && git check-ignore -q handover.md)", str(inner)) is None
 
 
 def test_a_quoted_paren_label_is_not_a_subshell(tmp_path):
