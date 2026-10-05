@@ -2417,6 +2417,13 @@ BROAD_USER_PATTERN = re.compile(
     r"|\bi (told|asked) you\b|\bas i (said|mentioned|asked)\b"
     r"|\bnot (quite|what i|right|correct)\b|\b(revert|undo|rollback)\b"
     r"|\b(perfect|exactly right|spot on|love it|that.?s it|works now)\b"
+    # A request to RE-CHECK and correct challenges a claim just made ("check, correct if
+    # neccessary, and push" found a real exec-bit loss in "harmless churn"). Needs both halves:
+    # check/verify alone, or fix/correct alone, is an ordinary instruction.
+    r"|\b(?:check|verify|review|double.?check)(?: it| this| that)?,?\s+(?:and\s+)?(?:correct|fix)\b"
+    r"|\b(?:correct|fix)(?: it| this| that)? if (?:nec+es+ary|needed|required)\b"
+    r"|\b(?:prüf|überprüf|kontrollier)\w* und (?:korrigier|berichtig)\w*"
+    r"|\b(?:korrigier|berichtig)\w* (?:falls|wenn|soweit) nötig\b"
     # NEUTRAL PREFERENCE: an imperative that sets a durable convention with no correction
     # wording at all ("use httpx2 here", "put it in the application layer"). The strict set
     # keys on correction/remember phrasing, so it never sees these - they are pure audit.

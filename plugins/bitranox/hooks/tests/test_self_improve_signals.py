@@ -149,6 +149,34 @@ def test_broad_quiet_on_neutral_turns():
     assert S.broad_matches("assistant", "Done, added the helper function.") == []
 
 
+# A request to re-check a claim just made challenges it: the 2026-09-11 text below found a real
+# exec-bit loss in files the assistant had called harmless churn, and neither set saw it.
+@pytest.mark.parametrize("text", [
+    "--> check, correct if neccessary, and push",          # the real text, misspelling included
+    "check, correct if necessary",
+    "check and correct",
+    "verify and fix if needed",
+    "double-check it and fix",
+    "fix it if required",
+    "bitte prüfen und korrigieren",
+    "korrigiere falls nötig",
+])
+def test_broad_user_flags_a_request_to_recheck_and_correct(text):
+    assert S.broad_matches("user", text), text
+    assert S.user_signal_offset(text) is not None
+
+
+@pytest.mark.parametrize("text", [
+    "check the logs please",
+    "the correct value is 3",
+    "check it and push",
+    "fix the typo in line 3",
+    "if necessary, add a test",
+])
+def test_broad_user_stays_quiet_on_check_or_fix_alone(text):
+    assert S.broad_matches("user", text) == [], text
+
+
 def test_broad_matches_returns_sorted_lowercase_unique():
     m = S.broad_matches("assistant", "Wait, I missed it. I missed it again.")
     assert m == sorted(set(m))
