@@ -12,11 +12,13 @@ Two layers of test live here:
   the REAL markitdown ``pytest.importorskip`` it.
 
 Every subprocess gets a throwaway HOME and dead proxies, so nothing can write to
-the real home directory or reach the network.
+the real home directory or reach the network. PYTHONUSERBASE is pinned to the
+running interpreter's, so that private HOME does not also hide the user site.
 """
 
 import importlib.util
 import os
+import site
 import subprocess
 import sys
 from dataclasses import dataclass
@@ -163,6 +165,9 @@ def _child_env(home: Path, pythonpath: list, encoding: str, extra: dict) -> dict
     env["PYTHONIOENCODING"] = encoding
     env["HOME"] = str(home)
     env["USERPROFILE"] = str(home)
+    # On POSIX the user site-packages dir is derived from HOME, so the private HOME above would
+    # hide every `pip install --user` package - a user-site markitdown included - from the child.
+    env.setdefault("PYTHONUSERBASE", site.getuserbase())
     for proxy in ("HTTPS_PROXY", "HTTP_PROXY", "ALL_PROXY", "https_proxy", "http_proxy", "all_proxy"):
         env[proxy] = "http://127.0.0.1:9"
     env.update(extra)
@@ -209,6 +214,17 @@ def run_script(
 def block_import_prelude(*names: str) -> str:
     """A ``run_script`` prelude that makes ``import <name>`` raise ImportError, whatever is installed."""
     return "import sys\nfor _name in " + repr(list(names)) + ":\n    sys.modules[_name] = None\n"
+
+
+@pytest.fixture(scope="session")
+def child_env():
+    """The environment ``run_script`` hands a child, as a builder: ``child_env(home, extra=...)``."""
+
+    def build(home: Path, *, pythonpath: list | None = None, encoding: str = "utf-8",
+              extra: dict | None = None) -> dict:
+        return _child_env(home, pythonpath or [], encoding, extra or {})
+
+    return build
 
 
 @pytest.fixture(scope="session")
