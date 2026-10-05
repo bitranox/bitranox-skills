@@ -23,9 +23,10 @@ Usage (cwd defaults to the current directory):
   contrib_queue.py queues           # every queue on this machine, by key
   contrib_queue.py rehome-tombstones [--apply]  # repair closes filed under the wrong key
 
-Exit codes: 0 done (a duplicate or already-closed add included); 1 the store could not be read or
-written (nothing was recorded); 2 usage error, an empty --what, or a selector / queue key that names
-nothing.
+Exit codes: 0 done (a duplicate or already-closed add included); 2 could not run: the store could
+not be read or written (nothing was recorded; the message starts `! failed:`), a usage error, an
+empty --what, or a selector / queue key that names nothing (`! refused:` or `no such queue`). No
+verb answers a yes/no question, so none exits 1.
 
 `rehome-tombstones` repairs what a `ship`/`drop` addressed as `queue_key:<hash>` wrote before
 7.24.0: the tombstone went to a file keyed by the pseudo-path, which no reader consults, so the close
@@ -138,7 +139,7 @@ def _queue_rows(qdir):
 
 
 def _print_queues():
-    """The `queues` verb. Exit 0 listed; 1 when a queue file could not be read (it is listed as
+    """The `queues` verb. Exit 0 listed; 2 when a queue file could not be read (it is listed as
     unreadable, never counted as holding nothing)."""
     # The queue is addressed by cwd, and the filename is a one-way hash of it - so without this
     # there is no way to ask which projects have pending contributions, and a queue whose cwd was
@@ -161,7 +162,7 @@ def _print_queues():
         # answers "no pending upstream contributions" - indistinguishable from done.
         print("  %s  %s  %s" % (key, "? open" if n is None else "%d open" % n, where))
     print("address one with: contrib_queue.py list|ship|drop ... queue_key:<full-key>|<path>")
-    return 1 if unreadable else 0
+    return 2 if unreadable else 0
 
 
 def _hint_orphans():
@@ -178,12 +179,12 @@ def _hint_orphans():
 
 def _rehome_tombstones(apply):
     """Report (default) or repair (--apply) the closed-set files an older queue_key: close wrote
-    under the wrong key. Exit 0 done or nothing to do; 1 a file could not be read or written."""
+    under the wrong key. Exit 0 done or nothing to do; 2 a file could not be read or written."""
     try:
         found = sig.find_orphan_tombstones()
     except OSError as exc:
         print("! failed: could not read a closed-set file (%s)" % exc, file=sys.stderr)
-        return 1
+        return 2
     orphans = [o for o in found if o["status"] == "orphan"]
     for o in found:
         if o["status"] == "ambiguous":
@@ -202,7 +203,7 @@ def _rehome_tombstones(apply):
             except OSError as exc:
                 print("! failed: could not rehome %s (%s) - re-run after fixing the store"
                       % (o["path"], exc), file=sys.stderr)
-                return 1
+                return 2
             print("    merged %d new; the file is kept as %s*" % (added, o["path"].name + ".rehomed"))
     if not apply:
         print("dry run: pass --apply to merge them into their queues' closed sets")
@@ -282,7 +283,7 @@ def main(argv=None):
         except OSError as exc:
             print("! failed: could not queue %r (%s) - nothing was recorded; fix the store and "
                   "re-run" % (args.what, exc), file=sys.stderr)
-            return 1
+            return 2
         if not queued:
             # already queued, or CLOSED earlier - either way not a new TODO. Name the outcome that
             # closed it: "rejected" for work that was already DONE would send the reader to redo it.
@@ -297,7 +298,7 @@ def main(argv=None):
     if args.cmd == "list":
         recs = _read_or_report(sig.read_contributions, proj, "queue")
         if recs is None:
-            return 1
+            return 2
         if not recs:
             print("no pending upstream contributions for %s" % proj)
             return 0
@@ -325,7 +326,7 @@ def main(argv=None):
             # Nothing was closed that the store does not record; say so rather than claim it.
             print("! failed: could not record the %s (%s) - the entry is still queued; fix the "
                   "store and re-run" % ("ship" if shipping else "drop", exc), file=sys.stderr)
-            return 1
+            return 2
         print("%s: %s%s%s" % ("shipped" if shipping else "dropped", rec.get("what") or "",
                               " -> %s" % rec["target"] if rec.get("target") else "",
                               " (%s)" % note if note else ""))
@@ -337,7 +338,7 @@ def main(argv=None):
         recs = _read_or_report(sig.read_shipped if shipping else sig.read_rejected, proj,
                                "closed set")
         if recs is None:
-            return 1
+            return 2
         label, field = ("shipped", "note") if shipping else ("dropped", "reason")
         if not recs:
             print("no %s contributions for %s" % (label, proj))
@@ -354,7 +355,7 @@ def main(argv=None):
     except OSError as exc:
         print("! failed: could not record the drain (%s) - the queue is unchanged; fix the store "
               "and re-run" % exc, file=sys.stderr)
-        return 1
+        return 2
     print("drained the pending-contribution queue for %s: %d closed as shipped"
           % (proj, len(drained)))
     return 0
