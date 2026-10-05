@@ -99,8 +99,11 @@ reads) - and one copyleft id rejects, including one
 alternative of an `OR`. Anything it cannot read, classify or vouch for (an unparseable manifest, a
 license text it does not recognise, an unknown id, a named license file that is missing, a
 symlinked folder or a link to a file outside the skill, whose target would be copied unread) stops
-it as NO LICENSE FOUND with the reason, for you to decide. Exit
-codes: 0 adopted, 1 the gate stopped it (nothing written), 2 error.
+it as NO LICENSE FOUND with the reason, for you to decide. A license the gate could not READ (a
+file it cannot open, a dir it cannot list, a `pyproject.toml` license table on Python 3.10, which
+has no `tomllib`) stops it as LICENSE GATE: CANNOT READ instead: the source was not judged, so fix
+the read and rerun rather than researching the license. Exit codes: 0 adopted, 1 the gate said no
+(REJECTED or NO LICENSE FOUND), 2 error, CANNOT READ included. Nothing is written on 1 or 2.
 
 ## Step 3 - Enhance to bitranox standards
 
