@@ -31,9 +31,150 @@ two "versions with no entry" notes came to sit in this file disagreeing with it.
 
 ## [8.0.0]
 
+### Breaking
+
+Every CLI the plugin ships now follows one exit-code contract: **0** = yes / ran and found nothing
+wrong, **1** = ran and the answer is no (a finding, a partial outcome), **2** = could not run (bad
+input, a missing tool, an unreadable or unwritable path, a crash, a whole action refused or
+failed). Under `--json` every exit prints `{ok, command, data, skipped}` (plus `error` on exit 2),
+and `ok` is false exactly on exit 2, so a run that worked and answered "no" is `ok: true`. A caller
+that branches on the old codes must move:
+
+- Exits that moved to 2 from 1: `memory_engine` refusals (slug collision, hook over the hard cap,
+  empty body, pinned target, invalid slug, excluded altitude, refused move/rename/retitle) and
+  `factedit apply` when the engine refuses; `contrib_queue` store failures; `convert_with_ai`
+  runtime failures (it no longer exits 1 at all); `anchor_edit` and `mdwrap` refusals;
+  `adjudicate` UNUSABLE; `classifier_eval harvest` with no verdict object; `settings.py set/reset`
+  that cannot write; `audit_skills` with a missing report; `skill_receipt` start/end that cannot
+  touch the receipt; `transfer fetch/push` failures; `render-graphs.js` usage errors and every
+  `--combine` refusal; `pfsense dhcp rm`, `dhcp rm-static-arp` and `dns rm` that removed nothing,
+  and `table del` / `snort unblock` when every requested address is still present.
+- Exits that moved to 2 from 3 (or 4): `run-python.sh` called without `--hook`; `confound`
+  INCONCLUSIVE; `redcheck` unchecked; `guard_replay` nothing replayed (3) or predicate raised (4);
+  `jsonl_grep` nothing read; `classifier_eval` failed control; `jig_probe` failed control;
+  `find_polluter` pre-existing path; `audit_responsive`,
+  `open_viewports`, `make_storage_state` could-not-run.
+- Exits that moved to 1: `dream_state due` (not-due) and `should-promote` (hold); `memory_engine
+  lint --tree` with findings; `jsonl_grep` read everything and matched nothing; `task_brief` task
+  not found (was 3); `audit_responsive` findings (was 4).
+- Crashes that used to exit 0 now exit 2: `repo-gate.py --ci`, `--pre-push`, `--mirrors`,
+  `--mirror-of`, `--pytest-only`, `--print-test-deps` (CI and the git pre-push hook read a crashed
+  gate as a pass); `classifier.py --shadow`; `memory_engine heal` leaving an unreadable level.
+- `--json` shapes changed: `audit_headers` (url/counts/findings moved under `data`), `ci_wait`
+  (state/summary/runs under `data`), `corpus_prompts` (report under `data`), `pushcheck` (verdict
+  is `data.safe`), `script_prepass`, `winlog`; every compuse-toolbox jig prints the envelope on a
+  usage error and a crash too.
+
+### Added
+
+- `compuse-toolbox/scripts/_cli_envelope.py`: the shared envelope and exit-code boundary the jigs
+  use (envelope, emit, an argparse subclass that prints the envelope on a usage error under
+  `--json`, and a guarded `main()` that turns an uncaught exception into exit 2).
+- `anchor_edit.py batch --spec FILE`: many exact replacements across files, every count checked
+  before any write, with an optional per-file line-delta assertion.
+- `mutation_arm --battery SPEC.json` for many labelled arms with a green baseline before and after,
+  and `--python PATH` / `--with DEP` to choose the runner (else `./.venv`'s python); the report
+  names the runner and the test that caught the mutation.
+- `gate.py --cwd DIR` / `--env K=V` and per-gate `--gate-cwd` / `--gate-env`, still without a shell.
+- `ci_wait --event`: with no flag every run on the sha counts except a scheduled one, so a nightly
+  run on the same head cannot hold the verdict open and a fork PR's `pull_request` runs are seen;
+  `--event push` filters, `--event any` includes schedule. A fork-PR run awaiting approval is
+  reported at once as `pending-approval` (exit 2), and the repository is resolved once.
+- `jsonl_grep --raw` prints strings bare like `jq -r`.
+- compuse-toolbox jig `plan_codecheck`: places a plan section's python blocks at the repo paths
+  they name in a temporary copy and runs pytest, pyright strict and ruff on them (0 pass, 1 a
+  check failed or a block had no path, 2 could not check).
+- compuse-toolbox jig `instrument_share`: classifies every tool call in the transcript corpus as
+  work, memory, handover or skills-detour and reports instrumentation minutes and share per ISO
+  week and per triggering Stop hook, SessionStart context or prompt.
+- toolbox-nudge points a hand-rolled computed-span edit at `anchor_edit` and a hand-rolled plan
+  dry-run driver at `plan_codecheck`.
+- `pfsense.py dhcp add` and `dhcp rename`.
+- `dream_state session-review` lists every other transcript of the project the dream has not
+  finished reading, and `--transcript PATH` reads or marks one.
+- `reconcile_memory_index --repair-appended-type` (and a permanent `--check-tree` finding) for a
+  body whose prose opens with a `---` rule and carries an appended `metadata: type:` block.
+- `classifier_eval replay --roster installed` vets each distinct installed roster against the
+  planted controls once and skips, never pays for, prompts whose roster fails.
+- `reformat-md-tables` leaves a checkout alone that sets `git config bitranox.reformatMdTables
+  false`, for upstream mirrors with someone else's table style.
+- New nudges: `git-footgun-guard` warns when a pathspec `git commit` would discard a staged-only
+  change; `nudge-detector-footguns` flags `grep -c ... || echo 0` and a state label such as
+  `git status --porcelain && echo CLEAN` the command's exit cannot vouch for; `arbitrary-sleep-nudge`
+  flags a waiter detached with a trailing `&`; `missing-mechanism-nudge` adds a premise reminder to
+  every `AskUserQuestion`.
+- `shell_text.directory_change`, the one reader for where a `cd`/`pushd`/`Set-Location` lands,
+  now shared by git-wrong-repo-nudge, git-path-not-here-nudge, tooling-detour-nudge, ci-watch-nudge
+  and `git_verb_dir`.
+
 ### Changed
 
-- (batch in progress)
+- `repo-gate`: the mirror commit and push gates judge a change by what it ships - the committing
+  repo at its index on a commit and at HEAD on a push, the other repo at its published ref plus
+  what it committed since - so another session's uncommitted edit no longer blocks a commit as
+  DRIFT. `--mirrors` / `--mirror-of` keep newest text and name any repo whose origin was last
+  fetched more than 7 days ago; every DRIFT message names a stale ref. `--mirrors` counts a twin
+  missing from `MIRRORED_SKILLS` as a finding. The checks see a staged change whose working copy
+  was reverted. The commit gate reads the index as it stands before the command runs, so stage in
+  a separate earlier command.
+- `harness_checks` / `audit_local`: a malformed hook entry in a settings file is reported as
+  `settings-malformed-entry` and the file's other registrations are still checked; only a file
+  Claude Code rejects whole is `settings-unparseable`.
+- The Stop gate counts a slash command with arguments (`/goal ...`) as the typed prompt, and no
+  longer blocks on a self-admission the assistant quotes in code or quotes.
+- `task_brief.py` starts every brief with the plan's Global Constraints section and refuses a plan
+  where two headings share the requested task id.
+- The context-watcher's handover offer asks git whether `handover.md` is tracked instead of always
+  calling it gitignored; SessionStart names an OPEN-WORK rank shared by two lines.
+- `migrate_memory` ignores its files through `.git/info/exclude` and never writes the tracked
+  `.gitignore`; its backup and `--restore` cover the exclude file.
+- `fleet_ssh --trust-changing-host-keys` uses `StrictHostKeyChecking=accept-new`: a changed key is
+  refused before the command runs, the stale entry dropped and the command retried once, keyed on
+  ssh's own `-E` log, never on the remote command's stderr.
+- `anchor_edit` writes its backup under the repository's git dir inside a work tree, so `git add`
+  can no longer stage a `.bak`.
+- `block-partial-typecheck` judges each pyright run from the directory its preceding `cd` lands
+  in; `block-pgrep-self-match` no longer blocks a grep/rg whose pattern names `pgrep -f` and
+  rewrites `-m` only inside git commit/tag/merge; `venv-guard` no longer nudges on `uv run` inside a
+  uv project; tell-sweep and reformat-md-tables no longer run on NotebookEdit.
+- `audit_headers` grades a `frame-ancestors` wildcard over one label (`*.com`) as MINOR.
+- `generate_schematic_ai`: a NEEDS_IMPROVEMENT verdict at or above the threshold is a [WARN] on
+  stderr (exit 0); exit 1 is only a best score below the threshold.
+- `pluginprune` reports a symlinked marketplace or plugin directory once and gives every refused
+  or failed entry a `reason_code`; `wtclean` gives each blocked entry a kind.
+- `newest --name-timestamp`: an unzoned stamp is local time, a `Z` stamp UTC. `srccount`: an
+  unreadable directory inside an excluded tree is a floor warning, not exit 2. `mem_levels` counts
+  a level only when its CLAUDE.local.md carries a managed pointer block. `audit_skills`
+  REPO_FILES.txt lists tracked files only.
+- `memory_engine add` no longer asks to propose a guard when the body records the user's
+  escalation decision.
+- The self-improve audit flags a request to re-check and correct a claim (EN and DE).
+- Skill text: compuse-git, compuse-bash, compuse-ssh, coding-resilience, coding-python-uv,
+  infra-modulejail, meta-using-bitranox-skills, git-worktrees (nested-worktree pyright config),
+  meta-context-watcher (handover.prev.md copy, STALE marker never a standalone commit, rank rules),
+  process-agents-subagent-driven-development (RED mutations through mutation_arm),
+  process-review-enhance-code-quality (the Error contract row covers every escaping exception),
+  meta-dream-tree (a required semantic dedup pass after dedup_scan), compuse-toolbox (the exit-code
+  and envelope rule stated once, exit codes on every tool row), and every doc that states one of the
+  moved exit codes.
+
+### Fixed
+
+- `repo-gate`: a wrongly shaped `skill-taxonomy.json` fails open instead of crashing the gate.
+- toolbox-nudge no longer stalls on a large Write or Edit: two of its authored-text rules ran in
+  time growing with the square of the text (an 880 KB file took minutes per call).
+- `strip_typographic_tells --check`: an unreadable, non-UTF-8 or unwritable file exits 2 instead
+  of a traceback that `--check` read as "tells remain".
+- `skill_receipt end` no longer reports "absent" while the receipt and its gate stay armed.
+- `adopt_skill` reports LICENSE GATE: CANNOT READ instead of NO LICENSE FOUND for an unreadable
+  license or a TOML table without tomllib.
+- `proxy_pool run`, `transcript_index`, `profile_with_cache_template`, `compare_performance`,
+  `setup_env`, `build_skill_docs`, `build_skill_triggers`, `migrate_to_slug_store`, `reconcile`,
+  `migrate_memory` and `hookdoc_stamp` exit 2 with a message instead of a traceback on their
+  could-not-run paths.
+- The coding-python-performance-review and docs-convert-markitdown tests keep the interpreter's
+  user site-packages when a fixture sets a private HOME.
+- `procsig --kill` says "already exited" for a target gone before the signal.
 
 ## [7.42.0]
 
