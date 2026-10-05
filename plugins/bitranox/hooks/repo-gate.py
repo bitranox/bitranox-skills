@@ -38,7 +38,11 @@ Checks:
   6. skill-mirrors - HOOK MODE ONLY: a skill that also ships from its own tool repo must
                     match that twin apart from the documented divergences. Local only,
                     because the twins are sibling repos that a CI clone does not have.
-                    Run `repo-gate.py --mirrors` to audit every pair, changed or not.
+                    The side being committed is read at its index (commit) or HEAD (push);
+                    the other side at its published ref plus what it committed since, so
+                    another session's uncommitted edit never decides a commit. Never fetches.
+                    Run `repo-gate.py --mirrors` to audit every pair, changed or not, at the
+                    newest text of both sides, with any ref last fetched over 7 days ago named.
   7. changelog    - BOTH MODES: the version plugin.json names must have a `## [version]`
                     CHANGELOG.md heading. Stated as an invariant rather than a diff, because a
                     diff against origin/master is inert in CI on a push (by then the bump IS
@@ -55,6 +59,7 @@ import os
 import re
 import subprocess
 import tempfile
+import time
 import traceback
 import xml.etree.ElementTree as ET
 import sys
@@ -860,9 +865,12 @@ def _changed_vs_origin(root):
     rc, _, _ = _git(root, "rev-parse", "--verify", "origin/master")
     if rc != 0:
         return None
+    # `diff origin/master` compares the WORKING TREE, so a staged change whose working copy was
+    # reverted afterwards was missing - yet that staged text is exactly what the commit carries.
     _, changed = _git_paths(root, "diff", "--name-only", "origin/master")
+    _, staged = _git_paths(root, "diff", "--cached", "--name-only", "origin/master")
     _, untracked = _git_paths(root, "ls-files", "--others", "--exclude-standard")
-    return changed + untracked
+    return list(dict.fromkeys(changed + staged + untracked))
 
 
 def _table_rows(lines, tool):
@@ -1238,7 +1246,9 @@ def _published_commit(directory):
 
 
 def _checked_out_bytes(directory, commit, rel):
-    """A file of ``commit`` exactly as a checkout here would write it (eol and filters applied)."""
+    """A file of ``commit`` exactly as a checkout here would write it (eol and filters applied).
+
+    ``commit`` "" names the INDEX (``:./rel``), which is what the next commit will carry."""
     try:
         out = subprocess.run(["git", "cat-file", "--filters", "%s:./%s" % (commit, rel)],
                              cwd=str(directory), capture_output=True)
@@ -1247,8 +1257,81 @@ def _checked_out_bytes(directory, commit, rel):
     return out.stdout if out.returncode == 0 else None
 
 
+#: What the commit and push gates read of the side being committed: the index on a commit, HEAD
+#: on a push (or `gh pr create`, which publishes HEAD).
+STAGE_INDEX, STAGE_HEAD = "index", "HEAD"
+
+
+def shipped_files(skill_dir, stage):
+    """Map every comparable file of a mirrored skill to the bytes a commit or push SHIPS.
+
+    The side being committed is judged by what its commit carries, never by its working tree: an
+    unstaged edit is not part of a commit, and a staged one is not part of a push until it is
+    committed (#111). ``stage`` is ``STAGE_INDEX`` or ``STAGE_HEAD``. Without git, or with nothing
+    to list (no commit yet), the working tree is all there is, and that is what is compared.
+    """
+    skill_dir = Path(skill_dir)
+    if stage == STAGE_INDEX:
+        commit, (rc, listed) = "", _git_paths(skill_dir, "ls-files", "--", ".")
+    else:
+        commit, (rc, listed) = "HEAD", _git_paths(skill_dir, "ls-tree", "-r", "--name-only", "HEAD", "--", ".")
+    if rc:
+        return _working_tree_files(skill_dir)
+    found = {}
+    for rel in dict.fromkeys(listed):            # an unmerged path is listed once per stage
+        if _mirror_ignored(rel):
+            continue
+        data = _checked_out_bytes(skill_dir, commit, rel)
+        if data is None:
+            return _working_tree_files(skill_dir)
+        found[rel] = data
+    return dict(sorted(found.items()))
+
+
+def _on_published(skill_dir, local_since, fallback):
+    """The published ref's files, each one the checkout changed since forking replaced by its local copy.
+
+    ``local_since(base)`` returns ``(paths, read)`` - the paths changed here since the fork point
+    ``base`` and a reader giving a path's local bytes, or None for a path that is gone - or None
+    when it cannot tell. Every failure to read git hands over to ``fallback()``.
+    """
+    skill_dir = Path(skill_dir)
+    published = _published_commit(skill_dir)
+    if published is None:
+        return fallback()
+    rc, base, _ = _git(skill_dir, "merge-base", "HEAD", published)
+    base = base.strip()
+    rc_up, upstream = _git_paths(skill_dir, "ls-tree", "-r", "--name-only", published, "--", ".")
+    local = local_since(base) if rc == 0 and base else None
+    if rc_up or local is None:
+        return fallback()
+    paths, read = local
+    found = {}
+    for rel in upstream:
+        if rel in paths or _mirror_ignored(rel):
+            continue
+        data = _checked_out_bytes(skill_dir, published, rel)
+        if data is None:
+            return fallback()
+        found[rel] = data
+    for rel in paths:
+        data = None if _mirror_ignored(rel) else read(rel)
+        if data is not None:
+            found[rel] = data
+    return dict(sorted(found.items()))
+
+
+def _changed_since(skill_dir, base, *upto):
+    # --no-renames: with rename detection on, a moved file lists only its NEW name, and the old one
+    # would be read back from the published ref as a file that still exists.
+    return _git_paths(skill_dir, "diff", "--name-only", "--relative", "--no-renames", base, *upto, "--", ".")
+
+
 def mirror_files(skill_dir):
     """Map every comparable file of a mirrored skill to its NEWEST bytes, by relative posix path.
+
+    The reading of the AUDITS (`--mirrors`, `--mirror-of`); the commit and push gates read
+    `shipped_files` and `published_files` instead.
 
     A checkout is not the newest text of anything it has not edited. Measured 2026-10-02: the main
     marketplace checkout sat 16 commits behind origin under another session's uncommitted work, and
@@ -1263,36 +1346,109 @@ def mirror_files(skill_dir):
     """
 
     skill_dir = Path(skill_dir)
-    published = _published_commit(skill_dir)
-    if published is None:
-        return _working_tree_files(skill_dir)
-    rc, base, _ = _git(skill_dir, "merge-base", "HEAD", published)
-    rc_up, upstream = _git_paths(skill_dir, "ls-tree", "-r", "--name-only", published, "--", ".")
-    # --no-renames: with rename detection on, a moved file lists only its NEW name, and the old one
-    # would be read back from the published ref as a file that still exists.
-    rc_ed, edited = _git_paths(skill_dir, "diff", "--name-only", "--relative", "--no-renames",
-                               base.strip(), "--", ".") if rc == 0 else (1, [])
-    rc_un, untracked = _git_paths(skill_dir, "ls-files", "--others", "--exclude-standard", "--", ".")
-    if rc or rc_up or rc_ed or rc_un or not base.strip():
-        return _working_tree_files(skill_dir)
 
-    local = set(edited) | set(untracked)
-    found = {}
-    for rel in upstream:
-        if rel in local or _mirror_ignored(rel):
+    def local_since(base):
+        rc_ed, edited = _changed_since(skill_dir, base)
+        rc_un, untracked = _git_paths(skill_dir, "ls-files", "--others", "--exclude-standard", "--", ".")
+        if rc_ed or rc_un:
+            return None
+        return set(edited) | set(untracked), lambda rel: (
+            (skill_dir / rel).read_bytes() if (skill_dir / rel).is_file() else None)
+
+    return _on_published(skill_dir, local_since, lambda: _working_tree_files(skill_dir))
+
+
+def published_files(skill_dir):
+    """Map every comparable file of a mirrored skill to what its repo has PUBLISHED or COMMITTED.
+
+    The reading of the side a commit or push is NOT being made in: its published ref, with every
+    file it committed since forking from that ref read from HEAD. Its uncommitted and untracked
+    files are ignored - they belong to another session's work in progress, which neither commit
+    ships. Measured as #84: a tool-repo commit was blocked as DRIFT by a marketplace edit nobody
+    had committed. With no published ref this is HEAD; without git, the working tree.
+    """
+
+    skill_dir = Path(skill_dir)
+
+    def local_since(base):
+        rc_ed, edited = _changed_since(skill_dir, base, "HEAD")
+        if rc_ed:
+            return None
+        return set(edited), lambda rel: _checked_out_bytes(skill_dir, "HEAD", rel)
+
+    return _on_published(skill_dir, local_since, lambda: shipped_files(skill_dir, STAGE_HEAD))
+
+
+#: A published ref last fetched longer ago than this is named beside the comparison that read it.
+STALE_REF_DAYS = 7
+
+
+def _clone_time(common):
+    """The clone's own timestamp from the first entry of `logs/HEAD`, or None."""
+    try:
+        first = (Path(common) / "logs" / "HEAD").read_text(encoding="utf-8", errors="replace").split("\n", 1)[0]
+        who, message = first.split("\t", 1)
+        return float(who.split()[-2]) if message.startswith("clone:") else None
+    except (OSError, ValueError, IndexError):
+        return None
+
+
+def ref_age_days(directory, now=None):
+    """Days since the repository holding `directory` last fetched its remote, or None if unknown.
+
+    FETCH_HEAD is rewritten by every fetch and pull, a no-op one included, so its mtime is the last
+    fetch. It is per-worktree: a fetch run from a linked worktree writes `worktrees/<name>/FETCH_HEAD`
+    and leaves the common one alone, so the newest of all of them is the answer. A clone writes no
+    FETCH_HEAD; its `logs/HEAD` clone entry dates the refs instead. Probed on git 2.x, 2026-10-05.
+    """
+    rc, out, _ = _git(directory, "rev-parse", "--git-common-dir")
+    if rc or not out.strip():
+        return None
+    common = Path(out.strip())
+    if not common.is_absolute():
+        common = Path(directory) / common
+    stamps = []
+    for candidate in [common / "FETCH_HEAD", *sorted((common / "worktrees").glob("*/FETCH_HEAD"))]:
+        try:
+            stamps.append(candidate.stat().st_mtime)
+        except OSError:
             continue
-        data = _checked_out_bytes(skill_dir, published, rel)
-        if data is None:
-            return _working_tree_files(skill_dir)
-        found[rel] = data
-    for rel in local:
-        path = skill_dir / rel
-        if path.is_file() and not _mirror_ignored(rel):
-            found[rel] = path.read_bytes()
-    return dict(sorted(found.items()))
+    if not stamps:
+        stamps = [stamp for stamp in [_clone_time(common)] if stamp is not None]
+    if not stamps:
+        return None
+    return max(0.0, ((time.time() if now is None else now) - max(stamps)) / 86400)
 
 
-def mirror_failures(root, names):
+def stale_ref_notes(directories):
+    """One line per directory whose published ref was last fetched over STALE_REF_DAYS ago.
+
+    Read-only by design: the gates never fetch (a network call inside a commit hook), so the most
+    they can do is say how old the text they compared against is."""
+    notes = []
+    for directory in directories:
+        age = ref_age_days(directory)
+        if age is not None and age > STALE_REF_DAYS:
+            notes.append("note: the published ref of %s was last fetched %.1f days ago - it may be "
+                         "behind its origin; refresh it with a fetch in that repo and compare again."
+                         % (directory, age))
+    return notes
+
+
+def _mirror_readers(committing, stage):
+    """(marketplace reader, twin reader, sides whose published ref is read) for one comparison."""
+    if committing is None:
+        return mirror_files, mirror_files, ("marketplace", "twin")
+
+    def shipped(skill_dir):
+        return shipped_files(skill_dir, stage)
+
+    if committing == "marketplace":
+        return shipped, published_files, ("twin",)
+    return published_files, shipped, ("marketplace",)
+
+
+def mirror_failures(root, names, committing=None, stage=STAGE_INDEX):
     """Return a failure per mirrored skill in ``names`` whose twin has drifted.
 
     A mirrored skill is a DIRECTORY. Several pairs ship `references/` and `scripts/` beside their
@@ -1303,12 +1459,22 @@ def mirror_failures(root, names):
     `SKILL.md` is compared through `normalise_mirror`, which erases the three by-convention
     divergences. Every other file must match byte for byte: nothing about them is per-repo.
 
-    Each side is read at its newest text (`mirror_files`), never at whatever a checkout holds.
+    How each side is read depends on who asks. ``committing`` None is an AUDIT: both sides at
+    their newest text (`mirror_files`). A GATE names the side being committed ("marketplace" or
+    "twin"): that side is read at what it ships (`shipped_files` at ``stage``, the index or HEAD)
+    and the other at what it published or committed (`published_files`), so neither another
+    session's uncommitted edit nor this repo's unstaged one decides a commit. A side with nothing
+    to compare - not checked out, or nothing committed - is skipped, as the audit reports.
+
+    A drift message names every side read from a published ref that was last fetched over
+    STALE_REF_DAYS ago (`stale_ref_notes`): stale text is the likeliest false drift, and the
+    gates never fetch.
     """
 
     public = _public_tree(root)
     if public is None:
         return []
+    read_here, read_twin, from_published = _mirror_readers(committing, stage)
     fails = []
     for name in sorted(names):
         relative = MIRRORED_SKILLS.get(name)
@@ -1320,7 +1486,9 @@ def mirror_failures(root, names):
             # The tool repo is not checked out on this machine, so there is nothing to
             # compare against. Silence is right: the audit mode reports the skip.
             continue
-        mine_files, their_files = mirror_files(here_dir), mirror_files(twin_dir)
+        mine_files, their_files = read_here(here_dir), read_twin(twin_dir)
+        if not mine_files or not their_files:
+            continue  # nothing committed on one side yet: no text either commit could ship
         differing, sample = [], []
         for rel in sorted(set(mine_files) | set(their_files)):
             mine, theirs = mine_files.get(rel), their_files.get(rel)
@@ -1342,29 +1510,47 @@ def mirror_failures(root, names):
         if not differing:
             continue
         detail = "\n      ".join(sample[:6]) if sample else "\n      ".join(differing[:6])
+        dirs = {"marketplace": here_dir, "twin": twin_dir}
+        notes = stale_ref_notes([dirs[side] for side in from_published])
+        between = "\n    %s\n    " % "\n    ".join(notes) if notes else " "
         fails.append(
             "skills/%s has drifted from its twin at %s (%d differing file(s): %s). Regenerate the "
             "stale side from the other, re-apply only the three divergences (the `name:` line, a "
             "trailing `(<name>)` on the H1 - the H1 text before it must match - and the "
-            "self-install blockquote), and bump that repo's plugin.json. First lines:\n      %s"
-            % (name, relative, len(differing), ", ".join(differing[:6]), detail)
+            "self-install blockquote), and bump that repo's plugin.json.%sFirst lines:\n      %s"
+            % (name, relative, len(differing), ", ".join(differing[:6]), between, detail)
         )
     return fails
 
 
-def check_skill_mirrors(root):
+def check_skill_mirrors(root, stage=STAGE_INDEX):
     """Gate the mirrored twin of every skill this change touches.
 
     Scoped to what changed, like the review and description checks: pre-existing drift in
     a skill nobody is editing must not block an unrelated commit, and the maintainer has
-    ``--mirrors`` for the full sweep.
+    ``--mirrors`` for the full sweep. The marketplace is the side being committed, read at
+    ``stage`` (the index on a commit, HEAD on a push); the twin at what its repo committed.
     """
 
     changed = _changed_vs_origin(root)
     if changed is None:
         return []
     touched = {m.group(1) for m in (_SKILL_MD_RX.match(p) for p in changed) if m}
-    return mirror_failures(root, touched & set(MIRRORED_SKILLS))
+    return mirror_failures(root, touched & set(MIRRORED_SKILLS), committing="marketplace", stage=stage)
+
+
+def mirror_stage(command, tool_name=None):
+    """What a gated command ships of the repo it runs in: the index for a commit, else HEAD.
+
+    A command that commits anywhere commits the index first, and any push after it in the same
+    command pushes that commit, so one `git commit` statement decides. A push or `gh pr create`
+    alone publishes HEAD. Segmented exactly like `shell_text.is_gated_command`, heredoc bodies
+    dropped, so a commit named as DATA does not count."""
+    for _at, seg in shell_text.iter_segments(shell_text.strip_heredoc_bodies(command or ""), tool_name):
+        seg = seg.strip().lstrip("(").strip()
+        if shell_text.is_git_verb(seg, {"commit"}, tool_name or "Bash"):
+            return STAGE_INDEX
+    return STAGE_HEAD
 
 
 def _marketplace_checkout(public):
@@ -1409,6 +1595,8 @@ def audit_mirror_of(tool_repo):
     fails = mirror_failures(marketplace, set(mine))
     for name in mine:
         print("%-8s%-34s %s" % ("DRIFT" if any(name in f for f in fails) else "in sync", name, MIRRORED_SKILLS[name]))
+    for note in stale_ref_notes([marketplace, tool]):
+        print(note)
     for failure in fails:
         print("\n" + failure)
     return 1 if fails else 0
@@ -1425,6 +1613,8 @@ def audit_mirrors(root):
         print("no public/ tree above %s - nothing to compare" % root)
         return 0
     drifted = 0
+    for note in stale_ref_notes([root]):
+        print(note)
     for name in sorted(MIRRORED_SKILLS):
         relative = MIRRORED_SKILLS[name]
         twin = public / relative / "SKILL.md"
@@ -1438,6 +1628,8 @@ def audit_mirrors(root):
             print("        " + fails[0].split("First lines:\n")[-1].strip()[:400])
         else:
             print("in sync %-34s %s" % (name, relative))
+        for note in stale_ref_notes([twin.parent]):
+            print("        " + note)
     unlisted = unlisted_mirrors(root, public)
     for pair in unlisted:
         print("UNLISTED %-33s %s" % pair)
@@ -1483,11 +1675,12 @@ def unlisted_mirrors(root, public):
     return found
 
 
-def run_checks(root, ci, full_pytest=None, run_pytest=True, baseline=0):
+def run_checks(root, ci, full_pytest=None, run_pytest=True, baseline=0, mirror_at=STAGE_INDEX):
     """`ci` picks the CHECK SET (CI omits the maintainer-only ones); `full_pytest` picks the pytest
     SCOPE and defaults to `ci`. They are separate axes because a pre-push is BOTH: the maintainer
     (so version-bump, skill-review and mirrors apply) and the last gate before CI (so it runs the
-    whole suite CI runs, not just hooks/tests)."""
+    whole suite CI runs, not just hooks/tests). `mirror_at` is what the commit or push ships of the
+    marketplace (`mirror_stage`): the index on a commit, HEAD on a push."""
     if full_pytest is None:
         full_pytest = ci
     failures = []
@@ -1516,7 +1709,7 @@ def run_checks(root, ci, full_pytest=None, run_pytest=True, baseline=0):
         failures += check_version_bumped(root)
         failures += check_ragged_tables(root)
         failures += check_skill_review(root)
-        failures += check_skill_mirrors(root)
+        failures += check_skill_mirrors(root, stage=mirror_at)
     # Preflight the dependencies, and run pytest only when they are all there. Running it anyway
     # would report the SAME problem a second time as a failed assertion in an unrelated test,
     # and that second message is the one a reader acts on.
@@ -1530,7 +1723,7 @@ def run_checks(root, ci, full_pytest=None, run_pytest=True, baseline=0):
     return failures
 
 
-def gate_tool_repo_mirror(root):
+def gate_tool_repo_mirror(root, stage=STAGE_INDEX):
     """Check the mirror of a skill edited in its OWN repo, before it is committed or pushed.
 
     `main` has already read the event and confirmed it is a gated command, and `root` is the
@@ -1541,6 +1734,10 @@ def gate_tool_repo_mirror(root):
     mirrored pair unguarded, which is the side that actually drifted: measured twice on
     ``coding-python-network-probe``, which described a subsystem as absent two releases
     after it shipped.
+
+    The tool repo is the side being committed, read at ``stage`` (its index on a commit, HEAD on
+    a push); the marketplace at what it published or committed, never another session's
+    uncommitted edit there (#84).
 
     Returns 2 to block a drifted pair, 0 otherwise. Silent when this repo owns no
     mirrored skill, so it does not narrate in every unrelated repo.
@@ -1568,7 +1765,7 @@ def gate_tool_repo_mirror(root):
         _say_unverifiable(mine, marketplace)
         return 0
 
-    fails = mirror_failures(marketplace, set(mine))
+    fails = mirror_failures(marketplace, set(mine), committing="twin", stage=stage)
     if not fails:
         return 0
     # All of it on STDERR: on a PreToolUse exit 2 that is what the model is shown, and stdout is
@@ -1652,6 +1849,8 @@ def main():
         return audit_mirror_of(target)
 
     hook_mode = not (ci or pre_push or mirrors)
+    # A git pre-push hook pushes commits, so it reads HEAD; hook mode reads what its command ships.
+    stage = STAGE_HEAD
     if hook_mode:
         # A real git pre-push hook receives REF LINES on stdin, never a Claude Code event, so only
         # hook mode parses it - read that way, a pre-push would fail the parse and pass by accident
@@ -1661,9 +1860,11 @@ def main():
             event = json.load(sys.stdin)
         except Exception:  # noqa: BLE001
             return 0
-        if not is_gated_command((event.get("tool_input") or {}).get("command") or "", event.get("tool_name")):
+        command = (event.get("tool_input") or {}).get("command") or ""
+        if not is_gated_command(command, event.get("tool_name")):
             return 0
         root = hook_root(event)
+        stage = mirror_stage(command, event.get("tool_name"))
     else:
         root = repo_root()
     if root is None or not is_bitranox_skills(root):
@@ -1679,7 +1880,7 @@ def main():
         # Hook mode outside the marketplace. Not "never interfere" any more: if THIS repo
         # ships a skill mirrored into the marketplace, the pair is checked from this side
         # too. Everything else still passes untouched.
-        return gate_tool_repo_mirror(root)
+        return gate_tool_repo_mirror(root, stage)
 
     if mirrors:
         # The full sweep the commit gate deliberately does not do: it reports every pair,
@@ -1687,7 +1888,7 @@ def main():
         return 1 if audit_mirrors(root) else 0
 
     failures = run_checks(root, ci, full_pytest=ci or pre_push,
-                          run_pytest=run_pytest, baseline=expected_collected(root))
+                          run_pytest=run_pytest, baseline=expected_collected(root), mirror_at=stage)
 
     if not failures:
         if ci or pre_push:
