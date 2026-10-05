@@ -39,10 +39,13 @@ The engine is this plugin's own (`hooks/memory_engine.py` beside this skill) unl
 $BITRANOX_MEMORY_ENGINE names another; only a copy of this file outside the plugin falls back to
 the newest installed engine.
 
-Run (from the plugin root, via the launcher that forces UTF-8):
-  `bash hooks/run-python.sh skills/meta-dream-tree/factedit.py show --slug <slug> --from <dir>`
-  `bash hooks/run-python.sh skills/meta-dream-tree/factedit.py check --hook-file draft.txt`
-  `bash hooks/run-python.sh skills/meta-dream-tree/factedit.py apply --slug <slug> --from <dir> --hook-file new.txt --dry-run`
+Run (from the plugin root):
+  `uv run skills/meta-dream-tree/factedit.py show --slug <slug> --from <dir>`
+  `uv run skills/meta-dream-tree/factedit.py check --hook-file draft.txt`
+  `uv run skills/meta-dream-tree/factedit.py apply --slug <slug> --from <dir> --hook-file new.txt --dry-run`
+`default_python` picks a real, non-ephemeral interpreter to launch the engine with even when THIS
+script itself is run under `uv run` (see below), and the plugin's run-python.sh launcher, which
+the dream passes use, works identically.
 
 Exit codes: 0 = yes (found / would be accepted / applied), 1 = no (no such fact / the engine
 refuses this hook / the engine refused the write with its own exit 1), 2 = error (no engine, an

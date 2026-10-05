@@ -36,6 +36,13 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "hooks"))
 import memory_engine as ME  # noqa: E402
 import uuid_store  # noqa: E402 - the engine's pointer parser, so a level holds what the engine reads
 
+# reconcile_memory_index is this script's sibling in meta-self-improve/ (same dir, already on
+# sys.path when this runs as a script or under its own conftest): its `_store_bodies` is the one
+# place that enumerates BOTH body layouts (flat `facts/<slug>.md` and pre-pivot sharded
+# `facts/<shard>/<uuid>.md`), already shared internally by find_dangling_bodies and
+# find_frame_only_bodies, so this does not re-derive the sharded-directory rule a third time.
+import reconcile_memory_index as _rmi  # noqa: E402
+
 REF_RX = re.compile(r"\[\[([^\]]+)\]\]")
 
 
@@ -75,13 +82,25 @@ def read_refs(root: Path, hooks=None) -> tuple[dict[str, list[str]], dict[str, l
     the hook (the body's copy edited away) is still an edge. Raises the engine's TreeWalkError on
     a body that cannot be read or is not UTF-8, the same rule the engine's own inbound scan applies:
     dropping it reported a real inbound edge as absent, which is the answer that permits a move, and
-    replacing its bad bytes could cut a ref in half."""
+    replacing its bad bytes could cut a ref in half.
+
+    Also scans pre-pivot SHARDED bodies (`facts/<shard>/<uuid>.md`): the engine's own
+    `inbound_ref_sources` (what `move` is refused on) reads a legacy pointer's body via
+    `legacy_body_path`, so a ref sitting only in such a body's text is a real inbound edge - listing
+    only `facts/*.md` made it invisible here while the engine still enforced it. A sharded body
+    carries no slug of its own (legacy pointers are uuid-keyed), so it is keyed by the same
+    `<shard>/<uuid>` pseudo-source `find_dangling_bodies` reports it as: it can be an OUTBOUND
+    source but is never a valid `--root`-queried slug or ref TARGET."""
     hooks = read_hooks(root) if hooks is None else hooks
     texts = dict(hooks)
     facts = root / ".claude-memory" / "facts"
-    for body in sorted(facts.glob("*.md")):
-        source = canon(body.stem)
-        texts[source] = "%s\n%s" % (texts.get(source, ""), ME.read_store_text(body))
+    flat, sharded = _rmi._store_bodies(facts)  # noqa: SLF001 - the one body-enumeration helper
+    for slug in sorted(flat):
+        source = canon(slug)
+        texts[source] = "%s\n%s" % (texts.get(source, ""), ME.read_store_text(facts / (slug + ".md")))
+    for rel in sorted(sharded.values()):
+        source = canon(rel)
+        texts[source] = "%s\n%s" % (texts.get(source, ""), ME.read_store_text(facts / (rel + ".md")))
     outbound: dict[str, list[str]] = {}
     inbound: dict[str, list[str]] = {}
     for source in sorted(texts):

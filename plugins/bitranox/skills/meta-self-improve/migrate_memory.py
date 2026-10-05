@@ -271,8 +271,7 @@ def _is_own_placement(stored, slug, entry):
 # ---- receipts (idempotency + resume) -----------------------------------------------------------
 
 def _receipt_path(proj):
-    import re as _re
-    stem = _re.sub(r"[^A-Za-z0-9]+", "-", str(proj)).strip("-")
+    stem = re.sub(r"[^A-Za-z0-9]+", "-", str(proj)).strip("-")
     return sig.curated_state_dir(proj) / "migration-receipts" / (stem + ".json")
 
 
@@ -335,19 +334,27 @@ def ensure_gitignore(proj):
             return "WARNING: %s is TRACKED (possible existing leak) - not modifying .gitignore" % store
     gi = root / ".gitignore"
     try:
-        cur = gi.read_text(encoding="utf-8") if gi.is_file() else ""
+        raw = gi.read_bytes() if gi.is_file() else b""
+        # read_bytes/write_bytes do no newline translation at all, unlike the platform-dependent
+        # read_text/write_text pair this replaces, which silently mangled a Windows-authored
+        # file's CRLF line endings into the host's own os.linesep on the way through. A file whose
+        # bytes are not valid UTF-8 is still left exactly alone (OSError/UnicodeDecodeError both
+        # land on "gitignore write failed" below), the same refusal as before.
+        nl = "\r\n" if b"\r\n" in raw else "\n"
+        cur = raw.decode("utf-8").replace("\r\n", "\n")
         have = set(cur.splitlines())
         wanted = [sig.MEMORY_DIRNAME + "/", sig.CURATED_DIRNAME + "/", "CLAUDE.local.md"]
         add = [w for w in wanted if w not in have and w.rstrip("/") not in have]
         if not add:
             return "already ignored"
-        gi.write_text((cur.rstrip("\n") + "\n" if cur.strip() else "")
-                      + "# bitranox curated self-learning memory (local wiring; engine-written)\n"
-                      + "\n".join(add) + "\n", encoding="utf-8")
+        new_text = ((cur.rstrip("\n") + "\n" if cur.strip() else "")
+                   + "# bitranox curated self-learning memory (local wiring; engine-written)\n"
+                   + "\n".join(add) + "\n")
+        if nl == "\r\n":
+            new_text = new_text.replace("\n", "\r\n")
+        gi.write_bytes(new_text.encode("utf-8"))
         return "gitignored"
     except (OSError, UnicodeDecodeError):
-        # A .gitignore that is not UTF-8 is left as it is: rewriting it would need its bytes
-        # decoded, and an uncaught decode error ended the run after the backup, unnamed.
         return "gitignore write failed"
 
 
@@ -683,34 +690,40 @@ def main(argv=None):
     incomplete = False
     print("%s %d store(s)%s" % ("DRY-RUN over" if dry else "MIGRATING", len(slugs),
                                 "" if dry else " (writing)"))
-    for slug in slugs:
-        rep = migrate_store(slug, dry_run=dry, redirect=redirects.get(slug), backup_run=run)
-        total_in += rep["in"]
-        total_placed += rep["placed"]
-        if rep["excluded"]:
-            total_excluded += rep["in"]
-            if rep["in"]:
-                print("  - excluded (transient/home): %s -> %s (%d entries skipped)"
-                      % (slug, rep["resolved"], rep["in"]))
-        elif rep["parked"]:
-            total_parked += rep["in"]
-            parked.append(slug)
-            print("  ! PARKED (unresolved): %s (%d entries)" % (slug, rep["in"]))
-        elif rep["in"] or rep["redirected"]:            # suppress 0-entry no-op noise
-            print("  %s%s -> %s : in=%d %s=%d skip=%d"
-                  % ("[redirect] " if rep["redirected"] else "", slug, rep["resolved"], rep["in"],
-                     "would-place" if dry else "placed", rep["placed"], rep["skipped"]))
-        incomplete |= _report_store_problems(rep)
-        total_failed += len(rep["failed"])
-    print("TOTAL in=%d %s=%d parked=%d excluded=%d failed=%d "
-          "(in == placed+skipped+parked+excluded+failed)"
-          % (total_in, "would-place" if dry else "placed", total_placed, total_parked,
-             total_excluded, total_failed))
-    if parked:
-        print("PARKED slugs (redirect with --redirect=<slug>=<path>, or resolve manually): %s"
-              % ", ".join(parked))
-    if run.dir is not None:
-        print("BACKUP of everything written: %s (undo with --restore %s)" % (run.dir, run.dir))
+    try:
+        for slug in slugs:
+            rep = migrate_store(slug, dry_run=dry, redirect=redirects.get(slug), backup_run=run)
+            total_in += rep["in"]
+            total_placed += rep["placed"]
+            if rep["excluded"]:
+                total_excluded += rep["in"]
+                if rep["in"]:
+                    print("  - excluded (transient/home): %s -> %s (%d entries skipped)"
+                          % (slug, rep["resolved"], rep["in"]))
+            elif rep["parked"]:
+                total_parked += rep["in"]
+                parked.append(slug)
+                print("  ! PARKED (unresolved): %s (%d entries)" % (slug, rep["in"]))
+            elif rep["in"] or rep["redirected"]:         # suppress 0-entry no-op noise
+                print("  %s%s -> %s : in=%d %s=%d skip=%d"
+                      % ("[redirect] " if rep["redirected"] else "", slug, rep["resolved"], rep["in"],
+                         "would-place" if dry else "placed", rep["placed"], rep["skipped"]))
+            incomplete |= _report_store_problems(rep)
+            total_failed += len(rep["failed"])
+        print("TOTAL in=%d %s=%d parked=%d excluded=%d failed=%d "
+              "(in == placed+skipped+parked+excluded+failed)"
+              % (total_in, "would-place" if dry else "placed", total_placed, total_parked,
+                 total_excluded, total_failed))
+        if parked:
+            print("PARKED slugs (redirect with --redirect=<slug>=<path>, or resolve manually): %s"
+                  % ", ".join(parked))
+    finally:
+        # A bug in migrate_store (or a future exception type it does not special-case) must not
+        # swallow this line: BackupRun's manifest is restorable as soon as anything is copied, so
+        # an exception that skips straight past the normal end-of-run print would otherwise strand
+        # an operator who has no idea an undo dir even exists.
+        if run.dir is not None:
+            print("BACKUP of everything written: %s (undo with --restore %s)" % (run.dir, run.dir))
     return 1 if (parked or incomplete) else 0
 
 

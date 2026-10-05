@@ -650,6 +650,10 @@ def find_frame_only_bodies(anchor, unreadable=None):
     promises a rule and the walk-up retrieval it advertises delivers an empty file. The engine now
     refuses to create one, but stores written before that still carry them.
 
+    Checks both layouts via `_store_bodies` (the same helper `find_dangling_bodies` uses): a flat
+    body is reported by its slug, a pre-pivot sharded body as `<shard>/<uuid>` - listing only
+    `facts/*.md` left every sharded body out, frame-only or not.
+
     A body that cannot be read or is not UTF-8 raises `TreeWalkError`, unless `unreadable` is a
     list, which then receives its path: skipping it in silence reported it as not frame-only."""
     anchor = Path(anchor)
@@ -657,7 +661,10 @@ def find_frame_only_bodies(anchor, unreadable=None):
     facts = us.central_facts_dir(anchor)
     if not facts.is_dir():
         return out
-    for p in sorted(facts.glob("*.md")):
+    flat, sharded = _store_bodies(facts, unreadable)
+    items = sorted((facts / (slug + ".md"), slug) for slug in flat)
+    items += sorted((facts / (rel + ".md"), rel) for rel in sharded.values())
+    for p, name in items:
         try:
             raw = ME.read_store_text(p)
         except ME.TreeWalkError as exc:
@@ -666,7 +673,7 @@ def find_frame_only_bodies(anchor, unreadable=None):
             unreadable.append(exc.path)
             continue
         if not _content_after_frontmatter(raw).strip():
-            out.append(p.stem)
+            out.append(name)
     return out
 
 

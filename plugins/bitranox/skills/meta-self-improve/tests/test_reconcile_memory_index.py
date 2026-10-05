@@ -461,6 +461,40 @@ def test_check_tree_does_not_flag_a_real_body(tmp_path):
     assert slug
 
 
+def test_find_frame_only_bodies_sees_a_pre_pivot_sharded_body(tmp_path):
+    """A pre-pivot sharded body (`facts/<shard>/<uuid>.md`) that is frame-only must be reported
+    too - listing only `facts/*.md` left every sharded body out, frame-only or not, exactly the
+    gap `find_dangling_bodies` was already fixed for via `_store_bodies`."""
+    proj = tmp_path / "proj"
+    proj.mkdir()
+    anchor = Path(ME._anchor(str(proj)))  # noqa: SLF001 - test needs the real anchor path
+    fact_uuid = "ab123456-0000-0000-0000-000000000001"
+    sharded_dir = us.central_facts_dir(anchor) / us.shard(fact_uuid)
+    sharded_dir.mkdir(parents=True, exist_ok=True)
+    (sharded_dir / (fact_uuid + ".md")).write_text(
+        "---\nname: legacy-fact\ndescription: a legacy hook\nmetadata:\n  type: reference\n---\n",
+        encoding="utf-8")
+    rep = R.check_tree(str(proj))
+    assert "%s/%s" % (us.shard(fact_uuid), fact_uuid) in rep["frame_only_bodies"]
+
+
+def test_find_frame_only_bodies_does_not_flag_a_real_sharded_body(tmp_path):
+    """Control: a pre-pivot sharded body with real prose must not be reported - catches a path
+    construction bug (e.g. a missing `.md` suffix) that would read every sharded body as the
+    empty string and flag it as frame-only for the wrong reason."""
+    proj = tmp_path / "proj"
+    proj.mkdir()
+    anchor = Path(ME._anchor(str(proj)))  # noqa: SLF001 - test needs the real anchor path
+    fact_uuid = "ef654321-0000-0000-0000-000000000003"
+    sharded_dir = us.central_facts_dir(anchor) / us.shard(fact_uuid)
+    sharded_dir.mkdir(parents=True, exist_ok=True)
+    (sharded_dir / (fact_uuid + ".md")).write_text(
+        "---\nname: legacy-fact-2\ndescription: a legacy hook\nmetadata:\n  type: reference\n"
+        "---\nReal prose, not frame-only.\n", encoding="utf-8")
+    rep = R.check_tree(str(proj))
+    assert "%s/%s" % (us.shard(fact_uuid), fact_uuid) not in rep["frame_only_bodies"]
+
+
 # --- the chain's altitude must not come from argv order ----------------------------------------
 # Altitude was read from list POSITION with no validation, so the identical store answered
 # differently depending on the order the caller happened to type the levels in.

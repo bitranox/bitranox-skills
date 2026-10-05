@@ -134,31 +134,26 @@ def _config_problem():
 
     `load_config` falls back to the defaults on a corrupt file, which is right for a hook but
     wrong here: `view` then showed defaults the user never chose, and the next `set` wrote those
-    defaults over every choice the damaged file still held."""
-    import json as _json
+    defaults over every choice the damaged file still held.
+
+    Delegates the read/decode/parse/classify work to `sig._read_config_file` - THE one reader
+    `load_config` and `save_config` already agree on - so this CLI's refusal and the hooks'
+    fallback-to-defaults can never silently diverge on what "unusable" means; only the richer,
+    CLI-facing guidance text is built here."""
     p = sig._config_path()
-    try:
-        text = p.read_text(encoding="utf-8-sig")
-    except (FileNotFoundError, NotADirectoryError):   # no config can exist there: nothing to protect
+    _raw, problem = sig._read_config_file()
+    if problem is None:
         return None
-    except OSError as exc:
-        return "cannot read %s: %s" % (p, exc)
-    except UnicodeDecodeError as exc:
+    if problem.startswith("cannot read "):
+        return problem
+    if "not UTF-8 text" in problem:
         # Decoded exactly as load_config decodes it, so "readable" means the same thing on both
         # sides: a file the hooks read as the defaults is one this CLI refuses, never one it shows
         # as the defaults or overwrites with them. A UTF-16 file lands here too.
-        return ("%s is not UTF-8 text (%s); re-save it as UTF-8, or delete the file to start "
-                "from the defaults" % (p, exc))
-    try:
-        parsed = _json.loads(text)
-    except ValueError as exc:
-        parsed, why = None, str(exc)
-    else:
-        why = "the top level is %s, not an object" % type(parsed).__name__
-    if isinstance(parsed, dict):
-        return None
+        return ("%s is not UTF-8 text; re-save it as UTF-8, or delete the file to start "
+                "from the defaults" % p)
     return ("%s is not a valid config (%s); fix the JSON by hand, or delete the file to start "
-            "from the defaults" % (p, why))
+            "from the defaults" % (p, problem))
 
 
 def _save_and_print(updates):

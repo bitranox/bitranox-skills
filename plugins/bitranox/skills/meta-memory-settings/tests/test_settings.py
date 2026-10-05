@@ -262,6 +262,27 @@ def test_a_utf8_config_holding_non_ascii_text_is_still_read(home, capsys):
         ("off", "eager", ["/data/M\u00fcller"])
 
 
+# ---- _config_problem delegates its read/classify logic to sig._read_config_file ---------------
+# A hand-rolled second copy of that classification only agrees with the hooks' `load_config`/
+# `save_config` by coincidence; a change to what "unusable" means in self_improve_signals would
+# silently stop applying here. These prove delegation, not merely that the output still looks
+# right: they monkeypatch the ONE function a delegating implementation would have to call.
+
+def test_config_problem_reflects_whatever_sig_read_config_file_reports(monkeypatch):
+    monkeypatch.setattr(ST.sig, "_read_config_file",
+                        lambda: (None, "/fake/path is not UTF-8 text (fake reason)"))
+    problem = ST._config_problem()
+    assert problem is not None and "UTF-8" in problem
+
+
+def test_config_problem_is_none_when_sig_reports_no_problem(monkeypatch, home):
+    """Control: with no problem reported, _config_problem must not independently invent one -
+    proves the real file on disk is not what decides the answer once delegation is in place."""
+    (home / ".claude" / ".bitranox-memory.json").write_text("not even json", encoding="utf-8")
+    monkeypatch.setattr(ST.sig, "_read_config_file", lambda: ({}, None))
+    assert ST._config_problem() is None
+
+
 # ---- leftover arguments are refused, never silently ignored ------------------------------------
 
 @pytest.mark.parametrize("argv", [

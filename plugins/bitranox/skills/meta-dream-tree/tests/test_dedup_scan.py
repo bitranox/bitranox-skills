@@ -325,14 +325,16 @@ CONTENT = ["alpha", "bravo", "charlie", "delta", "echo", "foxtrot", "golf", "hot
            "sierra", "tango", "uniform", "victor", "whiskey", "xray"]
 
 
-@pytest.mark.parametrize("n_content", range(2, len(CONTENT) + 1))
+@pytest.mark.parametrize("n_content", range(1, len(CONTENT) + 1))
 @pytest.mark.parametrize("filler", ["", "the", "and the of"])
 def test_the_control_fires_for_every_content_length_and_stopword_density(n_content, filler):
     """The plant's size decision must be made on the words the scorer SEES. Pinned across every
-    length either side of the short/long switch, bare and with stopwords between the words.
-
-    From two content words up: the pair index links two facts only when they share two words,
-    so a longest fact of ONE content word cannot be paired with anything, its plant included.
+    length either side of the short/long switch, bare and with stopwords between the words,
+    including a single content word: `run` scores the (source, planted) control pair DIRECTLY
+    rather than through `_candidate_pairs`' shared-token index (a performance heuristic for real
+    pairs, requiring >= 2 shared rare tokens), so the self-check no longer depends on that index
+    at all - a longest fact of ONE content word used to leave the control pair unindexed and the
+    run reported an instrument failure though the scorer itself worked fine.
     The other fact has no content word at all, so the longest fact is always the one built."""
     text = " ".join(f"{w} {filler}".strip() for w in CONTENT[:n_content])
     result = DS.run(facts(("x", text), ("y", "ok")), threshold=0.5)
