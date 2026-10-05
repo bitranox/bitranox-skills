@@ -254,3 +254,38 @@ def test_an_unexpected_error_exits_2_not_the_absent_code(tmp_path, monkeypatch, 
     rc = cc.main([str(f), "--pattern", "needle", "--control", "alpha"])
     assert rc == 2
     assert "No space left" in capsys.readouterr().err
+
+
+# ---- wave D: unified exit codes and the D2 envelope ---------------------------------------------
+
+
+def test_absent_is_exit_1_with_ok_true(tmp_path):
+    """ok means "ran without error": ABSENT is a real answer (exit 1), so ok is true."""
+    f = _write(tmp_path, "a.md", "alpha\n")
+    r = _run([str(f), "--pattern", "nope", "--control", "alpha", "--json"])
+    assert r.returncode == 1
+    payload = json.loads(r.stdout)
+    assert payload["ok"] is True and payload["data"]["verdict"] == "ABSENT"
+
+
+def test_an_argparse_error_under_json_prints_the_envelope(tmp_path):
+    f = _write(tmp_path, "a.md", "alpha\n")
+    r = _run([str(f), "--pattern", "x", "--json"])          # --control missing
+    assert r.returncode == 2
+    payload = json.loads(r.stdout)
+    assert payload["ok"] is False and payload["command"] == "claim_check"
+    assert "--control" in payload["error"]
+
+
+def test_a_crash_under_json_is_exit_2_with_an_envelope(tmp_path, monkeypatch, capsys):
+    def boom(*_a, **_k):
+        raise RuntimeError("checker broke")
+    monkeypatch.setattr(cc, "check", boom)
+    f = _write(tmp_path, "a.md", "alpha\n")
+    rc = cc.main([str(f), "--pattern", "x", "--control", "alpha", "--json"])
+    cap = capsys.readouterr()
+    assert rc == 2
+    payload = json.loads(cap.out)
+    assert payload["ok"] is False and "checker broke" in payload["error"]
+    assert "BROKEN" in cap.err
+

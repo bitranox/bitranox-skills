@@ -28,17 +28,19 @@ Verdicts and exit codes (format-independent):
   ABSENT   1   the pattern did not match AND the control did, and every path was read
   BROKEN   2   the control missed, a path could not be read and nothing matched, the regex is
                invalid, or the tool itself failed - answer withheld
+Under --json the envelope {ok, command, data, skipped} is printed on every exit, a usage error and
+a crash included; `ok` is false only on exit 2 (BROKEN), so ABSENT is ok with exit 1.
 
 Run: uv run scripts/claim_check.py FILE... --pattern REGEX --control REGEX [--json] [--case-sensitive]
      uv run scripts/claim_check.py skills/*/SKILL.md --pattern 'LC_ALL=C' --control 'git'
 """
 from __future__ import annotations
 
-import argparse
-import json
 import re
 import sys
 from pathlib import Path
+
+from _cli_envelope import EnvelopeArgumentParser, emit, wants_json
 
 PRESENT, ABSENT, BROKEN = "PRESENT", "ABSENT", "BROKEN"
 _EXIT = {PRESENT: 0, ABSENT: 1, BROKEN: 2}
@@ -161,12 +163,20 @@ def main(argv=None) -> int:
     try:
         return _main(argv)
     except Exception as exc:  # noqa: BLE001 - a crash must not read as a verdict
-        print("claim_check: BROKEN: %s: %s" % (type(exc).__name__, exc), file=sys.stderr)
+        message = "%s: %s" % (type(exc).__name__, exc)
+        if wants_json(argv):
+            try:
+                emit(_EXIT[BROKEN], "claim_check", {"verdict": BROKEN, "reason": message},
+                     error=message, indent=1)
+            except OSError:  # the stdout that just failed may fail again; stderr still says why
+                pass
+        print("claim_check: BROKEN: %s" % message, file=sys.stderr)
         return _EXIT[BROKEN]
 
 
 def _main(argv) -> int:
-    ap = argparse.ArgumentParser(
+    ap = EnvelopeArgumentParser(
+        envelope_command="claim_check",
         description="Check whether a pattern is already present in files, gated on a control match.")
     ap.add_argument("paths", nargs="*", help="files to scan (shell-expanded globs are fine)")
     ap.add_argument("--pattern", required=True, help="the claim to test, as a regex")
@@ -183,10 +193,8 @@ def _main(argv) -> int:
         # Diagnostics go to stderr so stdout stays parseable even on a BROKEN/ABSENT result.
         if r["reason"]:
             print("claim_check: %s" % r["reason"], file=sys.stderr)
-        json.dump({"ok": v == PRESENT, "command": "claim_check", "data": r,
-                   "skipped": r["unreadable"]}, sys.stdout, indent=1)
-        print()
-        return _EXIT[v]
+        # ok is "ran without error": ABSENT (exit 1) is an answer, only BROKEN (exit 2) is not.
+        return emit(_EXIT[v], "claim_check", r, skipped=r["unreadable"], indent=1)
 
     for h in r["hits"]:
         print("%s:%d: %s" % (h["path"], h["line"], h["text"]))

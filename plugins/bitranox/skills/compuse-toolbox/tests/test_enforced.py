@@ -522,3 +522,45 @@ class TestACasePatternIsADecision:
     def test_a_class_pattern_branches_on_the_class(self) -> None:
         src = "def run(x):\n    match x:\n        case Strict():\n            raise Stop()\n"
         assert decisions(classify_source(src, "Strict", path=Path("run.py")))
+
+
+class TestUnifiedExitCodes:
+    """Wave D: ok means "ran without error" (exit != 2), and every exit 2 prints the envelope."""
+
+    def test_incomplete_exit_2_is_ok_false(self, tmp_path: Path, capsys) -> None:
+        write(tmp_path / "policy.py", POLICY)
+        write(tmp_path / "broken.py", "def (:\n")
+        assert run(tmp_path, "planner_kinds", "--json") == 2
+        payload = json.loads(capsys.readouterr().out)
+        assert payload["ok"] is False and payload["skipped"]
+        assert "incomplete" in payload["error"]
+
+    def test_parsed_never_enforced_is_exit_1_with_ok_true(self, tmp_path: Path, capsys) -> None:
+        write(tmp_path / "policy.py", POLICY)
+        assert run(tmp_path, "planner_kinds", "--json") == 1
+        assert json.loads(capsys.readouterr().out)["ok"] is True
+
+    def test_not_found_is_exit_2_ok_false_with_an_error(self, tmp_path: Path, capsys) -> None:
+        write(tmp_path / "other.py", "x = 1\n")
+        assert run(tmp_path, "planner_kinds", "--json") == 2
+        payload = json.loads(capsys.readouterr().out)
+        assert payload["ok"] is False and "not found" in payload["error"]
+
+    def test_an_argparse_error_under_json_prints_the_envelope(self, capsys) -> None:
+        with pytest.raises(SystemExit) as exc:
+            main(["--json"])
+        assert exc.value.code == 2
+        payload = json.loads(capsys.readouterr().out)
+        assert payload["ok"] is False and payload["command"] == "enforced"
+
+    def test_a_crash_under_json_is_exit_2_with_an_envelope(self, tmp_path: Path, monkeypatch,
+                                                         capsys) -> None:
+        def boom(*_a, **_k):
+            raise RuntimeError("classifier broke")
+        monkeypatch.setattr(enforced, "classify_tree", boom)
+        assert run(tmp_path, "planner_kinds", "--json") == 2
+        cap = capsys.readouterr()
+        payload = json.loads(cap.out)
+        assert payload["ok"] is False and "classifier broke" in payload["error"]
+        assert "Traceback" not in cap.err
+
