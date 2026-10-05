@@ -17,6 +17,12 @@ Usage:
     
     # Generate for poster
     python generate_schematic.py "MAPK signaling pathway" -o pathway.png --doc-type poster
+
+Exit status: the AI script's own code is passed through unchanged - 0 the image met the
+threshold, 1 the best image's score is below the threshold (the image is still written), 2 the
+quality question could not be answered (no image, an unverified image, httpx2 missing, an
+unexpected error) or a usage error. The wrapper's own failures are 2 as well: no API key, or the
+AI script cannot be found or launched.
 """
 
 import argparse
@@ -83,8 +89,11 @@ Examples:
 Environment Variables:
   OPENROUTER_API_KEY    Required for AI generation (the only way to pass the key)
 
-Exit status: the AI script's own (0 image written and reviewed, 1 failure or review
-unavailable, 2 usage error); 1 when the AI script cannot be found or launched.
+Exit status: the AI script's own code is passed through unchanged - 0 the image met the
+threshold, 1 the best image's score is below the threshold (the image is still written), 2 the
+quality question could not be answered (no image, an unverified image, httpx2 missing, an
+unexpected error) or a usage error. The wrapper's own failures are 2 as well: no API key, or the
+AI script cannot be found or launched.
         """
     )
     
@@ -124,7 +133,7 @@ unavailable, 2 usage error); 1 when the AI script cannot be found or launched.
         print("Get one at: https://openrouter.ai/keys", file=sys.stderr)
         print("\nSet it with:", file=sys.stderr)
         print("  export OPENROUTER_API_KEY='your_api_key'", file=sys.stderr)
-        sys.exit(1)
+        sys.exit(2)
     
     # Find AI generation script
     script_dir = Path(__file__).parent
@@ -132,7 +141,7 @@ unavailable, 2 usage error); 1 when the AI script cannot be found or launched.
     
     if not ai_script.exists():
         print(f"Error: AI generation script not found: {ai_script}", file=sys.stderr)
-        sys.exit(1)
+        sys.exit(2)
     
     # Build command. The output travels as --output=VALUE and the prompt after "--", so a
     # value that starts with a dash is never re-read by the child as an option.
@@ -165,7 +174,7 @@ unavailable, 2 usage error); 1 when the AI script cannot be found or launched.
         sys.exit(result.returncode)
     except Exception as e:
         print(f"Error executing AI generation: {e}", file=sys.stderr)
-        sys.exit(1)
+        sys.exit(2)
 
 
 if __name__ == "__main__":

@@ -17,12 +17,14 @@ Requirements:
       line would sit in the process list for the whole run)
     - httpx2 library
 
-Exit status: 0 an image was written, reviewed and met the quality threshold; 1 no image, an
-image whose review failed so its quality was NOT verified (only when no earlier image was
-reviewed: otherwise the best-scoring reviewed image is kept and judged), or an image whose best
-score stayed below the threshold (in both of those cases the image is still written); 2 a usage
-error. The threshold is numeric: a kept image scoring at or above it exits 0 even when the
-reviewer's verdict said NEEDS_IMPROVEMENT.
+Exit status: 0 an image was written, reviewed and met the quality threshold; 1 the best-scoring
+kept image stayed below the threshold (the image is still written); 2 the quality question could
+not be answered: no image (every generation failed), an image whose review failed so its quality
+was NOT verified (only when no earlier image was reviewed: otherwise the best-scoring reviewed
+image is kept and judged; the unverified image is still written), no API key (OPENROUTER_API_KEY
+unset), httpx2 missing, an unexpected error, or a usage error. The threshold is numeric: a kept
+image scoring at or above it exits 0 even when the reviewer's verdict said NEEDS_IMPROVEMENT, and
+that verdict is printed as a [WARN] on stderr.
 
 Usage:
     python generate_schematic_ai.py "Create a flowchart showing CONSORT participant flow" -o flowchart.png
@@ -46,7 +48,7 @@ try:
 except ImportError:
     print("Error: httpx2 library not found. Run via: uv run --with httpx2 generate_schematic_ai.py",
           file=sys.stderr)
-    sys.exit(1)
+    sys.exit(2)  # a missing dependency: the script could not run
 
 # Both IDs are preview-tier, which providers rename and retire without notice. Verified present in
 # the live OpenRouter catalogue on 2026-09-27. When a run starts failing with an opaque HTTP error,
@@ -803,8 +805,16 @@ Generate a publication-quality scientific diagram that meets all the guidelines 
             else:
                 reason = "No image was judged acceptable" if met else "No image met the threshold"
             relation = "at or above" if met else "below"
-            print(f"\n[WARN] {reason}; keeping v{best['iteration']}, the best-scoring reviewed "
-                  f"image (score {best['score']}/10, {relation} the {threshold}/10 threshold)")
+            kept = (f"keeping v{best['iteration']}, the best-scoring reviewed image (score "
+                    f"{best['score']}/10, {relation} the {threshold}/10 threshold)")
+            if not (met and not last_failed and unreviewed is None):
+                print(f"\n[WARN] {reason}; {kept}")
+            if met:
+                # A kept image at or above the threshold got here only because its reviewer said
+                # NEEDS_IMPROVEMENT. The number decides the exit (0); the disagreeing verdict goes
+                # to stderr, where a caller watching for problems looks, not into the progress.
+                print(f"[WARN] the reviewer's verdict on v{best['iteration']} was NEEDS_IMPROVEMENT; "
+                      f"{kept}, and the score decides: exiting 0", file=sys.stderr)
             results["final_image"] = best["image_path"]
             results["final_score"] = best["score"]
             results["success"] = True
@@ -873,10 +883,12 @@ Note: Multiple iterations only occur if quality is BELOW the threshold.
 Environment:
   OPENROUTER_API_KEY    OpenRouter API key (required; the only way to pass the key)
 
-Exit status: 0 image written, reviewed and at or above the threshold; 1 failure, review
-unavailable with no earlier reviewed image, or best reviewed score below the threshold (the
-image may still be written); 2 usage error. The threshold is numeric: a NEEDS_IMPROVEMENT
-verdict on a score at or above it still exits 0.
+Exit status: 0 image written, reviewed and at or above the threshold; 1 the best image's score
+is below the threshold (the image is still written); 2 the quality question could not be
+answered: no image, an image whose review failed with no earlier reviewed image (still written),
+no API key, httpx2 missing, an unexpected error, or a usage error. The threshold is numeric: a
+NEEDS_IMPROVEMENT verdict on a score at or above it still exits 0, and that verdict is printed
+as a [WARN] on stderr.
         """
     )
     
@@ -921,7 +933,7 @@ def main(argv: Optional[List[str]] = None) -> int:
         print("Error: OPENROUTER_API_KEY environment variable not set", file=sys.stderr)
         print("\nSet it with:", file=sys.stderr)
         print("  export OPENROUTER_API_KEY='your_api_key'", file=sys.stderr)
-        return 1
+        return 2
 
     try:
         generator = ScientificSchematicGenerator(api_key=api_key, verbose=args.verbose,
@@ -934,13 +946,16 @@ def main(argv: Optional[List[str]] = None) -> int:
             doc_type=args.doc_type
         )
 
+        # Exit 2 for both: no image, and an image nobody could review, leave the quality question
+        # unanswered. Only a reviewed score below the threshold is the "no" answer (exit 1).
         if not results["success"]:
-            print("\n[FAIL] Generation failed. Check review log for details.")
-            return 1
+            print("\n[FAIL] Generation failed: no image was produced. Check the review log for "
+                  "details; exiting 2", file=sys.stderr)
+            return 2
         if results.get("review_skipped"):
             print(f"\n[WARN] Image saved to {args.output}, but its quality was NOT verified "
-                  f"(the review failed); exiting 1")
-            return 1
+                  f"(the review failed); exiting 2", file=sys.stderr)
+            return 2
         if results.get("threshold_met") is False:
             # User decision 2026-09-26: the best image is delivered, but a run that never met
             # the threshold is a "no" (exit 1), not a success.
@@ -954,7 +969,7 @@ def main(argv: Optional[List[str]] = None) -> int:
         return 0
     except Exception as e:
         print(f"\n[FAIL] Error: {str(e)}", file=sys.stderr)
-        return 1
+        return 2
 
 
 if __name__ == "__main__":

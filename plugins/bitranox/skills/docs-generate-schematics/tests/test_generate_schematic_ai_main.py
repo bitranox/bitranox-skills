@@ -79,7 +79,7 @@ def test_failed_review_never_claims_the_threshold_was_met(gen_ai, scripted, monk
     rc = run_main(gen_ai, monkeypatch, "diagram", "-o", str(_out(tmp_path)), "--doc-type", "journal")
 
     stdout = capsys.readouterr().out
-    assert rc == 1
+    assert rc == 2  # the quality question could not be answered
     assert "meets" not in stdout
     assert "NOT verified" in stdout
     assert _out(tmp_path).read_bytes() == b"V1"  # the image is still delivered
@@ -91,7 +91,7 @@ def test_review_without_choices_does_not_crash(gen_ai, scripted, monkeypatch, ca
     rc = run_main(gen_ai, monkeypatch, "diagram", "-o", str(_out(tmp_path)))
 
     stdout = capsys.readouterr().out
-    assert rc == 1
+    assert rc == 2
     assert "unpack" not in stdout
     assert _out(tmp_path).read_bytes() == b"V1"
     assert (tmp_path / "out_review_log.json").is_file()
@@ -103,7 +103,7 @@ def test_unparseable_review_is_not_scored(gen_ai, scripted, monkeypatch, capsys,
     rc = run_main(gen_ai, monkeypatch, "diagram", "-o", str(_out(tmp_path)), "--doc-type", "presentation")
 
     stdout = capsys.readouterr().out
-    assert rc == 1
+    assert rc == 2
     assert "7.5" not in stdout
     assert "NOT verified" in stdout
 
@@ -218,13 +218,16 @@ def test_a_kept_image_below_the_threshold_exits_1_and_names_score_and_threshold(
 def test_a_kept_image_meeting_the_threshold_still_exits_0(
     gen_ai, scripted, monkeypatch, capsys, tmp_path, script
 ):
-    """The control for the arm above."""
+    """The control for the arm above, and for the D10 warning: no reviewer said
+    NEEDS_IMPROVEMENT, so stderr carries no verdict warning."""
     scripted(*[image(s) if s.startswith("V") else review(s) for s in script])
 
     rc = run_main(gen_ai, monkeypatch, "diagram", "-o", str(_out(tmp_path)), "--doc-type", "journal")
 
-    stdout = capsys.readouterr().out
+    captured = capsys.readouterr()
+    stdout = captured.out
     assert rc == 0
+    assert "NEEDS_IMPROVEMENT" not in captured.err
     assert "[OK] Success!" in stdout
     assert _out(tmp_path).read_bytes() == script[-2].encode()
     log = json.loads((tmp_path / "out_review_log.json").read_text(encoding="utf-8"))
@@ -241,10 +244,14 @@ def test_a_verdict_forced_retry_above_the_threshold_is_not_called_below_it(
     rc = run_main(gen_ai, monkeypatch, "diagram", "-o", str(_out(tmp_path)), "--doc-type", "journal",
                   "--iterations", "1")
 
-    stdout = capsys.readouterr().out
+    captured = capsys.readouterr()
     assert rc == 0
-    assert "below the 8.5/10" not in stdout
-    assert "at or above the 8.5/10 threshold" in stdout
+    assert "below the 8.5/10" not in captured.out + captured.err
+    # D10: the number decides the exit, and the reviewer's disagreeing verdict is a warning on
+    # STDERR, where a caller watching for problems looks - not mixed into the progress lines.
+    assert "NEEDS_IMPROVEMENT" in captured.err
+    assert "at or above the 8.5/10 threshold" in captured.err
+    assert "NEEDS_IMPROVEMENT" not in captured.out
 
 
 def test_a_failed_retry_review_keeps_the_reviewed_first_image(
@@ -279,10 +286,12 @@ def test_a_failed_retry_review_after_a_verdict_forced_retry_keeps_v1_and_exits_0
 
     rc = run_main(gen_ai, monkeypatch, "diagram", "-o", str(_out(tmp_path)), "--doc-type", "journal")
 
-    stdout = capsys.readouterr().out
+    captured = capsys.readouterr()
+    stdout = captured.out
     assert rc == 0
     assert _out(tmp_path).read_bytes() == b"V1"
     assert "review of v2 failed" in stdout
+    assert "NEEDS_IMPROVEMENT" in captured.err and "v1" in captured.err
     log = json.loads((tmp_path / "out_review_log.json").read_text(encoding="utf-8"))
     assert (log["kept_iteration"], log["threshold_met"]) == (1, True)
 
@@ -290,6 +299,21 @@ def test_a_failed_retry_review_after_a_verdict_forced_retry_keeps_v1_and_exits_0
 def test_exit_status_docs_name_the_missed_threshold(gen_ai):
     assert "threshold" in gen_ai.__doc__.split("Exit status:", 1)[1].split("Usage:", 1)[0]
     assert "threshold" in gen_ai.build_parser().epilog.split("Exit status:", 1)[1]
+
+
+@pytest.mark.parametrize("where", ["docstring", "epilog"])
+def test_exit_status_docs_put_no_image_and_an_unverified_image_on_2(gen_ai, where):
+    """1 is the one "no" answer (the best score missed the threshold); everything that kept the
+    question from being answered is 2. The tables said 1 for no image and an unreviewed one."""
+    text = (gen_ai.__doc__.split("Usage:", 1)[0] if where == "docstring"
+            else gen_ai.build_parser().epilog)
+    status = " ".join(text.split("Exit status:", 1)[1].split())
+    one = status.split("; 1 ", 1)[1].split("; 2 ", 1)[0]
+    two = status.split("; 2 ", 1)[1]
+    assert "below the threshold" in one
+    assert "no image" not in one and "review" not in one
+    for phrase in ("no image", "review failed", "usage error", "API key", "httpx2"):
+        assert phrase in two, (phrase, two)
 
 
 # ---- the TOTAL score is parsed, never a per-criterion one ---------------------------------------
@@ -335,12 +359,13 @@ def test_a_multi_criterion_review_is_scored_by_its_total(gen_ai, scripted, monke
     assert log["final_score"] == 9.0
 
 
-def test_every_generation_failing_exits_1_without_output(gen_ai, scripted, monkeypatch, tmp_path):
+def test_every_generation_failing_exits_2_without_output(gen_ai, scripted, monkeypatch, tmp_path):
+    """No image at all: generating has no "no" answer, so nothing produced is "could not run"."""
     scripted(failure(429), failure(429))
 
     rc = run_main(gen_ai, monkeypatch, "diagram", "-o", str(_out(tmp_path)))
 
-    assert rc == 1
+    assert rc == 2
     assert not _out(tmp_path).exists()
 
 
@@ -375,7 +400,7 @@ def test_help_and_missing_key_message_do_not_offer_a_key_flag(gen_ai, monkeypatc
     rc = run_main(gen_ai, monkeypatch, "diagram", "-o", "o.png")
 
     captured = capsys.readouterr()
-    assert rc == 1
+    assert rc == 2
     assert "--api-key" not in captured.out + captured.err
 
 
@@ -388,7 +413,7 @@ def test_a_missing_key_is_reported_on_stderr(gen_ai, monkeypatch, capsys, tmp_pa
     rc = run_main(gen_ai, monkeypatch, "diagram", "-o", "o.png")
 
     captured = capsys.readouterr()
-    assert rc == 1
+    assert rc == 2
     assert "OPENROUTER_API_KEY environment variable not set" in captured.err
     assert "export OPENROUTER_API_KEY" in captured.err
     assert captured.out == ""
@@ -428,7 +453,7 @@ def test_an_unexpected_error_is_reported_on_stderr(gen_ai, scripted, monkeypatch
     rc = run_main(gen_ai, monkeypatch, "diagram", "-o", str(tmp_path / "a-file" / "out.png"))
 
     captured = capsys.readouterr()
-    assert rc == 1
+    assert rc == 2
     assert "[FAIL] Error:" in captured.err
     assert "[FAIL] Error:" not in captured.out
 
@@ -442,7 +467,7 @@ def test_a_missing_httpx2_is_reported_on_stderr(gen_ai, tmp_path):
         pytest.skip("httpx2 is importable without site-packages here, so the guard cannot fire")
     proc = subprocess.run([sys.executable, "-S", script, "--help"], capture_output=True,
                           cwd=str(tmp_path), timeout=60, check=False)
-    assert proc.returncode == 1
+    assert proc.returncode == 2
     assert b"httpx2 library not found" in proc.stderr
     assert proc.stdout == b""
 
