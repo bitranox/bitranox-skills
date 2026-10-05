@@ -153,7 +153,7 @@ def test_an_unreadable_closed_set_is_not_clobbered_by_the_next_close(tmp_path, c
     before = rf.read_bytes()
     rf.chmod(0o200)
     try:
-        assert Q.main(["drop", "--match", "new", proj]) == 1
+        assert Q.main(["drop", "--match", "new", proj]) == 2
     finally:
         rf.chmod(0o644)
     assert "failed" in capsys.readouterr().err
@@ -168,7 +168,7 @@ def test_an_unreadable_queue_is_a_failed_close_not_a_bad_selector(tmp_path, caps
     qf = S.contrib_file(proj)
     qf.chmod(0o200)
     try:
-        assert Q.main(["ship", "--match", "x", proj]) == 1
+        assert Q.main(["ship", "--match", "x", proj]) == 2
     finally:
         qf.chmod(0o644)
     err = capsys.readouterr().err

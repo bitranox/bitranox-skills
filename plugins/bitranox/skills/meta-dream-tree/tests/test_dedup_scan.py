@@ -168,20 +168,32 @@ def test_cli_exits_1_and_frames_the_output_as_candidates(tmp_path):
     assert "candidates" in env["data"]
     assert env["data"]["control"]["detected"] is True
     assert env["data"]["candidates"][0]["score"] > 0.5
+    # ok means "ran without error": candidates are an answer, not a failure
+    assert env["ok"] is True
 
 
 def test_cli_exits_0_on_a_tree_with_nothing_near_duplicate(tmp_path):
     make_tree(tmp_path)
     r = run_cli(["--from", str(tmp_path), "--threshold", "0.99", "--json"], tmp_path)
     assert r.returncode == 0
-    assert json.loads(r.stdout)["data"]["candidates"] == []
+    env = json.loads(r.stdout)
+    assert env["data"]["candidates"] == [] and env["ok"] is True
 
 
 def test_cli_exits_2_when_there_is_no_tree(tmp_path):
     r = run_cli(["--from", str(tmp_path / "nope"), "--json"], tmp_path)
     assert r.returncode == 2
     assert "Traceback" not in r.stderr
-    assert json.loads(r.stdout)["ok"] is False
+    env = json.loads(r.stdout)
+    assert env["ok"] is False and set(env) >= {"command", "data", "skipped"}
+    assert env["error"] == env["data"]["error"] and env["error"]
+
+
+def test_cli_text_error_goes_to_stderr_only(tmp_path):
+    """Without --json the error is a diagnostic: stderr, once, and nothing on stdout."""
+    r = run_cli(["--from", str(tmp_path / "nope")], tmp_path)
+    assert r.returncode == 2
+    assert r.stdout == "" and r.stderr.count("error:") == 1
 
 
 # ---- read errors: a fact the scan could not read is never a silent "clean" ----------------------

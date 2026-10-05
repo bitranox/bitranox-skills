@@ -187,7 +187,7 @@ def test_verify_exits_1_and_names_what_changed(tmp_path):
     r = run_cli(["verify", "--out", str(out), "--json"], tmp_path)
     assert r.returncode == 1
     env = json.loads(r.stdout)
-    assert env["ok"] is False
+    assert env["ok"] is True          # ran without error; "differs" is the answer, exit 1 says it
     assert env["data"]["removed"][0]["slug"] == "c-slug"
 
 
@@ -212,7 +212,16 @@ def test_the_cli_emits_json_on_the_error_path(tmp_path):
     r = run_cli(["verify", "--out", str(tmp_path / "absent"), "--json"], tmp_path)
     assert r.returncode == 2
     assert "Traceback" not in r.stderr
-    assert json.loads(r.stdout)["ok"] is False
+    env = json.loads(r.stdout)
+    assert env["ok"] is False and set(env) >= {"command", "data", "skipped"}
+    assert env["error"] == env["data"]["error"] and env["error"]
+
+
+def test_the_cli_text_error_goes_to_stderr_only(tmp_path):
+    """Without --json the error is a diagnostic: stderr, once, and nothing on stdout."""
+    r = run_cli(["verify", "--out", str(tmp_path / "absent")], tmp_path)
+    assert r.returncode == 2
+    assert r.stdout == "" and r.stderr.count("error:") == 1
 
 
 def test_a_backup_written_inside_the_tree_does_not_become_part_of_the_scope(tmp_path):

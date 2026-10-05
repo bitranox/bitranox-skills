@@ -25,6 +25,8 @@ Two things this tool is careful about, both learned the hard way:
 Exit codes: 0 = no self-contradictions, 1 = at least one, 2 = error (no levels, a missing or
 unreadable level, a --chain that is not a directory, a baseline `clear` cannot read or write).
 The candidate list is informational and never on its own sets exit 1.
+--json prints the envelope {ok, command, data, skipped} on every exit, an `error` key added
+on exit 2; `ok` means the run worked and is false only on exit 2.
 
 The baseline lives in the store the ENGINE uses (the topmost dir with a `CLAUDE.md` and a store,
 see tree_support), never merely the nearest one.
@@ -391,7 +393,8 @@ def tree_levels(start: Path) -> list[Path]:
 
 def _clear_error(msg: str, as_json: bool) -> int:
     if as_json:
-        print(json.dumps({"ok": False, "command": "clear", "error": msg}, indent=2))
+        print(json.dumps({"ok": False, "command": "clear", "data": {}, "skipped": [],
+                          "error": msg}, indent=2))
     else:
         print(f"error: {msg}", file=sys.stderr)
     return 2
@@ -524,7 +527,8 @@ def _render(result: ScanResult, pending: list[str], bl_path: Path | None,
 def _usage_error(args: argparse.Namespace, msg: str) -> int:
     """Exit 2 with the JSON envelope on stdout under --json, else an error line on stderr."""
     if args.json:
-        print(json.dumps({"ok": False, "command": args.cmd, "error": msg}, indent=2))
+        print(json.dumps({"ok": False, "command": args.cmd, "data": {}, "skipped": [],
+                          "error": msg}, indent=2))
     else:
         print(f"error: {msg}", file=sys.stderr)
     return 2

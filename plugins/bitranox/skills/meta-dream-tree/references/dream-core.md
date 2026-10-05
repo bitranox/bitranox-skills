@@ -156,6 +156,18 @@ file; `session-reviewed` marks the same file. Read the banner before deciding wh
 are, and do not clear the obligation any other way - discharging it without reading that file is how
 a compacted session's stretch is lost while the run reports itself consolidated.
 
+**Earlier sessions nobody reviewed are LISTED, not read.** The review reads ONE transcript, the owed
+one or else the live session's. Every other transcript of the project that still has unreviewed
+bytes is listed after it under `OTHER UNREVIEWED TRANSCRIPTS OF THIS PROJECT`, newest first, at most
+ten with a count of the rest: an earlier session that never compacted is named by no flag and is
+not the live one, so nothing else ever offers it. The list is an offer, not a quota - a project can
+hold dozens. Read the ones that may hold uncaptured learnings, newest first, as far as the run
+allows: `dream_state.py session-review "<cwd>" --transcript <path> > review.txt 2>&1`, capture,
+then `dream_state.py session-reviewed "<cwd>" --transcript <path>` with the SAME path - without the
+flag the mark lands on the owed or live transcript, not the file you read. Parts work as above.
+Never mark a listed transcript reviewed without reading it, and report how many the run left
+unread.
+
 ## Backup + manifest (before any edit)
 
 Copy every store the run may touch (the anchor's `.claude-memory/` + each in-scope level's
@@ -205,7 +217,8 @@ counting never bumps its mtime) that counts distinct projects, not sightings - a
 UNCHANGED fact bodies on every run, so counting sightings let one act of judgement corroborate itself.
 Record each sighting with `dream_state.py saw-promotable <slug> <project the fact came from>` (the
 project defaults to the cwd, which is wrong for a fan-out reading other projects' stores), ask
-`dream_state.py should-promote <slug>` (prints `promote`/`hold`), and after an actual promotion run
+`dream_state.py should-promote <slug>` (prints `promote` with exit 0 or `hold` with exit 1, an
+answer either way), and after an actual promotion run
 `dream_state.py promoted <slug>` to clear every project's sighting at once. HOLD keeps the fact at
 the project level until a SECOND project sights it.
 

@@ -18,7 +18,7 @@ file/flag, a resolved issue, superseded by a newer entry, leaked task-state), vi
 `reconcile_memory_index.py --archive <slug> <level>` (home:
 `<plugin>/skills/meta-self-improve/`, launch through `hooks/run-python.sh`; it archives the body only
 when NO level still points at the slug). Launch it as a real script file, never a heredoc piped into
-`run-python.sh` (a `-` stdin arg fails with `run-python.sh: script not found: -` and exit 3). (3) a manual "forget this".
+`run-python.sh` (a `-` stdin arg fails with `run-python.sh: script not found: -` and exit 2). (3) a manual "forget this".
 Never archive a still-valid but quiet note.
 (See `forgetting-is-usage-based-only`.)
 
@@ -155,8 +155,12 @@ description the router cannot derive a trigger from, a script with no test, a `t
 exists but does not collect, all survive indefinitely. Run
 `bitranox:meta-audit-local-skills-and-hooks` over THIS tree with `--no-personal` - the personal
 `~/.claude` half is machine-global and belongs to the deep crosstree dream, not here. Invoke the
-SKILL (Skill tool); the skill name is not a command, and its own `audit_local.py` is what takes
-`--root <tree> --no-personal`. Follow that
+SKILL (Skill tool); the skill name is not a command. Its own `audit_local.py` (home:
+`<plugin>/skills/meta-audit-local-skills-and-hooks/scripts/`, launch via `hooks/run-python.sh`)
+takes a SUBCOMMAND first: `audit_local.py check --root <anchor> --no-personal` (the tree's top
+dir) runs the checks
+(`targets` with the same flags only lists the dirs); `--root` without one is refused by argparse
+with exit 2. Follow that
 skill for the procedure, above all its refusal to edit a dir some plugin owns; do not restate the
 rule here and do not re-derive the target list with a `find`, which is how a tool repo's mirrored
 twin gets edited. Findings follow this project's dream mode. No `.claude/skills` in the tree -> no-op.

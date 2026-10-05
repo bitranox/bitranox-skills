@@ -211,14 +211,28 @@ class TestCliArguments:
         _level(tmp_path, "- [T](mem:thing-blocked-by-x) - When X, it is SUPERSEDED, it works.")
         proc = _cli("scan", "--level", "CLAUDE.local.md", "--chain", ".", "--json", cwd=tmp_path)
         assert proc.returncode == 1, proc.stderr
-        data = json.loads(proc.stdout)["data"]
+        env = json.loads(proc.stdout)
+        data = env["data"]
         assert data["total_pointers"] == 1 and len(data["contradictions"]) == 1
+        assert env["ok"] is True          # ran without error; the contradiction is the answer
 
     def test_a_mistyped_chain_is_refused(self, tmp_path):
         _level(tmp_path, "- [T](mem:s) - When X, it is deployed.")
         proc = _cli("scan", "--chain", str(tmp_path / "projj"), "--json")
         assert proc.returncode == 2
-        assert json.loads(proc.stdout)["ok"] is False
+        env = json.loads(proc.stdout)
+        assert env["ok"] is False and env["error"]
+        assert env["data"] == {} and env["skipped"] == []     # the full envelope on exit 2 too
+
+    def test_a_clear_error_carries_the_full_envelope(self, tmp_path):
+        """clear's own refusals (here: no store to record against) are exit 2 with the same
+        four keys as every other envelope, not a reduced {ok, command, error}."""
+        lvl = _level(tmp_path, "- [T](mem:s) - When X, it is deployed.")
+        proc = _cli("clear", "--level", str(lvl), "--json", cwd=tmp_path)
+        assert proc.returncode == 2, proc.stdout + proc.stderr
+        env = json.loads(proc.stdout)
+        assert env["ok"] is False and env["command"] == "clear" and env["error"]
+        assert env["data"] == {} and env["skipped"] == []
 
     def test_no_levels_is_exit_2_with_json(self, tmp_path):
         proc = _cli("scan", "--json", cwd=tmp_path)
@@ -314,6 +328,10 @@ class TestTreeMode:
         assert json.loads(proc.stdout)["ok"] is False
 
     def test_clear_tree_records_a_slug_from_a_sibling_level(self, tmp_path):
+        """clear shares scan's --tree wiring, so this test was written after the code and passed
+        first run. Its RED arm is proven: mutating main() so that clear walks the CHAIN of --tree
+        (chain_levels) instead of the whole tree fails it with "not a flagged candidate in this
+        scope: a-fact" - the sibling slug is exactly what a chain-scoped clear cannot reach."""
         anchor = self._tree(tmp_path)
         before = json.loads(_cli("scan", "--tree", str(anchor / "b"), "--json").stdout)["data"]
         assert "a-fact" in before["new_or_changed"], before

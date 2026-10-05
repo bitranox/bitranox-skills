@@ -382,7 +382,7 @@ def test_ship_reports_failure_when_the_tombstone_cannot_be_written(capsys):
     Q.main(["add", "--what", "only one", "--target", "skill:x", "/p/f1"])
     _block_tombstones("/p/f1")
     capsys.readouterr()
-    assert Q.main(["ship", "--index", "1", "/p/f1"]) != 0
+    assert Q.main(["ship", "--index", "1", "/p/f1"]) == 2       # could not run, never a "no"
     out = capsys.readouterr()
     assert "will NOT be re-queued" not in out.out and out.err.strip()
     assert [r["what"] for r in S.read_contributions("/p/f1")] == ["only one"]
@@ -427,7 +427,7 @@ def test_drain_on_an_unwritable_store_fails_and_keeps_the_queue(capsys):
     Q.main(["add", "--what", "gap A", "/p/dr2"])
     _block_tombstones("/p/dr2")
     capsys.readouterr()
-    assert Q.main(["drain", "/p/dr2"]) == 1
+    assert Q.main(["drain", "/p/dr2"]) == 2
     out = capsys.readouterr()
     assert "drained" not in out.out and out.err.strip()
     assert [r["what"] for r in S.read_contributions("/p/dr2")] == ["gap A"]
@@ -516,13 +516,13 @@ def test_add_refuses_an_empty_what(capsys, what):
     assert S.read_contributions("/p/e1") == []
 
 
-def test_add_reports_a_store_write_failure_with_exit_1(capsys):
+def test_add_reports_a_store_write_failure_with_exit_2(capsys):
     Q.main(["add", "--what", "gap A", "/p/e2"])
     f = S.contrib_file("/p/e2")
     f.unlink()
     f.mkdir()                                                 # the queue file cannot be written
     capsys.readouterr()
-    assert Q.main(["add", "--what", "gap B", "/p/e2"]) == 1
+    assert Q.main(["add", "--what", "gap B", "/p/e2"]) == 2
     out = capsys.readouterr()
     assert "already queued" not in out.out
     assert "failed" in out.err
@@ -549,7 +549,7 @@ def test_an_unreadable_closed_set_does_not_let_a_closed_intent_back_in(capsys):
     """The re-queue block read the closed set through a reader that answered [] on ANY error, so a
     closed set that exists but cannot be read let a shipped intent be queued again as a new TODO."""
     S.rejected_file("/p/rc1").mkdir(parents=True)
-    assert Q.main(["add", "--what", "gap", "/p/rc1"]) == 1
+    assert Q.main(["add", "--what", "gap", "/p/rc1"]) == 2
     out = capsys.readouterr()
     assert "queued: gap" not in out.out and "failed" in out.err
     assert S.contrib_file("/p/rc1").exists() is False                 # nothing was queued
@@ -561,7 +561,7 @@ def test_an_unreadable_closed_set_does_not_let_a_closed_intent_back_in(capsys):
 @pytest.mark.parametrize("verb", ["shipped", "rejected"])
 def test_shipped_and_rejected_fail_on_an_unreadable_closed_set(capsys, verb):
     S.rejected_file("/p/rc2").mkdir(parents=True)
-    assert Q.main([verb, "/p/rc2"]) == 1
+    assert Q.main([verb, "/p/rc2"]) == 2
     out = capsys.readouterr()
     assert "no shipped" not in out.out and "no dropped" not in out.out
     assert "could not read" in out.err
@@ -576,7 +576,7 @@ def test_shipped_and_rejected_stay_quiet_on_an_absent_closed_set(capsys, verb):
 
 def test_list_fails_on_an_unreadable_queue(capsys):
     S.contrib_file("/p/rc4").mkdir(parents=True)
-    assert Q.main(["list", "/p/rc4"]) == 1
+    assert Q.main(["list", "/p/rc4"]) == 2
     out = capsys.readouterr()
     assert "no pending" not in out.out and "could not read" in out.err
 
@@ -585,7 +585,7 @@ def test_queues_reports_an_unreadable_queue_instead_of_hiding_it(capsys):
     Q.main(["add", "--what", "readable", "/p/rc5"])
     S.contrib_file("/p/rc6").mkdir(parents=True)
     capsys.readouterr()
-    assert Q.main(["queues"]) == 1
+    assert Q.main(["queues"]) == 2
     out = capsys.readouterr().out
     assert S.proj_key("/p/rc6") in out and "unreadable" in out
     assert S.proj_key("/p/rc5") in out                                # the readable one still listed
