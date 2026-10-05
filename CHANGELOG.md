@@ -29,6 +29,20 @@ than the change, so entries reconstructed from them would read like coverage wit
 a hole nobody has drawn a line under is one that gets rediscovered and half-filled - which is how
 two "versions with no entry" notes came to sit in this file disagreeing with it.
 
+## [7.42.0]
+
+### Changed
+
+- `process-review-enhance-code-quality` ends its sweep loop on a severity gate instead of on a
+  sweep that finds nothing: the loop stops when a full checklist walk finds no SEVERE and no MEDIUM
+  finding a realistic caller can reach (the API used as documented, the CLI, a config file, the
+  environment; hostile data too where taking it is the project's documented job). A finding only a
+  crafted input, a microsecond race or a platform path alias can reach is fixed when cheap and
+  otherwise recorded as accepted with its reach as the reason. Each sweep reports a per-severity
+  table so the plateau (SEVERE gone, MEDIUM flat, fixes seeding findings) is visible. An
+  adversarial review does not converge to zero findings, so "found nothing" was not a reachable
+  exit.
+
 ## [7.41.3]
 
 ### Fixed
