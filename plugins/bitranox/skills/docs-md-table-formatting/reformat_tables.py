@@ -437,8 +437,7 @@ def _quote_run_end(lines, start):
 
 def _unquote_once(line):
     """The line with one quote level removed: the `>` and one optional space after it."""
-    rest = line.lstrip(" \t")[1:]
-    return rest[1:] if rest.startswith(" ") else rest
+    return line.lstrip(" \t")[1:].removeprefix(" ")
 
 
 def _ragged_messages(filepath, first_line, contents):

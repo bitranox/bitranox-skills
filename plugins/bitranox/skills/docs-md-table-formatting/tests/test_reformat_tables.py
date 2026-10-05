@@ -11,6 +11,7 @@ from pathlib import Path
 import pytest
 
 import reformat_tables as R
+import tablekit
 
 SKILL_DIR = Path(__file__).resolve().parent.parent
 SCRIPT = SKILL_DIR / "reformat_tables.py"
@@ -807,7 +808,6 @@ def test_a_quote_inside_a_top_level_fence_stays_code(tmp_path):
 
 
 def test_tablekit_does_not_count_a_table_in_a_quoted_fence():
-    import tablekit  # noqa: PLC0415 - the second consumer of classify_lines, checked here too
-
+    """tablekit is the second consumer of classify_lines, so it must agree."""
     assert tablekit.parse_tables("> ```\n" + QUOTED + "> ```\n") == []
     assert len(tablekit.parse_tables(QUOTED)) == 1
