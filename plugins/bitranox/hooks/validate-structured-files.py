@@ -24,7 +24,9 @@ False-block avoidance is the priority - a noisy gate gets disabled. So it SKIPS
 (exit 0) rather than blocks whenever it cannot be certain the file is meant to be
 strict data:
   - templates (Helm / Jinja / Go / ERB markers {{ }}, {% %}, <% %>) are not data;
-    in a .json only a marker outside a string literal counts;
+    a marker inside a quoted value (a JSON string, a quoted or block YAML scalar, an
+    XML attribute value) is data and does not count, unless a quote inside the
+    template expression cut that value short;
   - JSONC (tsconfig, .vscode/*, files with // or /* */ comments outside string
     literals) is parsed with a JSON5 reader if one is installed, and skipped if
     none is;
@@ -239,13 +241,77 @@ def classify(path: str):
     return None, None
 
 
+# After a quoted YAML scalar closes, only these may follow it on its line (plus spaces or the end
+# of the text). Anything else means a quote INSIDE a template expression cut it short
+# (`"{{ include "x" . }}"`), so the file is a template.
+_AFTER_YAML_STRING = frozenset(":,]}#\r\n")
+
+# The styles of a YAML scalar whose content is opaque text: double- and single-quoted, literal
+# and folded block. A marker inside one is a value, not structure.
+_YAML_DATA_STYLES = frozenset({'"', "'", "|", ">"})
+
+
+def _yaml_data_spans(yaml, text: str):
+    """[(start, end)] of the quoted and block scalars the scanner reached before any error."""
+    spans = []
+    try:
+        for token in yaml.scan(text, Loader=yaml.SafeLoader):
+            if not isinstance(token, yaml.ScalarToken) or token.style not in _YAML_DATA_STYLES:
+                continue
+            start, end = token.start_mark.index, token.end_mark.index
+            if token.style in ('"', "'"):
+                rest = text[end:].lstrip(" \t")
+                if rest and rest[0] not in _AFTER_YAML_STRING:
+                    continue  # cut short by a template quote: not a clean value
+            spans.append((start, end))
+    except yaml.YAMLError:
+        pass  # markers past the error stay unclassified, so they still read as a template
+    return spans
+
+
+def yaml_is_template(text: str) -> bool:
+    """True if a template marker sits anywhere but inside a clean quoted or block scalar.
+
+    A marker the scanner never reached (behind a scan error) counts as a template, as does every
+    marker when PyYAML is absent: unable to tell, the hook stays out of the way.
+    """
+    try:
+        import yaml  # PyYAML; optional, like every format library here
+    except ImportError:
+        return bool(TEMPLATE_RX.search(text))
+    spans = _yaml_data_spans(yaml, text)
+    return any(not any(s <= m.start() < e for s, e in spans) for m in TEMPLATE_RX.finditer(text))
+
+
+# An XML start or empty-element tag whose attribute values are all well-formed quotes, and one
+# attribute value inside it. `<` is illegal in an attribute value, so a value holding one is not
+# matched and its marker stays a template marker - which also keeps `<% %>` a template always.
+_XML_TAG = re.compile(r"""<[A-Za-z_][\w:.-]*(?:\s+[\w:.-]+\s*=\s*(?:"[^"<]*"|'[^'<]*'))*\s*/?>""")
+_XML_VALUE = re.compile(r"""=\s*("[^"<]*"|'[^'<]*')""")
+
+
+def xml_is_template(text: str) -> bool:
+    """True if a template marker sits anywhere but inside a well-formed attribute value.
+
+    A marker in element text (`{% for %}` between elements) is template structure; one in a
+    quoted attribute value is a value. A value cut short by a quote inside a template expression
+    (`href="{{ "x" }}"`) does not form a well-formed tag, so its marker is not exempted.
+    """
+    spans = []
+    for tag in _XML_TAG.finditer(text):
+        for value in _XML_VALUE.finditer(tag.group(0)):
+            spans.append((tag.start() + value.start(1), tag.start() + value.end(1)))
+    return any(not any(s <= m.start() < e for s, e in spans) for m in TEMPLATE_RX.finditer(text))
+
+
 def is_template(kind: str, text: str) -> bool:
-    # JSON strings have one simple, scannable syntax, so a marker inside a string value can be
-    # told apart from one in data position. YAML quoting (single, double, block scalars) is not
-    # worth a scanner here, so a YAML/XML marker anywhere still means "template".
+    # A marker inside a quoted value is data in every format here, so each format tells a value
+    # from structure with its own quoting rules.
     if kind == "json":
         return json_is_template(text)
-    return bool(TEMPLATE_RX.search(text))
+    if kind == "yaml":
+        return yaml_is_template(text)
+    return xml_is_template(text)
 
 
 def main() -> int:

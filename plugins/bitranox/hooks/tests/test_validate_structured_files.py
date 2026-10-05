@@ -490,3 +490,55 @@ def test_json_segments(text, expected):
 ])
 def test_json_is_template(text, expected):
     assert V.json_is_template(text) is expected
+
+
+# ---- a template marker inside a QUOTED YAML/XML value is data ------------------------------------
+#
+# A placeholder in a quoted YAML scalar or an XML attribute value is ordinary data (Ansible files
+# are full of them, and must parse as YAML before Jinja ever runs), so it must not exempt the file
+# around it from validation - the same distinction JSON already drew. A marker anywhere else, or a
+# quoted value cut short by a quote INSIDE a template expression, still means "template".
+
+@pytest.mark.parametrize("name,text", [
+    ("a.yaml", 'greeting: "Hello {{name}}"\nitems: [a, b\n'),
+    ("a.yaml", "greeting: 'Hi {{ name }}'\nitems: [a, b\n"),
+    ("a.yml", 'when: "{% if x %}y{% endif %}"\nitems: [a, b\n'),
+    ("a.yaml", "tpl: |\n  {{ name }} here\nitems: [a, b\n"),
+    ("a.xml", '<root><a title="{{ title }}">x</a><b></root>'),
+    ("a.xml", "<root><a title='{% x %}'/><b></root>"),
+])
+def test_a_marker_in_a_quoted_value_does_not_exempt_a_broken_file(tmp_path, monkeypatch, name, text):
+    assert run_main(monkeypatch, _event(tmp_path, name, text)) == 2
+
+
+@pytest.mark.parametrize("name,text", [
+    ("a.yaml", 'greeting: "Hello {{name}}"\nitems: [a, b]\n'),
+    ("a.xml", '<root><a title="{{ title }}">x</a></root>'),
+])
+def test_a_valid_file_with_a_quoted_placeholder_passes(tmp_path, monkeypatch, name, text):
+    assert run_main(monkeypatch, _event(tmp_path, name, text)) == 0
+
+
+@pytest.mark.parametrize("name,text", [
+    # a quote inside the template expression cuts the quoted value short
+    ("chart.yaml", 'name: "{{ include "chart.name" . }}"\nitems: [a, b\n'),
+    # a marker in a plain (unquoted) position
+    ("chart.yaml", 'name: "x"\nlabels: {{- toYaml .Values.l | nindent 4 }}\n'),
+    # a marker the scanner never reaches, behind a scan error
+    ("chart.yaml", 'a: "{{ x }}"\nb: @bad {{ y }}\n'),
+    # a quoted marker beside a plain one: the plain one decides
+    ("chart.yaml", 'a: "{{ x }}"\n{{- if .Values.b }}\nb: [1\n{{- end }}\n'),
+    ("t.xml", '<root>{% for x in y %}<a title="{{ x }}">{% endfor %}</root'),
+    ("t.xml", '<root><a href="{{ "x" }}"></root>'),
+    ("t.xml", "<root><%= b %></root"),
+])
+def test_a_real_yaml_or_xml_template_is_still_skipped(tmp_path, monkeypatch, name, text):
+    assert run_main(monkeypatch, _event(tmp_path, name, text)) == 0
+
+
+def test_without_pyyaml_any_yaml_marker_still_means_template(tmp_path, monkeypatch):
+    """With no scanner to tell a value from structure, the hook stays out of the way rather than
+    guess; the ruamel fallback still validates a file that carries no marker at all."""
+    _block_imports(monkeypatch, "yaml")
+    assert run_main(monkeypatch, _event(tmp_path, "a.yaml", 'g: "Hi {{n}}"\ni: [a, b\n')) == 0
+    assert run_main(monkeypatch, _event(tmp_path, "b.yaml", 'g: "Hi n"\ni: [a, b\n')) == 2
