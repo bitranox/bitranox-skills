@@ -132,6 +132,14 @@ you work on some other project. Queue the symptom in one line (`contrib_queue.py
 asks for the fix in so many words. The full discipline is in `bitranox:meta-self-improve`
 ("Pathfinder discipline").
 
+## Launching a script in a worktree-isolated session
+
+In a worktree-isolated session, Claude Code's own isolation guard (not a bitranox hook) refuses a
+compound Bash form launching a script - `bash <plugin>/hooks/run-python.sh <script>`, a heredoc
+piping a script into an interpreter, or an `env -u ...` prefix - because it cannot verify the
+command stays inside the worktree. Launch the script directly instead: `python3 <script>` runs
+fine there.
+
 ## Skill Types
 
 **Rigid** (TDD, debugging): Follow exactly. Don't adapt away discipline.

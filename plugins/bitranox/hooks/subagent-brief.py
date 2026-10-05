@@ -31,10 +31,13 @@ into every subagent would contaminate exactly the agent whose value is an uncont
 and the failure would be silent: the probe would simply start passing.
 
 The exclusion can only key on `agent_type`, the one identity SubagentStart carries - the event has
-no prompt and no `subagent_type`. For a NAMED dispatch that field holds the NAME: measured
-2026-09-11, a named baseline-probe's hook record read `SubagentStart:<name>` and the probe was
-briefed. A named probe therefore cannot be recognised here, and subagent-probe-capability-gate
-refuses to dispatch one. A probe sent to an ordinary agent type is briefed like any other agent.
+no prompt and no `subagent_type`. For a NAMED dispatch that field CAN hold the NAME instead of the
+type: measured 2026-10-05 on CLI 2.1.289, a named teammate-style dispatch recorded
+`SubagentStart:<name>`, while a named general-purpose dispatch from the main session recorded
+`SubagentStart:general-purpose`. Measured 2026-09-11, a named baseline-probe's hook record read
+`SubagentStart:<name>` and the probe was briefed. A named probe therefore cannot be recognised
+here, and subagent-probe-capability-gate refuses to dispatch one. A probe sent to an ordinary
+agent type is briefed like any other agent.
 An `agent_type` that is missing, blank or not a string gets silence: all 1213 recorded subagents
 carried a non-empty type, so only a malformed event reaches that branch.
 

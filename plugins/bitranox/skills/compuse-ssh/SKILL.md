@@ -71,15 +71,16 @@ An SSH session is a flaky external resource: it can drop, hang, or time out mid-
   a stdout/stderr-merging helper (see the table above) - so `/dev/null` CAUSES that corruption, and
   a persistent file ends it after the first connect instead of forcing you to discard stderr.
 
-  A changed key then does NOT fail. Under `StrictHostKeyChecking no` ssh prints the
-  `REMOTE HOST IDENTIFICATION HAS CHANGED` banner, logs in with the key and RUNS the command - and
-  never replaces the stale entry, so the banner repeats on every later call. Self-heal rather than
-  reverting to `/dev/null`: drop the stale entry with
-  `ssh-keygen -R <host> -f ~/.ssh/known_hosts_fleet`, whatever the exit status, and NEVER re-run
-  the command: it already ran, and a failing status after the banner is its own. Key the drop on
-  ssh's `Offending <TYPE> key in <file>:<line>` line naming YOUR known-hosts file, never on the
-  phrase `Host key verification failed`: a remote command that itself runs ssh or rsync relays its
-  inner ssh's banner, that phrase and exit 255, all about some other host.
+  Use `StrictHostKeyChecking accept-new`, not `no`: accept-new records a NEW host but REFUSES a
+  changed or revoked key before anything runs (OpenSSH 10.2: the REMOTE HOST IDENTIFICATION HAS
+  CHANGED banner, `Host key verification failed.`, exit 255, command not run), whereas `no` logs
+  in and RUNS the command under the warning and never replaces the stale entry. Self-heal rather
+  than reverting to `/dev/null`: drop the stale entry with
+  `ssh-keygen -R <name ssh printed> -f ~/.ssh/known_hosts_fleet` and retry ONCE - safe, because
+  the refused command never ran. Key that on ssh's OWN messages (`ssh -E <logfile>` sends them to
+  a file of yours), never on stderr: a remote command that itself runs ssh or rsync relays its
+  inner ssh's banner, offending line, refusal and exit 255 through the remote stderr, and on a
+  fleet with the same tooling it can name the same known-hosts path.
   `fleet_ssh.py --trust-changing-host-keys` (`bitranox:compuse-toolbox`) does exactly this.
 
   **A command-line `-o StrictHostKeyChecking=no` has NO scope** - it disables the check for

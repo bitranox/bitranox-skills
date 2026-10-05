@@ -9,7 +9,7 @@ description: Use when creating, editing, or reformatting markdown tables in any 
 
 Rules for consistently formatted, readable markdown tables. Misaligned tables are hard to scan in source view and may trigger linter warnings.
 
-**A `reformat-md-tables` PostToolUse hook auto-realigns tables in every `*.md` file on each Write/Edit**, so tables Claude writes stay aligned with no manual step. To bulk-reformat a tree by hand or in CI, run this skill's `reformat_tables.py -r <dir>` (see Programmatic Reformatting below).
+**A `reformat-md-tables` PostToolUse hook auto-realigns tables in every `*.md` file on each Write/Edit**, so tables Claude writes stay aligned with no manual step, unless the checkout opted out with `git config bitranox.reformatMdTables false`. To bulk-reformat a tree by hand or in CI, run this skill's `reformat_tables.py -r <dir>` (see Programmatic Reformatting below).
 
 ## Rules
 

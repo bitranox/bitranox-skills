@@ -44,6 +44,13 @@ For the modern Python pick behind each, see `bitranox:coding-python-use-modern-l
 - **Circuit breaker for a repeatedly-failing dependency.** After N consecutive failures, OPEN the
   circuit: fail fast (or serve a fallback) instead of hammering a dead service; after a cool-off,
   try one probe (HALF-OPEN) and CLOSE on success. Stops one sick dependency cascading into a stall.
+- **Before automating a DISRUPTIVE remedy (reboot, driver reload, service restart), check whether
+  past occurrences STARTED during that same remedy.** A remedy that is also a trigger can loop: each
+  reboot "fixes" the hang by inducing the next one. Climb cheaper rungs first (probe, soft reset,
+  service restart) before the disruptive one, cap the number of remedy attempts per episode so a
+  loop cannot run forever, and order the refusal/guard checks so every refusal branch is actually
+  REACHABLE - a broad earlier check that shadows a narrower one placed after it means that branch
+  never fires and the disruptive remedy runs anyway.
 - **Degrade gracefully.** On partial failure return a partial result + a clear warning + a non-zero
   exit - never a silent wrong answer. If a target resolves somewhere unexpected (e.g. a public host
   to an internal IP), say so.

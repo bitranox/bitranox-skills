@@ -44,7 +44,7 @@ ist das exakte Gegenstück zur tell-sweep-Prüfung, sodass der Text diese danach
 
     bash <plugin>/hooks/run-python.sh <plugin>/hooks/strip_typographic_tells.py DATEI          # Datei direkt ersetzen
     cat DATEI | bash <plugin>/hooks/run-python.sh <plugin>/hooks/strip_typographic_tells.py -  # oder einen Stream normalisieren
-    bash <plugin>/hooks/run-python.sh <plugin>/hooks/strip_typographic_tells.py --check DATEI  # nur prüfen, Exit 1 bei Resten
+    bash <plugin>/hooks/run-python.sh <plugin>/hooks/strip_typographic_tells.py --check DATEI  # nur prüfen, Exit 1 bei Resten, Exit 2 wenn eine Datei nicht lesbar ist
 
 Das Skript liegt im `hooks/`-Ordner des Plugins, nicht in einem `scripts/`-Ordner dieses
 Skills - die Befehle oben verwenden bereits den richtigen `<plugin>/hooks/`-Pfad. Es ersetzt
