@@ -17,7 +17,9 @@ Two shapes cause it, and this hook blocks both. Both are read only inside a
    checker's own argv (the literal `[n]ginx` is not the regex `nginx`). But the
    SAME keyword appearing verbatim anywhere else in the command - an echo/printf
    label, a comment, a commit message, a heredoc body - re-introduces the literal,
-   because the whole command string is the shell's own cmdline.
+   because the whole command string is the shell's own cmdline. The pattern is judged
+   as the regex pgrep compiles, against that whole string: `[m]ake test` leaks only
+   where `make test` appears, and an unbracketed alternative (`[a]x|b`) always leaks.
 
 2. PLAIN LITERAL.
 
@@ -50,6 +52,7 @@ Exit 2 blocks the call and shows stderr to the model; every other path (includin
 any error) exits 0, so a broken guard never wedges a turn.
 """
 
+import collections
 import json
 import re
 import sys
@@ -68,23 +71,13 @@ from shell_text import (
 # read the rest of the line as that call's arguments. A leading `/` is allowed because
 # `/usr/bin/pgrep` is a real invocation; a trailing `-`, `.` or word character is not, because
 # `pgrep-self-match` and `pkill-notes.md` name files, not programs.
+#
+# A call also ends at an unquoted `)` or backtick: `$(pgrep -x a) $(pgrep -f "[a]b")` is two calls,
+# and read as one the second call's flags and pattern were credited to the first. A quoted run is
+# taken whole, so `pgrep -f "foo)"` keeps its `)`; an unterminated quote (the call sits inside an
+# outer quote, as in `ssh host 'pgrep -f x'`) ends the call where it opens.
 _PROGRAM = r"(?<![\w-])(?:pgrep|pkill)(?![\w.-])"
-_INVOCATION = re.compile(_PROGRAM + r"[^|;&\n]*")
-
-# `-f`, alone or bundled (e.g. -af), or its exact long form `--full`.
-#
-# The FLAG must start at a token boundary. Without that guard the `-` inside a hyphenated word
-# matched: `nudge-detector-footguns reformat-md-tables` was read as the flag `-footguns` carrying
-# the pattern `reformat-md-tables`, inventing an invocation out of two filenames.
-#
-# The long form is spelled out rather than "any long option containing an f": that reading took
-# `--pidfile` and `--logpidfile` for `-f`, and both read PIDs from a file and match no command line.
-# A bundle is letters only, and pgrep's only lowercase-f short option is -f itself.
-_DASH_F_FLAG = r"(?<![\w-])(?:-[a-zA-Z]*f[a-zA-Z]*|--full)"
-_HAS_DASH_F = re.compile(_DASH_F_FLAG + r"(?=\s|$)")
-
-# The flag followed by its pattern argument: a double-quoted, single-quoted, or bare token.
-_DASH_F_PATTERN = re.compile(_DASH_F_FLAG + r"\s+(?:\"([^\"]*)\"|'([^']*)'|(\S+))")
+_INVOCATION = re.compile(_PROGRAM + r"""(?:[^|;&\n)`'"]|'[^'\n]*'|"[^"\n]*")*""")
 
 _BRACKET_TOKEN = re.compile(r"\[[^\]]\][A-Za-z0-9_./@:+-]+")
 
@@ -124,11 +117,36 @@ def strip_data_bodies(cmd, tool_name=None):
         lambda m: m.group(0) if _RUNS_SUBSTITUTION.search(m.group(0)) else "-m X", out)
 
 
-def bracket_leaks(cmd, haystack=None):
-    """Shape 1: a de-bracketed literal appearing contiguously elsewhere in the command.
+def _pattern_leak(pattern, ignore_case, haystack):
+    """The text in `haystack` that a bracket-trick `pattern` matches, or None when it matches none.
 
-    A contiguous occurrence cannot come from the bracket form itself, so it is
-    always a real label/comment leak.
+    pgrep compiles its pattern as an extended regex and matches it against each cmdline, so that
+    is the test: the bracket form itself can never match its own text (`[n]ginx` needs an `n`
+    followed by `ginx`, and its own spelling has a `]` there), so any match is a real leak. Judging
+    a de-bracketed WORD instead cut `[m]ake test` at its space and blocked a command whose only
+    `make` sat in `maketest.log`, which the regex `make test` never matches. A pattern Python's
+    `re` cannot compile falls back to that word test, which errs toward a visible block.
+    """
+    try:
+        found = re.compile(pattern, re.IGNORECASE if ignore_case else 0).search(haystack)
+    except re.error:
+        for tok in _BRACKET_TOKEN.findall(pattern):
+            literal = tok[1] + tok[3:]  # drop the '[' and the ']'
+            if literal in haystack:
+                return literal
+        return None
+    return None if found is None else found.group(0)
+
+
+# A `$` that starts an expansion, not an ERE anchor: the shell substitutes it, so argv holds the
+# unexpanded text and what pgrep would run cannot be judged from the command.
+_EXPANSION = re.compile(r"\$[\w{(]")
+
+
+def bracket_leaks(cmd, haystack=None):
+    """Shape 1: a bracket-trick pattern that still matches the command's own text elsewhere.
+
+    The bracket form cannot match itself, so a match is always a real label/comment leak.
 
     TWO texts, and they must not be the same one. `cmd` is where INVOCATIONS are read, so it may
     have inert statements blanked - a pgrep merely named inside an `echo` is not a call. `haystack`
@@ -146,36 +164,137 @@ def bracket_leaks(cmd, haystack=None):
     # search pattern, and the bracket form there is correct usage, not a footgun.
     leaked = []
     for call in _INVOCATION.findall(cmd):
+        full, ignore_case, pattern = _parse_call(_call_words(call))
         # Without -f/--full the call matches comm, the program name, never a command line, so no
         # literal elsewhere in the command can make it match the shell.
-        if not _HAS_DASH_F.search(call):
+        if not full or pattern is None or not _BRACKET_TOKEN.search(pattern):
             continue
-        for tok in _BRACKET_TOKEN.findall(call):
-            literal = tok[1] + tok[3:]  # drop the '[' and the ']'
-            if literal in haystack:
-                entry = f"{tok} -> {literal}"
-                if entry not in leaked:
-                    leaked.append(entry)
+        if _EXPANSION.search(pattern):
+            continue
+        match = _pattern_leak(pattern, ignore_case, haystack)
+        if match is not None:
+            entry = f"{pattern} -> {match}"
+            if entry not in leaked:
+                leaked.append(entry)
     return leaked
 
 
+# pgrep/pkill options that take a VALUE (procps-ng), short and long. The value is not the pattern:
+# taking the token after `-f` for the pattern reported `pgrep -f -u root x` as `-f -u`.
+_VALUE_SHORT = frozenset("dgGOPstuUFrq")
+_VALUE_LONG = frozenset({
+    "--delimiter", "--pgroup", "--group", "--older", "--parent", "--session", "--terminal",
+    "--euid", "--uid", "--pidfile", "--runstates", "--ns", "--nslist", "--signal", "--queue",
+    "--cgroup", "--env",
+})
+# pkill's signal forms (`-9`, `-TERM`, `-SIGKILL`) carry no value and select no pattern.
+_SIGNAL = re.compile(r"-(?:\d+|SIG[A-Z0-9+-]+|[A-Z][A-Z0-9+-]+)$")
+
+
+def _call_words(call):
+    """The shell words of one pgrep/pkill call, quotes removed, ending where the call does.
+
+    The call ends at an unquoted `)` or backtick as well as at a separator: inside `$(pgrep -f x)`
+    the closer belongs to the substitution, and read as part of the call it was reported as the
+    pattern `x)"`. An unterminated quote runs to the end of the text, which is how the call reads
+    when it sits inside an outer quote (`ssh host 'pgrep -f x'`).
+
+    A backslash-escaped quote is unescaped one level first: inside an outer double-quoted string
+    (`ssh h "pgrep -f \\"[o]bs\\""`) it is a real quote to the shell that runs the call, and read
+    literally it glued the backslashes onto the pattern.
+    """
+    call = call.replace('\\"', '"').replace("\\'", "'")
+    words, cur, has_word, i, n = [], [], False, 0, len(call)
+    while i < n:
+        ch = call[i]
+        if ch in "'\"":
+            close = call.find(ch, i + 1)
+            close = n if close < 0 else close
+            cur.append(call[i + 1:close])
+            has_word, i = True, close + 1
+            continue
+        if ch in ")`":
+            break
+        if ch.isspace():
+            if has_word:
+                words.append("".join(cur))
+            cur, has_word = [], False
+        else:
+            cur.append(ch)
+            has_word = True
+        i += 1
+    if has_word:
+        words.append("".join(cur))
+    return words
+
+
+_LONG_AS_SHORT = {"--full": "f", "--ignore-case": "i"}
+
+
+def _option_meaning(word):
+    """(short letters the word switches on, takes_next) for one option word of a call's argv.
+
+    `-f` counts alone or bundled (`-af`), and the long form only as exactly `--full`: "any long
+    option containing an f" took `--pidfile` and `--logpidfile` for `-f`, and both read PIDs from a
+    file and match no command line. Only WORDS are judged, so the `-` inside a hyphenated filename
+    (`nudge-detector-footguns`) is never read as a flag.
+    """
+    if word.startswith("--"):
+        name = word.split("=", 1)[0]
+        letters = {_LONG_AS_SHORT[name]} if name in _LONG_AS_SHORT else set()
+        return letters, name in _VALUE_LONG and "=" not in word
+    if _SIGNAL.match(word):
+        return set(), False
+    letters = set()
+    for pos, ch in enumerate(word[1:], 1):
+        if ch in _VALUE_SHORT:
+            return letters, pos == len(word) - 1   # a value attached to the bundle consumes nothing
+        letters.add(ch)
+    return letters, False
+
+
+_Call = collections.namedtuple("_Call", "full ignore_case pattern")
+
+
+def _parse_call(words):
+    """A call's -f/--full and -i/--ignore-case switches and its pattern OPERAND (None when it has
+    none), from its words, program name first."""
+    letters, pattern, i, operands_only = set(), None, 1, False
+    while i < len(words):
+        word = words[i]
+        i += 1
+        if operands_only or not word.startswith("-") or word == "-":
+            if pattern is None:
+                pattern = word
+            continue
+        if word == "--":
+            operands_only = True
+            continue
+        seen, takes_next = _option_meaning(word)
+        letters |= seen
+        i += 1 if takes_next else 0
+    return _Call("f" in letters, "i" in letters, pattern)
+
+
 def plain_f_patterns(cmd):
-    """Shape 2: `-f` patterns that are plain literals, so the shell's argv self-matches."""
+    """Shape 2: `-f` patterns that are plain literals, so the shell's argv self-matches.
+
+    The pattern is the call's first OPERAND, found by walking its options and the values they
+    take, never simply the token after `-f`.
+    """
     found = []
     for call in _INVOCATION.findall(cmd):
-        for m in _DASH_F_PATTERN.finditer(call):
-            pattern = next((g for g in m.groups() if g is not None), "")
-            # An EMPTY pattern is not "no pattern" - it is the worst one there is, matching every
-            # command line on the box including this shell's. The regex requires one of its three
-            # alternatives to match, so a match always has exactly one non-None group and the ""
-            # default is unreachable; the old `if not pattern: continue` therefore skipped nothing
-            # BUT the explicitly-empty quoted form. A `-f` with no pattern at all does not match
-            # the regex in the first place, so it never reaches here.
-            if "$" in pattern:
-                continue  # variable: argv holds the unexpanded text, cannot self-match
-            if _BRACKET_TOKEN.search(pattern):
-                continue  # bracket trick: shape 1 owns the leak case
-            found.append(pattern)
+        full, _ignore_case, pattern = _parse_call(_call_words(call))
+        # No operand: nothing to reason about (a malformed or listing-only call). An EMPTY operand
+        # is different - it is the worst pattern there is, matching every command line on the
+        # box including this shell's - so it is reported, not skipped.
+        if not full or pattern is None:
+            continue
+        if "$" in pattern:
+            continue  # variable: argv holds the unexpanded text, cannot self-match
+        if _BRACKET_TOKEN.search(pattern):
+            continue  # bracket trick: shape 1 owns the leak case
+        found.append(pattern)
     return found
 
 

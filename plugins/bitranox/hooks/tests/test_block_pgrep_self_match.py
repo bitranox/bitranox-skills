@@ -319,3 +319,92 @@ def test_a_commit_message_counts_as_a_bracket_leak(monkeypatch):
 def test_a_heredoc_without_the_literal_leaves_the_bracket_trick_intact(monkeypatch):
     cmd = "pgrep -f \"[n]ginx\"; cat <<'EOF' > notes.txt\nhello\nEOF"
     assert run_bash(monkeypatch, cmd) == 0
+
+
+# ---- the finding names the pattern pgrep will actually use -------------------------------------
+#
+# The pattern is the first OPERAND, not whatever token follows -f: an option after -f, or the
+# value of a value-taking option, is not the pattern. Reported as the pattern, `pgrep -f -u root x`
+# read as `-f -u`, which sends the reader to fix a pattern they never wrote.
+
+@pytest.mark.parametrize("cmd, pattern", [
+    ("pgrep -f -u root x", "x"),
+    ("pkill -f -n \"iperf3 -s\"", "iperf3 -s"),
+    ("pgrep -fu root x", "x"),
+    ("pgrep -f --euid root x", "x"),
+    ("pgrep -f --euid=root x", "x"),
+    ("pkill -9 -f myserver", "myserver"),
+    ("pkill -TERM -f myserver", "myserver"),
+    ("pgrep -f -- -weird", "-weird"),
+    ("pgrep myserver -f", "myserver"),
+])
+def test_plain_f_patterns_names_the_operand_not_the_next_token(cmd, pattern):
+    assert B.plain_f_patterns(cmd) == [pattern]
+
+
+@pytest.mark.parametrize("cmd, pattern", [
+    ('echo "$(pgrep -f nginx)"', "nginx"),
+    ("x=`pgrep -f sshd`", "sshd"),
+    ("ssh host 'pgrep -f nginx'", "nginx"),
+    ('pgrep -f "foo)"', "foo)"),
+])
+def test_a_substitution_closer_is_not_part_of_the_pattern(cmd, pattern):
+    assert B.plain_f_patterns(cmd) == [pattern]
+
+
+def test_an_escaped_quote_inside_an_outer_quote_is_a_quote_to_the_inner_shell():
+    cmd = 'ssh h "pct exec 1 -- pgrep -f \\"observe keys.py\\""'
+    assert B.plain_f_patterns(cmd) == ["observe keys.py"]
+
+
+def test_a_second_call_in_its_own_substitution_is_read_as_its_own_call(monkeypatch, capsys):
+    """From the corpus: the `-x claude` call puts the literal in the shell's argv, which the second
+    call's bracket trick then matches. Ending the first call at its `)` must not swallow the second
+    call along with it."""
+    cmd = 'for p in $(pgrep -x claude) $(pgrep -f "[c]laude" | head -20); do echo $p; done'
+    assert run_main(monkeypatch, cmd) == 2
+    assert "[c]laude -> claude" in capsys.readouterr().err
+
+
+def test_a_bracket_alternative_after_a_quoted_pipe_is_still_judged(monkeypatch, capsys):
+    """From the corpus: the call used to end at the `|` INSIDE the quoted pattern, so only the
+    first alternative was ever read, and `[l]eg3` - whose literal sits in the grep and the log path
+    of the same command - went unseen while pgrep reported the shell itself as the campaign."""
+    cmd = ('tail -n 3 /home/u/leg3-campaign.log; '
+           'pgrep -af "[p]rovmm.e2e|[b]ench|[l]eg3" | head -5')
+    assert run_main(monkeypatch, cmd) == 2
+    assert "leg3" in capsys.readouterr().err
+
+
+def test_an_unbracketed_alternative_matches_its_own_text(monkeypatch, capsys):
+    """From the corpus: one bracketed alternative does not protect a plain one beside it - the
+    plain alternative is spelled in the shell's argv and matches it there."""
+    cmd = 'ps -o pid -p $(pgrep -f "[m]utate.py|from mutate import" | head -3)'
+    assert run_main(monkeypatch, cmd) == 2
+    assert "-> from mutate import" in capsys.readouterr().err
+
+
+def test_a_bracket_pattern_is_judged_as_the_regex_pgrep_runs(monkeypatch):
+    """From the corpus: `[m]ake test` matches only "make test", so `maketest.log` elsewhere in
+    the command does not make it self-match. Cutting the pattern at its first space judged the
+    word `make` alone and blocked a correct command."""
+    cmd = ("L=/tmp/maketest.log; tail -c 700 \"$L\"; "
+           "for p in $(pgrep -f '[b]mk|[p]ytest|[m]ake test'); do echo $p; done")
+    assert run_main(monkeypatch, cmd) == 0
+
+
+def test_the_finding_line_quotes_the_real_pattern(monkeypatch, capsys):
+    assert run_main(monkeypatch, "pgrep -f -u root myserver") == 2
+    err = capsys.readouterr().err
+    assert "  -f myserver" in err
+    assert "-f -u" not in err
+
+
+def test_a_variable_pattern_after_an_option_is_not_a_self_match(monkeypatch):
+    """`$name` is the pattern here, and argv holds it unexpanded, so it cannot self-match. Taking
+    `-u` for the pattern blocked it as a plain literal."""
+    assert run_main(monkeypatch, 'pgrep -f -u root "$name"') == 0
+
+
+def test_a_dash_f_with_options_but_no_operand_is_not_blocked(monkeypatch):
+    assert run_main(monkeypatch, "pgrep -f -u root") == 0

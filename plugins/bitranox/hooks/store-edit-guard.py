@@ -116,7 +116,14 @@ def _read(path):
     """(text, exact) of the file at `path`. A file that is not valid UTF-8 is decoded with
     replacement characters and exact=False: the fence markers are ASCII and survive that, so the
     block stays locatable, whereas treating the file as unreadable would drop every deny on it.
-    A UTF-16 BOM is honoured because the Edit/Write tools read and write UTF-16LE files too."""
+    A UTF-16 BOM is honoured because the Edit/Write tools read and write UTF-16LE files too.
+
+    UTF-16 WITHOUT a BOM is deliberately not sniffed. Claude Code (2.1.289, every decode site)
+    reads FF FE as UTF-16LE and everything else as UTF-8, and the engine reads CLAUDE.local.md as
+    strict UTF-8, so in a BOM-less UTF-16 file no reader ever sees a block: Edit cannot match an
+    ASCII old_string against the NUL-interleaved text, and the engine and the context loader find
+    no pointers. Guessing the encoding here would protect bytes the rest of the system cannot read,
+    and steer the model to an engine that cannot see them either."""
     try:
         data = path.read_bytes()
     except OSError:
@@ -143,6 +150,55 @@ def _resolve(raw, cwd):
 
 def _apply(text, old_s, new_s, replace_all):
     return text.replace(old_s, new_s) if replace_all else text.replace(old_s, new_s, 1)
+
+
+# The Edit tool does not match old_string literally. Probed on Claude Code 2.1.289 and read from
+# its validateInput: when the verbatim string is absent it retries with the four curly quotes
+# folded to straight ones on BOTH sides (a straight-quote old_string edits curly text and the
+# reverse), then with `\uXXXX` escapes in old_string swapped for their characters, then with the
+# old_string's non-ASCII characters looked up as `\uXXXX` escapes in the file. Each retry yields
+# the file's OWN substring, which is what the tool replaces. Judging only the verbatim string let
+# an edit the tool then applied inside the block through as "not found".
+_QUOTE_FOLD = str.maketrans({0x2018: "'", 0x2019: "'", 0x201C: '"', 0x201D: '"'})
+_ESCAPE = re.compile(r"(\\\\)|\\u([0-9a-fA-F]{4})")
+
+
+def _unescape(s):
+    """`s` with each `\\uXXXX` turned into its character; an escaped backslash is left alone."""
+    return _ESCAPE.sub(lambda m: m.group(0) if m.group(1) else chr(int(m.group(2), 16)), s)
+
+
+def _escaped_form(needle):
+    """A regex matching `needle` with every non-ASCII UTF-16 unit spelled as a `\\uXXXX` escape."""
+    units = needle.encode("utf-16-le")
+    parts = []
+    for i in range(0, len(units), 2):
+        unit = int.from_bytes(units[i:i + 2], "little")
+        if unit < 0x80:
+            parts.append(re.escape(chr(unit)))
+        else:
+            parts.append(r"\\u" + "".join(f"[{d}{d.upper()}]" if d.isalpha() else d
+                                           for d in f"{unit:04x}"))
+    return "".join(parts)
+
+
+def _locate(text, needle):
+    """The substring of `text` the Edit tool would edit for old_string `needle`, or None."""
+    if needle in text:
+        return needle
+    at = text.translate(_QUOTE_FOLD).find(needle.translate(_QUOTE_FOLD))
+    if at >= 0:
+        return text[at:at + len(needle)]
+    unescaped = _unescape(needle)
+    if unescaped != needle and unescaped in text:
+        return unescaped
+    if needle.isascii() or "\\u" not in text:
+        return None
+    try:
+        found = re.search(_escaped_form(needle), text)
+    except re.error:
+        return None
+    return None if found is None else found.group(0)
 
 
 def decide(event, env):
@@ -182,18 +238,25 @@ def decide(event, env):
     for e in edits or []:
         old_s = e.get("old_string") or ""
         new_s = e.get("new_string") or ""
-        if _injects_marker(new_s) and not _injects_marker(old_s):
+        # the tool unescapes new_string too when it matched through an escape swap
+        adds_marker = _injects_marker(new_s) or _injects_marker(_unescape(new_s))
+        if adds_marker and not _injects_marker(old_s):
             return deny                                # hand-injecting a fence marker
-        spans = _block_spans(working)
-        if _overlaps_block(working, old_s, spans):
-            return deny                                # the edit target sits inside the block
         if not old_s:
-            continue                                   # nothing to locate, nothing to apply
-        if old_s not in working:
+            # Edit refuses an empty old_string on a file whose content is not blank ("Cannot
+            # create new file - file already exists.", probed on Claude Code 2.1.289; its
+            # validateInput tests content.trim() !== ""), and a blank file holds no block. A
+            # marker the new_string would add is caught above.
+            continue
+        spans = _block_spans(working)
+        target = _locate(working, old_s)
+        if target is None:
             if not exact and spans:
                 return _UNPLACEABLE % raw              # the undecodable bytes may hide the match
             continue                                   # the tool rejects a target it cannot find
-        working = _apply(working, old_s, new_s, e.get("replace_all"))
+        if _overlaps_block(working, target, spans):
+            return deny                                # the edit target sits inside the block
+        working = _apply(working, target, new_s, e.get("replace_all"))
     if _block_region(working) != _block_region(current):
         return deny                                    # the edits together change the block
     return None
