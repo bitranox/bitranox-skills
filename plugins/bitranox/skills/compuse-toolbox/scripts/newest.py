@@ -56,7 +56,10 @@ from _cli_envelope import EXIT_ERROR, EXIT_NO, EXIT_YES, EnvelopeArgumentParser,
 
 # A stat that fails with one of these says the path is not there; any other failure (EACCES,
 # ELOOP, EIO) says it may well be there and could not be looked at, which is not a "no".
-_ABSENT_ERRNOS = frozenset({errno.ENOENT, errno.ENOTDIR})
+# EINVAL and ENAMETOOLONG are names the filesystem refuses outright, so nothing can be there:
+# Windows answers EINVAL for `*`, `?`, `<` (an unexpanded glob that matched nothing lands here),
+# Linux answers ENAMETOOLONG for an over-long component.
+_ABSENT_ERRNOS = frozenset({errno.ENOENT, errno.ENOTDIR, errno.EINVAL, errno.ENAMETOOLONG})
 
 
 def _mtime(path: Path) -> float | None:

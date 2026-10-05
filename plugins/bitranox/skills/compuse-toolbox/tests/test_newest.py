@@ -418,6 +418,19 @@ def test_a_glob_that_matches_nothing_is_still_no_match(tmp_path):
     assert "nothing-*" in r.stderr
 
 
+@pytest.mark.parametrize("name", ["x" * 300, "a?b", "a<b"],
+                         ids=["over-long", "question-mark", "angle-bracket"])
+def test_a_name_that_cannot_exist_is_no_match_not_unstattable(tmp_path, name):
+    """A name the filesystem refuses outright cannot be there, so it is a no-match (1), never the
+    "exists but could not be stat'd" refusal (2). Linux refuses an over-long component with
+    ENAMETOOLONG; Windows refuses `?` and `<` (and the `*` of an unexpanded glob) with EINVAL.
+    Each platform turns the other's cases into a plain ENOENT, so every arm is meaningful on one."""
+    r = subprocess.run([sys.executable, str(TOOL), name], capture_output=True, text=True,
+                       encoding="utf-8", errors="replace", cwd=str(tmp_path), check=False)
+    assert r.returncode == 1, r.stderr
+    assert "could not be stat'd" not in r.stderr
+
+
 def test_an_existing_name_with_brackets_is_taken_literally(tmp_path):
     literal = tmp_path / "snap[1]"
     _touch(literal, 100.0)
