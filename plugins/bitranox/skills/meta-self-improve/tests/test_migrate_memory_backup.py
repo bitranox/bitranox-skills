@@ -202,7 +202,7 @@ def test_an_unreadable_level_file_fails_its_store_and_the_backup_is_still_named(
     _native(home, s2, {"project-gamma": "Gamma body."})
     before = _snapshot(top)
 
-    assert M.main(["--apply", "--slug=" + s1, "--slug=" + s2]) == 1
+    assert M.main(["--apply", "--slug=" + s1, "--slug=" + s2]) == 2   # I/O beats "no"
     out = capsys.readouterr().out
     assert "FAILED" in out and "CLAUDE.local.md" in out
     runs = [p for p in M._backups_dir().iterdir() if p.is_dir()]
@@ -290,3 +290,29 @@ def test_a_non_ascii_repo_path_under_an_ascii_locale_is_still_gitignored(env):
     assert r.returncode == 0, r.stderr
     assert r.stdout.strip() == "gitignored", (r.stdout, r.stderr)
     assert sig.MEMORY_DIRNAME + "/" in (top / ".gitignore").read_text(encoding="utf-8")
+
+
+def test_a_restore_that_cannot_put_an_item_back_exits_2(env, capsys):
+    """A put-back that fails is an I/O failure (2), not a "no" (1). The backup copy of one file is
+    removed, so copying it back raises on every platform."""
+    tmp_path, home = env
+    top, proj = _tree(tmp_path)
+    s1 = _slug(proj)
+    _native(home, s1, {"project-alpha": "Alpha body."})
+    assert M.main(["--apply", "--slug=" + s1]) == 0
+    run = [p for p in M._backups_dir().iterdir() if p.is_dir()][0]
+    items = json.loads((run / "manifest.json").read_text(encoding="utf-8"))["items"]
+    victim = next(i for i in items if i["existed"] and i["kind"] == "file" and i["restore"])
+    (run / victim["copy"]).unlink()
+    capsys.readouterr()
+    assert M.main(["--restore", str(run)]) == 2
+    assert "NOT restored" in capsys.readouterr().out
+
+
+def test_control_a_parked_store_alone_still_exits_1(env):
+    """R-d: a run that acted and could not place some entries (a parked store) is a partial
+    outcome, 1 - only an I/O failure moves it to 2."""
+    _tmp, home = env
+    slug = "-media-does-not-exist-anywhere-either"
+    _native(home, slug, {"project-a": "Body A."})
+    assert M.main(["--apply", "--slug=" + slug]) == 1

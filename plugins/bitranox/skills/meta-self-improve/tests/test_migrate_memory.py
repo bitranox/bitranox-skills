@@ -425,7 +425,7 @@ def test_a_failed_backup_aborts_the_store_before_any_write(env, capsys):
     rep = M.migrate_store(slug, dry_run=False)
     assert rep["error"] and "backup" in rep["error"]
     assert _placed_bodies(proj) == {}
-    assert M.main(["--apply", "--slug=" + slug]) == 1
+    assert M.main(["--apply", "--slug=" + slug]) == 2          # an I/O failure, not a "no"
 
 
 def test_a_backup_that_works_is_not_an_error(env):
@@ -436,7 +436,7 @@ def test_a_backup_that_works_is_not_an_error(env):
     assert rep["error"] is None and rep["placed"] == 1
 
 
-# ---- exit codes: 0 all placed, 1 something was not, 2 usage ------------------------------------
+# ---- exit codes: 0 all placed, 1 a store parked or an entry refused, 2 usage or I/O ------------
 
 def test_a_parked_store_exits_1(env):
     _tmp, home = env
@@ -492,9 +492,10 @@ def test_an_exception_mid_run_still_names_the_backup(env, capsys, monkeypatch):
         raise RuntimeError("unexpected mid-run failure")
 
     monkeypatch.setattr(M, "migrate_store", boom)
-    with pytest.raises(RuntimeError):
-        M.main(["--apply", "--slug=" + slug])
-    out = capsys.readouterr().out
+    assert M.main(["--apply", "--slug=" + slug]) == 2       # mapped at the boundary, no traceback
+    captured = capsys.readouterr()
+    out = captured.out
+    assert "unexpected mid-run failure" in captured.err
     assert "BACKUP of everything written" in out
     assert str(home / "fake-backup-dir") in out
 
@@ -518,11 +519,11 @@ def test_a_bom_topic_file_keeps_its_frontmatter(env):
     assert entry["hook"] == "the hook" and entry["type"] == "reference"
 
 
-def test_an_undecodable_topic_file_is_reported_and_exits_1(env, capsys):
+def test_an_undecodable_topic_file_is_reported_and_exits_2(env, capsys):
     proj, slug, home = _project(env, "repoBadBytes")
     _raw_store(home, slug, {"a.md": "---\nname: project-a\ndescription: d\n---\nBody A.\n",
                             "b.md": b"---\nname: project-b\ndescription: caf\xe9\n---\nB.\n"})
-    assert M.main(["--apply", "--slug=" + slug]) == 1
+    assert M.main(["--apply", "--slug=" + slug]) == 2
     out = capsys.readouterr().out
     assert "b.md" in out
     assert list(_placed_bodies(proj)) == ["project-a"]
