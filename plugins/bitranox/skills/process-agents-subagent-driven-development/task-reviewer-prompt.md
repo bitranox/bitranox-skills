@@ -50,7 +50,14 @@ Subagent (general-purpose):
     checking the call sites is the right method.
 
     Your review is read-only on this checkout. Do not mutate the working
-    tree, the index, HEAD, or branch state in any way.
+    tree, the index, HEAD, or branch state in any way. A temporary
+    RED-proof mutation is a mutation too: when whether a test can fail is
+    your doubt, name the mutation in your report. If you must run one, use
+    compuse-toolbox's mutation_arm (it copies the file first and restores it
+    in a `finally`), never a hand edit restored from a scratch copy -
+    subagents share the session's scratchpad, so a `.orig` you find there
+    can be an earlier agent's stale file - and confirm afterwards that
+    `git diff --quiet HEAD` still exits 0.
 
     ## Do Not Trust the Report
 
