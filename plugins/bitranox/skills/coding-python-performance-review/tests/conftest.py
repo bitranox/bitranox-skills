@@ -5,6 +5,7 @@ SKILL.md invokes it, and returns the CompletedProcess with BYTES output so a tes
 encoding the script actually wrote.
 """
 import os
+import site
 import subprocess
 import sys
 
@@ -19,10 +20,16 @@ def _clean_env(**extra):
 
     A push from a linked worktree exports GIT_DIR to its hooks, and git reads it before the
     cwd, so a fixture repo built under it would write into the repo being pushed.
+
+    PYTHONUSERBASE is pinned to the running interpreter's: on POSIX the user site-packages dir
+    is derived from HOME, so a fixture that gives the child a private HOME would otherwise hide
+    every ``pip install --user`` package from it - pytest included - and the child suite dies
+    with "No module named pytest" whenever the outer run uses such an interpreter.
     """
     env = {k: v for k, v in os.environ.items()
            if not k.startswith("GIT_") and k not in ("PYTEST_ADDOPTS", "PYTHONIOENCODING")}
     env["PYTHONDONTWRITEBYTECODE"] = "1"
+    env.setdefault("PYTHONUSERBASE", site.getuserbase())
     env.update(extra)
     return env
 

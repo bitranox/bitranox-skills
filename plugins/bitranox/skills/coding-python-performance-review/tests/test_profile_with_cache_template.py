@@ -228,6 +228,35 @@ def _project(tmp_path, files):
     return proj
 
 
+@pytest.mark.parametrize("module,function", [("no_such_pkg.mod", "f"), ("mypkg.mod", "no_such_function")])
+def test_e2e_an_unimportable_target_exits_2_with_abort_before_any_run(tmp_path, clean_env, module,
+                                                                      function):
+    """The template's one required edit, done wrong, raised a traceback (exit 1) - and only after
+    the warm-up and the first uncached run had been paid for."""
+    files = dict(PROJECT_FILES)
+    files["tests/test_f.py"] = ("import os\nfrom mypkg.mod import f\n\n\ndef test_f():\n"
+                                "    open(os.environ['SUITE_LOG'], 'a').write('ran\\n')\n"
+                                "    assert f(3) == 4\n")
+    proj = _project(tmp_path, files)
+    script = _copy_template(tmp_path, module, function)
+    log = tmp_path / "suite.log"
+    r = subprocess.run([sys.executable, str(script)], cwd=str(proj),
+                       env=clean_env(SUITE_LOG=str(log)), capture_output=True, text=True,
+                       encoding="utf-8", errors="replace", timeout=180, check=False)
+    assert r.returncode == 2, r.stdout + r.stderr
+    assert "ABORT" in r.stdout and "Traceback" not in r.stderr
+    assert not log.exists(), "the suite ran before the target was checked"
+
+
+def test_main_without_pytest_exits_2_with_abort(target, monkeypatch, capsys):
+    """A missing pytest is a missing dependency: ABORT (exit 2), never a traceback."""
+    monkeypatch.setitem(sys.modules, "pytest", None)  # import pytest -> ImportError
+    rc = pwct.main(clock=FakeClock())
+    out = capsys.readouterr().out
+    assert rc == 2
+    assert "ABORT" in out and "pytest" in out
+
+
 def _copy_template(tmp_path, module, function, repeats=None):
     """Copy the template to a sibling dir and fill in its two TODO constants, as SKILL.md says.
 

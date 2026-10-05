@@ -15,8 +15,10 @@ One run per arm is not a measurement: on a small suite two identical runs differ
 The copy may live anywhere (SKILL.md puts it in the scratch dir): the current directory goes
 on sys.path first, the way ``python -m pytest`` would put it there.
 
-Exit codes: 0 a verdict (RECOMMEND or REJECT) was printed, 2 ABORT - a suite run failed
-(with or without the cache), so there is no valid measurement to judge.
+Exit codes: 0 a verdict (RECOMMEND or REJECT) was printed - REJECT is a measured answer, not a
+failure; 2 ABORT - no valid measurement to judge: a suite run failed (with or without the
+cache), pytest is not installed, or MODULE_NAME / FUNCTION_NAME do not import. The last two are
+checked before the first suite run, so a wrong edit costs nothing.
 """
 
 import os
@@ -110,13 +112,35 @@ def _rebind(old, new):
     return changed
 
 
-def profile_with_cache(clock=time.perf_counter):
-    """Profile test suite with caching applied."""
+class NotRunnable(Exception):
+    """The experiment cannot start: a missing dependency or a target that does not import."""
+
+
+def _resolve_target():
+    """The module and the function to cache, or NotRunnable naming the edit to fix."""
     import importlib
     _ensure_cwd_importable()
-    module = importlib.import_module(MODULE_NAME)
+    try:
+        module = importlib.import_module(MODULE_NAME)
+    except ImportError as exc:
+        raise NotRunnable(f"MODULE_NAME {MODULE_NAME!r} does not import ({exc}); set it to the "
+                          "module that defines the function, importable from the project root") from exc
+    if not hasattr(module, FUNCTION_NAME):
+        raise NotRunnable(f"FUNCTION_NAME {FUNCTION_NAME!r} is not defined in {MODULE_NAME}")
+    return module, getattr(module, FUNCTION_NAME)
 
-    original_func = getattr(module, FUNCTION_NAME)
+
+def _require_pytest():
+    try:
+        import pytest  # noqa: F401 - only checking that the suite runner exists
+    except ImportError as exc:
+        raise NotRunnable(f"pytest is not installed in this interpreter ({sys.executable}); "
+                          "run the copy with the project's own python") from exc
+
+
+def profile_with_cache(clock=time.perf_counter):
+    """Profile test suite with caching applied."""
+    module, original_func = _resolve_target()
     cached_func = lru_cache(maxsize=CACHE_SIZE)(original_func)
 
     patched = _rebind(original_func, cached_func)
@@ -214,6 +238,14 @@ def main(clock=time.perf_counter):
               "tell a difference from noise.")
         return 2
     _ensure_cwd_importable()
+
+    try:
+        # Both checked before the first (paid-for) suite run.
+        _require_pytest()
+        _resolve_target()
+    except NotRunnable as exc:
+        print(f"ABORT: {exc}. No verdict: nothing was measured.")
+        return 2
 
     try:
         uncached, cached, cache_info, hit_rate = _measure(clock)

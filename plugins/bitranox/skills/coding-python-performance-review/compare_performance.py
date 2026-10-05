@@ -9,8 +9,8 @@ Usage: python compare_performance.py
 
 Exit codes: 0 both suite runs passed and the delta is reported; 2 no comparison was
 possible - not a git repository, no commits, no parent commit, a git step failed, a suite
-run failed (a failing suite's timing measures nothing), or the working tree could not be
-restored (stderr then names the branch or commit to check out again, the sha of the stash
+run failed (a failing suite's timing measures nothing), git itself is missing, or the working
+tree could not be restored (stderr then names the branch or commit to check out again, the sha of the stash
 that holds the uncommitted changes, and the git commands that put both back). When the BEFORE
 run created a file where the stash restores an untracked file, the stash is not popped at all
 - git would write the tracked changes and then refuse - and stderr names that file first.
@@ -36,8 +36,12 @@ def _git(*args):
     # Decisions below read exit codes and refs, never git's messages; LC_ALL=C keeps a
     # localized git from changing anything that is printed or parsed.
     env = {**os.environ, "LC_ALL": "C"}
-    return subprocess.run(["git", *args], capture_output=True, text=True,
-                          encoding="utf-8", errors="replace", env=env, check=False)
+    try:
+        return subprocess.run(["git", *args], capture_output=True, text=True,
+                              encoding="utf-8", errors="replace", env=env, check=False)
+    except OSError as exc:
+        # git missing or not executable: no comparison is possible (exit 2), not a traceback.
+        raise CompareError(f"git could not be run ({exc}); install git or put it on PATH") from exc
 
 
 def _rev(ref):
