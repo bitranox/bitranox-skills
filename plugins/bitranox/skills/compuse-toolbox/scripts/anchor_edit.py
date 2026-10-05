@@ -24,8 +24,18 @@ Run:
   `uv run scripts/anchor_edit.py insert F --anchor-file a.txt --new-file n.txt --after`
   `uv run scripts/anchor_edit.py replace-span F --start-file s.txt --end-file e.txt \\
        --new-text '' --expect-removed-lines 3 --must-keep 'def survivor('`
+  `uv run scripts/anchor_edit.py batch --spec edits.json` - many exact replacements, across
+       files, every one checked before ANY file is written
   add `--json` for an envelope, `--dry-run` to see the line delta without writing
   `uv run scripts/anchor_edit.py reap F` lists F's backups; `--apply` deletes them
+
+`batch` reads a JSON spec (a file, or - for stdin): a list of edits, or an object
+`{"edits": [...], "expect_line_delta": {"<abs path>": N}}`. Each edit is
+`{"file": "<abs path>", "old": "...", "new": "...", "count": 1}`; `count` (default 1) is how many
+times `old` must occur, and every occurrence is replaced. Edits to one file apply in order, each
+seeing the previous result. Nothing is written unless every edit matches its count and every
+`expect_line_delta` holds - so a one-line record edit that must not change the line count states
+`0` there. Two spellings of one path are one file.
 
 The new text is spliced in VERBATIM - no newline, blank line or indentation is added for you,
 so text meant to land as its own line must carry its own trailing newline. Stated because it
@@ -48,17 +58,22 @@ Line endings are kept: a file whose every newline is CRLF is matched and edited 
 anchor still matches) and written back as CRLF, new text with CRLF of its own included; any other
 file is edited byte for byte. The file must be UTF-8; a BOM is kept.
 
-Exit codes: 0 = the edit was applied, 1 = refused (nothing written), 2 = usage or IO error
-(unreadable or non-UTF-8 file, missing anchor argument, a write that failed).
+Exit codes: 0 = the edit was applied (or, with --dry-run, would be), 2 = it was not: refused with
+nothing written (the anchor is absent or ambiguous, a postcondition failed, reap of a file git
+cannot restore), or a usage or IO error (unreadable or non-UTF-8 file, missing anchor argument,
+a write that failed), or a crash. A refusal is a refusal of the whole action, so it is 2, not 1;
+the message (and `data.refused` under --json) says which it was. `--json` prints the envelope
+`{ok, command, data, skipped}` on every exit; `ok` is false exactly on exit 2.
 """
 from __future__ import annotations
 
-import argparse
 import json
 import os
 import subprocess
 import sys
 from pathlib import Path
+
+from _cli_envelope import EnvelopeArgumentParser, emit, run_guarded
 
 
 class AnchorError(Exception):
@@ -70,7 +85,8 @@ class AnchorError(Exception):
 
 
 class UsageError(Exception):
-    """A bad invocation or an IO failure (exit 2), as opposed to a refusal (exit 1)."""
+    """A bad invocation or an IO failure, as opposed to a refusal. Both exit 2; the envelope's
+    `data.refused` tells them apart."""
 
 
 def line_count(text: str) -> int:
@@ -142,6 +158,24 @@ def replace_exact(text: str, old: str, new: str) -> str:
     if result == text and old != new:
         raise AnchorError("the replacement produced no change, which cannot be right here")
     return result
+
+
+def replace_counted(text: str, old: str, new: str, count: int = 1) -> str:
+    """Replace every occurrence of `old`, which must occur exactly `count` times, or refuse.
+
+    Overlapping occurrences are refused when `count` is above 1: `str.replace` rewrites only the
+    non-overlapping ones, so "aa" in "aaa" counts twice and is replaced once.
+    """
+    if count == 1:
+        return replace_exact(text, old, new)
+    found = occurrences(text, old)
+    if found != count:
+        head = old.strip().split("\n")[0] if old.strip() else old
+        raise AnchorError(f"old text appears {found} times, expected {count}: {head!r}")
+    if text.count(old) != count:
+        raise AnchorError(f"old text overlaps itself, so replacing all {count} is ambiguous: "
+                          f"{old!r}")
+    return text.replace(old, new)
 
 
 def insert_at(text: str, anchor: str, new: str, *, where: str = "after") -> str:
@@ -369,6 +403,43 @@ def _back_to_crlf(before: str, after: str) -> str:
     return lf.replace("\n", "\r\n")
 
 
+class _Plan:
+    """A transformed file held in memory, not yet written: what `commit_plan` needs."""
+
+    def __init__(self, path: Path, raw: bytes, before: str, after: str, crlf: bool):
+        self.path = path
+        self.raw = raw
+        self.before = before
+        self.after = after
+        self.crlf = crlf
+
+    @property
+    def line_delta(self) -> int:
+        return line_count(self.after) - line_count(self.before)
+
+
+def plan_file(path: Path, transform) -> _Plan:
+    """Read and transform the file in memory. Raises AnchorError / UsageError; writes nothing."""
+    path = Path(path)
+    raw, text = _read_file(path)
+    crlf = _is_all_crlf(text)
+    before = text.replace("\r\n", "\n") if crlf else text
+    return _Plan(path, raw, before, transform(before), crlf)
+
+
+def commit_plan(plan: _Plan, *, backup: bool = True) -> EditResult:
+    """Write a planned edit, backing the file up first when git could not restore it."""
+    saved = None
+    if backup and not is_recoverable_from_git(plan.path):
+        saved = next_backup_path(plan.path)
+        _write_bytes(saved, plan.raw, f"cannot write the backup {saved}, nothing written")
+    out = _back_to_crlf(plan.before, plan.after) if plan.crlf else plan.after
+    where = f"the pre-edit content is in {saved}" if saved else "restore it from git"
+    _write_bytes(plan.path, out.encode("utf-8"),
+                 f"writing {plan.path} failed, it may be unchanged or partly written - {where}")
+    return EditResult(plan.path, plan.line_delta, saved, written=True)
+
+
 def apply_to_file(path: Path, transform, *, dry_run: bool = False, backup: bool = True):
     """Read, transform, and write the file, backing it up first when git does not track it.
 
@@ -376,23 +447,140 @@ def apply_to_file(path: Path, transform, *, dry_run: bool = False, backup: bool 
     (an LF anchor still matches) and written back as CRLF, any other file byte for byte. The
     backup is the original bytes.
     """
-    path = Path(path)
-    raw, text = _read_file(path)
-    crlf = _is_all_crlf(text)
-    before = text.replace("\r\n", "\n") if crlf else text
-    after = transform(before)
-    delta = line_count(after) - line_count(before)
+    plan = plan_file(path, transform)
     if dry_run:
-        return EditResult(path, delta, None, written=False)
-    saved = None
-    if backup and not is_recoverable_from_git(path):
-        saved = next_backup_path(path)
-        _write_bytes(saved, raw, f"cannot write the backup {saved}, nothing written")
-    out = _back_to_crlf(before, after) if crlf else after
-    where = f"the pre-edit content is in {saved}" if saved else "restore it from git"
-    _write_bytes(path, out.encode("utf-8"),
-                 f"writing {path} failed, it may be unchanged or partly written - {where}")
-    return EditResult(path, delta, saved, written=True)
+        return EditResult(plan.path, plan.line_delta, None, written=False)
+    return commit_plan(plan, backup=backup)
+
+
+class BatchRefusal(AnchorError):
+    """A batch refused before any write, naming the edit (1-based) when one edit caused it."""
+
+    def __init__(self, index: int | None, message: str):
+        super().__init__(message)
+        self.index = index
+
+
+class BatchEdit:
+    """One exact replacement of a batch, numbered from 1 in the order the spec gave it."""
+
+    def __init__(self, index: int, file: Path, old: str, new: str, count: int):
+        self.index = index
+        self.file = file
+        self.old = old
+        self.new = new
+        self.count = count
+
+
+_EDIT_KEYS = {"file", "old", "new", "count"}
+_SPEC_KEYS = {"edits", "expect_line_delta"}
+
+
+def _spec_path(value, where: str) -> Path:
+    if not isinstance(value, str) or not value:
+        raise UsageError(f"{where}: 'file' must be a non-empty string")
+    path = Path(value)
+    if not path.is_absolute():
+        raise UsageError(f"{where}: refusing a relative path, pass an absolute one: {value}")
+    if not path.is_file():
+        raise UsageError(f"{where}: no such file: {value}")
+    return path
+
+
+def _spec_edit(index: int, row) -> BatchEdit:
+    where = f"edit {index}"
+    if not isinstance(row, dict):
+        raise UsageError(f"{where}: must be an object, not {type(row).__name__}")
+    unknown = set(row) - _EDIT_KEYS
+    if unknown:
+        raise UsageError(f"{where}: unknown key(s) {sorted(unknown)}")
+    for key in ("old", "new"):
+        if not isinstance(row.get(key), str):
+            raise UsageError(f"{where}: '{key}' is required and must be a string")
+    if not row["old"]:
+        raise UsageError(f"{where}: 'old' is empty, which matches everywhere")
+    count = row.get("count", 1)
+    if isinstance(count, bool) or not isinstance(count, int) or count < 1:
+        raise UsageError(f"{where}: 'count' must be a positive integer")
+    return BatchEdit(index, _spec_path(row.get("file"), where), row["old"], row["new"], count)
+
+
+def parse_batch_spec(text: str) -> tuple[list[BatchEdit], dict[Path, int]]:
+    """The spec's edits and its expected line delta per RESOLVED path. Raises UsageError."""
+    try:
+        doc = json.loads(text)
+    except ValueError as exc:
+        raise UsageError(f"the spec is not JSON: {exc}") from exc
+    if isinstance(doc, list):
+        doc = {"edits": doc}
+    if not isinstance(doc, dict):
+        raise UsageError("the spec must be a list of edits or an object with 'edits'")
+    unknown = set(doc) - _SPEC_KEYS
+    if unknown:
+        raise UsageError(f"unknown spec key(s) {sorted(unknown)}")
+    rows = doc.get("edits")
+    if not isinstance(rows, list) or not rows:
+        raise UsageError("no edits in the spec")
+    edits = [_spec_edit(i, row) for i, row in enumerate(rows, start=1)]
+    expect_raw = doc.get("expect_line_delta", {})
+    if not isinstance(expect_raw, dict):
+        raise UsageError("'expect_line_delta' must map an absolute path to an integer")
+    expect: dict[Path, int] = {}
+    for name, delta in expect_raw.items():
+        if isinstance(delta, bool) or not isinstance(delta, int):
+            raise UsageError(f"expect_line_delta[{name!r}] must be an integer")
+        expect[_spec_path(name, f"expect_line_delta[{name!r}]").resolve()] = delta
+    return edits, expect
+
+
+def plan_batch(edits: list[BatchEdit], expect: dict[Path, int]) -> list[_Plan]:
+    """Every file's edits applied in memory, in spec order, or the first refusal.
+
+    Grouped by RESOLVED path: two spellings of one file planned apart would each start from the
+    disk copy, and the second write would silently drop the first one's edits.
+    """
+    order: list[Path] = []
+    groups: dict[Path, list[BatchEdit]] = {}
+    for edit in edits:
+        key = edit.file.resolve()
+        if key not in groups:
+            order.append(key)
+            groups[key] = []
+        groups[key].append(edit)
+    unplanned = set(expect) - set(groups)
+    if unplanned:
+        names = sorted(map(str, unplanned))
+        raise UsageError(f"expect_line_delta names a file no edit touches: {names}")
+    plans = []
+    for key in order:
+        plan = plan_file(key, lambda text, todo=groups[key]: _apply_in_order(text, todo))
+        want = expect.get(key)
+        if want is not None and plan.line_delta != want:
+            raise BatchRefusal(None, f"{key} would change by {plan.line_delta:+d} lines, "
+                                     f"expected {want:+d}")
+        plans.append(plan)
+    return plans
+
+
+def _apply_in_order(text: str, edits: list[BatchEdit]) -> str:
+    for edit in edits:
+        try:
+            text = replace_counted(text, edit.old, edit.new, edit.count)
+        except AnchorError as exc:
+            raise BatchRefusal(edit.index, f"edit {edit.index} ({edit.file}): {exc}") from exc
+    return text
+
+
+def commit_batch(plans: list[_Plan], *, backup: bool = True) -> list[EditResult]:
+    """Write every plan. A failed write names the files already written, which stay written."""
+    done: list[EditResult] = []
+    for plan in plans:
+        try:
+            done.append(commit_plan(plan, backup=backup))
+        except UsageError as exc:
+            written = ", ".join(str(r.path) for r in done) or "none"
+            raise UsageError(f"{exc}; files already written: {written}") from exc
+    return done
 
 
 def _read_stdin() -> str:
@@ -445,7 +633,8 @@ def _add_common(sub):
 
 
 def _parser():
-    ap = argparse.ArgumentParser(description="Edit a file at an exact anchor, or refuse.")
+    ap = EnvelopeArgumentParser(description="Edit a file at an exact anchor, or refuse.",
+                                envelope_command="anchor_edit")
     subs = ap.add_subparsers(dest="command", required=True)
     for name in ("replace", "insert"):
         sub = subs.add_parser(name)
@@ -468,16 +657,19 @@ def _parser():
                       help="lines the region must cover; a bigger region is a refusal")
     span.add_argument("--must-keep", action="append",
                       help="text that must still be present after the write (repeatable)")
+    batch = subs.add_parser("batch", help="many exact replacements, all checked before any write")
+    batch.add_argument("--spec", required=True, help="JSON spec file, or - for stdin")
+    batch.add_argument("--json", action="store_true", help="machine-readable envelope")
+    batch.add_argument("--dry-run", action="store_true",
+                       help="report each file's line delta, write nothing")
+    batch.add_argument("--no-backup", action="store_true",
+                       help="skip the .bak written when git could not restore a file")
     reap = subs.add_parser("reap", help="delete a file's backups once git can restore the file")
     reap.add_argument("file")
     reap.add_argument("--apply", action="store_true",
                       help="delete them; without it the backups are only listed")
     reap.add_argument("--json", action="store_true", help="machine-readable envelope")
     return ap
-
-
-def _envelope(ok: bool, data: dict) -> str:
-    return json.dumps({"ok": ok, "command": "anchor_edit", "skipped": [], "data": data}, indent=2)
 
 
 def _reconfigure_streams() -> None:
@@ -493,33 +685,37 @@ def _reconfigure_streams() -> None:
 
 
 def main(argv=None) -> int:
+    """The CLI. An uncaught exception exits 2 with the envelope under --json, never a traceback."""
+    return run_guarded(_main, argv, command="anchor_edit")
+
+
+def _main(argv=None) -> int:
     _reconfigure_streams()
     args = _parser().parse_args(argv)
+    if args.command == "batch":
+        return _run_batch(args)
     target = Path(args.file)
     if not target.is_absolute():
         # Which file a relative path names depends on the cwd, and a cwd persists across calls.
         # The absent-anchor check does NOT cover this: a sibling repo is exactly where the anchor
         # is most likely to be PRESENT in the wrong file - template-copied docs, a section
         # duplicated across repos - so the edit lands elsewhere and exits 0.
-        print(f"anchor_edit: refusing a relative path, pass an absolute one: {target}",
-              file=sys.stderr)
-        return 2
+        return _usage(args, f"refusing a relative path, pass an absolute one: {target}")
     if not target.is_file():
-        print(f"anchor_edit: no such file: {target}", file=sys.stderr)
-        return 2
+        return _usage(args, f"no such file: {target}")
     if args.command == "reap":
         return _run_reap(target, args)
     try:
         result = apply_to_file(target, _build_transform(args), dry_run=args.dry_run,
                                backup=not args.no_backup)
     except AnchorError as exc:
-        return _fail(args, 1, f"refused, nothing written - {exc}", exc)
+        return _fail(args, f"refused, nothing written - {exc}", exc, refused=True)
     except UsageError as exc:
         # The message itself says whether anything was written: a failed target write may
         # already have left a backup behind.
-        return _fail(args, 2, f"error - {exc}", exc)
+        return _fail(args, f"error - {exc}", exc)
     if args.json:
-        print(_envelope(True, result.as_data()))
+        emit(0, "anchor_edit", result.as_data())
     else:
         verb = "would change" if args.dry_run else "changed"
         # The exact path, because a later run writes .bak.001, .bak.002 and so on - printing a bare
@@ -531,23 +727,67 @@ def main(argv=None) -> int:
     return 0
 
 
-def _fail(args, code: int, message: str, exc: Exception) -> int:
+def _fail(args, message: str, exc: Exception, *, refused: bool = False, **data) -> int:
+    """Exit 2. `refused` marks a refusal (nothing written) apart from a usage or IO error."""
     if args.json:
-        print(_envelope(False, {"reason": str(exc)}))
+        emit(2, "anchor_edit", {"reason": str(exc), **({"refused": True} if refused else {}),
+                                **data}, error=str(exc))
     print(f"anchor_edit: {message}", file=sys.stderr)
-    return code
+    return 2
+
+
+def _usage(args, message: str) -> int:
+    if getattr(args, "json", False):
+        emit(2, "anchor_edit", {"reason": message}, error=message)
+    print(f"anchor_edit: {message}", file=sys.stderr)
+    return 2
+
+
+def _read_spec(spec: str) -> str:
+    try:
+        if spec == "-":
+            return sys.stdin.buffer.read().decode("utf-8-sig")
+        return Path(spec).read_text(encoding="utf-8-sig")
+    except (OSError, UnicodeDecodeError) as exc:
+        raise UsageError(f"cannot read --spec: {exc}") from exc
+
+
+def _run_batch(args) -> int:
+    try:
+        edits, expect = parse_batch_spec(_read_spec(args.spec))
+        plans = plan_batch(edits, expect)
+        results = ([EditResult(p.path, p.line_delta, None, written=False) for p in plans]
+                   if args.dry_run else commit_batch(plans, backup=not args.no_backup))
+    except BatchRefusal as exc:
+        return _fail(args, f"refused, nothing written - {exc}", exc, refused=True,
+                     edit=exc.index)
+    except AnchorError as exc:
+        return _fail(args, f"refused, nothing written - {exc}", exc, refused=True)
+    except UsageError as exc:
+        return _fail(args, f"error - {exc}", exc)
+    if args.json:
+        emit(0, "anchor_edit", {"dry_run": args.dry_run,
+                                "files": [{**r.as_data(), "edits": sum(
+                                    1 for e in edits if e.file.resolve() == r.path)}
+                                          for r in results]})
+        return 0
+    verb = "would change" if args.dry_run else "changed"
+    for r in results:
+        note = f", backup {r.backup}" if r.backup else ""
+        print(f"anchor_edit: {verb} {r.path} ({r.line_delta:+d} lines){note}")
+    return 0
 
 
 def _run_reap(target: Path, args) -> int:
     try:
         backups = reap_backups(target, apply=args.apply)
     except AnchorError as exc:
-        return _fail(args, 1, f"refused, nothing deleted - {exc}", exc)
+        return _fail(args, f"refused, nothing deleted - {exc}", exc, refused=True)
     except UsageError as exc:
-        return _fail(args, 2, f"error - {exc}", exc)
+        return _fail(args, f"error - {exc}", exc)
     if args.json:
-        print(_envelope(True, {"path": str(target), "backups": [str(b) for b in backups],
-                               "deleted": args.apply}))
+        emit(0, "anchor_edit", {"path": str(target), "backups": [str(b) for b in backups],
+                                "deleted": args.apply})
         return 0
     if not backups:
         print(f"anchor_edit: no backups of {target}")

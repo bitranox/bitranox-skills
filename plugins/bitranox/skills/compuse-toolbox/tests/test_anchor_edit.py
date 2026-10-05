@@ -337,11 +337,12 @@ def test_cli_applies_a_replacement_and_exits_zero(tmp_path):
     assert "    return 22" in target.read_text(encoding="utf-8")
 
 
-def test_cli_refuses_an_absent_anchor_with_exit_one_and_writes_nothing(tmp_path):
+def test_cli_refuses_an_absent_anchor_with_exit_two_and_writes_nothing(tmp_path):
+    """A refusal of the whole edit is "could not run" (2) under the 0/1/2 standard."""
     target = tmp_path / "f.py"
     target.write_text(SAMPLE, encoding="utf-8")
     proc = _run("replace", str(target), "--anchor", "absent", "--new-text", "x")
-    assert proc.returncode == 1
+    assert proc.returncode == 2
     assert target.read_text(encoding="utf-8") == SAMPLE
 
 
@@ -351,10 +352,11 @@ def test_cli_json_stays_parseable_on_a_refusal(tmp_path):
     target = tmp_path / "f.py"
     target.write_text(SAMPLE, encoding="utf-8")
     proc = _run("replace", str(target), "--anchor", "absent", "--new-text", "x", "--json")
-    assert proc.returncode == 1
+    assert proc.returncode == 2
     payload = json.loads(proc.stdout)
     assert payload["ok"] is False
     assert payload["command"] == "anchor_edit"
+    assert payload["data"]["refused"] is True and "appears 0 times" in payload["error"]
 
 
 def test_cli_usage_error_exits_two(tmp_path):
@@ -662,7 +664,7 @@ def test_cli_replace_span_refuses_when_must_keep_is_lost(tmp_path):
     bad = _run("replace-span", str(target), "--start", "def keep_me():", "--end",
                "def also_keep():", "--new-text", "", "--expect-removed-lines", "6",
                "--must-keep", "def target():")
-    assert bad.returncode == 1
+    assert bad.returncode == 2
     assert target.read_bytes() == SAMPLE.encode("utf-8")
 
 
@@ -712,7 +714,7 @@ def test_reap_refuses_a_file_git_cannot_restore(tmp_path):
     target = _git_repo(tmp_path, commit=False)
     _plant_backups(target, ".bak")
     proc = _run("reap", str(target), "--apply")
-    assert proc.returncode == 1
+    assert proc.returncode == 2
     assert (tmp_path / "f.md.bak").exists()
 
 
@@ -722,7 +724,7 @@ def test_reap_refuses_a_tracked_file_with_uncommitted_work(tmp_path):
     target.write_text(SAMPLE + "# local work\n", encoding="utf-8")
     _plant_backups(target, ".bak")
     proc = _run("reap", str(target), "--apply")
-    assert proc.returncode == 1
+    assert proc.returncode == 2
     assert (tmp_path / "f.md.bak").exists()
 
 
@@ -759,3 +761,199 @@ def test_an_edit_that_writes_a_backup_names_the_reap_command(tmp_path):
     proc = _run("replace", str(target), "--anchor", "    return 2", "--new-text", "    return 22")
     assert proc.returncode == 0, proc.stderr
     assert "reap" in proc.stdout
+
+
+# ---- wave D: unified exit codes and the D2 envelope ---------------------------------------------
+
+def test_cli_json_relative_path_prints_the_envelope(tmp_path):
+    (tmp_path / "notes.md").write_text("alpha\n", encoding="utf-8")
+    proc = _run("replace", "notes.md", "--anchor", "alpha", "--new-text", "b", "--json",
+                cwd=str(tmp_path))
+    assert proc.returncode == 2
+    payload = json.loads(proc.stdout)
+    assert payload["ok"] is False and "absolute" in payload["error"]
+
+
+def test_cli_json_missing_file_prints_the_envelope(tmp_path):
+    proc = _run("replace", str(tmp_path / "missing.py"), "--anchor", "a", "--new-text", "b",
+                "--json")
+    assert proc.returncode == 2
+    payload = json.loads(proc.stdout)
+    assert payload["ok"] is False and "no such file" in payload["error"]
+
+
+def test_cli_json_argparse_error_prints_the_envelope(tmp_path):
+    proc = _run("replace", str(tmp_path / "f.py"), "--json", "--no-such-flag")
+    assert proc.returncode == 2
+    payload = json.loads(proc.stdout)
+    assert payload["ok"] is False and payload["command"] == "anchor_edit"
+
+
+def test_cli_json_crash_prints_the_envelope(tmp_path, monkeypatch, capsys):
+    target = tmp_path / "f.py"
+    target.write_text(SAMPLE, encoding="utf-8")
+
+    def boom(*_a, **_k):
+        raise RuntimeError("writer broke")
+    monkeypatch.setattr(AE, "apply_to_file", boom)
+    rc = AE.main(["replace", str(target), "--anchor", "alpha", "--new-text", "b", "--json"])
+    assert rc == 2
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["ok"] is False and "writer broke" in payload["error"]
+
+
+def test_cli_json_reap_refusal_marks_refused(tmp_path):
+    target = _git_repo(tmp_path, commit=False)
+    proc = _run("reap", str(target), "--apply", "--json")
+    assert proc.returncode == 2
+    assert json.loads(proc.stdout)["data"]["refused"] is True
+
+
+# ---- batch: every edit checked before any write ------------------------------------------------
+
+def _spec(tmp_path, doc):
+    spec = tmp_path / "spec.json"
+    spec.write_bytes(json.dumps(doc).encode("utf-8"))
+    return spec
+
+
+def test_batch_applies_edits_across_files(tmp_path):
+    a, b = tmp_path / "a.md", tmp_path / "b.md"
+    a.write_bytes(b"one\ntwo\n")
+    b.write_bytes(b"three\nfour\n")
+    spec = _spec(tmp_path, [{"file": str(a), "old": "two", "new": "TWO"},
+                            {"file": str(b), "old": "three\n", "new": "3\n3b\n"}])
+    proc = _run("batch", "--spec", str(spec), "--no-backup", "--json")
+    assert proc.returncode == 0, proc.stderr
+    assert a.read_bytes() == b"one\nTWO\n" and b.read_bytes() == b"3\n3b\nfour\n"
+    files = {Path(f["path"]).name: f for f in json.loads(proc.stdout)["data"]["files"]}
+    assert files["a.md"]["line_delta"] == 0 and files["b.md"]["line_delta"] == 1
+
+
+def test_batch_refuses_everything_when_one_anchor_is_absent(tmp_path):
+    """The point of the verb: the bad pair is the LAST one, and the first file is still untouched."""
+    a, b = tmp_path / "a.md", tmp_path / "b.md"
+    a.write_bytes(b"one\n")
+    b.write_bytes(b"two\n")
+    spec = _spec(tmp_path, [{"file": str(a), "old": "one", "new": "ONE"},
+                            {"file": str(b), "old": "absent", "new": "x"}])
+    proc = _run("batch", "--spec", str(spec), "--no-backup", "--json")
+    assert proc.returncode == 2
+    payload = json.loads(proc.stdout)
+    assert payload["ok"] is False and payload["data"]["refused"] is True
+    assert payload["data"]["edit"] == 2
+    assert a.read_bytes() == b"one\n" and b.read_bytes() == b"two\n"
+
+
+def test_batch_count_must_match_exactly(tmp_path):
+    a = tmp_path / "a.md"
+    a.write_bytes(b"x x x\n")
+    refused = _run("batch", "--spec",
+                   str(_spec(tmp_path, [{"file": str(a), "old": "x", "new": "y", "count": 2}])),
+                   "--no-backup")
+    assert refused.returncode == 2 and a.read_bytes() == b"x x x\n"
+    assert "3 times" in refused.stderr
+    done = _run("batch", "--spec",
+                str(_spec(tmp_path, [{"file": str(a), "old": "x", "new": "y", "count": 3}])),
+                "--no-backup")
+    assert done.returncode == 0, done.stderr
+    assert a.read_bytes() == b"y y y\n"
+
+
+def test_batch_count_refuses_overlapping_occurrences(tmp_path):
+    """'aa' occurs at 0 and 1 in 'aaa': str.replace would rewrite only one of the two."""
+    a = tmp_path / "a.md"
+    a.write_bytes(b"aaa\n")
+    proc = _run("batch", "--spec",
+                str(_spec(tmp_path, [{"file": str(a), "old": "aa", "new": "b", "count": 2}])),
+                "--no-backup")
+    assert proc.returncode == 2 and a.read_bytes() == b"aaa\n"
+
+
+def test_batch_expect_line_delta_refuses_a_one_line_edit_that_grew(tmp_path):
+    """#42/#100: a one-line record edit must leave the line count unchanged."""
+    a = tmp_path / "a.md"
+    a.write_bytes(b"- [ ] item\nnext\n")
+    doc = {"edits": [{"file": str(a), "old": "- [ ] item\n", "new": "- [x] item\nstray\n"}],
+           "expect_line_delta": {str(a): 0}}
+    proc = _run("batch", "--spec", str(_spec(tmp_path, doc)), "--no-backup")
+    assert proc.returncode == 2 and a.read_bytes() == b"- [ ] item\nnext\n"
+    assert "+1" in proc.stderr
+    doc["edits"][0]["new"] = "- [x] item\n"
+    ok = _run("batch", "--spec", str(_spec(tmp_path, doc)), "--no-backup")
+    assert ok.returncode == 0, ok.stderr
+    assert a.read_bytes() == b"- [x] item\nnext\n"
+
+
+def test_batch_dry_run_reports_per_file_delta_and_writes_nothing(tmp_path):
+    a = tmp_path / "a.md"
+    a.write_bytes(b"one\n")
+    spec = _spec(tmp_path, [{"file": str(a), "old": "one\n", "new": "one\ntwo\n"}])
+    proc = _run("batch", "--spec", str(spec), "--dry-run")
+    assert proc.returncode == 0, proc.stderr
+    assert "would change" in proc.stdout and "+1 lines" in proc.stdout
+    assert a.read_bytes() == b"one\n"
+    assert not (tmp_path / "a.md.bak").exists()
+
+
+def test_batch_edits_to_one_file_apply_in_order(tmp_path):
+    """The second edit sees the first one's result, so it can anchor on what the first wrote."""
+    a = tmp_path / "a.md"
+    a.write_bytes(b"one\n")
+    spec = _spec(tmp_path, [{"file": str(a), "old": "one", "new": "two"},
+                            {"file": str(a), "old": "two", "new": "three"}])
+    proc = _run("batch", "--spec", str(spec), "--no-backup")
+    assert proc.returncode == 0, proc.stderr
+    assert a.read_bytes() == b"three\n"
+
+
+def test_batch_two_spellings_of_one_file_are_one_file(tmp_path):
+    """Planned separately, the second write would silently discard the first edit."""
+    sub = tmp_path / "sub"
+    sub.mkdir()
+    a = tmp_path / "a.md"
+    a.write_bytes(b"one two\n")
+    other = str(sub / ".." / "a.md")
+    spec = _spec(tmp_path, [{"file": str(a), "old": "one", "new": "ONE"},
+                            {"file": other, "old": "two", "new": "TWO"}])
+    proc = _run("batch", "--spec", str(spec), "--no-backup")
+    assert proc.returncode == 0, proc.stderr
+    assert a.read_bytes() == b"ONE TWO\n"
+
+
+@pytest.mark.parametrize("doc,needle", [
+    ([{"file": "rel.md", "old": "a", "new": "b"}], "absolute"),
+    ([{"file": "/no/such/abs/file.md", "old": "a", "new": "b"}], "no such file"),
+    ([{"file": "/x", "old": "a"}], "new"),
+    ([{"file": "/x", "old": "", "new": "b"}], "empty"),
+    ([{"file": "/x", "old": "a", "new": "b", "count": 0}], "count"),
+    ([], "no edits"),
+    ({"edits": [{"file": "/x", "old": "a", "new": "b"}], "bogus": 1}, "bogus"),
+])
+def test_batch_a_malformed_spec_is_a_usage_error(tmp_path, doc, needle):
+    proc = _run("batch", "--spec", str(_spec(tmp_path, doc)), "--json")
+    assert proc.returncode == 2
+    payload = json.loads(proc.stdout)
+    assert payload["ok"] is False and needle in payload["error"]
+    assert "refused" not in payload["data"]
+
+
+def test_batch_spec_from_stdin(tmp_path):
+    a = tmp_path / "a.md"
+    a.write_bytes(b"one\n")
+    doc = json.dumps([{"file": str(a), "old": "one", "new": "1"}]).encode("utf-8")
+    proc = subprocess.run([sys.executable, str(TOOL), "batch", "--spec", "-", "--no-backup"],
+                          input=doc, capture_output=True, timeout=60)
+    assert proc.returncode == 0, proc.stderr
+    assert a.read_bytes() == b"1\n"
+
+
+def test_batch_keeps_crlf_and_backs_up_an_untracked_file(tmp_path):
+    a = tmp_path / "a.md"
+    a.write_bytes(b"one\r\ntwo\r\n")
+    spec = _spec(tmp_path, [{"file": str(a), "old": "one\n", "new": "one\nhalf\n"}])
+    proc = _run("batch", "--spec", str(spec))
+    assert proc.returncode == 0, proc.stderr
+    assert a.read_bytes() == b"one\r\nhalf\r\ntwo\r\n"
+    assert AE.existing_backups(a), "an untracked file must be backed up before the write"
+
