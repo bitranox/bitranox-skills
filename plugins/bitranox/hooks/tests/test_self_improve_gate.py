@@ -15,7 +15,6 @@ All content is ASCII.
 import io
 import json
 import sys
-from pathlib import Path
 
 import pytest
 
@@ -798,3 +797,51 @@ def test_the_routing_hint_says_what_its_evidence_covers(tmp_path, monkeypatch, c
     reason = _reason_of(capsys)
     assert "this session edited files under" in reason
     assert "this turn also edited" not in reason
+
+
+def _many_levels(tmp_path, siblings, other_tree):
+    """cwd's tree with `siblings` sibling projects, and a second tree with `other_tree` ones."""
+    root = _two_trees(tmp_path)
+    made = []
+    for tree, n in (("treeA", siblings), ("treeB", other_tree)):
+        for i in range(n):
+            lvl = root / tree / ("p%02d" % i)
+            lvl.mkdir(parents=True)
+            (lvl / "CLAUDE.md").write_text("proj\n", encoding="utf-8")
+            made.append(lvl)
+    return root, made
+
+
+def test_the_routing_hint_is_capped_however_many_levels_the_session_touched(tmp_path, monkeypatch, capsys):
+    """The touched-paths record holds up to 400 paths and the hint listed every level they map
+    to, so the block reason grew without bound with the session's reach. The listing is capped,
+    the cross-tree levels (the ones a dream can never re-home) are listed first, and the reason
+    says how many it left out."""
+    import self_improve_signals as S
+    _iso_home(tmp_path, monkeypatch)
+    root, made = _many_levels(tmp_path, siblings=60, other_tree=3)
+    for lvl in made:
+        S.record_touched_path("sC", str(lvl / "f.py"))
+    tp = make_transcript(tmp_path, user="No, that's wrong, the flag is --tree")
+    run_gate(monkeypatch, tmp_path, {"transcript_path": tp, "cwd": str(root / "treeA" / "projA1"),
+                                     "session_id": "sC"})
+    reason = _reason_of(capsys)
+    hint = reason[reason.index("ROUTING EVIDENCE"):]
+    assert len(hint) < 2500
+    for i in range(3):                                     # every cross-tree level survives the cap
+        assert str(root / "treeB" / ("p%02d" % i)) in hint
+    assert "more level" in hint and "--proj" in hint
+
+
+def test_the_routing_hint_lists_every_level_when_few_control(tmp_path, monkeypatch, capsys):
+    import self_improve_signals as S
+    _iso_home(tmp_path, monkeypatch)
+    root, made = _many_levels(tmp_path, siblings=2, other_tree=1)
+    for lvl in made:
+        S.record_touched_path("sD", str(lvl / "f.py"))
+    tp = make_transcript(tmp_path, user="No, that's wrong, the flag is --tree")
+    run_gate(monkeypatch, tmp_path, {"transcript_path": tp, "cwd": str(root / "treeA" / "projA1"),
+                                     "session_id": "sD"})
+    reason = _reason_of(capsys)
+    assert all(str(lvl) in reason for lvl in made)
+    assert "more level" not in reason

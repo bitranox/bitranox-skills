@@ -246,7 +246,9 @@ VENDOR_DIRNAMES = {
 
 # LEGACY dirnames: the retired pre-UUID store layout. Kept ONLY for the one-shot migration tools
 # (migrate_memory receipts, the store walks that must never descend into an old store) and
-# gather_scan's transitional dual-read on downstream installs. Nothing else may key on these.
+# gather_scan's transitional dual-read on downstream installs - including recall-memory.py, which
+# labels a legacy `index.md` hit that dual-read returns and strips its scope block by these names.
+# Nothing else may key on these.
 CURATED_DIRNAME = ".claude-bx-selflearning"
 CURATED_INDEX = "index.md"                    # named `index.md` (not `memory.md`) so it is never
                                               # confused with Claude Code's native `MEMORY.md` tier
@@ -1618,8 +1620,9 @@ def unreviewed_transcript_part(proj, reviewer, transcript=None, max_bytes=2_000_
     offset of the file END, so a caller that marked that offset discharged everything older
     unread; and a single unreviewed line longer than the cap came back as "", which reads as
     "nothing new". Now a stretch over `max_bytes` is cut after its last newline, so the next call
-    resumes on a whole line; a single line longer than the cap is cut at the byte bound. Call again
-    after marking to get the next part.
+    resumes on a whole line; a single line longer than the cap is cut at the last whole UTF-8
+    character before the byte bound (see `_whole_characters`). Call again after marking to get the
+    next part.
 
     Nothing new is ("", mark, mark, size): that is what stops a second dream in one session from
     re-analyzing (and re-paying for) the whole transcript. A transcript SHORTER than the mark means
@@ -1643,9 +1646,34 @@ def unreviewed_transcript_part(proj, reviewer, transcript=None, max_bytes=2_000_
     with open(transcript, "rb") as fh:             # opened even when nothing is new: an unreadable
         fh.seek(mark)                              # file must raise, not read as consumed
         data = fh.read(end - mark)
-    if mark + len(data) < size and b"\n" in data:
-        data = data[:data.rfind(b"\n") + 1]        # resume on a whole line next time
+        if mark + len(data) < size:
+            if b"\n" in data:
+                data = data[:data.rfind(b"\n") + 1]    # resume on a whole line next time
+            else:
+                data = _whole_characters(data, fh)
     return TranscriptPart(data.decode("utf-8", "replace"), mark, mark + len(data), size)
+
+
+def _whole_characters(data, fh):
+    """`data` cut back to the last complete UTF-8 character; extended from `fh` to complete the
+    first one instead when nothing whole would be left, so every call still makes progress.
+
+    A line longer than the cap is cut at a byte bound, which can fall inside a multi-byte
+    character: decoded with "replace", the end of one part and the start of the next each carried
+    U+FFFD for a character that is in the file. Bytes that are not UTF-8 at all are left as they
+    are - the cut only moves for a lead byte whose continuation was cut off."""
+    lead = len(data) - 1
+    while lead >= 0 and len(data) - lead <= 3 and 0x80 <= data[lead] < 0xC0:
+        lead -= 1                                  # step back over continuation bytes
+    if lead < 0:
+        return data
+    first = data[lead]
+    need = 2 if 0xC0 <= first < 0xE0 else 3 if 0xE0 <= first < 0xF0 else 4 if 0xF0 <= first < 0xF8 else 1
+    if len(data) - lead >= need:
+        return data                                # the last character is complete
+    if lead > 0:
+        return data[:lead]
+    return data + fh.read(need - len(data))        # only a partial first character: finish it
 
 
 def unreviewed_transcript_text(proj, reviewer, transcript=None, max_bytes=2_000_000):
@@ -2357,7 +2385,8 @@ REALIZATION_PATTERN = re.compile(
     # realization ("the real cause IS/WAS/turned out ...") fires, but a retrospective fix-REPORT
     # LABEL ("The real cause: ...") does not trip the live Stop block. The colon-excluding window is
     # what distinguishes an asserted realization from a heading/label of already-shipped work.
-    r"|the (key|real|actual) (insight|issue|problem|cause|reason)\b(?=[^.\n:]{0,15}\b(?:is|was|were|turned out|ended up|lies|stems)\b)|root cause is\b"
+    r"|the (key|real|actual) (insight|issue|problem|cause|reason)\b"
+    r"(?=[^.\n:]{0,15}\b(?:is|was|were|turned out|ended up|lies|stems)\b)|root cause is\b"
     r"|(actually|really) (runs|lives|sits|resides|is hosted|happens|is served) on\b"
     r"|clear(er)? picture|the (full|whole|complete|bigger) picture"
     r"|\b(now|it all|everything|it)('?s| is| are)? (clear|much clearer)\b"
@@ -2449,6 +2478,16 @@ def asst_signal_offset(text):
     whitespace-collapsed form when the offset is meant for `inert_snippet`.
     """
     starts = [m.start() for rx in (ASST_PATTERN, REALIZATION_PATTERN, ENDORSE_PATTERN, BROAD_ASST_PATTERN)
+              for m in (rx.search(text or ""),) if m]
+    return min(starts) if starts else None
+
+
+def user_signal_offset(text):
+    """Offset in `text` of the EARLIEST user learning signal, strict or broad; None if none.
+
+    The user-role counterpart of `asst_signal_offset`: the patterns `strict_user_hit` and
+    `broad_matches("user", ...)` consult, with the same offset convention."""
+    starts = [m.start() for rx in (USER_PATTERN, ENDORSE_PATTERN, BROAD_USER_PATTERN)
               for m in (rx.search(text or ""),) if m]
     return min(starts) if starts else None
 
@@ -2584,6 +2623,26 @@ def tool_matches_outside_fixtures(block):
     scan = _FixtureScan()
     live = [line for line in (block or "").splitlines() if not scan.is_data(line)]
     return tool_matches("\n".join(live))
+
+
+def tool_signal_offset(block):
+    """Offset of the first TOOL signal `tool_matches_outside_fixtures` counts in `block`, as an
+    offset into the WHITESPACE-COLLAPSED block (what `inert_snippet` quotes); None if none.
+
+    The same line-by-line fixture discount, so a test-data line that names the phrase first is
+    skipped and the offset lands on the live line that made the block a candidate."""
+    scan = _FixtureScan()
+    lines = (block or "").splitlines()
+    for i, line in enumerate(lines):
+        if scan.is_data(line):
+            continue
+        m = TOOL_SIGNAL_PATTERN.search(line)
+        if m:
+            # Collapsing the text up to and including the match's first character puts that
+            # character last, so its index in the collapsed whole is that length minus one.
+            prefix = "\n".join(lines[:i] + [line[:m.start() + 1]])
+            return len(" ".join(prefix.split())) - 1
+    return None
 
 
 # Invoking a skill (the Skill tool, or a /slash-command) injects the WHOLE SKILL.md as a

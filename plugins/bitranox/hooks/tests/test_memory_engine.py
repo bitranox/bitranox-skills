@@ -11,6 +11,7 @@ rendered on any line.
 """
 
 import json
+import os
 from pathlib import Path
 
 import pytest
@@ -155,6 +156,61 @@ def test_ensure_level_moves_legacy_scope_block_out_of_claude_md(proj):
     assert "more user text" in md and md.startswith("# Proj")
     local = sig.claude_local_md_path(proj).read_text(encoding="utf-8")
     assert sig.read_scope_block(local) == "legacy descriptor"        # relocated into the pointer block
+
+
+def _git_repo(path):
+    import subprocess
+    path.mkdir(parents=True, exist_ok=True)
+    subprocess.run(["git", "init", "-q", str(path)], check=True)
+    out = subprocess.run(["git", "-C", str(path), "rev-parse", "--git-path", "info/exclude"],
+                         capture_output=True, check=True).stdout
+    exclude = Path(os.fsdecode(out).strip())
+    return exclude if exclude.is_absolute() else path / exclude
+
+
+def test_ensure_level_warns_when_it_cannot_make_sure_the_private_files_are_ignored(tmp_path, capsys):
+    """ensure_gitignored says False when it could not make sure; ensure_level ignored that, so a
+    level whose CLAUDE.local.md and store git would stage looked exactly like a protected one."""
+    repo = tmp_path / "repo"
+    exclude = _git_repo(repo)
+    if exclude.exists():
+        exclude.unlink()
+    exclude.parent.mkdir(parents=True, exist_ok=True)
+    exclude.mkdir()                                        # cannot be read or written as a file
+    E.ensure_level(str(repo), scope_default="x")
+    err = capsys.readouterr().err
+    assert "warning" in err and "CLAUDE.local.md" in err and str(repo) in err
+    assert ".claude-memory/" in err
+
+
+def test_ensure_level_control_a_writable_exclude_file_warns_nothing(tmp_path, capsys):
+    repo = tmp_path / "repo"
+    _git_repo(repo)
+    E.ensure_level(str(repo), scope_default="x")
+    assert "warning" not in capsys.readouterr().err
+
+
+# ---- _body_description reads the frame, never the prose ----------------------------------------
+
+def test_body_description_ignores_a_description_line_in_unframed_prose():
+    """A body with no frontmatter has no description; its prose saying `description: x` is the
+    author's text, which adopting a dangling body then made the always-loaded hook."""
+    assert E._body_description("Some prose.\ndescription: not a hook\n") == ""
+
+
+def test_body_description_ignores_a_horizontal_rule_body():
+    assert E._body_description("---\nprose\ndescription: nope\n---\nmore\n") == ""
+
+
+def test_body_description_reads_inside_the_frame_not_a_later_prose_line():
+    framed = ("---\nname: s\nmetadata:\n  type: project\n---\n\n"
+              "description: a prose line below the frame\n")
+    assert E._body_description(framed) == ""
+
+
+def test_body_description_control_a_framed_body_reads_its_own():
+    framed = "---\nname: s\ndescription: real hook\nmetadata:\n  type: project\n---\n\nbody\n"
+    assert E._body_description(framed) == "real hook"
 
 
 # ---- CLI ---------------------------------------------------------------------------------------
@@ -393,7 +449,6 @@ def test_move_completes_after_crash_duplicate(tmp_path):
     rep = E.move_entry(proj, mid, "f")
     assert rep["moved"] is True
     _s, ptrs = us.parse_pointer_index((Path(mid) / "CLAUDE.local.md").read_text(encoding="utf-8"))
-    got = {p.slug: p for p in ptrs}
     assert len([p for p in ptrs if p.slug == "f"]) == 1          # merged to a single line
     assert "f" not in {p.slug for p in us.parse_pointer_index(
         (Path(proj) / "CLAUDE.local.md").read_text(encoding="utf-8"))[1]}

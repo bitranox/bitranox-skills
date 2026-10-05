@@ -25,8 +25,11 @@ line together.
 Pure standard library; cross-platform (pathlib, UTF-8). Writers are mtime-neutral (a no-op write
 writes nothing) so the PostToolUse hooks do not churn the files.
 """
+import errno
 import os
 import re
+import stat
+import tempfile
 import uuid as _uuid
 from pathlib import Path
 
@@ -485,18 +488,100 @@ def upsert_pointer_block(text, scope, pointers):
     return sep + block + "\n"
 
 
+# ---- the strict store reader --------------------------------------------------------------------
+
+class TreeWalkError(RuntimeError):
+    """Part of the store could not be read: a directory the level walk cannot list, or a store
+    file - a level's `CLAUDE.md` / `CLAUDE.local.md`, or a fact body - that cannot be opened or is
+    not UTF-8 (`read_store_text`). Raised, never skipped - a partial level list is an undercount
+    every caller would read as the whole tree (check-tree says clean, relocate sees no inbound refs
+    to protect), and a file read as empty is a level with no facts. The memory_engine CLI maps it
+    to exit 2; memory_engine re-exports this class, so both modules raise and catch the one type."""
+
+    def __init__(self, path, reason):
+        super().__init__("%s: %s" % (path, reason))
+        self.path, self.reason = str(path), reason
+
+
+def read_store_text(path):
+    """The text of one store file, or "" when it does not exist.
+
+    THE reader for a level file or a fact body, so every read of the store fails the same named
+    way. Absent (including a path whose parent is a file, which can never exist) is a fact about
+    the tree and reads as empty. Anything else - a file that cannot be opened, or bytes that are not
+    UTF-8 - raises TreeWalkError naming the file: a `read_text` guarded by `except OSError` let a
+    UnicodeDecodeError past and read a permission error as an empty level. Otherwise the text is
+    what `read_text(encoding="utf-8")` returned before: a BOM decodes (it is UTF-8) and is kept,
+    and line endings are translated to "\\n" the way text mode reads them."""
+    try:
+        data = Path(path).read_bytes()
+    except (FileNotFoundError, NotADirectoryError):
+        return ""
+    except OSError as exc:
+        raise TreeWalkError(path, "unreadable: %s" % exc) from exc
+    try:
+        text = data.decode("utf-8")
+    except UnicodeDecodeError as exc:
+        raise TreeWalkError(path, "not UTF-8 (byte 0x%02x at offset %d) - re-save it as UTF-8"
+                            % (data[exc.start], exc.start)) from exc
+    return text.replace("\r\n", "\n").replace("\r", "\n")
+
+
 # ---- mtime-neutral writers ----------------------------------------------------------------------
 
-def write_if_changed(path, text):
-    """Write only when content differs (mtime-neutral). True if written."""
-    path = Path(path)
+def _current_text(path):
+    """The file's text for the "has it changed" test, None when there is nothing comparable.
+
+    Absent, unreadable and undecodable all mean the same here: the file does not already hold
+    `text`, so it is written. A UnicodeDecodeError is a ValueError, not an OSError, and used to
+    escape a guard that caught only OSError."""
     try:
-        if path.read_text(encoding="utf-8") == text:
-            return False
-    except OSError:
-        pass
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(text, encoding="utf-8")
+        return path.read_text(encoding="utf-8")
+    except (OSError, UnicodeDecodeError):
+        return None
+
+
+def _umask_mode():
+    """The mode a plain `open(path, "w")` would give a new file under the current umask."""
+    mask = os.umask(0)
+    os.umask(mask)
+    return 0o666 & ~mask
+
+
+def write_if_changed(path, text):
+    """Write only when content differs (mtime-neutral). True if written.
+
+    The new text goes to a temp file beside the target and is renamed over it, so a write that
+    fails part way (a full disk, text the codec refuses) leaves the previous content whole. Writing
+    in place truncated first: a failed write left `CLAUDE.local.md` empty, a level with no facts.
+    What the in-place write kept is kept: newline translation (text mode, as before), the target's
+    permission bits (a temp file is created private), a symlinked target written THROUGH the link,
+    and a read-only target refused with PermissionError (a rename over it would succeed on POSIX)."""
+    path = Path(path)
+    if _current_text(path) == text:
+        return False
+    target = Path(os.path.realpath(path))            # write through a symlink, never replace it
+    target.parent.mkdir(parents=True, exist_ok=True)
+    try:
+        mode = stat.S_IMODE(target.stat().st_mode)
+    except FileNotFoundError:
+        mode = _umask_mode()
+    else:
+        if not os.access(target, os.W_OK):
+            raise PermissionError(errno.EACCES, "the file is read-only", str(target))
+    fd, tmp = tempfile.mkstemp(prefix=target.name + ".", suffix=".tmp", dir=str(target.parent))
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as fh:
+            fh.write(text)
+        os.chmod(tmp, mode)
+        sig.retry_while_shared(os.replace, tmp, str(target))
+        tmp = None
+    finally:
+        if tmp is not None:
+            try:
+                os.unlink(tmp)
+            except OSError:
+                pass
     return True
 
 
@@ -511,14 +596,13 @@ def add_pointer(altitude_dir, slug, title, hook, pin=False, scope_default=""):
     descriptor if absent. Updating a LEGACY pointer flips it to the current format (the caller is
     responsible for having written the slug-named body). Does NOT write the body - the caller does,
     via `put_body`. Returns the slug. Raises `InvalidSlug` before writing for a slug that is not a
-    plain filename."""
+    plain filename. Raises TreeWalkError, before writing, for a level file that exists but cannot
+    be read or is not UTF-8: read as empty, the merge would rewrite it as the managed block alone
+    and drop every other line in it."""
     require_valid_slug(slug)
     local = sig.claude_local_md_path(altitude_dir)
     with sig.memory_lock(local):
-        try:
-            text = local.read_text(encoding="utf-8")
-        except OSError:
-            text = ""
+        text = read_store_text(local)
         scope, pointers = parse_pointer_index(text)
         by_slug = {p.slug: p for p in pointers}
         if slug in by_slug:

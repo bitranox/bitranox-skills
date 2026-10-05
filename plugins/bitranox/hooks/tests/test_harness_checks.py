@@ -456,6 +456,19 @@ def test_hook_registrations_reads_null_hooks_and_groups_as_none(tmp_path):
     assert hc.hook_registrations(path) == []
 
 
+@pytest.mark.parametrize("command", ["0", "[]", "{}", '""', "null"])
+def test_a_falsy_command_is_skipped_and_the_files_other_hooks_still_read(tmp_path, command):
+    """Measured against Claude Code 2.1.289 (headless, the file given by --settings and as a
+    project-local settings file): a hook whose command is 0, [] or {}, and an event set to null,
+    leave every OTHER hook in the file running. So these read as "this entry registers nothing",
+    never as an unreadable file - refusing them would report a live harness as dead."""
+    path = tmp_path / "settings.json"
+    path.write_text('{"hooks": {"Stop": [{"hooks": [{"type": "command", "command": %s}]},'
+                    ' {"matcher": "Bash", "hooks": [{"type": "command", "command": "bash /x/y.sh"}]}],'
+                    ' "PreToolUse": null}}' % command, encoding="utf-8")
+    assert hc.hook_registrations(path) == [("Stop", "Bash", "bash /x/y.sh")]
+
+
 def test_registration_problems_does_not_call_an_unreadable_file_clean(tmp_path):
     """The caller that reports problems must not turn "could not read" into "zero problems"."""
     path = tmp_path / "settings.json"
