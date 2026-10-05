@@ -491,3 +491,37 @@ def test_replace_stdout_is_not_newline_translated(eol, tmp_path, monkeypatch):
     assert rc == 0
     expected = TK.replace_table(BASIC, 0, json.loads(payload)).replace("\n", eol).encode("utf-8")
     assert written == expected
+
+
+# ---- render and `read -` give the same bytes on every OS ----
+# A Windows stdin is a universal-newline text stream (newline=None) and a Windows stdout turns
+# "\n" into "\r\n"; TextIOWrappers configured that way reproduce both on every platform.
+def test_render_is_not_newline_translated(monkeypatch):
+    payload = json.dumps({"headers": ["a", "b"], "rows": [["1", "2"]]})
+    windows_stdout = io.TextIOWrapper(io.BytesIO(), encoding="utf-8", newline="\r\n")
+    monkeypatch.setattr(sys, "stdin", io.StringIO(payload))
+    monkeypatch.setattr(sys, "stdout", windows_stdout)
+    rc = TK.main(["render"])
+    windows_stdout.flush()
+    written = windows_stdout.buffer.getvalue()
+    monkeypatch.undo()
+    assert rc == 0
+    assert written == (TK.render_table(json.loads(payload)) + "\n").encode("utf-8")
+
+
+@pytest.mark.parametrize("data", [
+    b"| a | b |\r|---|---|\r| 1 | 2 |\r",            # lone CR: one line to the file reader
+    b"x\r\n| a | b |\r\n|---|---|\r\n| 1 | 2 |\r\n",  # CRLF
+    b"\xef\xbb\xbf| a | b |\n|---|---|\n| 1 | 2 |\n",  # a BOM
+])
+def test_read_from_stdin_matches_read_from_the_file(data, tmp_path, monkeypatch, capsys):
+    """`read -` must see the bytes `read FILE` sees: a translating stdin split a lone-CR
+    document into three lines and found a table the file reader does not."""
+    f = tmp_path / "t.md"
+    f.write_bytes(data)
+    assert TK.main(["read", str(f)]) == 0
+    from_file = capsys.readouterr().out
+    windows_stdin = io.TextIOWrapper(io.BytesIO(data), encoding="utf-8", newline=None)
+    monkeypatch.setattr(sys, "stdin", windows_stdin)
+    assert TK.main(["read", "-"]) == 0
+    assert capsys.readouterr().out == from_file
