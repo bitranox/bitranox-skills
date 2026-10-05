@@ -756,10 +756,12 @@ class TestAStalledGhCannotOutliveTheTimeout:
         started = time.monotonic()
         proc = subprocess.run(
             [sys.executable, str(SCRIPT), "--sha", SHA, "--repo", "o/r", "--timeout", "2",
-             "--interval", "1"],
+             "--interval", str(ci_wait.MIN_INTERVAL_S)],
             capture_output=True, text=True, env=env, timeout=45,
         )
         assert proc.returncode == 2, proc.stderr
+        # Exit 2 is also a usage error: require that the wait actually RAN and timed out on gh.
+        assert "usage:" not in proc.stderr, proc.stderr
         assert time.monotonic() - started < 30
 
 
@@ -858,3 +860,61 @@ class TestAConsoleThatCannotEncodeAWorkflowName:
         )
         assert proc.returncode == 0, proc.stderr.decode("cp1252", "replace")
         assert b"CI " in proc.stdout
+
+
+class TestAnIntervalHasAFloor:
+    """With the wall-clock deadline, a tiny --interval polls gh back to back for the whole wait:
+    one API request per call, ~1,500 a minute at 0.04 s, which spends the hourly rate limit the
+    rest of the machine shares. Refused as a usage error rather than silently raised."""
+
+    @pytest.mark.parametrize("value", ["0.001", "1", "4.9"])
+    def test_an_interval_below_the_floor_is_a_usage_error(self, value, monkeypatch, capsys):
+        calls: list[list[str]] = []
+        monkeypatch.setattr(
+            ci_wait.subprocess, "run", emulated_gh([run("CI", "completed", "success")], calls)
+        )
+        monkeypatch.setattr(ci_wait.time, "sleep", lambda _s: None)
+        with pytest.raises(SystemExit) as info:
+            ci_wait.main(["--sha", SHA, "--repo", "o/r", "--settle", "0", "--interval", value])
+        assert info.value.code == 2
+        err = capsys.readouterr().err
+        assert "--interval" in err and "Traceback" not in err
+        assert not calls
+
+    def test_the_floor_itself_is_allowed(self):
+        assert ci_wait._parse_args(["--sha", SHA, "--interval", str(ci_wait.MIN_INTERVAL_S)]).interval \
+            == ci_wait.MIN_INTERVAL_S
+
+
+class TestASettleCutByTheDeadlineIsSaid:
+    """The deadline cuts every sleep to the time left, the settle included. The green is still
+    reported (a confirmation is never another way to fail), but a confirmation that waited less
+    than --settle, or never ran, must not read like a full one."""
+
+    @staticmethod
+    def _green_at(poll_index: int):
+        polls: list[int] = []
+
+        def fetch() -> list[dict[str, object]]:
+            polls.append(1)
+            status = "completed" if len(polls) > poll_index else "in_progress"
+            return [run("ci", status, "success" if status == "completed" else None)]
+        return fetch
+
+    def test_a_settle_shortened_by_the_deadline_says_so(self):
+        # polls at 0, 30, 60 pending; green at 90; the 20 s settle is cut to 10 by deadline 100.
+        result = ci_wait.wait_for(self._green_at(3), sleep=lambda _s: None, interval_s=30.0,
+                                  settle_s=20.0, deadline_s=100.0)
+        assert result.state == "success"
+        assert "not the full 20s --settle" in result.summary, result.summary
+
+    def test_a_green_the_deadline_never_let_be_confirmed_says_so(self):
+        result = ci_wait.wait_for(self._green_at(0), deadline_polls=1, sleep=lambda _s: None)
+        assert result.state == "success"
+        assert "not confirmed" in result.summary, result.summary
+
+    def test_control_a_settle_that_fits_adds_nothing(self):
+        result = ci_wait.wait_for(self._green_at(3), sleep=lambda _s: None, interval_s=30.0,
+                                  settle_s=20.0, deadline_s=1000.0)
+        assert result.state == "success"
+        assert result.summary == "ci=success"

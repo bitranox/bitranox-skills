@@ -418,3 +418,20 @@ class TestReadFile:
     def test_missing_file_raises(self, tmp_path):
         with pytest.raises(OSError):
             winlog.read_windows_log(tmp_path / "missing.log")
+
+
+class TestTheNulCacheNeverAnswersForAnEarlierStart:
+    """`_next_nul` caches the next NUL it found. That answer is valid only for a start at or after
+    where that search began: asked for an EARLIER start, the cache skipped every NUL in between.
+    Today's callers only move forward, so the guarantee belongs in the cache, not in each caller."""
+
+    DATA = b"aaaaa\x00bbbbbbbbbbbbbbb\x00cc"
+
+    def test_an_earlier_start_after_a_later_one_still_finds_the_first_nul(self) -> None:
+        seg = winlog._Segmenter(self.DATA)
+        assert seg._next_nul(10) == 21
+        assert seg._next_nul(0) == 5
+
+    def test_control_forward_queries_answer_the_same(self) -> None:
+        seg = winlog._Segmenter(self.DATA)
+        assert [seg._next_nul(s) for s in (0, 3, 5, 6, 21, 22)] == [5, 5, 5, 21, 21, len(self.DATA)]

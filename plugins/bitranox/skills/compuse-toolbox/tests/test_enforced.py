@@ -487,6 +487,21 @@ class TestARootThatIsATestDirectory:
         write(tmp_path / "test" / "admit.py", GUARD)
         assert run(tmp_path / "test") == 0
 
+    @pytest.mark.parametrize("below", ["helpers", "helpers/deep"])
+    def test_a_root_BELOW_a_tests_dir_is_still_test(self, tmp_path: Path, below: str) -> None:
+        """--root tests/helpers named neither itself nor anything under it test, so its assert
+        read as the project's enforcer: exit 0 for a value nothing in production checks."""
+        write(tmp_path / "proj" / "pyproject.toml", "")
+        write(tmp_path / "proj" / "tests" / below / "h.py", TEST_ASSERT)
+        assert run(tmp_path / "proj" / "tests" / below) == 1
+
+    def test_a_tests_dir_ABOVE_the_project_root_does_not_make_it_test(self, tmp_path: Path) -> None:
+        """The climb stops at the first project marker: a checkout that lives under a folder
+        called test is still the project, and its guard is still an enforcer."""
+        write(tmp_path / "test" / "proj" / "pyproject.toml", "")
+        write(tmp_path / "test" / "proj" / "src" / "admit.py", GUARD)
+        assert run(tmp_path / "test" / "proj" / "src") == 0
+
 
 class TestAPythonFileNamedLikeDotenv:
     def test_a_dotenv_named_python_file_is_parsed_as_python(self, tmp_path: Path, capsys) -> None:

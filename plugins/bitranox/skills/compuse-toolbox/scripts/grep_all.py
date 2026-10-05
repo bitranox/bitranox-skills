@@ -41,8 +41,11 @@ from pathlib import Path
 
 # Never worth searching: git's own object store, vendored trees, caches. Kept small and explicit -
 # a broad skip list would reintroduce exactly the silent under-reporting this tool exists to stop.
-_SKIP_DIRS = {".git", "node_modules", "__pycache__", ".venv", ".venv-win", ".mypy_cache",
-              ".pytest_cache", ".ruff_cache"}
+_SKIP_DIRS = {".git", "node_modules", "__pycache__", ".mypy_cache", ".pytest_cache",
+              ".ruff_cache"}
+_SKIP_DIR_PREFIXES = (".venv",)
+"""Prefix, not name: .venv-win, .venv-3.12 and .venv-bmk are venvs too (the rule enforced and
+srccount use). Naming two of them searched the rest as if they were project files."""
 _SKIP_FILES = {".git"}
 """A `.git` FILE is a linked worktree's or submodule's gitdir pointer - never content."""
 _BINARY_SNIFF = 4096
@@ -64,7 +67,8 @@ def walk(paths, glob=None, unreadable=None):
             out.append(p)
             continue
         for dirpath, dirnames, filenames in os.walk(p, onerror=record):
-            dirnames[:] = [d for d in dirnames if d not in _SKIP_DIRS]
+            dirnames[:] = [d for d in dirnames
+                           if d not in _SKIP_DIRS and not d.startswith(_SKIP_DIR_PREFIXES)]
             for name in filenames:
                 if name not in _SKIP_FILES:
                     out.append(Path(dirpath) / name)

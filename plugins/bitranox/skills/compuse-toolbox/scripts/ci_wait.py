@@ -30,7 +30,8 @@ the whole set being done. Measured: a push whose `ci` workflow went green while 
 for the same sha was still being created was reported as success. A failure is still reported at
 once, since a later run cannot rescue it.
 
-Waits up to `--timeout` seconds (default 1500, so 25 minutes) polling every `--interval` (30).
+Waits up to `--timeout` seconds (default 1500, so 25 minutes) polling every `--interval` (30;
+below 5 is refused, since each poll is one API request and a tiny one polls back to back).
 The timeout is wall-clock time, and each `gh` call is itself bounded (60 seconds, or what is left
 of the timeout), so a stalled API connection cannot hold the wait past it. The runs are asked for
 by sha (`gh run list --commit`), so newer runs of other commits cannot push them out of the
@@ -57,7 +58,7 @@ import subprocess
 import sys
 import time
 import traceback
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import Callable, Iterable, Sequence
 
 FULL_SHA_RE = re.compile(r"^[0-9a-f]{40}$")
@@ -69,6 +70,11 @@ _PASSING = frozenset({"success", "skipped"})
 #: Longest a single `gh run list` may take. A half-open API connection otherwise blocks the whole
 #: wait forever, and `--timeout` - checked only between polls - never gets its turn.
 GH_CALL_TIMEOUT_S = 60.0
+#: Shortest `--interval` accepted. Every poll is one API request, and the wall-clock deadline keeps
+#: polling for the whole wait, so `--interval 0.01` would call gh back to back for 25 minutes and
+#: spend the hourly rate limit every other gh call on the machine shares. Refused, never raised
+#: silently: a caller who typed 1 should learn it was not honoured.
+MIN_INTERVAL_S = 5.0
 #: gh's documented exit code for "authentication required" (measured on 2.92.0: no token and no
 #: config gives 4 and tells you to run `gh auth login`). Local configuration, so it is fatal here
 #: rather than retried. A REJECTED credential is exit 1, not this - see GhUnavailable.
@@ -280,7 +286,8 @@ def wait_for(
     created. So a success re-polls after ``settle_s`` and must see the same SET of runs (by
     :func:`_run_key`) before it is returned; a set that grew starts the confirmation again. Only
     a success is confirmed - a failure is returned at once, because a later run cannot rescue it -
-    and running out of deadline mid-confirmation reports the green, never a timeout.
+    and running out of deadline mid-confirmation reports the green, never a timeout - with the
+    summary saying it was not confirmed, or that the deadline cut the settle short.
 
     Only :class:`GhFailed` is retried. :class:`GhUnavailable` - the OS refusing to spawn `gh` -
     propagates at once, because it is a local fact that will not change during this process, and
@@ -325,6 +332,7 @@ def wait_for(
     last_error = ""
     last_summary = ""
     settled: frozenset[tuple[object, object]] | None = None
+    green_since = 0.0
     last_success: Verdict | None = None
 
     def may_poll_again(poll: int) -> bool:
@@ -367,11 +375,14 @@ def wait_for(
             empty_since = None
             last_success = current
             seen = frozenset(_run_key(r) for r in rows)
-            if settle_s <= 0 or settled == seen:
+            if settle_s <= 0:
                 return current
+            if settled == seen:
+                return _cut_settle_said(current, timer.now() - green_since, settle_s)
             report(f"{label(poll)}: {current.summary}; confirming no run for "
                    f"this sha is still being created")
             settled = seen
+            green_since = timer.now()
             if not may_poll_again(poll):
                 break
             pause(settle_s)
@@ -392,11 +403,27 @@ def wait_for(
     # Confirming must never turn a green into a timeout. If every run was terminal and successful
     # and only the confirming poll ran out of deadline, report what was actually seen - which is
     # exactly what this function returned before the confirmation existed.
+    # It still says so: a green nobody re-polled must not read like a confirmed one.
     if last_success is not None:
-        return last_success
+        return replace(last_success, summary=last_success.summary
+                       + " (not confirmed: the deadline ended before the --settle re-poll)")
     if errors_seen:
         return _gh_gave_up(errors_seen, last_error)
     return Verdict("timeout", last_summary)
+
+
+def _cut_settle_said(confirmed: Verdict, waited: float, settle_s: float) -> Verdict:
+    """The confirmed green, saying so when the deadline cut the settle short.
+
+    Every sleep is cut to the time left, the settle included, so a green first seen near the
+    deadline is re-polled sooner than ``--settle`` asked. That is still reported as success - a
+    confirmation is never another way to fail - but a run created in the part of the settle that
+    never happened is exactly what the settle exists to catch, so the summary names the shortfall.
+    """
+    if waited >= settle_s:
+        return confirmed
+    return replace(confirmed, summary=f"{confirmed.summary} (confirmed after {waited:.0f}s, not the "
+                                      f"full {settle_s:g}s --settle: the deadline cut it short)")
 
 
 class _Timer:
@@ -494,6 +521,16 @@ def _seconds(*, allow_zero: bool) -> Callable[[str], float]:
     return parse
 
 
+def _interval(text: str) -> float:
+    """A positive duration of at least :data:`MIN_INTERVAL_S` - see there for why."""
+    value = _seconds(allow_zero=False)(text)
+    if value < MIN_INTERVAL_S:
+        raise argparse.ArgumentTypeError(
+            f"{text!r} is below the {MIN_INTERVAL_S:g}-second floor: every poll is one gh API "
+            f"request, so a shorter interval polls back to back until the deadline")
+    return value
+
+
 def _positive_int(text: str) -> int:
     try:
         value = int(text)
@@ -510,7 +547,9 @@ def _parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--sha", required=True, help="the FULL 40-character commit sha (git rev-parse HEAD)")
     parser.add_argument("--repo", default=None, help="OWNER/NAME; default is the cwd's repo")
     parser.add_argument("--timeout", type=positive, default=1500.0, help="seconds to wait (default 1500)")
-    parser.add_argument("--interval", type=positive, default=30.0, help="seconds between polls (default 30)")
+    parser.add_argument("--interval", type=_interval, default=30.0,
+                        help=f"seconds between polls (default 30, at least {MIN_INTERVAL_S:g}: each "
+                             "poll is one API request)")
     parser.add_argument(
         "--limit", type=_positive_int, default=30,
         help="how many of this sha's runs to fetch (default 30)",

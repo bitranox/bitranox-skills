@@ -468,3 +468,39 @@ def test_adjudicate_asks_to_be_launched_with_a_plain_interpreter():
     toolbox-nudge reads LAUNCH_WITH to suggest the right launch."""
     assert A.LAUNCH_WITH == "python3"
     assert "uv run scripts/adjudicate.py" not in (A.__doc__ or "")
+
+
+# ---- stdin goes over as BYTES (rank 181, L3b) ----------------------------------------------------
+
+def test_the_subject_is_fed_stdin_as_bytes_never_through_a_text_wrapper(tmp_path, monkeypatch):
+    """A text-mode stdin translates every \\n to os.linesep, so on Windows the subject reads
+    "a\\r" where "a" was written and a line-fed subject matches nothing - no error, just a
+    different answer. Only a byte payload is immune on every platform; this pins that the
+    payload never goes through the translating wrapper, which a Linux run cannot otherwise see."""
+    seen = {}
+    real = A.subprocess.run
+
+    def spy(*args, **kwargs):
+        seen.update(kwargs)
+        return real(*args, **kwargs)
+
+    monkeypatch.setattr(A.subprocess, "run", spy)
+    hook = _fake_hook(tmp_path, "print('ok')\n")
+    A.run_once(A.subject_for_hook(hook), "line one\nline two\n", [])
+    assert isinstance(seen["input"], bytes), type(seen["input"])
+    assert not seen.get("text") and "encoding" not in seen
+
+
+def test_the_subject_receives_exactly_the_bytes_written(tmp_path):
+    hook = _fake_hook(tmp_path, "sys.stdout.write(repr(sys.stdin.buffer.read()))\n")
+    payload = "a\nb\n" + chr(0xE9)
+    run = A.run_once(A.subject_for_hook(hook), payload, [])
+    assert run.stdout == repr(payload.encode("utf-8"))
+
+
+def test_the_subjects_output_keeps_universal_newlines_and_survives_bad_utf8(tmp_path):
+    """What text=True gave the CAPTURE side is kept: CRLF and CR read as LF, and an undecodable
+    byte becomes U+FFFD instead of a crash."""
+    hook = _fake_hook(tmp_path, "sys.stdout.buffer.write(b'x\\r\\ny\\rz\\xff\\n')\n")
+    run = A.run_once(A.subject_for_hook(hook), "", [])
+    assert run.stdout == "x\ny\nz" + chr(0xFFFD) + "\n"

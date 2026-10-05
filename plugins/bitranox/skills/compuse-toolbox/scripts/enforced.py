@@ -38,9 +38,11 @@ where a value is declared, never where it is enforced, which is exactly the conf
 a shipped config line look like a mechanism.
 
 What counts as a TEST hit: anything under a `test`/`tests` directory BELOW --root, everything
-when --root itself is such a directory (or a file in one) that holds no project marker
-(`pyproject.toml`, `setup.py`, `setup.cfg`, `.git`), and any `test_*.py`, `*_test.py` or
-`conftest.py`. The walk skips VCS, cache and vendored trees below --root (`.git`, `__pycache__`,
+when --root itself is such a directory (or a file in one) holding no project marker
+(`pyproject.toml`, `setup.py`, `setup.cfg`, `.git`), everything when --root lies inside such a
+directory that a project marker above it proves is part of a project (`--root tests/helpers`),
+and any `test_*.py`, `*_test.py` or `conftest.py`. The walk skips VCS, cache and vendored trees
+below --root (`.git`, `__pycache__`,
 `venv`, any `.venv*`, `.tox`, `site-packages`, `node_modules`), reads a `.env` / `.env.*` file as
 config unless it is a `.py`/`.pyi` module, and matches comments, docstrings and config lines as
 whole words, taking comments from the tokenizer so a `#` inside a string is not one. A directory
@@ -147,15 +149,34 @@ def _is_test_path(path: Path) -> bool:
 
 
 def _is_test_root(root: Path) -> bool:
-    """Whether the scan root ITSELF is a test directory: named test/tests once resolved (so
-    `--root .` from inside tests/ counts) and holding no project marker.
+    """Whether the scan root lies IN a test directory, judged once resolved (so `--root .` from
+    inside tests/ counts).
 
     `_is_test_path` sees only the part BELOW the root, so without this a helper module in a
-    tests dir given as --root read as production code and its assert as the enforcer."""
+    tests dir given as --root - or in a folder under one, `--root tests/helpers` - read as
+    production code and its assert as the enforcer.
+
+    Two shapes, decided differently because a folder called test ABOVE the root is ambiguous:
+    it can be the tests dir the root sits in, or merely where a checkout lives.
+    - The root itself is named test/tests: a test dir unless it holds a project marker.
+    - An ancestor is: a test dir only when a project marker sits ABOVE that ancestor, which
+      proves it is a folder inside the project. With no marker anywhere up the chain the root
+      stays the project, as it always did."""
     resolved = root.resolve()
-    if resolved.name.lower() not in _TEST_DIRS:
+    if _holds_project_marker(resolved):
         return False
-    return not any(os.path.lexists(resolved / marker) for marker in _PROJECT_MARKERS)
+    if resolved.name.lower() in _TEST_DIRS:
+        return True
+    under_a_test_dir = False
+    for directory in resolved.parents:
+        if _holds_project_marker(directory):
+            return under_a_test_dir
+        under_a_test_dir = under_a_test_dir or directory.name.lower() in _TEST_DIRS
+    return False
+
+
+def _holds_project_marker(directory: Path) -> bool:
+    return any(os.path.lexists(directory / marker) for marker in _PROJECT_MARKERS)
 
 
 def _skipped_dir(name: str) -> bool:
@@ -356,7 +377,8 @@ def _alias_decisions(
         if _enclosing_scope(candidate, table) is not scope:
             continue
         if _decides(candidate, table):
-            hits.append(Hit(HitKind.DECISION, candidate.lineno, str(path), _line_text(lines, candidate.lineno), via=name))
+            hits.append(Hit(HitKind.DECISION, candidate.lineno, str(path),
+                            _line_text(lines, candidate.lineno), via=name))
     del identifier_line
     return hits
 

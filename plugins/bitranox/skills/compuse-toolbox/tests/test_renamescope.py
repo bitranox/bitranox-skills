@@ -607,3 +607,49 @@ class TestCoverageGaps:
 
     def test_nothing_matched_is_not_a_dead_exception_class(self) -> None:
         assert not hasattr(renamescope, "NothingMatched")
+
+
+class TestAComprehensionIsItsOwnScope:
+    """A comprehension binds its targets in its OWN scope, like a lambda. Read as part of the
+    enclosing function, a comprehension variable named like a parameter reported PARAMETER - the
+    measured defect's exact shape - and a read AFTER the comprehension reported a binding the
+    function does not have."""
+
+    @pytest.mark.parametrize("brackets", ["[{}]", "{{{}}}", "({})"])
+    def test_a_comprehension_target_shadowing_a_parameter_is_the_comprehensions(
+            self, brackets: str) -> None:
+        body = brackets.format("mac for mac in others")
+        result = scan(f"def f(mac, others):\n    return {body}\n", "mac", "f")
+        inside = [s for s in result.sites if s.line == 2]
+        assert [s.binding for s in inside] == [Binding.COMPREHENSION_VAR] * 2, inside
+
+    def test_a_dict_comprehension_target_is_the_comprehensions(self) -> None:
+        result = scan("def f(k, d):\n    return {k: v for k, v in d}\n", "k", "f")
+        assert [s.binding for s in result.sites if s.line == 2] == [Binding.COMPREHENSION_VAR] * 2
+
+    def test_a_read_after_the_comprehension_is_not_bound_by_it(self) -> None:
+        result = scan("def g(xs):\n    ys = [mac for mac in xs]\n    return mac\n", "mac", "g")
+        assert [s.binding for s in result.sites if s.line == 3] == [Binding.FREE]
+
+    def test_the_first_iterable_is_read_in_the_enclosing_scope(self) -> None:
+        """`[mac for mac in mac]`: the iterable after the FIRST `in` is evaluated outside."""
+        result = scan("def f(mac):\n    return [mac for mac in mac]\n", "mac", "f")
+        on_line = sorted((s.col, s.binding) for s in result.sites if s.line == 2)
+        assert [b for _, b in on_line] == [Binding.COMPREHENSION_VAR, Binding.COMPREHENSION_VAR,
+                                           Binding.PARAMETER]
+
+    def test_a_later_iterable_is_read_inside_the_comprehension(self) -> None:
+        result = scan("def f(row, rows):\n    return [c for row in rows for c in row]\n",
+                      "row", "f")
+        on_line = sorted((s.col, s.binding) for s in result.sites if s.line == 2)
+        assert [b for _, b in on_line] == [Binding.COMPREHENSION_VAR, Binding.COMPREHENSION_VAR]
+
+    def test_a_walrus_inside_a_comprehension_binds_the_enclosing_function(self) -> None:
+        """PEP 572: `:=` in a comprehension binds in the CONTAINING scope, so the read after it
+        is a real ASSIGNED binding of the function."""
+        result = scan("def f(xs):\n    [(last := x) for x in xs]\n    return last\n", "last", "f")
+        assert [s.binding for s in result.sites if s.line == 3] == [Binding.ASSIGNED]
+
+    def test_control_a_loop_variable_still_binds_the_function(self) -> None:
+        result = scan("def h(xs):\n    for mac in xs:\n        pass\n    return mac\n", "mac", "h")
+        assert [s.binding for s in result.sites if s.line == 4] == [Binding.LOOP_VAR]
