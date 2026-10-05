@@ -51,6 +51,7 @@ import json
 import math
 import os
 import random
+import re
 import sys
 from collections import Counter
 from pathlib import Path
@@ -183,11 +184,21 @@ def locate_prompt(row):
 
 
 # Why `locate_prompt` answered None, kept apart because they mean different things to a count: a
-# gone transcript is missing data, while a scheduled prompt (CronCreate / ScheduleWakeup) is a
-# row that should never have been scored as a typed request at all.
+# gone transcript is missing data, a row that was never a typed request (a scheduled fire, a
+# subagent hand-back, a notification) should not have been scored as one at all, and only
+# NOT_FOUND is a prompt the join failed to find. Shadow mode logged hand-backs and task
+# notifications as prompts, and before they had reasons of their own they made up every
+# NOT_FOUND row on the live logs, so the count said nothing about the join.
 UNLOCATED_GONE = "its transcript is gone"
 UNLOCATED_SCHEDULED = "a scheduled prompt (CronCreate / ScheduleWakeup), not typed"
+UNLOCATED_NO_PROMPT = "it logged no prompt text to look for (a task-notification turn)"
+UNLOCATED_NOT_TYPED = "a subagent hand-back, notification or other harness record, not typed"
+# looks_typed leaves every slash-command record out on purpose. Whether one carrying arguments
+# (`/goal do 3-7`) should count as typed is an open decision, so these are counted apart from
+# both a miss and a hand-back: the count is what sizes that decision.
+UNLOCATED_COMMAND = "a slash command, which looks_typed leaves out"
 UNLOCATED_NOT_FOUND = jp.UNLOCATED
+COMMAND_PREFIXES = ("<command-", "<local-command")
 
 
 def _scheduled_texts(path):
@@ -207,17 +218,84 @@ def _scheduled_texts(path):
     return texts
 
 
+def _record_text(obj):
+    """The text a user record or a queued attachment carries, else ""."""
+    if obj.get("type") == "attachment":
+        attachment = obj.get("attachment")
+        prompt = attachment.get("prompt") if isinstance(attachment, dict) else None
+        return prompt if isinstance(prompt, str) else ""
+    if obj.get("type") != "user":
+        return ""
+    message = obj.get("message")
+    return transcript_turns.text_of(message.get("content") if isinstance(message, dict) else None)
+
+
+def _where_text_sits(path, want):
+    """(whether a typed record holds `want`, the stripped text of every untyped record that does).
+
+    Typed means what `human_text` counts, so this agrees with `locate_prompt` by construction."""
+    typed, untyped = False, []
+    with open(path, "rb") as fh:
+        for raw in fh:
+            try:
+                obj = json.loads(raw.decode("utf-8", "replace"))
+            except ValueError:
+                continue
+            if not isinstance(obj, dict):
+                continue
+            typed_text = transcript_turns.human_text(obj)
+            if typed_text:
+                typed = typed or want in typed_text
+                continue
+            text = _record_text(obj)
+            if want in text:
+                untyped.append(text.lstrip())
+    return typed, untyped
+
+
 def unlocated_reason(row):
-    """Why a live row has no typed prompt to join: one of the UNLOCATED_* reasons."""
+    """Why a live row has no typed prompt to join: one of the UNLOCATED_* reasons.
+
+    A row whose text a typed record also holds stays NOT_FOUND even when an untyped record holds
+    it too: the person did type it, so the join missed it (on the offset), which is a real miss.
+    """
     path, want = row.get("transcript_path"), _logged_prompt(row)
     if not path or not os.path.exists(path):
         return UNLOCATED_GONE
+    if not want:
+        return UNLOCATED_NO_PROMPT
     try:
-        if want and any(want in text for text in _scheduled_texts(path)):
+        if any(want in text for text in _scheduled_texts(path)):
             return UNLOCATED_SCHEDULED
+        typed, untyped = _where_text_sits(path, want)
+        if not typed and not untyped:
+            untyped = _command_records(path, want)
     except OSError:
         return UNLOCATED_GONE
-    return UNLOCATED_NOT_FOUND
+    if typed or not untyped:
+        return UNLOCATED_NOT_FOUND
+    if any(text.startswith(COMMAND_PREFIXES) for text in untyped):
+        return UNLOCATED_COMMAND
+    return UNLOCATED_NOT_TYPED
+
+
+# A slash command as the prompt-time hook receives it: the name, then its arguments.
+SLASH_FORM = re.compile(r"/([\w:.-]+)(?:\s+(.*))?\Z", re.DOTALL)
+
+
+def _command_records(path, want):
+    """The command records holding `want` when it is a slash command as the hook received it.
+
+    The hook gets `/goal do 3-7`; the transcript stores `<command-name>/goal</command-name>` with
+    `<command-args>do 3-7</command-args>`, so the logged text is a substring of no record. A
+    prompt that merely opens with a path finds no record of that name, and stays a miss."""
+    match = SLASH_FORM.match(want)
+    if not match:
+        return []
+    tag = "<command-name>/%s</command-name>" % match.group(1)
+    args = (match.group(2) or "").strip()
+    return [text for text in _where_text_sits(path, args)[1]
+            if text.startswith(COMMAND_PREFIXES) and tag in text]
 
 
 def _scores(result):

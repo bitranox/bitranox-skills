@@ -376,6 +376,120 @@ def test_a_row_that_cannot_be_located_answers_none(tmp_path, change):
     assert ce.locate_prompt({**row, **change}) is None
 
 
+# ---- why a row did not locate: a real miss vs a row that was never typed -----------------------
+# Shadow mode logged subagent hand-backs, task notifications and slash commands as prompts. They
+# have no typed record to join, and counting them as UNLOCATED_NOT_FOUND made a panel's unlocated
+# count mean nothing: measured on the live logs, every one of 2,523 NOT_FOUND rows was one of
+# these. The record shapes below are copied (values replaced) from real transcripts.
+
+HAND_BACK = "<agent-message from=\"a1b2\">rank 12 done, gate green</agent-message>"
+
+
+def _peer_user(uuid, text):
+    """A subagent hand-back delivered as a user record: isMeta, origin.kind peer."""
+    return {"type": "user", "uuid": uuid, "isMeta": True, "promptSource": "system",
+            "turnOrigin": "peer", "message": {"role": "user", "content": text},
+            "origin": {"kind": "peer", "from": "a1b2", "senderTaskId": "a1b2", "handback": True}}
+
+
+def _peer_queued(uuid, text):
+    """A subagent hand-back that arrived while the assistant was busy: a queued attachment."""
+    return _queued_typed(uuid, text, {"kind": "peer", "from": "a1b2", "senderTaskId": "a1b2",
+                                      "handback": True})
+
+
+def _command(uuid, text, origin=None):
+    record = {"type": "user", "uuid": uuid, "message": {"role": "user", "content": text}}
+    return {**record, "origin": origin} if origin else record
+
+
+def _unlocated(tmp_path, records, prompt, *, site_row=None, at=-1):
+    t = tmp_path / "t.jsonl"
+    ends = _write(t, records)
+    row = _located(site_row or router_row([], {}, prompt=prompt), t, ends[at])
+    assert ce.locate_prompt(row) is None
+    return ce.unlocated_reason(row)
+
+
+@pytest.mark.parametrize("hand_back", [_peer_user, _peer_queued])
+def test_a_subagent_hand_back_is_unlocated_as_not_typed(tmp_path, hand_back):
+    records = [_typed("p1", "go"), _said("a1", "Dispatched."), hand_back("h1", HAND_BACK)]
+    assert _unlocated(tmp_path, records, HAND_BACK) == ce.UNLOCATED_NOT_TYPED
+
+
+def test_a_harness_meta_record_is_unlocated_as_not_typed(tmp_path):
+    notice = "[Cross-session idle notice] the other session is idle; act only if asked"
+    records = [_typed("p1", "go"), {"type": "user", "uuid": "m1", "isMeta": True,
+                                    "message": {"content": notice}}]
+    assert _unlocated(tmp_path, records, notice) == ce.UNLOCATED_NOT_TYPED
+
+
+GOAL = _command("c1", "<command-name>/goal</command-name>\n            <command-message>goal"
+                      "</command-message>\n            <command-args>do ranks 3-7</command-args>")
+SKILL_COMMAND = _command("c1", "<command-message>bitranox:meta-dream-tree</command-message>\n"
+                               "<command-name>/bitranox:meta-dream-tree</command-name>",
+                         {"kind": "human"})
+
+
+@pytest.mark.parametrize("record, prompt", [
+    (GOAL, "do ranks 3-7"),
+    # The hook receives the command as typed; the transcript stores it as tags, so the logged
+    # text is a substring of no record. Measured: 9 of the 11 rows left after the reasons above.
+    (GOAL, "/goal do ranks 3-7"),
+    (GOAL, "/goal"),
+    (SKILL_COMMAND, "/bitranox:meta-dream-tree"),
+])
+def test_a_slash_command_is_unlocated_as_a_command_not_as_a_miss(tmp_path, record, prompt):
+    # looks_typed leaves every <command- record out on purpose; whether a command with arguments
+    # should count as typed is an open decision, so these are counted apart from both a miss and
+    # a hand-back, which is what sizes that decision.
+    assert _unlocated(tmp_path, [_typed("p1", "go"), record], prompt) == ce.UNLOCATED_COMMAND
+
+
+def test_a_path_shaped_prompt_with_no_command_record_stays_a_real_miss(tmp_path):
+    # Control for the slash form: a prompt opening with a path is not a command unless the
+    # transcript holds that command's record.
+    records = [_typed("p1", "go"), GOAL]
+    assert _unlocated(tmp_path, records, "/media/x do ranks 3-7") == ce.UNLOCATED_NOT_FOUND
+
+
+def test_a_router_row_for_a_task_notification_logged_no_prompt(tmp_path):
+    row = router_row([], {}, prompt="")
+    row["states"] = [{"task_status": "completed", "task_summary": "Agent \"x\" finished",
+                      "previous_assistant_message": "Waiting."}]
+    reason = _unlocated(tmp_path, [_typed("p1", "go")], "", site_row=row)
+    assert reason == ce.UNLOCATED_NO_PROMPT
+
+
+def test_a_stop_row_with_no_typed_prompt_logged_no_prompt(tmp_path):
+    row = stop_row(False, {}, user="")
+    assert _unlocated(tmp_path, [_peer_user("h1", HAND_BACK)], "", site_row=row) \
+        == ce.UNLOCATED_NO_PROMPT
+
+
+def test_text_also_in_a_typed_record_stays_a_real_miss(tmp_path):
+    # Control: the person typed the hand-back's text too, AFTER the stop row's offset. locate
+    # fails on the offset, not because nothing was typed, so this must stay NOT_FOUND.
+    said = "rank 12 done, gate green"
+    records = [_peer_user("h1", said), _said("a1", "Noted."), _typed("p1", said)]
+    row = stop_row(False, {}, user=said)
+    assert _unlocated(tmp_path, records, said, site_row=row, at=1) == ce.UNLOCATED_NOT_FOUND
+    # ...and the same transcript without the typed copy is the hand-back it looks like.
+    assert _unlocated(tmp_path, records[:2], said, site_row=row, at=1) == ce.UNLOCATED_NOT_TYPED
+
+
+def test_text_in_no_record_at_all_stays_a_real_miss(tmp_path):
+    records = [_typed("p1", "go"), _peer_user("h1", HAND_BACK)]
+    assert _unlocated(tmp_path, records, "a prompt nobody wrote") == ce.UNLOCATED_NOT_FOUND
+
+
+def test_a_cron_fire_still_does_not_locate_and_stays_scheduled(tmp_path):
+    fire = {"type": "user", "uuid": "s1", "isMeta": True, "promptSource": "system",
+            "scheduledTaskId": "e4ce11db", "message": {"content": "cron tick: check CI"}}
+    reason = _unlocated(tmp_path, [_typed("p1", "go"), fire], "cron tick: check CI")
+    assert reason == ce.UNLOCATED_SCHEDULED
+
+
 # ---- a family that is logged but never counted as a firing ------------------------------------
 # `endorsement` scored above the threshold as a turn's ONLY reason to fire on 12 turns across two
 # shadow windows, every one a plain approval ("yes", "go", "lets try 1-4"). Approving a proposal is

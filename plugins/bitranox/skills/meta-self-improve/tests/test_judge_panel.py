@@ -369,3 +369,26 @@ def test_cli_packet_names_why_each_live_row_could_not_be_located(tmp_path, capsy
     reasons = [s["reason"] for s in json.loads((out / "skipped.json").read_text(encoding="utf-8"))]
     assert reasons == [ce.UNLOCATED_SCHEDULED, ce.UNLOCATED_GONE, ce.UNLOCATED_NOT_FOUND]
     assert len(set(reasons)) == 3
+
+
+def test_cli_packet_counts_hand_backs_and_commands_apart_from_real_misses(tmp_path):
+    # A panel's skipped list is how many prompts it failed to find. A subagent hand-back and a
+    # slash command were never typed prompts, so each gets its own reason, not NOT_FOUND.
+    t = tmp_path / "t.jsonl"
+    hand_back = "<agent-message from=\"a1\">rank 12 done</agent-message>"
+    recs = [{"type": "user", "uuid": "p1", "origin": {"kind": "human"},
+             "message": {"content": "typed ask"}},
+            {"type": "user", "uuid": "h1", "isMeta": True, "origin": {"kind": "peer"},
+             "message": {"content": hand_back}},
+            {"type": "user", "uuid": "c1",
+             "message": {"content": "<command-name>/goal</command-name> do ranks 3-7"}}]
+    data = "".join(json.dumps(r) + "\n" for r in recs).encode("utf-8")
+    t.write_bytes(data)
+    rows = [live_row(text, [], "none_needed", {}, 0.1, path=str(t), offset=len(data))
+            for text in ("typed ask", hand_back, "do ranks 3-7", "never written")]
+    log = tmp_path / "day.jsonl"
+    log.write_text("".join(json.dumps(r) + "\n" for r in rows), encoding="utf-8")
+    out = tmp_path / "panel"
+    assert ce.main(["packet", "--from", str(log), "--out", str(out), "--json"], skills={}) == 0
+    reasons = [s["reason"] for s in json.loads((out / "skipped.json").read_text(encoding="utf-8"))]
+    assert reasons == [ce.UNLOCATED_NOT_TYPED, ce.UNLOCATED_COMMAND, ce.UNLOCATED_NOT_FOUND]
