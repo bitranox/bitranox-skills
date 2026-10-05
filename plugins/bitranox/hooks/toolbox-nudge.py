@@ -246,12 +246,42 @@ _ANY_TOOL_RULES = [
     (re.compile(r"\bfind\b[^\n]*-name\s+['\"]?CLAUDE\.md"
                 r"|\bgrep\s+-[A-Za-z]*r[A-Za-z]*\b[^\n]*CLAUDE\.md"), "claudemd_variance",
      "finding duplicated CLAUDE.md sections by hand"),
+    # A hand-rolled plan DRY-RUN: a driver that pulls a plan's python fences out with a regex or an
+    # index() and then writes and checks them. The extraction call on a literal python fence is
+    # the shape; a plan that merely CONTAINS python blocks is not. Priced over the transcript
+    # corpus: 21 of 106,395 Bash calls (0.02%), 7 of 6,676 Write bodies and 1 of 10,267 Edit
+    # fragments, and every firing read pulled python blocks out of a plan, a brief, a README or
+    # a SKILL.md to run or check them. The broader candidate "a python fence, a check tool and a
+    # .md in one text" was mostly plan documents being WRITTEN, which is not the chore. Listed
+    # before the span rule, because such a driver usually also splices its blocks into a file.
+    (re.compile(r"\b(?:findall|finditer|search|match|split|index|find|compile)\(\s*(?:rb?|f)?"
+                r"[\"']{1,3}(?:`{3}|~{3})(?:python|py)\b"), "plan_codecheck",
+     "extracting a plan's python blocks to prove them, where each hand-written driver carries the "
+     "last one's quirks"),
+    # The COMPUTED-SPAN spelling of anchor_edit's chore: two `.index()`/`.find()` anchors, then
+    # `s[:a] + new + s[b:]` written back. It carries no `.replace(`, so the exact-text rule below
+    # never saw it, and it is the costlier mistake - a wrong end anchor, or a `.find` that returned
+    # -1, deletes a region silently and the file still parses. Every part of the shape is required
+    # (two finds, a head slice glued with `+`, a tail slice, a write), so reading a span or prose
+    # describing one is not a firing. Priced over the transcript corpus: the shape is in 471 of
+    # 106,293 Bash calls (0.44%), this rule's reason is the one given on 262 (0.25%), and 122 of
+    # those (0.11%) are calls the hook said nothing about before; 22 of 6,668 Write bodies (7 new)
+    # and 1 of 10,258 Edit fragments. The new firings read, bucketed, were hand-rolled splices. Listed before the
+    # exact-text rule so a script doing both gets the span reason. `\A` anchors the lookaheads,
+    # as on the rule below: unanchored, `search` retries them at every offset and an 880 KB Write
+    # cost minutes per call.
+    (re.compile(r"(?s)\A(?=.*\.r?(?:index|find)\(.*\.r?(?:index|find)\()"
+                r"(?=.*\b\w+\[\s*:[^\]\n]+\]\s*\+)"
+                r"(?=.*\+\s*\w+\[[^\]\n:]+:\s*\])"
+                r"(?=.*(?:write_text\(|\.write\())"), "anchor_edit",
+     "splicing a file region between two found anchors (s[:a] + new + s[b:]), where a wrong end "
+     "anchor or a find() of -1 deletes text silently - use its replace-span"),
     # The Python spelling of anchor_edit's chore. Its other rule is `sed -i`, and measured over 60
     # recorded calls this is how the chore is actually written - a read, an exact-text replace and
     # a write-back - usually inside a heredoc, where NO command rule can see it. Both CALL shapes
     # are required so that prose naming the trap ("read_text then write_text with a replace") is
     # not an instance of it.
-    (re.compile(r"(?s)(?=.*\.replace\()(?=.*write_text\()"), "anchor_edit",
+    (re.compile(r"(?s)\A(?=.*\.replace\()(?=.*write_text\()"), "anchor_edit",
      "replacing a file region by exact text, where a computed span or a double-apply goes wrong "
      "silently"),
 ]
@@ -312,6 +342,14 @@ NO_COMMAND_SHAPE = {
         "shape; candidate `rglob\\('\\*\\.jsonl` fires 56 times (0.066%) and is the shared corpus "
         "WALK, so it names guard_replay's chore as readily as this one; the path alone fires 824 "
         "times (0.970%) for every purpose at once."),
+    "instrument_share": (
+        "the chore is re-measuring how much session time the instrumentation takes - a question "
+        "asked about the corpus, and the walk it produces is the one `transcript_index` already "
+        "claims through `.claude/projects`, so the intent is not on the command line.",
+        "measured over the transcript corpus: candidate `\\.claude/projects` plus an ISO-week "
+        "computation (`isocalendar`, `%V`) fires 0 times in 106,324 Bash calls and once in 6,670 "
+        "Write bodies, that one being this jig's own source; the path alone is transcript_index's "
+        "rule and names every corpus walk at once."),
     "guard_replay": (
         "the chore is shipping a hook on the strength of its unit tests - a decision, not a "
         "command.",
@@ -454,8 +492,9 @@ def _tool_invocation(tool):
 #:
 #: The launch belongs to the tool, not to this hook: `uv run` gives a script an isolated
 #: interpreter, which is right for almost every tool and wrong for two kinds. One whose work is
-#: its OWN interpreter running the project's pytest (mutation_arm): there every arm reads
-#: INCONCLUSIVE. One that runs a command the CALLER supplies (gate): `uv run` puts its build env
+#: the project's pytest (mutation_arm): it falls back to ./.venv's python by itself, but run from
+#: anywhere else, or in a project with no .venv, under `uv run` it has neither pytest nor the
+#: project and every arm reads INCONCLUSIVE. One that runs a command the CALLER supplies (gate): `uv run` puts its build env
 #: first on the PATH that command inherits, so a `python3 -m pytest` gate dies with `No module
 #: named pytest` and reads RED - gate.py's docstring says so, and this hook suggested `uv run`
 #: anyway because it read declarations only. A special case here would be forgotten by the next
@@ -473,8 +512,9 @@ LAUNCHERS = {
          "`python3 -m pytest` dies with `No module named pytest` and reads as a false RED")),
     "project-python": (
         (".venv\\Scripts\\python.exe" if os.name == "nt" else ".venv/bin/python") + " %s --help",
-        (" - launch it with the PROJECT's own interpreter, which has the project's pytest and the "
-         "project installed; the isolated environment `uv` would give it has neither")),
+        (" - launch it with the PROJECT's own interpreter (or pass `--python PATH`): its work "
+         "runs the project's pytest, and only an interpreter with pytest and the project "
+         "installed gives a verdict; launched through uv it finds one only in ./.venv")),
 }
 
 #: Resolved key for a docstring that shows the tool launched two different non-uv ways.
