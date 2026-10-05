@@ -38,7 +38,8 @@ lines) is ignored; leading whitespace and a form feed are behaviour.
 Exit codes: 0 = expectation met, 1 = expectation not met (or nothing differed when it had to),
 2 = usage/IO error - a command string that does not split, a missing script operand, a malformed
 --case-file row, a case where a side did not run, or the tool itself failing. `--json` emits the
-machine-readable envelope.
+envelope `{ok, command, data, skipped}` on every exit, a usage error and a crash included; `ok` is
+false exactly on exit 2 (with an `error` saying why), so an unmet expectation is ok with exit 1.
 """
 from __future__ import annotations
 
@@ -47,7 +48,6 @@ from __future__ import annotations
 # pytest and the project's packages are missing - a false RED. toolbox-nudge reads this.
 LAUNCH_WITH = "python3"
 
-import argparse
 import json
 import os
 import shlex
@@ -55,6 +55,8 @@ import shutil
 import subprocess
 import sys
 from dataclasses import asdict, dataclass, field
+
+from _cli_envelope import EnvelopeArgumentParser, emit, run_guarded
 
 
 @dataclass(frozen=True)
@@ -358,7 +360,8 @@ def _print_human(results: list[CaseResult], summary: dict) -> None:
 
 
 def _parse(argv):
-    ap = argparse.ArgumentParser(description="Run two commands on the same inputs and diff what they did.")
+    ap = EnvelopeArgumentParser(description="Run two commands on the same inputs and diff what they did.",
+                                envelope_command="diffbehave")
     ap.add_argument("--a", required=True,
                     help="the first command (DOUBLE-quoted, split by the platform's rules, "
                          "no shell used)")
@@ -410,26 +413,33 @@ def _main(argv) -> int:
     try:
         cases = _prepare(args)
     except UsageError as exc:
-        print(f"diffbehave: {exc}", file=sys.stderr)
-        return 2
+        return _usage_failure(str(exc), args.json)
     if not cases:
-        print("diffbehave: no cases - pass --case or --case-file", file=sys.stderr)
-        return 2
+        return _usage_failure("no cases - pass --case or --case-file", args.json)
 
     results = compare(args.a, args.b, cases, timeout=args.timeout)
     summary = summarize(results)
-    ok = meets_expectation(summary, args.expect_differ) and not summary["error"]
     _report_problems(args, summary, results)
+    if summary["error"]:
+        code = 2
+    else:
+        code = 0 if meets_expectation(summary, args.expect_differ) else 1
 
     if args.json:
-        print(json.dumps({"ok": ok, "command": "diffbehave", "skipped": [],
-                          "data": {"summary": summary,
-                                   "results": [asdict(r) for r in results]}}, indent=2))
+        error = (f"{summary['error']} case(s) could not run on one or both sides"
+                 if code == 2 else None)
+        emit(code, "diffbehave", {"summary": summary, "results": [asdict(r) for r in results]},
+             error=error)
     else:
         _print_human(results, summary)
-    if summary["error"]:
-        return 2
-    return 0 if ok else 1
+    return code
+
+
+def _usage_failure(message: str, as_json: bool) -> int:
+    print(f"diffbehave: {message}", file=sys.stderr)
+    if as_json:
+        emit(2, "diffbehave", error=message)
+    return 2
 
 
 def _harden_stdout() -> None:
@@ -449,11 +459,7 @@ def _harden_stdout() -> None:
 
 def main(argv=None) -> int:
     """Run the CLI. An unexpected failure exits 2, never 1 (expectation not met) or 0."""
-    try:
-        return _main(argv)
-    except Exception as exc:  # noqa: BLE001 - a crash must not read as a verdict
-        print(f"diffbehave: error: {type(exc).__name__}: {exc}", file=sys.stderr)
-        return 2
+    return run_guarded(_main, argv, command="diffbehave")
 
 
 if __name__ == "__main__":
