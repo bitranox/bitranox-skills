@@ -57,7 +57,7 @@ def test_add_refuses_a_pinned_target_and_leaves_the_original_hook_on_disk(proj, 
                 "--hook", "When testing, do something ELSE.", "--body", "B2", "--slug", slug])
     out = capsys.readouterr().out
 
-    assert rc == 1
+    assert rc == 2
     assert "! refused:" in out and slug in out and "amend-pinned" in out
 
     ptr = _pointer(proj, slug)
@@ -79,7 +79,7 @@ def test_pinned_refusal_attributes_the_escape_to_a_human_not_the_reader(proj, ca
                 "--hook", "When testing, do something ELSE.", "--slug", slug])
     out = capsys.readouterr().out
 
-    assert rc == 1
+    assert rc == 2
     assert "human review" in out
     assert "amend-pinned --slug %s" % slug in out   # a human at a keyboard still needs the verb
 
@@ -151,10 +151,10 @@ def test_amend_pinned_refuses_an_unreadable_hook_file_before_writing(tmp_path, p
 
     rc = E.main(["amend-pinned", "--proj", proj, "--slug", slug,
                 "--hook-file", str(tmp_path / "absent.txt")])
-    out = capsys.readouterr().out
+    err = capsys.readouterr().err
 
-    assert rc == 1
-    assert "! refused:" in out
+    assert rc == 2
+    assert "! error:" in err and "absent.txt" in err
     assert _pointer(proj, slug).hook == "When testing, do the original thing."
 
 
@@ -190,7 +190,7 @@ def test_pinned_fact_survives_move_and_the_gate_still_refuses_at_the_destination
                 "--hook", "When testing, do something ELSE.", "--slug", slug])
     out = capsys.readouterr().out
 
-    assert rc == 1
+    assert rc == 2
     assert "! refused:" in out and slug in out
     ptr = _pointer(mid, slug)
     assert ptr.hook == "When testing, do the original thing."   # still unchanged after the move

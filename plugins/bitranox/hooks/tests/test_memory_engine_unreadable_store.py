@@ -157,10 +157,16 @@ def test_control_heal_reports_no_unreadable_level_on_a_utf8_tree(tree):
 
 
 def test_the_heal_cli_prints_the_unreadable_level(tree, capsys):
+    """...and exits 2: heal could not do its job at that level, so 'done' would be a lie."""
     bad = _spoil_level(tree / "sub")
-    assert E.main(["heal", "--proj", str(tree / "sub")]) == 0
+    assert E.main(["heal", "--proj", str(tree / "sub")]) == 2
     out = capsys.readouterr().out
     assert "unreadable" in out and str(bad) in out
+
+
+def test_control_the_heal_cli_exits_0_on_a_readable_tree(tree, capsys):
+    assert E.main(["heal", "--proj", str(tree / "sub")]) == 0
+    assert "unreadable" not in capsys.readouterr().out
 
 
 @pytest.mark.skipif(os.name == "nt" or (hasattr(os, "geteuid") and os.geteuid() == 0),
@@ -181,17 +187,18 @@ def test_read_store_names_an_unreadable_level_file_instead_of_reading_it_empty(t
 # ---- the files a caller names on the command line ------------------------------------------------
 
 @pytest.mark.parametrize("flag", ["--hook-file", "--body-file"])
-def test_an_undecodable_input_file_is_a_refusal_naming_it(tree, tmp_path, flag, capsys):
-    """A cp1252 --hook-file or --body-file escaped as a UnicodeDecodeError traceback."""
+def test_an_undecodable_input_file_is_an_error_naming_it(tree, tmp_path, flag, capsys):
+    """A cp1252 --hook-file or --body-file escaped as a UnicodeDecodeError traceback; it is now
+    exit 2 (could not run), never 1 (the answer is no)."""
     bad = tmp_path / "input.txt"
     bad.write_bytes(b"When caf\xe9, do x.\n")
     argv = ["add", "--proj", str(tree), "--title", "New fact", "--hook", "When new, do new.",
             "--body", "New body."]
     argv[argv.index("--hook" if flag == "--hook-file" else "--body")] = flag
     argv[argv.index(flag) + 1] = str(bad)
-    assert E.main(argv) == 1
-    out = capsys.readouterr().out
-    assert "refused" in out and str(bad) in out and "UTF-8" in out
+    assert E.main(argv) == 2
+    err = capsys.readouterr().err
+    assert "! error:" in err and str(bad) in err and "UTF-8" in err
 
 
 def test_a_hook_file_with_a_bom_stores_no_invisible_first_character(tree, tmp_path):

@@ -76,7 +76,7 @@ def test_add_refuses_when_neither_hook_flag_is_given(tmp_path, capsys):
 
     rc = E.main(["add", "--proj", proj, "--title", "T", "--body", "b", "--slug", "s-nohook"])
 
-    assert rc != 0
+    assert rc == 2                      # a usage error: the call could not run, not a "no"
     # ONE readouterr(): each call DRAINS the capture, so a second call returns empty and
     # the stream it reads is never actually checked. Read both from a single capture.
     captured = capsys.readouterr()
@@ -93,7 +93,7 @@ def test_hook_file_is_subject_to_the_hard_cap(tmp_path, capsys):
     rc = E.main(["add", "--proj", proj, "--title", "T", "--hook-file", str(hf),
                  "--body", "b", "--slug", "s-toolong"])
 
-    assert rc != 0
+    assert rc == 2                      # a whole-action refusal (NU-1)
     assert "refused" in capsys.readouterr().out
 
 
@@ -119,9 +119,9 @@ def test_set_scope_refuses_when_neither_scope_flag_is_given(tmp_path, capsys):
 
     rc = E.main(["set-scope", "--proj", proj])
 
-    assert rc != 0
-    out = capsys.readouterr().out
-    assert "--scope" in out and "--scope-file" in out
+    assert rc == 2
+    err = capsys.readouterr().err
+    assert "! error:" in err and "--scope" in err and "--scope-file" in err
     assert not (Path(proj) / "CLAUDE.local.md").exists()
 
 
@@ -132,8 +132,9 @@ def test_a_missing_hook_file_fails_with_the_path(tmp_path, capsys):
     rc = E.main(["add", "--proj", proj, "--title", "T", "--hook-file",
                  str(tmp_path / "nope.txt"), "--body", "b", "--slug", "s-missing"])
 
-    assert rc != 0
-    assert "nope.txt" in capsys.readouterr().out
+    assert rc == 2
+    err = capsys.readouterr().err
+    assert "! error:" in err and "nope.txt" in err
 
 
 def test_add_with_neither_scope_flag_still_succeeds(tmp_path, capsys):
@@ -165,17 +166,17 @@ def test_add_reads_the_scope_from_a_file(tmp_path):
 
 
 def test_add_scope_file_unreadable_path_is_a_clean_refusal(tmp_path, capsys):
-    """An unreadable --scope-file must exit 1 with `! refused:`, never a traceback."""
+    """An unreadable --scope-file exits 2 with `! error:` naming it, never a traceback."""
     _anchor, proj = _tree(tmp_path)
 
     rc = E.main(["add", "--proj", proj, "--title", "T", "--hook", HOOK,
                  "--body", "b", "--slug", "s-scopemissing",
                  "--scope-file", str(tmp_path / "nope-scope.txt")])
-    out = capsys.readouterr().out
+    err = capsys.readouterr().err
 
-    assert rc == 1
-    assert "! refused:" in out
-    assert "nope-scope.txt" in out
+    assert rc == 2
+    assert "! error:" in err
+    assert "nope-scope.txt" in err
 
 
 def test_add_scope_file_wins_over_inline_scope(tmp_path):
@@ -193,3 +194,54 @@ def test_add_scope_file_wins_over_inline_scope(tmp_path):
     scope = _scope_at(proj)
     assert "PLACE-ELSEWHERE: b" in scope
     assert "the inline one" not in scope
+
+
+# ---- exit 2 for every input the CLI could not read (D11) ----------------------------------------
+#
+# 0 done, 1 the answer is no, 2 could not run. An input file that cannot be read or decoded is
+# the definition of "could not run", so it is 2 on every verb and flag, with `! error:` on stderr.
+
+def _write_bytes(path, raw):
+    path.write_bytes(raw)
+    return str(path)
+
+
+@pytest.mark.parametrize("flag", ["--hook-file", "--body-file", "--scope-file"])
+def test_add_exits_2_for_a_non_utf8_input_file(tmp_path, capsys, flag):
+    _anchor, proj = _tree(tmp_path)
+    bad = _write_bytes(tmp_path / "bad.txt", b"\xff\xfe not utf-8")
+    argv = {"--hook-file": ["--hook-file", bad, "--body", "b"],
+            "--body-file": ["--hook", HOOK, "--body-file", bad],
+            "--scope-file": ["--hook", HOOK, "--body", "b", "--scope-file", bad]}[flag]
+
+    rc = E.main(["add", "--proj", proj, "--title", "T", "--slug", "s-bad"] + argv)
+
+    captured = capsys.readouterr()
+    assert rc == 2
+    assert "! error:" in captured.err and "bad.txt" in captured.err
+    assert "! refused:" not in captured.out
+    assert not (Path(_anchor) / us.STORE_DIRNAME / "facts" / "s-bad.md").exists()
+
+
+@pytest.mark.parametrize("flag", ["--hook-file", "--body-file"])
+def test_amend_pinned_exits_2_for_a_missing_input_file(tmp_path, capsys, flag):
+    _anchor, proj = _tree(tmp_path)
+    assert E.main(["add", "--proj", proj, "--title", "T", "--hook", HOOK, "--body", "b",
+                   "--slug", "s-pinned", "--pin"]) == 0
+    capsys.readouterr()
+
+    rc = E.main(["amend-pinned", "--proj", proj, "--slug", "s-pinned",
+                 flag, str(tmp_path / "gone.txt")])
+
+    assert rc == 2
+    assert "gone.txt" in capsys.readouterr().err
+
+
+def test_set_scope_exits_2_for_a_missing_scope_file(tmp_path, capsys):
+    _anchor, proj = _tree(tmp_path)
+
+    rc = E.main(["set-scope", "--proj", proj, "--scope-file", str(tmp_path / "gone.txt")])
+
+    assert rc == 2
+    assert "gone.txt" in capsys.readouterr().err
+    assert not (Path(proj) / "CLAUDE.local.md").exists()

@@ -230,7 +230,7 @@ def test_cli_retitle_refusal_exits_nonzero(tmp_path, capsys):
     rc = E.main(["retitle", "--level", proj, "--slug", "iron-rule", "--to-title", "New"])
     out = capsys.readouterr().out
 
-    assert rc == 1
+    assert rc == 2
     assert "! refused:" in out and "amend-pinned" in out
 
 

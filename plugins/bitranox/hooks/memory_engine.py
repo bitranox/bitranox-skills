@@ -136,6 +136,17 @@ class PinnedEntry(ValueError):
                          % (slug, slug))
 
 
+class ExcludedLevel(ValueError):
+    """Raised when a write targets HOME, the system temp dir or the filesystem root: those dirs are
+    never a memory level (see `ensure_level`). A ValueError subclass, so an in-process caller that
+    catches ValueError still does; the CLI maps it to exit 2 rather than letting it escape as a
+    traceback."""
+
+    def __init__(self, proj):
+        self.proj = proj
+        super().__init__("%s is an excluded altitude (home/tempdir/root)" % proj)
+
+
 class UnknownSlug(ValueError):
     """Raised when `amend-pinned` targets a slug this level has no pointer for. The verb carries no
     `--title` (it amends, it does not create), so there is nothing to attach a first write to; use
@@ -874,7 +885,7 @@ def ensure_level(proj, scope_default="", _locked=False):
     that pollutes recall (bitten twice on 2026-07-05)."""
     proj = os.path.abspath(str(proj))
     if _is_excluded_level(proj):
-        raise ValueError("refused: %s is an excluded altitude (home/tempdir/root)" % proj)
+        raise ExcludedLevel(proj)
     def _do():
         md_path = sig.claude_md_path(proj)
         # Both reads raise TreeWalkError rather than read as empty: this function REWRITES both
@@ -1622,15 +1633,16 @@ def _read_input_file(path):
 
     Decoded as `utf-8-sig`: a BOM is what a Windows editor leaves, and kept it would ride into the
     always-loaded pointer line as an invisible first character that `strip()` does not remove.
-    Bytes that are not UTF-8 are a refusal naming the file, like an unreadable one - they used to
-    escape as a UnicodeDecodeError traceback."""
+    Bytes that are not UTF-8 are an error naming the file, like an unreadable one - they used to
+    escape as a UnicodeDecodeError traceback. The CLI prints the message on stderr and exits 2: an
+    input it could not read means the call could not run, which is not the engine saying no."""
     try:
         return Path(path).read_text(encoding="utf-8-sig"), None
     except UnicodeDecodeError as exc:
-        return None, "! refused: %s is not UTF-8 (byte at offset %d) - re-save it as UTF-8" % (
+        return None, "! error: %s is not UTF-8 (byte at offset %d) - re-save it as UTF-8" % (
             path, exc.start)
     except OSError as exc:
-        return None, "! refused: cannot read %s (%s)" % (path, exc.strerror or exc)
+        return None, "! error: cannot read %s (%s)" % (path, exc.strerror or exc)
 
 
 def _text_from_flag_or_file(inline, path, inline_flag, file_flag):
@@ -1639,28 +1651,70 @@ def _text_from_flag_or_file(inline, path, inline_flag, file_flag):
     The file variant exists because a hook (up to 500 chars) and a scope descriptor (multi-line)
     are too long to type inline comfortably, and the shell workaround - `--hook "$(cat f)"` - is a
     command substitution the shell EXECUTES, which the plugin's own guard denies. The file wins when
-    both are given, matching --body/--body-file.
+    both are given, matching --body/--body-file. Passing neither is a usage error (exit 2).
     """
     if path:
         return _read_input_file(path)
     if inline is None:
-        return None, "! refused: pass %s or %s" % (inline_flag, file_flag)
+        return None, "! error: pass %s or %s" % (inline_flag, file_flag)
     return inline, None
+
+
+def _input_error(message):
+    """Print an input/usage error from `_text_from_flag_or_file` / `_read_input_file`; exit 2."""
+    print(message, file=sys.stderr)
+    return 2
+
+
+def _refused(reason):
+    """Print an engine refusal; exit 2. A refusal is the WHOLE action declined (nothing written),
+    so it is "could not run" in the plugin-wide 0/1/2 scheme, never the "no" of a check. The
+    `! refused:` text stays on stdout so a caller capturing the result still reads the reason."""
+    print("! refused: %s" % reason)
+    return 2
+
+
+# A USER ruling on the escalation ladder, as bodies record it: "**Escalation decided 2026-08-23
+# (USER): no guard and no jig - ...". Requires the phrase and the (USER) attribution on one line,
+# so a body that merely discusses escalating, or records an agent's own call, still escalates.
+_USER_ESCALATION_RX = re.compile(r"(?im)^[^\n]*\bescalation\s+decided\b[^\n]*\(user\)")
+
+
+def _user_decided_escalation(body):
+    """True when `body` records the USER's decision on the guard/jig ladder (see the regex)."""
+    return bool(_USER_ESCALATION_RX.search(body or ""))
 
 
 # ---- CLI: the capture procedure invokes this (never hand-writes memory files) ------------------
 
 def main(argv=None):
-    """The CLI. Exit codes: 0 done, 1 refused (the message says why), 2 usage error or a store it
-    could not read.
+    """The CLI. Exit codes (the plugin-wide 0/1/2 scheme):
 
-    TreeWalkError is mapped HERE, once, rather than at each verb: it can surface from any read of
-    the store, and a verb that forgets to catch it lets a traceback exit 1 - the code every verb
-    uses for "refused", so a store that could not even be read read as an ordinary refusal."""
+    0  done (a write verb wrote, or found nothing to change; a report verb ran);
+    1  `lint --tree` found something (over-cap hook, trigger-less hook, unlabelled body, invalid
+       pointer) - the one verb that is a check, so its findings are a "no";
+    2  could not run: a usage error, an input file it could not read or decode, a store it could
+       not read, a level lock held past its timeout, a failed write, `heal` leaving a level it
+       could not read, or a refusal - `! refused: <why>` on stdout - where the engine declined
+       the whole action (slug collision, hook over the hard cap, empty body on a new fact, pinned
+       target, unknown or invalid slug, excluded altitude, a refused move/relocate/rename/retitle).
+       Nothing is written on a refusal.
+
+    TreeWalkError and OSError (TimeoutError from the lock is one) are mapped HERE, once, rather
+    than at each verb: they can surface from any read or write of the store, and a verb that
+    forgot to catch one let a traceback exit 1 - which reads as a "no" rather than as a call that
+    could not run."""
     try:
         return _main(argv)
     except TreeWalkError as exc:
         print("! error: cannot read the memory store - %s" % exc, file=sys.stderr)
+        return 2
+    except ExcludedLevel as exc:
+        return _refused(exc)
+    except OSError as exc:
+        # TimeoutError (lock contention) is an OSError subclass whose strerror is None
+        detail = exc if exc.strerror is None else "%s: %s" % (exc.strerror, exc.filename or "")
+        print("! error: %s" % detail, file=sys.stderr)
         return 2
 
 
@@ -1815,15 +1869,15 @@ def _main(argv=None):
         print("TOTAL over-cap hooks: %d | trigger-less hooks: %d | bodies without Why/How labels: %d"
               " (style advisory)" % (len(rep["over_cap"]), len(rep["no_trigger"]),
                                      len(rep["unlabelled"])))
-        return 0
+        found = rep["over_cap"] or rep["no_trigger"] or rep["unlabelled"] or rep["invalid_pointers"]
+        return 1 if found else 0
 
     if args.cmd == "move":
         # `--slug a --slug b` and `--slug a b` both land as a list of groups; flatten to the set
         slugs = [s for group in args.slug for s in group]
         rep = move_entry(args.from_level, args.to_level, slugs, force=args.force)
         if rep["refused"]:
-            print("! refused: %s" % rep["refused"])
-            return 1
+            return _refused(rep["refused"])
         for w in rep["warnings"]:
             print("~ warning: %s" % w)
         print("moved %s: %s -> %s (%s)" % (rep["slug"], rep["from"], rep["to"], rep["direction"]))
@@ -1832,8 +1886,7 @@ def _main(argv=None):
     if args.cmd == "relocate":
         rep = relocate_entry(args.from_level, args.to_level, args.slug, force=args.force)
         if rep["refused"]:
-            print("! refused: %s" % rep["refused"])
-            return 1
+            return _refused(rep["refused"])
         for w in rep["warnings"]:
             print("~ warning: %s" % w)
         print("relocated %s: %s -> %s (%s)" % (
@@ -1845,8 +1898,7 @@ def _main(argv=None):
     if args.cmd == "rename":
         rep = rename_entry(args.level, args.slug, args.to_slug)
         if rep["refused"]:
-            print("! refused: %s" % rep["refused"])
-            return 1
+            return _refused(rep["refused"])
         for w in rep["warnings"]:
             print("~ warning: %s" % w)
         print("renamed %s -> %s at %s" % (rep["slug"], rep["to_slug"], rep["level"]))
@@ -1857,8 +1909,7 @@ def _main(argv=None):
     if args.cmd == "retitle":
         rep = retitle_entry(args.level, args.slug, args.to_title)
         if rep["refused"]:
-            print("! refused: %s" % rep["refused"])
-            return 1
+            return _refused(rep["refused"])
         for w in rep["warnings"]:
             print("~ warning: %s" % w)
         print("retitled %s -> %r at %s" % (rep["slug"], rep["to_title"], rep["level"]))
@@ -1877,8 +1928,7 @@ def _main(argv=None):
         # Resolve BEFORE ensure_level: a refused call must not leave a level scaffolded behind it.
         scope, err = _text_from_flag_or_file(args.scope, args.scope_file, "--scope", "--scope-file")
         if err:
-            print(err)
-            return 1
+            return _input_error(err)
         ensure_level(args.proj)                       # make sure the pointer block exists first
         local = sig.claude_local_md_path(args.proj)
         text = read_store_text(local)
@@ -1899,20 +1949,19 @@ def _main(argv=None):
         for level, why in rep["unreadable"]:
             print("    ! unreadable level, left untouched (fix its permissions, or re-save it as "
                   "UTF-8): %s [%s]" % (why, level))
-        return 0
+        # heal could not do its job at an unreadable level, so "done" would be a lie there
+        return 2 if rep["unreadable"] else 0
 
     if args.cmd == "add":
         hook, err = _text_from_flag_or_file(args.hook, args.hook_file, "--hook", "--hook-file")
         if err:
-            print(err)
-            return 1
+            return _input_error(err)
         hook = hook.strip()
         body = args.body
         if args.body_file:
             body, err = _read_input_file(args.body_file)
             if err:
-                print(err)
-                return 1
+                return _input_error(err)
         # Unlike --hook/--hook-file, a scope flag on `add` is OPTIONAL - essentially every capture
         # passes neither. So this is a GUARDED call: `_text_from_flag_or_file` only runs when
         # --scope-file was actually given (it reads the file, or refuses cleanly if it cannot);
@@ -1925,15 +1974,13 @@ def _main(argv=None):
             scope_default, err = _text_from_flag_or_file(args.scope, args.scope_file,
                                                           "--scope", "--scope-file")
             if err:
-                print(err)
-                return 1
+                return _input_error(err)
         try:
             slug = add_or_update_entry(args.proj, title=args.title, hook=hook, body=body,
                                        type_=args.type_, pin=args.pin,
                                        scope_default=scope_default, slug=args.slug)
         except (SlugCollision, HookTooLong, EmptyBody, PinnedEntry, InvalidSlug) as c:
-            print("! refused: %s" % c)
-            return 1
+            return _refused(c)
         print(slug)
         if us.hook_over_budget(hook):
             print("~ warning: hook is %d chars (soft cap %d, advisory - fine up to the %d-char hard "
@@ -1953,7 +2000,12 @@ def _main(argv=None):
         # the counter living only in the rule ladder is what kept sending readers to a guard
         # while the jig was never proposed.
         seen = us.recurrence_count(body)
-        if seen is not None and seen >= us.RECURRENCE_ESCALATE_AT:
+        if seen is not None and seen >= us.RECURRENCE_ESCALATE_AT and _user_decided_escalation(body):
+            # The user already ruled on the ladder: "propose it in THIS turn" would contradict the
+            # very fact being written and re-ask a settled question.
+            print("~ note: this body records recurrence %d and the user's escalation decision - "
+                  "not re-proposing a guard or jig" % seen)
+        elif seen is not None and seen >= us.RECURRENCE_ESCALATE_AT:
             print("~ warning: this body records recurrence %d - prose has already failed %d times, "
                   "so do NOT just reword it. Escalate and PROPOSE it to the user in THIS turn: a "
                   "deterministic GUARD if a rule keeps being skipped, a JIG (toolbox tool) if the "
@@ -1969,21 +2021,18 @@ def _main(argv=None):
         if args.hook is not None or args.hook_file:
             hook, err = _text_from_flag_or_file(args.hook, args.hook_file, "--hook", "--hook-file")
             if err:
-                print(err)
-                return 1
+                return _input_error(err)
             hook = hook.strip()
         body = None
         if args.body_file:
             body, err = _read_input_file(args.body_file)
             if err:
-                print(err)
-                return 1
+                return _input_error(err)
         try:
             slug = amend_pinned_entry(args.proj, slug=args.slug, hook=hook, body=body,
                                       title=args.title, type_=args.type_)
         except (SlugCollision, HookTooLong, EmptyBody, UnknownSlug, InvalidSlug) as c:
-            print("! refused: %s" % c)
-            return 1
+            return _refused(c)
         print(slug)
         return 0
     ap.print_help(sys.stderr)
