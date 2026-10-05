@@ -578,6 +578,44 @@ def test_injected_user_records_do_not_hide_the_human_prompt(tmp_path, monkeypatc
     assert decision_of(capsys) == "block"
 
 
+# A self-admission the assistant QUOTES is data about another turn, not an admission in this one.
+# The first is the 2026-09-22 shadow report that fired the gate; replayed over the corpus, 7 of
+# the 131 keyword firings were quoted spans like these and none was an admission.
+@pytest.mark.parametrize("reply", [
+    'The strongest real case was my "That was wrong" correction on your turn.',
+    "The subagent's \u201cNow I have the full picture.\u201d line is task-local noise.",
+    "It runs `block-pgrep-self-match.py` end to end.",
+    "The table:\n```\nps ... args | grep (self-match)    procsig\n```\nDone.",
+    "The log says 'you were right, my mistake' at line 4.",
+])
+def test_a_self_admission_the_assistant_quotes_does_not_block(tmp_path, monkeypatch, capsys,
+                                                               reply):
+    tp = _write(tmp_path, *_tool_turn("please summarise the shadow log"))
+    run_gate(monkeypatch, tmp_path, {"transcript_path": tp, "cwd": str(tmp_path),
+                                     "last_assistant_message": reply})
+    assert decision_of(capsys) is None
+
+
+@pytest.mark.parametrize("reply", [
+    "That was my mistake - I read the stale log.",
+    "You're right, I missed the second call site.",
+    'I was wrong about "harmless churn": the exec bit was lost.',
+])
+def test_an_unquoted_self_admission_still_blocks(tmp_path, monkeypatch, capsys, reply):
+    tp = _write(tmp_path, *_tool_turn("please summarise the shadow log"))
+    run_gate(monkeypatch, tmp_path, {"transcript_path": tp, "cwd": str(tmp_path),
+                                     "last_assistant_message": reply})
+    assert decision_of(capsys) == "block"
+
+
+def test_a_quoted_correction_from_the_user_still_blocks(tmp_path, monkeypatch, capsys):
+    # Only the assistant side is unquoted: a person quoting the reply back is still correcting it.
+    tp = _write(tmp_path, *_tool_turn('"harmless churn"? no, that is wrong'))
+    run_gate(monkeypatch, tmp_path, {"transcript_path": tp, "cwd": str(tmp_path),
+                                     "last_assistant_message": "Checking again."})
+    assert decision_of(capsys) == "block"
+
+
 GOAL_CMD = ("<command-name>/goal</command-name>\n            <command-message>goal</command-message>"
             "\n            <command-args>%s</command-args>")
 

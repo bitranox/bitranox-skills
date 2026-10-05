@@ -166,6 +166,27 @@ def test_broad_user_flags_a_request_to_recheck_and_correct(text):
     assert S.user_signal_offset(text) is not None
 
 
+@pytest.mark.parametrize("head, quoted, tail", [
+    ("my ", '"That was wrong"', " correction"),
+    ("run ", "`x self-match`", " now"),
+    ("a ", "\u201cfound it\u201d", " line"),
+    ("the ", "'my mistake'", " quote"),
+    ("before\n", "```py\nI was wrong\n```", "\nafter"),
+])
+def test_unquoted_blanks_quoted_spans_and_keeps_offsets(head, quoted, tail):
+    assert S.unquoted(head + quoted + tail) == head + " " * len(quoted) + tail
+
+
+def test_unquoted_leaves_apostrophes_alone():
+    text = "you're right, the users' files and it's fine"
+    assert S.unquoted(text) == text
+
+
+def test_unquoted_leaves_an_unclosed_quote_alone():
+    text = 'I was wrong about "the cache\nand the rest'
+    assert S.unquoted(text) == text
+
+
 @pytest.mark.parametrize("text", [
     "check the logs please",
     "the correct value is 3",

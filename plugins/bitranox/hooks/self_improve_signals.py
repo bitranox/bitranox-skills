@@ -2456,6 +2456,29 @@ BROAD_ASST_PATTERN = re.compile(
 )
 
 
+# Text the assistant QUOTES rather than says: a fenced code block, an inline code span, and a
+# single-line span in double, curly or single quotes. A report citing another turn's "that was
+# my mistake" is data about that turn, not an admission in this one. A single quote opens only
+# after a non-word character and closes only before one, so the apostrophes of "you're" and
+# "users'" never pair up into a span. Spans are bounded so an unclosed quote cannot swallow a
+# whole reply.
+_QUOTED_SPANS = re.compile(
+    r"(?ms)^[ \t]*(```|~~~).*?^[ \t]*\1[^\n]*$"
+    r"|`[^`\n]{1,400}`"
+    r"|\"[^\"\n]{1,400}\""
+    r"|\u201c[^\u201c\u201d\n]{1,400}\u201d"
+    r"|(?<![\w'])'[^'\n]{1,400}'(?![\w'])")
+
+
+def unquoted(text):
+    """`text` with every quoted span (see _QUOTED_SPANS) blanked to spaces, offsets preserved.
+
+    For the ASSISTANT side of the Stop gate: a self-admission the assistant quotes as data is
+    not one it makes. Same length as the input, so an offset into the result is an offset into
+    `text`."""
+    return _QUOTED_SPANS.sub(lambda m: " " * len(m.group(0)), text or "")
+
+
 def strict_user_hit(text):
     """A strict learning signal in a USER message (correction/remember/endorsement)."""
     return bool(USER_PATTERN.search(text) or ENDORSE_PATTERN.search(text))
