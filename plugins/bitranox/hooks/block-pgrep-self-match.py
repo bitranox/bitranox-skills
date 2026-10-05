@@ -30,9 +30,11 @@ Two shapes cause it, and this hook blocks both. Both are read only inside a
    itself is the leak.
 
 A call is looked for only in text the shell will EXECUTE: heredoc bodies, `#`
-comments, plain commit-message text, and the operands of echo/printf and the other
-sinks `shell_text.strip_data_sink_statements` lists are blanked first. A `$(...)`
-or backtick substitution inside a message still runs, so it is kept.
+comments, the message text of a git commit/tag/merge, the operands of echo/printf
+and the other sinks `shell_text.strip_data_sink_statements` lists, and the pattern
+and file operands of grep/egrep/fgrep/zgrep/rg (this guard's own list) are blanked
+first. A `$(...)` or backtick substitution inside any of them still runs, so it is
+kept, and so is an `rg --pre <command>`, which executes its value.
 
 These forms are NOT blocked because they cannot self-match or already handle it:
   - a pattern containing `$` (`pkill -f "$name"`): argv holds the UNEXPANDED text,
@@ -44,8 +46,9 @@ These forms are NOT blocked because they cannot self-match or already handle it:
     `-F`/`--pidfile` and `-L`/`--logpidfile` are not `-f` either;
   - a command that already excludes the current shell (`grep -vw "$$"`).
 
-A pgrep/pkill named inside a quoted argument of a program NOT on that sink list -
-`grep -rn "pkill -f x"` - still reads as a call; bracket its first letter to pass.
+A pgrep/pkill named inside a quoted argument of any OTHER program - `ssh host
+'pkill -f x'`, `xargs pkill -f x` - still reads as a call; most of those really run
+it. Bracket its first letter to pass a mention that does not.
 
 Pure standard library: no jq, no shell. Reads the PreToolUse event JSON on stdin.
 Exit 2 blocks the call and shows stderr to the model; every other path (including
@@ -58,7 +61,12 @@ import re
 import sys
 
 from shell_text import (
+    argv_for_match,
+    basename_for_tool,
+    is_git_verb,
+    iter_segments,
     mask_data_regions,
+    past_command_prefix,
     strip_data_sink_statements,
     strip_heredoc_bodies,
 )
@@ -81,10 +89,15 @@ _INVOCATION = re.compile(_PROGRAM + r"""(?:[^|;&\n)`'"]|'[^'\n]*'|"[^"\n]*")*"""
 
 _BRACKET_TOKEN = re.compile(r"\[[^\]]\][A-Za-z0-9_./@:+-]+")
 
-# A `git commit` message argument (`-m`/`--message`, quoted or bare). Its TEXT is stored, never run.
-# Kept beside the shared sink stripper because that one stops at `git -C <dir> commit` - the `-C`
-# value is not a flag, so the statement is not recognised as a commit there.
+# A git message argument (`-m`/`--message`, quoted or bare). Its TEXT is stored, never run. Kept
+# beside the shared sink stripper because that one stops at `git -C <dir> commit` - the `-C` value is
+# not a flag, so the statement is not recognised as a commit there - and knows no `tag` or `merge`.
+#
+# Applied ONLY inside a git statement whose verb takes a message: run over the whole command it
+# rewrote the `-m zz` INSIDE a pgrep pattern (`pgrep -f "[a]b -m zz"`) to `-m X`, so the pattern the
+# guard judged was not the one pgrep runs.
 _COMMIT_MSG = re.compile(r"(?:-m|--message)(?:=|\s+)(?:\"[^\"]*\"|'[^']*'|\S+)")
+_MESSAGE_VERBS = frozenset({"commit", "tag", "merge"})
 
 # `$(` and a backtick RUN what they enclose, even inside a double-quoted message, so a message that
 # carries one is left for the invocation search: `git commit -m "$(pgrep -f x | wc -l) up"` runs a
@@ -113,8 +126,77 @@ def strip_data_bodies(cmd, tool_name=None):
     """
     out = strip_heredoc_bodies(cmd)
     out = _blank_comments(out, tool_name)
-    return _COMMIT_MSG.sub(
-        lambda m: m.group(0) if _RUNS_SUBSTITUTION.search(m.group(0)) else "-m X", out)
+    return _rewrite_git_messages(out, tool_name)
+
+
+def _rewrite_git_messages(text, tool_name):
+    """`text` with each git commit/tag/merge statement's message text replaced by `-m X`.
+
+    Only those statements are touched: a `-m <word>` anywhere else - inside a pgrep pattern, as
+    another program's option - is left exactly as written.
+    """
+    tool = tool_name or "Bash"
+    pieces, pos = [], 0
+    for at, segment in iter_segments(text, tool_name):
+        if not is_git_verb(segment.strip().lstrip("(").strip(), _MESSAGE_VERBS, tool):
+            continue
+        pieces.append(text[pos:at])
+        pieces.append(_COMMIT_MSG.sub(
+            lambda m: m.group(0) if _RUNS_SUBSTITUTION.search(m.group(0)) else "-m X", segment))
+        pos = at + len(segment)
+    pieces.append(text[pos:])
+    return "".join(pieces)
+
+
+# Programs whose operands are a search PATTERN and FILE names: searched for, never executed. Decided
+# for THIS guard only (2026-10-05, option B): shell_text's shared sink list stays echo/printf,
+# because every guard consults it and grep there would change all of them at once.
+_SEARCH_PROGRAMS = frozenset({"grep", "egrep", "fgrep", "zgrep", "rg"})
+
+# rg's `--pre <command>` EXECUTES its value for every file, so such a statement is not inert.
+_EXECUTING_SEARCH_OPTION = re.compile(r"^--pre(?:=|$)")
+
+
+def _search_program_index(tokens, tool_name):
+    """Index of grep/rg when that is the program this statement runs, else None.
+
+    Walks past `NAME=value` assignments and the shared launcher set (`sudo`, `timeout 5`, ...), the
+    same statement walk the git guards use - never a scan of the whole argv, which would read
+    `ssh host 'grep x'` or `echo grep` as a search.
+    """
+    at = 0
+    while at < len(tokens) and "=" in tokens[at] and not tokens[at].startswith("-"):
+        at += 1
+    if at >= len(tokens):
+        return None
+    if basename_for_tool(tokens[at], tool_name) in _SEARCH_PROGRAMS:
+        return at
+    return past_command_prefix(tokens, at, _SEARCH_PROGRAMS, tool_name)
+
+
+def blank_search_operands(text, tool_name=None):
+    """`text` with the operands of every grep/rg statement blanked, length preserved.
+
+    `grep "pkill -f x" file` searches for that text; nothing in it runs. A statement carrying a
+    `$(`/backtick substitution is left whole (the substitution runs), and so is one cut short by a
+    substitution opening, and an `rg --pre` (it executes its value). The program word survives.
+    """
+    tool = tool_name or "Bash"
+    out = list(text)
+    for at, segment in iter_segments(text, tool_name):
+        if _RUNS_SUBSTITUTION.search(segment) or _RUNS_SUBSTITUTION.match(text, at + len(segment)):
+            continue
+        tokens = argv_for_match(segment.strip().lstrip("(").strip(), tool)
+        index = _search_program_index(tokens, tool)
+        if index is None or any(_EXECUTING_SEARCH_OPTION.match(t) for t in tokens[index + 1:]):
+            continue
+        words = list(re.finditer(r"\S+", segment))
+        if len(words) <= index:
+            continue
+        for position in range(at + words[index].end(), at + len(segment)):
+            if out[position] != "\n":
+                out[position] = " "
+    return "".join(out)
 
 
 def _pattern_leak(pattern, ignore_case, haystack):
@@ -315,14 +397,16 @@ def main() -> int:
     # reads, and it keeps only what EXECUTES, so `echo \'pkill -f x\'` is not mistaken for a call.
     tool_name = data.get("tool_name")
     haystack = cmd
-    commands = strip_data_sink_statements(strip_data_bodies(cmd, tool_name), tool_name)
+    executed = strip_data_sink_statements(strip_data_bodies(cmd, tool_name), tool_name)
+    commands = blank_search_operands(executed, tool_name)
 
     # Fast path: only guard commands that call pgrep/pkill.
     if not re.search(_PROGRAM, commands):
         return 0
 
-    # An explicit self-exclusion means the caller already handled it.
-    if re.search(r"grep\s+-vw\s+[\"']?\$\$", commands):
+    # An explicit self-exclusion means the caller already handled it. Read before the search
+    # operands are blanked: the exclusion IS a grep, and its `$$` is one of those operands.
+    if re.search(r"grep\s+-vw\s+[\"']?\$\$", executed):
         return 0
 
     leaked = bracket_leaks(commands, haystack)

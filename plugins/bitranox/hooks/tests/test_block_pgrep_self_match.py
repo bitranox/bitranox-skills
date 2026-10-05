@@ -282,13 +282,66 @@ def test_a_comment_still_counts_as_a_bracket_leak(monkeypatch):
     assert run_bash(monkeypatch, 'pgrep -f "[n]ginx"  # is nginx up') == 2
 
 
-def test_a_grep_pattern_naming_the_footgun_is_still_blocked(monkeypatch):
-    """Pinned choice: a quoted argument to grep still reads as a call. Whether an argument is inert
-    is decided by ONE allowlist in shell_text (strip_data_sink_statements), and grep is not on it;
-    a second, hook-local list would drift from it. The false positive is visible and has a cheap
-    way round, which the second assertion pins: bracketing the grep pattern."""
-    assert run_bash(monkeypatch, 'grep -rn "pkill -f nginx" hooks/') == 2
-    assert run_bash(monkeypatch, 'grep -rn "[p]kill -f nginx" hooks/') == 0
+@pytest.mark.parametrize("command", [
+    'grep -rn "pkill -f nginx" hooks/',
+    'grep "pkill -f x" file',
+    'grep -e "pkill -f x" file',
+    "grep -E 'pgrep -f [a-z]+' log",
+    'rg "pgrep -f nginx" src',
+    'ps aux | grep "pkill -f x"',
+    'sudo grep "pkill -f x" /var/log/syslog',
+    '/usr/bin/grep -c "pkill -f x" f',
+    'LC_ALL=C grep "pkill -f x" f',
+    'grep -rn "[p]kill -f nginx" hooks/',
+])
+def test_a_search_pattern_naming_the_footgun_is_data(monkeypatch, command):
+    """grep's and rg's operands are a pattern and file names: searched for, never run. Decided for
+    THIS guard only (2026-10-05): shell_text's shared sink list stays echo/printf, because adding
+    grep there would change every guard that consults it."""
+    assert run_bash(monkeypatch, command) == 0
+
+
+@pytest.mark.parametrize("command", [
+    "grep foo f; pkill -f x",
+    'grep "$(pgrep -f x)" f',
+    'grep "`pgrep -f x`" f',
+    "pkill -f x | grep y",
+    'rg --pre "pkill -f x" pattern',
+    'grep -q nginx log && pgrep -f nginx',
+])
+def test_a_real_call_beside_or_inside_a_search_still_blocks(monkeypatch, command):
+    """Controls: a substitution inside the pattern RUNS, `rg --pre` EXECUTES its value, and a call
+    in its own statement is a call whatever searches before or after it."""
+    assert run_bash(monkeypatch, command) == 2
+
+
+def test_a_search_pattern_still_counts_as_a_bracket_leak(monkeypatch):
+    """The literal is searched for in the RAW command, which is what `pgrep -f` matches, so a grep
+    of the same word still re-introduces it into the shell's own argv."""
+    assert run_bash(monkeypatch, 'pgrep -f "[n]ginx"; grep -c nginx /var/log/x') == 2
+
+
+# --- the -m rewrite belongs to git's message, not to a pgrep pattern (OPEN-WORK 250) -------------
+
+def test_a_dash_m_inside_a_pgrep_pattern_is_not_rewritten(monkeypatch, capsys):
+    """strip_data_bodies rewrote ANY `-m <word>` to `-m X`, so the pattern `[a]b -m zz` became
+    `[a]b -m X` and its real leak into the echo label went unreported."""
+    assert run_bash(monkeypatch, 'pgrep -f "[a]b -m zz"; echo "ab -m zz"') == 2
+    assert "-> ab -m zz" in capsys.readouterr().err
+    assert run_bash(monkeypatch, 'pgrep -f "x -m y"') == 2
+    assert "  -f x -m y" in capsys.readouterr().err
+
+
+@pytest.mark.parametrize("command", [
+    'git commit -m "pkill -f x"',
+    'git -C /tmp/repo commit -m "pkill -f x"',
+    'git -C /tmp/repo commit --message="pkill -f x"',
+    'git tag -a v1 -m "pkill -f x"',
+    'git merge --no-ff -m "pkill -f x" topic',
+    'cd /r && git -C sub commit -m "pkill -f x" && echo ok',
+])
+def test_a_git_message_naming_the_footgun_is_still_data(monkeypatch, command):
+    assert run_bash(monkeypatch, command) == 0
 
 
 def test_a_pidfile_option_is_not_the_f_flag(monkeypatch):
