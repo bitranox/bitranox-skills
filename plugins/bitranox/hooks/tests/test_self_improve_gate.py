@@ -616,6 +616,22 @@ def test_a_quoted_correction_from_the_user_still_blocks(tmp_path, monkeypatch, c
     assert decision_of(capsys) == "block"
 
 
+def test_acknowledging_a_duplicate_idle_notification_does_not_block(tmp_path, monkeypatch, capsys):
+    # The 2026-09-11 shape (agentswarm remit-case): a named agent's idle notification arrives a
+    # fourth time, its summary says "rather than", and the reply only acknowledges it. The
+    # notification is not a typed prompt, so the quiet typed prompt before it is what is judged.
+    idle = ('Another Claude session sent a message: <teammate-message teammate_id="t3">'
+            '{"type":"idle_notification","result":"Fix wave complete. Asserting the defect '
+            'keyword rather than bare truthiness."}</teammate-message>')
+    tp = _write(tmp_path, _rec("user", "go ahead with the fix wave", origin={"kind": "human"}),
+                _rec("assistant", [{"type": "text", "text": "Fix wave landed as d075710."}]),
+                _rec("user", idle))
+    run_gate(monkeypatch, tmp_path, {"transcript_path": tp, "cwd": str(tmp_path),
+                                     "last_assistant_message": "Fourth duplicate - that is "
+                                     "d075710, which I already verified. No action."})
+    assert decision_of(capsys) is None
+
+
 GOAL_CMD = ("<command-name>/goal</command-name>\n            <command-message>goal</command-message>"
             "\n            <command-args>%s</command-args>")
 
