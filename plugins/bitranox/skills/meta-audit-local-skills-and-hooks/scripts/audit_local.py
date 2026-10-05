@@ -179,8 +179,10 @@ def _settings_findings(settings, home):
                                           "either" % path))
         problem = settings_problem(path)
         if problem:
-            found.append(("settings-unparseable", "%s: %s - every hook it registers is dead, and none of "
-                                                   "them could be checked" % (path, problem)))
+            found.append(("settings-unparseable", "%s: %s - none of its hook registrations could "
+                                                   "be checked. Whether Claude Code treats the "
+                                                   "whole file as dead, or only the malformed "
+                                                   "part, is not measured here" % (path, problem)))
         else:
             loadable.append(path)
     for path in loadable:

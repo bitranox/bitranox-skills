@@ -225,6 +225,34 @@ def test_main_json_on_a_plugin(tmp_path, capsys):
     assert rc == 0 and '"hooks/h.py"' in capsys.readouterr().out
 
 
+def test_main_json_carries_an_unmeasured_key(tmp_path, capsys):
+    """The --json envelope must carry what js_parse could not judge, not only facts/leads.
+
+    run_prepass already tracks this (it feeds the human summary's "UNMEASURED for N file(s)"
+    text), but _scan's --json branch dumped only {"facts": ..., "leads": ...} and threw the
+    unmeasured map away."""
+    import json
+
+    rc = P.main(["--room", str(_fixture_plugin(tmp_path)), "--json"])
+    out = json.loads(capsys.readouterr().out)
+    assert rc == 0
+    assert "unmeasured" in out
+    assert "js_parse" in out["unmeasured"]
+
+
+def test_main_json_unmeasured_names_the_file_node_could_not_check(tmp_path, capsys):
+    room = _room_with_js(tmp_path, "const x = 1;\n")
+    import json
+
+    rc = P.main(["--room", str(room), "--json"])
+    out = json.loads(capsys.readouterr().out)
+    assert rc == 0
+    # node is not guaranteed to be on PATH in CI; either it ran (unmeasured empty) or it could
+    # not be launched (the js file is named as unmeasured) - both are a well-formed envelope.
+    js_unmeasured = out["unmeasured"]["js_parse"]
+    assert js_unmeasured == [] or js_unmeasured[0][0] == "skills/a/broken.js"
+
+
 @pytest.mark.parametrize("json_flag", [[], ["--json"]])
 def test_main_on_a_missing_room_exits_2(tmp_path, capsys, json_flag):
     rc = P.main(["--room", str(tmp_path / "does-not-exist")] + json_flag)
@@ -363,11 +391,23 @@ def test_a_platform_flag_read_in_one_function_does_not_guard_another(tmp_path):
     "def test_x():\n    assert parse(mode='check')\n",
     "def test_x():\n    assert CHOICES == ['check', 'run']\n",
     "def test_x():\n    assert {'check': 1}\n",
+    # a str->str dict with no hyphen/underscore alias relationship is an ordinary mapping
+    # (an expected-output table, a CLI choice-to-label map), not a loader's alias map.
+    "def test_x():\n    assert {'check': 'ok'}\n",
 ])
 def test_a_short_stem_as_an_unrelated_string_is_not_coverage(tmp_path, body):
     tests = _tests(tmp_path, "test_other.py", body)
     hits = P.per_file_test_module(_write(tmp_path, "check.py", "x = 1\n"), test_roots=[tests])
     assert hits and "'check'" in hits[0][2]
+
+
+def test_a_hyphen_underscore_alias_dict_entry_is_still_coverage(tmp_path):
+    """The real alias-map shape (hooks/tests/conftest.py's _HOOK_MODULES) must still count: a
+    hyphenated hook name mapped to its underscored module alias, fed to a loader elsewhere."""
+    body = "_HOOK_MODULES = {'my-guard': 'my_guard'}\n"
+    tests = _tests(tmp_path, "conftest.py", body)
+    hits = P.per_file_test_module(_write(tmp_path, "my_guard.py", "x = 1\n"), test_roots=[tests])
+    assert hits == []
 
 
 @pytest.mark.parametrize("name,body", [

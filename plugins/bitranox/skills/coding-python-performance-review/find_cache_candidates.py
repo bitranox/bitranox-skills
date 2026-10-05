@@ -22,8 +22,12 @@ _IMPURE_ATTR_CALLS = frozenset({'write', 'read', 'execute',
                                 'now', 'today', 'utcnow', 'random', 'randint',
                                 'time', 'time_ns', 'perf_counter', 'perf_counter_ns',
                                 'monotonic', 'monotonic_ns', 'process_time'})
-# Calling anything on these modules runs a process: never deterministic, never side-effect free.
-_IMPURE_MODULES = frozenset({'subprocess'})
+# Calling anything DIRECTLY on these modules (module.call(...), func.value a bare Name) is
+# process execution, filesystem or network I/O: never deterministic, never side-effect free.
+# A two-attribute call like os.path.join(...) is NOT caught here (func.value is itself an
+# Attribute, not a Name), which is deliberate - os.path/shutil-free string helpers stay pure.
+_IMPURE_MODULES = frozenset({'subprocess', 'os', 'shutil', 'requests', 'sqlite3',
+                             'smtplib', 'ftplib'})
 # Methods that change the object they are called on (list, dict, set, deque, bytearray, ndarray).
 # Called on a container the function created, they are local work; on anything else - a
 # parameter, a global, self.x - they are a side effect the caller sees.
@@ -175,15 +179,35 @@ def _binding_depths(node):
     return []
 
 
+def _body_nodes(func_node):
+    """Every node reachable from `func_node`'s own BODY - never its decorator_list or its own
+    parameter defaults.
+
+    A decorator argument and a default-value expression both run ONCE, when the def statement
+    executes (module import time, usually), never again on each call of the function. Walking
+    them as if they were part of the function's per-call behaviour is why a one-time impure or
+    expensive default/decorator argument used to leak into the purity and expensiveness
+    verdicts of an otherwise trivial function. Nested function/lambda defs inside the body are
+    still walked in full (their own decorators/defaults are a separate, smaller instance of the
+    same issue, left alone here), which is what keeps `_local_container_depths`' documented
+    "nested functions and lambdas included" behaviour intact."""
+    for node in func_node.body:
+        yield from ast.walk(node)
+
+
 def _local_container_depths(func_node):
     """Name -> how deep a subscript store into it stays inside objects this function created.
 
-    Every binding of the name anywhere in the function counts, nested functions and lambdas
-    included (their parameters too): one binding to something not created here - a
+    Every binding of the name anywhere in the function's own body counts, nested functions and
+    lambdas included (their parameters too): one binding to something not created here - a
     parameter, an alias, a loop variable - makes a store through that name a store into an
-    object the caller may hold. A name bound nowhere in the function is a global or a closure."""
+    object the caller may hold. A name bound nowhere in the function is a global or a closure.
+    A missing name defaults to depth 0 (not new) wherever it is looked up, which is exactly what
+    an explicit `(param, 0)` binding would have recorded - so leaving the function's OWN
+    decorator_list/defaults out of this walk (see `_body_nodes`) changes nothing for its own
+    parameters, only for whatever the decorator/default expressions themselves bind."""
     depths = {}
-    for node in ast.walk(func_node):
+    for node in _body_nodes(func_node):
         for name, depth in _binding_depths(node):
             depths[name] = min(depths.get(name, _INFINITE), depth)
     return depths
@@ -232,6 +256,29 @@ def _mutates_shared_object(call, local_depths, modules):
     return _reaches_shared_object(func.value, local_depths, 1)
 
 
+# Module-level FUNCTIONS (not methods) that mutate their FIRST POSITIONAL argument in place -
+# a different AST shape from `x.append(...)`: the mutated object is an argument, not the thing
+# the call is made "on". `heapq.heappush(heap, item)` and `random.shuffle(xs)` used to be
+# invisible to the purity check because `_MUTATING_METHODS`/`_mutates_shared_object` only ever
+# looked at `func.attr`/`func.value`, never at `call.args[0]`.
+_MUTATING_MODULE_FUNCS = {
+    'heapq': frozenset({'heappush', 'heappop', 'heapify', 'heapreplace', 'heappushpop'}),
+    'random': frozenset({'shuffle'}),
+}
+
+
+def _mutates_via_first_arg(call, local_depths):
+    """True when *call* is `module.func(first_arg, ...)` from `_MUTATING_MODULE_FUNCS` and
+    `first_arg` can be an object the caller sees."""
+    func = call.func
+    if not (isinstance(func, ast.Attribute) and isinstance(func.value, ast.Name)):
+        return False
+    names = _MUTATING_MODULE_FUNCS.get(func.value.id)
+    if not names or func.attr not in names or not call.args:
+        return False
+    return _reaches_shared_object(call.args[0], local_depths, 1)
+
+
 def _module_aliases(tree):
     """The names ``import x`` / ``import x.y as z`` bind anywhere in *tree*."""
     return frozenset((a.asname or a.name).split('.')[0]
@@ -258,9 +305,10 @@ def is_pure_function(func_node, modules=None):
     modules the function imports itself)."""
     modules = _module_aliases(func_node) if modules is None else modules
     local_depths = _local_container_depths(func_node)
-    for node in ast.walk(func_node):
+    for node in _body_nodes(func_node):
         if isinstance(node, ast.Call) and (_is_impure_call(node)
-                                           or _mutates_shared_object(node, local_depths, modules)):
+                                           or _mutates_shared_object(node, local_depths, modules)
+                                           or _mutates_via_first_arg(node, local_depths)):
             return False
         if isinstance(node, (ast.Global, ast.Nonlocal)):
             return False
@@ -319,10 +367,14 @@ def returns_new_mutable(func_node):
 
 
 def is_expensive_computation(func_node):
-    """Detect potentially expensive computations."""
+    """Detect potentially expensive computations.
+
+    Walks the function's own BODY only (`_body_nodes`): a decorator argument or a default-value
+    expression runs once at def time, not on each call, so a loop/recursion/crypto-looking call
+    found only THERE must not tag the function as expensive on every invocation."""
     expensive_indicators = []
 
-    for node in ast.walk(func_node):
+    for node in _body_nodes(func_node):
         # Complex loops
         if isinstance(node, (ast.For, ast.While)):
             expensive_indicators.append('loops')
@@ -378,7 +430,7 @@ def find_cache_candidates(file_path):
     candidates = []
 
     for node in ast.walk(tree):
-        if isinstance(node, ast.FunctionDef):
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
             # Skip if already decorated with cache
             has_cache = any(_is_cache_decorator(dec) for dec in node.decorator_list)
 

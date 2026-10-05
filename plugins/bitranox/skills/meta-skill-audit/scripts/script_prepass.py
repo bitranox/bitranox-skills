@@ -496,8 +496,13 @@ def _loader_strings(text):
     """Strings a test module hands to a loader: a loader call's first argument, an alias-map entry.
 
     A loader call is one whose function name contains load, import or spec. An alias-map entry is a
-    dict item whose key AND value are both strings; both sides count, because the map may run
-    stem-to-alias or alias-to-stem. A test module that does not parse contributes nothing here."""
+    dict item whose key AND value are both strings, from a dict that is itself the RIGHT-HAND SIDE
+    of an assignment (`_HOOK_MODULES = {"my-guard": "my_guard", ...}`, as hooks/tests/conftest.py
+    has it) - both sides count then, because the map may run stem-to-alias or alias-to-stem. A dict
+    literal used inline, never bound to a name (`assert {"check": "ok"}`), is not a loader's alias
+    map - it is an incidental mapping (an expected-output table, a CLI choice-to-label map), and
+    without the assignment check BOTH its strings wrongly read as loaded. A test module that does
+    not parse contributes nothing here."""
     try:
         tree = ast.parse(text)
     except (SyntaxError, ValueError):
@@ -507,8 +512,8 @@ def _loader_strings(text):
         if isinstance(node, ast.Call) and node.args and _is_str(node.args[0]):
             if any(word in _call_name(node).lower() for word in _LOADER_WORDS):
                 out.add(node.args[0].value)
-        elif isinstance(node, ast.Dict):
-            for key, value in zip(node.keys, node.values):
+        elif isinstance(node, (ast.Assign, ast.AnnAssign)) and isinstance(node.value, ast.Dict):
+            for key, value in zip(node.value.keys, node.value.values):
                 if _is_str(key) and _is_str(value):
                     out.update((key.value, value.value))
     return out
@@ -539,7 +544,7 @@ def _run(cmd, cwd, timeout=20):
                           errors="replace", timeout=timeout)
 
 
-def argparse_flags_vs_docs(targets, room, docs_text, run=_run):
+def argparse_flags_vs_docs(targets, room, docs_text, run=_run, unmeasured=None):
     """Flags the shipped documentation names that `--help` does not accept.
 
     A manual instrument, deliberately NOT one of `run_prepass`'s checks: it executes every target
@@ -547,7 +552,10 @@ def argparse_flags_vs_docs(targets, room, docs_text, run=_run):
     never run. Call it by hand over a vetted target list.
 
     A non-zero exit or a timeout is UNMEASURED, never a finding: plenty of these cannot run in a
-    room with no host, no browser and no network."""
+    room with no host, no browser and no network. When `unmeasured` (a list) is passed, every such
+    target is appended as (rel, reason) - the same out-parameter convention js_parse uses - so a
+    caller can tell "measured and clean" from "could not run anywhere" instead of the two reading
+    identically as zero hits."""
     out = []
     for rel in targets:
         documented = set(_FLAG_IN_TEXT.findall(docs_text.get(rel, "")))
@@ -555,9 +563,13 @@ def argparse_flags_vs_docs(targets, room, docs_text, run=_run):
             continue
         try:
             proc = run([sys.executable, rel, "--help"], room)
-        except Exception:
+        except Exception as exc:
+            if unmeasured is not None:
+                unmeasured.append((rel, "could not be launched (%s)" % exc.__class__.__name__))
             continue                                     # UNMEASURED: could not even launch it
         if proc.returncode != 0:
+            if unmeasured is not None:
+                unmeasured.append((rel, "--help exited %d" % proc.returncode))
             continue                                     # UNMEASURED: no parser, or it needs stdin
         offered = set(_FLAG_IN_TEXT.findall(proc.stdout or ""))
         for flag in sorted(documented - offered):
@@ -627,11 +639,17 @@ def group_by_file(hits):
     return out
 
 
-def run_prepass(room, targets, ci_min="3.11", vendored=(), run=_run):
+def run_prepass(room, targets, ci_min="3.11", vendored=(), run=_run, unmeasured=None):
     """Every deterministic check over the enumerated corpus.
 
     Returns (facts_per_file, leads_per_file, summary_lines). The two maps carry opposite
     instructions to a reviewer, so they must not be merged - see LEAD_CHECKS.
+
+    `unmeasured`, when passed, is filled in place with {check_name: [(rel, reason), ...]} for
+    every file a check could not judge (js_parse when node is absent or times out) - the same
+    out-parameter shape js_parse itself uses. A caller that needs this machine-readable, such as
+    `_scan`'s --json branch, passes a dict; one that only wants the human summary line can ignore
+    it, since every entry is already folded into `summary` via `_unmeasured_note`.
 
     `vendored` is the corpus that is deliberately kept OUT of the reviewer sweep, because fixing a
     defect in upstream sample code diverges our copy from upstream. It still gets `ast.parse`: that
@@ -651,7 +669,8 @@ def run_prepass(room, targets, ci_min="3.11", vendored=(), run=_run):
     vendored_py = [(rel, room / rel) for rel, _k in vendored if rel.endswith(".py")]
 
     facts, leads, summary = [], [], []
-    unmeasured = {"js_parse": []}
+    unmeasured = {} if unmeasured is None else unmeasured
+    unmeasured.setdefault("js_parse", [])
     for name, fn in (("syntax_errors", lambda: syntax_errors(py + vendored_py)),
                      ("unguarded_third_party_imports",
                       lambda: unguarded_third_party_imports(hook_py, siblings)),
@@ -730,10 +749,13 @@ def _scan(args):
     import audit_skills  # noqa: PLC0415 - sibling script, resolved from this file's own dir
 
     targets = audit_skills.script_targets(args.room)
+    unmeasured = {}
     facts, leads, summary = run_prepass(args.room, targets,
-                                        vendored=vendored_targets(audit_skills, args.room))
+                                        vendored=vendored_targets(audit_skills, args.room),
+                                        unmeasured=unmeasured)
     if args.json:
-        print(json.dumps({"facts": facts, "leads": leads}, indent=2, sort_keys=True))
+        print(json.dumps({"facts": facts, "leads": leads, "unmeasured": unmeasured},
+                         indent=2, sort_keys=True))
         return 0
     for line in summary:
         print(line)

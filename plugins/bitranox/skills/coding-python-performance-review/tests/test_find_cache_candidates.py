@@ -528,6 +528,169 @@ def test_open_makes_a_function_impure_and_file_io_is_not_an_indicator(tmp_path):
     assert "file_io" not in fcc.is_expensive_computation(tree.body[0])
 
 
+# --- decorators and defaults run once at def time, not per call --------------------------
+
+def test_a_decorator_argument_does_not_count_as_the_function_s_own_computation(tmp_path):
+    """A decorator's own argument expression is evaluated once, when the module is imported -
+    not on every call of the decorated function - so its content must not leak into the
+    function's purity/expensiveness verdict (it used to: ast.walk(func_node) descends into
+    decorator_list, which IS a real FunctionDef child)."""
+    p = tmp_path / "deco.py"
+    p.write_text(textwrap.dedent('''
+        def register(**kw):
+            def wrap(f):
+                return f
+            return wrap
+
+        @register(key=obj.compute_hash())
+        def plain(n):
+            for i in range(n):
+                pass
+            return n
+    '''), encoding="utf-8")
+    # "plain" has a real loop in its own body, so it is a genuine expensive/pure candidate -
+    # the decorator argument's "compute_hash" call must not ALSO contribute a 'crypto' tag,
+    # and must not make the function read as impure either.
+    candidates = fcc.find_cache_candidates(str(p))
+    assert {c["function"] for c in candidates} == {"plain"}
+    assert candidates[0]["indicators"] == ["loops"], candidates[0]
+
+
+def test_a_default_argument_s_impure_call_does_not_run_on_every_call(tmp_path):
+    """def f(x=open(...).read()): the default is computed once, at def time, so the function
+    itself does zero I/O on each call - it must not read as impure forever because of it."""
+    p = tmp_path / "defaults.py"
+    p.write_text(textwrap.dedent('''
+        def worker(n, cache=open("config.txt").read()):
+            for i in range(n):
+                pass
+            return n + len(cache)
+    '''), encoding="utf-8")
+    assert _names(p) == {"worker"}
+
+
+# --- impurity via a module-qualified call, not only the hardcoded name/attr lists --------
+
+def test_os_system_makes_a_function_impure(tmp_path):
+    p = tmp_path / "sysio.py"
+    p.write_text(textwrap.dedent('''
+        import os
+
+        def runner(cmd, n):
+            for _ in range(n):
+                pass
+            os.system(cmd)
+            return n
+    '''), encoding="utf-8")
+    assert _names(p) == set()
+
+
+def test_requests_get_makes_a_function_impure(tmp_path):
+    p = tmp_path / "netio.py"
+    p.write_text(textwrap.dedent('''
+        import requests
+
+        def fetch(url, n):
+            for _ in range(n):
+                pass
+            requests.get(url)
+            return n
+    '''), encoding="utf-8")
+    assert _names(p) == set()
+
+
+def test_os_path_join_stays_pure(tmp_path):
+    """Control: os.path.join is two attributes deep (func.value is an Attribute, not a bare
+    Name), so widening the impure-module check to 'os' must not catch it."""
+    p = tmp_path / "pathjoin.py"
+    p.write_text(textwrap.dedent('''
+        import os
+
+        def joiner(a, b, n):
+            for _ in range(n):
+                pass
+            return os.path.join(a, b)
+    '''), encoding="utf-8")
+    assert _names(p) == {"joiner"}
+
+
+# --- a module-level function mutating its first argument, not a method call --------------
+
+def test_heapq_heappush_on_a_parameter_makes_a_function_impure(tmp_path):
+    p = tmp_path / "heap.py"
+    p.write_text(textwrap.dedent('''
+        import heapq
+
+        def push_all(heap, items):
+            for item in items:
+                heapq.heappush(heap, item)
+            return heap
+    '''), encoding="utf-8")
+    assert _names(p) == set()
+
+
+def test_heapq_heappush_on_a_locally_created_heap_stays_pure(tmp_path):
+    """Returns a count, not the heap itself - isolates the mutation check from the separate
+    returns-new-mutable exclusion (a function returning a fresh container it built is excluded
+    from candidates for its own, different reason: lru_cache would hand every caller the same
+    object)."""
+    p = tmp_path / "heap_local.py"
+    p.write_text(textwrap.dedent('''
+        import heapq
+
+        def build(items):
+            heap = []
+            for item in items:
+                heapq.heappush(heap, item)
+            return len(heap)
+    '''), encoding="utf-8")
+    assert _names(p) == {"build"}
+
+
+def test_random_shuffle_on_a_parameter_makes_a_function_impure(tmp_path):
+    p = tmp_path / "shuf.py"
+    p.write_text(textwrap.dedent('''
+        import random
+
+        def mix(xs, n):
+            for _ in range(n):
+                pass
+            random.shuffle(xs)
+            return xs
+    '''), encoding="utf-8")
+    assert _names(p) == set()
+
+
+def test_random_shuffle_on_a_locally_created_list_stays_pure(tmp_path):
+    """Returns a count, not the shuffled list itself - see the heapq test above for why."""
+    p = tmp_path / "shuf_local.py"
+    p.write_text(textwrap.dedent('''
+        import random
+
+        def mixed_copy(xs, n):
+            out = list(xs)
+            for _ in range(n):
+                pass
+            random.shuffle(out)
+            return len(out)
+    '''), encoding="utf-8")
+    assert _names(p) == {"mixed_copy"}
+
+
+# --- async defs ----------------------------------------------------------------------------
+
+def test_an_async_def_is_reported_like_a_sync_one(tmp_path):
+    p = tmp_path / "coro.py"
+    p.write_text(textwrap.dedent('''
+        async def total(n):
+            out = 0
+            for i in range(n):
+                out += i
+            return out
+    '''), encoding="utf-8")
+    assert _names(p) == {"total"}
+
+
 # --- CLI ---------------------------------------------------------------------------------
 
 def test_cli_reports_a_candidate_and_exits_0(tmp_path, run_script):

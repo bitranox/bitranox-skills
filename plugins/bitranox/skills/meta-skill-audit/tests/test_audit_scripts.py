@@ -397,6 +397,24 @@ def test_audit_scripts_counts_findings(tmp_path):
     assert res["hooks/my-guard.py"] == 0
 
 
+def test_audit_scripts_done_line_breaks_down_findings_by_class(tmp_path):
+    """count_by_class exists to make a prompt that stopped producing a class visible (its own
+    docstring), but nothing in production called it - it was reachable only from its own tests.
+    Wire it into the sweep's own DONE summary."""
+    src = _plugin(tmp_path)
+
+    def runner(prompt, cwd, model, timeout):
+        if "shared_lib" in prompt:
+            return _report("hooks/shared_lib.py", 1, "VALUE = 1")
+        return "NO FINDINGS"
+
+    lines = []
+    A.audit_scripts(src, tmp_path / "room", jobs=2, runner=runner, log=lines.append)
+    done = [line for line in lines if line.startswith("DONE:")]
+    assert done, lines
+    assert "BUG=1" in done[0], done[0]
+
+
 def test_every_script_reviewer_runs_with_the_room_as_cwd(tmp_path):
     """Never the live tree: that is the contamination the clean room exists to prevent."""
     src = _plugin(tmp_path)

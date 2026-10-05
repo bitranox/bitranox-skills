@@ -163,7 +163,8 @@ _APOSTROPHES = str.maketrans({"\u2019": "'", "\u2018": "'", "\u2032": "'", "\u02
 
 
 def _fold_apostrophes(text: str) -> str:
-    """Typographic apostrophes as ASCII, so "that\N{RIGHT SINGLE QUOTATION MARK}s exactly" matches like "that's exactly"."""
+    """Typographic apostrophes as ASCII, so "that\N{RIGHT SINGLE QUOTATION MARK}s exactly"
+    matches like "that's exactly"."""
     return text.translate(_APOSTROPHES)
 
 _STOP = frozenset(

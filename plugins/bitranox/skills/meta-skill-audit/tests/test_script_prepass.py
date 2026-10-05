@@ -230,6 +230,34 @@ def test_a_script_the_docs_never_mention_is_skipped(tmp_path):
     assert called == []
 
 
+def test_a_nonzero_exit_names_the_target_as_unmeasured(tmp_path):
+    """An UNMEASURED verdict must still say WHICH targets it could not judge, same convention
+    as js_parse's unmeasured= out-param, else a caller cannot tell 'measured clean' from
+    'could not run anywhere'."""
+    unmeasured = []
+    P.argparse_flags_vs_docs(["t.py"], tmp_path, {"t.py": "`t.py --then`"},
+                             run=lambda *_a, **_k: _Proc(2, "", "boom"), unmeasured=unmeasured)
+    assert unmeasured and unmeasured[0][0] == "t.py"
+
+
+def test_a_launch_failure_names_the_target_as_unmeasured(tmp_path):
+    def explode(*_a, **_k):
+        raise OSError("no interpreter")
+
+    unmeasured = []
+    P.argparse_flags_vs_docs(["t.py"], tmp_path, {"t.py": "`t.py --then`"}, run=explode,
+                             unmeasured=unmeasured)
+    assert unmeasured and unmeasured[0][0] == "t.py"
+
+
+def test_a_measured_target_is_not_named_unmeasured(tmp_path):
+    unmeasured = []
+    P.argparse_flags_vs_docs(["t.py"], tmp_path, {"t.py": "`t.py --then`"},
+                             run=lambda *_a, **_k: _Proc(0, "usage: t.py [--then]"),
+                             unmeasured=unmeasured)
+    assert unmeasured == []
+
+
 # ---- js -------------------------------------------------------------------------------------------
 
 def test_js_parse_reports_a_failing_check(tmp_path):

@@ -416,6 +416,27 @@ def test_a_settings_file_of_the_wrong_shape_or_encoding_is_a_finding(tmp_path, r
     assert "[settings-unparseable]" in out and why in out, out
 
 
+def test_the_unparseable_finding_does_not_claim_the_whole_file_is_dead(tmp_path):
+    """This audit reads the FILE, not Claude Code's own parser. One malformed event's shape
+    (here "Stop") stops hook_registrations reading ANY event in the file, including a
+    perfectly well-shaped "PreToolUse" earlier in it - but whether Claude Code's own loader
+    treats the whole file as dead, or only the malformed event, is NOT measured here (same
+    disclaiming style as the settings-bom finding). The message must say what this audit
+    could not CHECK, not assert what Claude Code does with the rest of the file."""
+    home = tmp_path / "home"
+    raw = json.dumps({"hooks": {
+        "PreToolUse": [{"matcher": "*", "hooks": [
+            {"type": "command", "command": "bash %s/.claude/hooks/good.sh" % home}]}],
+        "Stop": {},
+    }}).encode("utf-8")
+    home = _settings_home(tmp_path, raw)
+    code, out, _ = _run_check(["check", "--home", str(home)])
+    assert code == 1, out
+    assert "[settings-unparseable]" in out
+    assert "every hook it registers is dead" not in out, out
+    assert "not measured here" in out, out
+
+
 def test_a_settings_file_the_registration_reader_refuses_is_the_same_finding(tmp_path):
     """One shape rule: whatever `hook_registrations` refuses, the unparseable screen reports, so
     no settings file can pass the screen and then crash the registration check behind it."""
