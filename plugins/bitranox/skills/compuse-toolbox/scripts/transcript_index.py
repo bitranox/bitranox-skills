@@ -36,7 +36,12 @@ Usage:
 Exit: 0 hits (or index done), 1 no match, 2 error (a malformed --fts query, an
 empty query or one with no letter or digit in any word - punctuation is not
 indexed, so it could never match - a directory or file that could not be read
-while indexing).
+while indexing, an index database that cannot be created, opened, migrated or
+written - unwritable ~/.claude, a corrupt, locked or full database - or an
+internal error).
+
+`search --json` prints `{ok, command, data, skipped}` on every exit, 2 included;
+`ok` is false exactly when the exit is 2, and a miss adds a `caveat` key.
 """
 
 from __future__ import annotations
@@ -48,6 +53,9 @@ import pathlib
 import sqlite3
 import sys
 import unicodedata
+
+from _cli_envelope import (EXIT_ERROR, EXIT_NO, EXIT_YES, EnvelopeArgumentParser, emit,
+                           envelope_for_exit, guarded, render)
 
 __all__ = ["QueryError", "ensure_schema", "fts_literal", "index_dir", "search", "main"]
 
@@ -265,26 +273,54 @@ def _tolerate_console_encoding() -> None:
 
 def _run_index(db: sqlite3.Connection) -> int:
     errors: list[str] = []
-    n = index_dir(ROOT, db, errors)
+    try:
+        n = index_dir(ROOT, db, errors)
+    except sqlite3.Error as exc:
+        # A locked, corrupt or full database mid-run: what was committed stays, the rest did not
+        # happen, so this is "could not index", never the 1 a search reads as "no match".
+        print(f"transcript_index: database error while indexing {DB_PATH}: {exc}",
+              file=sys.stderr)
+        return EXIT_ERROR
     print(f"indexed {n} new message(s)")
     for e in errors:
         print(f"transcript_index: {e}", file=sys.stderr)
-    return 2 if errors else 0
+    return EXIT_ERROR if errors else EXIT_YES
 
 
 def _query_failed(exc: QueryError, as_json: bool) -> int:
     message = f"query error: {exc}"
     if as_json:
-        print(json.dumps({"ok": False, "command": "search", "data": [], "error": message}))
+        emit(EXIT_ERROR, "search", [], error=message, indent=None)
     else:
         print(message, file=sys.stderr)
-    return 2
+    return EXIT_ERROR
 
 
+def _open_index(as_json: bool) -> sqlite3.Connection | None:
+    """The index database, created or migrated as needed; None (reported) when it cannot be.
+
+    An unwritable ~/.claude, a file where the directory should be, and a corrupt or locked
+    database all used to escape as a traceback, whose exit 1 reads as "no match".
+    """
+    try:
+        DB_PATH.parent.mkdir(parents=True, exist_ok=True)
+        db = sqlite3.connect(DB_PATH)
+        ensure_schema(db)
+    except (OSError, sqlite3.Error) as exc:
+        message = f"cannot open the index database {DB_PATH}: {exc}"
+        print(f"transcript_index: {message}", file=sys.stderr)
+        if as_json:
+            emit(EXIT_ERROR, "search", [], error=message, indent=None)
+        return None
+    return db
+
+
+@guarded("transcript_index")
 def main(argv: list[str] | None = None) -> int:
+    """Index or search; an uncaught exception exits 2, never Python's 1, which is "no match"."""
     _tolerate_console_encoding()
-    ap = argparse.ArgumentParser(description=__doc__,
-                                 formatter_class=argparse.RawDescriptionHelpFormatter)
+    ap = EnvelopeArgumentParser(description=__doc__, envelope_command="search",
+                                formatter_class=argparse.RawDescriptionHelpFormatter)
     sub = ap.add_subparsers(dest="cmd", required=True)
     sub.add_parser("index", help="index every transcript")
     s = sub.add_parser("search", help="full-text search")
@@ -295,9 +331,9 @@ def main(argv: list[str] | None = None) -> int:
     s.add_argument("--json", action="store_true", dest="as_json")
     args = ap.parse_args(argv)
 
-    DB_PATH.parent.mkdir(parents=True, exist_ok=True)
-    db = sqlite3.connect(DB_PATH)
-    ensure_schema(db)
+    db = _open_index(getattr(args, "as_json", False))
+    if db is None:
+        return EXIT_ERROR
 
     if args.cmd == "index":
         return _run_index(db)
@@ -306,19 +342,19 @@ def main(argv: list[str] | None = None) -> int:
         hits = search(db, args.query, args.limit, raw=args.fts)
     except QueryError as exc:
         return _query_failed(exc, args.as_json)
+    code = EXIT_YES if hits else EXIT_NO
     if args.as_json:
-        payload: dict[str, object] = {"ok": True, "command": "search", "data": hits}
+        payload = envelope_for_exit(code, "search", hits)
         if not hits:
             payload["caveat"] = NO_MATCH_CAVEAT
-        print(json.dumps(payload))
-        return 0 if hits else 1
+        print(render(payload, indent=None))
+        return code
     for h in hits:
         print(f"[{h['project']}] {h['role']}: {h['text'][:200]}")
     if not hits:
         print("no matches", file=sys.stderr)
         print(NO_MATCH_CAVEAT, file=sys.stderr)
-        return 1
-    return 0
+    return code
 
 
 if __name__ == "__main__":

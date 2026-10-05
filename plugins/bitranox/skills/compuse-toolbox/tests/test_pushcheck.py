@@ -204,7 +204,8 @@ def test_cli_refuses_a_public_repo_whose_range_carries_a_home_path(tmp_path):
                  "--json"], tmp_path)
     assert r.returncode == 1, r.stdout + r.stderr
     env = json.loads(r.stdout)
-    assert env["ok"] is False
+    # ok means "ran without error"; the verdict itself is data.safe (and the exit code).
+    assert env["ok"] is True and env["data"]["safe"] is False
     assert env["data"]["findings"][0]["kind"] == "abs_path"
     assert env["data"]["examined_lines"] >= 1
 
@@ -219,6 +220,7 @@ def test_cli_passes_a_clean_public_range_and_reports_what_it_read(tmp_path):
     assert r.returncode == 0, r.stdout + r.stderr
     env = json.loads(r.stdout)
     assert env["ok"] is True and env["data"]["examined_lines"] >= 1
+    assert env["data"]["safe"] is True
 
 
 def test_cli_exits_2_on_an_empty_range_rather_than_reporting_clean(tmp_path):
@@ -681,3 +683,28 @@ def test_a_range_of_only_binary_changes_is_refused_as_unscanned_not_as_empty(tmp
     assert rc == 2
     assert "binary" in env["data"]["reason"] and "empty" not in env["data"]["reason"]
     assert env["skipped"] == ["blob.bin: binary content is not scanned"]
+
+
+
+# --- wave D: a crash is exit 2, never the leak-found 1 ----------------------------------------
+
+def test_an_internal_crash_exits_2_with_the_envelope_not_the_leak_answer(tmp_path, capsys,
+                                                                          monkeypatch):
+    def explode(*_a, **_k):
+        raise RuntimeError("kaboom")
+
+    # The process boundary is under test, so the crash is injected at main's first call.
+    monkeypatch.setattr(PC, "repo_root", explode)
+    rc = PC.main(["--repo", str(tmp_path), "--visibility", "public", "--json"])
+    cap = capsys.readouterr()
+    assert rc == 2
+    env = json.loads(cap.out)
+    assert env["ok"] is False and "kaboom" in env["error"]
+    assert "internal error" in cap.err
+
+
+def test_a_refusal_under_json_carries_the_reason_as_error(tmp_path):
+    r = run_cli(["--repo", str(tmp_path / "nope"), "--json"], tmp_path)
+    env = json.loads(r.stdout)
+    assert r.returncode == 2 and env["ok"] is False and env["error"] == env["data"]["reason"]
+    assert env["data"]["safe"] is False

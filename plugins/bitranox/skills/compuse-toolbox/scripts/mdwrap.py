@@ -57,16 +57,19 @@ Run: `uv run scripts/mdwrap.py --file TODO.md --anchor "NEXT STEP:" --width 98`
      `uv run scripts/mdwrap.py --file TODO.md --anchor "NEXT STEP:" --width 98 --apply`
      `uv run scripts/mdwrap.py --file TODO.md --anchor "NEXT STEP:" --json`
 
-Exit codes: 0 = rewrapped (or would be), 1 = refused (anchor not found, ambiguous, or a paragraph
-that must not be reflowed), 2 = error (unreadable or non-UTF-8 file, a failed write, bad
-arguments, an internal error).
+Exit codes: 0 = rewrapped (or would be), 2 = it did not act: refused (anchor not found,
+ambiguous, or a paragraph that must not be reflowed) or an error (unreadable or non-UTF-8 file, a
+failed write, bad arguments, an internal error). There is no 1: an action tool has no "no" answer,
+and a refusal names its reason on stderr and in the JSON `error` field.
+
+`--json` prints `{ok, command, data, skipped}` on every exit, 2 included; `ok` is false exactly
+when the exit is 2.
 """
 from __future__ import annotations
 
 import argparse
 import contextlib
 import errno
-import json
 import os
 import re
 import shutil
@@ -75,6 +78,8 @@ import tempfile
 import textwrap
 from dataclasses import dataclass, field
 from pathlib import Path
+
+from _cli_envelope import EXIT_ERROR, EXIT_YES, EnvelopeArgumentParser, emit, guarded
 
 __all__ = ["Result", "rewrap", "main"]
 
@@ -410,7 +415,8 @@ def _write_file(path: Path, text: str, *, make_temp=tempfile.mkstemp) -> str:
 
 
 def _parse(argv):
-    ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    ap = EnvelopeArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter,
+                                envelope_command="mdwrap")
     ap.add_argument("--file", required=True, type=Path)
     ap.add_argument("--anchor", required=True, help="substring identifying the ONE paragraph")
     ap.add_argument("--width", type=_positive_width, default=98)
@@ -419,17 +425,12 @@ def _parse(argv):
     return ap.parse_args(argv)
 
 
-def _payload(args, r: Result, write: str, error: str = "") -> dict:
-    reason = error or r.reason
+def _data(args, r: Result, write: str, error: str = "") -> dict:
     return {
-        "ok": r.ok and not error, "command": "mdwrap",
-        "data": {
-            "file": str(args.file), "reason": reason,
-            "start_line": r.start_line, "end_line": r.end_line,
-            "line_delta": r.line_delta, "changed": r.changed,
-            "applied": bool(write), "write": write, "notes": r.notes,
-        },
-        "skipped": [] if r.ok and not error else [reason],
+        "file": str(args.file), "reason": error or r.reason,
+        "start_line": r.start_line, "end_line": r.end_line,
+        "line_delta": r.line_delta, "changed": r.changed,
+        "applied": bool(write), "write": write, "notes": r.notes,
     }
 
 
@@ -438,7 +439,9 @@ def _run(args) -> int:
         src, bom = _read(args.file)
     except (OSError, UnicodeDecodeError) as exc:
         print(f"error: {exc}", file=sys.stderr)
-        return 2
+        if args.json:
+            emit(EXIT_ERROR, "mdwrap", {"file": str(args.file)}, error=str(exc))
+        return EXIT_ERROR
 
     r = rewrap(src, args.anchor, args.width)
     write, error = "", ""
@@ -448,16 +451,19 @@ def _run(args) -> int:
         except OSError as exc:
             error = f"write failed: {exc}"
 
+    # A refusal is the whole action declined (NU-1): exit 2 like an error, the reason kept apart.
+    code = EXIT_YES if r.ok and not error else EXIT_ERROR
     if args.json:
-        print(json.dumps(_payload(args, r, write, error), indent=2))
+        why = (error or r.reason or "refused") if code == EXIT_ERROR else None
+        emit(code, "mdwrap", _data(args, r, write, error), error=why)
     if error:
         print(f"error: {error}", file=sys.stderr)
-        return 2
-    if args.json:
-        return 0 if r.ok else 1
+        return code
     if not r.ok:
         print(f"refused: {r.reason}", file=sys.stderr)
-        return 1
+        return code
+    if args.json:
+        return code
     verb = "rewrote" if write else ("would rewrite" if r.changed else "unchanged")
     span = f"lines {r.start_line}-{r.end_line}"
     print(f"{verb} {span} ({r.end_line - r.start_line + 1} -> "
@@ -470,15 +476,11 @@ def _run(args) -> int:
     return 0
 
 
+@guarded("mdwrap")
 def main(argv: list[str] | None = None) -> int:
-    """Rewrap one paragraph. An unexpected crash exits 2, never Python's default 1, which is this
-    tool's "refused" answer."""
-    args = _parse(argv)
-    try:
-        return _run(args)
-    except Exception as exc:                             # noqa: BLE001 - a crash must not read as a refusal
-        print(f"mdwrap: internal error: {type(exc).__name__}: {exc}", file=sys.stderr)
-        return 2
+    """Rewrap one paragraph. An unexpected crash exits 2 (with the envelope under --json), never
+    Python's default traceback exit 1."""
+    return _run(_parse(argv))
 
 
 if __name__ == "__main__":

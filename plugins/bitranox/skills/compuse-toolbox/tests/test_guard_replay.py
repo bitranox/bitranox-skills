@@ -194,7 +194,7 @@ def test_exit_code_separates_never_fired_from_empty_corpus(tmp_path):
     assert G.exit_code(G.replay(str(tmp_path), lambda cmd: False)) == 1
     empty = tmp_path / "empty"
     empty.mkdir()
-    assert G.exit_code(G.replay(str(empty), lambda cmd: False)) == 3
+    assert G.exit_code(G.replay(str(empty), lambda cmd: False)) == 2
 
 
 # --- the same call recorded twice --------------------------------------------------------------
@@ -544,9 +544,12 @@ def test_predicate_crashes_make_the_run_not_ok(tmp_path, capsys):
     rc = G.main(["--module", mod, "--root", root, "--json"])
     cap = capsys.readouterr()
     env = json.loads(cap.out)
-    assert rc == G.EXIT_PREDICATE_ERRORS and rc not in (0, 1, 2, 3)
+    # A run where the guard crashed is not a measurement: exit 2 (could not answer), with the
+    # reason kept in data so a caller can still tell it from a usage error.
+    assert rc == 2
     assert env["ok"] is False
     assert env["data"]["predicate_errors"] == 9
+    assert env["data"]["inconclusive"] == "predicate raised"
     assert "9" in cap.err
 
 
@@ -655,13 +658,14 @@ def test_never_fired_exits_1_and_says_so(tmp_path, capsys):
     assert rc == 1 and "never fired" in capsys.readouterr().err
 
 
-def test_an_empty_corpus_exits_3_and_says_so(tmp_path, capsys):
+def test_an_empty_corpus_exits_2_and_says_so(tmp_path, capsys):
     empty = tmp_path / "empty"
     empty.mkdir()
     rc = G.main(["--module", _module(tmp_path, FIRE_ON_FIRE), "--root", str(empty), "--json"])
     cap = capsys.readouterr()
-    assert rc == 3 and "nothing was replayed" in cap.err
-    assert json.loads(cap.out)["ok"] is False
+    assert rc == 2 and "nothing was replayed" in cap.err
+    env = json.loads(cap.out)
+    assert env["ok"] is False and env["data"]["inconclusive"] == "nothing replayed"
 
 
 def test_the_json_envelope_on_success(tmp_path, capsys):
@@ -676,7 +680,8 @@ def test_the_json_envelope_on_success(tmp_path, capsys):
 def test_the_json_envelope_on_a_usage_error(tmp_path, capsys):
     rc = G.main(["--module", str(tmp_path / "missing.py"), "--json"])
     env = json.loads(capsys.readouterr().out)
-    assert rc == 2 and env["ok"] is False and env["data"] is None and env["skipped"]
+    assert rc == 2 and env["ok"] is False and env["data"] == {} and env["skipped"] == []
+    assert "missing.py" in env["error"]
 
 
 def test_the_text_render_shows_samples_and_predicate_errors(tmp_path, capsys):
@@ -738,14 +743,16 @@ def test_a_keyword_only_tool_name_is_forwarded():
 def test_non_ascii_samples_survive_a_cp1252_stdout(tmp_path):
     root = _corpus(tmp_path, [_use("t1", "fire café \U0001f600")])
     mod = _module(tmp_path, FIRE_ON_FIRE)
-    for extra in ([], ["--json"]):
-        proc = _run(["--module", mod, "--root", root, "--sample", "1", *extra],
-                    {"PYTHONIOENCODING": "cp1252"})
-        assert proc.returncode == 0, proc.stderr
-        assert "café" in proc.stdout.decode("utf-8")
+    proc = _run(["--module", mod, "--root", root, "--sample", "1"],
+                {"PYTHONIOENCODING": "cp1252"})
+    assert proc.returncode == 0, proc.stderr
+    assert "café" in proc.stdout.decode("utf-8")
+    # The envelope is ASCII-escaped JSON, so the sample survives as data rather than as raw text.
     proc = _run(["--module", mod, "--root", root, "--sample", "1", "--json"],
                 {"PYTHONIOENCODING": "cp1252"})
-    assert json.loads(proc.stdout.decode("utf-8"))["ok"] is True
+    assert proc.returncode == 0, proc.stderr
+    env = json.loads(proc.stdout.decode("ascii"))
+    assert env["ok"] is True and "café" in env["data"]["samples"][0]["command"]
 
 
 def test_a_bom_does_not_cost_the_first_record(tmp_path):
@@ -865,7 +872,7 @@ def test_an_unwritable_firings_path_still_emits_the_json_envelope(tmp_path, caps
     cap = capsys.readouterr()
     assert rc == 2
     env = json.loads(cap.out)
-    assert env["ok"] is False and env["data"] is None
+    assert env["ok"] is False and env["data"] == {} and "firings" in env["error"]
 
 
 def test_write_firings_raises_usage_error_not_oserror(tmp_path):
@@ -923,3 +930,39 @@ def test_replay_never_leaves_fire_calls_in_its_report_without_firings(tmp_path):
     (tmp_path / "one.jsonl").write_text(_mk([_use("t1", "fire")]), encoding="utf-8")
     report = G.replay(str(tmp_path), lambda cmd: "fire" in cmd)
     assert "fire_calls" not in report
+
+
+# --- the D2 envelope: ok means "ran without error", printed on every exit -------------------------
+
+def test_never_fired_under_json_is_ok_true_with_exit_1(tmp_path, capsys):
+    rc = G.main(["--module", _module(tmp_path, FIRE_ON_FIRE), "--json",
+                 "--root", _corpus(tmp_path, [_use("t1", "quiet")])])
+    env = json.loads(capsys.readouterr().out)
+    assert rc == 1
+    assert env["ok"] is True and env["data"]["fires"] == 0
+    assert list(env)[:4] == ["ok", "command", "data", "skipped"]
+
+
+def test_an_internal_crash_under_json_prints_the_exit_2_envelope(tmp_path, capsys, monkeypatch):
+    def explode(*_a, **_k):
+        raise RuntimeError("kaboom")
+
+    # The process boundary is what is under test, so the crash is injected at the one call main
+    # makes into the replay; nothing below it is exercised.
+    monkeypatch.setattr(G, "replay", explode)
+    rc = G.main(["--module", _module(tmp_path, FIRE_ON_FIRE), "--json",
+                 "--root", _corpus(tmp_path, [_use("t1", "fire")])])
+    cap = capsys.readouterr()
+    assert rc == 2
+    env = json.loads(cap.out)
+    assert env["ok"] is False and "kaboom" in env["error"]
+    assert "internal error" in cap.err
+
+
+def test_an_argparse_usage_error_under_json_prints_the_envelope(capsys):
+    with pytest.raises(SystemExit) as exc:
+        G.main(["--json"])
+    cap = capsys.readouterr()
+    assert exc.value.code == 2
+    env = json.loads(cap.out)
+    assert env["ok"] is False and "--module" in env["error"]

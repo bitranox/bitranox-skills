@@ -16,7 +16,8 @@ needs deciding rather than drifting.
 
 `except-OSError-reraise` deliberately does NOT list the denied-by-permissions test, which skips
 when euid is 0. Coverage of that arm must not depend on a test that can silently vanish, so the
-harness runs with it deselected and still requires the arm to be covered.
+harness runs with it deselected and still requires the arm to be covered. The same holds for the
+unreadable-dir-inside-a-content-excluded-tree test, which the propagation mutant also kills.
 
 SCOPE, so the name does not overclaim. Eight mutants cover the content-marker validators, the
 exact-name list, the glob shapes, subtree propagation, the default extension set and the
@@ -42,10 +43,15 @@ TOOL = HERE.parent / "scripts" / "srccount.py"
 # Copied explicitly, never the whole dir: copying tests/ wholesale would include THIS file and
 # the sub-run would recurse into another mutation check.
 TEST_FILES = ("conftest.py", "test_srccount.py")
+# The scripts srccount imports at module top; without them every test fails at collection and
+# each mutant reads as killing everything.
+SIBLING_SCRIPTS = ("_cli_envelope.py",)
 
-# A test that skips rather than runs would satisfy any expectation, so it is excluded from the
-# run entirely and the mutants must be killed without it.
-SKIPPABLE = "test_a_marker_denied_by_permissions_leaves_the_tree_counted"
+# A test that skips rather than runs (both need a non-root POSIX user) would satisfy any
+# expectation as root and fail an "exact" one otherwise, so each is excluded from the run entirely
+# and the mutants must be killed without it.
+SKIPPABLE = ("test_a_marker_denied_by_permissions_leaves_the_tree_counted",
+             "test_an_unreadable_dir_inside_a_content_excluded_tree_is_a_floor_warning")
 
 
 @dataclass(frozen=True)
@@ -165,8 +171,8 @@ MUTANTS: tuple[Mutant, ...] = (
     ),
     Mutant(
         name="no-source-exit-gate-inverted",
-        find="    if not any(c.source for c in counts):",
-        replace="    if any(c.source for c in counts):",
+        find="    return EXIT_YES if any(c.source for c in counts) else EXIT_NO",
+        replace="    return EXIT_NO if any(c.source for c in counts) else EXIT_YES",
         must_kill=frozenset({
             "test_a_high_excluded_share_is_normal_and_exits_zero",
             "test_cli_json_envelope",
@@ -191,13 +197,17 @@ def run_mutant(mutant: Mutant, workdir: Path) -> set[str]:
     (workdir / "scripts").mkdir(parents=True, exist_ok=True)
     (workdir / "tests").mkdir(parents=True, exist_ok=True)
     (workdir / "scripts" / TOOL.name).write_text(source.replace(mutant.find, mutant.replace), encoding="utf-8")
+    for name in SIBLING_SCRIPTS:
+        shutil.copy2(TOOL.parent / name, workdir / "scripts" / name)
     for name in TEST_FILES:
         shutil.copy2(HERE / name, workdir / "tests" / name)
+    # nodeid form, NOT an absolute path: an absolute --deselect matches nothing and silently
+    # leaves the skippable test in the run.
+    deselect = [arg for name in SKIPPABLE
+                for arg in ("--deselect", f"tests/test_srccount.py::{name}")]
     done = subprocess.run(
         [sys.executable, "-m", "pytest", "tests", "-q", "--tb=no", "-p", "no:cacheprovider",
-         # nodeid form, NOT an absolute path: an absolute --deselect matches nothing and
-         # silently leaves the skippable test in the run.
-         "--deselect", f"tests/test_srccount.py::{SKIPPABLE}"],
+         *deselect],
         capture_output=True, text=True, encoding="utf-8", errors="replace", cwd=workdir,
     )
     report = done.stdout + done.stderr

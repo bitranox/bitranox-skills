@@ -653,3 +653,38 @@ class TestAComprehensionIsItsOwnScope:
     def test_control_a_loop_variable_still_binds_the_function(self) -> None:
         result = scan("def h(xs):\n    for mac in xs:\n        pass\n    return mac\n", "mac", "h")
         assert [s.binding for s in result.sites if s.line == 4] == [Binding.LOOP_VAR]
+
+
+
+# --- wave D: a crash is exit 2, never the hits-outside 1 --------------------------------------
+
+def test_an_internal_crash_exits_2_with_the_envelope_not_the_finding(tmp_path, capsys,
+                                                                     monkeypatch):
+    src = tmp_path / "m.py"
+    src.write_text("def f():\n    mac = 1\n", encoding="utf-8", newline="")
+
+    def explode(*_a, **_k):
+        raise RuntimeError("kaboom")
+
+    # The process boundary is under test, so the crash is injected at the scan main calls.
+    monkeypatch.setattr(renamescope, "scan_paths", explode)
+    rc = renamescope.main([str(src), "--name", "mac", "--intended", "f", "--json"])
+    cap = capsys.readouterr()
+    assert rc == 2
+    env = json.loads(cap.out)
+    assert env["ok"] is False and "kaboom" in env["error"]
+    assert "internal error" in cap.err
+
+
+def test_a_refusal_envelope_names_the_error_at_top_level(tmp_path, capsys):
+    rc = renamescope.main([str(tmp_path / "nope.py"), "--name", "mac", "--json"])
+    env = json.loads(capsys.readouterr().out)
+    assert rc == 2 and env["ok"] is False and "no such file" in env["error"]
+    assert list(env)[:4] == ["ok", "command", "data", "skipped"]
+
+
+def test_an_argparse_usage_error_under_json_prints_the_envelope(tmp_path, capsys):
+    with pytest.raises(SystemExit) as exc:
+        renamescope.main([str(tmp_path / "m.py"), "--json"])   # neither --name nor --regex
+    assert exc.value.code == 2
+    assert json.loads(capsys.readouterr().out)["ok"] is False

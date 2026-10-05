@@ -49,7 +49,11 @@ Run:
   `uv run scripts/pushcheck.py --visibility public --range HEAD~3..HEAD`   (skip the gh lookup)
 
 Exit codes: 0 = safe to push, 1 = a PUBLIC repo's range carries private-looking content,
-2 = refused to answer (unknown visibility, empty range, bad arguments, git or gh failure).
+2 = refused to answer (unknown visibility, empty range, bad arguments, git or gh failure, an
+internal error).
+
+`--json` prints `{ok, command, data, skipped}` on every exit, 2 included. `ok` means the check RAN
+(false exactly on exit 2); the verdict is `data.safe` - so a leak found is `ok: true, safe: false`.
 """
 from __future__ import annotations
 
@@ -61,6 +65,8 @@ import sys
 from dataclasses import dataclass, field
 from fnmatch import fnmatch
 from pathlib import Path
+
+from _cli_envelope import EXIT_ERROR, EnvelopeArgumentParser, emit, guarded
 
 __all__ = ["Finding", "Verdict", "parse_remote", "scan_text", "scan_diff", "scan_messages",
            "decide"]
@@ -543,21 +549,23 @@ def _render(verdict: Verdict) -> str:
 
 def _emit(as_json: bool, verdict: Verdict) -> None:
     if as_json:
-        print(json.dumps({"ok": verdict.ok, "command": "pushcheck",
-                          "data": {"visibility": verdict.visibility,
-                                   "examined_lines": verdict.examined_lines,
-                                   "examined_message_lines": verdict.examined_message_lines,
-                                   "reason": verdict.reason,
-                                   "unused_exclusions": verdict.unused_exclusions,
-                                   "findings": [f.as_dict() for f in verdict.findings]},
-                          "skipped": [f"{name}: binary content is not scanned"
-                                      for name in verdict.unscanned_binary]}, indent=2))
+        # `ok` is the envelope's "ran without error"; the verdict travels as data.safe, so a leak
+        # found (exit 1) is not mistaken for a run that failed.
+        emit(verdict.exit_code, "pushcheck",
+             {"safe": verdict.ok, "visibility": verdict.visibility,
+              "examined_lines": verdict.examined_lines,
+              "examined_message_lines": verdict.examined_message_lines,
+              "reason": verdict.reason,
+              "unused_exclusions": verdict.unused_exclusions,
+              "findings": [f.as_dict() for f in verdict.findings]},
+             skipped=[f"{name}: binary content is not scanned" for name in verdict.unscanned_binary],
+             error=verdict.reason if verdict.exit_code == EXIT_ERROR else None)
     else:
         print(_render(verdict))
 
 
 def build_parser() -> argparse.ArgumentParser:
-    p = argparse.ArgumentParser(description=__doc__.splitlines()[0])
+    p = EnvelopeArgumentParser(description=__doc__.splitlines()[0], envelope_command="pushcheck")
     p.add_argument("--repo", default=".", help="the repository to check (default: cwd)")
     p.add_argument("--remote", default="origin", help="remote whose URL names the repo")
     p.add_argument("--range", dest="rev_range", default=None,
@@ -603,7 +611,9 @@ def _tolerate_unencodable_output() -> None:
             continue
 
 
+@guarded("pushcheck")
 def main(argv: list[str] | None = None) -> int:
+    """Check the range; an uncaught exception exits 2, never Python's 1, which means "a leak"."""
     _tolerate_unencodable_output()
     args = build_parser().parse_args(argv)
     try:

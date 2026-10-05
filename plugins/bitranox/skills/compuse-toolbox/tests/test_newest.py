@@ -4,6 +4,7 @@ import os
 import subprocess
 import sys
 import time
+from datetime import datetime, timezone
 from pathlib import Path
 
 import pytest
@@ -437,7 +438,7 @@ def test_the_leftmost_stamp_wins_whatever_its_width():
 def test_a_single_stamp_still_parses_at_full_width():
     """Control: at the same position the 14-digit form beats its own 8-digit prefix."""
     assert N.parse_name_stamp("x-20240101-120000.sql") \
-        == N.parse_name_stamp("x-20240101T120000Z.sql") != N.parse_name_stamp("x-20240101.sql")
+        == N.parse_name_stamp("x-20240101T120000.sql") != N.parse_name_stamp("x-20240101.sql")
 
 
 # --------------------------------------------------------------------------
@@ -450,3 +451,80 @@ def test_a_single_stamp_still_parses_at_full_width():
 ])
 def test_human_age_thresholds(seconds, text):
     assert N._human_age(seconds) == text
+
+
+
+# --- wave D: the envelope on every exit, could-not-stat is 2, unzoned stamps are local --------
+
+def test_no_paths_under_json_prints_the_exit_2_envelope():
+    r = _run(["--json"])
+    assert r.returncode == 2
+    env = json.loads(r.stdout)
+    assert env["ok"] is False and env["command"] == "newest" and "no paths" in env["error"]
+
+
+def test_no_match_under_json_prints_an_ok_envelope_with_exit_1(tmp_path):
+    r = _run(["--json", str(tmp_path / "gone-a")])
+    assert r.returncode == 1
+    env = json.loads(r.stdout)
+    assert env["ok"] is True and env["data"] == [] and env["skipped"] == [str(tmp_path / "gone-a")]
+
+
+def test_name_timestamp_no_match_under_json_prints_an_ok_envelope(tmp_path):
+    plain = tmp_path / "plain.txt"
+    _touch(plain, 100.0)
+    r = _run(["--json", "--name-timestamp", str(plain)])
+    assert r.returncode == 1
+    assert json.loads(r.stdout)["ok"] is True
+
+
+def test_an_argparse_usage_error_under_json_prints_the_envelope():
+    r = _run(["--json", "--bogus"])
+    assert r.returncode == 2
+    assert json.loads(r.stdout)["ok"] is False
+
+
+@pytest.mark.skipif(sys.platform == "win32" or getattr(os, "geteuid", lambda: 1)() == 0,
+                    reason="needs POSIX mode bits and a non-root user to deny a stat")
+@pytest.mark.parametrize("name_timestamp", [False, True])
+def test_paths_that_cannot_be_stat_d_are_exit_2_not_no_match(tmp_path, name_timestamp):
+    """A path that EXISTS but cannot be stat'd (a parent dir without search permission) is not an
+    answer of "no": the newest file may be exactly the one that could not be read. Missing paths
+    stay 1 - the control is the existing test_nothing_readable_is_exit_1."""
+    locked = tmp_path / "locked"
+    locked.mkdir()
+    inside = locked / "s-20260101T000000Z.gz"
+    _touch(inside, 100.0)
+    locked.chmod(0o600)                        # readable listing, no search: stat() is EACCES
+    try:
+        r = _run([*(["--name-timestamp"] if name_timestamp else []), "--json", str(inside)])
+    finally:
+        locked.chmod(0o755)
+    assert r.returncode == 2, (r.stdout, r.stderr)
+    env = json.loads(r.stdout)
+    assert env["ok"] is False and env["skipped"] == [str(inside)]
+
+
+def test_an_unzoned_stamp_is_local_time_and_a_z_stamp_is_utc():
+    naive = datetime(2026, 1, 2, 3, 4, 5)
+    assert N.parse_name_stamp("x-20260102-030405.gz") == naive.timestamp()
+    assert N.parse_name_stamp("x-20260102T030405Z.gz") == naive.replace(
+        tzinfo=timezone.utc).timestamp()
+
+
+@pytest.mark.skipif(not hasattr(time, "tzset"), reason="time.tzset is POSIX-only")
+def test_the_two_readings_differ_by_the_utc_offset(monkeypatch):
+    """Pinned under a fixed +05:30 zone, so it cannot pass by accident on a UTC machine (CI)."""
+    old = os.environ.get("TZ")
+    monkeypatch.setenv("TZ", "IST-5:30")
+    time.tzset()
+    try:
+        local = N.parse_name_stamp("x-20260102-030405.gz")
+        utc = N.parse_name_stamp("x-20260102T030405Z.gz")
+    finally:
+        if old is None:
+            monkeypatch.delenv("TZ")
+        else:
+            monkeypatch.setenv("TZ", old)
+        time.tzset()
+    assert utc - local == 5.5 * 3600

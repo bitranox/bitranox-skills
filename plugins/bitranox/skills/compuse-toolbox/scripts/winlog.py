@@ -22,16 +22,20 @@ many bytes it held, since a zeroed tail is itself evidence of how the writer end
     winlog.py read install.log --tail 20 --json
 
 Exit: 0 ok (or --grep matched), 1 --grep matched nothing, 2 error (unreadable file, a --grep
-that is not a valid regex, a negative --tail).
+that is not a valid regex, a negative --tail, an internal error).
+
+`--json` prints `{ok, command, data, skipped}` on every exit, 2 included (with an `error` key
+there); `ok` is false exactly when the exit is 2, so a --grep miss (exit 1) is `ok: true`.
 """
 from __future__ import annotations
 
 import argparse
-import json
 import re
 import sys
 from pathlib import Path
 from typing import NamedTuple
+
+from _cli_envelope import EXIT_ERROR, EXIT_NO, EXIT_YES, EnvelopeArgumentParser, emit, guarded
 
 __all__ = ["decode_windows_text", "describe_encoding", "read_windows_log", "main"]
 
@@ -349,13 +353,19 @@ def _select(text: str, rx: re.Pattern[str] | None, tail: int | None) -> tuple[li
     return lines, matched
 
 
-def _emit(as_json: bool, ok: bool, data: dict[str, object] | None, error: str | None) -> None:
+def _fail(as_json: bool, error: str) -> int:
+    """Exit 2: the reason on stderr always, and in the envelope's error key under --json."""
+    print(error, file=sys.stderr)
     if as_json:
-        print(json.dumps({"ok": ok, "command": "read", "data": data or {}, "error": error}))
-    elif error:
-        print(error, file=sys.stderr)
-    elif data:
-        for line in data["lines"]:  # type: ignore[index]
+        emit(EXIT_ERROR, "read", error=error, indent=None)
+    return EXIT_ERROR
+
+
+def _emit(as_json: bool, code: int, data: dict[str, object]) -> None:
+    if as_json:
+        emit(code, "read", data, indent=None)
+    else:
+        for line in data["lines"]:  # type: ignore[union-attr]
             print(line)
 
 
@@ -364,25 +374,24 @@ def cmd_read(args: argparse.Namespace) -> int:
         rx = re.compile(args.grep) if args.grep else None
     except re.error as exc:
         # Exit 1 means "no line matched"; a pattern that cannot compile answered nothing.
-        _emit(args.json, False, None, f"winlog: invalid --grep regex {args.grep!r}: {exc}")
-        return 2
+        return _fail(args.json, f"winlog: invalid --grep regex {args.grep!r}: {exc}")
     try:
         raw = Path(args.file).read_bytes()
     except OSError as exc:
-        _emit(args.json, False, None, f"winlog: cannot read {args.file}: {exc}")
-        return 2
+        return _fail(args.json, f"winlog: cannot read {args.file}: {exc}")
     encoding = describe_encoding(raw)
     # Advisory on STDERR, never in the parsed stream: --json stdout must stay pure JSON.
     if encoding.startswith("MIXED"):
         print(f"winlog: {args.file}: {encoding}", file=sys.stderr)
     lines, matched = _select(decode_windows_text(raw), rx, args.tail)
-    _emit(args.json, True, {"path": str(args.file), "encoding": encoding, "lines": lines}, None)
-    return 0 if matched else 1
+    code = EXIT_YES if matched else EXIT_NO
+    _emit(args.json, code, {"path": str(args.file), "encoding": encoding, "lines": lines})
+    return code
 
 
 def build_parser() -> argparse.ArgumentParser:
-    p = argparse.ArgumentParser(description=__doc__,
-                                formatter_class=argparse.RawDescriptionHelpFormatter)
+    p = EnvelopeArgumentParser(description=__doc__, envelope_command="read",
+                               formatter_class=argparse.RawDescriptionHelpFormatter)
     sub = p.add_subparsers(dest="cmd_name", required=True)
     r = sub.add_parser("read", help="decode a Windows-written log and print it")
     r.add_argument("file")
@@ -411,7 +420,9 @@ def _tolerate_console_encoding() -> None:
                 pass
 
 
+@guarded("winlog")
 def main(argv: list[str] | None = None) -> int:
+    """Run the sub-command; an uncaught exception exits 2, never the 1 that means "no match"."""
     _tolerate_console_encoding()
     args = build_parser().parse_args(argv)
     return int(args.func(args))

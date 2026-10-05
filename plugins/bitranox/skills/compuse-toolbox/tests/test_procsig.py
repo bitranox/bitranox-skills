@@ -308,9 +308,7 @@ def test_a_real_signal_name_is_accepted(tmp_path, monkeypatch, name):
     assert sent == [(300, int(signal.SIGTERM))]
 
 
-@pytest.mark.parametrize("error", [PermissionError(1, "Operation not permitted"),
-                                   ProcessLookupError(3, "No such process")])
-def test_kill_exits_2_when_a_signal_could_not_be_delivered(tmp_path, monkeypatch, capsys, error):
+def _refusing_kill(tmp_path, monkeypatch, error):
     _mkproc(tmp_path, 300, exe="/x/worker", cmdline=["worker"])
     _harness(tmp_path, monkeypatch)
 
@@ -318,8 +316,35 @@ def test_kill_exits_2_when_a_signal_could_not_be_delivered(tmp_path, monkeypatch
         raise error
 
     monkeypatch.setattr(P, "_kill", refuse)
+
+
+def test_kill_exits_2_when_a_signal_is_refused(tmp_path, monkeypatch, capsys):
+    _refusing_kill(tmp_path, monkeypatch, PermissionError(1, "Operation not permitted"))
     assert P.main(["--kill", "--exe", "worker"]) == 2
-    assert "failed to signal 300" in capsys.readouterr().err
+    err = capsys.readouterr().err
+    assert "failed to signal 300" in err and "already exited" not in err
+
+
+def test_kill_of_a_process_that_already_exited_says_so_and_exits_2(tmp_path, monkeypatch, capsys):
+    """ESRCH: the target exited between the scan and the signal. Still 2 (nothing was signaled,
+    so the action did not happen), but worded as what it is rather than as a refusal."""
+    _refusing_kill(tmp_path, monkeypatch, ProcessLookupError(3, "No such process"))
+    assert P.main(["--kill", "--exe", "worker"]) == 2
+    err = capsys.readouterr().err
+    assert "300 already exited" in err and "failed to signal" not in err
+
+
+def test_an_internal_crash_exits_2_not_the_no_match_1(tmp_path, monkeypatch, capsys):
+    _mkproc(tmp_path, 300, exe="/x/worker", cmdline=["worker"])
+    _harness(tmp_path, monkeypatch)
+
+    def explode(*_a, **_k):
+        raise RuntimeError("kaboom")
+
+    # The process boundary is under test, so the crash is injected at the scan main calls.
+    monkeypatch.setattr(P, "scan", explode)
+    assert P.main(["--exe", "worker"]) == 2
+    assert "internal error" in capsys.readouterr().err
 
 
 def test_a_non_cp1252_cmdline_does_not_crash_a_cp1252_console(tmp_path):

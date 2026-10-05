@@ -25,22 +25,25 @@ the data they hold ended, and every rate computed across a file boundary used th
 neighbour, with no error. `--name-timestamp` keys on a fixed-width stamp in the filename
 instead, and then reports the age from that stamp too (`age_basis` in --json says which), since
 an mtime age would make a stale set look fresh. A stamped path that no longer exists is skipped
-and reported, never picked. A stamp is read as UTC whether or not it ends in `Z`: one written
-in LOCAL time (`date +%Y%m%d-%H%M%S`) reports an age off by the UTC offset - negative for a fresh
-file east of Greenwich - while the ORDER within a set written one way is unaffected. The default
-run WARNS when the two keys disagree about the answer, which is exactly when the choice of key
-matters.
+and reported, never picked. A stamp ending in `Z` is UTC; an unzoned stamp is LOCAL time, which
+is what `date +%Y%m%d-%H%M%S` writes, so its age is right on the machine that wrote it. The ORDER
+within a set written one way does not depend on that choice. The default run WARNS when the two
+keys disagree about the answer, which is exactly when the choice of key matters.
 
 A glob the shell did not expand (cmd.exe, PowerShell, a quoted argument) is expanded here; an
 argument that names an existing path is always taken literally.
 
-Exit codes: 0 = a match, 1 = no match, 2 = usage error.
+Exit codes: 0 = a match, 1 = no match (every path missing, or none stamped under
+--name-timestamp), 2 = could not answer: a usage error, an internal error, or no match while some
+path EXISTS but could not be stat'd (permission denied) - the newest may be exactly that one.
+
+`--json` prints `{ok, command, data, skipped}` on every exit, 2 included; `ok` is false exactly
+when the exit is 2, so a no-match (exit 1) is `ok: true` with `data: []`.
 """
 from __future__ import annotations
 
-import argparse
+import errno
 import glob
-import json
 import math
 import os
 import re
@@ -49,6 +52,12 @@ import time
 from datetime import datetime, timezone
 from pathlib import Path
 
+from _cli_envelope import EXIT_ERROR, EXIT_NO, EXIT_YES, EnvelopeArgumentParser, emit, guarded
+
+# A stat that fails with one of these says the path is not there; any other failure (EACCES,
+# ELOOP, EIO) says it may well be there and could not be looked at, which is not a "no".
+_ABSENT_ERRNOS = frozenset({errno.ENOENT, errno.ENOTDIR})
+
 
 def _mtime(path: Path) -> float | None:
     """The path's mtime, or None when it cannot be read (a dangling symlink, a race)."""
@@ -56,6 +65,18 @@ def _mtime(path: Path) -> float | None:
         return path.stat().st_mtime
     except OSError:
         return None
+
+
+def denied(paths) -> list[str]:
+    """Raw path strings whose stat failed for a reason OTHER than absence (permission denied)."""
+    out = []
+    for raw in paths or []:
+        try:
+            Path(raw).stat()
+        except OSError as exc:
+            if exc.errno not in _ABSENT_ERRNOS:
+                out.append(str(raw))
+    return out
 
 
 def _readable(raw) -> tuple[Path, float] | None:
@@ -87,7 +108,8 @@ def parse_name_stamp(name) -> float | None:
     `build-20261345.log` as a date would be a fresh way to get the same silent wrong answer. The
     FIRST (leftmost) parseable stamp wins when a name carries more than one, whatever its width;
     at the same position the wider form wins, so a 14-digit stamp is never read as its own
-    8-digit prefix. Stamps are read as UTC.
+    8-digit prefix. A stamp followed by `Z` is UTC; without it the stamp is LOCAL time, which is
+    what `date +%Y%m%d-%H%M%S` writes.
     """
     text = str(name)
     best = None
@@ -97,7 +119,10 @@ def parse_name_stamp(name) -> float | None:
                 parsed = datetime.strptime("".join(hit.groups()), fmt)
             except ValueError:
                 continue                       # right width, not a real date
-            candidate = (hit.start(), rank, parsed.replace(tzinfo=timezone.utc).timestamp())
+            zulu = text[hit.end():hit.end() + 1] in ("Z", "z")
+            # A naive datetime's timestamp() reads it as local time, DST included.
+            moment = parsed.replace(tzinfo=timezone.utc) if zulu else parsed
+            candidate = (hit.start(), rank, moment.timestamp())
             best = candidate if best is None or candidate < best else best
             break                              # later hits of this pattern are further right
     return None if best is None else best[2]
@@ -217,22 +242,42 @@ def _human_age(seconds: float) -> str:
     return f"{seconds:.0f}s"
 
 
+def _no_match(args, skipped: list[str], paths) -> int:
+    """Exit 1 (no match) - or 2 when a path that exists could not be stat'd, since the answer
+    may be that very path. The envelope says which under --json."""
+    blocked = denied(paths)
+    code = EXIT_ERROR if blocked else EXIT_NO
+    if blocked:
+        print(f"newest: {len(blocked)} path(s) exist but could not be stat'd (permission?): "
+              f"{', '.join(blocked)} - cannot say which is newest", file=sys.stderr)
+    if args.json:
+        emit(code, "newest", [], skipped=skipped,
+             error="could not stat: " + ", ".join(blocked) if blocked else None)
+    return code
+
+
+@guarded("newest")
 def main(argv=None) -> int:
-    ap = argparse.ArgumentParser(
+    """Pick the newest path; exit 0 a match, 1 no match, 2 could not answer (see module doc)."""
+    ap = EnvelopeArgumentParser(
+        envelope_command="newest",
         description="Newest path by mtime (shell expands the glob; never sorts by name).")
     ap.add_argument("paths", nargs="*", help="paths, usually from a shell glob")
     ap.add_argument("--all", action="store_true", help="list every match, newest first")
     ap.add_argument("--json", action="store_true", help="machine-readable envelope")
     ap.add_argument("--name-timestamp", action="store_true",
                     help="key on a fixed-width timestamp in the FILENAME, not mtime - "
-                         "correct when a later pass rewrote the files; the stamp is read "
-                         "as UTC, Z or not")
+                         "correct when a later pass rewrote the files; a stamp ending in Z "
+                         "is UTC, an unzoned one local time")
     args = ap.parse_args(argv)
     _tolerate_unencodable_output()
 
     if not args.paths:
-        print("newest: no paths - did the glob match nothing?", file=sys.stderr)
-        return 2
+        message = "no paths - did the glob match nothing?"
+        print(f"newest: {message}", file=sys.stderr)
+        if args.json:
+            emit(EXIT_ERROR, "newest", [], error=message)
+        return EXIT_ERROR
     paths = expand_args(args.paths)
 
     if args.name_timestamp:
@@ -250,7 +295,7 @@ def main(argv=None) -> int:
             # Never fall back to mtime here. A silent fallback answers the question the caller
             # explicitly said was the wrong one, which is the defect this flag exists to fix.
             print(_no_stamped_match_reason(paths, no_stamp), file=sys.stderr)
-            return 1
+            return _no_match(args, skipped, paths)
     else:
         ordered = by_mtime(paths)
         skipped = unreadable(paths)
@@ -260,7 +305,7 @@ def main(argv=None) -> int:
                   file=sys.stderr)
         if not ordered:
             print("newest: nothing readable among the given paths", file=sys.stderr)
-            return 1
+            return _no_match(args, skipped, paths)
         if keys_disagree(paths):
             print("newest: mtime and the name stamps pick DIFFERENT files - a later pass "
                   "(compression, re-encoding, a fixup job) likely rewrote these, so mtime "
@@ -275,15 +320,14 @@ def main(argv=None) -> int:
         data = data[:1]
 
     if args.json:
-        print(json.dumps({"ok": True, "command": "newest", "skipped": skipped, "data": data},
-                         indent=2, allow_nan=False))
+        emit(EXIT_YES, "newest", data, skipped=skipped)
     else:
         label = ", from name stamp" if args.name_timestamp else ""
         for item in data:
             age = item["age_seconds"]
             print(f"{item['path']}  (age {_human_age(float('inf') if age is None else age)}"
                   f"{label})")
-    return 0
+    return EXIT_YES
 
 
 def _no_stamped_match_reason(paths, no_stamp) -> str:

@@ -94,7 +94,8 @@ basename confirms the full name.
 
 Exit codes: 0 = at least one match that is not this process or an ancestor (with `--kill`: every
 one of them signaled), 1 = no such match, 2 = could not answer or could not act (a blank needle,
-an unknown signal, no /proc, or a signal that could not be delivered).
+an unknown signal, no /proc, an internal error, or a signal that was not delivered: refused, or
+the target already exited between the scan and the signal - said as "already exited").
 
 Run: `uv run scripts/procsig.py --exe myserver`
      `uv run scripts/procsig.py --kill --signal TERM --cmdline job-1234`
@@ -108,6 +109,8 @@ import signal
 import sys
 from pathlib import Path
 from typing import NamedTuple
+
+from _cli_envelope import guarded
 
 PROC = Path("/proc")                                          # overridden in tests with a fake tree
 
@@ -565,7 +568,9 @@ def _kill(pid: int, sig: int) -> None:                        # seam: monkeypatc
     os.kill(pid, sig)
 
 
+@guarded("procsig", json_flags=())
 def main(argv=None) -> int:
+    """Find or signal; an unexpected crash exits 2, never Python's traceback 1 ("no match")."""
     ap = argparse.ArgumentParser(description="Find or signal processes without self-matching.")
     m = ap.add_mutually_exclusive_group(required=True)
     m.add_argument("--exe", help="match /proc/<pid>/exe path or basename")
@@ -623,6 +628,11 @@ def main(argv=None) -> int:
         try:
             _kill(pid, int(sig))
             print(f"signaled {pid} with {args.signal}")
+        except ProcessLookupError:
+            # ESRCH: it exited between the scan and the signal. Still not delivered, so still 2,
+            # but a refusal wording sent readers chasing a permission problem that was not there.
+            failed += 1
+            print(f"{pid} already exited before it could be signaled", file=sys.stderr)
         except OSError as exc:
             failed += 1
             print(f"failed to signal {pid}: {exc}", file=sys.stderr)

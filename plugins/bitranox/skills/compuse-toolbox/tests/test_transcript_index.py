@@ -225,6 +225,7 @@ def test_cli_miss_exits_1_with_the_caveat(home):
     assert p.returncode == 1
     doc = json.loads(p.stdout)
     assert doc["ok"] is True and doc["data"] == [] and "caveat" in doc
+    assert doc["skipped"] == []
 
 
 def test_cli_query_error_is_ok_false_exit_2_without_the_caveat(home):
@@ -234,6 +235,7 @@ def test_cli_query_error_is_ok_false_exit_2_without_the_caveat(home):
     assert doc["ok"] is False
     assert "syntax error" in doc["error"]
     assert "caveat" not in doc
+    assert doc["skipped"] == []
 
 
 def test_cli_query_error_plain_goes_to_stderr(home):
@@ -400,3 +402,42 @@ def test_cli_search_on_an_old_database_does_not_match_path_words(tmp_path):
     p = _cli(tmp_path, "search", "animals", "--json")
     assert p.returncode == 0, p.stderr
     assert [h["text"] for h in json.loads(p.stdout)["data"]] == ["nothing about animals here"]
+
+
+
+# ---- wave D: a database that cannot be opened or written is exit 2, never the miss 1 --------
+
+@pytest.mark.parametrize("cmd", [["index"], ["search", "anything", "--json"]])
+def test_a_corrupt_database_exits_2_not_a_traceback(tmp_path, cmd):
+    (tmp_path / ".claude").mkdir()
+    (tmp_path / ".claude" / "transcript-index.db").write_bytes(b"this is not sqlite" * 64)
+    p = _cli(tmp_path, *cmd)
+    assert p.returncode == 2, p.stderr
+    assert b"Traceback" not in p.stderr and b"transcript-index.db" in p.stderr
+    if "--json" in cmd:
+        doc = json.loads(p.stdout)
+        assert doc["ok"] is False and "database" in doc["error"]
+
+
+def test_an_unusable_index_directory_exits_2(tmp_path):
+    (tmp_path / ".claude").write_text("a file where the directory should be", encoding="utf-8")
+    p = _cli(tmp_path, "search", "anything", "--json")
+    assert p.returncode == 2, p.stderr
+    assert json.loads(p.stdout)["ok"] is False
+
+
+def test_a_sqlite_error_mid_index_exits_2(tmp_path, monkeypatch, capsys):
+    projects = tmp_path / "projects"
+    _write_transcript(projects, "-proj-a", [{"type": "user", "message": {"content": "hello"}}])
+
+    def locked(*_a, **_k):
+        raise sqlite3.OperationalError("database is locked")
+
+    # The configured locations are the tool's external edge; the failure is injected at the
+    # per-file insert, where a locked or full database surfaces mid-run.
+    monkeypatch.setattr(ti, "DB_PATH", tmp_path / "idx.db")
+    monkeypatch.setattr(ti, "ROOT", projects)
+    monkeypatch.setattr(ti, "_index_file", locked)
+    rc = ti.main(["index"])
+    assert rc == 2
+    assert "database is locked" in capsys.readouterr().err
