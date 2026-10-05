@@ -725,8 +725,9 @@ def test_check_tree_reports_a_directory_it_could_not_read(tmp_path, capsys):
     finally:
         locked.chmod(0o755)
     out = capsys.readouterr().out
-    assert rc == 1
+    assert rc == 2                     # could not check all of the tree: not a "no", a "could not"
     assert "unreadable directory" in out and "locked" in out
+    assert "TOTAL tree problems: 1" in out
 
 
 def test_check_tree_reports_a_level_file_that_is_not_utf8(tmp_path, capsys):
@@ -739,7 +740,7 @@ def test_check_tree_reports_a_level_file_that_is_not_utf8(tmp_path, capsys):
     local_b.write_bytes(local_b.read_bytes() + b"caf\xe9\n")
     rc = R.main(["--check-tree", anchor])
     out = capsys.readouterr().out
-    assert rc == 1
+    assert rc == 2                     # a level it could not read: "could not run", never "no"
     assert "tree integrity: 1 curated level(s)" in out
     assert "UTF-8" in out and str(local_b) in out
     # B's body is pointed at from the level that could not be read, so it is NOT dangling -
@@ -783,3 +784,94 @@ def test_a_cp1252_console_survives_a_tree_path_it_cannot_encode(tmp_path):
 def test_parse_frontmatter_reads_through_a_bom():
     meta, _body = R.parse_frontmatter("\ufeff---\nname: x\n---\nbody\n")
     assert meta["name"] == "x"
+
+
+# ---- the "---\n<prose> + metadata" damage: a permanent --check-tree finding plus a repair -------
+#
+# Before the frontmatter test required a CLOSED block with a `name:` key, a re-type asked only
+# `lstrip().startswith("---")`. A body that merely opened with a markdown rule was taken for a
+# frame, and the `metadata:\n  type:` block was appended to its prose - before the prose's next
+# `---` line, or at its very end. The fixed code no longer writes that shape; stores written
+# before still hold it, and nothing else reports it.
+
+def _old_retype(text, type_):
+    """The damaging re-type, as it ran before the fix (its no-`type:`-line branch), kept here so
+    the fixture is the real damage rather than a guess at it."""
+    head = (text or "").lstrip()
+    end = head.find("\n---", 3)
+    front, rest = (head[:end], head[end:]) if end > 0 else (head, "")
+    return front + "\nmetadata:\n  type: %s" % type_ + rest
+
+
+RULE_BODY = "---\nA body that opens with a horizontal rule.\n\n---\n\nMore prose below.\n"
+RULE_BODY_NO_SECOND = "---\nOnly one rule in this body, at the top.\n"
+
+
+def _damaged_fact(tmp_path, body, title="Ruled fact", pin=False):
+    proj = tmp_path / "proj"
+    proj.mkdir(exist_ok=True)
+    slug = ME.add_or_update_entry(str(proj), title, "When ruled, do ruled.",
+                                  body="placeholder", pin=pin)
+    p = us.body_path(Path(ME._anchor(str(proj))), slug)
+    p.write_text(_old_retype(body, "feedback") + "\n", encoding="utf-8", newline="")
+    return proj, slug, p
+
+
+def test_appended_type_damage_is_recognised_in_both_shapes():
+    assert R.appended_type_damage(_old_retype(RULE_BODY, "feedback")) == (
+        RULE_BODY.lstrip(), "feedback")
+    prose, kind = R.appended_type_damage(_old_retype(RULE_BODY_NO_SECOND, "user") + "\n")
+    assert kind == "user" and "metadata:" not in prose and "Only one rule" in prose
+
+
+def test_control_healthy_bodies_are_not_damage():
+    framed = "---\nname: s\ndescription: d\nmetadata:\n  type: project\n---\n\n" + RULE_BODY
+    assert R.appended_type_damage(framed) is None                  # a rule AFTER a real frame
+    assert R.appended_type_damage(RULE_BODY) is None               # a rule, nothing appended
+    assert R.appended_type_damage("plain prose\nmetadata:\n  type: feedback\n") is None
+    assert R.appended_type_damage(_old_retype(RULE_BODY, "nonsense")) is None   # not a kind
+
+
+def test_check_tree_reports_the_appended_type_damage(tmp_path, capsys):
+    proj, slug, _p = _damaged_fact(tmp_path, RULE_BODY)
+    assert slug in R.check_tree(str(proj))["appended_type_damage"]
+    assert R.main(["--check-tree", str(proj)]) == 1
+    out = capsys.readouterr().out
+    assert "appended to a body" in out and slug in out and "--repair-appended-type" in out
+
+
+def test_control_check_tree_does_not_report_a_body_with_a_leading_rule(tmp_path):
+    proj = tmp_path / "proj"
+    proj.mkdir()
+    ME.add_or_update_entry(str(proj), "Ruled", "When ruled, do ruled.", body=RULE_BODY)
+    assert R.check_tree(str(proj))["appended_type_damage"] == []
+
+
+def test_repair_dry_run_names_the_body_and_writes_nothing(tmp_path, capsys):
+    proj, slug, p = _damaged_fact(tmp_path, RULE_BODY)
+    before = p.read_bytes()
+    assert R.main(["--repair-appended-type", "--dry-run", str(proj)]) == 0
+    out = capsys.readouterr().out
+    assert "would repair: %s (type feedback)" % slug in out and "TOTAL repaired: 0" not in out
+    assert p.read_bytes() == before
+
+
+def test_repair_reframes_the_prose_with_the_appended_kind(tmp_path, capsys):
+    proj, slug, p = _damaged_fact(tmp_path, RULE_BODY, pin=True)
+    assert R.main(["--repair-appended-type", str(proj)]) == 0
+    assert "repaired: %s" % slug in capsys.readouterr().out
+    text = p.read_text(encoding="utf-8")
+    assert ME._has_frontmatter(text) and ME._body_type(text) == "feedback"
+    assert text.endswith(RULE_BODY) or text.rstrip("\n").endswith(RULE_BODY.rstrip("\n"))
+    assert text.count("metadata:") == 1
+    assert R.check_tree(str(proj))["appended_type_damage"] == []
+    pointer = [e for e in ME.read_store(str(proj))[1] if e.slug == slug][0]
+    assert pointer.pin is True and pointer.hook == "When ruled, do ruled."
+
+
+def test_repair_on_a_clean_tree_is_a_no_op(tmp_path, capsys):
+    proj = tmp_path / "proj"
+    proj.mkdir()
+    ME.add_or_update_entry(str(proj), "Fine", "When fine, do fine.", body="fine")
+    assert R.main(["--repair-appended-type", str(proj)]) == 0
+    assert "TOTAL repaired: 0" in capsys.readouterr().out

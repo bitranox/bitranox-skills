@@ -22,11 +22,13 @@ under ~/.claude/self-improve-audit/backups/migrate-<ts>-<random>/ with a manifes
 `--restore` puts each path back byte for byte and removes what the run created. It restores the
 state AS OF THE BACKUP, so anything written to those paths after the run is lost too.
 
-Exit codes: 0 every entry placed (or would be) / every item restored; 1 something was not (a parked
-store, an entry the engine refused, an unreadable topic file, a level file or body the engine cannot
-read, a failed backup, write or restore; each of these still ends with the BACKUP line naming the
-undo dir when a backup was taken); 2 usage error (--dry-run with --apply, a malformed --redirect or one naming a missing dir, a --slug
-with no native store, a --restore dir with no migration manifest).
+Exit codes: 0 every entry placed (or would be) / every item restored; 1 the run acted but some
+entries were not placed (a parked store, an entry the engine refused); 2 could not run, or could
+not do all of it: a usage error (--dry-run with --apply, a malformed --redirect or one naming a
+missing dir, a --slug with no native store, a --restore dir with no migration manifest), an
+unreadable topic file, a level file or body the engine cannot read, a failed backup or write, an
+item --restore could not put back, or an unexpected failure mid-run. 2 wins in a mixed run. Every
+apply run still ends with the BACKUP line naming the undo dir when a backup was taken.
 
 Pure standard library; ASCII output.
 """
@@ -643,8 +645,10 @@ _GITIGNORE_FINE = ("gitignored", "already ignored", "not a git repo: skipped",
 
 
 def _report_store_problems(rep):
-    """Print what one store did NOT migrate; True when there was anything. A gitignore warning is
-    printed too but does not count: every entry was still placed."""
+    """Print what one store did NOT migrate. Returns (refused, io_failed): an entry the engine
+    refused is a partial outcome (exit 1); an unreadable topic file or a failed backup/write/read
+    is a failure (exit 2). A gitignore warning is printed too but does not count: every entry was
+    still placed."""
     gitignore = rep.get("gitignore")
     if gitignore and gitignore not in _GITIGNORE_FINE:
         print("  ! gitignore (%s): %s" % (rep["slug"], gitignore))
@@ -654,11 +658,12 @@ def _report_store_problems(rep):
         print("  ! UNREADABLE topic file (%s): %s" % (rep["slug"], why))
     if rep["error"]:
         print("  ! FAILED (%s): %s" % (rep["slug"], rep["error"]))
-    return bool(rep["failed"] or rep["unreadable"] or rep["error"])
+    return bool(rep["failed"]), bool(rep["unreadable"] or rep["error"])
 
 
 def _restore_cmd(backup_dir):
-    """`--restore`: 0 every item restored; 1 an item could not be; 2 not a migration backup."""
+    """`--restore`: 0 every item restored; 2 an item could not be put back (an I/O failure), or
+    the dir is not a migration backup."""
     try:
         problems = restore_backup(backup_dir)
     except ValueError as exc:
@@ -667,12 +672,12 @@ def _restore_cmd(backup_dir):
     for why in problems:
         print("  ! NOT restored: %s" % why)
     print("restored from %s%s" % (backup_dir, " (INCOMPLETE)" if problems else ""))
-    return 1 if problems else 0
+    return 2 if problems else 0
 
 
 def main(argv=None):
-    """Exit codes: 0 every entry placed (or would be); 1 something was not - a parked store, an
-    entry the engine refused, an unreadable topic file, a failed backup or write; 2 usage error."""
+    """Exit codes are in the module docstring: 0 all placed; 1 a parked store or a refused entry;
+    2 usage, an unreadable input, a failed backup/write, or an unexpected failure mid-run."""
     args = _parser().parse_args(sys.argv[1:] if argv is None else argv)
     if args.restore:
         return _restore_cmd(args.restore)
@@ -687,7 +692,7 @@ def main(argv=None):
     slugs = args.slug if args.slug else enumerate_slugs()
     total_in = total_placed = total_parked = total_excluded = total_failed = 0
     parked = []
-    incomplete = False
+    refused = io_failed = False
     print("%s %d store(s)%s" % ("DRY-RUN over" if dry else "MIGRATING", len(slugs),
                                 "" if dry else " (writing)"))
     try:
@@ -708,7 +713,9 @@ def main(argv=None):
                 print("  %s%s -> %s : in=%d %s=%d skip=%d"
                       % ("[redirect] " if rep["redirected"] else "", slug, rep["resolved"], rep["in"],
                          "would-place" if dry else "placed", rep["placed"], rep["skipped"]))
-            incomplete |= _report_store_problems(rep)
+            store_refused, store_io = _report_store_problems(rep)
+            refused |= store_refused
+            io_failed |= store_io
             total_failed += len(rep["failed"])
         print("TOTAL in=%d %s=%d parked=%d excluded=%d failed=%d "
               "(in == placed+skipped+parked+excluded+failed)"
@@ -717,6 +724,12 @@ def main(argv=None):
         if parked:
             print("PARKED slugs (redirect with --redirect=<slug>=<path>, or resolve manually): %s"
                   % ", ".join(parked))
+    except Exception as exc:                # noqa: BLE001 - the CLI boundary: a crash is exit 2
+        # A bug in migrate_store, or an exception type it does not special-case, used to escape
+        # as a traceback (exit 1, the code for "some entries were not placed").
+        print("migrate_memory: unexpected failure mid-run: %s: %s" % (type(exc).__name__, exc),
+              file=sys.stderr)
+        io_failed = True
     finally:
         # A bug in migrate_store (or a future exception type it does not special-case) must not
         # swallow this line: BackupRun's manifest is restorable as soon as anything is copied, so
@@ -724,7 +737,9 @@ def main(argv=None):
         # an operator who has no idea an undo dir even exists.
         if run.dir is not None:
             print("BACKUP of everything written: %s (undo with --restore %s)" % (run.dir, run.dir))
-    return 1 if (parked or incomplete) else 0
+    if io_failed:
+        return 2
+    return 1 if (parked or refused) else 0
 
 
 def _reconfigure_stdout():

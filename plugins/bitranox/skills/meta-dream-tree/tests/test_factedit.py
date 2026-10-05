@@ -408,13 +408,16 @@ def test_check_exits_1_for_a_hook_the_engine_would_refuse(tmp_path):
     assert "would REFUSE" in r.stdout
 
 
-def test_check_json_envelope_has_the_house_shape_and_ok_false_on_a_refusal(tmp_path):
+def test_check_json_envelope_has_the_house_shape_and_ok_true_on_a_no(tmp_path):
+    """ok means "ran without error" (true on 0 and 1, false only on 2): a check that answered
+    "the engine would refuse this" ran fine, and the answer lives in data.accepted."""
     eng = make_engine_dir(tmp_path)
     r = run_cli(["check", "--engine", str(eng), "--json", "--hook", over_hard_hook(eng)], tmp_path)
     assert r.returncode == 1
     env = json.loads(r.stdout)
     assert set(env) >= {"ok", "command", "data", "skipped"}
-    assert env["ok"] is False and env["command"] == "check"
+    assert env["ok"] is True and env["command"] == "check"
+    assert env["data"]["accepted"] is False
     assert env["data"]["hook_chars"] > env["data"]["hard_max"]
     assert env["skipped"]                      # body advisories were not checked
 
@@ -434,7 +437,9 @@ def test_an_absent_slug_is_a_no_answer_exit_1_not_an_error(tmp_path):
     r = run_cli(["show", "--engine", str(make_engine_dir(tmp_path)), "--json",
                  "--slug", "feedback-absent", "--from", str(level)], tmp_path)
     assert r.returncode == 1
-    assert json.loads(r.stdout)["error"].startswith("UnknownFact:")
+    env = json.loads(r.stdout)
+    assert env["error"].startswith("UnknownFact:")
+    assert env["ok"] is True and set(env) >= {"ok", "command", "data", "skipped"}
 
 
 def test_show_prints_the_hook_its_size_and_the_verb_the_engine_needs(tmp_path):
@@ -473,7 +478,8 @@ def test_apply_refuses_an_over_cap_hook_before_staging_or_invoking_anything(tmp_
     r = run_cli(["apply", "--engine", str(eng), "--json", "--slug", "feedback-demo",
                  "--from", str(level), "--hook-file", str(hookfile),
                  "--stage-dir", str(stage)], tmp_path)
-    assert r.returncode == 1
+    assert r.returncode == 2                   # a whole-action refusal, same code as the engine's
+    assert json.loads(r.stdout)["ok"] is False
     assert not stage.exists(), "a refusal must not leave staged files behind"
     assert not (eng.parent / "memory_engine.py.called").exists()
 
@@ -710,7 +716,7 @@ def test_an_unpinned_over_cap_stored_hook_is_still_refused(tmp_path):
     body.write_text("new prose\n", encoding="utf-8")
     r = run_cli(["apply", "--engine", str(eng), "--json", "--slug", "feedback-demo",
                  "--from", str(level), "--body-file", str(body)], tmp_path)
-    assert r.returncode == 1
+    assert r.returncode == 2
     assert not (eng.parent / "memory_engine.py.called").exists()
 
 
@@ -798,9 +804,9 @@ def test_an_unreadable_body_is_an_error_not_an_empty_body(tmp_path):
     assert r.returncode == 2, r.stdout + r.stderr
 
 
-# ---- the engine's own exit code: refused is 1, an engine error is 2 -----------------------------
+# ---- the engine's own exit code: 0 applied, anything else (its refusal included) is 2 ----------
 
-@pytest.mark.parametrize(("code", "expected"), [(1, 1), (2, 2), (3, 2)])
+@pytest.mark.parametrize(("code", "expected"), [(1, 2), (2, 2), (3, 2)])
 def test_the_engine_exit_code_maps_to_no_or_error(tmp_path, code, expected):
     eng = make_engine_dir(tmp_path)
     eng.write_text(f"import sys\nprint('engine says {code}')\nsys.exit({code})\n",
@@ -959,7 +965,7 @@ def test_a_refused_apply_keeps_the_default_stage_dir_and_names_it(tmp_path):
     hookfile.write_text("When the new thing happens, do the new thing.\n", encoding="utf-8")
     r = run_cli(["apply", "--engine", str(eng), "--slug", "feedback-demo",
                  "--from", str(level), "--hook-file", str(hookfile)], tmp_path)
-    assert r.returncode == 1, r.stdout + r.stderr
+    assert r.returncode == 2, r.stdout + r.stderr
     kept = list(sys_tmp(tmp_path).glob("factedit-*"))
     assert len(kept) == 1 and (kept[0] / "feedback-demo.hook.txt").is_file()
     assert str(kept[0]) in r.stdout, "a kept stage dir is only useful if the reader is told where"
@@ -1060,3 +1066,37 @@ def test_every_toolbox_row_s_launch_form_agrees_with_its_scripts_own_run_section
             mismatches.append((name, "%s's own Run section uses run-python.sh; the toolbox row "
                                       "for it does not mention run-python.sh at all" % script_path))
     assert not mismatches, mismatches
+
+
+# ---- a stage dir that cannot be created is an error (exit 2), not a traceback --------------------
+
+def test_an_unwritable_stage_dir_exits_2_with_an_envelope(tmp_path):
+    """--stage-dir under a regular FILE cannot be created on any platform. The OSError escaped
+    main (which caught only FactEditError) as a traceback exit 1 - the code for "refused"."""
+    eng = make_engine_dir(tmp_path)
+    level = make_tree(tmp_path)
+    blocker = tmp_path / "a-file"
+    blocker.write_text("x\n", encoding="utf-8")
+    hookfile = tmp_path / "h.txt"
+    hookfile.write_text("When X, do Y.\n", encoding="utf-8")
+    r = run_cli(["apply", "--engine", str(eng), "--json", "--slug", "feedback-demo",
+                 "--from", str(level), "--hook-file", str(hookfile),
+                 "--stage-dir", str(blocker / "stage")], tmp_path)
+    assert r.returncode == 2, r.stdout + r.stderr
+    assert "Traceback" not in r.stderr
+    env = json.loads(r.stdout)
+    assert env["ok"] is False and env["error"].startswith("StageFailed:")
+    assert set(env) >= {"ok", "command", "data", "skipped"}
+    assert not (eng.parent / "memory_engine.py.called").exists()
+
+
+def test_control_a_writable_stage_dir_still_applies(tmp_path):
+    eng = make_engine_dir(tmp_path)
+    level = make_tree(tmp_path)
+    hookfile = tmp_path / "h.txt"
+    hookfile.write_text("When X, do Y.\n", encoding="utf-8")
+    r = run_cli(["apply", "--engine", str(eng), "--json", "--slug", "feedback-demo",
+                 "--from", str(level), "--hook-file", str(hookfile),
+                 "--stage-dir", str(tmp_path / "stage")], tmp_path)
+    assert r.returncode == 0, r.stdout + r.stderr
+    assert json.loads(r.stdout)["ok"] is True

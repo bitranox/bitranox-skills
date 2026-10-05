@@ -255,7 +255,8 @@ def test_a_non_utf8_pointer_file_is_reported_and_the_rest_still_migrates(tmp_pat
     rep = MS.migrate([str(tmp_path)], apply=False)
     assert rep["legacy_lines"] == 2
     assert rep["unreadable"] == [str(other / "CLAUDE.local.md")]
-    assert MS.main(["--root", str(tmp_path)]) == 0
+    # 2, not 0: a file it could not scan is a part of the question it could not answer
+    assert MS.main(["--root", str(tmp_path)]) == 2
     out = capsys.readouterr().out
     assert "UNREADABLE" in out and str(other / "CLAUDE.local.md") in out
 
@@ -304,7 +305,7 @@ def test_a_failed_backup_aborts_the_apply_with_a_non_zero_exit(tmp_path, capsys)
         anchor.chmod(mode)
     assert (proj / "CLAUDE.local.md").read_text(encoding="utf-8") == before
     assert not us.body_path(anchor, "proj-fact").exists()
-    assert rc != 0
+    assert rc == 2                                  # a refusal to act: the apply did not run
     assert "backup" in capsys.readouterr().err.lower()
 
 
@@ -360,3 +361,44 @@ def test_stores_backups_and_the_audit_dir_are_still_not_walked(tmp_path, _scratc
         d.mkdir(parents=True)
         (d / "CLAUDE.local.md").write_text(block, encoding="utf-8")
     assert MS.find_pointer_files(str(tmp_path)) == []
+
+
+# ---- exit codes: 0 ran clean, 2 could not do (all of) its job ----------------------------------
+
+def test_cli_exits_0_on_a_clean_dry_run_and_apply(tmp_path):
+    """Control for the exit-2 cases below: a readable tree migrates with exit 0."""
+    _legacy_tree(tmp_path)
+    assert MS.main(["--root", str(tmp_path)]) == 0
+    assert MS.main(["--root", str(tmp_path), "--apply"]) == 0
+
+
+def test_a_nonexistent_root_exits_2_instead_of_reporting_zero_files(tmp_path, capsys):
+    rc = MS.main(["--root", str(tmp_path / "no-such-dir")])
+    captured = capsys.readouterr()
+    assert rc == 2
+    assert "no-such-dir" in captured.err
+    assert "DRY-RUN" not in captured.out
+
+
+def test_apply_exits_2_when_a_tree_was_refused(tmp_path, capsys):
+    anchor, proj = _legacy_tree(tmp_path)
+    bad = anchor / "bad"
+    bad.mkdir()
+    (bad / "CLAUDE.local.md").write_bytes(b"caf\xe9 " + us.LEGACY_INDEX_BEGIN.encode("ascii"))
+    rc = MS.main(["--root", str(tmp_path), "--apply"])
+    assert rc == 2
+    assert "REFUSED" in capsys.readouterr().out
+
+
+def test_an_oserror_mid_apply_exits_2_and_still_names_the_backup(tmp_path, capsys):
+    """A write that fails after the backup was taken escaped as a traceback (exit 1) and the
+    report - including the backup to restore from - was never printed. A held level lock is a
+    real OSError (TimeoutError) on every platform; only a STALE lock is reclaimed."""
+    anchor, proj = _legacy_tree(tmp_path)
+    Path(str(proj / "CLAUDE.local.md") + ".lock").write_text("held\n", encoding="utf-8")
+    rc = MS.main(["--root", str(tmp_path), "--apply"])
+    captured = capsys.readouterr()
+    assert rc == 2
+    assert "Traceback" not in captured.err
+    assert "! error:" in captured.err and "backup" in captured.err.lower()
+    assert "backup:" in captured.out

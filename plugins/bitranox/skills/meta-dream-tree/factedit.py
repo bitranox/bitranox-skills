@@ -47,11 +47,14 @@ Run (from the plugin root):
 script itself is run under `uv run` (see below), and the plugin's run-python.sh launcher, which
 the dream passes use, works identically.
 
-Exit codes: 0 = yes (found / would be accepted / applied), 1 = no (no such fact / the engine
-refuses this hook / the engine refused the write with its own exit 1), 2 = error (no engine, an
-unreadable or non-UTF-8 tree or input file, an interpreter that cannot be launched, bad
-arguments, or the engine exiting with anything but 0 or 1). Advisories are PRODUCT, so they
-ride in the envelope's `data`; operational warnings go to stderr and never into stdout.
+Exit codes: 0 = yes (found / would be accepted / applied), 1 = no (no such fact / `check`: the
+engine would refuse this hook), 2 = could not run (no engine, an unreadable or non-UTF-8 tree or
+input file, a stage dir that cannot be written, an interpreter that cannot be launched, bad
+arguments, `apply` refusing the hook before the engine runs, or the engine exiting non-zero - a
+refusal of the whole write included). The `--json` envelope `{ok, command, data, skipped}` is
+printed on every exit, and `ok` means "ran without error": true on 0 and 1, false only on 2.
+Advisories are PRODUCT, so they ride in the envelope's `data`; operational warnings go to stderr
+and never into stdout.
 """
 from __future__ import annotations
 
@@ -131,6 +134,10 @@ class Unreadable(FactEditError):
 
 class EngineLaunchFailed(FactEditError):
     """The interpreter given to run the engine could not be started at all."""
+
+
+class StageFailed(FactEditError):
+    """The stage dir (--stage-dir, or the temp dir) or a staged file could not be written."""
 
 
 @dataclass(frozen=True)
@@ -416,9 +423,12 @@ def stage_text(stage: Path, name: str, text: str) -> Path:
     substitution the guard denies.
     """
     stage = Path(stage)
-    stage.mkdir(parents=True, exist_ok=True)
     path = stage / name
-    path.write_text(text if text.endswith("\n") else text + "\n", encoding="utf-8")
+    try:
+        stage.mkdir(parents=True, exist_ok=True)
+        path.write_text(text if text.endswith("\n") else text + "\n", encoding="utf-8")
+    except OSError as exc:
+        raise StageFailed(f"cannot write the staged file {path}: {exc}") from exc
     return path
 
 
@@ -617,7 +627,7 @@ def cmd_check(args, rules: EngineRules) -> int:
                else "the engine would REFUSE this hook")]
     text += [f"! refused: {line}" for line in verdict.refusals]
     text += [f"~ advisory: {line}" for line in verdict.advisories]
-    _emit(args.as_json, "check", verdict.accepted, data, skipped, "\n".join(text))
+    _emit(args.as_json, "check", True, data, skipped, "\n".join(text))
     return 0 if verdict.accepted else 1
 
 
@@ -657,13 +667,12 @@ def cmd_apply(args, rules: EngineRules) -> int:
         _emit(args.as_json, "apply", False, data, ["the engine was not invoked"],
               "\n".join([f"! refused: {line}" for line in verdict.refusals]
                         + ["the engine was not invoked; nothing was staged or written"]))
-        return 1
+        return 2
 
     # A stage dir this call CREATED is this call's to remove once the engine has taken the files;
     # one the caller named with --stage-dir is the caller's, and is never touched.
     own_stage = not args.stage_dir
-    stage = Path(args.stage_dir) if args.stage_dir else Path(
-        tempfile.mkdtemp(prefix="factedit-"))
+    stage = Path(args.stage_dir) if args.stage_dir else _make_temp_stage()
     skipped: list[str] = []
     hook_path = None
     if keep_stored_hook:
@@ -714,6 +723,14 @@ def cmd_apply(args, rules: EngineRules) -> int:
     return _exit_for_engine(proc.returncode)
 
 
+def _make_temp_stage() -> Path:
+    """A fresh factedit-* dir in the system temp dir; StageFailed (exit 2) when none can be made."""
+    try:
+        return Path(tempfile.mkdtemp(prefix="factedit-"))
+    except OSError as exc:
+        raise StageFailed(f"cannot create a stage dir in the temp dir: {exc}") from exc
+
+
 def _remove_stage(stage: Path, skipped: list[str]) -> bool:
     """Remove a stage dir this call created, now that the engine has the files. True if gone.
 
@@ -739,14 +756,14 @@ def _run_engine(argv: list[str]) -> subprocess.CompletedProcess:
 
 
 def _exit_for_engine(returncode: int) -> int:
-    """0 applied; 1 the engine REFUSED the write (its own exit 1); 2 anything else.
+    """0 applied; 2 for anything else.
 
-    The engine exits 2 on an argparse usage error and non-zero on a crash. Folding those into 1
-    would report "the engine said no" for a call it never got to judge.
+    The engine exits 2 when it refuses the whole write (a collision, a pinned target, an over-cap
+    hook) as well as on a usage error or an input it could not read, and non-zero on a crash.
+    None of those is a "no" to a question `apply` asked: the write did not happen, so the call
+    could not run. The engine's own code and stdout ride in the envelope for the reason.
     """
-    if returncode in (0, 1):
-        return returncode
-    return 2
+    return 0 if returncode == 0 else 2
 
 
 # ---- CLI ----------------------------------------------------------------------------------------
@@ -811,13 +828,14 @@ def main(argv=None) -> int:
         rules = load_rules(find_engine(args.engine))
         return _VERBS[args.cmd](args, rules)
     except FactEditError as exc:
-        payload = {"ok": False, "command": args.cmd, "data": None,
+        code = 1 if isinstance(exc, UnknownFact) else 2
+        payload = {"ok": code != 2, "command": args.cmd, "data": None,
                    "skipped": [], "error": f"{type(exc).__name__}: {exc}"}
         if args.as_json:
             print(json.dumps(payload, indent=2))
         else:
             print(f"error: {exc}", file=sys.stderr)
-        return 1 if isinstance(exc, UnknownFact) else 2
+        return code
 
 
 if __name__ == "__main__":

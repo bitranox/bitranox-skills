@@ -110,13 +110,13 @@ def test_relocate_into_a_tree_without_the_slug_still_works(tmp_path):
     assert "MOVER BODY" in _body(top2, "mover") and "mover" in _slugs(sub2)
 
 
-def test_cli_relocate_refusal_exits_one(tmp_path, capsys):
+def test_cli_relocate_refusal_exits_two(tmp_path, capsys):
     top1, sub1 = _tree(tmp_path, "tree1")
     top2, sub2 = _tree(tmp_path, "tree2")
     E.add_or_update_entry(top2, "Shared name", "When T2, keep me", body="TREE2 ORIGINAL FACT")
     E.add_or_update_entry(sub1, "Shared name", "When T1, other", body="TREE1 FACT")
     rc = E.main(["relocate", "--from-level", sub1, "--to-level", sub2, "--slug", "shared-name"])
-    assert rc == 1 and "refused" in capsys.readouterr().out
+    assert rc == 2 and "refused" in capsys.readouterr().out
 
 
 # ---- a caller-supplied slug is a FILENAME: it must not carry a path -----------------------------
@@ -141,11 +141,11 @@ def test_add_accepts_the_slug_shapes_real_stores_carry(tmp_path, good):
     assert us.body_path(top, good).is_file()
 
 
-def test_cli_add_refuses_a_traversal_slug_with_exit_one(tmp_path, capsys):
+def test_cli_add_refuses_a_traversal_slug_with_exit_two(tmp_path, capsys):
     top, sub = _tree(tmp_path, "tree")
     rc = E.main(["add", "--proj", sub, "--title", "t", "--hook", "When x, do y",
                  "--body", "clobbered", "--slug", "../../CLAUDE"])
-    assert rc == 1 and "refused" in capsys.readouterr().out
+    assert rc == 2 and "refused" in capsys.readouterr().out
     assert (Path(top) / "CLAUDE.md").read_text(encoding="utf-8") == "x\n"
 
 

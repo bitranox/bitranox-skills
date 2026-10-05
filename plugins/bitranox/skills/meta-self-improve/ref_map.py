@@ -15,7 +15,9 @@ sitting BELOW the level you are lifting to is what will be stranded.
 
 Exit codes are format-independent: 0 every slug mapped cleanly, 1 at least one slug is unknown or
 has a dangling ref, 2 the map could not be built at all (no store under the root, or a level file
-or fact body that cannot be read - a partial map would under-report inbound refs).
+or fact body that cannot be read - a partial map would under-report inbound refs). `--json` prints
+the envelope `{ok, command, data, skipped}` on every exit; `ok` means "ran without error", so it is
+true on 0 and 1 and false only on 2.
 
 Refs resolve exactly as the engine resolves them (`[[slug|label]]`, `[[type:slug]]`, any case,
 `_`/`-`/whitespace as one separator), and each fact's pointer hook is scanned beside its body.
@@ -172,21 +174,19 @@ def main(argv=None, out=None, err=None) -> int:
     parser.add_argument("--json", action="store_true", help="machine-readable envelope")
     args = parser.parse_args(argv)
 
+    def _fail(error):
+        if args.json:
+            print(json.dumps({"ok": False, "command": "ref-map", "data": {"entries": []},
+                              "skipped": [], "error": error}, indent=2), file=out)
+        return 2
+
     root = Path(args.root)
     if not root.is_dir():
         print("ref_map: root does not exist: %s" % root, file=err)
-        if args.json:
-            print(json.dumps({"ok": False, "command": "ref-map",
-                              "data": {"entries": []},
-                              "error": "root does not exist: %s" % root}, indent=2), file=out)
-        return 2
+        return _fail("root does not exist: %s" % root)
     if not (root / ".claude-memory" / "facts").is_dir():
         print("ref_map: no .claude-memory/facts under %s - is this the anchor?" % root, file=err)
-        if args.json:
-            print(json.dumps({"ok": False, "command": "ref-map", "data": {"entries": []},
-                              "error": "no .claude-memory/facts under %s" % root}, indent=2),
-                  file=out)
-        return 2
+        return _fail("no .claude-memory/facts under %s" % root)
 
     # The one place a read failure becomes exit 2. TreeWalkError is not an OSError, so catching
     # only OSError here let an undecodable level file escape as a traceback that exited 1 - the
@@ -195,12 +195,10 @@ def main(argv=None, out=None, err=None) -> int:
         entries, problems = build(root, args.slugs)
     except (OSError, ME.TreeWalkError) as exc:
         print("ref_map: cannot read %s - the map would be incomplete" % exc, file=err)
-        if args.json:
-            print(json.dumps({"ok": False, "command": "ref-map", "data": {"entries": []},
-                              "error": "cannot read: %s" % exc}, indent=2), file=out)
-        return 2
+        return _fail("cannot read: %s" % exc)
     if args.json:
-        print(json.dumps({"ok": not problems, "command": "ref-map",
+        # ok = "ran without error": an unknown slug or a dangling ref is the answer (exit 1)
+        print(json.dumps({"ok": True, "command": "ref-map",
                           "data": {"entries": entries}, "skipped": []}, indent=2), file=out)
     else:
         render(entries, out)

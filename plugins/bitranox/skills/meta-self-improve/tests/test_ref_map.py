@@ -92,10 +92,12 @@ def test_an_unknown_slug_exits_1_and_says_so_rather_than_reporting_an_empty_map(
 
 
 def test_json_stays_parseable_on_the_failure_path(tree):
+    """ok means "ran without error": an unknown slug is an answer (exit 1), so ok stays true."""
     code, out, _ = _run(["--root", str(tree), "no-such-slug", "--json"])
     assert code == 1
     payload = json.loads(out)
-    assert payload["ok"] is False
+    assert payload["ok"] is True
+    assert set(payload) >= {"ok", "command", "data", "skipped"}
 
 
 def test_a_dangling_outbound_ref_is_reported_as_dangling(tmp_path):
@@ -140,7 +142,9 @@ def test_a_missing_root_is_an_error_not_an_empty_map(tmp_path):
 def test_warnings_go_to_stderr_so_json_stays_parseable(tmp_path):
     code, out, err = _run(["--root", str(tmp_path / "nope"), "a", "--json"])
     assert code == 2
-    json.loads(out)
+    payload = json.loads(out)
+    assert payload["ok"] is False
+    assert set(payload) >= {"ok", "command", "data", "skipped"}        # the house envelope
     assert err.strip()
 
 
@@ -212,6 +216,7 @@ def test_a_plain_dir_root_without_a_store_exits_2_with_a_json_envelope(tmp_path)
     assert code == 2
     payload = json.loads(out)
     assert payload["ok"] is False and ".claude-memory/facts" in payload["error"]
+    assert set(payload) >= {"ok", "command", "data", "skipped"}
     assert "anchor" in err
 
 

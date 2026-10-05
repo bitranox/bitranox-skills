@@ -351,12 +351,12 @@ def test_add_roundtrips_through_the_resolver(tmp_path):
     assert got[0].body.startswith("---\nname: fact\n") and got[0].body.endswith("the body")
 
 
-def test_cli_add_collision_refusal_exit_one(tmp_path, capsys):
+def test_cli_add_collision_refusal_exit_two(tmp_path, capsys):
     anchor, proj = _anchored_tree(tmp_path)
     E.add_or_update_entry(str(tmp_path / "tree"), "T", "h", body="B")
     rc = E.main(["add", "--proj", proj, "--title", "T", "--hook", "h", "--body", "other"])
     out = capsys.readouterr().out
-    assert rc == 1 and "! refused:" in out and "t-2" in out
+    assert rc == 2 and "! refused:" in out and "t-2" in out
 
 
 def test_cli_add_warns_over_hook_budget(tmp_path, capsys, proj):
@@ -366,11 +366,11 @@ def test_cli_add_warns_over_hook_budget(tmp_path, capsys, proj):
     assert rc == 0 and "~ warning: hook is" in out                  # advisory, exit stays 0
 
 
-def test_cli_add_over_hard_cap_refusal_exit_one(tmp_path, capsys, proj):
+def test_cli_add_over_hard_cap_refusal_exit_two(tmp_path, capsys, proj):
     over = "x" * (us.HOOK_HARD_MAX + 1)
     rc = E.main(["add", "--proj", proj, "--title", "Over", "--hook", over, "--body", "B"])
     out = capsys.readouterr().out
-    assert rc == 1 and "! refused:" in out and "hard cap" in out
+    assert rc == 2 and "! refused:" in out and "hard cap" in out
     assert E.read_store(proj)[1] == []                              # refused BEFORE any write
 
 
@@ -672,7 +672,7 @@ def test_cli_move_success_and_refusal(tmp_path, capsys):
     assert rc == 0 and "moved" in out
     rc = E.main(["move", "--from-level", proj, "--to-level", mid, "--slug", "f"])   # gone now
     out = capsys.readouterr().out
-    assert rc == 1 and "! refused:" in out
+    assert rc == 2 and "! refused:" in out          # a whole-action refusal (NU-1)
 
 
 # ---- lint --tree: voice/frame sweep (defect J) ---------------------------------------------------
@@ -688,7 +688,7 @@ def test_lint_tree_reports_over_cap_triggerless_and_unlabelled(tmp_path, capsys)
     us.add_pointer(anchor, slug="huge", title="Huge", hook="When " + ("x" * 600) + " do z")
     rc = E.main(["lint", "--tree", proj])
     out = capsys.readouterr().out
-    assert rc == 0
+    assert rc == 1                                  # a check that found something answers "no"
     assert "hook over HARD cap" in out and "huge" in out
     assert "hook missing trigger" in out and "bad" in out
     assert "body missing the **Why:**/**How to apply:** labels" in out
@@ -925,6 +925,57 @@ def test_cli_add_stays_quiet_when_the_body_records_no_repeat(proj, capsys):
                  "When it breaks, fix it.", "--body", "A plain fact with no repeat marker."])
     out = capsys.readouterr().out
     assert rc == 0 and "recurrence" not in out
+
+
+DECIDED_BODY = ("The thing broke again. recurrence: 5 (last 2026-08-23).\n\n"
+                "**Escalation decided 2026-08-23 (USER): no guard and no jig - the ladder stops "
+                "here deliberately.** Do not re-propose one.")
+
+
+def test_cli_add_does_not_re_propose_an_escalation_the_user_already_decided(proj, capsys):
+    """A body recording the USER's escalation decision ends the ladder: telling the reader to
+    propose a guard or jig 'in THIS turn' contradicts the fact it is writing."""
+    rc = E.main(["add", "--proj", proj, "--title", "Decided", "--hook",
+                 "When it breaks, fix it.", "--body", DECIDED_BODY])
+    out = capsys.readouterr().out
+    assert rc == 0
+    assert "PROPOSE" not in out and "GUARD" not in out
+    assert "recurrence 5" in out and "escalation" in out.lower()     # still says why it is quiet
+
+
+def test_control_a_decision_by_someone_else_than_the_user_still_escalates(proj, capsys):
+    body = DECIDED_BODY.replace("(USER)", "(agent)")
+    rc = E.main(["add", "--proj", proj, "--title", "Undecided", "--hook",
+                 "When it breaks, fix it.", "--body", body])
+    out = capsys.readouterr().out
+    assert rc == 0 and "PROPOSE" in out and "GUARD" in out
+
+
+def test_cli_add_at_an_excluded_altitude_exits_2_without_a_traceback(_isolated_home, capsys):
+    """HOME is never a memory level; the refusal was an uncaught ValueError (traceback, exit 1)."""
+    rc = E.main(["add", "--proj", str(_isolated_home), "--title", "T", "--hook",
+                 "When x, do y.", "--body", "b"])
+    captured = capsys.readouterr()
+    assert rc == 2
+    assert "excluded altitude" in captured.out + captured.err
+    assert not (_isolated_home / "CLAUDE.local.md").exists()
+
+
+def test_cli_set_scope_at_an_excluded_altitude_exits_2(_isolated_home, capsys):
+    rc = E.main(["set-scope", "--proj", str(_isolated_home), "--scope", "WHAT: x"])
+    assert rc == 2
+    assert not (_isolated_home / "CLAUDE.local.md").exists()
+
+
+def test_cli_add_exits_2_when_the_level_lock_is_held(proj, capsys):
+    """A lock another writer holds past the timeout is 'could not run', not 'refused'. A fresh
+    lock file is a real holder (only a STALE one is reclaimed), so this waits out the timeout."""
+    Path(proj, "CLAUDE.local.md.lock").write_text("held\n", encoding="utf-8")
+    rc = E.main(["add", "--proj", proj, "--title", "T", "--hook", "When x, do y.",
+                 "--body", "b"])
+    err = capsys.readouterr().err
+    assert rc == 2
+    assert "! error:" in err and "contention" in err
 
 
 def test_cli_add_slug_targets_existing_identity(proj, capsys):

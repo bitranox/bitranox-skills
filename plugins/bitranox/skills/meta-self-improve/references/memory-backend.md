@@ -63,7 +63,7 @@ Each altitude's `CLAUDE.local.md` carries ONE managed, fenced pointer block:
   the one that matters). The HARD cap is 500 chars and `add` REFUSES a longer hook rather than
   truncating it, because every pointer line is always-loaded context and a silently cut one still
   reads like a complete instruction. The refusal is checked BEFORE the lock, so it is atomic: the
-  CLI prints `! refused:` and exits 1, no body file and no pointer line are written, and on an
+  CLI prints `! refused:` and exits 2, no body file and no pointer line are written, and on an
   update the existing entry keeps its old hook. Nothing needs cleaning up - rewrite the hook, move
   the surplus detail into the body, and re-run `add`; do not delete detail to fit. The hook must
   stay self-sufficient: keep the load-bearing names, paths, flags, and numbers in it, even if that
@@ -155,8 +155,18 @@ Never hand-edit a pointer block or a body - a PreToolUse guard denies it (bypass
 
 **Fail-loud contract:** run engine calls with `BITRANOX_RUN_PYTHON_STRICT=1`, require the command's
 success line in the output, and ABORT-AND-SHOW on any miss (a refused move prints `! refused:` and
-exits 1; a colliding add prints `! refused:` with a suggested slug). Never continue past a silent or
+exits 2; a colliding add prints `! refused:` with a suggested slug). Never continue past a silent or
 malformed engine result.
+
+**Engine exit codes:** 0 done. 1 only from `lint --tree`, when it reports anything. 2 whenever the
+action did not happen, and the printed line says which kind: `! refused: <why>` on stdout when the
+engine declined the whole write (collision, hook over the hard cap, empty body on a new fact,
+pinned target, unknown or invalid slug, excluded altitude, a refused move/relocate/rename/retitle;
+nothing is written), or `! error: <why>` on stderr when it could not run (a usage error, an input
+file it could not read or decode, a store it could not read, a level lock held past its timeout, a
+failed write). `heal` exits 2 when it left a level it could not read untouched. A refusal is fixed
+by changing the input (rewrite the hook, pick the suggested slug, use `amend-pinned`); an error by
+fixing the file, path or permissions it names.
 
 **Pass a hook or a scope descriptor as a FILE, never through a shell substitution.** A hook runs to
 500 chars and a scope descriptor is multi-line, so the tempting form is `--hook "$(cat f)"` - but
@@ -164,8 +174,8 @@ that is a command substitution the SHELL evaluates, and the plugin's own `shell-
 denies it (it cannot tell a benign `cat` from prose that executes). The denial also discards the
 WHOLE pending command, so a heredoc writing that file in the same call dies with it and the next
 call fails on a missing input, pointing at the wrong cause. Use `--hook-file` / `--scope-file`
-instead (the file wins if both forms are given, matching `--body-file`); either verb refuses with
-`! refused: pass --X or --X-file` when neither is present, and `set-scope` refuses BEFORE it
+instead (the file wins if both forms are given, matching `--body-file`); either verb stops with
+`! error: pass --X or --X-file` (exit 2) when neither is present, and `set-scope` stops BEFORE it
 scaffolds the level, so a rejected call leaves nothing behind.
 
 `add` semantics: upserts by slug (title-derived unless `--slug` targets an existing identity),
@@ -221,8 +231,10 @@ target drags its own refs up with it.
 `heal` runs every session (skip-fast when healthy), is
 CHAIN-scoped and normalizes drifted grammar only; a pointer whose body is missing is REPORTED, never
 fabricated - it does NOT detect cross-sibling duplicate pointers, which is `--check-tree`'s job.
+A level `heal` cannot read is reported and left untouched, and the run then exits 2.
 `lint --tree` is the read-only voice/style sweep (over-hard-cap hooks, trigger-less hooks, bodies
-without the Why/How labels - a style advisory, not a backlog to clear).
+without the Why/How labels - a style advisory, not a backlog to clear). It exits 1 when it reports
+anything and 0 on a clean tree; the 1 is the answer of a check, not a failure to act on.
 
 ## Keeping it lean
 

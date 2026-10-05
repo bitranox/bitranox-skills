@@ -221,4 +221,4 @@ def test_cli_rename_refusal_exits_nonzero(tmp_path, capsys):
 
     rc = E.main(["rename", "--level", proj, "--slug", "absent", "--to-slug", "x"])
 
-    assert rc == 1 and "! refused:" in capsys.readouterr().out
+    assert rc == 2 and "! refused:" in capsys.readouterr().out
