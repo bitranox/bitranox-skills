@@ -667,6 +667,101 @@ def test_the_authored_pass_does_not_use_the_shell_only_rules():
     assert N.match_authored("git push origin master") is None
 
 
+# ---- a COMPUTED-SPAN edit: two found anchors and a slice spliced back ----------------------------
+# The other spelling of anchor_edit's chore. `s[:a] + new + s[b:]` after two `.index()`/`.find()`
+# calls carries no `.replace(`, so the exact-text rule above never saw it - and it is the more
+# dangerous one: a wrong end anchor or a `.find` returning -1 deletes a region silently and the
+# file still parses. Priced over the transcript corpus: its reason is given on 262 of 106,293 Bash
+# calls, 122 of them calls the hook said nothing about before, and on 22 of 6,668 Write bodies.
+
+_SPAN_IN_A_HEREDOC = (
+    "python3 - %s\n"
+    "from pathlib import Path\n"
+    "p = Path('src/layout.py')\n"
+    "s = p.read_text(encoding='utf-8')\n"
+    "a = s.index('def natural_widths(')\n"
+    "b = s.index('def render(')\n"
+    "p.write_text(s[:a] + NEW + s[b:], encoding='utf-8')\n"
+    "PY\n" % _OPEN
+)
+
+
+# The exact-text rule's reason mentions "a computed span" too, so a test keyed on the word "span"
+# passes on THAT rule; the span rule is told apart by its own reason.
+_SPAN_REASON = "splicing a file region between two found anchors"
+
+
+def test_a_computed_span_edit_in_a_heredoc_is_routed_to_anchor_edit():
+    hit = N.match_authored(shell_text.heredoc_bodies(_SPAN_IN_A_HEREDOC))
+    assert hit is not None and hit[0] == "anchor_edit"
+    assert hit[1].startswith(_SPAN_REASON) and "replace-span" in hit[1]
+
+
+def test_a_computed_span_edit_written_as_a_script_is_routed_to_anchor_edit():
+    script = ("text = path.read_text()\nstart = text.find('# BEGIN')\n"
+              "end = text.find('# END', start)\n"
+              "path.write_text(text[:start] + block + text[end + len('# END'):])\n")
+    hit = N.match_tool(script, "Write")
+    assert hit is not None and hit[1].startswith(_SPAN_REASON)
+
+
+def test_a_script_doing_both_edits_gets_the_span_reason():
+    script = ("s = p.read_text()\na = s.index('A')\nb = s.index('B')\n"
+              "s = s.replace('x', 'y')\np.write_text(s[:a] + new + s[b:])\n")
+    assert N.match_authored(script)[1].startswith(_SPAN_REASON)
+
+
+@pytest.mark.parametrize("text", [
+    # one found anchor and a slice, nothing written back: reading, not editing
+    "i = s.index('x')\nj = s.index('y')\nprint(s[:i] + '|' + s[j:])\n",
+    # two finds and a write, but no splice
+    "a = s.find('x')\nb = s.find('y')\nout.write(str(b - a))\n",
+    # prose describing the trap
+    "Never splice s[:a] + new + s[b:] after two index() calls; write it with anchor_edit.\n",
+])
+def test_the_span_rule_needs_the_whole_shape(text):
+    hit = N.match_authored(text)
+    assert hit is None or not hit[1].startswith(_SPAN_REASON), hit
+
+
+def test_a_large_authored_file_is_matched_in_linear_time():
+    # The authored-text rules run on every Write and Edit. An unanchored `(?=.*X)` lookahead is
+    # retried at every offset, so a 100 KB file without the shape cost seconds per call.
+    import time
+    text = "value = compute(item)\n" * 40_000                     # ~880 KB, no match anywhere
+    began = time.monotonic()
+    assert N.match_authored(text) is None
+    assert time.monotonic() - began < 2.0
+
+
+# ---- a hand-rolled plan dry-run: pulling the python fences out of a plan -------------------------
+# The chore plan_codecheck replaces: a driver that regex-extracts a plan's ```python blocks, writes
+# them somewhere and runs the checks. Each copy carried the previous one's quirks.
+
+_FENCE = "`" * 3
+
+
+@pytest.mark.parametrize("text", [
+    "blocks = re.findall(r\"%spython\\n(.*?)%s\", plan, re.S)\n" % (_FENCE, _FENCE),
+    "BLOCK = re.compile(r\"%spython\\n(.*?)%s\", re.S)\n" % (_FENCE, _FENCE),
+    "j = plan.index(\"%spython\\n\", i) + len(\"%spython\\n\")\n" % (_FENCE, _FENCE),
+])
+def test_a_driver_extracting_a_plans_python_blocks_is_routed_to_plan_codecheck(text):
+    assert N.match_authored(text)[0] == "plan_codecheck"
+
+
+@pytest.mark.parametrize("text", [
+    # a plan that merely CONTAINS python blocks is not the extraction chore
+    "- [ ] **Step 1: Write the failing test**\n\n%spython\ndef test_x():\n    assert f()\n%s\n"
+    % (_FENCE, _FENCE),
+    # a markdown fence matcher that is not about python blocks
+    "FENCE = re.compile(r\"^ {0,3}(%s|~~~)(.*)$\")\n" % _FENCE,
+])
+def test_the_plan_rule_needs_the_extraction_not_just_a_fence(text):
+    hit = N.match_authored(text)
+    assert hit is None or hit[0] != "plan_codecheck", hit
+
+
 def test_the_command_reading_keeps_precedence_over_the_authored_one():
     # the command rules are the shipped, measured behaviour; the authored pass only extends reach
     command = _REPLACE_IN_A_HEREDOC + "pgrep -f something\n"
