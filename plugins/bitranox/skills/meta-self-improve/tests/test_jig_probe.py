@@ -239,6 +239,10 @@ def test_report_on_an_empty_log_exits_1(tmp_path, capsys):
     log = tmp_path / "jig.jsonl"
     log.write_text("", encoding="utf-8")
     assert jp.main(["report", "--log", str(log), "--json"]) == 1
+    env = json.loads(capsys.readouterr().out)
+    # the run worked and the answer is "nothing": ok means "ran without error", false only on 2
+    assert env["ok"] is True and set(env) >= {"ok", "command", "data", "skipped"}
+    assert "no rows" in env["error"]
 
 
 # ---- end to end through run(), against a planted corpus and a classifier at the real seam ------
@@ -280,11 +284,16 @@ def test_run_end_to_end_logs_one_row_per_call(tmp_path, corpus, fake_answers, mo
     assert len((tmp_path / "log.jsonl").read_text(encoding="utf-8").splitlines()) == 2
 
 
-def test_a_control_failure_exits_3_and_logs_nothing(tmp_path, corpus, fake_answers, monkeypatch,
+def test_a_control_failure_exits_2_and_logs_nothing(tmp_path, corpus, fake_answers, monkeypatch,
                                                     capsys):
+    """A failed control means the instrument could not answer: exit 2 like any could-not-run,
+    with the reason kept apart in the envelope so it is never mistaken for a setup error."""
     monkeypatch.setattr(jp, "get_classifier",
                         lambda *a, **k: fake_answers({jp.CHOICE_ID: "procsig"}))
-    assert _run_cli(tmp_path, corpus, "--limit", "5") == 3
+    assert _run_cli(tmp_path, corpus, "--limit", "5") == 2
+    env = json.loads(capsys.readouterr().out)
+    assert env["ok"] is False and env["data"] == {"inconclusive": True, "control_failed": True}
+    assert env["error"].startswith("control failed:")
     assert not (tmp_path / "log.jsonl").exists()
 
 

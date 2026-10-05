@@ -33,9 +33,11 @@ A classifier request that FAILS (an outage, a timeout) is never read as Jev sayi
 is logged with the failure's reason and counted as `unanswered`, outside the four-way comparison,
 and a run or report holding any such row exits 2.
 
-Exit codes: 0 fine, 1 nothing to report (an empty corpus or log), 2 usage, IO or classifier error
-(no key, a failed request, a missing root, a bad flag, a malformed log line, an unexpected crash),
-3 a control failed (the instrument is wrong, so no number from the run may be read).
+Exit codes: 0 fine, 1 nothing to report (an empty corpus or log), 2 could not answer: usage, IO or
+classifier error (no key, a failed request, a missing root, a bad flag, a malformed log line, an
+unexpected crash) or a control that failed (the instrument is wrong, so no number from the run may
+be read; the envelope says so with data.inconclusive and data.control_failed, and the error starts
+"control failed:"). The JSON envelope is printed on every exit; its `ok` is false only on exit 2.
 """
 
 import argparse
@@ -434,9 +436,10 @@ def _parse(argv):
     return p.parse_args(argv)
 
 
-def _fail(command, exc, code):
-    # ensure_ascii (the default) on stdout: a cp1252 console cannot encode most of Unicode.
-    print(json.dumps(_envelope(False, command, error=str(exc))))
+def _fail(command, exc, code, data=None):
+    # ok means "ran without error", so it is false only on exit 2; an exit-1 "nothing to report"
+    # ran fine. ensure_ascii (the default) on stdout: a cp1252 console cannot encode most of Unicode.
+    print(json.dumps(_envelope(code != 2, command, data, error=str(exc))))
     return code
 
 
@@ -445,7 +448,9 @@ def main(argv=None):
     try:
         outcome = {"size": _size, "run": _run, "report": _report}[args.cmd](args)
     except ControlFailed as exc:
-        return _fail(args.cmd, exc, 3)
+        # Could not answer, so 2 like any could-not-run; the reason stays apart in the data.
+        return _fail(args.cmd, "control failed: %s" % exc, 2,
+                     {"inconclusive": True, "control_failed": True})
     except NothingToReport as exc:
         return _fail(args.cmd, exc, 1)
     except (ClassifierUnavailable, ClassifierFailed, OSError, ValueError) as exc:
