@@ -107,14 +107,14 @@ consequences that a plain library does not have:
 
 ## Common mistakes
 
-| Mistake                                              | Fix                                                                    |
-|------------------------------------------------------|------------------------------------------------------------------------|
-| `./rename.sh lib_wombat` (passing the name as arg)   | Name the DIRECTORY; run `./rename.sh` with no arg.                     |
-| Skipping `./rename_dry.sh`                           | Always preview first; the dry-run is the safety check.                 |
-| `reset_git_history.sh` with the template as `origin` | It force-pushes to the first remote; `git remote remove origin` first. |
-| Keeping the `master` branch                          | New repos use `main` (`git branch -m master main`).                    |
-| Editing `.github/*`                                  | Template-managed; change CI in `default_cicd_public` (`github.com/bitranox/default_cicd_public`) instead.          |
-| Hand-editing the `Makefile` or version in code       | Makefile is bmk-generated; bump only `pyproject.toml`.                 |
+| Mistake                                              | Fix                                                                                                       |
+|------------------------------------------------------|-----------------------------------------------------------------------------------------------------------|
+| `./rename.sh lib_wombat` (passing the name as arg)   | Name the DIRECTORY; run `./rename.sh` with no arg.                                                        |
+| Skipping `./rename_dry.sh`                           | Always preview first; the dry-run is the safety check.                                                    |
+| `reset_git_history.sh` with the template as `origin` | It force-pushes to the first remote; `git remote remove origin` first.                                    |
+| Keeping the `master` branch                          | New repos use `main` (`git branch -m master main`).                                                       |
+| Editing `.github/*`                                  | Template-managed; change CI in `default_cicd_public` (`github.com/bitranox/default_cicd_public`) instead. |
+| Hand-editing the `Makefile` or version in code       | Makefile is bmk-generated; bump only `pyproject.toml`.                                                    |
 
 ## Reference
 
