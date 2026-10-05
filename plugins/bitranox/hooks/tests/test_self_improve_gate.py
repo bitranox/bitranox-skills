@@ -565,7 +565,9 @@ def test_a_neutral_tool_using_turn_does_not_block(tmp_path, monkeypatch, capsys)
 @pytest.mark.parametrize("noise", [
     _rec("user", "Stop hook feedback: a learning signal was detected", isMeta=True),
     _rec("user", [{"type": "text", "text": "Base directory for this skill: /x\n# y"}], isMeta=True),
-    _rec("user", "<command-name>/plugin</command-name> <command-args>update</command-args>"),
+    # A bare command (no arguments) is not typed prose; one WITH arguments is (below).
+    _rec("user", "<command-name>/reload-plugins</command-name> <command-args></command-args>"),
+    _rec("user", "<local-command-stdout>Reloaded</local-command-stdout>"),
     _rec("user", "<task-notification> agent finished </task-notification>",
          origin={"kind": "task-notification"}),
 ])
@@ -574,6 +576,31 @@ def test_injected_user_records_do_not_hide_the_human_prompt(tmp_path, monkeypatc
     run_gate(monkeypatch, tmp_path, {"transcript_path": tp, "cwd": str(tmp_path),
                                      "last_assistant_message": "ok"})
     assert decision_of(capsys) == "block"
+
+
+GOAL_CMD = ("<command-name>/goal</command-name>\n            <command-message>goal</command-message>"
+            "\n            <command-args>%s</command-args>")
+
+
+def test_a_slash_command_with_arguments_is_the_prompt_the_gate_judges(tmp_path, monkeypatch,
+                                                                         capsys):
+    # The person typed the arguments, so they are judged like any prompt (user decision).
+    tp = _write(tmp_path, *_tool_turn("please list the files"),
+                _rec("assistant", [{"type": "text", "text": "Here they are."}]),
+                _rec("user", GOAL_CMD % "no, that is wrong - redo it from the start"),
+                _rec("user", "<local-command-stdout>Goal set</local-command-stdout>"))
+    run_gate(monkeypatch, tmp_path, {"transcript_path": tp, "cwd": str(tmp_path),
+                                     "last_assistant_message": "Redoing it."})
+    assert decision_of(capsys) == "block"
+
+
+def test_a_quiet_slash_command_with_arguments_does_not_block(tmp_path, monkeypatch, capsys):
+    # Control: the command itself is not a signal, only what its arguments say.
+    tp = _write(tmp_path, _rec("user", GOAL_CMD % "list the files in src"),
+                _rec("user", "<local-command-stdout>Goal set</local-command-stdout>"))
+    run_gate(monkeypatch, tmp_path, {"transcript_path": tp, "cwd": str(tmp_path),
+                                     "last_assistant_message": "Here are the files."})
+    assert decision_of(capsys) is None
 
 
 def test_the_human_prompt_is_found_behind_a_tool_output_larger_than_the_tail(tmp_path, monkeypatch,

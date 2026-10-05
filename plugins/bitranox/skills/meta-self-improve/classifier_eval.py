@@ -195,10 +195,10 @@ UNLOCATED_GONE = "its transcript is gone"
 UNLOCATED_SCHEDULED = "a scheduled prompt (CronCreate / ScheduleWakeup), not typed"
 UNLOCATED_NO_PROMPT = "it logged no prompt text to look for (a task-notification turn)"
 UNLOCATED_NOT_TYPED = "a subagent hand-back, notification or other harness record, not typed"
-# looks_typed leaves every slash-command record out on purpose. Whether one carrying arguments
-# (`/goal do 3-7`) should count as typed is an open decision, so these are counted apart from
-# both a miss and a hand-back: the count is what sizes that decision.
-UNLOCATED_COMMAND = "a slash command, which looks_typed leaves out"
+# A slash command WITH arguments (`/goal do 3-7`) is typed and locates like any prompt
+# (transcript_turns.slash_command); a bare one (`/clear`, a skill invoked with no arguments)
+# carries no prose and is not typed, so it is counted apart from both a miss and a hand-back.
+UNLOCATED_COMMAND = "a bare slash command (no arguments), not typed"
 UNLOCATED_NOT_FOUND = jp.UNLOCATED
 COMMAND_PREFIXES = ("<command-", "<local-command")
 

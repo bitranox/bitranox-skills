@@ -431,25 +431,36 @@ SKILL_COMMAND = _command("c1", "<command-message>bitranox:meta-dream-tree</comma
                          {"kind": "human"})
 
 
+BARE_GOAL = _command("c2", "<command-name>/goal</command-name>\n            <command-message>goal"
+                           "</command-message>\n            <command-args></command-args>")
+
+
+@pytest.mark.parametrize("prompt", [
+    "do ranks 3-7",
+    # The hook receives the command as typed and the transcript stores it as tags; human_text
+    # rebuilds the typed form, so the logged text is found in the record it came from.
+    "/goal do ranks 3-7",
+])
+def test_a_slash_command_with_arguments_locates_like_any_typed_prompt(tmp_path, prompt):
+    t = tmp_path / "t.jsonl"
+    ends = _write(t, [_typed("p1", "go"), GOAL])
+    assert ce.locate_prompt(_located(router_row([], {}, prompt=prompt), t, ends[-1])) == "c1"
+
+
 @pytest.mark.parametrize("record, prompt", [
-    (GOAL, "do ranks 3-7"),
-    # The hook receives the command as typed; the transcript stores it as tags, so the logged
-    # text is a substring of no record. Measured: 9 of the 11 rows left after the reasons above.
-    (GOAL, "/goal do ranks 3-7"),
-    (GOAL, "/goal"),
+    (BARE_GOAL, "/goal"),
     (SKILL_COMMAND, "/bitranox:meta-dream-tree"),
 ])
-def test_a_slash_command_is_unlocated_as_a_command_not_as_a_miss(tmp_path, record, prompt):
-    # looks_typed leaves every <command- record out on purpose; whether a command with arguments
-    # should count as typed is an open decision, so these are counted apart from both a miss and
-    # a hand-back, which is what sizes that decision.
+def test_a_bare_slash_command_is_unlocated_as_a_command_not_as_a_miss(tmp_path, record, prompt):
+    # A command with no arguments carries no prose and is not typed; it is counted apart from
+    # both a miss and a hand-back.
     assert _unlocated(tmp_path, [_typed("p1", "go"), record], prompt) == ce.UNLOCATED_COMMAND
 
 
 def test_a_path_shaped_prompt_with_no_command_record_stays_a_real_miss(tmp_path):
     # Control for the slash form: a prompt opening with a path is not a command unless the
     # transcript holds that command's record.
-    records = [_typed("p1", "go"), GOAL]
+    records = [_typed("p1", "go"), BARE_GOAL]
     assert _unlocated(tmp_path, records, "/media/x do ranks 3-7") == ce.UNLOCATED_NOT_FOUND
 
 
