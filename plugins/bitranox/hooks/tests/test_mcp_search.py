@@ -44,26 +44,35 @@ def test_enabled_honors_knob(home, monkeypatch):
     assert X.enabled() is False                          # auto but CLI absent
 
 
+# The PATH lookup is the seam these patch, not `available()`: search resolves the program itself,
+# so patching `available` alone left these running whatever `basic-memory` the test machine has.
+def _cli_on_path(monkeypatch, path="/usr/bin/basic-memory"):
+    monkeypatch.setattr(X.shutil, "which", lambda _n: path)
+
+
 def test_search_none_when_unavailable(monkeypatch):
-    monkeypatch.setattr(X, "available", lambda: False)
+    _cli_on_path(monkeypatch, None)
+    calls = []
+    monkeypatch.setattr(subprocess, "run", lambda *a, **k: calls.append(a))
     assert X.search("query") is None
+    assert calls == []
 
 
 def test_search_none_on_error_output(monkeypatch):
-    monkeypatch.setattr(X, "available", lambda: True)
+    _cli_on_path(monkeypatch)
     monkeypatch.setattr(subprocess, "run", _fake_run("Error during search: Project not found: 'main'."))
     assert X.search("q") is None
 
 
 def test_search_parses_json(monkeypatch):
-    monkeypatch.setattr(X, "available", lambda: True)
+    _cli_on_path(monkeypatch)
     payload = json.dumps({"results": [{"permalink": "notes/a"}, {"file_path": "notes/b.md"}]})
     monkeypatch.setattr(subprocess, "run", _fake_run(payload))
     assert X.search("q") == ["notes/a", "notes/b.md"]
 
 
 def test_search_parses_lines(monkeypatch):
-    monkeypatch.setattr(X, "available", lambda: True)
+    _cli_on_path(monkeypatch)
     monkeypatch.setattr(subprocess, "run", _fake_run("notes/a\nnotes/b\n"))
     assert X.search("q") == ["notes/a", "notes/b"]
 
@@ -157,6 +166,36 @@ def test_search_returns_none_for_unusable_arguments_rather_than_raising(fake_cli
 def test_search_returns_none_when_the_cli_times_out(fake_cli):
     fake_cli(mode="sleep")
     assert X.search("q", timeout=0.5) is None
+
+
+def test_search_runs_the_path_that_which_resolved(fake_cli, monkeypatch):
+    """argv[0] is the absolute path `available()` found, never the bare name: on Windows
+    CreateProcess searches PATH itself and knows only .exe, so the bare name and the lookup that
+    said "available" could disagree."""
+    cli = fake_cli()
+    seen = []
+
+    def run(argv, **kwargs):
+        seen.append(argv)
+        return types.SimpleNamespace(returncode=0, stdout="notes/a\n", stderr="")
+
+    monkeypatch.setattr(subprocess, "run", run)
+    assert X.search("q") == ["notes/a"]
+    assert seen and os.path.isabs(seen[0][0])
+    assert os.path.samefile(seen[0][0], cli)
+
+
+@pytest.mark.parametrize("shim", ["C:/tools/basic-memory.CMD", "/opt/bin/basic-memory.bat"])
+def test_a_batch_file_shim_is_declined_not_run(monkeypatch, shim):
+    """A .cmd/.bat runs under cmd.exe, which re-parses its arguments: a free-text query would be
+    interpreted by cmd, not handed to the CLI. Declined, so the caller falls back to the keyword
+    scan, and `available()` says so rather than promising a search that cannot run."""
+    monkeypatch.setattr(X.shutil, "which", lambda _n: shim)
+    calls = []
+    monkeypatch.setattr(subprocess, "run", lambda *a, **k: calls.append(a))
+    assert X.available() is False
+    assert X.search("q & echo pwned") is None
+    assert calls == []
 
 
 def test_search_returns_none_when_the_cli_cannot_be_started(fake_cli, tmp_path, monkeypatch):
