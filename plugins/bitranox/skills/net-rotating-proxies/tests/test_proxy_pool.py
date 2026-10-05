@@ -54,6 +54,33 @@ def test_grow_result_is_sorted(store):
     assert lines == sorted(lines)
 
 
+# Another process writing the same store holds its own temporary file. With one fixed temp
+# name per target, a second writer truncated it and moved it into place half-written, and the
+# first writer's os.replace then died with FileNotFoundError (526 of 2,400 writes in a
+# four-process stress run). A file sitting at the old fixed name stands in for that writer.
+@pytest.mark.parametrize("write, name", [
+    (lambda path: pp._grow(path, ["1.1.1.1:80"]), "pool.txt"),
+    (lambda path: pp._upsert_speeds(path, {"1.1.1.1:80": 0.5}), "speeds.tsv"),
+])
+def test_a_write_never_touches_another_writers_temp_file(store, write, name):
+    path = pp._p(store, name)
+    other = path + ".tmp"
+    with open(other, "w", encoding="utf-8") as f:
+        f.write("ANOTHER WRITER, HALF DONE\n")
+    write(path)
+    with open(other, encoding="utf-8") as f:
+        assert f.read() == "ANOTHER WRITER, HALF DONE\n"
+    with open(path, encoding="utf-8") as f:
+        assert "1.1.1.1:80" in f.read()
+
+
+def test_a_write_leaves_no_temp_file_behind(store):
+    path = pp._p(store, "pool.txt")
+    pp._grow(path, ["1.1.1.1:80"])
+    pp._upsert_speeds(pp._p(store, "speeds.tsv"), {"1.1.1.1:80": 0.5})
+    assert sorted(os.listdir(store)) == ["pool.txt", "speeds.tsv"]
+
+
 # ----------------------------------------------------------------------------
 # validate --need (right-size: stop early instead of testing the whole pool)
 # ----------------------------------------------------------------------------

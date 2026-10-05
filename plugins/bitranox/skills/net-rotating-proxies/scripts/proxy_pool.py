@@ -52,7 +52,7 @@ The --cmd template may contain {proxy} (host:port) and {item}. Example:
             --sub-langs en.*,en --sub-format vtt -o out/{item}.%(ext)s
             https://www.youtube.com/watch?v={item}'
 """
-import argparse, concurrent.futures as cf, glob, os, random, re, shlex, subprocess, sys, threading, time
+import argparse, concurrent.futures as cf, glob, os, random, re, shlex, subprocess, sys, tempfile, threading, time
 import httpx2
 
 DEAD_DEFAULT = r"connection refused|connection reset|timed out|cannot connect|unreachable|EOF occurred|proxy|tunnel|ProxyError"
@@ -90,15 +90,32 @@ def _read(path):
         return set()
 
 
+def _atomic_write(path, text):
+    """Replace `path` with `text` in one step, through a temp file no other writer can share.
+
+    _lock serialises threads, not processes: two runs on one store each wrote `path + ".tmp"`,
+    so one truncated the other's half-written file, moved it into place, and the first
+    writer's os.replace then failed because its temp file was gone."""
+    directory, name = os.path.split(os.path.abspath(path))
+    fd, tmp = tempfile.mkstemp(prefix=name + ".", suffix=".tmp", dir=directory)
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
+            f.write(text)
+        os.replace(tmp, path)
+    except BaseException:
+        try:
+            os.unlink(tmp)
+        except OSError:
+            pass
+        raise
+
+
 def _grow(path, items):
     """Atomic grow-only merge: never shrinks the file."""
     with _lock:
         cur = _read(path)
         cur |= set(items)
-        tmp = path + ".tmp"
-        with open(tmp, "w", encoding="utf-8") as f:
-            f.write("\n".join(sorted(cur)) + "\n")
-        os.replace(tmp, path)
+        _atomic_write(path, "\n".join(sorted(cur)) + "\n")
 
 
 def _append(path, line):
@@ -153,11 +170,7 @@ def _upsert_speeds(path, new):
     with _lock:
         d = _read_speeds(path)
         d.update(new)
-        tmp = path + ".tmp"
-        with open(tmp, "w", encoding="utf-8") as f:
-            for p, s in sorted(d.items()):
-                f.write(f"{p}\t{s:.3f}\n")
-        os.replace(tmp, path)
+        _atomic_write(path, "".join(f"{p}\t{s:.3f}\n" for p, s in sorted(d.items())))
 
 
 def _median(xs):
