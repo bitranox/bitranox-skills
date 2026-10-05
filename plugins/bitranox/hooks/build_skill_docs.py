@@ -9,7 +9,9 @@ appears in the catalog by construction at its release's regeneration.
     build_skill_docs.py [--skills-dir DIR] [--taxonomy FILE] [--out FILE] [--check]
 
 `--check` verifies the committed catalog is in sync (exit 1 if stale) - wired into the
-hooks pytest suite. Pure standard library; ASCII.
+hooks pytest suite. Exit 2 when it could not run: the taxonomy is missing or unusable, the
+--skills-dir does not exist, the catalog cannot be written, or (--check) there is no readable
+catalog to compare. Pure standard library; ASCII.
 """
 import argparse
 import json
@@ -32,9 +34,28 @@ the skill fires.
 """
 
 
+class Unusable(Exception):
+    """An input the catalog cannot be built from (exit 2, not a stale-catalog finding)."""
+
+
+def load_categories(taxonomy_file):
+    """The taxonomy's `categories` mapping, or `Unusable` naming why it cannot be read."""
+    try:
+        data = json.loads(Path(taxonomy_file).read_text(encoding="utf-8"))
+    except (OSError, ValueError) as exc:  # ValueError covers bad JSON and undecodable bytes
+        raise Unusable("cannot read the taxonomy %s: %s" % (taxonomy_file, exc)) from exc
+    categories = data.get("categories") if isinstance(data, dict) else None
+    if not isinstance(categories, dict):
+        raise Unusable("the taxonomy %s has no 'categories' object" % taxonomy_file)
+    return categories
+
+
 def render(skills_dir, taxonomy_file):
     """The full catalog markdown for the given skills dir and taxonomy file."""
-    categories = json.loads(Path(taxonomy_file).read_text(encoding="utf-8"))["categories"]
+    if not Path(skills_dir).is_dir():
+        # Globbing a missing dir finds nothing, and the result was an "All 0 skills" catalog.
+        raise Unusable("--skills-dir is not a directory: %s" % skills_dir)
+    categories = load_categories(taxonomy_file)
     grouped = {}
     total = 0
     for skill_md in sorted(Path(skills_dir).glob("*/SKILL.md")):
@@ -63,7 +84,11 @@ def main(argv=None):
     ap.add_argument("--out", default=str(here.parents[2] / "docs" / "skills.md"))
     ap.add_argument("--check", action="store_true", help="verify the committed catalog is in sync")
     args = ap.parse_args(argv if argv is not None else sys.argv[1:])
-    text = render(args.skills_dir, args.taxonomy)
+    try:
+        text = render(args.skills_dir, args.taxonomy)
+    except Unusable as exc:
+        print("build_skill_docs: %s" % exc, file=sys.stderr)
+        return 2
     out = Path(args.out)
     if args.check:
         try:
@@ -71,14 +96,22 @@ def main(argv=None):
         except OSError:
             # Not "stale": outside the source repo the default --out points at a docs/ that never
             # ships, and "run build_skill_docs.py" would only write a catalog nobody reads there.
+            # Nothing to compare is could-not-run (2), not the stale finding (1).
             print("docs/skills.md is missing: %s" % out, file=sys.stderr)
-            return 1
+            return 2
+        except ValueError as exc:
+            print("docs/skills.md is not readable UTF-8: %s (%s)" % (out, exc), file=sys.stderr)
+            return 2
         if current == text:
             print("docs/skills.md in sync")
             return 0
         print("docs/skills.md is STALE - run build_skill_docs.py", file=sys.stderr)
         return 1
-    out.write_text(text, encoding="utf-8", newline="\n")
+    try:
+        out.write_text(text, encoding="utf-8", newline="\n")
+    except OSError as exc:
+        print("build_skill_docs: cannot write %s: %s" % (out, exc), file=sys.stderr)
+        return 2
     print("wrote %s" % out)
     return 0
 
