@@ -234,10 +234,16 @@ def test_cli_exit_0_on_clean_and_1_on_contaminated(tmp_path: Path) -> None:
 
 
 def test_cli_emits_a_json_envelope(tmp_path: Path) -> None:
+    # A corpus that holds a document: a corpus that assembles nothing is an unchecked run (exit
+    # 2, ok false), which is not the envelope shape under test here.
+    corpus_dir = tmp_path / "skills"
+    corpus_dir.mkdir()
+    (corpus_dir / "SKILL.md").write_text(SKILL_ALREADY_TEACHING[1], encoding="utf-8")
     s = tmp_path / "s.txt"
     s.write_text(CLEAN_SCENARIO, encoding="utf-8")
-    proc = _run(["--scenario", str(s), "--corpus", str(tmp_path), "--json"])
+    proc = _run(["--scenario", str(s), "--corpus", str(corpus_dir), "--json"])
     payload = json.loads(proc.stdout)
+    assert proc.returncode == 0, payload
     assert payload["ok"] is True
     assert payload["command"] == "redcheck"
     assert "skipped" in payload
@@ -263,13 +269,13 @@ def test_cli_reads_scenario_from_stdin(tmp_path: Path) -> None:
 def test_warnings_go_to_stderr_and_into_the_skipped_field(tmp_path: Path) -> None:
     """A missing corpus dir is a warning, not a crash - and it must be visible both ways.
 
-    It is also an UNCHECKED verdict (exit 3) since the --corpus guard landed: naming a dir is the
+    It is also an UNCHECKED verdict (exit 2) since the --corpus guard landed: naming a dir is the
     caller promising a corpus. The warning behaviour under test here is unchanged - stdout stays a
     parseable envelope and the reason appears in both channels.
     """
     missing = tmp_path / "missing"
     proc = _run(["--scenario", "-", "--corpus", str(missing), "--json"], stdin=CLEAN_SCENARIO)
-    assert proc.returncode == 3
+    assert proc.returncode == 2
     payload = json.loads(proc.stdout)  # must parse: the warning must not corrupt stdout
     assert any("missing" in w.lower() for w in payload["skipped"])
     assert "missing" in proc.stderr.lower()
@@ -580,8 +586,12 @@ def test_cli_exits_unchecked_when_the_cascade_assembles_nothing(tmp_path: Path) 
     s.write_text(CLEAN_SCENARIO, encoding="utf-8")
     proc = _run(["--scenario", str(s), "--corpus-cascade", str(tmp_path / "nope"), "--json"])
 
-    assert proc.returncode == 3, proc.stdout + proc.stderr
+    # Exit 2, "could not answer": the 0/1/2 standard has no separate code for it, and ok is false
+    # because the check did not run. data.unchecked keeps the distinction from a usage error.
+    assert proc.returncode == 2, proc.stdout + proc.stderr
     payload = json.loads(proc.stdout)
+    assert payload["ok"] is False
+    assert payload["data"]["unchecked"] is True
     assert payload["data"]["corpus_documents"] == 0
     assert payload["data"]["corpus_empty"] is True
     assert "unchecked" in payload["data"]["verdict"]
@@ -600,7 +610,7 @@ def test_cli_exits_unchecked_when_a_named_corpus_dir_assembles_nothing(tmp_path:
     s.write_text(CLEAN_SCENARIO, encoding="utf-8")
     proc = _run(["--scenario", str(s), "--corpus", str(tmp_path / "nope"), "--json"])
 
-    assert proc.returncode == 3, proc.stdout + proc.stderr
+    assert proc.returncode == 2, proc.stdout + proc.stderr
     payload = json.loads(proc.stdout)
     assert payload["data"]["corpus_documents"] == 0
     assert payload["data"]["corpus_empty"] is True
@@ -615,8 +625,31 @@ def test_cli_exits_unchecked_when_an_EMPTY_corpus_dir_is_named(tmp_path: Path) -
     empty.mkdir()
     proc = _run(["--scenario", str(s), "--corpus", str(empty), "--json"])
 
-    assert proc.returncode == 3, proc.stdout + proc.stderr
+    assert proc.returncode == 2, proc.stdout + proc.stderr
     assert json.loads(proc.stdout)["data"]["corpus_empty"] is True
+
+
+def test_a_leak_outranks_an_unchecked_corpus(tmp_path: Path) -> None:
+    """A telegraphed scenario is a finding even when the corpus came back empty: the RED is
+    already contaminated, so the answer is "leak" (exit 1, ok true), not "could not check"."""
+    s = tmp_path / "scenario.txt"
+    s.write_text(TELEGRAPHED_SCENARIO, encoding="utf-8")
+    empty = tmp_path / "empty"
+    empty.mkdir()
+    proc = _run(["--scenario", str(s), "--corpus", str(empty), "--json"])
+
+    payload = json.loads(proc.stdout)
+    assert proc.returncode == 1, payload
+    assert payload["ok"] is True
+    assert payload["data"]["unchecked"] is True
+
+
+def test_a_clean_checked_run_reports_unchecked_false(tmp_path: Path) -> None:
+    """The control for data.unchecked."""
+    proc = _run(["--scenario", "-", "--json"], stdin=CLEAN_SCENARIO)
+    payload = json.loads(proc.stdout)
+    assert proc.returncode == 0
+    assert payload["ok"] is True and payload["data"]["unchecked"] is False
 
 
 def test_cli_without_any_corpus_flag_still_exits_clean(tmp_path: Path) -> None:
@@ -779,7 +812,8 @@ def test_an_answer_that_yields_no_terms_is_unchecked_not_clean(tmp_path: Path) -
     a.write_text("", encoding="utf-8")
     proc = _run(["--scenario", str(s), "--answer", str(a), "--json"])
     payload = json.loads(proc.stdout)
-    assert proc.returncode == 3, payload
+    assert proc.returncode == 2, payload
+    assert payload["ok"] is False
     assert "unchecked" in payload["data"]["verdict"]
     assert any("answer" in w for w in payload["skipped"])
 
