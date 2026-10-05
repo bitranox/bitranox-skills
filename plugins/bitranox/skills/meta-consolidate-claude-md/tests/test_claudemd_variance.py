@@ -732,5 +732,6 @@ class TestCliRobustness:
         assert proc.returncode == 1
         payload = json.loads(proc.stdout)
         assert payload["data"]["files_matched"] == 0
-        # the documented envelope: ok false, and no `error` - nothing failed, the answer is "no"
-        assert payload["ok"] is False and "error" not in payload
+        # the documented envelope: ok TRUE (it ran without error) and no `error` - nothing
+        # failed, the answer is "no", and that answer is carried by the exit code
+        assert payload["ok"] is True and "error" not in payload

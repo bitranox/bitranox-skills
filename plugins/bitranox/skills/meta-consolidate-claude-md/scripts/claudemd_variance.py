@@ -36,8 +36,9 @@ Run:
 Exit codes: 0 = at least one CLAUDE.md file was found and analysed, 1 = the walk completed but
 matched zero files (an empty or misspelled --root), 2 = error (a --root path does not exist,
 every matched file failed to decode, a variant's members share no directory, or any other
-failure). `--json` emits `{ok, command, skipped, data}`; ok is false on exit 1 and exit 2, and
-only an exit-2 envelope adds `error` (a zero-match run failed at nothing, so it carries none);
+failure). `--json` emits `{ok, command, skipped, data}` on every exit; ok means the run finished without
+error, so it is true on exit 0 and exit 1 and false on exit 2, and only an exit-2 envelope adds
+`error` (a zero-match run failed at nothing, so it carries none);
 warnings (an unreadable file, a directory the walk cannot list, a bound hit) always go to stderr
 so stdout stays parseable. Every JSON string is valid UTF-8: a name that is not shows its
 undecodable bytes as \\xNN, and `data.undecodable_paths` lists each such path as
@@ -678,7 +679,8 @@ def _fail(message: str, *, as_json: bool, warnings: list[str], data: object = No
 
 def _emit(report: Report, *, as_json: bool, warnings: list[str]) -> None:
     if as_json:
-        _dump_envelope({"ok": report.files_matched > 0, "command": "claudemd_variance",
+        # ok = ran without error (exit 0 or 1); the zero-match 'no' is the exit code's to carry.
+        _dump_envelope({"ok": True, "command": "claudemd_variance",
                         "skipped": warnings, "data": report.as_dict()})
         return
     for line in _render(report):
