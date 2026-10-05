@@ -10,8 +10,10 @@ re-copying what an ancestor already provides.
 Usage:
   gather_scan.py --topic "<text>" [--self <cwd>]
 
-Exit codes: 0 scanned (or marked), 1 "not gathered yet" (--seen only), 2 error. A file that cannot
-be read or decoded, and a directory that cannot be listed, is skipped with a warning on stderr.
+Exit codes: 0 scanned (or marked) - a scan that matched nothing is still 0, it is a report; 1 "not
+gathered yet" (--seen only); 2 error, including "not scanned" (no usable keyword in --topic, or no
+tree anchor while cross_tree_search=false). A file that cannot be read or decoded, and a directory
+that cannot be listed, is skipped with a warning on stderr.
 
 Imports the shared helpers from the plugin's hooks dir, like the meta-dream-tree cadence CLI. Pure stdlib.
 """
@@ -506,10 +508,12 @@ def _tolerant_stdio():
 
 
 def _not_scanned(reason):
-    """The explicit empty result: the caller reads CANDIDATES either way, and learns why."""
+    """The explicit empty result: the caller reads CANDIDATES either way, and learns why.
+
+    Exit 2, not 0: no scan ran, so "nothing matched" would be a claim nobody checked."""
     print(reason, file=sys.stderr)
     print("CANDIDATES: 0 (not scanned: %s)" % reason)
-    return 0
+    return 2
 
 
 def _candidate_files(self_proj, cross_allowed):

@@ -397,6 +397,7 @@ def test_check_against_a_local_body_needs_no_network(capsys):
     payload = json.loads(capsys.readouterr().out)
     assert rc == 1
     assert payload["data"]["verdict"] == H.STRUCTURAL
+    assert payload["ok"] is True   # ok = ran without error; the drift is the exit code's 1
 
 
 def test_expect_flag_fails_on_a_mismatched_verdict(capsys):
@@ -404,6 +405,22 @@ def test_expect_flag_fails_on_a_mismatched_verdict(capsys):
                  "--body", str(FIXTURES / "hooks-sample.md"), "--expect", H.STRUCTURAL])
     capsys.readouterr()
     assert rc == 1
+
+
+def test_a_broken_verdict_exits_2_even_when_expect_mismatches(capsys):
+    """--expect turned a run that could not look (BROKEN) into a plain 'no' (1)."""
+    rc = H.main(["check", "--stamp", str(FIXTURES / "stamp-sample.json"), "--source", "hooks-sample",
+                 "--body", str(FIXTURES / "hooks-sample-truncated.md"), "--expect", H.CURRENT])
+    err = capsys.readouterr().err
+    assert rc == 2
+    assert "expected CURRENT, got BROKEN" in err
+
+
+def test_a_broken_verdict_that_was_expected_still_exits_2(capsys):
+    rc = H.main(["check", "--stamp", str(FIXTURES / "stamp-sample.json"), "--source", "hooks-sample",
+                 "--body", str(FIXTURES / "hooks-sample-truncated.md"), "--expect", H.BROKEN])
+    capsys.readouterr()
+    assert rc == 2
 
 
 def test_json_output_stays_parseable_when_the_stamp_is_broken(tmp_path, capsys):
@@ -785,7 +802,7 @@ def test_stamp_refuses_to_write_a_new_event_the_references_do_not_document(tmp_p
     rc = H.main(["stamp", "--stamp", str(target), "--refs", str(REFS), "--source", "hooks-sample",
                  "--body", str(FIXTURES / "hooks-sample-structural.md"), "--write"])
     out = capsys.readouterr().out
-    assert rc == 1, out
+    assert rc == 2, out   # a whole-action refusal is 'could not run'
     assert "refusing" in out
     assert target.read_bytes() == before
 
@@ -795,7 +812,7 @@ def test_the_stamp_dry_run_predicts_the_same_refusal(tmp_path, capsys):
     rc = H.main(["stamp", "--stamp", str(target), "--refs", str(REFS), "--source", "hooks-sample",
                  "--body", str(FIXTURES / "hooks-sample-structural.md")])
     capsys.readouterr()
-    assert rc == 1
+    assert rc == 2
 
 
 def test_stamp_write_refreshes_a_source_when_coverage_holds(tmp_path, capsys):
@@ -829,7 +846,7 @@ def test_cosmetic_only_refuses_a_structural_body(tmp_path, capsys):
                  "--body", str(FIXTURES / "hooks-sample-structural.md"), "--write", "--cosmetic-only",
                  "--accept-gaps"])
     out = capsys.readouterr().out
-    assert rc == 1 and "cosmetic-only" in out
+    assert rc == 2 and "cosmetic-only" in out
     assert target.read_bytes() == before
 
 
@@ -870,9 +887,33 @@ def test_baseline_write_with_no_line_to_update_fails_and_leaves_the_file(tmp_pat
     skill_md.write_text("# Skill\n\nno baseline here\n", encoding="utf-8")
     rc = H.main(["baseline", "--skill-md", str(skill_md), "--write"])
     out = capsys.readouterr().out
-    assert rc == 1
+    assert rc == 2
     assert "no baseline line" in out
     assert skill_md.read_text(encoding="utf-8") == "# Skill\n\nno baseline here\n"
+
+
+def test_a_skill_md_that_is_not_utf8_exits_2_not_a_traceback(tmp_path, capsys):
+    skill_md = tmp_path / "SKILL.md"
+    skill_md.write_bytes(b"# Skill\n\nReference baseline: \xff\xfe stale\n")
+    rc = H.main(["--json", "baseline", "--skill-md", str(skill_md)])
+    payload = json.loads(capsys.readouterr().out)
+    assert rc == 2
+    assert payload["ok"] is False and payload["data"]["verdict"] == H.BROKEN
+
+
+def test_an_unreadable_body_path_prints_the_envelope_under_json(tmp_path, capsys):
+    """OSError exits 2; under --json it printed nothing to stdout, so a parser got no JSON."""
+    rc = H.main(["--json", "fingerprint", str(tmp_path / "no-such-body.md")])
+    payload = json.loads(capsys.readouterr().out)
+    assert rc == 2
+    assert payload["ok"] is False and "no-such-body.md" in payload["data"]["reason"]
+
+
+def test_a_selftest_fixture_stamp_that_is_not_json_exits_2(tmp_path, capsys):
+    (tmp_path / "stamp-sample.json").write_text("{not json", encoding="utf-8")
+    rc = H.main(["selftest", "--fixtures", str(tmp_path)])
+    assert rc == 2
+    assert "BROKEN" in capsys.readouterr().err
 
 
 def test_baseline_write_rewrites_a_stale_line(tmp_path, capsys):

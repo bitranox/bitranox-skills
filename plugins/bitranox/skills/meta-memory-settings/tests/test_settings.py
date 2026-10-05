@@ -142,17 +142,18 @@ def _claude_dir_is_a_file(home):
     d.write_text("not a dir", encoding="utf-8")
 
 
-def test_set_reports_a_failed_write_and_exits_1(home, capsys):
+def test_set_reports_a_failed_write_and_exits_2(home, capsys):
+    """A write that could not happen is 'could not run' (2), not a 'no' answer (1)."""
     _claude_dir_is_a_file(home)
     rc = ST.main(["set", "dream_mode", "off"])
     err = capsys.readouterr().err
-    assert rc == 1
+    assert rc == 2
     assert "not saved" in err
 
 
-def test_reset_reports_a_failed_write_and_exits_1(home, capsys):
+def test_reset_reports_a_failed_write_and_exits_2(home, capsys):
     _claude_dir_is_a_file(home)
-    assert ST.main(["reset"]) == 1
+    assert ST.main(["reset"]) == 2
     assert "not saved" in capsys.readouterr().err
 
 

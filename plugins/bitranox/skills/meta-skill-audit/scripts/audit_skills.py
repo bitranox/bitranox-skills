@@ -139,7 +139,7 @@ PROJECT_LOCAL_NOTE = """
 PROJECT-LOCAL SKILL: this skill is not shipped in a plugin. It lives in a repository's
 `.claude/skills/` and runs from that repository's root, so a repo-relative path it names
 (`scripts/x.py`, `tests/`, `docs/y.md`, `CHANGELOG.md`) IS reachable when it exists there. Only
-the skills were copied here; `{manifest}` lists every path in that repository, one per line.
+the skills were copied here; `{manifest}` lists every path git tracks there, one per line.
 Before reporting a repo-relative path as DANGLING, look it up in `{manifest}`: listed means it
 resolves (do not report it), absent means it is DANGLING. The files' contents are not available,
 so do not report on what a listed file does or contains.
@@ -173,9 +173,10 @@ def _git(repo, *args):
 
 
 def repo_paths(repo):
-    """Every path a checkout of `repo` holds: tracked, plus untracked files git does not ignore
-    (a script added but not yet committed is still there for the skill to run)."""
-    out = _git(repo, "ls-files", "-z", "--cached", "--others", "--exclude-standard")
+    """Every path git TRACKS in `repo`. A shipped skill is read by other clones, not by this
+    checkout, so a script added but never committed must read as DANGLING: every other clone
+    lacks it."""
+    out = _git(repo, "ls-files", "-z", "--cached")
     return sorted({p for p in (out or "").split("\0") if p})
 
 # ---------------------------------------------------------------------------------------------
@@ -1042,8 +1043,10 @@ def _tolerant_stdio():
 def _parser():
     ap = argparse.ArgumentParser(
         description="Audit shipped skills or scripts in a clean room.",
-        epilog="Exit codes: 0 every target has a report; 1 at least one target has no report (its "
-               "report file says why); 2 refused or crashed before a verdict.")
+        epilog="Exit codes: 0 every target has a report; 2 at least one target has no report (its "
+               "reviewer could not run or gave no report block; its report file says why), or "
+               "refused or crashed before a verdict. Findings live in the reports, never in the "
+               "exit code, so 1 is never returned.")
     src = ap.add_mutually_exclusive_group(required=True)
     src.add_argument("--plugin", help="the plugin dir to audit (holds skills/, hooks/)")
     src.add_argument("--skills-dir", dest="skills_dir",
@@ -1127,7 +1130,9 @@ def missing_reports(reports_dir, stems):
 
 
 def _sweep(args, only):
-    """Run the selected sweep. Returns 0 when every target has a report, else 1."""
+    """Run the selected sweep. Returns 0 when every target has a report, else 2: a target with
+    no report is one whose reviewer could not run (the CLI missing, a timeout, a crash, a reply
+    with no report block), so nothing was judged - 'could not run', not a 'no' about the skill."""
     if args.scripts:
         results = audit_scripts(args.plugin, args.room, args.model or "opus", args.jobs or 4,
                                 args.timeout or 1500, only, args.prefix, args.reuse_room,
@@ -1143,7 +1148,7 @@ def _sweep(args, only):
     if missing:
         print("audit_skills: %d target(s) have no report; each report file says why: %s"
               % (len(missing), ", ".join(missing)), file=sys.stderr)
-        return 1
+        return 2
     return 0
 
 
@@ -1181,7 +1186,6 @@ def main(argv=None):
         print("audit_skills: %s" % exc, file=sys.stderr)
         return 2
     except Exception:
-        # 1 is the verdict "a target has no report"; a crash must not read as that verdict.
         traceback.print_exc()
         print("audit_skills: crashed before a verdict (exit 2)", file=sys.stderr)
         return 2

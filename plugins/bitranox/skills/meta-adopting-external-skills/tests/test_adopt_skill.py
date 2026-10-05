@@ -588,6 +588,72 @@ def test_plain_permissive_licenses_still_pass(tmp_path, files, expected):
     assert lic["status"] == "accept" and lic["id"] == expected, lic
 
 
+# --------------------------------------------------------------------------
+# A license the gate could not READ is "could not run" (exit 2), never the gate's "no" (exit 1):
+# the source was not judged. It still writes nothing.
+# --------------------------------------------------------------------------
+
+def _dangling_link(at, target):
+    """A dangling link is listed as a file and raises OSError on read. Creating one needs a
+    privilege on Windows, so a test that needs it is skipped where it cannot be built."""
+    try:
+        os.symlink(target, at)
+    except (OSError, NotImplementedError):
+        pytest.skip("cannot create a symlink here")
+
+
+def test_adopt_with_no_toml_parser_exits_2_and_scaffolds_nothing(tmp_path, record_subprocess,
+                                                                  capsys, monkeypatch):
+    # The interpreter capability is the external edge here: Python 3.10 has no tomllib.
+    monkeypatch.setattr(AS, "_TOML_LOADS", None)
+    repo, skills = _fake_repo(tmp_path)
+    src = _fake_source(tmp_path)
+    (src / "pyproject.toml").write_text('[project]\nlicense = {text = "MIT"}\n',
+                                        encoding="utf-8", newline="")
+    assert AS.main([str(src), "--dest", str(skills)]) == 2
+    err = capsys.readouterr().err
+    assert "CANNOT READ" in err and "tomllib" in err
+    assert not (skills / "upstream-skill").exists()
+
+
+def test_a_toml_parser_reads_the_same_source_and_adopts_it(tmp_path, record_subprocess):
+    """Control for the test above: with a parser the same table is read and accepted."""
+    if AS._TOML_LOADS is None:
+        pytest.skip("this interpreter has no tomllib")
+    repo, skills = _fake_repo(tmp_path)
+    src = _fake_source(tmp_path)
+    (src / "pyproject.toml").write_text('[project]\nlicense = {text = "MIT"}\n',
+                                        encoding="utf-8", newline="")
+    assert AS.main([str(src), "--dest", str(skills)]) == 0
+
+
+def test_an_unreadable_license_file_is_unreadable_not_absent(tmp_path):
+    # Asked of the gate directly: a local-path source is copied before the gate runs, and that
+    # copy already fails (exit 2) on a dangling link; a cloned tree reaches the gate with it.
+    _tree(tmp_path, {"LICENSE": MIT})
+    _dangling_link(tmp_path / "COPYING", tmp_path / "gone.txt")
+    lic = AS.find_license(tmp_path)
+    assert lic["status"] == "unreadable" and "COPYING" in lic["where"]
+    with pytest.raises(AS.AdoptError, match="CANNOT READ"):   # main maps AdoptError to exit 2
+        AS._gate(lic)
+
+
+def test_a_copyleft_verdict_still_wins_over_an_unreadable_file(tmp_path):
+    """A REJECT is a definite 'no' whatever else could not be read, so it stays exit 1."""
+    _tree(tmp_path, {"LICENSE": GPL})
+    _dangling_link(tmp_path / "COPYING", tmp_path / "gone.txt")
+    assert AS.find_license(tmp_path)["status"] == "reject"
+
+
+def test_an_unrecognised_license_still_wins_over_an_unread_one(tmp_path, monkeypatch):
+    """Something the gate READ and cannot vouch for is already its 'no' (1); a file it could not
+    read beside it cannot turn that into an accept, so the verdict stays 'absent'."""
+    monkeypatch.setattr(AS, "_TOML_LOADS", None)
+    _tree(tmp_path, {"LICENSE": "some random text\n",
+                     "pyproject.toml": '[project]\nlicense = {text = "MIT"}\n'})
+    assert AS.find_license(tmp_path)["status"] == "absent"
+
+
 def test_two_different_permissive_license_files_are_both_credited(tmp_path):
     _tree(tmp_path, {"LICENSE-MIT": MIT, "LICENSE-APACHE": APACHE})
     lic = AS.find_license(tmp_path)

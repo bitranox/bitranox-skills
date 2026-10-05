@@ -99,6 +99,19 @@ def test_validate_without_need_tests_whole_pool(store, monkeypatch):
     assert len(pp._read(pp._p(store, "live.txt"))) == 20
 
 
+def test_a_live_entry_lost_to_a_concurrent_merge_is_retested_by_the_next_validate(store,
+                                                                                monkeypatch):
+    """_grow is not locked across processes; that is safe only because a lost live.txt entry is
+    still in pool.txt and validate re-tests pool - live - bad. Pin that invariant."""
+    pp._grow(pp._p(store, "pool.txt"), ["192.0.2.1:80", "192.0.2.2:80"])
+    pp._grow(pp._p(store, "live.txt"), ["192.0.2.1:80"])   # 192.0.2.2 was lost by a racing run
+    tested = []
+    monkeypatch.setattr(pp, "_reachable", lambda p, u, t: (tested.append(p) or True, 0.1))
+    pp.validate(store, "https://x/", workers=1, timeout=1)
+    assert tested == ["192.0.2.2:80"]
+    assert pp._read(pp._p(store, "live.txt")) == {"192.0.2.1:80", "192.0.2.2:80"}
+
+
 # ----------------------------------------------------------------------------
 # _append
 # ----------------------------------------------------------------------------

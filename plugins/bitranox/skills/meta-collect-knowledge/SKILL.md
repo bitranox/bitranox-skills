@@ -34,8 +34,10 @@ unknown, defer - a blind gather pulls noise.
    and prints candidates GROUPED BY KNOWLEDGE TREE (`TREE: <top>` headers; the native tier is
    labeled `native-tier (machine-local)` - that whole string is the label, so grep for it, not for
 `machine-local` alone). With `cross_tree_search=false` (the knob defaults to true) the scan stays inside the CURRENT tree;
-   pass `--cross-tree` for a deliberate cross-tree gather. Nothing matched -> stop (the whole
-   gather cost one grep); `CANDIDATES: 0 (not scanned: <reason>)` means the same, with the reason.
+   pass `--cross-tree` for a deliberate cross-tree gather. Nothing matched (`CANDIDATES: 0 in ...`,
+   exit 0) -> stop (the whole gather cost one grep). `CANDIDATES: 0 (not scanned: <reason>)` exits 2:
+   no scan ran, so fix the reason (a topic with no usable keyword, or no tree anchor while
+   `cross_tree_search=false`) rather than reading it as "nothing to gather".
    A note it cannot read or decode is skipped and named on stderr, never fatal.
    - Optional MCP boost: with the `mcp_search` knob `auto` and a covering `basic-memory` index,
      the same command prints `MCP-CANDIDATES` (read-only search, never the store; the keyword

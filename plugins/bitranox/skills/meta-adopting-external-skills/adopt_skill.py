@@ -16,7 +16,9 @@ Usage:
 SKILL.md.
 
 Exit codes: 0 adopted, 1 the license gate stopped the adoption (nothing was written),
-2 error (bad source, clone failure, no marketplace checkout, an existing destination, ...).
+2 error (bad source, clone failure, no marketplace checkout, an existing destination, a license
+file the gate could not read or a pyproject license table with no tomllib to parse it - nothing
+was written then either).
 
 Pure standard library. Cross-platform: paths via pathlib, git via argv lists (never shell=True).
 """
@@ -148,6 +150,13 @@ try:
     _TOML_LOADS = tomllib.loads
 except ImportError:  # Python 3.10 has no stdlib TOML parser; see _pyproject_license_lines
     _TOML_LOADS = None
+_USE_MODULE_PARSER = object()   # resolve _TOML_LOADS at call time, so the default follows it
+
+
+class CannotRead(str):
+    """A license problem that is about THIS RUN, not about the source: a file it could not read,
+    a dir it could not list, a manifest it has no parser for. The gate never judged the source,
+    so the run exits 2 ('could not run') rather than 1 (the gate's 'no')."""
 
 
 _NOTICE_NAMES = {"NOTICE", "NOTICE.TXT", "NOTICE.MD"}
@@ -166,8 +175,8 @@ def _subtree_files(tree, base):
     files, problems = [], []
 
     def onerror(err):
-        problems.append(f"{getattr(err, 'filename', None) or '?'}: cannot list "
-                        f"({err.strerror or err})")
+        problems.append(CannotRead(f"{getattr(err, 'filename', None) or '?'}: cannot list "
+                                   f"({err.strerror or err})"))
 
     for dirpath, dirnames, filenames in os.walk(base, onerror=onerror):
         here = Path(dirpath)
@@ -208,7 +217,7 @@ def _ancestor_files(tree, skill_dir):
         try:
             entries = sorted(d.iterdir())
         except OSError as exc:
-            problems.append(f"{d}: cannot list ({exc.strerror or exc})")
+            problems.append(CannotRead(f"{d}: cannot list ({exc.strerror or exc})"))
             continue
         for entry in entries:
             if entry.is_dir() and entry.name.lower() in _LICENSE_DIRS:
@@ -233,7 +242,7 @@ def _read_text(path):
     try:
         return path.read_text(encoding="utf-8-sig", errors="replace"), None
     except OSError as exc:
-        return "", f"unreadable ({exc.strerror or exc})"
+        return "", CannotRead(f"unreadable ({exc.strerror or exc})")
 
 
 def _is_license_file(rel):
@@ -305,15 +314,19 @@ def _pyproject_license_lines(text):
         if m.group(1) == "license" and plain and re.match(r"^[ \t]*license[ \t]*=", m.group(0)):
             out.append(("id", plain.group(1) if plain.group(1) is not None else plain.group(2)))
         else:
-            out.append(("unreadable", f"`{m.group(0).strip()[:60]}` needs tomllib (Python 3.11+)"))
-    out += [("unreadable", f"`{m.group(0).strip()}` needs tomllib (Python 3.11+)")
+            out.append(("unreadable", CannotRead(
+                f"`{m.group(0).strip()[:60]}` needs tomllib (Python 3.11+)")))
+    out += [("unreadable", CannotRead(f"`{m.group(0).strip()}` needs tomllib (Python 3.11+)"))
             for m in _TOML_LICENSE_TABLE.finditer(text)]
     return out
 
 
-def _pyproject_license_decls(text, loads=_TOML_LOADS):
+def _pyproject_license_decls(text, loads=_USE_MODULE_PARSER):
     """[(kind, value)] for every `license` and `license-files` key in a pyproject.toml, in any
-    table ([project], [tool.poetry], ...). `loads` is the TOML parser; None reads lines instead."""
+    table ([project], [tool.poetry], ...). `loads` is the TOML parser (default: the module's);
+    None reads lines instead."""
+    if loads is _USE_MODULE_PARSER:
+        loads = _TOML_LOADS
     if loads is None:
         return _pyproject_license_lines(text)
     try:
@@ -352,7 +365,7 @@ def _named_file_decl(tree, path, label, where):
         return (None, f"{label} not found", where)
     text, problem = _read_text(path)
     if problem:
-        return (None, f"{label} {problem}", where)
+        return (None, CannotRead(f"{label} {problem}"), where)
     return (_license_file_id(text), f"{label} text not recognised", where)
 
 
@@ -496,8 +509,11 @@ def find_license(tree, skill_dir=None):
     rejects. Anything the gate cannot read, classify or vouch for - an unlistable dir, a symlink
     whose target would ship unread, an unreadable or unparseable file, a license text it does not
     recognise, an id it can neither accept nor reject, a named license file that is missing -
-    stops it for a human ('absent') rather than letting a permissive declaration decide. Returns
-    a dict: {id, status, copyright, text, notice, where}; status is 'accept', 'reject' or 'absent'.
+    stops it for a human ('absent') rather than letting a permissive declaration decide. A file it
+    could not READ, a dir it could not list, or a pyproject license table on an interpreter with
+    no tomllib is 'unreadable' instead: the source was not judged (and a reject or an absent
+    verdict outranks it). Returns a dict: {id, status, copyright, text, notice, where}; status
+    is 'accept', 'reject', 'absent' or 'unreadable'.
     """
     # abspath collapses a "plugins/b/../a" spelling, so the ancestor walk climbs the real chain.
     tree = Path(os.path.abspath(tree))
@@ -513,11 +529,20 @@ def find_license(tree, skill_dir=None):
     for mapped, _label, where in declared:
         if mapped == "REJECT":
             return _verdict("reject", None, where, parts)
-    if walk_errors:
-        return _verdict("absent", None, walk_errors[0], parts)
+    # What the gate READ and cannot vouch for is its 'no' whatever else it could not read, so it
+    # outranks an unread file: reject > absent > unreadable > accept.
+    walk_unread = [p for p in walk_errors if isinstance(p, CannotRead)]
+    walk_absent = [p for p in walk_errors if not isinstance(p, CannotRead)]
+    if walk_absent:
+        return _verdict("absent", None, walk_absent[0], parts)
+    for mapped, label, where in declared:
+        if mapped is None and not isinstance(label, CannotRead):
+            return _verdict("absent", None, f"{where}: {label}", parts)
+    if walk_unread:
+        return _verdict("unreadable", None, walk_unread[0], parts)
     for mapped, label, where in declared:
         if mapped is None:
-            return _verdict("absent", None, f"{where}: {label}", parts)
+            return _verdict("unreadable", None, f"{where}: {label}", parts)
     if not declared:
         return _verdict("absent", None, "", parts)
     # The id credited: the license files' when there are any (they carry the text the notice
@@ -959,6 +984,11 @@ def _gate(lic):
                        + ". A missing license is 'all rights reserved', not permissive - do NOT "
                        "assume MIT. Research the source online, present what you find, and get an "
                        "explicit user decision before adopting. Nothing was scaffolded.")
+    if lic["status"] == "unreadable":
+        # Not the gate's 'no': it could not look, so this is an error (exit 2), still fail-closed.
+        raise AdoptError(f"LICENSE GATE: CANNOT READ ({lic['where']}). The source was not "
+                         "judged, so nothing was scaffolded: fix the read (a file permission, a "
+                         "Python 3.11+ interpreter for a pyproject.toml license table) and rerun.")
 
 
 _CROSS_REF_SUFFIXES = {".md", ".py", ".txt", ".json", ".yml", ".yaml"}

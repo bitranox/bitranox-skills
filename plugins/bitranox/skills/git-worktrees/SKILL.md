@@ -147,6 +147,23 @@ npm test / cargo test / pytest / go test ./...
 
 **If tests pass:** Report ready.
 
+**A worktree nested in the main checkout inherits the tool config ABOVE it.** A project-local
+worktree (`.worktrees/<name>`, `.claude/worktrees/<name>`) sits inside the main checkout, so a
+tool that searches upward for its config can find the main checkout's file before, or instead
+of, the worktree's own. Measured with pyright 1.1.407: run from a worktree under
+`.claude/worktrees/<name>`, it loaded the main checkout's `pyrightconfig.json` and ignored the
+worktree's own `[tool.pyright]` in `pyproject.toml` - 0 errors where the worktree's strict setting
+reports 4. A green type check there can be the parent's laxer config talking. Before trusting a
+type-check or lint result in such a worktree, check which config the tool loaded:
+
+```bash
+pyright --verbose 2>&1 | grep "Loading configuration"   # must name a file INSIDE the worktree
+pyright -p .                                           # pin the worktree's own config
+```
+
+A worktree outside the checkout (the `<base>/wt-<topic>` convention) has nothing above it to
+inherit, which is one reason to prefer it when the project's tools read upward-found config.
+
 ### Report
 
 ```
@@ -226,17 +243,23 @@ rejects is not knowable until it is attempted:
   `worktrees/` or `.claude/worktrees/` the name is kept whole, so `.worktrees/wt-cache` looks for
   `<base>/wt-wt-cache-target` and never touches `<base>/wt-cache-target`, which belongs to a
   different worktree.
-- **A `--cache-dir` that does not exist** is refused by name (a typo would otherwise read as
-  "nothing to remove" and exit 0 while the real cache stays on disk).
-- **A path that is your home directory or a filesystem root** is refused, `--cache-dir` included.
+- **A `--cache-dir` that does not exist** is refused by name with exit 2, dry run included (a typo
+  would otherwise read as "nothing to remove" and exit 0 while the real cache stays on disk).
+- **A path that is your home directory or a filesystem root** is refused, `--cache-dir` included;
+  a `--cache-dir` refused that way (or as a symlink) exits 2, since the path you typed is the
+  problem.
 
 Works for a worktree of an ordinary checkout, a bare repository and a `--separate-git-dir` one:
 git is run from the repository's common git dir. The removal has no timeout, because killing git
 part way through would leave a half-deleted, still-registered worktree. A size that could not be
 read in full is shown as `at least`.
 
-Exit codes: 0 = nothing blocked, 1 = something was refused or could not be removed, 2 = usage
-error. `--json` emits the machine-readable envelope; warnings go to stderr.
+Exit codes: 0 = nothing blocked; 1 = the plan refused something (a dirty or unreadable worktree,
+an ambiguous topic) and nothing failed; 2 = could not run as asked - a usage error, an unsafe
+topic, a missing or forbidden `--cache-dir`, or a removal that FAILED (git refused, an I/O error).
+A 2 wins over a 1. `--json` emits `{ok, command, data, skipped}` on every exit, `ok` false only on
+exit 2, each blocked entry's `kind` (`refused`, `bad_input`, `failed`) under `data.blocked`;
+warnings go to stderr.
 
 ## Quick Reference
 
@@ -279,6 +302,14 @@ error. `--json` emits the machine-readable envelope; warnings go to stderr.
 
 - **Problem:** Creates inconsistency, violates project conventions
 - **Fix:** Follow priority: explicit instructions > existing project-local directory > default
+
+### Trusting a check that read the parent's config
+
+- **Problem:** In a worktree nested in the main checkout, pyright (and any tool that searches
+  upward for its config) can load the main checkout's config instead of the worktree's own, so a
+  green result reflects the wrong settings
+- **Fix:** Check the loaded config path (`pyright --verbose`), pin it (`pyright -p .`), or create
+  the worktree outside the checkout (Step 3)
 
 ### Proceeding with failing tests
 

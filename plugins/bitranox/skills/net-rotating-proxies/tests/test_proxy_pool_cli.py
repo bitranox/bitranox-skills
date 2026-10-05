@@ -116,6 +116,40 @@ def test_run_survives_output_that_is_not_utf8(tmp_path, tool):
     assert _run(_store(tmp_path), _worklist(tmp_path, "bytes1"), cmd) == 1
 
 
+# ---- bad input is "could not run" (2), never a traceback (1) -------------------------------------
+@pytest.mark.skipif(os.name == "nt", reason="Windows command-line rules accept an unbalanced "
+                                            "quote, so this template is not malformed there")
+def test_run_with_a_malformed_cmd_template_exits_2(tmp_path, capsys):
+    rc = _run(_store(tmp_path), _worklist(tmp_path, "ok1"), 'tool "{proxy} {item}')
+    assert rc == 2
+    assert "--cmd" in capsys.readouterr().err
+
+
+def test_run_with_an_invalid_dead_regex_exits_2(tmp_path, tool, capsys):
+    cmd, _ = tool
+    rc = _run(_store(tmp_path), _worklist(tmp_path, "ok1"), cmd, "--dead-regex", "(unclosed")
+    assert rc == 2
+    assert "--dead-regex" in capsys.readouterr().err
+
+
+def test_run_with_a_worklist_that_is_not_utf8_exits_2(tmp_path, tool, capsys):
+    cmd, _ = tool
+    worklist = tmp_path / "items.txt"
+    worklist.write_bytes(b"ok1\n\xff\xfe\x81\n")
+    rc = _run(_store(tmp_path), str(worklist), cmd)
+    assert rc == 2
+    assert "--worklist" in capsys.readouterr().err
+
+
+def test_validate_with_no_live_proxy_found_still_exits_0(tmp_path, monkeypatch):
+    """validate is a report (NU-3): zero new live proxies is a result, not a failure."""
+    store = _store(tmp_path, live=())
+    with open(os.path.join(store, "pool.txt"), "w", encoding="utf-8", newline="") as f:
+        f.write("192.0.2.1:80\n")
+    monkeypatch.setattr(pp, "_reachable", lambda p, u, t: (False, None))   # the network edge
+    assert pp.main(["--store", store, "validate", "--workers", "1"]) == 0
+
+
 def test_a_worklist_saved_with_a_bom_does_not_corrupt_the_first_item(tmp_path, tool):
     cmd, outdir = tool
     assert _run(_store(tmp_path), _worklist(tmp_path, "ok1", bom=True), cmd) == 0

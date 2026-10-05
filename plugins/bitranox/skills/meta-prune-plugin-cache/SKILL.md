@@ -40,15 +40,23 @@ aged past `--min-age` in between can go although the dry run kept it. Every remo
 the same rules, and within one `--apply` the set only shrinks - a session starting between the
 plan and the removal claims its version, and that directory is refused. Only what was actually
 removed is reported as removed. On stderr a directory the plan refused, and so never attempted, is
-reported REFUSED; one whose removal was attempted and did not happen is reported FAILED.
+reported REFUSED; one whose removal was attempted and did not happen is reported FAILED. A
+symlinked marketplace or plugin directory is reported once, as the alias, not once per version
+reached through it; `--json` gives every refused or failed entry a `reason_code` (`alias`,
+`symlink`, `outside_cache`, `in_use`, `io_error`, ...) to key on instead of the message text.
 
 ```bash
 uv run scripts/pluginprune.py             # the plan, with sizes and a reason per kept directory
 uv run scripts/pluginprune.py --apply     # re-plan, then remove that plan
-uv run scripts/pluginprune.py --json      # {ok, command, data, skipped} on every exit (on 2: ok false, data null, error); 0 fine, 1 refused, 2 usage or unusable settings
+uv run scripts/pluginprune.py --json      # {ok, command, data, skipped} on every exit; ok false only on exit 2
 ```
 
 Run `--help` for the rest (`--marketplace`, `--keep`, `--min-age`, `--settings`).
+
+Exit codes: 0 nothing blocked; 1 something was refused (by the plan, or claimed by a session
+before `--apply` reached it) and the rest went ahead; 2 a removal that was tried and FAILED on I/O
+(it is still on disk, and a 2 wins over any refusal), a usage error, or a settings source it
+cannot use.
 
 It keeps a version with a live lock (or an `.in_use` directory it cannot list), the
 `installPath` from `installed_plugins.json` (what a fresh session resolves to), anything a

@@ -593,8 +593,9 @@ def test_json_reports_a_refusal_and_exits_one(cache: Path, capsys) -> None:
     rc = P.main(["--cache-dir", str(cache), "--json"])
     assert rc == 1
     payload = json.loads(capsys.readouterr().out)
-    assert payload["ok"] is False
+    assert payload["ok"] is True   # ok = ran without error; the refusal is the exit code's 1
     assert any("symlink" in item for item in payload["skipped"])
+    assert [entry["reason_code"] for entry in payload["data"]["refused"]] == ["symlink"]
 
 
 def test_text_report_names_the_session_check_when_no_live_lock_is_found(cache: Path, capsys) -> None:
@@ -660,7 +661,9 @@ def test_a_symlinked_marketplace_dir_is_refused_and_the_installed_version_surviv
 
     plan = plan_for(cache)
     refused = {str(entry.path): entry.refusal for entry in plan.refused}
-    assert "symlink" in (refused.get(str(alias / "own-plugin" / "1.2.0")) or "")
+    # One refusal for the alias, not one per version reached through it.
+    assert "symlink" in (refused.get(str(alias)) or "")
+    assert not any(path.startswith(str(alias / "own-plugin")) for path in refused)
     assert not any(str(alias) in path for path in paths(plan.prune))
     assert kept_reasons(plan)[str(installed)] == "installed"
 
@@ -1084,7 +1087,7 @@ def test_apply_does_not_report_a_directory_it_failed_to_remove(cache: Path, caps
     finally:
         (target / "skills").chmod(0o755)
     out, err = capsys.readouterr()
-    assert rc == 1
+    assert rc == 2   # an I/O-failed removal is 'could not run', not a plan refusal
     assert target.exists()
     assert f"removed: {target} " not in out
     assert "FAILED" in err and str(target) in err
@@ -1100,7 +1103,7 @@ def test_apply_json_lists_only_what_was_removed(cache: Path, capsys) -> None:
     finally:
         (target / "skills").chmod(0o755)
     payload = json.loads(capsys.readouterr().out)
-    assert rc == 1
+    assert rc == 2   # one removal failed on I/O
     removed = set(payload["data"]["removed"])
     assert str(target) not in removed
     assert str(cache / "own-marketplace" / "own-plugin" / "1.1.0") in removed
@@ -1481,9 +1484,59 @@ def test_json_skipped_names_the_kind_of_each_entry(cache: Path, tmp_path: Path) 
     assert f"REFUSED: {link}: is a symlink" in " ".join(payload["skipped"])
     assert f"FAILED: {failed_path}: could not be removed: denied" in payload["skipped"]
     assert len(payload["skipped"]) == 2
-    assert payload["data"]["failed"] == [{"path": str(failed_path), "reason": "could not be removed: denied"}]
+    assert payload["data"]["failed"] == [{"path": str(failed_path), "reason": "could not be removed: denied",
+                                         "reason_code": "io_error"}]
     assert [entry["path"] for entry in payload["data"]["refused"]] == [str(link)]
-    assert payload["ok"] is False
+    assert payload["ok"] is False   # the io_error failure makes this run an exit 2
+    assert P.exit_code(plan, applied) == 2
+
+
+def test_a_refusal_alone_exits_1_and_a_failure_wins_with_2(cache: Path, tmp_path: Path) -> None:
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    (cache / "own-marketplace" / "own-plugin" / "latest").symlink_to(outside, target_is_directory=True)
+    plan = plan_for(cache)
+    assert P.exit_code(plan, None) == 1
+    assert P.exit_code(plan, P.ApplyResult(removed=(), failures=())) == 1
+    assert P.exit_code(plan, _late_failure(plan)) == 2
+
+
+def test_a_version_claimed_between_plan_and_apply_is_a_refusal_not_an_io_failure(
+    cache: Path,
+) -> None:
+    """A live lock that appears after planning stops the removal: a partial outcome (1)."""
+    plan = plan_for(cache)
+    target = next(e for e in plan.prune if e.kind == P.KIND_VERSION)
+    write_lock(target.path, os.getpid(), P.process_start_ticks(os.getpid()))
+    applied = P.apply_plan(plan)
+    claimed = [f for f in applied.failures if f.path == target.path]
+    assert claimed and claimed[0].reason_code == "in_use"
+    assert P.exit_code(plan, applied) == 1
+
+
+def test_one_symlinked_marketplace_is_reported_once_with_a_reason_code(
+    cache: Path, capsys
+) -> None:
+    """An alias marketplace refused every version beneath it, one line each, with nothing a
+    caller could key on to tell an alias from a failed removal."""
+    alias = cache / "alias-mkt"
+    alias.symlink_to(cache / "own-marketplace", target_is_directory=True)
+    rc = P.main(["--cache-dir", str(cache), "--json"])
+    payload = json.loads(capsys.readouterr().out)
+    assert rc == 1
+    refused = payload["data"]["refused"]
+    assert [(entry["path"], entry["reason_code"]) for entry in refused] == [(str(alias), "alias")]
+    assert sum(1 for item in payload["skipped"] if str(alias) in item) == 1
+    assert "3 version" in refused[0]["refusal"]
+
+
+def test_two_aliases_are_two_entries(cache: Path) -> None:
+    """Control: once per ALIAS, not once per run."""
+    (cache / "alias-a").symlink_to(cache / "own-marketplace", target_is_directory=True)
+    (cache / "alias-b").symlink_to(cache / "other-marketplace", target_is_directory=True)
+    plan = plan_for(cache)
+    assert sorted(e.path.name for e in plan.refused) == ["alias-a", "alias-b"]
+    assert {e.reason_code for e in plan.refused} == {"alias"}
 
 
 def test_json_without_apply_has_no_failed_list(cache: Path) -> None:
@@ -1504,7 +1557,9 @@ def test_json_apply_reports_a_real_removal_failure_as_failed(cache: Path, capsys
     finally:
         parent.chmod(0o755)
     payload = json.loads(capsys.readouterr().out)
-    assert rc == 1
+    assert rc == 2
+    assert payload["ok"] is False
     assert payload["skipped"] and all(item.startswith("FAILED: ") for item in payload["skipped"])
+    assert {entry["reason_code"] for entry in payload["data"]["failed"]} == {"io_error"}
     assert {entry["path"] for entry in payload["data"]["failed"]} <= {
         str(p) for p in parent.iterdir()}

@@ -19,7 +19,13 @@ The dangerous verdict is the negative: "nothing changed" and "I never really loo
 output. Every failure to look lands in BROKEN rather than collapsing into CURRENT, and a body that
 arrives truncated is caught by the control gate before it can read as "every event was removed".
 
-Exit codes: 0 current or cosmetic, 1 structural drift or a coverage gap, 2 broken.
+Exit codes: 0 current or cosmetic (or the asked-for action done); 1 structural drift, a coverage
+gap, a stale baseline line, a failed selftest, or a `check --expect` the verdict did not meet; 2
+broken - the run could not look (a fetch, a read, a decode or a parse failed), or a whole action was
+refused (`stamp` with coverage gaps or with `--cosmetic-only` against a moved structure, `baseline
+--write` with no line to update). A BROKEN verdict exits 2 whatever `--expect` said. Under `--json`
+every exit prints the envelope {ok, command, data, skipped}; ok means the run finished without
+error, so it is false only on exit 2.
 """
 
 from __future__ import annotations
@@ -737,7 +743,7 @@ def cmd_coverage(args: argparse.Namespace) -> int:
     if result["undocumented_advisory"]:
         lines.append("  advisory: %d of %d example field names not mentioned (not a failure)"
                      % (len(result["undocumented_advisory"]), result["advisory_checked"]))
-    emit(args, "coverage", ok, result, "\n".join(lines))
+    emit(args, "coverage", True, result, "\n".join(lines))
     return 0 if ok else 1
 
 
@@ -759,6 +765,15 @@ def _expectation_failed(args: argparse.Namespace, verdict: str) -> bool:
         sys.stderr.write("expected %s, got %s\n" % (args.expect, verdict))
         return True
     return False
+
+
+def _check_exit(args: argparse.Namespace, verdict: str) -> int:
+    """BROKEN is 2 whatever --expect said: a mismatch reported as 1 made a run that could not
+    look read as a plain 'no'. Otherwise an unmet --expect is 1, else the verdict's own code."""
+    failed = _expectation_failed(args, verdict)
+    if verdict == BROKEN:
+        return 2
+    return 1 if failed else _EXIT[verdict]
 
 
 def cmd_check(args: argparse.Namespace) -> int:
@@ -790,8 +805,8 @@ def cmd_check(args: argparse.Namespace) -> int:
             # says "your CLI is X" in the present tense, and the staleness verdict that matters
             # (docs versus CLI) is computed from that same number.
             cached = dict(cached, cli_version=cli, cli_ahead_of_docs=ahead)
-            emit(args, "check", _EXIT[cached["verdict"]] == 0, cached, _human_check(cached))
-            return 1 if _expectation_failed(args, cached["verdict"]) else _EXIT[cached["verdict"]]
+            emit(args, "check", cached["verdict"] != BROKEN, cached, _human_check(cached))
+            return _check_exit(args, cached["verdict"])
 
     if args.offline and not args.body:
         # Decided BEFORE the fetch loop: --offline means no network I/O at all, not a fetch whose
@@ -818,8 +833,8 @@ def cmd_check(args: argparse.Namespace) -> int:
     # --offline run read nothing, so replaying either would answer the next online check for it.
     if not args.body and not args.offline:
         write_cache(cache_dir, payload)
-    emit(args, "check", _EXIT[overall] == 0, payload, _human_check(payload))
-    return 1 if _expectation_failed(args, overall) else _EXIT[overall]
+    emit(args, "check", overall != BROKEN, payload, _human_check(payload))
+    return _check_exit(args, overall)
 
 
 def _check_source(src: dict[str, Any], args: argparse.Namespace) -> Verdict:
@@ -876,7 +891,7 @@ def cmd_stamp(args: argparse.Namespace) -> int:
         rec = build_source_record(src["name"], src["url"], raw, src.get("tier", "api"), src.get("control"))
         if args.cosmetic_only and rec["structure_sha256"] != src["structure_sha256"]:
             emit(args, "stamp", False, {"refused": True, "source": src["name"]}, "refusing: --cosmetic-only but the structure moved")
-            return 1
+            return 2   # a whole-action refusal: nothing was stamped
         records.append(rec)
 
     by_name = {r["name"]: r for r in records}
@@ -895,7 +910,7 @@ def cmd_stamp(args: argparse.Namespace) -> int:
         if not cov["complete"] and not args.accept_gaps:
             emit(args, "stamp", False, {"refused": True, "coverage": cov},
                  "refusing to re-stamp: coverage of the new stamp has gaps\n  %s" % cov)
-            return 1
+            return 2   # a whole-action refusal: nothing was stamped
         gaps = cov["missing_events"] if args.accept_gaps else []
     stamp["coverage_gaps"] = gaps
 
@@ -945,7 +960,7 @@ def cmd_selftest(args: argparse.Namespace) -> int:
     lines = ["%-32s expected %-11s got %-11s %s" % (r["fixture"], r["expected"], r["got"], "ok" if r["pass"] else "FAIL") for r in out["results"]]
     if not out["passed"]:
         lines.append("the detector is a rubber stamp or is mis-tuned; do not trust its verdicts")
-    emit(args, "selftest", out["passed"], out, "\n".join(lines))
+    emit(args, "selftest", True, out, "\n".join(lines))
     return 0 if out["passed"] else 1
 
 
@@ -973,14 +988,14 @@ def cmd_baseline(args: argparse.Namespace) -> int:
         emit(args, "baseline", True, {"line": want, "in_sync": True}, want)
         return 0
     if not args.write:
-        emit(args, "baseline", False, {"expected": want, "found": found.group(0) if found else None, "in_sync": False}, "stale baseline line\n  want: %s\n  have: %s" % (want, found.group(0) if found else "(absent)"))
+        emit(args, "baseline", True, {"expected": want, "found": found.group(0) if found else None, "in_sync": False}, "stale baseline line\n  want: %s\n  have: %s" % (want, found.group(0) if found else "(absent)"))
         return 1
     if not found:
         # Inserting a line into SKILL.md is a placement decision this tool cannot make; claiming
         # "wrote" while the file is byte-identical is the one answer it must not give.
         emit(args, "baseline", False, {"expected": want, "found": None, "written": False},
              "no baseline line to update in %s; add a line starting 'Reference baseline: ' first" % target)
-        return 1
+        return 2   # a whole-action refusal: nothing was written
     text = BASELINE_RX.sub(lambda _m: want, text)
     target.write_text(text, encoding="utf-8")
     emit(args, "baseline", True, {"line": want, "written": True}, "wrote: %s" % want)
@@ -1069,15 +1084,20 @@ def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
     try:
         return int(args.func(args))
-    except ControlError as exc:
-        if getattr(args, "json", False):
-            sys.stdout.write(json.dumps(envelope(args.command, False, {"verdict": BROKEN, "reason": str(exc)}), indent=2) + "\n")
-        else:
-            sys.stderr.write("hookdoc-freshness: BROKEN - %s\n" % exc)
-        return 2
-    except OSError as exc:
-        sys.stderr.write("hookdoc-freshness: BROKEN - %s\n" % exc)
-        return 2
+    except (ControlError, OSError, ValueError) as exc:
+        # ValueError covers UnicodeDecodeError (a --skill-md or references file that is not UTF-8)
+        # and JSONDecodeError (a selftest fixture stamp): both escaped as a traceback, exit 1.
+        return _broken(args, exc)
+
+
+def _broken(args: argparse.Namespace, exc: Exception) -> int:
+    """Exit 2 for a run that could not look, with the envelope under --json."""
+    reason = str(exc) if isinstance(exc, ControlError) else "%s: %s" % (type(exc).__name__, exc)
+    if getattr(args, "json", False):
+        sys.stdout.write(json.dumps(envelope(args.command, False, {"verdict": BROKEN, "reason": reason}), indent=2) + "\n")
+    else:
+        sys.stderr.write("hookdoc-freshness: BROKEN - %s\n" % reason)
+    return 2
 
 
 if __name__ == "__main__":

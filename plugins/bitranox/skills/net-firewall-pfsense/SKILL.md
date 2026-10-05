@@ -45,17 +45,24 @@ Run `pfsense.py --help` and `pfsense.py <verb> --help` for the current flags.
 | `doctor`                                                  | what is quietly wrong, live or from a snapshot file   |
 | `info`                                                    | version, DHCP backend, resolver, interfaces, packages |
 | `snapshot`                                                | save `/conf/config.xml` under a timestamped name      |
-| `dhcp list` / `rm` / `rm-static-arp`                      | reservations, and the static-ARP fix                  |
+| `dhcp list` / `add` / `rename` / `rm` / `rm-static-arp`   | reservations, and the static-ARP fix                  |
 | `dns list` / `add` / `rm`                                 | unbound host overrides                                |
 | `arp [--permanent]`                                       | the live ARP table                                    |
 | `table list` / `show` / `test` / `del`                    | any pf table - snort2c, ISP aliases, bogons           |
 | `rules [--counters] [--nat]`                              | the live ruleset, with per-rule counters              |
 | `snort check` / `why` / `unblock` / `verify` / `fixsteps` | a Snort block and its durable fix                     |
 
-Everything is a dry run until `--apply`. The four verbs that edit `config.xml` (`dhcp rm`,
-`dhcp rm-static-arp`, `dns add`, `dns rm`) snapshot it first and abort if the snapshot fails.
+Everything is a dry run until `--apply`. The six verbs that edit `config.xml` (`dhcp add`,
+`dhcp rename`, `dhcp rm`, `dhcp rm-static-arp`, `dns add`, `dns rm`) snapshot it first and abort if
+the snapshot fails. `dhcp add --mac M --ip A --hostname H` refuses a MAC or address that is already
+reserved and an address outside the interface's subnet (the interface is the one holding the
+address, or `--interface lan`); `dhcp rename --mac M --hostname H` sets one reservation's
+hostname. Both take a hostname as one label (letters, digits, inner hyphens), as the GUI does.
 `table del` and `snort unblock` change LIVE pf state, which a `config.xml` snapshot neither
 captures nor restores, so they take none - undo those by re-adding the entry.
+
+With `--json` every verb prints `{ok, command, data, skipped}`, including on exit 2; `ok` means it
+ran without error, so it stays true on a well-formed "no" (exit 1) such as `doctor` findings.
 
 A snapshot is a whole `config.xml`, with password hashes, private keys and certificates in it, so
 it is written to a private per-user state directory (`--snapshot-dir` to choose another). Writing
