@@ -65,9 +65,10 @@ Run: uv run scripts/renamescope.py src/net.py --name mac \
        --intended _guest_new_iface --intended _apply_iface
      uv run scripts/renamescope.py src/*.py --regex '(?m)^([ \t]*)if x:$' --intended run --json
 Exit 0 = every hit is inside a function you named; 1 = hits fall OUTSIDE that list (the finding);
-2 = error - no such file, a directory, an unreadable or undecodable or unparseable source, or a
-pattern that matched nothing. A file that could not be read makes the whole run exit 2: a mandate
-checked against part of the files cannot come back clean.
+2 = error - no such file, a directory, an unreadable or undecodable or unparseable source, a
+pattern that matched nothing, or an internal error. A file that could not be read makes the whole
+run exit 2: a mandate checked against part of the files cannot come back clean. `--json` prints
+`{ok, command, data, skipped}` on every exit; `ok` is false exactly when the exit is 2.
 """
 
 from __future__ import annotations
@@ -82,6 +83,8 @@ import tokenize
 from dataclasses import asdict, dataclass, field, replace
 from enum import Enum
 from pathlib import Path
+
+from _cli_envelope import EXIT_ERROR, EnvelopeArgumentParser, emit, guarded
 
 __all__ = [
     "Binding",
@@ -973,7 +976,8 @@ def _render(scan: Scan, pattern: str) -> str:
 
 
 def _build_parser() -> argparse.ArgumentParser:
-    p = argparse.ArgumentParser(
+    p = EnvelopeArgumentParser(
+        envelope_command="renamescope",
         prog="renamescope.py",
         description=__doc__,
         formatter_class=argparse.RawDescriptionHelpFormatter,
@@ -1001,12 +1005,11 @@ def _build_parser() -> argparse.ArgumentParser:
 def _fail(message: str, *, as_json: bool, command: str = "renamescope",
           skipped: tuple[str, ...] = ()) -> int:
     if as_json:
-        print(json.dumps({"ok": False, "command": command, "data": {"error": message},
-                          "skipped": list(skipped)}, indent=1))
+        emit(EXIT_ERROR, command, {"error": message}, skipped=skipped, error=message, indent=1)
     for note in skipped:
         print(f"renamescope: skipped: {note}", file=sys.stderr)
     print(f"renamescope: {message}", file=sys.stderr)
-    return 2
+    return EXIT_ERROR
 
 
 def _read_intended_file(path: Path) -> list[str]:
@@ -1041,7 +1044,9 @@ def _path_problem(paths: list[Path]) -> str | None:
     return None
 
 
+@guarded("renamescope")
 def main(argv: list[str] | None = None) -> int:
+    """Scan; an uncaught exception exits 2, never Python's 1, which is "hits fall outside"."""
     _tolerate_console_encoding()
     args = _build_parser().parse_args(argv)
 
