@@ -40,9 +40,11 @@ prompt into blind judge packets plus a key, and `harvest` reads each judge's ver
 transcript and writes majority labels keyed by prompt uuid, printing every split. Both read and
 write local files only.
 
-Exit codes: 0 done; 1 nothing to report (no usable rows, no prompts, a judge transcript with no
-verdict object); 2 usage or IO error, or no API key; 3 a planted control answered the wrong way, so
-no number from the run may be read.
+Exit codes: 0 done; 1 nothing to report (no usable rows, no prompts); 2 could not run: a usage or
+IO error, no API key, a judge transcript with no verdict object, or a planted control that answered
+the wrong way, so no number from the run may be read (its message says which). Under `--json` every
+exit prints `{ok, command, data, skipped}` (plus `error` when there is one); `ok` is true unless the
+exit is 2.
 """
 from __future__ import annotations
 
@@ -193,10 +195,10 @@ UNLOCATED_GONE = "its transcript is gone"
 UNLOCATED_SCHEDULED = "a scheduled prompt (CronCreate / ScheduleWakeup), not typed"
 UNLOCATED_NO_PROMPT = "it logged no prompt text to look for (a task-notification turn)"
 UNLOCATED_NOT_TYPED = "a subagent hand-back, notification or other harness record, not typed"
-# looks_typed leaves every slash-command record out on purpose. Whether one carrying arguments
-# (`/goal do 3-7`) should count as typed is an open decision, so these are counted apart from
-# both a miss and a hand-back: the count is what sizes that decision.
-UNLOCATED_COMMAND = "a slash command, which looks_typed leaves out"
+# A slash command WITH arguments (`/goal do 3-7`) is typed and locates like any prompt
+# (transcript_turns.slash_command); a bare one (`/clear`, a skill invoked with no arguments)
+# carries no prose and is not typed, so it is counted apart from both a miss and a hand-back.
+UNLOCATED_COMMAND = "a bare slash command (no arguments), not typed"
 UNLOCATED_NOT_FOUND = jp.UNLOCATED
 COMMAND_PREFIXES = ("<command-", "<local-command")
 
@@ -1142,8 +1144,59 @@ def _replay_report(rows, threshold):
     return out
 
 
+def roster_fingerprint(roster):
+    """A stable key for a roster: its names and texts, order-free."""
+    import hashlib  # noqa: PLC0415 - only a --roster installed run fingerprints
+
+    blob = json.dumps(sorted(roster.items()), ensure_ascii=False)
+    return hashlib.sha1(blob.encode("utf-8")).hexdigest()
+
+
+class InstalledRosterVetting:
+    """The planted controls, asked once per distinct installed roster before a row uses it.
+
+    The run-wide vetting covers the shipped roster only, while `--roster installed` offers each
+    prompt the listing of its own session, which can lack the skill a planted positive needs or
+    carry a trimmed description. Each distinct roster (with the --description overrides applied,
+    as the row will see it) is asked the controls of every replayed arm once, cached by
+    fingerprint; a prompt whose roster fails is skipped before any arm is asked about it.
+    """
+
+    def __init__(self, ask, args, bodies, router_text):
+        self.ask, self.args, self.bodies, self.router_text = ask, args, bodies, router_text
+        self.verdicts = {}
+
+    def failure_for(self, prompt, shipped):
+        """None when this prompt's roster may be replayed, else why not."""
+        if getattr(self.args, "roster", "shipped") != "installed":
+            return None
+        offered, source = roster_for(prompt, shipped, "installed")
+        if source != skill_roster.SOURCE_TRANSCRIPT:
+            return None  # fell back to the shipped roster, which the run already vetted
+        offered, _applied = with_descriptions(
+            offered, dict(getattr(self.args, "description", None) or []))
+        key = roster_fingerprint(offered)
+        if key not in self.verdicts:
+            self.verdicts[key] = self._vet(offered)
+        return self.verdicts[key]
+
+    def _vet(self, offered):
+        try:
+            for arm in selected_arms(getattr(self.args, "arm", None)):
+                check_controls(arm, self.ask, offered, threshold=self.args.threshold,
+                               shortlist=self.args.shortlist, bodies=self.bodies,
+                               router_text=self.router_text)
+        except ControlFailed as exc:
+            return "its installed roster failed a planted control: %s" % exc
+        return None
+
+    def summary(self):
+        return {"vetted": len(self.verdicts),
+                "failed": sum(1 for v in self.verdicts.values() if v)}
+
+
 def _run_replay(args, clf=None, skills=None):
-    """(exit code, data, error) for replay / size / controls. Raises ControlFailed (exit 3).
+    """(exit code, data, error) for replay / size / controls. Raises ControlFailed (exit 2).
 
     `clf` and `skills` are the two external edges - the paid classifier and the installed skill
     set - injectable so a test can drive this whole function with a fake transport. None means
@@ -1171,7 +1224,7 @@ def _run_replay(args, clf=None, skills=None):
                 for row in run_controls(arm, ask, skills, threshold=args.threshold,
                                         shortlist=args.shortlist, bodies=bodies,
                                         router_text=router_text)]
-        return (0 if all(r["ok"] for r in rows) else 3), \
+        return (0 if all(r["ok"] for r in rows) else 2), \
             {"controls": rows, "input_tokens": ask.tokens, "requests": ask.calls,
              "failures": dict(ask.reasons)}, \
             None if all(r["ok"] for r in rows) else "a planted control answered the wrong way"
@@ -1201,10 +1254,19 @@ def _run_replay(args, clf=None, skills=None):
                        bodies=bodies, router_text=router_text)
     triggers = router.load_triggers()
     rows, replayed, skipped = [], [], []
+    vet = InstalledRosterVetting(ask, args, bodies, router_text)
     # Written as they come, not at the end: a run costs real money and several minutes, and a
     # crash on the last prompt would otherwise discard every row before it.
     with open(args.out, "a", encoding="utf-8") as fh:
         for prompt in picked:
+            failure = vet.failure_for(prompt, skills)
+            if failure:
+                # Skipped before any arm is asked: a row bought on a roster the planted controls
+                # reject measures the roster's defect, not the arm.
+                skipped.append({"uuid": prompt.get("uuid"), "source": prompt.get("source"),
+                                "line": prompt.get("line"), "reason": failure})
+                print("classifier_eval: skipped a prompt - %s" % failure, file=sys.stderr)
+                continue
             try:
                 row = _replay_one(prompt, ask, skills, bodies, router, triggers, args,
                                   router_text)
@@ -1226,6 +1288,7 @@ def _run_replay(args, clf=None, skills=None):
               "failures": dict(ask.reasons), "log": str(args.out),
               "roster": getattr(args, "roster", "shipped"),
               "rosters_used": dict(Counter(r["roster"] for r in rows)),
+              "installed_rosters": vet.summary(),
               "arms": _replay_report(rows, args.threshold)}
     if getattr(args, "description", None):
         # Rows each override reached, per skill: 0 means the run was its own control.
@@ -1462,7 +1525,8 @@ def _run_harvest(args):
     for path in args.transcript:
         panel = jp.extract_panel(path, set(key))
         if panel is None:
-            return 1, None, "no verdict object for these items in %s" % path
+            # Malformed input, not "nothing found": a judge transcript always holds a verdict.
+            return 2, None, "no verdict object for these items in %s" % path
         panels.append(panel)
     out = jp.harvest(key, panels)
     args.out.write_text(json.dumps(out["labels"], ensure_ascii=False, indent=1), encoding="utf-8")
@@ -1471,13 +1535,16 @@ def _run_harvest(args):
                "invalid": out["invalid"]}, None
 
 
-def _emit(args, ok, data=None, error=None, skipped=None):
+def _emit(args, code, data=None, error=None, skipped=None):
+    """Print one exit's output. Under --json that is always the envelope, whose `ok` means "ran
+    without error" (true on 0 and 1, false on 2), so a caller can tell a run that found nothing
+    from one that could not run without reading the exit code."""
     if args.json:
-        env = {"ok": ok, "command": args.command, "data": data, "skipped": skipped or {}}
+        env = {"ok": code != 2, "command": args.command, "data": data, "skipped": skipped or {}}
         if error:
             env["error"] = error
         print(json.dumps(env, ensure_ascii=False, indent=2))
-    elif ok or data is not None:
+    elif data is not None:
         # A failure that carries data prints it: for `controls` the rows ARE the diagnosis, and a
         # verdict line alone would say a control failed while withholding which one and at what
         # score. The error still goes to stderr, so the exit code and the stream stay separable.
@@ -1491,53 +1558,76 @@ def _emit(args, ok, data=None, error=None, skipped=None):
         print("classifier_eval: %s" % error, file=sys.stderr)
 
 
+def _usage_envelope(argv):
+    """The envelope for an argparse usage error (exit 2) when --json was asked for: argparse
+    exits before any command runs, so without this a --json caller got no envelope at all."""
+    argv = list(sys.argv[1:] if argv is None else argv)
+    if "--json" not in argv:
+        return
+    command = next((a for a in argv if a in COMMANDS), None)
+    print(json.dumps({"ok": False, "command": command, "data": None, "skipped": {},
+                      "error": "usage error (see stderr)"}, ensure_ascii=False, indent=2))
+
+
+COMMANDS = ("report", "replay", "size", "controls", "packet", "harvest")
+
+
+def _parse(argv):
+    try:
+        return _parser().parse_args(argv)
+    except SystemExit as exc:
+        if exc.code not in (0, None):
+            _usage_envelope(argv)
+        raise
+
+
 def main(argv=None, *, clf=None, skills=None):
     """`clf` and `skills` are forwarded to `_run_replay` (see there); None means the real ones."""
-    args = _parser().parse_args(argv)
+    args = _parse(argv)
     if args.command in ("replay", "size", "controls"):
         try:
             code, data, error = _run_replay(args, clf=clf, skills=skills)
         except ControlFailed as exc:
-            _emit(args, False, error=str(exc))
-            return 3
+            _emit(args, 2, error=str(exc))
+            return 2
         except (OSError, ValueError) as exc:
-            _emit(args, False, error="%s: %s" % (type(exc).__name__, exc))
+            _emit(args, 2, error="%s: %s" % (type(exc).__name__, exc))
             return 2
         skipped = ({"prompts_without_a_prefix": len(data["skipped_prompts"]),
                     "unreadable_corpus_paths": len(data["corpus"].get("unreadable", []))}
                    if data and "skipped_prompts" in data else None)
-        _emit(args, code == 0, data=data, error=error, skipped=skipped)
+        _emit(args, code, data=data, error=error, skipped=skipped)
         return code
     if args.command in ("packet", "harvest"):
         try:
             code, data, error = (_run_packet(args, skills) if args.command == "packet"
                                  else _run_harvest(args))
         except (OSError, ValueError) as exc:
-            _emit(args, False, error="%s: %s" % (type(exc).__name__, exc))
+            _emit(args, 2, error="%s: %s" % (type(exc).__name__, exc))
             return 2
-        _emit(args, code == 0, data=data, error=error)
+        _emit(args, code, data=data, error=error)
         return code
     exclude = tuple(args.exclude_session if args.exclude_session is not None else DEFAULT_EXCLUDE)
     args.log = args.log or default_log()
     try:
         rows, bad = load_rows(args.log, exclude_sessions=exclude)
     except OSError as exc:
-        _emit(args, False, error="cannot read %s: %s" % (args.log, exc))
+        _emit(args, 2, error="cannot read %s: %s" % (args.log, exc))
         return 2
     skipped = {"malformed_lines": bad}
     if bad:
         print("classifier_eval: skipped %d malformed line(s)" % bad, file=sys.stderr)
     if not rows:
-        _emit(args, False, error="no usable rows in %s" % args.log, skipped=skipped)
+        _emit(args, 1, error="no usable rows in %s" % args.log, skipped=skipped)
         return 1
     rep = summarize(rows, args.threshold, args.top)
     if args.disagreements:
         try:
             write_disagreements(rep, args.disagreements)
         except OSError as exc:
-            _emit(args, False, error="cannot write %s: %s" % (args.disagreements, exc))
+            _emit(args, 2, error="cannot write %s: %s" % (args.disagreements, exc))
             return 2
-    _emit(args, True, data=rep, skipped=skipped)
+    _emit(args, 0, data=rep, skipped=skipped)
     return 0
 
 

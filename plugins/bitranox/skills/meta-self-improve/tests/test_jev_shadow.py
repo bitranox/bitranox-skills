@@ -713,6 +713,12 @@ def test_report_with_no_log_is_exit_1(home, capsys):
     assert js.main(["report"]) == 1
 
 
+def test_report_with_no_log_under_json_says_ok_true(home, capsys):
+    assert js.main(["report", "--json"]) == 1
+    env = json.loads(capsys.readouterr().out)
+    assert env["ok"] is True and env["data"]["records"] == 0
+
+
 # ---- the site files -------------------------------------------------------------------------
 
 SITE_FILES = sorted(SITES_DIR.glob("*.json"))
@@ -978,6 +984,17 @@ def test_an_unknown_site_is_a_usage_error(tmp_path, home, capsys):
     assert js.main(["items", "--site", "nope", "--out", str(tmp_path / "i.jsonl")]) == 2
 
 
+def test_an_argparse_usage_error_under_json_prints_an_envelope(capsys):
+    assert js.main(["run", "--site", "dream-prune", "--json"]) == 2
+    env = json.loads(capsys.readouterr().out)
+    assert env["ok"] is False and env["command"] == "run" and "error" in env["data"]
+
+
+def test_an_argparse_usage_error_without_json_prints_nothing_on_stdout(capsys):
+    assert js.main(["run", "--site", "dream-prune"]) == 2
+    assert capsys.readouterr().out == ""
+
+
 # ---- status ---------------------------------------------------------------------------------
 
 
@@ -986,6 +1003,7 @@ def test_status_says_whether_a_run_would_happen(fake, home, capsys):
     assert js.main(["status", "--json"]) == 1
     env = json.loads(capsys.readouterr().out)
     assert env["data"]["would_run"] is False
+    assert env["ok"] is True  # "no run would happen" is an answer, not a failure
     knob(home)
     assert js.main(["status", "--json"]) == 0
     env = json.loads(capsys.readouterr().out)
@@ -1356,9 +1374,37 @@ def test_jev_answering_no_item_is_exit_1_with_the_reason_on_stderr(
 
 
 @posix_only
-def test_jev_judge_failing_outright_is_exit_1_with_its_exit_on_stderr(
+def test_jev_answering_no_item_reports_ok_true_because_the_run_itself_worked(
+    tmp_path, fake, home, capsys
+):
+    knob(home)
+    assert run_prune(tmp_path, fake, rows={}, extra=("--json",)) == 1
+    env = json.loads(capsys.readouterr().out)
+    assert env["ok"] is True and env["data"]["jev_failed"] == env["data"]["items"]
+
+
+@posix_only
+def test_jev_judge_failing_after_answering_nothing_is_exit_2(
     tmp_path, fake, home, capsys, monkeypatch
 ):
+    """Rows written, every one a failure, and jev-judge itself exited 2: the run failed, so the
+    answer "none" is not Jev's verdict."""
+    knob(home)
+    monkeypatch.setenv("FAKE_JEV_EXIT", "2")
+    assert run_prune(tmp_path, fake, rows={}) == 2
+    cap = capsys.readouterr()
+    assert "jev-judge run exited 2" in cap.err
+    # One line, so a step can report it verbatim as `error <message>`.
+    assert len([ln for ln in cap.err.splitlines() if ln.startswith("jev_shadow: ")]) == 1
+    assert len(read_jsonl(shadow_logs(home)[0])) == 3
+
+
+@posix_only
+def test_jev_judge_failing_outright_is_exit_2_with_its_exit_on_stderr(
+    tmp_path, fake, home, capsys, monkeypatch
+):
+    """jev-judge crashed before writing a row: a required tool could not run, so the run could
+    not answer (exit 2), which is not "Jev ran and answered none" (exit 1)."""
     knob(home)
     monkeypatch.setenv(
         "FAKE_JEV_ROWS", str(tmp_path / "missing.json")
@@ -1375,11 +1421,14 @@ def test_jev_judge_failing_outright_is_exit_1_with_its_exit_on_stderr(
                 str(items),
                 "--verdicts",
                 str(vpath),
+                "--json",
             ]
         )
-        == 1
+        == 2
     )
-    assert "jev-judge run exited" in capsys.readouterr().err
+    cap = capsys.readouterr()
+    assert "jev-judge run exited" in cap.err
+    assert json.loads(cap.out)["ok"] is False
     recs = read_jsonl(shadow_logs(home)[0])
     assert all(r["jev"] is None and "exited" in r["jev_reason"] for r in recs)
 

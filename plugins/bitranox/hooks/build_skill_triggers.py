@@ -12,7 +12,8 @@ lint guarantees its description is derivable) is all it takes.
     build_skill_triggers.py [--skills-dir DIR] [--out FILE] [--check]
 
 `--check` verifies the committed map is in sync (exit 1 if stale) - wired into the repo-gate's
-pytest suite. Pure standard library; ASCII.
+pytest suite. Exit 2 when it could not run: the --skills-dir does not exist, the map cannot be
+written, or (--check) there is no readable map to compare. Pure standard library; ASCII.
 """
 import argparse
 import json
@@ -109,6 +110,11 @@ def main(argv=None):
     ap.add_argument("--out", default=str(here / "skill_triggers.json"))
     ap.add_argument("--check", action="store_true", help="verify the committed map is in sync")
     args = ap.parse_args(argv if argv is not None else sys.argv[1:])
+    if not Path(args.skills_dir).is_dir():
+        # Globbing a missing dir finds nothing, and the result was an empty map written as {}.
+        print("build_skill_triggers: --skills-dir is not a directory: %s" % args.skills_dir,
+              file=sys.stderr)
+        return 2
     triggers = build(args.skills_dir)
     text = json.dumps(triggers, indent=1, sort_keys=True) + "\n"
     out = Path(args.out)
@@ -118,14 +124,22 @@ def main(argv=None):
         except OSError:
             # Not "stale": there is nothing to regenerate, so the --out (or the layout it was
             # derived from) is what is wrong, and saying STALE sends the reader to the wrong fix.
+            # Nothing to compare is could-not-run (2), not the stale finding (1).
             print("skill_triggers.json is missing: %s" % out, file=sys.stderr)
-            return 1
+            return 2
+        except ValueError as exc:
+            print("skill_triggers.json is not readable UTF-8: %s (%s)" % (out, exc), file=sys.stderr)
+            return 2
         if current == text:
             print("skill_triggers.json in sync (%d skills)" % len(triggers))
             return 0
         print("skill_triggers.json is STALE - run build_skill_triggers.py", file=sys.stderr)
         return 1
-    out.write_text(text, encoding="utf-8", newline="\n")
+    try:
+        out.write_text(text, encoding="utf-8", newline="\n")
+    except OSError as exc:
+        print("build_skill_triggers: cannot write %s: %s" % (out, exc), file=sys.stderr)
+        return 2
     print("wrote %s (%d skills)" % (out, len(triggers)))
     return 0
 

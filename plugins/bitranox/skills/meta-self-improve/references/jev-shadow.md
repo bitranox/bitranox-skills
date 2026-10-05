@@ -86,8 +86,11 @@ one entry, `<site> <form>`, in exactly one of four forms:
 | `no items`        | `items` exited 1: nothing to judge, so `run` was skipped                              |
 | `error <message>` | `items` or `run` exited 2: its one `jev_shadow: ...` stderr line, without that prefix |
 
-Exit 1 from `run` means Jev answered no item; its counts say so themselves (they end in
-`<N> without a Jev answer`), so they are reported as counts, not as an error. A site swept once per
+Exit 1 from `run` means jev-judge ran and Jev answered no item; its counts say so themselves
+(they end in `<N> without a Jev answer`), so they are reported as counts, not as an error. Exit 2
+from `run` includes a jev-judge that could not answer at all (it could not start, timed out, wrote
+no row, or exited other than 0 or 1 with no item answered): that is an `error`, named by the one
+stderr line, because "none" there is not Jev's answer. A site swept once per
 tree names the tree after the site: `crosstree-misplaced /work no items`. Example line:
 `jev shadow: dream-firing 20 items, 20 paired, 18 of 20 answers agreed, 0 without a Jev answer;
 dream-prune off (classifier_skills is not shadow)`.
@@ -175,13 +178,15 @@ reading by hand. Either side can be the wrong one; deciding which is the point.
 
 ## Exit codes and output
 
-| Command  | 0                                                  | 1                             | 2                                                                                     |
-|----------|----------------------------------------------------|-------------------------------|---------------------------------------------------------------------------------------|
-| `status` | a run would happen                                 | it would not (reason printed) | usage error                                                                           |
-| `items`  | items written                                      | none built (empty file)       | unknown site, agent-built site, missing source                                        |
-| `run`    | records logged, shadow off, or an empty items file | logged, but Jev answered none | missing verdicts file, malformed items or verdicts, unwritable log, workdir or output |
-| `report` | records summarized                                 | no records match              | bad `--since`, unwritable `--disagreements`                                           |
+| Command  | 0                                                  | 1                             | 2                                                                                                                                                 |
+|----------|----------------------------------------------------|-------------------------------|---------------------------------------------------------------------------------------------------------------------------------------------------|
+| `status` | a run would happen                                 | it would not (reason printed) | usage error                                                                                                                                       |
+| `items`  | items written                                      | none built (empty file)       | unknown site, agent-built site, missing source                                                                                                    |
+| `run`    | records logged, shadow off, or an empty items file | logged, but Jev answered none | missing verdicts file, malformed items or verdicts, unwritable log, workdir or output; jev-judge could not answer any item (records still logged) |
+| `report` | records summarized                                 | no records match              | bad `--since`, unwritable `--disagreements`                                                                                                       |
 
-`--json` prints `{ok, command, data, skipped}` on stdout; diagnostics go to stderr. A jev-judge
-run that fails (it could not start, timed out, or exited other than 0 or 1) after writing some
-rows still logs every record and exits by the answers it got; the failure is named on stderr.
+`--json` prints `{ok, command, data, skipped}` on stdout on every exit, a usage error included;
+`ok` means the command ran without error, so it is true on 0 and 1 and false on 2. Diagnostics go
+to stderr. A jev-judge run that fails (it could not start, timed out, or exited other than 0 or 1)
+after answering some items still logs every record and exits by the answers it got; the failure
+is named on stderr. One that fails having answered NO item exits 2, its records still logged.

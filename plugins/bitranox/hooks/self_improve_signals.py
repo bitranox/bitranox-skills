@@ -2417,6 +2417,13 @@ BROAD_USER_PATTERN = re.compile(
     r"|\bi (told|asked) you\b|\bas i (said|mentioned|asked)\b"
     r"|\bnot (quite|what i|right|correct)\b|\b(revert|undo|rollback)\b"
     r"|\b(perfect|exactly right|spot on|love it|that.?s it|works now)\b"
+    # A request to RE-CHECK and correct challenges a claim just made ("check, correct if
+    # neccessary, and push" found a real exec-bit loss in "harmless churn"). Needs both halves:
+    # check/verify alone, or fix/correct alone, is an ordinary instruction.
+    r"|\b(?:check|verify|review|double.?check)(?: it| this| that)?,?\s+(?:and\s+)?(?:correct|fix)\b"
+    r"|\b(?:correct|fix)(?: it| this| that)? if (?:nec+es+ary|needed|required)\b"
+    r"|\b(?:prüf|überprüf|kontrollier)\w* und (?:korrigier|berichtig)\w*"
+    r"|\b(?:korrigier|berichtig)\w* (?:falls|wenn|soweit) nötig\b"
     # NEUTRAL PREFERENCE: an imperative that sets a durable convention with no correction
     # wording at all ("use httpx2 here", "put it in the application layer"). The strict set
     # keys on correction/remember phrasing, so it never sees these - they are pure audit.
@@ -2447,6 +2454,29 @@ BROAD_ASST_PATTERN = re.compile(
     r"|\bwait\b[\s,.!\-]*(?:that|this|no\b|why\b|i\b|hold on)",
     re.IGNORECASE,
 )
+
+
+# Text the assistant QUOTES rather than says: a fenced code block, an inline code span, and a
+# single-line span in double, curly or single quotes. A report citing another turn's "that was
+# my mistake" is data about that turn, not an admission in this one. A single quote opens only
+# after a non-word character and closes only before one, so the apostrophes of "you're" and
+# "users'" never pair up into a span. Spans are bounded so an unclosed quote cannot swallow a
+# whole reply.
+_QUOTED_SPANS = re.compile(
+    r"(?ms)^[ \t]*(```|~~~).*?^[ \t]*\1[^\n]*$"
+    r"|`[^`\n]{1,400}`"
+    r"|\"[^\"\n]{1,400}\""
+    r"|\u201c[^\u201c\u201d\n]{1,400}\u201d"
+    r"|(?<![\w'])'[^'\n]{1,400}'(?![\w'])")
+
+
+def unquoted(text):
+    """`text` with every quoted span (see _QUOTED_SPANS) blanked to spaces, offsets preserved.
+
+    For the ASSISTANT side of the Stop gate: a self-admission the assistant quotes as data is
+    not one it makes. Same length as the input, so an offset into the result is an offset into
+    `text`."""
+    return _QUOTED_SPANS.sub(lambda m: " " * len(m.group(0)), text or "")
 
 
 def strict_user_hit(text):

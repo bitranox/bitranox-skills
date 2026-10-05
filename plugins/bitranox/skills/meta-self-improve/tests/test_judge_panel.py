@@ -306,12 +306,12 @@ def test_cli_packet_then_harvest_round_trip(tmp_path, capsys):
     assert labels["u2"]["needs_skill"] is False
 
 
-def test_cli_harvest_exits_1_when_a_transcript_holds_no_verdicts(tmp_path, capsys):
+def test_cli_harvest_exits_2_when_a_transcript_holds_no_verdicts(tmp_path, capsys):
     key = tmp_path / "key.json"
     key.write_text(json.dumps(KEY), encoding="utf-8")
     empty = _transcript(tmp_path / "j.jsonl", [_says("I could not do it")])
     assert ce.main(["harvest", "--key", str(key), "--transcript", str(empty),
-                    "--out", str(tmp_path / "l.json"), "--json"]) == 1
+                    "--out", str(tmp_path / "l.json"), "--json"]) == 2
     assert not (tmp_path / "l.json").exists()
 
 

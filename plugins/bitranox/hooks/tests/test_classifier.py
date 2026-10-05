@@ -398,17 +398,30 @@ def test_the_shadow_child_records_where_the_prompt_sits_in_its_transcript(tmp_pa
 
 
 # A child that crashes used to write nothing, so a broken site read exactly like an idle one.
+# It logs the row AND exits 2 (could not run): exiting 0 read the crash as a clean run.
 def test_a_failing_shadow_child_still_logs_a_row_naming_the_error(tmp_path, fake):
     payload = {"site": "skill_router", "session_id": "s9", "regex": {"router_view": "ctx-v1"},
                "requests": "not a list of requests"}
     r, log = _run_child(tmp_path, fake.url, payload,
                         {"classifier_backend": "jev", "classifier_skill_router": "shadow"})
-    assert r.returncode == 0, r.stderr
+    assert r.returncode == 2, r.stderr
     line = _last_line(log)
     assert line["site"] == "skill_router" and line["session_id"] == "s9"
     assert line["reason"].startswith("error: AttributeError")
     assert line["results"] == [] and line["regex"] == {"router_view": "ctx-v1"}
     assert line["plugin_version"] == _plugin_version()
+
+
+def test_a_shadow_child_given_a_malformed_payload_logs_an_error_row_and_exits_2(tmp_path):
+    home = tmp_path / "home"
+    (home / ".claude").mkdir(parents=True)
+    env = dict(os.environ, HOME=str(home), USERPROFILE=str(home))
+    r = subprocess.run([sys.executable, str(HOOKS_DIR / "classifier.py"), "--shadow"],
+                       input="{not json", capture_output=True, text=True, env=env,
+                       encoding="utf-8", errors="replace", timeout=30)
+    assert r.returncode == 2, r.stderr
+    line = _last_line(_only_log(home / ".claude" / "self-improve-audit"))
+    assert line["reason"].startswith("error: JSONDecodeError")
 
 
 def test_shadow_guard_swallows_an_exception_and_logs_it(tmp_path, monkeypatch):

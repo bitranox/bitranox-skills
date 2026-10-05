@@ -21,7 +21,8 @@ MAX_TAIL_BYTES = 16 * 1024 * 1024
 
 # Records that carry `type: user` and text but were not typed by the person, for transcripts
 # old enough to lack the `origin` field: slash-command echoes and their output, background-task
-# notifications and teammate messages. Hook feedback and skill bodies are marked `isMeta`
+# notifications and teammate messages. (A command WITH arguments is read before this check, by
+# `slash_command`, so only the bare ones and the output reach this prefix.) Hook feedback and skill bodies are marked `isMeta`
 # instead, and tool results carry no text block at all.
 #
 # `<bash-input` and `<bash-stdout` are the `!` shell escape and its output: the person typed the
@@ -105,6 +106,12 @@ def human_text(obj):
     `queued_command`, never as a `user` record; its `origin` tells it apart from the task
     notifications, subagent hand-backs and coordinator messages the same queue carries. Measured
     over the corpus: 368 such prompts, each recorded once (every one `absorbed_mid_turn`).
+
+    A slash command with arguments is returned as `/name args` (see `slash_command`); a bare one
+    and every other `<command-` record stay out. Replayed over the corpus before shipping (564
+    sessions, 4,382 turn ends): the Stop gate's keyword verdict changed on 2 turns, both a
+    `/goal` whose pasted backlog text says "instead of", and 33 of the 41 shadow rows that could
+    not be placed for being a command now locate (the other 8 are bare skill commands).
     """
     if not isinstance(obj, dict):
         return ""
@@ -119,10 +126,7 @@ def human_text(obj):
         origin = obj["origin"]
         if not (isinstance(origin, dict) and origin.get("kind") == "human"):
             return ""
-    text = text_of(_content(obj))
-    if not text.strip() or not looks_typed(text):
-        return ""
-    return text
+    return _typed_text(text_of(_content(obj)))
 
 
 def _queued_human_text(attachment):
@@ -133,9 +137,46 @@ def _queued_human_text(attachment):
     if not (isinstance(origin, dict) and origin.get("kind") == "human"):
         return ""
     text = attachment.get("prompt")
-    if not isinstance(text, str) or not text.strip() or not looks_typed(text):
+    return _typed_text(text) if isinstance(text, str) else ""
+
+
+def _typed_text(text):
+    """`text` when the person typed it, a slash command with arguments as `/name args`, else ""."""
+    if not text.strip():
         return ""
-    return text
+    command = slash_command(text)
+    if command:
+        return command
+    return text if looks_typed(text) else ""
+
+
+# A slash command's transcript record: exactly these three tags (in either order, CLI 2.1.260 and
+# 2.1.283 differ), the arguments tag optional. Anything else in the record is some other shape.
+_COMMAND_TAG = re.compile(r"\s*<(command-name|command-message|command-args)>(.*?)</\1>\s*",
+                          re.DOTALL)
+
+
+def slash_command(text):
+    """A slash command with arguments as the prompt-time hooks receive it (`/goal do 3-7`), else "".
+
+    The person typed the command and its arguments, so the arguments are a prompt like any other
+    (measured over the corpus: `/goal <task>` and `/plugin marketplace update ...`). A bare
+    command (`/clear`, empty arguments) carries no prose to judge and stays out, as does every
+    other `<command-`/`<local-command` record: the command's output, a caveat, a skill echo.
+    """
+    tags, pos, head = {}, 0, (text or "").lstrip()
+    if not head.startswith("<command-"):
+        return ""
+    while pos < len(head):
+        match = _COMMAND_TAG.match(head, pos)
+        if not match or match.group(1) in tags:
+            return ""
+        tags[match.group(1)] = match.group(2)
+        pos = match.end()
+    name, args = tags.get("command-name", "").strip(), tags.get("command-args", "").strip()
+    if not name.startswith("/") or not args:
+        return ""
+    return "%s %s" % (name, args)
 
 
 def is_hook_feedback(obj):
@@ -176,7 +217,13 @@ def _scan(data):
             continue
         typed = human_text(obj)
         if typed:
-            prompt, before, reply, answering_hook = typed, reply, "", False
+            # A slash command often gets no assistant reply at all (`/plugin ...` runs locally),
+            # so it keeps the newest reply standing: the prompt after it answers that reply, not
+            # an empty one. Replayed over the corpus, resetting it blanked the reply before 57
+            # later prompts.
+            keep = typed.startswith("/") and bool(slash_command(text_of(_content(obj))))
+            prompt, before, answering_hook = typed, reply, False
+            reply = reply if keep else ""
             prompts += 1
     return Turn(prompt, reply or "", before), prompts
 

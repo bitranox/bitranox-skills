@@ -216,12 +216,18 @@ def _consume_subagent_hint(session):
 
 def _regex_verdict(last_user, last_asst):
     """The keyword patterns' verdict per family, and whether any fires - what blocks the stop
-    with the classifier off, and the baseline every classifier row records."""
+    with the classifier off, and the baseline every classifier row records.
+
+    The assistant half is matched with its QUOTED spans blanked (`unquoted`): a report citing
+    another turn's "that was my mistake" is data, not an admission. Replayed over the corpus,
+    that removed 7 of 131 firings, every one a quoted span or code, and no admission. The user
+    half is matched whole: a person quoting the reply back is still correcting it."""
+    said = _sig.unquoted(last_asst)
     regex = {"user_pattern": bool(_USER_PATTERN.search(last_user)),
-             "asst_pattern": bool(_ASST_PATTERN.search(last_asst)),
-             "realization": bool(_REALIZATION_PATTERN.search(last_asst)),
+             "asst_pattern": bool(_ASST_PATTERN.search(said)),
+             "realization": bool(_REALIZATION_PATTERN.search(said)),
              "endorse_user": bool(_ENDORSE_PATTERN.search(last_user)),
-             "endorse_asst": bool(_ENDORSE_PATTERN.search(last_asst))}
+             "endorse_asst": bool(_ENDORSE_PATTERN.search(said))}
     regex["fires"] = any(regex.values())
     regex["context_view"] = _classifier.CONTEXT_VIEW
     return regex

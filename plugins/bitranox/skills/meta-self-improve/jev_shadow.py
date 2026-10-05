@@ -33,8 +33,11 @@ Verdicts file, one line per item the agent judged (unjudged items are allowed):
   {"id": "<item id>", "verdict": {"<qid>": true|false|"<choice key>"|<score index>}, "note": "..."}
 
 Exit codes: 0 done (or shadow off, or no items to ask about); 1 no (status: no run would happen;
-items: none built; run: Jev answered no item; report: no records); 2 usage, input or IO error,
-including a missing verdicts file. Standard library only.
+items: none built; run: jev-judge ran and Jev answered no item; report: no records); 2 could not
+run: a usage, input or IO error, including a missing verdicts file, or a `run` whose jev-judge
+could not start, timed out, wrote no row or exited other than 0 or 1 before answering any item
+(its records are still logged). `--json` prints `{ok, command, data, skipped}` on every exit; `ok`
+is true unless the exit is 2. Standard library only.
 """
 
 from __future__ import annotations
@@ -422,14 +425,16 @@ def _git_head(cwd: str) -> str | None:
 def _emit(
     args: argparse.Namespace,
     command: str,
-    ok: bool,
+    code: int,
     data: Mapping[str, object],
     human: str,
     skipped: list[str] | None = None,
 ) -> None:
+    """Print one exit's output; under --json the envelope, whose `ok` means "ran without
+    error": true on exit 0 and 1, false on 2."""
     if args.json:
         envelope = {
-            "ok": ok,
+            "ok": code != EXIT_ERROR,
             "command": command,
             "data": data,
             "skipped": skipped or [],
@@ -453,8 +458,9 @@ def cmd_status(args: argparse.Namespace) -> int:
         "reason": gate.reason,
     }
     human = "shadow: on" if gate.on else f"shadow: off ({gate.reason})"
-    _emit(args, "status", gate.on, data, human)
-    return EXIT_OK if gate.on else EXIT_NO
+    code = EXIT_OK if gate.on else EXIT_NO
+    _emit(args, "status", code, data, human)
+    return code
 
 
 def cmd_items(args: argparse.Namespace) -> int:
@@ -473,13 +479,14 @@ def cmd_items(args: argparse.Namespace) -> int:
         raise ShadowError(f"cannot write --out {out}: {exc}") from exc
     data = {"site": site.name, "items": len(items), "out": str(out)}
     human = f"{site.name}: {len(items)} items written to {out}"
-    _emit(args, "items", bool(items), data, human)
-    return EXIT_OK if items else EXIT_NO
+    code = EXIT_OK if items else EXIT_NO
+    _emit(args, "items", code, data, human)
+    return code
 
 
 def _quiet(args: argparse.Namespace, data: dict[str, object], human: str) -> int:
     """Exit 0 having asked nothing: shadow is off, or there is nothing to ask about."""
-    _emit(args, "run", True, data, human)
+    _emit(args, "run", EXIT_OK, data, human)
     return EXIT_OK
 
 
@@ -572,6 +579,15 @@ class _RunPlan:
     model: str | None
 
 
+def _run_code(answered: bool, jev: slog.JevRun) -> int:
+    """0 when Jev answered an item; 1 when jev-judge ran and answered none (each row says why);
+    2 when it answered none because jev-judge itself failed - it could not start, timed out,
+    wrote no row, or exited other than 0 or 1 - so "none" is not Jev's answer."""
+    if answered:
+        return EXIT_OK
+    return EXIT_ERROR if (jev.reason or jev.failure) else EXIT_NO
+
+
 def _ask_and_log(args: argparse.Namespace, uvx: str, plan: _RunPlan) -> int:
     prepared = _redacted(plan.items)
     with _workdir(args.workdir) as workdir:
@@ -592,13 +608,17 @@ def _ask_and_log(args: argparse.Namespace, uvx: str, plan: _RunPlan) -> int:
         )
     counts = _counts(records, jev)
     answered = counts["jev_failed"] != counts["items"]
-    if not answered:
+    code = _run_code(answered, jev)
+    if code == EXIT_ERROR:
+        # ONE line naming why jev-judge could not answer: a step reports it as `error <message>`.
+        print(f"jev_shadow: {jev.failure or jev.reason}", file=sys.stderr)
+    elif not answered:
         print(f"jev_shadow: {_no_answer_reason(records, jev)}", file=sys.stderr)
     # A run that failed after writing some rows still answered; say how it failed all the same.
-    if jev.failure and jev.failure != jev.reason:
+    if code != EXIT_ERROR and jev.failure and jev.failure != jev.reason:
         print(f"jev_shadow: {jev.failure}", file=sys.stderr)
-    _emit(args, "run", answered, counts, _human_counts(counts))
-    return EXIT_OK if answered else EXIT_NO
+    _emit(args, "run", code, counts, _human_counts(counts))
+    return code
 
 
 def cmd_run(args: argparse.Namespace) -> int:
@@ -645,7 +665,7 @@ def cmd_report(args: argparse.Namespace) -> int:
     if not log.records:
         print("jev_shadow: no shadow records match", file=sys.stderr)
         _emit(
-            args, "report", False, {"records": 0, "sites": {}}, "0 records", log.skipped
+            args, "report", EXIT_NO, {"records": 0, "sites": {}}, "0 records", log.skipped
         )
         return EXIT_NO
     specs = {name: _spec(sites.load_site(name)) for name in sites.site_names()}
@@ -656,7 +676,7 @@ def cmd_report(args: argparse.Namespace) -> int:
             _write_jsonl(out, rpt.disagreements(log.records))
         except OSError as exc:
             raise ShadowError(f"cannot write --disagreements {out}: {exc}") from exc
-    _emit(args, "report", True, summary, rpt.render(summary), log.skipped)
+    _emit(args, "report", EXIT_OK, summary, rpt.render(summary), log.skipped)
     return EXIT_OK
 
 
@@ -705,6 +725,17 @@ _COMMANDS = {
 }
 
 
+def _usage_envelope(argv: list[str] | None) -> None:
+    """The envelope for an argparse usage error when --json was asked for: argparse exits
+    before any command runs, so a --json caller otherwise got nothing on stdout."""
+    words = list(sys.argv[1:] if argv is None else argv)
+    if "--json" not in words:
+        return
+    command = next((w for w in words if w in _COMMANDS), None)
+    data = {"error": "usage error (see stderr)"}
+    print(json.dumps({"ok": False, "command": command, "data": data, "skipped": []}))
+
+
 def main(argv: list[str] | None = None) -> int:
     """Parse argv, run the command, map refusals to exit 2 with one line on stderr.
 
@@ -720,7 +751,10 @@ def main(argv: list[str] | None = None) -> int:
     try:
         args = _parser().parse_args(argv)
     except SystemExit as exc:
-        return int(exc.code or 0)
+        code = int(exc.code or 0)
+        if code == EXIT_ERROR:
+            _usage_envelope(argv)
+        return code
     try:
         return _COMMANDS[args.command](args)
     except (ShadowError, sites.SiteError, OSError) as exc:

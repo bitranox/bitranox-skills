@@ -431,25 +431,36 @@ SKILL_COMMAND = _command("c1", "<command-message>bitranox:meta-dream-tree</comma
                          {"kind": "human"})
 
 
+BARE_GOAL = _command("c2", "<command-name>/goal</command-name>\n            <command-message>goal"
+                           "</command-message>\n            <command-args></command-args>")
+
+
+@pytest.mark.parametrize("prompt", [
+    "do ranks 3-7",
+    # The hook receives the command as typed and the transcript stores it as tags; human_text
+    # rebuilds the typed form, so the logged text is found in the record it came from.
+    "/goal do ranks 3-7",
+])
+def test_a_slash_command_with_arguments_locates_like_any_typed_prompt(tmp_path, prompt):
+    t = tmp_path / "t.jsonl"
+    ends = _write(t, [_typed("p1", "go"), GOAL])
+    assert ce.locate_prompt(_located(router_row([], {}, prompt=prompt), t, ends[-1])) == "c1"
+
+
 @pytest.mark.parametrize("record, prompt", [
-    (GOAL, "do ranks 3-7"),
-    # The hook receives the command as typed; the transcript stores it as tags, so the logged
-    # text is a substring of no record. Measured: 9 of the 11 rows left after the reasons above.
-    (GOAL, "/goal do ranks 3-7"),
-    (GOAL, "/goal"),
+    (BARE_GOAL, "/goal"),
     (SKILL_COMMAND, "/bitranox:meta-dream-tree"),
 ])
-def test_a_slash_command_is_unlocated_as_a_command_not_as_a_miss(tmp_path, record, prompt):
-    # looks_typed leaves every <command- record out on purpose; whether a command with arguments
-    # should count as typed is an open decision, so these are counted apart from both a miss and
-    # a hand-back, which is what sizes that decision.
+def test_a_bare_slash_command_is_unlocated_as_a_command_not_as_a_miss(tmp_path, record, prompt):
+    # A command with no arguments carries no prose and is not typed; it is counted apart from
+    # both a miss and a hand-back.
     assert _unlocated(tmp_path, [_typed("p1", "go"), record], prompt) == ce.UNLOCATED_COMMAND
 
 
 def test_a_path_shaped_prompt_with_no_command_record_stays_a_real_miss(tmp_path):
     # Control for the slash form: a prompt opening with a path is not a command unless the
     # transcript holds that command's record.
-    records = [_typed("p1", "go"), GOAL]
+    records = [_typed("p1", "go"), BARE_GOAL]
     assert _unlocated(tmp_path, records, "/media/x do ranks 3-7") == ce.UNLOCATED_NOT_FOUND
 
 
@@ -577,7 +588,8 @@ def test_cli_empty_log_exits_1(tmp_path, capsys):
     log.write_text("", encoding="utf-8")
     assert ce.main(["report", "--log", str(log), "--json"]) == 1
     env = json.loads(capsys.readouterr().out)
-    assert env["ok"] is False
+    # ok means "ran without error": an empty log is an answer (nothing to report), not a fault.
+    assert env["ok"] is True and "no usable rows" in env["error"]
 
 
 def test_cli_missing_log_exits_2_with_json_error(tmp_path, capsys):
@@ -858,20 +870,20 @@ def test_the_sample_is_stratified_over_short_and_long_prompts():
     assert kinds.count("s") == 3 and kinds.count("l") == 3
 
 
-def test_a_failed_control_exits_3_so_a_gate_reading_the_code_cannot_read_the_numbers(
+def test_a_failed_control_exits_2_so_a_gate_reading_the_code_cannot_read_the_numbers(
         tmp_path, capsys):
     # The exception existing is not the guarantee; the EXIT CODE is, because that is what a
-    # caller keys on. Exit 3 means the instrument is wrong, which is not the same as exit 1
-    # (nothing to report) or exit 2 (bad usage), and collapsing it into either would let a run
-    # that measured nothing read as a run that found nothing. Driven through the real replay
-    # with a transport that answers every planted control the same way.
+    # caller keys on. A failed control means the instrument is wrong, so the run could not
+    # answer: exit 2, never exit 1 (nothing to report), which would let a run that measured
+    # nothing read as a run that found nothing. Driven through the real replay with a transport
+    # that answers every planted control the same way.
     class _PicksEverything(FakeClassifier):
         def ask(self, state, questions):
             return super().ask({"user_prompt": "a real task"}, questions)
 
     rc = _replay(tmp_path, "--arm", "choice_full", clf=_PicksEverything())
     env = json.loads(capsys.readouterr().out)
-    assert rc == 3
+    assert rc == 2
     assert env["ok"] is False and "no number from this run may be read" in env["error"]
 
 
@@ -1169,12 +1181,20 @@ def test_a_positive_count_is_accepted():
 
 # ---- the module docstring names every command and exit code the CLI has ----------------------
 
-def test_the_docstring_documents_every_command_and_exit_3():
+def test_the_docstring_documents_every_command_and_the_three_exit_codes():
     doc = ce.__doc__
-    for command in ("report", "replay", "size", "controls"):
+    for command in ("report", "replay", "size", "controls", "packet", "harvest"):
         assert "classifier_eval.py %s" % command in doc, command
-    assert "3 " in doc.split("Exit codes:")[1]
+    codes = doc.split("Exit codes:")[1]
+    assert "0 done" in codes and "1 nothing to report" in codes and "2 could not run" in codes
+    assert "planted control" in codes.split("2 could not run")[1]
+    assert " 3 " not in codes
     assert "calls no API" not in doc
+
+
+def test_the_cli_commands_list_matches_the_parser():
+    sub = next(a for a in ce._parser()._actions if a.dest == "command")
+    assert set(sub.choices) == set(ce.COMMANDS)
 
 
 # ---- replay end to end, with a fake transport at the classifier seam --------------------------
@@ -1215,6 +1235,94 @@ def _replay(tmp_path, *extra, clf=None, skills=None):
     return ce.main(argv, clf=clf or FakeClassifier(), skills=SKILLS if skills is None else skills)
 
 
+# ---- an installed roster is vetted too (D13) ----------------------------------------------------
+# The controls ran on the SHIPPED roster only, so a run over `--roster installed` bought rows on a
+# roster nobody had checked: one missing the skill a planted positive needs, say. Each distinct
+# installed roster is now vetted once, keyed by a fingerprint of its names and texts.
+
+class RosterAware(FakeClassifier):
+    """Picks the table skill only when the roster offers it, so a roster without it fails the
+    planted positive exactly as a real classifier would."""
+
+    def ask(self, state, questions):
+        result = super().ask(state, questions)
+        pick = next((q for q in questions if q.id == ce.cl.PICK_ID), None)
+        if result is not None and pick is not None and \
+                "docs-md-table-formatting" not in (pick.criteria or {}):
+            result.answers[ce.cl.PICK_ID] = ce.cl.Answer("choice", ce.cl.NO_SKILL_KEY)
+        return result
+
+
+def _installed_log(tmp_path, rows):
+    """A pinned log whose rows name their source transcripts: [(uuid, prompt, source), ...]."""
+    log = tmp_path / "earlier.jsonl"
+    log.write_text("".join(json.dumps({"uuid": u, "source": src, "line": 1,
+                                       "state": {"user_prompt": p, "project": "p"}, "arms": {}})
+                           + "\n" for u, p, src in rows), encoding="utf-8")
+    return log
+
+
+def _listing(path, names_descs):
+    rec = {"type": "attachment", "attachment": {
+        "type": "skill_listing", "isInitial": True, "names": [n for n, _d in names_descs],
+        "content": "\n".join("- %s: %s" % nd for nd in names_descs)}}
+    path.write_text(json.dumps(rec) + "\n", encoding="utf-8")
+    return str(path)
+
+
+def _installed_replay(tmp_path, log, clf):
+    return ce.main(["replay", "--prompts", str(log), "--out", str(tmp_path / "out.jsonl"),
+                    "--json", "--arm", "choice_full", "--roster", "installed"],
+                   clf=clf, skills=SKILLS)
+
+
+def _asked_prompts(clf):
+    return [state.get("user_prompt") for state, _q in clf.asked]
+
+
+def test_an_installed_roster_is_vetted_once_however_many_prompts_use_it(tmp_path, capsys):
+    good = _listing(tmp_path / "good.jsonl", sorted(SKILLS.items()))
+    log = _installed_log(tmp_path, [("a", "reformat the markdown table", good),
+                                    ("b", "align the table columns", good)])
+    clf = RosterAware()
+    assert _installed_replay(tmp_path, log, clf) == 0
+    env = json.loads(capsys.readouterr().out)
+    # Each vetting asks the two planted "go ahead" negatives: the shipped vetting plus ONE
+    # vetting of the installed roster, however many prompts share it. (The fake key "k" is
+    # redacted out of the table prompt as a literal, so the negatives are what is counted.)
+    assert _asked_prompts(clf).count("go ahead") == 2 * 2
+    assert env["data"]["installed_rosters"] == {"vetted": 1, "failed": 0}
+    assert env["data"]["sampled"] == 2
+
+
+def test_a_broken_installed_roster_buys_no_row(tmp_path, capsys):
+    good = _listing(tmp_path / "good.jsonl", sorted(SKILLS.items()))
+    broken = _listing(tmp_path / "broken.jsonl", [("compuse-bash", "Use when running shell")])
+    log = _installed_log(tmp_path, [("a", "reformat the markdown table", good),
+                                    ("b", "fix the table please", broken)])
+    clf = RosterAware()
+    assert _installed_replay(tmp_path, log, clf) == 0
+    env = json.loads(capsys.readouterr().out)
+    assert "fix the table please" not in _asked_prompts(clf), "a paid row on an unvetted roster"
+    assert env["data"]["sampled"] == 1
+    assert env["data"]["installed_rosters"] == {"vetted": 2, "failed": 1}
+    skipped = env["data"]["skipped_prompts"]
+    assert [s["uuid"] for s in skipped] == ["b"] and "planted control" in skipped[0]["reason"]
+    rows = [json.loads(x) for x in (tmp_path / "out.jsonl").read_text(encoding="utf-8").split("\n")
+            if x.strip()]
+    assert [r["uuid"] for r in rows] == ["a"]
+
+
+def test_a_shipped_roster_run_vets_no_installed_roster(tmp_path, capsys):
+    good = _listing(tmp_path / "good.jsonl", sorted(SKILLS.items()))
+    log = _installed_log(tmp_path, [("a", "reformat the markdown table", good)])
+    clf = RosterAware()
+    assert ce.main(["replay", "--prompts", str(log), "--out", str(tmp_path / "out.jsonl"),
+                    "--json", "--arm", "choice_full"], clf=clf, skills=SKILLS) == 0
+    env = json.loads(capsys.readouterr().out)
+    assert env["data"]["installed_rosters"] == {"vetted": 0, "failed": 0}
+
+
 def test_replay_vets_the_arm_it_replays_not_a_fixed_one(tmp_path, capsys):
     assert _replay(tmp_path, "--arm", "choice_full") == 0
     env = json.loads(capsys.readouterr().out)
@@ -1222,9 +1330,9 @@ def test_replay_vets_the_arm_it_replays_not_a_fixed_one(tmp_path, capsys):
     assert env["data"]["arms"]["choice_full"]["prompts_with_a_pick"] == 1
 
 
-def test_replay_of_an_arm_whose_controls_fail_exits_3(tmp_path, capsys):
+def test_replay_of_an_arm_whose_controls_fail_exits_2(tmp_path, capsys):
     """The control for the test above: the rerank arm really does fail these controls."""
-    assert _replay(tmp_path, "--arm", "choice_short_rerank") == 3
+    assert _replay(tmp_path, "--arm", "choice_short_rerank") == 2
     assert "choice_short_rerank" in json.loads(capsys.readouterr().out)["error"]
     assert not (tmp_path / "out.jsonl").exists(), "no row may be bought after a failed control"
 
@@ -1269,7 +1377,24 @@ def test_replay_of_an_empty_prompt_log_exits_1(tmp_path, capsys):
     rc = ce.main(["replay", "--prompts", str(empty), "--out", str(tmp_path / "o.jsonl"), "--json"],
                  clf=FakeClassifier(), skills=SKILLS)
     assert rc == 1
-    assert "no prompts" in json.loads(capsys.readouterr().out)["error"]
+    env = json.loads(capsys.readouterr().out)
+    assert "no prompts" in env["error"] and env["ok"] is True
+
+
+def test_a_usage_error_under_json_still_prints_an_envelope(capsys):
+    with pytest.raises(SystemExit) as exc:
+        ce.main(["replay", "--limit", "0", "--json"])
+    assert exc.value.code == 2
+    env = json.loads(capsys.readouterr().out)
+    assert env["ok"] is False and env["command"] == "replay" and env["data"] is None
+    assert "usage" in env["error"]
+
+
+def test_a_usage_error_without_json_prints_no_envelope(capsys):
+    with pytest.raises(SystemExit) as exc:
+        ce.main(["replay", "--limit", "0"])
+    assert exc.value.code == 2
+    assert capsys.readouterr().out == ""
 
 
 def test_a_pinned_prompt_carrying_a_line_separator_is_read_whole(tmp_path):

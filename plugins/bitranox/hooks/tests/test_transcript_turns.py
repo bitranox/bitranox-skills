@@ -401,3 +401,83 @@ def test_scheduled_text_is_the_fired_prompt_and_empty_for_anything_else():
     assert T.scheduled_text(_fired(CRON_TEXT)) == CRON_TEXT
     assert T.scheduled_text(_user(CRON_TEXT)) == ""
     assert T.scheduled_text(None) == ""
+
+
+# ---- slash commands -----------------------------------------------------------------------------
+# A slash command is written as ONE user record holding three tags (CLI 2.1.283), with no `origin`
+# key, and its output follows as a `<local-command-stdout>` record. The person typed the command
+# and its arguments, and the prompt-time hooks receive them as `/name args`, so a command WITH
+# arguments counts as typed, in exactly that form. A bare command carries no prose to judge.
+
+def _command(name, args, legacy_order=False, **extra):
+    tags = ["<command-name>/%s</command-name>" % name,
+            "<command-message>%s</command-message>" % name]
+    if legacy_order:
+        tags.reverse()
+    if args is not None:
+        tags.append("<command-args>%s</command-args>" % args)
+    record = {"type": "user", "entrypoint": "cli",
+              "message": {"role": "user", "content": "\n            ".join(tags)}}
+    record.update(extra)
+    return record
+
+
+def _stdout(text):
+    return {"type": "user", "message": {"content": "<local-command-stdout>%s</local-command-stdout>"
+                                                   % text}}
+
+
+def test_a_slash_command_with_arguments_is_typed_as_the_hook_receives_it():
+    assert T.human_text(_command("goal", "do A-F, use subagents")) == "/goal do A-F, use subagents"
+    assert T.human_text(_command("plugin", "marketplace update bitranox-skills")) == \
+        "/plugin marketplace update bitranox-skills"
+
+
+def test_a_slash_command_keeps_its_arguments_verbatim_inside():
+    text = T.human_text(_command("goal", ": fix  Still open\n  - [91] a b"))
+    assert text == "/goal : fix  Still open\n  - [91] a b"
+
+
+def test_a_slash_command_in_the_older_tag_order_is_read_the_same_way():
+    assert T.human_text(_command("tfbpr", "patch", legacy_order=True)) == "/tfbpr patch"
+
+
+def test_a_bare_slash_command_is_not_typed():
+    assert T.human_text(_command("clear", "")) == ""
+    assert T.human_text(_command("reload-plugins", "   ")) == ""
+    assert T.human_text(_command("context", None)) == ""
+
+
+def test_command_output_and_other_harness_command_records_stay_excluded():
+    assert T.human_text(_stdout("Goal set: x")) == ""
+    caveat = {"type": "user", "message": {"content": "<local-command-caveat>Caveat: x"
+                                                     "</local-command-caveat>"}}
+    assert T.human_text(caveat) == ""
+    # A command record carrying anything besides its three tags is not this shape.
+    odd = _command("goal", "x")
+    odd["message"]["content"] += "\nmore text"
+    assert T.human_text(odd) == ""
+
+
+def test_a_slash_command_record_still_obeys_origin_meta_and_sdk():
+    assert T.human_text(_command("goal", "x", isMeta=True)) == ""
+    assert T.human_text(_command("goal", "x", origin={"kind": "task-notification"})) == ""
+    assert T.human_text(_command("goal", "x", origin={"kind": "human"})) == "/goal x"
+    assert T.human_text(_command("goal", "x", entrypoint="sdk-py")) == ""
+
+
+def test_looks_typed_is_unchanged_for_the_raw_tag_form():
+    # The prompt-time readers receive `/goal x`, never the tag form, and the tag form stays
+    # not-typed there: only a transcript reader reconstructs the command.
+    assert T.looks_typed(_command("goal", "x")["message"]["content"]) is False
+    assert T.looks_typed("/goal x") is True
+
+
+def test_a_slash_command_with_arguments_becomes_the_turns_prompt(tmp_path):
+    t = _write(tmp_path, [_user("fix it"), _asst("Which part first?"),
+                          _command("goal", "do 3-7"), _stdout("Goal set: do 3-7"),
+                          _asst("Working on 3.")])
+    turn = T.read_turn(t)
+    assert turn.prompt == "/goal do 3-7"
+    assert turn.reply_before_prompt == "Which part first?"
+    assert turn.reply == "Working on 3."

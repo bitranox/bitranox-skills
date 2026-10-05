@@ -47,9 +47,30 @@ def test_build_check_says_missing_for_a_map_that_does_not_exist(tmp_path, capsys
     regenerate a file that was never there (a wrong --out, a run outside the repo)."""
     _skill(tmp_path, "alpha", "Use when alpha widgets explode under pressure loads")
     out = tmp_path / "nowhere" / "map.json"
-    assert B.main(["--skills-dir", str(tmp_path), "--out", str(out), "--check"]) == 1
+    # Could not compare (exit 2), which is not "stale" (exit 1).
+    assert B.main(["--skills-dir", str(tmp_path), "--out", str(out), "--check"]) == 2
     err = capsys.readouterr().err
     assert "missing" in err and str(out) in err and "STALE" not in err
+
+
+def test_build_with_a_skills_dir_that_does_not_exist_exits_2_and_writes_nothing(tmp_path):
+    out = tmp_path / "map.json"
+    assert B.main(["--skills-dir", str(tmp_path / "nope"), "--out", str(out)]) == 2
+    assert not out.exists()
+
+
+def test_build_with_an_unwritable_out_exits_2(tmp_path):
+    _skill(tmp_path, "alpha", "Use when alpha widgets explode under pressure loads")
+    out = tmp_path / "isdir"
+    out.mkdir()
+    assert B.main(["--skills-dir", str(tmp_path), "--out", str(out)]) == 2
+
+
+def test_build_check_of_a_non_utf8_map_exits_2(tmp_path):
+    _skill(tmp_path, "alpha", "Use when alpha widgets explode under pressure loads")
+    out = tmp_path / "map.json"
+    out.write_bytes(b"\xff\xfe")
+    assert B.main(["--skills-dir", str(tmp_path), "--out", str(out), "--check"]) == 2
 
 
 def test_build_check_still_says_stale_for_an_outdated_map(tmp_path, capsys):

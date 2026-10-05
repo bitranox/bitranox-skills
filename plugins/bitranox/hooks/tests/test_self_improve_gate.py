@@ -565,7 +565,9 @@ def test_a_neutral_tool_using_turn_does_not_block(tmp_path, monkeypatch, capsys)
 @pytest.mark.parametrize("noise", [
     _rec("user", "Stop hook feedback: a learning signal was detected", isMeta=True),
     _rec("user", [{"type": "text", "text": "Base directory for this skill: /x\n# y"}], isMeta=True),
-    _rec("user", "<command-name>/plugin</command-name> <command-args>update</command-args>"),
+    # A bare command (no arguments) is not typed prose; one WITH arguments is (below).
+    _rec("user", "<command-name>/reload-plugins</command-name> <command-args></command-args>"),
+    _rec("user", "<local-command-stdout>Reloaded</local-command-stdout>"),
     _rec("user", "<task-notification> agent finished </task-notification>",
          origin={"kind": "task-notification"}),
 ])
@@ -574,6 +576,85 @@ def test_injected_user_records_do_not_hide_the_human_prompt(tmp_path, monkeypatc
     run_gate(monkeypatch, tmp_path, {"transcript_path": tp, "cwd": str(tmp_path),
                                      "last_assistant_message": "ok"})
     assert decision_of(capsys) == "block"
+
+
+# A self-admission the assistant QUOTES is data about another turn, not an admission in this one.
+# The first is the 2026-09-22 shadow report that fired the gate; replayed over the corpus, 7 of
+# the 131 keyword firings were quoted spans like these and none was an admission.
+@pytest.mark.parametrize("reply", [
+    'The strongest real case was my "That was wrong" correction on your turn.',
+    "The subagent's \u201cNow I have the full picture.\u201d line is task-local noise.",
+    "It runs `block-pgrep-self-match.py` end to end.",
+    "The table:\n```\nps ... args | grep (self-match)    procsig\n```\nDone.",
+    "The log says 'you were right, my mistake' at line 4.",
+])
+def test_a_self_admission_the_assistant_quotes_does_not_block(tmp_path, monkeypatch, capsys,
+                                                               reply):
+    tp = _write(tmp_path, *_tool_turn("please summarise the shadow log"))
+    run_gate(monkeypatch, tmp_path, {"transcript_path": tp, "cwd": str(tmp_path),
+                                     "last_assistant_message": reply})
+    assert decision_of(capsys) is None
+
+
+@pytest.mark.parametrize("reply", [
+    "That was my mistake - I read the stale log.",
+    "You're right, I missed the second call site.",
+    'I was wrong about "harmless churn": the exec bit was lost.',
+])
+def test_an_unquoted_self_admission_still_blocks(tmp_path, monkeypatch, capsys, reply):
+    tp = _write(tmp_path, *_tool_turn("please summarise the shadow log"))
+    run_gate(monkeypatch, tmp_path, {"transcript_path": tp, "cwd": str(tmp_path),
+                                     "last_assistant_message": reply})
+    assert decision_of(capsys) == "block"
+
+
+def test_a_quoted_correction_from_the_user_still_blocks(tmp_path, monkeypatch, capsys):
+    # Only the assistant side is unquoted: a person quoting the reply back is still correcting it.
+    tp = _write(tmp_path, *_tool_turn('"harmless churn"? no, that is wrong'))
+    run_gate(monkeypatch, tmp_path, {"transcript_path": tp, "cwd": str(tmp_path),
+                                     "last_assistant_message": "Checking again."})
+    assert decision_of(capsys) == "block"
+
+
+def test_acknowledging_a_duplicate_idle_notification_does_not_block(tmp_path, monkeypatch, capsys):
+    # The 2026-09-11 shape (agentswarm remit-case): a named agent's idle notification arrives a
+    # fourth time, its summary says "rather than", and the reply only acknowledges it. The
+    # notification is not a typed prompt, so the quiet typed prompt before it is what is judged.
+    idle = ('Another Claude session sent a message: <teammate-message teammate_id="t3">'
+            '{"type":"idle_notification","result":"Fix wave complete. Asserting the defect '
+            'keyword rather than bare truthiness."}</teammate-message>')
+    tp = _write(tmp_path, _rec("user", "go ahead with the fix wave", origin={"kind": "human"}),
+                _rec("assistant", [{"type": "text", "text": "Fix wave landed as d075710."}]),
+                _rec("user", idle))
+    run_gate(monkeypatch, tmp_path, {"transcript_path": tp, "cwd": str(tmp_path),
+                                     "last_assistant_message": "Fourth duplicate - that is "
+                                     "d075710, which I already verified. No action."})
+    assert decision_of(capsys) is None
+
+
+GOAL_CMD = ("<command-name>/goal</command-name>\n            <command-message>goal</command-message>"
+            "\n            <command-args>%s</command-args>")
+
+
+def test_a_slash_command_with_arguments_is_the_prompt_the_gate_judges(tmp_path, monkeypatch,
+                                                                         capsys):
+    # The person typed the arguments, so they are judged like any prompt (user decision).
+    tp = _write(tmp_path, *_tool_turn("please list the files"),
+                _rec("assistant", [{"type": "text", "text": "Here they are."}]),
+                _rec("user", GOAL_CMD % "no, that is wrong - redo it from the start"),
+                _rec("user", "<local-command-stdout>Goal set</local-command-stdout>"))
+    run_gate(monkeypatch, tmp_path, {"transcript_path": tp, "cwd": str(tmp_path),
+                                     "last_assistant_message": "Redoing it."})
+    assert decision_of(capsys) == "block"
+
+
+def test_a_quiet_slash_command_with_arguments_does_not_block(tmp_path, monkeypatch, capsys):
+    # Control: the command itself is not a signal, only what its arguments say.
+    tp = _write(tmp_path, _rec("user", GOAL_CMD % "list the files in src"),
+                _rec("user", "<local-command-stdout>Goal set</local-command-stdout>"))
+    run_gate(monkeypatch, tmp_path, {"transcript_path": tp, "cwd": str(tmp_path),
+                                     "last_assistant_message": "Here are the files."})
+    assert decision_of(capsys) is None
 
 
 def test_the_human_prompt_is_found_behind_a_tool_output_larger_than_the_tail(tmp_path, monkeypatch,
