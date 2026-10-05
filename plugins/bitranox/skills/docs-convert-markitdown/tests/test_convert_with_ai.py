@@ -63,6 +63,17 @@ def test_pep723_block_declares_both_dependencies(scripts_dir):
     assert "openai" in block
 
 
+def test_exit_status_docs_name_no_exit_1(script_runner, scripts_dir, tmp_path):
+    """Converting has no "no" answer, so every failure is "could not run" (2). The docstring and
+    --help both said "1 an error", which a caller keyed on the old code would keep trusting."""
+    doc = (scripts_dir / "convert_with_ai.py").read_text(encoding="utf-8").split('"""', 2)[1]
+    run = script_runner("convert_with_ai", ["--help"], cwd=tmp_path, env={"COLUMNS": "200"})
+    for text in (doc, run.stdout):
+        status = " ".join(text.split("Exit status:", 1)[1].split())
+        assert status.startswith("0 converted, 2 "), status
+        assert " 1 " not in status, status
+
+
 def _deck(path, pictures):
     path.write_text("SLIDE TEXT\n" + "PICTURE\n" * pictures, encoding="utf-8")
 
@@ -72,7 +83,7 @@ def test_pptx_whose_captions_all_fail_fails_the_run(script_runner, tmp_path, fak
 
     run = _ai(script_runner, tmp_path, fakes, ["deck.pptx", "deck.md"], mode="fail")
 
-    assert run.returncode == 1, run.output
+    assert run.returncode == 2, run.output
     assert _calls(tmp_path) == 1
     assert "1 of 1 image description" in run.stderr
     assert "[OK] Successfully converted" not in run.output
@@ -112,7 +123,7 @@ def test_pptx_whose_captions_come_back_empty_fails_the_run(script_runner, tmp_pa
 
     run = _ai(script_runner, tmp_path, fakes, ["deck.pptx", "deck.md"], mode=mode)
 
-    assert run.returncode == 1, run.output
+    assert run.returncode == 2, run.output
     assert _calls(tmp_path) == 2
     assert "2 of 2 image description" in run.stderr
     assert "[OK] Successfully converted" not in run.output
@@ -124,7 +135,7 @@ def test_png_whose_caption_comes_back_empty_fails_the_run(script_runner, tmp_pat
 
     run = _ai(script_runner, tmp_path, fakes, ["pic.png", "pic.md"], mode=mode)
 
-    assert run.returncode == 1, run.output
+    assert run.returncode == 2, run.output
     assert "[OK] Successfully converted" not in run.output
 
 
@@ -133,7 +144,7 @@ def test_png_whose_caption_fails_fails_the_run(script_runner, tmp_path, fakes):
 
     run = _ai(script_runner, tmp_path, fakes, ["pic.png", "pic.md"], mode="fail")
 
-    assert run.returncode == 1, run.output
+    assert run.returncode == 2, run.output
     assert not (tmp_path / "pic.md").exists()
 
 
@@ -185,7 +196,7 @@ def test_input_filename_with_non_utf8_bytes_is_reported_not_crashed(script_runne
     run = _ai(script_runner, tmp_path, fakes, [bad_name, "out.md"])
 
     assert "Traceback" not in run.output, run.output
-    assert run.returncode == 1, run.output
+    assert run.returncode == 2, run.output
     assert "[FAIL]" in run.stderr
 
 
@@ -195,7 +206,7 @@ def test_input_without_an_ai_description_path_is_refused(script_runner, tmp_path
 
     run = _ai(script_runner, tmp_path, fakes, [name, "out.md"])
 
-    assert run.returncode == 1, run.output
+    assert run.returncode == 2, run.output
     assert "no AI image descriptions" in run.stderr
     assert not (tmp_path / "out.md").exists()
     assert _calls(tmp_path) == 0
@@ -211,12 +222,12 @@ def test_image_suffixes_are_accepted_in_any_case(script_runner, tmp_path, fakes,
     assert _calls(tmp_path) == 1
 
 
-def test_missing_api_key_exits_1(script_runner, tmp_path, fakes):
+def test_missing_api_key_exits_2(script_runner, tmp_path, fakes):
     (tmp_path / "pic.png").write_text("PNG", encoding="utf-8")
 
     run = script_runner("convert_with_ai", ["pic.png", "out.md"], cwd=tmp_path, pythonpath=fakes)
 
-    assert run.returncode == 1, run.output
+    assert run.returncode == 2, run.output
     assert "OPENROUTER_API_KEY" in run.stderr
     # The one remedy it names must be one that works: there is no key flag to point at.
     assert "--api-key" not in run.output
@@ -227,7 +238,7 @@ def test_a_missing_input_file_is_reported_on_stderr(script_runner, tmp_path, fak
     them on) reads it as output and a caller watching stderr sees nothing."""
     run = _ai(script_runner, tmp_path, fakes, ["absent.png", "out.md"])
 
-    assert run.returncode == 1, run.output
+    assert run.returncode == 2, run.output
     assert "does not exist" in run.stderr
     assert "does not exist" not in run.stdout
     assert not (tmp_path / "out.md").exists()
@@ -241,7 +252,7 @@ def test_a_directory_as_input_is_refused_as_not_a_file(script_runner, tmp_path, 
 
     run = _ai(script_runner, tmp_path, fakes, ["shots.png", "out.md"])
 
-    assert run.returncode == 1, run.output
+    assert run.returncode == 2, run.output
     assert "is not a file" in run.stderr
     assert "is not a file" not in run.stdout
     assert _calls(tmp_path) == 0
@@ -331,7 +342,7 @@ def _png():
     return b"\x89PNG\r\n\x1a\n" + chunk(b"IHDR", header) + chunk(b"IDAT", pixels) + chunk(b"IEND", b"")
 
 
-@pytest.mark.parametrize("mode,expected_rc", [("fail", 1), ("ok", 0), ("nochoices", 1), ("empty", 1)])
+@pytest.mark.parametrize("mode,expected_rc", [("fail", 2), ("ok", 0), ("nochoices", 2), ("empty", 2)])
 def test_real_markitdown_pptx_caption_failure_is_seen(script_runner, fake_openai_dir, tmp_path, mode, expected_rc):
     pytest.importorskip("markitdown")
     pptx = pytest.importorskip("pptx")
@@ -349,7 +360,7 @@ def test_real_markitdown_pptx_caption_failure_is_seen(script_runner, fake_openai
     assert _calls(tmp_path) == 1
 
 
-@pytest.mark.parametrize("mode,expected_rc", [("ok", 0), ("null", 1), ("empty", 1)])
+@pytest.mark.parametrize("mode,expected_rc", [("ok", 0), ("null", 2), ("empty", 2)])
 def test_real_markitdown_png_without_a_caption_is_seen(script_runner, fake_openai_dir, tmp_path, mode, expected_rc):
     """markitdown's ImageConverter skips a None description silently and writes an empty one for
     "", so neither raises: only the returned text tells a caption from none."""
