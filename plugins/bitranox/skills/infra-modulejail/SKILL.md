@@ -185,15 +185,16 @@ Only after step 4 passed, install the file the gate checked, unchanged:
 
 ```bash
 install -m 0644 candidate.conf /etc/modprobe.d/modulejail-blacklist.conf
-depmod -a
 ```
 
 Do **not** run `update-initramfs`/`proxmox-boot-tool refresh` to "make it permanent" - the
-runtime file already blocks every post-boot load. `install` overrides only intercept FUTURE
-loads, so nothing already running is touched and the live host is safe by construction. The
-file takes effect on the NEXT load attempt immediately - `modprobe` re-reads `modprobe.d` on
-every call - so no reboot is needed to START blocking; the reboot in step 6 only proves the
-host still BOOTS with the block in place.
+runtime file already blocks every post-boot load, and do **not** run `depmod -a` either: it
+only rebuilds `modules.dep` from the module files under `/lib/modules/$(uname -r)`, which a
+`modprobe.d` blacklist/install directive never touches, so it is a no-op here. `install`
+overrides only intercept FUTURE loads, so nothing already running is touched and the live host
+is safe by construction. The file takes effect on the NEXT load attempt immediately -
+`modprobe` re-reads `modprobe.d` on every call - so no reboot is needed to START blocking; the
+reboot in step 6 only proves the host still BOOTS with the block in place.
 
 ### 6. The reboot-while-recoverable gate (mandatory)
 

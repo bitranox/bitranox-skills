@@ -20,13 +20,13 @@ md = MarkItDown(
 
 #### Parameters
 
-| Parameter           | Type          | Default | Description                                                           |
-|---------------------|---------------|---------|-----------------------------------------------------------------------|
-| `llm_client`        | OpenAI client | `None`  | OpenAI-compatible client for AI image descriptions                    |
-| `llm_model`         | str           | `None`  | Model name (e.g., "anthropic/claude-opus-4.5") for image descriptions |
-| `llm_prompt`        | str           | `None`  | Custom prompt for image description                                   |
-| `docintel_endpoint` | str           | `None`  | Azure Document Intelligence endpoint                                  |
-| `enable_plugins`    | bool          | `False` | Enable 3rd-party plugins                                              |
+| Parameter           | Type          | Default | Description                                                                 |
+|---------------------|---------------|---------|-----------------------------------------------------------------------------|
+| `llm_client`        | OpenAI client | `None`  | OpenAI-compatible client for AI image descriptions                          |
+| `llm_model`         | str           | `None`  | Vision-capable model ID for image descriptions - see Available Models below |
+| `llm_prompt`        | str           | `None`  | Custom prompt for image description                                         |
+| `docintel_endpoint` | str           | `None`  | Azure Document Intelligence endpoint                                        |
+| `enable_plugins`    | bool          | `False` | Enable 3rd-party plugins                                                    |
 
 #### Methods
 
@@ -315,7 +315,7 @@ Be precise and technical.
 
 md = MarkItDown(
     llm_client=client,
-    llm_model="anthropic/claude-opus-4.5",
+    llm_model="anthropic/claude-opus-4.5",  # a vision model as of 2026-09; see Available Models above
     llm_prompt=scientific_prompt
 )
 ```

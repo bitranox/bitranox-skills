@@ -82,6 +82,20 @@ def test_pptx_with_working_captions_succeeds(script_runner, tmp_path, fakes):
 
     assert run.returncode == 0, run.output
     assert (tmp_path / "deck.md").read_text(encoding="utf-8").count("FAKE-CAPTION") == 2
+    assert "(2 image description(s))" in run.stdout
+
+
+def test_pptx_with_zero_pictures_succeeds_and_says_so(script_runner, tmp_path, fakes):
+    """A deck with no pictures has nothing to describe - that is success, not a failure -
+    but the [OK] line must not read the same as a run that actually described images."""
+    _deck(tmp_path / "deck.pptx", 0)
+
+    run = _ai(script_runner, tmp_path, fakes, ["deck.pptx", "deck.md"])
+
+    assert run.returncode == 0, run.output
+    assert _calls(tmp_path) == 0
+    assert "[OK] Successfully converted" in run.stdout
+    assert "(0 image description(s))" in run.stdout
 
 
 _NO_CAPTION_MODES = ["nochoices", "empty", "blank", "null"]
@@ -138,6 +152,22 @@ def test_cp1252_console_with_non_ascii_output_name(script_runner, tmp_path, fake
 
     assert run.returncode == 0, run.output
     assert (tmp_path / out_name).is_file()
+
+
+def test_input_filename_with_non_utf8_bytes_is_reported_not_crashed(script_runner, tmp_path, fakes):
+    """A POSIX filename may carry bytes that are not valid UTF-8 (surrogate-escaped on decode).
+    That text then flows into the written Markdown's "Source" line, where it cannot be UTF-8
+    encoded; the run must report that as [FAIL], never as an uncaught traceback."""
+    import os
+
+    bad_name = os.fsdecode(b"bad_\xff_pic.png")
+    (tmp_path / bad_name).write_bytes(b"PNG")
+
+    run = _ai(script_runner, tmp_path, fakes, [bad_name, "out.md"])
+
+    assert "Traceback" not in run.output, run.output
+    assert run.returncode == 1, run.output
+    assert "[FAIL]" in run.stderr
 
 
 @pytest.mark.parametrize("name", ["paper.pdf", "notes.DOCX", "sheet.xlsx"])

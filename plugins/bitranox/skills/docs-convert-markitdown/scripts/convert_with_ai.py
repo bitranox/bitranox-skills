@@ -214,7 +214,10 @@ def convert_with_ai(
             file=sys.stderr,
         )
         return False
-    print(f"[OK] Successfully converted to: {output_file}")
+    # Name the count even on success: zero pictures (nothing to describe) is a real
+    # success, but must not read the same as a run that actually described images.
+    print(f"[OK] Successfully converted to: {output_file} ({counter.produced} image "
+          f"description(s))")
     return True
 
 

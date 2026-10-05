@@ -82,7 +82,7 @@ _SCORE_LABEL = re.compile(
 )
 # The older wording a review may use instead: "Rating: 7", "Overall quality: 6 / 10".
 _FALLBACK_LABEL = re.compile(
-    r'(?:rating|quality)[:\s]+(?P<num>\d+(?:\.\d+)?)(?:\s*/\s*(?P<den>\d+(?:\.\d+)?))?',
+    r'\b(?:rating|quality)[:\s]+(?P<num>\d+(?:\.\d+)?)(?:\s*/\s*(?P<den>\d+(?:\.\d+)?))?',
     re.IGNORECASE,
 )
 # What may stand before the label on its own line: indentation, emphasis, heading, quote.

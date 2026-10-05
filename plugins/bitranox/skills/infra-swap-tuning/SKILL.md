@@ -174,7 +174,22 @@ Two traps, both of which produce a green run and a broken host:
   swapoff/reset the bullet above warns against.
 
   ```bash
-  want_mb=$(awk -F= '/^zram-size/ {gsub(/[[:space:]]/,"",$2); print $2}' /etc/systemd/zram-generator.conf)
+  # Lowest to highest precedence (zram-generator README): /usr/lib < /usr/local/lib < /etc
+  # < /run, and within each location a .conf.d/ drop-in overrides that location's own main
+  # file. awk treats a missing input file as FATAL (not "skip it"), so build the list with a
+  # loop first - a glob that matches nothing expands to its own literal pattern, which [ -f ]
+  # then correctly rejects.
+  files=()
+  for f in /usr/lib/systemd/zram-generator.conf /usr/lib/systemd/zram-generator.conf.d/*.conf \
+           /usr/local/lib/systemd/zram-generator.conf /usr/local/lib/systemd/zram-generator.conf.d/*.conf \
+           /etc/systemd/zram-generator.conf /etc/systemd/zram-generator.conf.d/*.conf \
+           /run/systemd/zram-generator.conf /run/systemd/zram-generator.conf.d/*.conf; do
+    [ -f "$f" ] && files+=("$f")
+  done
+  want_mb=$(awk -F= '
+    /^\s*\[/ { in_zram0 = ($0 ~ /^\s*\[zram0\]/) }
+    in_zram0 && /^\s*zram-size\s*=/ { gsub(/[[:space:]]/,"",$2); print $2 }
+  ' "${files[@]}" | tail -1)
   case $want_mb in
     ''|*[!0-9]*) echo "zram-size '$want_mb' is not a plain MB number; refusing" >&2; exit 2 ;;
   esac
@@ -188,6 +203,14 @@ Two traps, both of which produce a green run and a broken host:
   size reads as unchanged. Refusing is the only safe answer: skipping ignores the change, and
   resetting on a value the guard cannot read is the swapoff/reset above. Write the resolved
   number into the config instead. `10#` keeps a leading zero from being read as octal.
+
+  **Scope the read to `[zram0]`, and read every config location.** A bare `/^zram-size/` match
+  with no section tracking also fires inside a `[zram1]` (or any other) section, and
+  `/etc/systemd/zram-generator.conf` is only one of the files zram-generator reads: each of
+  `/usr/lib`, `/usr/local/lib`, `/etc` and `/run` has its own main file plus a `.conf.d/`
+  drop-in directory, and a drop-in overrides its own location's main file. The loop above
+  collects every location that actually exists, in ascending precedence, and `tail -1` keeps
+  the winner.
 
 If the host runs a module allowlist, `zram` and its compression backends must be whitelisted, and
 that block is silent - see `bitranox:infra-modulejail`.

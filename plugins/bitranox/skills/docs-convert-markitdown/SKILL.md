@@ -380,7 +380,10 @@ for paper in papers_dir.glob("*.pdf"):
     
     output_file.write_text(content)
 
-# For AI-enhanced conversion with figures
+# markitdown never sends a PDF's figures to an LLM (llm_client/llm_model/llm_prompt
+# are silently unused for PDF input, which still converts, just text-only). AI
+# descriptions only reach .png/.jpg/.jpeg images and PPTX pictures - see
+# docs-generate-schematics or extract a page as an image first.
 from openai import OpenAI
 
 client = OpenAI(
@@ -390,7 +393,7 @@ client = OpenAI(
 
 md_ai = MarkItDown(
     llm_client=client,
-    llm_model="anthropic/claude-opus-4.5",
+    llm_model="anthropic/claude-opus-4.5",  # a vision model as of 2026-09; see references/api_reference.md
     llm_prompt="Describe scientific figures with technical precision"
 )
 ```
@@ -428,7 +431,7 @@ print(result.text_content)
    tesseract changes nothing. To get text out of an image, either pass an `llm_client` and
    `llm_model`, or route the document through Azure Document Intelligence.
    ```python
-   md = MarkItDown(llm_client=client, llm_model="anthropic/claude-opus-4.5")
+   md = MarkItDown(llm_client=client, llm_model="anthropic/claude-opus-4.5")  # a vision model as of 2026-09; see references/api_reference.md
    result = md.convert("scan.png")
    ```
    EXIF metadata additionally requires an explicit `exiftool_path`; without it

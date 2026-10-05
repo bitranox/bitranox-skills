@@ -97,7 +97,7 @@ unavailable, 2 usage error); 1 when the AI script cannot be found or launched.
                                "report", "grant", "thesis", "preprint", "default"],
                        help="Document type for quality threshold (default: default)")
     parser.add_argument("--iterations", type=int, default=2,
-                       help="Maximum refinement iterations (default: 2, max: 2)")
+                       help="Maximum refinement iterations (default: 2, range: 1-2)")
     # No default here: the AI script owns the default IDs, so only an explicit choice is forwarded.
     parser.add_argument("--image-model", metavar="ID",
                        help="OpenRouter model that generates the image (default: the AI script's)")
@@ -141,8 +141,9 @@ unavailable, 2 usage error); 1 when the AI script cannot be found or launched.
     if args.doc_type != "default":
         cmd.extend(["--doc-type", args.doc_type])
     
-    # Enforce max 2 iterations
-    iterations = min(args.iterations, 2)
+    # Enforce 1-2 iterations: the AI script refuses anything outside that range with a
+    # usage error, so bound both ends here instead of forwarding an invalid value.
+    iterations = max(1, min(args.iterations, 2))
     if iterations != 2:
         cmd.extend(["--iterations", str(iterations)])
     
