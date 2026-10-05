@@ -269,3 +269,70 @@ def test_a_real_bad_byte_in_a_capped_read_is_still_reported(monkeypatch, tmp_pat
     f.write_bytes(b"head" + b"\xff" + b"x" * C._MAX_MESSAGE_BYTES)
     assert _run(monkeypatch, 'git commit -F "%s"' % f.as_posix()) == 2
     assert "byte 4" in capsys.readouterr().err
+
+
+# ---- a message read from the command's own STDIN ---------------------------------------------------
+#
+# `git commit -F - <<'EOF'` is a real, recurring form in the transcript corpus: a quoted heredoc is
+# the one inline route bash never expands. The guard handed "-" to open() like any path, read
+# nothing, and approved a message it had never seen.
+
+@pytest.mark.parametrize("flag", ["-F -", "-F-", "--file=-", "--file -", "-F /dev/stdin",
+                                  "-aF -", "--file=/dev/fd/0"])
+def test_a_stdin_heredoc_message_is_scanned(monkeypatch, flag):
+    cmd = "git commit %s <<'EOF'\nSpike: core %s typed records\nEOF" % (flag, EM_DASH)
+    assert _run(monkeypatch, cmd) == 2
+
+
+def test_a_stdin_heredoc_message_after_pathspecs_is_scanned(monkeypatch):
+    cmd = "git commit -F - OPEN-WORK.md handover.md <<'MSG'\nClose rank 34 %s now\nMSG" % EM_DASH
+    assert _run(monkeypatch, cmd) == 2
+
+
+def test_a_stdin_message_on_a_continued_line_is_scanned(monkeypatch):
+    cmd = "git commit -F - \\\n  OPEN-WORK.md <<'MSG'\nClose rank 34 %s now\nMSG" % EM_DASH
+    assert _run(monkeypatch, cmd) == 2
+
+
+def test_a_heredoc_piped_into_a_stdin_commit_is_scanned(monkeypatch):
+    cmd = "cat <<'EOF' | git commit -F -\nSubject %s here\nEOF" % EM_DASH
+    assert _run(monkeypatch, cmd) == 2
+
+
+def test_a_stdin_message_with_an_apostrophe_is_still_scanned(monkeypatch):
+    """An apostrophe in a quoted-heredoc body is plain text to bash, but an argv split of the raw
+    command reads it as an unterminated quote. The guard must not give up on the whole command."""
+    cmd = "git commit -F - <<'EOF'\nDon't drop it %s ever\nEOF" % EM_DASH
+    assert _run(monkeypatch, cmd) == 2
+
+
+def test_an_inline_message_beside_an_apostrophe_heredoc_is_still_scanned(monkeypatch):
+    """The same split failure took down an ordinary -m message sharing a command with any
+    heredoc whose body holds an apostrophe."""
+    cmd = "cat > notes.txt <<'EOF'\nit's data\nEOF\ngit commit -m \"Fix %s now\"" % EM_DASH
+    assert _run(monkeypatch, cmd) == 2
+
+
+def test_a_clean_stdin_heredoc_message_passes(monkeypatch):
+    cmd = "git commit -F - <<'EOF'\nSpike: core - typed records, it's fine\nEOF"
+    assert _run(monkeypatch, cmd) == 0
+
+
+def test_a_heredoc_that_is_not_the_message_is_not_read_as_one(monkeypatch):
+    """A tell in some OTHER heredoc of the same command (a script, a notes file) is not the
+    commit message, so it must not block a commit whose message comes from stdin elsewhere."""
+    cmd = ("python3 - <<'PY'\nprint('%s')\nPY\nprintf 'ok\\n' | git commit -F -" % EM_DASH)
+    assert _run(monkeypatch, cmd) == 0
+
+
+def test_a_stdin_redirect_from_a_file_is_scanned(monkeypatch, tmp_path):
+    f = tmp_path / "msg.txt"
+    f.write_text("Subject %s here\n" % EM_DASH, encoding="utf-8")
+    assert _run(monkeypatch, 'git commit -F - < "%s"' % f.as_posix()) == 2
+
+
+def test_a_stdin_message_is_quoted_back_like_an_inline_one(monkeypatch, capsys):
+    """The heredoc body is text the caller typed into the command, so quoting it is free."""
+    cmd = "git commit -F - <<'EOF'\nSubject %s here\nEOF" % EM_DASH
+    assert _run(monkeypatch, cmd) == 2
+    assert "Subject" in capsys.readouterr().err

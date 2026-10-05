@@ -89,53 +89,150 @@ def _read_message_file(path):
     return Message(text, True, bad_byte, path)
 
 
+# `-F`/`--file` values that name the COMMAND's standard input rather than a file. git reads the
+# message from stdin for `-`, and the device paths reach the same descriptor. Opened inside this
+# hook they would name the HOOK's stdin - the event pipe, already consumed - so the guard read
+# nothing and approved a message it had never seen, which is how `git commit -F - <<'EOF'` (a
+# recurring form: a quoted heredoc is the one inline route bash never expands) went unchecked.
+_STDIN_PATHS = frozenset({"-", "/dev/stdin", "/dev/fd/0", "/proc/self/fd/0"})
+
+# Tokens that end the statement a stdin redirect could belong to.
+_STATEMENT_ENDS = frozenset({";", "&&", "||", "|", "&"})
+
+
+def _argv(command, tool_name):
+    """The command's argv, or None when it cannot be split.
+
+    An apostrophe in a quoted heredoc body is plain text to bash, but a split of the RAW command
+    reads it as an unterminated quote and raises, which used to blank every message in the
+    command - an inline `-m` beside any such heredoc included. The raw split is tried first because
+    it keeps a body that IS a message (`-m "$(cat <<'EOF' ... EOF)"`); only when it fails is the
+    command re-split with heredoc bodies removed. A stdin message's body is read separately.
+    """
+    try:
+        return shell_text.split_for_tool(command, tool_name)
+    except ValueError:
+        pass
+    if tool_name == "PowerShell":
+        return None
+    try:
+        return shell_text.split_for_tool(shell_text.strip_heredoc_bodies(command), tool_name)
+    except ValueError:
+        return None
+
+
+def _message_flags(toks):
+    """(kind, value, index) for every message-bearing flag in `toks`; kind is "msg" or "file"."""
+    found, i = [], 0
+    while i < len(toks):
+        t = toks[i]
+        if t in ("--message", "--file") and i + 1 < len(toks):
+            found.append(("msg" if t == "--message" else "file", toks[i + 1], i))
+            i += 2
+            continue
+        if t.startswith("--message="):
+            found.append(("msg", t.split("=", 1)[1], i))
+        elif t.startswith("--file="):
+            found.append(("file", t.split("=", 1)[1], i))
+        elif t.startswith("-") and not t.startswith("--") and len(t) > 1:
+            kind, value, extra = _cluster(t, toks, i)
+            if kind is not None:
+                found.append((kind, value, i))
+            i += extra
+        i += 1
+    return found
+
+
+def _reads_stdin_message(toks):
+    """True when `toks` hold a git command whose message file is its own standard input."""
+    return "git" in toks and any(kind == "file" and value in _STDIN_PATHS
+                                 for kind, value, _ in _message_flags(toks))
+
+
+def _redirected_stdin(toks, start):
+    """The path a `< path` redirect feeds into the statement that begins at `start`, or None."""
+    for i in range(start, len(toks)):
+        t = toks[i]
+        if t in _STATEMENT_ENDS:
+            return None
+        if t == "<" and i + 1 < len(toks):
+            return toks[i + 1]
+        if t.startswith("<") and not t.startswith("<<") and len(t) > 1:
+            return t[1:]
+    return None
+
+
+def _logical_line(lines, at):
+    """Line `at` joined with the backslash-continued lines before it, as bash reads one line."""
+    first = at
+    while first > 0 and lines[first - 1].endswith("\\"):
+        first -= 1
+    return " ".join(line[:-1] if line.endswith("\\") else line for line in lines[first:at + 1])
+
+
+def _stdin_heredoc_bodies(command):
+    """The bodies of the heredocs that feed a stdin-reading git command.
+
+    A heredoc is the message when its opener sits on the same (logical) line as that git command:
+    `git commit -F - <<'EOF'` and `cat <<'EOF' | git commit -F -` both qualify. A heredoc on any
+    other line feeds some other program - a script, a notes file - and is not the message.
+    """
+    lines = command.split("\n")
+    bodies = []
+    for at, _opener, (start, end) in shell_text.iter_heredocs(command):
+        line = _logical_line(lines, at)
+        try:
+            toks = shell_text.split_for_tool(line, "Bash")
+        except ValueError:
+            continue
+        if _reads_stdin_message(toks):
+            bodies.append("\n".join(lines[start:end]))
+    return bodies
+
+
+def _stdin_messages(command, toks, tool_name):
+    """Messages a stdin-reading git command receives: a heredoc body, or a `< file` redirect."""
+    msgs = []
+    if tool_name != "PowerShell":
+        msgs += [Message(body, False, None, None) for body in _stdin_heredoc_bodies(command)]
+    for kind, value, index in _message_flags(toks):
+        if kind != "file" or value not in _STDIN_PATHS:
+            continue
+        path = _redirected_stdin(toks, index)
+        found = _read_message_file(path) if path else None
+        if found is not None:
+            msgs.append(found)
+    return msgs
+
+
 def _messages(command, tool_name="Bash"):
     """Inline commit/merge/tag messages in a git command, as (text, from_file) pairs: the values
-    of -m/--message, and the contents of the file named by -F/--file. Empty unless the command is
-    a git command.
+    of -m/--message, the contents of the file named by -F/--file, and - when that file is the
+    command's own stdin - the heredoc or redirected file feeding it. Empty unless the command is a
+    git command.
 
-    `from_file` travels with the text because it decides how a hit may be REPORTED. A -m value is
-    text the caller typed and already has; a -F file's content is not.
+    `from_file` travels with the text because it decides how a hit may be REPORTED. A -m value or
+    a heredoc body is text the caller typed and already has; a -F file's content is not.
 
     `tool_name` picks the splitting language. It matters here because this function RESOLVES a
     token - it opens the `-F` path - so a separator eaten by the wrong splitter leaves a path that
     opens nothing and the guard approves a message it never read.
     """
-    try:
-        toks = shell_text.split_for_tool(command, tool_name)
-    except ValueError:
+    toks = _argv(command, tool_name)
+    if not toks or "git" not in toks:
         return []
-    if "git" not in toks:
-        return []
-    msgs, i = [], 0
-    while i < len(toks):
-        t = toks[i]
-        if t == "--message" and i + 1 < len(toks):
-            msgs.append(Message(toks[i + 1], False, None, None))
-            i += 2
-            continue
-        if t == "--file" and i + 1 < len(toks):
-            found = _read_message_file(toks[i + 1])
+    msgs, reads_stdin = [], False
+    for kind, value, _index in _message_flags(toks):
+        if kind == "msg":
+            msgs.append(Message(value, False, None, None))
+        elif value in _STDIN_PATHS:
+            reads_stdin = True
+        else:
+            found = _read_message_file(value)
             if found is not None:
                 msgs.append(found)
-            i += 2
-            continue
-        if t.startswith("--message="):
-            msgs.append(Message(t.split("=", 1)[1], False, None, None))
-        elif t.startswith("--file="):
-            found = _read_message_file(t.split("=", 1)[1])
-            if found is not None:
-                msgs.append(found)
-        elif t.startswith("-") and not t.startswith("--") and len(t) > 1:
-            kind, value, extra = _cluster(t, toks, i)
-            if kind == "msg":
-                msgs.append(Message(value, False, None, None))
-            elif kind == "file":
-                found = _read_message_file(value)
-                if found is not None:
-                    msgs.append(found)
-            i += extra
-        i += 1
+    if reads_stdin:
+        msgs += _stdin_messages(command, toks, tool_name)
     return msgs
 
 
