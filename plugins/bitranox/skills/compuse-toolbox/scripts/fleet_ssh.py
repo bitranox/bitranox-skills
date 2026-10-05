@@ -19,18 +19,24 @@ on every call, and three traps sit in that one-liner.
    surfaces far downstream as "the command returned nothing". Keys are picked by READABILITY.
 
 Host-key checking is left at ssh's own strict default. `--trust-changing-host-keys` is for a fleet
-you reimage, where a changed key is expected rather than an attack: it turns strict checking off,
-keeps that churn in a SEPARATE known-hosts file instead of polluting your real one, and heals a
-changed key by dropping the stale entry, whatever the exit status, since ssh never replaces that
-entry itself and the banner would otherwise repeat on every call. The entry is dropped under the
+you reimage, where a changed key is expected rather than an attack. It sets
+StrictHostKeyChecking=accept-new and keeps the fleet's keys in a SEPARATE known-hosts file instead
+of polluting your real one. accept-new records a NEW host and REFUSES a changed (or @revoked) key
+before anything runs - measured on OpenSSH 10.2: the banner, "Host key verification failed.", exit
+255, and the command never ran. So a changed key is healed by dropping the stale entry and
+retrying ONCE, and that retry is the command's first and only run. The entry is dropped under the
 name ssh says it recorded, which for an ssh_config alias or a non-default port is not the name
-typed. Strict checking off also means a key marked @revoked is only a warning: ssh runs the
-command under it, and this tool passes the warning through but cannot stop that run. It heals only when ssh names an
-offending entry in THAT file: a remote command that itself runs ssh or rsync relays its inner
-ssh's banner and "Host key verification failed." too, about some other host. It never re-runs the
-command: with strict checking off a changed key is only a warning, ssh logs in and RUNS the
-command, so a non-zero exit after the banner is the remote command's own, and a second run would
-apply a mutating command twice. Pointing a known-hosts file at
+typed; a drop that removed nothing is reported and not retried, and neither is a second refusal.
+
+The retry is keyed on ssh's OWN messages, never on what reaches stderr: a remote command that
+itself runs ssh or rsync relays its inner ssh's banner, offending entry, removal advice, refusal
+and exit 255 through the remote command's stderr, and on a fleet running the same tooling it can
+name the same known-hosts path. So in ssh mode `-E <file of ours>` sends ssh's own messages to a
+file this tool reads (and then forwards), and the remote command's stderr cannot reach it. scp has
+no `-E` and runs no remote command, so there its own stderr is ssh's. A key marked @revoked names
+no offending entry, so it is refused and never healed into acceptance.
+
+Pointing a known-hosts file at
 /dev/null is refused, because ssh then records every key "permanently" into the bit bucket, making
 every connect a first connect - that is the cause of a "Permanently added ..." warning that repeats
 forever and lands in the output of any helper that merges stderr into stdout.
@@ -57,17 +63,25 @@ a local copy that overwrites f2. A bracketed IPv6 literal (`[fe80::1]:/p`, `root
 that address, and a Windows drive path (`C:\\dir\\f`, `C:/dir/f`) is local, not a host called C.
 
 Exit status is ssh's or scp's own, so the caller keeps the remote command's exit code; 255 is
-ssh itself failing (unreachable, auth, host key), and 2 is a usage error from this script.
+ssh itself failing (unreachable, auth, host key). This script's own failures are 2: a usage error,
+ssh or scp not installed, a known-hosts directory it cannot create, no local user name to resolve
+a key for, or a crash. (A remote command that exits 2 is passed through as 2 as well; the stderr
+line `fleet_ssh: ...` is what marks one of ours.) `--json` with `--dry-run` prints the envelope
+`{ok, command, data: {argv}, skipped}`, and any exit 2 under `--json` prints one too; a `--json`
+written after the host belongs to the remote command, never to this script.
 """
 from __future__ import annotations
 
 import argparse
-import json
+import getpass
 import os
 import re
 import subprocess
 import sys
+import tempfile
 from pathlib import Path
+
+from _cli_envelope import EXIT_ERROR, emit
 
 # Templates, not paths: {user} matters because a fleet key is usually per-login, and the FIRST
 # READABLE one wins (see the module docstring). Override with FLEET_SSH_KEY_CANDIDATES.
@@ -98,6 +112,11 @@ _DRIVE_SLASH = re.compile(r"^[A-Za-z]:/")
 _ON_WINDOWS = os.name == "nt"
 # Pure noise once the key is on file, and the line that leaks into merged-output parses.
 _ADDED_NOISE = re.compile(r"^Warning: Permanently added .*to the list of known hosts\.?\s*$")
+# ssh's own words for a changed key it refused. All three must be in ITS OWN messages (the -E log),
+# with exit 255: the banner, the refusal, and an offending entry in our known-hosts file.
+_CHANGED_BANNER = "REMOTE HOST IDENTIFICATION HAS CHANGED"
+_REFUSED = "Host key verification failed."
+_SSH_FAILED = 255
 
 
 class UsageError(Exception):
@@ -153,7 +172,9 @@ def build_options(*, key: str | None, timeout: int, trust_changing_host_keys: bo
         # tried, which reads as a key that "does not work".
         opts += ["-o", "IdentitiesOnly=yes"]
     if trust_changing_host_keys:
-        opts += ["-o", "StrictHostKeyChecking=no"]
+        # accept-new, never `no`: under `no` a changed key is only a warning and ssh RUNS the
+        # command, so no retry is ever safe; accept-new refuses first, so one retry is.
+        opts += ["-o", "StrictHostKeyChecking=accept-new"]
     if known_hosts:
         opts += ["-o", f"UserKnownHostsFile={known_hosts}"]
     return opts
@@ -252,35 +273,76 @@ def forward_stderr(text: str, stream=None) -> None:
 
 def run_with_host_key_healing(argv: list[str], *, host: str | None, known_hosts: str | None,
                               heal: bool, run=subprocess.run) -> int:
-    """Run `argv` exactly once; on a changed host key, drop the stale entry afterwards.
+    """Run `argv`; when ssh REFUSED a changed host key, drop the stale entry and retry ONCE.
 
-    stdout is inherited so large command output still streams; only stderr is captured, and only
-    so the mismatch can be detected and the noise line filtered. It is decoded as UTF-8 with
-    replacement, because what arrives there is partly the REMOTE command's stderr, in whatever
-    encoding the remote wrote, and a strict locale decode would crash after the command ran.
+    stdout is inherited so large command output still streams; only stderr is captured, so the
+    noise line can be filtered. It is decoded as UTF-8 with replacement, because what arrives
+    there is partly the REMOTE command's stderr, in whatever encoding the remote wrote, and a
+    strict locale decode would crash after the command ran.
 
-    Healing needs healing enabled, a known host, and ssh's own "Offending ... key in <file>" line
-    naming `known_hosts` - whatever the exit status. Healing runs with StrictHostKeyChecking=no,
-    under which a changed key is only a warning: ssh runs the command and never replaces the entry
-    on file, so the banner would repeat on every later call until the entry is dropped. Dropping it
-    runs nothing remote, so it is safe on any status.
+    Healing runs under StrictHostKeyChecking=accept-new (see build_options), which refuses a
+    changed key BEFORE running anything: exit 255, "Host key verification failed.". The retry is
+    therefore the command's first run, never a second one - but only when ssh ITSELF said so. In
+    ssh mode its own messages go to a `-E` log of ours, which the remote command's stderr cannot
+    reach, so an inner ssh's banner relayed through that stderr is never mistaken for ours; scp
+    runs no remote command, so its stderr is its own.
 
-    The command is never re-run. Under StrictHostKeyChecking=no ssh does not refuse a changed key
-    (measured on OpenSSH 10.2: banner, no "Host key verification failed"), so a failing status
-    after the banner is the command's own, and `argv` can be MUTATING. It does not refuse a key
-    marked @revoked either (measured, same version: a REVOKED banner, then the command runs); that
-    banner names no offending entry, so the revocation marker is never dropped, and the banner is
-    passed through. The entry is dropped under the name ssh's own removal advice gives for this
-    file, falling back to `host`, and the report says whether the file actually changed. `run` is
-    injected so this is testable without a live host and a real changed key.
+    Retried only when the status is 255 and ssh's own messages hold the banner, the refusal and
+    an offending entry in `known_hosts`, and only when the drop actually changed the file - a drop
+    that removed nothing would just be refused again. At most once. A key marked @revoked names no
+    offending entry, so it is never dropped. `run` is injected so this is testable without a live
+    host and a real changed key.
+
+    Returns ssh's (or the retry's) status, or 2 when ssh/scp could not be started at all.
     """
-    proc = _run_capturing_stderr(argv, run)
-    err = proc.stderr or ""
-    if heal and host and known_hosts and offends_known_hosts(err, known_hosts):
-        _drop_stale_entry(recorded_name(err, known_hosts) or host, known_hosts,
-                          proc.returncode, run)
-    forward_stderr(err)
-    return proc.returncode
+    healing = bool(heal and host and known_hosts)
+    first = _run_once(argv, run, own_log=healing and argv[:1] == ["ssh"])
+    if first is None:
+        return EXIT_ERROR
+    status, own = first
+    if not (healing and _refused_changed_key(status, own, known_hosts)):
+        return status
+    if not _drop_stale_entry(recorded_name(own, known_hosts) or host, known_hosts, run):
+        return status
+    print("fleet_ssh: retrying once - ssh refused the changed key, so the command has not run yet",
+          file=sys.stderr)
+    second = _run_once(argv, run, own_log=argv[:1] == ["ssh"])
+    return EXIT_ERROR if second is None else second[0]
+
+
+def _refused_changed_key(status: int, own: str, known_hosts: str) -> bool:
+    return (status == _SSH_FAILED and _CHANGED_BANNER in own and _REFUSED in own
+            and offends_known_hosts(own, known_hosts))
+
+
+def _run_once(argv: list[str], run, *, own_log: bool) -> tuple[int, str] | None:
+    """(status, ssh's own messages) for one run, both streams forwarded; None if it cannot start.
+
+    With `own_log`, ssh writes its own messages to a temp file through `-E` and the captured
+    stderr is the REMOTE command's alone; without it, the captured stderr is all there is.
+    """
+    log_fd, log_path = tempfile.mkstemp(prefix="fleet_ssh-", suffix=".log") if own_log else (None, "")
+    if log_fd is not None:
+        os.close(log_fd)
+    try:
+        full = [argv[0], "-E", log_path, *argv[1:]] if own_log else list(argv)
+        try:
+            proc = _run_capturing_stderr(full, run)
+        except OSError as exc:
+            print(f"fleet_ssh: cannot run {argv[0]}: {exc}", file=sys.stderr)
+            return None
+        err = proc.stderr or ""
+        own = (_read_or_none(log_path) or b"").decode("utf-8", "replace") if own_log else err
+        if own_log:
+            forward_stderr(own)
+        forward_stderr(err)
+        return proc.returncode, own
+    finally:
+        if own_log:
+            try:
+                os.unlink(log_path)
+            except OSError:
+                pass
 
 
 def recorded_name(err: str, known_hosts: str) -> str | None:
@@ -297,18 +359,27 @@ def recorded_name(err: str, known_hosts: str) -> str | None:
     return None
 
 
-def _drop_stale_entry(name: str, known_hosts: str, returncode: int, run) -> None:
-    """`ssh-keygen -R`, then say what happened to the FILE - a claim checked, not assumed."""
+def _drop_stale_entry(name: str, known_hosts: str, run) -> bool:
+    """`ssh-keygen -R`, then say what happened to the FILE - a claim checked, not assumed.
+
+    Returns whether the file changed: only then can a retry find anything different. ssh-keygen
+    missing is reported and counts as no change, keeping ssh's own 255 for the caller.
+    """
     before = _read_or_none(known_hosts)
-    run(["ssh-keygen", "-R", name, "-f", known_hosts],
-        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=False)
+    try:
+        run(["ssh-keygen", "-R", name, "-f", known_hosts],
+            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=False)
+    except OSError as exc:
+        print(f"fleet_ssh: host key for {name} changed, but ssh-keygen could not run ({exc}); "
+              f"remove the entry by hand: ssh-keygen -R {name} -f {known_hosts}", file=sys.stderr)
+        return False
     if before is not None and _read_or_none(known_hosts) != before:
-        print(f"fleet_ssh: host key for {name} changed; dropped the stale entry "
-              f"{_after_the_drop(returncode)}", file=sys.stderr)
-        return
+        print(f"fleet_ssh: host key for {name} changed; dropped the stale entry", file=sys.stderr)
+        return True
     print(f"fleet_ssh: host key for {name} changed, but `ssh-keygen -R {name} -f {known_hosts}` "
-          f"removed nothing, so the banner will repeat - remove the entry ssh names below by hand "
-          f"{_after_the_drop(returncode)}", file=sys.stderr)
+          f"removed nothing, so ssh will refuse it again - remove the entry ssh names above by "
+          f"hand (the command did not run)", file=sys.stderr)
+    return False
 
 
 def _read_or_none(path: str) -> bytes | None:
@@ -331,28 +402,28 @@ def _comparable_path(path: str) -> str:
     return os.path.normcase(os.path.normpath(os.path.expanduser(path.strip())))
 
 
-def _after_the_drop(returncode: int) -> str:
-    """What became of the command - said, because a caller may need to run it again by hand."""
-    if returncode == 0:
-        return "(the command ran under the warning; the next connect records the new key)"
-    return ("(the command was not re-run: ssh runs it under the warning, so it may already have "
-            "had its effect)")
-
-
 def _run_capturing_stderr(argv: list[str], run):
     return run(argv, stderr=subprocess.PIPE, text=True, encoding="utf-8", errors="replace")
 
 
+class _Parser(argparse.ArgumentParser):
+    """A usage error becomes a UsageError, so main can print the --json envelope for it."""
+
+    def error(self, message):
+        raise UsageError(message)
+
+
 def parse_args(argv: list[str] | None) -> argparse.Namespace:
-    ap = argparse.ArgumentParser(
+    ap = _Parser(
         description="Run ssh/scp with one option set, one resolved key, and no interactive prompt.")
     ap.add_argument("--scp", action="store_true", help="scp mode: the positionals are <src> <dst>")
     ap.add_argument("--user", help="login user; unset leaves the host bare so ssh_config decides")
     ap.add_argument("--key", help="use this key instead of resolving one")
     ap.add_argument("--timeout", type=int, default=10, help="ConnectTimeout seconds")
     ap.add_argument("--trust-changing-host-keys", action="store_true",
-                    help="for a fleet you reimage: accept a changed host key, keep it in a "
-                         "separate known-hosts file, and heal a mismatch once")
+                    help="for a fleet you reimage: keep host keys in a separate known-hosts "
+                         "file (accept-new), and on a CHANGED key that ssh refused, drop the "
+                         "stale entry and retry once")
     ap.add_argument("--known-hosts", help="known-hosts file (default with --trust-changing-host-"
                                           "keys: ~/.ssh/known_hosts_fleet)")
     ap.add_argument("--dry-run", action="store_true", help="print the argv instead of running it")
@@ -451,22 +522,71 @@ def tolerate_unencodable_stdout(stream=None) -> None:
         pass
 
 
-def main(argv: list[str] | None = None, *, run=subprocess.run) -> int:
-    tolerate_unencodable_stdout()
-    args = parse_args(argv)
-    try:
-        import getpass
-        built, host, known_hosts = plan(args, default_user=getpass.getuser())
-    except UsageError as exc:
-        print(f"fleet_ssh: {exc}", file=sys.stderr)
-        return 2
+_VALUED = ("--user", "--key", "--timeout", "--known-hosts")
 
+
+def json_requested(argv: list[str]) -> bool:
+    """Whether `--json` is one of THIS script's options: written before the host, never after it.
+
+    Everything from the first positional on is the remote command's (argparse.REMAINDER), so a
+    `--json` there is the remote tool's flag, and an envelope from us would corrupt its stdout.
+    """
+    skip = False
+    for token in argv:
+        if skip:
+            skip = False
+            continue
+        if token == "--json":
+            return True
+        if token == "--" or not token.startswith("-"):
+            return False
+        skip = token in _VALUED
+    return False
+
+
+def _local_user() -> str:
+    """The local account name. Raises UsageError: no key can be resolved without one."""
+    try:
+        return getpass.getuser()
+    except (OSError, KeyError) as exc:     # OSError from 3.13, KeyError (pwd lookup) before
+        raise UsageError(f"cannot tell the local user name ({exc}); pass --user and --key") from exc
+
+
+def _fail(message: str, as_json: bool) -> int:
+    if as_json:
+        emit(EXIT_ERROR, "fleet_ssh", error=message)
+    print(f"fleet_ssh: {message}", file=sys.stderr)
+    return EXIT_ERROR
+
+
+def main(argv: list[str] | None = None, *, run=subprocess.run) -> int:
+    """The CLI: ssh's or scp's own status, or 2 for this script's own failures (see the module)."""
+    tolerate_unencodable_stdout()
+    raw = list(sys.argv[1:] if argv is None else argv)
+    as_json = json_requested(raw)
+    try:
+        return _main(raw, run, as_json)
+    except UsageError as exc:
+        return _fail(str(exc), as_json)
+    except Exception as exc:  # noqa: BLE001 - a crash must not pass for the remote command's code
+        return _fail(f"internal error: {type(exc).__name__}: {exc}", as_json)
+
+
+def _main(raw: list[str], run, as_json: bool) -> int:
+    args = parse_args(raw)
+    built, host, known_hosts = plan(args, default_user=_local_user())
     if args.dry_run:
-        print(json.dumps({"argv": built}) if args.json else " ".join(built))
+        if as_json:
+            return emit(0, "fleet_ssh", {"argv": built})
+        print(" ".join(built))
         return 0
     if known_hosts:
         # The directory must exist or ssh cannot create the file and warns on every call.
-        Path(known_hosts).parent.mkdir(parents=True, exist_ok=True)
+        try:
+            Path(known_hosts).parent.mkdir(parents=True, exist_ok=True)
+        except OSError as exc:
+            raise UsageError(f"cannot create the known-hosts directory "
+                             f"{Path(known_hosts).parent}: {exc}") from exc
     return run_with_host_key_healing(built, host=host, known_hosts=known_hosts,
                                      heal=args.trust_changing_host_keys, run=run)
 

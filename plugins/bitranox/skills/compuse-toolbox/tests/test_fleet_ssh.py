@@ -206,7 +206,10 @@ def test_strict_checking_is_the_default_and_no_known_hosts_is_overridden():
 
 def test_trusting_a_reimaged_fleet_is_opt_in_and_uses_a_separate_known_hosts():
     line, _host, known_hosts = plan(["--trust-changing-host-keys", "--key", "/k", "h", "uptime"])
-    assert "StrictHostKeyChecking=no" in line
+    # accept-new, never `no`: a NEW host is recorded, a CHANGED or revoked key is refused before
+    # anything runs, which is what makes the single retry after a drop safe.
+    assert "StrictHostKeyChecking=accept-new" in line
+    assert "StrictHostKeyChecking=no" not in line
     # separator-agnostic: the path is native now, so spelling one separator asserts the host's
     # OS rather than where the fleet known_hosts file goes
     assert known_hosts.replace(os.sep, "/").endswith("/.ssh/known_hosts_fleet")
@@ -242,27 +245,44 @@ def test_the_offending_path_is_compared_as_a_path():
     assert F.offends_known_hosts(_real_changed("/a/b/kh"), "/a/./b/kh")
 
 
-# ---- healing: this decides whether a remote command runs once or twice -------------------------
+# ---- healing: accept-new refuses a changed key, so ONE retry after the drop runs the command once
 
 class _FakeProc:
-    def __init__(self, returncode=0, stderr="", stdout=""):
+    def __init__(self, returncode=0, stderr="", stdout="", log=""):
         self.returncode, self.stderr, self.stdout = returncode, stderr, stdout
+        self.log = log
+        """What ssh writes about ITSELF: to the `-E` file when one is given, else to stderr."""
 
 
 class _Runner:
-    """A fake process runner recording every argv it was handed."""
+    """A fake process runner recording every argv it was handed.
 
-    def __init__(self, *results):
-        self.results, self.calls = list(results), []
+    It plays ssh's split honestly: with `-E FILE` in the argv, a result's `log` goes to that file
+    and its `stderr` (the REMOTE command's) to the captured stream; without `-E` both are stderr.
+    `on_keygen` stands in for ssh-keygen's effect on the known-hosts file.
+    """
+
+    def __init__(self, *results, on_keygen=None):
+        self.results, self.calls, self.on_keygen = list(results), [], on_keygen
 
     def __call__(self, argv, **kw):
         self.calls.append(list(argv))
-        return self.results.pop(0) if self.results else _FakeProc()
+        if argv[0] == "ssh-keygen":
+            if self.on_keygen is not None:
+                self.on_keygen()
+            return _FakeProc()
+        proc = self.results.pop(0) if self.results else _FakeProc()
+        if "-E" in argv:
+            with open(argv[argv.index("-E") + 1], "a", encoding="utf-8") as fh:
+                fh.write(proc.log)
+            return _FakeProc(proc.returncode, proc.stderr)
+        return _FakeProc(proc.returncode, proc.log + proc.stderr)
 
 
 def _real_changed(known_hosts: str, host: str = "h") -> str:
-    """What OpenSSH 10.2 prints for a changed key under StrictHostKeyChecking=no, captured from a
-    real run against a known-hosts file holding a wrong key. It names the file it read."""
+    """What OpenSSH 10.2 prints for a changed key under StrictHostKeyChecking=accept-new, captured
+    from a real run against a known-hosts file holding a wrong key: the banner, the offending
+    entry in the file it read, the removal advice, and the refusal. The command does NOT run."""
     frame = "@" * 59 + "\n"
     return (frame + "@    WARNING: REMOTE HOST IDENTIFICATION HAS CHANGED!     @\n" + frame +
             "IT IS POSSIBLE THAT SOMEONE IS DOING SOMETHING NASTY!\n"
@@ -275,75 +295,209 @@ def _real_changed(known_hosts: str, host: str = "h") -> str:
             f"Offending ED25519 key in {known_hosts}:1\n"
             "  remove with:\n"
             f"  ssh-keygen -f '{known_hosts}' -R '{host}'\n"
-            "Password authentication is disabled to avoid man-in-the-middle attacks.\n"
-            "Keyboard-interactive authentication is disabled to avoid man-in-the-middle attacks.\n")
+            f"Host key for {host} has changed and you have requested strict checking.\n"
+            "Host key verification failed.\n")
 
 
-_CHANGED = _real_changed("/kh")
+def _kh(tmp_path, body="h ssh-ed25519 AAAA\n"):
+    kh = tmp_path / "kh"
+    kh.write_text(body, encoding="utf-8")
+    return kh
+
+
+def _emptying(kh):
+    return lambda: kh.write_text("", encoding="utf-8")
 
 
 def _heal(runner, *, heal=True, host="h", known_hosts="/kh", argv=("ssh", "h", "uptime")):
-    return F.run_with_host_key_healing(list(argv), host=host, known_hosts=known_hosts,
+    return F.run_with_host_key_healing(list(argv), host=host, known_hosts=str(known_hosts),
                                        heal=heal, run=runner)
 
 
+def _programs(runner):
+    return [c[0] for c in runner.calls]
+
+
 def test_a_clean_run_is_executed_exactly_once():
-    r = _Runner(_FakeProc(0, ""))
+    r = _Runner(_FakeProc(0))
     assert _heal(r) == 0
-    assert len(r.calls) == 1
+    assert _programs(r) == ["ssh"]
 
 
-@pytest.mark.parametrize("status", [255, 3, 1])
-def test_a_changed_host_key_drops_the_entry_and_never_reruns(status):
-    """Under StrictHostKeyChecking=no, which healing always sets, ssh RUNS the command after the
-    warning (measured on OpenSSH 10.2: banner, no fatal line), so a failing status is the
-    command's own or a later auth failure - never a refusal that a re-run could cure."""
-    r = _Runner(_FakeProc(status, _CHANGED + "remote: something failed\n"))
-    assert _heal(r) == status
-    assert [c[0] for c in r.calls] == ["ssh", "ssh-keygen"], "healed, and the command ran ONCE"
-    assert r.calls[1] == ["ssh-keygen", "-R", "h", "-f", "/kh"]
+@pytest.mark.parametrize("retry_status", [0, 7])
+def test_a_changed_key_is_dropped_and_the_refused_command_runs_once(tmp_path, retry_status):
+    """Under accept-new ssh REFUSES a changed key before running anything (measured on OpenSSH
+    10.2: exit 255, the command never ran), so after the stale entry is dropped one retry is the
+    command's FIRST run. The retry's status is the command's own."""
+    kh = _kh(tmp_path)
+    r = _Runner(_FakeProc(255, log=_real_changed(str(kh))), _FakeProc(retry_status),
+                on_keygen=_emptying(kh))
+    assert _heal(r, known_hosts=kh) == retry_status
+    assert _programs(r) == ["ssh", "ssh-keygen", "ssh"]
+    assert r.calls[1] == ["ssh-keygen", "-R", "h", "-f", str(kh)]
 
 
-def test_an_inner_ssh_failing_on_its_own_host_key_is_neither_healed_nor_rerun(capsys):
-    """The reimage case: the remote command itself runs ssh or rsync to a peer whose key is
-    unknown or changed. That inner ssh prints the banner and "Host key verification failed." and
-    the remote command exits 255 - on the outer stream, indistinguishable by status and phrase
-    from ssh refusing us. Only the file it names tells them apart: the peer's, not ours."""
-    inner = _real_changed("/root/.ssh/known_hosts", host="peer") + "Host key verification failed.\n"
-    r = _Runner(_FakeProc(255, inner))
-    assert _heal(r, argv=("ssh", "h", "rsync -a /data peer:/data")) == 255
-    assert [c[0] for c in r.calls] == ["ssh"], "the outer host's key is fine; the command ran ONCE"
-    assert "Host key verification failed." in capsys.readouterr().err, "the remote's stderr survives"
+def test_an_inner_banner_on_the_remote_stderr_never_triggers_the_retry(tmp_path, capsys):
+    """The reimage case: the remote command itself runs ssh or rsync to a peer whose key changed.
+    That inner ssh's banner - offending path, removal advice, refusal, exit 255 and all - reaches
+    us as the REMOTE command's stderr, and it can even name a file with our path, since the fleet
+    runs the same tooling. Only ssh's OWN messages, which `-E` sends to a file of ours, count."""
+    kh = _kh(tmp_path)
+    inner = _real_changed(str(kh), host="peer")       # the SAME path, to rule the path test out
+    r = _Runner(_FakeProc(255, stderr=inner), on_keygen=_emptying(kh))
+    assert _heal(r, known_hosts=kh, argv=("ssh", "h", "rsync -a /data peer:/data")) == 255
+    assert _programs(r) == ["ssh"], "the outer key is fine: no drop, and the command ran ONCE"
+    assert kh.read_text(encoding="utf-8"), "our known-hosts file is untouched"
+    assert "Host key verification failed." in capsys.readouterr().err, "remote stderr survives"
 
 
-def test_a_changed_host_key_is_not_healed_when_trust_was_not_asked_for():
+def test_ssh_s_own_messages_go_to_a_log_of_ours_only_when_healing():
+    r = _Runner(_FakeProc(0))
+    _heal(r)
+    assert r.calls[0][:2] == ["ssh", "-E"]
+    plain = _Runner(_FakeProc(0))
+    _heal(plain, heal=False)
+    assert "-E" not in plain.calls[0]
+
+
+def test_ssh_s_own_log_is_forwarded_minus_the_known_hosts_noise(capsys):
+    r = _Runner(_FakeProc(0, log="Warning: Permanently added 'h' (ED25519) to the list of known "
+                                 "hosts.\nsome ssh notice\n", stderr="remote says hi\n"))
+    assert _heal(r) == 0
+    err = capsys.readouterr().err
+    assert "some ssh notice" in err and "remote says hi" in err
+    assert "Permanently added" not in err
+
+
+def test_a_changed_host_key_is_not_healed_when_trust_was_not_asked_for(tmp_path):
     """Strict mode must report the mismatch, not quietly accept the new key."""
-    r = _Runner(_FakeProc(255, _CHANGED + "Host key verification failed.\n"))
-    assert _heal(r, heal=False) == 255
-    assert len(r.calls) == 1
+    kh = _kh(tmp_path)
+    r = _Runner(_FakeProc(255, log=_real_changed(str(kh))), on_keygen=_emptying(kh))
+    assert _heal(r, heal=False, known_hosts=kh) == 255
+    assert _programs(r) == ["ssh"]
 
 
 def test_an_ordinary_failure_is_never_retried():
     """A remote command fails for a thousand reasons; re-running a MUTATING one applies it twice."""
-    r = _Runner(_FakeProc(1, "rm: cannot remove 'x': No such file\n"))
+    r = _Runner(_FakeProc(1, stderr="rm: cannot remove 'x': No such file\n"))
     assert _heal(r, argv=("ssh", "h", "rm x")) == 1
-    assert len(r.calls) == 1
+    assert _programs(r) == ["ssh"]
 
 
-def test_a_zero_exit_is_never_retried_even_if_stderr_mentions_the_phrase():
-    """Guards against keying on the message alone - the text can appear in a command's output."""
-    r = _Runner(_FakeProc(0, "echo Host key verification failed\n"))
-    assert _heal(r, argv=("ssh", "h", "cat log")) == 0
-    assert len(r.calls) == 1
+def test_an_ssh_failure_that_is_not_a_changed_key_is_never_retried():
+    r = _Runner(_FakeProc(255, log="ssh: connect to host h port 22: Connection refused\n"))
+    assert _heal(r) == 255
+    assert _programs(r) == ["ssh"]
 
 
-def test_no_host_means_no_retry():
-    """A local-to-local scp has no host to heal; retrying would just repeat the copy."""
-    r = _Runner(_FakeProc(255, _CHANGED))
-    assert _heal(r, host=None, argv=("scp", "a", "b")) == 255
-    assert len(r.calls) == 1
+def test_no_host_means_no_retry(tmp_path):
+    kh = _kh(tmp_path)
+    r = _Runner(_FakeProc(255, log=_real_changed(str(kh))), on_keygen=_emptying(kh))
+    assert _heal(r, host=None, known_hosts=kh, argv=("scp", "a", "b")) == 255
+    assert _programs(r) == ["scp"]
 
 
+def _real_revoked(host: str = "h") -> str:
+    """What OpenSSH 10.2 prints for a host key marked @revoked in the known-hosts file. Under
+    accept-new it is refused like a changed one, and it names no offending entry."""
+    frame = "@" * 59 + "\n"
+    return (frame + "@       WARNING: REVOKED HOST KEY DETECTED!               @\n" + frame +
+            f"The ED25519 host key for {host} is marked as revoked.\n"
+            "This could mean that a stolen key is being used to\n"
+            "impersonate this host.\n"
+            "Host key verification failed.\n")
+
+
+def test_a_revoked_key_is_never_healed_and_never_retried(capsys):
+    """Dropping the entry would delete the @revoked marker itself - healing a revocation into
+    acceptance. ssh names no offending entry for it, so nothing is dropped."""
+    r = _Runner(_FakeProc(255, log=_real_revoked()))
+    assert _heal(r) == 255
+    assert _programs(r) == ["ssh"]
+    assert "REVOKED HOST KEY" in capsys.readouterr().err
+
+
+def test_the_heal_drops_the_name_ssh_recorded_not_the_alias_it_was_given(tmp_path):
+    """An ssh_config alias or a non-default port is recorded under the RESOLVED name
+    (`[10.0.0.5]:2222`), so `ssh-keygen -R <alias>` removes nothing - measured against a real
+    sshd - and the banner then repeats on every call. ssh prints the exact name to remove."""
+    kh = _kh(tmp_path)
+    r = _Runner(_FakeProc(255, log=_real_changed(str(kh), host="[10.0.0.5]:2222")), _FakeProc(0),
+                on_keygen=_emptying(kh))
+    assert _heal(r, host="fleetalias", known_hosts=kh,
+                 argv=("ssh", "fleetalias", "uptime")) == 0
+    assert r.calls[1] == ["ssh-keygen", "-R", "[10.0.0.5]:2222", "-f", str(kh)]
+
+
+def test_without_ssh_s_removal_hint_the_host_given_is_dropped(tmp_path):
+    kh = _kh(tmp_path)
+    log = (f"Offending ED25519 key in {kh}:1\n"
+           "@    WARNING: REMOTE HOST IDENTIFICATION HAS CHANGED!     @\n"
+           "Host key verification failed.\n")
+    r = _Runner(_FakeProc(255, log=log), _FakeProc(0), on_keygen=_emptying(kh))
+    assert _heal(r, host="h", known_hosts=kh) == 0
+    assert r.calls[1] == ["ssh-keygen", "-R", "h", "-f", str(kh)]
+
+
+def test_a_drop_that_removed_nothing_is_reported_and_not_retried(tmp_path, capsys):
+    """'dropped the stale entry' is a claim about the file; it is made only when the file
+    actually changed. A retry against an unchanged file would fail the same way."""
+    kh = _kh(tmp_path, "[10.0.0.5]:2222 ssh-ed25519 AAAA\n")
+    r = _Runner(_FakeProc(255, log=_real_changed(str(kh), host="[10.0.0.5]:2222")))
+    assert _heal(r, known_hosts=kh) == 255
+    assert _programs(r) == ["ssh", "ssh-keygen"]
+    err = capsys.readouterr().err
+    assert "dropped the stale entry" not in err, err
+    assert "removed nothing" in err, err
+
+
+def test_a_drop_that_changed_the_file_is_reported_and_retried(tmp_path, capsys):
+    kh = _kh(tmp_path)
+    r = _Runner(_FakeProc(255, log=_real_changed(str(kh))), _FakeProc(0), on_keygen=_emptying(kh))
+    assert _heal(r, known_hosts=kh) == 0
+    err = capsys.readouterr().err
+    assert "dropped the stale entry" in err and "retrying once" in err
+
+
+def test_the_retry_happens_once_at_most(tmp_path):
+    """A host whose key changes again between the two connects is reported, not chased."""
+    kh = _kh(tmp_path)
+    changed = _FakeProc(255, log=_real_changed(str(kh)))
+    r = _Runner(changed, _FakeProc(255, log=_real_changed(str(kh))), on_keygen=_emptying(kh))
+    assert _heal(r, known_hosts=kh) == 255
+    assert _programs(r) == ["ssh", "ssh-keygen", "ssh"]
+
+
+def test_ssh_keygen_missing_keeps_ssh_s_code_and_warns(tmp_path, capsys):
+    kh = _kh(tmp_path)
+
+    def runner(argv, **kw):
+        if argv[0] == "ssh-keygen":
+            raise FileNotFoundError(2, "No such file or directory", "ssh-keygen")
+        with open(argv[argv.index("-E") + 1], "a", encoding="utf-8") as fh:
+            fh.write(_real_changed(str(kh)))
+        return _FakeProc(255)
+
+    assert _heal(runner, known_hosts=kh) == 255
+    assert "ssh-keygen" in capsys.readouterr().err
+
+
+def test_scp_reads_its_own_stderr_since_it_runs_no_remote_command(tmp_path):
+    """scp has no `-E`, and nothing but ssh and scp writes its stderr, so the banner there is
+    ssh's own."""
+    kh = _kh(tmp_path)
+    r = _Runner(_FakeProc(255, log=_real_changed(str(kh))), _FakeProc(0), on_keygen=_emptying(kh))
+    assert _heal(r, known_hosts=kh, argv=("scp", "./f", "h:/tmp/f")) == 0
+    assert _programs(r) == ["scp", "ssh-keygen", "scp"]
+    assert "-E" not in r.calls[0]
+
+
+def test_a_missing_ssh_binary_is_exit_2_not_a_traceback(capsys):
+    def runner(argv, **kw):
+        raise FileNotFoundError(2, "No such file or directory", argv[0])
+
+    assert _heal(runner) == 2
+    assert "cannot run ssh" in capsys.readouterr().err
 
 
 # ---- CLI surface --------------------------------------------------------------------------------
@@ -355,10 +509,12 @@ def test_dry_run_prints_the_argv_and_runs_nothing(capsys):
     assert capsys.readouterr().out.strip().startswith("ssh -i /k ")
 
 
-def test_dry_run_json_is_machine_readable(capsys):
+def test_dry_run_json_is_the_shared_envelope(capsys):
     import json
     assert F.main(["--dry-run", "--json", "--key", "/k", "h", "uptime"]) == 0
-    assert json.loads(capsys.readouterr().out)["argv"][:1] == ["ssh"]
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["ok"] is True and payload["command"] == "fleet_ssh"
+    assert payload["data"]["argv"][:1] == ["ssh"]
 
 
 def test_a_usage_error_exits_2_without_connecting(capsys):
@@ -368,149 +524,94 @@ def test_a_usage_error_exits_2_without_connecting(capsys):
     assert "scp needs" in capsys.readouterr().err
 
 
-# ---- a remote command that already ran must never run again ------------------------------------
-
-def _real_revoked(host: str = "h") -> str:
-    """What OpenSSH 10.2 prints under StrictHostKeyChecking=no for a host key marked @revoked in
-    the known-hosts file, captured from a real run. It is a WARNING only - ssh logs in and runs
-    the command - and it names no offending entry."""
-    frame = "@" * 59 + "\n"
-    return (frame + "@       WARNING: REVOKED HOST KEY DETECTED!               @\n" + frame +
-            f"The ED25519 host key for {host} is marked as revoked.\n"
-            "This could mean that a stolen key is being used to\n"
-            "impersonate this host.\n"
-            "Password authentication is disabled to avoid man-in-the-middle attacks.\n"
-            "Keyboard-interactive authentication is disabled to avoid man-in-the-middle attacks.\n")
+def test_a_usage_error_under_json_prints_the_envelope(capsys):
+    import json
+    r = _Runner()
+    assert F.main(["--json", "--dry-run", "--scp", "./only-one-path"], run=r) == 2
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["ok"] is False and "scp needs" in payload["error"]
 
 
-def test_a_revoked_key_is_never_healed_and_the_command_is_not_rerun(capsys):
-    """Dropping the entry would delete the @revoked marker itself - healing a revocation into
-    acceptance. ssh names no offending entry for it, so nothing is dropped, and the warning is
-    passed through for the caller to see."""
-    r = _Runner(_FakeProc(3, _real_revoked()))
-    assert _heal(r) == 3
-    assert [c[0] for c in r.calls] == ["ssh"]
-    assert "REVOKED HOST KEY" in capsys.readouterr().err
+def test_a_json_flag_inside_the_remote_command_is_not_ours(capsys):
+    """`fleet_ssh h tool --json` passes --json to the REMOTE tool; an envelope from us on its
+    stdout would corrupt the stream the caller parses."""
+    r = _Runner(_FakeProc(0))
+    assert F.main(["--key", "/k", "h", "tool", "--json"], run=r) == 0
+    assert r.calls[0][-1] == "tool --json"
+    assert capsys.readouterr().out == ""
 
 
-def test_the_heal_drops_the_name_ssh_recorded_not_the_alias_it_was_given():
-    """An ssh_config alias or a non-default port is recorded under the RESOLVED name
-    (`[10.0.0.5]:2222`), so `ssh-keygen -R <alias>` removes nothing - measured against a real
-    sshd - and the banner then repeats on every call. ssh prints the exact name to remove."""
-    r = _Runner(_FakeProc(0, _real_changed("/kh", host="[10.0.0.5]:2222")))
-    assert _heal(r, host="fleetalias", argv=("ssh", "fleetalias", "uptime")) == 0
-    assert r.calls[1] == ["ssh-keygen", "-R", "[10.0.0.5]:2222", "-f", "/kh"]
+def test_a_crash_under_json_is_exit_2_with_an_envelope(monkeypatch, capsys):
+    import json
+
+    def boom(*_a, **_k):
+        raise RuntimeError("planner broke")
+
+    monkeypatch.setattr(F, "plan", boom)
+    assert F.main(["--json", "--dry-run", "h", "uptime"]) == 2
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["ok"] is False and "planner broke" in payload["error"]
 
 
-def test_the_removal_hint_of_an_inner_ssh_is_not_taken_for_ours():
-    inner = _real_changed("/root/.ssh/known_hosts", host="peer")
-    ours = _real_changed("/kh", host="10.0.0.5")
-    r = _Runner(_FakeProc(0, inner + ours))
-    assert _heal(r, host="fleetalias") == 0
-    assert r.calls[1] == ["ssh-keygen", "-R", "10.0.0.5", "-f", "/kh"]
+def test_getuser_failing_is_exit_2(monkeypatch, capsys):
+    import getpass
+
+    def nobody():
+        raise OSError("No username set in the environment")
+
+    monkeypatch.setattr(getpass, "getuser", nobody)
+    assert F.main(["--dry-run", "h", "uptime"]) == 2
+    assert "local user" in capsys.readouterr().err
 
 
-def test_without_ssh_s_removal_hint_the_host_given_is_dropped():
-    r = _Runner(_FakeProc(0, "Offending ED25519 key in /kh:1\n"))
-    assert _heal(r, host="h") == 0
-    assert r.calls[1] == ["ssh-keygen", "-R", "h", "-f", "/kh"]
+@pytest.mark.skipif(sys.platform == "win32",
+                    reason="a file in the way of a directory is the portable way to make mkdir fail")
+def test_an_uncreatable_known_hosts_directory_is_exit_2(tmp_path, capsys):
+    blocker = tmp_path / "file"
+    blocker.write_bytes(b"x")
+    r = _Runner(_FakeProc(0))
+    rc = F.main(["--key", "/k", "--trust-changing-host-keys", "--known-hosts",
+                 str(blocker / "sub" / "kh"), "h", "uptime"], run=r)
+    assert rc == 2 and r.calls == []
+    assert "known-hosts" in capsys.readouterr().err
 
 
-def test_a_drop_that_removed_nothing_is_reported_as_such(tmp_path, capsys):
-    """'dropped the stale entry' is a claim about the file; it is made only when the file
-    actually changed, and otherwise ssh's own removal command is handed to the reader."""
-    kh = tmp_path / "kh"
-    kh.write_text("[10.0.0.5]:2222 ssh-ed25519 AAAA\n", encoding="utf-8")
-    r = _Runner(_FakeProc(0, _real_changed(str(kh), host="[10.0.0.5]:2222")))
-    assert _heal(r, known_hosts=str(kh)) == 0
-    err = capsys.readouterr().err
-    assert "dropped the stale entry" not in err, err
-    assert "removed nothing" in err, err
-
-
-def test_a_drop_that_changed_the_file_is_reported_as_dropped(tmp_path, capsys):
-    kh = tmp_path / "kh"
-    kh.write_text("h ssh-ed25519 AAAA\n", encoding="utf-8")
-
-    def runner(argv, **kw):
-        if argv[0] == "ssh-keygen":
-            kh.write_text("", encoding="utf-8")
-            return _FakeProc()
-        return _FakeProc(0, _real_changed(str(kh)))
-
-    assert _heal(runner, known_hosts=str(kh)) == 0
-    assert "dropped the stale entry" in capsys.readouterr().err
-
-
-def test_a_mutating_command_that_failed_under_the_banner_says_it_was_not_rerun(capsys):
-    r = _Runner(_FakeProc(3, _CHANGED))
-    assert _heal(r, argv=("ssh", "h", "apt-get -y upgrade && false")) == 3
-    assert "not re-run" in capsys.readouterr().err
-
-
-def test_a_command_that_succeeded_under_the_banner_still_drops_the_stale_entry(capsys):
-    """Under StrictHostKeyChecking=no ssh warns, RUNS the command, and exits 0 - and it never
-    replaces the entry on file. Healing only on a non-zero exit left the stale key there for good,
-    so every later call printed the banner again and the new key was never recorded."""
-    r = _Runner(_FakeProc(0, _CHANGED))
-    assert _heal(r, argv=("ssh", "h", "uptime")) == 0
-    assert [c[0] for c in r.calls] == ["ssh", "ssh-keygen"], "dropped, and the command ran ONCE"
-    assert r.calls[1] == ["ssh-keygen", "-R", "h", "-f", "/kh"]
-    assert "not re-run" not in capsys.readouterr().err, "nothing failed, so nothing to re-run"
-
-
-def test_a_clean_zero_exit_touches_no_known_hosts_entry():
-    """Control: with no banner there is nothing stale, so ssh-keygen is never run."""
-    r = _Runner(_FakeProc(0, "some remote stderr\n"))
-    assert _heal(r) == 0
-    assert [c[0] for c in r.calls] == ["ssh"]
-
-
-def test_a_framed_banner_that_names_no_file_of_ours_is_not_healed():
-    """The frame alone is what an inner ssh relays through the remote command's stderr too."""
-    frame = "@" * 59 + "\n"
-    banner = frame + "@    WARNING: REMOTE HOST IDENTIFICATION HAS CHANGED!     @\n" + frame
-    r = _Runner(_FakeProc(0, banner))
-    assert _heal(r) == 0
-    assert [c[0] for c in r.calls] == ["ssh"]
-
-
-def test_a_successful_command_that_prints_the_phrase_is_not_a_mismatch():
-    """Control: on success only ssh's FRAMED banner counts. A remote log line naming the phrase is
-    the command's own output, and dropping a good key over it would be healing nothing."""
-    r = _Runner(_FakeProc(0, "sshd: REMOTE HOST IDENTIFICATION HAS CHANGED for 10.0.0.9\n"))
-    assert _heal(r, argv=("ssh", "h", "tail /var/log/x")) == 0
-    assert [c[0] for c in r.calls] == ["ssh"]
-
-
-def test_a_banner_under_strict_checking_is_never_healed_even_on_success():
-    """Control: without --trust-changing-host-keys the mismatch is the user's to judge."""
-    r = _Runner(_FakeProc(0, _CHANGED))
-    assert _heal(r, heal=False) == 0
-    assert [c[0] for c in r.calls] == ["ssh"]
-
+# ---- end to end through real processes, on a private PATH ---------------------------------------
 
 def _stub_ssh_bin(tmp_path, exit_code):
     """A fake `ssh` and `ssh-keygen` on a private PATH, so no test can reach a real host.
 
-    The fake ssh prints the changed-key banner naming the known-hosts file it was handed, records
-    that the remote command RAN, and exits with the remote command's status - exactly what real
-    ssh does under StrictHostKeyChecking=no. It also writes a byte that is not UTF-8, which the
-    captured stderr must survive."""
+    The fake ssh behaves as real ssh does under accept-new: while the known-hosts file holds the
+    STALE key it writes the changed-key banner to its `-E` log and exits 255 WITHOUT running the
+    command; otherwise it records that the remote command RAN and exits with its status. It also
+    writes a byte that is not UTF-8 to stderr, which the capture must survive. The fake
+    ssh-keygen drops the stale line, as `ssh-keygen -R` does."""
     bindir = tmp_path / "bin"
     bindir.mkdir()
     log = tmp_path / "calls.log"
     (bindir / "ssh").write_text(
         "#!/bin/sh\n"
         f"echo ssh >> '{log}'\n"
-        "for a in \"$@\"; do case $a in UserKnownHostsFile=*) kh=${a#UserKnownHostsFile=};; esac; done\n"
-        "echo '@@@ WARNING: REMOTE HOST IDENTIFICATION HAS CHANGED! @@@' >&2\n"
-        "echo \"Offending ED25519 key in $kh:1\" >&2\n"
+        "elog=/dev/stderr; prev=\n"
+        "for a in \"$@\"; do\n"
+        "  case $a in UserKnownHostsFile=*) kh=${a#UserKnownHostsFile=};; esac\n"
+        "  [ \"$prev\" = -E ] && elog=$a\n"
+        "  prev=$a\n"
+        "done\n"
+        "if grep -q STALE \"$kh\" 2>/dev/null; then\n"
+        "  echo '@    WARNING: REMOTE HOST IDENTIFICATION HAS CHANGED!     @' >> \"$elog\"\n"
+        "  echo \"Offending ED25519 key in $kh:1\" >> \"$elog\"\n"
+        "  echo 'Host key verification failed.' >> \"$elog\"\n"
+        "  exit 255\n"
+        "fi\n"
         f"echo REMOTE-COMMAND-EXECUTED >> '{log}'\n"
         "printf 'bad byte \\377\\n' >&2\n"
         f"exit {exit_code}\n", encoding="utf-8")
-    (bindir / "ssh-keygen").write_text(f"#!/bin/sh\necho ssh-keygen >> '{log}'\n",
-                                       encoding="utf-8")
+    (bindir / "ssh-keygen").write_text(
+        "#!/bin/sh\n"
+        f"echo ssh-keygen >> '{log}'\n"
+        "while [ $# -gt 0 ]; do [ \"$1\" = -f ] && kh=$2; shift; done\n"
+        ": > \"$kh\"\n", encoding="utf-8")
     for stub in bindir.iterdir():
         stub.chmod(0o755)
     return bindir, log
@@ -519,36 +620,21 @@ def _stub_ssh_bin(tmp_path, exit_code):
 @pytest.mark.skipif(sys.platform == "win32",
                     reason="the stub ssh is a #!/bin/sh script, which CreateProcess cannot launch by "
                            "bare name; the healing rule itself is covered by the injected-run tests")
-def test_end_to_end_a_remote_command_runs_once_under_the_banner(tmp_path):
-    bindir, log = _stub_ssh_bin(tmp_path, 3)
+@pytest.mark.parametrize("status", [0, 3])
+def test_end_to_end_a_changed_key_heals_and_the_command_runs_once(tmp_path, status):
+    bindir, log = _stub_ssh_bin(tmp_path, status)
     home = tmp_path / "home"
-    home.mkdir()
+    (home / ".ssh").mkdir(parents=True)
+    (home / ".ssh" / "known_hosts_fleet").write_text("h ssh-ed25519 STALE\n", encoding="utf-8")
     env = {**os.environ, "PATH": str(bindir) + os.pathsep + os.environ.get("PATH", ""),
            "HOME": str(home), "USERPROFILE": str(home)}
     done = subprocess.run([sys.executable, F.__file__, "--key", "/k", "--trust-changing-host-keys",
-                           "h", "apt-get -y upgrade && false"],
+                           "h", "apt-get -y upgrade"],
                           env=env, capture_output=True, timeout=60)
     assert b"Traceback" not in done.stderr, "an undecodable byte on ssh's stderr must not crash"
-    assert done.returncode == 3, done.stderr
-    assert log.read_text(encoding="utf-8").split() == ["ssh", "REMOTE-COMMAND-EXECUTED",
-                                                        "ssh-keygen"]
-
-
-@pytest.mark.skipif(sys.platform == "win32",
-                    reason="the stub ssh is a #!/bin/sh script, which CreateProcess cannot launch by "
-                           "bare name; the healing rule itself is covered by the injected-run tests")
-def test_end_to_end_a_zero_exit_under_the_banner_still_heals(tmp_path):
-    bindir, log = _stub_ssh_bin(tmp_path, 0)
-    home = tmp_path / "home"
-    home.mkdir()
-    env = {**os.environ, "PATH": str(bindir) + os.pathsep + os.environ.get("PATH", ""),
-           "HOME": str(home), "USERPROFILE": str(home)}
-    done = subprocess.run([sys.executable, F.__file__, "--key", "/k", "--trust-changing-host-keys",
-                           "h", "uptime"],
-                          env=env, capture_output=True, timeout=60)
-    assert done.returncode == 0, done.stderr
-    assert log.read_text(encoding="utf-8").split() == ["ssh", "REMOTE-COMMAND-EXECUTED",
-                                                        "ssh-keygen"]
+    assert done.returncode == status, done.stderr
+    assert log.read_text(encoding="utf-8").split() == ["ssh", "ssh-keygen", "ssh",
+                                                        "REMOTE-COMMAND-EXECUTED"]
 
 
 # ---- scp argument shapes -----------------------------------------------------------------------
@@ -635,12 +721,21 @@ def _home(tmp_path, monkeypatch):
 
 def test_main_passes_the_trust_flag_through_as_healing(tmp_path, monkeypatch):
     home = _home(tmp_path, monkeypatch)
-    fleet_known_hosts = str(home / ".ssh" / "known_hosts_fleet")
-    r = _Runner(_FakeProc(0, _real_changed(fleet_known_hosts)), _FakeProc(0))
+    fleet = home / ".ssh" / "known_hosts_fleet"
+    fleet.parent.mkdir()
+    fleet.write_text("h ssh-ed25519 AAAA\n", encoding="utf-8")
+    r = _Runner(_FakeProc(255, log=_real_changed(str(fleet))), _FakeProc(0),
+                on_keygen=_emptying(fleet))
     assert F.main(["--key", "/k", "--trust-changing-host-keys", "h", "uptime"], run=r) == 0
-    assert r.calls[1] == ["ssh-keygen", "-R", "h", "-f", fleet_known_hosts]
-    assert len(r.calls) == 2
-    assert (home / ".ssh").is_dir(), "the fleet known-hosts directory is created before ssh runs"
+    assert r.calls[1] == ["ssh-keygen", "-R", "h", "-f", str(fleet)]
+    assert _programs(r) == ["ssh", "ssh-keygen", "ssh"]
+
+
+def test_main_creates_the_fleet_known_hosts_directory_before_ssh_runs(tmp_path, monkeypatch):
+    home = _home(tmp_path, monkeypatch)
+    r = _Runner(_FakeProc(0))
+    assert F.main(["--key", "/k", "--trust-changing-host-keys", "h", "uptime"], run=r) == 0
+    assert (home / ".ssh").is_dir()
 
 
 def test_main_without_the_trust_flag_never_heals(tmp_path, monkeypatch):
