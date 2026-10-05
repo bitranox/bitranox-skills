@@ -28,9 +28,12 @@ environment, and uv run swaps in its own throwaway interpreter.
     # a sampler runs with NO shell: wrap a pipeline in one explicitly
     python3 transfer.py check --file big.iso --cmd "sh -c 'grep eth0 /proc/net/dev'"
 
-check: exit 0 ADVANCING, 1 STALLED, 2 UNKNOWN (or a usage error).
-fetch/push: exit 0 ok, 1 the transfer failed, 2 usage error (bad rate, no output name, curl or
-rsync missing). --pid reads /proc, so it is Linux-only; elsewhere its signals read unusable.
+check: exit 0 ADVANCING, 1 STALLED, 2 UNKNOWN (or a usage error: a negative or non-finite
+--interval included).
+fetch/push: exit 0 ok, 2 the transfer did not happen - curl or rsync failed (an HTTP error, the
+network, ssh), could not be launched, or is missing, or a usage error (bad rate, no output name).
+There is no 1: an action whose action failed has no "no" answer. An internal error exits 2 in
+every mode. --pid reads /proc, so it is Linux-only; elsewhere its signals read unusable.
 """
 from __future__ import annotations
 
@@ -40,6 +43,7 @@ from __future__ import annotations
 LAUNCH_WITH = "python3"
 
 import argparse
+import math
 import os
 import posixpath
 import re
@@ -51,6 +55,8 @@ import time
 from dataclasses import dataclass
 from pathlib import Path
 from urllib.parse import urlsplit
+
+from _cli_envelope import EXIT_ERROR, EXIT_YES, guarded
 
 CLK_TCK = os.sysconf("SC_CLK_TCK") if hasattr(os, "sysconf") else 100
 
@@ -319,6 +325,30 @@ def rate_argument(text: str) -> int:
         raise argparse.ArgumentTypeError(str(exc)) from exc
 
 
+def interval_argument(text: str) -> float:
+    """argparse type for --interval: a negative, NaN or infinite interval is a usage error.
+
+    time.sleep raised ValueError on it AFTER the first sample, and that traceback's exit 1 read as
+    STALLED - a verdict about a transfer nobody had watched.
+    """
+    try:
+        value = float(text)
+    except ValueError:
+        raise argparse.ArgumentTypeError(f"not a number of seconds: {text!r}") from None
+    if not math.isfinite(value) or value < 0:
+        raise argparse.ArgumentTypeError(f"{text!r} must be a finite number of seconds >= 0")
+    return value
+
+
+def _run_tool(name: str, argv: list[str]) -> int | None:
+    """Run curl or rsync; its return code, or None (reported) when it could not be launched."""
+    try:
+        return subprocess.run(argv).returncode
+    except OSError as exc:
+        print(f"{name}: cannot run {argv[0]}: {exc}", file=sys.stderr)
+        return None
+
+
 def default_output_name(url: str) -> str:
     """The last PATH segment of `url`; the query and fragment may hold slashes of their own.
 
@@ -387,10 +417,15 @@ def cmd_fetch(args: argparse.Namespace) -> int:
     argv = build_fetch_args(args.url, out, rate)
     if rate:
         print(f"# cap {rate} B/s ({rate * 8 / 1e6:.3g} Mbit/s) -> {out}", file=sys.stderr)
-    p = subprocess.run(argv)
+    rc = _run_tool("fetch", argv)
+    if rc is None:
+        return EXIT_ERROR
     size = read_file_size(out)
-    print(f"{out} {size if size is not None else '?'} bytes (curl rc={p.returncode})")
-    return 0 if p.returncode == 0 else 1
+    print(f"{out} {size if size is not None else '?'} bytes (curl rc={rc})")
+    if rc != 0:
+        print(f"fetch failed: curl exited {rc}; nothing was downloaded as asked", file=sys.stderr)
+        return EXIT_ERROR
+    return EXIT_YES
 
 
 def build_push_args(src: str, dest: str, rate_bps: int | None,
@@ -430,8 +465,13 @@ def cmd_push(args: argparse.Namespace) -> int:
     argv = build_push_args(args.src, args.dest, rate, ssh=args.ssh)
     if rate:
         print(f"# cap {rate} B/s ({rate * 8 / 1e6:.3g} Mbit/s) -> {args.dest}", file=sys.stderr)
-    p = subprocess.run(argv)
-    return 0 if p.returncode == 0 else 1
+    rc = _run_tool("push", argv)
+    if rc is None:
+        return EXIT_ERROR
+    if rc != 0:
+        print(f"push failed: rsync exited {rc}", file=sys.stderr)
+        return EXIT_ERROR
+    return EXIT_YES
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -446,7 +486,8 @@ def build_parser() -> argparse.ArgumentParser:
                    help="command printing a number, run with no shell (repeatable; a failing "
                         "command reads as unreadable; wrap a pipeline in sh -c '...'; use for "
                         "remote hosts via ssh)")
-    c.add_argument("--interval", type=float, default=10.0, help="seconds between samples [10]")
+    c.add_argument("--interval", type=interval_argument, default=10.0,
+                   help="seconds between samples, >= 0 [10]")
     c.set_defaults(func=cmd_check)
 
     f = sub.add_parser("fetch", help="download resumably with a real rate cap")
@@ -477,7 +518,9 @@ def _tolerate_console_encoding() -> None:
                 pass
 
 
+@guarded("transfer", json_flags=())
 def main(argv: list[str] | None = None) -> int:
+    """Run the sub-command; an uncaught exception exits 2, never the 1 that reads as STALLED."""
     _tolerate_console_encoding()
     args = build_parser().parse_args(argv)
     return args.func(args)

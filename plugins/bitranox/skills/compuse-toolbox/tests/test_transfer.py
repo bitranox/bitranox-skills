@@ -277,10 +277,12 @@ def http_root(tmp_path):
 class TestFetchEndToEnd:
     """A loopback server only: the real curl, the real script, no outside network."""
 
-    def test_a_404_exits_1_and_leaves_no_error_page_behind(self, http_root, tmp_path):
+    def test_a_404_exits_2_and_leaves_no_error_page_behind(self, http_root, tmp_path):
+        """An action whose action failed has no "no" answer: the download did not happen (R-c)."""
         out = tmp_path / "missing.iso"
         p = _run("fetch", f"{http_root}/missing.iso", "-o", str(out))
-        assert p.returncode == 1, p.stdout + p.stderr
+        assert p.returncode == 2, p.stdout + p.stderr
+        assert "fetch failed" in p.stderr
         assert not out.exists() or b"<!DOCTYPE" not in out.read_bytes()
 
     def test_control_an_existing_file_downloads(self, http_root, tmp_path):
@@ -468,3 +470,45 @@ class TestPushEndToEnd:
         assert (dst / "a.bin").read_bytes() == b"y" * 100
         assert "--bwlimit" not in p.stdout
         assert "# cap 1000000 B/s" in p.stderr
+
+
+
+# --- wave D: a failed transfer, a bad interval and an unlaunchable tool are all exit 2 --------
+
+@pytest.mark.parametrize("value", ["-1", "nan", "inf"])
+def test_an_unusable_interval_is_a_usage_error_not_a_stalled_verdict(tmp_path, value):
+    f = tmp_path / "f"
+    f.write_bytes(b"x")
+    p = _run("check", "--file", str(f), "--interval", value)
+    assert p.returncode == 2, p.stdout + p.stderr
+    assert "Traceback" not in p.stderr and "--interval" in p.stderr
+
+
+@pytest.mark.skipif(shutil.which("rsync") is None, reason="push drives rsync")
+def test_a_push_whose_rsync_failed_exits_2(tmp_path):
+    dst = tmp_path / "out"
+    dst.mkdir()
+    p = _run("push", str(tmp_path / "no-such-file.bin"), str(dst) + "/")
+    assert p.returncode == 2, p.stdout + p.stderr
+    assert "push failed" in p.stderr
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="an exec-format failure needs a POSIX exec")
+@pytest.mark.parametrize("tool,args", [("curl", ["fetch", "http://127.0.0.1:9/x.iso", "-o"]),
+                                       ("rsync", ["push", "src.bin"])])
+def test_a_tool_that_cannot_be_launched_exits_2_not_a_traceback(tmp_path, tool, args):
+    """On PATH and executable, so shutil.which finds it, but not a program the kernel can run."""
+    bindir = tmp_path / "bin"
+    bindir.mkdir()
+    fake = bindir / tool
+    fake.write_bytes(b"\x00\x01 not a program")
+    fake.chmod(0o755)
+    target = str(tmp_path / "out")
+    # The fake is the ONLY entry: a POSIX exec that fails with ENOEXEC moves on to the next PATH
+    # entry, so a real tool further along would run instead and the test would prove nothing.
+    env = {**os.environ, "PATH": str(bindir)}
+    p = subprocess.run([sys.executable, str(SCRIPT), *args, target], capture_output=True,
+                       text=True, encoding="utf-8", errors="replace", check=False, env=env,
+                       cwd=str(tmp_path))
+    assert p.returncode == 2, p.stdout + p.stderr
+    assert "Traceback" not in p.stderr and "cannot run" in p.stderr
