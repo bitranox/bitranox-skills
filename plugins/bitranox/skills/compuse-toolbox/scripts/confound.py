@@ -59,15 +59,17 @@ Exit 0 = the claim is supported (or, with no --claim, no pair is confounded);
      2 = usage error (including an outcome recorded on some arms but not all, a label missing,
          a key given twice in one arm, or outcomes in different units under an outcome band -
          a plain plural such as file/files is the same unit),
-         or the tool itself failed;
-     3 = INCONCLUSIVE - the claim is isolated but the outcome moved less than the declared band.
-         Only reachable with --claim, because without one there is no claim to be unsure about.
+         or the tool itself failed, or INCONCLUSIVE - the claim is isolated but the outcome
+         moved less than the declared band, so the run could not answer. INCONCLUSIVE is only
+         reachable with --claim (without one there is no claim to be unsure about) and is kept
+         apart from a usage error by the report text, by data.inconclusive and by the error.
+Under --json the envelope {ok, command, data, skipped} is printed on every exit, a usage error and
+a crash included; ok is false exactly on exit 2.
 """
 
 from __future__ import annotations
 
 import argparse
-import json
 import math
 import re
 import sys
@@ -75,6 +77,8 @@ from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from enum import Enum
 from itertools import combinations
+
+from _cli_envelope import EnvelopeArgumentParser, emit, run_guarded
 
 __all__ = [
     "Arm",
@@ -560,17 +564,7 @@ def _render(
 
 def _fail(message: str, as_json: bool) -> int:
     if as_json:
-        print(
-            json.dumps(
-                {
-                    "ok": False,
-                    "command": "confound",
-                    "data": {"error": message},
-                    "skipped": [],
-                },
-                indent=1,
-            )
-        )
+        emit(2, "confound", {"error": message}, error=message, indent=1)
     else:
         print(message, file=sys.stderr)
     return 2
@@ -593,16 +587,14 @@ def _harden_stdout() -> None:
 
 def main(argv: list[str] | None = None) -> int:
     """Run the CLI. An unexpected failure exits 2, never 1 (REFUTED) or 0 (supported)."""
-    try:
-        return _main(argv)
-    except Exception as error:  # noqa: BLE001 - a crash must not read as a verdict
-        print(f"confound: error: {type(error).__name__}: {error}", file=sys.stderr)
-        return 2
+    return run_guarded(_main, argv, command="confound")
 
 
 def _main(argv: list[str] | None) -> int:
-    parser = argparse.ArgumentParser(
-        description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter
+    parser = EnvelopeArgumentParser(
+        description=__doc__,
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        envelope_command="confound",
     )
     parser.add_argument(
         "--arm",
@@ -643,40 +635,39 @@ def _main(argv: list[str] | None) -> int:
     except ValueError as error:
         return _fail(str(error), args.json)
 
+    inconclusive = pairs_inconclusive(report, args.claim) if args.claim else []
+    code = _exit_code(report, args.claim, supporting, inconclusive)
     if args.json:
-        print(
-            json.dumps(
-                {
-                    "ok": bool(supporting) if args.claim else not _has_finding(report),
-                    "command": "confound",
-                    "data": {
-                        "claim": args.claim,
-                        "tolerances": dict(report.tolerances),
-                        "outcome_tolerance": report.outcome_tolerance,
-                        "dimensions": list(report.dimensions),
-                        "supporting": [[p.a, p.b] for p in supporting or ()],
-                        "inconclusive": (
-                            [[p.a, p.b] for p in pairs_inconclusive(report, args.claim)]
-                            if args.claim
-                            else []
-                        ),
-                        "pairs": [
-                            {
-                                "a": p.a,
-                                "b": p.b,
-                                "differing": list(p.differing),
-                                "verdict": p.verdict.value,
-                                "outcome_a": p.outcome_a,
-                                "outcome_b": p.outcome_b,
-                                "outcome_change": p.outcome_change.value,
-                            }
-                            for p in report.pairs
-                        ],
-                    },
-                    "skipped": [],
-                },
-                indent=1,
-            )
+        error = (
+            f"INCONCLUSIVE: {args.claim} is isolated but the outcome moved less than the band"
+            if code == 2
+            else None
+        )
+        emit(
+            code,
+            "confound",
+            {
+                "claim": args.claim,
+                "tolerances": dict(report.tolerances),
+                "outcome_tolerance": report.outcome_tolerance,
+                "dimensions": list(report.dimensions),
+                "supporting": [[p.a, p.b] for p in supporting or ()],
+                "inconclusive": [[p.a, p.b] for p in inconclusive],
+                "pairs": [
+                    {
+                        "a": p.a,
+                        "b": p.b,
+                        "differing": list(p.differing),
+                        "verdict": p.verdict.value,
+                        "outcome_a": p.outcome_a,
+                        "outcome_b": p.outcome_b,
+                        "outcome_change": p.outcome_change.value,
+                    }
+                    for p in report.pairs
+                ],
+            },
+            error=error,
+            indent=1,
         )
     else:
         print(_render(report, args.claim, supporting))
@@ -694,12 +685,18 @@ def _main(argv: list[str] | None) -> int:
             file=sys.stderr,
         )
 
-    if args.claim:
+    return code
+
+
+def _exit_code(report: Report, claim: str | None, supporting, inconclusive) -> int:
+    """0 supported / nothing confounded, 1 refuted / a finding, 2 INCONCLUSIVE."""
+    if claim:
         if supporting:
             return 0
         # Too close to call is not the same answer as refuted, and a caller that can only read the
-        # exit code would otherwise re-make exactly the conflation the INCONCLUSIVE verdict ends.
-        return 3 if pairs_inconclusive(report, args.claim) else 1
+        # exit code would otherwise re-make exactly the conflation the INCONCLUSIVE verdict ends:
+        # it is "could not answer" (2), told apart from a usage error by data.inconclusive.
+        return 2 if inconclusive else 1
     return 1 if _has_finding(report) else 0
 
 
