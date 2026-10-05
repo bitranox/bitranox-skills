@@ -301,9 +301,13 @@ GIT_VALUE_OPTS = frozenset(
 # as a later operand, so the git call sits behind them - measured in the real corpus as
 # `nice -n 19 ionice -c3 git -C "$S" commit -F msg` and `timeout 1500 git rebase --continue`,
 # both of which a first-token-only reading missed entirely.
+#
+# `command` and `exec` belong here for the same reason: each runs the next word as the program, so
+# `command git push` is a push. The sed guard had added them to a private copy of this set, which
+# left every git guard blind to the same two spellings.
 _COMMAND_PREFIXES = frozenset({
     "nice", "ionice", "timeout", "sudo", "doas", "env", "stdbuf",
-    "nohup", "setsid", "chrt", "taskset", "time",
+    "nohup", "setsid", "chrt", "taskset", "time", "command", "exec",
 })
 
 # A segment cut from a loop or branch body starts at the keyword, not at the command - and so does
@@ -318,22 +322,29 @@ _STATEMENT_KEYWORDS = frozenset({
 _PREFIX_SCAN_LIMIT = 12
 
 
-def _past_command_prefix(tokens, idx, tool_name):
-    """Index of `git` when a known launcher runs it, else None.
+def past_command_prefix(tokens, idx, programs, tool_name="Bash"):
+    """Index of the first of `programs` that the launcher at `tokens[idx]` runs, else None.
 
-    Scans forward for a token whose basename is EXACTLY `git`, which is narrow enough to stay a
-    statement walk rather than the bag-of-tokens test this module replaced. The two shapes that
-    would abuse a looser scan cannot reach it: `nice -n 19 echo "git commit"` and `timeout 30 ssh
-    host 'git commit'` keep the whole quoted command as ONE token, whose basename is the entire
-    string and never `git`.
+    None as well when `tokens[idx]` is not a known launcher (`sudo`, `nice`, `timeout`, `env`,
+    `command`, `exec`, ...): starting only after a KNOWN one is what bounds the scan. `ssh host
+    '...'` is not one, so the scan never begins there - the same reason `_deciding_program_index`
+    refuses to scan the token list for a script name.
 
-    Starting only after a KNOWN launcher is what bounds it. `ssh host '...'` is not one, so the
-    scan never begins there - the same reason `_deciding_program_index` refuses to scan the token
-    list for a script name.
+    Scans at most `_PREFIX_SCAN_LIMIT` tokens forward for one whose basename (by the tool's path
+    rules, `.exe` dropped) is EXACTLY one of `programs`, which keeps it a statement walk rather
+    than a bag-of-tokens test. The shapes that would abuse a looser scan cannot reach it: `nice -n
+    19 echo "git commit"` and `timeout 30 ssh host 'git commit'` keep the whole quoted command as
+    ONE token, whose basename is the entire string.
+
+    Pass the program set rather than asking "is it git?": the sed guard asks the same question
+    about `sed`/`perl`, and a guard that needs it should not have to read this module's private
+    launcher set to answer it.
     """
+    if idx >= len(tokens) or basename_for_tool(tokens[idx], tool_name) not in _COMMAND_PREFIXES:
+        return None
     limit = min(len(tokens), idx + 1 + _PREFIX_SCAN_LIMIT)
     for at in range(idx + 1, limit):
-        if basename_for_tool(tokens[at], tool_name) == "git":
+        if basename_for_tool(tokens[at], tool_name) in programs:
             return at
     return None
 
@@ -364,7 +375,7 @@ def git_verb_operands(tokens, verbs, tool_name="Bash"):
     ):
         idx += 1                                  # loop/branch keywords, then VAR=value env prefix
     if idx < len(tokens) and basename_for_tool(tokens[idx], tool_name) in _COMMAND_PREFIXES:
-        idx = _past_command_prefix(tokens, idx, tool_name)
+        idx = past_command_prefix(tokens, idx, ("git",), tool_name)
     if idx is None or idx >= len(tokens) or basename_for_tool(tokens[idx], tool_name) != "git":
         return None
     idx += 1

@@ -186,3 +186,33 @@ def test_an_unbalanced_quote_falls_back_to_a_whitespace_split_and_still_blocks()
     BLOCK: the program, its `-i` and its target all stand outside the unbalanced quote."""
     assert action('sed -i s/a/b/ package.json "') == "block"
     assert action('sed s/a/b/ package.json "') is None
+
+
+# ---- statements the SEP regex could not separate ----
+import pytest  # noqa: E402 - grouped with the cases that need parametrize
+
+
+@pytest.mark.parametrize("command", [
+    "(sed -i s/a/b/ config.json)",
+    "cd /tmp && (sed -i s/a/b/ config.json)",
+    "x=$(sed -i s/a/b/ config.json)",
+    'echo "$(sed -i s/a/b/ config.json)"',
+    "echo `sed -i s/a/b/ config.json`",
+    "( cd sub; sed -i s/a/b/ config.json )",
+])
+def test_a_sed_inside_a_subshell_or_substitution_is_blocked(command):
+    """SEP has no paren (adding one cut quoted `echo "(must PASS)"` labels in a replay), so a
+    subshell's sed read as the program `(sed` and a substitution's as `x=$(sed`: neither is
+    `sed`, and the guard said nothing about a command that really rewrites config.json."""
+    assert action(command) == "block"
+
+
+@pytest.mark.parametrize("command", [
+    'echo "(sed -i s/a/b/ config.json)"',
+    "echo '$(sed -i s/a/b/ config.json)'",
+    "echo 'a; (sed -i s/a/b/ config.json)'",
+    "grep -n 'sed -i' notes.md # (sed -i x.json)",
+])
+def test_a_quoted_or_commented_subshell_shape_is_not_a_sed(command):
+    """The direction where it must NOT apply: the same text as data runs nothing."""
+    assert action(command) is None

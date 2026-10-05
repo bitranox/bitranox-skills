@@ -24,7 +24,7 @@ import re
 import sys
 
 import shell_text
-from shell_text import SEP, mask_data_regions, strip_heredoc_bodies
+from shell_text import iter_segments, past_command_prefix, strip_heredoc_bodies
 
 STRUCTURED_EXT = (".json", ".yaml", ".yml", ".toml", ".xml")
 INPLACE_CMDS = {"sed", "gsed", "perl"}
@@ -32,11 +32,6 @@ ASSIGN = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*=")
 REDIRECT = re.compile(r">>?\s*['\"]?(?P<f>[^\s'\";|&]+\.(?:json|ya?ml|toml|xml))\b", re.I)
 
 EDIT_SKILLS = "files-edit-json / files-edit-yml / files-edit-xml / files-edit-toml"
-
-# Launchers that RUN the command after them, so the editor is not argv[0]: `sudo sed -i x.json`,
-# `env LC_ALL=C sed -i ...`. shell_text's git guards step over the same set for the same reason;
-# `command` and `exec` are added because they, too, run the next word as the program.
-_LAUNCHERS = shell_text._COMMAND_PREFIXES | {"command", "exec"}
 
 # Perl switches whose ARGUMENT is the rest of their cluster: in `-Mlib=inc` the `i` belongs to the
 # module name, and in `-I/opt/lib` to the path, so neither is the in-place switch.
@@ -79,19 +74,14 @@ def _has_inplace(cmd, tokens):
 
 
 def _editor_index(argv, tool_name):
-    """Index of the in-place editor a leading launcher runs (`sudo sed ...`), else 0.
+    """Index of the in-place editor a leading launcher runs (`sudo sed ...`, `command sed ...`),
+    else 0.
 
-    Only after a KNOWN launcher, and only within the same bounded look-ahead the git guards use, so
-    the scan stays a statement walk: `timeout 30 ssh host 'sed -i x.json'` keeps the quoted remote
-    command as one token, whose basename is never `sed`.
+    `shell_text.past_command_prefix` owns the launcher set and the bounded look-ahead the git
+    guards use, so the scan stays a statement walk: `timeout 30 ssh host 'sed -i x.json'` keeps
+    the quoted remote command as one token, whose basename is never `sed`.
     """
-    if shell_text.basename_for_tool(argv[0], tool_name) not in _LAUNCHERS:
-        return 0
-    limit = min(len(argv), 1 + shell_text._PREFIX_SCAN_LIMIT)
-    for at in range(1, limit):
-        if shell_text.basename_for_tool(argv[at], tool_name) in INPLACE_CMDS:
-            return at
-    return 0
+    return past_command_prefix(argv, 0, INPLACE_CMDS, tool_name) or 0
 
 
 def assess(command, tool_name="Bash"):
@@ -108,12 +98,11 @@ def assess(command, tool_name="Bash"):
     # The command-position check alone does not cover it: `&&` inside a body splits into
     # segments whose first token really is `sed`.
     command = strip_heredoc_bodies(command or "")
-    # Split on the length-preserving MASKED text: a `;` inside a quoted string separates nothing,
-    # and splitting there manufactured a sed invocation out of an `echo` argument.
-    masked = mask_data_regions(command, tool_name=tool_name)
-    starts = [0] + [m.end() for m in SEP.finditer(masked)]
-    ends = [m.start() for m in SEP.finditer(masked)] + [len(command)]
-    for segment in [command[a:b] for a, b in zip(starts, ends)]:
+    # The quote-aware statement walk, not a SEP split: a `;` inside a quoted string separates
+    # nothing (splitting there manufactured a sed out of an `echo` argument), while a SUBSHELL
+    # paren and a `$(...)` / backtick substitution DO start a statement - `(sed -i x.json)` and
+    # `x=$(sed -i x.json)` read as the programs `(sed` and `x=$(sed` under SEP and went unseen.
+    for _offset, segment in iter_segments(command, tool_name):
         try:
             tokens = shell_text.split_for_tool(segment, tool_name)
         except ValueError:

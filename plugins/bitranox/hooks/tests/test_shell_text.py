@@ -705,3 +705,51 @@ def test_git_verb_dir_reads_a_continued_line_with_a_quoted_dash_c_value():
            " && git status --porcelain")
     for tool in ("Bash", None):
         assert S.git_verb_dir(cmd, "/s", S.GATED_GIT_VERBS, tool) == moved
+
+
+# ---- past_command_prefix: the launcher walk, public -------------------------------------------
+#
+# A guard asking "which program does this statement really run?" had to read the private
+# `_COMMAND_PREFIXES` / `_PREFIX_SCAN_LIMIT` (the sed guard did, and added `command`/`exec` to its
+# own copy). One public function, one launcher set.
+
+
+@pytest.mark.parametrize("argv,programs,expected", [
+    (["sudo", "sed", "-i", "x.json"], {"sed"}, 1),
+    (["nice", "-n", "19", "ionice", "-c3", "git", "push"], {"git"}, 5),
+    (["timeout", "30", "/usr/bin/sed", "-i", "f"], {"sed"}, 2),
+    (["command", "git", "push"], {"git"}, 1),
+    (["exec", "sed", "-i", "f.json"], {"sed", "perl"}, 1),
+    (["ssh", "host", "git", "push"], {"git"}, None),           # not a launcher: never scanned
+    (["sudo", "apt-get", "install", "vim"], {"git"}, None),     # a launcher running something else
+    (["timeout", "30", "ssh", "host", "git push"], {"git"}, None),  # one quoted token, not `git`
+])
+def test_past_command_prefix_finds_the_program_a_launcher_runs(argv, programs, expected):
+    assert S.past_command_prefix(argv, 0, programs) == expected
+
+
+def test_past_command_prefix_is_bounded():
+    """Past the look-ahead the scan stops, so it stays a statement walk, not a bag of tokens."""
+    argv = ["sudo"] + ["-x"] * (S._PREFIX_SCAN_LIMIT + 1) + ["git", "push"]
+    assert S.past_command_prefix(argv, 0, {"git"}) is None
+
+
+def test_past_command_prefix_reads_a_windows_path_under_powershell():
+    argv = ["sudo", "C:" + _B + "Git" + _B + "bin" + _B + "git.exe", "push"]
+    assert S.past_command_prefix(argv, 0, {"git"}, "PowerShell") == 1
+
+
+@pytest.mark.parametrize("command", [
+    "command git commit -m x", "exec git push origin main", "command -p git push",
+])
+def test_command_and_exec_run_the_git_after_them(command):
+    """`command git push` and `exec git commit` run git exactly as `sudo git push` does, so a
+    gate that steps over sudo and not these could not see the commit at all."""
+    assert S.is_gated_command(command) is True
+
+
+@pytest.mark.parametrize("command", [
+    "command -v git", "type -a git && command -v git", "exec > log 2>&1",
+])
+def test_command_and_exec_without_a_gated_git_are_not_gated(command):
+    assert S.is_gated_command(command) is False
