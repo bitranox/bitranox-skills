@@ -27,9 +27,27 @@ import repo_gate as RG
 # --------------------------------------------------------------------------
 
 
+@pytest.fixture(autouse=True)
+def _lf_git_eol_config(monkeypatch):
+    """Pin git's eol conversion for every git run in this module, the gate's own included.
+
+    write() puts LF bytes into the work tree, as a checkout with no eol conversion would, and
+    several tests compare such a file with git's view of a commit (`git cat-file --filters`).
+    That view follows the machine's config: LF under CI's core.autocrlf=false/core.eol=lf, but
+    CRLF under Git for Windows' default core.autocrlf=true, so the same test passed on the runner
+    and failed on a stock Windows box. GIT_CONFIG_* outranks every config file, so each run sees
+    CI's settings.
+    """
+    monkeypatch.setenv("GIT_CONFIG_COUNT", "2")
+    monkeypatch.setenv("GIT_CONFIG_KEY_0", "core.autocrlf")
+    monkeypatch.setenv("GIT_CONFIG_VALUE_0", "false")
+    monkeypatch.setenv("GIT_CONFIG_KEY_1", "core.eol")
+    monkeypatch.setenv("GIT_CONFIG_VALUE_1", "lf")
+
+
 def write(path, text):
     # Byte-exact (newline=""): a checkout writes a file and its origin/master text through the
-    # same eol filter, and the CI git config makes that LF. Text mode would make every fixture
+    # same eol filter, which _lf_git_eol_config pins to LF. Text mode would make every fixture
     # CRLF on Windows while git hands back LF, so a comparison against origin fails on line 1.
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(text, encoding="utf-8", newline="")
