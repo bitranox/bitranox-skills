@@ -6,11 +6,12 @@
 #   bash run-python.sh --hook <script>.py [args...]   hooks.json registration: fail-OPEN
 #
 # When the shim itself cannot run the script (the script is missing or unreadable, no Python 3
-# interpreter, an unexpected shell, a failed path conversion) a CLI caller gets exit 3 and a stderr
-# line, so a mistyped path in a gate never reads as a clean pass. A hook must never wedge a turn, so `--hook` turns the same
-# conditions into exit 0 after the stderr line. Neither mode ever produces exit 2 on its own (the
-# code Claude Code treats as a block); a script's OWN exit code, 2 included, always passes through.
-# BITRANOX_RUN_PYTHON_STRICT=1 forces the loud contract in both modes.
+# interpreter, an unexpected shell, a failed path conversion) a CLI caller gets exit 2 - could not
+# run, the plugin-wide code - and a stderr line, so a mistyped path in a gate never reads as a
+# clean pass. A hook must never wedge a turn, so `--hook` turns the same conditions into exit 0
+# after the stderr line. Hook mode never produces exit 2 on its own (the code Claude Code treats as
+# a block); a script's OWN exit code, 2 included, always passes through in both modes.
+# BITRANOX_RUN_PYTHON_STRICT=1 makes hook mode loud too, with exit 3 - still never the block code.
 #
 # Claude Code runs hook commands through bash on every desktop platform (Git Bash
 # on Windows), so hooks.json invokes this shim:
@@ -40,11 +41,15 @@ if [ -n "$_hook_mode" ] && [ -n "$BITRANOX_HOOKS_OFF" ]; then
   exit 0
 fi
 
-# The shim could not run the script: always say so on stderr, then exit 3 (loud) unless this is
-# a hook launch without BITRANOX_RUN_PYTHON_STRICT, which exits 0 so the turn goes on. The code is
-# decided once here because the Python bootstrap below degrades with the same one.
-_degrade_rc=3
-if [ -n "$_hook_mode" ] && [ -z "$BITRANOX_RUN_PYTHON_STRICT" ]; then _degrade_rc=0; fi
+# The shim could not run the script: always say so on stderr, then exit 2 for a CLI caller. A hook
+# launch exits 0 so the turn goes on, or 3 under BITRANOX_RUN_PYTHON_STRICT: loud, but never the 2
+# Claude Code reads as a block. The code is decided once here because the Python bootstrap below
+# degrades with the same one.
+_degrade_rc=2
+if [ -n "$_hook_mode" ]; then
+  _degrade_rc=0
+  if [ -n "$BITRANOX_RUN_PYTHON_STRICT" ]; then _degrade_rc=3; fi
+fi
 _degrade() {
   echo "run-python.sh: $1" >&2
   exit "$_degrade_rc"

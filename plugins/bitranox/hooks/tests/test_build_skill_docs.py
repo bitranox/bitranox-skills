@@ -3,6 +3,8 @@ docs fact-freshness guards (README skill count, reference.md knob table). ASCII.
 import json
 from pathlib import Path
 
+import pytest
+
 import build_skill_docs as D
 import self_improve_signals as S
 import skill_frontmatter as F
@@ -83,10 +85,57 @@ def test_check_says_missing_for_a_catalog_that_does_not_exist(tmp_path, capsys):
     tax = tmp_path / "tax.json"
     _taxonomy(tax)
     out = tmp_path / "docs" / "skills.md"
+    # Nothing to compare against is "could not run" (2), not the "stale" finding (1).
     assert D.main(["--skills-dir", str(skills), "--taxonomy", str(tax), "--out", str(out),
-                   "--check"]) == 1
+                   "--check"]) == 2
     err = capsys.readouterr().err
     assert "missing" in err and str(out) in err and "STALE" not in err
+
+
+def _could_not_run_argv(tmp_path, *, taxonomy=None, skills=True, out=None):
+    skills_dir = tmp_path / "skills"
+    if skills:
+        _skill(skills_dir, "meta-alpha", "Use when alpha work needs capturing across sessions")
+    tax = tmp_path / "tax.json"
+    if taxonomy is None:
+        _taxonomy(tax)
+    else:
+        tax.write_bytes(taxonomy)
+    return ["--skills-dir", str(skills_dir), "--taxonomy", str(tax),
+            "--out", str(out or tmp_path / "skills.md")]
+
+
+
+@pytest.mark.parametrize("taxonomy", [b"{not json", b"[1]", b'{"other": {}}', b"\xff\xfe\x00"],
+                         ids=["invalid-json", "a-list", "no-categories", "not-utf8"])
+def test_an_unusable_taxonomy_could_not_run(tmp_path, capsys, taxonomy):
+    assert D.main(_could_not_run_argv(tmp_path, taxonomy=taxonomy)) == 2
+    assert "taxonomy" in capsys.readouterr().err
+
+
+def test_a_missing_taxonomy_could_not_run(tmp_path):
+    argv = _could_not_run_argv(tmp_path)
+    (tmp_path / "tax.json").unlink()
+    assert D.main(argv) == 2
+
+
+def test_a_nonexistent_skills_dir_could_not_run_rather_than_writing_an_empty_catalog(tmp_path, capsys):
+    out = tmp_path / "skills.md"
+    assert D.main(_could_not_run_argv(tmp_path, skills=False, out=out)) == 2
+    assert not out.exists()
+    assert "skills" in capsys.readouterr().err
+
+
+def test_an_unwritable_out_could_not_run(tmp_path):
+    out = tmp_path / "is-a-directory"
+    out.mkdir()
+    assert D.main(_could_not_run_argv(tmp_path, out=out)) == 2
+
+
+def test_check_against_an_undecodable_catalog_could_not_run(tmp_path):
+    out = tmp_path / "skills.md"
+    out.write_bytes(b"\xff\xfe\x00 not utf-8")
+    assert D.main(_could_not_run_argv(tmp_path, out=out) + ["--check"]) == 2
 
 
 def test_check_still_says_stale_for_an_outdated_catalog(tmp_path, capsys):

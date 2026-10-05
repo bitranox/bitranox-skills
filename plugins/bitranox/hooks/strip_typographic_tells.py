@@ -30,6 +30,10 @@ Usage:
   strip_typographic_tells.py --check FILE ...  exit 1 if any tell remains (no write)
   strip_typographic_tells.py -                 read stdin, write normalized stdout
 
+Exit 0 done or clean, 1 (--check only) a tell remains, 2 could not run: a FILE missing,
+unreadable, not UTF-8 or not writable, or stdin not UTF-8. The other files are still processed,
+and 2 wins over 1.
+
 The replacement table is built from code points with chr()/ranges so this script
 is itself pure ASCII and passes the same check.
 """
@@ -223,30 +227,47 @@ def _main(argv):
         for stream in (sys.stdin, sys.stdout):
             if hasattr(stream, "reconfigure"):
                 stream.reconfigure(encoding="utf-8", newline="")
-        data = sys.stdin.read()
+        try:
+            data = sys.stdin.read()
+        except UnicodeDecodeError as exc:
+            sys.stderr.write("cannot read stdin as UTF-8: %s\n" % exc)
+            return 2
         out = normalize(data)
         if check:
             return 1 if out != data else 0
         sys.stdout.write(out)
         return 0
 
+    # 2 (could not read or write a file) wins over 1 (tells remain): a run that skipped a file
+    # has not answered for it, and the traceback this replaced exited 1, which --check callers
+    # read as "tells remain".
     rc = 0
     for path in args:
-        # newline="" on BOTH sides so line endings round-trip untouched. The defaults translate
-        # on read and rewrite as os.linesep, so this tool silently converted every file it
-        # rewrote to the platform ending - CRLF on Windows, in a repo whose gate requires LF.
-        with open(path, encoding="utf-8", newline="") as fh:
-            data = fh.read()
-        out = normalize(data)
-        if out == data:
-            continue
-        if check:
-            sys.stderr.write("typographic tells found: %s\n" % path)
-            rc = 1
-        else:
-            with open(path, "w", encoding="utf-8", newline="") as fh:
-                fh.write(out)
+        try:
+            if _process(path, check) and check:
+                rc = max(rc, 1)  # a rewrite that removed tells is done, not a finding
+        except (OSError, UnicodeDecodeError) as exc:
+            sys.stderr.write("could not process %s: %s\n" % (path, exc))
+            rc = 2
     return rc
+
+
+def _process(path, check):
+    """Normalize one file in place, or under `check` report it; True when it carried tells."""
+    # newline="" on BOTH sides so line endings round-trip untouched. The defaults translate
+    # on read and rewrite as os.linesep, so this tool silently converted every file it
+    # rewrote to the platform ending - CRLF on Windows, in a repo whose gate requires LF.
+    with open(path, encoding="utf-8", newline="") as fh:
+        data = fh.read()
+    out = normalize(data)
+    if out == data:
+        return False
+    if check:
+        sys.stderr.write("typographic tells found: %s\n" % path)
+    else:
+        with open(path, "w", encoding="utf-8", newline="") as fh:
+            fh.write(out)
+    return True
 
 
 if __name__ == "__main__":

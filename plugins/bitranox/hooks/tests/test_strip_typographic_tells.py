@@ -659,3 +659,62 @@ def test_stdin_check_mode_under_a_legacy_locale():
     res = subprocess.run([sys.executable, SCRIPT_PATH, "--check", "-"],
                          input="clean\r\n".encode("utf-8"), capture_output=True, env=env)
     assert res.returncode == 0, res.stderr
+
+
+# ---- exit codes: 0 clean/done, 1 tells remain (--check), 2 could not read or write ----------
+
+
+@pytest.mark.parametrize("check", [True, False], ids=["check", "rewrite"])
+def test_a_missing_file_could_not_run_and_is_not_reported_as_tells(tmp_path, capsys, check):
+    # A traceback used to exit 1, which under --check is exactly "tells remain".
+    argv = ["prog"] + (["--check"] if check else []) + [str(tmp_path / "absent.md")]
+    assert mod._main(argv) == 2
+    err = capsys.readouterr().err
+    assert "absent.md" in err and "typographic tells found" not in err
+
+
+@pytest.mark.parametrize("check", [True, False], ids=["check", "rewrite"])
+def test_a_file_that_is_not_utf8_could_not_run(tmp_path, capsys, check):
+    p = tmp_path / "latin1.md"
+    p.write_bytes(b"caf\xe9\n")
+    argv = ["prog"] + (["--check"] if check else []) + [str(p)]
+    assert mod._main(argv) == 2
+    assert p.read_bytes() == b"caf\xe9\n"   # never rewritten
+    assert "latin1.md" in capsys.readouterr().err
+
+
+def test_other_files_are_still_processed_and_2_wins(tmp_path):
+    good = tmp_path / "good.md"
+    good.write_bytes(("a" + EM_DASH + "b\n").encode("utf-8"))
+    assert mod._main(["prog", str(tmp_path / "absent.md"), str(good)]) == 2
+    assert good.read_bytes() == b"a - b\n"
+
+
+def test_check_with_tells_and_an_unreadable_file_is_2_not_1(tmp_path):
+    tells = tmp_path / "tells.md"
+    tells.write_bytes(("a" + EM_DASH + "b\n").encode("utf-8"))
+    assert mod._main(["prog", "--check", str(tells), str(tmp_path / "absent.md")]) == 2
+
+
+@pytest.mark.skipif(hasattr(os, "geteuid") and os.geteuid() == 0,
+                    reason="root writes a read-only file, so it cannot be made unwritable")
+def test_an_unwritable_file_could_not_run(tmp_path, capsys):
+    import stat
+
+    p = tmp_path / "ro.md"
+    p.write_bytes(("a" + EM_DASH + "b\n").encode("utf-8"))
+    p.chmod(stat.S_IREAD)
+    try:
+        assert mod._main(["prog", str(p)]) == 2
+        assert "ro.md" in capsys.readouterr().err
+    finally:
+        p.chmod(stat.S_IREAD | stat.S_IWRITE)
+
+
+@pytest.mark.parametrize("check", [True, False], ids=["check", "filter"])
+def test_stdin_that_is_not_utf8_could_not_run(monkeypatch, capsys, check):
+    import io
+
+    monkeypatch.setattr("sys.stdin", io.TextIOWrapper(io.BytesIO(b"caf\xe9\n"), encoding="utf-8"))
+    assert mod._main(["prog"] + (["--check"] if check else [])) == 2
+    assert "stdin" in capsys.readouterr().err

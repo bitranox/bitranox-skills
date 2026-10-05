@@ -50,19 +50,24 @@ silently drifts. Report it and stop.
 ... audit_local.py check --root <tree> --shipped <marketplace>/skills
 ```
 
-Anything a script can decide, a script decides: settings files Claude Code cannot load
-(`settings-unparseable` - every hook in one is dead), a settings file that opens with a UTF-8
-byte-order mark (`settings-bom` - the audit reads through it, but whether Claude Code does is not
-measured, so re-save it without one), registrations that name a missing file, hook
-scripts nothing registers, malformed tombstones, test dirs that cannot collect, skills shipping a
-script with no test, front matter whose name disagrees with its directory or whose description is
-not trigger-first, a local skill duplicating a shipped one, a local hook or skill script the
-marketplace now ships too (`duplicate-of-shipped`), graveyards, and directories the walk could
-not list (`unlistable` - never read as clean).
+Anything a script can decide, a script decides: settings files Claude Code cannot load at all
+(`settings-unparseable`: not JSON, not UTF-8, or an event whose value is a string; every hook in
+such a file is dead), an entry of the wrong shape inside a file that does load
+(`settings-malformed-entry` - that entry registers nothing, and the file's other registrations are
+still checked), a settings file that opens with a UTF-8 byte-order mark (`settings-bom` - the
+audit reads through it, but whether Claude Code does is not measured, so re-save it without one),
+registrations that name a missing file (`registration`), hook scripts nothing registers,
+malformed tombstones, test dirs that cannot collect, skills shipping a script with no test, front
+matter whose name disagrees with its directory or whose description is not trigger-first, a local
+skill duplicating a shipped one, a local hook or skill script the marketplace now ships too
+(`duplicate-of-shipped`), graveyards, and directories the walk could not list (`unlistable` -
+never read as clean).
 
 Pass `--shipped <marketplace>/skills` or the duplicate checks stay silent - the run has nothing to
-compare against and cannot tell you so. `check` exits 0 clean, 1 findings, 2 error, and refuses
-(exit 2) a `--root`, `--home` or `--shipped` that is not a directory rather than auditing nothing.
+compare against and cannot tell you so. `check` exits 0 clean, 1 findings, 2 error. Both verbs
+exit 2 when the answer would be about a tree they did not read: a `--root` or `--home` that is not
+a directory (and for `check` a `--shipped`) is refused rather than audited as empty, and a
+directory the walk could not list is still reported as `unlistable` but makes the run exit 2.
 
 Three of those repay a closer look, because the obvious version of each check is wrong:
 

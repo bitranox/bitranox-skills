@@ -342,3 +342,40 @@ def test_an_ordinary_integer_timestamp_is_still_fresh(monkeypatch):
     p.write_text('{"skill": "meta-skill-writer", "session_id": "%s", "ts": %d}'
                  % (THIS, int(time.time())), encoding="utf-8")
     assert SR.is_fresh("meta-skill-writer", session_id=THIS) is True
+
+
+# --------------------------------------------------------------------------
+# Exit codes: 0 done, 1 the answer is no (check only), 2 could not run
+# --------------------------------------------------------------------------
+
+
+def test_start_into_an_unwritable_receipts_dir_could_not_run(home, capsys):
+    # A FILE where the receipts directory belongs: mkdir fails on every platform, and the CLI used
+    # to die with a traceback (exit 1) that reads like "check said stale".
+    (home / ".claude" / "self-improve-audit").write_text("not a dir", encoding="utf-8")
+    assert SR.main(["start", "meta-skill-writer"]) == 2
+    assert "could not" in capsys.readouterr().err
+
+
+def test_end_that_cannot_remove_the_receipt_could_not_run_and_never_says_absent(monkeypatch, capsys):
+    SR.start("meta-skill-writer", session_id="")
+    target = SR.receipt_path("meta-skill-writer")
+    real_unlink = Path.unlink
+
+    def refusing_unlink(self, *args, **kwargs):
+        if self == target:
+            raise PermissionError(13, "Permission denied", str(self))
+        return real_unlink(self, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "unlink", refusing_unlink)
+    assert SR.main(["end", "meta-skill-writer"]) == 2
+    captured = capsys.readouterr()
+    assert "absent" not in captured.out
+    assert "could not remove" in captured.err
+    assert SR.is_fresh("meta-skill-writer", session_id="")  # the gate is still armed, and it says so
+
+
+def test_end_with_nothing_to_remove_is_still_0(capsys):
+    # Control: idempotent end of an absent receipt is a clean run, not a failure.
+    assert SR.main(["end", "meta-skill-writer"]) == 0
+    assert capsys.readouterr().out.strip().endswith("absent")

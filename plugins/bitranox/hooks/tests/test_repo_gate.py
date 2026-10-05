@@ -229,9 +229,11 @@ def test_main_noop_in_other_repo(tmp_path, monkeypatch):
 
 
 def test_main_ci_errors_in_other_repo(tmp_path, monkeypatch):
+    # Outside the marketplace there is nothing for --ci to check: it could not run (2), it did not
+    # find a violation (1).
     monkeypatch.setattr(RG, "repo_root", lambda: tmp_path)
     monkeypatch.setattr(sys, "argv", ["repo-gate.py", "--ci"])
-    assert RG.main() == 1
+    assert RG.main() == 2
 
 
 def test_main_hook_ignores_non_commit_command(tmp_path, monkeypatch):
@@ -402,6 +404,156 @@ def test_main_malformed_stdin_passes(tmp_path, monkeypatch):
     monkeypatch.setattr(RG, "repo_root", lambda: tmp_path)
     monkeypatch.setattr(sys, "stdin", io.StringIO("not json"))
     assert RG.main() == 0
+
+
+# --------------------------------------------------------------------------
+# Exit codes of the CLI modes: 0 clean, 1 a finding, 2 could not run
+# --------------------------------------------------------------------------
+
+
+def _boom(*_args, **_kwargs):
+    raise RuntimeError("SENTINEL crash")
+
+
+@pytest.mark.parametrize("flags", [["--ci"], ["--pre-push"], ["--mirrors"], ["--mirror-of", "."],
+                                   ["--pytest-only"], ["--print-test-deps"]], ids=lambda f: f[0])
+def test_a_crashed_cli_run_exits_2_never_0(monkeypatch, capsys, flags):
+    """A crash used to fall into the hook-mode catch-all and exit 0, so CI and the git pre-push hook
+    read a run that checked nothing as green - and it hid every finding the run had not reached."""
+    monkeypatch.setattr(RG, "repo_root", _boom)
+    monkeypatch.setattr(RG, "audit_mirror_of", _boom)
+    monkeypatch.setattr(sys, "argv", ["repo-gate.py", *flags])
+    monkeypatch.setattr(sys, "stdin", io.StringIO(""))
+    assert RG.entry() == 2
+    assert "SENTINEL crash" in capsys.readouterr().err
+
+
+def test_a_crashed_hook_mode_run_still_never_wedges_a_turn(monkeypatch):
+    # Control: the same crash under PreToolUse must keep passing, or a gate bug blocks every commit.
+    monkeypatch.setattr(RG, "repo_root", _boom)
+    monkeypatch.setattr(sys, "argv", ["repo-gate.py"])
+    monkeypatch.setattr(sys, "stdin", io.StringIO(json.dumps({"tool_input": {"command": "git commit -m x"}})))
+    assert RG.entry() == 0
+
+
+_CRASH_SITECUSTOMIZE = (
+    "import pathlib\n"
+    "def _boom(*a, **k):\n"
+    "    raise RuntimeError('SENTINEL crash')\n"
+    "pathlib.Path.cwd = classmethod(_boom)\n"
+)
+
+
+@pytest.mark.parametrize("flags, stdin, expected", [
+    (["--ci", "--no-pytest"], "", 2),
+    (["--pre-push", "--no-pytest"], "", 2),
+    ([], json.dumps({"tool_input": {"command": "git commit -m x"}}), 0),
+], ids=["ci", "pre-push", "hook-control"])
+def test_the_script_entry_point_maps_a_crash_by_mode(tmp_path, flags, stdin, expected):
+    """End to end through `python repo-gate.py`, so the __main__ block itself is under test.
+
+    The crash is injected through a sitecustomize on PYTHONPATH, which Python imports at startup:
+    nothing in the gate's own code has to be broken to make it crash."""
+    site = tmp_path / "site"
+    write(site / "sitecustomize.py", _CRASH_SITECUSTOMIZE)
+    env = {k: v for k, v in os.environ.items() if not k.startswith(("GIT_", "PYTEST_"))}
+    env["PYTHONPATH"] = str(site)
+    proc = subprocess.run([sys.executable, str(Path(RG.__file__).resolve()), *flags], cwd=tmp_path,
+                          env=env, input=stdin, capture_output=True, text=True, encoding="utf-8",
+                          timeout=60)
+    assert proc.returncode == expected, proc.stderr
+    if expected:
+        assert "SENTINEL crash" in proc.stderr
+
+
+@pytest.mark.parametrize("flags", [["--ci"], ["--mirrors"], ["--pytest-only"], ["--print-test-deps"]],
+                         ids=lambda f: f[0])
+def test_a_cli_run_outside_any_repo_could_not_run(monkeypatch, flags):
+    monkeypatch.setattr(RG, "repo_root", lambda *a: None)
+    monkeypatch.setattr(sys, "argv", ["repo-gate.py", *flags])
+    assert RG.main() == 2
+
+
+def test_pre_push_outside_the_marketplace_keeps_its_documented_skip(tmp_path, monkeypatch):
+    # core.hooksPath pointed here from another repo: not this gate's push, so it is skipped, not refused.
+    monkeypatch.setattr(RG, "repo_root", lambda: tmp_path)
+    monkeypatch.setattr(sys, "argv", ["repo-gate.py", "--pre-push"])
+    assert RG.main() == 0
+
+
+@pytest.mark.parametrize("mode", ["--ci", "--pre-push"])
+def test_missing_ci_dependencies_mean_the_gate_could_not_run(tmp_path, monkeypatch, mode):
+    make_repo(tmp_path, good_skill=True)
+    monkeypatch.setattr(RG, "repo_root", lambda: tmp_path)
+    monkeypatch.setattr(RG, "check_test_dependencies", lambda root: RG.could_not_run(["deps missing"]))
+    monkeypatch.setattr(RG, "check_version_bumped", lambda root: [])
+    monkeypatch.setattr(sys, "argv", ["repo-gate.py", mode])
+    assert RG.main() == 2
+
+
+@pytest.mark.parametrize("mode", ["--ci", "--pre-push"])
+def test_a_finding_beside_a_could_not_run_still_exits_2(tmp_path, monkeypatch, mode):
+    # 2 wins in a mixed run: the run is incomplete, so its findings are not the whole answer.
+    make_repo(tmp_path, bad_skill=True)
+    monkeypatch.setattr(RG, "repo_root", lambda: tmp_path)
+    monkeypatch.setattr(RG, "check_test_dependencies", lambda root: [])
+    monkeypatch.setattr(RG, "check_pytest", lambda root, paths, **kw: RG.could_not_run(["no pytest"]))
+    monkeypatch.setattr(sys, "argv", ["repo-gate.py", mode])
+    assert RG.main() == 2
+
+
+@pytest.mark.parametrize("mode", ["--ci", "--pre-push"])
+def test_a_finding_alone_still_exits_1(tmp_path, monkeypatch, mode):
+    # Control for the two above: an ordinary violation with a complete run stays 1.
+    make_repo(tmp_path, bad_skill=True)
+    monkeypatch.setattr(RG, "repo_root", lambda: tmp_path)
+    monkeypatch.setattr(RG, "check_test_dependencies", lambda root: [])
+    monkeypatch.setattr(RG, "check_pytest", lambda root, paths, **kw: [])
+    monkeypatch.setattr(RG, "check_version_bumped", lambda root: [])
+    monkeypatch.setattr(sys, "argv", ["repo-gate.py", mode])
+    assert RG.main() == 1
+
+
+def test_missing_dependencies_are_marked_could_not_run(tmp_path):
+    write(tmp_path / ".github" / "workflows" / "ci.yml", "        run: |\n          pip install pytest lxml\n")
+    lines = RG.check_test_dependencies(tmp_path, is_installed=lambda m: False)
+    assert "lxml" in "\n".join(lines)
+    assert RG.is_could_not_run(lines)
+    assert RG.check_test_dependencies(tmp_path, is_installed=lambda m: True) == []
+
+
+@pytest.mark.parametrize("rc, could_not_run", [(1, False), (2, True), (3, True), (4, True), (5, True),
+                                               (-9, True)])
+def test_check_pytest_marks_every_rc_but_a_test_failure_as_could_not_run(tmp_path, monkeypatch, rc,
+                                                                         could_not_run):
+    class Done:
+        returncode = rc
+        stdout = "x\n"
+        stderr = ""
+    monkeypatch.setattr(RG.subprocess, "run", lambda *a, **k: Done())
+    lines = RG.check_pytest(tmp_path, [tmp_path])
+    assert lines
+    assert RG.is_could_not_run(lines) is could_not_run
+
+
+def test_check_pytest_that_cannot_start_is_could_not_run(tmp_path, monkeypatch):
+    monkeypatch.setattr(RG.subprocess, "run", _boom)
+    assert RG.is_could_not_run(RG.check_pytest(tmp_path, [tmp_path]))
+
+
+def test_a_taxonomy_of_the_wrong_shape_fails_open_instead_of_crashing_the_gate(tmp_path):
+    # Valid JSON that is not an object used to raise on `.get` and take the whole run down.
+    make_repo(tmp_path, good_skill=False)
+    write(tmp_path / "plugins/bitranox/skills/unprefixed/SKILL.md", "# x\n")
+    write(tmp_path / "plugins/bitranox/skill-taxonomy.json", "[1]")
+    assert RG.check_skill_naming(tmp_path) == []
+
+
+def test_an_unreadable_junit_report_is_could_not_run_and_a_short_one_is_a_finding(tmp_path):
+    write(tmp_path / "short.xml", '<testsuite tests="1"/>')
+    assert RG.is_could_not_run(RG.floor_problems(tmp_path / "absent.xml", 100))
+    short = RG.floor_problems(tmp_path / "short.xml", 100)
+    assert short and not RG.is_could_not_run(short)
 
 
 # --------------------------------------------------------------------------
@@ -2160,8 +2312,9 @@ def test_audit_mirrors_counts_a_drifted_pair_and_names_it(tmp_path, monkeypatch,
 
 
 def test_audit_mirrors_reports_in_sync_skipped_and_unlisted_pairs(tmp_path, monkeypatch, capsys):
-    # Control for the count: an in-sync pair and a twin that is not checked out are both zero,
-    # and a twin the manifest does not list is reported without being counted as drift.
+    # An in-sync pair and a twin that is not checked out are both zero; a twin the manifest does
+    # not list is a finding of its own - unlisted, that pair is never checked at all - so it counts
+    # toward the exit code without being called drift.
     public = _mirror_tree(tmp_path)
     write(public / "KI" / "bitranox-skills" / "plugins" / "bitranox" / "skills" / "coding-python-other"
           / "SKILL.md", MIRROR_BODY.replace("the thing", "the other thing"))
@@ -2169,13 +2322,19 @@ def test_audit_mirrors_reports_in_sync_skipped_and_unlisted_pairs(tmp_path, monk
           TWIN_BODY.replace("the thing", "the other thing"))
     monkeypatch.setattr(RG, "MIRRORED_SKILLS", {"coding-python-thing": "libs/thing/skills/python-thing",
                                                 "coding-python-absent": "libs/absent/skills/python-absent"})
+    root = _marketplace_in(public)
 
-    assert RG.audit_mirrors(_marketplace_in(public)) == 0
+    assert RG.audit_mirrors(root) == 1
     out = capsys.readouterr().out
     assert "in sync coding-python-thing" in out
     assert "SKIP    coding-python-absent" in out
     assert "UNLISTED coding-python-other" in out
     assert "0 of 2 mirrored pairs have drifted." in out
+    assert "1 twin is not listed in MIRRORED_SKILLS" in out
+
+    monkeypatch.setattr(RG, "repo_root", lambda: root)
+    monkeypatch.setattr(sys, "argv", ["repo-gate.py", "--mirrors"])
+    assert RG.main() == 1
 
 
 def test_audit_mirrors_with_no_public_tree_compares_nothing(tmp_path, capsys):
@@ -2225,9 +2384,18 @@ def _suite_repo(tmp_path, tests, floor=None):
 def test_pytest_only_fails_when_the_suite_collects_nothing(tmp_path):
     # pytest exits 5 on zero collected; passing that through as success is how a renamed dir or
     # a broken glob reads as a green CI run with nothing tested.
+    # A run that tested nothing could not answer the question, so it is 2, not the 1 of a failure.
     proc = _pytest_only(_suite_repo(tmp_path, {"pkg/not_a_test.py": "x = 1\n"}))
-    assert proc.returncode == 1, proc.stderr
+    assert proc.returncode == 2, proc.stderr
     assert "collected no tests" in proc.stderr
+
+
+def test_pytest_only_maps_a_collection_error_to_could_not_run(tmp_path):
+    # pytest exits 2 (interrupted) when a test module cannot be imported; 3 and 4 likewise leave
+    # the 0/1 answer set. None of them is a test result, so none may read as one.
+    proc = _pytest_only(_suite_repo(tmp_path, {"t/test_broken.py": "import no_such_module_xyz\n",
+                                               "t/test_ok.py": "def test_ok():\n    assert True\n"}))
+    assert proc.returncode == 2, proc.stderr
 
 
 def test_pytest_only_fails_when_the_count_is_under_the_floor(tmp_path):

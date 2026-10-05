@@ -412,7 +412,8 @@ def _expand(token, home):
 
 class SettingsUnreadable(ValueError):
     """A settings file that exists but cannot be read for its hooks: unopenable, not UTF-8, not
-    JSON, or not the shape Claude Code reads hooks from.
+    JSON, or an event whose value is a string - the whole-file shapes Claude Code 2.1.289 itself
+    rejects. Any other malformed entry is skipped and named by `scan_hook_registrations`.
 
     Its own error rather than an empty result, because an empty result is also the honest answer
     for a file with no hooks - and a caller that cannot tell the two apart reports a harness whose
@@ -442,40 +443,58 @@ def _load_settings(settings_path):
         raise SettingsUnreadable(settings_path, "not valid JSON: %s" % exc) from exc
 
 
-def _as(value, kind, path, what):
-    """`value` when it is a `kind` (None reads as empty), SettingsUnreadable naming `what` else."""
+def _as(value, kind, what, malformed):
+    """`value` when it is a `kind` (None reads as empty); else None, with `what` named in
+    `malformed` - the entry is skipped and the rest of the file still read."""
     if value is None:
         return kind()
     if not isinstance(value, kind):
-        raise SettingsUnreadable(path, "%s is %s, not a %s" % (what, type(value).__name__,
-                                                               kind.__name__))
+        malformed.append("%s is %s, not a %s - skipped" % (what, type(value).__name__, kind.__name__))
+        return None
     return value
 
 
-def hook_registrations(settings_path):
-    """(event, matcher, command) for every hook a settings file registers.
+def scan_hook_registrations(settings_path):
+    """(registrations, malformed) for a settings file.
 
-    Empty when the file has no hooks or does not exist; raises SettingsUnreadable when it exists
-    but cannot be read for them, so "none" and "could not look" never share an answer."""
+    `registrations` is (event, matcher, command) for every hook the file registers; `malformed`
+    names each entry of the wrong shape that was skipped. Measured on Claude Code 2.1.289: a
+    malformed entry leaves the file's other hooks running, so it is skipped and named rather than
+    the whole file refused - refusing reported a live harness as dead. Raises SettingsUnreadable
+    only for what that version rejects as a whole file: unreadable, not UTF-8, not JSON, or an
+    event whose value is a string. Empty when the file has no hooks or does not exist, so "none"
+    and "could not look" never share an answer."""
     data = _load_settings(settings_path)
     if data is None:
-        return []
-    data = _as(data, dict, settings_path, "the top level")
-    out = []
-    for event, groups in _as(data.get("hooks"), dict, settings_path, '"hooks"').items():
-        for group in _as(groups, list, settings_path, '"hooks.%s"' % event):
-            group = _as(group, dict, settings_path, 'a "hooks.%s" group' % event)
+        return [], []
+    malformed, out = [], []
+    data = _as(data, dict, "the top level", malformed)
+    hooks = _as(data.get("hooks"), dict, '"hooks"', malformed) if data is not None else None
+    for event, groups in (hooks or {}).items():
+        if isinstance(groups, str):
+            raise SettingsUnreadable(settings_path, '"hooks.%s" is a string, not a list' % event)
+        for group in _as(groups, list, '"hooks.%s"' % event, malformed) or []:
+            group = _as(group, dict, 'a "hooks.%s" group' % event, malformed)
+            if group is None:
+                continue
             matcher = group.get("matcher", "")
-            for hook in _as(group.get("hooks"), list, settings_path, '"hooks.%s[].hooks"' % event):
-                hook = _as(hook, dict, settings_path, 'a "hooks.%s" hook' % event)
-                command = hook.get("command")
+            for hook in _as(group.get("hooks"), list, '"hooks.%s[].hooks"' % event, malformed) or []:
+                hook = _as(hook, dict, 'a "hooks.%s" hook' % event, malformed)
+                command = hook.get("command") if hook is not None else None
                 # A falsy command (0, [], {}, "") registers nothing, and Claude Code (measured on
-                # 2.1.289) keeps the file's other hooks running, so it is skipped rather than
-                # refused: refusing would report a live harness as unreadable.
+                # 2.1.289) keeps the file's other hooks running, so it is skipped silently: it is
+                # an empty entry, not a malformed one.
                 if command:
-                    out.append((event, matcher,
-                                _as(command, str, settings_path, 'a "hooks.%s" command' % event)))
-    return out
+                    command = _as(command, str, 'a "hooks.%s" command' % event, malformed)
+                    if command is not None:
+                        out.append((event, matcher, command))
+    return out, malformed
+
+
+def hook_registrations(settings_path):
+    """(event, matcher, command) for every hook a settings file registers - `scan_hook_registrations`
+    without the list of skipped entries."""
+    return scan_hook_registrations(settings_path)[0]
 
 
 def command_paths(command, home=None):
