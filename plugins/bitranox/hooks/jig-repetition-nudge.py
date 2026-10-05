@@ -369,6 +369,10 @@ def topic_tokens(name, script_purpose):
 # otherwise needs its own end test, or the `\b` silently rejects it: `rm -rf` failed because the
 # `r` it matched is followed by `f`, and `dd if=/dev/zero` because `=` is followed by `/`. Those
 # spellings, and the Python and long-option ones (.py is a script suffix), sit in the second group.
+#
+# `rm` counts with ANY operand, flagged or not: `rm notes.txt` deletes as surely as `rm -f`. What
+# stops it is the character in front - `--rm` is docker's flag, `self.rm` an attribute - and an
+# operand must follow on the same line, so a bare word `rm` in prose does not.
 CHANGES_STATE = re.compile(r"""(?xi) \b (?:
       remove-item | remove-itemproperty | move-item | rename-item | clear-content | new-itemproperty
     | set-acl | set-service | stop-service | start-service | restart-service | set-itemproperty
@@ -381,8 +385,8 @@ CHANGES_STATE = re.compile(r"""(?xi) \b (?:
     | zfs \s+ (?:set|destroy|rollback) | zpool \s+ (?:destroy|replace)
     | qm \s+ (?:set|destroy|stop|start) | pct \s+ (?:set|destroy|stop|start)
 ) \b
-  | \b rm \s+ (?: -[a-z]*[rf][a-z]* | --(?:recursive|force) ) (?![\w-])
-  | ['"] rm ['"] \s* , \s* ['"] (?: -[a-z]*[rf][a-z]* | --(?:recursive|force) ) ['"]
+  | (?<![-\w.]) rm [ \t]+ (?=[^\s|;&)])
+  | ['"] rm ['"] \s* ,
   | \b dd \s+ if=
   | \b shutil \s* \. \s* rmtree \b | \b os \s* \. \s* (?:remove|unlink|rmdir|removedirs) \s* \(
   | \. \s* unlink \s* \(
