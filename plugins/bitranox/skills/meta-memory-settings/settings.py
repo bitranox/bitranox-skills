@@ -10,9 +10,9 @@ Usage:
   settings.py set <key> <value>    set one knob (validated against the known schema)
   settings.py reset                restore all knobs to the recommended defaults
 
-Exit codes: 0 done; 1 the config could not be written (nothing was saved); 2 usage error, an
-unknown key or value, or an existing config file that is not UTF-8 text or not a JSON object (left
-untouched).
+Exit codes: 0 done; 2 could not run: a usage error, an unknown key or value, an existing config
+file that is not UTF-8 text or not a JSON object (left untouched), or a config that could not be
+written (nothing was saved). No verb answers a yes/no question, so 1 is never returned.
 
 Pure standard library.
 """
@@ -160,8 +160,9 @@ def _save_and_print(updates):
     try:
         cfg = sig.save_config(updates, strict=True)
     except OSError as exc:
+        # Could not run (2), not a "no" answer (1): the write itself failed.
         print("not saved: %s" % exc, file=sys.stderr)
-        return 1
+        return 2
     _print_config(cfg)
     return 0
 

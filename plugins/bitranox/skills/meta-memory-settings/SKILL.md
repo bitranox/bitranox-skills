@@ -30,8 +30,8 @@ cannot reach the file.
   naming the file, and left untouched, so a `set` never writes defaults over the choices it still
   holds. Fix the file by hand (re-save it as UTF-8), or delete it to start from the defaults. The
   hooks meanwhile read such a file as the defaults, silently, so they never block a turn.
-- **Exit 1** means the write failed (for example `~/.claude` is not a writable directory): nothing
-  was saved.
+- **A write that fails** (for example `~/.claude` is not a writable directory) exits 2 and saves
+  nothing. Every exit 2 means the command could not run; no verb ever returns 1.
 
 ## The knobs (recommended default in brackets)
 
