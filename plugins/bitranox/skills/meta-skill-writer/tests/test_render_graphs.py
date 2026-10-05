@@ -274,3 +274,68 @@ def test_every_shipped_skill_renders(tmp_path, name, mode):
     proc = run(skill, *mode)
     assert proc.returncode == 0, proc.stdout + proc.stderr
     assert [n for n in outputs(skill) if n.endswith(".svg")]
+
+
+# --- 9. --combine keeps `strict`, and finds the brace that really closes the graph --------------
+
+def edge_count(svg: Path) -> int:
+    return svg.read_text(encoding="utf-8").count('class="edge"')
+
+
+STRICT_DUP = "strict digraph s { a -> b; a -> b; }"
+
+
+def test_combine_keeps_a_strict_blocks_duplicate_edges_merged(tmp_path):
+    """`strict` merges duplicate edges; dropped by the merge, the combined diagram drew two."""
+    alone = make_skill(tmp_path, "alone", [STRICT_DUP])
+    assert run(alone).returncode == 0
+    assert edge_count(alone / "diagrams" / "s.svg") == 1
+    skill = make_skill(tmp_path, "strict", [STRICT_DUP, "strict digraph t { c -> d; }"])
+    proc = run(skill, "--combine")
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert edge_count(skill / "diagrams" / "strict_combined.svg") == 2
+
+
+def test_combine_keeps_a_plain_blocks_duplicate_edges(tmp_path):
+    """Control: without `strict` both edges are drawn, alone and combined."""
+    skill = make_skill(tmp_path, "plain", ["digraph p { a -> b; a -> b; }"])
+    proc = run(skill, "--combine")
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert edge_count(skill / "diagrams" / "plain_combined.svg") == 2
+
+
+def test_combine_refuses_a_mix_of_strict_and_plain_blocks(tmp_path):
+    """One merged graph is strict or not as a whole, so a mix cannot be drawn faithfully."""
+    skill = make_skill(tmp_path, "mixed", [STRICT_DUP, "digraph p { c -> d; c -> d; }"])
+    proc = run(skill, "--combine")
+    assert proc.returncode == 1, proc.stdout + proc.stderr
+    assert "strict" in proc.stderr
+    assert not [n for n in outputs(skill) if n.endswith(".svg")]
+
+
+@pytest.mark.parametrize("block", [
+    "digraph x { a -> b; } // a trailing } in a comment",
+    "digraph x { a -> b; } /* } */",
+    "digraph x { a -> b; }\n# a preprocessor line with }",
+], ids=["line-comment", "block-comment", "hash-line"])
+def test_combine_body_ends_at_the_brace_that_closes_the_graph(tmp_path, block):
+    skill = make_skill(tmp_path, "trail", [block])
+    assert run(skill).returncode == 0  # dot itself accepts the block
+    proc = run(skill, "--combine")
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert node_count(skill / "diagrams" / "trail_combined.svg") == 2
+
+
+@pytest.mark.parametrize("block", [
+    'digraph q { a [label="}"]; a -> b; }',
+    "digraph c { a -> b; /* } */ }",
+    "digraph h { a [label=<<b>}</b>>]; a -> b; }",
+    "digraph n { subgraph cluster_x { a; } a -> b; }",
+], ids=["quoted-brace", "comment-brace", "html-brace", "nested-subgraph"])
+def test_combine_skips_braces_that_do_not_close_the_graph(tmp_path, block):
+    """Controls: a brace in a string, comment or HTML label, or a subgraph's own brace, is not the
+    end of the body."""
+    skill = make_skill(tmp_path, "inner", [block])
+    proc = run(skill, "--combine")
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert node_count(skill / "diagrams" / "inner_combined.svg") == 2
