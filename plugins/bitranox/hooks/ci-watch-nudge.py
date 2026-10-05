@@ -73,8 +73,9 @@ _CI_WAIT = Path(__file__).resolve().parent.parent / "skills" / "compuse-toolbox"
 # Pushing tags in bulk, versus naming refs explicitly. A tag push builds the TAG ref, which is a
 # different run from its branch's - and at release time it is the run that matters most.
 _BULK_TAGS = re.compile(r"--tags\b|--follow-tags\b")
-# Everything after `push`, so the refspecs can be read off it. Options are dropped, not guessed at.
-_AFTER_PUSH = re.compile(r"\bpush\b(?P<rest>[^\n;|&]*)")
+# Everything after a `git push`, up to the end of its statement, so the remote and refspecs can be
+# read off it. Options are dropped, not guessed at.
+_PUSH_OPERANDS = re.compile(r"[^\n;|&]*")
 
 
 # `git -C <dir> push` is the shape the corpus is full of, and its repo is NOT the call's cwd.
@@ -228,17 +229,31 @@ def _ssh_hostname(alias: str) -> str | None:
     return None
 
 
-def _push_remote(command: str, repo: str, tool_name: str = "Bash") -> str | None:
-    """The remote this push targets: the first bare word after `push`, else the branch's
-    configured remote, else `origin`, which is git's own fallback.
+def _build_push_words(command: str, tool_name: str = "Bash") -> list[str] | None:
+    """The bare words after the first `git push` that BUILDS: [remote, refspec, ...], or None.
 
-    Found on the offset-preserving `commands_only_aligned` form and sliced from the raw command."""
-    rest = _AFTER_PUSH.search(commands_only_aligned(command, tool_name))
-    if rest:
-        span = rest.span("rest")
-        words = [w for w in command[span[0]:span[1]].split() if not w.startswith("-")]
-        if words and not any(ch in words[0] for ch in _UNRESOLVABLE):
-            return words[0]
+    The first push in the command is not necessarily that one. `git push --dry-run origin && git
+    push origin v9` sends nothing in its first statement, and reading the remote and refspecs off
+    it lost the tag that the second statement really pushed. A push is skipped by the same rule
+    `notice` applies (`_NOT_A_BUILD`, judged on its own statement).
+
+    Found on the offset-preserving `commands_only_aligned` form and sliced from the raw command.
+    """
+    aligned = commands_only_aligned(command, tool_name)
+    for push in _PUSH.finditer(aligned):
+        if _NOT_A_BUILD.search(_statement_around(aligned, push.start())):
+            continue
+        rest = _PUSH_OPERANDS.match(aligned, push.end())
+        return [w for w in command[rest.start():rest.end()].split() if not w.startswith("-")]
+    return None
+
+
+def _push_remote(command: str, repo: str, tool_name: str = "Bash") -> str | None:
+    """The remote this push targets: the first bare word after the building `git push`, else the
+    branch's configured remote, else `origin`, which is git's own fallback."""
+    words = _build_push_words(command, tool_name)
+    if words and not any(ch in words[0] for ch in _UNRESOLVABLE):
+        return words[0]
     branch = _git(["rev-parse", "--abbrev-ref", "HEAD"], repo)
     if branch and branch != "HEAD":
         configured = _git(["config", "--get", "branch.%s.remote" % branch], repo)
@@ -281,13 +296,52 @@ def _targets_a_watchable_forge(command: str, repo: str, tool_name: str = "Bash")
     return bool(resolved) and resolved in known
 
 
-def _resolve_ref(repo: str, name: str) -> tuple[str, str] | None:
-    """(sha, display) for a ref name, tags before branches. None when it does not resolve."""
-    for prefix, kind in (("refs/tags/", "tag"), ("refs/heads/", "branch")):
-        sha = _git(["rev-parse", "--verify", "-q", prefix + name + "^{commit}"], repo)
+# A push source git refuses outright because it names a tag AND a branch.
+_AMBIGUOUS = ("?", "?")
+
+
+def _resolve_source(repo: str, src: str) -> tuple[str, str] | None:
+    """(sha, kind) for a push SOURCE, kind "tag", "branch" or "HEAD"; None when it does not resolve;
+    `_AMBIGUOUS` when git itself would refuse it.
+
+    A short name that is both a tag and a branch is not "the tag": git refuses the push with
+    "src refspec <name> matches more than one" and sends nothing (measured on a scratch remote,
+    rc 1), so recording either one records a push that never happened. A fully qualified
+    `refs/tags/` or `refs/heads/` name is not ambiguous, and `HEAD` is the checked-out commit.
+    """
+    if src == "HEAD":
+        candidates = [("HEAD", "HEAD")]
+    elif src.startswith(("refs/tags/", "refs/heads/")):
+        candidates = [(src, "tag" if src.startswith("refs/tags/") else "branch")]
+    else:
+        candidates = [("refs/tags/" + src, "tag"), ("refs/heads/" + src, "branch")]
+    hits = []
+    for ref, kind in candidates:
+        sha = _git(["rev-parse", "--verify", "-q", ref + "^{commit}"], repo)
         if sha and re.fullmatch(r"[0-9a-f]{40}", sha):
-            return sha, ("%s %s" % (kind, name))
-    return None
+            hits.append((sha, kind))
+    if len(hits) > 1:
+        return _AMBIGUOUS
+    return hits[0] if hits else None
+
+
+def _destination(repo: str, src: str, dst: str, kind: str) -> tuple[str, str] | None:
+    """(kind, short name) of the ref a push WRITES on the remote, or None when it cannot be read.
+
+    That is the ref CI builds, so it is the one to name: `git push origin master:release` starts a
+    run on `release`. With no `:dst` git writes the same name as the source, and a bare `HEAD`
+    writes the checked-out branch's name (detached, git needs an explicit destination).
+    """
+    if dst:
+        if dst.startswith("refs/tags/"):
+            return "tag", _short_ref(dst)
+        if dst.startswith("refs/heads/"):
+            return "branch", _short_ref(dst)
+        return ("tag" if kind == "tag" else "branch"), dst
+    if kind == "HEAD":
+        branch = _git(["symbolic-ref", "--short", "-q", "HEAD"], repo)
+        return ("branch", branch) if branch else None
+    return kind, _short_ref(src)
 
 
 _STATEMENT_SEP = LIST_SEP
@@ -324,47 +378,45 @@ def _pushed_ref(command: str, repo: str, tool_name: str = "Bash") -> tuple[str, 
     """What this push actually built: (sha, display); None to fall back to the branch test; or
     `_NOT_LANDED` when a named branch was pushed and its tracking ref shows it did not arrive.
 
-    A refspec is read from the text after `push`; a `src:dst` pair is resolved by its SOURCE, which
-    is the object being sent, and a branch is then required to have landed on `<remote>/<dst>`
-    (see the module docstring for why a tag cannot be checked the same way). A leading `+` (force)
-    is not part of the name. Bulk `--tags` names no ref, so the newest local tag by creation date
-    stands in - the tag just cut is the one whose run is wanted.
-
-    Found on the offset-preserving `commands_only_aligned` form and sliced from the raw command:
-    the heredoc-stripped form has lost lines, so its offsets point elsewhere in the raw text.
+    The refspecs are read from the push that BUILDS (`_build_push_words`); a `src:dst` pair takes
+    its sha from the SOURCE, which is the object being sent, and its name from the DESTINATION,
+    which is the ref CI builds (`_destination`). A branch destination is then required to have
+    landed on `<remote>/<dst>` (see the module docstring for why a tag cannot be checked the same
+    way). A leading `+` (force) is not part of the name. Bulk `--tags` names no ref, so the newest
+    local tag by creation date stands in - the tag just cut is the one whose run is wanted.
     """
-    aligned = commands_only_aligned(command, tool_name)
-    rest = _AFTER_PUSH.search(aligned)
-    if not rest:
+    words = _build_push_words(command, tool_name)
+    if words is None:
         return None
-    span = rest.span("rest")
-    words = [w for w in command[span[0]:span[1]].split() if not w.startswith("-")]
     # The first bare word is the remote; the rest are refspecs.
     unlanded = False
     for spec in words[1:]:
         if any(ch in spec for ch in _UNRESOLVABLE):
             return None
         src, _, dst = spec.lstrip("+").partition(":")
-        source = _short_ref(src)
-        found = _resolve_ref(repo, source) if source and source != "HEAD" else None
-        if not found:
+        found = _resolve_source(repo, src) if src else None
+        if found == _AMBIGUOUS:
+            return _NOT_LANDED                       # git refused the whole push
+        target = _destination(repo, src, dst, found[1]) if found else None
+        if not target:
             continue
-        if found[1].startswith("branch ") and not _branch_landed(
-                repo, words[0], _short_ref(dst) or source, found[0]):
+        sha, (kind, name) = found[0], target
+        if kind == "branch" and not _branch_landed(repo, words[0], name, sha):
             unlanded = True
             continue
-        return found
+        return sha, "%s %s" % (kind, name)
     if unlanded:
         return _NOT_LANDED
-    if _BULK_TAGS.search(aligned):
+    if _BULK_TAGS.search(commands_only_aligned(command, tool_name)):
         # In `for-each-ref` the LAST --sort key is the PRIMARY one (measured, not assumed), so
         # this reads as: newest by creation date, ties broken by version order. Creation date
         # alone is not enough - tags cut in the same second tie, and the fallback is plain
         # alphabetical, where v10.0.0 sorts between v1.0.0 and v2.0.0.
         newest = _git(["for-each-ref", "--sort=-v:refname", "--sort=-creatordate", "--count=1",
                        "--format=%(refname:short)", "refs/tags"], repo)
-        if newest:
-            return _resolve_ref(repo, newest)
+        found = _resolve_source(repo, "refs/tags/" + newest) if newest else None
+        if found and found != _AMBIGUOUS:
+            return found[0], "tag " + newest
     return None
 
 
