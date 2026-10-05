@@ -417,3 +417,70 @@ def test_the_scan_lists_only_markdown(tmp_path):
 
 def test_the_scan_of_a_cwd_that_does_not_exist_is_empty(tmp_path):
     assert _scan(tmp_path / "gone") == []
+
+
+# --- an UPSTREAM checkout the cwd itself belongs to (contrib #95) --------------------------------
+
+_GIT_SCOPE_VARS = ("GIT_DIR", "GIT_WORK_TREE", "GIT_INDEX_FILE", "GIT_COMMON_DIR", "GIT_CONFIG")
+
+
+def _git(*args):
+    import os
+    import subprocess
+
+    env = {k: v for k, v in os.environ.items() if k not in _GIT_SCOPE_VARS}
+    subprocess.run(["git", *args], check=True, capture_output=True, text=True, encoding="utf-8", env=env)
+
+
+def _repo(path, *, opted_out):
+    """A git checkout holding a misaligned doc; `opted_out` sets the per-checkout knob."""
+    path.mkdir(parents=True, exist_ok=True)
+    _git("init", "-q", str(path))
+    if opted_out:
+        _git("-C", str(path), "config", "bitranox.reformatMdTables", "false")
+    doc = path / "Guide" / "doc.md"
+    doc.parent.mkdir()
+    doc.write_bytes(MISALIGNED.encode("utf-8"))
+    return doc
+
+
+@pytest.mark.parametrize("opted_out", [True, False])
+def test_a_write_inside_an_opted_out_checkout_is_left_alone(tmp_path, monkeypatch, opted_out):
+    """The Write/Edit path: a doc of a checkout whose own git config says `false` is never restyled.
+
+    The nested-repo prune only covers a checkout BELOW the working directory. A session started
+    INSIDE an upstream mirror (a vendored openvmm, say) owns no style there, yet every edit to its
+    docs was realigned, and that alignment churn diverges from upstream. Control: the same repo
+    without the knob is still realigned, so the knob is what decides.
+    """
+    doc = _repo(tmp_path / "upstream", opted_out=opted_out)
+
+    assert run(monkeypatch, doc) == 0
+
+    changed = doc.read_bytes().decode("utf-8") != MISALIGNED
+    assert changed is (not opted_out)
+
+
+@pytest.mark.parametrize("opted_out", [True, False])
+def test_a_command_run_inside_an_opted_out_checkout_restyles_nothing(tmp_path, monkeypatch, opted_out):
+    """The Bash path: the cwd's own checkout opted out, so the mtime scan reports nothing."""
+    doc = _repo(tmp_path / "upstream", opted_out=opted_out)
+
+    assert run_bash(monkeypatch, tmp_path / "upstream") == 0
+
+    changed = doc.read_bytes().decode("utf-8") != MISALIGNED
+    assert changed is (not opted_out)
+
+
+@pytest.mark.parametrize("value,opted_out", [("false", True), ("no", True), ("off", True), ("0", True),
+                                             ("true", False), ("yes", False)])
+def test_the_knob_reads_every_spelling_git_calls_a_boolean(tmp_path, value, opted_out):
+    repo = tmp_path / "r"
+    _repo(repo, opted_out=False)
+    _git("-C", str(repo), "config", "bitranox.reformatMdTables", value)
+    assert H.opted_out(repo) is opted_out
+
+
+def test_a_directory_outside_any_checkout_is_not_opted_out(tmp_path):
+    """No repo, no knob: the formatter keeps working on loose files."""
+    assert H.opted_out(tmp_path) is False
