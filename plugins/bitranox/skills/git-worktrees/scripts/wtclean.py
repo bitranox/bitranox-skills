@@ -62,9 +62,14 @@ Run:
   `uv run scripts/wtclean.py mytopic --json`
 
 Exit codes: 0 = nothing blocked (a dry-run plan that can be carried out as-is, or an `--apply`
-that removed everything it listed), 1 = something was refused or could not be removed, 2 = usage
-error. `--json` emits the machine-readable envelope; warnings always go to stderr so stdout stays
-parseable.
+that removed everything it listed), 1 = the plan refused something (a dirty or unreadable
+worktree, an ambiguous topic, a convention-derived cache outside --base) and everything else went
+through, 2 = could not run as asked: a usage error, an unsafe topic, a `--cache-dir` that does not
+exist or is forbidden (a symlink, a filesystem root, the home directory) - dry run included - or a
+removal that FAILED (git refused, an OSError); a 2 wins over a 1 in a mixed run. `--json` emits
+the envelope {ok, command, data, skipped} on every exit, with ok false only on exit 2 and each
+blocked entry's `kind` (refused / bad_input / failed) under `data.blocked`; warnings always go to
+stderr so stdout stays parseable.
 """
 
 from __future__ import annotations
@@ -83,8 +88,12 @@ __all__ = [
     "CacheTarget",
     "Plan",
     "Refusal",
+    "KIND_BAD_INPUT",
+    "KIND_FAILED",
+    "KIND_REFUSED",
     "apply_plan",
     "blocked_reasons",
+    "exit_code",
     "build_plan",
     "cache_dirs",
     "directory_size",
@@ -283,9 +292,14 @@ def directory_size(path: Path, errors: list[OSError] | None = None) -> int:
 # --------------------------------------------------------------------------------------------
 
 
+KIND_REFUSED = "refused"      # the plan declined it: a 'no' (exit 1)
+KIND_BAD_INPUT = "bad_input"  # a --cache-dir that is missing or forbidden: could not run (exit 2)
+KIND_FAILED = "failed"        # the removal was attempted and failed: could not run (exit 2)
+
+
 @dataclass(frozen=True)
 class Refusal:
-    """One thing that was not removed, and why.
+    """One thing that was not removed, why, and which KIND of not-removed it is.
 
     Kept as a (path, reason) pair rather than a formatted string because the renderer has to
     match refusals back to plan entries. Splitting a message back apart on its colon would
@@ -295,9 +309,20 @@ class Refusal:
 
     path: str
     reason: str
+    kind: str = KIND_REFUSED
 
     def __str__(self) -> str:
         return f"{self.path}: {self.reason}"
+
+    def as_dict(self) -> dict[str, str]:
+        return {"path": self.path, "reason": self.reason, "kind": self.kind}
+
+
+def exit_code(blocked: Sequence[Refusal]) -> int:
+    """0 nothing blocked, 1 only plan refusals, 2 when anything could not run (2 wins)."""
+    if any(item.kind != KIND_REFUSED for item in blocked):
+        return 2
+    return 1 if blocked else 0
 
 
 @dataclass(frozen=True)
@@ -312,6 +337,9 @@ class CacheTarget:
     size_bytes: int
     refusal: str | None
     size_complete: bool = True
+    # Named with --cache-dir rather than derived from the convention: a refusal of a path the
+    # caller typed out is refused INPUT (exit 2), not a plan decision (exit 1).
+    explicit: bool = False
 
     def as_dict(self) -> dict[str, object]:
         return {
@@ -319,13 +347,14 @@ class CacheTarget:
             "bytes": self.size_bytes,
             "size_complete": self.size_complete,
             "refusal": self.refusal,
+            "explicit": self.explicit,
         }
 
 
-def _cache_target(path: Path, refusal: str | None) -> CacheTarget:
+def _cache_target(path: Path, refusal: str | None, *, explicit: bool = False) -> CacheTarget:
     errors: list[OSError] = []
     size = directory_size(path, errors)
-    return CacheTarget(path, size, refusal, size_complete=not errors)
+    return CacheTarget(path, size, refusal, size_complete=not errors, explicit=explicit)
 
 
 @dataclass(frozen=True)
@@ -568,7 +597,7 @@ def build_plan(
     for raw in explicit_caches:
         candidate = Path(raw).expanduser()
         if candidate.exists() or candidate.is_symlink():
-            targets.append(_cache_target(candidate, refusal_for(candidate)))
+            targets.append(_cache_target(candidate, refusal_for(candidate), explicit=True))
         else:
             missing.append(candidate)
 
@@ -649,7 +678,7 @@ def blocked_reasons(
     )
     blocked = [Refusal(str(plan.worktree), reason)] if reason is not None else []
     blocked += [
-        Refusal(str(path), "does not exist - check the --cache-dir path")
+        Refusal(str(path), "does not exist - check the --cache-dir path", KIND_BAD_INPUT)
         for path in plan.missing_caches
     ]
     if plan.topic_ambiguous:
@@ -659,7 +688,11 @@ def blocked_reasons(
         # or symlinked worktree, which is a RESOLVED one whose caches are unambiguously its own.
         why = "derived from a topic that matches more than one worktree"
         return blocked + [Refusal(str(target.path), why) for target in plan.caches]
-    blocked += [Refusal(str(t.path), t.refusal) for t in plan.caches if t.refusal is not None]
+    blocked += [
+        Refusal(str(t.path), t.refusal, KIND_BAD_INPUT if t.explicit else KIND_REFUSED)
+        for t in plan.caches
+        if t.refusal is not None
+    ]
     return blocked
 
 
@@ -690,7 +723,7 @@ def apply_plan(
     if attempt_worktree:
         error = git_remove(plan.worktree, force=discard_uncommitted)
         if error:
-            failures.append(Refusal(str(plan.worktree), error))
+            failures.append(Refusal(str(plan.worktree), error, KIND_FAILED))
 
     if plan.topic_ambiguous:
         # The plan refused every cache for this topic, so the apply must refuse them too. A plan
@@ -705,7 +738,7 @@ def apply_plan(
         try:
             shutil.rmtree(target.path)
         except OSError as exc:
-            failures.append(Refusal(str(target.path), str(exc)))
+            failures.append(Refusal(str(target.path), str(exc), KIND_FAILED))
     return failures
 
 
@@ -839,13 +872,11 @@ def main(argv: Sequence[str] | None = None) -> int:
     given = args.topic
     reason = unsafe_argument_reason(given)
     if reason is not None:
-        print(f"wtclean: refusing {given!r} - it {reason}", file=sys.stderr)
-        return 2
+        return _refuse(args, f"refusing {given!r} - it {reason}")
     topic = topic_name(given, prefix=args.prefix, keep_prefix=in_project_worktree_dir(given))
     reason = unsafe_topic_reason(topic)
     if reason is not None:
-        print(f"wtclean: refusing topic {topic!r} - it {reason}", file=sys.stderr)
-        return 2
+        return _refuse(args, f"refusing topic {topic!r} - it {reason}")
 
     base = Path(args.base).expanduser() if args.base else None
     suffixes = tuple(args.cache_suffix) if args.cache_suffix else DEFAULT_CACHE_SUFFIXES
@@ -893,14 +924,20 @@ def main(argv: Sequence[str] | None = None) -> int:
             git_remove=git_worktree_remove,
         )
 
+    code = exit_code(blocked)
     if args.json:
         print(
             json.dumps(
                 {
-                    "ok": not blocked,
+                    # ok = ran without error: a plan refusal (1) is an answer, not an error.
+                    "ok": code != 2,
                     "command": "wtclean",
                     "skipped": warnings + [str(item) for item in blocked],
-                    "data": {"applied": args.apply, **plan.as_dict()},
+                    "data": {
+                        "applied": args.apply,
+                        **plan.as_dict(),
+                        "blocked": [item.as_dict() for item in blocked],
+                    },
                 },
                 indent=2,
             )
@@ -911,8 +948,18 @@ def main(argv: Sequence[str] | None = None) -> int:
         ):
             print(line)
         for item in blocked:
-            print(f"  REFUSED: {item}" if not args.apply else f"  FAILED: {item}", file=sys.stderr)
-    return 1 if blocked else 0
+            label = "FAILED" if item.kind == KIND_FAILED else "REFUSED"
+            print(f"  {label}: {item}", file=sys.stderr)
+    return code
+
+
+def _refuse(args: argparse.Namespace, message: str) -> int:
+    """Exit 2 before any plan exists, with the envelope under --json."""
+    print(f"wtclean: {message}", file=sys.stderr)
+    if args.json:
+        print(json.dumps({"ok": False, "command": "wtclean", "skipped": [], "data": {},
+                          "error": message}, indent=2))
+    return 2
 
 
 if __name__ == "__main__":

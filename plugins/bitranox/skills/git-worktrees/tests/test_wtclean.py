@@ -346,6 +346,31 @@ def test_a_cache_that_vanished_between_plan_and_apply_is_reported_not_hidden(tmp
     shutil.rmtree(cache)
     failures = W.apply_plan(plan, remove_worktree=False)
     assert len(failures) == 1 and failures[0].path == str(cache)
+    # An I/O-failed removal is 'could not run' (2), unlike a plan refusal (1).
+    assert failures[0].kind == W.KIND_FAILED
+    assert W.exit_code(failures) == 2
+
+
+def test_a_failed_removal_wins_over_a_plan_refusal_in_the_exit_code():
+    refused = W.Refusal("/w", "has uncommitted work")
+    failed = W.Refusal("/c", "Permission denied", kind=W.KIND_FAILED)
+    assert W.exit_code([]) == 0
+    assert W.exit_code([refused]) == 1
+    assert W.exit_code([refused, failed]) == 2
+
+
+def test_a_git_remove_that_fails_is_a_failed_removal(tmp_path):
+    (tmp_path / "wt-topic").mkdir()
+    plan = W.build_plan("topic", base=tmp_path, status_probe=lambda _p: W.STATUS_CLEAN)
+    failures = W.apply_plan(plan, git_remove=lambda *_a, **_k: "fatal: cannot remove")
+    assert [(f.path, f.kind) for f in failures] == [(str(tmp_path / "wt-topic"), W.KIND_FAILED)]
+
+
+def test_an_unsafe_topic_prints_the_envelope_under_json(tmp_path):
+    result = run_cli("../escape", "--base", str(tmp_path), "--json")
+    assert result.returncode == 2
+    payload = json.loads(result.stdout)
+    assert payload["ok"] is False and payload["command"] == "wtclean" and payload["error"]
 
 
 def test_an_applied_run_never_claims_it_removed_something_it_refused(tmp_path):
@@ -532,10 +557,11 @@ def test_a_blocked_plan_exits_one_and_a_clear_one_exits_zero(tmp_path):
 
     (tmp_path / "wt-topic").mkdir()  # a plain dir: git cannot read its state
     blocked = run_cli("topic", "--base", str(tmp_path), "--json")
-    assert blocked.returncode == 1
+    assert blocked.returncode == 1   # a plan-level refusal is a 'no', not 'could not run'
     payload = json.loads(blocked.stdout)
-    assert payload["ok"] is False
+    assert payload["ok"] is True    # ok = ran without error; the refusal is the exit code's 1
     assert payload["skipped"]
+    assert [item["kind"] for item in payload["data"]["blocked"]] == ["refused"]
 
 
 def test_apply_deletes_for_real_through_the_cli(tmp_path):
@@ -968,7 +994,7 @@ def test_a_missing_explicit_cache_dir_is_reported_and_blocks(tmp_path):
     typo = tmp_path / ".cache" / "targts" / "feat"
     result = run_cli("feat", "--base", str(tmp_path), "--skip-worktree",
                      "--cache-dir", str(typo), "--apply")
-    assert result.returncode == 1, result.stdout
+    assert result.returncode == 2, result.stdout   # bad input: could not run as asked
     assert "does not exist" in result.stderr and str(typo) in result.stderr
     assert real.exists()
 
@@ -979,7 +1005,7 @@ def test_a_missing_explicit_cache_dir_fails_the_dry_run_too(tmp_path):
                         status_probe=lambda _p: W.STATUS_CLEAN)
     assert [r.path for r in W.blocked_reasons(plan, remove_worktree=False)] == [str(typo)]
     result = run_cli("feat", "--base", str(tmp_path), "--skip-worktree", "--cache-dir", str(typo))
-    assert result.returncode == 1
+    assert result.returncode == 2
 
 
 def test_the_home_directory_is_refused_as_a_cache_dir_and_survives_apply(tmp_path):
@@ -989,7 +1015,7 @@ def test_the_home_directory_is_refused_as_a_cache_dir_and_survives_apply(tmp_pat
     (home / "keep.txt").write_text("keep", encoding="utf-8")
     result = run_cli("feat", "--base", str(home), "--skip-worktree",
                      "--cache-dir", str(home), "--apply", home=home)
-    assert result.returncode == 1
+    assert result.returncode == 2   # a forbidden --cache-dir is refused input, dry run or not
     assert "is the home directory" in result.stderr
     assert (home / "keep.txt").read_text(encoding="utf-8") == "keep"
 
