@@ -133,6 +133,64 @@ def test_a_derived_or_asserted_sha_is_left_alone(command):
     assert N.notice(command) is None
 
 
+# --- an assertion guards only what runs BECAUSE it succeeded --------------------------------------
+
+@pytest.mark.parametrize("command", [
+    f"git cat-file -e {S}^{{commit}}; gh run list --commit {S}",   # `;` runs gh regardless
+    f"git cat-file -e {S}^{{commit}}\ngh run list --commit {S}",
+    f"git cat-file -e {S}^{{commit}} || gh run list --commit {S}",  # runs gh only on FAILURE
+    f"git cat-file -e {S}^{{commit}} | tee x; gh run list --commit {S}",
+    f"gh run list --commit {S}; git cat-file -e {S}^{{commit}}",   # asserted only afterwards
+    f"gh run list --commit {S} && git cat-file -e {S}^{{commit}}",
+    f"! git cat-file -e {S}^{{commit}} && gh run list --commit {S}",
+    f"if ! git cat-file -e {S}^{{commit}}; then gh run list --commit {S}; fi",
+    f"if git cat-file -e {S}^{{commit}}; then echo ok; else gh run list --commit {S}; fi",
+    f"if git cat-file -e {S}^{{commit}}; then echo ok; fi; gh run list --commit {S}",
+    f"if git cat-file -e {S}^{{commit}}; true; then gh run list --commit {S}; fi",
+    f"X=$(git cat-file -e {S}^{{commit}}; echo) && gh run list --commit {S}",
+])
+def test_an_assertion_the_use_does_not_depend_on_does_not_vouch_for_it(command):
+    assert N.notice(command) is not None
+
+
+@pytest.mark.parametrize("command", [
+    f"git cat-file -e {S}^{{commit}} && echo ok && gh run list --commit {S}",
+    f"git merge-base --is-ancestor {S} HEAD && git log -1 && ci_wait --sha {S}",
+    f"if git cat-file -e {S}^{{commit}}; then gh run list --commit {S}; fi",
+    f"if git cat-file -e {S}^{{commit}}\nthen\n  gh run list --commit {S}\nfi",
+    f"if true && git cat-file -e {S}^{{commit}}; then echo a; gh run list --commit {S}; fi",
+    f"X=$(git rev-parse --verify -q {S}^{{commit}}) && gh run list --commit {S}",
+    f'test "$(git rev-parse {S}^{{commit}})" = {S} && gh run list --commit {S}',
+])
+def test_a_use_that_runs_only_after_the_assertion_succeeded_is_left_alone(command):
+    assert N.notice(command) is None
+
+
+# --- a literal reaching git through a variable or a quoted sub-command ----------------------------
+
+@pytest.mark.parametrize("command", [
+    f"I={S}; git merge-base --is-ancestor HEAD $I",
+    f'I={S} && git cat-file -e "${{I}}^{{commit}}" && gh run list --commit "$I"',
+    f"export I={S}; git show $I",
+    f"python3 gate.py --gate 'git cat-file -e {S}^{{commit}}'",
+    f"ssh host 'git log -1 {S}'",
+])
+def test_a_literal_only_git_resolves_through_a_variable_or_a_sub_command_is_left_alone(command):
+    assert N.notice(command) is None
+
+
+@pytest.mark.parametrize("command", [
+    f'I={S}; gh run list --commit "$I"',
+    f"I={S}",                                                      # assigned, never checked
+    f"I={S}; git merge-base --is-ancestor HEAD $IX",               # a DIFFERENT variable
+    f'I={S} ci_wait --sha "$I"',                                   # an env prefix is a use
+    f"bash -c 'gh run list --commit {S}'",
+    f"python3 gate.py --gate 'git cat-file -e {S}^{{commit}}' && gh run list --commit {S}",
+])
+def test_a_variable_or_a_sub_command_does_not_hide_a_silent_use(command):
+    assert N.notice(command) is not None
+
+
 # --- the PowerShell tool: the same questions in the other language --------------------------------
 
 @pytest.mark.parametrize("command", [
@@ -141,6 +199,7 @@ def test_a_derived_or_asserted_sha_is_left_alone(command):
     f"$r = $(gh run list --commit {S})",                   # the literal INSIDE the subexpression
     f"git log --grep={S}",
     f"git branch {S}",
+    f"git cat-file -e {S}; gh run list --commit {S}",      # `;` runs gh whatever cat-file says
 ])
 def test_powershell_commands_that_use_an_unverified_literal_are_nudged(command):
     assert N.notice(command, "PowerShell") is not None
@@ -157,7 +216,8 @@ def test_powershell_commands_that_use_an_unverified_literal_are_nudged(command):
     f"git show {S}",
     f"git log -1 {S}",
     "gh run list --commit $(git rev-parse HEAD)",
-    f"git cat-file -e {S}; gh run list --commit {S}",
+    f"git cat-file -e {S} && gh run list --commit {S}",
+    f"$I = '{S}'; git show $I",                            # through a variable, to a loud verb
 ])
 def test_powershell_commands_that_print_derive_or_resolve_the_sha_are_left_alone(command):
     assert N.notice(command, "PowerShell") is None
@@ -282,6 +342,101 @@ def test_a_command_result_s_structured_copy_still_counts(tmp_path):
         {"type": "tool_result", "tool_use_id": "t2", "content": S}]},
         "toolUseResult": {"stdout": S, "stderr": ""}}
     assert N.shown_shas([_transcript(tmp_path, "s.jsonl", [call, result])], [S]) == {S}
+
+
+def _call(call_id, name, input_):
+    return {"type": "assistant", "message": {"role": "assistant", "content": [
+        {"type": "tool_use", "id": call_id, "name": name, "input": input_}]}}
+
+
+def _result(call_id, text, tool_use_result=None):
+    record = {"type": "user", "message": {"role": "user", "content": [
+        {"type": "tool_result", "tool_use_id": call_id, "content": text}]}}
+    if tool_use_result is not None:
+        record["toolUseResult"] = tool_use_result
+    return record
+
+
+def _shell_round_trip(call_id, command, output):
+    return [_call(call_id, "Bash", {"command": command}),
+            _result(call_id, output, {"stdout": output, "stderr": ""})]
+
+
+@pytest.mark.parametrize("command", [
+    f"git rev-parse {S}",                                  # prints a bare full sha straight back
+    f"git rev-parse --verify -q {S}",
+    f"echo {S}",
+    f"printf '%s\\n' {S}",
+    f'for sha in {S}; do echo "=== $sha ==="; done',
+    f"gh run list --commit {S} --json headSha",            # the call carried it unverified
+])
+def test_a_result_echoing_a_literal_its_own_command_carried_does_not_count(tmp_path, command):
+    """The output repeats the assistant's own word: `git rev-parse <sha>` exits 0 and prints any
+    40-hex string back, so counting it would launder an invented sha for every later command."""
+    records = _shell_round_trip("c1", command, f"{S}\n")
+    assert N.shown_shas([_transcript(tmp_path, "s.jsonl", records)], [S]) == set()
+
+
+@pytest.mark.parametrize("command", [
+    f"git log -1 {S}",                                     # resolves it: refuses a bad one loudly
+    f"git rev-parse {S}^{{commit}}",                       # looks it up
+    "git log -1 --format=%H",                              # did not carry it at all
+])
+def test_a_result_of_a_command_that_resolved_or_never_carried_the_sha_counts(tmp_path, command):
+    records = _shell_round_trip("c1", command, f"commit {S}\n")
+    assert N.shown_shas([_transcript(tmp_path, "s.jsonl", records)], [S]) == {S}
+
+
+def test_an_echo_does_not_cancel_a_sha_shown_before_it(tmp_path):
+    records = [*_shell_round_trip("c0", "git log -1 --format=%H", S),
+               *_shell_round_trip("c1", f"git rev-parse {S}", S)]
+    assert N.shown_shas([_transcript(tmp_path, "s.jsonl", records)], [S]) == {S}
+
+
+# --- a sha the assistant wrote down and read back is still its own word ---------------------------
+
+def _written_then_read(write_records):
+    read = [_call("r1", "Read", {"file_path": "/x/notes.md"}),
+            _result("r1", f"     1\twait on {S}\n",
+                    {"type": "text", "file": {"filePath": "/x/notes.md", "content": f"wait on {S}\n"}})]
+    return [*write_records, *read]
+
+
+@pytest.mark.parametrize("write_records", [
+    [_call("w1", "Write", {"file_path": "/x/notes.md", "content": f"wait on {S}\n"}),
+     _result("w1", "File created successfully at: /x/notes.md")],
+    [_call("w1", "Edit", {"file_path": "/x/notes.md", "old_string": "x", "new_string": f"on {S}"}),
+     _result("w1", "The file /x/notes.md has been updated.")],
+    _shell_round_trip("w1", f"cat > /x/notes.md <<'EOF'\nwait on {S}\nEOF", ""),
+    _shell_round_trip("w1", f"echo {S} > /x/notes.md", ""),
+])
+def test_a_sha_written_to_a_file_and_read_back_does_not_count(tmp_path, write_records):
+    path = _transcript(tmp_path, "s.jsonl", _written_then_read(write_records))
+    assert N.shown_shas([path], [S]) == set()
+
+
+def test_a_sha_in_a_commit_message_read_back_from_git_does_not_count(tmp_path):
+    records = [*_shell_round_trip("c1", f'git commit -q -m "revert {S}"', ""),
+               *_shell_round_trip("c2", "git log -1 --format=%B", f"revert {S}\n")]
+    assert N.shown_shas([_transcript(tmp_path, "s.jsonl", records)], [S]) == set()
+
+
+@pytest.mark.parametrize("after", [
+    _shell_round_trip("c9", f"git log -1 {S}", f"commit {S}\n"),       # resolved: it exists
+    [{"type": "user", "message": {"role": "user", "content": f"it is {S}"}}],  # the user said so
+])
+def test_a_written_sha_still_counts_once_something_else_shows_it(tmp_path, after):
+    records = [_call("w1", "Write", {"file_path": "/x/notes.md", "content": f"wait on {S}\n"}),
+               _result("w1", "File created successfully at: /x/notes.md"), *after]
+    assert N.shown_shas([_transcript(tmp_path, "s.jsonl", records)], [S]) == {S}
+
+
+def test_a_sha_shown_before_it_was_written_down_stays_shown(tmp_path):
+    records = [*_shell_round_trip("c0", "git log -1 --format=%H", S),
+               *_written_then_read(
+                   [_call("w1", "Write", {"file_path": "/x/notes.md", "content": f"on {S}\n"}),
+                    _result("w1", "File created successfully at: /x/notes.md")])]
+    assert N.shown_shas([_transcript(tmp_path, "s.jsonl", records)], [S]) == {S}
 
 
 @pytest.mark.parametrize("error", [

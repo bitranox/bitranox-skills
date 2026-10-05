@@ -23,13 +23,32 @@ sha up only through a suffix such as `^{commit}`: bare, `git rev-parse --verify 
 sha back with exit 0 whether or not the object exists. A comparison against a derived value
 (`test "$SHA" = <literal>`) asserts nothing either: an invented literal just answers "not equal".
 
+Every USE of the literal is judged. A use is checked when it is the assertion itself, a loud git
+revision operand (below), or a statement that runs only because the assertion SUCCEEDED: joined to
+it by `&&` (or through the edge of a `$(...)`), or inside the `then` block of an `if` whose
+condition it is. `git cat-file -e <sha>^{commit}; gh run list --commit <sha>` fires - `;`, a
+newline, `||` and `|` run the next statement whatever the check said - and so does an assertion
+that comes after the use, or one negated with `!`. A literal assigned to a variable
+(`I=<sha>`, `export I=<sha>`, PowerShell `$I = '<sha>'`) is used where `$I` / `${I}` is expanded,
+not by the assignment. A literal inside a quoted command line another program runs
+(`gate.py --gate 'git cat-file -e <sha>^{commit}'`, `ssh host 'git log -1 <sha>'`) is judged as
+that command line.
+
 "Shown" means a non-assistant transcript record carried that exact 40-character string, which is
 what separates a pasted or printed sha (the normal case) from a padded or invented one (the
-padding case shows the short prefix and never the full form). Three kinds of record carry the
+padding case shows the short prefix and never the full form). These records carry the
 assistant's OWN text back and so do not count:
 
 - the result of a file-writing tool (Write, Edit, MultiEdit, NotebookEdit), whose `toolUseResult`
   and snippet repeat what the assistant wrote;
+- the result of a shell command that carried the literal without resolving it: `git rev-parse
+  <sha>` prints any 40-hex string back, `echo` prints anything, and a command that merely passed
+  it on cannot be told from one that confirmed it, so only a command that ASSERTED it or used it
+  as a loud git revision vouches for it in its output;
+- a sha the assistant wrote down as DATA before anything showed it - a file-writing tool's input,
+  a heredoc, an `echo` operand, a commit message - read back later by any tool (Read, `cat`,
+  `git log --format=%B`); again only an asserting or loud git command's output, or a record that
+  is not a tool result (the user's words), vouches for it afterwards;
 - a refusal: a sha that follows `bad object`, `unknown revision`, `no such commit` and the like on
   the same output line is the tool naming the sha it could NOT find;
 - inside a subagent, the brief (and any later message from the parent): the parent ASSISTANT
@@ -145,6 +164,21 @@ _REFUSAL = re.compile(
 
 _FILL = "\x00"
 
+# Separators across which the next statement runs only if the one before it succeeded: `&&`, and
+# the edges of a command substitution, whose status `X=$(...)` or a `test` comparison carries on.
+_CHAINED = frozenset({"&&", "$(", ")", "`"})
+_IF_HEADS = frozenset({"if", "elif"})
+_BLOCK_ENDS = frozenset({"else", "elif", "fi"})
+
+# Variable assignment: `NAME=value`, optionally after a declaring builtin, and PowerShell's
+# `$name = value`.
+_ASSIGNMENT = re.compile(r"([A-Za-z_][A-Za-z0-9_]*)=(.*)\Z", re.DOTALL)
+_DECLARERS = frozenset({"export", "local", "readonly", "declare", "typeset"})
+_PS_VARIABLE = re.compile(r"\$[A-Za-z_][A-Za-z0-9_]*\Z")
+
+# How deep a quoted command line inside a command line is judged as a command of its own.
+_MAX_DEPTH = 2
+
 _NOTICE = (
     "FULL SHA TYPED AS A LITERAL: {shas} {where}, and this command neither derives it nor checks "
     "it exists. A 40-character sha completed from a short one (or recalled) is invented: it "
@@ -210,56 +244,198 @@ def _revision_operands(verb, operands):
     return resolved
 
 
-def _asserted(statements, sha, tool_name):
-    """True when some statement is a git command that proves THIS literal exists."""
-    for argv in statements:
-        found = _git_verb(argv, _ASSERTING_VERBS, tool_name)
-        if found is None:
+def _asserts(argv, sha, tool_name):
+    """True when this statement is a git command that proves THIS literal exists."""
+    found = _git_verb(argv, _ASSERTING_VERBS, tool_name)
+    if found is None:
+        return False
+    verb, operands = found
+    for token in _revision_operands(verb, operands):
+        if not _holds(token, sha):
             continue
-        verb, operands = found
-        for token in _revision_operands(verb, operands):
-            if not _holds(token, sha):
-                continue
-            if verb != "rev-parse":
-                return True
-            after = token[token.find(sha) + len(sha):][:1]
-            if after and after in _LOOKUP_SUFFIX:
-                return True
+        if verb != "rev-parse":
+            return True
+        after = token[token.find(sha) + len(sha):][:1]
+        if after and after in _LOOKUP_SUFFIX:
+            return True
     return False
 
 
-def _consumed_only_by_loud_git(statements, sha, tool_name):
-    """True when every statement using `sha` resolves it as a revision of a loud git verb."""
-    uses = [argv for argv in statements if any(_holds(token, sha) for token in argv)]
+def _resolved_loudly(argv, sha, tool_name):
+    """True when this statement resolves `sha` as a revision of a loud git verb."""
+    found = _git_verb(argv, LOUD_GIT_VERBS, tool_name)
+    return found is not None and any(_holds(token, sha) for token in _revision_operands(*found))
+
+
+def _vetted_inside(argv, sha, tool_name, depth):
+    """True when every token carrying `sha` is a command line of its own that does not misuse it.
+
+    `gate.py --gate 'git cat-file -e <sha>^{commit}'` and `ssh host 'git log -1 <sha>'` hand the
+    literal to a command another program runs; judged as that command, it is asserted or resolved.
+    """
+    holding = [token for token in argv if _holds(token, sha)]
+    if not holding or depth >= _MAX_DEPTH:
+        return False
+    return all(any(char.isspace() for char in token)
+               and sha not in _unverified(token, tool_name, depth + 1) for token in holding)
+
+
+def _statements(executed, tool_name):
+    """[(argv, separator after it)] for each statement, the separator stripped ("" at the end)."""
+    segments = list(iter_segments(executed, tool_name))
+    out = []
+    for index, (at, segment) in enumerate(segments):
+        end = segments[index + 1][0] if index + 1 < len(segments) else len(executed)
+        out.append((argv_for_match(segment, tool_name or "Bash"),
+                    executed[at + len(segment):end].strip()))
+    return out
+
+
+def _unquoted(word):
+    if len(word) >= 2 and word[0] == word[-1] and word[0] in "'\"":
+        return word[1:-1]
+    return word
+
+
+def _assignments(argv, tool_name):
+    """{name: value} when the statement does nothing but assign variables, else None."""
+    if tool_name == "PowerShell":
+        if len(argv) == 3 and argv[1] == "=" and _PS_VARIABLE.match(argv[0]):
+            return {argv[0][1:].lower(): _unquoted(argv[2])}
+        return None
+    words = argv[1:] if argv[:1] and argv[0] in _DECLARERS else argv
+    found = {}
+    for word in words:
+        match = _ASSIGNMENT.match(word)
+        if match is None:
+            return None
+        found[match.group(1)] = _unquoted(match.group(2))
+    return found or None
+
+
+def _expanded(argv, variables, tool_name):
+    """`argv` with every `$NAME` / `${NAME}` of a variable holding a full sha replaced by it."""
+    if not variables:
+        return argv
+    flags = re.IGNORECASE if tool_name == "PowerShell" else 0
+    out = []
+    for token in argv:
+        for name, value in variables.items():
+            token = re.sub(r"\$(?:\{%s\}|%s(?![A-Za-z0-9_]))" % (name, name),
+                           lambda _m, value=value: value, token, flags=flags)
+        out.append(token)
+    return out
+
+
+def _with_variables(statements, tool_name):
+    """The statements with sha-holding variables expanded; a pure assignment becomes None.
+
+    `I=<sha>; git merge-base --is-ancestor HEAD $I` uses the literal where `$I` is expanded, and
+    the assignment itself consumes nothing.
+    """
+    variables = {}
+    out = []
+    for argv, separator in statements:
+        assigned = _assignments(argv, tool_name)
+        argv = _expanded(argv, variables, tool_name)
+        if assigned is None:
+            out.append((argv, separator))
+            continue
+        for name, value in assigned.items():
+            if tool_name == "PowerShell":
+                name = name.lower()
+            if _SHA.search(value):
+                variables[name] = value
+            else:
+                variables.pop(name, None)
+        out.append((None, separator))
+    return out
+
+
+def _head_word(argv):
+    return argv[0] if argv else ""
+
+
+def _then_block(statements, start):
+    """Indexes of the `then` block opening at `start`, up to its `else`/`elif`/`fi`."""
+    block = set()
+    depth = 0
+    for index in range(start, len(statements)):
+        word = _head_word(statements[index][0])
+        if index > start and depth == 0 and word in _BLOCK_ENDS:
+            break
+        if word == "if":
+            depth += 1
+        elif word == "fi" and depth:
+            depth -= 1
+        block.add(index)
+    return block
+
+
+def _runs_only_after(statements, index):
+    """Indexes of the statements that run only if statement `index` succeeded.
+
+    `&&` passes success on, and so does the edge of a command substitution, whose status an
+    assignment or a comparison carries; `;`, a newline, `||`, `|` and `&` do not. A condition of
+    `if`/`elif` made only of such links guards its `then` block.
+    """
+    guarded = set()
+    last = index
+    while last + 1 < len(statements) and statements[last][1] in _CHAINED:
+        last += 1
+        guarded.add(last)
+    head = index
+    while head > 0 and statements[head - 1][1] in _CHAINED:
+        head -= 1
+    opens = _head_word(statements[head][0]) in _IF_HEADS
+    if opens and last + 1 < len(statements) and _head_word(statements[last + 1][0]) == "then":
+        guarded |= _then_block(statements, last + 1)
+    return guarded
+
+
+def _negated(argv):
+    """True when a `!` before the program inverts the statement's status."""
+    return "!" in argv[:argv.index("git")] if "git" in argv else "!" in argv
+
+
+def _vouched(statements, sha, tool_name, depth):
+    """True when every use of `sha` is checked: asserted, loudly resolved, or run after a check."""
+    uses = [index for index, (argv, _sep) in enumerate(statements)
+            if argv and any(_holds(token, sha) for token in argv)]
     if not uses:
         return False
-    for argv in uses:
-        found = _git_verb(argv, LOUD_GIT_VERBS, tool_name)
-        if found is None:
-            return False
-        if not any(_holds(token, sha) for token in _revision_operands(*found)):
+    asserting = [index for index in uses if _asserts(statements[index][0], sha, tool_name)]
+    guarded = set()
+    for index in asserting:
+        if not _negated(statements[index][0]):
+            guarded |= _runs_only_after(statements, index)
+    for index in uses:
+        argv = statements[index][0]
+        if index in asserting or index in guarded or _resolved_loudly(argv, sha, tool_name):
+            continue
+        if not _vetted_inside(argv, sha, tool_name, depth):
             return False
     return True
+
+
+def _unverified(command, tool_name, depth):
+    executed = _executed_text(command, tool_name)
+    statements = _with_variables(_statements(executed, tool_name), tool_name)
+    found = []
+    for match in _SHA.finditer(executed):
+        sha = match.group(0)
+        if sha.isdigit() or sha in found:
+            continue
+        if not _vouched(statements, sha, tool_name, depth):
+            found.append(sha)
+    return found
 
 
 def shas_in(command, tool_name=None):
     """The bare full-sha literals this command uses without asserting them, in order."""
     if not command or not isinstance(command, str):
         return []
-    executed = _executed_text(command, tool_name)
-    statements = [argv_for_match(segment, tool_name or "Bash")
-                  for _at, segment in iter_segments(executed, tool_name)]
-    found = []
-    for match in _SHA.finditer(executed):
-        sha = match.group(0)
-        if sha.isdigit() or sha in found:
-            continue
-        if _asserted(statements, sha, tool_name):
-            continue
-        if _consumed_only_by_loud_git(statements, sha, tool_name):
-            continue
-        found.append(sha)
-    return found
+    return _unverified(command, tool_name, 0)
 
 
 def _parse(line):
@@ -268,16 +444,6 @@ def _parse(line):
     except ValueError:
         return None
     return record if isinstance(record, dict) else None
-
-
-def _file_tool_ids(record):
-    """Ids of the file-writing tool calls in an assistant record."""
-    content = (record.get("message") or {}).get("content")
-    if not isinstance(content, list):
-        return set()
-    return {block.get("id") for block in content
-            if isinstance(block, dict) and block.get("type") == "tool_use"
-            and block.get("name") in _FILE_TOOLS}
 
 
 def _strings(value):
@@ -339,25 +505,82 @@ def _unrefused(text):
     return found
 
 
+class _Calls:
+    """What the assistant's own tool calls did with each candidate sha, in transcript order.
+
+    `echoes[id]`: the shas a shell call carried without resolving them - its output repeating one
+    is the assistant's word coming back (`git rev-parse <sha>` prints any 40-hex string, `echo`
+    prints anything). `resolves[id]`: the shas a shell call resolved, so its output naming one is
+    evidence. `authored`: shas the assistant wrote down as DATA - a file-writing tool's input, a
+    heredoc, an `echo` operand, a commit message - before anything showed them.
+    """
+
+    def __init__(self):
+        self.file_tools = set()
+        self.echoes = {}
+        self.resolves = {}
+        self.authored = set()
+
+    def record(self, record, wanted, seen):
+        content = (record.get("message") or {}).get("content")
+        if not isinstance(content, list):
+            return
+        for block in content:
+            if not isinstance(block, dict) or block.get("type") != "tool_use":
+                continue
+            name, call_id, input_ = block.get("name"), block.get("id"), block.get("input")
+            if name in _FILE_TOOLS:
+                self.file_tools.add(call_id)
+                written = {sha for text in _strings(input_) for sha in wanted if sha in text}
+                self.authored |= written - seen
+            elif is_shell_tool(name) and isinstance(input_, dict):
+                self._shell(call_id, name, input_.get("command"), wanted, seen)
+
+    def _shell(self, call_id, name, command, wanted, seen):
+        if not isinstance(command, str):
+            return
+        carried = {sha for sha in wanted if sha in command}
+        if not carried:
+            return
+        executed = {match.group(0) for match in _SHA.finditer(_executed_text(command, name))}
+        resolved = (carried & executed) - set(shas_in(command, name))
+        self.resolves[call_id] = resolved
+        self.echoes[call_id] = carried - resolved
+        self.authored |= (carried - executed) - seen
+
+    def discounted(self, record):
+        """The shas a TOOL record's output may not vouch for: echoes of the call's own literal,
+        and what the assistant wrote down, unless this call resolved it."""
+        content = (record.get("message") or {}).get("content")
+        ids = {block.get("tool_use_id") for block in content if isinstance(block, dict)
+               and block.get("type") == "tool_result"} if isinstance(content, list) else set()
+        if not ids and "toolUseResult" not in record:
+            return set()                                # a user's words, an attachment
+        echoed = set().union(*(self.echoes.get(call_id, ()) for call_id in ids))
+        resolved = set().union(*(self.resolves.get(call_id, ()) for call_id in ids))
+        return echoed | (self.authored - resolved)
+
+
 def _shown_in(handle, wanted, relayed):
     seen = set()
-    file_tools = set()
+    calls = _Calls()
     for line in handle:
-        if _FILE_TOOL_USE.search(line):
-            record = _parse(line)
-            if record is not None and record.get("type") == "assistant":
-                file_tools |= _file_tool_ids(record)
         hits = {sha for sha in wanted - seen if sha in line}
-        if not hits:
+        if not hits and not _FILE_TOOL_USE.search(line):
             continue
         record = _parse(line)
         if record is None:
             seen |= {m.group(0) for m in _SHA_IN_TEXT.finditer(line)} & hits
             continue
         if record.get("type") == "assistant":
+            calls.record(record, wanted - seen, seen)
             continue
-        for text in _carried(record, file_tools, relayed):
-            seen |= _unrefused(text) & hits
+        if not hits:
+            continue
+        found = set()
+        for text in _carried(record, calls.file_tools, relayed):
+            found |= _unrefused(text) & hits
+        seen |= found - calls.discounted(record)
     return seen
 
 

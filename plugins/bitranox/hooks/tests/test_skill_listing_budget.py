@@ -6,8 +6,11 @@ substitution is CLAUDE_CONFIG_DIR, which is the hook's actual environment seam.
 
 import json
 import os
+import subprocess
+import sys
 import time
 from datetime import datetime, timezone
+from pathlib import Path
 
 import pytest
 
@@ -329,6 +332,20 @@ class TestStoredFraction:
         path.write_text("{nope", encoding="utf-8")
         assert budget.stored_fraction(path) == budget.HARNESS_DEFAULT_FRACTION
 
+    @pytest.mark.parametrize("raw", ["NaN", "Infinity", "-Infinity", "true", "false"])
+    def test_a_value_that_is_not_a_finite_number_is_no_fraction(self, tmp_path, raw):
+        # Python's json reads NaN and Infinity, and a bool is an int to isinstance
+        path = tmp_path / "settings.json"
+        path.write_text('{"skillListingBudgetFraction": %s}' % raw, encoding="utf-8")
+        assert budget.stored_fraction(path) == budget.HARNESS_DEFAULT_FRACTION
+
+    @pytest.mark.parametrize("raw", ["NaN", "Infinity", "true"])
+    def test_raising_over_a_value_that_is_not_a_fraction_reports_the_default_it_replaced(self, tmp_path, raw):
+        path = tmp_path / "settings.json"
+        path.write_text('{"skillListingBudgetFraction": %s, "model": "opus"}' % raw, encoding="utf-8")
+        assert budget.raise_fraction(path, 0.05) == (budget.HARNESS_DEFAULT_FRACTION, 0.05)
+        assert json.loads(path.read_text()) == {"skillListingBudgetFraction": 0.05, "model": "opus"}
+
 
 class TestNewestListing:
     def test_separates_bare_entries_from_described_ones(self, tmp_path):
@@ -507,6 +524,21 @@ class TestListingReader:
         assert budget.newest_listing(config, max_files=5) is None
         assert budget.newest_listing(config, max_files=6)["bare"] == ["a:b"]
 
+    def test_a_description_line_that_reads_like_an_entry_is_not_a_bare_name(self, tmp_path):
+        # `names` is the installed set; a description continuing on a line that starts "- " and
+        # holds no ": " belongs to the entry above it, not to a skill of that name
+        config = make_config(tmp_path)
+        content = "- a:one: Use when X. Covers:\n- the first case\n- b:two"
+        record = listing_record(content)
+        record["attachment"]["names"] = ["a:one", "b:two"]
+        write_transcript(config, "s1", [record])
+        assert budget.newest_listing(config)["bare"] == ["b:two"]
+
+    def test_without_names_the_lines_decide(self, tmp_path):
+        config = make_config(tmp_path)
+        write_listing(config, "s1", "- a:one: Use when X\n- b:two")
+        assert budget.newest_listing(config)["bare"] == ["b:two"]
+
     def test_it_reports_when_and_where_the_listing_was_produced(self, tmp_path):
         config = make_config(tmp_path)
         write_listing(config, "s1", GOOD, timestamp=1_700_000_000, cwd=tmp_path / "proj")
@@ -615,6 +647,25 @@ class TestProjectOverride:
         write_listing(config, "s1", over_budget_listing(400_000), cwd=tmp_path)
         _, dropped = budget.wanted_fraction(config, budget.installed_skills(config), 0.10)
         assert dropped == 1
+
+
+HOOK = Path(__file__).resolve().parents[1] / "skill-listing-budget.py"
+
+
+@pytest.mark.parametrize("roster_importable", [True, False])
+def test_the_estimate_survives_a_listing_reader_that_will_not_import(tmp_path, roster_importable):
+    """The listing reader pulls in the router's classifier and signal modules; an import error
+    there may cost the correction, never the disk estimate. Run as Claude Code runs it."""
+    config = make_config(tmp_path, plugin_skills=[(f"s{i}", "Use when " + "z" * 400) for i in range(40)])
+    block = "" if roster_importable else "sys.modules['skill_roster'] = None; "
+    bootstrap = ("import runpy, sys; sys.path.insert(0, %r); %srunpy.run_path(%r, run_name='__main__')"
+                 % (str(HOOK.parent), block, str(HOOK)))
+    env = {**os.environ, "CLAUDE_CONFIG_DIR": str(config), "PYTHONUTF8": "1"}
+    done = subprocess.run([sys.executable, "-c", bootstrap], capture_output=True, text=True,
+                          encoding="utf-8", errors="replace", env=env, timeout=60)
+    assert done.returncode == 0, done.stderr
+    assert "raised" in json.loads(done.stdout)["systemMessage"]
+    assert stored(config) == budget.required_fraction(budget.listing_demand(budget.installed_skills(config)))
 
 
 class TestTheEstimateSurvivesABadReading:
