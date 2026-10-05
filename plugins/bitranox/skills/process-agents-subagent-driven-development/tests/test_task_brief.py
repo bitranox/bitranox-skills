@@ -235,5 +235,107 @@ def test_a_task_that_is_not_found_leaves_an_existing_brief_alone(tmp_path):
     plan.write_text("## Task 1\none\n", encoding="utf-8")
     out = tmp_path / "brief.md"
     out.write_text("pre-existing brief\n", encoding="utf-8")
-    assert TB.main([str(plan), "7", str(out)]) == 3
+    assert TB.main([str(plan), "7", str(out)]) == 1
     assert out.read_text(encoding="utf-8") == "pre-existing brief\n"
+
+
+# ---- one id, two headings (D4) -------------------------------------------------------------------
+DUP_PLAN = ("# Plan\n\n# Phase A\n\n## Task 3: alpha\n\nbody alpha\n\n"
+            "# Phase B\n\n## Task 3: beta\n\nbody beta\n\n## Task 4: other\n\nfour\n")
+
+
+def test_two_headings_with_one_id_refuse_with_exit_2_and_name_both_lines(tmp_path, capsys):
+    """A plan whose phases restart numbering must not hand one agent two unrelated tasks."""
+    plan = tmp_path / "plan.md"
+    plan.write_bytes(DUP_PLAN.encode("utf-8"))
+    out = tmp_path / "brief.md"
+    out.write_bytes(b"pre-existing brief\n")
+    assert TB.main([str(plan), "3", str(out)]) == 2
+    err = capsys.readouterr().err
+    assert "line 5: ## Task 3: alpha" in err
+    assert "line 11: ## Task 3: beta" in err
+    assert out.read_bytes() == b"pre-existing brief\n"
+
+
+def test_a_unique_id_in_the_same_plan_still_writes_its_brief(tmp_path):
+    """Control for the refusal: only the duplicated id is refused."""
+    plan = tmp_path / "plan.md"
+    plan.write_bytes(DUP_PLAN.encode("utf-8"))
+    out = tmp_path / "brief.md"
+    assert TB.main([str(plan), "4", str(out)]) == 0
+    assert out.read_text(encoding="utf-8") == "## Task 4: other\n\nfour\n"
+
+
+def test_a_same_id_heading_inside_a_fence_is_not_a_second_task(tmp_path):
+    plan = tmp_path / "plan.md"
+    plan.write_bytes(b"## Task 3: real\n\nbody\n\n```\n## Task 3: quoted example\n```\n")
+    assert TB.main([str(plan), "3", str(tmp_path / "brief.md")]) == 0
+
+
+def test_task_headings_reports_one_based_lines_outside_fences():
+    found = TB.task_headings(DUP_PLAN, "3")
+    assert found == [(5, "## Task 3: alpha"), (11, "## Task 3: beta")]
+
+
+# ---- a plan that cannot be read -----------------------------------------------------------------
+def test_a_plan_that_is_not_utf8_is_exit_2_not_a_traceback(tmp_path, capsys):
+    plan = tmp_path / "plan.md"
+    plan.write_bytes(b"## Task 1\n\xff\xfe broken\n")
+    assert TB.main([str(plan), "1", str(tmp_path / "brief.md")]) == 2
+    assert "cannot read the plan" in capsys.readouterr().err
+    assert not (tmp_path / "brief.md").exists()
+
+
+def test_a_directory_given_as_the_plan_is_exit_2(tmp_path, capsys):
+    assert TB.main([str(tmp_path), "1", str(tmp_path / "brief.md")]) == 2
+    assert "no such plan file" in capsys.readouterr().err
+
+
+# ---- the plan's Global Constraints travel with every brief (C10) --------------------------------
+GC_PLAN = ("# Plan\n\n**Goal:** g\n\n## Global Constraints\n\n"
+           "* Python 3.11+.\n"
+           "* Every new test file is listed in SEED_SOURCES. This applies to Tasks 1 and 2,\n"
+           "  so tests/test_launch.py is in scope despite not appearing in their Files lists.\n"
+           "\n---\n\n### Task 1: first\n\n**Files:**\n- Create: `a.py`\n\n"
+           "### Task 2: second\n\n**Files:**\n- Create: `b.py`\n\n## Self-review\n\nno\n")
+
+
+def test_the_brief_carries_the_global_constraints_section_ahead_of_the_task(tmp_path):
+    plan = tmp_path / "plan.md"
+    plan.write_bytes(GC_PLAN.encode("utf-8"))
+    out = tmp_path / "brief.md"
+    assert TB.main([str(plan), "2", str(out)]) == 0
+    brief = out.read_text(encoding="utf-8")
+    assert brief.startswith("## Global Constraints\n")
+    assert "tests/test_launch.py is in scope" in brief
+    assert brief.index("## Global Constraints") < brief.index("### Task 2: second")
+    assert "- Create: `b.py`" in brief
+    assert "Create: `a.py`" not in brief      # the constraints section ends at the first task
+    assert "no\n" not in brief.split("### Task 2: second", 1)[1]
+
+
+def test_the_constraints_section_ends_at_a_heading_of_its_own_level():
+    plan = "## Global constraints\n\nc1\n\n## File Structure\n\nfs\n\n## Task 1\n\none\n"
+    section = TB.global_constraints(plan)
+    assert "c1" in section and "fs" not in section
+
+
+def test_a_plan_without_global_constraints_gives_the_task_alone(tmp_path):
+    plan = tmp_path / "plan.md"
+    plan.write_bytes(b"# Plan\n\n## Task 1: only\n\nbody\n")
+    out = tmp_path / "brief.md"
+    assert TB.main([str(plan), "1", str(out)]) == 0
+    assert out.read_text(encoding="utf-8") == "## Task 1: only\n\nbody\n"
+
+
+def test_a_constraints_heading_inside_a_fence_is_not_the_section():
+    plan = "```\n## Global Constraints\nfake\n```\n## Task 1\none\n"
+    assert TB.global_constraints(plan) == ""
+
+
+def test_a_plan_with_constraints_but_no_such_task_is_still_not_found(tmp_path):
+    plan = tmp_path / "plan.md"
+    plan.write_bytes(GC_PLAN.encode("utf-8"))
+    out = tmp_path / "brief.md"
+    assert TB.main([str(plan), "9", str(out)]) == 1
+    assert not out.exists()
