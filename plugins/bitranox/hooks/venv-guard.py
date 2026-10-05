@@ -20,7 +20,9 @@ Fires only when ALL of these hold for one statement, which keeps it quiet in nor
     or on PowerShell `Remove-Item Env:VIRTUAL_ENV`),
   * the project directory has its own `.venv`, and the two are not the same directory after
     resolving symlinks,
-  * and the tool is not already pinned by being run from a path inside that `.venv`.
+  * the tool is not already pinned by being run from a path inside that `.venv`,
+  * and it is not launched by `uv run` inside a uv project (a pyproject.toml beside the `.venv`),
+    which ignores a mismatched VIRTUAL_ENV unless given `--active` or `--no-project`.
 
 Heredoc bodies and quoted text are data, never statements. The remediation is written in the
 calling tool's language: `env -u` does not exist in PowerShell.
@@ -265,6 +267,32 @@ def _pinned_by_path(tokens: list[str], at: int, cwd, project_venv: Path, tool_na
     return False
 
 
+# `uv run` options that make it use VIRTUAL_ENV after all instead of the project's environment.
+_UV_RUN_ACTIVE = frozenset({"--active", "--no-project"})
+
+
+def _uv_run_uses_the_project(tokens: list[str], at: int, cwd, tool_name: str) -> bool:
+    """True when the gate is launched by `uv run` inside a uv project, so VIRTUAL_ENV is ignored.
+
+    Measured on uv 0.11.15 with a foreign VIRTUAL_ENV: inside a project (a pyproject.toml), `uv run`
+    warns that the variable "does not match the project environment path `.venv` and will be
+    ignored" and runs in the project's .venv - the hijack this hook warns about cannot happen.
+    `--active` and `--no-project` DO use VIRTUAL_ENV, and with no pyproject.toml there is no
+    project environment, so `uv run` uses VIRTUAL_ENV too; all three still fire. `uv tool run` /
+    `uvx` are isolated tool environments, not `uv run`, and are not exempted here.
+    """
+    if not (Path(str(cwd or ".")) / "pyproject.toml").is_file():
+        return False
+    for index, token in enumerate(tokens[:at]):
+        if basename_for_tool(token, tool_name) != "uv":
+            continue
+        between = tokens[index + 1:at]
+        if "run" not in between or "tool" in between[:between.index("run")]:
+            return False
+        return not any(t.split("=", 1)[0] in _UV_RUN_ACTIVE for t in between)
+    return False
+
+
 def _interpreter_hint(project_venv: Path, windows: bool | None = None) -> str:
     """The venv's python path for THIS platform - Windows puts it in Scripts/, POSIX in bin/."""
     if windows is None:
@@ -308,6 +336,8 @@ def build_notice(command: str, cwd, venv: str | None, tool_name: str = "Bash") -
             continue                                  # already the project's own venv
         if _pinned_by_path(tokens, at, cwd or ".", project_venv, tool_name):
             continue
+        if _uv_run_uses_the_project(tokens, at, cwd, tool_name):
+            continue                                  # uv run ignores a mismatched VIRTUAL_ENV
         return (
             f"WRONG VENV: VIRTUAL_ENV is {effective} but this project's venv is {project_venv}. "
             "A test, lint, type-check or audit run here resolves the WRONG interpreter, and the "

@@ -118,6 +118,40 @@ def test_still_fires_through_a_launcher(tmp_path):
         assert G.build_notice(cmd, proj, str(other)), cmd
 
 
+def _uv_project(tmp_path):
+    """A uv PROJECT: a pyproject.toml beside the .venv, which is what `uv run` keys on."""
+    proj = _project(tmp_path)
+    (proj / "pyproject.toml").write_text('[project]\nname = "p"\nversion = "0"\n', encoding="utf-8",
+                                         newline="")
+    return proj
+
+
+def test_uv_run_inside_a_uv_project_ignores_the_ambient_venv(tmp_path):
+    """Measured on uv 0.11.15: inside a project, `uv run` warns that a mismatched VIRTUAL_ENV "will
+    be ignored" and runs in the project's .venv. Nothing is hijacked, so nothing is said."""
+    proj = _uv_project(tmp_path)
+    other = _other(tmp_path)
+    for cmd in ("uv run pytest -q", "uv run --with pytest pytest", "env FOO=1 uv run pyright",
+                "timeout 600 uv run pytest", "uv run make test", "uv run --frozen ruff check ."):
+        assert G.build_notice(cmd, proj, other) is None, cmd
+
+
+def test_uv_run_that_targets_the_active_venv_still_fires(tmp_path):
+    """Controls, same uv measurement: `--active` and `--no-project` DO use VIRTUAL_ENV, and so does
+    a bare tool with no uv in front."""
+    proj = _uv_project(tmp_path)
+    other = _other(tmp_path)
+    for cmd in ("uv run --active pytest", "uv run --no-project pytest -q", "pytest -q",
+                "python -m pytest", "make test"):
+        assert G.build_notice(cmd, proj, other), cmd
+
+
+def test_uv_run_outside_a_uv_project_still_fires(tmp_path):
+    """Control: with no pyproject.toml uv has no project env, and `uv run` uses VIRTUAL_ENV."""
+    proj = _project(tmp_path)
+    assert G.build_notice("uv run pytest -q", proj, _other(tmp_path))
+
+
 def test_make_fires_only_on_pipeline_targets(tmp_path):
     proj = _project(tmp_path)
     other = tmp_path / "other"
@@ -136,7 +170,8 @@ def test_looks_like_a_gate_run_matches_a_path_qualified_tool():
 def _run(payload, env=None):
     e = {**os.environ, **(env or {})}
     return subprocess.run([sys.executable, str(HOOK)], input=json.dumps(payload),
-                          capture_output=True, text=True, env=e, check=False)
+                          capture_output=True, text=True, encoding="utf-8", errors="replace",
+                          env=e, check=False)
 
 
 def test_hook_emits_additional_context_not_bare_stderr(tmp_path):
