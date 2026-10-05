@@ -40,6 +40,9 @@ two "versions with no entry" notes came to sit in this file disagreeing with it.
 - The `convert_with_ai` test for an input filename holding non-UTF-8 bytes is skipped where no
   such filename can exist: on Windows (UTF-16 names) and on filesystems that refuse it with
   EILSEQ, such as APFS on macOS. Any other error creating the fixture still fails the test.
+- `githooks/pre-push` is pinned to LF in `.gitattributes`, so a Windows clone with
+  `core.autocrlf=true` no longer checks it out as CRLF, where its shebang breaks and the pre-push
+  gate never runs.
 
 ## [7.41.0]
 
