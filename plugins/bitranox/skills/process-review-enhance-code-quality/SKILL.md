@@ -38,14 +38,16 @@ worktree. See `bitranox:meta-self-improve` ("Pathfinder discipline").
    │                            └── no  → end of sweep                       │
    └────────────────────────────┬────────────────────────────────────────────┘
                                 ▼
-                   Did this sweep find anything, or fix anything?
+         Did this sweep find a SEVERE or MEDIUM a realistic caller can reach?
                    ├── yes → SWEEP AGAIN from 2 (fixes create findings)
                    └── no  → 7. Re-score and report
 ```
 
 **The outer loop is the point.** One sweep is not a review. Keep sweeping until a sweep that
-walked the whole checklist finds nothing and changes nothing; that clean sweep is the exit
-condition, not "I presented the issues I noticed".
+walked the whole checklist finds no SEVERE and no MEDIUM finding a realistic caller can reach;
+that severity gate is the exit condition, not "I presented the issues I noticed". "A sweep found
+nothing" is NOT the exit: an adversarial review does not converge to zero findings, so that
+condition is never met (Step 7).
 
 ## Step 1: Read Project Instructions File First
 
@@ -476,14 +478,29 @@ If the section exists, append. Do not duplicate entries. If the section does not
 - If the user RE-AFFIRMS it, refresh its acceptance note in place - rewrite the rationale to the current ground truth and date it - so the record reflects reality (replace the stale wording; do not append a "superseded" note).
 - If the user CHANGES it, implement the fix (Step 6a) and update or remove the acceptance note accordingly.
 
-## Step 7: Sweep again, and only then re-score
+## Step 7: Sweep again until the severity gate holds, then re-score
 
 **Do not stop after one sweep.** Go back to Step 2 and sweep again whenever the sweep just
-finished found ANY issue or applied ANY fix. Stop only when a full sweep - one that walked every
-row of the aspect checklist - produces no findings and no changes. Then re-run the rubric and
-present the before/after scorecard, with the per-sweep finding counts.
+finished found a SEVERE or MEDIUM finding that a realistic caller can reach. Stop when a full
+sweep - one that walked every row of the aspect checklist - finds none. Then re-run the rubric
+and present the before/after scorecard with the per-sweep severity table below.
 
-Two independent reasons, both observed rather than theorised:
+**A realistic caller** reaches the code the way the project documents it: the public API used as
+documented, the CLI, a config file, the environment. Where the project's documented job is to take
+untrusted data (a parser, an extractor, a network service), hostile data of that kind is a
+realistic caller too - judge reach by the documented use, not by how alarming the input looks.
+Judge the VALUE as well as the entry point: a documented entry point fed a value no documented use
+produces (a 17,000-character path, an object breaking its own protocol) is still exotic.
+
+**A finding only an exotic path can reach does not hold the loop open, at any severity** - a
+crafted input outside the documented use, an attacker racing a microsecond window, a platform path
+alias. When its fix is cheap (a local change plus its test, no new mechanism), propose the fix like
+any other finding. Otherwise present it in the Step 5 format with the suggested fix
+`accept: reachable only by ...`, and on acceptance record it under `# Code Quality` (Step 6b)
+WITH that reach as the reason, so later sweeps respect it instead of raising it again. Reach is a
+second axis, not a regrade: report the severity the finding earns, and let the gate read the reach.
+
+Sweep 2 and later exist for two independent reasons, both observed rather than theorised:
 
 **A fix creates findings.** It changes code that was not previously reviewed, and it is written
 under the momentum of having just understood the problem, which is when the adjacent case gets
@@ -501,6 +518,30 @@ had been present, and reachable, during sweep 1. Nothing about them was subtle; 
 in parts of the code that sweep had not looked at.
 
 The user should not have to invoke the skill four times to get four sweeps.
+
+**Zero findings is not a reachable exit.** Neither reason above ever runs out. An adversarial,
+open-charter review - fresh reviewers each sweep, new mutants each round - always finds something:
+each sweep's fixes are unreviewed code for the next one, and each fresh reviewer looks somewhere
+new. Measured on one library over ten sweeps: no SEVERE after sweep 7; MEDIUM per sweep 8, 6, 6,
+7, 7, 7, 4, 2, 7, 4; three of sweep 10's four MEDIUM-or-higher findings were caused by sweep 9's own
+fixes; the late findings were a path of 17,000 emoji on Windows, a loopback UNC share alias and a
+microsecond file-swap race; each sweep cost about a million reviewer tokens. "Stop when a sweep
+finds nothing" would have run there indefinitely, buying ever more exotic findings at a constant
+price.
+
+**Watch the severity table, every sweep.** Report it with the running totals:
+
+| Sweep | SEVERE | MEDIUM | MINOR | SEVERE+MEDIUM a realistic caller reaches | caused by the last sweep's fixes |
+|-------|--------|--------|-------|------------------------------------------|----------------------------------|
+
+When SEVERE has gone and MEDIUM stays flat while fixes keep seeding new findings, that is the
+plateau: more sweeps buy findings of shrinking reach at the same cost. Classify every remaining
+SEVERE and MEDIUM by reach and let the gate decide. Do not keep sweeping for a zero that will not
+come, and do not stop while one MEDIUM a realistic caller reaches is still open.
+
+**The last sweep** - the one that met the gate - still presents and settles all its findings,
+MINOR included (Steps 5-6b), before the re-score. Its fixes get their own tests and the decision
+review below, not another full sweep.
 
 ### The aspect checklist
 
@@ -525,8 +566,8 @@ transcript from a thorough one.
 | Interface shape    | COUNT (clumps, long lists, anonymous returns, tramps, re-parses, flags) THEN the meaning check on the dominant shape - both, or the row is not walked |
 | Machine-drivable   | Structured mode exists per subcommand; typed errors; stderr diagnostics; exit codes                                                                   |
 
-Report per sweep: which rows were walked, what each found, and the running total. That record is
-what makes "no findings" credible.
+Report per sweep: which rows were walked, what each found, and the severity table. That record is
+what makes "no findings" on a row credible.
 
 **The Error contract row is about what ESCAPES, not about what the package raises.** A census of
 the package's own `raise` statements finds them all classified and passes the row while a stdlib or
@@ -553,20 +594,22 @@ asks which of your own calls are still unsettled.
 
 ## Common Mistakes
 
-| Mistake                                                                | Fix                                                                                                                                    |
-|------------------------------------------------------------------------|----------------------------------------------------------------------------------------------------------------------------------------|
-| Dump all issues at once                                                | Present ONE at a time, wait for response                                                                                               |
-| Re-raise an accepted item with no new evidence (nagging)               | Respect it silently; re-open only on a ground-truth trigger                                                                            |
-| Vague suggested fixes ("improve this")                                 | Write specific, actionable instructions                                                                                                |
-| Skip saving declined items                                             | ALWAYS append to project instructions file                                                                                             |
-| Subjective scoring without rubric                                      | Use the weighted rubric table                                                                                                          |
-| Leaving the respect-or-reconsider call to a weak/literal session model | Delegate it to a pinned `sonnet` subagent                                                                                              |
-| Present MINOR issues before SEVERE                                     | Sort by severity: SEVERE > MEDIUM > MINOR                                                                                              |
-| Silently skip an accepted item ground truth now contradicts            | Re-open it as a propose-first "Reconsider" finding                                                                                     |
-| Review only the one code path in front of you                          | Walk the full input/variant/caller matrix (types, sizes, states, callers) of the changed code, one check per branch, on the FIRST pass |
-| Stop after one sweep because its issue list is empty                   | The list being empty means THIS sweep is done. Sweep again from Step 2; stop only when a full checklist walk finds and changes nothing |
-| Report "no findings" without saying what was examined                  | Name the checklist rows walked. An unqualified "nothing found" reads identically whether you looked or not                             |
-| Leave the user to re-invoke the skill for another pass                 | The loop is the skill's job. Four invocations to reach zero findings is three invocations too many                                     |
-| Score Testing from coverage % and a green run                          | Coverage says which lines RAN, not whether anything could FAIL. Audit the design per `bitranox:process-test-design`                    |
-| Treat a mocked-out path as covered                                     | Ask whether it would still work with the mock removed. A self-mocked step can be flatly broken and the suite stays green               |
-| Only ever ADD tests                                                    | Deleting a test that cannot fail is a finding too. Filler is negative value - propose the deletion, never a suppression to preserve it |
+| Mistake                                                                | Fix                                                                                                                                                                  |
+|------------------------------------------------------------------------|----------------------------------------------------------------------------------------------------------------------------------------------------------------------|
+| Dump all issues at once                                                | Present ONE at a time, wait for response                                                                                                                             |
+| Re-raise an accepted item with no new evidence (nagging)               | Respect it silently; re-open only on a ground-truth trigger                                                                                                          |
+| Vague suggested fixes ("improve this")                                 | Write specific, actionable instructions                                                                                                                              |
+| Skip saving declined items                                             | ALWAYS append to project instructions file                                                                                                                           |
+| Subjective scoring without rubric                                      | Use the weighted rubric table                                                                                                                                        |
+| Leaving the respect-or-reconsider call to a weak/literal session model | Delegate it to a pinned `sonnet` subagent                                                                                                                            |
+| Present MINOR issues before SEVERE                                     | Sort by severity: SEVERE > MEDIUM > MINOR                                                                                                                            |
+| Silently skip an accepted item ground truth now contradicts            | Re-open it as a propose-first "Reconsider" finding                                                                                                                   |
+| Review only the one code path in front of you                          | Walk the full input/variant/caller matrix (types, sizes, states, callers) of the changed code, one check per branch, on the FIRST pass                               |
+| Stop after one sweep because its issue list is empty                   | The list being empty means THIS sweep is done. Sweep again from Step 2 while a full checklist walk finds a SEVERE or MEDIUM a realistic caller reaches               |
+| Report "no findings" without saying what was examined                  | Name the checklist rows walked. An unqualified "nothing found" reads identically whether you looked or not                                                           |
+| Leave the user to re-invoke the skill for another pass                 | The loop is the skill's job. Four invocations to get four sweeps is three invocations too many                                                                       |
+| Keep sweeping until a sweep finds nothing                              | An adversarial review never reaches zero. Exit on the severity gate; fix an exotic-reach finding when cheap, else record it as accepted with its reach as the reason |
+| Regrade a finding to move it across the gate                           | Severity and reach are separate. Report the earned severity; the gate reads whether a realistic caller reaches it                                                    |
+| Score Testing from coverage % and a green run                          | Coverage says which lines RAN, not whether anything could FAIL. Audit the design per `bitranox:process-test-design`                                                  |
+| Treat a mocked-out path as covered                                     | Ask whether it would still work with the mock removed. A self-mocked step can be flatly broken and the suite stays green                                             |
+| Only ever ADD tests                                                    | Deleting a test that cannot fail is a finding too. Filler is negative value - propose the deletion, never a suppression to preserve it                               |
