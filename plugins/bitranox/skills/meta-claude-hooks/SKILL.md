@@ -5,7 +5,7 @@ description: Use when writing, editing, debugging or reviewing a Claude Code hoo
 
 # Claude Code hooks
 
-Reference baseline: hooks.md, fetched 2026-10-01, 33 events, content b902cbe857cb
+Reference baseline: hooks.md, fetched 2026-10-05, 33 events, content db1a798c65b7
 
 Hooks are the deterministic layer around the agent: Claude Code runs your handler at a fixed point in its
 lifecycle, so a rule holds whether or not the model decides to honour it.
@@ -197,9 +197,14 @@ the suite rather than rotting quietly.
 ```bash
 uv run scripts/hookdoc_stamp.py coverage          # offline: every stamped name is documented here
 uv run scripts/hookdoc_stamp.py selftest          # proves the drift detector is not a rubber stamp
-uv run scripts/hookdoc_stamp.py stamp --write     # re-stamp; refuses while coverage has gaps
+uv run scripts/hookdoc_stamp.py stamp --write     # re-stamp; refuses (exit 2) while coverage has gaps
 uv run scripts/hookdoc_stamp.py baseline --write  # refresh the baseline line above
 ```
+
+Exit codes: 0 current or cosmetic; 1 structural drift, a coverage gap, a stale baseline line, or an unmet
+`check --expect`; 2 the run could not look (BROKEN, whatever `--expect` said) or refused the whole action (`stamp`
+with gaps, `baseline --write` with no line to update). `--json` prints its envelope on every exit, `ok` false
+only on 2.
 
 After a `STRUCTURAL` verdict: update the reference files **first**, then re-stamp. `stamp` runs `coverage` before
 writing and refuses while a newly-appeared event is undocumented, so the stamp cannot quietly move ahead of the

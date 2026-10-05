@@ -336,6 +336,13 @@ after auto-compaction), so a re-run does not stack duplicates.
 Matcher: agent type (`general-purpose`, `Explore`, `Plan`, custom names, `^my-plugin:reviewer$`).
 Input adds `agent_id`, `agent_type`. Output: `additionalContext`.
 
+The event carries **no prompt and no `subagent_type`**, and `agent_type` does not always hold the type: a
+dispatch given a `name` can report that NAME instead. Measured on CLI 2.1.289: a named `Explore` dispatch that
+started as a mailbox teammate recorded `agent_type` = its name, while a named `general-purpose` dispatch from
+the main session recorded `general-purpose`. A hook that excludes (or targets) an agent type by `agent_type`
+therefore cannot rely on recognising a named dispatch of that type - key the decision on something the hook
+can verify, or accept that a named dispatch may be treated as an unknown type.
+
 ### SubagentStop
 
 Fires when a subagent finishes. **Can block**: exit 2 prevents it stopping.
