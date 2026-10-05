@@ -376,6 +376,24 @@ def test_csp_default_src_fallback_is_graded():
     assert sev(a._csp("default-src 'self' 'unsafe-inline'")) == "MEDIUM"
 
 
+@pytest.mark.parametrize("policy", [
+    "object-src 'none'; frame-ancestors 'none'",       # no script directive and no default-src
+    "object-src 'none', object-src 'none'",            # two policies, neither restricts scripts
+    "script-src-elem 'self'; object-src 'none'",       # handlers and CSP 2 browsers unrestricted
+])
+def test_csp_that_restricts_no_scripts_is_medium(policy):
+    """A policy with no script-src and no default-src places no restriction on scripts at all,
+    which mitigates XSS less than 'unsafe-inline' does."""
+    finding = a._csp(policy)
+    assert sev(finding) == "MEDIUM"
+    assert "script" in finding.detail
+
+
+def test_csp_one_policy_restricting_scripts_is_enough():
+    """Control: every policy is enforced, so one that restricts scripts restricts them."""
+    assert sev(a._csp("object-src 'none', default-src 'self'")) == "OK"
+
+
 def test_csp_without_object_or_default_src_is_minor():
     assert sev(a._csp("script-src 'self'")) == "MINOR"
 

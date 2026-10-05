@@ -165,6 +165,29 @@ def test_internal_target_warning():
     assert a.internal_target_warning("https://8.8.8.8/", None) is None
 
 
+@pytest.mark.parametrize("url", [
+    "https://user:pw@127.0.0.1/",      # userinfo: a regex host read "user"
+    "https://user@127.0.0.1:8443/x",
+    "http://[::1]:8080/",              # an IPv6 literal: a regex host read "["
+    "HTTP://127.0.0.1/",               # the scheme is case-insensitive
+])
+def test_internal_target_warning_reads_the_host_the_url_names(url):
+    """The host is the URL's own, however it is spelled; a mis-read one resolved to nothing and
+    the warning was silently skipped."""
+    warning = a.internal_target_warning(url, None)
+    assert warning is not None and "INTERNAL address" in warning
+
+
+def test_internal_target_warning_names_no_credentials():
+    warning = a.internal_target_warning("https://user:s3cret@127.0.0.1/", None)
+    assert warning is not None and "s3cret" not in warning
+
+
+def test_internal_target_warning_public_ipv6_is_quiet():
+    """Control: a public IPv6 literal is not internal."""
+    assert a.internal_target_warning("https://[2001:4860:4860::8888]/", None) is None
+
+
 class _Handler(http.server.BaseHTTPRequestHandler):
     def _reply(self, body=b""):
         self.send_response(200)
