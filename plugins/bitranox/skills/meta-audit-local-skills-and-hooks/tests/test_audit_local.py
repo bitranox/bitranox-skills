@@ -88,13 +88,26 @@ def test_exit_code_is_one_when_nothing_is_selected(tmp_path, monkeypatch):
     assert code == 1
 
 
-def test_a_missing_root_warns_on_stderr_and_does_not_pollute_stdout(tree):
-    """Warnings belong on stderr so `--json` stays parseable."""
+def test_a_missing_root_is_refused_like_check_refuses_it(tree):
+    """A typo in --root used to warn and go on, exiting 0 or 1 - an answer about a tree that was
+    never walked. `check` already refused it with 2; `targets` now agrees. The diagnostic stays on
+    stderr and `--json` still prints a parseable envelope, with ok false."""
     code, out, err = _run(["targets", "--root", str(tree.work),
                            "--root", str(tree.work / "nope"), "--json"])
+    assert code == 2
     assert "nope" in err
-    json.loads(out)
-    assert code == 0
+    payload = json.loads(out)
+    assert payload["ok"] is False and payload["command"] == "targets"
+    assert set(payload) >= {"ok", "command", "data", "skipped"}
+
+
+@pytest.mark.parametrize("flag", ["--root", "--home"])
+def test_check_refusal_prints_an_envelope_under_json(tree, flag):
+    code, out, err = _run_check(["check", flag, str(tree.work / "typo"), "--json"])
+    assert code == 2 and "typo" in err
+    payload = json.loads(out)
+    assert payload["ok"] is False and payload["command"] == "check"
+    assert set(payload) >= {"ok", "command", "data", "skipped"}
 
 
 # --- the check verb ---------------------------------------------------------------------------
@@ -396,8 +409,19 @@ def test_the_same_settings_file_parsed_reports_its_dead_registration(tmp_path):
     assert code == 1 and "[registration]" in out and "[settings-unparseable]" not in out
 
 
-# The wording is harness_checks.hook_registrations', which owns the one shape rule; this file only
-# asserts that each refusal surfaces as a finding naming the offending part.
+# The wording is harness_checks.scan_hook_registrations', which owns the one shape rule; this file
+# only asserts that each surfaces as a finding naming the offending part.
+@pytest.mark.parametrize("raw, why", [
+    (b'{"hooks": {"Stop": "bash x.sh"}}', '"hooks.Stop" is a string'),
+    (b'{"x": "caf\xe9"}', "not UTF-8"),
+], ids=["string-event", "not-utf8"])
+def test_a_settings_file_claude_code_rejects_whole_is_unparseable(tmp_path, raw, why):
+    home = _settings_home(tmp_path, raw)
+    code, out, err = _run_check(["check", "--home", str(home)])
+    assert code == 1, out + err
+    assert "[settings-unparseable]" in out and why in out, out
+
+
 @pytest.mark.parametrize("raw, why", [
     (b"[]", "the top level is list"),
     (b'{"hooks": []}', '"hooks" is list'),
@@ -407,40 +431,36 @@ def test_the_same_settings_file_parsed_reports_its_dead_registration(tmp_path):
     (b'{"hooks": {"Stop": [{"hooks": ["bash x.sh"]}]}}', 'a "hooks.Stop" hook is str'),
     (b'{"hooks": {"Stop": [{"hooks": [{"type": "command", "command": 7}]}]}}',
      'a "hooks.Stop" command is int'),
-    (b'{"x": "caf\xe9"}', "not UTF-8"),
 ])
-def test_a_settings_file_of_the_wrong_shape_or_encoding_is_a_finding(tmp_path, raw, why):
+def test_a_malformed_entry_is_a_per_entry_finding_not_a_dead_file(tmp_path, raw, why):
     home = _settings_home(tmp_path, raw)
     code, out, err = _run_check(["check", "--home", str(home)])
     assert code == 1, out + err
-    assert "[settings-unparseable]" in out and why in out, out
+    assert "[settings-malformed-entry]" in out and why in out, out
+    assert "[settings-unparseable]" not in out, out
 
 
-def test_the_unparseable_finding_does_not_claim_the_whole_file_is_dead(tmp_path):
-    """This audit reads the FILE, not Claude Code's own parser. One malformed event's shape
-    (here "Stop") stops hook_registrations reading ANY event in the file, including a
-    perfectly well-shaped "PreToolUse" earlier in it - but whether Claude Code's own loader
-    treats the whole file as dead, or only the malformed event, is NOT measured here (same
-    disclaiming style as the settings-bom finding). The message must say what this audit
-    could not CHECK, not assert what Claude Code does with the rest of the file."""
+def test_a_malformed_entry_does_not_hide_the_files_other_registrations(tmp_path):
+    """Claude Code 2.1.289 keeps running the rest of a file past a malformed entry, and so must
+    this audit: the well-shaped PreToolUse registration beside a malformed Stop is still checked,
+    so its missing target is still reported."""
     home = tmp_path / "home"
     raw = json.dumps({"hooks": {
         "PreToolUse": [{"matcher": "*", "hooks": [
-            {"type": "command", "command": "bash %s/.claude/hooks/good.sh" % home}]}],
+            {"type": "command", "command": "bash %s/.claude/hooks/gone.sh" % home}]}],
         "Stop": {},
     }}).encode("utf-8")
     home = _settings_home(tmp_path, raw)
     code, out, _ = _run_check(["check", "--home", str(home)])
     assert code == 1, out
-    assert "[settings-unparseable]" in out
-    assert "every hook it registers is dead" not in out, out
-    assert "not measured here" in out, out
+    assert "[settings-malformed-entry]" in out and "[settings-unparseable]" not in out, out
+    assert "[registration]" in out and "gone.sh" in out, out
 
 
 def test_a_settings_file_the_registration_reader_refuses_is_the_same_finding(tmp_path):
     """One shape rule: whatever `hook_registrations` refuses, the unparseable screen reports, so
     no settings file can pass the screen and then crash the registration check behind it."""
-    home = _settings_home(tmp_path, b'{"hooks": {"Stop": [{"hooks": [{"command": ["a"]}]}]}}')
+    home = _settings_home(tmp_path, b'{"hooks": {"Stop": "bash x.sh"}}')
     assert audit_local.settings_problem(home / ".claude" / "settings.json") is not None
 
 
@@ -515,7 +535,7 @@ def test_an_unlistable_dir_is_named_by_targets(tmp_path, monkeypatch):
         code, out, err = _run(["targets", "--root", str(tmp_path / "work"), "--no-personal"])
     finally:
         locked.chmod(0o755)
-    assert code == 1
+    assert code == 2        # unreadable input: the answer does not cover the tree it was asked about
     assert str(locked) in out and "cannot list" in out
     assert str(locked) in err
 
@@ -532,7 +552,7 @@ def test_an_unlistable_dir_makes_check_report_a_finding_not_clean(tmp_path, monk
         code, out, _ = _run_check(["check", "--root", str(tmp_path / "work"), "--no-personal"])
     finally:
         locked.chmod(0o755)
-    assert code == 1, out
+    assert code == 2, out   # still reported, never read as clean - and never as a mere finding
     assert "[unlistable]" in out and str(locked) in out
 
 
@@ -582,13 +602,29 @@ def test_main_exits_two_not_one_when_a_check_crashes(tmp_path, capsys, monkeypat
     assert "console went away" in capsys.readouterr().err
 
 
+def test_main_prints_an_envelope_when_a_json_run_crashes(tmp_path, capsys, monkeypatch):
+    """A --json caller parses stdout; a crash that printed only a stderr line left it nothing to
+    parse. The envelope is printed on every exit, 2 included, with ok false."""
+    home, _ = _healthy_project(tmp_path)
+
+    def boom(*_a, **_k):
+        raise RuntimeError("SENTINEL crash")
+
+    monkeypatch.setattr(audit_local, "check_personal", boom)
+    code = audit_local.main(["check", "--root", str(tmp_path / "work"), "--home", str(home), "--json"])
+    captured = capsys.readouterr()
+    assert code == 2 and "SENTINEL crash" in captured.err
+    payload = json.loads(captured.out)
+    assert payload["ok"] is False and payload["command"] == "check" and "SENTINEL" in payload["error"]
+
+
 def test_main_reports_a_non_string_hook_command_as_a_finding_not_a_crash(tmp_path, capsys):
     home, _ = _healthy_project(tmp_path)
     (home / ".claude" / "settings.json").write_text(
         '{"hooks": {"Stop": [{"hooks": [{"type": "command", "command": 7}]}]}}', encoding="utf-8")
     code = audit_local.main(["check", "--root", str(tmp_path / "work"), "--home", str(home)])
     assert code == 1
-    assert "[settings-unparseable]" in capsys.readouterr().out
+    assert "[settings-malformed-entry]" in capsys.readouterr().out
 
 
 def test_main_reports_an_undecodable_skill_md_as_a_finding(tmp_path, capsys):

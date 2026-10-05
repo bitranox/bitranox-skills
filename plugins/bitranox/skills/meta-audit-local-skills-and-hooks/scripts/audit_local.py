@@ -19,6 +19,11 @@ numbers - do not wire CI off one of them expecting the other:
 
 So `check` exiting 0 is the CLEAN result, and it exits 0 over an empty tree too (0 findings
 across 0 targets) - run `targets` first if you need to know anything was in scope at all.
+
+Error (2) is anything that leaves the answer about a tree that was not read: a --root, --home or
+--shipped that is not a directory (both verbs refuse it), a directory the walk could not list
+(still reported, as `unlistable`, so it never reads as clean), or a crash. Under --json the
+{ok, command, data, skipped} envelope is printed on every exit, with ok false on a 2.
 """
 
 import argparse
@@ -74,13 +79,18 @@ def _home(args):
     return Path(args.home) if getattr(args, "home", "") else None
 
 
-def _envelope(selected, skipped):
+def _envelope(selected, skipped, ok=True):
     return {
-        "ok": True,
+        "ok": ok,
         "command": "targets",
         "data": {"targets": [str(p) for p in selected], "count": len(selected)},
         "skipped": skipped,
     }
+
+
+def _refusal(command, error):
+    """The envelope a --json caller gets on an exit 2: ok false, and still the four keys."""
+    return {"ok": False, "command": command, "data": {}, "skipped": [], "error": error}
 
 
 def render_text(selected, skipped, out):
@@ -101,19 +111,21 @@ def cmd_targets(args, out=None, err=None):
     """Print the selection and return its exit code."""
     out = out or sys.stdout
     err = err or sys.stderr
-    roots = [Path(r) for r in args.root]
-    for root in roots:
-        if not root.is_dir():
-            print("warning: root does not exist, skipping: %s" % root, file=err)
+    if _refuse_missing_paths(args, "targets", out, err):
+        return 2
     unlistable = []
-    selected, skipped = gather(roots, home=_home(args), personal=not args.no_personal,
-                               unlistable=unlistable)
+    selected, skipped = gather([Path(r) for r in args.root], home=_home(args),
+                               personal=not args.no_personal, unlistable=unlistable)
     for path, why in unlistable:
         print("warning: cannot list, not audited: %s: %s" % (path, why), file=err)
     if args.json:
-        print(json.dumps(_envelope(selected, skipped), indent=2), file=out)
+        print(json.dumps(_envelope(selected, skipped, ok=not unlistable), indent=2), file=out)
     else:
         render_text(selected, skipped, out)
+    # A dir the walk could not list makes the answer incomplete: it is unreadable input (2), so
+    # "none found" and "found some" are both claims about a tree that was not fully read.
+    if unlistable:
+        return 2
     return 0 if selected else 1
 
 
@@ -169,7 +181,8 @@ def settings_bom(path):
 
 def _settings_findings(settings, home):
     """(findings, registered paths) for the settings files: an unloadable file is one finding and
-    contributes no registrations; a loadable one is checked for registrations naming missing files."""
+    contributes no registrations; a loadable one is checked for malformed entries (each skipped
+    and named) and for registrations naming missing files."""
     found, loadable = [], []
     for path in settings:
         if settings_bom(path):
@@ -180,11 +193,16 @@ def _settings_findings(settings, home):
         problem = settings_problem(path)
         if problem:
             found.append(("settings-unparseable", "%s: %s - none of its hook registrations could "
-                                                   "be checked. Whether Claude Code treats the "
-                                                   "whole file as dead, or only the malformed "
-                                                   "part, is not measured here" % (path, problem)))
-        else:
-            loadable.append(path)
+                                                   "be checked, and Claude Code (measured on "
+                                                   "2.1.289) rejects a file of this shape whole"
+                                                   % (path, problem)))
+            continue
+        loadable.append(path)
+        for entry in hc.scan_hook_registrations(path)[1]:
+            found.append(("settings-malformed-entry", "%s: %s. That entry registers nothing; the "
+                                                       "file's other hooks still run (measured on "
+                                                       "Claude Code 2.1.289) and are checked here"
+                                                       % (path, entry)))
     for path in loadable:
         for event, _command, missing in hc.registration_problems(path, home=home):
             found.append(("registration", "%s (%s): command names %s, which does not exist - the "
@@ -253,20 +271,31 @@ def _missing_path_args(args):
     --home audits an empty harness, and one in --shipped turns the duplicate checks off - and all
     three would otherwise print "clean" and exit 0."""
     named = [("--root", r) for r in args.root]
-    named += [(flag, value) for flag, value in (("--home", args.home), ("--shipped", args.shipped))
+    named += [(flag, value) for flag, value in (("--home", args.home),
+                                                ("--shipped", getattr(args, "shipped", "")))
               if value]
     return ["%s is not a directory: %s" % (flag, value) for flag, value in named
             if not Path(value).is_dir()]
+
+
+def _refuse_missing_paths(args, command, out, err):
+    """True (after saying why, and printing the envelope under --json) when a path argument names
+    no directory - the same refusal for both verbs, so neither answers about a tree it never read."""
+    missing = _missing_path_args(args)
+    if not missing:
+        return False
+    for line in missing:
+        print("error: %s" % line, file=err)
+    if args.json:
+        print(json.dumps(_refusal(command, "; ".join(missing)), indent=2), file=out)
+    return True
 
 
 def cmd_check(args, out=None, err=None):
     """Run every deterministic check over the selected targets and return an exit code."""
     out = out or sys.stdout
     err = err or sys.stderr
-    missing = _missing_path_args(args)
-    if missing:
-        for line in missing:
-            print("error: %s" % line, file=err)
+    if _refuse_missing_paths(args, "check", out, err):
         return 2
     home = _home(args) or Path.home()
     unlistable = []
@@ -296,7 +325,7 @@ def cmd_check(args, out=None, err=None):
         results.append({"target": str(home / ".claude"),
                         "findings": [{"check": c, "message": m} for c, m in findings]})
     if args.json:
-        print(json.dumps({"ok": True, "command": "check",
+        print(json.dumps({"ok": not unlistable, "command": "check",
                           "data": {"results": results, "finding_count": total},
                           "skipped": skipped}, indent=2), file=out)
     else:
@@ -308,6 +337,10 @@ def cmd_check(args, out=None, err=None):
                 print("  [%s] %s" % (finding["check"], finding["message"]), file=out)
         print("\n%d finding(s) across %d target(s)" % (total, len(results)), file=out)
     del err
+    # A dir the walk could not list is unreadable input: reported like a finding so it is never
+    # read as clean, but the run did not audit everything it was pointed at, so it exits 2.
+    if unlistable:
+        return 2
     return 0 if total == 0 else 1
 
 
@@ -353,7 +386,13 @@ def main(argv=None):
     try:
         return {"targets": cmd_targets, "check": cmd_check}[args.command](args)
     except Exception as exc:  # noqa: BLE001 - 1 means "findings"; a crash must never read as that
-        print("error: %s: %s" % (type(exc).__name__, exc), file=sys.stderr)
+        error = "%s: %s" % (type(exc).__name__, exc)
+        print("error: %s" % error, file=sys.stderr)
+        if args.json:
+            try:
+                print(json.dumps(_refusal(args.command, error), indent=2))
+            except Exception:  # noqa: BLE001 - the console itself may be what failed
+                pass
         return 2
 
 

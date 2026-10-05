@@ -424,23 +424,50 @@ def test_hook_registrations_is_empty_for_a_missing_settings_file(tmp_path):
 @pytest.mark.parametrize("raw", [
     b"{not json",                                              # not JSON
     b'{"hooks": {"Stop": []}, "x": "caf\xe9"}',                # not UTF-8
-    b"[]",                                                     # top level not an object
-    b'{"hooks": []}',                                          # hooks not keyed by event
-    b'{"hooks": {"Stop": {"matcher": ""}}}',                   # groups not a list
-    b'{"hooks": {"Stop": ["bash /x.sh"]}}',                    # group not an object
-    b'{"hooks": {"Stop": [{"hooks": {"command": "x"}}]}}',     # inner hooks not a list
-    b'{"hooks": {"Stop": [{"hooks": ["bash /x.sh"]}]}}',       # hook not an object
-    b'{"hooks": {"Stop": [{"hooks": [{"command": 7}]}]}}',     # command not a string
-], ids=["json", "utf8", "toplevel", "hooks", "groups", "group", "inner", "hook", "command"])
+    b'{"hooks": {"Stop": "bash /x.sh"}}',                      # a string event value
+], ids=["json", "utf8", "string-event"])
 def test_hook_registrations_refuses_a_file_it_cannot_read_for_hooks(tmp_path, raw):
     """An unparsable file used to return [] - indistinguishable from a file with no hooks, so the
-    audit reported a harness whose every hook was dead as clean - and a wrong shape raised a bare
-    AttributeError. Both are now one named error the caller can tell from "none"."""
+    audit reported a harness whose every hook was dead as clean. These are the shapes Claude Code
+    2.1.289 itself rejects as a whole file (bad JSON, bad encoding, a string event value), so they
+    are one named error the caller can tell from "none"."""
     path = tmp_path / "settings.json"
     path.write_bytes(raw)
     with pytest.raises(hc.SettingsUnreadable) as info:
         hc.hook_registrations(path)
     assert str(path) in str(info.value)
+
+
+_GOOD = b'"PreToolUse": [{"matcher": "Bash", "hooks": [{"type": "command", "command": "bash /x/y.sh"}]}]'
+
+
+@pytest.mark.parametrize("raw, why", [
+    (b"[]", "the top level is list"),
+    (b'{"hooks": []}', '"hooks" is list'),
+    (b'{"hooks": {"Stop": {"matcher": ""}, %s}}' % _GOOD, '"hooks.Stop" is dict'),
+    (b'{"hooks": {"Stop": 7, %s}}' % _GOOD, '"hooks.Stop" is int'),
+    (b'{"hooks": {"Stop": ["bash /x.sh"], %s}}' % _GOOD, 'a "hooks.Stop" group is str'),
+    (b'{"hooks": {"Stop": [{"hooks": {"command": "x"}}], %s}}' % _GOOD, '"hooks.Stop[].hooks" is dict'),
+    (b'{"hooks": {"Stop": [{"hooks": ["bash /x.sh"]}], %s}}' % _GOOD, 'a "hooks.Stop" hook is str'),
+    (b'{"hooks": {"Stop": [{"hooks": [{"command": 7}]}], %s}}' % _GOOD, 'a "hooks.Stop" command is int'),
+], ids=["toplevel", "hooks", "groups", "groups-int", "group", "inner", "hook", "command"])
+def test_a_malformed_entry_is_skipped_with_a_finding_and_its_siblings_still_read(tmp_path, raw, why):
+    """Claude Code 2.1.289 keeps a file's other hooks running past a malformed entry, so refusing
+    the whole file reported a live harness as dead. The entry is skipped and named instead."""
+    path = tmp_path / "settings.json"
+    path.write_bytes(raw)
+    registrations, malformed = hc.scan_hook_registrations(path)
+    assert any(why in entry for entry in malformed), malformed
+    if b"PreToolUse" in raw:
+        assert registrations == [("PreToolUse", "Bash", "bash /x/y.sh")]
+    assert hc.hook_registrations(path) == registrations
+
+
+def test_a_well_formed_file_has_no_malformed_entries(tmp_path):
+    # Control for the test above.
+    path = tmp_path / "settings.json"
+    path.write_bytes(b'{"hooks": {%s}}' % _GOOD)
+    assert hc.scan_hook_registrations(path) == ([("PreToolUse", "Bash", "bash /x/y.sh")], [])
 
 
 def test_hook_registrations_refuses_a_path_it_cannot_open(tmp_path):
