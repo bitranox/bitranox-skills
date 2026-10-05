@@ -11,6 +11,9 @@ about procedure, a receipt at least proves entry.
     skill_receipt.py check <skill-name>       exit 0 fresh / 1 stale-or-missing (prints age + session)
     skill_receipt.py end <skill-name>         remove this session's receipt (idempotent; disarms gates)
 
+start and end exit 0 when done; every command exits 2 when it could not run (a usage error, a
+receipt that cannot be written, or one that exists but cannot be removed - the gate stays armed).
+
 Receipts live under ~/.claude/self-improve-audit/skill-receipts/, one file per skill AND session
 (`<skill>.<session>.json`; `<skill>.json` when the surface supplies no session id). The session
 comes from CLAUDE_CODE_SESSION_ID. Keying by skill alone let one session's `start` overwrite and
@@ -130,17 +133,17 @@ def _owned(skill, session_id):
 
 
 def end(skill, session_id=None):
-    """Remove THIS session's receipt (idempotent) - disarms this session's gates, no one else's."""
+    """Remove THIS session's receipt (idempotent) - disarms this session's gates, no one else's.
+
+    Returns whether a receipt was removed. Raises OSError when one exists but cannot be removed:
+    swallowing it reported "absent" while the receipt - and the gate it arms - stayed in place."""
     sid = session_id if session_id is not None else current_session_id()
     removed = False
     while True:
         p, _ = _owned(skill, sid)
         if p is None:
             return removed
-        try:
-            p.unlink()
-        except OSError:
-            return removed
+        p.unlink()
         removed = True
 
 
@@ -170,10 +173,21 @@ def main(argv=None):
         return 2
     cmd, skill = args
     if cmd == "start":
-        print("receipt: %s" % start(skill))
+        try:
+            path = start(skill)
+        except OSError as exc:
+            print("skill_receipt: could not write the receipt for %s: %s" % (skill, exc), file=sys.stderr)
+            return 2
+        print("receipt: %s" % path)
         return 0
     if cmd == "end":
-        print("receipt %s: %s" % (skill, "removed" if end(skill) else "absent"))
+        try:
+            removed = end(skill)
+        except OSError as exc:
+            print("skill_receipt: could not remove the receipt for %s: %s - the gate it arms is still "
+                  "armed" % (skill, exc), file=sys.stderr)
+            return 2
+        print("receipt %s: %s" % (skill, "removed" if removed else "absent"))
         return 0
     sid = current_session_id()
     who = "session %s" % (sid or "(none)")
