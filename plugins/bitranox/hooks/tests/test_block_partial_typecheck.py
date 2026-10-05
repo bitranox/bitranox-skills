@@ -298,8 +298,10 @@ def test_looking_up_the_pyright_executable_is_not_a_run(command):
     "npx pyright src",
     "poetry run pyright src",
     "FORCE_COLOR=0 pyright src",
-    "cd sub\npyright src",
-    "cd sub; pyright src",
+    # `cd .`, not `cd sub`: a run is judged where the cd lands, and these cases are about the
+    # separator, so the cd must land in the project that has the tests/.
+    "cd .\npyright src",
+    "cd .; pyright src",
     "if pyright src; then echo ok; fi",
     "for f in a; do pyright src; done",
     "{ pyright src; echo done; }",
@@ -330,3 +332,53 @@ def test_a_path_with_a_nul_byte_is_undecidable_not_a_crash(monkeypatch, project)
 
 def test_an_undecidable_path_does_not_excuse_a_narrowed_run_beside_it(monkeypatch, project):
     assert run_main(monkeypatch, "pyright 'src" + chr(0) + "x' && pyright src", project) == 2
+
+
+# --- the directory a run lands in, not the session's ---------------------------
+
+
+@pytest.fixture
+def nested(tmp_path: Path) -> tuple[Path, Path]:
+    """The reporter's layout: a repo root with NO top-level tests/, and a skill dir holding its own
+    scripts/ and tests/. The session sat in the skill dir and cd'd to the root first."""
+    root = tmp_path / "repo"
+    skill = root / "skills" / "x"
+    (skill / "scripts").mkdir(parents=True)
+    (skill / "tests").mkdir()
+    (root / "scripts").mkdir()
+    return root, skill
+
+
+def _sh(path: Path) -> str:
+    """`path` as a Bash operand: double-quoted, forward slashes (bash eats unquoted backslashes)."""
+    return '"%s"' % path.as_posix()
+
+
+def test_a_full_coverage_run_after_a_cd_to_the_repo_root_passes(monkeypatch, nested):
+    """contrib #74, reproduced on the five recorded calls behind it: judged against the SESSION's
+    directory, `skills/x/tests` resolved to nothing and the skill's own tests/ read as excluded."""
+    root, skill = nested
+    cmd = f"cd {_sh(root)} && pyright skills/x/scripts skills/x/tests scripts"
+    assert run_main(monkeypatch, cmd, skill) == 0
+    assert run_main(monkeypatch, "cd ../.. && pyright skills/x/scripts skills/x/tests", skill) == 0
+
+
+def test_a_narrowed_run_is_judged_where_the_cd_lands(monkeypatch, nested):
+    """Control: the same cd into a directory that HAS tests/, with tests/ left out, still blocks."""
+    root, skill = nested
+    assert run_main(monkeypatch, f"cd {_sh(skill)} && pyright scripts", root) == 2
+    assert run_main(monkeypatch, f"cd {_sh(skill)} && pyright scripts tests", root) == 0
+    assert run_main(monkeypatch, "pyright scripts", skill) == 2          # no cd: the session dir
+
+
+def test_a_cd_that_cannot_be_followed_leaves_nothing_to_judge(monkeypatch, nested):
+    _root, skill = nested
+    assert run_main(monkeypatch, 'cd "$REPO" && pyright scripts', skill) == 0
+
+
+def test_a_cd_inside_a_subshell_does_not_outlive_it(monkeypatch, nested):
+    root, skill = nested
+    cmd = f"(cd {_sh(root)} && pyright scripts) ; pyright scripts"
+    assert run_main(monkeypatch, cmd, skill) == 2      # the second run is back in the skill dir
+    cmd = f"(cd {_sh(skill)} && pyright scripts tests) ; pyright scripts"
+    assert run_main(monkeypatch, cmd, root) == 0       # control: back at the root, no tests/

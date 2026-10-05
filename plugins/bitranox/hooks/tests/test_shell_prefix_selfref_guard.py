@@ -447,3 +447,29 @@ def test_powershell_control_an_unescaped_subexpression_still_blocks(
     command = 'git commit -m "describe $(rm x) safely"'
     assert guard.substitutes_inside_text_arg(command, tool_name="PowerShell") is True
     assert _exit_as("PowerShell", command, monkeypatch) == 2
+
+
+@pytest.mark.parametrize("command", [
+    'git commit -m "line one`nline two`tend"',
+    'git commit -m"a`nb`tc"',
+    'git commit --message="a`nb`tc"',
+    'gh pr create --title "x" --body "a`nb`nc"',
+    'gh pr create -t "x`ny" -b "a`nb"',
+    'git commit -m "a `` b" -m "c `` d"',
+])
+def test_powershell_backtick_escapes_are_never_read_as_a_substitution(
+    command: str, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """OPEN-WORK 280 asked whether a backtick PAIR reads as a Bash substitution under PowerShell.
+    It does not reach the pattern at all: blank_unexpanded_text blanks every PowerShell escape
+    (the backtick and the character it escapes) first, so no backtick is left to pair. Pinned so a
+    change to that blanking cannot quietly turn every escaped newline into a block."""
+    assert guard.substitutes_inside_text_arg(command, tool_name="PowerShell") is False
+    assert _exit_as("PowerShell", command, monkeypatch) == 0
+
+
+def test_bash_control_the_same_backtick_pair_runs_there(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Control: under Bash a backtick pair inside double quotes IS a command substitution."""
+    command = 'git commit -m "line one`nline two`tend"'
+    assert guard.substitutes_inside_text_arg(command, tool_name="Bash") is True
+    assert _exit_as("Bash", command, monkeypatch) == 2

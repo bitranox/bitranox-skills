@@ -449,6 +449,18 @@ def test_an_unresolvable_cd_target_refuses_rather_than_guessing():
     assert hook._repo_dir("cd $HOME/repo && git push", "/cwd") is None
 
 
+def test_the_shared_cd_reader_follows_a_loop_body_and_a_quoted_path():
+    """`do cd X && git push` opens with the loop keyword, which the private regex read as the
+    program, so the push was credited to the session's own repo; a quoted path with a space was
+    refused outright. `shell_text.directory_change` reads both, and refuses a bare `cd` (HOME of
+    the shell) rather than leaving the push in the cwd."""
+    assert _names(hook._repo_dir("for i in 1; do cd /other/repo && git push; done", "/cwd"),
+                  "/other/repo")
+    assert _names(hook._repo_dir('cd "/other/my repo" && git push', "/cwd"), "/other/my repo")
+    assert hook._repo_dir("for r in a b; do cd $r && git push; done", "/cwd") is None
+    assert hook._repo_dir("cd && git push", "/cwd") is None
+
+
 # --- a named branch refspec must have LANDED, like the plain push ------------------------------
 # `_pushed_ref` resolved the LOCAL branch and returned it with no landed test, so a rejected
 # `git push origin master 2>&1 | tail -3` (a pipeline that exits 0) recorded a commit the remote

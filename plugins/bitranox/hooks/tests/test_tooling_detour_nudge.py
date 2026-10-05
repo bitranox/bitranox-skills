@@ -84,7 +84,7 @@ def test_a_tool_repo_that_ships_its_own_usage_skill_is_ordinary_work(tmp_path, r
     tool = _marketplace(tmp_path / "some-tool", "some-tool")
     (tool / "skills" / "s").mkdir(parents=True)
     assert TDN.notice_path(str(tool / "skills" / "s" / "SKILL.md"), str(work)) is None
-    assert TDN.notice_bash("cd %s && git commit -F m" % tool, str(work)) is None
+    assert TDN.notice_bash("cd \"%s\" && git commit -F m" % tool, str(work)) is None
 
 
 def test_without_a_plugin_root_the_hook_is_silent(rooms, monkeypatch):
@@ -117,7 +117,28 @@ def test_a_relative_target_resolves_against_the_cwd(rooms):
 
 def test_a_commit_in_the_marketplace_from_a_work_project_is_noticed(rooms):
     mkt, work = rooms
-    assert TDN.notice_bash("cd %s && git commit -F m -- plugins/x" % mkt, str(work))
+    assert TDN.notice_bash("cd \"%s\" && git commit -F m -- plugins/x" % mkt, str(work))
+
+
+def test_a_cd_the_shared_reader_follows_moves_the_commit_too(rooms):
+    """The private regex knew `cd` only at statement start and cut a quoted path at its first
+    space; the shared `shell_text.directory_change` reads a loop body, a pushd and a quoted path."""
+    mkt, work = rooms
+    assert TDN.notice_bash("for i in 1; do cd \"%s\" && git commit -F m; done" % mkt, str(work))
+    assert TDN.notice_bash("pushd \"%s\" && git commit -F m" % mkt, str(work))
+    spaced = mkt.parent / "m k t"
+    mkt.rename(spaced)
+    assert TDN.notice_bash("cd \"%s\" && git commit -F m" % spaced, str(work))
+    # control: a cd the reader cannot follow attributes nothing
+    assert TDN.notice_bash("cd \"$X\" && git commit -F m", str(work)) is None
+
+
+def test_a_cd_into_the_marketplace_through_the_home_tilde_is_noticed(rooms, scratch_home):
+    """The hook runs as the user whose shell runs the command, so `~` is that user's home."""
+    mkt, work = rooms
+    moved = scratch_home / "mkt"
+    mkt.rename(moved)
+    assert TDN.notice_bash("cd ~/mkt && git commit -F m", str(work))
 
 
 def test_a_git_dash_c_push_is_noticed(rooms):
@@ -142,26 +163,26 @@ def test_a_redirect_to_a_log_while_running_a_marketplace_script_is_silent(rooms,
     log = tmp_path / "scratch" / "run.log"
     assert TDN.notice_bash("python3 %s --check > %s 2>&1" % (_hook_file(rooms), log), str(work)) is None
     mkt = rooms[0]
-    assert TDN.notice_bash("cd %s && python3 -m pytest -q > %s" % (mkt, log), str(work)) is None
+    assert TDN.notice_bash("cd \"%s\" && python3 -m pytest -q > %s" % (mkt, log), str(work)) is None
 
 
 def test_an_arrow_in_prose_and_a_variable_target_are_not_redirects_into_the_repo(rooms):
     """Measured: `echo 'a -> b'` after a `cd` into the repo read as a redirect to `b` under it, and
     a `$LOG` target resolved as a relative path there. Neither can be shown to land in the repo."""
     mkt, work = rooms
-    assert TDN.notice_bash("cd %s && echo '=== a -> b ===' && python3 -m pytest -q" % mkt, str(work)) is None
-    assert TDN.notice_bash("cd %s && python3 -m pytest -q > $LOG 2>&1" % mkt, str(work)) is None
-    assert TDN.notice_bash("cd %s && printf x > plugins/x/hooks/a.py" % mkt, str(work))
+    assert TDN.notice_bash("cd \"%s\" && echo '=== a -> b ===' && python3 -m pytest -q" % mkt, str(work)) is None
+    assert TDN.notice_bash("cd \"%s\" && python3 -m pytest -q > $LOG 2>&1" % mkt, str(work)) is None
+    assert TDN.notice_bash("cd \"%s\" && printf x > plugins/x/hooks/a.py" % mkt, str(work))
 
 
 def test_a_comparison_inside_a_quoted_one_liner_is_not_a_redirect(rooms):
     """Measured 56 of 596 corpus firings: `python3 -c "... if n > 126"` after a cd into the repo
     read as a redirect to `126` under it. A `>` inside quotes is data."""
     mkt, work = rooms
-    cmd = 'cd %s && python3 -c "import sys; sys.exit(0 if len(sys.argv) > 126 else 1)"' % mkt
+    cmd = 'cd \"%s\" && python3 -c "import sys; sys.exit(0 if len(sys.argv) > 126 else 1)"' % mkt
     assert TDN.notice_bash(cmd, str(work)) is None
-    assert TDN.notice_bash("cd %s && awk '$1 > 100' data.txt" % mkt, str(work)) is None
-    assert TDN.notice_bash('cd %s && printf x > "plugins/x/hooks/a.py"' % mkt, str(work))
+    assert TDN.notice_bash("cd \"%s\" && awk '$1 > 100' data.txt" % mkt, str(work)) is None
+    assert TDN.notice_bash('cd \"%s\" && printf x > "plugins/x/hooks/a.py"' % mkt, str(work))
 
 
 def test_a_python_heredoc_that_writes_a_hook_is_noticed(rooms):
@@ -184,8 +205,8 @@ def test_a_read_only_git_question_in_the_marketplace_is_silent(rooms):
     """Measured firing on the corpus: `merge-base` read as `merge`, and a `2>/dev/null` read as a
     write. Neither lands a byte in the repo."""
     mkt, work = rooms
-    assert TDN.notice_bash("cd %s && git status --porcelain && git log -3" % mkt, str(work)) is None
-    assert TDN.notice_bash("cd %s && git merge-base --is-ancestor a b" % mkt, str(work)) is None
+    assert TDN.notice_bash("cd \"%s\" && git status --porcelain && git log -3" % mkt, str(work)) is None
+    assert TDN.notice_bash("cd \"%s\" && git merge-base --is-ancestor a b" % mkt, str(work)) is None
     assert TDN.notice_bash("grep -n x %s 2>/dev/null" % _hook_file(rooms), str(work)) is None
 
 
@@ -209,7 +230,7 @@ def test_a_windows_drive_path_is_a_path_token():
 def test_a_commit_in_the_work_project_is_silent(rooms):
     _, work = rooms
     assert TDN.notice_bash("git commit -F m -- src/", str(work)) is None
-    assert TDN.notice_bash("cd %s && git push" % work, str(work)) is None
+    assert TDN.notice_bash("cd \"%s\" && git push" % work, str(work)) is None
 
 
 def test_bash_from_inside_the_marketplace_is_silent(rooms):

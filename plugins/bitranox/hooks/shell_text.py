@@ -478,13 +478,69 @@ def _readable_dir(target, base):
 
 
 def _cd_target(args):
-    """The destination operand of a cd-like command, its own options skipped."""
+    """The destination operand of a cd-like command, its own options skipped.
+
+    Taking the first word as the target read `cd -P <dir>` as a cd into "<previous>/-P".
+    """
     for index, token in enumerate(args):
         if token == "--":
             return args[index + 1] if index + 1 < len(args) else None
         if token == "-" or not token.startswith("-"):
             return token
     return None
+
+
+# `pushd +2` / `pushd -1` rotate the directory stack: where they land is the stack's business.
+_STACK_ROTATION = re.compile(r"^[+-]\d+$")
+
+
+def directory_change(statement, here, tool_name="Bash", *, expand_home=False):
+    """(changes, landing) for ONE statement: does it move the shell's directory, and to where.
+
+    THE cd reader. Four nudges once carried a private regex each, and they had drifted in every
+    direction a cd can be read: anchored or not, an env-assignment prefix or not, a bare `cd` seen
+    or missed, a quoted path with a space kept whole, cut at the space, or refused - so the next fix
+    had to be found and made four times, and a nudge that missed it judged the wrong repository.
+
+    `changes` is False when the statement is not a directory change at all; `landing` is then
+    `here`, unchanged, so a caller can write `changed, here = directory_change(stmt, here)`. When it
+    IS one, `landing` is the normalised directory, or None when no static read can say where it
+    goes: a bare `cd` or a tilde path (HOME of the shell that runs it), `cd -`, a variable,
+    substitution or glob, `popd`, a stack rotation, or a relative target from an unknown `here`.
+    What a caller does with None is its own policy - stop judging, fail open, or carry on.
+
+    `statement` is RAW text (quotes intact), already cut out of the command by the caller; words
+    come from `argv_for_match`, so `cd "a b"` is one word and a trailing comment is not one. Loop
+    and branch keywords, a subshell paren and `NAME=value` prefixes in front of the program are
+    skipped. `expand_home` resolves `~` and `~/...` against this process's HOME, for a caller that
+    has decided the hook and the shell share one.
+    """
+    tool = tool_name or "Bash"
+    tokens = argv_for_match((statement or "").strip().lstrip("(").strip(), tool)
+    return _directory_change_tokens(tokens, here, tool, expand_home)
+
+
+def _directory_change_tokens(tokens, here, tool, expand_home=False):
+    """`directory_change` on an argv the caller already split."""
+    idx = 0
+    while idx < len(tokens) and (
+        tokens[idx] in _STATEMENT_KEYWORDS
+        or ("=" in tokens[idx] and not tokens[idx].startswith("-"))
+    ):
+        idx += 1
+    if idx >= len(tokens):
+        return False, here
+    program = basename_for_tool(tokens[idx], tool).lower()
+    if program == "popd":
+        return True, None
+    if program not in _CD_PROGRAMS:
+        return False, here
+    target = _cd_target(tokens[idx + 1:])
+    if program == "pushd" and target and _STACK_ROTATION.match(target):
+        return True, None
+    if expand_home and target and (target == "~" or target.startswith(("~/", "~\\"))):
+        target = os.path.expanduser(target)
+    return True, _readable_dir(target, here)
 
 
 def _apply_git_options(prefix, here, tool):
@@ -525,12 +581,8 @@ def git_verb_dir(command, cwd, verbs, tool_name=None):
         tokens = argv_for_match(segment.strip().lstrip("(").strip(), tool)
         if not tokens:
             continue
-        program = basename_for_tool(tokens[0], tool).lower()
-        if program in _CD_PROGRAMS:
-            here = _readable_dir(_cd_target(tokens[1:]), here)
-            continue
-        if program == "popd":
-            here = None
+        changed, here = _directory_change_tokens(tokens, here, tool)
+        if changed:
             continue
         operands = git_verb_operands(tokens, verbs, tool)
         if operands is not None:
