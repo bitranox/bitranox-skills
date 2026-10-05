@@ -328,7 +328,7 @@ def test_trailing_spaces_on_the_last_line_are_not_a_hard_break():
     assert r.ok
 
 
-# --- the CLI contract: 0 rewrapped, 1 refused, 2 error ---------------------------------------------
+# --- the CLI contract: 0 rewrapped, 2 refused or error (an action tool has no "no") ---------------
 
 def test_cli_dry_run_exits_0_and_writes_nothing(tmp_path, capsys):
     p, rc = _main(tmp_path, PARA, "--anchor", "ANCHOR", "--width", "20")
@@ -336,9 +336,9 @@ def test_cli_dry_run_exits_0_and_writes_nothing(tmp_path, capsys):
     assert capsys.readouterr().out.startswith("would rewrite lines 3-3")
 
 
-def test_cli_refusal_exits_1(tmp_path, capsys):
+def test_cli_refusal_exits_2(tmp_path, capsys):
     _, rc = _main(tmp_path, PARA, "--anchor", "missing words")
-    assert rc == 1 and "refused: anchor not found" in capsys.readouterr().err
+    assert rc == 2 and "refused: anchor not found" in capsys.readouterr().err
 
 
 def test_cli_json_envelope(tmp_path, capsys):
@@ -350,7 +350,7 @@ def test_cli_json_envelope(tmp_path, capsys):
 
 def test_cli_empty_anchor_is_refused(tmp_path, capsys):
     _, rc = _main(tmp_path, PARA, "--anchor", "  ")
-    assert rc == 1 and "empty anchor" in capsys.readouterr().err
+    assert rc == 2 and "empty anchor" in capsys.readouterr().err
 
 
 def test_cli_missing_file_exits_2(tmp_path, capsys):
@@ -502,3 +502,43 @@ def test_cli_apply_to_a_writable_file_in_a_read_only_directory_exits_0(tmp_path,
     finally:
         d.chmod(0o755)
     assert sorted(x.name for x in d.iterdir()) == ["doc.md"]
+
+
+# --- the --json envelope on every exit: ok is false exactly when the exit is 2 --------------------
+
+def test_cli_json_refusal_is_exit_2_with_ok_false_and_the_reason(tmp_path, capsys):
+    p, rc = _main(tmp_path, PARA, "--anchor", "missing words", "--json")
+    env = json.loads(capsys.readouterr().out)
+    assert rc == 2 and env["ok"] is False and "anchor not found" in env["error"]
+    assert list(env)[:4] == ["ok", "command", "data", "skipped"]
+    assert p.read_text(encoding="utf-8") == PARA
+
+
+def test_cli_ambiguous_anchor_is_refused_with_exit_2(tmp_path, capsys):
+    _, rc = _main(tmp_path, "ANCHOR one\n\nANCHOR two\n", "--anchor", "ANCHOR", "--width", "20")
+    assert rc == 2 and "refused" in capsys.readouterr().err
+
+
+@pytest.mark.parametrize("content", [None, b"caf\xe9 ANCHOR\n"], ids=["missing", "non-utf8"])
+def test_cli_json_unreadable_file_prints_the_envelope(tmp_path, capsys, content):
+    p = tmp_path / "doc.md"
+    if content is not None:
+        p.write_bytes(content)
+    rc = mdwrap.main(["--file", str(p), "--anchor", "ANCHOR", "--json"])
+    env = json.loads(capsys.readouterr().out)
+    assert rc == 2 and env["ok"] is False and env["command"] == "mdwrap" and env["error"]
+
+
+def test_cli_json_internal_crash_prints_the_envelope(tmp_path, capsys, monkeypatch):
+    def explode(*_a, **_k):
+        raise RuntimeError("kaboom")
+
+    # The process boundary is under test, so the crash is injected at the one call _run makes.
+    monkeypatch.setattr(mdwrap, "rewrap", explode)
+    p = tmp_path / "doc.md"
+    p.write_text(PARA, encoding="utf-8")
+    rc = mdwrap.main(["--file", str(p), "--anchor", "ANCHOR", "--json"])
+    cap = capsys.readouterr()
+    env = json.loads(cap.out)
+    assert rc == 2 and env["ok"] is False and "kaboom" in env["error"]
+    assert "internal error" in cap.err
