@@ -760,6 +760,38 @@ def test_a_multi_line_self_install_blockquote_is_dropped_whole():
     assert "One paragraph of content." in normalised
 
 
+def test_only_a_trailing_parenthetical_on_a_hash_line_is_erased_not_a_renamed_h1():
+    """Pins the rule CLAUDE.md states: the H1's TEXT must match its twin verbatim.
+
+    A mirror author who reads "the name echoed in the H1" renames the H1 to the skill's own
+    name, and the gate then reports drift. What is erased is a trailing parenthetical, on
+    every `# ` line and whatever it holds; anything else on that line is content.
+    """
+    base = "---\nname: a\n---\n\n# Doing it (a)\n\nbody\n\n```bash\n# install it (optional)\n```\n"
+    same = RG.normalise_mirror(base)
+
+    assert RG.normalise_mirror(base.replace("# Doing it (a)", "# b")) != same
+    assert RG.normalise_mirror(base.replace(" (a)", "")) != same
+    assert RG.normalise_mirror(base.replace("Doing it (a)", "Done it (a)")) != same
+    assert RG.normalise_mirror(base.replace("(a)", "(any words at all)")) == same
+    assert RG.normalise_mirror(base.replace("(optional)", "(required)")) == same
+    assert RG.normalise_mirror(base.replace("body", "BODY")) != same  # control: content is drift
+
+
+def test_the_drift_message_names_the_h1_divergence_as_the_code_applies_it(tmp_path, monkeypatch):
+    public = tmp_path / "public"
+    root = public / "KI" / "bitranox-skills"
+    write(root / "plugins" / "bitranox" / "skills" / "coding-python-thing" / "SKILL.md", MIRROR_BODY)
+    write(public / "libs" / "thing" / "skills" / "python-thing" / "SKILL.md",
+          TWIN_BODY.replace("One paragraph", "A DIFFERENT paragraph"))
+    monkeypatch.setitem(RG.MIRRORED_SKILLS, "coding-python-thing", "libs/thing/skills/python-thing")
+
+    fails = RG.mirror_failures(root, {"coding-python-thing"})
+
+    assert "a trailing `(<name>)` on the H1" in fails[0]
+    assert "name/H1/self-install" not in fails[0]
+
+
 def test_a_blockquote_that_is_not_the_self_install_note_is_kept() -> None:
     quoted = TWIN_BODY.replace("> The `thing` repo", "> A quote worth keeping").replace(
         "> anywhere with `/plugin marketplace add bitranox/thing` then `/plugin install thing`.\n", ""

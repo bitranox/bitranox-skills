@@ -1019,9 +1019,14 @@ def normalise_mirror(text):
     """Return the comparable body of a mirrored SKILL.md.
 
     Three divergences are by convention, not drift, so they are erased rather than
-    reported: the `name:` field (each copy uses its own repo's skill name), the same name
-    echoed in the H1, and the tool repo's self-install blockquote. Everything else is
+    reported: the `name:` field (each copy uses its own repo's skill name), a trailing
+    `(<name>)` on the H1, and the tool repo's self-install blockquote. Everything else is
     content, and content that differs between the copies is drift by definition.
+
+    The H1 rule is wider than its purpose: a trailing parenthetical with no nested
+    parentheses is erased on EVERY line starting with `# ` (a `# ` comment in a code block
+    included), whatever it holds. The text before it is compared verbatim, so an H1 renamed
+    to the skill's own name is drift.
     """
 
     source = text.splitlines()
@@ -1182,7 +1187,10 @@ def mirror_failures(root, names):
                 b = normalise_mirror(mine.decode("utf-8"))
                 if a != b:
                     differing.append(rel)
-                    sample = [line for line in difflib.unified_diff(a.splitlines(), b.splitlines(), "twin", "marketplace", lineterm="", n=0) if line[:1] in "+-" and line[:3] not in ("---", "+++")]
+                    diff = difflib.unified_diff(a.splitlines(), b.splitlines(), "twin", "marketplace",
+                                                lineterm="", n=0)
+                    sample = [line for line in diff
+                              if line[:1] in "+-" and line[:3] not in ("---", "+++")]
             elif mine != theirs:
                 differing.append(rel)
         if not differing:
@@ -1190,8 +1198,9 @@ def mirror_failures(root, names):
         detail = "\n      ".join(sample[:6]) if sample else "\n      ".join(differing[:6])
         fails.append(
             "skills/%s has drifted from its twin at %s (%d differing file(s): %s). Regenerate the "
-            "stale side from the other, re-apply only the name/H1/self-install divergences, and "
-            "bump that repo's plugin.json. First lines:\n      %s"
+            "stale side from the other, re-apply only the three divergences (the `name:` line, a "
+            "trailing `(<name>)` on the H1 - the H1 text before it must match - and the "
+            "self-install blockquote), and bump that repo's plugin.json. First lines:\n      %s"
             % (name, relative, len(differing), ", ".join(differing[:6]), detail)
         )
     return fails

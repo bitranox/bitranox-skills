@@ -75,8 +75,11 @@ and `scripts/`, and comparing one file let three changed files sit unreported un
 verdict. `.skillwriter/` and `__pycache__` are excluded - neither side ships them to the other.
 
 Three differences are by convention and are never drift, and all three are scoped to `SKILL.md`:
-the `name:` field, that same name echoed in the H1, and the tool repo's self-install blockquote
-(true there, nonsense here). Every other file must match byte for byte.
+the `name:` field, a trailing `(<name>)` on the H1, and the tool repo's self-install blockquote
+(true there, nonsense here). The H1 text before that parenthetical must match the twin verbatim,
+so an H1 renamed to the skill's own name reads as drift. Precisely, the check erases a trailing
+parenthetical (no nested parentheses, whatever it holds) on EVERY line starting with `# `, which
+includes a `# ` comment line inside a code block. Every other file must match byte for byte.
 
 Each side is read at its NEWEST text, never at whatever a checkout holds: a file edited locally
 (uncommitted, untracked, or committed since the fork point) comes from disk, every other file from
