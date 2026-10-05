@@ -140,7 +140,9 @@ def test_json_still_emitted_on_failure(tmp_path, capsys):
     rc = mem_levels.main(["--root", str(tmp_path / "nope"), "--json"])
 
     assert rc == 2
-    assert _json.loads(capsys.readouterr().out)["ok"] is False
+    env = _json.loads(capsys.readouterr().out)
+    assert env["ok"] is False and "nope" in env["error"]
+    assert list(env)[:4] == ["ok", "command", "data", "skipped"]
 
 
 def test_a_suffixed_venv_is_pruned_like_a_plain_one(tmp_path):
@@ -154,11 +156,11 @@ def test_a_suffixed_venv_is_pruned_like_a_plain_one(tmp_path):
     """
     real = tmp_path / "proj"
     real.mkdir()
-    (real / "CLAUDE.local.md").write_text("- [T](mem:a-slug) - hook\n", encoding="utf-8")
+    (real / "CLAUDE.local.md").write_text(BLOCK.format(rows=_row("a-slug")), encoding="utf-8")
     for venv in (".venv", ".venv-win", ".venv-3.13", "venv-alice", "venv_thing"):
         vendored = tmp_path / venv / "lib" / "site-packages" / "pkg"
         vendored.mkdir(parents=True)
-        (vendored / "CLAUDE.local.md").write_text("- [V](mem:vendored) - hook\n",
+        (vendored / "CLAUDE.local.md").write_text(BLOCK.format(rows=_row("vendored")),
                                                   encoding="utf-8")
     report = mem_levels.scan(tmp_path)
     levels = sorted(report.levels)
@@ -333,9 +335,12 @@ def test_slug_json_found_and_absent(tmp_path, capsys):
     absent = capsys.readouterr()
 
     assert found_rc == 0 and json.loads(found.out) == {
-        "ok": True, "command": "mem_levels", "data": {"slug": "sub-fact", "levels": ["sub"]}}
+        "ok": True, "command": "mem_levels", "data": {"slug": "sub-fact", "levels": ["sub"]},
+        "skipped": []}
     assert found.err == ""
-    assert absent_rc == 1 and json.loads(absent.out)["data"]["levels"] == []
+    # "No level holds it" is the tool answering, so ok is true: ok means "ran without error".
+    absent_env = json.loads(absent.out)
+    assert absent_rc == 1 and absent_env["data"]["levels"] == [] and absent_env["ok"] is True
     assert "no level points at nope-fact" in absent.err
 
 
@@ -359,11 +364,12 @@ def test_a_non_ascii_level_survives_a_cp1252_stdout(tmp_path):
         assert "Проект" in proc.stdout.decode("utf-8")
 
 
-def test_a_bom_does_not_hide_the_first_pointer(tmp_path):
-    """The pointer regex is anchored at ^, so a BOM glued to line 1 made its pointer invisible."""
+def test_a_bom_does_not_hide_the_level_or_its_pointers(tmp_path):
+    """The block marker and the pointer pattern are both read from line 1 onward, so a BOM glued
+    to the file must not hide the managed block (and with it the whole level)."""
     root = _tree(tmp_path / "t", {".": []}, bodies=["a-fact"])
     (root / "CLAUDE.local.md").write_bytes(
-        b"\xef\xbb\xbf" + (_row("a-fact") + "\n" + _row("b-fact") + "\n").encode("utf-8"))
+        b"\xef\xbb\xbf" + BLOCK.format(rows=_row("a-fact") + "\n" + _row("b-fact")).encode("utf-8"))
 
     assert mem_levels.scan(root).levels["."] == ["a-fact", "b-fact"]
 
@@ -400,3 +406,70 @@ def test_a_level_file_without_a_managed_block_is_not_a_level(tmp_path):
     assert "runs/r1/workspace" not in report.levels
     assert report.levels["empty"] == []
     assert set(report.levels) == {".", "empty"}
+
+
+
+# ==== wave D: the envelope on every exit, the engine's level predicate ==========================
+
+@pytest.mark.skipif(sys.platform == "win32" or getattr(os, "geteuid", lambda: 1)() == 0,
+                    reason="needs POSIX mode bits and a non-root user to make a level unreadable")
+def test_an_unreadable_level_under_json_names_it_in_skipped(tmp_path, capsys):
+    root = _tree(tmp_path / "t", {".": ["top-fact"], "sub": ["hidden-fact"]})
+    target = root / "sub"
+    target.chmod(0)
+    try:
+        rc = mem_levels.main(["--root", str(root), "--json"])
+    finally:
+        target.chmod(0o755)
+    env = json.loads(capsys.readouterr().out)
+    assert rc == 2 and env["ok"] is False
+    assert any("sub" in entry for entry in env["skipped"])
+
+
+def test_an_internal_crash_under_json_prints_the_envelope(tmp_path, capsys, monkeypatch):
+    def explode(*_a, **_k):
+        raise RuntimeError("kaboom")
+
+    # The process boundary is under test, so the crash is injected at the one call _run makes.
+    monkeypatch.setattr(mem_levels, "scan", explode)
+    rc = mem_levels.main(["--root", str(_tree(tmp_path / "t", {".": ["a-fact"]})), "--json"])
+    cap = capsys.readouterr()
+    env = json.loads(cap.out)
+    assert rc == 2 and env["ok"] is False and "kaboom" in env["error"]
+    assert "internal error" in cap.err
+
+
+def test_a_missing_engine_parser_exits_2_not_the_gate_answer_1(tmp_path):
+    """uuid_store is a sibling module in the plugin's hooks dir. When it cannot be imported, the
+    traceback's exit 1 read as "no level holds it"."""
+    root = _tree(tmp_path / "t", {".": ["a-fact"]})
+    script = Path(mem_levels.__file__).resolve()
+    # The script dir goes first on sys.path, as `uv run` puts it, so only uuid_store is missing.
+    shim = ("import os, runpy, sys; sys.modules['uuid_store'] = None; script = sys.argv[1]; "
+            "sys.path.insert(0, os.path.dirname(script)); "
+            "sys.argv = sys.argv[1:]; runpy.run_path(script, run_name='__main__')")
+    proc = subprocess.run([sys.executable, "-c", shim, str(script), "--root", str(root),
+                           "--slug", "a-fact", "--json"], capture_output=True, text=True,
+                          encoding="utf-8", errors="replace")
+    assert proc.returncode == 2, proc.stderr
+    assert "uuid_store" in proc.stderr and "Traceback" not in proc.stderr
+    assert json.loads(proc.stdout)["ok"] is False
+
+
+def test_a_pointer_file_without_a_managed_block_is_not_a_level(tmp_path):
+    """NU-5: the engine counts a level only when its CLAUDE.local.md carries a managed block, so a
+    hand-written file of bare pointer lines is not a level here either - one level count
+    tree-wide. The control: the same pointer inside a block IS a level."""
+    root = _tree(tmp_path / "t", {".": ["top-fact"]})
+    bare = root / "bare"
+    bare.mkdir()
+    (bare / "CLAUDE.local.md").write_text(_row("bare-fact") + "\n", encoding="utf-8")
+    blocked = root / "blocked"
+    blocked.mkdir()
+    (blocked / "CLAUDE.local.md").write_text(BLOCK.format(rows=_row("bare-fact")),
+                                             encoding="utf-8")
+
+    report = mem_levels.scan(root)
+
+    assert "bare" not in report.levels
+    assert report.levels["blocked"] == ["bare-fact"]

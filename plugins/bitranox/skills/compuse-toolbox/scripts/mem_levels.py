@@ -23,8 +23,16 @@ Run: `uv run scripts/mem_levels.py --root <tree-anchor>`          # every level,
 Exit: 0 = listed, or the slug was found. 1 = the slug is at no level (a real "no" answer, so this
       works in a gate). 2 = could not answer: a missing root, a root that is not a tree anchor (no
       `.claude-memory/` there, so the body checks would be silently off), a level file or directory
-      that could not be read (listed on stderr; a "no" over a partial read is not a "no"), or an
-      internal error.
+      that could not be read (listed on stderr; a "no" over a partial read is not a "no"), the
+      engine's pointer parser (`hooks/uuid_store.py`) not importable, or an internal error.
+
+`--json` prints `{ok, command, data, skipped}` on every exit, 2 included; `ok` is false exactly
+when the exit is 2, so "no level holds it" (exit 1) is `ok: true`. Unreadable paths are listed in
+`skipped`.
+
+A level is a `CLAUDE.local.md` carrying a managed pointer block - the engine's own predicate
+(`memory_engine._carries_pointer_block`). A file of bare pointer lines with no block is not a level,
+because the engine neither counts nor maintains one.
 
 Pre-pivot `uuid:` pointers count as facts at their level; their bodies are looked for at the old
 sharded path `facts/<2 chars>/<uuid>.md`, exactly where the engine reads them. A sharded body no
@@ -37,16 +45,24 @@ Read-only: it never writes to the store. Writes go through the engine (`memory_e
 from __future__ import annotations
 
 import argparse
-import json
 import sys
 from dataclasses import dataclass, field
 from pathlib import Path
 
+from _cli_envelope import EXIT_ERROR, EXIT_NO, EXIT_YES, EnvelopeArgumentParser, emit, guarded
+
 # The engine's pointer parser, from the plugin's hooks dir: scripts -> compuse-toolbox -> skills
 # -> bitranox. A private regex matched `](mem:x)` anywhere, so a pointer-shaped line in the prose
-# around the managed block counted as a fact at that level and hid a real dangling body.
+# around the managed block counted as a fact at that level and hid a real dangling body. A failed
+# import is held rather than raised: its traceback exits 1, which is this tool's "no level holds
+# it", so main() refuses with 2 instead.
 sys.path.insert(0, str(Path(__file__).resolve().parents[3] / "hooks"))
-import uuid_store  # noqa: E402
+try:
+    import uuid_store  # noqa: E402
+    _IMPORT_ERROR: ImportError | None = None
+except ImportError as _exc:  # noqa: E402 - see above
+    uuid_store = None  # type: ignore[assignment]
+    _IMPORT_ERROR = _exc
 
 LEVEL_FILE = "CLAUDE.local.md"
 STORE_DIR = ".claude-memory"
@@ -138,12 +154,13 @@ def _carries_block(text: str) -> bool:
     return uuid_store.INDEX_BEGIN in text or uuid_store.LEGACY_INDEX_BEGIN in text
 
 
-def _is_level(text: str, pointers: list) -> bool:
-    """A level carries a managed block (even an empty one) or at least one pointer the engine's
-    parser reads. A file with neither - a harness pre-creating a stub `CLAUDE.local.md` in a
-    scratch workspace - is not a level: counting it put this tool's level total out of step with
-    `reconcile_memory_index.py --check-tree` (113 against 109 on a real tree)."""
-    return bool(pointers) or _carries_block(text)
+def _is_level(text: str) -> bool:
+    """A level carries a managed block (even an empty one): the engine's predicate, and nothing
+    wider. A stub `CLAUDE.local.md` a harness pre-creates is not a level - counting it put this
+    tool's level total out of step with `reconcile_memory_index.py --check-tree` (113 against 109
+    on a real tree) - and neither is a file of bare pointer lines with no block, which the engine
+    does not count, heal or write."""
+    return _carries_block(text)
 
 
 def _read_levels(root: Path, report: Report) -> None:
@@ -155,9 +172,9 @@ def _read_levels(root: Path, report: Report) -> None:
         except OSError as exc:
             report.unreadable.append("%s: %s" % (lf, exc.strerror or exc))
             continue
-        pointers = _pointers_in(text)
-        if not _is_level(text, pointers):
+        if not _is_level(text):
             continue
+        pointers = _pointers_in(text)
         report.levels[rel] = [p.slug for p in pointers]
         report.legacy.update({p.slug: p.uuid for p in pointers if p.legacy})
         report.legacy_uuids.update(p.uuid for p in pointers if p.legacy)
@@ -243,11 +260,11 @@ def _print_human(report: Report, out) -> None:
 
 
 def _fail(message: str, as_json: bool) -> int:
-    """Exit 2 with the reason on stderr; JSON mode still emits JSON on failure."""
+    """Exit 2 with the reason on stderr; JSON mode still emits the envelope on failure."""
     print(message, file=sys.stderr)
     if as_json:
-        print(json.dumps({"ok": False, "command": "mem_levels", "error": message}, indent=1))
-    return 2
+        emit(EXIT_ERROR, "mem_levels", error=message, indent=1)
+    return EXIT_ERROR
 
 
 def _report_unreadable(report: Report) -> None:
@@ -255,14 +272,22 @@ def _report_unreadable(report: Report) -> None:
         print("unreadable: %s" % entry, file=sys.stderr)
 
 
+def _slug_code(report: Report, found: list[str]) -> int:
+    if report.unreadable:
+        return EXIT_ERROR
+    return EXIT_YES if found else EXIT_NO
+
+
 def _answer_slug(report: Report, slug: str, as_json: bool) -> int:
     found = report.level_of(slug)
-    ok = bool(found) and not report.unreadable
+    code = _slug_code(report, found)
     if as_json:
         data = {"slug": slug, "levels": found}
         if report.unreadable:
             data["unreadable"] = report.unreadable
-        print(json.dumps({"ok": ok, "command": "mem_levels", "data": data}, indent=1))
+        emit(code, "mem_levels", data, skipped=report.unreadable, indent=1,
+             error="%d path(s) could not be read" % len(report.unreadable)
+             if report.unreadable else None)
     else:
         for lvl in found:
             print(lvl)
@@ -273,9 +298,7 @@ def _answer_slug(report: Report, slug: str, as_json: bool) -> int:
     elif not found:
         print("no level points at %s" % slug, file=sys.stderr)
     _report_unreadable(report)
-    if report.unreadable:
-        return 2
-    return 0 if found else 1
+    return code
 
 
 def _run(args) -> int:
@@ -290,30 +313,34 @@ def _run(args) -> int:
                      % (STORE_DIR, args.root), args.as_json)
     if args.slug:
         return _answer_slug(report, args.slug, args.as_json)
+    code = EXIT_ERROR if report.unreadable else EXIT_YES
     if args.as_json:
-        print(json.dumps({"ok": not report.unreadable, "command": "mem_levels",
-                          "data": report.as_dict()}, indent=1))
+        emit(code, "mem_levels", report.as_dict(), skipped=report.unreadable, indent=1,
+             error="%d path(s) could not be read" % len(report.unreadable)
+             if report.unreadable else None)
     else:
         _print_human(report, sys.stdout)
     _report_unreadable(report)
-    return 2 if report.unreadable else 0
+    return code
 
 
+@guarded("mem_levels", json_flags=("--json",))
 def main(argv: list[str] | None = None) -> int:
-    """List the levels or answer `--slug`. An unexpected crash exits 2, never 1: 1 is the gate's
-    "no level holds it", and Python's default exit for a traceback is exactly that code."""
-    ap = argparse.ArgumentParser(
+    """List the levels or answer `--slug`. An unexpected crash exits 2 (with the envelope under
+    --json), never 1: 1 is the gate's "no level holds it", and Python's default exit for a
+    traceback is exactly that code."""
+    ap = EnvelopeArgumentParser(
+        envelope_command="mem_levels",
         prog="mem_levels",
         description="List a curated memory tree's levels and the slugs at each.")
     ap.add_argument("--root", required=True, help="the tree anchor (the dir holding .claude-memory/)")
     ap.add_argument("--slug", default=None, help="report which level holds this slug (exit 1 if none)")
     ap.add_argument("--json", action="store_true", dest="as_json", help="machine-readable envelope")
     args = ap.parse_args(argv)
-    try:
-        return _run(args)
-    except Exception as exc:                             # noqa: BLE001 - a crash must not read as "no"
-        print("mem_levels: internal error: %s: %s" % (type(exc).__name__, exc), file=sys.stderr)
-        return 2
+    if uuid_store is None:
+        return _fail("mem_levels: cannot import the engine's pointer parser (hooks/uuid_store.py): "
+                     "%s" % _IMPORT_ERROR, args.as_json)
+    return _run(args)
 
 
 def _utf8_stdout() -> None:
