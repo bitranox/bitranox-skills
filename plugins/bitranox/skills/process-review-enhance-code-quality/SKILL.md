@@ -516,7 +516,7 @@ transcript from a thorough one.
 | Resource lifetime  | Sockets, files, handles, registries: freed on every path including errors                                                                             |
 | Unbounded input    | Big/append-only files, wide ranges, long lists - streamed or bounded                                                                                  |
 | Algorithmic cost   | Loops nested over inputs; per-item work inside a per-item loop                                                                                        |
-| Error contract     | One hierarchy, consistent types, nothing leaking a foreign exception                                                                                  |
+| Error contract     | One hierarchy; EVERY exception a public call can let escape, a stdlib or dependency one included (see below the table)                                |
 | Cross-platform     | Each supported OS's branch, and the type check for each                                                                                               |
 | Packaging          | Builds, installs clean, entry points and marker files present in the wheel                                                                            |
 | Tests              | Could they fail? Real seams not self-mocks, an e2e path, no filler; stable and isolated                                                               |
@@ -527,6 +527,15 @@ transcript from a thorough one.
 
 Report per sweep: which rows were walked, what each found, and the running total. That record is
 what makes "no findings" credible.
+
+**The Error contract row is about what ESCAPES, not about what the package raises.** A census of
+the package's own `raise` statements finds them all classified and passes the row while a stdlib or
+dependency call that receives caller data lets its own exception through the public API - a
+`ValueError` from an email header built out of a caller's attachment filename escaped a `send()`
+whose own raises were all in one hierarchy. Walk the row from the entry points inward: for each
+public call, list the dependency calls its caller-supplied data reaches, drive that call with
+hostile data (CR/LF, NUL, an oversized or wrongly typed value) and assert the exception TYPE that
+comes out. A foreign type reaching the caller is a finding, whoever raised it.
 
 Two of these rows are COUNTED, not read, and a sweep that reports "no findings" on them without
 naming the counts did not walk them. State the numbers: how many functions share the dominant
