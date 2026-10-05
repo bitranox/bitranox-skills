@@ -193,7 +193,7 @@ def handles_pipe_status(command: str, tool_name: str = "Bash") -> bool:
     base = blank_heredoc_bodies(command or "")
     if _PIPEFAIL.search(mask_data_regions(base, tool_name=tool_name)):
         return True
-    return bool(_PIPESTATUS_READ.search(blank_unexpanded_text(base)))
+    return bool(_PIPESTATUS_READ.search(blank_unexpanded_text(base, tool_name=tool_name)))
 
 
 def _comments_blanked(raw: str, masked: str) -> str:
@@ -230,7 +230,7 @@ def _statements(command: str, tool_name: str) -> list[tuple[str, str]]:
 _STATUS_READ = re.compile(r"\$\?")
 
 
-def reads_masked_status(command: str) -> bool:
+def reads_masked_status(command: str, tool_name: str = "Bash") -> bool:
     """True when a read of `$?` DIRECTLY follows a pipeline into a swallowing filter.
 
     Orthogonal to :func:`masks_a_gate`, which needs the command to be a RECOGNISED gate before it
@@ -263,16 +263,19 @@ def reads_masked_status(command: str) -> bool:
     so `o=$(tool | head -c 4000); rc=$?` reads head's; and a `$?` inside a later substitution reads
     whatever ran before it THERE, so `$(tool; echo $?)` is about tool, while `$(echo $?)` still
     reads the pipe.
+
+    Both views are read under `tool_name`'s escape rules: under PowerShell a backtick escapes and a
+    backslash is a path separator, so `"C:\\x\\" 'rc=$?'` holds a single-quoted, inert `$?`.
     """
-    if handles_pipe_status(command):
+    if handles_pipe_status(command, tool_name):
         return False
     base = blank_heredoc_bodies(command or "")
-    masked = mask_data_regions(base)
-    expanding = blank_unexpanded_text(base)
-    reads = _status_reads(expanding)
+    masked = mask_data_regions(base, tool_name=tool_name)
+    expanding = blank_unexpanded_text(base, tool_name=tool_name)
+    reads = _status_reads(expanding, tool_name=tool_name)
     spans = [(a, b) for a, b in _spans(masked) if masked[a:b].strip()]
     for index, (start, end) in enumerate(spans):
-        if not _ends_in_a_filter(base, masked, start, end):
+        if not _ends_in_a_filter(base, masked, start, end, tool_name=tool_name):
             continue
         following = spans[index + 1] if index + 1 < len(spans) else (end, end)
         if any(following[0] <= at < following[1] for at in reads):
@@ -295,29 +298,30 @@ def _spans(masked: str) -> list[tuple[int, int]]:
 _ASSIGNMENTS_ONLY = re.compile(r"^\s*(?:[A-Za-z_]\w*=\S*\s*)+$")
 
 
-def _ends_in_a_filter(base: str, masked: str, start: int, end: int) -> bool:
+def _ends_in_a_filter(base: str, masked: str, start: int, end: int, *,
+                      tool_name: str = "Bash") -> bool:
     """True when the statement at [start, end) leaves a swallowing filter's status in `$?`."""
     structure = masked[start:end]
     if _ASSIGNMENTS_ONLY.match(structure):
-        bodies = [b for b in _substitution_bodies(base) if start <= b[0] < end]
+        bodies = [b for b in _substitution_bodies(base, tool_name=tool_name) if start <= b[0] < end]
         if not bodies:
             return False
         body = base[bodies[-1][0]:bodies[-1][1]]
-        inner = mask_data_regions(body)
+        inner = mask_data_regions(body, tool_name=tool_name)
         last = [(a, b) for a, b in _spans(inner) if inner[a:b].strip()]
         structure = inner[last[-1][0]:last[-1][1]] if last else ""
     elements = [e for e in _PIPE.split(structure) if e.strip()]
     return len(elements) >= 2 and any(FILTER.match(e) for e in elements[1:])
 
 
-def _walk(text: str):
+def _walk(text: str, *, tool_name: str = "Bash"):
     """(start, end, separator_before, openers) for each segment of the quote-aware walk.
 
     `openers` is the stack of group openers (`$(`, a backtick, `(` ...) the segment sits inside.
     """
     stack: list[str] = []
     previous_end = 0
-    for at, segment in iter_segments(text):
+    for at, segment in iter_segments(text, tool_name):
         separator = text[previous_end:at]
         if stack and (separator == ")" or (separator == "`" and stack[-1] == "`")):
             stack.pop()
@@ -327,10 +331,10 @@ def _walk(text: str):
         yield at, previous_end, separator, tuple(stack)
 
 
-def _substitution_bodies(text: str) -> list[tuple[int, int]]:
+def _substitution_bodies(text: str, *, tool_name: str = "Bash") -> list[tuple[int, int]]:
     """(start, end) of each outermost `$(...)` / backtick body in `text`."""
     bodies, open_at = [], None
-    for at, _end, separator, openers in _walk(text):
+    for at, _end, separator, openers in _walk(text, tool_name=tool_name):
         if separator in ("$(", "`") and len(openers) == 1:
             open_at = at
         elif not openers and open_at is not None:
@@ -339,14 +343,14 @@ def _substitution_bodies(text: str) -> list[tuple[int, int]]:
     return bodies
 
 
-def _status_reads(expanding: str) -> list[int]:
+def _status_reads(expanding: str, *, tool_name: str = "Bash") -> list[int]:
     """Offsets of every `$?` that reads the status left BEFORE its statement.
 
     Outside a substitution that is every one. Inside a `$(...)` only a read in the substitution's
     FIRST statement qualifies; after `$(tool; echo $?)` has run tool, the read is about tool.
     """
     reads = []
-    for at, end, separator, openers in _walk(expanding):
+    for at, end, separator, openers in _walk(expanding, tool_name=tool_name):
         substituted = any(o in ("$(", "`") for o in openers)
         if substituted and separator not in ("$(", "`"):
             continue
@@ -386,6 +390,8 @@ def main() -> int:
     cmd = (data.get("tool_input") or {}).get("command") or ""
     if not cmd:
         return 0
+    # Every reading below is under this shell's escape rules: PowerShell escapes with a backtick.
+    tool_name = data.get("tool_name") or "Bash"
 
     # Advisories, emitted as ONE additionalContext: Claude Code reads a single JSON document from
     # a hook's stdout, so two written separately would be neither.
@@ -393,7 +399,7 @@ def main() -> int:
     # The verification shape, which needs no recognised gate: a pipe into a truncating filter and
     # then a read of `$?`. Advisory rather than a block - measuring an exit code is legitimate
     # work, and the mistake is reading the WRONG one, so the fix is to name the right form.
-    if reads_masked_status(cmd):
+    if reads_masked_status(cmd, tool_name):
         advisories.append(
             "MASKED EXIT STATUS: this pipes into a truncating filter and then reads `$?`, "
             "which is the FILTER's status, not the command's. Measured: a tool that had "
@@ -451,7 +457,6 @@ def main() -> int:
 
     # A heredoc BODY is stdin data, so a doc that WRITES an example of the footgun is not one.
     # Measured live: that shape blocked a real command while this guard was under investigation.
-    tool_name = data.get("tool_name") or "Bash"
 
     # Fast path: nothing further to protect if no gate runs here.
     if not GATE.search(strip_heredoc_bodies(cmd)):

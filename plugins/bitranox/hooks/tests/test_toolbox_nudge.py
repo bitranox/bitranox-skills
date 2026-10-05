@@ -1067,3 +1067,34 @@ def test_control_with_a_session_id_only_the_first_call_nudges(home, monkeypatch,
         N.main()
         outs.append("git_state" in capsys.readouterr().out)
     assert outs == [True, False, False]
+
+
+# ---- PowerShell reads its own escapes ------------------------------------------------------------
+# `"C:\tmp\"` closes under PowerShell, so the single-quoted text after it is inert prose. Read as
+# Bash the backslash escaped the closing quote and the quoted words stayed visible to the rules.
+
+_PS_PATH_THEN_QUOTED_CHORE = "Write-Output \"C:\\tmp\\\" 'pkill -f vm'"
+
+
+def _ev_as(tool_name, cmd, session):
+    return {"tool_name": tool_name, "session_id": session, "tool_input": {"command": cmd}}
+
+
+def test_extract_text_powershell_blanks_single_quotes_after_a_backslash_path():
+    text = N.extract_text("PowerShell", {"command": _PS_PATH_THEN_QUOTED_CHORE})
+    assert N.match_tool(text, "PowerShell") is None
+
+
+def test_main_powershell_does_not_nudge_on_single_quoted_prose_after_a_path(home, monkeypatch,
+                                                                             capsys):
+    _with_tool(home, "procsig")
+    _feed(monkeypatch, _ev_as("PowerShell", _PS_PATH_THEN_QUOTED_CHORE, "ps-path"))
+    N.main()
+    assert "procsig" not in capsys.readouterr().out
+
+
+def test_main_powershell_control_a_real_pkill_still_nudges(home, monkeypatch, capsys):
+    _with_tool(home, "procsig")
+    _feed(monkeypatch, _ev_as("PowerShell", "pkill -f vm", "ps-ctl"))
+    N.main()
+    assert "procsig" in capsys.readouterr().out

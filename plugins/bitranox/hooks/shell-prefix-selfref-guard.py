@@ -109,7 +109,7 @@ _HEREDOC_SUBSTITUTION_RX = re.compile(r"`|\$\(")
 _HEREDOC_ESCAPED_RX = re.compile(r"\\[`$\\]")
 
 
-def substitutes_inside_text_arg(command: str) -> bool:
+def substitutes_inside_text_arg(command: str, *, tool_name: str = "Bash") -> bool:
     """Return whether self-authored PROSE carries a command substitution the shell will run.
 
     Bash evaluates backticks and `$(...)` inside a double-quoted argument BEFORE the program sees
@@ -123,16 +123,17 @@ def substitutes_inside_text_arg(command: str) -> bool:
     # blank_unexpanded_text, not the raw command: a SINGLE-quoted string and a `#` comment are
     # inert, so prose describing this footgun is not an instance of it and must not be blocked.
     # It deliberately leaves DOUBLE-quoted text alone, which is where a real `$( )` expands - the
-    # very thing this guard looks for - so a broader mask would delete the finding.
-    text = blank_unexpanded_text(strip_heredoc_bodies(command))
+    # very thing this guard looks for - so a broader mask would delete the finding. Under
+    # PowerShell a backtick escapes, so `` `$(x) `` is literal text and is blanked with the escape.
+    text = blank_unexpanded_text(strip_heredoc_bodies(command), tool_name=tool_name)
     return any(_SUBSTITUTION_RX.search(arg)
-               for arg in _TEXT_ARG_RX.findall(text) + _gh_short_text_args(text))
+               for arg in _TEXT_ARG_RX.findall(text) + _gh_short_text_args(text, tool_name))
 
 
-def _gh_short_text_args(text: str) -> list[str]:
+def _gh_short_text_args(text: str, tool_name: str = "Bash") -> list[str]:
     """The double-quoted `-t`/`-b` values of every gh statement that takes prose through them."""
     found: list[str] = []
-    for masked, raw in _statement_pairs(text):
+    for masked, raw in _statement_pairs(text, tool_name):
         if _GH_PROSE_COMMAND.match(masked):
             found += _GH_SHORT_TEXT_ARG_RX.findall(raw)
     return found
@@ -222,6 +223,7 @@ def main() -> int:
     except Exception:
         return 0
     command = (event.get("tool_input") or {}).get("command") or ""
+    tool_name = event.get("tool_name") or "Bash"
     if substitutes_inside_unquoted_heredoc(command):
         sys.stderr.write(
             "An UNQUOTED heredoc body carries a command substitution, so the shell will RUN it.\n"
@@ -234,7 +236,7 @@ def main() -> int:
             "BACK: a byte count or a tail of the composed file catches this in one line.\n"
         )
         return 2
-    if substitutes_inside_text_arg(command):
+    if substitutes_inside_text_arg(command, tool_name=tool_name):
         sys.stderr.write(
             "Self-authored PROSE carries a command substitution, so the shell will RUN it.\n"
             "Backticks and $(...) inside a double-quoted argument are evaluated BEFORE the\n"
@@ -246,7 +248,7 @@ def main() -> int:
             "Then READ THE RESULT BACK before pushing.\n"
         )
         return 2
-    if not self_referencing_prefix(command, event.get("tool_name") or "Bash"):
+    if not self_referencing_prefix(command, tool_name):
         return 0
     sys.stderr.write(
         "A prefix assignment is referenced on the same command line, so it expands EMPTY.\n"

@@ -419,3 +419,31 @@ def test_short_b_and_t_elsewhere_are_ordinary_work(command: str) -> None:
     """Outside gh's prose-carrying subcommands, -b and -t take branch names, image tags, sizes:
     substituting one in is ordinary, and a guard that fired there would be disabled."""
     assert guard.substitutes_inside_text_arg(command) is False
+
+
+# ------------------------------------------- PowerShell reads its own escape character
+
+def _exit_as(tool_name: str, command: str, monkeypatch: pytest.MonkeyPatch) -> int:
+    import io
+    import json
+
+    payload = {"tool_name": tool_name, "tool_input": {"command": command}}
+    monkeypatch.setattr("sys.stdin", io.StringIO(json.dumps(payload)))
+    return guard.main()
+
+
+def test_powershell_backtick_escaped_dollar_is_literal_prose(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Under PowerShell a backtick escapes `$`, so `` `$(rm x) `` is literal text and nothing runs.
+    Read as Bash the backtick escaped nothing and the `$(` was blocked as a real substitution."""
+    command = 'git commit -m "describe `$(rm x) safely"'
+    assert guard.substitutes_inside_text_arg(command, tool_name="PowerShell") is False
+    assert _exit_as("PowerShell", command, monkeypatch) == 0
+
+
+def test_powershell_control_an_unescaped_subexpression_still_blocks(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """`$(...)` inside double quotes is a PowerShell subexpression: it RUNS, so this must block."""
+    command = 'git commit -m "describe $(rm x) safely"'
+    assert guard.substitutes_inside_text_arg(command, tool_name="PowerShell") is True
+    assert _exit_as("PowerShell", command, monkeypatch) == 2

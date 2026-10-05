@@ -545,3 +545,51 @@ def test_advisory_json_names_the_pretooluse_event(monkeypatch, capsys):
     """Claude Code routes additionalContext by hookEventName; a wrong name drops the advisory."""
     assert run_main_bg(monkeypatch, 'uv run /p/scripts/gate.py --gate "make test"', False) == 0
     assert json.loads(capsys.readouterr().out)["hookSpecificOutput"]["hookEventName"] == "PreToolUse"
+
+
+# ---------------------------------------------------------------------------
+# PowerShell reads its own escapes: a backslash is a path separator, a backtick escapes
+# ---------------------------------------------------------------------------
+
+
+def _rc_as(monkeypatch, tool_name, command):
+    payload = json.dumps({"tool_name": tool_name, "tool_input": {"command": command}})
+    monkeypatch.setattr(sys, "stdin", io.StringIO(payload))
+    return B.main()
+
+
+# `"C:\temp\"` closes under PowerShell, so the PIPESTATUS after it is SINGLE-quoted and expands
+# nothing. Read as Bash the backslash escaped the closing quote, the string ran on, and the
+# single-quoted word read as a genuine status check that disabled the block.
+_PS_PATH_THEN_QUOTED_PIPESTATUS = (
+    "pytest -q " + chr(124) + " tail -3; echo \"C:\\temp\\\" '${PIPESTATUS[0]}'; git commit -m x")
+
+
+def test_powershell_single_quoted_pipestatus_after_a_path_is_not_the_fix(monkeypatch):
+    assert B.handles_pipe_status(_PS_PATH_THEN_QUOTED_PIPESTATUS, "PowerShell") is False
+    assert _rc_as(monkeypatch, "PowerShell", _PS_PATH_THEN_QUOTED_PIPESTATUS) == 2
+
+
+def test_powershell_control_a_double_quoted_pipestatus_still_counts(monkeypatch):
+    command = ("pytest -q " + chr(124)
+               + ' tail -3; echo "C:\\temp\\" "${PIPESTATUS[0]}"; git commit -m x')
+    assert _rc_as(monkeypatch, "PowerShell", command) == 0
+
+
+# Same shape for the `$?` advisory: single-quoted after a closed path, nothing expands.
+_PS_PATH_THEN_QUOTED_STATUS = "tool verify " + chr(124) + " tail -5; echo \"C:\\x\\\" 'rc=$?'"
+
+
+def test_powershell_single_quoted_status_after_a_path_is_no_status_read(monkeypatch, capsys):
+    assert B.reads_masked_status(_PS_PATH_THEN_QUOTED_STATUS, "PowerShell") is False
+    assert _rc_as(monkeypatch, "PowerShell", _PS_PATH_THEN_QUOTED_STATUS) == 0
+    assert "MASKED EXIT STATUS" not in capsys.readouterr().out
+
+
+def test_powershell_backtick_escaped_quotes_leave_the_status_read_expanding(monkeypatch, capsys):
+    """`` `'rc=$?`' `` is no single-quoted string to PowerShell: the backtick escapes each quote,
+    so `$?` expands. Read as Bash it was a single-quoted string and the advisory stayed silent."""
+    command = "tool verify " + chr(124) + " tail -5; echo `'rc=$?`'"
+    assert B.reads_masked_status(command, "PowerShell") is True
+    assert _rc_as(monkeypatch, "PowerShell", command) == 0
+    assert "MASKED EXIT STATUS" in capsys.readouterr().out

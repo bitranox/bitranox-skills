@@ -375,7 +375,9 @@ def extract_text(tool_name, tool_input):
         # documenting a footgun trips the guard that watches for it.
         # blank_unexpanded_text too: a single-quoted commit message DESCRIBING a trap is not
         # an instance of it, and nudging there blocks the writing of the guidance itself.
-        return blank_unexpanded_text(strip_heredoc_bodies(ti.get("command", "")))
+        # Under the event's own shell: PowerShell escapes with a backtick, not a backslash.
+        return blank_unexpanded_text(strip_heredoc_bodies(ti.get("command", "")),
+                                     tool_name=tool_name)
     if tool_name == "Write":
         return ti.get("content", "")
     if tool_name == "Edit":
