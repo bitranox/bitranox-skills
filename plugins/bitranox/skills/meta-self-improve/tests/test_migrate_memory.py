@@ -23,10 +23,13 @@ def _encode_slug(path):
 
 
 @pytest.fixture
-def env(tmp_path, short_root, monkeypatch):
+def env(short_root, monkeypatch):
     """(root for project dirs, fake home). Project dirs go under `short_root` (conftest): their
-    path becomes a slug capped at 200 characters, which a long TMPDIR under tmp_path overran."""
-    home = tmp_path / "home"
+    path becomes a slug capped at 200 characters, which a long TMPDIR under tmp_path overran. The
+    home goes there too: the migration backup nests a project-derived receipt name five levels
+    under it, and under tmp_path (temp dir plus the test's own name) that passed Windows' 260-char
+    MAX_PATH, so the backup failed for a reason that has nothing to do with the code."""
+    home = short_root / "home"
     (home / ".claude").mkdir(parents=True)
     monkeypatch.setenv("HOME", str(home))
     monkeypatch.setenv("USERPROFILE", str(home))

@@ -23,10 +23,12 @@ HAVE_GIT = shutil.which("git") is not None
 
 
 @pytest.fixture
-def env(tmp_path, short_root, monkeypatch):
+def env(short_root, monkeypatch):
     """(root for project dirs, fake home); project dirs go under the conftest's `short_root` so a
-    long TMPDIR cannot push their slug past the 200-character cap."""
-    home = tmp_path / "home"
+    long TMPDIR cannot push their slug past the 200-character cap. The home goes there too: the
+    backup nests a project-derived receipt name five levels under it, and under tmp_path that
+    passed Windows' 260-char MAX_PATH."""
+    home = short_root / "home"
     (home / ".claude").mkdir(parents=True)
     monkeypatch.setenv("HOME", str(home))
     monkeypatch.setenv("USERPROFILE", str(home))
@@ -68,7 +70,7 @@ def _tree(tmp_path, git=True):
     (proj / "CLAUDE.local.md").write_text("my own notes\n", encoding="utf-8")
     if git and HAVE_GIT:
         subprocess.run(["git", "init", "-q", str(top)], check=True, capture_output=True)
-        (top / ".gitignore").write_text("*.pyc\n", encoding="utf-8")
+        (top / ".gitignore").write_bytes(b"*.pyc\n")     # bytes: text mode writes CRLF on Windows
     return top, proj
 
 
