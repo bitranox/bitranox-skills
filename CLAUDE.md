@@ -51,7 +51,9 @@ does not silently break it. These rules are enforced/encoded by `.gitattributes`
   reports `Linux` to `uname` and cannot be told apart from it. The shim guards `uname -s` and skips
   loudly to stderr under any other shell. A hook must never wedge a turn: every hooks.json command
   launches the shim with `--hook`, under which every failure path exits 0 (a CLI call without
-  `--hook` gets exit 3 instead, so a mistyped path in a gate is loud). Python is started on a small
+  `--hook` gets exit 2 instead - could not run, the plugin-wide code - so a mistyped path in a gate
+  is loud; `BITRANOX_RUN_PYTHON_STRICT=1` makes a hook launch loud too, with exit 3, never the
+  block code). Python is started on a small
   `-c` bootstrap rather than on the script, because python's own "can't open file" exit is 2, the
   block code: a script that vanishes or cannot be opened degrades instead.
 
@@ -81,15 +83,21 @@ so an H1 renamed to the skill's own name reads as drift. Precisely, the check er
 parenthetical (no nested parentheses, whatever it holds) on EVERY line starting with `# `, which
 includes a `# ` comment line inside a code block. Every other file must match byte for byte.
 
-Each side is read at its NEWEST text, never at whatever a checkout holds: a file edited locally
+Which text of each side is compared depends on who asks. The audits (`--mirrors`, `--mirror-of`)
+read each side at its NEWEST text, never at whatever a checkout holds: a file edited locally
 (uncommitted, untracked, or committed since the fork point) comes from disk, every other file from
-the published `origin` ref. A checkout behind origin therefore neither reports false drift nor
-hides real drift; one level with or ahead of origin reads exactly as its working tree.
+the published `origin` ref, so a checkout behind origin neither reports false drift nor hides real
+drift. The commit and push gates read what the change SHIPS: the repo being committed at its index
+on a commit and at HEAD on a push, the other repo at its published ref plus what it committed
+since forking from it, so another session's uncommitted edit there never decides a commit. Nothing
+fetches; the audits, and every DRIFT message, name a repo whose `origin` was last fetched more than
+7 days ago, because a stale ref is the likeliest source of a false drift.
 
-- The commit gate checks the twin of any mirrored skill the current change touches. Pre-existing
-  drift elsewhere does not block an unrelated commit.
+- The commit and push gates check the twin of any mirrored skill the current change touches.
+  Pre-existing drift elsewhere does not block an unrelated commit.
 - `python3 plugins/bitranox/hooks/repo-gate.py --mirrors` audits every pair, changed or not, and
-  exits non-zero when any has drifted. This is local only: the twins are sibling repos that a CI
+  exits 1 when any pair has drifted or a twin is missing from `MIRRORED_SKILLS`, 2 when it could
+  not run (outside the repo, or a crash). This is local only: the twins are sibling repos that a CI
   clone does not have, so CI cannot run it.
 - `repo-gate.py --mirror-of <tool-repo>` asks the same question from the other side, about that one
   repo's pair only. It is what a tool repo's release pipeline runs before pushing, where another
@@ -116,8 +124,8 @@ produces failures that read exactly like real defects but are artifacts of the e
   document instead of rejecting it, failing `test_validate_xml_entities_not_expanded`; without
   `defusedxml` as well it skips every XML file, failing 5 tests in `test_validate_structured_files.py`;
 - without `httpx2`, `test_proxy_pool.py` fails at COLLECTION, which aborts the whole run;
-- `repo-gate.py --ci` shells out to pytest itself, so it needs the same set or it reports
-  `repo-gate: FAILED` for a repo that is fine.
+- `repo-gate.py --ci` shells out to pytest itself, so it needs the same set or it exits 2 (could
+  not run) naming the missing packages, never reporting the repo itself as failing.
 
 ```bash
 env -u VIRTUAL_ENV uv run --with pytest --with PyYAML --with lxml --with defusedxml \
