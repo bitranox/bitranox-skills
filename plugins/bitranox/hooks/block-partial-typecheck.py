@@ -20,7 +20,9 @@ invocation is judged, not only the first):
   - it actually invokes pyright as a check (not --version/--help);
   - pyright is given at least one positional path (no paths = the config's own
     include list = the full project = fine);
-  - the project HAS a test directory (nothing to miss otherwise);
+  - the directory the run lands in - the event cwd moved by every `cd` before it -
+    HAS a test directory (nothing to miss otherwise; a `cd` this hook cannot follow
+    leaves nothing to judge);
   - none of the given paths covers that test directory.
 
 Pure standard library: no jq, no shell. Reads the PreToolUse event JSON on stdin.
@@ -147,23 +149,55 @@ def _pyright_invocations(cmd: str, tool_name: str = "Bash") -> list[list[str]]:
     `C:\venv\Scripts\pyright.exe`, and a POSIX basename over what survives still never matches.
     Either half missing lets a partial typecheck through the gate that exists to catch it.
     """
+    return [positionals for positionals, _where in _pyright_runs(cmd, None, tool_name)]
+
+
+def _pyright_runs(cmd: str, cwd: str | None, tool_name: str = "Bash") -> list[tuple[list[str], str | None]]:
+    """(positional paths, directory it runs in) for EVERY pyright check run in `cmd`.
+
+    The directory follows every cd-like statement before the run, read by the shared
+    `shell_text.directory_change`, starting from `cwd`. It is None when a cd lands somewhere no
+    static read can name (a variable, `cd -`, a bare `cd`), and such a run cannot be judged.
+
+    The event cwd is where the SESSION sits, not where `cd <repo root> && pyright a/tests b` runs.
+    Judging the paths against the session's directory blocked exactly that full-coverage run: from
+    a skill dir holding its own tests/, `skills/x/tests` resolved to nothing and the skill's tests/
+    read as excluded (measured on the five calls behind the report, 2026-10-05).
+    """
     # Heredoc bodies first: a body is stdin DATA, so a doc or script that merely CONTAINS a narrow
     # pyright invocation is not one, and blocking it stops the footgun being written down - the
     # guard-blocks-its-own-documentation shape this gate has hit before.
     text = shell_text.strip_heredoc_bodies(cmd)
-    invocations: list[list[str]] = []
-    for _offset, segment in shell_text.iter_segments(text, tool_name):
-        try:
-            tokens = shell_text.split_for_tool(segment, tool_name, comments=True)
-        except ValueError:
-            continue  # unbalanced quotes: not ours to judge
-        index = _pyright_index(tokens, tool_name)
-        if index is None:
-            continue
-        positionals = _invocation_positionals(tokens[index + 1 :])
-        if positionals is not None:
-            invocations.append(positionals)
-    return invocations
+    runs: list[tuple[list[str], str | None]] = []
+    here: str | None = cwd
+    saved: list[str | None] = []
+    segments = list(shell_text.iter_segments(text, tool_name))
+    for number, (offset, segment) in enumerate(segments):
+        changed, here = shell_text.directory_change(segment, here, tool_name)
+        if not changed:
+            run = _pyright_run(segment, tool_name)
+            if run is not None:
+                runs.append((run, here))
+        # A cd inside a subshell ends with it: `(cd sub && pyright x); pyright y` runs y here.
+        end = offset + len(segment)
+        separator = text[end:segments[number + 1][0]] if number + 1 < len(segments) else ""
+        if "(" in separator:
+            saved.append(here)
+        elif ")" in separator and saved:
+            here = saved.pop()
+    return runs
+
+
+def _pyright_run(segment: str, tool_name: str) -> list[str] | None:
+    """The positional paths of the pyright check ONE statement runs, or None when it runs none."""
+    try:
+        tokens = shell_text.split_for_tool(segment, tool_name, comments=True)
+    except ValueError:
+        return None  # unbalanced quotes: not ours to judge
+    index = _pyright_index(tokens, tool_name)
+    if index is None:
+        return None
+    return _invocation_positionals(tokens[index + 1 :])
 
 
 def _is_pyright(token: str, tool_name: str) -> bool:
@@ -276,6 +310,22 @@ def _covers(path_arg: str, cwd: Path, tests: Path) -> bool:
     return target == tests_resolved or tests_resolved.is_relative_to(target) or target.is_relative_to(tests_resolved)
 
 
+def _excluded_tests(paths: list[str], where: str | None) -> tuple[list[str], Path] | None:
+    """(paths, test dir) when a run narrowed to `paths` from `where` misses that dir's tests.
+
+    None when the run gave no paths (the full project), when `where` cannot be read (a cd this
+    hook could not follow - cannot tell, so do not block), when that directory has no tests to
+    miss, or when a path covers them.
+    """
+    if not paths or where is None:
+        return None
+    base = Path(where)
+    tests = _test_dir(base)
+    if tests is None or any(_covers(p, base, tests) for p in paths):
+        return None
+    return paths, tests
+
+
 def main() -> int:
     try:
         data = json.load(sys.stdin)
@@ -289,24 +339,18 @@ def main() -> int:
     if not re.search(r"\bpyright\b", cmd):
         return 0
 
-    # Invocations with no paths use the config's include list: that IS the full project.
-    narrowed = [p for p in _pyright_invocations(cmd, data.get("tool_name") or "Bash") if p]
-    if not narrowed:
-        return 0
-
     cwd_raw = data.get("cwd")
     if not cwd_raw:
         return 0
-    cwd = Path(cwd_raw)
-    tests = _test_dir(cwd)
-    if tests is None:
-        return 0  # no tests to miss
 
-    # Each run's result is read on its own, so each is judged on its own.
-    positionals = next(
-        (paths for paths in narrowed if not any(_covers(p, cwd, tests) for p in paths)), None)
-    if positionals is None:
+    # Each run's result is read on its own, so each is judged on its own, from the directory it
+    # runs in. Invocations with no paths use the config's include list: that IS the full project.
+    runs = _pyright_runs(cmd, str(cwd_raw), data.get("tool_name") or "Bash")
+    found = next((hit for hit in (_excluded_tests(paths, where) for paths, where in runs) if hit),
+                 None)
+    if found is None:
         return 0
+    positionals, tests = found
 
     rel = tests.name
     msg = [
