@@ -278,3 +278,36 @@ def test_the_fire_cap_silences_the_session_after_it_is_spent(session):
     outs = [_run(_pending(session, "rsync -a -z src dst"))[1] for _ in range(R.FIRE_CAP + 1)]
     assert all(outs[:R.FIRE_CAP]), "every nudge up to the cap must speak"
     assert outs[R.FIRE_CAP] == "", "the nudge past the cap must be silent"
+
+
+# ---------------------------------------------------------------- a subshell paren is not a word
+
+@pytest.mark.parametrize("command", [
+    "(sed -n 1p file.txt)",
+    "cd /tmp && (sed -n 1p file.txt)",
+    "(sed -n 1p file.txt) | head -3",
+    "true; (cd x && sed -n 1p file.txt)",
+])
+def test_a_subshell_does_not_glue_its_paren_to_the_program_or_an_operand(command):
+    """Statements were cut on a regex that knows no parens, so the program read `(sed` and the last
+    operand `file.txt)`: a retry written without the parens compared as a different command."""
+    assert R.shape("sed -n 1p file.txt") == ("sed", ("-n",), ("1p", "file.txt"))   # control
+    assert R.shape(command) == ("sed", ("-n",), ("1p", "file.txt"))
+    assert R.notice("sed -n -E 1p file.txt", [list(R.shape(command))]) is not None
+
+
+def test_a_process_substitution_is_an_argument_not_a_statement():
+    """The corpus replay of the walk caught this: split at `<(`, `diff <(sed a x) <(sed b y)` became
+    the command `sed`, and the words after a `<(...)` became a statement of their own."""
+    assert R.shape("diff <(sed -n 1p a.md) <(sed -n 1p b.md)")[0] == "diff"
+    shaped = R.shape("timeout 60 tool --replay <(cat f.json) disks --format json | python3 -c x")
+    assert shaped[0] == "timeout" and "disks" in shaped[2]
+
+
+def test_a_subshell_followed_by_a_redirect_is_still_its_last_statement():
+    assert R.shape("cd .. && (ruff check a.py; ruff format --check b.py) 2>&1 | tail -4") == (
+        "ruff", ("--check",), ("format", "b.py"))
+
+
+def test_a_quoted_paren_is_still_an_operand():
+    assert R.shape('grep -n "(must PASS)" log.txt') == ("grep", ("-n",), ("(must PASS)", "log.txt"))

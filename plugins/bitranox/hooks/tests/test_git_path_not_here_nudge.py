@@ -215,6 +215,28 @@ def test_an_operand_after_double_dash_is_a_path_even_with_a_leading_dash(tmp_pat
     assert G.notice("git ls-files --error-unmatch -odd.md", str(inner)) is None     # an option
 
 
+# --- a subshell is a statement boundary ----------------------------------------------------------
+# Statements were cut on a regex that knows no parens, so `(git check-ignore ...)` read as the
+# program `(git` - never a git verb - and `(cd X && ...)` as no cd at all.
+
+def test_a_question_inside_a_subshell_still_fires(tmp_path):
+    _outer, inner = _umbrella(tmp_path)
+    assert G.notice("git check-ignore -q handover.md", str(inner)) is not None     # control
+    assert G.notice("(git check-ignore -q handover.md)", str(inner)) is not None
+    assert G.notice("echo start; (git ls-files --error-unmatch handover.md)", str(inner)) is not None
+
+
+def test_a_cd_inside_a_subshell_states_the_subject(tmp_path):
+    outer, inner = _umbrella(tmp_path)
+    assert G.notice(f"(cd {outer} && git check-ignore -q handover.md)", str(inner)) is None
+
+
+def test_a_quoted_paren_label_is_not_a_subshell(tmp_path):
+    _outer, inner = _umbrella(tmp_path)
+    cmd = 'echo "=== (must PASS) ===" ; git check-ignore -q handover.md'
+    assert G.notice(cmd, str(inner)) is not None
+
+
 # --- the walks that reach the filesystem root ----------------------------------------------------
 
 def test_no_work_tree_anywhere_is_silent(tmp_path):

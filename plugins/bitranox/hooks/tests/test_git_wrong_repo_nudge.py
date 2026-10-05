@@ -278,3 +278,29 @@ def test_a_quoted_destination_with_a_space_is_one_destination(tmp_path):
     here, one, two = _repo(tmp_path, "here"), _repo(tmp_path, "one"), _repo(tmp_path, "t w o")
     assert G.notice(f'cd {one} && git log && cd "{two}" && git log', str(here)) is not None
     assert G.notice(f'cd {one} && git log && cd -P "{two}" && git log', str(here)) is not None
+
+
+# --- subshells: a statement boundary, and a cd that does not outlive its parens --------------------
+
+def test_two_subshells_into_different_repos_fire(tmp_path):
+    # A regex that knows no parens read `(cd X` as a program named `(cd`, so neither cd counted.
+    here, one, two = _repo(tmp_path, "here"), _repo(tmp_path, "one"), _repo(tmp_path, "two")
+    assert G.notice(f"cd {one} && git log ; cd {two} && git log", str(here)) is not None  # control
+    assert G.notice(f"(cd {one} && git log) ; (cd {two} && git log)", str(here)) is not None
+    assert G.notice(f"(cd {one}; git log); (cd {two}; git log)", str(here)) is not None
+
+
+def test_a_cd_inside_a_subshell_ends_with_it(tmp_path):
+    # Relative cds in sibling subshells both start from the call's own directory. Read flat, the
+    # second resolved under the first (one/two, absent) and fell back to repo `one`, so two repos
+    # read as one.
+    base = tmp_path / "base"
+    _repo(base, "one"), _repo(base, "two")
+    assert G.notice("(cd one && git log) ; (cd two && git log)", str(base)) is not None
+    assert G.notice("cd one && git log ; cd two && git log", str(base)) is None   # flat: one/two
+
+
+def test_a_git_after_the_subshell_answers_from_the_calls_own_repo(tmp_path):
+    here, one = _repo(tmp_path, "here"), _repo(tmp_path, "one")
+    assert G.notice(f"(cd {one} && git log) ; git log", str(here)) is not None
+    assert G.notice(f"(cd {here} && git log) ; git log", str(here)) is None       # one repo twice

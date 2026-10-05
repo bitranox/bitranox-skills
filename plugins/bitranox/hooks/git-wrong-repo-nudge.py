@@ -58,7 +58,7 @@ import os
 import re
 import sys
 
-from shell_text import SEP, commands_only_aligned, is_shell_tool
+from shell_text import commands_only_aligned, is_shell_tool, iter_segments
 
 # `cd` as the statement's own verb, optionally behind env assignments. The operands are optional: a
 # bare `cd` is still a directory change, to $HOME, and must not read as "no cd happened".
@@ -67,21 +67,31 @@ _GIT = re.compile(r"^\s*(?:\w+=\S*\s+)*(?:sudo\s+|timeout\s+\S+\s+)*git\b")
 
 
 def _statements(command, tool_name="Bash"):
-    """(start, end) offsets of each statement, read from the MASKED text.
+    """(start, end, separator) of each statement, read from the MASKED text.
 
     Structure comes from the mask; the caller slices the RAW string at these offsets, because a
     path compared on masked text would be compared as filler characters. That slicing is only
     sound because the mask is ALIGNED: heredoc bodies are blanked in place rather than deleted, so
     an offset here is an offset into the raw command. A deleting strip shifted every statement after
     a heredoc onto the body text, which blinded the guard or made it fire on the body's data.
+
+    Statements come from the quote-aware walk, which ends one at a subshell paren too; a regex
+    that knows no parens read `(cd X` as a program named `(cd`. `separator` is the text that ended
+    the statement (`;`, `&&`, `(`, `)`, ...) or "" for the last one, so the caller can tell where a
+    subshell opens and closes.
     """
     masked = commands_only_aligned(command, tool_name)
-    spans, start = [], 0
-    for hit in SEP.finditer(masked):
-        spans.append((start, hit.start()))
-        start = hit.end()
-    spans.append((start, len(masked)))
+    segments = list(iter_segments(masked, tool_name))
+    spans = []
+    for number, (at, segment) in enumerate(segments):
+        end = at + len(segment)
+        following = segments[number + 1][0] if number + 1 < len(segments) else end
+        spans.append((at, end, masked[end:following]))
     return masked, spans
+
+
+# A separator that opens a subshell, whose `cd` ends with it, and the one that closes it.
+_SUBSHELL_OPENERS = frozenset({"(", "$(", "<(", ">("})
 
 
 _UNKNOWABLE = re.compile(r"[$`<>|\n*?]")          # a destination no static read can resolve
@@ -148,34 +158,54 @@ def notice(command, cwd, tool_name="Bash"):
     too when any destination is unreadable - a shell variable, `cd -`, a bare `cd` or `~`, or a
     path that is not there - because a verdict built on a guessed destination is invented rather
     than measured.
+
+    A cd inside a subshell ends with it: `(cd A && git log) ; git log` answers from A and then
+    from the call's own directory, so the directory in force is saved at each `(` and restored at
+    its `)`.
     """
     if not command or not isinstance(command, str) or not cwd:
         return None
     masked, spans = _statements(command, tool_name)
-    here, landed, answered = str(cwd), [], []
-    for start, end in spans:
-        cd_hit = _CD.match(masked[start:end])
-        if cd_hit:
-            target = None
-            if cd_hit.group("args") is not None:
-                # Words are found on the MASKED text, where a quoted path is one word however many
-                # spaces it holds, and each is then sliced from the raw statement.
-                raw, offset = command[start:end], cd_hit.start("args")
-                target = _cd_target([raw[offset + w.start():offset + w.end()]
-                                     for w in re.finditer(r"\S+", cd_hit.group("args"))])
-            if _unknowable(target):
-                return None            # where it lands is not readable here
-            here = _resolve(target, here)
-            landed.append(here)
-            continue
-        if not _GIT.match(masked[start:end]) or not landed:
-            continue
-        answered.append(here)          # a git after a cd: it answers from this landing
-        if None in {_repo_root(path) for path in landed}:
-            continue
-        if len({_repo_root(path) for path in answered}) > 1:
-            return _multi_cd_notice(here)
+    here, landed, answered, saved = str(cwd), [], [], []
+    for start, end, separator in spans:
+        message, here = _judge_statement(command, masked[start:end], start, here, landed, answered)
+        if message is not False:
+            return message
+        if separator in _SUBSHELL_OPENERS:
+            saved.append(here)
+        elif separator == ")" and saved:
+            here = saved.pop()
     return None
+
+
+def _judge_statement(command, statement, start, here, landed, answered):
+    """(verdict, directory in force after it) for one statement.
+
+    The verdict is False to carry on, None to stop silently (an unreadable destination), or the
+    notice text. `landed` and `answered` are appended to in place.
+    """
+    cd_hit = _CD.match(statement)
+    if cd_hit:
+        target = None
+        if cd_hit.group("args") is not None:
+            # Words are found on the MASKED text, where a quoted path is one word however many
+            # spaces it holds, and each is then sliced from the raw statement.
+            raw, offset = command[start:start + len(statement)], cd_hit.start("args")
+            target = _cd_target([raw[offset + w.start():offset + w.end()]
+                                 for w in re.finditer(r"\S+", cd_hit.group("args"))])
+        if _unknowable(target):
+            return None, here          # where it lands is not readable here
+        here = _resolve(target, here)
+        landed.append(here)
+        return False, here
+    if not _GIT.match(statement) or not landed:
+        return False, here
+    answered.append(here)              # a git after a cd: it answers from this landing
+    if None in {_repo_root(path) for path in landed}:
+        return False, here
+    if len({_repo_root(path) for path in answered}) > 1:
+        return _multi_cd_notice(here), here
+    return False, here
 
 
 def _multi_cd_notice(where):

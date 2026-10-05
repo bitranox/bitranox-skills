@@ -574,3 +574,60 @@ def test_a_heredoc_then_cd_into_a_ci_repo_records_that_repos_sha(tmp_path, repo,
     out = capsys.readouterr().out
     assert _head(other)[:12] in out and _head(repo)[:12] not in out
     assert [e["sha"] for e in state.pending_for(str(repo), "sess-1")] == [_head(other)]
+
+
+# --- which push, which source, which destination -------------------------------------------------
+
+def _context(capsys):
+    out = capsys.readouterr().out
+    return json.loads(out)["hookSpecificOutput"]["additionalContext"] if out else ""
+
+
+def test_refspecs_come_from_the_push_that_builds_not_the_first_one(repo, capsys):
+    """`_AFTER_PUSH` read the FIRST push in the command, so a dry run in front of a tag push handed
+    over its own operands: no refspec, the branch fallback, and the tag's run never recorded."""
+    tag_sha = _tag(repo, "v9.0.0")
+    assert hook.main(_event("git push origin v9.0.0", repo)) == 0                 # control
+    assert "tag v9.0.0" in _context(capsys)
+    state.clear_session(str(repo), "sess-1")
+    assert hook.main(_event("git push --dry-run origin && git push origin v9.0.0", repo)) == 0
+    text = _context(capsys)
+    assert "tag v9.0.0" in text and tag_sha[:12] in text
+
+
+def test_a_head_source_is_resolved_and_judged_by_its_destination(repo, capsys):
+    """`HEAD:release` was skipped as a source, so the branch's own HEAD == @{u} test decided - and
+    with the work pushed to ANOTHER branch that test fails, so a landed push recorded nothing."""
+    _commit_unpushed(repo)
+    assert hook.main(_event("git push origin HEAD:release", repo)) == 0
+    assert _context(capsys) == ""                                                 # not pushed yet
+    _git(repo, "push", "origin", "HEAD:release")
+    assert hook.main(_event("git push origin HEAD:release", repo)) == 0
+    text = _context(capsys)
+    assert "branch release" in text and _head(repo)[:12] in text
+
+
+def test_a_name_that_is_both_a_tag_and_a_branch_records_nothing(repo, capsys):
+    """git refuses such a push outright ("src refspec foo matches more than one", rc 1, nothing
+    sent), and the hook recorded the TAG for it - unverified, since a tag leaves no tracking ref."""
+    _git(repo, "branch", "foo")
+    _commit_unpushed(repo)
+    _git(repo, "tag", "foo")
+    refused = subprocess.run(["git", "push", "origin", "foo"], cwd=str(repo), capture_output=True,
+                             check=False)
+    assert refused.returncode != 0                                                # git's own verdict
+    assert hook.main(_event("git push origin foo", repo)) == 0
+    assert _context(capsys) == ""
+    assert state.pending_for(str(repo), "sess-1") == []
+    # A fully qualified source is not ambiguous, and git pushes it.
+    assert hook.main(_event("git push origin refs/tags/foo", repo)) == 0
+    assert "tag foo" in _context(capsys)
+
+
+def test_a_src_dst_push_names_the_destination_ref(repo, capsys):
+    """CI builds the DESTINATION branch, so that is the ref the announcement must name."""
+    _commit_unpushed(repo)
+    _git(repo, "push", "origin", "master:release")
+    assert hook.main(_event("git push origin master:release", repo)) == 0
+    text = _context(capsys)
+    assert "branch release" in text and "branch master" not in text

@@ -32,12 +32,12 @@ import sys
 # guard fire on prose that merely mentions the footgun it guards. Re-exported so callers and tests
 # can keep reaching it as `shell_prefix_selfref_guard.strip_heredoc_bodies`.
 from shell_text import (  # noqa: F401
-    SEP, blank_unexpanded_text, heredoc_is_quoted, iter_heredocs, mask_data_regions,
+    blank_unexpanded_text, heredoc_is_quoted, iter_heredocs, iter_segments, mask_data_regions,
     strip_heredoc_bodies,
 )
 
-# Statement separators (`SEP`, shared). A prefix assignment dies at the end of ITS command, so a
-# reference after one of these is a deliberate use of the shell's own variable.
+# Statements come from shell_text's quote-aware walk. A prefix assignment dies at the end of ITS
+# command, so a reference after a separator is a deliberate use of the shell's own variable.
 
 # NAME=value at a command position. The value is optional (`VAR= cmd` is legal).
 ASSIGNMENT = re.compile(r"^([A-Za-z_][A-Za-z0-9_]*)=")
@@ -89,6 +89,12 @@ _TEXT_ARG_RX = re.compile(
 )
 _SUBSTITUTION_RX = re.compile(r"`[^`]*`|\$\(")
 
+# gh's SHORT spellings of --title and --body. Scoped to the gh subcommands that take prose, because
+# elsewhere `-b` and `-t` carry a branch name, an image tag or a block size, where substituting a
+# value in is ordinary work (`git checkout -b "x-$(date +%s)"`, `docker build -t "img:$(...)"`).
+_GH_PROSE_COMMAND = re.compile(r"^\s*(?:\w+=\S*\s+)*gh\s+(?:pr|issue)\s+(?:create|edit|comment)\b")
+_GH_SHORT_TEXT_ARG_RX = re.compile(r"(?<![\w-])-[bt](?:\s*|=)\"([^\"]*)\"")
+
 # Inside a heredoc body an opening backtick is enough: the closing one may sit on a later line,
 # so the paired form above would miss a multi-line span. Only the SUBSTITUTING forms are listed.
 # A bare `$VAR` also expands in a bare heredoc, but templating a value in is ordinary work, and a
@@ -118,21 +124,38 @@ def substitutes_inside_text_arg(command: str) -> bool:
     # inert, so prose describing this footgun is not an instance of it and must not be blocked.
     # It deliberately leaves DOUBLE-quoted text alone, which is where a real `$( )` expands - the
     # very thing this guard looks for - so a broader mask would delete the finding.
+    text = blank_unexpanded_text(strip_heredoc_bodies(command))
     return any(_SUBSTITUTION_RX.search(arg)
-               for arg in _TEXT_ARG_RX.findall(
-                   blank_unexpanded_text(strip_heredoc_bodies(command))))
+               for arg in _TEXT_ARG_RX.findall(text) + _gh_short_text_args(text))
+
+
+def _gh_short_text_args(text: str) -> list[str]:
+    """The double-quoted `-t`/`-b` values of every gh statement that takes prose through them."""
+    found: list[str] = []
+    for masked, raw in _statement_pairs(text):
+        if _GH_PROSE_COMMAND.match(masked):
+            found += _GH_SHORT_TEXT_ARG_RX.findall(raw)
+    return found
+
+
+def _statement_pairs(text: str, tool_name: str = "Bash") -> list[tuple[str, str]]:
+    """(masked, raw) for each statement of `text`.
+
+    Separators are found by the quote-aware walk on the MASKED text, where quoted text, comments
+    and substitutions are filler: a `;` or newline inside a quoted value does not end a statement,
+    and `MSG="$(cat f)" make push` stays ONE statement because its `$(` is already filler. The walk
+    also ends a statement at a subshell paren, so `(MSG=x make push MSG="$MSG")` begins with the
+    assignment rather than with `(MSG=x`. The mask preserves length, so its offsets cut the raw
+    text too.
+    """
+    masked = mask_data_regions(text, tool_name=tool_name)
+    return [(segment, text[at:at + len(segment)])
+            for at, segment in iter_segments(masked, tool_name)]
 
 
 def _statements(text: str, tool_name: str = "Bash") -> list[str]:
-    """`text` split into statements, ignoring separators inside quotes, comments and
-    substitutions. Offsets come from the length-preserving mask and index the raw text."""
-    out, start = [], 0
-    masked = mask_data_regions(text, tool_name=tool_name)
-    for m in SEP.finditer(masked):
-        out.append(text[start:m.start()])
-        start = m.end()
-    out.append(text[start:])
-    return out
+    """`text` split into raw statements (see `_statement_pairs`)."""
+    return [raw for _masked, raw in _statement_pairs(text, tool_name)]
 
 
 def self_referencing_prefix(command: str, tool_name: str = "Bash") -> bool:
@@ -141,10 +164,10 @@ def self_referencing_prefix(command: str, tool_name: str = "Bash") -> bool:
     # Split statements on the MASKED text and slice the raw. Two wrong tools were tried first:
     # a bare `SEP.split` is not quote-aware, so a `;` or newline inside the assignment's own
     # quoted value split the segment and the self-reference was LOST - the guard went silent on
-    # the footgun it exists to block. `iter_segments` fixes that but also breaks at `$(`, which
-    # is right for statements and wrong here: `MSG="$(cat f)" make push` is ONE assignment, and
-    # splitting it lost the prefix instead. `mask_data_regions` is length-preserving, so the
-    # separator offsets it yields index the raw text exactly.
+    # the footgun it exists to block. `iter_segments` on the RAW text fixes that but also breaks
+    # at `$(`, which is right for statements and wrong here: `MSG="$(cat f)" make push` is ONE
+    # assignment, and splitting it lost the prefix instead. Run on the masked text, where that
+    # `$(` is already filler, the walk splits only at real separators and subshell parens.
     for segment in _statements(strip_heredoc_bodies(command), tool_name):
         names = _prefix_names(segment)
         if not names:
