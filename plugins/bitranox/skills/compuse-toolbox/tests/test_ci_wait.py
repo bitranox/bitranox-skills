@@ -969,12 +969,13 @@ class TestTheEnvelope:
 class TestAnEventFilter:
     """#41: a SCHEDULED run queued on the same head sha held a push's verdict open until timeout."""
 
-    def test_the_default_asks_gh_for_push_runs_only(self, monkeypatch):
+    def test_the_default_asks_gh_for_every_event(self, monkeypatch):
+        """The default excludes schedule CLIENT-side, so gh is not asked for one event."""
         calls: list[list[str]] = []
         monkeypatch.setattr(ci_wait.subprocess, "run", emulated_gh([run("CI", "completed", "success")],
                                                                     calls))
         ci_wait.main(["--sha", SHA, "--repo", "o/r", "--settle", "0"])
-        assert calls[0][calls[0].index("--event") + 1] == "push"
+        assert "--event" not in calls[0]
 
     def test_a_scheduled_run_on_the_same_sha_cannot_hold_the_verdict(self, monkeypatch):
         rows = [evrun("CI", "completed", "success", "push"),
@@ -1007,6 +1008,84 @@ class TestAnEventFilter:
 
     def test_no_runs_under_a_filter_names_the_way_out(self):
         assert "--event any" in ci_wait.verdict([], event="push").summary
+
+
+def event_gh(rows: list[dict[str, object]], calls: list[list[str]]):
+    """`gh run list` with gh's server-side `--commit` AND `--event` filters, `--limit` last."""
+
+    def fake_run(argv, **kwargs):
+        calls.append(list(argv))
+        kept = [r for r in rows if r["headSha"] == argv[argv.index("--commit") + 1]]
+        if "--event" in argv:
+            kept = [r for r in kept if r.get("event") == argv[argv.index("--event") + 1]]
+        limit = int(argv[argv.index("--limit") + 1])
+        return subprocess.CompletedProcess(argv, 0, stdout=json.dumps(kept[:limit]), stderr="")
+
+    return fake_run
+
+
+class TestTheDefaultEventIsAnyButSchedule:
+    """W-D8: with no --event every run on the sha counts EXCEPT a scheduled one.
+
+    A `push` default read a fork pull request's head - whose only runs are `pull_request` - as
+    `no-runs`, exit 2, on a bare wait. Excluding only `schedule` keeps the reason the filter was
+    added (a nightly run queued on the same sha held a push's verdict open) without that cost.
+    """
+
+    def _main(self, monkeypatch, rows, *extra):
+        calls: list[list[str]] = []
+        monkeypatch.setattr(ci_wait.subprocess, "run", event_gh(rows, calls))
+        monkeypatch.setattr(ci_wait.time, "sleep", lambda _s: None)
+        rc = ci_wait.main(["--sha", SHA, "--repo", "o/r", "--settle", "0", "--appear-grace", "0",
+                           "--timeout", "60", *extra])
+        return rc, calls
+
+    def test_a_fork_pr_head_with_only_pull_request_runs_is_seen_by_a_bare_wait(self, monkeypatch):
+        rc, _ = self._main(monkeypatch, [evrun("CI", "completed", "success", "pull_request")])
+        assert rc == 0
+
+    def test_control_event_push_still_filters_them_out(self, monkeypatch, capsys):
+        rc, calls = self._main(monkeypatch, [evrun("CI", "completed", "success", "pull_request")],
+                               "--event", "push")
+        assert rc == 2 and "no push runs" in capsys.readouterr().err
+        assert calls[0][calls[0].index("--event") + 1] == "push"
+
+    def test_a_scheduled_run_does_not_hold_a_bare_wait_open(self, monkeypatch):
+        rows = [evrun("CI", "completed", "success", "push"),
+                evrun("nightly", "in_progress", None, "schedule")]
+        rc, _ = self._main(monkeypatch, rows)
+        assert rc == 0
+
+    def test_a_scheduled_failure_does_not_fail_a_bare_wait(self, monkeypatch):
+        rows = [evrun("CI", "completed", "success", "push"),
+                evrun("nightly", "completed", "failure", "schedule")]
+        rc, _ = self._main(monkeypatch, rows)
+        assert rc == 0
+
+    def test_event_any_counts_the_scheduled_run_too(self, monkeypatch):
+        rows = [evrun("CI", "completed", "success", "push"),
+                evrun("nightly", "completed", "failure", "schedule")]
+        rc, _ = self._main(monkeypatch, rows, "--event", "any")
+        assert rc == 1
+
+    def test_gh_runs_with_no_event_drops_only_schedule_rows(self, monkeypatch):
+        rows = [evrun("CI", "completed", "success", "push"),
+                evrun("PR", "completed", "success", "pull_request"),
+                evrun("nightly", "in_progress", None, "schedule"),
+                run("legacy", "completed", "success")]
+        monkeypatch.setattr(ci_wait.subprocess, "run", event_gh(rows, []))
+        kept = ci_wait.gh_runs(SHA)
+        assert [r["workflowName"] for r in kept] == ["CI", "PR", "legacy"]
+
+    def test_only_scheduled_runs_read_no_runs_naming_the_way_out(self, monkeypatch, capsys):
+        rc, _ = self._main(monkeypatch, [evrun("nightly", "completed", "success", "schedule")])
+        err = capsys.readouterr().err
+        assert rc == 2 and "schedule" in err and "--event any" in err
+
+    def test_the_help_states_the_default(self, capsys):
+        with pytest.raises(SystemExit):
+            ci_wait.main(["--help"])
+        assert "except schedule" in " ".join(capsys.readouterr().out.split())
 
 
 class TestAwaitingApproval:
