@@ -167,7 +167,7 @@ def _logical_line(lines, at):
     first = at
     while first > 0 and lines[first - 1].endswith("\\"):
         first -= 1
-    return " ".join(line[:-1] if line.endswith("\\") else line for line in lines[first:at + 1])
+    return " ".join(line.removesuffix("\\") for line in lines[first:at + 1])
 
 
 def _stdin_heredoc_bodies(command):
