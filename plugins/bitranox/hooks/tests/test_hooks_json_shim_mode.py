@@ -1,9 +1,10 @@
 """Every hooks.json registration launches the shim in HOOK mode.
 
-run-python.sh is loud by default (exit 3 when it cannot run the script), which is right for a CLI
+run-python.sh is loud by default (exit 2 when it cannot run the script), which is right for a CLI
 caller and wrong for a hook: a registration that forgets `--hook` turns a missing interpreter into
-a non-blocking error notice on every event instead of a silent skip. Nothing else would report the
-omission, so it is pinned here. This test reads JSON only, so it runs on every platform.
+a BLOCKED tool call or turn on every PreToolUse/Stop event instead of a silent skip. Nothing else
+would report the omission, so it is pinned here. This test reads JSON only, so it runs on every
+platform.
 """
 
 import json

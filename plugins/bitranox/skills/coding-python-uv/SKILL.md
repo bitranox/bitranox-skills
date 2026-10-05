@@ -148,6 +148,13 @@ Makefile targets that fall back to `python3` on PATH. The symptom is a tool runn
 interpreter: `ModuleNotFoundError` inside an isolated venv, a flood of phantom type-check errors, or
 `pip-audit` failing on CVEs from an unrelated shared env.
 
+**`uv run` itself is the one exception inside a project (measured uv 0.11.15): it IGNORES a foreign
+`VIRTUAL_ENV`, only warns, and uses the project's own `.venv`.** It honours the variable only with
+`--active` (or `--no-project`), or when run OUTSIDE a `uv` project entirely. So a stray `VIRTUAL_ENV`
+cannot hijack a bare `uv run pytest`/`uv run pyright` - but keep the `env -u VIRTUAL_ENV` prefix
+anyway (harmless, and still required for `pip-audit`, `tox`, `nox`, and any Makefile target that
+falls back to `python3` on PATH, none of which have this guard).
+
 **Default: strip the ambient env for every local test/lint/build, do not wait for it to break.** Prefix
 the invocation rather than relying on the inherited environment:
 

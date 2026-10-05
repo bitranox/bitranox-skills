@@ -46,7 +46,7 @@ inverse of the tell-sweep check, so the text passes that gate afterward:
 
     bash <plugin>/hooks/run-python.sh <plugin>/hooks/strip_typographic_tells.py FILE          # rewrite a file in place
     cat FILE | bash <plugin>/hooks/run-python.sh <plugin>/hooks/strip_typographic_tells.py -  # or normalize a stream
-    bash <plugin>/hooks/run-python.sh <plugin>/hooks/strip_typographic_tells.py --check FILE  # report only, exit 1 if tells remain
+    bash <plugin>/hooks/run-python.sh <plugin>/hooks/strip_typographic_tells.py --check FILE  # report only, exit 1 if tells remain, 2 if a file cannot be read
 
 The script lives in the plugin's `hooks/` directory, not in a `scripts/` directory under
 this skill - the commands above already use the correct `<plugin>/hooks/` path. It replaces

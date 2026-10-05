@@ -66,11 +66,18 @@ launch environment).
 | `TYPESAFE_API_KEY`             | unset   | The classifier's API key; takes precedence over the keyfile `~/.credentials/typesafe.key` (owner-only, mode 600; a keyfile others can read is refused).                                                                                                      | You, only if you prefer an env var to the keyfile. The keyfile is recommended: hooks inherit whatever environment Claude Code was launched with, and the file works for every launch path. Get a key at https://console.typesafe.ai/keys     |
 | `BITRANOX_CLASSIFIER_BASE_URL` | unset   | Points the classifier at another API base URL - honoured ONLY for a loopback host (`127.0.0.1`, `localhost`, `::1`), so it cannot send the key elsewhere                                                                                                     | The test suite, to reach its local fake API. Never needed for normal use                                                                                                                                                                     |
 
+## Per-checkout git config
+
+| Key                         | Default              | Effect when set                                                                                                                                  | Who sets it, and when                                                                                                                                      |
+|-----------------------------|----------------------|--------------------------------------------------------------------------------------------------------------------------------------------------|------------------------------------------------------------------------------------------------------------------------------------------------------------|
+| `bitranox.reformatMdTables` | unset (formatter on) | `false` (or `no`/`off`/`0`): the reformat-md-tables hook never realigns a markdown file of this checkout, on Write/Edit or after a shell command | You, once, inside an UPSTREAM checkout whose docs follow someone else's style: `git config bitranox.reformatMdTables false`. Per checkout, never committed |
+
 ## Command-line surface
 
 **The memory engine** - `python3 <plugin>/hooks/memory_engine.py <subcommand>` - is the single
-write path to the store. Fail-loud: success prints an explicit line, refusals print
-`! refused: ...` and exit non-zero.
+write path to the store. Fail-loud: success prints an explicit line; a refusal prints
+`! refused: ...` and an input or usage error prints `! error: ...` on stderr, both exit 2. Only
+`lint --tree` exits 1, when it reports anything.
 
 | Subcommand                                                                                                                               | Success line                                 |
 |------------------------------------------------------------------------------------------------------------------------------------------|----------------------------------------------|

@@ -56,9 +56,10 @@ Two things this route does NOT give you, both of which the marketplace install d
   ```
 
   `--hook` is what makes a hook fail open: without it, a script the shim cannot run (moved,
-  no Python 3 found) exits 3 and shows as a hook error on every event, and the
-  `BITRANOX_HOOKS_OFF` kill-switch does not silence it. `hooks/hooks.json` lists every event,
-  matcher and script to copy.
+  no Python 3 found) exits 2, which Claude Code reads as a BLOCK on a PreToolUse or Stop event, and
+  the `BITRANOX_HOOKS_OFF` kill-switch does not silence it. Always keep `--hook` in a hook
+  registration - it is the difference between a silent skip and a blocked turn. `hooks/hooks.json`
+  lists every event, matcher and script to copy.
 - **No auto-update.** A new version arrives when you run `uv tool upgrade bitranox-skills` and
   then `bitranox-skills install --force`, not on its own.
 

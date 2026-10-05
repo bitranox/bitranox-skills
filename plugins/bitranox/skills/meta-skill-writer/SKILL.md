@@ -645,7 +645,7 @@ so Windows does not silently break it:
   `python3 -> python -> py -3` and converts the script's own path with `cygpath` when present
   (only that path: the script's arguments are its own business).
   The plugin's `hooks/run-python.sh` is the working reference; reuse it. It is strict by default:
-  when it cannot run the script (missing file, no Python 3, an unexpected shell) it exits 3, so
+  when it cannot run the script (missing file, no Python 3, an unexpected shell) it exits 2, so
   a hook registration must pass `--hook` as the FIRST shim argument, before the script path, to
   get the exit-0 contract below. Copy the exact command form from any entry in the plugin's
   `hooks/hooks.json`; a skill step that launches a script never passes `--hook`.

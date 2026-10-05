@@ -96,9 +96,11 @@ literal and only double quotes group (single quotes are ordinary characters ther
 per proxy until one succeeds.
 
 Exit codes: `run` gives 0 when every item succeeded, 1 when any did not, and 2 when it cannot do
-the work at all - the `--cmd` binary is not found (the run stops at the first attempt), or the
-store holds no usable proxy (run `discover` and `validate` first). `discover` gives 2 when no
-source answered.
+the work at all - the `--cmd` binary is not found (the run stops at the first attempt), the
+store holds no usable proxy (run `discover` and `validate` first), or an argument cannot be used
+(a `--cmd` that cannot be split, an invalid `--dead-regex`, a `--worklist` that is not UTF-8).
+`discover` gives 2 when no source answered; `validate` is a report and gives 0 even when no
+candidate turned out live.
 
 `run` holds a self-optimizing working set of the `--need` fastest healthy proxies - pass it, or
 `--need` defaults to None and the working set is not right-sized at all: it rotates the

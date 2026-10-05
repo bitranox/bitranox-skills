@@ -69,7 +69,10 @@ Keep the registry in sync, or the local pre-commit gate and CI (`hooks/repo-gate
 - **Verify before pushing.** Run `python3 plugins/bitranox/hooks/repo-gate.py --ci` - the full
   CI-parity gate (whole-repo pytest), the same checks CI runs - so a stale artifact is caught
   locally, not by a red CI run. A bare no-arg `repo-gate.py` checks nothing (it expects a commit
-  event on stdin); the pre-commit hook fires on `git commit` and `git push`.
+  event on stdin); the pre-commit hook fires on `git commit` and `git push`. The gate reads the
+  INDEX as it stands BEFORE the command runs: `git commit -a`, `git commit <pathspec>`, and
+  `git add X && git commit` are all judged on the PRE-command index, not on what the command would
+  stage. Stage everything you intend to commit in its own earlier command, then commit.
 
 ## Skill naming: category-prefix scheme
 
