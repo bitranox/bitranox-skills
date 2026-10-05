@@ -829,19 +829,129 @@ def _changed_vs_origin(root):
     return changed + untracked
 
 
-def skill_review_failures(root, changed):
+def _table_rows(lines, tool):
+    """Per line: (leading whitespace, blockquote prefix, row) for a markdown table row, else None.
+
+    Decided the way the formatter decides it (`_reformat_lines`), with its own fence scanner, so a
+    pipe line inside a non-markdown fence or an indented code block is literal text, not a row.
+    The front matter is never a table: it is YAML the router reads, so a row-shaped line there is
+    content whatever its padding.
+    """
+    front_end = -1
+    if lines and lines[0].strip() == "---":
+        front_end = next((i for i in range(1, len(lines)) if lines[i].strip() == "---"), len(lines))
+    rows = []
+    in_table = False
+    for index, (line, cls) in enumerate(zip(lines, tool.classify_lines(lines))):
+        found = None
+        if index > front_end and cls.kind == tool.TEXT:
+            bq_prefix, content = tool.strip_blockquote(line.strip())
+            is_row = content.startswith("|") and "|" in content[1:]
+            if is_row and not in_table:
+                is_row = not tool.is_indented_code(lines, index, cls.floor, cls.base)
+            if is_row:
+                found = (line[: len(line) - len(line.lstrip(" \t"))], bq_prefix, content)
+        in_table = found is not None
+        rows.append(found)
+    return rows
+
+
+def _row_problem(number, old_row, new_row, is_separator, tool):
+    """Why the changed line `number` is more than padding, or None when it is padding only."""
+    if old_row is None or new_row is None:
+        return "line %d is not a table row" % number
+    if old_row[:2] != new_row[:2]:
+        return "line %d: the row's indentation or blockquote prefix changed" % number
+    old_cells, new_cells = tool.split_table_row(old_row[2]), tool.split_table_row(new_row[2])
+    if not is_separator:
+        return None if old_cells == new_cells else "line %d: a table cell changed" % number
+    marks = [[tool.parse_separator_cell(c) for c in cells] for cells in (old_cells, new_cells)]
+    if marks[0] == marks[1] and all(valid for _, _, valid in marks[0]):
+        return None
+    return "line %d: the alignment of a column changed" % number
+
+
+def table_padding_problem(old, new, tool):
+    """Return why `new` differs from `old` by more than table padding, or None when it does not.
+
+    Table padding only means: the same line count, every changed line a table row on both sides
+    with the same indentation and blockquote prefix, every cell equal after stripping, and every
+    separator cell keeping its alignment markers. Whether `new` is canonical is the caller's
+    question: it needs the file the formatter would rewrite, not two strings.
+    """
+    old_lines = [line.rstrip("\r") for line in old.split("\n")]
+    new_lines = [line.rstrip("\r") for line in new.split("\n")]
+    if len(old_lines) != len(new_lines):
+        return "the line count changed (%d -> %d)" % (len(old_lines), len(new_lines))
+    old_rows, new_rows = _table_rows(old_lines, tool), _table_rows(new_lines, tool)
+    for index, (before, after) in enumerate(zip(old.split("\n"), new.split("\n"))):
+        if before == after:
+            continue
+        # The second row of a table is its separator; any other row's cells are text a reader sees.
+        is_separator = index > 0 and new_rows[index - 1] is not None and (
+            index < 2 or new_rows[index - 2] is None)
+        problem = _row_problem(index + 1, old_rows[index], new_rows[index], is_separator, tool)
+        if problem:
+            return problem
+    return None
+
+
+def _origin_text(root, rel):
+    """The origin/master text of `rel` as a checkout here would write it, or None."""
+    data = _checked_out_bytes(root, "origin/master", rel)
+    return None if data is None else data.decode("utf-8", errors="replace")
+
+
+def table_repad_problem(root, rel, read_original=None):
+    """Why the changed SKILL.md `rel` is NOT a waivable table re-pad, or None when it is.
+
+    The waiver exists because the reformat-md-tables hook rewrites a non-canonical table in every
+    fresh worktree, and the checklist requirement then fires for a skill nobody edited. It is
+    granted on a proof, never on a judgement: padding only against origin/master (see
+    `table_padding_problem`), and canonical per the shipped formatter, so the hook will not
+    rewrite it again.
+    """
+    tool = _table_checker(root)
+    if tool is None:
+        return "the table formatter is not shipped here, so a re-pad cannot be proven"
+    old = (read_original or (lambda path: _origin_text(root, path)))(rel)
+    if old is None:
+        return "it has no origin/master version to compare against"
+    try:
+        with open(root / rel, encoding="utf-8", newline="") as handle:
+            new = handle.read()
+    except (OSError, UnicodeDecodeError):
+        return "it cannot be read"
+    problem = table_padding_problem(old, new, tool)
+    if problem:
+        return problem
+    if tool.reformat_file(root / rel, check_only=True):
+        return "its tables are not in the canonical form reformat_tables writes"
+    return None
+
+
+def skill_review_failures(root, changed, read_original=None):
     """A changed SKILL.md needs a co-changed, fully-checked .skillwriter/checklist-*.md - the
     skill-writer procedure's committed receipt. Prose discipline gets cherry-picked; a required
-    artifact does not."""
+    artifact does not.
+
+    One mechanical exception, waived only on proof: a change that re-pads tables and nothing else
+    (`table_repad_problem`). `read_original(rel)` returns the origin/master text, or None; it
+    defaults to reading git and is a parameter so tests need no remote."""
     fails = []
     names = sorted({m.group(1) for p in changed for m in [_SKILL_MD_RX.match(p)] if m})
     for name in names:
         prefix = "%s/%s/.skillwriter/" % (_SKILLS_DIR, name)
         arts = [p for p in changed if p.startswith(prefix) and p.endswith(".md")]
         if not arts:
+            not_a_repad = table_repad_problem(root, "%s/%s/SKILL.md" % (_SKILLS_DIR, name),
+                                              read_original)
+            if not_a_repad is None:
+                continue
             fails.append("skills/%s/SKILL.md changed without an updated .skillwriter/checklist-*.md "
                          "in the same change - run bitranox:meta-skill-writer and commit its "
-                         "checklist artifact." % name)
+                         "checklist artifact. (Not a table re-pad, which needs none: %s.)"
+                         % (name, not_a_repad))
             continue
         for a in arts:
             try:
