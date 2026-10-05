@@ -276,6 +276,13 @@ Worked example - a zram swap device configured for `zstd`:
 `zstd` is the crypto-API backend requested when `zstd` is written to `comp_algorithm`, and is
 invisible to `--show-depends` at any depth.
 
+Worked example - WPA on a wireless link with `ccm` blocked: `wpa_supplicant` reports
+`Failed to set PTK` and then `4-Way Handshake failed - pre-shared key may be incorrect`, which
+reads exactly like a wrong password, not a module policy. Only `journalctl -t modulejail` shows
+`blocked: ccm` - the crypto API requested it at the moment of the handshake, and no static
+dependency closure of the wireless driver predicted it. Whitelist `ccm cmac gcm` together with the
+wireless driver's own closure (`cfg80211`/`mac80211`/the vendor driver), then retry the handshake.
+
 **Run `--show-depends` on YOUR kernel; do not copy that list.** It is kernel-specific, and the
 plausible guesses are wrong often enough to be worth naming. Two measured on one 7.0.x build,
 both of which a competent reader would assume the other way:
