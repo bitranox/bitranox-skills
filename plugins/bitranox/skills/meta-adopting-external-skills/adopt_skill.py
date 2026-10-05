@@ -840,10 +840,38 @@ def append_notice(notices_path, name, source_desc, source_url, lic_id, copyright
         existing, eol = _read_keeping_eol(notices_path)
     else:
         existing, eol = "# Third-Party Notices\n", "\n"
-    if f"### {name}\n" in existing + "\n":
-        return False
+    present = _notice_entry(existing, name)
+    if present is not None:
+        if _credits_source(present, source_desc):
+            return False
+        # Same heading, another source: skipping would credit this skill to that one.
+        credited = _credited_source(present) or "no source named"
+        raise AdoptError(f"error: THIRD_PARTY_NOTICES.md already has an entry '### {name}' "
+                         f"crediting {credited}, but this adoption is from {source_desc}. "
+                         "Remove the stale entry if that skill is gone, or adopt under another "
+                         "--name. Nothing was adopted.")
     _write_keeping_eol(notices_path, existing.rstrip() + "\n\n---\n\n" + block + "\n", eol)
     return True
+
+
+def _notice_entry(text, name):
+    """The text of the `### <name>` entry, up to the next entry or `---` rule, or None."""
+    start = re.search(rf"^### {re.escape(name)}[ \t]*$", text, re.MULTILINE)
+    if start is None:
+        return None
+    end = re.search(r"^(?:### |---[ \t]*$)", text[start.end():], re.MULTILINE)
+    return text[start.end():start.end() + end.start()] if end else text[start.end():]
+
+
+def _credited_source(entry_text):
+    match = re.search(r"^- Source: (.*)$", entry_text, re.MULTILINE)
+    return match.group(1).strip() if match else None
+
+
+def _credits_source(entry_text, source_desc):
+    """Whether the entry's Source line names `source_desc` (a URL may follow it)."""
+    credited = _credited_source(entry_text)
+    return credited is not None and (credited == source_desc or credited.startswith(source_desc + " ("))
 
 
 # ---------------------------------------------------------------------------
@@ -977,6 +1005,7 @@ def adopt(args, workdir):
 
     lic = find_license(tree, src_skill)
     _gate(lic)
+    _require_utf8(src_skill / "SKILL.md")
 
     new_name = normalize_name(args.name or derive_name(args.source, args.subdir))
     if not _NAME_RX.match(new_name):
@@ -1004,6 +1033,21 @@ def adopt(args, workdir):
 
     gate_out = run_gate_readonly(repo_root)
     _report(new_name, lic, dest, rewrites, stub, gate_out, credited=credited, noticed=noticed)
+
+
+def _require_utf8(skill_md):
+    """Refuse a SKILL.md that is not UTF-8 before anything is copied.
+
+    The credit line and the name rewrite both need its text, and the marketplace ships UTF-8
+    only. Found later, the adoption died mid-install on a bare UnicodeDecodeError that named no
+    file; here the message names the file and the first bad byte."""
+    try:
+        skill_md.read_bytes().decode("utf-8")
+    except UnicodeDecodeError as exc:
+        raise AdoptError(f"error: {skill_md} is not UTF-8 (byte {exc.start}: 0x{exc.object[exc.start]:02x}). "
+                         "Convert it to UTF-8 and run the adoption again. Nothing was adopted.") from exc
+    except OSError as exc:
+        raise AdoptError(f"error: cannot read {skill_md}: {exc}") from exc
 
 
 def _install(args, lic, src_skill, dest, notices, *, old_name, new_name):
