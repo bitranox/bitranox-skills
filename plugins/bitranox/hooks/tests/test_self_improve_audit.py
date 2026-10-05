@@ -8,7 +8,6 @@ All content is ASCII.
 import io
 import json
 import sys
-from pathlib import Path
 
 import pytest
 
@@ -162,6 +161,50 @@ def test_a_candidate_snippet_shows_the_block_that_matched(tmp_path):
     t = _tool_results(tmp_path, "1 failed, 41 passed in 2.10s " + "x" * 200, "bash: pct: command not found")
     cands = [c for c in A.find_candidates(str(t)) if c["role"] == "tool"]
     assert cands and "command not found" in cands[0]["snippet"], cands
+
+
+# ---- the snippet quotes the signal, not the head of a long message -----------------------------
+# The snippet was the message's first _SNIPPET characters, so a learning stated after a long
+# preamble was cut away and the report showed only the preamble (subagent-capture had the same
+# defect). Each role now centres the window on where its own match sits.
+
+_PREAMBLE = "I edited the module, ran the full suite and read the log end to end. " * 6
+
+
+def _snippets(tmp_path, turns, role):
+    cands = A.find_candidates(make_transcript(tmp_path, turns))
+    return [c["snippet"] for c in cands if c["role"] == role]
+
+
+def test_an_assistant_learning_after_a_long_preamble_is_in_the_snippet(tmp_path):
+    snips = _snippets(tmp_path, [("assistant", _PREAMBLE + "Let me reconsider the parser approach.")],
+                      "assistant")
+    assert snips and "reconsider" in snips[0], snips
+
+
+def test_a_user_learning_after_a_long_preamble_is_in_the_snippet(tmp_path):
+    snips = _snippets(tmp_path, [("user", _PREAMBLE + "Why did you skip the tests again?")], "user")
+    assert snips and "why did you" in snips[0].lower(), snips
+
+
+def test_a_tool_signal_after_long_output_is_in_the_snippet(tmp_path):
+    t = _tool_results(tmp_path, "ordinary build output line\n" * 30 + "bash: pct: command not found")
+    snips = [c["snippet"] for c in A.find_candidates(str(t)) if c["role"] == "tool"]
+    assert snips and "command not found" in snips[0], snips
+
+
+def test_a_tool_snippet_skips_an_earlier_fixture_line_carrying_the_same_phrase(tmp_path):
+    """The fixture line names the phrase first, but it is test data that matched nothing; the
+    window belongs on the live line that made this block a candidate."""
+    t = _tool_results(tmp_path, 'tests/test_x.py:12:    assert "command not found" in err\n'
+                      + "ordinary build output line\n" * 30 + "bash: pct: command not found")
+    snips = [c["snippet"] for c in A.find_candidates(str(t)) if c["role"] == "tool"]
+    assert snips and "pct: command not found" in snips[0], snips
+
+
+def test_a_short_message_snippet_still_starts_at_the_head_control(tmp_path):
+    snips = _snippets(tmp_path, [("assistant", "Let me reconsider the parser approach.")], "assistant")
+    assert snips == ["Let me reconsider the parser approach."]
 
 
 # ---- P2: tool-block scanning + skill tally ---------------------------------------------

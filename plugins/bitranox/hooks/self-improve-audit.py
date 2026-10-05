@@ -24,9 +24,11 @@ import os
 import sys
 from pathlib import Path
 
-from self_improve_signals import (audit_file, broad_matches, inert_snippet, is_injected_skill_body,
-                                  quoted_snippet, skills_invoked, snippet_was_escaped,
-                                  strict_asst_hit, strict_user_hit, tool_matches_outside_fixtures)
+from self_improve_signals import (asst_signal_offset, audit_file, broad_matches, inert_snippet,
+                                  is_injected_skill_body, quoted_snippet, skills_invoked,
+                                  snippet_was_escaped, strict_asst_hit, strict_user_hit,
+                                  tool_matches_outside_fixtures, tool_signal_offset,
+                                  user_signal_offset)
 
 # Bound how much transcript we read (sessions can be many MB); the tail covers a long
 # session while keeping memory bounded.
@@ -135,6 +137,19 @@ def _tool_signal(blocks):
     return sorted(matched), shown
 
 
+def _signal_offset(role, text):
+    """Where in the whitespace-collapsed `text` the signal that made it a candidate sits, for
+    `inert_snippet(..., around=)`; None quotes the head.
+
+    Without it the snippet was the message's first _SNIPPET characters, so a learning stated after
+    a long preamble - or a tool error at the end of long output - was cut away and the report
+    quoted only what came before it."""
+    if role == "tool":
+        return tool_signal_offset(text)
+    collapsed = " ".join(str(text or "").split())
+    return user_signal_offset(collapsed) if role == "user" else asst_signal_offset(collapsed)
+
+
 def find_candidates(transcript_path):
     """Return candidate-miss dicts: a broad/tool match the strict gate did NOT catch."""
     candidates = []
@@ -154,7 +169,7 @@ def find_candidates(transcript_path):
                 continue
             matched = broad_matches(role, text)
         if matched:
-            snippet = inert_snippet(text, _SNIPPET)
+            snippet = inert_snippet(text, _SNIPPET, around=_signal_offset(role, text))
             candidates.append({"role": role, "matched": matched, "snippet": snippet,
                                "escaped": snippet_was_escaped(text)})
     return candidates

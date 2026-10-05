@@ -469,6 +469,9 @@ def hook_registrations(settings_path):
             for hook in _as(group.get("hooks"), list, settings_path, '"hooks.%s[].hooks"' % event):
                 hook = _as(hook, dict, settings_path, 'a "hooks.%s" hook' % event)
                 command = hook.get("command")
+                # A falsy command (0, [], {}, "") registers nothing, and Claude Code (measured on
+                # 2.1.289) keeps the file's other hooks running, so it is skipped rather than
+                # refused: refusing would report a live harness as unreadable.
                 if command:
                     out.append((event, matcher,
                                 _as(command, str, settings_path, 'a "hooks.%s" command' % event)))

@@ -158,6 +158,11 @@ def _anchor(proj):
 # mtime-neutral writer: one implementation, in uuid_store.
 _write_if_changed = us.write_if_changed
 
+# The strict store reader and its error: one implementation, in uuid_store, so a read that
+# add_pointer makes there fails with the class this module's CLI maps to exit 2.
+TreeWalkError = us.TreeWalkError
+read_store_text = us.read_store_text
+
 
 def read_store(proj):
     """Return (scope, [Entry], {slug: body}) for a level's curated store: the pointer block in its
@@ -398,9 +403,16 @@ def _slug_owned_elsewhere(anchor, proj, slug):
 
 
 def _body_description(text):
-    """The `description:` value (the hook) from a framed body's frontmatter, or '' if absent."""
-    m = re.search(r"(?m)^description:[ \t]*(.*)$", text or "")
-    return m.group(1).strip() if m else ""
+    """The `description:` value (the hook) from a framed body's frontmatter, or '' if absent.
+
+    Scoped to the LEADING frontmatter block (see `_frontmatter`), like `_body_type`: a
+    `description:` line in the prose, or in a body that merely opens with a horizontal rule, is
+    the author's text, and adopting a dangling body made it the always-loaded hook."""
+    _head, m = _frontmatter(text)
+    if m is None:
+        return ""
+    d = re.search(r"(?m)^description:[ \t]*([^\r\n]*)", m.group(1))
+    return d.group(1).strip() if d else ""
 
 
 def _body_type(text):
@@ -854,7 +866,8 @@ def ensure_level(proj, scope_default="", _locked=False):
     harvested from `CLAUDE.md`, else `scope_default`), and (2) any LEGACY `<!-- bitranox:self-learning
     -->` scope block still sitting in `CLAUDE.md` is MOVED out into the pointer block (byte-safe outside
     the markers). Best-effort gitignore of `CLAUDE.local.md` + the anchor's `.claude-memory/` when not
-    `track_private`. Idempotent + mtime-neutral. No `@import`, no `index.md`.
+    `track_private`; when git cannot confirm a pattern is ignored, a warning on stderr names it
+    (the level is still set up). Idempotent + mtime-neutral. No `@import`, no `index.md`.
 
     REFUSES an excluded altitude (home, the system temp dir, the filesystem root): those dirs are
     never a memory level, and scaffolding them turns e.g. all of /tmp into a fake knowledge tree
@@ -877,8 +890,13 @@ def ensure_level(proj, scope_default="", _locked=False):
         if us.INDEX_BEGIN not in text or want_scope != scope:
             us.write_if_changed(local, us.upsert_pointer_block(text, want_scope, pointers))
         if not sig.load_config().get("track_private"):     # keep local wiring + central store unpushed
-            sig.ensure_gitignored(proj, "CLAUDE.local.md")
-            sig.ensure_gitignored(str(_anchor(proj)), us.STORE_DIRNAME + "/")
+            for where, pattern in ((proj, "CLAUDE.local.md"),
+                                   (str(_anchor(proj)), us.STORE_DIRNAME + "/")):
+                if not sig.ensure_gitignored(where, pattern):
+                    sys.stderr.write("~ warning: could not make sure git ignores %s in %s (git did not "
+                                     "answer, or its exclude file could not be read or written) - "
+                                     "check `git status` there before staging anything\n"
+                                     % (pattern, where))
 
     if _locked:
         _do()
@@ -1456,42 +1474,6 @@ def _other_levels_pointing_in(anchor, slug):
         if any(e.slug == slug for e in entries):
             return True
     return False
-
-
-class TreeWalkError(RuntimeError):
-    """Part of the store could not be read: a directory the level walk cannot list, or a store
-    file - a level's `CLAUDE.md` / `CLAUDE.local.md`, or a fact body - that cannot be opened or is
-    not UTF-8 (`read_store_text`). Raised, never skipped - a partial level list is an undercount
-    every caller would read as the whole tree (check-tree says clean, relocate sees no inbound refs
-    to protect), and a file read as empty is a level with no facts. The CLI maps it to exit 2."""
-
-    def __init__(self, path, reason):
-        super().__init__("%s: %s" % (path, reason))
-        self.path, self.reason = str(path), reason
-
-
-def read_store_text(path):
-    """The text of one store file, or "" when it does not exist.
-
-    THE reader for a level file or a fact body, so every read of the store fails the same named
-    way. Absent (including a path whose parent is a file, which can never exist) is a fact about
-    the tree and reads as empty. Anything else - a file that cannot be opened, or bytes that are not
-    UTF-8 - raises TreeWalkError naming the file: a `read_text` guarded by `except OSError` let a
-    UnicodeDecodeError past and read a permission error as an empty level. Otherwise the text is
-    what `read_text(encoding="utf-8")` returned before: a BOM decodes (it is UTF-8) and is kept,
-    and line endings are translated to "\\n" the way text mode reads them."""
-    try:
-        data = Path(path).read_bytes()
-    except (FileNotFoundError, NotADirectoryError):
-        return ""
-    except OSError as exc:
-        raise TreeWalkError(path, "unreadable: %s" % exc) from exc
-    try:
-        text = data.decode("utf-8")
-    except UnicodeDecodeError as exc:
-        raise TreeWalkError(path, "not UTF-8 (byte 0x%02x at offset %d) - re-save it as UTF-8"
-                            % (data[exc.start], exc.start)) from exc
-    return text.replace("\r\n", "\n").replace("\r", "\n")
 
 
 def _raise_walk_error(err):

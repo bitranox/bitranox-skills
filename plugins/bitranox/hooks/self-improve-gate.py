@@ -35,6 +35,11 @@ from pathlib import Path
 # rest stay queued for a later stop rather than being dropped.
 _SUBAGENT_HINT_MAX = 10
 
+# How many levels the routing hint names. The touched-paths record holds up to 400 paths for the
+# whole session, and listing every level they map to grew the block reason without bound; the
+# capture step needs the candidates, not the session's full reach.
+_ROUTING_LEVELS_MAX = 8
+
 # Learning-signal patterns live in the shared self_improve_signals module (single source
 # of truth, also used by the SessionEnd audit hook). Re-bound to the private names this
 # module and its tests use. Signals cluster in FAMILIES (user correction / "remember";
@@ -85,9 +90,14 @@ def _routing_hint(event, proj):
         levels = _sig.subject_levels(_sig.read_touched_paths(session), proj)
         if not levels:
             return ""
+        # Cross-tree first: those are the levels a misfiled fact can never be moved back from.
+        levels = sorted(levels, key=lambda lv: not lv["cross_tree"])
+        shown, left = levels[:_ROUTING_LEVELS_MAX], len(levels) - _ROUTING_LEVELS_MAX
         bits = ["%s%s" % (lv["level"], " (a DIFFERENT tree - the dream can NEVER re-home a fact "
                                        "misfiled across trees)" if lv["cross_tree"] else
-                          " (a sibling project in this tree)") for lv in levels]
+                          " (a sibling project in this tree)") for lv in shown]
+        if left > 0:
+            bits.append("and %d more level(s) not listed" % left)
         return (" ROUTING EVIDENCE - this session edited files under: " + "; ".join(bits) +
                 ". Capture defaults to the cwd, which is WRONG when the learning is ABOUT one of "
                 "those repos: in that case pass `--proj <that level>` to `memory_engine.py add`, not "

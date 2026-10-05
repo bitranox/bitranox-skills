@@ -863,6 +863,38 @@ def test_two_compact_pointers_never_push_the_essentials_past_the_ceiling(tmp_pat
     assert seen_listed, "control: the queue pointer must appear while there is room for it"
 
 
+def _unreadable_queue(cwd):
+    """A queue path that exists but cannot be read as a file (a directory stands there)."""
+    q = SIG.contrib_file(cwd)
+    q.mkdir(parents=True)
+    with pytest.raises(OSError):
+        SIG.read_contributions(cwd)                            # the reader really does refuse it
+    return q
+
+
+@pytest.mark.parametrize("room", ["marketplace", "work"])
+def test_an_unreadable_contribution_queue_is_named_not_hidden(tmp_path, room):
+    """The readers raise on an unreadable queue, and the hook turned that into silence - the same
+    output as an empty queue, so pending contributions vanished without a word."""
+    cwd = _marketplace(tmp_path) if room == "marketplace" else _work_project(tmp_path)
+    _unreadable_queue(cwd)
+    block = S.contrib_context(cwd, budget=1500)
+    assert block and "could not be read" in block and "contrib_queue.py list" in block
+    assert S.contrib_pointer(cwd) == block
+
+
+def test_an_unreadable_queue_line_still_respects_its_budget(tmp_path):
+    cwd = _marketplace(tmp_path)
+    _unreadable_queue(cwd)
+    assert S.contrib_context(cwd, budget=20) is None
+    assert len(S.contrib_pointer(cwd).encode("utf-8")) > 20    # control: it is the SIZE that refused it
+
+
+def test_an_absent_contribution_queue_still_shows_nothing_control(tmp_path):
+    cwd = _marketplace(tmp_path)
+    assert S.contrib_context(cwd, budget=1500) is None and S.contrib_pointer(cwd) is None
+
+
 def test_open_work_falls_back_to_a_compact_pointer_when_the_budget_is_gone(tmp_path, monkeypatch, capsys):
     # When the other blocks have spent the ceiling there is no room for items, but the backlog
     # must not vanish either - hiding it is the failure this whole file exists to stop. It

@@ -137,6 +137,12 @@ def contrib_context(proj, budget=None):
     """
     try:
         recs = read_contributions(proj)
+    except OSError as exc:
+        allowed = _ESSENTIALS_CEILING_BYTES if budget is None else budget
+        return _fitting_pointer(_contrib_unreadable(exc), allowed)
+    except Exception:  # noqa: BLE001 - never wedge a session start
+        return None
+    try:
         if not recs:
             return None
         if not dream_room(proj):
@@ -169,8 +175,20 @@ def contrib_pointer(proj):
     try:
         recs = read_contributions(proj)
         return (_CONTRIB_COMPACT % len(recs)) if recs else None
+    except OSError as exc:
+        return _contrib_unreadable(exc)
     except Exception:  # noqa: BLE001 - never wedge a session start
         return None
+
+
+def _contrib_unreadable(exc):
+    """The line for a queue that exists but could not be read.
+
+    The readers raise there rather than answer [] (an empty answer is what an emptied queue gives,
+    and the next add would rewrite the file with one entry). Turning that error into silence here
+    hid pending contributions the same way, so the block names it instead."""
+    why = getattr(exc, "strerror", None) or type(exc).__name__
+    return _CONTRIB_UNREADABLE % why
 
 
 def _fitting_pointer(pointer, allowed):
@@ -188,6 +206,8 @@ def _fitting_pointer(pointer, allowed):
 _CONTRIB_MORE = "- ... and %d more; `contrib_queue.py list` shows them"
 _CONTRIB_COMPACT = ("%d PENDING UPSTREAM CONTRIBUTION(S) - no room to list them here; "
                     "`contrib_queue.py list` shows them.")
+_CONTRIB_UNREADABLE = ("The UPSTREAM CONTRIBUTION queue could not be read (%s), so pending "
+                       "contributions may be hidden; `contrib_queue.py list` names the file.")
 
 
 def _listing_floor(head, lines, more):

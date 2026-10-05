@@ -794,6 +794,39 @@ def test_watermark_resets_when_the_transcript_shrinks_or_rotates(home, tmp_path)
     assert "new" in text                                 # must not silently skip a fresh transcript
 
 
+def _walk_parts(tp, cap):
+    """Every part of `tp` under `cap`, marking each one reviewed, as the dream does."""
+    parts = []
+    while True:
+        part = S.unreviewed_transcript_part("/p/x", "llm", str(tp), max_bytes=cap)
+        if not part.text:
+            return parts
+        parts.append(part)
+        S.set_watermark("/p/x", str(tp), "llm", part.end)
+
+
+@pytest.mark.parametrize("cap", [1, 2, 3, 5, 7, 11])
+def test_a_line_longer_than_the_cap_is_never_cut_inside_a_utf8_character(home, tmp_path, cap):
+    """A single line longer than the cap was cut at the byte bound, splitting a multi-byte
+    character, and decoded with "replace": each part then carried U+FFFD for a character that is
+    in the file. Every part must decode cleanly, and the parts together must be the file."""
+    tp = tmp_path / "t.jsonl"
+    line = ("\u00e9\u20ac\U0001f600a" * 6) + "\n"     # 2-, 3- and 4-byte characters, no newline inside
+    tp.write_text(line, encoding="utf-8")
+    parts = _walk_parts(tp, cap)
+    assert all("\ufffd" not in p.text for p in parts)
+    assert "".join(p.text for p in parts) == line       # nothing lost, nothing repeated
+    assert all(p.end > p.start for p in parts)          # every call made progress
+
+
+def test_a_line_cut_at_a_character_boundary_control(home, tmp_path):
+    """Control: a cap that falls between characters already decodes cleanly."""
+    tp = tmp_path / "t.jsonl"
+    tp.write_text("\u00e9" * 50 + "\n", encoding="utf-8")
+    part = S.unreviewed_transcript_part("/p/x", "llm", str(tp), max_bytes=8)
+    assert part.text == "\u00e9" * 4 and part.end == 8
+
+
 # ---- subagent-learnings buffer (a subagent cannot write memory; main drains this) --------------
 
 def test_subagent_learning_buffer_roundtrips_and_drains(home):
@@ -1962,3 +1995,25 @@ def test_asst_signal_offset_names_the_earliest_signal_or_none():
     for hit in ("You're right, my mistake.", "the root cause is the stale venv"):
         assert S.strict_asst_hit(hit) or S.broad_matches("assistant", hit)
         assert S.asst_signal_offset(hit) is not None
+
+
+def test_user_signal_offset_names_the_earliest_signal_or_none():
+    text = "Some context about the build first. Why did you skip the tests again?"
+    assert S.user_signal_offset(text) == text.lower().index("why did you")
+    assert S.user_signal_offset("Please list the files.") is None
+    for hit in ("No, that's wrong, the path is /etc", "Good idea, let's do that.",
+                "why did you skip the tests again?"):
+        assert S.strict_user_hit(hit) or S.broad_matches("user", hit)
+        assert S.user_signal_offset(hit) is not None
+
+
+def test_tool_signal_offset_points_into_the_collapsed_block_at_the_live_signal():
+    block = ('tests/test_x.py:12:    assert "command not found" in err\n'
+             "  output   line\n\n" + "bash: pct: command not found")
+    collapsed = " ".join(block.split())
+    off = S.tool_signal_offset(block)
+    assert collapsed[off:].startswith("command not found") and off > collapsed.index("bash: pct")
+    assert S.tool_signal_offset("all good\nnothing to see") is None
+    # Agrees with the counting predicate: a fixture-only signal counts nothing and has no offset.
+    only_data = 'tests/test_x.py:12:    assert "command not found" in err'
+    assert S.tool_matches_outside_fixtures(only_data) == [] and S.tool_signal_offset(only_data) is None

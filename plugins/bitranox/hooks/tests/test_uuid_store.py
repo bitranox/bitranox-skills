@@ -5,6 +5,8 @@ throwaway trees under tmp_path and never touch a real store. They cover: determi
 sharding + central body paths, cwd-derived anchor resolution, pointer-index render/parse round-trip,
 the mtime-neutral writers, and the full cwd->bodies resolver across multiple altitudes and mount points.
 """
+import os
+import stat
 import uuid as _uuid
 
 import pytest
@@ -151,6 +153,96 @@ def test_write_if_changed_writes_then_is_a_noop(tmp_path):
     assert us.write_if_changed(p, "hello\n") is True
     assert p.read_text(encoding="utf-8") == "hello\n"
     assert us.write_if_changed(p, "hello\n") is False   # identical -> no write
+
+
+def test_a_write_that_fails_part_way_leaves_the_previous_content_whole(tmp_path):
+    """The write used to truncate the file in place before encoding it, so a failure part-way
+    (here a lone surrogate the UTF-8 codec refuses) left CLAUDE.local.md EMPTY - every pointer
+    of that level gone, and the next read sees a level with no facts."""
+    p = tmp_path / "CLAUDE.local.md"
+    p.write_text("precious pointer block\n", encoding="utf-8")
+    with pytest.raises(UnicodeEncodeError):
+        us.write_if_changed(p, "bad \ud800 text\n")
+    assert p.read_text(encoding="utf-8") == "precious pointer block\n"
+    assert sorted(x.name for x in tmp_path.iterdir()) == ["CLAUDE.local.md"]   # no temp left behind
+
+
+def test_write_if_changed_replaces_a_file_that_is_not_utf8(tmp_path):
+    """Undecodable current content cannot equal the text asked for, so it is a difference to
+    write, not a UnicodeDecodeError escaping past the `except OSError`."""
+    p = tmp_path / "f.md"
+    p.write_bytes(b"\xff\xfe old bytes")
+    assert us.write_if_changed(p, "new\n") is True
+    assert p.read_text(encoding="utf-8") == "new\n"
+
+
+@pytest.mark.skipif(not hasattr(os, "geteuid"), reason="POSIX permission bits")
+def test_write_if_changed_keeps_the_mode_of_the_file_it_replaces(tmp_path):
+    p = tmp_path / "f.md"
+    p.write_text("old\n", encoding="utf-8")
+    os.chmod(p, 0o640)
+    assert us.write_if_changed(p, "new\n") is True
+    assert stat.S_IMODE(p.stat().st_mode) == 0o640
+
+
+@pytest.mark.skipif(not hasattr(os, "geteuid"), reason="POSIX permission bits")
+def test_a_new_file_gets_the_umask_mode_not_a_private_temp_mode(tmp_path):
+    p = tmp_path / "new.md"
+    old = os.umask(0o022)
+    try:
+        assert us.write_if_changed(p, "x\n") is True
+    finally:
+        os.umask(old)
+    assert stat.S_IMODE(p.stat().st_mode) == 0o644
+
+
+@pytest.mark.skipif(not hasattr(os, "symlink") or os.name == "nt", reason="POSIX symlinks")
+def test_write_if_changed_writes_through_a_symlink(tmp_path):
+    target = tmp_path / "real.md"
+    target.write_text("old\n", encoding="utf-8")
+    link = tmp_path / "CLAUDE.local.md"
+    link.symlink_to(target)
+    assert us.write_if_changed(link, "new\n") is True
+    assert link.is_symlink()                             # the link is not replaced by a file
+    assert target.read_text(encoding="utf-8") == "new\n"
+
+
+@pytest.mark.skipif(not hasattr(os, "geteuid") or os.geteuid() == 0, reason="needs a non-root POSIX user")
+def test_write_if_changed_still_refuses_a_read_only_file(tmp_path):
+    """A rename over a read-only file succeeds on POSIX, so the replace must not turn the old
+    refusal into a silent overwrite."""
+    p = tmp_path / "f.md"
+    p.write_text("old\n", encoding="utf-8")
+    os.chmod(p, 0o444)
+    with pytest.raises(PermissionError):
+        us.write_if_changed(p, "new\n")
+    assert p.read_text(encoding="utf-8") == "old\n"
+
+
+def test_add_pointer_refuses_a_level_file_that_is_not_utf8(tmp_path):
+    """Read as empty, the merge would rewrite the file as the managed block alone and drop the
+    user's own text; a bare UnicodeDecodeError escaped the CLI's exit-2 mapping instead."""
+    local = tmp_path / "CLAUDE.local.md"
+    local.write_bytes(b"caf\xe9 user notes\n")
+    with pytest.raises(us.TreeWalkError) as info:
+        us.add_pointer(str(tmp_path), slug="a-slug", title="T", hook="h")
+    assert "not UTF-8" in str(info.value) and str(local) in str(info.value)
+    assert local.read_bytes() == b"caf\xe9 user notes\n"
+
+
+def test_add_pointer_control_a_utf8_level_file_keeps_its_text(tmp_path):
+    local = tmp_path / "CLAUDE.local.md"
+    local.write_text("cafe user notes\n", encoding="utf-8")
+    us.add_pointer(str(tmp_path), slug="a-slug", title="T", hook="h")
+    text = local.read_text(encoding="utf-8")
+    assert "cafe user notes" in text and "(mem:a-slug)" in text
+
+
+def test_the_engine_names_the_same_read_error_class():
+    """One class, so the engine CLI's TreeWalkError -> exit 2 mapping covers a store read here."""
+    import memory_engine
+    assert memory_engine.TreeWalkError is us.TreeWalkError
+    assert memory_engine.read_store_text is us.read_store_text
 
 
 def test_put_body_writes_to_the_slug_named_path(tmp_path):
