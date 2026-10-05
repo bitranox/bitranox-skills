@@ -577,7 +577,8 @@ def test_cli_empty_log_exits_1(tmp_path, capsys):
     log.write_text("", encoding="utf-8")
     assert ce.main(["report", "--log", str(log), "--json"]) == 1
     env = json.loads(capsys.readouterr().out)
-    assert env["ok"] is False
+    # ok means "ran without error": an empty log is an answer (nothing to report), not a fault.
+    assert env["ok"] is True and "no usable rows" in env["error"]
 
 
 def test_cli_missing_log_exits_2_with_json_error(tmp_path, capsys):
@@ -858,20 +859,20 @@ def test_the_sample_is_stratified_over_short_and_long_prompts():
     assert kinds.count("s") == 3 and kinds.count("l") == 3
 
 
-def test_a_failed_control_exits_3_so_a_gate_reading_the_code_cannot_read_the_numbers(
+def test_a_failed_control_exits_2_so_a_gate_reading_the_code_cannot_read_the_numbers(
         tmp_path, capsys):
     # The exception existing is not the guarantee; the EXIT CODE is, because that is what a
-    # caller keys on. Exit 3 means the instrument is wrong, which is not the same as exit 1
-    # (nothing to report) or exit 2 (bad usage), and collapsing it into either would let a run
-    # that measured nothing read as a run that found nothing. Driven through the real replay
-    # with a transport that answers every planted control the same way.
+    # caller keys on. A failed control means the instrument is wrong, so the run could not
+    # answer: exit 2, never exit 1 (nothing to report), which would let a run that measured
+    # nothing read as a run that found nothing. Driven through the real replay with a transport
+    # that answers every planted control the same way.
     class _PicksEverything(FakeClassifier):
         def ask(self, state, questions):
             return super().ask({"user_prompt": "a real task"}, questions)
 
     rc = _replay(tmp_path, "--arm", "choice_full", clf=_PicksEverything())
     env = json.loads(capsys.readouterr().out)
-    assert rc == 3
+    assert rc == 2
     assert env["ok"] is False and "no number from this run may be read" in env["error"]
 
 
@@ -1169,12 +1170,20 @@ def test_a_positive_count_is_accepted():
 
 # ---- the module docstring names every command and exit code the CLI has ----------------------
 
-def test_the_docstring_documents_every_command_and_exit_3():
+def test_the_docstring_documents_every_command_and_the_three_exit_codes():
     doc = ce.__doc__
-    for command in ("report", "replay", "size", "controls"):
+    for command in ("report", "replay", "size", "controls", "packet", "harvest"):
         assert "classifier_eval.py %s" % command in doc, command
-    assert "3 " in doc.split("Exit codes:")[1]
+    codes = doc.split("Exit codes:")[1]
+    assert "0 done" in codes and "1 nothing to report" in codes and "2 could not run" in codes
+    assert "planted control" in codes.split("2 could not run")[1]
+    assert " 3 " not in codes
     assert "calls no API" not in doc
+
+
+def test_the_cli_commands_list_matches_the_parser():
+    sub = next(a for a in ce._parser()._actions if a.dest == "command")
+    assert set(sub.choices) == set(ce.COMMANDS)
 
 
 # ---- replay end to end, with a fake transport at the classifier seam --------------------------
@@ -1222,9 +1231,9 @@ def test_replay_vets_the_arm_it_replays_not_a_fixed_one(tmp_path, capsys):
     assert env["data"]["arms"]["choice_full"]["prompts_with_a_pick"] == 1
 
 
-def test_replay_of_an_arm_whose_controls_fail_exits_3(tmp_path, capsys):
+def test_replay_of_an_arm_whose_controls_fail_exits_2(tmp_path, capsys):
     """The control for the test above: the rerank arm really does fail these controls."""
-    assert _replay(tmp_path, "--arm", "choice_short_rerank") == 3
+    assert _replay(tmp_path, "--arm", "choice_short_rerank") == 2
     assert "choice_short_rerank" in json.loads(capsys.readouterr().out)["error"]
     assert not (tmp_path / "out.jsonl").exists(), "no row may be bought after a failed control"
 
@@ -1269,7 +1278,24 @@ def test_replay_of_an_empty_prompt_log_exits_1(tmp_path, capsys):
     rc = ce.main(["replay", "--prompts", str(empty), "--out", str(tmp_path / "o.jsonl"), "--json"],
                  clf=FakeClassifier(), skills=SKILLS)
     assert rc == 1
-    assert "no prompts" in json.loads(capsys.readouterr().out)["error"]
+    env = json.loads(capsys.readouterr().out)
+    assert "no prompts" in env["error"] and env["ok"] is True
+
+
+def test_a_usage_error_under_json_still_prints_an_envelope(capsys):
+    with pytest.raises(SystemExit) as exc:
+        ce.main(["replay", "--limit", "0", "--json"])
+    assert exc.value.code == 2
+    env = json.loads(capsys.readouterr().out)
+    assert env["ok"] is False and env["command"] == "replay" and env["data"] is None
+    assert "usage" in env["error"]
+
+
+def test_a_usage_error_without_json_prints_no_envelope(capsys):
+    with pytest.raises(SystemExit) as exc:
+        ce.main(["replay", "--limit", "0"])
+    assert exc.value.code == 2
+    assert capsys.readouterr().out == ""
 
 
 def test_a_pinned_prompt_carrying_a_line_separator_is_read_whole(tmp_path):

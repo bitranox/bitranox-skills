@@ -40,9 +40,11 @@ prompt into blind judge packets plus a key, and `harvest` reads each judge's ver
 transcript and writes majority labels keyed by prompt uuid, printing every split. Both read and
 write local files only.
 
-Exit codes: 0 done; 1 nothing to report (no usable rows, no prompts, a judge transcript with no
-verdict object); 2 usage or IO error, or no API key; 3 a planted control answered the wrong way, so
-no number from the run may be read.
+Exit codes: 0 done; 1 nothing to report (no usable rows, no prompts); 2 could not run: a usage or
+IO error, no API key, a judge transcript with no verdict object, or a planted control that answered
+the wrong way, so no number from the run may be read (its message says which). Under `--json` every
+exit prints `{ok, command, data, skipped}` (plus `error` when there is one); `ok` is true unless the
+exit is 2.
 """
 from __future__ import annotations
 
@@ -1143,7 +1145,7 @@ def _replay_report(rows, threshold):
 
 
 def _run_replay(args, clf=None, skills=None):
-    """(exit code, data, error) for replay / size / controls. Raises ControlFailed (exit 3).
+    """(exit code, data, error) for replay / size / controls. Raises ControlFailed (exit 2).
 
     `clf` and `skills` are the two external edges - the paid classifier and the installed skill
     set - injectable so a test can drive this whole function with a fake transport. None means
@@ -1171,7 +1173,7 @@ def _run_replay(args, clf=None, skills=None):
                 for row in run_controls(arm, ask, skills, threshold=args.threshold,
                                         shortlist=args.shortlist, bodies=bodies,
                                         router_text=router_text)]
-        return (0 if all(r["ok"] for r in rows) else 3), \
+        return (0 if all(r["ok"] for r in rows) else 2), \
             {"controls": rows, "input_tokens": ask.tokens, "requests": ask.calls,
              "failures": dict(ask.reasons)}, \
             None if all(r["ok"] for r in rows) else "a planted control answered the wrong way"
@@ -1462,7 +1464,8 @@ def _run_harvest(args):
     for path in args.transcript:
         panel = jp.extract_panel(path, set(key))
         if panel is None:
-            return 1, None, "no verdict object for these items in %s" % path
+            # Malformed input, not "nothing found": a judge transcript always holds a verdict.
+            return 2, None, "no verdict object for these items in %s" % path
         panels.append(panel)
     out = jp.harvest(key, panels)
     args.out.write_text(json.dumps(out["labels"], ensure_ascii=False, indent=1), encoding="utf-8")
@@ -1471,13 +1474,16 @@ def _run_harvest(args):
                "invalid": out["invalid"]}, None
 
 
-def _emit(args, ok, data=None, error=None, skipped=None):
+def _emit(args, code, data=None, error=None, skipped=None):
+    """Print one exit's output. Under --json that is always the envelope, whose `ok` means "ran
+    without error" (true on 0 and 1, false on 2), so a caller can tell a run that found nothing
+    from one that could not run without reading the exit code."""
     if args.json:
-        env = {"ok": ok, "command": args.command, "data": data, "skipped": skipped or {}}
+        env = {"ok": code != 2, "command": args.command, "data": data, "skipped": skipped or {}}
         if error:
             env["error"] = error
         print(json.dumps(env, ensure_ascii=False, indent=2))
-    elif ok or data is not None:
+    elif data is not None:
         # A failure that carries data prints it: for `controls` the rows ARE the diagnosis, and a
         # verdict line alone would say a control failed while withholding which one and at what
         # score. The error still goes to stderr, so the exit code and the stream stay separable.
@@ -1491,53 +1497,76 @@ def _emit(args, ok, data=None, error=None, skipped=None):
         print("classifier_eval: %s" % error, file=sys.stderr)
 
 
+def _usage_envelope(argv):
+    """The envelope for an argparse usage error (exit 2) when --json was asked for: argparse
+    exits before any command runs, so without this a --json caller got no envelope at all."""
+    argv = list(sys.argv[1:] if argv is None else argv)
+    if "--json" not in argv:
+        return
+    command = next((a for a in argv if a in COMMANDS), None)
+    print(json.dumps({"ok": False, "command": command, "data": None, "skipped": {},
+                      "error": "usage error (see stderr)"}, ensure_ascii=False, indent=2))
+
+
+COMMANDS = ("report", "replay", "size", "controls", "packet", "harvest")
+
+
+def _parse(argv):
+    try:
+        return _parser().parse_args(argv)
+    except SystemExit as exc:
+        if exc.code not in (0, None):
+            _usage_envelope(argv)
+        raise
+
+
 def main(argv=None, *, clf=None, skills=None):
     """`clf` and `skills` are forwarded to `_run_replay` (see there); None means the real ones."""
-    args = _parser().parse_args(argv)
+    args = _parse(argv)
     if args.command in ("replay", "size", "controls"):
         try:
             code, data, error = _run_replay(args, clf=clf, skills=skills)
         except ControlFailed as exc:
-            _emit(args, False, error=str(exc))
-            return 3
+            _emit(args, 2, error=str(exc))
+            return 2
         except (OSError, ValueError) as exc:
-            _emit(args, False, error="%s: %s" % (type(exc).__name__, exc))
+            _emit(args, 2, error="%s: %s" % (type(exc).__name__, exc))
             return 2
         skipped = ({"prompts_without_a_prefix": len(data["skipped_prompts"]),
                     "unreadable_corpus_paths": len(data["corpus"].get("unreadable", []))}
                    if data and "skipped_prompts" in data else None)
-        _emit(args, code == 0, data=data, error=error, skipped=skipped)
+        _emit(args, code, data=data, error=error, skipped=skipped)
         return code
     if args.command in ("packet", "harvest"):
         try:
             code, data, error = (_run_packet(args, skills) if args.command == "packet"
                                  else _run_harvest(args))
         except (OSError, ValueError) as exc:
-            _emit(args, False, error="%s: %s" % (type(exc).__name__, exc))
+            _emit(args, 2, error="%s: %s" % (type(exc).__name__, exc))
             return 2
-        _emit(args, code == 0, data=data, error=error)
+        _emit(args, code, data=data, error=error)
         return code
     exclude = tuple(args.exclude_session if args.exclude_session is not None else DEFAULT_EXCLUDE)
     args.log = args.log or default_log()
     try:
         rows, bad = load_rows(args.log, exclude_sessions=exclude)
     except OSError as exc:
-        _emit(args, False, error="cannot read %s: %s" % (args.log, exc))
+        _emit(args, 2, error="cannot read %s: %s" % (args.log, exc))
         return 2
     skipped = {"malformed_lines": bad}
     if bad:
         print("classifier_eval: skipped %d malformed line(s)" % bad, file=sys.stderr)
     if not rows:
-        _emit(args, False, error="no usable rows in %s" % args.log, skipped=skipped)
+        _emit(args, 1, error="no usable rows in %s" % args.log, skipped=skipped)
         return 1
     rep = summarize(rows, args.threshold, args.top)
     if args.disagreements:
         try:
             write_disagreements(rep, args.disagreements)
         except OSError as exc:
-            _emit(args, False, error="cannot write %s: %s" % (args.disagreements, exc))
+            _emit(args, 2, error="cannot write %s: %s" % (args.disagreements, exc))
             return 2
-    _emit(args, True, data=rep, skipped=skipped)
+    _emit(args, 0, data=rep, skipped=skipped)
     return 0
 
 
