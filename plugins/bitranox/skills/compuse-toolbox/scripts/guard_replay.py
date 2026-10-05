@@ -45,14 +45,18 @@ Run:
   `uv run scripts/guard_replay.py --module g.py --root ~/.claude/projects --tool Bash`
 
 Exit codes: 0 it fired at least once, 1 it never fired (loud on purpose - a guard that cannot
-speak and a corpus you never really read print the same otherwise), 2 usage error or an internal
-crash (an unknown tool, a field no call carries, a bad --block-pattern, a module that will not
-import), 3 nothing was replayed (no files, or no calls of that tool), 4 the predicate raised on at
-least one command - the run is a defect report, not a measurement, whatever it fired on.
+speak and a corpus you never really read print the same otherwise), 2 could not measure: a usage
+error or an internal crash (an unknown tool, a field no call carries, a bad --block-pattern, a
+module that will not import), nothing was replayed (no files, or no calls of that tool), or the
+predicate raised on at least one command - that run is a defect report, not a measurement,
+whatever it fired on. The last two say which in `data.inconclusive` ("nothing replayed" /
+"predicate raised") and on stderr.
+
+`--json` prints `{ok, command, data, skipped}` on every exit, 2 included; `ok` is false exactly
+when the exit is 2, so a never-fired run (exit 1) is `ok: true`.
 """
 from __future__ import annotations
 
-import argparse
 import fnmatch
 import importlib.util
 import inspect
@@ -61,6 +65,8 @@ import os
 import re
 import sys
 from pathlib import Path
+
+from _cli_envelope import EXIT_ERROR, EnvelopeArgumentParser, emit, guarded
 
 try:                                                     # fast path when available (uv run installs it)
     import orjson
@@ -84,9 +90,11 @@ class UsageError(Exception):
     """A caller mistake worth naming, rather than an AttributeError from three frames deep."""
 
 
-# Distinct from 1 ("never fired") and 2 (usage): a guard that crashed on real commands has not been
-# measured, and a caller gating on 0 must not read a run that was 99 percent crashes as a pass.
-EXIT_PREDICATE_ERRORS = 4
+# Why a run did not measure anything, carried in data.inconclusive beside exit 2: a guard that
+# crashed on real commands has not been measured, and a caller gating on 0 must not read a run that
+# was 99 percent crashes as a pass - nor confuse it with an empty corpus or a usage error.
+INCONCLUSIVE_NOTHING_REPLAYED = "nothing replayed"
+INCONCLUSIVE_PREDICATE_RAISED = "predicate raised"
 
 
 # What Claude Code writes into a tool_result when a PreToolUse hook refuses the call. It is the
@@ -530,17 +538,25 @@ def _corpus_files(base: Path, skipped: list):
     return sorted(found)
 
 
-def exit_code(report) -> int:
-    """0 fired, 1 never fired, 3 nothing was replayed at all, 4 the predicate raised."""
+def inconclusive_reason(report) -> str | None:
+    """Why this report is not a measurement, or None when it is one."""
     if not report.get("commands"):
-        return 3
+        return INCONCLUSIVE_NOTHING_REPLAYED
     if report.get("predicate_errors"):
-        return EXIT_PREDICATE_ERRORS
+        return INCONCLUSIVE_PREDICATE_RAISED
+    return None
+
+
+def exit_code(report) -> int:
+    """0 fired, 1 never fired, 2 nothing was replayed or the predicate raised (no measurement)."""
+    if inconclusive_reason(report) is not None:
+        return EXIT_ERROR
     return 0 if report.get("fires") else 1
 
 
 def _parse(argv):
-    ap = argparse.ArgumentParser(
+    ap = EnvelopeArgumentParser(
+        envelope_command="replay",
         description="Replay real Bash commands through a guard predicate; report rate AND precision.")
     ap.add_argument("--module", required=True, help="path to the .py holding the predicate")
     ap.add_argument("--func", default="notice", help="predicate name in that module (default: notice)")
@@ -596,8 +612,8 @@ def _refuse(args, message) -> int:
     """A usage refusal: one readable line on stderr, the failure envelope in JSON mode, exit 2."""
     print("guard_replay: %s" % message, file=sys.stderr)
     if args.json:
-        print(_dumps({"ok": False, "command": "replay", "skipped": [str(message)], "data": None}))
-    return 2
+        emit(EXIT_ERROR, "replay", error=str(message))
+    return EXIT_ERROR
 
 
 def _run(args) -> int:
@@ -620,10 +636,12 @@ def _run(args) -> int:
     # `report` never carries `fire_calls` at this point - `replay` only ever builds it when asked
     # and pops it back out before returning, so there is nothing left to strip here.
     rc = exit_code(report)
-    if rc == 3:
+    reason = inconclusive_reason(report)
+    report["inconclusive"] = reason
+    if reason == INCONCLUSIVE_NOTHING_REPLAYED:
         print("guard_replay: read %d file(s) and found no %s calls - nothing was replayed"
               % (report["files_read"], args.tool), file=sys.stderr)
-    elif rc == EXIT_PREDICATE_ERRORS:
+    elif reason == INCONCLUSIVE_PREDICATE_RAISED:
         print("guard_replay: the predicate raised on %d of %d command(s) - fix the guard before "
               "reading its rate" % (report["predicate_errors"], report["commands"]),
               file=sys.stderr)
@@ -631,24 +649,20 @@ def _run(args) -> int:
         print("guard_replay: the predicate never fired over %d command(s)" % report["commands"],
               file=sys.stderr)
     if args.json:
-        print(_dumps({"ok": rc == 0, "command": "replay", "skipped": report["skipped"],
-                      "data": report}))
+        emit(rc, "replay", report, skipped=report["skipped"])
     else:
         print(_render(report))
     return rc
 
 
+@guarded("replay")
 def main(argv=None) -> int:
     """Load the predicate, replay the corpus, report. Warnings go to stderr, never into the data.
 
-    An unexpected crash exits 2, never Python's default 1, which is this tool's "never fired".
+    An unexpected crash exits 2 (with the envelope under --json), never Python's default 1, which
+    is this tool's "never fired".
     """
-    args = _parse(sys.argv[1:] if argv is None else argv)
-    try:
-        return _run(args)
-    except Exception as exc:                             # noqa: BLE001 - a crash must not read as an answer
-        print("guard_replay: internal error: %s: %s" % (type(exc).__name__, exc), file=sys.stderr)
-        return 2
+    return _run(_parse(sys.argv[1:] if argv is None else argv))
 
 
 def _utf8_stdio() -> None:
