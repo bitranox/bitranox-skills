@@ -44,7 +44,9 @@ tool here, not by shell glue:
 
 Exit codes: 0 = every item succeeded (discover: at least one source answered),
 1 = some items did not succeed, 2 = error (the --cmd binary was not found, no usable
-proxy in the store, every discovery source failed).
+proxy in the store, every discovery source failed, a --cmd that cannot be parsed, an invalid
+--dead-regex, a --worklist that is not UTF-8). validate is a report: it exits 0 even when no
+candidate turned out live.
 
 The --cmd template may contain {proxy} (host:port) and {item}. Example:
   uv run proxy_pool.py run --worklist ids.txt --workers 16 --success-glob 'out/{item}*.vtt'
@@ -74,6 +76,11 @@ class CommandNotFound(Exception):
 
 class NoProxies(Exception):
     """The store holds no usable proxy, so every item would fail without being attempted."""
+
+
+class BadInput(Exception):
+    """An argument cannot be used (a malformed --cmd, an invalid --dead-regex, a --worklist that
+    is not UTF-8): the run never starts, exit 2."""
 
 
 def _p(store, name):
@@ -111,7 +118,16 @@ def _atomic_write(path, text):
 
 
 def _grow(path, items):
-    """Atomic grow-only merge: never shrinks the file."""
+    """Atomic grow-only merge: never shrinks the file.
+
+    Threads are serialised; two PROCESSES on one store are not, so one run's merge can drop
+    entries the other added in the same moment (measured: 166 of 600 under two writers merging
+    in a tight loop, none serially). That is left unlocked on purpose: every file merged here is a
+    cache of work that is redone. A live.txt entry that is lost stays in pool.txt, and validate
+    tests pool - live - bad, so the next validate re-tests it; a lost speeds.tsv value is
+    re-measured; a lost pool.txt entry comes back with the next discover while its source still
+    lists it. bad.txt and good.txt are appended, never merged here. The temp file from mkstemp is
+    0600, so a store file this writes is owner-only, which is kept: the store is per-user state."""
     with _lock:
         cur = _read(path)
         cur |= set(items)
@@ -579,6 +595,26 @@ def split_command(text, windows=os.name == "nt"):
     return _split_windows(text) if windows else shlex.split(text)
 
 
+def _parse_run_inputs(cmd, dead_regex, worklist):
+    """(argv template, compiled dead regex, items), or BadInput naming the argument at fault.
+
+    Each used to escape main as a traceback (exit 1, which reads as 'some items failed')."""
+    try:
+        argv_tpl = split_command(cmd)    # parse template once; substituted per attempt, no shell
+    except ValueError as exc:            # shlex: "No closing quotation", "No escaped character"
+        raise BadInput(f"--cmd cannot be parsed: {exc}") from exc
+    try:
+        dead_re = re.compile(dead_regex, re.I)
+    except re.error as exc:
+        raise BadInput(f"--dead-regex is not a valid regex: {exc}") from exc
+    try:
+        with open(worklist, encoding="utf-8-sig") as f:
+            items = [l.strip() for l in f if l.strip()]
+    except UnicodeDecodeError as exc:
+        raise BadInput(f"--worklist {worklist} is not UTF-8 text: {exc}") from exc
+    return argv_tpl, dead_re, items
+
+
 def run(store, worklist, cmd, workers, per_item, item_timeout, bg, test_url, vworkers, vtimeout,
         success_glob, dead_regex, need=None, cooldown=5.0, bench_interval=120, flaky_fail_ratio=0.5):
     """Run the worklist; return (succeeded, total).
@@ -586,10 +622,7 @@ def run(store, worklist, cmd, workers, per_item, item_timeout, bg, test_url, vwo
     Raises CommandNotFound when the --cmd binary does not exist, and NoProxies when the store
     holds no usable proxy - both make every item fail, so running them would only print noise.
     """
-    argv_tpl = split_command(cmd)        # parse template once; substituted per attempt, no shell
-    dead_re = re.compile(dead_regex, re.I)
-    with open(worklist, encoding="utf-8-sig") as f:
-        items = [l.strip() for l in f if l.strip()]
+    argv_tpl, dead_re, items = _parse_run_inputs(cmd, dead_regex, worklist)
     # Self-optimizing working set: rotates the pick (no hammering), tracks flaky proxies,
     # and (with --background-discovery) benchmarks + swaps fresh fast proxies in for slow ones.
     pool = ProxyPool(store, need, test_url=test_url, vtimeout=vtimeout, cooldown=cooldown,
@@ -674,7 +707,7 @@ def main(argv=None):
     try:
         os.makedirs(a.store, exist_ok=True)
         return _dispatch(a)
-    except (CommandNotFound, NoProxies, OSError) as e:
+    except (CommandNotFound, NoProxies, BadInput, OSError) as e:
         print(f"proxy_pool: {e}", file=sys.stderr)
         return 2
 
