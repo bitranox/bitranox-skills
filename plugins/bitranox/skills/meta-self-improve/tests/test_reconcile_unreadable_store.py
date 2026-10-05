@@ -125,7 +125,7 @@ def test_other_levels_pointing_names_an_undecodable_level(tree):
 
 def test_check_tree_reports_an_undecodable_body_instead_of_crashing(tree, capsys):
     bad = _spoil(_facts(tree) / "b-fact.md")
-    assert R.main([str(tree), "--check-tree"]) == 1
+    assert R.main([str(tree), "--check-tree"]) == 2      # could not check it: 2, never "no" (1)
     out = capsys.readouterr().out
     assert str(bad) in out and "unreadable" in out and "directory" not in out
 
@@ -200,7 +200,7 @@ def test_rehome_reports_an_undecodable_dangler_instead_of_skipping_it(tree, caps
     orphan = _facts(tree) / "orphan.md"
     orphan.write_text(BODY % "orphan", encoding="utf-8")
     _spoil(orphan)
-    assert R.main([str(tree), "--rehome"]) == 1
+    assert R.main([str(tree), "--rehome"]) == 2          # an unreadable body is an I/O failure
     out = capsys.readouterr().out
     assert "cannot re-home: orphan.md" in out and "UTF-8" in out
     assert not any(e.slug == "orphan" for e in E.read_store(str(tree))[1])
@@ -210,3 +210,14 @@ def test_control_rehome_still_reattaches_a_readable_flat_dangler(tree, capsys):
     (_facts(tree) / "orphan.md").write_text(BODY % "orphan", encoding="utf-8")
     assert R.main([str(tree), "--rehome"]) == 0
     assert "re-homed: orphan" in capsys.readouterr().out
+
+
+def test_rehome_exits_2_when_the_pointer_write_fails(tree, capsys):
+    """The engine write behind --rehome raised OSError past main (which caught only
+    TreeWalkError) - a traceback exit 1. A held level lock is a real OSError on every platform."""
+    (_facts(tree) / "orphan.md").write_text(BODY % "orphan", encoding="utf-8")
+    Path(str(tree / "CLAUDE.local.md") + ".lock").write_text("held\n", encoding="utf-8")
+    rc = R.main([str(tree), "--rehome"])
+    err = capsys.readouterr().err
+    assert rc == 2
+    assert "! error:" in err and "Traceback" not in err

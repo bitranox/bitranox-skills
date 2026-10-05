@@ -11,15 +11,20 @@ A curated altitude is a level dir whose `CLAUDE.local.md` holds a managed pointe
     fabricated). A body no level points at is a DANGLING body: `--check` / `--check-tree` report
     it and `--rehome` re-attaches it; nothing here deletes one.
   * `archive_entry` forgets a fact: drop its pointer line + move its central body to `.archive/`.
+  * `--repair-appended-type`: a one-off repair for the body damage `--check-tree` reports as an
+    appended `metadata: type:` block (see `appended_type_damage`); `--dry-run` lists only.
 
 `parse_frontmatter`/`derive_title`/`derive_hook` are kept for the NATIVE `~/.claude` tier (its topic
 files still carry `name`/`description` frontmatter); `migrate_memory.py` imports them.
 
 Exit codes: 0 clean; 1 a problem was found (orphan pointer or ref, downward ref, duplicate, decoy,
-unreadable dir or file under `--check-tree`, misplaced fact, unrehomable body) or `--archive` named
-no entry; 2 a dir argument does not exist, `--archive` could not move the body or write the pointer
-(the fact is then left as it was, or the message names where its body now is), or any other mode could not read a level file, fact body or store directory (not UTF-8, no
-permission) - it names the path and does not guess at an answer.
+frame-only or appended-type body, misplaced fact, a dangling body `--rehome` cannot re-attach
+because it is sharded or its name is not a slug, a damaged body `--repair-appended-type` could not
+repair) or `--archive` named no entry; 2 could not run: a dir argument does not exist, a level
+file, fact body or store directory could not be read (not UTF-8, no permission - `--check-tree`
+still prints every finding and counts the path in its TOTAL line, `--rehome` names the body), a
+write failed (`--archive` leaves the fact as it was, or names where its body now is). A path it
+could not read is never guessed at.
 
 Pure standard library; cross-platform; ASCII output only.
 """
@@ -629,6 +634,7 @@ def check_tree(anchor):
                                if r in all_targets and not _reachable(r, lvl)))
     decoys = find_decoy_anchors(anchor, unreadable=unreadable)
     frame_only = find_frame_only_bodies(anchor, unreadable=unreadable)
+    appended = find_appended_type_damage(anchor, unreadable=unreadable)
     # A body pointed at only from a level that could not be read would list as dangling, and
     # --rehome would then re-attach a fact that still has a pointer - so with anything unreadable
     # the danglers are not assessed; the unreadable finding already fails the run.
@@ -639,7 +645,7 @@ def check_tree(anchor):
             "orphan_pointers": sorted(orphan_pointers), "orphan_refs": orphan_refs,
             "sideways_refs": sideways_refs, "danglers": danglers,
             "decoy_anchors": decoys, "unreadable_dirs": sorted(set(unreadable)),
-            "frame_only_bodies": frame_only}
+            "frame_only_bodies": frame_only, "appended_type_damage": appended}
 
 
 def find_frame_only_bodies(anchor, unreadable=None):
@@ -688,6 +694,86 @@ def _content_after_frontmatter(raw):
     Matched to the FIRST closing delimiter, so a payload holding its own `---` rule survives."""
     m = _FRONTMATTER_RX.match(raw)
     return raw[m.end():] if m else raw
+
+
+# The damage a re-type did before the frontmatter test required a CLOSED block with a `name:` key:
+# it asked only `lstrip().startswith("---")`, so a body that merely opened with a markdown rule was
+# taken for a frame and `\nmetadata:\n  type: <kind>` was appended to its prose, right before the
+# prose's next `---` line or at its very end. Anchored to the end of that span, so a `metadata:`
+# line anywhere else is the author's text.
+_APPENDED_TYPE_RX = re.compile(r"\r?\nmetadata:\r?\n  type: (\S+)[ \t]*\Z")
+
+
+def appended_type_damage(raw):
+    """(prose, kind) when `raw` carries the appended-type damage, else None. PURE.
+
+    The damaged span is the text before the first `---` line after the opening rule (or the whole
+    text when there is none); it must end in the appended block, and `kind` must be one of the four
+    kinds, or it is not this damage. Also found under a real frame, which a later re-type puts on
+    top of a damaged body. `prose` is the text with only the appended block removed."""
+    head, m = ME._frontmatter(raw)
+    content = (head[m.end():] if m else head).lstrip()
+    if not re.match(r"---[ \t]*\r?\n", content) or ME._frontmatter(content)[1] is not None:
+        return None
+    end = content.find("\n---", 3)
+    front, rest = (content[:end], content[end:]) if end > 0 else (content.rstrip(), "")
+    t = _APPENDED_TYPE_RX.search(front)
+    if t is None or t.group(1) not in _TYPE_PREFIXES:
+        return None
+    return front[:t.start()] + rest, t.group(1)
+
+
+def find_appended_type_damage(anchor, unreadable=None):
+    """Names of the bodies in `anchor`'s store carrying `appended_type_damage`: a flat body by its
+    slug, a sharded one as `<shard>/<uuid>`. A body that cannot be read raises `TreeWalkError`,
+    unless `unreadable` is a list, which then receives its path."""
+    facts = us.central_facts_dir(Path(anchor))
+    if not facts.is_dir():
+        return []
+    flat, sharded = _store_bodies(facts, unreadable)
+    items = sorted((facts / (slug + ".md"), slug) for slug in flat)
+    items += sorted((facts / (rel + ".md"), rel) for rel in sharded.values())
+    out = []
+    for path, name in items:
+        try:
+            raw = ME.read_store_text(path)
+        except ME.TreeWalkError as exc:
+            if unreadable is None:
+                raise
+            unreadable.append(exc.path)
+            continue
+        if appended_type_damage(raw) is not None:
+            out.append(name)
+    return out
+
+
+def repair_appended_type(anchor, dry_run=False):
+    """Re-frame every damaged body through the engine: the prose with the appended block removed,
+    under a real frame carrying the kind (the real frame's own kind when the body has one, else the
+    appended one). Title, hook and pin come from the pointer and are kept.
+
+    Returns (repaired [(slug, kind)], skipped [(name, why)]). A body no pointer names, or a sharded
+    one, is skipped: there is no title or hook to re-frame it with."""
+    anchor = Path(anchor)
+    owners = {}
+    for lvl in _all_curated_levels(anchor):
+        for e in ME.read_store(str(lvl))[1]:
+            owners.setdefault(e.slug, (lvl, e))
+    repaired, skipped = [], []
+    for name in find_appended_type_damage(anchor):
+        if _is_sharded_body_name(name) or name not in owners:
+            skipped.append((name, "no pointer names this body - re-home it first (--rehome)"))
+            continue
+        level, entry = owners[name]
+        raw = ME.read_store_text(us.body_path(anchor, name))
+        prose, appended = appended_type_damage(raw)
+        kind = ME._body_type(raw) or appended                 # noqa: SLF001 - the engine's reader
+        if not dry_run:
+            ME.add_or_update_entry(str(level), title=entry.title, hook=entry.hook, body=prose,
+                                   type_=kind, slug=name, allow_over_cap_hook=True,
+                                   allow_pinned_overwrite=True)
+        repaired.append((name, kind))
+    return repaired, skipped
 
 
 def rehome_dangling_bodies(anchor, to_level=None, dry_run=False):
@@ -766,14 +852,18 @@ def _print_report(rep):
 def main(argv=None):
     """The CLI; exit codes are in the module docstring.
 
-    TreeWalkError is mapped to 2 HERE, once, rather than in each mode: any read of the store can
-    raise it, and a mode that forgot to catch it let a traceback exit 1 - the code for "problems
-    found", so a store that could not be read passed for one with findings. --check-tree differs
-    on purpose: it collects what it could not read and reports each path as a finding (exit 1)."""
+    TreeWalkError and OSError are mapped to 2 HERE, once, rather than in each mode: any read or
+    write of the store can raise one, and a mode that forgot to catch it let a traceback exit 1 -
+    the code for "problems found", so a store that could not be read passed for one with findings.
+    --check-tree collects what it could not read instead, so every other finding is still
+    reported, and then exits 2."""
     try:
         return _main(argv)
     except ME.TreeWalkError as exc:
         print("! error: cannot read the memory store - %s" % exc, file=sys.stderr)
+        return 2
+    except OSError as exc:                  # a failed write (TimeoutError from a held lock is one)
+        print("! error: %s" % exc, file=sys.stderr)
         return 2
 
 
@@ -789,8 +879,9 @@ def _main(argv=None):
                     help="re-attach every dangling body (a central body no level points at) so it is "
                          "visible + loadable again; a later dream re-levels it. Default target is the "
                          "tree top - use --rehome-to for a subtree so a subtree's danglers are not "
-                         "over-promoted to the whole tree. Exit 1 when a dangling body's filename is "
-                         "not a valid slug, which it names and cannot re-home")
+                         "over-promoted to the whole tree. Exit 1 when a dangling body is sharded or "
+                         "its filename is not a valid slug, which it names and cannot re-home; exit 2 "
+                         "when one cannot be read")
     ap.add_argument("--rehome-to", metavar="LEVEL", default=None, dest="rehome_to",
                     help="with --rehome: re-attach the dangling bodies at LEVEL (a dir in the tree) "
                          "instead of the tree top - so a subtree's orphaned bodies land in that subtree")
@@ -802,11 +893,17 @@ def _main(argv=None):
                     help="TREE-WIDE integrity from any dir in the tree (resolved to its anchor): flags a "
                          "slug pointed at from >1 level (tree-unique violation), orphan pointers, refs "
                          "resolving nowhere, and dangling bodies - the cross-sibling problems --check "
-                         "(chain-only) cannot see; exit 1 on any hard problem")
+                         "(chain-only) cannot see; exit 1 on any hard problem, 2 when a path could "
+                         "not be read (every finding is still printed)")
     ap.add_argument("--check-misplaced", action="store_true", dest="check_misplaced",
                     help="TREE-WIDE wrong-tree audit: facts whose body cites ONLY another tree's "
                          "paths, i.e. captured in the wrong store (capture routes by cwd). Reports "
                          "candidates + the relocate command; never moves anything. Exit 1 if any")
+    ap.add_argument("--repair-appended-type", action="store_true", dest="repair_appended_type",
+                    help="one-off repair of the body damage --check-tree reports as an appended "
+                         "`metadata: type:` block: re-frame each such body's prose through the "
+                         "engine with that kind (title, hook and pin kept). --dry-run lists only. "
+                         "Exit 1 when a damaged body could not be repaired (no pointer names it)")
     args = ap.parse_args(sys.argv[1:] if argv is None else argv)
 
     # Absolutize ONCE at the boundary. A relative dir reached the level/anchor resolution in
@@ -889,6 +986,10 @@ def _main(argv=None):
             print("    ! frame-only body (frontmatter and nothing else; the pointer promises a rule "
                   "and the reader gets an empty file): %s" % slug)
             problems += 1
+        for name in rep["appended_type_damage"]:
+            print("    ! a `metadata: type:` block appended to a body that opens with a --- rule "
+                  "and has no frame (run --repair-appended-type, --dry-run first): %s" % name)
+            problems += 1
         for path in rep["unreadable_dirs"]:
             print("    ! %s" % _unreadable_line(path))
             problems += 1
@@ -898,7 +999,19 @@ def _main(argv=None):
         if rep["danglers"]:
             print("TOTAL dangling bodies: %d (advisory - run with --rehome to re-attach them)"
                   % len(rep["danglers"]))
+        if rep["unreadable_dirs"]:
+            return 2                        # part of the tree could not be checked at all
         return 1 if problems else 0
+
+    if args.repair_appended_type:
+        anchor = ME._anchor(args.dirs[0])
+        repaired, skipped = repair_appended_type(anchor, dry_run=args.dry_run)
+        for slug, kind in repaired:
+            print("%s: %s (type %s)" % ("would repair" if args.dry_run else "repaired", slug, kind))
+        for name, why in skipped:
+            print("cannot repair: %s - %s" % (name, why))
+        print("TOTAL %s: %d" % ("would repair" if args.dry_run else "repaired", len(repaired)))
+        return 1 if skipped else 0
 
     if args.rehome:
         anchor = ME._anchor(args.dirs[0])
@@ -909,6 +1022,11 @@ def _main(argv=None):
         stuck = unrehomable_bodies(anchor)
         for name, why in stuck:
             print("cannot re-home: %s.md - %s" % (name, why))
+        # a sharded body or a non-slug name is a finding for a person (1); anything else on the
+        # list is a body that could not be READ, which is not an answer but a failure (2)
+        unread = [n for n, _why in stuck if not _is_sharded_body_name(n) and us.is_valid_slug(n)]
+        if unread:
+            return 2
         return 1 if stuck else 0
 
     if args.check:
