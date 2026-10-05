@@ -31,9 +31,158 @@ two "versions with no entry" notes came to sit in this file disagreeing with it.
 
 ## [7.41.0]
 
+### Changed
+
+- `skill_roster`'s names-aware listing parser is now public as `raw_listing` (was private
+  `_raw_listing`); the old name stays as an alias.
+- `repo-gate` waives the skill-writer checklist for a SKILL.md change proven to be whitespace-only
+  table re-padding against `origin/master` (unchanged line count, every changed line a matching
+  table row, cells equal after stripping, alignment kept, canonical per `reformat_tables --check`);
+  anything else still needs the checklist. `CONTRIBUTING.md` documents the waiver.
+- `meta-skill-writer`'s Iron Law names that table re-pad as a second mechanical exception beside
+  the front-matter repair, and the procedure gains a closing `skill_receipt.py end` step so a
+  later SKILL.md edit re-enters the procedure instead of riding an existing receipt.
+- `meta-dream-tree` step 5 now classifies each tree-top-bound fact as misplacement or promotion
+  before reading its `should-promote` verdict: a misplacement is re-homed regardless of the
+  verdict, a promotion obeys it with no part-way compromise to a middle level.
+- The mirror gate's description of its own H1 tolerance now matches the code: a trailing
+  `(<name>)` parenthetical on a `"# "` line is stripped before comparison, not "the same name
+  echoed in the H1".
+- `block-git-semicolon-chain` judges `&&`/`||`/`;` reachability through `()` and `{}` groups
+  instead of flattening them, so `(git commit -m x ; git push)` blocks like its flat form while
+  `(git commit -m x) && git push` stays allowed; a brace is a reserved word only at command
+  position.
+- `ci-watch-nudge` now reads the git push that actually builds (skipping a `--dry-run` push),
+  resolves a `HEAD` source by its destination ref, refuses an ambiguous tag-or-branch short name
+  instead of guessing, and announces the destination ref CI builds rather than the source.
+- `git-path-not-here-nudge`, `git-wrong-repo-nudge`, `shell-prefix-selfref-guard`,
+  `retry-with-a-flag-nudge`, `block-sed-structured-files` and `block-partial-typecheck` now split
+  commands with the quote-aware statement walk instead of a SEP/LIST_SEP regex, so a statement
+  inside a subshell or process substitution (`(sed -i ... config.json)`,
+  `diff <(sed ..) <(sed ..)`) is read correctly and a quoted `pyright`/`sed` inside a grep pattern
+  or test expression is no longer mistaken for a real run.
+- `block-masked-gate-exit`'s `$?` advisory now follows statement and pipe boundaries from the
+  masked text, and a filter written as a subshell element (`gate | (tail -3)`) still masks the
+  gate.
+- `shell_text` exposes `past_command_prefix` publicly and adds `command`/`exec` to the shared
+  launcher set, so every git guard now sees `command git commit` / `exec git push`.
+- `block-pgrep-self-match` reads the call's real pattern operand (walking past `-u`, `--euid`,
+  signal flags) instead of the token after `-f`, and judges it as the regex pgrep actually
+  compiles, including bracket classes and alternation.
+- Hooks that call `blank_unexpanded_text` (`block-masked-gate-exit`, `shell-prefix-selfref-guard`,
+  `toolbox-nudge`) and `split_for_tool` now apply PowerShell quoting/escaping rules under
+  PowerShell instead of Bash defaults: backtick escapes, no ANSI-C strings, an ordinary backslash,
+  and a PowerShell single-quoted string is no longer split at its spaces.
+- `venv-guard` recognizes a sourced Bash `activate` script or a PowerShell `Activate.ps1` as
+  changing the session's venv for later statements, instead of nudging every later command as
+  running under a foreign ambient venv.
+
 ### Fixed
 
-- (batch in progress)
+- `gated-prep-nudge` now counts `tee`'s file operands as writes; previously only a `>` redirect
+  after `tee` counted, so `printf x | tee msg.txt && git commit -F msg.txt` gave no notice.
+- `jig-repetition-nudge` now treats a plain `rm` of a file, not only `rm -rf`/`--force`, as
+  state-changing.
+- `sha-literal-nudge` judges each literal use on its own: an assertion only vouches for what runs
+  because it succeeded, a literal behind a variable is judged where the variable expands, and a
+  shell result no longer vouches for a literal its own command never resolved
+  (`git rev-parse <sha>`, `echo`).
+- `skill-listing-budget` reads bare-entry detection from the router's names-aware parser when the
+  listing carries names, treats a NaN/Infinity/bool fraction as the harness default, and no longer
+  silences the whole hook on an unrelated import error.
+- `commit-tell-sweep` now reads a commit message piped via `-F -`, `--file=-`, `-F /dev/stdin`, a
+  heredoc, or a `< file` redirect, instead of silently approving a message it never saw; an
+  apostrophe inside a heredoc body no longer blanks every message in the command.
+- `store-edit-guard` locates `old_string` using the same curly-quote-folding and `\uXXXX`-escape
+  retries the Edit tool itself falls back to, so an edit reached through one of those retries is
+  no longer misjudged as "not found"; BOM-less UTF-16 is documented as deliberately not sniffed.
+- `audit_headers` resolves the target host via `urlsplit` plus `getaddrinfo` instead of a regex,
+  so `user:pw@host` and a bracketed IPv6 host no longer silently skip the internal-target warning;
+  a CSP with neither `script-src` nor `default-src` is now graded MEDIUM.
+- `detectors.js` recognizes every CSS property that establishes a containing block (transform,
+  filter, contain, will-change, and more), not only `transform`, when judging whether an ancestor
+  clips a fixed or absolute box; a box fixed to the viewport is no longer listed as widening the
+  page.
+- `validate-structured-files` no longer skips a whole YAML or XML file just because a template
+  marker appears inside a quoted value; PyYAML's scanner and a well-formed-tag scan now tell a
+  marker in data from one in structure.
+- `render-graphs --combine` keeps `strict` when every input graph is strict (refusing a mixed
+  strict/plain combine) and finds each graph's real closing brace instead of the file's last one,
+  so a trailing comment holding a brace no longer breaks the merge.
+- `proxy_pool` writes its pool and speed-tracking files through a unique temp file per write
+  instead of a fixed `.tmp` path, fixing corruption when two processes write the same store.
+- `mcp_search` runs the absolute path its own lookup resolved, not the bare command name, so a
+  Windows PATH search that finds only an `.exe` can no longer report a tool it then fails to
+  start; a `.cmd`/`.bat` shim is declined rather than run through `cmd.exe`.
+- `adopt_skill` matches an existing THIRD_PARTY_NOTICES entry by its own `Source:` line instead of
+  by a bare name match, and refuses a non-UTF-8 SKILL.md up front, before anything is copied.
+- `pluginprune --json` labels every skipped cache entry `REFUSED:` (never attempted) or `FAILED:`
+  (attempted, still present), matching its text report.
+- `reformat_tables` recognizes a fence inside a blockquote, so a table inside a quoted code block
+  is no longer realigned as if it were live markdown.
+- `tablekit` reads stdin as bytes decoded as UTF-8 instead of text mode, and renders through the
+  same writer as `replace --stdout`, so a lone CR in the input or a render on Windows no longer
+  produces different bytes than on Linux.
+- `pfsense`'s snort-alert year inference now reads the firewall's own clock from the same remote
+  command instead of the local machine's, so an alert is no longer pushed a year off when the two
+  clocks disagree.
+- `classifier_eval`'s `unlocated_reason` separates `NO_PROMPT`, `NOT_TYPED` (a peer hand-back, a
+  queued attachment, or a cross-session notice) and `COMMAND` (a slash command) from genuine
+  unlocated misses.
+- `coding-python-new-public-library`'s "Common mistakes" table, and its mirrored twin in
+  `bitranox_template_py_lib`, is re-padded into canonical table form.
+- docs-convert-markitdown / docs-generate-schematics: `generate_schematic.py` clamps
+  `--iterations` to 1-2; `convert_literature.py` prints `[FAIL]` lines to stderr instead of
+  stdout; the AI-rating fallback score label now matches on a word boundary (no longer matches
+  inside "inequality" or "operating"); `convert_with_ai`'s `[OK]` line states how many image
+  descriptions were produced; the skill's examples no longer imply a PDF's figures get
+  AI-described.
+- `infra-swap-tuning`'s idempotency guard scopes its `zram-size` read to the `[zram0]` section and
+  checks every config location zram-generator actually reads, in precedence order.
+- `coding-python-gitignore`'s `max_token_bytes` one-liner is documented as an internal,
+  non-public import with a fallback. `infra-modulejail` drops a no-op `depmod -a` from its
+  runtime modprobe-override step.
+- `compuse-toolbox`: `pushcheck` scans every commit message in a push range (a finding refuses a
+  public push, even a removal-only one) and lists unscanned binaries instead of treating a
+  binary-only range as empty; `ci_wait` refuses `--interval` under 5 seconds and reports when
+  `--settle` cut its deadline short or never re-polled; `enforced` treats a `--root` under a
+  project-marked tests dir as test code; `grep_all` skips every `.venv*` directory, not only
+  `.venv`/`.venv-win`; `renamescope` scopes a comprehension's own targets to the comprehension;
+  `adjudicate` feeds subject stdin as UTF-8 bytes with no Windows CRLF translation; `winlog`'s NUL
+  cache re-searches correctly for a start earlier than the cached search.
+- Memory store and self-improve hooks: `uuid_store.write_if_changed` writes through a temp file
+  and renames it over the target, so a failed write no longer leaves `CLAUDE.local.md` truncated;
+  `uuid_store.add_pointer` raises a named `TreeWalkError` (exit 2) instead of a bare
+  `UnicodeDecodeError` on an unreadable level file; `memory_engine.ensure_level` warns on stderr
+  when git cannot confirm the store is gitignored; `self_improve_signals.unreviewed_transcript_part`
+  cuts a long line at a whole UTF-8 character instead of mid-character; session-start names an
+  unreadable contribution queue instead of showing nothing; self-improve-audit centres each
+  candidate snippet on its own signal for every role; self-improve-gate caps its routing hint at 8
+  levels.
+- `migrate_memory.py`'s BACKUP line now prints from a `finally` block, so an exception mid-run
+  still names the already-taken backup dir, and `ensure_gitignore` preserves a `.gitignore`'s own
+  line endings instead of normalizing them to the host's.
+- `reconcile_memory_index.py` / `ref_map.py` now scan pre-pivot sharded legacy memory bodies too
+  (not only flat `facts/*.md`), so a frame-only sharded body is reported and a reference sitting
+  only inside a sharded body's text counts as a real inbound edge.
+- `dedup_scan.py`'s planted self-check control pair is scored directly instead of through the
+  candidate-pairs index, so a source fact with one content word no longer reports a false
+  instrument failure.
+- `factedit.py`'s documented launch form now matches the compuse-toolbox catalogue's `uv run`
+  form, and a new registration test flags any script whose own docs disagree with the catalogue.
+- `find_cache_candidates` no longer lets decorators or parameter defaults leak into the
+  purity/expensiveness verdict, recognizes `os.system`/`requests.get`-style direct calls as
+  impure and the mutating `heapq`/`random.shuffle` functions as mutation, and scans `async def`
+  functions like sync ones.
+- `validate_perf_claims` resolves overlapping claim-pattern matches to a single claim via interval
+  scheduling, without losing two genuinely distinct claims that share a sentence.
+- `audit_local`'s settings-unparseable finding no longer claims every hook in a malformed
+  `settings.json` is dead; it now says what could not be checked.
+- Nine stale or imprecise claims corrected across `meta-dream-nap`, `meta-self-improve`,
+  `meta-claude-hooks` references, `write-humanize-en`/`-de`, `meta-skill-audit` and
+  `meta-dream-tree` SKILL.md files; `docs/skills.md` and `skill_triggers.json` regenerated.
+- `secret_patterns`'s `flattened_pem_run` growth-ratio calibration draws 5 repeats instead of 3,
+  so a rare CI stall under load no longer fails the test.
 
 ## [7.40.0]
 
