@@ -171,3 +171,60 @@ def test_main_forwards_the_event_s_tool_to_the_exemption(tool_name, expect_silen
                           capture_output=True, text=True, encoding="utf-8", errors="replace")
     assert proc.returncode == 0
     assert (proc.stdout.strip() == "") is expect_silence
+
+
+# --- a trailing & on a waiter (contrib #22) --------------------------------------------------------
+# Corpus replay (103,932 shell commands): 19 firings, all foreground; 17 detached a gate.py or
+# ci_wait.py with `nohup ... &` (verdict only in a log, no completion notice), 2 were test fixtures
+# whose `( sleep 0.5; ... ) &` a later `wait` collects - the exemption below.
+
+
+@pytest.mark.parametrize("command", [
+    "nohup python3 /p/scripts/gate.py --gate 'make test' --log /tmp/g.log > /dev/null 2>&1 &",
+    "nohup uv run /p/scripts/ci_wait.py --sha $(git rev-parse HEAD) > w.log 2>&1 &\necho started",
+    "(sleep 600; echo TIMEOUT >> run.log) &",
+    "until test -f /tmp/done.flag; do sleep 5; done &",
+    "while pgrep -x make >/dev/null; do sleep 10; done & echo armed",
+    "gh run watch 123 --exit-status > watch.log 2>&1 &",
+    "python3 backstop.py --deadline 900 &",
+])
+def test_a_backgrounded_waiter_is_named(command):
+    assert N.backgrounded_waiter(command, "Bash") is not None
+
+
+@pytest.mark.parametrize("command", [
+    "(sleep 0.5; rm -rf /tmp/x) & python3 -m pytest -q; wait",   # a later wait collects it
+    "nohup myserver --port 8080 > s.log 2>&1 &",                  # a daemon, not a waiter
+    "sleep 5 && echo ready",                                      # no &
+    "make test 2>&1 | tee log",
+    "cat > notes.md <<'EOF'\nsleep 300 &\nEOF",                  # heredoc body is data
+    "echo 'gate.py --gate x &'",                                  # quoted data
+])
+def test_a_non_waiter_or_a_collected_one_is_silent(command):
+    assert N.backgrounded_waiter(command, "Bash") is None
+
+
+def test_powershell_is_out_of_scope_for_the_ampersand_check():
+    """In PowerShell `&` is the CALL operator: `& gate.py ...` runs it in the foreground."""
+    assert N.backgrounded_waiter("& python gate.py --gate 'x'", "PowerShell") is None
+
+
+@pytest.mark.parametrize("background,phrase", [(True, "exits at once"), (False, "orphan")])
+def test_main_says_what_the_ampersand_does_in_each_mode(background, phrase):
+    event = {"hook_event_name": "PreToolUse", "tool_name": "Bash",
+             "tool_input": {"command": "nohup python3 gate.py --gate 'make test' > g.log 2>&1 &",
+                            "run_in_background": background}}
+    proc = subprocess.run([sys.executable, str(_HOOK)], input=json.dumps(event),
+                          capture_output=True, text=True, encoding="utf-8", errors="replace")
+    assert proc.returncode == 0
+    assert phrase in json.loads(proc.stdout)["hookSpecificOutput"]["additionalContext"]
+
+
+def test_a_long_backgrounded_sleep_carries_both_notes_in_one_envelope():
+    """Claude Code reads ONE JSON document from stdout, so the two notes must share it."""
+    event = {"hook_event_name": "PreToolUse", "tool_name": "Bash",
+             "tool_input": {"command": "(sleep 600; echo TIMEOUT >> run.log) &"}}
+    proc = subprocess.run([sys.executable, str(_HOOK)], input=json.dumps(event),
+                          capture_output=True, text=True, encoding="utf-8", errors="replace")
+    text = json.loads(proc.stdout)["hookSpecificOutput"]["additionalContext"]
+    assert "ARBITRARY SLEEP" in text and "orphan" in text
