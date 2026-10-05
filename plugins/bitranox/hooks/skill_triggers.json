@@ -903,10 +903,11 @@
   "right",
   "context",
   "compaction",
-  "postcompact",
-  "nudge",
-  "points",
-  "here",
+  "stop",
+  "gate",
+  "blocks",
+  "owed",
+  "post-compaction",
   "dream-nap"
  ],
  "meta-dream-tree": [

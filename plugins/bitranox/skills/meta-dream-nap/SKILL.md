@@ -1,6 +1,6 @@
 ---
 name: meta-dream-nap
-description: Use for a QUICK, cheap memory consolidation of only the current directory's chain - before or right after a context compaction (the PostCompact nudge points here), when the session accumulated learning signals worth folding in NOW, or on "nap", "dream nap", "/dream-nap", "quick tidy". Minutes, not tens of minutes; for the full periodic consolidation of the whole tree use bitranox:meta-dream-tree.
+description: Use for a QUICK, cheap memory consolidation of only the current directory's chain - before or right after a context compaction (the Stop gate blocks on an owed post-compaction nap and points here), when the session accumulated learning signals worth folding in NOW, or on "nap", "dream nap", "/dream-nap", "quick tidy". Minutes, not tens of minutes; for the full periodic consolidation of the whole tree use bitranox:meta-dream-tree.
 ---
 
 # meta-dream-nap
@@ -41,7 +41,8 @@ than deleting it.
 ## When to run
 
 - Around a context compaction: the PreCompact hook salvaged candidate learnings; nap them into
-  the store while the detail is still warm (the PostCompact nudge points here).
+  the store while the detail is still warm. PostCompact only records that a nap is owed; the Stop
+  gate reads that obligation and blocks on it, pointing here.
 - The session accumulated several learning signals and a full dream is not worth its cost now.
 - Manual: "nap", "dream nap", "/dream-nap", "quick tidy".
 - NOT a replacement for the full dream: the SessionStart consolidation-due nudge still means

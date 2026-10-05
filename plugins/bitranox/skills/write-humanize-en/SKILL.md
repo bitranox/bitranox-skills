@@ -62,12 +62,12 @@ contain those characters on purpose. That is also why every such example is kept
 code span or fenced block: the hook (`tell_chars.find_tell_lines`) and
 `strip_typographic_tells.py` (`tell_chars.transform_outside_code`) are two walks over the same
 `tell_chars` fence and inline-span rules, so an em dash inside a span or a fence survives both.
-They are twins, not one function, and the difference matters for one class of character: a
-codepoint that is ITSELF a line break (U+2028, U+2029, U+0085) is invisible to the detector and
-still rewritten by the script, because `str.splitlines()` breaks on exactly those. So a clean
-sweep is not a promise that the script will leave the file alone. Keeping the examples in
-backticks is the protection; before
-it, the script rewrote the tell inside a span and inside a fence alike. A prose warning alone did
+They are twins, not one function, but both now split lines with the same `tell_chars.split_lines`
+(never on U+2028, U+2029 or U+0085, only on `\r\n`, `\r` and `\n`), which closed an earlier trap
+where the two walks disagreed about where a line ended and a file the sweep called clean could
+still be rewritten, splitting a code span across two lines. Keeping the examples in backticks is
+still the protection; before the shared splitter,
+the script rewrote the tell inside a span and inside a fence alike. A prose warning alone did
 not protect them either (a
 past pass flattened the curly-quote example into two identical halves). Put any new
 example of a tell in backticks. After the pass, do the judgment-based rewrites.

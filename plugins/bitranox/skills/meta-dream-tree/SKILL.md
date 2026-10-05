@@ -40,9 +40,9 @@ rewritten, because rewriting it would drop every earlier verdict) and
 Write or Edit on a pointer block or a body is denied by the store-edit guard; `show` reports the
 stored `type`, an amend PRESERVES it, and `--type` is the one deliberate way to re-classify, a
 PINNED fact included - `amend-pinned` carries `--type` and is the only route to a pinned fact's
-kind, since `add` refuses a pinned entry outright). The
-last two moved here from a personal toolbox; the PreToolUse nudge names them on the chores they
-answer, so they surface without this file being open. Every one of these tools finds the store the
+kind, since `add` refuses a pinned entry outright). The PreToolUse nudge names `statusrot.py` and
+`factedit.py` on the chores they answer, so they surface without this file being open. Every one
+of these tools finds the store the
 way the engine does (the topmost dir holding a `CLAUDE.md` AND a `.claude-memory/`), so a leftover
 store lower down the chain is never backed up, scanned or recorded against in its place. A level,
 directory or fact any of them could not read is an error (exit 2) that names the path, never a

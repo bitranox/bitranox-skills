@@ -75,7 +75,9 @@ both `Edit` and `NotebookEdit`. Write `^Edit$` when you mean the whole string.
 
 Version gates worth knowing:
 
-- comma separators and surrounding whitespace need v2.1.191+
+- comma separators and surrounding whitespace needed v2.1.191+ when this was last measured;
+  current upstream reference docs no longer state a version gate for comma syntax, so treat this
+  floor as historical rather than still-asserted upstream
 - hyphens in the exact-match set need v2.1.195+. Earlier, `code-reviewer` was an unanchored regex, so it also fired
   for `senior-code-reviewer`
 - `FileChanged` and `StopFailure` use a **narrower** exact-match set: letters, digits, `_` and `|` only. A hyphen,
