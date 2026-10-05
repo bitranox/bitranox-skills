@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""PostToolUse(Write|Edit|MultiEdit|NotebookEdit|Bash|PowerShell|Monitor) hook: auto-realign markdown tables after a write.
+"""PostToolUse(Write|Edit|MultiEdit|Bash|PowerShell|Monitor) hook: auto-realign markdown tables after a write.
 
 Formatter-on-save for markdown tables (Mode A). When a markdown file is written or edited, reuse the
 docs-md-table-formatting skill's `reformat_tables.reformat_file()` to realign its tables in place, so a
@@ -14,11 +14,17 @@ with no declared path in exactly the same way. The scan never parses the command
 changed on disk - so it keys on the event CARRYING a command rather than on the tool being a shell,
 and any command-carrying tool the matcher admits is covered.
 
-NotebookEdit is in the matcher but a notebook edit is never reformatted: the event names its
-target `notebook_path`, which this hook deliberately does not read, because that path always ends
-in `.ipynb`, never in `_MD_SUFFIXES` - so there is nothing for the suffix check to match even if
-it were read. Until a notebook cell's own markdown content is worth reformatting in place, the
-registration is a no-op for that tool, same as `tell-sweep.py`'s NotebookEdit entry.
+NotebookEdit is deliberately NOT registered: its event names the target `notebook_path`, which
+always ends in `.ipynb`, never in `_MD_SUFFIXES`, so there is nothing to reformat. hooks.json
+keeps this hook and `tell-sweep.py` in their own PostToolUse group without NotebookEdit, while the
+hooks that do read `notebook_path` keep it.
+
+A checkout can opt out as a whole: `git config bitranox.reformatMdTables false`, run once inside
+it. That is for an UPSTREAM checkout the working directory itself belongs to (a vendored
+microsoft/openvmm mirror, say), whose docs are someone else's style: realigning them is churn that
+diverges from upstream on every edit. The nested-repo prune below only covers a checkout BELOW the
+working directory, and nothing in a checkout says whose style it follows, so the owner says it.
+The knob is per checkout and never committed. Unset, or any other value, keeps the formatter on.
 
 Silent by design: it just fixes the file. `reformat_tables` is safe-by-design (it bails on tables
 with inconsistent column counts and skips non-markdown fenced code blocks), so a normal edit is left
@@ -28,6 +34,7 @@ broken hook never wedges a turn.
 import importlib.util
 import json
 import os
+import subprocess
 import sys
 import time
 from pathlib import Path
@@ -51,6 +58,33 @@ _GIT_TREE_WRITERS = frozenset({
     "checkout", "switch", "merge", "rebase", "pull", "clone", "reset",
     "stash", "cherry-pick", "revert", "am", "apply", "restore", "worktree",
 })
+
+
+OPT_OUT_KEY = "bitranox.reformatMdTables"
+
+# Variables that point git at a repository other than the one `-C` names. A hook launched from a
+# git hook of a linked worktree inherits GIT_DIR, and git reads it BEFORE `-C`, so the knob would be
+# read from the wrong checkout.
+_GIT_SCOPE_VARS = ("GIT_DIR", "GIT_WORK_TREE", "GIT_INDEX_FILE", "GIT_COMMON_DIR")
+
+
+def opted_out(directory) -> bool:
+    """True when the checkout holding `directory` set `bitranox.reformatMdTables` to false.
+
+    Asked through git itself (`--bool` normalises false/no/off/0), so a worktree's shared config,
+    an include and a global setting all count the way git counts them. Any failure - no git, not a
+    checkout, a timeout - answers False: the formatter stays on unless the owner said otherwise.
+    """
+    env = {k: v for k, v in os.environ.items() if k not in _GIT_SCOPE_VARS}
+    try:
+        done = subprocess.run(
+            ["git", "-C", str(directory), "config", "--bool", "--get", OPT_OUT_KEY],
+            capture_output=True, text=True, encoding="utf-8", errors="replace",
+            timeout=5, env=env, check=False,
+        )
+    except (OSError, subprocess.SubprocessError, ValueError):
+        return False
+    return done.returncode == 0 and done.stdout.strip() == "false"
 
 
 def _rewrites_the_tree(command: str, tool_name=None) -> bool:
@@ -183,6 +217,10 @@ def _markdown_paths_from_a_command(event) -> list[str]:
             if git_rewrite is not None and mtime <= git_rewrite:
                 continue
             found.append(str(path))
+    # Asked only when there is something to restyle: this runs after EVERY shell command, and a
+    # git process per call is a cost the common case (nothing written) should not pay.
+    if found and opted_out(cwd):
+        return []
     return found
 
 
@@ -193,6 +231,8 @@ def main():
         return 0
     path = (event.get("tool_input") or {}).get("file_path") or ""
     if path.lower().endswith(_MD_SUFFIXES) and Path(path).is_file():
+        if opted_out(Path(path).parent):
+            return 0
         targets = [path]
     elif isinstance((event.get("tool_input") or {}).get("command"), str):
         targets = _markdown_paths_from_a_command(event)

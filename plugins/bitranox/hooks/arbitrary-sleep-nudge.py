@@ -12,6 +12,13 @@ the sleep merely pacing the checks - so `until ... do sleep N; done` and friends
 however long the pause. Short pauses are left alone too: a couple of seconds to let a service
 settle is not a wait on an event.
 
+A second shape is a WAITER detached with a trailing `&` (a sleep, a poll loop, gate.py, ci_wait,
+backstop.py, `gh run watch`). Under run_in_background the task exits at once, so nothing is
+armed; in a foreground call the waiter is orphaned - no completion notice, its verdict only in a
+redirect file. Corpus replay (103,932 shell commands): 19 firings, all foreground, 17 of them a
+`nohup ... gate.py/ci_wait.py ... &`, and 2 test fixtures whose `( sleep 0.5; ... ) &` a later
+`wait` collects, which is exempt. Bash only: in PowerShell `&` is the call operator.
+
 NON-BLOCKING: emits additionalContext and exits 0. Fail-open on any error. ASCII only.
 """
 from __future__ import annotations
@@ -20,7 +27,12 @@ import json
 import re
 import sys
 
-from shell_text import is_shell_tool, strip_heredoc_bodies
+from shell_text import (
+    blank_heredoc_bodies,
+    is_shell_tool,
+    mask_data_regions,
+    strip_heredoc_bodies,
+)
 
 # Below this a sleep is a settle pause, not a wait on an event.
 LONG_SLEEP_SECONDS = 60
@@ -137,6 +149,74 @@ def notice(command, tool_name="Bash"):
     return _NOTICE % format(longest, ".0f")
 
 
+# What a backgrounded unit must be to count as a WAITER: it starts with a sleep or a loop head, or
+# it runs one of the waiting jigs. A daemon (`nohup server &`) is none of these and is left alone.
+_WAITER = re.compile(
+    r"^\s*\(?\s*(?:sleep\s+\d|until\b|while\b)"
+    r"|\bgate\.py\b|\bbackstop\.py\b|\bci_wait(?:\.py)?\b|\bgh\s+run\s+watch\b")
+_LOOP_HEAD = re.compile(r"(?:^|[\s;&|(])(?:while|until|for|select)\b")
+_LOOP_CLOSE = re.compile(r"(?:^|[\s;&|(])done\b")
+_LATER_WAIT = re.compile(r"(?:^|[;&|\n(]\s*)wait\b")
+
+
+def _unit_start(masked, end):
+    """Where the statement backgrounded by the `&` at `end` begins.
+
+    Walks back over a `( ... )` group and over a whole `while/until ... do ... done` loop, so
+    `(sleep 600; kill $P) &` and `until X; do sleep 5; done &` are judged as one unit each.
+    """
+    depth, at = 0, end - 1
+    while at >= 0:
+        char = masked[at]
+        if char == ")":
+            depth += 1
+        elif char == "(":
+            if depth == 0:
+                return at
+            depth -= 1
+        elif depth == 0 and (char in ";\n" or masked[at - 1:at + 1] in ("&&", "||")
+                             or _is_lone_ampersand(masked, at)):
+            # Inside a loop the unit runs back to its HEAD: keep walking while the text after
+            # this separator closes more loops than it opens.
+            tail = masked[at + 1:end]
+            if len(_LOOP_CLOSE.findall(tail)) <= len(_LOOP_HEAD.findall(tail)):
+                return at + 1
+        at -= 1
+    return 0
+
+
+def _is_lone_ampersand(text, at):
+    """True when the `&` at `at` backgrounds a statement, not part of `&&`, `2>&1`, `&>f`, `|&`."""
+    return (text[at] == "&" and (at == 0 or text[at - 1] not in "<>&|\\")
+            and text[at + 1:at + 2] not in (">", "&"))
+
+
+_WAITER_NOTICE = {
+    True: ("BACKGROUNDED WAITER: `%s` ends in `&` inside a run_in_background task, so the task "
+           "exits at once and nothing is armed. Let the task itself BE the waiter: drop the `&`."),
+    False: ("BACKGROUNDED WAITER: `%s` ends in `&` in a foreground call, so the waiter is "
+            "orphaned: untracked, no completion notice, its verdict only in a redirect file. Run "
+            "it with run_in_background and no `&`; if it must outlive the session, launch it with "
+            "setsid nohup from a script that appends its own RC, and judge it by that RC."),
+}
+
+
+def backgrounded_waiter(command, tool_name="Bash"):
+    """The waiter a lone `&` detaches, or None. Bash only; a later `wait` collects it."""
+    if tool_name != "Bash" or not command or not isinstance(command, str):
+        return None
+    raw = blank_heredoc_bodies(command)
+    masked = mask_data_regions(raw, tool_name=tool_name)
+    for at in (i for i, char in enumerate(masked) if char == "&" and _is_lone_ampersand(masked, i)):
+        unit = raw[_unit_start(masked, at):at]
+        if not _WAITER.search(unit.strip()):
+            continue
+        if _LATER_WAIT.search(masked[at + 1:]):
+            continue
+        return " ".join(unit.split())[:100]
+    return None
+
+
 def main() -> int:
     try:
         event = json.load(sys.stdin)
@@ -144,9 +224,15 @@ def main() -> int:
         return 0
     if not isinstance(event, dict) or not is_shell_tool(event.get("tool_name")):
         return 0
-    message = notice((event.get("tool_input") or {}).get("command"),
-                     event.get("tool_name") or "Bash")
+    tool_input = event.get("tool_input") or {}
+    tool_name = event.get("tool_name") or "Bash"
+    notes = [notice(tool_input.get("command"), tool_name)]
+    waiter = backgrounded_waiter(tool_input.get("command"), tool_name)
+    if waiter:
+        notes.append(_WAITER_NOTICE[bool(tool_input.get("run_in_background"))] % waiter)
+    message = "\n\n".join(n for n in notes if n)
     if message:
+        # ONE document: Claude Code reads a single JSON object from a hook's stdout.
         sys.stdout.write(json.dumps({"hookSpecificOutput": {
             "hookEventName": "PreToolUse",
             "additionalContext": message,

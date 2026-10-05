@@ -6,6 +6,7 @@ with a stdin payload, and a subprocess smoke test through run-python.sh.
 
 import io
 import json
+import os
 import subprocess
 import sys
 import pytest
@@ -125,7 +126,8 @@ def test_main_bad_payload_is_safe(monkeypatch):
 def test_shim_smoke():
     payload = json.dumps({"tool_input": {"command": "git rev-parse --short A B"}})
     r = subprocess.run(
-        ["bash", str(SHIM), str(SCRIPT)], input=payload, capture_output=True, text=True
+        ["bash", str(SHIM), str(SCRIPT)], input=payload, capture_output=True, text=True,
+        encoding="utf-8",
     )
     assert r.returncode == 2
     assert "Needed a single revision" in r.stderr
@@ -176,3 +178,103 @@ def test_a_trailing_ampersand_is_backgrounding_not_a_revision():
     assert G.broken_revparse("git rev-parse --short HEAD & git log -1") is False
     assert G.broken_revparse("git rev-parse --short A B &") is True        # control
     assert G.broken_revparse("git rev-parse --short HEAD &", "PowerShell") is False
+
+
+# --- a pathspec commit over a STAGED-ONLY change (contrib #35) ------------------------------------
+#
+# `git commit -- <paths>` records the WORKTREE copy of each named path. Measured in temp repos (git
+# 2.x): a staged `rm --cached` is re-added when another path rides the same pathspec (exit 0), a
+# staged `update-index --chmod=+x` under core.fileMode=false reverts to 100644, and a partial stage
+# is replaced by the whole file. Fixtures are written as bytes so CRLF conversion cannot differ.
+
+_GIT_SCOPE = ("GIT_DIR", "GIT_WORK_TREE", "GIT_INDEX_FILE", "GIT_COMMON_DIR", "GIT_CONFIG")
+
+
+def _git(repo, *args):
+    env = {k: v for k, v in os.environ.items() if k not in _GIT_SCOPE}
+    env.update(GIT_AUTHOR_NAME="t", GIT_AUTHOR_EMAIL="t@e", GIT_COMMITTER_NAME="t",
+               GIT_COMMITTER_EMAIL="t@e")
+    return subprocess.run(["git", "-C", str(repo), *args], check=True, capture_output=True,
+                          text=True, encoding="utf-8", env=env)
+
+
+@pytest.fixture
+def repo(tmp_path):
+    r = tmp_path / "repo"
+    r.mkdir()
+    _git(r, "init", "-q")
+    _git(r, "config", "core.fileMode", "false")
+    _git(r, "config", "core.autocrlf", "false")
+    (r / "f.txt").write_bytes(b"one\n")
+    (r / "other.txt").write_bytes(b"x\n")
+    _git(r, "add", ".")
+    _git(r, "commit", "-q", "-m", "base")
+    return r
+
+
+def _advise(monkeypatch, capsys, command, cwd):
+    monkeypatch.setattr(sys, "stdin", io.StringIO(json.dumps(
+        {"tool_name": "Bash", "cwd": str(cwd), "tool_input": {"command": command}})))
+    assert G.main() == 0
+    out = capsys.readouterr().out.strip()
+    return json.loads(out)["hookSpecificOutput"]["additionalContext"] if out else None
+
+
+def test_a_staged_untrack_named_in_a_pathspec_commit_is_advised(repo, monkeypatch, capsys):
+    _git(repo, "rm", "--cached", "-q", "f.txt")
+    (repo / "other.txt").write_bytes(b"y\n")
+    text = _advise(monkeypatch, capsys, "git commit -m x -- other.txt f.txt", repo)
+    assert text and "PATHSPEC COMMIT" in text and "f.txt" in text and "untrack" in text
+    assert "other.txt" not in text.split("discard")[-1]
+
+
+def test_a_staged_mode_change_named_in_a_pathspec_commit_is_advised(repo, monkeypatch, capsys):
+    _git(repo, "update-index", "--chmod=+x", "f.txt")
+    text = _advise(monkeypatch, capsys, 'git commit -F msg.txt -- f.txt', repo)
+    assert text and "f.txt" in text and "100755" in text
+
+
+def test_a_partial_stage_named_in_a_pathspec_commit_is_advised(repo, monkeypatch, capsys):
+    (repo / "f.txt").write_bytes(b"two\n")
+    _git(repo, "add", "f.txt")
+    (repo / "f.txt").write_bytes(b"three\n")
+    text = _advise(monkeypatch, capsys, "git commit -m x f.txt", repo)
+    assert text and "f.txt" in text and "partial" in text
+
+
+def test_a_staged_change_equal_to_the_worktree_is_silent(repo, monkeypatch, capsys):
+    """Control: the normal pathspec commit loses nothing, so it says nothing."""
+    (repo / "f.txt").write_bytes(b"two\n")
+    _git(repo, "add", "f.txt")
+    assert _advise(monkeypatch, capsys, "git commit -m x -- f.txt", repo) is None
+
+
+def test_a_commit_without_a_pathspec_is_silent(repo, monkeypatch, capsys):
+    """Control: without a pathspec the index IS what gets committed."""
+    _git(repo, "rm", "--cached", "-q", "f.txt")
+    assert _advise(monkeypatch, capsys, "git commit -m x", repo) is None
+
+
+def test_an_untrack_in_the_same_command_is_advised_without_reading_state(repo, monkeypatch, capsys):
+    """PreToolUse runs before `git rm --cached` does, so the index cannot show it yet."""
+    text = _advise(monkeypatch, capsys,
+                   "git rm --cached f.txt && git commit -m x -- .gitignore f.txt", repo)
+    assert text and "f.txt" in text
+
+
+def test_the_repo_is_the_one_the_commit_runs_in(repo, tmp_path, monkeypatch, capsys):
+    _git(repo, "update-index", "--chmod=+x", "f.txt")
+    elsewhere = tmp_path / "elsewhere"
+    elsewhere.mkdir()
+    text = _advise(monkeypatch, capsys, "cd %s && git commit -m x -- f.txt" % repo.as_posix(), elsewhere)
+    assert text and "f.txt" in text
+
+
+def test_outside_a_repository_it_is_silent(tmp_path, monkeypatch, capsys):
+    assert _advise(monkeypatch, capsys, "git commit -m x -- f.txt", tmp_path) is None
+
+
+def test_the_rev_parse_block_still_wins(repo, monkeypatch, capsys):
+    monkeypatch.setattr(sys, "stdin", io.StringIO(json.dumps(
+        {"tool_name": "Bash", "cwd": str(repo), "tool_input": {"command": "git rev-parse --short A B"}})))
+    assert G.main() == 2

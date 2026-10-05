@@ -173,7 +173,8 @@ _CLAIM_COMMAND = 'memory_engine.py add --proj . --title T --hook "the retry is m
 
 def _run(stdin):
     return subprocess.run(
-        [sys.executable, str(_HOOK)], input=stdin, capture_output=True, text=True, check=False
+        [sys.executable, str(_HOOK)], input=stdin, capture_output=True, text=True,
+        encoding="utf-8", check=False,
     )
 
 
@@ -204,3 +205,49 @@ def test_main_resolves_a_hook_file_against_the_event_cwd(tmp_path):
     r = _run(json.dumps(event))
     assert r.returncode == 0
     assert "MISSING-MECHANISM" in json.loads(r.stdout)["hookSpecificOutput"]["additionalContext"]
+
+
+# --- AskUserQuestion: every question gets the premise reminder (contrib #27, option A) -------------
+
+_QUESTION = {"questions": [{"question": "Which way?", "header": "Route",
+                            "options": [{"label": "A", "description": "X cannot do this"},
+                                        {"label": "B", "description": "use Y"}],
+                            "multiSelect": False}]}
+
+
+@pytest.mark.parametrize("tool_input", [_QUESTION, {}, {"questions": []}, None])
+def test_every_askuserquestion_call_gets_the_premise_reminder(tool_input):
+    """No wording match, by the user's choice: the reminder rides on EVERY question.
+
+    A premise test on the option text would miss the shapes nobody listed ('X has no flag for',
+    'Y only runs as root'), and one line on a question costs little. Probe-verified on CLI 2.1.289:
+    the context is recorded as a hook_additional_context attachment on the tool use and reaches the
+    model WITH the user's answer, so the text has to say what to do after the fact.
+    """
+    r = _run(json.dumps({"tool_name": "AskUserQuestion", "tool_input": tool_input}))
+    assert r.returncode == 0
+    payload = json.loads(r.stdout)
+    assert payload["hookSpecificOutput"]["hookEventName"] == "PreToolUse"
+    text = payload["hookSpecificOutput"]["additionalContext"]
+    assert text == N.QUESTION_REMINDER
+    assert "\n" not in text.strip()
+    assert "unverified" in text and "instrument" in text
+
+
+def test_the_question_reminder_is_ascii_and_says_what_to_do_once_answered():
+    assert N.QUESTION_REMINDER.isascii()
+    assert "already answered" in N.QUESTION_REMINDER
+
+
+def test_a_shell_command_still_gets_only_the_memory_add_check():
+    """Control: the AskUserQuestion branch must not leak into the shell path."""
+    r = _run(json.dumps({"tool_name": "Bash", "tool_input": {"command": "echo hi"}}))
+    assert r.returncode == 0 and r.stdout.strip() == ""
+
+
+def test_hooks_json_registers_this_hook_for_askuserquestion():
+    groups = json.loads((_HOOK.parent / "hooks.json").read_text(encoding="utf-8"))["hooks"]["PreToolUse"]
+    matchers = [set(g["matcher"].split("|")) for g in groups
+                for h in g["hooks"] if h["command"].endswith('/hooks/missing-mechanism-nudge.py"')]
+    assert any("AskUserQuestion" in m for m in matchers)
+    assert any({"Bash", "PowerShell"} <= m for m in matchers)

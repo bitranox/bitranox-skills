@@ -5,8 +5,8 @@ A check you write to VERIFY your own work is itself unverified code, and it fail
 the direction that produces a false alarm or a false all-clear - never in a direction
 you notice, because you are reading its output to find out what is true.
 
-Two such invocations are mechanically detectable and have each burned a real session.
-Both are NUDGES (non-blocking `additionalContext`), not blocks: each has legitimate
+Four such invocations are mechanically detectable and have each burned a real session.
+All are NUDGES (non-blocking `additionalContext`), not blocks: each has legitimate
 uses, and the failure is a wrong ANSWER rather than a dangerous action, so the right
 intervention is to tell the model what it is about to misread.
 
@@ -31,6 +31,22 @@ intervention is to tell the model what it is about to misread.
    invocation. Fires only when a venv directory is actually present and no
    `--pythonpath` / `--venvpath` / `-p` / `--project` is given.
 
+3. `grep -c PAT FILE || echo 0`
+
+   grep -c PRINTS 0 and EXITS 1 when nothing matches, so the fallback runs as well and the
+   captured value is "0\\n0". A numeric test on it errors and the check it guards is skipped.
+   Corpus replay (103,932 shell commands): 29 firings, 23 outputs visibly doubled.
+
+4. `git status --porcelain && echo CLEAN` - a state label chained on a command whose exit status
+   does not encode that state
+
+   git status / diff (without --quiet or --exit-code) / ls-files (without --error-unmatch) / log,
+   `find` and `gh ... list` exit 0 whatever they found, so the label prints when it is false.
+   Corpus replay: 323 such chains; 249 were reading hints ("(no output = clean)") and are left
+   alone; of the 74 bare claims several printed CLEAN directly under ` M` lines. After excluding
+   progress markers and `||` fallbacks the shipped matcher fires 67 times (0.06%); read one by
+   one, all but one ("backup ok") are bare state claims.
+
 Pure standard library: no jq, no shell. Reads the PreToolUse event JSON on stdin,
 writes `hookSpecificOutput.additionalContext` on stdout, and ALWAYS exits 0 - a nudge
 must never wedge a turn, and every error path is swallowed for the same reason.
@@ -47,8 +63,30 @@ from shell_text import (
     argv_for_match,
     basename_for_tool,
     iter_segments,
+    mask_data_regions,
     strip_heredoc_bodies,
 )
+
+# `grep ... -c ... || echo 0` inside ONE pipeline element: a `|` after grep hands the fallback a
+# different command's status, so it is excluded by the character class.
+_GREP_COUNT_FALLBACK = re.compile(
+    r"\bgrep\b[^;&\n|]*?\s(?:-[A-Za-z]*c[A-Za-z]*|--count)\b[^;&\n|]*(?P<op>\|\|)\s*echo\s+[\"']?0\b")
+
+# A command whose exit status says it RAN, not what it found, chained to an echo.
+_UNENCODED = re.compile(
+    r"(?P<prog>\bgit(?:\s+-C\s+\S+)?\s+(?:status|diff|ls-files|log)\b|\bfind\b"
+    r"|\bgh\s+(?:run|pr|issue)\s+list\b)(?P<args>[^;&|\n]*?)"
+    r"(?P<op>&&)\s*echo\s+(?P<label>[^;&|\n]*)")
+_ENCODES = re.compile(r"--exit-code|--quiet|(?<!\S)-q\b|--error-unmatch|--check\b")
+_STATE_WORD = re.compile(
+    r"\b(?:CLEAN|EMPTY|NONE|NOTHING|NO[ _-]?CHANGES?|NO[ _-]?DIFF|UNCHANGED|DIRTY|UNTRACKED|"
+    r"TRACKED|MISSING|ABSENT|PRESENT|EXISTS?|FOUND|NOT[ _-]?FOUND|IGNORED|SAME|IDENTICAL|"
+    r"DIFFERS?|DIFFERENT|OK|PUSHED)\b", re.IGNORECASE)
+# A label that tells the READER how to judge the output above it is not a claim. Measured: 249 of
+# 323 chains were this, e.g. "(no output = clean)", "--- (empty above = clean) ---". A progress
+# marker ("CLEAN-CHECK-DONE") says a step ran, which the status does vouch for.
+_READING_HINT = re.compile(
+    r"above|if\b|=|means|expect|should|\?|---|===|empty|blank|\(|done|checked|\bcheck\b", re.I)
 
 # A -newermt value bfs cannot parse. ISO-like stamps are fine; these are not.
 _RELATIVE_TIME_RE = re.compile(
@@ -138,12 +176,67 @@ def pyright_without_pinned_interpreter(
         return False
 
 
+def _executed_matches(pattern, command: str, tool_name: str, *anchors: str):
+    """Matches of `pattern` whose program word and every named operator group are CODE.
+
+    The pattern runs on the heredoc-stripped text, and each anchor position is checked against the
+    masked view of the same text (equal length), where quoted strings, assignment values and echo
+    operands are filler: `echo "git status && echo CLEAN"` documents the chain and runs none of it.
+    """
+    text = strip_heredoc_bodies(command or "")
+    masked = mask_data_regions(text, tool_name=tool_name)
+    for match in pattern.finditer(text):
+        spots = [match.start()] + [match.start(a) for a in anchors]
+        if all(masked[at:at + 2] == text[at:at + 2] for at in spots):
+            yield match
+
+
+def grep_count_fallback(command: str, tool_name: str = "Bash") -> bool:
+    """True when a `grep -c ... || echo 0` appears outside a heredoc body.
+
+    Quoted text is NOT excluded, unlike the state-label check. Replayed both ways over the corpus:
+    every firing a quote-aware view dropped (5 of 29) was a real count inside a quoted command line
+    another shell runs - `ssh host '... $(grep -c X f || echo 0) ...'`, `bash -lc '...'` - and the
+    only firing the raw view added was a Python string quoting the shape. A nudge that misses the
+    remote half of the defect is the worse error.
+    """
+    del tool_name  # the pattern is the same under either shell; kept for the replay's signature
+    return _GREP_COUNT_FALLBACK.search(strip_heredoc_bodies(command or "")) is not None
+
+
+def unencoded_state_label(command: str, tool_name: str = "Bash") -> str | None:
+    """The `<cmd> && echo <STATE>` chain whose label the command's exit status cannot vouch for."""
+    for match in _executed_matches(_UNENCODED, command, tool_name, "op"):
+        if _ENCODES.search(match.group("args")):
+            continue
+        label = match.group("label")
+        if _STATE_WORD.search(label) and not _READING_HINT.search(label):
+            return match.group(0).strip()
+    return None
+
+
 def build_notice(command: str, cwd: Path, tool_name: str = "Bash") -> str | None:
     """The advisory text for one command, or None when nothing applies."""
     statements = _tokens(command, tool_name)
     if not statements:
         return None
     notes: list[str] = []
+
+    if grep_count_fallback(command, tool_name):
+        notes.append(
+            "`grep -c PAT FILE || echo 0`: grep -c PRINTS 0 and EXITS 1 when nothing matches, so "
+            "the fallback runs too and the captured value is '0\\n0' - a numeric test on it errors "
+            "and the check is skipped. Write `n=$(grep -c PAT FILE || true); n=${n:-0}`."
+        )
+
+    chain = unencoded_state_label(command, tool_name)
+    if chain is not None:
+        notes.append(
+            f"`{chain[:80]}`: that command exits 0 whatever it found (git status/diff/ls-files/log, "
+            "find, gh ... list), so the label prints even when it is false - measured, CLEAN printed "
+            "directly under ` M` lines. Test the property instead: `test -z \"$(git status "
+            "--porcelain)\"`, `git diff --quiet`, `git ls-files --error-unmatch`, or read the output."
+        )
 
     offending = find_newermt_relative(statements, tool_name)
     if offending is not None:
