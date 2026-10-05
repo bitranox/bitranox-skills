@@ -328,6 +328,10 @@ class TestTreeMode:
         assert json.loads(proc.stdout)["ok"] is False
 
     def test_clear_tree_records_a_slug_from_a_sibling_level(self, tmp_path):
+        """clear shares scan's --tree wiring, so this test was written after the code and passed
+        first run. Its RED arm is proven: mutating main() so that clear walks the CHAIN of --tree
+        (chain_levels) instead of the whole tree fails it with "not a flagged candidate in this
+        scope: a-fact" - the sibling slug is exactly what a chain-scoped clear cannot reach."""
         anchor = self._tree(tmp_path)
         before = json.loads(_cli("scan", "--tree", str(anchor / "b"), "--json").stdout)["data"]
         assert "a-fact" in before["new_or_changed"], before
