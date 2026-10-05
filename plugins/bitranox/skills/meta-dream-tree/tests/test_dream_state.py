@@ -25,7 +25,8 @@ def _mem(proj="/p/x"):
 
 
 def test_due_reports_not_due_without_memory(home, capsys):
-    assert D.main(["due", "/p/x"]) == 0
+    # a yes/no verb: "not-due" is the answer no, so exit 1 (the word is still printed)
+    assert D.main(["due", "/p/x"]) == 1
     assert capsys.readouterr().out.strip() == "not-due"
 
 
@@ -230,7 +231,7 @@ def test_repeat_sightings_in_one_project_never_corroborate(home, capsys):
     for _ in range(84):
         assert D.main(["saw-promotable", "s", "/p/x"]) == 0
         assert capsys.readouterr().out.strip() == "1"             # one project, one corroborator
-    assert D.main(["should-promote", "s", "/p/x"]) == 0
+    assert D.main(["should-promote", "s", "/p/x"]) == 1        # hold is the answer no
     assert capsys.readouterr().out.strip() == "hold"
 
 
@@ -238,7 +239,7 @@ def test_two_sightings_in_one_project_still_hold(home, capsys):
     D.main(["saw-promotable", "s", "/p/x"])
     D.main(["saw-promotable", "s", "/p/x"])
     capsys.readouterr()
-    assert D.main(["should-promote", "s", "/p/x"]) == 0
+    assert D.main(["should-promote", "s", "/p/x"]) == 1
     assert capsys.readouterr().out.strip() == "hold"              # N=2 from one project: not evidence
 
 
@@ -247,7 +248,7 @@ def test_two_distinct_projects_corroborate(home, capsys):
     # A model-inferred fact routed to the tree top needs >= 2 distinct projects before it may promote.
     assert D.main(["saw-promotable", "some-slug", "/p/a"]) == 0
     assert capsys.readouterr().out.strip() == "1"                 # dwell after the first project
-    assert D.main(["should-promote", "some-slug", "/p/a"]) == 0
+    assert D.main(["should-promote", "some-slug", "/p/a"]) == 1
     assert capsys.readouterr().out.strip() == "hold"              # one project: not yet
     assert D.main(["saw-promotable", "some-slug", "/p/b"]) == 0
     assert capsys.readouterr().out.strip() == "2"
@@ -266,7 +267,7 @@ def test_promoted_clears_every_project_sighting(home, capsys):
     # /p/b's sighting went too - a leftover entry would let one later sighting re-trip the gate
     assert D.main(["saw-promotable", "s", "/p/b"]) == 0
     assert capsys.readouterr().out.strip() == "1"
-    assert D.main(["should-promote", "s", "/p/b"]) == 0
+    assert D.main(["should-promote", "s", "/p/b"]) == 1
     assert capsys.readouterr().out.strip() == "hold"
 
 
@@ -520,3 +521,109 @@ def test_a_cp1252_stdout_does_not_crash_on_a_non_ascii_transcript(home, tmp_path
                         "/p/u"], capture_output=True, check=False, env=env)
     assert b"Traceback" not in r.stderr, r.stderr.decode("utf-8", "replace")
     assert r.returncode == 0
+
+
+# ---- every unconsumed transcript of the project is offered, not only the owed or live one -----
+# Seen 2026-09-22: a 2.9 MB predecessor that no nap flag named and that was not the live session
+# was never offered by session-review, so nothing ever consolidated it.
+
+def _native(proj, name, text, age=0):
+    """A transcript in the project's native dir; `age` seconds older than now."""
+    d = D.sig.memory_dir(proj).parent
+    d.mkdir(parents=True, exist_ok=True)
+    tp = d / name
+    tp.write_bytes(text.encode("utf-8"))
+    if age:
+        t = tp.stat().st_mtime - age
+        os.utime(tp, (t, t))
+    return tp
+
+
+def _live(proj, text):
+    tp = _native(proj, "live.jsonl", text)
+    D.sig.record_session_meta(proj, "live", str(tp))
+    return tp
+
+
+def test_session_review_offers_an_unconsumed_predecessor_no_flag_names(home, capsys):
+    proj = "/p/pre"
+    pred = _native(proj, "pred.jsonl", '{"type":"user","message":{"content":"OLD-LESSON"}}\n',
+                   age=3600)
+    _live(proj, '{"type":"user","message":{"content":"NEW-TURN"}}\n')
+    assert D.main(["session-review", proj]) == 0
+    out = capsys.readouterr().out
+    assert "NEW-TURN" in out and "OLD-LESSON" not in out    # the live session is still the target
+    assert "OTHER UNREVIEWED TRANSCRIPTS OF THIS PROJECT: 1" in out
+    assert str(pred) in out and "%d bytes" % pred.stat().st_size in out
+    assert "--transcript" in out                             # and how to read it
+
+
+def test_a_consumed_predecessor_is_not_offered(home, capsys):
+    """Control: one whose watermark reaches its end is done, and is not listed."""
+    proj = "/p/pre2"
+    pred = _native(proj, "pred.jsonl", '{"type":"user","message":{"content":"OLD"}}\n', age=3600)
+    D.sig.set_watermark(proj, str(pred), "dream", pred.stat().st_size)
+    _live(proj, '{"type":"user","message":{"content":"NEW"}}\n')
+    assert D.main(["session-review", proj]) == 0
+    out = capsys.readouterr().out
+    assert "OTHER UNREVIEWED" not in out and str(pred) not in out
+
+
+def test_the_offer_survives_a_consumed_live_session(home, capsys):
+    """NOTHING NEW for the live session is not nothing new for the project."""
+    proj = "/p/pre3"
+    pred = _native(proj, "pred.jsonl", '{"type":"user","message":{"content":"OLD"}}\n', age=3600)
+    _live(proj, '{"type":"user","message":{"content":"NEW"}}\n')
+    D.main(["session-review", proj])
+    D.main(["session-reviewed", proj])
+    capsys.readouterr()
+    assert D.main(["session-review", proj]) == 0
+    out = capsys.readouterr().out
+    assert "NOTHING NEW" in out and str(pred) in out
+
+
+def test_a_named_transcript_is_reviewed_and_marked(home, capsys):
+    proj = "/p/pre4"
+    pred = _native(proj, "pred.jsonl", '{"type":"user","message":{"content":"OLD-LESSON"}}\n',
+                   age=3600)
+    _live(proj, '{"type":"user","message":{"content":"NEW-TURN"}}\n')
+    assert D.main(["session-review", proj, "--transcript", str(pred)]) == 0
+    out = capsys.readouterr().out
+    assert "OLD-LESSON" in out and "NEW-TURN" not in out
+    assert "READING AN EARLIER SESSION" in out and "COMPACTED" not in out
+    assert "session-reviewed %s --transcript %s" % (proj, pred) in out
+    assert D.main(["session-reviewed", proj, "--transcript=%s" % pred]) == 0
+    capsys.readouterr()
+    assert D.sig.get_watermark(proj, str(pred), "dream") == pred.stat().st_size
+    assert D.sig.get_watermark(proj, str(D.sig.resolve_transcript(proj)), "dream") == 0
+    D.main(["session-review", proj])
+    assert str(pred) not in capsys.readouterr().out          # consumed, so no longer offered
+
+
+@pytest.mark.parametrize("verb", ["session-review", "session-reviewed"])
+def test_a_named_transcript_that_does_not_exist_is_refused(home, tmp_path, verb, capsys):
+    _live("/p/pre5", '{"type":"user","message":{"content":"x"}}\n')
+    assert D.main([verb, "/p/pre5", "--transcript", str(tmp_path / "gone.jsonl")]) == 2
+    captured = capsys.readouterr()
+    assert "gone.jsonl" in captured.err and "advanced" not in captured.out
+
+
+@pytest.mark.parametrize("argv", [["session-review", "/p/x", "--transcript"],
+                                  ["due", "/p/x", "--transcript", "t.jsonl"]])
+def test_transcript_needs_a_value_and_a_review_verb(home, argv, capsys):
+    assert D.main(argv) == 2
+    assert "usage" in capsys.readouterr().err
+
+
+def test_the_offer_is_bounded_and_says_how_many_it_left_out(home, capsys):
+    proj = "/p/pre6"
+    for i in range(D.OFFER_LIMIT + 3):
+        _native(proj, "old%02d.jsonl" % i, '{"type":"user","message":{"content":"o"}}\n',
+                age=3600 + i)
+    _live(proj, '{"type":"user","message":{"content":"NEW"}}\n')
+    D.main(["session-review", proj])
+    out = capsys.readouterr().out
+    assert "OTHER UNREVIEWED TRANSCRIPTS OF THIS PROJECT: %d" % (D.OFFER_LIMIT + 3) in out
+    assert "old00.jsonl" in out                              # newest first
+    assert "and 3 more" in out
+    assert "old%02d.jsonl" % (D.OFFER_LIMIT + 2) not in out
