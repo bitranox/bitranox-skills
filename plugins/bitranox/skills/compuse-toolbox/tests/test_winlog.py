@@ -15,7 +15,8 @@ SCRIPT = Path(__file__).resolve().parent.parent / "scripts" / "winlog.py"
 
 
 def run(*args: str) -> subprocess.CompletedProcess[str]:
-    return subprocess.run([sys.executable, str(SCRIPT), *args], capture_output=True, text=True)
+    return subprocess.run([sys.executable, str(SCRIPT), *args], capture_output=True, text=True,
+                          encoding="utf-8", errors="replace")
 
 
 class TestDecode:
@@ -132,6 +133,7 @@ class TestCli:
         assert p.returncode == 0, p.stderr
         doc = json.loads(p.stdout)
         assert doc["ok"] is True
+        assert list(doc) == ["ok", "command", "data", "skipped"]
         assert "mixed" in doc["data"]["encoding"].lower()
         assert any("DONE-OK" in line for line in doc["data"]["lines"])
 
@@ -140,7 +142,8 @@ class TestCli:
         assert p.returncode == 2
         doc = json.loads(p.stdout)
         assert doc["ok"] is False
-        assert doc["error"]
+        assert doc["error"] and doc["skipped"] == []
+        assert "gone.log" in p.stderr
 
     def test_warnings_go_to_stderr_not_into_the_parsed_stream(self, tmp_path):
         f = tmp_path / "a.log"
@@ -435,3 +438,36 @@ class TestTheNulCacheNeverAnswersForAnEarlierStart:
     def test_control_forward_queries_answer_the_same(self) -> None:
         seg = winlog._Segmenter(self.DATA)
         assert [seg._next_nul(s) for s in (0, 3, 5, 6, 21, 22)] == [5, 5, 5, 21, 21, len(self.DATA)]
+
+
+
+# --- wave D: the envelope on every exit -----------------------------------------------------
+
+def test_a_grep_miss_under_json_is_ok_true_with_exit_1(tmp_path):
+    f = tmp_path / "a.log"
+    f.write_bytes("nothing here\n".encode("utf-16-le"))
+    p = run("read", str(f), "--grep", "DONE-OK", "--json")
+    assert p.returncode == 1
+    doc = json.loads(p.stdout)
+    assert doc["ok"] is True and doc["data"]["lines"] == [] and "error" not in doc
+
+
+def test_an_argparse_usage_error_under_json_prints_the_envelope(tmp_path):
+    p = run("read", str(tmp_path / "a.log"), "--tail", "-1", "--json")
+    assert p.returncode == 2
+    assert json.loads(p.stdout)["ok"] is False
+
+
+def test_an_internal_crash_under_json_prints_the_envelope(tmp_path, capsys, monkeypatch):
+    f = tmp_path / "a.log"
+    f.write_bytes(b"x\n")
+
+    def explode(*_a, **_k):
+        raise RuntimeError("kaboom")
+
+    # The process boundary is under test, so the crash is injected at the decode cmd_read calls.
+    monkeypatch.setattr(winlog, "decode_windows_text", explode)
+    rc = winlog.main(["read", str(f), "--json"])
+    cap = capsys.readouterr()
+    assert rc == 2
+    assert json.loads(cap.out)["ok"] is False and "internal error" in cap.err
