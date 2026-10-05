@@ -212,7 +212,7 @@ def test_every_sibling_splitter_sees_the_lone_ampersand():
     text = "git push --dry-run x & git push x"
     assert ci_watch_nudge._statement_around(text, text.rindex("push")).strip() == "git push x"
     assert retry_with_a_flag_nudge.shape("sleep 1 & sed -i x f")[0] == "sed"
-    parts = block_git_semicolon_chain.SEP_SPLIT.split("a |& b")
+    parts, _raw = block_git_semicolon_chain._parts("a |& b", "a |& b", "Bash")
     assert parts == ["a ", "|&", " b"]              # one pipe operator, no `&` glued to `b`
 
 

@@ -347,11 +347,11 @@ def test_comment_is_not_a_command():
 
 
 def test_semicolon_inside_command_substitution_is_not_a_separator():
-    """Layered on purpose, so a single-mechanism mutation will NOT turn this red.
+    """The `;` inside the substitution is hidden only by `mask_data_regions`.
 
-    If `mask_data_regions` stopped masking `$(...)`, the parens would survive into `_mask_groups`
-    and be masked there instead. The unit-level proof that the masking itself works lives in
-    tests/test_shell_text.py; this asserts the behaviour a user sees.
+    If it stopped masking `$(...)`, the walk would read that `;` as a separator between the
+    checkout and the push and this would block. The unit-level proof that the masking itself
+    works lives in tests/test_shell_text.py; this asserts the behaviour a user sees.
     """
     command = "git checkout -B rel/$(cd /v; git describe --tags) && git push -u origin HEAD"
     assert G.chained_state_changes(command) is None
@@ -795,3 +795,75 @@ def test_git_dir_and_work_tree_also_name_a_tree():
     assert G.chained_state_changes(
         "git --git-dir /a/.git commit -m x ; git --git-dir /b/.git commit -m y"
     ) is None
+
+
+# --- statements inside a subshell or brace group are judged too ------------------------------------
+
+
+@pytest.mark.parametrize("command", [
+    "(git commit -m x ; git push)",
+    "cd /r && (git commit -m x ; git push)",
+    "git commit -m x ; (git push)",
+    "(git commit -m x) ; git push",
+    "{ git commit -m x; git push; }",
+])
+def test_a_semicolon_chain_inside_or_across_a_group_is_blocked(command):
+    """A group used to be masked whole, so the `;` inside it, or the one leading into it, was never
+    read: `(git commit -m x ; git push)` is the incident with a pair of parens around it. The
+    control is the same chain without the group, blocked by the first test in this file."""
+    assert G.chained_state_changes(command) == ["commit", "push"]
+
+
+def test_a_chain_inside_a_brace_group_after_and_is_blocked():
+    """`&&` guards the GROUP's entry, not the `;` inside it: a failed ff-merge still runs the push."""
+    command = "git fetch -q && { git merge --ff-only origin/main; git push; }"
+    assert G.chained_state_changes(command) == ["merge", "push"]
+
+
+@pytest.mark.parametrize("command", [
+    "(git commit -m x) && git push",
+    "git commit -m x && (git push ; echo pushed)",
+    "(git commit -m x) || true ; git push",
+    "(cd /a && git commit -m x) || exit 1 ; git push",
+    "{ git commit -m x; } && git push",
+    "{ git commit -m x; } || true ; git push",
+    "git commit -m x &&\n(git push; echo pushed)",
+])
+def test_a_group_does_not_turn_a_guarded_chain_into_a_finding(command):
+    """The other direction of the same change. A failed commit stops at `&&` and skips the WHOLE
+    next group, `;` inside it included; a `||` handler written after the group is the author's
+    failure path for the commit inside it, exactly as `git commit -m x || true ; git push` is."""
+    assert G.chained_state_changes(command) is None
+
+
+def test_quoted_parens_in_a_label_are_not_groups():
+    """The 7.23.3 replay's lesson: a paren split on RAW text cut `echo "=== (must PASS) ==="`."""
+    assert G.chained_state_changes('echo "=== (must PASS) ===" ; git commit -m x ; git push') == [
+        "commit",
+        "push",
+    ]
+    assert G.chained_state_changes('git commit -m x && echo "(must PASS)" && git push') is None
+
+
+@pytest.mark.parametrize("tail", ["echo {", "echo }", "echo x{", "printf '%s' }"])
+def test_a_lone_brace_argument_does_not_silence_the_guard(tail):
+    """A brace is a reserved word only at COMMAND position; as an argument it is a plain word
+    (`bash -c 'echo {'` prints `{`). The old character-level bail read it as an unbalanced group
+    and allowed the whole chain."""
+    assert G.chained_state_changes("git commit -m x ; git push ; " + tail) == ["commit", "push"]
+
+
+def test_a_stray_paren_still_bails_because_bash_refuses_the_command():
+    """`echo )` and `echo (` are syntax errors to bash (`bash -n` exits 2), so nothing runs and
+    allowing is correct - the paren half of the lone-bracket report is not a defect."""
+    assert G.chained_state_changes("git commit -m x ; git push ; echo )") is None
+    assert G.chained_state_changes("git commit -m x ; git push ; echo (") is None
+
+
+def test_an_unbalanced_command_position_brace_bails():
+    """`{ git commit; git push` never closes: bash refuses it, so the guard does not judge it."""
+    assert G.chained_state_changes("{ git commit -m x ; git push") is None
+
+
+def test_a_one_line_function_definition_is_not_executed():
+    assert G.chained_state_changes("f() { git commit -m x; git push; }") is None

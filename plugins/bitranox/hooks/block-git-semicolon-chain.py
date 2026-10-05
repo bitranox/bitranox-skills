@@ -12,20 +12,27 @@ ship while the working tree never moved.
 WHAT THIS GUARD REFUSES TO JUDGE
 --------------------------------
 A hook runs on a bare interpreter with no third-party packages, so there is no bash parser
-available and this reads statement structure with a regex split. That instrument cannot model a
-construct whose branches are alternatives or whose separators are required syntax: an `if`/`else`
-runs exactly one branch, and a `for ... ; do ... ; done` needs its semicolons. A guess there
-blocks correct work, so a command carrying a shell KEYWORD is left alone entirely.
+available and this reads statement structure with shell_text's quote-aware walk. That instrument
+cannot model a construct whose branches are alternatives or whose separators are required syntax:
+an `if`/`else` runs exactly one branch, and a `for ... ; do ... ; done` needs its semicolons. A
+guess there blocks correct work, so a command carrying a shell KEYWORD is left alone entirely.
 
-A balanced brace group or subshell is different - it is self-contained, one statement seen from
-outside, so it is MASKED rather than bailed on and the statements around it stay judgeable. The
-distinction is worth the extra code: an error handler on its own line
-(`pytest ... || { tail -10 log; exit 1; }`) was silencing the guard over a plain
-`git commit` / `git push` pair further down.
+A subshell or brace group is different: its statements are walked like any others, because the
+footgun is the same inside one - `(git commit -m x ; git push)` is the incident in parens. What a
+group changes is REACHABILITY, and that is modelled: a failed step stops at `&&` and skips the
+whole next element, so `git commit && (git push ; echo x)` never reaches the push, and a `||`
+written after a group is the failure path of the step that ended inside it. Masking groups whole
+instead hid every chain inside one, and an error handler on its own line
+(`pytest ... || { tail -10 log; exit 1; }`) never silenced the pair below it either way.
+
+A brace is a reserved word only at COMMAND position. `echo {` prints a brace, so a brace argument
+is a plain word and never a reason to stop judging; only an unbalanced command-position brace,
+a stray paren or backtick (bash refuses those: `echo )` is a syntax error), or a `name()`
+function definition (its body is not run here) makes the command unjudgeable.
 
 That is still a deliberate accuracy-for-coverage trade. It gives up some real hits, and in
-exchange every verdict it does give is one a flat statement list can actually support. The regions
-it cannot see at all, and knowingly ignores: anything inside `eval`, `bash -c "..."`,
+exchange every verdict it does give is one a statement list can actually support. The regions it
+cannot see at all, and knowingly ignores: anything inside `eval`, `bash -c "..."`,
 `ssh host '...'`, or a command substitution - it scans the LOCAL statement structure only.
 
 THE TEST A FINDING HAS TO PASS
@@ -65,7 +72,7 @@ import sys
 # Shared with the other command-scanning guards. `mask_data_regions` replaces quoted strings,
 # command substitutions and comments INCLUDING their delimiters, so each becomes a single token -
 # without that, `git -C "$MAIN" commit` splits into two bare `"` tokens and the verb is lost.
-from shell_text import SEP, mask_data_regions, strip_heredoc_bodies
+from shell_text import iter_segments, mask_data_regions, strip_heredoc_bodies
 
 # Verbs whose failure invalidates whatever the author wrote next. Read-only verbs (status, log,
 # diff, rev-parse) are deliberately absent: a failed `git log` does not make the following step
@@ -134,16 +141,24 @@ WRAPPER_VALUE_OPTS = {
     "nohup": frozenset(),
 }
 
-# Block structure this guard will not judge, because a flat split cannot model a construct whose
-# branches are alternatives or whose separators are required syntax. Keywords are matched as whole
-# TOKENS. A balanced brace group or subshell is NOT here - it is self-contained, so `_mask_groups`
-# turns it into one opaque token and the statements AROUND it stay judgeable. Only an UNBALANCED
-# leftover reaches the bail, which means the command is something this parser does not understand.
+# Block structure this guard will not judge, because a statement list cannot model a construct
+# whose branches are alternatives or whose separators are required syntax. Keywords are matched as
+# whole TOKENS. A subshell or brace group is NOT here - see `_parts` - and only an unbalanced or
+# stray bracket reaches the bail, which means the command is something bash itself would refuse.
 BLOCK_KEYWORDS = frozenset(
     {"if", "then", "else", "elif", "fi", "for", "while", "until", "do", "done",
      "case", "esac", "select", "function"}
 )
-BLOCK_CHARS = "(){}`"
+# `name()` defines a function: its body is not run by this command, so its verbs are not a chain.
+FUNCTION_DEFINITION = re.compile(r"[\w.-]\s*\(\s*\)")
+# An escaped character is data to the shell, a bracket included.
+ESCAPED = re.compile(r"\\.", re.DOTALL)
+
+# Group delimiters as they appear among the separators `_parts` yields. The walk reports a subshell
+# and a substitution by their own spellings; a brace group is recognised by `_parts` from its
+# reserved word at command position.
+OPENERS = frozenset({"(", "$(", "<(", ">(", "{"})
+CLOSERS = frozenset({")", "}"})
 
 # Repetition of these verbs is parallel work over independent targets - branches, remotes, repos,
 # tags - so `&&` between them is wrong advice. Repetition of any OTHER verb can be a real chain:
@@ -168,11 +183,6 @@ NON_MOVING_TARGETS = frozenset({None, "", ".", "./", "-", "$PWD", "${PWD}", "$(p
 # origin/main` - where `&&` is wrong advice and the fetch is the confirmation this guard's own
 # message asks for.
 NEVER_THE_SECOND_HALF = frozenset({"fetch"})
-
-# Split while KEEPING the separators, because which one joined two statements is the entire
-# question. The separator set is shell_text's: a bare `&` backgrounds, which is the strongest
-# continue-regardless there is, while `2>&1`, `&>log` and the `|&` pipe are not separators.
-SEP_SPLIT = re.compile("(" + SEP.pattern + ")")
 
 # Only these continue past a failure. `&&` stops, `||` runs only ON failure, `|` is a pipeline.
 CONTINUES_AFTER_FAILURE = frozenset({";", "\n", "&"})
@@ -347,36 +357,115 @@ def _errexit_delta(segment: str) -> int:
     return delta
 
 
-def _mask_groups(text: str, fill: str = "Q") -> str:
-    """Mask balanced `{...}` brace groups and `(...)` subshells, keeping newlines.
+# A brace group's delimiter: a `{` or `}` standing as the FIRST word of a statement. Anywhere else
+# a brace is an ordinary word (`echo {`, `@{u}`, `find -exec rm {} +`).
+_BRACE_WORD = re.compile(r"\s*([{}])(?=\s|$)")
 
-    A group is ONE statement from the outside, so its internal `;` says nothing about the
-    statements around it - and bailing on the whole command because one exists silences the guard
-    where it still had a clear view. Measured: an error handler like
-    `pytest ... || {{ tail -10 log; exit 1; }}` on its own line was hiding a plain
-    `git commit` / `git push` pair further down.
+
+def _append_statement(parts, raw_parts, masked, raw, start, end):
+    """Append the statement `masked[start:end]`, splitting off any leading brace-group words.
+
+    To the walk a brace is a word, not a separator, so `{ git commit -m x` arrives as one
+    statement whose program is `{`. Splitting the reserved word off as a separator of its own
+    lets the git verb be read and lets the reachability walk treat the group like a subshell.
     """
-    out = list(text)
-    depth, start = 0, -1
-    for position, char in enumerate(text):
-        if char in "({":
-            if depth == 0:
-                start = position
+    while True:
+        word = _BRACE_WORD.match(masked, start, end)
+        if not word:
+            break
+        parts += [masked[start:word.start(1)], word.group(1)]
+        raw_parts += [raw[start:word.start(1)], word.group(1)]
+        start = word.end(1)
+    parts.append(masked[start:end])
+    raw_parts.append(raw[start:end])
+
+
+def _parts(masked: str, raw: str, tool_name: str) -> tuple[list[str], list[str]]:
+    """Statements and the separators between them, alternating: [stmt, sep, stmt, ..., stmt].
+
+    Found by shell_text's quote-aware walk on the MASKED text, where quoted text, substitutions
+    and comments are already filler, so a `(` inside `echo "(must PASS)"` is not a subshell - the
+    shape a raw-text paren split cut in a corpus replay. Every mask preserves length, so the same
+    offsets cut the raw text into `raw_parts`, which is what a `-C` path is compared on.
+    """
+    parts: list[str] = []
+    raw_parts: list[str] = []
+    segments = list(iter_segments(masked, tool_name))
+    for number, (start, segment) in enumerate(segments):
+        end = start + len(segment)
+        _append_statement(parts, raw_parts, masked, raw, start, end)
+        if number + 1 < len(segments):
+            following = segments[number + 1][0]
+            parts.append(masked[end:following])
+            raw_parts.append(raw[end:following])
+    return parts, raw_parts
+
+
+def _unjudgeable(masked: str, parts: list[str]) -> bool:
+    """True when the command carries structure a statement list cannot honestly model.
+
+    A stray paren or backtick is a command bash itself refuses (`echo )` is a syntax error), and an
+    unbalanced command-position brace never closes its group, so judging either would be guessing.
+    A brace ARGUMENT is not on this list: it is a plain word, and bailing on it allowed
+    `git commit -m x ; git push ; echo {`.
+    """
+    plain = ESCAPED.sub("  ", masked)
+    if "`" in plain or plain.count("(") != plain.count(")"):
+        return True
+    if FUNCTION_DEFINITION.search(plain):
+        return True                                        # a body that this command does not run
+    separators = parts[1::2]
+    if separators.count("{") != separators.count("}"):
+        return True
+    return any(token in BLOCK_KEYWORDS for token in masked.split())
+
+
+def _skipped_group_end(parts: list[str], index: int) -> int | None:
+    """Where the group right after the separator at `index` closes, or None when no group follows.
+
+    After a FAILED step, `&&` skips the next element whole - and when that element is a group, the
+    `;` inside it is never reached: `git commit -m x && (git push ; echo x)` cannot push after a
+    failed commit. A group that never closes swallows the rest of the command.
+    """
+    probe = index + 2
+    while probe < len(parts) and not parts[probe - 1].strip() and parts[probe] == "\n":
+        probe += 2                                         # `&&` then a line break, then the group
+    if probe >= len(parts) or parts[probe - 1].strip() or parts[probe] not in OPENERS:
+        return None
+    depth = 0
+    for at in range(probe, len(parts), 2):
+        if parts[at] in OPENERS:
             depth += 1
-        elif char in ")}" and depth > 0:
+        elif parts[at] in CLOSERS:
             depth -= 1
             if depth == 0:
-                for index in range(start, position + 1):
-                    if out[index] != "\n":
-                        out[index] = fill
-    return "".join(out)
+                return at
+    return len(parts)
 
 
-def _unjudgeable(text: str) -> bool:
-    """True when the command carries block structure a flat split cannot honestly model."""
-    if any(char in text for char in BLOCK_CHARS):
-        return True                                    # an UNBALANCED group survived the masking
-    return any(token in BLOCK_KEYWORDS for token in text.split())
+def _closes_a_group(parts: list[str], index: int) -> bool:
+    """True when the separator at `index` is only the terminator before a group's closer.
+
+    `{ git commit -m x; } && git push` needs that `;` - bash requires it before `}` - and nothing
+    runs after it inside the group, so a failed commit still reaches the `&&` and stops there.
+    """
+    return (index + 2 < len(parts) and not parts[index + 1].strip()
+            and parts[index + 2] in CLOSERS)
+
+
+def _failure_handled_after(parts: list[str], index: int) -> bool:
+    """True when the statement at `index` is followed by a `||` handler, past any group it ends.
+
+    `(git commit -m x) || true` and `{ git commit -m x; } || exit 1` hand the group's status - the
+    commit's - to the handler exactly as `git commit -m x || true` does.
+    """
+    at = index + 1
+    while at + 1 < len(parts) and not parts[at + 1].strip():
+        if parts[at] in CLOSERS or (parts[at] in (";", "\n") and _closes_a_group(parts, at)):
+            at += 2
+            continue
+        break
+    return at < len(parts) and parts[at] == "||"
 
 
 def _gap_continues_after_failure(parts: list[str], start: int, stop: int) -> bool:
@@ -385,18 +474,28 @@ def _gap_continues_after_failure(parts: list[str], start: int, stop: int) -> boo
     A newline directly after `&&`, `||` or `|` is a LINE CONTINUATION, not a separator - the
     author already wrote the correct form and split it over lines. Treating it as `;` blocks a
     correct command with a message telling the author to do what they just did.
+
+    A group after a success-join is skipped whole on failure (`_skipped_group_end`), and the
+    terminator a group's closer requires continues to nothing (`_closes_a_group`).
     """
     joined_on_success = False
-    for index in range(start, stop, 2):
+    index = start
+    while index < stop:
         separator = parts[index]
-        preceding = parts[index - 1].strip()
         if separator in JOINS_ON_SUCCESS:
             joined_on_success = True
-            continue
-        if separator == "\n" and joined_on_success and not preceding:
-            continue                                       # continuation line, still guarded
-        if separator in CONTINUES_AFTER_FAILURE:
+            group_end = _skipped_group_end(parts, index)
+            if group_end is not None:
+                if group_end >= stop:
+                    return False                           # the second verb is inside the skip
+                index = group_end + 2
+                continue
+        elif separator == "\n" and joined_on_success and not parts[index - 1].strip():
+            pass                                           # continuation line, still guarded
+        elif separator in CONTINUES_AFTER_FAILURE and not (
+                separator != "&" and _closes_a_group(parts, index)):
             return True
+        index += 2
     return False
 
 
@@ -410,19 +509,14 @@ def chained_state_changes(command: str, tool_name: str = "Bash") -> list[str] | 
     ff-merge run the second merge on a stale base and push it sat right there.
     """
     stripped = strip_heredoc_bodies(command or "")
-    text = _mask_groups(mask_data_regions(stripped, tool_name=tool_name))
-    if _unjudgeable(text):
+    masked = mask_data_regions(stripped, tool_name=tool_name)
+    # The masking preserves LENGTH, so the same offsets index the pre-mask text exactly. The `-C`
+    # comparison needs the real path: masked, two different quoted paths of equal length become
+    # the same run of filler, so the verdict turned on how many characters a variable name had -
+    # `"$PLAN"` vs `"$PROX"` blocked while `"$PLANNING"` vs `"$PROX"` did not.
+    parts, raw_parts = _parts(masked, stripped, tool_name)
+    if _unjudgeable(masked, parts):
         return None
-
-    parts = SEP_SPLIT.split(text)
-    # Both masking passes preserve LENGTH, so the same offsets index the pre-mask text exactly.
-    # The `-C` comparison needs the real path: masked, two different quoted paths of equal length
-    # become the same run of filler, so the verdict turned on how many characters a variable name
-    # had - `"$PLAN"` vs `"$PROX"` blocked while `"$PLANNING"` vs `"$PROX"` did not.
-    raw_parts, offset = [], 0
-    for part in parts:
-        raw_parts.append(stripped[offset : offset + len(part)])
-        offset += len(part)
     statements = list(range(0, len(parts), 2))
 
     # errexit is a FLAG, so the last `set -e` / `set +e` wins: `set -e; set -e; set +e` leaves it
@@ -440,9 +534,7 @@ def chained_state_changes(command: str, tool_name: str = "Bash") -> list[str] | 
     for position, (index_a, verb_a) in enumerate(found):
         if active_before[index_a]:
             continue                                       # the shell aborts on failure anyway
-        # The bound matters: iterating EVERY statement (not consecutive pairs) means `index_a` can
-        # be the last one, which has no following separator.
-        if index_a + 1 < len(parts) and parts[index_a + 1] == "||":
+        if _failure_handled_after(parts, index_a):
             continue                                       # the author wrote the failure path
         for index_b, verb_b in found[position + 1 :]:
             if verb_b in NEVER_THE_SECOND_HALF:
