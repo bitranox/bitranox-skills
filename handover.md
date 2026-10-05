@@ -1,4 +1,4 @@
-# Handover - 2026-10-05 16:45, open-work batch: 7.41.0 shipped, CI red on macOS/Windows (fix in flight), wave D planned
+# STALE - read 2026-10-05, work continued
 
 Working tree for all of this: the `jev-shadow` worktree (`.claude/worktrees/jev-shadow`, branch
 `worktree-jev-shadow`) is the INTEGRATION branch. Batch records are in its gitignored
