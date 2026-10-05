@@ -30,7 +30,7 @@ def _run(args, strict=False, env_extra=None, bash="bash"):
 def test_missing_script_fails_loud_for_a_cli_caller():
     # a mistyped path in a gate must not read as a clean pass
     r = _run(["/no/such/script.py"])
-    assert r.returncode == 3
+    assert r.returncode == 2                        # could not run (exit-code standard)
     assert "not found" in r.stderr
 
 
@@ -41,14 +41,14 @@ def test_missing_script_fail_open_in_hook_mode():
 
 
 def test_missing_script_fail_loud_when_strict_in_both_modes():
-    assert _run(["/no/such/script.py"], strict=True).returncode == 3
+    assert _run(["/no/such/script.py"], strict=True).returncode == 2  # CLI: STRICT changes nothing
     r = _run(["--hook", "/no/such/script.py"], strict=True)
     assert r.returncode == 3                        # STRICT overrides hook mode
     assert "not found" in r.stderr
 
 
 def test_no_script_argument_at_all():
-    assert _run([]).returncode == 3
+    assert _run([]).returncode == 2
     assert _run(["--hook"]).returncode == 0
 
 
@@ -82,7 +82,7 @@ def test_no_interpreter_fails_loud_for_a_cli_caller_and_open_in_hook_mode(tmp_pa
     bash = shutil.which("bash")
     cli = _run([str(s)], env_extra=env, bash=bash)
     hook = _run(["--hook", str(s)], env_extra=env, bash=bash)
-    assert cli.returncode == 3, cli.stderr
+    assert cli.returncode == 2, cli.stderr
     assert hook.returncode == 0, hook.stderr
     for r in (cli, hook):
         assert "no Python 3 interpreter found" in r.stderr
@@ -163,7 +163,7 @@ def _marker_script(tmp_path, name="s.py"):
 
 
 def _assert_degraded(r, hook, fragment):
-    assert r.returncode == (0 if hook else 3), (r.returncode, r.stderr)
+    assert r.returncode == (0 if hook else 2), (r.returncode, r.stderr)
     last = r.stderr.splitlines()[-1]               # a failing cygpath may print its own line first
     assert last.startswith("run-python.sh: "), r.stderr
     assert fragment in last, r.stderr
@@ -171,7 +171,7 @@ def _assert_degraded(r, hook, fragment):
 
 @pytest.mark.skipif(hasattr(os, "geteuid") and os.geteuid() == 0,
                     reason="root reads a mode-000 file, so it cannot be made unreadable")
-def test_unreadable_script_degrades_and_never_returns_the_block_code(tmp_path):
+def test_unreadable_script_degrades_and_a_hook_never_returns_the_block_code(tmp_path):
     s, marker = _marker_script(tmp_path)
     s.chmod(0)
     try:
