@@ -44,7 +44,6 @@ Read-only: it never writes to the store. Writes go through the engine (`memory_e
 
 from __future__ import annotations
 
-import argparse
 import sys
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -60,7 +59,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[3] / "hooks"))
 try:
     import uuid_store  # noqa: E402
     _IMPORT_ERROR: ImportError | None = None
-except ImportError as _exc:  # noqa: E402 - see above
+except ImportError as _exc:
     uuid_store = None  # type: ignore[assignment]
     _IMPORT_ERROR = _exc
 

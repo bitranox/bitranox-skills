@@ -77,7 +77,6 @@ exit 1, which would read as SURVIVED.
 """
 from __future__ import annotations
 
-import argparse
 import importlib.util
 import json
 import os

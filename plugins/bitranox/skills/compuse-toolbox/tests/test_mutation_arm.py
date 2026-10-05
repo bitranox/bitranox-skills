@@ -1000,8 +1000,8 @@ def test_a_battery_arm_may_carry_several_mutations(tmp_path):
     ("[]", "no arms"),
     ('{"tests": ["t"], "arms": [{"label": "x", "file": "src.py", "old": "a"}]}', "new"),
     ('{"arms": [{"label": "x", "file": "src.py", "old": "a", "new": "b"}]}', "tests"),
-    ('{"tests": ["t"], "arms": [{"label": "x", "file": "src.py", "old": "a", "new": "b"}, '
-     '{"label": "x", "file": "src.py", "old": "c", "new": "d"}]}', "duplicate"),
+    (('{"tests": ["t"], "arms": [{"label": "x", "file": "src.py", "old": "a", "new": "b"}, '
+      '{"label": "x", "file": "src.py", "old": "c", "new": "d"}]}'), "duplicate"),
     ("{not json", "JSON"),
 ])
 def test_a_malformed_battery_is_refused(tmp_path, spec_text, needle):
