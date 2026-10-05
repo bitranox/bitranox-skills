@@ -13,10 +13,10 @@ one that makes the pollution path appear.
 Exit codes:
   0  no test created the path (every matched test ran)
   1  found the polluter
-  2  error: bad usage, no test file matched the glob, or the test runner never ran the
-     tests (npm missing, no "test" script, or every single run failed)
-  3  cannot check: the pollution path already exists before the first test, so no test
-     can be seen creating it - remove it and run again
+  2  could not check: bad usage, no test file matched the glob, the test runner never ran
+     the tests (npm missing, no "test" script, or every single run failed), or the pollution
+     path already exists before the first test, so no test can be seen creating it - remove
+     it and run again (stderr says which)
 """
 import glob
 import shutil
@@ -24,7 +24,7 @@ import subprocess
 import sys
 from pathlib import Path
 
-EXIT_CLEAN, EXIT_FOUND, EXIT_ERROR, EXIT_PREEXISTING = 0, 1, 2, 3
+EXIT_CLEAN, EXIT_FOUND, EXIT_ERROR = 0, 1, 2
 
 # npm's own failures, as opposed to a test that ran and failed. A polluting test may itself
 # fail, so a non-zero exit alone cannot abort the scan; these say the runner never ran it.
@@ -129,7 +129,7 @@ def main(argv, *, run_test=_run_test):
         # and skipping every test would end in "all tests clean".
         print("find_polluter: %s already exists before any test ran; remove it first, "
               "then run again" % pollution, file=sys.stderr)
-        return EXIT_PREEXISTING
+        return EXIT_ERROR
     try:
         return _scan(pollution, test_files, run_test)
     except RunnerError as exc:

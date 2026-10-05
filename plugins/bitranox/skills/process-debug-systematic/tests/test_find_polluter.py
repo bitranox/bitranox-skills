@@ -130,7 +130,7 @@ def test_preexisting_pollution_is_refused_not_reported_clean(tmp_path, capsys):
     pollution.mkdir()
     runner = Runner()
     rc = find_polluter.main(["prog", str(pollution), _glob(tmp_path, "*.test.ts")], run_test=runner)
-    assert rc == 3
+    assert rc == 2  # could not check: the 0/1/2 standard has no fourth code
     assert runner.ran == []
     captured = capsys.readouterr()
     assert "remove it first" in captured.err
