@@ -163,6 +163,38 @@ def test_ensure_gitignore_in_git_repo(env):
     assert M.ensure_gitignore(str(proj)) == "already ignored"      # idempotent
 
 
+def test_ensure_gitignore_preserves_crlf(env):
+    """A Windows-authored .gitignore keeps its own CRLF line endings after the append - the
+    hand-rolled read_text/write_text round trip normalized them to the host's os.linesep."""
+    import subprocess
+    tmp_path, _ = env
+    proj = tmp_path / "gitrepo-crlf"
+    proj.mkdir()
+    subprocess.run(["git", "init", "-q", str(proj)], check=False)
+    (proj / ".gitignore").write_bytes(b"*.pyc\r\nbuild/\r\n")
+    assert M.ensure_gitignore(str(proj)) == "gitignored"
+    raw = (proj / ".gitignore").read_bytes()
+    assert b"\r\n" in raw and b"\n\r" not in raw.replace(b"\r\n", b"")
+    assert raw.count(b"\n") == raw.count(b"\r\n"), "a bare LF slipped into a CRLF file"
+
+
+def test_ensure_gitignore_still_refuses_a_non_utf8_file(env):
+    """Unchanged: a .gitignore holding bytes that are not valid UTF-8 (e.g. a latin-1 comment) is
+    still left exactly alone, pinned by test_migrate_memory_backup.py's
+    test_a_non_utf8_gitignore_neither_crashes_the_run_nor_is_rewritten - the CRLF-preservation fix
+    only changes how a readable UTF-8 file's own line endings are kept, never what counts as
+    readable."""
+    import subprocess
+    tmp_path, _ = env
+    proj = tmp_path / "gitrepo-latin1"
+    proj.mkdir()
+    subprocess.run(["git", "init", "-q", str(proj)], check=False)
+    raw = b"# commentaire \xe9t\xe9\n*.pyc\n"   # latin-1 'ete', not valid UTF-8
+    (proj / ".gitignore").write_bytes(raw)
+    assert M.ensure_gitignore(str(proj)) == "gitignore write failed"
+    assert (proj / ".gitignore").read_bytes() == raw               # left untouched
+
+
 def test_ensure_gitignore_non_git_skips(env):
     tmp_path, _ = env
     d = tmp_path / "plain"
@@ -445,6 +477,26 @@ def test_a_valid_redirect_places_and_exits_0(env):
     target.mkdir()
     assert M.main(["--apply", "--slug=" + slug, "--redirect=%s=%s" % (slug, target)]) == 0
     assert list(_placed_bodies(target)) == ["project-a"]
+
+
+def test_an_exception_mid_run_still_names_the_backup(env, capsys, monkeypatch):
+    """A bug in migrate_store (or a future exception type it does not special-case) must not
+    swallow the one line naming where the already-taken backup lives: BackupRun's own manifest
+    is restorable as soon as anything is copied, so losing the printed location strands an
+    operator who has no idea an undo dir even exists."""
+    proj, slug, home = _project(env, "repoCrash")
+    _native_store(home, slug, [("a.md", "project-a", "fact a", "Body A.")])
+
+    def boom(slug_, dry_run=True, scope_default="", redirect=None, backup_run=None):
+        backup_run.dir = home / "fake-backup-dir"   # simulate: something was already copied
+        raise RuntimeError("unexpected mid-run failure")
+
+    monkeypatch.setattr(M, "migrate_store", boom)
+    with pytest.raises(RuntimeError):
+        M.main(["--apply", "--slug=" + slug])
+    out = capsys.readouterr().out
+    assert "BACKUP of everything written" in out
+    assert str(home / "fake-backup-dir") in out
 
 
 def test_dry_run_and_apply_together_are_refused(env, capsys):

@@ -301,13 +301,18 @@ def run(facts: list[Fact], *, threshold: float = 0.5, scorer=similarity,
     corpus, source, planted = _plant_control(facts)
     candidates: list[Candidate] = []
     distribution: dict[float, int] = defaultdict(int)
-    control_score = 0.0
+    # Scored directly, never through _candidate_pairs' shared-token index: that index is a
+    # performance heuristic for REAL pairs (requiring >= 2 shared rare tokens before a pair is
+    # even considered), and a self-check that depends on it is not independent of it - a source
+    # fact with fewer than 2 content words (or one the paraphrase trims hard enough) made the
+    # index never consider the (source, planted) pair at all, reporting an instrument failure
+    # though the scorer itself worked fine.
+    control_score = scorer(_scored(source), _scored(planted))
     real_pairs = 0
     for i, j in _candidate_pairs(corpus):
         fa, fb = corpus[i], corpus[j]
         if {fa.slug, fb.slug} == {planted.slug, source.slug}:
-            control_score = max(control_score, scorer(_scored(fa), _scored(fb)))
-            continue
+            continue                       # already scored directly above
         if fa.slug.startswith(CONTROL_PREFIX) or fb.slug.startswith(CONTROL_PREFIX):
             # The plant against a third fact is not a pair anyone can merge. Counted, it put
             # phantom near-misses in the very distribution a reader is told to inspect.

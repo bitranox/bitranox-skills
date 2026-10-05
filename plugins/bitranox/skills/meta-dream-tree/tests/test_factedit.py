@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -1003,3 +1004,59 @@ def test_an_explicit_stage_dir_is_never_removed(tmp_path):
                  "--stage-dir", str(stage)], tmp_path)
     assert r.returncode == 0, r.stdout + r.stderr
     assert (stage / "feedback-demo.hook.txt").is_file()
+
+
+# ---- registration: the toolbox catalogue agrees with every tool's own launch docstring --------
+# factedit's own "Run" section once said `bash hooks/run-python.sh ...` while the
+# compuse-toolbox catalogue (and factedit's sibling statusrot.py, same skill dir) both prescribe
+# `uv run skills/meta-dream-tree/<script>.py ...` - the one mismatch among the toolbox's rows.
+# This generalises the by-hand comparison into a standing check over every row, not just
+# factedit's.
+
+_TOOLBOX_SKILL_MD = (Path(__file__).resolve().parents[2] / "compuse-toolbox" / "SKILL.md")
+_ROW_RX = re.compile(r"^\| `(?P<name>[a-zA-Z0-9_]+)`\s*\|(?P<desc>.*)\|(?P<launch>[^|]*)\|\s*$")
+_LAUNCH_CMD_RX = re.compile(r"`([^`]*\.py[^`]*)`")
+_SCRIPT_RX = re.compile(r"(\S+\.py)")
+_RUN_SECTION_RX = re.compile(r"Run \([^\n]*\):\s*\n((?:[ \t]+`[^\n]*`\n?)+)")
+
+
+def _toolbox_rows():
+    text = _TOOLBOX_SKILL_MD.read_text(encoding="utf-8")
+    rows = []
+    for line in text.splitlines():
+        m = _ROW_RX.match(line)
+        if m:
+            rows.append((m.group("name"), m.group("launch")))
+    return rows
+
+
+def test_every_toolbox_row_s_launch_form_agrees_with_its_scripts_own_run_section():
+    """Registration test over all compuse-toolbox catalogue rows (read-only; that SKILL.md is
+    not owned by this skill): where a row's launch script documents its OWN `Run (...)` section
+    using `bash hooks/run-python.sh`, the toolbox row for that same script must say so too -
+    otherwise the catalogue and the script's own usage docs silently disagree about how to call
+    it, which is exactly what happened to factedit.py's docstring."""
+    rows = _toolbox_rows()
+    assert len(rows) >= 30, "sanity: the toolbox table did not parse (%d rows)" % len(rows)
+    mismatches = []
+    for name, launch_cell in rows:
+        cmds = _LAUNCH_CMD_RX.findall(launch_cell)
+        if not cmds:
+            continue
+        m = _SCRIPT_RX.search(cmds[0])
+        if not m:
+            continue
+        script_path = (_TOOLBOX_SKILL_MD.parent / m.group(1)).resolve()
+        if not script_path.is_file():
+            mismatches.append((name, "launch script does not exist: %s" % script_path))
+            continue
+        own_doc = script_path.read_text(encoding="utf-8")
+        own_run = _RUN_SECTION_RX.search(own_doc)
+        if not own_run:
+            continue
+        own_uses_runpy = "run-python.sh" in own_run.group(1)
+        toolbox_mentions_runpy = "run-python.sh" in launch_cell
+        if own_uses_runpy and not toolbox_mentions_runpy:
+            mismatches.append((name, "%s's own Run section uses run-python.sh; the toolbox row "
+                                      "for it does not mention run-python.sh at all" % script_path))
+    assert not mismatches, mismatches

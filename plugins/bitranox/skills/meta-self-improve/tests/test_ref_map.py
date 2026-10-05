@@ -114,6 +114,23 @@ def test_underscores_and_dashes_are_the_same_slug(tmp_path):
     assert "dangling" not in out.lower()
 
 
+def test_a_sharded_legacy_body_s_text_still_counts_as_an_inbound_ref(tmp_path):
+    """The engine's own move-refusal reads legacy pointers' bodies (`read_store`, via
+    `legacy_body_path`) when scoring inbound refs - `inbound_ref_sources`/`has_inbound_refs` are
+    what `move` calls - so ref_map's "exactly as the engine resolves them" promise is broken if a
+    ref sitting only inside a pre-pivot sharded body's text is invisible here: a modern slug would
+    read as safe to move while a legacy body still cites it."""
+    root = _tree(tmp_path / "t", {"": {"top-general": "A general rule.\n"}})
+    fact_uuid = "cd123456-0000-0000-0000-000000000002"
+    facts = root / ".claude-memory" / "facts"
+    shard_dir = facts / US.shard(fact_uuid)
+    shard_dir.mkdir(parents=True, exist_ok=True)
+    (shard_dir / (fact_uuid + ".md")).write_text(
+        "Cites [[top-general]] from a legacy body.\n", encoding="utf-8")
+    _outbound, inbound = ref_map.read_refs(root)
+    assert inbound.get("top-general"), inbound
+
+
 def test_a_missing_root_is_an_error_not_an_empty_map(tmp_path):
     code, _, err = _run(["--root", str(tmp_path / "nope"), "a"])
     assert code == 2
