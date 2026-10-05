@@ -348,3 +348,95 @@ def test_utf16_claude_local_md_keeps_the_edit_deny(tmp_path, run):
     # control: the user's own line in the same file stays editable
     ev = _event("Edit", str(p), {"old_string": "# notes", "new_string": "# mine"}, cwd=str(tmp_path))
     assert run(ev) == 0
+
+
+# ---- the Edit tool's matching is not literal --------------------------------------------------------
+#
+# Probed on Claude Code 2.1.289 and read from its validateInput: when old_string is not found
+# verbatim, Edit retries with curly quotes folded to straight ones on BOTH sides, then with
+# `\uXXXX` escapes swapped for their characters. A guard that only looks for the verbatim string
+# allowed an edit the tool then applied inside the block.
+
+LQ, RQ, LS, RS = chr(0x201C), chr(0x201D), chr(0x2018), chr(0x2019)
+
+
+@pytest.fixture
+def curly_block_file(tmp_path):
+    p = tmp_path / "CLAUDE.local.md"
+    hook = "say %shi%s and %sit%ss" % (LQ, RQ, LS, RS)
+    block = _block([us.Pointer(slug="a-fact", title="A", hook=hook)])
+    assert hook in block
+    p.write_text("# notes\nuser %sline%s\n\n" % (LQ, RQ) + block, encoding="utf-8")
+    return p
+
+
+def test_a_straight_quote_old_string_matching_curly_block_text_is_denied(curly_block_file, tmp_path):
+    ev = _event("Edit", str(curly_block_file),
+                {"old_string": 'say "hi" and', "new_string": "tampered"}, cwd=str(tmp_path))
+    assert G.decide(ev, {}) is not None
+
+
+def test_a_curly_old_string_matching_straight_block_text_is_denied(tmp_path):
+    p = tmp_path / "CLAUDE.local.md"
+    p.write_text("# notes\n\n" + _block([us.Pointer(slug="a-fact", title="A", hook="it's here")]),
+                 encoding="utf-8")
+    ev = _event("Edit", str(p), {"old_string": "it%ss here" % RS, "new_string": "x"},
+                cwd=str(tmp_path))
+    assert G.decide(ev, {}) is not None
+
+
+def test_a_single_quote_fold_reaches_the_block_too(curly_block_file, tmp_path):
+    ev = _event("Edit", str(curly_block_file),
+                {"old_string": "'it's", "new_string": "x"}, cwd=str(tmp_path))
+    assert G.decide(ev, {}) is not None
+
+
+def test_a_quote_folded_edit_outside_the_block_stays_allowed(curly_block_file, tmp_path):
+    ev = _event("Edit", str(curly_block_file),
+                {"old_string": 'user "line"', "new_string": "user text"}, cwd=str(tmp_path))
+    assert G.decide(ev, {}) is None
+
+
+def test_a_quote_folded_replace_all_that_reaches_the_block_is_denied(curly_block_file, tmp_path):
+    """The folded match is judged at every occurrence the tool would replace, not only the
+    first: here the first sits outside the block and a later one inside it."""
+    p = curly_block_file
+    p.write_text(p.read_text(encoding="utf-8").replace("user %sline%s" % (LQ, RQ),
+                                                        "say %shi%s" % (LQ, RQ)), encoding="utf-8")
+    ev = _event("Edit", str(p), {"old_string": 'say "hi"', "new_string": "x", "replace_all": True},
+                cwd=str(tmp_path))
+    assert G.decide(ev, {}) is not None
+
+
+def test_an_escaped_old_string_matching_block_text_is_denied(tmp_path):
+    p = tmp_path / "CLAUDE.local.md"
+    hook = "a %s b" % chr(0x00E9)
+    p.write_text("# notes\n\n" + _block([us.Pointer(slug="a-fact", title="A", hook=hook)]),
+                 encoding="utf-8")
+    ev = _event("Edit", str(p), {"old_string": "a \\u00e9 b", "new_string": "x"}, cwd=str(tmp_path))
+    assert G.decide(ev, {}) is not None
+
+
+def test_a_non_ascii_old_string_matching_escaped_block_text_is_denied(tmp_path):
+    p = tmp_path / "CLAUDE.local.md"
+    p.write_text("# notes\n\n" + _block([us.Pointer(slug="a-fact", title="A",
+                                                     hook="a \\u00E9 b")]), encoding="utf-8")
+    ev = _event("Edit", str(p), {"old_string": "a %s b" % chr(0x00E9), "new_string": "x"},
+                cwd=str(tmp_path))
+    assert G.decide(ev, {}) is not None
+
+
+def test_an_escape_spelled_fence_marker_in_new_string_is_denied(local_file, tmp_path):
+    """When the tool matched through an escape swap it unescapes new_string as well, so a marker
+    spelled with an escape lands as a real one."""
+    new = "keep me\n<!-- \\u0042ITRANOX-MEMORY-INDEX:BEGIN -->"
+    ev = _event("Edit", str(local_file), {"old_string": "keep me", "new_string": new},
+                cwd=str(tmp_path))
+    assert G.decide(ev, {}) is not None
+
+
+def test_an_old_string_absent_in_every_form_is_still_allowed(curly_block_file, tmp_path):
+    """The tool refuses a target it cannot find in any form, so there is nothing to judge."""
+    ev = _event("Edit", str(curly_block_file),
+                {"old_string": "nowhere at all", "new_string": "x"}, cwd=str(tmp_path))
+    assert G.decide(ev, {}) is None
