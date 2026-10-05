@@ -778,6 +778,12 @@ def test_the_waiver_reads_origin_master_through_the_real_entry_point(tmp_path):
     """End to end through check_skill_review: the default reader is git, not the seam."""
     _skill_with_formatter(tmp_path, PAD_ORIG)
     _g(tmp_path, "init", "-q", ".")
+    # write() puts LF bytes straight into the work tree, as a checkout with no eol conversion
+    # would. Pin that in this repo: otherwise the machine's git config decides the line endings
+    # git hands back for origin/master - LF under CI's autocrlf=false/eol=lf, but CRLF under Git
+    # for Windows' default autocrlf=true - and the test fails on a stock Windows box.
+    _g(tmp_path, "config", "core.autocrlf", "false")
+    _g(tmp_path, "config", "core.eol", "lf")
     _g(tmp_path, "add", "-A")
     _g(tmp_path, "commit", "-qm", "base")
     _g(tmp_path, "update-ref", "refs/remotes/origin/master", "HEAD")

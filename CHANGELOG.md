@@ -29,6 +29,14 @@ than the change, so entries reconstructed from them would read like coverage wit
 a hole nobody has drawn a line under is one that gets rediscovered and half-filled - which is how
 two "versions with no entry" notes came to sit in this file disagreeing with it.
 
+## [7.41.3]
+
+### Fixed
+
+- The `repo-gate` end-to-end table re-pad test passes on a stock Windows machine, not only under
+  CI's git config: its temporary repo now pins `core.autocrlf=false` and `core.eol=lf`, so Git for
+  Windows' default `autocrlf=true` no longer hands back a CRLF origin text against the LF edit.
+
 ## [7.41.2]
 
 ### Fixed
