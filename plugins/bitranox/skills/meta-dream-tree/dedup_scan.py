@@ -33,6 +33,8 @@ Run (from the plugin root, via the launcher that forces UTF-8):
 Exit codes: 0 = scanned, no candidates at or above the threshold (and the control fired),
 1 = candidates to read, 2 = refused, something could not be read, or the control did NOT fire
 (the run proves nothing).
+--json prints the envelope {ok, command, data, skipped} on every exit, an `error` key added
+on exit 2; `ok` means the run worked and is false only on exit 2.
 """
 from __future__ import annotations
 
@@ -472,14 +474,15 @@ def main(argv: list[str] | None = None) -> int:
         result = run(load_facts(Path(args.start).expanduser(), skipped),
                      threshold=args.threshold, top=args.top)
     except DedupScanError as exc:
-        payload = {"ok": False, "command": "dedup_scan", "data": {"error": str(exc)},
-                   "skipped": skipped}
-        print(json.dumps(payload, indent=2) if args.as_json else f"error: {exc}")
-        if not args.as_json:
+        if args.as_json:
+            print(json.dumps({"ok": False, "command": "dedup_scan", "data": {"error": str(exc)},
+                              "skipped": skipped, "error": str(exc)}, indent=2))
+        else:
             print(f"error: {exc}", file=sys.stderr)
         return 2
     result.skipped = sorted(skipped)
-    ok = not result.instrument_failed and not result.candidates and not result.skipped
+    # ok means "ran without error" (false only on exit 2): candidates are the answer, not a failure
+    ok = not result.instrument_failed and not result.skipped
     if args.as_json:
         print(json.dumps({"ok": ok, "command": "dedup_scan", "data": result.as_dict(),
                           "skipped": result.skipped}, indent=2))

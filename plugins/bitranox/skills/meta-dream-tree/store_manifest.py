@@ -40,6 +40,8 @@ Run (from the plugin root, via the launcher that forces UTF-8):
 
 Exit codes: 0 = backed up / verified identical, 1 = the tree differs from the manifest,
 2 = refused (no store, empty scope, unreadable level or backup, bad arguments).
+--json prints the envelope {ok, command, data, skipped} on every exit, an `error` key added
+on exit 2; `ok` means the run worked and is false only on exit 2.
 """
 from __future__ import annotations
 
@@ -435,10 +437,15 @@ def verify(out: Path) -> Diff:
 # ---- CLI ---------------------------------------------------------------------------------------
 
 def _emit(as_json: bool, ok: bool, command: str, data: dict, text: str,
-          skipped: list[str] | None = None) -> None:
+          skipped: list[str] | None = None, error: str | None = None) -> None:
+    """The envelope under --json, else `text` - on stdout for an answer, on stderr for an error."""
     if as_json:
-        print(json.dumps({"ok": ok, "command": command, "data": data,
-                          "skipped": list(skipped or [])}, indent=2))
+        env = {"ok": ok, "command": command, "data": data, "skipped": list(skipped or [])}
+        if error is not None:
+            env["error"] = error
+        print(json.dumps(env, indent=2))
+    elif error is not None:
+        print(text, file=sys.stderr)
     else:
         print(text)
 
@@ -487,15 +494,14 @@ def main(argv: list[str] | None = None) -> int:
                   f"backed up {len(entries)} pointer(s) ({args.scope} scope) -> {path}")
             return 0
         d = verify(Path(args.out).expanduser())
-        _emit(args.as_json, d.identical, "verify", d.as_dict(), _render_diff(d))
+        # ok means "ran without error" (false only on exit 2); "differs" is the answer, exit 1
+        _emit(args.as_json, True, "verify", d.as_dict(), _render_diff(d))
         return 0 if d.identical else 1
     except (StoreManifestError, OSError) as exc:
         # OSError: a copy or manifest write that failed part-way (full disk, read-only target).
         skipped = exc.paths if isinstance(exc, Unreadable) else []
         _emit(getattr(args, "as_json", False), False, args.cmd, {"error": str(exc)},
-              f"error: {exc}", skipped)
-        if not getattr(args, "as_json", False):
-            print(f"error: {exc}", file=sys.stderr)
+              f"error: {exc}", skipped, error=str(exc))
         return 2
 
 
