@@ -144,6 +144,16 @@ def test_failed_paper_exits_2_and_stays_out_of_the_index(script_runner, tmp_path
     assert "Bad_2021_Paper.pdf" not in index
 
 
+def test_conversion_failure_fail_line_is_on_stderr(script_runner, tmp_path, fake_markitdown_dir):
+    _paper(tmp_path / "in" / "Bad_2021_Paper.pdf", "FAIL-CONVERSION")
+
+    run = _lit(script_runner, tmp_path, fake_markitdown_dir)
+
+    assert run.returncode == 2, run.output
+    assert "[FAIL] Error converting" in run.stderr
+    assert "[FAIL] Error converting" not in run.stdout
+
+
 def test_no_pdfs_exits_1(script_runner, tmp_path, fake_markitdown_dir):
     _paper(tmp_path / "in" / "notes.txt", "X")
 
@@ -176,6 +186,8 @@ def test_unreadable_subdir_is_reported_not_skipped(script_runner, tmp_path, fake
 
     assert run.returncode == 2, run.output
     assert "locked" in run.output
+    assert "[FAIL]" in run.stderr
+    assert "[FAIL]" not in run.stdout
 
 
 @pytest.mark.skipif(

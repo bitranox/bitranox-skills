@@ -126,6 +126,10 @@ def _review_response(text):
     ("Accuracy score: 2/2\nClarity score: 1/2", None),
     ("Looks nice overall, clear labels.", None),
     ("SCORE: 85", None),  # off the 0-10 scale the prompt asks for
+    # the fallback label needs a word boundary: "quality"/"rating" as a substring of a
+    # longer word (inequality, operating) must not match
+    ("Inequality: 5", None),
+    ("Operating: 9", None),
 ])
 def test_parse_score_reads_the_total_not_a_criterion(gen_ai, text, expected):
     assert gen_ai._parse_score(text) == expected

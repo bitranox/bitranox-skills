@@ -97,11 +97,15 @@ with open("data_tables.md", "w") as f:
 from markitdown import MarkItDown
 from openai import OpenAI
 
-# With AI descriptions for images
-client = OpenAI()
+# With AI descriptions for images (an OpenRouter client, not a plain OpenAI() one:
+# "anthropic/claude-sonnet-4.5" is an OpenRouter model ID)
+client = OpenAI(
+    api_key="your-openrouter-api-key",
+    base_url="https://openrouter.ai/api/v1"
+)
 md = MarkItDown(
     llm_client=client,
-    llm_model="anthropic/claude-sonnet-4.5",
+    llm_model="anthropic/claude-sonnet-4.5",  # a vision model as of 2026-09; see references/api_reference.md
     llm_prompt="Describe this scientific slide, focusing on data and key findings"
 )
 
@@ -147,8 +151,10 @@ md = MarkItDown(
     llm_prompt=scientific_prompt
 )
 
-# Convert paper with figures
-result = md.convert("paper_with_figures.pdf")
+# markitdown sends only .png/.jpg/.jpeg images and PPTX pictures to the LLM; a PDF's
+# figures are never described (llm_client/llm_model/llm_prompt are silently unused for
+# PDF input, which still converts, just without any image description).
+result = md.convert("figure.png")
 print(result.text_content)
 ```
 
@@ -164,14 +170,16 @@ client = OpenAI(
     base_url="https://openrouter.ai/api/v1"
 )
 
-# Scientific papers - use Claude for technical analysis
+# Scientific papers - the llm_client here has no effect on a PDF's figures
+# (markitdown never sends a PDF's images to an LLM); it still extracts the PDF's
+# text, just without any image description.
 scientific_md = MarkItDown(
     llm_client=client,
-    llm_model="anthropic/claude-sonnet-4.5",
+    llm_model="anthropic/claude-sonnet-4.5",  # a vision model as of 2026-09; see references/api_reference.md
     llm_prompt="Describe scientific figures with technical precision"
 )
 
-# Presentations - same model, a prompt tuned for slides
+# Presentations - same model, a prompt tuned for slides (PPTX pictures ARE described)
 presentation_md = MarkItDown(
     llm_client=client,
     llm_model="anthropic/claude-sonnet-4.5",

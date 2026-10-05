@@ -90,6 +90,27 @@ def test_iterations_one_forwarded(gen_wrapper, monkeypatch):
     assert cmd[i + 1] == "1"
 
 
+def test_iterations_clamped_to_one_at_the_low_end(gen_wrapper, monkeypatch):
+    # The AI script refuses anything outside 1-2, so the wrapper must not forward a
+    # value below 1 unbounded - it owns the "max: 2" contract, so it should own the
+    # floor too, instead of relying on the child's own usage-error refusal.
+    out = _run_main(
+        gen_wrapper, ["x", "-o", "f.png", "--iterations", "-5"], monkeypatch
+    )
+    cmd = out["cmd"]
+    i = cmd.index("--iterations")
+    assert cmd[i + 1] == "1"
+
+
+def test_iterations_zero_clamped_to_one(gen_wrapper, monkeypatch):
+    out = _run_main(
+        gen_wrapper, ["x", "-o", "f.png", "--iterations", "0"], monkeypatch
+    )
+    cmd = out["cmd"]
+    i = cmd.index("--iterations")
+    assert cmd[i + 1] == "1"
+
+
 def test_api_key_passed_via_env_not_argv(gen_wrapper, monkeypatch):
     # Security: the key must go through the child env, never onto the argv.
     out = _run_main(gen_wrapper, ["x", "-o", "f.png"], monkeypatch, env_key="FAKE-KEY-NOT-REAL")

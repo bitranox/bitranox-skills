@@ -118,7 +118,7 @@ Content from slide 1...
 from openai import OpenAI
 
 client = OpenAI()
-md = MarkItDown(llm_client=client, llm_model="gpt-4o")
+md = MarkItDown(llm_client=client, llm_model="gpt-4o")  # a vision-capable OpenAI model as of 2026-09
 result = md.convert("presentation.pptx")
 ```
 
@@ -198,7 +198,7 @@ from openai import OpenAI
 client = OpenAI()
 md = MarkItDown(
     llm_client=client,
-    llm_model="gpt-4o",
+    llm_model="gpt-4o",  # a vision-capable OpenAI model as of 2026-09
     llm_prompt="Describe this scientific diagram in detail"
 )
 result = md.convert("graph.png")
@@ -466,7 +466,7 @@ result = md.convert("message.msg")
 
 1. **Use AI for visual content**:
    ```python
-   md = MarkItDown(llm_client=client, llm_model="gpt-4o")
+   md = MarkItDown(llm_client=client, llm_model="gpt-4o")  # a vision-capable OpenAI model as of 2026-09
    ```
 
 2. **Check speaker notes** - they're included in output
@@ -489,7 +489,7 @@ result = md.convert("message.msg")
    ```python
    md = MarkItDown(
        llm_client=client,
-       llm_model="gpt-4o",
+       llm_model="gpt-4o",  # a vision-capable OpenAI model as of 2026-09
        llm_prompt="Describe this scientific figure in detail"
    )
    ```

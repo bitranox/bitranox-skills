@@ -231,7 +231,7 @@ def convert_paper(
         output_file.parent.mkdir(parents=True, exist_ok=True)
         output_file.write_text(render_paper(metadata, result.text_content), encoding='utf-8')
     except Exception as e:
-        print(f"[FAIL] Error converting {input_file.name}: {str(e)}")
+        print(f"[FAIL] Error converting {input_file.name}: {str(e)}", file=sys.stderr)
         return False, {'source_file': input_file.name, 'error': str(e)}
 
     print(f"[OK] Saved to: {output_file}")
@@ -369,7 +369,7 @@ def _run(args: argparse.Namespace) -> int:
     pdf_files = find_pdfs(args.input_dir, args.recursive, walk_errors)
     failures = [f"cannot read directory {error}" for error in walk_errors]
     for failure in failures:
-        print(f"[FAIL] {failure[0].upper()}{failure[1:]}")
+        print(f"[FAIL] {failure[0].upper()}{failure[1:]}", file=sys.stderr)
     if not pdf_files:
         print("No PDF files found")
         return EXIT_ERROR if failures else EXIT_NONE_FOUND
