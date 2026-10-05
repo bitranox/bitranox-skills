@@ -45,6 +45,10 @@ Audit a box, or a snapshot file with no network at all:
 Add `--json` for a machine-readable envelope {ok, command, data, skipped}, emitted on failure
 too; `ok` means the command ran without error, so it is true on exit 0 and exit 1.
 Exit codes: 0 = yes/clean, 1 = well-formed no/findings, 2 = error.
+A removal that removed nothing is a failed action, exit 2: `dhcp rm`, `dhcp rm-static-arp` or
+`dns rm` whose entry matched but whose write changed nothing, and a `table del` or
+`snort unblock` that leaves every requested address present (one address asked for included).
+Only some of several addresses left present is a partial outcome, exit 1, naming them.
 """
 from __future__ import annotations
 
@@ -1110,9 +1114,36 @@ def cmd_dhcp_rm(args) -> int:
     _guard_mutation(args, target, f"removing the reservation for {mac}")
     result = run_php(target, php_rm_reservation(mac), run=args.run)
     removed = result.get("removed") or []
+    _require_effect(removed, f"the reservation for {mac} matched, but removing it removed nothing "
+                             "(it changed since it was listed); config.xml was not written")
     _emit(envelope(command="dhcp rm", data=result, ok=True), args.json,
           f"  removed {len(removed)} reservation(s) for {mac}")
-    return 0 if removed else 1
+    return 0
+
+
+def _require_effect(effect: list, failure: str) -> None:
+    """Refuse a single-target change that matched and then changed nothing.
+
+    The listing found exactly one entry, so the caller asked for one thing and it did not happen.
+    That is a failed action (exit 2), not a well-formed "no": exit 1 is reserved for an answer
+    such as a finding or a PARTIAL outcome, and reporting this as one hides that nothing changed.
+    """
+    if not effect:
+        raise PfsenseError(failure)
+
+
+def _removal_exit(requested: list[str], still: list[str], *, where: str) -> int:
+    """0 when every address is gone, 1 when SOME of several remain, 2 (raised) when none went.
+
+    Some-of-several is a partial outcome, an answer the caller reads as "these are left". Every
+    requested address still present - one address asked for included - means the action did
+    nothing, which is a failure rather than an answer.
+    """
+    if not still:
+        return 0
+    if set(still) >= set(requested):
+        raise PfsenseError(f"nothing was removed: {', '.join(still)} still present in {where}")
+    return 1
 
 
 def cmd_dhcp_rm_static_arp(args) -> int:
@@ -1133,9 +1164,11 @@ def cmd_dhcp_rm_static_arp(args) -> int:
     _guard_mutation(args, target, f"clearing static ARP for {mac}")
     result = run_php(target, php_rm_static_arp(mac), run=args.run)
     changed = result.get("changed") or []
+    _require_effect(changed, f"static ARP is set on the reservation for {mac}, but clearing it "
+                             "changed nothing (it changed since it was listed); config.xml was not written")
     _emit(envelope(command="dhcp rm-static-arp", data=result, ok=True), args.json,
           f"  cleared static ARP on {len(changed)} reservation(s) for {mac}")
-    return 0 if changed else 1
+    return 0
 
 
 def cmd_dns_list(args) -> int:
@@ -1195,9 +1228,11 @@ def cmd_dns_rm(args) -> int:
     stored_domain = (entry.get("domain") or "").lower()
     result = run_php(target, php_rm_override(stored_host, stored_domain), run=args.run)
     removed = result.get("removed") or []
+    _require_effect(removed, f"the override {host}.{domain} matched, but removing it removed nothing "
+                             "(it changed since it was listed); config.xml was not written")
     _emit(envelope(command="dns rm", data=result, ok=True), args.json,
           f"  removed {len(removed)} override(s) for {host}.{domain}")
-    return 0 if removed else 1
+    return 0
 
 
 def cmd_arp(args) -> int:
@@ -1273,10 +1308,11 @@ def cmd_table(args) -> int:
     if rc != 0:
         raise PfsenseError(f"could not re-read table {args.table} to confirm: {err.strip()[:200]}")
     still = blocked_among(out, args.ips)
+    code = _removal_exit(args.ips, still, where=f"table {args.table}")
     _emit(envelope(command="table del", data={"requested": args.ips, "still_present": still}, ok=True),
           args.json, f"  deleted {len(args.ips) - len(still)} of {len(args.ips)} from {args.table}" +
                      (f"\n  STILL PRESENT: {', '.join(still)}" if still else ""))
-    return 1 if still else 0
+    return code
 
 
 def cmd_rules(args) -> int:
@@ -1390,6 +1426,7 @@ def cmd_snort_unblock(args) -> int:
     if rc != 0:
         raise PfsenseError(f"could not re-read the table to confirm: {err.strip()[:200]}")
     still = blocked_among(table, args.ips)
+    code = _removal_exit(args.ips, still, where=SNORT_TABLE)
     data = {"requested": args.ips, "still_blocked": still}
     human = "  cleared: " + ", ".join(ip for ip in args.ips if ip not in still)
     if still:
@@ -1397,7 +1434,7 @@ def cmd_snort_unblock(args) -> int:
     human += ("\n\nThis is temporary. Clearing the table does NOT stop the rule re-adding the "
               "address on the next packet: suppress the SID too, with snort fixsteps --sid <SID>.")
     _emit(envelope(command="snort unblock", data=data, ok=True), args.json, human)
-    return 1 if still else 0
+    return code
 
 
 def cmd_snort_verify(args) -> int:

@@ -40,8 +40,12 @@ by sha (`gh run list --commit`), so newer runs of other commits cannot push them
 A run concluding `skipped` (a workflow whose jobs were all `if:`-gated off) does not fail the push;
 a push on which every run was skipped tested nothing and is reported `failed`, never green.
 
-Only runs of one EVENT count, `push` by default (`--event`, `any` for all): a scheduled run that
-GitHub queues on the same head sha otherwise holds a push's verdict open until the deadline. A run
+By default every run on the sha counts EXCEPT a scheduled one: a nightly run that GitHub queues on
+the same head sha would otherwise hold a push's verdict open until the deadline, or fail it for a
+reason the push did not cause. The exclusion is client-side and covers only `schedule`, so a fork
+pull request's head - whose only runs are `pull_request` - is seen by a bare wait. `--event NAME`
+counts only runs of that event (asked for server-side); `--event any` counts every run, scheduled
+ones included. A run
 concluding `action_required` (a fork pull request awaiting a maintainer's approval) is reported at
 once as `pending-approval`, exit 2: no wait resolves it, and it is not a failure.
 
@@ -95,8 +99,13 @@ _GH_EXIT_AUTH_REQUIRED = 4
 #: A fork pull request's run waiting for a maintainer to approve it. Terminal for a waiter: no
 #: amount of polling changes it, and it is not a failure of the code.
 _AWAITING_APPROVAL = "action_required"
-#: `--event` value meaning "do not filter on the event".
+#: `--event` value meaning "do not filter on the event", scheduled runs included.
 ANY_EVENT = "any"
+#: Events left out when no `--event` is given. A scheduled run is not caused by the commit it runs
+#: on, yet GitHub queues it on the default branch's head sha, so counting it would make a push's
+#: verdict wait for (or fail on) a nightly job. Excluded client-side, because gh's `--event` takes
+#: one event to KEEP and has no way to drop one.
+_EXCLUDED_BY_DEFAULT = frozenset({"schedule"})
 _EXIT_CODES = {"success": 0, "failed": 1, "timeout": 2, "no-runs": 2, "error": 2,
                "pending-approval": 2}
 
@@ -211,7 +220,8 @@ def verdict(runs: Sequence[dict[str, object]], *, event: str | None = None) -> V
     Args:
         runs: The rows for ONE sha, as `gh run list --json` returns them.
         event: The event the runs were filtered to, named in a ``no-runs`` summary so the reader
-            sees the filter that may have emptied the list.
+            sees the filter that may have emptied the list. ``None`` is the default filter
+            (every event except ``schedule``), ``any`` is no filter at all.
 
     Returns:
         ``no-runs`` when the list is empty - never ``success``, because "nothing matched" and
@@ -227,7 +237,11 @@ def verdict(runs: Sequence[dict[str, object]], *, event: str | None = None) -> V
         beside one still reads ``failed``.
     """
     if not runs:
-        if event and event != ANY_EVENT:
+        if event is None:
+            excluded = ", ".join(sorted(_EXCLUDED_BY_DEFAULT))
+            return Verdict("no-runs", f"no runs found for that sha ({excluded} runs are not "
+                                      f"counted by default: pass --event any to see every run)")
+        if event != ANY_EVENT:
             return Verdict("no-runs", f"no {event} runs found for that sha (runs of another event "
                                       f"are not counted: pass --event any to see every run)")
         return Verdict("no-runs", "no runs found for that sha")
@@ -504,7 +518,9 @@ def gh_runs(
     tool has already refused a short one. The client-side filter stays as a second check.
 
     ``event`` (anything but ``None`` or ``any``) is passed as `--event` and checked client-side on
-    the rows that carry the field.
+    the rows that carry the field. ``None`` - the default - asks for every event and drops the
+    rows whose event is in :data:`_EXCLUDED_BY_DEFAULT` (``schedule``) client-side; ``any`` keeps
+    every row.
 
     Raises:
         GhFailed: `gh` exited non-zero, did not answer within ``timeout_s``, or returned
@@ -538,7 +554,16 @@ def gh_runs(
     if not isinstance(rows, list):
         raise GhFailed(f"gh returned {type(rows).__name__}, not a list")
     return [r for r in rows if isinstance(r, dict) and r.get("headSha") == sha
-            and (not filtered or r.get("event", event) == event)]
+            and _event_counts(r, event)]
+
+
+def _event_counts(row: dict[str, object], event: str | None) -> bool:
+    """Does this row's event pass the filter? A row without the field passes every filter."""
+    if event == ANY_EVENT:
+        return True
+    if event is None:
+        return row.get("event") not in _EXCLUDED_BY_DEFAULT
+    return row.get("event", event) == event
 
 
 def resolve_repo(*, timeout_s: float = GH_CALL_TIMEOUT_S) -> str:
@@ -641,9 +666,10 @@ def _parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
              "rescue it",
     )
     parser.add_argument(
-        "--event", default="push",
-        help="count only runs of this event (default push; 'any' counts every run). A scheduled "
-             "run GitHub queues on the same head sha otherwise holds a push's verdict open",
+        "--event", default=None,
+        help="count only runs of this event, e.g. push or pull_request ('any' counts every run). "
+             "Default: every event except schedule - a nightly run GitHub queues on the same "
+             "head sha otherwise holds a push's verdict open or fails it",
     )
     parser.add_argument("--json", action="store_true", help="emit a JSON envelope instead of text")
     return parser.parse_args(argv)

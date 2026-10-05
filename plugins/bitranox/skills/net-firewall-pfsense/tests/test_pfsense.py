@@ -469,6 +469,44 @@ def test_clearing_static_arp_on_a_reservation_that_has_none_does_nothing():
     assert not any("write_config" in body for body in fake.php_bodies())
 
 
+# W-D9: a single-target removal whose MATCH succeeded but whose change removed nothing is a failed
+# action, exit 2 - never exit 1, which is a well-formed "no" (a finding, a partial outcome).
+def _fake_that_removes_nothing():
+    return FakeRun([
+        ("$removed", (0, '{"removed":[]}', "")),
+        ("$changed", (0, '{"changed":[]}', "")),
+        ('config_get_path("unbound/hosts"', (0, BARE_OVERRIDES, BANNER)),
+        ('config_get_path("dhcpd"', (0, RESERVATIONS_JSON, BANNER)),
+        ("cat /conf/config.xml", (0, CONFIG_XML, BANNER)),
+    ])
+
+
+@pytest.mark.parametrize("argv", [
+    ["dhcp", "rm", "--mac", "00:11:22:33:44:30"],
+    ["dhcp", "rm-static-arp", "--mac", "00:11:22:33:44:30"],
+    ["dns", "rm", "--name", "nas.example.com"],
+])
+def test_a_matched_removal_that_removed_nothing_is_exit_2_with_ok_false(argv, tmp_path, capsys):
+    rc = P.main(["--host", "192.0.2.1", "--json", "--apply", "--snapshot-dir", str(tmp_path / "s"),
+                 *argv], run=_fake_that_removes_nothing())
+    out = capsys.readouterr()
+    assert rc == 2
+    assert json.loads(out.out)["ok"] is False
+    assert "nothing" in out.err
+
+
+@pytest.mark.parametrize("argv", [
+    ["dhcp", "rm", "--mac", "00:11:22:33:44:30"],
+    ["dhcp", "rm-static-arp", "--mac", "00:11:22:33:44:30"],
+    ["dns", "rm", "--name", "nas.example.com"],
+])
+def test_control_a_removal_that_removed_its_entry_is_exit_0(argv, tmp_path):
+    fake = _fake_for_mutation()
+    fake.responses.append(('config_get_path("unbound/hosts"', (0, BARE_OVERRIDES, BANNER)))
+    assert P.main(["--host", "192.0.2.1", "--apply", "--snapshot-dir", str(tmp_path / "s"), *argv],
+                  run=fake) == 0
+
+
 # ---- snapshot -----------------------------------------------------------------------------------
 def test_snapshot_writes_a_timestamped_file(tmp_path):
     fake = FakeRun([("cat /conf/config.xml", (0, CONFIG_XML, BANNER))])
@@ -1039,9 +1077,28 @@ def test_table_del_apply_deletes_and_confirms():
     assert any("-T delete 192.0.2.5" in c["remote"] for c in fake.calls)
 
 
-def test_table_del_apply_exits_1_when_an_entry_survives():
+def test_table_del_of_one_address_that_survives_is_a_failed_action_exit_2(capsys):
+    """W-D9: one address asked for and still present is not a partial outcome - nothing happened."""
     fake = FakeRun([("-T show", (0, "  192.0.2.5\n", ""))])
-    assert P.main(["--host", "192.0.2.1", "table", "del", "snort2c", "192.0.2.5", "--apply"], run=fake) == 1
+    rc = P.main(["--host", "192.0.2.1", "--json", "table", "del", "snort2c", "192.0.2.5", "--apply"], run=fake)
+    out = capsys.readouterr()
+    assert rc == 2
+    assert json.loads(out.out)["ok"] is False and "192.0.2.5" in out.err
+
+
+def test_table_del_of_several_where_some_survive_is_partial_exit_1(capsys):
+    fake = FakeRun([("-T show", (0, "  192.0.2.5\n", ""))])
+    rc = P.main(["--host", "192.0.2.1", "--json", "table", "del", "snort2c", "192.0.2.5", "192.0.2.6",
+                 "--apply"], run=fake)
+    payload = json.loads(capsys.readouterr().out)
+    assert rc == 1
+    assert payload["ok"] is True and payload["data"]["still_present"] == ["192.0.2.5"]
+
+
+def test_table_del_of_several_where_all_survive_is_a_failed_action_exit_2():
+    fake = FakeRun([("-T show", (0, "  192.0.2.5\n  192.0.2.6\n", ""))])
+    assert P.main(["--host", "192.0.2.1", "table", "del", "snort2c", "192.0.2.5", "192.0.2.6",
+                   "--apply"], run=fake) == 2
 
 
 # ---- snort --------------------------------------------------------------------------------------
@@ -1169,7 +1226,20 @@ def test_snort_unblock_apply_confirms_by_rereading_the_table():
     cleared = FakeRun([("-T show", (0, "", ""))])
     assert P.main(["--host", "192.0.2.1", "snort", "unblock", "192.0.2.5", "--apply"], run=cleared) == 0
     stuck = FakeRun([("-T show", (0, "  192.0.2.5\n", ""))])
-    assert P.main(["--host", "192.0.2.1", "snort", "unblock", "192.0.2.5", "--apply"], run=stuck) == 1
+    assert P.main(["--host", "192.0.2.1", "snort", "unblock", "192.0.2.5", "--apply"], run=stuck) == 2
+
+
+def test_snort_unblock_of_several_where_some_stay_blocked_is_partial_exit_1():
+    stuck = FakeRun([("-T show", (0, "  192.0.2.5\n", ""))])
+    assert P.main(["--host", "192.0.2.1", "snort", "unblock", "192.0.2.5", "192.0.2.6", "--apply"],
+                  run=stuck) == 1
+
+
+def test_snort_unblock_of_several_where_all_stay_blocked_is_exit_2(capsys):
+    stuck = FakeRun([("-T show", (0, "  192.0.2.5\n  192.0.2.6\n", ""))])
+    rc = P.main(["--host", "192.0.2.1", "--json", "snort", "unblock", "192.0.2.5", "192.0.2.6", "--apply"],
+                run=stuck)
+    assert rc == 2 and json.loads(capsys.readouterr().out)["ok"] is False
 
 
 # ---- live doctor --------------------------------------------------------------------------------

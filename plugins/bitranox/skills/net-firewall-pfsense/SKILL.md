@@ -62,7 +62,13 @@ hostname. Both take a hostname as one label (letters, digits, inner hyphens), as
 captures nor restores, so they take none - undo those by re-adding the entry.
 
 With `--json` every verb prints `{ok, command, data, skipped}`, including on exit 2; `ok` means it
-ran without error, so it stays true on a well-formed "no" (exit 1) such as `doctor` findings.
+ran without error, so it stays true on a well-formed "no" (exit 1) such as `doctor` findings and
+is false on exit 2.
+
+A removal that removed nothing is a failed action, exit 2, not a "no": `dhcp rm`,
+`dhcp rm-static-arp` or `dns rm` whose entry matched but whose write changed nothing, and a
+`table del` or `snort unblock` that leaves every requested address present - a single address
+included. Only some of several addresses left present is a partial outcome: exit 1, naming them.
 
 A snapshot is a whole `config.xml`, with password hashes, private keys and certificates in it, so
 it is written to a private per-user state directory (`--snapshot-dir` to choose another). Writing
