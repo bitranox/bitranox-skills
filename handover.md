@@ -51,9 +51,11 @@ USER item after that; [18] deferred by the user; [150]/[245] need the main check
 
 ## The exact next action
 
-Work OPEN-WORK [12] step (5): count the recall_rerank shadow rows on plugin >= 7.31.0 in
-`~/.claude/self-improve-audit/classifier-shadow-*.jsonl` (site `recall_rerank`), then put to the
-user whether that is "much more data" yet. If it is not, move to [17].
+Work OPEN-WORK [10] (added at the end of this session, the user's "fix that"): ask the user which
+fix they chose for the recall hook injecting other projects' handover notes on "read handover and
+continue" (recommended: session-management words as filler), then TDD it with a firing-rate replay.
+After that, [12] step (5): count the recall_rerank shadow rows on plugin >= 7.31.0, and put to the
+user whether that is "much more data" yet; if not, move to [17].
 
 ## Files that matter
 
