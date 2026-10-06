@@ -117,6 +117,13 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer  # noqa: E40
 import pytest  # noqa: E402
 
 
+class _WideBacklogServer(ThreadingHTTPServer):
+    # socketserver listens with a backlog of 5. A client opening 12-30 connections at once (recall
+    # decide asks every note together) then has the surplus aborted on Windows (WinError 10053)
+    # before the handler ever sees it, so the fake would under-count requests the hook did send.
+    request_queue_size = 64
+
+
 class FakeJev:
     """A local stand-in for api.typesafe.ai: records each request, answers per a script."""
 
@@ -168,7 +175,7 @@ class FakeJev:
                 else:
                     self.wfile.write(data)
 
-        self.server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+        self.server = _WideBacklogServer(("127.0.0.1", 0), Handler)
         self.url = "http://127.0.0.1:%d" % self.server.server_address[1]
         _threading.Thread(target=self.server.serve_forever, daemon=True).start()
 

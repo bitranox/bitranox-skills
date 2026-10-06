@@ -29,6 +29,17 @@ than the change, so entries reconstructed from them would read like coverage wit
 a hole nobody has drawn a line under is one that gets rediscovered and half-filled - which is how
 two "versions with no entry" notes came to sit in this file disagreeing with it.
 
+## [8.3.1]
+
+### Fixed
+
+- Tests: the fake TypeSafe server listened with socketserver's default backlog of 5, so on
+  Windows the surplus of 12 simultaneous connections was aborted (WinError 10053) before the
+  handler saw it and the recall decide test under-counted the requests sent; it now listens with
+  64. That test asserts more than 8 requests in flight (what a default pool can never reach)
+  rather than exactly 12, which raced thread start-up on a slow runner, and reads a pick's file
+  name with `Path.name` instead of splitting on `/`.
+
 ## [8.3.0]
 
 ### Added

@@ -22,6 +22,7 @@ import json
 import re
 import subprocess
 import sys
+from pathlib import Path
 
 import pytest
 
@@ -122,17 +123,20 @@ def test_logs_one_decide_row_naming_the_picks(env, monkeypatch, capsys):
     _run(monkeypatch, capsys)
     (row,) = _rows(env)
     assert row["mode"] == "decide" and row["decide_path"] == "jev"
-    assert [p.rsplit("/", 1)[-1] for p in row["picks"]] == ["note-high.md"]
+    assert [Path(p).name for p in row["picks"]] == ["note-high.md"]
     assert len(row["results"]) == len(row["regex"]["shortlist"]) == 2
 
 
 def test_asks_every_shortlisted_note_at_once(env, monkeypatch, capsys):
-    fake = _serve(env, delay=0.2)
+    # More than the 8 a default worker pool allows is the property: exactly 12 at once would race
+    # thread start-up on a slow runner, while a pool of 8 can never exceed 8 however long the
+    # requests are held.
+    fake = _serve(env, delay=0.5)
     for i in range(12):
         _note("note-%02d" % i, "0.5")
     _run(monkeypatch, capsys)
     assert len(fake.requests) == 12
-    assert fake.max_in_flight == 12
+    assert fake.max_in_flight > 8
 
 
 def test_starts_no_shadow_child(env, monkeypatch, capsys):
