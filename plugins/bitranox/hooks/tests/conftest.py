@@ -120,9 +120,13 @@ import pytest  # noqa: E402
 class FakeJev:
     """A local stand-in for api.typesafe.ai: records each request, answers per a script."""
 
-    def __init__(self, status=200, body=None, delay=0.0, trickle=False, echo_state=False):
+    def __init__(self, status=200, body=None, delay=0.0, trickle=False, echo_state=False,
+                 answer_fn=None):
         self.status, self.body, self.delay, self.trickle = status, body, delay, trickle
         self.echo_state = echo_state
+        # request JSON -> response payload, for a test whose answer depends on what was asked
+        # (recall scores each note on its own, so one fixed body cannot tell notes apart).
+        self.answer_fn = answer_fn
         self.requests = []
         # How many requests were being served AT ONCE. A client that serialises can never push
         # this above 1, so it is the concurrency property itself rather than a wall-clock proxy.
@@ -148,7 +152,7 @@ class FakeJev:
                 finally:
                     with fake._counter_lock:
                         fake.in_flight -= 1
-                payload = fake.body
+                payload = fake.answer_fn(request) if fake.answer_fn else fake.body
                 if payload is None:
                     payload = fake.default_answers(request, echo_state=fake.echo_state)
                 data = payload if isinstance(payload, bytes) else _json.dumps(payload).encode()

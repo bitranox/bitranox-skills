@@ -53,7 +53,8 @@ def test_reset_restores_defaults(capsys):
     assert cfg["dream_mode"] == "propose" and cfg["privacy"] == "open"
 
 
-@pytest.mark.parametrize("key", ["classifier_skill_router", "classifier_stop_signal"])
+@pytest.mark.parametrize("key", ["classifier_skill_router", "classifier_stop_signal",
+                                 "classifier_recall_rerank"])
 def test_a_site_whose_hook_implements_decide_accepts_it(capsys, key):
     assert ST.main(["set", key, "decide"]) == 0
     assert sig.load_config()[key] == "decide"
@@ -63,8 +64,7 @@ def test_a_site_whose_hook_implements_decide_accepts_it(capsys, key):
     ("classifier_skill_router", "decides"),
     ("classifier_skill_router", "on"),
     ("classifier_stop_signal", "decides"),
-    # decide exists only where a hook implements it; recall still logs in shadow only.
-    ("classifier_recall_rerank", "decide"),
+    ("classifier_recall_rerank", "decides"),
     # classifier_skills gates the Jev-shadow skill-steps pipeline; "decide" is a later task
     # (per-site decide mode), not yet implemented here.
     ("classifier_skills", "decide"),

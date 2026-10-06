@@ -29,6 +29,25 @@ than the change, so entries reconstructed from them would read like coverage wit
 a hole nobody has drawn a line under is one that gets rediscovered and half-filled - which is how
 two "versions with no entry" notes came to sit in this file disagreeing with it.
 
+## [8.3.0]
+
+### Added
+
+- `classifier_recall_rerank = decide`: memory recall injects only the shortlisted notes Jev
+  scores at 0.8 or more, best first, up to 4, whether or not the keyword ranking picked them.
+  When Jev scores every note lower or does not answer, nothing is injected - the keyword ranking
+  is not a fallback, because a blind panel of ten judges over 215 live (prompt, note) pairs
+  found its top 4 relevant 6% of the time against 44% for Jev at 0.8. All shortlisted notes are
+  asked at once under the 1.5 s hook deadline (`classifier.ask_in_hook` takes `workers`), and
+  each decide prompt logs one row naming the path (`jev`, `none` or `fallback-<reason>`) and its
+  `picks`. `meta-memory-settings` accepts the value.
+
+### Fixed
+
+- `meta-memory-settings`: the recall row now lists the assistant reply the request carries
+  (300 characters at most), and two sentences claiming only the skill router has `decide` are
+  gone.
+
 ## [8.2.0]
 
 ### Added

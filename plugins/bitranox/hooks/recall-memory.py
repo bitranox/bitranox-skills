@@ -242,25 +242,69 @@ def _note_view(path, keywords, maxlen):
     return "%s: %s" % (_label(path), text.strip()[:maxlen].strip())
 
 
+def _rerank_request(prompt, by_score, ranked, hits, keywords, transcript):
+    """(shortlist, regex, requests) for the classifier: one pair request per (prompt, note), each
+    with the reply the prompt answers, which settles a word that means different things in
+    different conversations. Shadow and decide both build it here, so they ask the same thing."""
+    shortlist = by_score[:SHADOW_SHORTLIST]
+    regex = {"shortlist": shortlist, "selected": ranked[:MAX_HITS], "note_view": NOTE_VIEW,
+             "context_view": classifier.CONTEXT_VIEW}
+    questions = classifier.recall_questions()
+    previous = transcript_turns.last_reply(transcript)
+    requests = [{"fields": classifier.with_previous(
+                    {"user_prompt": prompt,
+                     "memory_note": _note_view(p, hits.get(p, keywords), SHADOW_NOTE)},
+                    previous),
+                 "questions": questions} for p in shortlist]
+    return shortlist, regex, requests
+
+
 def _shadow_recall(prompt, sid, by_score, ranked, hits, keywords, transcript=""):
-    """Hand the keyword shortlist to the classifier's detached shadow child: one pair request
-    per (prompt, note), each with the reply the prompt answers, which settles a word that means
-    different things in different conversations. Never changes what is injected and never
-    raises; a failure is logged as an error row."""
+    """Hand the keyword shortlist to the classifier's detached shadow child. Never changes what
+    is injected and never raises; a failure is logged as an error row."""
     with classifier.shadow_guard("recall_rerank", sid):
         if not classifier.shadow_enabled(sig.load_config(), "recall_rerank"):
             return
-        shortlist = by_score[:SHADOW_SHORTLIST]
-        regex = {"shortlist": shortlist, "selected": ranked[:MAX_HITS], "note_view": NOTE_VIEW,
-                 "context_view": classifier.CONTEXT_VIEW}
-        questions = classifier.recall_questions()
-        previous = transcript_turns.last_reply(transcript)
-        requests = [{"fields": classifier.with_previous(
-                        {"user_prompt": prompt,
-                         "memory_note": _note_view(p, hits.get(p, keywords), SHADOW_NOTE)},
-                        previous),
-                     "questions": questions} for p in shortlist]
+        _shortlist, regex, requests = _rerank_request(prompt, by_score, ranked, hits, keywords,
+                                                      transcript)
         classifier.spawn_shadow("recall_rerank", sid, regex, requests, transcript=transcript)
+
+
+def _relevance(result):
+    """The `relevant` score of one logged result, or None when it carries none."""
+    value = (((result or {}).get("answers") or {}).get("relevant") or {}).get("value")
+    return value if isinstance(value, (int, float)) else None
+
+
+def _decide_recall(prompt, sid, by_score, ranked, hits, keywords, transcript, cfg):
+    """Decide mode: the notes to inject, best first - the shortlisted ones Jev scores at or above
+    the site threshold, whatever the keyword ranking thought of them.
+
+    A blind panel on 2026-10-06 found the keyword top 4 relevant 6% of the time and Jev at 0.8
+    44%, so Jev not answering injects NOTHING rather than falling back to the keywords. Every
+    note is asked at once: in waves of 8, 30 requests do not fit the hook's deadline. One row per
+    prompt is logged, naming the path: jev, none or fallback-<reason>."""
+    shortlist, regex, requests = _rerank_request(prompt, by_score, ranked, hits, keywords,
+                                                 transcript)
+    picks = []
+    try:
+        row = classifier.ask_in_hook("recall_rerank", sid, regex, requests, cfg,
+                                     transcript=transcript, workers=len(requests))
+    except Exception as exc:  # noqa: BLE001 - a failure to ask is a failure to answer
+        row = classifier.error_row("recall_rerank", sid, exc)
+        path = "fallback-error: %s" % type(exc).__name__
+    else:
+        scores = [_relevance(r) for r in row.get("results") or []]
+        if all(s is None for s in scores):
+            path = "fallback-%s" % (row.get("reason") or "no answer")
+        else:
+            threshold = classifier.SITE_THRESHOLDS["recall_rerank"]
+            kept = [(s, p) for s, p in zip(scores, shortlist) if s is not None and s >= threshold]
+            picks = [p for _s, p in sorted(kept, key=lambda sp: (-sp[0], sp[1]))]
+            path = "jev" if picks else "none"
+    row.update(mode="decide", decide_path=path, picks=picks)
+    classifier.append_row(row)
+    return picks
 
 
 def main():
@@ -350,11 +394,16 @@ def main():
         u = _useful(p)
         return len(u) >= 2 or any(df[k] <= SPECIFIC_MAX for k in u)
     ranked = sorted((p for p in hits if _specific(p)), key=lambda p: (-_score(p), p))
-    # Opt-in shadow comparison (off by default). The shortlist is taken from ALL hits, not only
-    # the ones that passed the specificity filter, so the reranker can surface a note the
-    # keyword rules dropped.
-    _shadow_recall(prompt, sid, sorted(hits, key=lambda p: (-_score(p), p)), ranked, hits,
-                   keywords, ev.get("transcript_path") or "")
+    # The classifier's shortlist is taken from ALL hits, not only the ones that passed the
+    # specificity filter, so it can surface a note the keyword rules dropped. In decide mode its
+    # picks replace the keyword ranking; in shadow mode it is only logged (both off by default).
+    by_score = sorted(hits, key=lambda p: (-_score(p), p))
+    transcript = ev.get("transcript_path") or ""
+    cfg = sig.load_config()
+    if classifier.site_mode(cfg, "recall_rerank") == "decide":
+        ranked = _decide_recall(prompt, sid, by_score, ranked, hits, keywords, transcript, cfg)
+    else:
+        _shadow_recall(prompt, sid, by_score, ranked, hits, keywords, transcript)
     if not ranked:
         return 0
 

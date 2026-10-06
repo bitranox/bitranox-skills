@@ -1,4 +1,4 @@
-# Handover - 2026-10-06 12:40, stop_signal live adjudication done, 8.0.1 shipped
+# STALE - read 2026-10-06, work continued
 
 Working tree: the `jev-shadow` worktree (`.claude/worktrees/jev-shadow`, branch
 `worktree-jev-shadow`), level with origin/master after the handover commit. Its gitignored

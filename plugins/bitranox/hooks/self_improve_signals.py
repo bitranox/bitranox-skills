@@ -1163,7 +1163,7 @@ DEFAULT_CONFIG = {
     "classifier_model": "jev-latest",  # the TypeSafe model id sent with every request
     "classifier_stop_signal": "off",   # off | shadow | decide - self-improve Stop gate signal
     "classifier_skill_router": "off",  # off | shadow | decide - UserPromptSubmit skill router
-    "classifier_recall_rerank": "off",  # off | shadow - UserPromptSubmit memory recall ranking
+    "classifier_recall_rerank": "off",  # off | shadow | decide - UserPromptSubmit memory recall ranking
     "classifier_skills": "off",        # off | shadow - skill-step Jev shadow (needs classifier_backend=jev too)
 }
 

@@ -92,8 +92,7 @@ FIELD_CAP = 4000
 ERROR_CAP = 200
 CAP_MARK = "\n[... truncated ...]\n"
 # The first-wave sites. Each has its own config knob `classifier_<site>`: off | shadow, plus
-# decide where the site's hook implements it (skill_router, stop_signal; meta-memory-settings
-# validates which).
+# decide where the site's hook implements it (all three; meta-memory-settings validates which).
 SITES = ("stop_signal", "skill_router", "recall_rerank")
 SITE_MODES = ("off", "shadow", "decide")
 # The threshold each site's gate or score is read at - by `classifier_eval.py report` when judging
@@ -841,7 +840,7 @@ def error_row(site, session_id, exc):
     return _error_record({"site": site, "session_id": session_id}, exc)
 
 
-def run_shadow(payload, cfg, env=None, home=None, deadline=SHADOW_DEADLINE):
+def run_shadow(payload, cfg, env=None, home=None, deadline=SHADOW_DEADLINE, workers=8):
     """Ask Jev for one site's comparison and return the log record (the caller appends it)."""
     site = str(payload.get("site") or "")
     requests = payload.get("requests") or []
@@ -854,7 +853,7 @@ def run_shadow(payload, cfg, env=None, home=None, deadline=SHADOW_DEADLINE):
         redactions += n
     items = [(s, [Question.from_json(q) for q in r.get("questions") or []])
              for s, r in zip(states, requests)]
-    results = clf.ask_many(items)
+    results = clf.ask_many(items, workers=workers)
     first_text = " ".join(str(v) for v in (requests[0].get("fields") or {}).values()) if requests else ""
     return _stamp({
         "ts": datetime.now(timezone.utc).isoformat(timespec="seconds"),
@@ -871,13 +870,15 @@ def run_shadow(payload, cfg, env=None, home=None, deadline=SHADOW_DEADLINE):
     }, payload)
 
 
-def ask_in_hook(site, session_id, regex, requests, cfg, transcript=""):
+def ask_in_hook(site, session_id, regex, requests, cfg, transcript="", workers=8):
     """Decide mode: ask Jev from inside the hook, under DEFAULT_DEADLINE, and return the row a
     shadow child would have logged for the same request - same redaction, same fields. The caller
     reads the answer from its `results`, adds how it used it, and appends it with `append_row`.
-    An unanswered request comes back with `results` of [None] and the cause in `reason`."""
+    An unanswered request comes back with `results` of [None] and the cause in `reason`.
+    `workers` bounds the requests in flight at once; a site asking one request per candidate
+    passes their count, since waves of 8 do not fit 30 requests into the deadline."""
     return run_shadow(_payload(site, session_id, regex, requests, transcript), cfg,
-                      deadline=DEFAULT_DEADLINE)
+                      deadline=DEFAULT_DEADLINE, workers=workers)
 
 
 def decided_row(site, session_id, regex, transcript=""):
