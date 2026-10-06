@@ -175,6 +175,12 @@ that branches on the old codes must move:
 - The coding-python-performance-review and docs-convert-markitdown tests keep the interpreter's
   user site-packages when a fixture sets a private HOME.
 - `procsig --kill` says "already exited" for a target gone before the signal.
+- `newest` no longer reports a name the filesystem refuses (an unexpanded glob with `*` or `?`
+  on Windows, an over-long name on Linux) as "exists but could not be stat'd" with exit 2; it is
+  a plain no-match, exit 1.
+- The shared cd reader treats a drive-less root such as `/r` as a fixed destination on Windows
+  under Python 3.13+ (whose `os.path.isabs` changed), so the cd-tracking guards judge the same
+  repository whether or not the starting directory is known.
 
 ## [7.42.0]
 
