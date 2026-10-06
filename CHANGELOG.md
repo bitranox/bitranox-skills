@@ -29,6 +29,20 @@ than the change, so entries reconstructed from them would read like coverage wit
 a hole nobody has drawn a line under is one that gets rediscovered and half-filled - which is how
 two "versions with no entry" notes came to sit in this file disagreeing with it.
 
+## [8.0.3]
+
+### Changed
+
+- `coding-python-send-mail` matches its twin in btx_lib_mail 4.0.0: `send()` returns `True` or
+  raises (no `False`); warn-and-skip for a missing attachment or an invalid recipient; the
+  fallback rules of the `send()` overrides (`credentials=()` against `credentials=""`); a
+  generator of attachment paths; a NUL in the credentials; STARTTLS off for a relay without TLS
+  (`--no-starttls`); the environment variable behind each CLI option; what `skipped` and
+  `data.recipients` report under `--json`; an unreadable attachment reported as
+  `AttachmentNotFoundError`; and an attachment name with a bidirectional formatting character
+  refused as `FILENAME`. The description adds the leaked-password `ValidationError` and the relay
+  that hangs mid-session or refuses the EHLO greeting as triggers.
+
 ## [8.0.2]
 
 ### Fixed
