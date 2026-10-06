@@ -606,26 +606,36 @@ def _timed(text, scan, clock):
     return clock() - start
 
 
-# The small arm must run long enough that scheduler noise is a small share of it. At a fixed
-# 50k chars the fastest shape took ~10 ms on a macOS runner, where a few ms of jitter alone moved
-# a linear scan's ratio to 8.03 and failed the bound. Doubling the size until the small arm takes
-# this long keeps the ratio a measurement of growth rather than of noise.
-_SMALL_ARM_FLOOR_S = 0.05
+# The large arm is this many times the small one. A linear scan then costs ~16x and a quadratic
+# one ~256x, and the bound sits at their geometric middle (exponent 1.5, i.e. 64x). The factor is
+# what buys the margin: a string outgrowing a cache steps its per-char cost up by a bounded
+# factor c, which lands in the ratio ONCE whatever the size factor, so a linear scan reads 16c.
+# At a factor of 4 the bound was 8 and a linear scan read 4c, failing from c = 2 - and on a host
+# at load ~25 the cache step measured 1.8x (flattened_pem_run, 128 ns/char at 400k chars against
+# 231 at 800k), sustained contention that neither the CPU clock nor the fastest pass can filter.
+# At 16 the bound tolerates c up to 4. An interleaved A/B at load ~25-28 (12 runs over the three
+# slowest shapes) read factor 4 at up to 86% of its bound and factor 16 at up to 45% of its own.
+_GROWTH_FACTOR = 16
+_MAX_GROWTH_EXPONENT = 1.5
+# The small arm must run long enough that scheduler noise is a small share of it; the size
+# doubles until it takes this long. With the margin the growth factor buys, a few ms of jitter
+# on a 20 ms arm moves a linear ratio far less than the distance to the bound.
+_SMALL_ARM_FLOOR_S = 0.02
 _START_LEN = 50_000
+_MIN_SMALL_LEN = 1_000
 _MAX_SMALL_LEN = 1_600_000
-# 3 repeats still let flattened_pem_run read 8.29 against the < 8 bound under real CI load
-# (2026-10-02, a run that otherwise touched nothing under hooks/). 25 repeats under a sustained
-# 16-way CPU burner on this host never exceeded 6.43 for that shape (median ~5.9), so the single
-# 8.29 reading was a one-off stall rather than the steady-state ratio - exactly what the minimum
-# is supposed to filter, just not often enough at 3 draws. Each extra repeat is an independent
-# chance for a stall to miss that arm's minimum, so 5 repeats cuts the odds of a stall surviving
-# into BOTH arms' minima roughly in half again relative to 3, for ~67% more wall time on this test.
-_REPEATS = 5
-# A timing can be off by one tick either way. Ten ticks per small arm keeps that under ~13% of a
-# linear ratio. The floor above is already hundreds of ticks on Linux and macOS, but Windows'
-# thread_time advances in 15.625 ms steps (GetThreadTimes; get_clock_info claims 1e-7 s), which
-# made a 50 ms arm 3 ticks long and read a true 6.0x as 7.67x.
-_TICKS_PER_ARM = 10
+# On ANY runner the large arm must never crawl, quadratic or not.
+_BACKSTOP_S = 10.0
+# Each arm keeps its fastest pass, so a transient stall must hit every pass of the SAME arm to
+# survive into the ratio. Three passes did that for the A/B above with every reading under half
+# the bound.
+_REPEATS = 3
+# A timing can be off by one tick either way, so a small arm N ticks long can read up to
+# N/(N-1) of its true ratio. Linux and macOS thread_time is fine-grained and the floor above is
+# thousands of ticks there, but Windows' thread_time advances in 15.625 ms steps
+# (GetThreadTimes; get_clock_info claims 1e-7 s). Five ticks caps that at 1.25x, which keeps
+# the worst linear reading of the A/B (29x) under the bound (36x against 64x).
+_TICKS_PER_ARM = 5
 _TICK_PROBE_BUDGET_S = 0.2
 
 
@@ -645,44 +655,59 @@ def _clock_tick(clock, budget_s=_TICK_PROBE_BUDGET_S):
 
 
 def _growth_ratio(prefix, unit, suffix, scan=_scan, clock=time.thread_time):
-    """Time `scan` on the shape at a calibrated size n and at 4n; return (t_n, t_4n).
+    """Time `scan` on the shape at a calibrated size n and at _GROWTH_FACTOR * n; return
+    (t_n, t_large).
 
     The clock is this thread's CPU time, not the wall: on a loaded host the wall also counts
     every interval the scan sat preempted, and the longer arm absorbs more of that, so a linear
     scan read 9-12x at load ~26 on 16 cores. The two arms then ALTERNATE, each keeping its fastest
     pass: measured one after the other, a load that changes during the test lands on one arm only.
     The minimum filters a transient stall without hiding real quadratic growth - a slow pass
-    recurs on every repeat, a stall does not."""
+    recurs on every repeat, a stall does not.
+
+    A large pass over the backstop returns at once: no stall turns linear work into that much
+    CPU time, and repeating it would only make a regression slower to report."""
     floor = max(_SMALL_ARM_FLOOR_S, _TICKS_PER_ARM * _clock_tick(clock))
-    length = _START_LEN
-    while (_timed(_sized_case(prefix, unit, suffix, length), scan, clock) < floor
-           and length < _MAX_SMALL_LEN):
-        length *= 2
+    length = _calibrated_length(prefix, unit, suffix, scan, clock, floor)
     small = _sized_case(prefix, unit, suffix, length)
-    large = _sized_case(prefix, unit, suffix, 4 * length)
-    t_n = t_4n = None
+    large = _sized_case(prefix, unit, suffix, _GROWTH_FACTOR * length)
+    t_n = t_large = None
     for _ in range(_REPEATS):
         s, b = _timed(small, scan, clock), _timed(large, scan, clock)
         t_n = s if t_n is None else min(t_n, s)
-        t_4n = b if t_4n is None else min(t_4n, b)
-    return t_n, t_4n
+        t_large = b if t_large is None else min(t_large, b)
+        if b > _BACKSTOP_S:
+            break
+    return t_n, t_large
 
 
-# A 4x input costs a linear scan ~4x and a quadratic one ~16x. Linear can read up to ~6x: the
-# per-char cost steps up ~1.4-1.5x once the text outgrows a cache (for escaped_json between 50k
-# and 100k chars, flattened_pem between 400k and 800k), so arms on either side of the step carry
-# it. 8 still sits clear of both, and a real quadratic regex read 16.1x through this instrument.
-_MAX_LINEAR_RATIO = 8
+def _calibrated_length(prefix, unit, suffix, scan, clock, floor):
+    """The size at which one scan of the shape takes from `floor` to about 4x `floor`.
+
+    It shrinks as well as grows. A shape already slow at the start size - a quadratic regression
+    most of all - would otherwise keep that size, and the large arm would cost _GROWTH_FACTOR
+    squared times a slow pass, so the suite would crawl for minutes instead of failing."""
+    length = _START_LEN
+    elapsed = _timed(_sized_case(prefix, unit, suffix, length), scan, clock)
+    while elapsed > 4 * floor and length > _MIN_SMALL_LEN:
+        length //= 2
+        elapsed = _timed(_sized_case(prefix, unit, suffix, length), scan, clock)
+    while elapsed < floor and length < _MAX_SMALL_LEN:
+        length *= 2
+        elapsed = _timed(_sized_case(prefix, unit, suffix, length), scan, clock)
+    return length
+
+
+_MAX_LINEAR_RATIO = _GROWTH_FACTOR ** _MAX_GROWTH_EXPONENT
 
 
 @pytest.mark.parametrize("shape", sorted(_ADVERSARIAL_CASE_SHAPES))
 def test_adversarial_inputs_stay_linear(shape):
     prefix, unit, suffix = _ADVERSARIAL_CASE_SHAPES[shape]
-    t_n, t_4n = _growth_ratio(prefix, unit, suffix)
-    # A generous absolute backstop: on ANY runner this must never crawl, quadratic or not.
-    assert t_4n < 10.0, (shape, t_4n)
-    ratio = t_4n / t_n
-    assert ratio < _MAX_LINEAR_RATIO, (shape, t_n, t_4n, ratio)
+    t_n, t_large = _growth_ratio(prefix, unit, suffix)
+    assert t_large < _BACKSTOP_S, (shape, t_large)
+    ratio = t_large / t_n
+    assert ratio < _MAX_LINEAR_RATIO, (shape, t_n, t_large, ratio)
 
 
 _PLANTED_BASE_S = 0.1
@@ -692,8 +717,8 @@ class _VirtualClock:
     """A clock only the planted scans move, so the instrument is tested on exact costs.
 
     The planted scans used to SLEEP, and a macOS runner overshoots every sleep by a roughly
-    constant ~0.12 s: added to both arms it turned a true 16x into (1.6+0.12)/(0.1+0.12) = 7.8x,
-    under the bound, and failed CI on a tree that had just passed. This test is about the
+    constant ~0.12 s: added to both arms it compressed a planted quadratic's ratio to under the
+    bound, and failed CI on a tree that had just passed. This test is about the
     calibration and the ratio bound, not the OS scheduler, so it needs no real time at all."""
 
     def __init__(self):
@@ -717,10 +742,11 @@ def test_growth_ratio_flags_a_planted_quadratic_and_passes_a_planted_linear():
     def linear(text):
         clock.spend(_PLANTED_BASE_S * (len(text) / _START_LEN))
 
-    q_n, q_4n = _growth_ratio("", "a", "", scan=quadratic, clock=clock)
-    l_n, l_4n = _growth_ratio("", "a", "", scan=linear, clock=clock)
-    assert q_4n / q_n == pytest.approx(16.0) and q_4n / q_n > _MAX_LINEAR_RATIO, (q_n, q_4n)
-    assert l_4n / l_n == pytest.approx(4.0) and l_4n / l_n < _MAX_LINEAR_RATIO, (l_n, l_4n)
+    q_n, q_large = _growth_ratio("", "a", "", scan=quadratic, clock=clock)
+    l_n, l_large = _growth_ratio("", "a", "", scan=linear, clock=clock)
+    q_ratio, l_ratio = q_large / q_n, l_large / l_n
+    assert q_ratio == pytest.approx(_GROWTH_FACTOR ** 2) and q_ratio > _MAX_LINEAR_RATIO, q_ratio
+    assert l_ratio == pytest.approx(_GROWTH_FACTOR) and l_ratio < _MAX_LINEAR_RATIO, l_ratio
 
 
 def test_the_default_clock_does_not_count_time_the_thread_is_not_running():
@@ -736,17 +762,17 @@ def test_the_default_clock_does_not_count_time_the_thread_is_not_running():
 def test_a_linear_scan_measured_while_load_rises_still_reads_linear():
     """Measuring every small pass before every large one confounds the arm with the moment it
     ran: a load that climbs during the test inflates only the later, larger arm. Here each scan
-    costs 1.3x the one before it; interleaved arms keep a true 4x under the bound, sequential
-    ones read it as 8.8x."""
+    costs 2x the one before it; interleaved arms read a true 16x as 32x, under the bound, while
+    sequential ones read it as 128x."""
     clock = _VirtualClock()
     load = [1.0]
 
     def linear_under_rising_load(text):
         clock.spend(_PLANTED_BASE_S * (len(text) / _START_LEN) * load[0])
-        load[0] *= 1.3
+        load[0] *= 2.0
 
-    t_n, t_4n = _growth_ratio("", "a", "", scan=linear_under_rising_load, clock=clock)
-    assert t_4n / t_n < _MAX_LINEAR_RATIO, (t_n, t_4n)
+    t_n, t_large = _growth_ratio("", "a", "", scan=linear_under_rising_load, clock=clock)
+    assert t_large / t_n < _MAX_LINEAR_RATIO, (t_n, t_large)
 
 
 _WINDOWS_TICK_S = 0.015625
@@ -781,10 +807,10 @@ def test_a_clock_that_never_advances_measures_no_tick_and_returns():
 
 @pytest.mark.parametrize("step", [1.0, 1.5])
 def test_a_coarse_clock_does_not_inflate_a_linear_ratio(step):
-    """Through a 15.625 ms tick a ~50 ms small arm loses up to a tick to rounding, which inflated
-    a linear ratio by 28% (6.0 read as 7.67, one tick from the bound). `step` is the per-char cost
-    jump measured when a string outgrows a cache (1.4-1.5x): real, linear, and already costing
-    part of the margin. The small arm must be long in TICKS, not only in seconds."""
+    """Through a 15.625 ms tick a 50 ms small arm, 3 ticks long, lost up to a tick to rounding,
+    which inflated a linear ratio by 28%. `step` is the per-char cost jump measured when a string
+    outgrows a cache (1.4-1.5x): real, linear, and already costing part of the margin. The small
+    arm must be long in TICKS, not only in seconds, so the inflation stays within N/(N-1)."""
     worst = 0.0
     for base_ms in range(5, 60, 5):
         for offset_ms in range(0, 16, 3):
@@ -796,11 +822,42 @@ def test_a_coarse_clock_does_not_inflate_a_linear_ratio(step):
                 cost_by_len[len(text)] = cost
                 clock.spend(cost)
 
-            t_n, t_4n = _growth_ratio("", "a", "", scan=linear_with_cache_step, clock=clock)
+            t_n, t_large = _growth_ratio("", "a", "", scan=linear_with_cache_step, clock=clock)
             small, large = sorted(cost_by_len)[-2:]
             true_ratio = cost_by_len[large] / cost_by_len[small]
-            worst = max(worst, (t_4n / t_n) / true_ratio)
-    assert worst < 1.15, worst
+            worst = max(worst, (t_large / t_n) / true_ratio)
+    assert worst <= _TICKS_PER_ARM / (_TICKS_PER_ARM - 1), worst
+
+
+def test_a_linear_scan_across_a_loaded_cache_step_still_reads_linear():
+    """A string outgrowing a cache steps its per-char cost up, and on a loaded host the other
+    processes contend for that cache, so the step grows: flattened_pem_run measured 128 ns/char
+    at 400k chars and 231 ns/char at 800k at load ~25 on 16 cores, a 1.8x step where a quiet
+    host shows 1.4-1.5x. The contention is sustained, so neither the CPU clock nor the fastest
+    pass filters it. A step of 2x landing between the arms is linear work and must read as such."""
+    clock = _VirtualClock()
+
+    def linear_with_loaded_cache_step(text):
+        step = 2.0 if len(text) > 2 * _START_LEN else 1.0
+        clock.spend(_PLANTED_BASE_S * (len(text) / _START_LEN) * step)
+
+    t_n, t_large = _growth_ratio("", "a", "", scan=linear_with_loaded_cache_step, clock=clock)
+    assert t_large / t_n == pytest.approx(2.0 * _GROWTH_FACTOR), (t_n, t_large)
+    assert t_large / t_n < _MAX_LINEAR_RATIO, (t_n, t_large)
+
+
+def test_a_quadratic_already_slow_at_the_start_size_fails_in_bounded_time():
+    """A regression that makes the start size cost seconds must still be REPORTED, not timed
+    for an hour: the calibration shrinks the small arm, and the first large pass over the
+    backstop ends the measurement."""
+    clock = _VirtualClock()
+
+    def slow_quadratic(text):
+        clock.spend(5.0 * (len(text) / _START_LEN) ** 2)
+
+    t_n, t_large = _growth_ratio("", "a", "", scan=slow_quadratic, clock=clock)
+    assert t_large / t_n > _MAX_LINEAR_RATIO, (t_n, t_large)
+    assert clock.now < 4 * _BACKSTOP_S, clock.now
 
 
 def test_the_calibration_grows_the_small_arm_until_it_clears_the_floor():
@@ -813,7 +870,8 @@ def test_the_calibration_grows_the_small_arm_until_it_clears_the_floor():
         sizes.append(len(text))
         clock.spend(0.004 * (len(text) / _START_LEN))
 
-    t_n, t_4n = _growth_ratio("", "a", "", scan=cheap, clock=clock)
+    t_n, t_large = _growth_ratio("", "a", "", scan=cheap, clock=clock)
+    small_len = sorted(set(sizes))[-2]
     assert t_n >= _SMALL_ARM_FLOOR_S, t_n
-    assert max(sizes) > 4 * _START_LEN, sizes
-    assert t_4n / t_n == pytest.approx(4.0)
+    assert small_len > _START_LEN, sizes
+    assert t_large / t_n == pytest.approx(_GROWTH_FACTOR)

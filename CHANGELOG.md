@@ -29,6 +29,21 @@ than the change, so entries reconstructed from them would read like coverage wit
 a hole nobody has drawn a line under is one that gets rediscovered and half-filled - which is how
 two "versions with no entry" notes came to sit in this file disagreeing with it.
 
+## [8.0.2]
+
+### Fixed
+
+- `hooks/tests/test_secret_patterns.py`: the growth-ratio perf test no longer fails a linear scan
+  on a loaded host. It compared a 4x input against a bound of 8, and a string outgrowing a cache
+  steps its per-char cost up by a factor that lands in the ratio once: on a host at load ~25 that
+  step measured 1.8x (`flattened_pem_run`, 128 ns/char at 400k chars against 231 at 800k), so a
+  linear scan read up to 8.6x and blocked commits and pushes that touched nothing under `hooks/`.
+  The large arm is now 16x the small one with the bound at growth exponent 1.5 (64x), which
+  tolerates a cache step up to 4x; at load ~30 every shape stayed at or under 44% of the bound
+  while a real quadratic regex read 240-307x. The small arm is calibrated down as well as up and
+  the first large pass over the 10 s backstop ends the measurement, so a quadratic regression
+  fails in seconds instead of timing a 256x pass three times.
+
 ## [8.0.1]
 
 ### Changed
