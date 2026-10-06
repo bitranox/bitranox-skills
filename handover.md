@@ -1,79 +1,72 @@
-# Handover - 2026-10-06 08:25, wave D (rank 13, exit-code unification) shipped as 8.0.0
+# Handover - 2026-10-06 12:40, stop_signal live adjudication done, 8.0.1 shipped
 
 Working tree: the `jev-shadow` worktree (`.claude/worktrees/jev-shadow`, branch
-`worktree-jev-shadow`) was the integration branch. Its gitignored `.plan/openwork-batch-2026-10-04/`
-holds every batch record (DECISIONS-TAKEN.md, waveD/REPORTS.md, waveD/D-1/D-2/D-8-reply.json,
-waveD/PARTITION.json, waveD/EXITCODES.md). It exists only in that worktree: copy the dir out before
-removing the worktree.
+`worktree-jev-shadow`), level with origin/master after the handover commit. Its gitignored
+`.plan/` holds two records that exist nowhere else: `.plan/openwork-batch-2026-10-04/` (wave D)
+and `.plan/jev-stop-2026-10-06/` (this session). Copy both out before removing the worktree.
 
 ## In flight
 
-- Nothing is running. The contribution queue was closed against 8.0.0: 98 entries shipped or
-  dropped with evidence, 19 remain open across 10 queues (#21, #58 -> OPEN-WORK [300], #77 ->
-  [310], plus entries wave D never covered). `contrib_queue.py queues` (home
-  `plugins/bitranox/skills/meta-self-improve/`) lists them; OPEN-WORK [200] is the item.
+- Nothing is running. 8.0.1 is on origin (d63beefd), CI green on every workflow.
 
 ## Committed, or not
 
-- On origin: 8.0.0 = cd960f03 (wave D, all 13 groups + D-7b, D-8b, D-14, D-win), CI green on every
-  cell. 7.41.2 and 7.41.3 (Windows test fixes) and a concurrent session's 7.42.0 are below it.
-- Committed with this handover: OPEN-WORK [360] (template repo's unpushed commits).
-- Memory facts added this session: `reference-typesafe-jev-cost-and-latency-documented-and-measured`
-  (KI level, closes C43) and `reference-a-background-subagent-survives-clear-and-reports-into-the-next-conversation`
-  (bitranox-skills level).
+- On origin: 8.0.1 = d63beefd (`classifier.MIN_PROMPT_CHARS = {"correction": 40}`, tests, CHANGELOG,
+  `docs/reference.md`, meta-memory-settings row + its `.skillwriter` checklist).
+- Committed with this handover: OPEN-WORK [12] updated with step (4) and the 8.0.1 decision.
 
 ## Decided, and why - do not reopen
 
-- W-D1..W-D12 in `.plan/openwork-batch-2026-10-04/DECISIONS-TAKEN.md`, all as recommended: shim
-  CLI exit 2; mirror gates judge what the change ships (index on commit, HEAD on push, the other repo
-  at its published ref); migrate_memory writes .git/info/exclude; C99 closed with no guard; C35 and
-  C27 stay advisory; C43 recorded as a fact; ci_wait default = every event except schedule; pfsense
-  rm that removed nothing -> 2, partial multi-IP -> 1; same-command staging documented, not parsed;
-  the four CLAUDE.md wordings applied (2bf51d4b); the release is 8.0.0 (MAJOR: exit codes and
-  --json shapes changed for callers).
+- stop_signal decide mode STAYS at 0.8: a pre-registered blind panel (ten opus judges, 8/8 planted
+  controls right) found 67 of 92 live Jev blocks to be real lessons (73%, bar 60%). Record:
+  `.plan/jev-stop-2026-10-06/` (PREREG.md, RESULTS.md, labels.json, key.json, judges/, scripts).
+- `correction` kept (user's choice over dropping it) but counted only after a typed prompt of at
+  least 40 characters. The user asked about 60: measured worse (4 real lessons lost against 2, no
+  extra false block removed). 30 scored one item better on the same 14 blocks; left at 40.
+- No lowering to 0.7: quiet turns scored 0.7-0.8 were only 31% real lessons.
 
 ## Decided against, and why
 
-- No deny/block for C86 (masked exit, <=15% real), C36 (sha literal, <=39% precision), D20 (PID
-  literals, 1 of 189), C40 (md self-claims, 0 of 25) - priced by D-5 over the corpus.
-- No post-read recall hook for C43, and no parser for same-command staging (W-D10).
+- A prompt-length rule for EVERY family: it lost 43 of 67 real lessons, because most admissions
+  and root causes follow a bare "yes" or "continue".
 
 ## Still open, untouched
 
-`OPEN-WORK.md` is the list. [17] (new USER item, the Claude Code module/behaviour feature) is the
-top workable USER item; [12] and [14] wait on data; [18] is deferred by the user; [150]/[245] wait
-on the user's housekeeping script; [300]-[360] are wave D's follow-ups.
+`OPEN-WORK.md` is the list. [12] next step is recall_rerank (count its eligible rows first; the
+user said it waits for much more data); [14] waits on notification rows; [17] is the top workable
+USER item after that; [18] deferred by the user; [150]/[245] need the main checkout.
 
 ## Lessons for the next nap
 
-- When a partition gives fixers whole directories, a scope check must treat a directory entry as a
-  prefix and diff each branch against ITS OWN base, or it flags owned files and every merged one.
-- When a batch is green on Linux, run the whole suite on the Windows dev VM from a `git bundle` clone
-  made with `-c core.autocrlf=false -c core.eol=lf` before the push: it found 6 defects the fixers'
-  Linux runs missed, including Python 3.13's changed `ntpath.isabs('/r')`.
-- When other sessions push to master during a long integration, MERGE origin/master into the
-  integration branch rather than rebasing, so every fixer's base stays an ancestor.
-- When a fixer cannot commit a file another group pins (a test asserting the old exit code), hand
-  the callee to the test's owner with a byte-exact copy instead of leaving it uncommitted.
+- When a gate or filter is keyed on one field (prompt length), measure where the positives'
+  evidence actually lives before applying it to every class: most Stop-gate lessons sit in the
+  assistant reply after a short prompt, so a prompt-length gate removed 43 of 67 of them.
+- When a blind panel needs more items than one judge can read, split them into halves with their
+  own five judges and their own planted controls per half, and dry-run the scorer on all-true
+  labels first so the control check is proven able to fire.
+- When a classifier shadow log grows during the analysis, freeze the data with a timestamp cutoff
+  written into the pre-registration, or the strata counts drift between inventory and build.
+- tooling: in a worktree-isolated session, a command that runs python with `$VAR` or `$(...)`
+  arguments is refused; write the script to the scratchpad and pass literal paths.
 
 ## The exact next action
 
-Work OPEN-WORK [17]: find which Claude Code feature "write your own modules and change behaviour"
-is (code.claude.com/docs raw .md pages and the changelog; `claude --version` for the installed CLI),
-probe it on the installed CLI, then list concrete uses for bitranox-skills with a recommendation
-each. Before that, merge nothing: master is clean at 8.0.0.
+Work OPEN-WORK [12] step (5): count the recall_rerank shadow rows on plugin >= 7.31.0 in
+`~/.claude/self-improve-audit/classifier-shadow-*.jsonl` (site `recall_rerank`), then put to the
+user whether that is "much more data" yet. If it is not, move to [17].
 
 ## Files that matter
 
-- `OPEN-WORK.md`, `CHANGELOG.md` (8.0.0 Breaking section lists every moved exit code).
-- `.plan/openwork-batch-2026-10-04/` in the jev-shadow worktree (see top).
-- `plugins/bitranox/skills/compuse-toolbox/scripts/_cli_envelope.py` (the shared envelope helper).
+- `plugins/bitranox/hooks/classifier.py` (`MIN_PROMPT_CHARS`, `stop_signal_firings`)
+- `plugins/bitranox/hooks/self-improve-gate.py` (`_decide_stop_signal`)
+- `plugins/bitranox/hooks/tests/test_self_improve_gate_decide.py`
+- `.plan/jev-stop-2026-10-06/` in the jev-shadow worktree (gitignored)
 
 ## How to verify
 
-- `git log --oneline -1 origin/master` shows cd960f03 or later.
-- `env -u VIRTUAL_ENV uv run --with pytest --with PyYAML --with lxml --with defusedxml --with ruamel.yaml --with httpx2 python plugins/bitranox/hooks/repo-gate.py --ci`
-  ends with `repo-gate: all checks passed.`
+- `git log --oneline -1 origin/master` shows the handover commit on top of d63beefd.
+- `env -u VIRTUAL_ENV uv run --with pytest --with PyYAML --with lxml --with defusedxml --with ruamel.yaml --with httpx2 python -m pytest plugins/bitranox/hooks/tests/test_self_improve_gate_decide.py -q`
+  passes (25 tests).
 
 Read this, then replace the first line with `# STALE - read <date>, work continued`. Do not delete
 it - if this session ends badly it is the only record of where things stood.
