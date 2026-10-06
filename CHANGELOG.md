@@ -29,6 +29,18 @@ than the change, so entries reconstructed from them would read like coverage wit
 a hole nobody has drawn a line under is one that gets rediscovered and half-filled - which is how
 two "versions with no entry" notes came to sit in this file disagreeing with it.
 
+## [8.0.4]
+
+### Fixed
+
+- The test suite no longer leaves files in the launcher's temp directory. Hooks keep per-project
+  state in `tempfile.gettempdir()` keyed by a hash of the project path, and each test passes its own
+  `tmp_path` as the project, so every run left a few hundred `claude-ci-watch-*.json` and similar
+  files behind. On a host whose `/tmp` is a tmpfs that exhausted its inodes, and every tool there
+  then failed with "no space left on device" while gigabytes were free. The root `conftest.py` now
+  points `TMPDIR`, `TEMP`, `TMP` and `tempfile.tempdir` at one session directory and removes it
+  when the session ends. Measured on the ci-watch tests: 92 files left behind before, 0 after.
+
 ## [8.0.3]
 
 ### Changed
