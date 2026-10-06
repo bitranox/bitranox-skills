@@ -276,7 +276,8 @@ def _decide_stop_signal(event, regex, request, cfg):
             if result is None:
                 path = "fallback-%s" % (row.get("reason") or "no answer")
             else:
-                families = _classifier.stop_signal_firings(result)
+                families = _classifier.stop_signal_firings(
+                    result, user_message=request["fields"].get("user_message") or "")
                 path = "jev" if families else "none"
     row.update(mode="decide", decide_path=path, families=families)
     _classifier.append_row(row)

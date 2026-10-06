@@ -129,6 +129,13 @@ SITE_THRESHOLDS = {"stop_signal": 0.8, "skill_router": 0.5, "recall_rerank": 0.8
 # "go", "lets try 1-4"): approving a proposal the assistant made is not a learning signal. The
 # question stays in the set, so the score keeps being recorded and can be revisited on data.
 NON_FIRING_FAMILIES = frozenset({"endorsement"})
+# Stop-gate families that fire only after a typed prompt of at least this many characters
+# (surrounding whitespace not counted). A live blind panel on 2026-10-06 found `correction` right
+# on 6 of its 14 blocks: the wrong ones were short steering prompts ("release first", "B", "yes,
+# but dont release now") read as pushback, and no threshold separated them. Skipping Jev on every
+# short prompt was measured too and rejected: it lost 43 of 67 real lessons, because most
+# admissions and root causes follow a bare "yes" or "continue". The score is still logged.
+MIN_PROMPT_CHARS = {"correction": 40}
 _LOOPBACK = {"127.0.0.1", "localhost", "::1"}
 
 
@@ -883,13 +890,16 @@ def decided_row(site, session_id, regex, transcript=""):
                    "states": []}, payload)
 
 
-def stop_signal_firings(result, threshold=None):
+def stop_signal_firings(result, *, user_message, threshold=None):
     """The learning families one Stop-gate answer fires on, sorted: each scored at least
-    `threshold` (the site's own by default), `NON_FIRING_FAMILIES` excluded."""
+    `threshold` (the site's own by default), `NON_FIRING_FAMILIES` excluded, and a family in
+    `MIN_PROMPT_CHARS` only when `user_message` is at least that long once stripped."""
     threshold = SITE_THRESHOLDS["stop_signal"] if threshold is None else threshold
     answers = (result or {}).get("answers") or {}
+    typed = len((user_message or "").strip())
     return sorted(k for k, a in answers.items()
-                  if k not in NON_FIRING_FAMILIES and isinstance(a, dict)
+                  if k not in NON_FIRING_FAMILIES and typed >= MIN_PROMPT_CHARS.get(k, 0)
+                  and isinstance(a, dict)
                   and isinstance(a.get("value"), (int, float)) and a["value"] >= threshold)
 
 

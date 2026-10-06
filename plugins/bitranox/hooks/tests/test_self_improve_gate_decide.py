@@ -13,6 +13,9 @@ What decide mode promises - the union adjudicated blind on 2026-09-25, at 0.8:
 * Jev does not answer (deadline, HTTP error, no key, malformed answer): the keyword verdict
   stands, so a quiet turn stays unblocked;
 * a message already blocked once is not asked about again;
+* `correction` counts only when the typed prompt is at least `MIN_PROMPT_CHARS` long: on a short
+  steering prompt ("release first") it is logged, never a block, while every other family still
+  blocks after a bare "yes", which is where most admissions and root causes are said;
 * one comparison row per asked or regex-decided turn lands in the shadow log, naming the path.
 """
 
@@ -26,7 +29,8 @@ import pytest
 import classifier as cl
 import self_improve_gate as G
 
-QUIET_USER = "Please list the files in the repo."
+# 40+ characters, so every family - `correction` included - can block after it.
+QUIET_USER = "Please list every file in this repository for me."
 QUIET_ASST = "Here are the files: a.py, b.py."
 FIRING = ("correction", "remember_rule", "self_admission", "realization")
 
@@ -158,3 +162,46 @@ def test_shadow_still_never_blocks_on_jev(env, monkeypatch, capsys):
     env["fake"].body = _answer(self_admission=0.95)
     _config(env["home"], classifier_backend="jev", classifier_stop_signal="shadow")
     assert _run(monkeypatch, capsys, _event(env["tmp"])) is None
+
+
+def test_quiet_user_is_long_enough_for_every_family():
+    assert len(QUIET_USER) >= cl.MIN_PROMPT_CHARS["correction"]
+
+
+@pytest.mark.parametrize("prompt", ["release first", "yes, but dont release now", "B", ""])
+def test_decide_does_not_block_on_correction_after_a_short_prompt(env, monkeypatch, capsys,
+                                                                   prompt):
+    # Adjudicated 2026-10-06: 8 of correction's 14 blocks were short steering prompts, not lessons.
+    env["fake"].body = _answer(correction=0.95)
+    _decide(env["home"])
+    assert _run(monkeypatch, capsys, _event(env["tmp"], user=prompt, sid="s-short")) is None
+    [row] = _rows(env["home"])
+    assert (row["decide_path"], row["families"]) == ("none", [])
+    assert row["results"], "the raw correction score must still be logged for re-measurement"
+
+
+@pytest.mark.parametrize("length, blocks", [(39, None), (40, "block")])
+def test_correction_prompt_length_boundary_is_forty(env, monkeypatch, capsys, length, blocks):
+    env["fake"].body = _answer(correction=0.95)
+    _decide(env["home"])
+    prompt = ("please move the lookup somewhere else " * 3)[:length]
+    assert len(prompt) == length
+    assert _run(monkeypatch, capsys, _event(env["tmp"], user=prompt,
+                                            sid="s-len%d" % length)) == blocks
+
+
+def test_short_prompt_padding_does_not_count_toward_the_length(env, monkeypatch, capsys):
+    env["fake"].body = _answer(correction=0.95)
+    _decide(env["home"])
+    prompt = "  release first" + " " * 40
+    assert _run(monkeypatch, capsys, _event(env["tmp"], user=prompt)) is None
+
+
+@pytest.mark.parametrize("family", ["self_admission", "realization", "remember_rule"])
+def test_other_families_still_block_after_a_bare_yes(env, monkeypatch, capsys, family):
+    # Most real lessons follow "yes" / "continue": the admission is in the reply, not the prompt.
+    env["fake"].body = _answer(**{family: 0.95})
+    _decide(env["home"])
+    assert _run(monkeypatch, capsys, _event(env["tmp"], user="yes", sid="s-" + family)) == "block"
+    [row] = _rows(env["home"])
+    assert row["families"] == [family]

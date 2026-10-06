@@ -29,6 +29,18 @@ than the change, so entries reconstructed from them would read like coverage wit
 a hole nobody has drawn a line under is one that gets rediscovered and half-filled - which is how
 two "versions with no entry" notes came to sit in this file disagreeing with it.
 
+## [8.0.1]
+
+### Changed
+
+- Stop gate, decide mode: the `correction` family now blocks only after a typed prompt of at least
+  40 characters (`classifier.MIN_PROMPT_CHARS`, surrounding whitespace not counted). A live blind
+  panel over every Jev block from 2026-10-01 to 2026-10-06 found `correction` right on 6 of 14:
+  the wrong ones were short steering prompts ("release first", "B", "yes, but dont release now"),
+  and no threshold separated them. The other three families still block after a bare "yes"; a
+  prompt-length rule for all of them was measured and rejected, since it lost 43 of 67 real
+  lessons. Jev is still asked on every quiet turn and the correction score is still logged.
+
 ## [8.0.0]
 
 ### Breaking
