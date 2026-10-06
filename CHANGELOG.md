@@ -29,6 +29,21 @@ than the change, so entries reconstructed from them would read like coverage wit
 a hole nobody has drawn a line under is one that gets rediscovered and half-filled - which is how
 two "versions with no entry" notes came to sit in this file disagreeing with it.
 
+## [8.1.0]
+
+### Added
+
+- `compuse-toolbox` `mutation_arm.py --revert FILE REV`: run a test arm against a file's committed
+  text, the RED half of proving a test pins an uncommitted fix, without the hand-rolled
+  copy-aside and `git show HEAD:<file> > <file>` that parallel agents restored from a sibling's
+  copy. A revert is one more entry in the arm: the copy taken before the first write, the restore
+  with byte comparison, the bytecode purge and `--timeout` all apply, and it combines with
+  `--mutate` (anchors are checked against the reverted text). The text comes from
+  `git cat-file --filters`, so a CRLF checkout keeps CRLF. Refused with nothing written: a file
+  outside a git work tree or absent at REV, a REV that is not a commit, and a work tree already
+  identical to REV. The report's `reverts` names each REV with its resolved sha. `--battery` with
+  `--revert` is refused as separate modes.
+
 ## [8.0.4]
 
 ### Fixed

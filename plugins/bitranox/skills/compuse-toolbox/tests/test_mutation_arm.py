@@ -1034,3 +1034,127 @@ def test_battery_code_is_2_when_any_arm_is_inconclusive():
     assert M.battery_code(result) == 0
     result["final_baseline"] = {"green": False}
     assert M.battery_code(result) == 2
+
+
+# --------------------------------------------------------------------------
+# --revert FILE REV: run the arm against the committed version of a file
+# --------------------------------------------------------------------------
+
+FIXED = SOURCE  # the work tree: test_zero passes
+BUGGY = SOURCE.replace('return "zero"', 'return "ZERO"')  # what HEAD holds
+
+
+def _git(cwd, *args):
+    return subprocess.run(["git", *args], cwd=str(cwd), capture_output=True, text=True,
+                          encoding="utf-8", errors="replace", check=True).stdout.strip()
+
+
+def make_git_project(tmp_path, committed=BUGGY, worktree=FIXED):
+    """HEAD holds `committed`, the work tree `worktree`: the shape of an uncommitted fix."""
+    p = make_project(tmp_path)
+    (p / "src.py").write_text(committed, encoding="utf-8")
+    _git(p, "init", "-q")
+    _git(p, "config", "user.name", "t")
+    _git(p, "config", "user.email", "t@example.com")
+    _git(p, "add", "src.py", "test_src.py")
+    _git(p, "commit", "-q", "-m", "c1")
+    (p / "src.py").write_text(worktree, encoding="utf-8")
+    return p
+
+
+def test_a_revert_the_test_notices_is_killed(tmp_path):
+    p = make_git_project(tmp_path)
+    proc = run(p, "--revert", "src.py", "HEAD", "--test", "test_src.py::test_zero", "--json")
+    assert proc.returncode == 0, (proc.stdout, proc.stderr)
+    data = json.loads(proc.stdout)["data"]
+    assert data["verdict"] == "killed"
+    assert data["reverts"] == [{"path": "src.py", "rev": "HEAD", "sha": _git(p, "rev-parse", "HEAD")}]
+
+
+def test_a_revert_the_test_cannot_see_survives(tmp_path):
+    p = make_git_project(tmp_path, committed=SOURCE.replace('"negative"', '"NEGATIVE"'))
+    proc = run(p, "--revert", "src.py", "HEAD", "--test", "test_src.py::test_zero", "--json")
+    assert proc.returncode == 1, (proc.stdout, proc.stderr)
+    assert json.loads(proc.stdout)["data"]["verdict"] == "survived"
+
+
+def test_a_revert_restores_the_uncommitted_work_byte_for_byte(tmp_path):
+    p = make_git_project(tmp_path)
+    before = (p / "src.py").read_bytes()
+    run(p, "--revert", "src.py", "HEAD", "--test", "test_src.py::test_zero")
+    assert (p / "src.py").read_bytes() == before
+
+
+def test_a_revert_restores_after_a_timeout(tmp_path):
+    p = make_git_project(tmp_path)
+    before = (p / "src.py").read_bytes()
+    planned, _ = M.plan_reverts([[str(p / "src.py"), "HEAD"]])
+    report = M.run_arm(planned, "test_src.py::test_zero", timeout=1,
+                       runner=[sys.executable, "-c", "import time; time.sleep(30)"])
+    assert report["verdict"] == "timeout"
+    assert (p / "src.py").read_bytes() == before
+
+
+@pytest.mark.parametrize("case", ["untracked", "not_a_repo", "bad_rev", "identical"])
+def test_a_revert_that_cannot_mean_anything_is_refused_and_writes_nothing(tmp_path, case):
+    p = make_git_project(tmp_path) if case != "not_a_repo" else make_project(tmp_path)
+    target, rev = "src.py", "HEAD"
+    if case == "untracked":
+        (p / "extra.py").write_text("x = 1\n", encoding="utf-8")
+        target = "extra.py"
+    elif case == "bad_rev":
+        rev = "no-such-rev"
+    elif case == "identical":
+        (p / "src.py").write_text(BUGGY, encoding="utf-8")
+    before = (p / target).read_bytes()
+    proc = run(p, "--revert", target, rev, "--test", "test_src.py::test_zero", "--json")
+    assert proc.returncode == 2, (case, proc.stdout, proc.stderr)
+    assert json.loads(proc.stdout)["ok"] is False
+    # The tool's own refusal, not argparse rejecting an unknown flag, which also exits 2.
+    assert "refused, nothing written" in proc.stderr, (case, proc.stderr)
+    assert (p / target).read_bytes() == before
+
+
+def test_a_revert_and_a_mutation_apply_together_as_one_arm(tmp_path):
+    """Alone, either one is KILLED; together the test passes - which only happens when both
+    were applied."""
+    p = make_git_project(tmp_path)
+    (p / "old.txt").write_text('assert classify(0) == "zero"', encoding="utf-8")
+    (p / "new.txt").write_text('assert classify(0) == "ZERO"', encoding="utf-8")
+    proc = run(p, "--revert", "src.py", "HEAD", "--mutate", "test_src.py", "old.txt", "new.txt",
+               "--test", "test_src.py::test_zero", "--json")
+    assert proc.returncode == 1, (proc.stdout, proc.stderr)
+
+
+def test_a_mutation_anchor_is_checked_against_the_reverted_text(tmp_path):
+    """'return "ZERO"' exists only at HEAD, so the anchor must be looked up after the revert."""
+    p = make_git_project(tmp_path)
+    (p / "old.txt").write_text('return "ZERO"', encoding="utf-8")
+    (p / "new.txt").write_text('return "zero"', encoding="utf-8")
+    proc = run(p, "--revert", "src.py", "HEAD", "--mutate", "src.py", "old.txt", "new.txt",
+               "--test", "test_src.py::test_zero", "--json")
+    assert proc.returncode == 1, (proc.stdout, proc.stderr)
+
+
+def test_a_reverted_crlf_checkout_keeps_its_line_endings_during_the_arm(tmp_path):
+    p = make_git_project(tmp_path)
+    _git(p, "config", "core.autocrlf", "true")
+    (p / "src.py").write_bytes(FIXED.replace("\n", "\r\n").encode("utf-8"))
+    before = (p / "src.py").read_bytes()
+    seen = p / "seen.bin"
+    probe = (f"import pathlib; pathlib.Path({str(seen)!r}).write_bytes("
+             f"pathlib.Path({str(p / 'src.py')!r}).read_bytes()); raise SystemExit(0)")
+    planned, _ = M.plan_reverts([[str(p / "src.py"), "HEAD"]])
+    M.run_arm(planned, "test_src.py::test_zero", runner=[sys.executable, "-c", probe])
+    during = seen.read_bytes()
+    assert b'return "ZERO"\r\n' in during
+    assert during.count(b"\n") == during.count(b"\r\n")
+    assert (p / "src.py").read_bytes() == before
+
+
+def test_revert_and_battery_together_are_refused(tmp_path):
+    p = make_git_project(tmp_path)
+    (p / "spec.json").write_text('{"tests": ["test_src.py"], "arms": []}', encoding="utf-8")
+    proc = run(p, "--battery", "spec.json", "--revert", "src.py", "HEAD")
+    assert proc.returncode == 2
+    assert "separate modes" in proc.stderr

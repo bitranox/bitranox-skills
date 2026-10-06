@@ -16,6 +16,17 @@ goes wrong, and it went wrong the same three ways often enough to be worth a too
 * **One mutation was not enough.** Layered validation absorbs a single-layer break: a short field
   zero-fills and a later check catches it anyway, so the arm stays green and reads as a weak test.
   `--mutate` repeats, and every mutation is applied together as ONE arm.
+* **The arm was "the committed version of the whole file".** Proving a test pins an uncommitted
+  fix means running it against the file as it was before the fix, and the hand-rolled way - copy
+  the file aside, `git show HEAD:<file> > <file>`, run, copy back - is where parallel agents
+  restored a sibling's copy over their own work and reported success. `--revert FILE REV`
+  (repeatable, combinable with `--mutate` in one arm) replaces the whole file with its text at REV
+  as a checkout would write it, and is restored like any mutation. Refused with nothing written: a
+  file outside a git work tree or absent at REV, a REV that is not a commit, and a work tree
+  already identical to REV (an arm that changes nothing would SURVIVE vacuously). The report names
+  each revert's REV and its resolved sha, so "killed against HEAD" stays meaningful after HEAD
+  moves. Mutation anchors are checked against the text as the reverts leave it.
+  `.venv/bin/python scripts/mutation_arm.py --revert src/x.py HEAD --test tests/t.py::test_y`
 
 Restoring is from a COPY taken before the first edit, never `git checkout -- <file>`, which
 restores from HEAD and so discards any uncommitted work in that file. The restore runs whatever
@@ -356,7 +367,7 @@ def _match_endings(text: str, crlf: bool) -> str:
     return lf.replace("\n", "\r\n") if crlf else lf
 
 
-def _plan(specs, load):
+def _plan(specs, load, after=None):
     """Validate every anchor BEFORE writing anything, returning (path, old, new) triples.
 
     All or nothing: one absent or ambiguous anchor refuses the whole arm. A partly-applied arm
@@ -364,9 +375,10 @@ def _plan(specs, load):
     as the EARLIER mutations to the same file leave it, which is the text the arm will edit -
     checking against the original accepted a chain that then failed half-way through writing.
     `load(spec, crlf)` turns an anchor spec (a file path or an inline text) into the text.
+    `after` maps a resolved path to the text a --revert leaves it holding, for the same reason.
     """
     planned = []
-    texts: dict[Path, str] = {}
+    texts: dict[Path, str] = dict(after or {})
     for path_arg, old_spec, new_spec in specs:
         path = Path(path_arg)
         if not path.is_file():
@@ -382,9 +394,66 @@ def _plan(specs, load):
     return planned
 
 
-def plan_mutations(specs):
+def plan_mutations(specs, *, after=None):
     """`_plan` for `--mutate FILE OLD_FILE NEW_FILE` triples, whose anchors live in files."""
-    return _plan(specs, _read_anchor)
+    return _plan(specs, _read_anchor, after)
+
+
+class RevertError(ValueError):
+    """A --revert that cannot mean anything; refused before anything is written."""
+
+
+def _git(args, cwd) -> subprocess.CompletedProcess:
+    # LC_ALL=C: nothing here parses git's messages, but a refusal quoting one should not switch
+    # language with the host's locale.
+    return subprocess.run(["git", *args], cwd=str(cwd), capture_output=True,
+                          env={**os.environ, "LC_ALL": "C"})
+
+
+def resolve_revert(path_arg, rev):
+    """(path, the file's text at REV as a checkout would write it, REV's 40-character sha).
+
+    `git cat-file --filters` applies the eol and smudge conversion a checkout does, so a CRLF
+    work tree gets CRLF text back rather than the LF blob. Refused: a path outside a git work
+    tree, a REV that is not a commit, a file absent at REV, and a work tree already identical to
+    REV - that arm would change nothing, so its SURVIVED would be vacuous.
+    """
+    path = Path(path_arg)
+    if not path.is_file():
+        raise RevertError(f"not a file: {path}")
+    real = path.resolve()
+    top = _git(["rev-parse", "--show-toplevel"], real.parent)
+    if top.returncode != 0:
+        raise RevertError(f"{path} is not inside a git work tree")
+    sha = _git(["rev-parse", "--verify", "-q", f"{rev}^{{commit}}"], real.parent)
+    if sha.returncode != 0:
+        raise RevertError(f"{rev!r} does not resolve to a commit")
+    sha_text = sha.stdout.decode("ascii").strip()
+    rel = real.relative_to(Path(top.stdout.decode("utf-8").strip()).resolve()).as_posix()
+    blob = _git(["cat-file", "--filters", f"{sha_text}:{rel}"], real.parent)
+    if blob.returncode != 0:
+        raise RevertError(f"{path} does not exist at {rev}")
+    text = blob.stdout.decode("utf-8")
+    if text == _read_source(path):
+        raise RevertError(f"{path} already matches {rev}: the arm would change nothing")
+    return path, text, sha_text
+
+
+def plan_reverts(specs):
+    """Whole-file entries (path, None, text at REV) for run_arm, and one report dict per revert.
+
+    `old` is None for a whole-file replacement: the file's current text as an anchor would be
+    unique by construction, but an empty file would make it the empty string, which matches
+    everywhere."""
+    planned, reports, seen = [], [], set()
+    for path_arg, rev in specs:
+        path, text, sha = resolve_revert(path_arg, rev)
+        if path.resolve() in seen:
+            raise RevertError(f"{path} is reverted twice in one arm")
+        seen.add(path.resolve())
+        planned.append((path, None, text))
+        reports.append({"path": str(path_arg), "rev": rev, "sha": sha})
+    return planned, reports
 
 
 def plan_text_mutations(specs):
@@ -420,7 +489,8 @@ def run_arm(planned, nodeid, *, runner=None, timeout=None):
         try:
             try:
                 for path, old, new in planned:
-                    _write_source(path, replace_exact(_read_source(path), old, new))
+                    _write_source(path, new if old is None
+                                  else replace_exact(_read_source(path), old, new))
             except OSError as exc:
                 # An unwritable source must not escape as a traceback: its exit 1 reads as
                 # SURVIVED. The restore below still runs for whatever was already written.
@@ -506,6 +576,9 @@ def _parse(argv):
                     "restore from a copy taken first.")
     ap.add_argument("--mutate", nargs=3, action="append", metavar=("FILE", "OLD_FILE", "NEW_FILE"),
                     help="repeatable; every mutation is applied together as ONE arm")
+    ap.add_argument("--revert", nargs=2, action="append", metavar=("FILE", "REV"),
+                    help="repeatable; replace FILE with its text at REV for the arm (applied "
+                         "before any --mutate), restored like a mutation")
     ap.add_argument("--test", default=None, metavar="NODEID",
                     help="the pytest node id to run (required with --mutate; with --battery it "
                          "replaces the spec's tests)")
@@ -536,6 +609,8 @@ def main(argv=None) -> int:
                        as_json=args.json)
     if args.battery and args.mutate:
         return _refuse("--battery and --mutate are separate modes; give one", as_json=args.json)
+    if args.battery and args.revert:
+        return _refuse("--battery and --revert are separate modes; give one", as_json=args.json)
     try:
         runner, source = resolve_runner(args.python, args.with_deps)
     except RunnerError as exc:
@@ -548,17 +623,19 @@ def main(argv=None) -> int:
 
 
 def _main_single(args, runner, source) -> int:
-    if not args.mutate:
-        return _refuse("no --mutate given", as_json=args.json)
+    if not args.mutate and not args.revert:
+        return _refuse("no --mutate or --revert given", as_json=args.json)
     if not args.test:
-        return _refuse("--test is required with --mutate", as_json=args.json)
+        return _refuse("--test is required with --mutate or --revert", as_json=args.json)
 
     try:
-        planned = plan_mutations(args.mutate)
+        reverted, reverts = plan_reverts(args.revert or [])
+        after = {path.resolve(): text for path, _, text in reverted}
+        planned = reverted + plan_mutations(args.mutate or [], after=after)
     except UnicodeDecodeError as exc:
-        return _refuse(f"refused, nothing written - a source or anchor file is not UTF-8 "
-                       f"({exc.reason} at byte {exc.start})", as_json=args.json)
-    except (AnchorError, OSError) as exc:
+        return _refuse(f"refused, nothing written - a source, anchor file or reverted text is "
+                       f"not UTF-8 ({exc.reason} at byte {exc.start})", as_json=args.json)
+    except (AnchorError, RevertError, OSError) as exc:
         return _refuse(f"refused, nothing written - {exc}", as_json=args.json)
 
     try:
@@ -566,11 +643,14 @@ def _main_single(args, runner, source) -> int:
     except (AnchorError, OSError) as exc:
         return _refuse(f"refused before mutating - {exc}", as_json=args.json)
     report["runner"], report["runner_source"] = runner, source
+    report["reverts"] = reverts
 
     _warn_restore(report)
     if args.json:
         print(json_envelope(report))
     else:
+        for item in reverts:
+            print(f"reverted {item['path']} to {item['rev']} ({item['sha']})")
         print(f"{report['verdict'].upper()}: {args.test}")
         if report["failure"]:
             print(f"  reason: {report['failure']}")
