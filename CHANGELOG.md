@@ -29,6 +29,25 @@ than the change, so entries reconstructed from them would read like coverage wit
 a hole nobody has drawn a line under is one that gets rediscovered and half-filled - which is how
 two "versions with no entry" notes came to sit in this file disagreeing with it.
 
+## [8.2.0]
+
+### Added
+
+- `compuse-toolbox` `fanout_crosscheck.py`: after a per-target fan-out, finds text that landed in
+  the wrong target - a sibling's package name in a docstring, one level's descriptor written over
+  another's - which every recorded incident found only from ground truth while the agents reported
+  success. `--target NAME=PATH` (at least two) takes a git work tree, whose ADDED lines are read
+  (`git diff -U0` against `--since`, default HEAD, plus every untracked non-ignored file, since a
+  file created in the wrong place never shows in `git diff`), or a plain file, read whole. It looks
+  for each other target's name in its snake, kebab and space spellings, case-insensitive and as a
+  whole word, plus `--ident NAME=TOKEN`; a dependency the scanned target declares in its
+  `pyproject.toml` and `--allow NAME=TOKEN` are not findings. `--since` takes a REV for every
+  target or `NAME=REV` for one, because a sha from one repo does not exist in another. Exit 0
+  clean, 1 findings, 2 a usage error, an unreadable target, or ZERO added lines examined, which
+  would otherwise print a green that means nothing; the examined counts are always reported.
+  `toolbox-nudge.py` records why no command shape identifies the chore (a candidate measured 8
+  firings in 113,472 Bash calls, none of them this job).
+
 ## [8.1.0]
 
 ### Added

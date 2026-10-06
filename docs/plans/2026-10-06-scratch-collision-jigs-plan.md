@@ -235,7 +235,9 @@ Run: `env -u VIRTUAL_ENV uv run --with pytest python -m pytest -q -p no:cachepro
 
 - [ ] **Step 6: Bump, CHANGELOG, commit, push, watch CI** (version re-read from origin/master; minor bump: a new capability).
 
-### Task 2: `fanout_crosscheck` (detailed after Task 1 lands)
+### Task 2: `fanout_crosscheck` (shipped in 8.2.0)
+
+Two departures from the design, both found while writing the tests: `--since` also takes `NAME=REV`, because one REV cannot name a commit in several repos; and every untracked, non-ignored file counts as added, because `git diff` never shows a file created in the wrong target. Because repo-gate requires a nudge rule or a recorded reason for every toolbox script, the exemption with its corpus measurement shipped here rather than in Task 3.
 
 Per the design's Part 2: `scripts/fanout_crosscheck.py --target NAME=PATH ... [--since REV] [--ident NAME=TOKEN ...] [--allow NAME=TOKEN ...] [--json]`; added lines only (`git diff -U0`, default work tree plus index; a plain-file target counts every line as added); identifiers are each target NAME's snake/kebab/space spellings case-insensitive plus `--ident`; a declared `pyproject.toml` dependency of the scanned target and `--allow` are not findings; exit 0 clean, 1 findings, 2 usage/IO or zero added lines examined; the examined counts always reported. Tests: the 2026-10-05 three-repo fixture, declared-dependency negative, pre-existing-line negative, plain-file targets, zero-lines exit 2, planted positive and negative.
 

@@ -302,6 +302,14 @@ _ANY_TOOL_RULES = [
 #: a QUESTION someone asks, not a command they type. "Costs more than the channel carries" means a
 #: shape exists and was measured too broad to ship.
 NO_COMMAND_SHAPE = {
+    "fanout_crosscheck": (
+        "the chore is 'did an agent of this fan-out write into a sibling's target?', which arises "
+        "when a fan-out FINISHES - an Agent result, not a command - so its channel is the "
+        "Verification step of process-agents-dispatching-parallel.",
+        "measured over 113,472 recorded Bash calls: candidate two-or-more `git -C <path> diff` in "
+        "one command fires 8 times (0.007%), and the sampled firings are multi-repo status and "
+        "--stat reviews, not a search for one target's name in another's added lines; the intent "
+        "is not on the command line."),
     "grep_all": (
         "an ordinary `grep -r` is most of a session's searching, and no part of the command says "
         "whether THIS one must be complete. `claim_check` already claims the -c/-l variant, where "
