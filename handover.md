@@ -8,10 +8,10 @@ removing the worktree.
 
 ## In flight
 
-- Nothing is running that changes the repo. The subagent `wave-d-queue` may still be closing
-  contribution-queue entries (#15 and the 25 `already_shipped_or_dup` entries of PARTITION.json);
-  it edits only the queue store. If it reports after the clear, nothing needs doing beyond reading
-  its table; check with `contrib_queue.py queues` (home `plugins/bitranox/skills/meta-self-improve/`).
+- Nothing is running. The contribution queue was closed against 8.0.0: 98 entries shipped or
+  dropped with evidence, 19 remain open across 10 queues (#21, #58 -> OPEN-WORK [300], #77 ->
+  [310], plus entries wave D never covered). `contrib_queue.py queues` (home
+  `plugins/bitranox/skills/meta-self-improve/`) lists them; OPEN-WORK [200] is the item.
 
 ## Committed, or not
 
