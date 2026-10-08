@@ -266,9 +266,22 @@ def _framed_body(slug, hook, type_, body):
 def add_or_update_entry(proj, title, hook, body="", type_=None, pin=False,
                         scope_default="", slug=None, allow_over_cap_hook=False,
                         allow_pinned_overwrite=False):
+    """`upsert_entry` returning only the slug: the single write path for every caller that does not
+    need to know whether the fact was new."""
+    return upsert_entry(proj, title, hook, body=body, type_=type_, pin=pin,
+                        scope_default=scope_default, slug=slug,
+                        allow_over_cap_hook=allow_over_cap_hook,
+                        allow_pinned_overwrite=allow_pinned_overwrite)[0]
+
+
+def upsert_entry(proj, title, hook, body="", type_=None, pin=False,
+                 scope_default="", slug=None, allow_over_cap_hook=False,
+                 allow_pinned_overwrite=False):
     """Upsert a curated fact into `<proj>`'s pointer block + the anchor's central store (the single write
     path). Ensures the level's pointer block + scope, and writes under a lock, mtime-neutral.
-    Returns the slug.
+    Returns (slug, created): `created` is True when this call made a new fact, decided under the
+    lock from the store it read, False when it updated one (a dangling body adopted back counts as
+    an update).
 
     An over-cap hook raises `HookTooLong` BEFORE anything is written, so a refusal never half-writes
     or clobbers the entry it was updating. `allow_over_cap_hook` exists for the movers only (rehome,
@@ -316,6 +329,7 @@ def add_or_update_entry(proj, title, hook, body="", type_=None, pin=False,
             if adopted is not None:
                 entries.append(adopted)
                 by_slug[slug] = adopted
+        created = slug not in by_slug
         if slug in by_slug:
             e = by_slug[slug]
             # A pinned target refuses an ORDINARY add - the write-permission gate this function
@@ -354,7 +368,7 @@ def add_or_update_entry(proj, title, hook, body="", type_=None, pin=False,
     if not store_existed and store_dir.exists():      # this add created a brand-new store dir:
         sig.bump_stores_generation()                  # bust the cross-tree dir-cache so recall sees it
     _warn_dangling_wikilinks(anchor, "%s\n%s" % (e.hook or "", e.body or ""), slug)
-    return slug
+    return slug, created
 
 
 def add_with_advice(proj, title, hook, body="", type_=None, pin=False, scope_default="",
@@ -369,9 +383,8 @@ def add_with_advice(proj, title, hook, body="", type_=None, pin=False, scope_def
     _require_known_type(type_)                # same refusal order as add_or_update_entry
     target = slug or slugify(title, type_)
     _require_valid_slug(target)
-    created = not us.body_path(_anchor(os.path.abspath(str(proj))), target).is_file()
-    slug = add_or_update_entry(proj, title=title, hook=hook, body=body, type_=type_, pin=pin,
-                               scope_default=scope_default, slug=slug)
+    slug, created = upsert_entry(proj, title=title, hook=hook, body=body, type_=type_, pin=pin,
+                                 scope_default=scope_default, slug=slug)
     return slug, created, _add_advice(hook, body)
 
 
