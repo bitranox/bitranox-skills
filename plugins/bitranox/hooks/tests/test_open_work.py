@@ -170,7 +170,7 @@ def test_a_malformed_field_is_refused_and_nothing_is_written(tmp_path, field, va
 
 @pytest.mark.parametrize("kw", [{"origin": "ME"}, {"raised": "yesterday"},
                                 {"raised": "2026-02-30"}, {"raised": "2026-10-08\n"},
-                                {"raised": "٢026-10-08"}, {"origin": ["USER"]}])
+                                {"raised": "\u0662026-10-08"}, {"origin": ["USER"]}])
 def test_a_bad_origin_or_date_is_refused(tmp_path, kw):
     with pytest.raises(ow.MalformedField):
         _add(_backlog(tmp_path), 10, **kw)
