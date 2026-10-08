@@ -1,88 +1,114 @@
-# STALE - read 2026-10-08, work continued
+# Handover - 2026-10-08 14:35, [17] being built (plan Task 1 of 10 done, branch not pushed); [16] shipped as 8.6.0/8.6.1
 
-Session A (worktree `jev-shadow`). Session B (worktree `notify-decide-failed`, branch
-`mods-memory-backlog-tools`) is building [17] as option (3), memory and backlog as model-callable
-tools; it holds the 8.7.x bump on that branch and re-bumps above master at push time.
+Two sessions are in play. Session A (worktree `jev-shadow`) shipped [16]; its state below is carried
+from its 13:30 handover (commit 8f1573be) unchanged in substance. Session B (worktree
+`notify-decide-failed`) is building [17].
 
 ## In flight
 
-- Nothing part-done. CI for 4bbad193 (the [19] closure, OPEN-WORK.md only) was still running at
-  writing time; the three earlier backlog pushes today (ed7a1ae8, a2c8f976, b766189d) were green
-  on every cell.
+- Session B, [17]: the user chose to build the memory and backlog tools as a Claude Code mod
+  (option 3), then agreed the design one decision at a time. Implementation runs subagent-driven
+  from `docs/plans/2026-10-08-mods-memory-backlog-tools-plan.md`. Task 1 (open_work.py read side)
+  is done and reviewed clean; Tasks 2-10 are not started. The progress ledger is
+  `.bitranox/sdd/progress.md` in the `notify-decide-failed` worktree (gitignored there, so resume
+  FROM that worktree); it also lists the reviewer's minor findings for the final review and the two
+  plan deviations already applied.
+- Session A: nothing is running. CI is green on 8.6.1 (f7326534) and on the 3.14-matrix commit
+  079f9a93; release v8.6.1 is published (tag on 079f9a93); 8.6.0 has no release, its CI was red.
+- [12] belongs to session A and waits on time: step 6 needs about a week of decide rows, earliest
+  2026-10-13.
 
 ## Committed, or not
 
-- Pushed to master: ed7a1ae8 ([19] worktrees and branches; [430]/[440] carried in), a2c8f976
-  ([400] closed), b766189d ([150] closed), 4bbad193 ([19] closed).
-- Memory store (the softdev tree-top `.claude-memory/`, its own git): commit 5439f45 holds this
-  session's 6 new and 2 amended facts plus store OPEN-WORK [70]/[80]. Peer sessions have UNCOMMITTED
-  edits in that store (about 20 facts); they are not ours, leave them to their sessions or the
-  dream.
-- Not in any git: `apps/utils/bmk/OPEN-WORK.md` gained [20] (that file is untracked by the user's
-  open decision, bmk [5]). The main checkout's gitignored `.plan/` holds `TODO-JEV.md` and
-  `TODO-JEV.staged.md` ([150]) and `worktree-archive-2026-10-08/` (diffs of the 4 removed dirty
-  worktrees, `deleted-branches.txt` now 129 rows).
-- Contribution queue gained 3 entries this session: a landed-on-master jig (target compuse-toolbox
-  or git-worktrees), a compuse-git row for `git rm --cached` on an AM file, and a
-  shell-prefix-selfref-guard false positive (a standalone `c=$(...);` followed by `"$c"` was
-  refused as a prefix assignment).
+- Branch `mods-memory-backlog-tools` (worktree `notify-decide-failed`), on top of origin 8f1573be,
+  NOT pushed: the design doc, the plan, and Task 1 (977535b3: `plugins/bitranox/hooks/open_work.py`,
+  its tests, the bump to 8.7.0 in plugin.json and pyproject.toml, and a CHANGELOG `## [8.7.0]`
+  entry). Committed with this handover: OPEN-WORK [17] progress and the new [500].
+- Session A told by message that [17] holds 8.7.0; if it ships first, re-bump above it at push.
+- Not in git, nothing depends on them: the scratchpad probe plugins (`probe-both`), which answered
+  the mods API questions now recorded in the memory fact on Claude Code mods.
+- The `jev-shadow` worktree's gitignored `.plan/` is still the only copy of three experiment
+  records ([390]).
 
 ## Decided, and why - do not reopen
 
-- [19]: every object was shown to the user and removed on their yes. Evidence per object is on the
-  [19] line; `git branch <name> <sha>` from `deleted-branches.txt` restores any branch.
-- `dream-open-work` worktree's 5 unlanded backlog lines: tool work went to this repo ([430], [440]),
-  store content to the store's backlog ([70], [80]), one was already store [50].
-- [150]: the index held an older TODO-JEV.md than the file, so both versions were kept in `.plan/`.
-- Git in another checkout from this isolated session goes through `ExitWorktree` with `keep` on the
-  user's request, not a script with `cwd=`. This session used the script route before finding that
-  rule (misfiled at the soundtouch-watchdog level); the worktree-isolation fact now says so.
+- [17] design (user, 2026-10-08): v1 is backlog_list/add/close plus memory_add and contrib_add;
+  shipped INSIDE the bitranox plugin (hooks.json gains `modules`); all logic in Python behind one
+  JSON bridge (`hooks/mod_bridge.py`), TypeScript only relays; rank is REQUIRED on backlog_add and
+  the tool only enforces it is free over every line.
+- Measured on the live backlog after the design was approved, and corrected in the design doc: ranks
+  are not all tens (5, 7, 12-19, 121; three ranks on two lines each) and the file is not sorted, so
+  a rank must be a free positive integer (tens only suggested) and a new line goes after the item
+  with the largest smaller rank.
+- Probed on 2.1.290: one hooks.json holds classic hooks AND a module (both ran); a registered tool
+  answers `{ result }`; `claude plugin test` has no engine beneath, so a test stubs every `$` op
+  (op hooks answer `{ value }`, session.start answers `{ cwd }`, `mock.env` for env.get).
+- The version bump and CHANGELOG moved into Task 1's commit: the repo gate refuses any plugins/
+  change without a version above origin's and a matching CHANGELOG heading. Each later task extends
+  the `[8.7.0]` entry.
+- Session A's [16] decisions: see commit 8f1573be's handover (liveness via the session registry plus
+  procStart; holders per platform; scratch 1 day, one-offs 7 days).
 
 ## Decided against, and why
 
-- [245] now: its two worktrees are locked by THIS session's process (pid 260379, its own earlier
-  subagents), so removing them needs ExitWorktree; the lock lifts when this session ends, after
-  which `git worktree remove --force` on each (no own commits; a26b133c's work is on origin) is
-  one step from any session.
-- Capturing session B's carried lessons in this nap: B is live and can nap them itself.
+- A backlog/status band or pane first (recommended, the user picked the tools instead); a separate
+  opt-in plugin (the user chose inside, accepting the unmeasured older-CLI risk, which plan Task 8
+  now measures before release); backlog logic in TypeScript (two parsers in two languages).
+- Session A: pruning this machine by hand (the hook's first run is the proof, [400]).
 
 ## Still open, untouched
 
-`OPEN-WORK.md` is the list: [12] (after 2026-10-13), [17] (session B), [18] deferred by the user,
-[96] waits on Jev data, [170]-[186] review leftovers, [200] contribution queue, [245] (see above),
-[290]-[360], [390], [410], [420], [430], [440].
+`OPEN-WORK.md` is the list: [12] (session A, after 2026-10-13), [18] deferred by the user, [19] dirty
+worktrees and branches left to judge, [245] a locked agent worktree, [390] copy the `jev-shadow`
+`.plan/` records out, [400] observe the first hook-driven prune, [410] the foreign-mount guard's
+missing test, [420] two hook rows missing from docs/architecture.md, [500] the guard proposal owed
+to the user for the &&-chaining rule (recurrence 3).
 
 ## Lessons for the next nap
 
-- When a fact seems missing, remember a fact filed at a SIBLING level never loads here: the
-  ExitWorktree rule sat at soundtouch-watchdog while this repo needed it; the tree dream should
-  re-home it and merge it with reference-in-a-worktree-isolated-session-scratchpad-scripts-edit-then-cp.
-- Carried from session B (still not confirmed napped, B may take them): take a run id from the
-  listing's JSON in the same step; convert a token count with the recorded price before deciding
-  on it; a blind panel over the non-chosen kinds is cheap; tooling: EnterWorktree on an existing
-  path tightens every later Bash call - prefer `git worktree add` plus absolute paths; tooling:
-  `claude -p` takes the prompt right after `-p`; and the 10:35 list in commit 31b9e205.
+- When a heredoc resolver's assertions are the safety check, put && on the heredoc OPENER line: a
+  terminator ends the statement, so a failed assertion let the next line commit conflict markers
+  (already captured, recurrence 3; the guard proposal is [500]).
+- When a design fixes rules about existing data, count the live data first (already captured as
+  feedback-measure-the-live-data-before-a-design-fixes-rules-about-it).
+- When a plan puts the version bump in its last task, move it to the first commit that touches
+  plugins/: this repo's commit gate refuses the commit otherwise, and later commits ride that bump.
+- When a worktree-isolated session runs tests, drop the `env -u VIRTUAL_ENV` prefix (refused) and use
+  `uv run --with pytest --with PyYAML --with lxml --with defusedxml --with ruamel.yaml --with httpx2
+  python -m pytest ...`; write scripts with Write and run them with python3, never heredocs.
+- When a tracked plan or handover names a test host, key or private path, scrub it before the
+  push and fold the fix into the commit that introduced it (Task 9 named the Windows dev VM).
+- tooling: the plan-writing skill never asks whether the repo gates version bumps per commit; a plan
+  for this repo that bumps last is unexecutable as written.
+- Carried from session A's 13:30 handover (rmtree onexc re-call, mutation-arm failure lines, mmap
+  trackfd, unix socket path limit, Windows dev box before push, workflow-change tag refusal, run the
+  route a doc names, merge a live session's handover, bump pyproject with plugin.json) and from
+  session B's 11:50 handover (31b9e205): not yet confirmed napped.
 
 ## The exact next action
 
-Top live items are not workable now: [12] waits on a date, [17] is session B's, [18] is deferred,
-[96] waits on data. So take [170], the top found item that can be worked: read its line in
-`OPEN-WORK.md`, re-verify each of its 12 follow-ups against current master (several may be fixed
-since 2026-09-25), and ask the user before fixing the ones that still hold.
+[17] stays the top open USER item and is mid-build: from the `notify-decide-failed` worktree, invoke
+bitranox:process-agents-subagent-driven-development on
+`docs/plans/2026-10-08-mods-memory-backlog-tools-plan.md`; the ledger says Task 1 is done, so it
+resumes at Task 2 (`task_brief.py <plan> 2`). Arm the model gate first (the skill says how). Before
+any push, `git fetch` and re-check origin's version against 8.7.0.
 
 ## Files that matter
 
-- `OPEN-WORK.md` ([19], [150], [400] closed today; [430], [440] new)
-- the memory store's `OPEN-WORK.md` (store backlog, [70] and [80] new)
-- the bmk repo's `OPEN-WORK.md` (sibling `apps/utils/bmk`, [20] new)
+- `docs/plans/2026-10-08-mods-memory-backlog-tools-plan.md` and `-design.md`
+- `plugins/bitranox/hooks/open_work.py`, `plugins/bitranox/hooks/tests/test_open_work.py`
+- `.bitranox/sdd/progress.md` (worktree-local ledger), `OPEN-WORK.md` ([17], [500])
+- Session A: `plugins/bitranox/hooks/tmp_prune.py`, `plugins/bitranox/hooks/tmp-prune-hook.py`,
+  `plugins/bitranox/hooks/process_liveness.py`
 
 ## How to verify
 
-- `uv run <plugin>/skills/compuse-toolbox/scripts/ci_wait.py --sha 4bbad1934b95c9febe157e537178b09eeca76dac`
-  exits 0.
-- `git worktree list` shows only `jev-shadow`, session B's worktrees and the two locked agent
-  worktrees of [245]; `git branch` lists no `worktree-agent-*` other than those two.
-- In the memory store, `git show --stat 5439f45` lists the 6 new facts and 2 amended ones.
+- In the `notify-decide-failed` worktree: `git log --oneline origin/master..HEAD` shows the design,
+  two plan commits, Task 1 and this handover; `uv run --with pytest --with PyYAML --with lxml
+  --with defusedxml --with ruamel.yaml --with httpx2 python -m pytest
+  plugins/bitranox/hooks/tests/test_open_work.py -q` passes 10.
+- Session A: `uv run <plugin>/skills/compuse-toolbox/scripts/ci_wait.py --sha
+  f73265348c6842bf1db3e635ba963313704bbf07` exits 0.
 
 Read this, then replace the first line with `# STALE - read <date>, work continued`. Do not delete
 it - if this session ends badly it is the only record of where things stood.
