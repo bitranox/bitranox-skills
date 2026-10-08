@@ -29,6 +29,16 @@ than the change, so entries reconstructed from them would read like coverage wit
 a hole nobody has drawn a line under is one that gets rediscovered and half-filled - which is how
 two "versions with no entry" notes came to sit in this file disagreeing with it.
 
+## [8.7.1]
+
+### Fixed
+
+- `coding-python-logging`: four statements made false by lib_log_rich 6.5.0 are corrected, mirrored
+  from the library repo. `pywin32` now comes from the `eventlog` extra (`lib_log_rich[eventlog]`)
+  instead of being undeclared; `LogLevel` and string keys may be mixed in `console_styles`; and a
+  `console_adapter_factory` adapter without `flush()` is refused by `init()` with a `TypeError`
+  rather than accepted until `shutdown()` raised `AttributeError`. Each states the version it holds from.
+
 ## [8.7.0]
 
 ### Added
