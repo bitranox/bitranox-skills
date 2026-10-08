@@ -34,9 +34,9 @@ jobs:
         python-version: ["3.11", "3.12", "3.13", "3.14"]
         include:
           - os: windows-latest
-            python-version: "3.13"
+            python-version: "3.14"
           - os: macos-latest
-            python-version: "3.13"
+            python-version: "3.14"
     steps:
       # The gate fails any tracked .py/.sh/.json containing CRLF, so a Windows checkout must not
       # rewrite them on the way in. BOTH settings are required and they stop different things:
