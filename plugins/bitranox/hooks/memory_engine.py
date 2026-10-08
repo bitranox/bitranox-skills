@@ -35,6 +35,7 @@ from pathlib import Path
 
 import capture_constraints
 import self_improve_signals as sig
+import tell_chars
 import uuid_store as us
 
 SCOPE_BEGIN = sig.SCOPE_MARK_BEGIN          # <!-- bitranox:self-learning -->
@@ -531,9 +532,6 @@ def _ref_slug(raw):
     return _canon_slug(core)
 
 
-_FENCE_RX = re.compile(r"^ {0,3}(`{3,}|~{3,})(.*)$")
-
-
 def _blank(chars, start, end):
     """Overwrite chars[start:end] with spaces, leaving newlines so line structure survives."""
     for i in range(start, end):
@@ -541,32 +539,15 @@ def _blank(chars, start, end):
             chars[i] = " "
 
 
-def _is_fence_opener(m):
-    """CommonMark: an opener may carry an info string, but a BACKTICK fence's may hold no backtick.
-
-    Without that clause a prose line merely BEGINNING with an inline span (```text, ```bash) reads
-    as an opener, and the block it opens never closes - so the rest of the fact is blanked and every
-    real ref in it stops being reported. Measured on the live store, where the unit tests were green.
-    """
-    return not (m.group(1)[0] == "`" and "`" in m.group(2))
-
-
 def _mask_fenced_blocks(chars, text):
-    """Blank every fenced code block in place. A closer must be bare (no info string); an unclosed
-    fence runs to the end of the text."""
-    pos, fence = 0, None
-    for line in text.splitlines(keepends=True):
-        bare = line.rstrip("\n")
-        m = _FENCE_RX.match(bare)
-        if fence is None:
-            if m and _is_fence_opener(m):
-                fence = (m.group(1)[0], len(m.group(1)))
-                _blank(chars, pos, pos + len(bare))
-        else:
-            ch, width = fence
-            if m and m.group(1)[0] == ch and len(m.group(1)) >= width and not m.group(2).strip():
-                fence = None
-            _blank(chars, pos, pos + len(bare))
+    """Blank every fenced code block in place, fence lines included, by the shared fence rule
+    (`tell_chars.code_line_flags`). A missed opener is the costly direction here: a block read as
+    prose reports every quoted [[ref]] in it as dangling."""
+    lines = tell_chars.split_lines(text, keepends=True)
+    pos = 0
+    for line, is_code in zip(lines, tell_chars.code_line_flags(lines)):
+        if is_code:
+            _blank(chars, pos, pos + len(line))
         pos += len(line)
 
 

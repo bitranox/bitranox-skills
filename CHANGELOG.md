@@ -29,6 +29,17 @@ than the change, so entries reconstructed from them would read like coverage wit
 a hole nobody has drawn a line under is one that gets rediscovered and half-filled - which is how
 two "versions with no entry" notes came to sit in this file disagreeing with it.
 
+## [8.7.3]
+
+### Fixed
+
+- Hooks: one fence rule decides what is code. `tell_chars.code_line_flags` follows CommonMark and
+  judges a fence's indentation against the list item it sits in; the tell sweep and rewriter, the
+  memory engine's wikilink masking and the harness front-matter checks all use it. Before, they
+  disagreed: the tell side let an indented example fence nested in a block close it early, so the
+  rest of the block was read as prose, and the other two missed a fence inside a list item, so its
+  code was read as prose.
+
 ## [8.7.2]
 
 ### Fixed

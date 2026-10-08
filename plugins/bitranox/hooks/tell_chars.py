@@ -54,9 +54,15 @@ _TELL = re.compile("[" + _char_class() + "]")
 _INLINE = re.compile(r"(?<!`)(`+)(?!`)(.+?)(?<!`)\1(?!`)")
 
 # A fence line, after its indentation: a run of three or more backticks or tildes, then an info
-# string. Indentation is not limited to three spaces here: a fence nested in a list item sits
-# deeper, and reading it as prose would flag every deliberate example inside it.
+# string. How deep the line may be indented is judged against the block it sits in (see
+# `code_line_flags`), not here: a fence nested in a list item sits deeper than three spaces.
 _FENCE_RUN = re.compile(r"(`{3,}|~{3,})(.*)")
+# CommonMark: four columns of indentation beyond the enclosing block's content make indented code,
+# so a fence-looking line that deep is content, never an opener or a closer.
+_CODE_INDENT = 4
+_TAB_WIDTH = 4
+# A list item marker and the whitespace after it; group(0) ends where the item's content starts.
+_LIST_ITEM = re.compile(r"[ \t]*(?:[-*+]|\d{1,9}[.)])(?:[ \t]+|$)")
 
 # A PDF or HTML extraction marks a WRAPPED line with U+2190 at the join. Two shapes are artifacts,
 # one is prose:
@@ -114,31 +120,88 @@ def fence_opener(line):
     return m.group(1)[0], len(m.group(1))
 
 
+def _indent_columns(line):
+    """How many columns of spaces and tabs `line` starts with, a tab advancing to the next stop."""
+    return len(line[: len(line) - len(line.lstrip(" \t"))].expandtabs(_TAB_WIDTH))
+
+
+def _item_content_column(line):
+    """The column where a list item's content starts when `line` opens one, else None."""
+    item = _LIST_ITEM.match(line.rstrip("\r\n"))
+    if item is None:
+        return None
+    columns = len(item.group(0).expandtabs(_TAB_WIDTH))
+    return columns if item.group(0).endswith((" ", "\t")) else columns + 1
+
+
+def _container_column(lines, index, floor):
+    """The content column of the block holding `lines[index]`: a list item's content column, or 0
+    at top level. The walk goes back, no further than the last fence line `floor`, to the nearest
+    less-indented line; a deeper paragraph inside an item is passed over on the way to it."""
+    columns = _indent_columns(lines[index])
+    for prior in reversed(lines[floor + 1:index]):
+        prior_columns = _indent_columns(prior)
+        if not prior.strip() or prior_columns >= columns:
+            continue
+        item = _item_content_column(prior)
+        if item is not None:
+            return item
+        if prior_columns == 0:
+            return 0
+    return 0
+
+
+def _opens(lines, index, floor):
+    """(char, width, container) for the fence `lines[index]` opens, else None: a fence run with an
+    allowed info string, indented less than four columns into the block it sits in."""
+    run = fence_opener(lines[index])
+    if run is None:
+        return None
+    container = _container_column(lines, index, floor)
+    if _indent_columns(lines[index]) - container >= _CODE_INDENT:
+        return None
+    return run[0], run[1], container
+
+
 def _closes(line, fence):
-    """Whether `line` closes the block `fence` = (char, width) opened: the same character, a run
-    at least as long, and nothing after it."""
-    m = _FENCE_RUN.fullmatch(line.lstrip().rstrip("\r\n"))
-    return (m is not None and m.group(1)[0] == fence[0] and len(m.group(1)) >= fence[1]
-            and not m.group(2).strip())
+    """Whether `line` closes the block `fence` = (char, width, container) opened: the same
+    character, a run at least as long, nothing after it, and less than four columns into the
+    block the opener sat in. A deeper fence line is an example inside the block."""
+    char, width, container = fence
+    m = _FENCE_RUN.fullmatch(line.lstrip(" \t").rstrip("\r\n"))
+    return (m is not None and m.group(1)[0] == char and len(m.group(1)) >= width
+            and not m.group(2).strip() and _indent_columns(line) - container < _CODE_INDENT)
+
+
+def code_line_flags(lines):
+    """One bool per line of `lines` (with or without their endings): True for a fence line and for
+    every line inside a fenced block. An unclosed fence runs to the end.
+
+    The one fence rule every hook module uses, so they cannot disagree about what is code; it
+    follows CommonMark, judging indentation against the enclosing list item. Two shapes once split
+    the modules: an indented example fence nested in a block closed it early under an any-depth
+    rule, and a fence inside a list item was missed under a three-space rule. A fence closes only
+    on a bare run of its OWN character at least as long as its opener, so a `~~~` inside a backtick
+    block or a three-backtick example inside a four-backtick block is content."""
+    flags, fence, floor = [], None, -1
+    for index, line in enumerate(lines):
+        if fence is None:
+            fence = _opens(lines, index, floor)
+            fence_line = fence is not None
+        else:
+            fence_line = _closes(line, fence)
+            if fence_line:
+                fence = None
+        flags.append(fence_line or fence is not None)
+        if fence_line:
+            floor = index
+    return flags
 
 
 def lines_with_code_state(text, keepends=False):
-    """Yield (line, is_code) for every line of `text`: is_code is True for a fence line and for
-    every line inside a fenced block. An unclosed fence runs to the end.
-
-    Closing follows CommonMark. A fence closes only on a bare run of its OWN character at least as
-    long as its opener: toggling on any fence-looking line let a `~~~` inside a backtick block close
-    it, and a four-backtick fence showing a three-backtick example close at the example - after
-    which the example was treated as prose and the real prose after the block as code."""
-    fence = None
-    for line in split_lines(text, keepends=keepends):
-        if fence is None:
-            fence = fence_opener(line)
-            yield line, fence is not None
-            continue
-        if _closes(line, fence):
-            fence = None
-        yield line, True
+    """Yield (line, is_code) for every line of `text`, is_code as `code_line_flags` decides it."""
+    lines = split_lines(text, keepends=keepends)
+    yield from zip(lines, code_line_flags(lines))
 
 
 def transform_outside_code(text, fn, edges=False):

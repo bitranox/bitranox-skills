@@ -24,6 +24,7 @@ import sys
 from pathlib import Path
 
 import skill_frontmatter
+import tell_chars
 
 # A plugin root announces itself with one of these; either means some other gate owns the content.
 PLUGIN_MANIFESTS = ("plugin.json", "marketplace.json")
@@ -856,35 +857,11 @@ def frontmatter_unterminated(path):
     return not any(line.strip() == "---" for line in lines[1:])
 
 
-#: A fenced code block opener/closer. Skills that DOCUMENT front matter show one in a fence,
-#: so a scan that cannot see fences reads the example as a real second block.
-_FENCE_RX = re.compile(r"^ {0,3}(`{3,}|~{3,})(.*)$")
-
-
 def _fenced_lines(lines):
-    """Indices of lines inside a fenced code block, by the CommonMark rules.
-
-    Two rules carry the weight: a BACKTICK fence's info string may hold no backtick, and a
-    closer must be bare and at least as long as its opener. Skipping either makes a prose line
-    that opens with an inline code span read as a fence, and everything after it disappears."""
-    inside, char, width, start = set(), None, 0, None
-    for index, line in enumerate(lines):
-        match = _FENCE_RX.match(line)
-        if char is None:
-            if match is None:
-                continue
-            fence, info = match.group(1), match.group(2)
-            if fence[0] == "`" and "`" in info:
-                continue
-            char, width, start = fence[0], len(fence), index
-        elif match is not None:
-            fence, info = match.group(1), match.group(2)
-            if fence[0] == char and len(fence) >= width and not info.strip():
-                inside.update(range(start, index + 1))
-                char, start = None, None
-    if char is not None:                      # an unclosed fence runs to EOF
-        inside.update(range(start, len(lines)))
-    return inside
+    """Indices of lines in a fenced code block, fence lines included, by the shared fence rule
+    (`tell_chars.code_line_flags`). Skills that DOCUMENT front matter show one in a fence, so a scan
+    that cannot see fences reads the example as a real second block."""
+    return {index for index, is_code in enumerate(tell_chars.code_line_flags(lines)) if is_code}
 
 
 def _bare_delimiters(lines):
