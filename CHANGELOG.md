@@ -50,6 +50,14 @@ two "versions with no entry" notes came to sit in this file disagreeing with it.
   the model five tools - `mcp__bitranox__backlog_list`, `backlog_add`, `backlog_close`,
   `memory_add` and `contrib_add` - each relayed to `mod_bridge.py`, whose envelope it returns as JSON text.
 
+### Compatibility
+
+- The five tools need Claude Code 2.1.259 or later, the first release that loads a hooks module
+  registering on `session.start`. Claude Code 2.1.241 and older ignore the `modules` key. On
+  2.1.242 to 2.1.258 the module fails to load with `"session.start" is not an event` and an
+  error is logged, and the tools are absent. Every classic hook runs unchanged on all of these
+  (checked on 2.1.200, 2.1.241, 2.1.242 and 2.1.258 against the unchanged plugin).
+
 
 
 ## [8.7.4]
