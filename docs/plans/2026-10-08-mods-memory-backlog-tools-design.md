@@ -58,7 +58,7 @@ model --tool_use--> mcp__bitranox__<tool>
 | `backlog_add`   | `rank*`, `origin*` (`USER`, `FOUND`), `what*`, `size*`, `open*`, `next*`, `raised` (`YYYY-MM-DD`, `YYYY-MM-DD?`, `unknown`; default today plus `?`) | `{rank, line}`                                                    |
 | `backlog_close` | `rank*`, `reason*`                                                                                                                                  | `{rank, line}`                                                    |
 | `memory_add`    | `title*`, `hook*`, `body*`, `level` (dir; default the session cwd), `type`, `slug`                                                                  | `{slug, level, action: created or updated, warnings}`             |
-| `contrib_add`   | `what*`, `target*` (`hook`, `skill`), `why*`                                                                                                        | `{queued, reason?}`                                               |
+| `contrib_add`   | `what*`, `target*` (one line, e.g. `hook` or `skill:<name>`, as the live queue spells it), `why*`                                                   | `{queued, reason?}`                                               |
 
 Envelope: `{ok: true, tool, data}` or `{ok: false, tool, error: {kind, message}}`, where `kind`
 names the typed exception (`RankTaken`, `UnknownRank`, `AlreadyClosed`, `MalformedField`,
@@ -69,10 +69,15 @@ Backlog rules the tool enforces (and no others):
 
 - the file is `OPEN-WORK.md` at the git top level of the session cwd; `backlog_add` creates it
   with the standard header when absent, `backlog_list` returns an empty list with a note;
-- a rank is a multiple of ten and free over EVERY line, closed ones included; a refusal names the
-  nearest free tens;
-- the new line is inserted in rank order, on an item boundary, and the file grows by exactly one
-  line (asserted before writing);
+- a rank is a positive integer free over EVERY line, closed ones included; a refusal names the
+  nearest free tens as suggestions. Tens are the convention, not a rule the tool enforces: the
+  live backlog measured 2026-10-08 holds 5, 7, 12-19 and 121 beside the tens, and already has
+  three ranks on two lines each (14, 16, 95);
+- the file is not sorted by rank (same measurement), so "rank order" means: the new line goes
+  directly after the item whose rank is the largest one below it, or before the first item when
+  none is smaller; the file grows by exactly one line (asserted before writing);
+- a rank that labels more than one OPEN line cannot be closed by number (`AmbiguousRank`), since
+  the tool cannot tell which one is meant;
 - closing writes `- [x]` plus `| closed: <reason>`; the line is never deleted;
 - a missing `raised` is today's date with `?`, never an inferred date.
 
