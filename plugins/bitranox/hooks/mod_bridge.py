@@ -23,11 +23,16 @@ class BadInput(ValueError):
 
 
 class BadRequest(ValueError):
-    """A request the bridge cannot run: not JSON, not an object, an unknown tool."""
+    """A request the bridge cannot run: not JSON, not an object, an unknown tool. `tool` is the
+    tool name when it was parsed and is known, so the envelope can still name it."""
+
+    def __init__(self, message, tool=None):
+        super().__init__(message)
+        self.tool = tool
 
 
 REFUSALS = (ow.BacklogError, BadInput, ME.SlugCollision, ME.HookTooLong, ME.EmptyBody,
-            ME.PinnedEntry, ME.InvalidSlug, OSError)
+            ME.PinnedEntry, ME.InvalidSlug, ME.ExcludedLevel, OSError)
 
 
 def _backlog_list(inp, cwd):
@@ -54,8 +59,17 @@ def _text(inp, name):
     return value
 
 
+def _level(inp, cwd):
+    value = inp.get("level")
+    if value is None:
+        return cwd
+    if not isinstance(value, str) or not value.strip():
+        raise BadInput("level must be a non-empty string (a directory), or absent for the session cwd")
+    return Path(value)
+
+
 def _memory_add(inp, cwd):
-    level = Path(inp.get("level") or cwd)
+    level = _level(inp, cwd)
     if not level.is_dir():
         raise BadInput("level is not a directory: %s" % level)
     type_ = inp.get("type")
@@ -73,7 +87,7 @@ def _contrib_add(inp, cwd):
     target = ow.require_line(_text(inp, "target"), "target")
     proj = str(cwd)
     queued = sig.add_contribution(proj, {"what": what, "target": target,
-                                         "why": _text(inp, "why"), "source": "mod:contrib_add"},
+                                         "why": ow.require_line(_text(inp, "why"), "why"), "source": "mod:contrib_add"},
                                   strict=True)
     if queued:
         return {"queued": True}
@@ -87,13 +101,15 @@ TOOLS = {"backlog_list": _backlog_list, "backlog_add": _backlog_add,
 def _request(raw):
     try:
         req = json.loads(raw)
-    except ValueError as exc:
+    except (ValueError, RecursionError) as exc:
         raise BadRequest("stdin is not JSON: %s" % exc) from None
+    tool = req.get("tool") if isinstance(req, dict) else None
+    known = tool if isinstance(tool, str) and tool in TOOLS else None
     if not isinstance(req, dict) or not isinstance(req.get("input", {}), dict):
-        raise BadRequest("the request must be {\"tool\": <name>, \"input\": {...}}")
-    if req.get("tool") not in TOOLS:
-        raise BadRequest("unknown tool %r; known: %s" % (req.get("tool"), ", ".join(sorted(TOOLS))))
-    return req["tool"], req.get("input", {})
+        raise BadRequest("the request must be {\"tool\": <name>, \"input\": {...}}", known)
+    if known is None:
+        raise BadRequest("unknown tool %r; known: %s" % (tool, ", ".join(sorted(TOOLS))))
+    return known, req.get("input", {})
 
 
 def _emit(envelope, rc):
@@ -102,23 +118,28 @@ def _emit(envelope, rc):
     return rc
 
 
+def _internal(tool, exc):
+    traceback.print_exc()
+    return _emit({"ok": False, "tool": tool,
+                  "error": {"kind": "Internal",
+                            "message": "%s: %s" % (type(exc).__name__, exc)}}, 2)
+
+
 def main():
-    tool = None
     try:
         tool, inp = _request(sys.stdin.buffer.read().decode("utf-8", errors="replace"))
     except BadRequest as exc:
-        return _emit({"ok": False, "tool": tool,
+        return _emit({"ok": False, "tool": exc.tool,
                       "error": {"kind": "BadRequest", "message": str(exc)}}, 2)
+    except Exception as exc:  # noqa: BLE001 - the relay must always get an envelope
+        return _internal(None, exc)
     try:
         data = TOOLS[tool](inp, Path(os.getcwd()))
     except REFUSALS as exc:
         return _emit({"ok": False, "tool": tool,
                       "error": {"kind": type(exc).__name__, "message": str(exc)}}, 1)
     except Exception as exc:  # noqa: BLE001 - the relay must always get an envelope, never a bare traceback
-        traceback.print_exc()
-        return _emit({"ok": False, "tool": tool,
-                      "error": {"kind": "Internal",
-                                "message": "%s: %s" % (type(exc).__name__, exc)}}, 2)
+        return _internal(tool, exc)
     return _emit({"ok": True, "tool": tool, "data": data}, 0)
 
 
