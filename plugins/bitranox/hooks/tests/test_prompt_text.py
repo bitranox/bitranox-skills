@@ -241,6 +241,32 @@ def test_notification_fields_are_empty_for_anything_else():
         assert P.notification_fields(text) == {}, text
 
 
+# ---- which notification is a failed background command ----------------------------------------
+# The envelope carries no type element: a background command and an agent are told apart only by
+# the summary's opening words, in the shapes the transcripts store.
+
+def _note(status, summary):
+    return ("<task-notification>\n<task-id>b1</task-id>\n<status>%s</status>\n"
+            "<summary>%s</summary>\n</task-notification>" % (status, summary))
+
+
+def test_a_failed_background_command_is_recognised():
+    assert P.failed_background_command(
+        _note("failed", 'Background command "Wait for CI" failed with exit code 1'))
+
+
+def test_nothing_else_is_a_failed_background_command():
+    for text in (_note("completed", 'Background command "Wait for CI" completed (exit code 0)'),
+                 _note("killed", 'Background command "Wait for CI" was stopped'),
+                 _note("failed", 'Agent "Fix it" failed: Agent terminated early'),
+                 _note("failed", 'Monitor "CI verdict" failed'),
+                 _note("failed", ""),
+                 # typed text quoting the words is a prompt, not a notification
+                 'Background command "Wait for CI" failed with exit code 1',
+                 "", None):
+        assert not P.failed_background_command(text), text
+
+
 # ---- harness turns that no PREFIX can match ---------------------------------------------------
 # Measured over the corpus: of 1,409 turns this module called typed, 112 (7.9%) were the harness
 # talking - 82 interruption notices, 16 opening with a tag the prefix tuple does not list, and 14

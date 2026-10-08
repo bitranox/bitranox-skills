@@ -13,8 +13,10 @@ What decide mode promises:
 * Jev answers and picks nothing: nothing is nudged - "no skill" is an answer, not a failure;
 * Jev does not answer (deadline, HTTP error, no key, malformed answer), or picks a skill the
   session may no longer have: the keyword nudge, byte for byte;
-* a task notification is not a prompt: it is nudged as with the classifier off, and still handed
-  to the shadow child, so Jev's answers on notifications keep being logged;
+* a failed background command's notification is decided like a typed prompt, except that a
+  silent Jev nudges nothing (the keyword match scores no machine turn);
+* every other task notification is nudged as with the classifier off, and still handed to the
+  shadow child, so Jev's answers on those keep being logged;
 * a hand-back from a subagent or another session is not a prompt either: no request, no nudge;
 * one skill is nudged at most once per session whichever path nudged it;
 * one comparison row per prompt lands in the shadow log, saying which path decided.
@@ -228,24 +230,80 @@ def test_control_a_cached_pick_of_this_plugins_shipped_skill_is_still_nudged(env
     assert _rows(env["home"])[-1]["regex"]["roster"] == "cache"
 
 
-# ---- a task notification is not a prompt ------------------------------------------------------
+# ---- a failed background command is decided ---------------------------------------------------
 
-def test_decide_nudges_a_task_notification_exactly_as_off_does(env, monkeypatch, capsys,
-                                                                spawned):
+def test_decide_nudges_the_confident_jev_pick_on_a_failed_background_command(env, monkeypatch,
+                                                                              capsys, spawned):
+    env["fake"].body = _answer(0.9, JEV_PICK, 0.95)
+    _decide(env["home"])
+    out = _run(monkeypatch, capsys, "s-failed", prompt=NOTIFICATION)
+    assert _nudged(out) == ["bitranox:" + JEV_PICK]
+    assert len(env["fake"].requests) == 1
+    # The decision row replaces the comparison, so no shadow child is started as well.
+    assert _shadow_children(spawned) == []
+    [row] = _rows(env["home"])
+    assert (row["mode"], row["decide_path"]) == ("decide", "jev")
+    assert row["regex"]["notify_view"] == cl.NOTIFY_VIEW
+
+
+def test_off_nudges_nothing_on_a_failed_background_command(env, monkeypatch, capsys, spawned):
     env["fake"].body = _answer(0.9, JEV_PICK, 0.95)
     _config(env["home"])
-    off = _run(monkeypatch, capsys, "s-note-off", prompt=NOTIFICATION)
+    assert _run(monkeypatch, capsys, "s-failed-off", prompt=NOTIFICATION) == ""
+    assert env["fake"].requests == [] and _shadow_children(spawned) == []
+
+
+def test_a_silent_jev_nudges_nothing_on_a_failed_background_command(env, monkeypatch, capsys):
+    # The keyword fallback scores no machine turn, so a failed command has nothing to fall back to.
+    env["fake"].status = 500
+    _decide(env["home"])
+    assert _run(monkeypatch, capsys, "s-failed-silent", prompt=NOTIFICATION) == ""
+    [row] = _rows(env["home"])
+    assert row["decide_path"].startswith("fallback-") and row["nudged"] == []
+
+
+# ---- every other task notification is not decided ----------------------------------------------
+
+def _notification(status, summary, extra=""):
+    return ("<task-notification>\n<task-id>b6bgpwg53</task-id>\n<status>%s</status>\n"
+            "<summary>%s</summary>\n%s</task-notification>" % (status, summary, extra))
+
+
+# Measured over 964 notifications: Jev's picks on these kinds were wrong or of no use, so they
+# stay nudged as with the classifier off and keep being shadowed.
+OTHER_NOTIFICATIONS = {
+    "command-completed": _notification(
+        "completed", 'Background command "Run the gate" completed (exit code 0)'),
+    "command-killed": _notification("killed", 'Background command "Run the gate" was stopped'),
+    "agent-failed": _notification(
+        "failed", 'Agent "Fix the parser" failed: Agent terminated early due to an API error',
+        "<result>weekly limit</result>\n"),
+    "agent-completed": _notification(
+        "completed", 'Agent "Fix the parser" finished', "<result>done</result>\n"),
+    "monitor": _notification("completed", 'Monitor "CI verdict" ended'),
+}
+
+
+@pytest.mark.parametrize("kind", sorted(OTHER_NOTIFICATIONS))
+def test_decide_nudges_any_other_task_notification_exactly_as_off_does(env, monkeypatch, capsys,
+                                                                        spawned, kind):
+    note = OTHER_NOTIFICATIONS[kind]
+    env["fake"].body = _answer(0.9, JEV_PICK, 0.95)
+    _config(env["home"])
+    off = _run(monkeypatch, capsys, "s-note-off-" + kind, prompt=note)
     assert env["fake"].requests == [] and _shadow_children(spawned) == []
     _decide(env["home"])
-    # A confident Jev pick, and still nothing: decide acts on typed prompts only.
-    assert _run(monkeypatch, capsys, "s-note", prompt=NOTIFICATION) == off == ""
+    # A confident Jev pick, and still nothing: only a failed background command is decided.
+    assert _run(monkeypatch, capsys, "s-note-" + kind, prompt=note) == off == ""
 
 
-def test_decide_still_shadows_a_task_notification_so_its_evidence_keeps_accruing(
-        env, monkeypatch, capsys, spawned):
+@pytest.mark.parametrize("kind", sorted(OTHER_NOTIFICATIONS))
+def test_decide_still_shadows_any_other_task_notification_so_its_evidence_keeps_accruing(
+        env, monkeypatch, capsys, spawned, kind):
+    note = OTHER_NOTIFICATIONS[kind]
     env["fake"].body = _answer(0.9, JEV_PICK, 0.95)
     _decide(env["home"])
-    _run(monkeypatch, capsys, "s-note-shadow", prompt=NOTIFICATION)
+    _run(monkeypatch, capsys, "s-note-shadow-" + kind, prompt=note)
     assert len(_shadow_children(spawned)) == 1
     end = time.monotonic() + 20  # the detached child writes the row
     while not _rows(env["home"]) and time.monotonic() < end:
@@ -253,7 +311,6 @@ def test_decide_still_shadows_a_task_notification_so_its_evidence_keeps_accruing
     [row] = _rows(env["home"])
     assert row.get("mode") is None and "decide_path" not in row  # a comparison, not a decision
     assert row["regex"]["notify_view"] == cl.NOTIFY_VIEW
-    assert row["states"][0]["task_status"] == "failed"
     assert row["results"][0] is not None
 
 

@@ -150,3 +150,20 @@ def notification_fields(prompt):
         return {}
     fields = {name: _element(text, element) for name, element in _NOTIFICATION_FIELDS}
     return {k: v for k, v in fields.items() if v} if any(fields.values()) else {}
+
+
+# The envelope has no element saying what kind of task it reports: an agent, a monitor and a
+# background command all carry the same <status>. Only the summary's opening words tell a
+# background command apart, so a reworded summary reads as "not one" - the safe side, since that
+# notification is then handled exactly as every other kind is.
+_BACKGROUND_COMMAND = "Background command "
+
+
+def failed_background_command(prompt):
+    """True for the notification of a background command that FAILED (non-zero exit), else False.
+
+    It is the one notification kind a skill measurably fits: over 964 shadowed notifications Jev
+    picked a skill on 67 of 70 failed commands and on almost nothing else."""
+    fields = notification_fields(prompt)
+    return (fields.get("task_status") == "failed"
+            and fields.get("task_summary", "").startswith(_BACKGROUND_COMMAND))

@@ -52,7 +52,7 @@ worktree/branch cleanup); its own text is in git as commit e0befd4f.
 ## Still open, untouched
 
 `OPEN-WORK.md` is the list. [12] step (6) waits about a week of decide rows (earliest
-2026-10-13); [14] re-measure notification rows; [16] /tmp cleanup needs the user's
+2026-10-13); [16] /tmp cleanup needs the user's
 when/what/how; [17] identify the new Claude Code module feature; [18] deferred by the user;
 [19] 4 dirty worktrees + 24 branches left to judge; [245] `agent-a26b133c84c5141bb` was locked;
 [390] copy the jev-shadow `.plan/` records out.
@@ -94,10 +94,9 @@ when/what/how; [17] identify the new Claude Code module feature; [18] deferred b
 
 ## The exact next action
 
-[12] is blocked on time (step 6 needs about a week of decide rows), so start with [14]: count the
-skill_router notification rows logged since plugin 7.30.9
-(`~/.claude/self-improve-audit/classifier-shadow-*.jsonl`, rows carrying `notify_view`) and put
-to the user whether that is enough to re-measure; if not, ask the user [16]'s when/what/how.
+[14] is closed (8.5.0: decide mode now decides a failed background command's notification; see its
+OPEN-WORK line for the measurement). [12] is blocked on time (step 6 needs about a week of decide
+rows, earliest 2026-10-13), so start with [16]: ask the user its when/what/how.
 
 ## Files that matter
 

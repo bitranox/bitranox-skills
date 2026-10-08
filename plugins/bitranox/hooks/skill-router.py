@@ -26,8 +26,10 @@ prompt instead: the hook asks the shadow comparison's own gate-plus-choice quest
 under the classifier's DEFAULT_DEADLINE, and nudges the ONE skill `classifier.choice_pick` returns
 - or nothing, when Jev answered and picked nothing. Only when Jev does not answer, or picks a skill
 from a cached roster that cannot be confirmed installed, does the keyword match decide, exactly as
-with the classifier off; a task notification goes that way too, and is still handed to the shadow
-child, so Jev's answers on notifications keep being logged without nudging anything. Each decide
+with the classifier off. The notification of a failed background command is decided the same way
+(the keyword match scores no machine turn, so a silent Jev nudges nothing there); every other task
+notification goes the way it does with the site off, and is still handed to the shadow child, so
+Jev's answers on those keep being logged without nudging anything. Each decide
 prompt appends one shadow-log row saying which path nudged, so `classifier_eval.py report` reads
 decide sessions like shadow ones.
 """
@@ -189,13 +191,22 @@ def _router_request(prompt, sid, triggers, transcript, cwd):
     return regex, {"fields": fields, "questions": questions}, skills
 
 
+def _decides(cfg, prompt):
+    """True when decide mode acts on this turn: a typed prompt, or the notification of a failed
+    background command. Every other turn goes the way it does with the site off."""
+    return (classifier.site_mode(cfg, "skill_router") == "decide"
+            and (prompt_text.typed_by_a_person(prompt)
+                 or prompt_text.failed_background_command(prompt)))
+
+
 def _shadows(cfg, prompt):
     """True when this turn gets a shadow comparison: every turn in shadow mode, and in decide mode
-    the task notifications decide leaves alone. No blind judgement covers a notification yet, and
-    this log is the only evidence a later decision to act on them can rest on - with decide
-    switching the shadow off, it stopped growing the day decide was turned on."""
+    the task notifications decide leaves alone. This log is the only evidence a later decision to
+    act on those kinds can rest on - with decide switching the shadow off, it would stop growing
+    the day decide was turned on."""
     mode = classifier.site_mode(cfg, "skill_router")
-    return mode == "shadow" or (mode == "decide" and bool(prompt_text.notification_fields(prompt)))
+    return mode == "shadow" or (mode == "decide" and bool(prompt_text.notification_fields(prompt))
+                                and not prompt_text.failed_background_command(prompt))
 
 
 def _shadow_skill_router(prompt, sid, triggers, transcript="", cwd=""):
@@ -303,12 +314,11 @@ def main():
         hits = match(prompt, triggers, max_skills=None)
         transcript = ev.get("transcript_path") or ""
         cfg = sig.load_config()
-        # No blind judgement has covered a turn the person did not type, so decide mode acts on
-        # typed prompts only. Every other turn goes the way it does with the site off: a task
+        # Decide mode acts on typed prompts and on a failed background command's notification
+        # (`_decides`). Every other turn goes the way it does with the site off: any other task
         # notification is still shadowed (`_shadows`), and a hand-back from a subagent or another
         # session gets neither a Jev request nor, scoring no prose, a keyword nudge.
-        if (classifier.site_mode(cfg, "skill_router") == "decide"
-                and prompt_text.typed_by_a_person(prompt)):
+        if _decides(cfg, prompt):
             _decide(prompt, sid, triggers, hits, transcript, cwd, cfg)
             return 0
         # Opt-in shadow comparison (off by default), before the per-session dedup so every

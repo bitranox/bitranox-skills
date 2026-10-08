@@ -29,6 +29,21 @@ than the change, so entries reconstructed from them would read like coverage wit
 a hole nobody has drawn a line under is one that gets rediscovered and half-filled - which is how
 two "versions with no entry" notes came to sit in this file disagreeing with it.
 
+## [8.5.0]
+
+### Changed
+
+- `skill-router.py`: with `classifier_skill_router = decide`, the notification of a background
+  command that FAILED is now decided like a typed prompt: Jev's one pick is nudged, or nothing when
+  it picks nothing, under the same 1.5 s deadline. A silent Jev nudges nothing there, since the
+  keyword match scores no machine turn. Every other notification (a command that completed or was
+  stopped, an agent, a monitor) is still nudged as with `off` and still shadowed. Measured over 964
+  shadowed notifications: Jev picked a skill on 73 of 77 failed background commands and the keyword
+  match on none; on the other kinds three blind judges rated 4 of Jev's 29 picks helpful and the
+  rest neutral.
+- `prompt_text.failed_background_command`: recognises that notification by its status plus the
+  summary's opening words, since the envelope carries no element naming the task kind.
+
 ## [8.4.1]
 
 ### Fixed
