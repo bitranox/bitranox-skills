@@ -30,9 +30,11 @@ ON_LINUX = sys.platform.startswith("linux")
 def age_tree(path: Path, days: float) -> None:
     """Set the mtime of `path` and everything under it to `days` ago (children first)."""
     stamp = NOW - days * DAY
+    # Windows has no utime(follow_symlinks=False); the fixtures there hold no symlinks to protect.
+    no_follow = {"follow_symlinks": False} if os.utime in os.supports_follow_symlinks else {}
     for root, dirs, files in os.walk(path, topdown=False):
         for name in files + dirs:
-            os.utime(os.path.join(root, name), (stamp, stamp), follow_symlinks=False)
+            os.utime(os.path.join(root, name), (stamp, stamp), **no_follow)
     os.utime(path, (stamp, stamp))
 
 

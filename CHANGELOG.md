@@ -29,6 +29,14 @@ than the change, so entries reconstructed from them would read like coverage wit
 a hole nobody has drawn a line under is one that gets rediscovered and half-filled - which is how
 two "versions with no entry" notes came to sit in this file disagreeing with it.
 
+## [8.6.1]
+
+### Fixed
+
+- `hooks/tests/test_tmp_prune.py`: the fixture that ages a tree called
+  `os.utime(follow_symlinks=False)`, which Windows does not implement, so every prune test errored
+  on the windows-latest cell; it now passes `follow_symlinks` only where the platform supports it.
+
 ## [8.6.0]
 
 ### Added
