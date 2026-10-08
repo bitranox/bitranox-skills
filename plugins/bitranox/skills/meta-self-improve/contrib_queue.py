@@ -89,21 +89,6 @@ def _resolve_from_session(qdir, key):
     return ""
 
 
-def _why_not_queued(proj, what, target):
-    """Why an add was refused: "shipped earlier", "rejected earlier" or "already queued".
-
-    The add itself already read the closed set through the raising loader, so an unreadable one
-    failed it before this runs; a read failure here is a change in between, and says so rather
-    than guessing "already queued"."""
-    try:
-        closed = {(r.get("what"), r.get("target") or ""): r.get("outcome")
-                  for r in sig.read_closed(proj)}
-    except OSError as exc:
-        return "already queued or closed - the closed set could not be read: %s" % exc
-    return {sig.SHIPPED: "shipped earlier", sig.REJECTED: "rejected earlier"}.get(
-        closed.get((what, target)), "already queued")
-
-
 def _read_or_report(reader, proj, what):
     """`reader(proj)`, or None after printing why it failed. An unreadable store must never be
     reported in the words an empty one produces."""
@@ -287,7 +272,7 @@ def main(argv=None):
         if not queued:
             # already queued, or CLOSED earlier - either way not a new TODO. Name the outcome that
             # closed it: "rejected" for work that was already DONE would send the reader to redo it.
-            print("not queued (%s): %s" % (_why_not_queued(proj, args.what, args.target), args.what))
+            print("not queued (%s): %s" % (sig.why_not_queued(proj, args.what, args.target), args.what))
             return 0
         print("queued: %s%s" % (args.what, " -> %s" % args.target if args.target else ""))
         return 0

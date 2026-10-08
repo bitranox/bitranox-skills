@@ -807,6 +807,21 @@ def read_closed(proj):
         return []
 
 
+def why_not_queued(proj, what, target):
+    """Why an add was refused: "shipped earlier", "rejected earlier" or "already queued".
+
+    The add itself already read the closed set through the raising loader, so an unreadable one
+    failed it before this runs; a read failure here is a change in between, and says so rather
+    than guessing "already queued"."""
+    try:
+        closed = {(r.get("what"), r.get("target") or ""): r.get("outcome")
+                  for r in read_closed(proj)}
+    except OSError as exc:
+        return "already queued or closed - the closed set could not be read: %s" % exc
+    return {SHIPPED: "shipped earlier", REJECTED: "rejected earlier"}.get(
+        closed.get((what, target or "")), "already queued")
+
+
 def _tombstone(rec, outcome, note=""):
     """The closed-record form of queue entry `rec` under `outcome`."""
     tomb = dict(rec)

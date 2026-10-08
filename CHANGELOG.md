@@ -42,6 +42,8 @@ two "versions with no entry" notes came to sit in this file disagreeing with it.
 - `hooks/memory_engine.py`: `add_with_advice` is the one write path for a captured fact - it returns
   the slug, whether it was created, and the advisory lines as data. `memory_engine.py add` now
   prints exactly those lines, so its output is unchanged.
+- `hooks/self_improve_signals.py`: `why_not_queued` is now public (moved from contrib_queue.py as
+  `_why_not_queued`), providing a reusable path for determining why a contribution was refused.
 
 
 

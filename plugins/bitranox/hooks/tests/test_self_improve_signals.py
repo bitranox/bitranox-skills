@@ -2066,3 +2066,15 @@ def test_tool_signal_offset_points_into_the_collapsed_block_at_the_live_signal()
     # Agrees with the counting predicate: a fixture-only signal counts nothing and has no offset.
     only_data = 'tests/test_x.py:12:    assert "command not found" in err'
     assert S.tool_matches_outside_fixtures(only_data) == [] and S.tool_signal_offset(only_data) is None
+
+
+def test_why_not_queued_names_the_outcome_that_closed_it(tmp_path, monkeypatch):
+    home = tmp_path / "home"
+    (home / ".claude").mkdir(parents=True)
+    monkeypatch.setenv("HOME", str(home))
+    monkeypatch.setenv("USERPROFILE", str(home))
+    proj = str(tmp_path / "proj")
+    assert S.add_contribution(proj, {"what": "fix x", "target": "hook"}, strict=True)
+    assert S.why_not_queued(proj, "fix x", "hook") == "already queued"
+    S.drain_contributions(proj, note="shipped", strict=True)
+    assert S.why_not_queued(proj, "fix x", "hook") == "shipped earlier"
