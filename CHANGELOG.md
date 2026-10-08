@@ -57,6 +57,9 @@ two "versions with no entry" notes came to sit in this file disagreeing with it.
   2.1.242 to 2.1.258 the module fails to load with `"session.start" is not an event` and an
   error is logged, and the tools are absent. Every classic hook runs unchanged on all of these
   (checked on 2.1.200, 2.1.241, 2.1.242 and 2.1.258 against the unchanged plugin).
+- On Windows the tools ran in a live headless session on Claude Code 2.1.294 with
+  `CLAUDE_CODE_GIT_BASH_PATH` unset. The machine had no WSL `bash.exe`, so a bare `bash` resolving
+  to WSL is not covered; set `CLAUDE_CODE_GIT_BASH_PATH` to Git Bash where WSL is installed.
 
 
 
