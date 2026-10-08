@@ -1,114 +1,111 @@
-# Handover - 2026-10-08 14:35, [17] being built (plan Task 1 of 10 done, branch not pushed); [16] shipped as 8.6.0/8.6.1
-
-Two sessions are in play. Session A (worktree `jev-shadow`) shipped [16]; its state below is carried
-from its 13:30 handover (commit 8f1573be) unchanged in substance. Session B (worktree
-`notify-decide-failed`) is building [17].
+# STALE - read 2026-10-08 17:15, work continued
 
 ## In flight
 
-- Session B, [17]: the user chose to build the memory and backlog tools as a Claude Code mod
-  (option 3), then agreed the design one decision at a time. Implementation runs subagent-driven
-  from `docs/plans/2026-10-08-mods-memory-backlog-tools-plan.md`. Task 1 (open_work.py read side)
-  is done and reviewed clean; Tasks 2-10 are not started. The progress ledger is
-  `.bitranox/sdd/progress.md` in the `notify-decide-failed` worktree (gitignored there, so resume
-  FROM that worktree); it also lists the reviewer's minor findings for the final review and the two
-  plan deviations already applied.
-- Session A: nothing is running. CI is green on 8.6.1 (f7326534) and on the 3.14-matrix commit
-  079f9a93; release v8.6.1 is published (tag on 079f9a93); 8.6.0 has no release, its CI was red.
-- [12] belongs to session A and waits on time: step 6 needs about a week of decide rows, earliest
-  2026-10-13.
+- [17] (the user's top live item): the memory and backlog tools as a Claude Code mod, built
+  subagent-driven from `docs/plans/2026-10-08-mods-memory-backlog-tools-plan.md` in the
+  `notify-decide-failed` worktree. Tasks 1-7 are done and reviewed; Tasks 8, 9 and 10 are not
+  started. The progress ledger `.bitranox/sdd/progress.md` (gitignored, worktree-local - resume FROM
+  that worktree) lists every task's commits, the minor findings for the final whole-branch review,
+  the plan deviations, and the Task 7 findings.
+- Fix `2421f869` (the mod answers each tool call with the envelope as JSON TEXT) was verified live
+  (Task 7 run 2) but has NOT had its own subagent task review yet. Do that first.
+- [12] belongs to the `jev-shadow` session and waits on time (earliest 2026-10-13).
 
 ## Committed, or not
 
-- Branch `mods-memory-backlog-tools` (worktree `notify-decide-failed`), on top of origin 8f1573be,
-  NOT pushed: the design doc, the plan, and Task 1 (977535b3: `plugins/bitranox/hooks/open_work.py`,
-  its tests, the bump to 8.7.0 in plugin.json and pyproject.toml, and a CHANGELOG `## [8.7.0]`
-  entry). Committed with this handover: OPEN-WORK [17] progress and the new [500].
-- Session A told by message that [17] holds 8.7.0; if it ships first, re-bump above it at push.
-- Not in git, nothing depends on them: the scratchpad probe plugins (`probe-both`), which answered
-  the mods API questions now recorded in the memory fact on Claude Code mods.
-- The `jev-shadow` worktree's gitignored `.plan/` is still the only copy of three experiment
-  records ([390]).
+- Branch `mods-memory-backlog-tools`, NOT pushed, version 8.7.0: the design, the plan, Tasks 1-6 and
+  fix `2421f869`. ORIGIN SHIPPED 8.7.0 ITSELF at about 17:00 (1d5e1ced, the coding-python-logging
+  skill) and closed [150] and [400] in its OPEN-WORK.md, so the repo gate now refuses every commit on
+  this branch until it is rebased and re-bumped above origin.
+- THIS handover.md and the reconciled OPEN-WORK.md ([17] updated, [440] added) are UNCOMMITTED in the
+  worktree for that reason - the commit was refused, not skipped. Commit them right after the rebase.
+- Uncommitted and NOT mine to judge blind: `plugins/bitranox/tsconfig.json` (untracked; appeared
+  after the Task 6 fix - written by `claude plugin test` or the fixer). Decide commit or ignore
+  before Task 10. `plugins/bitranox/.claude-plugin/types/` is gitignored by its own .gitignore.
+- The previous handover text is copied to `.bitranox/sdd/handover.prev.md` (ignored).
 
 ## Decided, and why - do not reopen
 
-- [17] design (user, 2026-10-08): v1 is backlog_list/add/close plus memory_add and contrib_add;
-  shipped INSIDE the bitranox plugin (hooks.json gains `modules`); all logic in Python behind one
-  JSON bridge (`hooks/mod_bridge.py`), TypeScript only relays; rank is REQUIRED on backlog_add and
-  the tool only enforces it is free over every line.
-- Measured on the live backlog after the design was approved, and corrected in the design doc: ranks
-  are not all tens (5, 7, 12-19, 121; three ranks on two lines each) and the file is not sorted, so
-  a rank must be a free positive integer (tens only suggested) and a new line goes after the item
-  with the largest smaller rank.
-- Probed on 2.1.290: one hooks.json holds classic hooks AND a module (both ran); a registered tool
-  answers `{ result }`; `claude plugin test` has no engine beneath, so a test stubs every `$` op
-  (op hooks answer `{ value }`, session.start answers `{ cwd }`, `mock.env` for env.get).
-- The version bump and CHANGELOG moved into Task 1's commit: the repo gate refuses any plugins/
-  change without a version above origin's and a matching CHANGELOG heading. Each later task extends
-  the `[8.7.0]` entry.
-- Session A's [16] decisions: see commit 8f1573be's handover (liveness via the session registry plus
-  procStart; holders per platform; scratch 1 day, one-offs 7 days).
+- The bridge (`plugins/bitranox/hooks/mod_bridge.py`) answers every path with exactly one ASCII
+  JSON line: exit 0 ok, 1 refused (kind named), 2 could not run (BadRequest, or `Internal` for any
+  non-refusal exception, traceback on stderr). The `Internal` catch-all and `ExcludedLevel` as a
+  refusal were added beyond the plan, because a model must always get an envelope it can act on.
+- A wrong-typed field from the model is a refusal (exit 1), never `Internal`; `level` absent or
+  null means the session cwd, anything else must be a non-empty string.
+- `memory_add` may create a new tree top or scaffold any sub-level, like the CLI's `--proj` (design
+  doc line 60).
+- A registered tool's `{ result }` must be a STRING or a content-block array: core validates it,
+  and the plugin test kit (no engine) does not. The mod returns `JSON.stringify(envelope)`.
+- The plan's Task 7 pass criterion (the FILE only) was insufficient: run 1 wrote the file while every
+  call reached the model as an error. Judge a tool e2e by the transcript's tool_result too.
 
 ## Decided against, and why
 
-- A backlog/status band or pane first (recommended, the user picked the tools instead); a separate
-  opt-in plugin (the user chose inside, accepting the unmeasured older-CLI risk, which plan Task 8
-  now measures before release); backlog logic in TypeScript (two parsers in two languages).
-- Session A: pruning this machine by hand (the hook's first run is the proof, [400]).
+- Unrolling the `tool.call` loop into five literal calls: `validate` lists the computed matcher as
+  `tool=?`, but routing is at runtime (d.ts), so it is cosmetic.
+- Using `deny` for a refusal: a refusal envelope is a normal answer the model acts on.
 
 ## Still open, untouched
 
-`OPEN-WORK.md` is the list: [12] (session A, after 2026-10-13), [18] deferred by the user, [19] dirty
-worktrees and branches left to judge, [245] a locked agent worktree, [390] copy the `jev-shadow`
-`.plan/` records out, [400] observe the first hook-driven prune, [410] the foreign-mount guard's
-missing test, [420] two hook rows missing from docs/architecture.md, [500] the guard proposal owed
-to the user for the &&-chaining rule (recurrence 3).
+`OPEN-WORK.md` holds them: [12], [18], [19], [245], [390], [400], [410], [420], [430], and the new
+[440] (the escape-trap guard proposal, unanswered).
+
+Two plan-mandated minors wait for the user at the final review (ledger): `OSError` in REFUSALS
+reports an environment fault as exit 1 not 2; `body` is required on every `memory_add`.
 
 ## Lessons for the next nap
 
-- When a heredoc resolver's assertions are the safety check, put && on the heredoc OPENER line: a
-  terminator ends the statement, so a failed assertion let the next line commit conflict markers
-  (already captured, recurrence 3; the guard proposal is [500]).
-- When a design fixes rules about existing data, count the live data first (already captured as
-  feedback-measure-the-live-data-before-a-design-fixes-rules-about-it).
-- When a plan puts the version bump in its last task, move it to the first commit that touches
-  plugins/: this repo's commit gate refuses the commit otherwise, and later commits ride that bump.
-- When a worktree-isolated session runs tests, drop the `env -u VIRTUAL_ENV` prefix (refused) and use
-  `uv run --with pytest --with PyYAML --with lxml --with defusedxml --with ruamel.yaml --with httpx2
-  python -m pytest ...`; write scripts with Write and run them with python3, never heredocs.
-- When a tracked plan or handover names a test host, key or private path, scrub it before the
-  push and fold the fix into the commit that introduced it (Task 9 named the Windows dev VM).
-- tooling: the plan-writing skill never asks whether the repo gates version bumps per commit; a plan
-  for this repo that bumps last is unexecutable as written.
-- Carried from session A's 13:30 handover (rmtree onexc re-call, mutation-arm failure lines, mmap
-  trackfd, unix socket path limit, Windows dev box before push, workflow-change tag refusal, run the
-  route a doc names, merge a live session's handover, bump pyproject with plugin.json) and from
-  session B's 11:50 handover (31b9e205): not yet confirmed napped.
+- When a plugin's tool behaviour is unit-tested with `claude plugin test`, run one headless
+  `claude -p --plugin-dir` session too and read the transcript's tool_result `is_error`: the kit has
+  no engine, so core's output-shape validation never runs (captured in no fact yet).
+- When a mod hook answers a registered `mcp__<plugin>__*` tool, return `{ result: <string> }` or a
+  content-block array, never an object (measured on 2.1.294; extends the mods memory fact).
+- When a subagent prompt or a Write must carry a backslash-u escape, name the character by
+  codepoint (U+0662) and build it with chr(0x0662), never type the escape: it hit a third time
+  writing THIS handover (captured: recurrence 2 before that, guard proposal [440]).
+- When validating a whole value with a Python regex, use `fullmatch` and `re.ASCII` (captured as
+  reference-python-re-dollar-matches-before-a-trailing-newline-and-d-is-not-ascii).
+- When a parametrize case holds a huge string, give it an explicit `pytest.param(id=...)`: the raw
+  id lands in PYTEST_CURRENT_TEST and a child subprocess fails with E2BIG.
+- When a haiku implementer reports a suite count far below the known size, run the full suite
+  yourself before review (Task 4 reported 276 of about 6,700).
+- When checking a rank or any line-anchored field with grep, prove the pattern on a known-present
+  value first (a `\] \[440\]` check could never match and read as "free").
+- tooling: the stop-repeating-failure nudge blames the last git subcommand of a compound command
+  the worktree guard refused (queued via contrib_queue).
+- tooling: a worktree-isolated session cannot edit the shared `.git/info/exclude`.
+- Not yet confirmed napped: the lessons of the 14:35 handover (commit a0f7310d) and those it carried
+  from the 13:30 (8f1573be) and 11:50 (31b9e205) handovers - read them from `git show <sha>:handover.md`.
 
 ## The exact next action
 
-[17] stays the top open USER item and is mid-build: from the `notify-decide-failed` worktree, invoke
-bitranox:process-agents-subagent-driven-development on
-`docs/plans/2026-10-08-mods-memory-backlog-tools-plan.md`; the ledger says Task 1 is done, so it
-resumes at Task 2 (`task_brief.py <plan> 2`). Arm the model gate first (the skill says how). Before
-any push, `git fetch` and re-check origin's version against 8.7.0.
+From the `notify-decide-failed` worktree, first restore a committable branch: set this handover and
+OPEN-WORK.md aside in a temporary WIP commit is impossible (gate), so copy both into
+`.bitranox/sdd/` (ignored), `git checkout -- handover.md OPEN-WORK.md`, rebase onto origin/master
+(OPEN-WORK.md will conflict: keep origin's [150]/[400] closes AND this branch's lines), re-bump to
+8.8.0 in `plugins/bitranox/.claude-plugin/plugin.json` and `pyproject.toml` (assert the old value;
+round-trip) and rename this branch's CHANGELOG `## [8.7.0]` entry to `## [8.8.0]` above origin's,
+fold the bump into the branch's first plugins/ commit or a new one, then re-apply the two copied files
+and commit them. Then invoke bitranox:process-agents-subagent-driven-development, arm the model gate,
+review fix `2421f869` (its sha changes after the rebase - re-derive it), then Task 8.
 
 ## Files that matter
 
-- `docs/plans/2026-10-08-mods-memory-backlog-tools-plan.md` and `-design.md`
-- `plugins/bitranox/hooks/open_work.py`, `plugins/bitranox/hooks/tests/test_open_work.py`
-- `.bitranox/sdd/progress.md` (worktree-local ledger), `OPEN-WORK.md` ([17], [500])
-- Session A: `plugins/bitranox/hooks/tmp_prune.py`, `plugins/bitranox/hooks/tmp-prune-hook.py`,
-  `plugins/bitranox/hooks/process_liveness.py`
+- `docs/plans/2026-10-08-mods-memory-backlog-tools-plan.md`, `-design.md`
+- `plugins/bitranox/hooks/open_work.py`, `mod_bridge.py`, `memory_engine.py` (add_with_advice),
+  `self_improve_signals.py` (why_not_queued), `plugins/bitranox/hooks/mods/register.ts` and its test,
+  `plugins/bitranox/hooks/hooks.json` (`modules` key)
+- `.bitranox/sdd/progress.md` (ledger) and `.bitranox/sdd/task-*-07123228-{brief,report}.md`
 
 ## How to verify
 
-- In the `notify-decide-failed` worktree: `git log --oneline origin/master..HEAD` shows the design,
-  two plan commits, Task 1 and this handover; `uv run --with pytest --with PyYAML --with lxml
-  --with defusedxml --with ruamel.yaml --with httpx2 python -m pytest
-  plugins/bitranox/hooks/tests/test_open_work.py -q` passes 10.
-- Session A: `uv run <plugin>/skills/compuse-toolbox/scripts/ci_wait.py --sha
-  f73265348c6842bf1db3e635ba963313704bbf07` exits 0.
+- `git log --oneline origin/master..HEAD` in the worktree shows the design, plan, Tasks 1-6, the
+  fixes and this handover.
+- `uv run --with pytest --with PyYAML --with lxml --with defusedxml --with ruamel.yaml --with httpx2
+  python -m pytest plugins/bitranox/hooks/tests/test_open_work.py plugins/bitranox/hooks/tests/test_mod_bridge.py -q`
+  passes; `claude plugin test plugins/bitranox` reports 6 pass; `claude plugin validate
+  plugins/bitranox` passes.
 
 Read this, then replace the first line with `# STALE - read <date>, work continued`. Do not delete
 it - if this session ends badly it is the only record of where things stood.
