@@ -1,4 +1,4 @@
-# Handover - 2026-10-08 13:30, [16] shipped as 8.6.0/8.6.1 (automatic /tmp prune); [17] still awaits the user's pick
+# STALE - read 2026-10-08 14:37, work continued
 
 Two sessions are in play. Session A (worktree `jev-shadow`) shipped [16]. Session B (worktree
 `notify-decide-failed`) shipped [14] as 8.5.0 and is on [17]; its 11:50 handover is in git as
