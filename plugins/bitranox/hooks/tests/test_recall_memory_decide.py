@@ -128,14 +128,13 @@ def test_logs_one_decide_row_naming_the_picks(env, monkeypatch, capsys):
 
 
 def test_asks_every_shortlisted_note_at_once(env, monkeypatch, capsys):
-    # More than the 8 a default worker pool allows is the property: exactly 12 at once would race
-    # thread start-up on a slow runner, while a pool of 8 can never exceed 8 however long the
-    # requests are held.
+    # More than the 8 a default worker pool allows is the property: a pool of 8 can never exceed 8
+    # however long the requests are held. How MANY of the 12 arrive is not asserted - that races
+    # the hook's 1.5 s deadline, and a slow windows-latest runner started only 9 in time.
     fake = _serve(env, delay=0.5)
     for i in range(12):
         _note("note-%02d" % i, "0.5")
     _run(monkeypatch, capsys)
-    assert len(fake.requests) == 12
     assert fake.max_in_flight > 8
 
 

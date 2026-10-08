@@ -153,6 +153,25 @@ def test_ask_many_runs_requests_concurrently_and_keeps_order(fake_jev):
     assert [r.model for r in out] == [str(i) for i in range(6)]
 
 
+def test_one_tls_context_serves_every_request(fake_jev, monkeypatch):
+    # Building a default context loads the system certificate store; on Windows 12 of them cost
+    # 0.25 s on a dev box, and recall asks 30 at once under a 1.5 s deadline. Counted at the
+    # stdlib edge (the real factory still runs), so the property is "built once", not a timing.
+    import ssl
+    calls, real = [], ssl.create_default_context
+
+    def counting(*a, **kw):
+        calls.append(1)
+        return real(*a, **kw)
+
+    monkeypatch.setattr(ssl, "create_default_context", counting)
+    c = _jev(fake_jev().url, deadline=5.0)
+    out = c.ask_many([({"n": str(i)}, [NOUL]) for i in range(6)], workers=6)
+    out += c.ask_many([({"n": "again"}, [NOUL])])
+    assert all(r is not None for r in out)
+    assert len(calls) == 1
+
+
 def test_null_classifier_answers_nothing():
     n = cl.NullClassifier("classifier_backend is off")
     assert n.ask({"a": "b"}, [NOUL]) is None

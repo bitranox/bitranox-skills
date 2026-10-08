@@ -29,6 +29,17 @@ than the change, so entries reconstructed from them would read like coverage wit
 a hole nobody has drawn a line under is one that gets rediscovered and half-filled - which is how
 two "versions with no entry" notes came to sit in this file disagreeing with it.
 
+## [8.4.1]
+
+### Fixed
+
+- `classifier.JevClassifier` builds ONE TLS context and reuses it for every request instead of one
+  per request. Building a context loads the system certificate store - 12 cost 0.25 s on a
+  Windows dev box - and recall decide asks up to 30 at once under the 1.5 s hook deadline.
+- Tests: the recall decide concurrency test no longer asserts how many of its 12 requests arrive,
+  which raced that deadline (a windows-latest runner started 9 in time); it asserts more than 8 in
+  flight, the property a default pool of 8 can never reach.
+
 ## [8.4.0]
 
 ### Added

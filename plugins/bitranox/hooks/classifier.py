@@ -212,6 +212,18 @@ class JevClassifier:
     base_url: str = DEFAULT_BASE_URL
     deadline: float = DEFAULT_DEADLINE
     last_reason: object = field(default=None)
+    # One TLS context for every request this classifier makes. Building one loads the system
+    # certificate store - 12 cost 0.25 s on a Windows dev box - and recall asks up to 30 at once
+    # under DEFAULT_DEADLINE, so a context per request spent a large part of that budget on setup.
+    _tls: object = field(default=None, init=False, repr=False, compare=False)
+    _tls_lock: object = field(default_factory=threading.Lock, init=False, repr=False,
+                              compare=False)
+
+    def _tls_context(self):
+        with self._tls_lock:
+            if self._tls is None:
+                self._tls = ssl.create_default_context()
+            return self._tls
 
     def ask(self, state, questions):
         """One request; a Result, or None with `last_reason` set. Never raises."""
@@ -265,7 +277,7 @@ class JevClassifier:
         t0 = time.monotonic()
         timeout = max(0.05, end - t0)
         with urllib.request.urlopen(req, timeout=timeout,  # noqa: S310 - fixed https or loopback
-                                    context=ssl.create_default_context()) as resp:
+                                    context=self._tls_context()) as resp:
             raw = resp.read()
         latency = int((time.monotonic() - t0) * 1000)
         return _parse(raw, questions, latency)
