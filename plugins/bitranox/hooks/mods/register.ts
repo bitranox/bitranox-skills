@@ -2,7 +2,8 @@ import type { Register } from "claude-code";
 
 // The tools' rules live in hooks/mod_bridge.py and the Python it calls; this module only relays.
 const TIMEOUT_MS = 60_000;
-const RESERVED = new Set(["tool", "tool_use_id"]);
+// The keys tool.call carries beside the tool's own arguments (ToolCallReserved plus AgentLoop).
+const RESERVED = new Set(["tool", "tool_use_id", "consent", "agentId"]);
 
 const str = (description: string) => ({ type: "string", description });
 
@@ -88,6 +89,13 @@ function envelopeFrom(tool: string, run: { exitCode: number; stdout: string; std
   return failure(tool, "BridgeFailed", `exit ${run.exitCode}: ${said}`);
 }
 
+// A string, not the envelope object: core validates the result of a plugin-registered tool as a
+// string or an array of content blocks and turns anything else into a tool_use_error. The plugin
+// test kit has no engine beneath it and never runs that validation, so only a live session shows it.
+function answer(envelope: unknown) {
+  return { result: JSON.stringify(envelope) as never };
+}
+
 export const register: Register = (on) => {
   on("session.start", async ($, e, next) => {
     for (const spec of TOOLS) await $.tool.register(spec as never);
@@ -107,9 +115,9 @@ export const register: Register = (on) => {
           [bash, `${root}/hooks/run-python.sh`, `${root}/hooks/mod_bridge.py`],
           { stdin: JSON.stringify({ tool: spec.name, input }), timeoutMs: TIMEOUT_MS },
         );
-        return { result: envelopeFrom(spec.name, run) as never };
+        return answer(envelopeFrom(spec.name, run));
       } catch (err) {
-        return { result: failure(spec.name, "BridgeFailed", String(err)) as never };
+        return answer(failure(spec.name, "BridgeFailed", String(err)));
       }
     }).catch(($, e, next) =>
       next.called ? next(e) : { deny: `bitranox: the ${spec.name} tool failed before it ran.` },
