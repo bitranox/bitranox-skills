@@ -1042,6 +1042,7 @@ Note `"input": []` must be refused: `isinstance(req.get("input", {}), dict)` is 
 - `claude plugin validate plugins/bitranox` reports an error (warnings are fine);
 - a repo test that iterates `hooks.json` (registration tests) fails on the new `modules` key - report it rather than special-casing the key;
 - `claude plugin test` cannot run in this plugin folder.
+- `claude plugin validate` refuses the computed `tool.call` matcher in the `for (const spec of TOOLS)` loop (the engine already requires a string-literal EVENT name, measured; a computed MATCHER is unmeasured): then unroll it into five `on("tool.call", { tool: "mcp__bitranox__<name>" }, relay("<name>"))` calls with literal names and one shared `relay(name)` hook factory, and re-validate.
 
 - [ ] **Step 1: Write the failing plugin test** (`register.test.ts`). Findings from the 2026-10-08 probe that shape it: the test kit has NO engine beneath the plugin, so the test answers every `$` call the plugin makes (`tool.register`, `session.start`, `process.run`, `env.get` via `mock.env`); an op hook (`tool.register`, `process.run`) answers `{ value: ... }`; `session.start` answers `{ cwd }`.
 
