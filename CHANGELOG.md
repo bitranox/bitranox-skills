@@ -70,8 +70,6 @@ two "versions with no entry" notes came to sit in this file disagreeing with it.
   `CLAUDE_CODE_GIT_BASH_PATH` unset. The machine had no WSL `bash.exe`, so a bare `bash` resolving
   to WSL is not covered; set `CLAUDE_CODE_GIT_BASH_PATH` to Git Bash where WSL is installed.
 
-
-
 ## [8.7.4]
 
 ### Fixed
