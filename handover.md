@@ -1,122 +1,88 @@
-# STALE - read 2026-10-08 14:37, work continued
+# Handover - 2026-10-08 17:30, backlog sweep: [19], [150], [400] closed; nap done; next is [170]
 
-Two sessions are in play. Session A (worktree `jev-shadow`) shipped [16]. Session B (worktree
-`notify-decide-failed`) shipped [14] as 8.5.0 and is on [17]; its 11:50 handover is in git as
-commit 31b9e205, and its state is carried below unchanged in substance.
+Session A (worktree `jev-shadow`). Session B (worktree `notify-decide-failed`, branch
+`mods-memory-backlog-tools`) is building [17] as option (3), memory and backlog as model-callable
+tools; it holds the 8.7.x bump on that branch and re-bumps above master at push time.
 
 ## In flight
 
-- Session A: nothing is running. 8.6.0 (559d24ab) went red on windows-latest only: 22 prune tests
-  errored in a fixture calling `os.utime(follow_symlinks=False)`, which Windows lacks. 8.6.1 fixes
-  the fixture (45 passed, 6 POSIX-only skips on a real Windows machine). CI on 8.6.1 (f7326534): green
-  on every cell (ci_wait exit 0). CI on the 3.14 matrix commit 079f9a93:
-  green, windows-latest and macos-latest now on py3.14. Release v8.6.1 is published, its tag on
-  079f9a93 (same plugin content as f7326534); 8.6.0 has no release, since its CI was red.
-- Session B: [17] is part-done - identified and probed, and the user was asked which use to build
-  first, with (1) a backlog/status band or pane recommended. No answer yet.
-- [12] belongs to session A and waits on time: step 6 needs about a week of decide rows, earliest
-  2026-10-13.
+- Nothing part-done. CI for 4bbad193 (the [19] closure, OPEN-WORK.md only) was still running at
+  writing time; the three earlier backlog pushes today (ed7a1ae8, a2c8f976, b766189d) were green
+  on every cell.
 
 ## Committed, or not
 
-- Pushed: 8.5.0 (session B, [14]); a ci.yml change moving the windows-latest and macos-latest
-  cells to Python 3.14 (user request, 2026-10-08); 8.6.1 (session A, the Windows fixture fix); 8.6.0 (session A, [16]: `tmp-prune-hook.py`, `tmp_prune.py`,
-  `process_liveness.py`, knob `tmp_prune`, docs, the meta-memory-settings row and its skill-writer
-  checklist). Committed with this handover: OPEN-WORK [400], [410], [420].
-- Not in git, and nothing depends on them: session A's scratch scripts (arms, plan listing,
-  Windows probe) and session B's probe mod and tally scripts.
-- Worktree `.claude/worktrees/notify-decide-failed` holds nothing not on origin (session B may
-  still be using it). The `jev-shadow` worktree's gitignored `.plan/` is still the only copy of
-  three experiment records ([390]).
-- This machine still runs 8.4.1 in open sessions until `/reload-plugins`; the prune hook only
-  starts once a session is on 8.6.0.
+- Pushed to master: ed7a1ae8 ([19] worktrees and branches; [430]/[440] carried in), a2c8f976
+  ([400] closed), b766189d ([150] closed), 4bbad193 ([19] closed).
+- Memory store (the softdev tree-top `.claude-memory/`, its own git): commit 5439f45 holds this
+  session's 6 new and 2 amended facts plus store OPEN-WORK [70]/[80]. Peer sessions have UNCOMMITTED
+  edits in that store (about 20 facts); they are not ours, leave them to their sessions or the
+  dream.
+- Not in any git: `apps/utils/bmk/OPEN-WORK.md` gained [20] (that file is untracked by the user's
+  open decision, bmk [5]). The main checkout's gitignored `.plan/` holds `TODO-JEV.md` and
+  `TODO-JEV.staged.md` ([150]) and `worktree-archive-2026-10-08/` (diffs of the 4 removed dirty
+  worktrees, `deleted-branches.txt` now 129 rows).
+- Contribution queue gained 3 entries this session: a landed-on-master jig (target compuse-toolbox
+  or git-worktrees), a compuse-git row for `git rm --cached` on an AM file, and a
+  shell-prefix-selfref-guard false positive (a standalone `c=$(...);` followed by `"$c"` was
+  refused as a prefix assignment).
 
 ## Decided, and why - do not reopen
 
-- [16] design, every answer the user's (2026-10-08), recorded on the [16] line: SessionStart plus
-  a throttled Stop check, at most hourly across the machine; scope is Claude scratch (1 day) plus
-  the user's own one-off temp dirs (7 days, chosen over scratch-only); all platforms.
-- Liveness is the session registry `~/.claude/sessions/<pid>.json` plus a `procStart` match
-  (measured: field 22 of `/proc/<pid>/stat`, 9 of 9 live sessions matched). An unreadable registry
-  entry keeps every scratch dir.
-- Holders: `/proc` fd, cwd, root AND maps on Linux; `lsof` on macOS; on Windows a rename before
-  delete (measured on a real Windows machine: refused with WinError 5 for an open file, 32 for a
-  cwd, control renamed). One-offs are kept on a platform with no holder check.
-- With `CLAUDE_CODE_TMPDIR` set, scratch is scanned under it AND the system default (Claude Code's
-  long-path fallback); one-offs only in the system temp dir. Windows accepts `claude-0` (what the
-  2.1.294 binary builds) and `claude` (what the docs say); which is real is unverified.
-- `pluginprune.py` imports its liveness helpers from `hooks/process_liveness.py`, one copy.
-- Session B's [14] and [17] decisions: see commit 31b9e205 (decide covers failed background
-  commands only; a user mod cannot reach prompt composition or attribution on 2.1.290).
+- [19]: every object was shown to the user and removed on their yes. Evidence per object is on the
+  [19] line; `git branch <name> <sha>` from `deleted-branches.txt` restores any branch.
+- `dream-open-work` worktree's 5 unlanded backlog lines: tool work went to this repo ([430], [440]),
+  store content to the store's backlog ([70], [80]), one was already store [50].
+- [150]: the index held an older TODO-JEV.md than the file, so both versions were kept in `.plan/`.
+- Git in another checkout from this isolated session goes through `ExitWorktree` with `keep` on the
+  user's request, not a script with `cwd=`. This session used the script route before finding that
+  rule (misfiled at the soundtouch-watchdog level); the worktree-isolation fact now says so.
 
 ## Decided against, and why
 
-- Pruning this machine by hand with `--apply`: the hook doing it after a reload is the
-  end-to-end proof ([400]); a dry run here listed 16 dirs / 182k inodes, every one cross-checked
-  dead (no registered session, newest file and transcript at least 42 h old).
-- Changing the meta-memory-settings description for the new knob: no routing keyword moves.
-- Session B: porting the Python guards to tool.call mods; a fixed rule instead of Jev for failed
-  commands (both in 31b9e205).
+- [245] now: its two worktrees are locked by THIS session's process (pid 260379, its own earlier
+  subagents), so removing them needs ExitWorktree; the lock lifts when this session ends, after
+  which `git worktree remove --force` on each (no own commits; a26b133c's work is on origin) is
+  one step from any session.
+- Capturing session B's carried lessons in this nap: B is live and can nap them itself.
 
 ## Still open, untouched
 
-`OPEN-WORK.md` is the list: [12] (session A, after 2026-10-13), [17] (session B, user's pick),
-[18] deferred by the user, [19] dirty worktrees and branches left to judge, [245] a locked agent
-worktree, [390] copy the `jev-shadow` `.plan/` records out, [400] observe the first hook-driven
-prune, [410] the foreign-mount guard's missing test, [420] two hook rows missing from
-docs/architecture.md.
+`OPEN-WORK.md` is the list: [12] (after 2026-10-13), [17] (session B), [18] deferred by the user,
+[96] waits on Jev data, [170]-[186] review leftovers, [200] contribution queue, [245] (see above),
+[290]-[360], [390], [410], [420], [430], [440].
 
 ## Lessons for the next nap
 
-- When an rmtree onexc/onerror handler retries the failed call, re-call only a removal function:
-  rmtree also reports `os.open(path, flags, dir_fd=...)`, and re-calling that with one argument
-  raises TypeError, escapes rmtree and aborts every directory after it.
-- When a mutation arm is "killed", read its failure line: one killed by a TypeError instead of an
-  assertion exposed a production bug, and one that SURVIVED showed a test never isolated its guard.
-- When a test must show a file held only through a memory map, use `mmap(..., trackfd=False)`
-  (3.13+): plain `mmap` dups the fd, so an fd scan alone passes the test.
-- When a test binds a unix socket under pytest's tmp_path, chdir into the dir and bind a relative
-  name: the absolute path exceeds the socket path limit and a skip branch leaks the socket.
-- When a new test file must run on Windows, run it on the Windows dev box BEFORE the first push:
-  8.6.0 shipped with every prune test erroring there on a call Windows does not implement.
-- When a .github/workflows change is pushed while the previous commit's release run is still
-  pending, that run's tag push is refused ("refusing to allow a GitHub App to create or update
-  workflow ... without `workflows` permission"); the next green CI's release tags the newer sha.
-  Check `gh release list` and the tag target before calling a release lost.
-- When a doc names a command route ("run X for the list"), run it before shipping: the CLI printed
-  counts only until a test pinned the list.
-- When an outgoing handover belongs to a session that is still working, merge it into yours.
-- tooling: bump pyproject.toml together with plugin.json - repo-gate's version-drift check failed
-  the first gate run (recurred; carried from the 11:50 handover).
-- Carried from session B, not yet confirmed napped: take a run id from the listing's JSON in the
-  same step; classify a notification's kind by the summary's opening words; convert a token count
-  with the recorded price before deciding on it; a blind panel over the non-chosen kinds is cheap;
-  tooling: EnterWorktree on an existing path tightens every later Bash call - prefer
-  `git worktree add` plus absolute paths; tooling: `claude -p` takes the prompt right after `-p`;
-  and the 10:35 list in commit 31b9e205.
+- When a fact seems missing, remember a fact filed at a SIBLING level never loads here: the
+  ExitWorktree rule sat at soundtouch-watchdog while this repo needed it; the tree dream should
+  re-home it and merge it with reference-in-a-worktree-isolated-session-scratchpad-scripts-edit-then-cp.
+- Carried from session B (still not confirmed napped, B may take them): take a run id from the
+  listing's JSON in the same step; convert a token count with the recorded price before deciding
+  on it; a blind panel over the non-chosen kinds is cheap; tooling: EnterWorktree on an existing
+  path tightens every later Bash call - prefer `git worktree add` plus absolute paths; tooling:
+  `claude -p` takes the prompt right after `-p`; and the 10:35 list in commit 31b9e205.
 
 ## The exact next action
 
-[17] is the top-ranked open item, and it is session B's: if that session is gone, put the
-user's pick to them again (build (1) the backlog/status band or pane, or another option on the
-[17] line). Otherwise take [19], the next live USER item: judge the 4 dirty worktrees and 24
-branches its line lists. [12] waits until 2026-10-13.
+Top live items are not workable now: [12] waits on a date, [17] is session B's, [18] is deferred,
+[96] waits on data. So take [170], the top found item that can be worked: read its line in
+`OPEN-WORK.md`, re-verify each of its 12 follow-ups against current master (several may be fixed
+since 2026-09-25), and ask the user before fixing the ones that still hold.
 
 ## Files that matter
 
-- `OPEN-WORK.md` ([16] closed with the outcome, [400]/[410]/[420] new, [17] options)
-- `plugins/bitranox/hooks/tmp_prune.py`, `plugins/bitranox/hooks/tmp-prune-hook.py`,
-  `plugins/bitranox/hooks/process_liveness.py`, `plugins/bitranox/hooks/tests/test_tmp_prune.py`
-- `plugins/bitranox/skills/meta-memory-settings/settings.py` (`ENUM_CHOICES["tmp_prune"]`)
+- `OPEN-WORK.md` ([19], [150], [400] closed today; [430], [440] new)
+- the memory store's `OPEN-WORK.md` (store backlog, [70] and [80] new)
+- the bmk repo's `OPEN-WORK.md` (sibling `apps/utils/bmk`, [20] new)
 
 ## How to verify
 
-- `uv run <plugin>/skills/compuse-toolbox/scripts/ci_wait.py --sha f73265348c6842bf1db3e635ba963313704bbf07`
+- `uv run <plugin>/skills/compuse-toolbox/scripts/ci_wait.py --sha 4bbad1934b95c9febe157e537178b09eeca76dac`
   exits 0.
-- `python3 plugins/bitranox/hooks/tmp_prune.py --json` prints a dry-run envelope with
-  `examined_dirs` > 0 and a `removed` list; nothing is deleted.
-- After `/reload-plugins` and one finished turn: a new last line in
-  `~/.claude/self-improve-audit/tmp-prune.log.jsonl` ([400]).
+- `git worktree list` shows only `jev-shadow`, session B's worktrees and the two locked agent
+  worktrees of [245]; `git branch` lists no `worktree-agent-*` other than those two.
+- In the memory store, `git show --stat 5439f45` lists the 6 new facts and 2 amended ones.
 
 Read this, then replace the first line with `# STALE - read <date>, work continued`. Do not delete
 it - if this session ends badly it is the only record of where things stood.
