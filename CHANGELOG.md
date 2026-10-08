@@ -38,17 +38,26 @@ two "versions with no entry" notes came to sit in this file disagreeing with it.
   ignored, the file located at the git top level of a directory with every inherited `GIT_`
   variable dropped. It is the backend of the model-callable backlog tools this release adds.
 - `hooks/open_work.py`: adds and closes backlog items, refusing malformed input (a split line, a
-  taken rank, a bad origin or date) before any write; a close keeps the line and appends its reason.
+  taken rank, a bad origin or date, a rank above 999999) before any write; a field holding any
+  control character, line or paragraph separator, or text a UTF-8 file cannot hold is refused, so
+  one item stays one line for every reader; a failed write leaves no temporary file; a close keeps
+  the line and appends its reason.
+- `hooks/session-start.py`: reads `OPEN-WORK.md` by splitting on newlines only, as `open_work.py`
+  does, so no character inside an item line can start a second item.
 - `hooks/memory_engine.py`: `add_with_advice` is the one write path for a captured fact - it returns
   the slug, whether it was created, and the advisory lines as data. `memory_engine.py add` now
   prints exactly those lines, so its output is unchanged.
 - `hooks/self_improve_signals.py`: `why_not_queued` is now public (moved from contrib_queue.py as
-  `_why_not_queued`), providing a reusable path for determining why a contribution was refused.
+  `_why_not_queued`), so its two callers - `contrib_queue.py` and the mod bridge's `contrib_add`
+  tool - report the same reason when a contribution is not queued.
 - `hooks/mod_bridge.py`: the JSON entry point the Claude Code mod relays tool calls through - one
-  request on stdin, one ASCII envelope on stdout, exit 0 done, 1 refused, 2 could not run.
+  request on stdin (decoded strictly as UTF-8), one ASCII envelope on stdout, exit 0 done, 1
+  refused, 2 could not run.
 - `hooks/mods/register.ts`: a hooks module, registered under `"modules"` in `hooks.json`, that gives
   the model five tools - `mcp__bitranox__backlog_list`, `backlog_add`, `backlog_close`,
-  `memory_add` and `contrib_add` - each relayed to `mod_bridge.py`, whose envelope it returns as JSON text.
+  `memory_add` and `contrib_add` - each relayed to `mod_bridge.py`, whose envelope it returns as JSON text. A refusal (exit 1) is
+  an ordinary result; a call that could not run (the bridge failed or timed out, output that is not
+  an envelope, exit code 2) reaches the model as a tool error.
 
 ### Compatibility
 

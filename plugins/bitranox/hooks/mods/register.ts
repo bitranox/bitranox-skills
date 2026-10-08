@@ -89,11 +89,27 @@ function envelopeFrom(tool: string, run: { exitCode: number; stdout: string; std
   return failure(tool, "BridgeFailed", `exit ${run.exitCode}: ${said}`);
 }
 
+// The bridge's exit codes: 0 done, 1 refused (a normal answer the model acts on), anything else
+// could not run. Only a success or a refusal is a result.
+const ANSWERED = new Set([0, 1]);
+
 // A string, not the envelope object: core validates the result of a plugin-registered tool as a
 // string or an array of content blocks and turns anything else into a tool_use_error. The plugin
 // test kit has no engine beneath it and never runs that validation, so only a live session shows it.
 function answer(envelope: unknown) {
   return { result: JSON.stringify(envelope) as never };
+}
+
+// A call that could not run reaches the model as a tool error, not as an ordinary answer: `deny`
+// is "the text ... as an error result" (ToolCallResult, claude-code/index.d.ts line 12633).
+function toolError(envelope: unknown) {
+  return { deny: JSON.stringify(envelope) };
+}
+
+function relay(tool: string, run: { exitCode: number; stdout: string; stderr: string }) {
+  const envelope = envelopeFrom(tool, run);
+  const unparsed = (envelope as { error?: { kind?: string } }).error?.kind === "BridgeFailed";
+  return ANSWERED.has(run.exitCode) && !unparsed ? answer(envelope) : toolError(envelope);
 }
 
 export const register: Register = (on) => {
@@ -108,16 +124,16 @@ export const register: Register = (on) => {
         Object.entries(e as Record<string, unknown>).filter(([k]) => !RESERVED.has(k)),
       );
       // On Windows a bare "bash" can resolve to the WSL stub; Claude Code's own Git Bash setting wins.
-      const bash = (await $.env.get("CLAUDE_CODE_GIT_BASH_PATH")) ?? "bash";
+      const bash = (await $.env.get("CLAUDE_CODE_GIT_BASH_PATH")) || "bash";
       const root = $.plugin.root;
       try {
         const run = await $.process.run(
           [bash, `${root}/hooks/run-python.sh`, `${root}/hooks/mod_bridge.py`],
           { stdin: JSON.stringify({ tool: spec.name, input }), timeoutMs: TIMEOUT_MS },
         );
-        return answer(envelopeFrom(spec.name, run));
+        return relay(spec.name, run);
       } catch (err) {
-        return answer(failure(spec.name, "BridgeFailed", String(err)));
+        return toolError(failure(spec.name, "BridgeFailed", String(err)));
       }
     }).catch(($, e, next) =>
       next.called ? next(e) : { deny: `bitranox: the ${spec.name} tool failed before it ran.` },
