@@ -1165,6 +1165,9 @@ DEFAULT_CONFIG = {
     "classifier_skill_router": "off",  # off | shadow | decide - UserPromptSubmit skill router
     "classifier_recall_rerank": "off",  # off | shadow | decide - UserPromptSubmit memory recall ranking
     "classifier_skills": "off",        # off | shadow - skill-step Jev shadow (needs classifier_backend=jev too)
+    # tmp-prune-hook.py: at most once an hour, delete dead Claude Code session scratch and old
+    # one-off dirs from the temp dir (tmp_prune.py says what counts as dead).
+    "tmp_prune": "on",                 # on | dry-run | off
 }
 
 

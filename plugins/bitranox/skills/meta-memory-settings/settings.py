@@ -42,6 +42,7 @@ ENUM_CHOICES = {
     "classifier_skill_router": ("off", "shadow", "decide"),
     "classifier_recall_rerank": ("off", "shadow", "decide"),
     "classifier_skills": ("off", "shadow"),
+    "tmp_prune": ("on", "dry-run", "off"),
 }
 
 _TRUE_WORDS = ("1", "true", "yes", "on")

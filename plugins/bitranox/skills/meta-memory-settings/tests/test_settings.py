@@ -81,6 +81,22 @@ def test_classifier_skills_defaults_to_off_and_accepts_shadow(capsys):
     assert sig.load_config()["classifier_skills"] == "shadow"
 
 
+def test_tmp_prune_defaults_to_on(capsys):
+    assert sig.load_config()["tmp_prune"] == "on"
+
+
+@pytest.mark.parametrize("value", ["dry-run", "off", "on"])
+def test_tmp_prune_accepts_its_modes(capsys, value):
+    assert ST.main(["set", "tmp_prune", value]) == 0
+    assert sig.load_config()["tmp_prune"] == value
+
+
+def test_tmp_prune_refuses_a_mode_it_does_not_have(capsys):
+    assert ST.main(["set", "tmp_prune", "yes"]) == 2
+    assert "must be one of" in capsys.readouterr().err
+    assert sig.load_config()["tmp_prune"] == "on"
+
+
 def test_set_list_knob_json(capsys):
     assert ST.main(["set", "discovery_roots", '["/a", "/b"]']) == 0
     assert sig.load_config()["discovery_roots"] == ["/a", "/b"]

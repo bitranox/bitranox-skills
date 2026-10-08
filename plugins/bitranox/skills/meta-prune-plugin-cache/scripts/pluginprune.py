@@ -117,6 +117,11 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import NoReturn
 
+# One copy of the liveness checks for every pruner the plugin ships: the temp-dir pruner in
+# hooks/ asks the same questions, and two copies would drift.
+sys.path.insert(0, str(Path(__file__).resolve().parents[3] / "hooks"))
+from process_liveness import pid_alive, process_start_ticks  # noqa: E402
+
 __all__ = [
     "ApplyResult",
     "Entry",
@@ -153,64 +158,6 @@ KIND_TEMP = "temp"
 # --------------------------------------------------------------------------------------------
 # Is that process still there?
 # --------------------------------------------------------------------------------------------
-
-
-def pid_alive(pid: int) -> bool:
-    """True when the process exists. Unknowable counts as alive - keeping costs disk, not a session."""
-    if pid <= 0:
-        return False
-    if os.name == "nt":
-        return _windows_pid_alive(pid)
-    try:
-        os.kill(pid, 0)
-    except ProcessLookupError:
-        return False
-    except (OSError, OverflowError):
-        # PermissionError: the process exists under another user. OverflowError: a corrupt lock
-        # names a pid no C int holds - unknowable, so it counts as alive.
-        return True
-    return True
-
-
-def _windows_pid_alive(pid: int) -> bool:
-    if pid > 0xFFFFFFFF:
-        return True  # no DWORD holds it, so the question cannot even be asked - keep
-    import ctypes  # noqa: PLC0415 - Windows-only, and ctypes.windll does not exist elsewhere
-
-    process_query_limited_information = 0x1000
-    still_active = 259
-    error_access_denied = 5
-    kernel32 = ctypes.windll.kernel32  # type: ignore[attr-defined]  # pyright: ignore[reportAttributeAccessIssue]
-    handle = kernel32.OpenProcess(process_query_limited_information, False, pid)
-    if not handle:
-        return bool(kernel32.GetLastError() == error_access_denied)
-    try:
-        code = ctypes.c_ulong()
-        if kernel32.GetExitCodeProcess(handle, ctypes.byref(code)):
-            return bool(code.value == still_active)
-        return True
-    finally:
-        kernel32.CloseHandle(handle)
-
-
-def process_start_ticks(pid: int) -> str | None:
-    """The process start time as Claude Code records it, or None when this OS cannot say.
-
-    Field 22 of `/proc/<pid>/stat`. The command name in field 2 may itself contain spaces and
-    parentheses, so the split starts after its CLOSING paren rather than at the first space.
-    """
-    try:
-        raw = Path("/proc") / str(pid) / "stat"
-        text = raw.read_text(encoding="utf-8", errors="replace")
-    except OSError:
-        return None
-    close = text.rfind(")")
-    if close == -1:
-        return None
-    fields = text[close + 1 :].split()
-    if len(fields) < 20:
-        return None
-    return fields[19]
 
 
 def live_lock_holder(version_dir: Path) -> str | None:

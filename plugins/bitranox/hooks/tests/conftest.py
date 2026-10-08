@@ -65,6 +65,7 @@ _HOOK_MODULES = {
     "store-edit-guard": "store_edit_guard",
     "venv-guard": "venv_guard",
     "warn-inline-powershell": "warn_inline_powershell",
+    "tmp-prune-hook": "tmp_prune_hook",
 }
 
 for _stem, _alias in _HOOK_MODULES.items():

@@ -29,6 +29,25 @@ than the change, so entries reconstructed from them would read like coverage wit
 a hole nobody has drawn a line under is one that gets rediscovered and half-filled - which is how
 two "versions with no entry" notes came to sit in this file disagreeing with it.
 
+## [8.6.0]
+
+### Added
+
+- `tmp-prune-hook.py` (SessionStart and Stop) with `tmp_prune.py`: the temp dir is pruned
+  automatically, at most once an hour across every session on the machine, by a detached worker,
+  so a long-running session triggers it too. A session's scratch dir
+  (`<temp>/claude-<uid>/<project>/<session-id>/`, which Claude Code never removes) goes once no
+  live session in `~/.claude/sessions` carries its id and neither it nor its transcript changed for
+  a day; any other dir the user owns in the temp dir goes once nothing inside changed for seven
+  days. Anything a process holds open, maps or sits in stays (read from `/proc` on Linux, `lsof` on
+  macOS, a refused rename on Windows), as does a dir holding a socket or FIFO or another mounted
+  filesystem; `pytest-of-*` is left to pytest. Each run appends a line to
+  `~/.claude/self-improve-audit/tmp-prune.log.jsonl`; `python3 hooks/tmp_prune.py --json` lists
+  what a run would remove without removing it.
+- `tmp_prune` setting (`on` by default, `dry-run`, `off`).
+- `process_liveness.py`: the pid and session liveness checks, now shared by `tmp_prune.py` and
+  `meta-prune-plugin-cache/scripts/pluginprune.py` instead of living only in the latter.
+
 ## [8.5.0]
 
 ### Changed

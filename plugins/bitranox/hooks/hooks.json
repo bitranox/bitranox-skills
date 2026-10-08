@@ -15,6 +15,10 @@
           {
             "type": "command",
             "command": "bash \"${CLAUDE_PLUGIN_ROOT}/hooks/run-python.sh\" --hook \"${CLAUDE_PLUGIN_ROOT}/hooks/skill-listing-budget.py\""
+          },
+          {
+            "type": "command",
+            "command": "bash \"${CLAUDE_PLUGIN_ROOT}/hooks/run-python.sh\" --hook \"${CLAUDE_PLUGIN_ROOT}/hooks/tmp-prune-hook.py\""
           }
         ]
       }
@@ -276,6 +280,10 @@
           {
             "type": "command",
             "command": "bash \"${CLAUDE_PLUGIN_ROOT}/hooks/run-python.sh\" --hook \"${CLAUDE_PLUGIN_ROOT}/hooks/ci-watch-gate.py\""
+          },
+          {
+            "type": "command",
+            "command": "bash \"${CLAUDE_PLUGIN_ROOT}/hooks/run-python.sh\" --hook \"${CLAUDE_PLUGIN_ROOT}/hooks/tmp-prune-hook.py\""
           }
         ]
       }
