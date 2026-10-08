@@ -29,6 +29,16 @@ than the change, so entries reconstructed from them would read like coverage wit
 a hole nobody has drawn a line under is one that gets rediscovered and half-filled - which is how
 two "versions with no entry" notes came to sit in this file disagreeing with it.
 
+## [8.7.0]
+
+### Added
+
+- `coding-python-logging`: a skill for lib_log_rich, the multi-sink structured logging library - install,
+  `RuntimeConfig` and its `LOG_*` overrides, the console, journald, Windows Event Log and Graylog sinks,
+  systemd, container and Windows service deployment, scrubbing, the stdlib bridge, queues and
+  multiprocessing, `validate_config`, ring-buffer dumps and the CLI. Mirrored from
+  `libs/lib_log_rich/skills/python-logging` and registered in `MIRRORED_SKILLS`.
+
 ## [8.6.1]
 
 ### Fixed

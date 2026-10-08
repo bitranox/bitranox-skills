@@ -138,6 +138,24 @@
   "choosing",
   "environment-variable"
  ],
+ "coding-python-logging": [
+  "python",
+  "application",
+  "logs",
+  "through",
+  "lib_log_rich",
+  "structured",
+  "logging",
+  "several",
+  "sinks",
+  "once",
+  "rich",
+  "console",
+  "systemd",
+  "journald",
+  "ring-buffer",
+  "log_"
+ ],
  "coding-python-network-probe": [
   "python",
   "code",

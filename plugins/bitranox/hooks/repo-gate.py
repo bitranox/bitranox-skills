@@ -1139,6 +1139,7 @@ MIRRORED_SKILLS = {
     "ai-llm-jev-judge": "KI/btx-skill-jev-judge/skills/jev-judge",
     "coding-python-gitignore": "libs/igittigitt/skills/python-gitignore",
     "coding-python-layered-config": "libs/lib_layered_config/skills/python-layered-config",
+    "coding-python-logging": "libs/lib_log_rich/skills/python-logging",
     "coding-python-network-probe": "libs/ipscout/skills/python-network-probe",
     "coding-python-new-public-library": "libs/bitranox_template_py_lib/skills/new-public-python-library",
     "coding-python-pwshpy": "apps/utils/pwshpy/skills/using-pwsh",
