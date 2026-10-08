@@ -112,6 +112,25 @@ query whether a consolidation is due, mark one done, or print the effective drea
 the router map, `python3 <plugin>/hooks/build_skill_docs.py` rebuilds the
 [skill catalog](skills.md); both support `--check` and are enforced by pytest sync tests.
 
+## Model-callable tools
+
+A hooks module (`hooks/mods/register.ts`, listed under `"modules"` in `hooks.json`) gives the model
+five tools, each relayed to `hooks/mod_bridge.py`, which answers with one JSON envelope. A refusal
+comes back as `ok: false` with the reason and nothing written.
+
+| Tool                           | Effect                                                                            | Refuses                                                                                                                                   |
+|--------------------------------|-----------------------------------------------------------------------------------|-------------------------------------------------------------------------------------------------------------------------------------------|
+| `mcp__bitranox__backlog_list`  | Lists the items of the repo's `OPEN-WORK.md` (open by default) as data            | Nothing; a missing file returns an empty list with a note                                                                                 |
+| `mcp__bitranox__backlog_add`   | Adds one item (rank, origin, text, size, open, next), creating the file if absent | A malformed item (split line, bad origin or date) and a rank already used by any line, closed included                                    |
+| `mcp__bitranox__backlog_close` | Closes one item by rank, keeping its line and appending the reason                | An unknown rank or an already closed item                                                                                                       |
+| `mcp__bitranox__memory_add`    | Writes or updates one curated memory fact at a level (default: the session cwd)   | A level that is not a directory, a bad type, an over-long hook, an empty body, a bad or colliding slug, a pinned entry, an excluded level |
+| `mcp__bitranox__contrib_add`   | Queues a contribution (what, target, why) for the next dream                      | Not a refusal: a duplicate or already-shipped entry returns `queued: false` with the reason                                               |
+
+| Requirement          | Detail                                                                                                                                                |
+|----------------------|-------------------------------------------------------------------------------------------------------------------------------------------------------|
+| Claude Code 2.1.259+ | 2.1.242 to 2.1.258 log a load error for the module and skip the tools; older builds ignore the `modules` key. Every classic hook works on all of them |
+| Windows with WSL     | Point `CLAUDE_CODE_GIT_BASH_PATH` at Git Bash so a bare `bash` does not resolve to the WSL one                                                        |
+
 ## Demo commands
 
 ```text

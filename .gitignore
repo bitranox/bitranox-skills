@@ -58,3 +58,6 @@ build/
 # The package declares no dependencies and pyproject carries floating floors, so a
 # lock adds nothing to resolve and only goes stale; the house convention is to omit it.
 uv.lock
+# It extends the Claude-Code-generated .claude-plugin/types/ dir, which its own .gitignore keeps
+# out of git, so a committed copy would point at nothing.
+plugins/bitranox/tsconfig.json
