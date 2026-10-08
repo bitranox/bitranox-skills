@@ -6,11 +6,21 @@ one accepted a fence at any depth, so an indented example fence nested in a bloc
 and the rest of the block read as prose; the others accepted only 0-3 spaces, so a fence inside a
 list item was missed and its code read as prose. The CASES below are the shapes that split them,
 and every caller must give the answer CommonMark gives.
+
+Four skill scripts keep a scanner of their own because they ship standalone and cannot import
+hooks/. They cannot share the code, so they share this table instead: each is loaded from its own
+path and held to the hooks rule, so a fix to one copy cannot leave the others behind unnoticed.
 """
+import importlib.util
+import sys
+from pathlib import Path
+
 import harness_checks as HC
 import memory_engine as ME
 import pytest
 import tell_chars as TC
+
+_SKILLS = Path(__file__).resolve().parents[2] / "skills"
 
 # (name, markdown, 1-based numbers of the lines that are code: fence lines and their content)
 CASES = [
@@ -78,3 +88,83 @@ def test_memory_engine_keeps_offsets_and_line_breaks_when_masking():
     assert [i for i, c in enumerate(masked) if c == "\n"] == [i for i, c in enumerate(text)
                                                               if c == "\n"]
     assert "[[x]]" not in masked and masked.endswith("b\n")
+
+
+# ---- the standalone skill-script scanners ------------------------------------------------------
+
+def _load(rel):
+    """Import a skill script from its own path under a private name. It is registered in
+    sys.modules before it runs, because a string-annotated dataclass resolves through it, and its
+    directory is on sys.path only while it loads, for the siblings it imports (mdwrap's
+    _cli_envelope) - left there, it would shadow same-named modules for the rest of the run."""
+    path = _SKILLS / rel
+    name = "fence_parity_" + path.stem
+    if name in sys.modules:
+        return sys.modules[name]
+    spec = importlib.util.spec_from_file_location(name, path)
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[name] = module
+    sys.path.insert(0, str(path.parent))
+    try:
+        spec.loader.exec_module(module)
+    finally:
+        sys.path.remove(str(path.parent))
+    return module
+
+
+MDWRAP = _load("compuse-toolbox/scripts/mdwrap.py")
+TABLES = _load("docs-md-table-formatting/reformat_tables.py")
+VARIANCE = _load("meta-consolidate-claude-md/scripts/claudemd_variance.py")
+ADOPT = _load("meta-adopting-external-skills/adopt_skill.py")
+
+# A column-0 line cannot sit inside a list item's fence (it ends the item), and the hooks rule
+# does not model a container ending, so the heading probes skip the list-item cases.
+_COLUMN_ZERO_CASES = [c for c in CASES if "list item" not in c[0]]
+
+
+@pytest.mark.parametrize("name,text,code", CASES, ids=[c[0] for c in CASES])
+def test_reformat_tables_classifies_lines_as_the_hooks_rule_does(name, text, code):
+    lines = TC.split_lines(text)
+    got = [cls.kind for cls in TABLES.classify_lines(lines)]
+    want = {TC.FENCE: TABLES.FENCE, TC.CODE: TABLES.LITERAL, TC.TEXT: TABLES.TEXT}
+    assert got == [want[kind] for kind in TC.line_kinds(lines)]
+
+
+@pytest.mark.parametrize("name,text,code", CASES, ids=[c[0] for c in CASES])
+def test_mdwrap_finds_the_lines_inside_a_fence_as_the_hooks_rule_does(name, text, code):
+    # mdwrap reports the lines strictly INSIDE a block, fence lines excluded.
+    lines = TC.split_lines(text)
+    inside = {i for i, kind in enumerate(TC.line_kinds(lines)) if kind == TC.CODE}
+    assert MDWRAP._fenced_lines(lines) == inside
+
+
+def _probe_positions(text):
+    """Each way to insert a column-0 `## probe` line into `text`, with whether the hooks rule
+    reads that probe as code."""
+    lines = TC.split_lines(text)
+    for at in range(len(lines) + 1):
+        probed = lines[:at] + ["## probe"] + lines[at:]
+        yield probed, at, TC.code_line_flags(probed)[at]
+
+
+@pytest.mark.parametrize("name,text,code", _COLUMN_ZERO_CASES,
+                         ids=[c[0] for c in _COLUMN_ZERO_CASES])
+def test_claudemd_variance_skips_a_heading_in_a_fence_as_the_hooks_rule_does(name, text, code):
+    for probed, at, in_code in _probe_positions(text):
+        assert (at in VARIANCE._heading_lines(probed)) is not in_code, (at, probed)
+
+
+@pytest.mark.parametrize("name,text,code", _COLUMN_ZERO_CASES,
+                         ids=[c[0] for c in _COLUMN_ZERO_CASES])
+def test_adopt_skill_skips_a_heading_in_a_fence_as_the_hooks_rule_does(name, text, code):
+    for probed, at, in_code in _probe_positions(text):
+        h1 = [line.replace("## ", "# ", 1) if i == at else line for i, line in enumerate(probed)]
+        # _h1_index answers the FIRST visible `# ` line, so only a probe in code may be skipped.
+        assert (ADOPT._h1_index(h1, 0) == at) is not in_code, (at, h1)
+
+
+def test_the_heading_probes_reach_both_answers():
+    # A probe table where every insertion lands outside code would pass any scanner.
+    answers = {in_code for _n, text, _c in _COLUMN_ZERO_CASES
+               for _p, _at, in_code in _probe_positions(text)}
+    assert answers == {True, False}

@@ -29,6 +29,19 @@ than the change, so entries reconstructed from them would read like coverage wit
 a hole nobody has drawn a line under is one that gets rediscovered and half-filled - which is how
 two "versions with no entry" notes came to sit in this file disagreeing with it.
 
+## [8.7.4]
+
+### Fixed
+
+- `compuse-toolbox` `mdwrap`: an indented example fence nested in a code block no longer ends the
+  block early, so the rest of the block is still refused for reflow; and a four-space fence-looking
+  line under a top-level paragraph is indented code, not an opener. It now follows the same
+  CommonMark rule as the hooks.
+- The four skill scripts that keep their own fence scanner (`mdwrap`, `reformat_tables`,
+  `claudemd_variance`, `adopt_skill`) are held to the hooks' fence rule by one parity test, so a fix
+  to one copy can no longer leave the others behind unnoticed. `tell_chars.line_kinds` gives the
+  per-line FENCE / CODE / TEXT view that test compares against.
+
 ## [8.7.3]
 
 ### Fixed

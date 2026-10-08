@@ -95,6 +95,11 @@ _ATX = re.compile(r"#{1,6}(?:[ \t]|$)")
 _THEMATIC = re.compile(r"(?:(?:\*[ \t]*){3,}|(?:-[ \t]*){3,}|(?:_[ \t]*){3,})$")
 _SETEXT = re.compile(r"(?:=+|-+)[ \t]*$")
 _FENCE_OPEN = re.compile(r"(`{3,}|~{3,})(.*)$")
+# CommonMark: four columns beyond the enclosing block's content make indented code, so a fence-
+# looking line that deep is content. A list item's content starts after its marker.
+_CODE_INDENT = 4
+_TAB_WIDTH = 4
+_LIST_ITEM = re.compile(r"[ \t]*(?:[-*+]|\d{1,9}[.)])(?:[ \t]+|$)")
 
 
 @dataclass
@@ -149,25 +154,66 @@ def _paragraph_bounds(lines: list[str], idx: int) -> tuple[int, int]:
     return lo, hi
 
 
+def _indent_columns(line: str) -> int:
+    return len(line[: len(line) - len(line.lstrip(" \t"))].expandtabs(_TAB_WIDTH))
+
+
+def _container_column(lines: list[str], index: int, floor: int) -> int:
+    """The content column of the block holding `lines[index]`: the nearest less-indented line
+    above it (no further back than the last fence line `floor`) decides - a list item by where its
+    content starts, a line at column 0 by being top level."""
+    columns = _indent_columns(lines[index])
+    for prior in reversed(lines[floor + 1:index]):
+        prior_columns = _indent_columns(prior)
+        if not prior.strip() or prior_columns >= columns:
+            continue
+        if item := _LIST_ITEM.match(prior):
+            width = len(item.group(0).expandtabs(_TAB_WIDTH))
+            return width if item.group(0).endswith((" ", "\t")) else width + 1
+        if prior_columns == 0:
+            return 0
+    return 0
+
+
+def _fence_open(lines: list[str], index: int, floor: int) -> tuple[str, int] | None:
+    """(run, container column) when `lines[index]` opens a fence, else None. A backtick opener's
+    info string may hold no backtick, and the line sits less than four columns into its block."""
+    m = _FENCE_OPEN.match(lines[index].strip())
+    if not m or (m.group(1)[0] == "`" and "`" in m.group(2)):
+        return None
+    container = _container_column(lines, index, floor)
+    if _indent_columns(lines[index]) - container >= _CODE_INDENT:
+        return None
+    return m.group(1), container
+
+
+def _fence_closes(line: str, run: str, container: int) -> bool:
+    """A bare run of the opener's character, at least as long, less than four columns into the
+    opener's block: a deeper one is an example inside the block."""
+    s = line.strip()
+    return (len(s) >= len(run) and set(s) == {run[0]}
+            and _indent_columns(line) - container < _CODE_INDENT)
+
+
 def _fenced_lines(lines: list[str]) -> set[int]:
     """0-based indexes of the lines strictly INSIDE a fenced code block, over the whole file.
 
     A paragraph between blank lines inside a fence has no fence line of its own, so a check over
-    the paragraph alone let it be reflowed. A backtick opener's info string may hold no backtick;
-    a closer is the same character, at least as long, and bare. An unclosed fence runs to the end.
+    the paragraph alone let it be reflowed. The rule is CommonMark's, the same one the plugin's
+    hooks use (tell_chars.line_kinds; a parity test holds the two together): an unclosed fence runs
+    to the end, and an indented example fence nested in a block does not close it.
     """
-    inside, run = set(), ""
+    inside: set[int] = set()
+    fence: tuple[str, int] | None = None
+    floor = -1
     for i, line in enumerate(lines):
-        s = line.strip()
-        if run:
-            if len(s) >= len(run) and set(s) == {run[0]}:
-                run = ""
-            else:
-                inside.add(i)
-            continue
-        m = _FENCE_OPEN.match(s)
-        if m and not (m.group(1)[0] == "`" and "`" in m.group(2)):
-            run = m.group(1)
+        if fence is None:
+            fence = _fence_open(lines, i, floor)
+            floor = i if fence else floor
+        elif _fence_closes(line, *fence):
+            fence, floor = None, i
+        else:
+            inside.add(i)
     return inside
 
 

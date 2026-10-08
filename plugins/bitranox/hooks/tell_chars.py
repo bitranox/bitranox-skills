@@ -173,9 +173,15 @@ def _closes(line, fence):
             and not m.group(2).strip() and _indent_columns(line) - container < _CODE_INDENT)
 
 
-def code_line_flags(lines):
-    """One bool per line of `lines` (with or without their endings): True for a fence line and for
-    every line inside a fenced block. An unclosed fence runs to the end.
+# What `line_kinds` says about one line.
+FENCE = "fence"  # a fence opener or closer
+CODE = "code"    # inside a fenced block
+TEXT = "text"    # prose
+
+
+def line_kinds(lines):
+    """FENCE, CODE or TEXT for each line of `lines` (with or without their endings). An unclosed
+    fence runs to the end.
 
     The one fence rule every hook module uses, so they cannot disagree about what is code; it
     follows CommonMark, judging indentation against the enclosing list item. Two shapes once split
@@ -183,19 +189,25 @@ def code_line_flags(lines):
     rule, and a fence inside a list item was missed under a three-space rule. A fence closes only
     on a bare run of its OWN character at least as long as its opener, so a `~~~` inside a backtick
     block or a three-backtick example inside a four-backtick block is content."""
-    flags, fence, floor = [], None, -1
+    kinds, fence, floor = [], None, -1
     for index, line in enumerate(lines):
         if fence is None:
             fence = _opens(lines, index, floor)
-            fence_line = fence is not None
+            kind = FENCE if fence is not None else TEXT
+        elif _closes(line, fence):
+            fence, kind = None, FENCE
         else:
-            fence_line = _closes(line, fence)
-            if fence_line:
-                fence = None
-        flags.append(fence_line or fence is not None)
-        if fence_line:
+            kind = CODE
+        kinds.append(kind)
+        if kind == FENCE:
             floor = index
-    return flags
+    return kinds
+
+
+def code_line_flags(lines):
+    """One bool per line of `lines`: True for a fence line and for every line inside a fenced
+    block, as `line_kinds` decides it."""
+    return [kind != TEXT for kind in line_kinds(lines)]
 
 
 def lines_with_code_state(text, keepends=False):
