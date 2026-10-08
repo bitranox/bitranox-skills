@@ -44,6 +44,8 @@ two "versions with no entry" notes came to sit in this file disagreeing with it.
   prints exactly those lines, so its output is unchanged.
 - `hooks/self_improve_signals.py`: `why_not_queued` is now public (moved from contrib_queue.py as
   `_why_not_queued`), providing a reusable path for determining why a contribution was refused.
+- `hooks/mod_bridge.py`: the JSON entry point the Claude Code mod relays tool calls through - one
+  request on stdin, one ASCII envelope on stdout, exit 0 done, 1 refused, 2 could not run.
 
 
 
