@@ -135,7 +135,7 @@ def backlog_path(cwd):
     return Path(r.stdout.strip()) / FILENAME
 
 
-_RAISED_RX = re.compile(r"(\d{4})-(\d{2})-(\d{2})\??$")
+_RAISED_RX = re.compile(r"(\d{4})-(\d{2})-(\d{2})\??", re.ASCII)
 
 
 def require_line(value, name):
@@ -163,7 +163,7 @@ def _require_raised(raised, today):
         return (today or datetime.date.today()).isoformat() + "?"
     if raised == "unknown":
         return raised
-    m = _RAISED_RX.match(raised) if isinstance(raised, str) else None
+    m = _RAISED_RX.fullmatch(raised) if isinstance(raised, str) else None
     if not m:
         raise MalformedField("raised must be YYYY-MM-DD, YYYY-MM-DD? or unknown, got %r" % (raised,))
     try:
@@ -190,7 +190,7 @@ def _write(path, lines):
 def add_item(path, rank, origin, what, size, open_, next_, raised=None, today=None):
     """Insert one open item; returns {"rank", "line"}. Refuses before writing anything."""
     rank = _require_rank(rank)
-    if origin not in ORIGINS:
+    if not isinstance(origin, str) or origin not in ORIGINS:
         raise MalformedField("origin must be USER or FOUND, got %r" % (origin,))
     fields = [require_line(v, n) for v, n in ((what, "what"), (size, "size"),
                                               (open_, "open"), (next_, "next"))]

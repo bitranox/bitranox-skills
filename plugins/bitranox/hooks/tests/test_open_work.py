@@ -169,7 +169,8 @@ def test_a_malformed_field_is_refused_and_nothing_is_written(tmp_path, field, va
 
 
 @pytest.mark.parametrize("kw", [{"origin": "ME"}, {"raised": "yesterday"},
-                                {"raised": "2026-02-30"}])
+                                {"raised": "2026-02-30"}, {"raised": "2026-10-08\n"},
+                                {"raised": "٢026-10-08"}, {"origin": ["USER"]}])
 def test_a_bad_origin_or_date_is_refused(tmp_path, kw):
     with pytest.raises(ow.MalformedField):
         _add(_backlog(tmp_path), 10, **kw)
@@ -198,6 +199,21 @@ def test_close_refuses_unknown_closed_and_ambiguous_ranks(tmp_path):
         ow.close_item(p, 10, "r")
     with pytest.raises(ow.AmbiguousRank):
         ow.close_item(p, 20, "r")
+
+
+@pytest.mark.parametrize("raised", ["unknown", "2026-09-30?"])
+def test_a_valid_raised_is_written_as_given(tmp_path, raised):
+    p = _backlog(tmp_path, _item(10))
+    out = _add(p, 20, raised=raised)
+    assert out["line"].startswith("- [ ] (%s) [20]" % raised)
+
+
+def test_a_refusal_for_raised_with_newline_leaves_file_unchanged(tmp_path):
+    p = _backlog(tmp_path, _item(10))
+    before = p.read_bytes()
+    with pytest.raises(ow.MalformedField):
+        _add(p, 20, raised="2026-10-08\n")
+    assert p.read_bytes() == before
 
 
 def test_close_without_a_reason_is_refused(tmp_path):
