@@ -39,6 +39,9 @@ two "versions with no entry" notes came to sit in this file disagreeing with it.
   variable dropped. It is the backend of the model-callable backlog tools this release adds.
 - `hooks/open_work.py`: adds and closes backlog items, refusing malformed input (a split line, a
   taken rank, a bad origin or date) before any write; a close keeps the line and appends its reason.
+- `hooks/memory_engine.py`: `add_with_advice` is the one write path for a captured fact - it returns
+  the slug, whether it was created, and the advisory lines as data. `memory_engine.py add` now
+  prints exactly those lines, so its output is unchanged.
 
 
 

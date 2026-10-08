@@ -357,6 +357,56 @@ def add_or_update_entry(proj, title, hook, body="", type_=None, pin=False,
     return slug
 
 
+def add_with_advice(proj, title, hook, body="", type_=None, pin=False, scope_default="",
+                    slug=None):
+    """`add_or_update_entry` plus the advisories the CLI prints after it, returned as data.
+
+    The CLI `add` and the mod bridge both write a fact through here, so a capture made either way
+    gets the same validation and the same warnings. Returns (slug, created, advice): `created` is
+    False when the fact already had a body (an update); `advice` holds the '~ warning: ...' and
+    '~ note: ...' lines in the order the CLI prints them. Raises what `add_or_update_entry` raises."""
+    hook = (hook or "").strip()
+    _require_known_type(type_)                # same refusal order as add_or_update_entry
+    target = slug or slugify(title, type_)
+    _require_valid_slug(target)
+    created = not us.body_path(_anchor(os.path.abspath(str(proj))), target).is_file()
+    slug = add_or_update_entry(proj, title=title, hook=hook, body=body, type_=type_, pin=pin,
+                               scope_default=scope_default, slug=slug)
+    return slug, created, _add_advice(hook, body)
+
+
+def _add_advice(hook, body):
+    """The advisory lines for a just-written fact, in print order. `hook` is the RESOLVED text (a
+    `--hook-file` call has no inline flag), so a caller must pass it, never the raw argument."""
+    advice = []
+    if us.hook_over_budget(hook):
+        advice.append("~ warning: hook is %d chars (soft cap %d, advisory - fine up to the %d-char "
+                      "hard cap; keep it self-sufficient, do not trim load-bearing detail to "
+                      "silence this)" % (len(hook), us.HOOK_SOFT_MAX, us.HOOK_HARD_MAX))
+    if us.hook_missing_trigger(hook):
+        advice.append("~ warning: hook has no trigger phrase - lead with WHEN it applies "
+                      "('When <situation>, <directive>'), or it will not fire during reasoning")
+    for _advice in capture_constraints.advise(hook, body):
+        advice.append(f"~ warning: {_advice}")
+    # The recurrence count is the one durable "this was already written and did not hold" signal,
+    # and this is the moment it is in hand. Naming BOTH ladders is deliberate: the body cannot say
+    # whether a repeat is a rule being skipped or work being re-done, and the counter living only
+    # in the rule ladder is what kept sending readers to a guard while the jig was never proposed.
+    seen = us.recurrence_count(body)
+    if seen is not None and seen >= us.RECURRENCE_ESCALATE_AT and _user_decided_escalation(body):
+        # The user already ruled on the ladder: "propose it in THIS turn" would contradict the
+        # very fact being written and re-ask a settled question.
+        advice.append("~ note: this body records recurrence %d and the user's escalation decision - "
+                      "not re-proposing a guard or jig" % seen)
+    elif seen is not None and seen >= us.RECURRENCE_ESCALATE_AT:
+        advice.append("~ warning: this body records recurrence %d - prose has already failed %d "
+                      "times, so do NOT just reword it. Escalate and PROPOSE it to the user in "
+                      "THIS turn: a deterministic GUARD if a rule keeps being skipped, a JIG "
+                      "(toolbox tool) if the same multi-step work keeps being re-done by hand - "
+                      "and BOTH when it is both." % (seen, seen))
+    return advice
+
+
 def amend_pinned_entry(proj, slug, hook=None, body=None, title=None, type_=None):
     """The escape hatch for a pinned fact: the same upsert as `add`, with the pinned refusal skipped.
     Keeps the existing pin state (this never unpins - `bx:pin` is untouched, only content changes);
@@ -1957,41 +2007,14 @@ def _main(argv=None):
             if err:
                 return _input_error(err)
         try:
-            slug = add_or_update_entry(args.proj, title=args.title, hook=hook, body=body,
-                                       type_=args.type_, pin=args.pin,
-                                       scope_default=scope_default, slug=args.slug)
+            slug, _created, advice = add_with_advice(
+                args.proj, title=args.title, hook=hook, body=body, type_=args.type_,
+                pin=args.pin, scope_default=scope_default, slug=args.slug)
         except (SlugCollision, HookTooLong, EmptyBody, PinnedEntry, InvalidSlug) as c:
             return _refused(c)
         print(slug)
-        if us.hook_over_budget(hook):
-            print("~ warning: hook is %d chars (soft cap %d, advisory - fine up to the %d-char hard "
-                  "cap; keep it self-sufficient, do not trim load-bearing detail to silence this)"
-                  % (len(hook), us.HOOK_SOFT_MAX, us.HOOK_HARD_MAX))
-        if us.hook_missing_trigger(hook):
-            print("~ warning: hook has no trigger phrase - lead with WHEN it applies "
-                  "('When <situation>, <directive>'), or it will not fire during reasoning")
-        # `hook`, never `args.hook`: the two are only the same when the caller chose the inline
-        # flag, and reading the raw namespace here would silently skip every advisory on a
-        # `--hook-file` call (advise() coerces None to "", so it stays green and says nothing).
-        for _advice in capture_constraints.advise(hook, body):
-            print(f"~ warning: {_advice}")
-        # The recurrence count is the one durable "this was already written and did not hold"
-        # signal, and this is the moment it is in hand. Naming BOTH ladders is deliberate: the
-        # body cannot say whether a repeat is a rule being skipped or work being re-done, and
-        # the counter living only in the rule ladder is what kept sending readers to a guard
-        # while the jig was never proposed.
-        seen = us.recurrence_count(body)
-        if seen is not None and seen >= us.RECURRENCE_ESCALATE_AT and _user_decided_escalation(body):
-            # The user already ruled on the ladder: "propose it in THIS turn" would contradict the
-            # very fact being written and re-ask a settled question.
-            print("~ note: this body records recurrence %d and the user's escalation decision - "
-                  "not re-proposing a guard or jig" % seen)
-        elif seen is not None and seen >= us.RECURRENCE_ESCALATE_AT:
-            print("~ warning: this body records recurrence %d - prose has already failed %d times, "
-                  "so do NOT just reword it. Escalate and PROPOSE it to the user in THIS turn: a "
-                  "deterministic GUARD if a rule keeps being skipped, a JIG (toolbox tool) if the "
-                  "same multi-step work keeps being re-done by hand - and BOTH when it is both."
-                  % (seen, seen))
+        for line in advice:
+            print(line)
         return 0
 
     if args.cmd == "amend-pinned":
