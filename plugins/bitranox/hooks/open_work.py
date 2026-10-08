@@ -133,3 +133,115 @@ def backlog_path(cwd):
     if r.returncode != 0 or not r.stdout.strip():
         raise NotARepo("%s is not inside a git repository, so it has no OPEN-WORK.md" % cwd)
     return Path(r.stdout.strip()) / FILENAME
+
+
+_RAISED_RX = re.compile(r"(\d{4})-(\d{2})-(\d{2})\??$")
+
+
+def require_line(value, name):
+    """`value` as one non-empty line, or MalformedField naming the field."""
+    if not isinstance(value, str) or not value.strip():
+        raise MalformedField("%s must be a non-empty string" % name)
+    if "\n" in value or "\r" in value:
+        raise MalformedField("%s must be one line: the backlog holds one item per line" % name)
+    if _FIELD_RX.search(" " + value + " "):
+        raise MalformedField("%s contains a ' | <label>: ' separator, which would split the "
+                             "line into the wrong fields" % name)
+    return value.strip()
+
+
+def _require_rank(rank):
+    # bool is an int subclass: True would otherwise be accepted as rank 1
+    if isinstance(rank, bool) or not isinstance(rank, int) or rank < 1:
+        raise MalformedField("rank must be a positive integer, got %r" % (rank,))
+    return rank
+
+
+def _require_raised(raised, today):
+    if raised is None:
+        # never an inferred date: an admitted unknown is today's date with a question mark
+        return (today or datetime.date.today()).isoformat() + "?"
+    if raised == "unknown":
+        return raised
+    m = _RAISED_RX.match(raised) if isinstance(raised, str) else None
+    if not m:
+        raise MalformedField("raised must be YYYY-MM-DD, YYYY-MM-DD? or unknown, got %r" % (raised,))
+    try:
+        datetime.date(int(m.group(1)), int(m.group(2)), int(m.group(3)))
+    except ValueError:
+        raise MalformedField("raised is not a calendar date: %r" % raised) from None
+    return raised
+
+
+def _free_tens_near(rank, taken):
+    base = rank - rank % 10
+    below = next((r for r in range(base, 0, -10) if r not in taken and r != rank), None)
+    above = next(r for r in range(base + 10, base + 10 ** 6, 10) if r not in taken)
+    return [r for r in (below, above) if r is not None]
+
+
+def _write(path, lines):
+    tmp = path.with_name("%s.tmp-%d" % (path.name, os.getpid()))
+    with open(tmp, "w", encoding="utf-8", newline="\n") as fh:
+        fh.write("\n".join(lines))
+    os.replace(tmp, path)
+
+
+def add_item(path, rank, origin, what, size, open_, next_, raised=None, today=None):
+    """Insert one open item; returns {"rank", "line"}. Refuses before writing anything."""
+    rank = _require_rank(rank)
+    if origin not in ORIGINS:
+        raise MalformedField("origin must be USER or FOUND, got %r" % (origin,))
+    fields = [require_line(v, n) for v, n in ((what, "what"), (size, "size"),
+                                              (open_, "open"), (next_, "next"))]
+    line = "- [ ] (%s) [%d] %s: %s | size: %s | open: %s | next: %s" % (
+        (_require_raised(raised, today), rank, origin) + tuple(fields))
+    path = Path(path)
+    with sig.memory_lock(path):
+        text = path.read_text(encoding="utf-8") if path.is_file() else HEADER
+        lines = text.split("\n")
+        items = list(iter_items(lines))
+        taken = {it["rank"] for _, it in items}
+        if rank in taken:
+            raise RankTaken("rank %d is already held by a line (closed lines count); free tens "
+                            "nearby: %s" % (rank, ", ".join(map(str, _free_tens_near(rank, taken)))))
+        smaller = [(it["rank"], i) for i, it in items if it["rank"] < rank]
+        if smaller:
+            at = max(smaller)[1] + 1
+        elif items:
+            at = items[0][0]
+        else:
+            # no item yet: after the last non-empty line, so the file keeps one trailing newline
+            at = len(lines) - 1 if lines and lines[-1] == "" else len(lines)
+        new = lines[:at] + [line] + lines[at:]
+        if new[-1] != "":
+            new.append("")
+        if len(new) != len(lines) + 1 + (0 if lines[-1] == "" else 1):
+            raise BacklogError("internal: an add must grow the file by exactly one line")
+        _write(path, new)
+    return {"rank": rank, "line": line}
+
+
+def close_item(path, rank, reason):
+    """Mark one open item closed with its reason; the line stays. Returns {"rank", "line"}."""
+    rank = _require_rank(rank)
+    reason = require_line(reason, "reason")
+    path = Path(path)
+    with sig.memory_lock(path):
+        if not path.is_file():
+            raise UnknownRank("no %s here, so there is no rank %d" % (FILENAME, rank))
+        lines = path.read_text(encoding="utf-8").split("\n")
+        hits = [(i, it) for i, it in iter_items(lines) if it["rank"] == rank]
+        if not hits:
+            raise UnknownRank("no line holds rank %d" % rank)
+        open_hits = [(i, it) for i, it in hits if it["state"] == "open"]
+        if not open_hits:
+            raise AlreadyClosed("rank %d is already closed" % rank)
+        if len(open_hits) > 1:
+            raise AmbiguousRank("rank %d labels %d open lines; give one a free number before "
+                                "closing either" % (rank, len(open_hits)))
+        i = open_hits[0][0]
+        # edit the raw line rather than re-rendering it, so an older line keeps its exact text
+        lines[i] = re.sub(r"^(\s*-\s*\[) \]", r"\1x]", lines[i], count=1) + " | closed: " + reason
+        _write(path, lines)
+    return {"rank": rank, "line": lines[i]}

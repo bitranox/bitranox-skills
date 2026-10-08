@@ -37,6 +37,8 @@ two "versions with no entry" notes came to sit in this file disagreeing with it.
   into rank, raised date, state, origin and its labelled fields, items inside fenced code blocks
   ignored, the file located at the git top level of a directory with every inherited `GIT_`
   variable dropped. It is the backend of the model-callable backlog tools this release adds.
+- `hooks/open_work.py`: adds and closes backlog items, refusing malformed input (a split line, a
+  taken rank, a bad origin or date) before any write; a close keeps the line and appends its reason.
 
 
 
