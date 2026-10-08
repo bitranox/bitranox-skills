@@ -9,6 +9,7 @@ import datetime
 import os
 import re
 import subprocess
+import unicodedata
 from pathlib import Path
 
 import self_improve_signals as sig
@@ -16,6 +17,8 @@ import self_improve_signals as sig
 FILENAME = "OPEN-WORK.md"
 ORIGINS = ("USER", "FOUND")
 STATES = ("open", "closed", "all")
+#: the largest rank a line may carry: a bound keeps the free-tens suggestion finite
+MAX_RANK = 999999
 #: the labelled fields of a line, in the order a written line carries them
 LABELS = ("size", "open", "next", "closed")
 
@@ -138,12 +141,28 @@ def backlog_path(cwd):
 _RAISED_RX = re.compile(r"(\d{4})-(\d{2})-(\d{2})\??", re.ASCII)
 
 
-def require_line(value, name):
-    """`value` as one non-empty line, or MalformedField naming the field."""
+def require_one_line(value, name):
+    """`value` unchanged when it is one non-empty line of text a UTF-8 file can hold, else
+    MalformedField naming the field.
+
+    Control characters (category Cc) and the line and paragraph separators (Zl, Zp) are refused,
+    which covers every character str.splitlines() breaks on, so no reader can see two lines."""
     if not isinstance(value, str) or not value.strip():
         raise MalformedField("%s must be a non-empty string" % name)
-    if "\n" in value or "\r" in value:
-        raise MalformedField("%s must be one line: the backlog holds one item per line" % name)
+    if any(unicodedata.category(ch) in ("Cc", "Zl", "Zp") for ch in value):
+        raise MalformedField("%s must be one line of plain text: no line break or other control "
+                             "character" % name)
+    try:
+        value.encode("utf-8")
+    except UnicodeEncodeError:
+        raise MalformedField("%s must be text a UTF-8 file can hold (a lone surrogate cannot)"
+                             % name) from None
+    return value
+
+
+def require_line(value, name):
+    """`value` as one non-empty backlog field, stripped, or MalformedField naming the field."""
+    require_one_line(value, name)
     if _FIELD_RX.search(" " + value + " "):
         raise MalformedField("%s contains a ' | <label>: ' separator, which would split the "
                              "line into the wrong fields" % name)
@@ -152,8 +171,8 @@ def require_line(value, name):
 
 def _require_rank(rank):
     # bool is an int subclass: True would otherwise be accepted as rank 1
-    if isinstance(rank, bool) or not isinstance(rank, int) or rank < 1:
-        raise MalformedField("rank must be a positive integer, got %r" % (rank,))
+    if isinstance(rank, bool) or not isinstance(rank, int) or not 1 <= rank <= MAX_RANK:
+        raise MalformedField("rank must be a positive integer up to %d, got %r" % (MAX_RANK, rank))
     return rank
 
 
@@ -182,9 +201,17 @@ def _free_tens_near(rank, taken):
 
 def _write(path, lines):
     tmp = path.with_name("%s.tmp-%d" % (path.name, os.getpid()))
-    with open(tmp, "w", encoding="utf-8", newline="\n") as fh:
-        fh.write("\n".join(lines))
-    os.replace(tmp, path)
+    try:
+        with open(tmp, "w", encoding="utf-8", newline="\n") as fh:
+            fh.write("\n".join(lines))
+        os.replace(tmp, path)
+    except BaseException:
+        # a failed write must not leave OPEN-WORK.md.tmp-<pid> beside the backlog
+        try:
+            os.unlink(tmp)
+        except OSError:
+            pass
+        raise
 
 
 def add_item(path, rank, origin, what, size, open_, next_, raised=None, today=None):
@@ -198,7 +225,9 @@ def add_item(path, rank, origin, what, size, open_, next_, raised=None, today=No
         (_require_raised(raised, today), rank, origin) + tuple(fields))
     path = Path(path)
     with sig.memory_lock(path):
-        text = path.read_text(encoding="utf-8") if path.is_file() else HEADER
+        text = path.read_text(encoding="utf-8") if path.is_file() else ""
+        if not text.strip():
+            text = HEADER                       # a missing or empty file starts from the header
         lines = text.split("\n")
         items = list(iter_items(lines))
         taken = {it["rank"] for _, it in items}

@@ -281,7 +281,7 @@ def _parse_open_work(text, today=None):
     """
     today = today or datetime.date.today()
     items = []
-    for raw in text.splitlines():
+    for raw in text.split("\n"):   # not splitlines(): it also breaks on U+2028 and form feed
         m = _OPEN_WORK_RX.match(raw.strip())
         if not m:
             continue                                  # closed "[x]" items and prose both land here
@@ -299,7 +299,7 @@ def _shared_rank_warning(text):
     Two closed lines on one number are history and are not named: nothing new can be cited by it.
     """
     states = {}
-    for raw in text.splitlines():
+    for raw in text.split("\n"):   # not splitlines(): it also breaks on U+2028 and form feed
         m = _ANY_ITEM_RX.match(raw.strip())
         if m:
             states.setdefault(int(m.group(2)), []).append(m.group(1) == " ")

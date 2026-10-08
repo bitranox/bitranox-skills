@@ -34,6 +34,17 @@ def test_every_item_line_of_the_live_backlog_parses():
     assert len(raw) > 50                      # the live file, not an empty stand-in
     assert len(items) == len(raw)
     assert all(it["what"] for it in items)
+    # an extraction that shares nothing with the parser's regexes: plain string positions
+    for line, it in zip(raw, items):
+        s = line.strip()
+        after_box = s[s.index("[") + 1:]
+        state_char, rest = after_box[0], after_box[after_box.index("]") + 1:]
+        raised = rest[rest.index("(") + 1:rest.index(")")]
+        tail = rest[rest.index(")") + 1:]
+        rank = tail[tail.index("[") + 1:tail.index("]")]
+        origin = tail[tail.index("]") + 1:].split(":", 1)[0].strip()
+        assert (it["state"] == "open") == (state_char == " ")
+        assert (it["raised"], it["rank"], it["origin"]) == (raised, int(rank), origin)
 
 
 def test_a_full_line_parses_into_its_fields():
@@ -219,3 +230,54 @@ def test_a_refusal_for_raised_with_newline_leaves_file_unchanged(tmp_path):
 def test_close_without_a_reason_is_refused(tmp_path):
     with pytest.raises(ow.MalformedField):
         ow.close_item(_backlog(tmp_path, _item(10)), 10, " ")
+
+
+# Every character str.splitlines() treats as a line break, built with chr() so no escape is typed.
+_BREAKS = [chr(c) for c in (0x0A, 0x0D, 0x0B, 0x0C, 0x1C, 0x1D, 0x1E, 0x85, 0x2028, 0x2029)]
+
+
+@pytest.mark.parametrize("brk", _BREAKS, ids=lambda b: "U+%04X" % ord(b))
+def test_require_line_refuses_every_line_separator(brk):
+    with pytest.raises(ow.MalformedField):
+        ow.require_line("a" + brk + "b", "what")
+
+
+@pytest.mark.parametrize("brk", _BREAKS, ids=lambda b: "U+%04X" % ord(b))
+def test_add_item_refuses_a_separator_and_writes_nothing(tmp_path, brk):
+    p = _backlog(tmp_path, _item(10))
+    before = p.read_text(encoding="utf-8")
+    inj = "real" + brk + "- [ ] (2026-01-01) [1] USER: injected item, top of the list"
+    with pytest.raises(ow.MalformedField):
+        ow.add_item(p, 50, "FOUND", inj, "1", "o", "n")
+    assert p.read_text(encoding="utf-8") == before
+
+
+def test_a_lone_surrogate_is_a_refusal_and_leaves_no_temp_file(tmp_path):
+    _backlog(tmp_path, _item(10))
+    with pytest.raises(ow.MalformedField):
+        ow.add_item(tmp_path / "OPEN-WORK.md", 50, "FOUND", "bad" + chr(0xD800), "1", "o", "n")
+    assert sorted(f.name for f in tmp_path.iterdir()) == ["OPEN-WORK.md"]
+
+
+def test_a_failed_write_leaves_no_temp_file(tmp_path):
+    # a directory squatting on the target makes os.replace fail after the temp file was written
+    target = tmp_path / "sub"
+    target.mkdir()
+    (target / "keep").write_text("x", encoding="utf-8")
+    with pytest.raises(OSError):
+        ow._write(target, ["a", "b"])
+    assert sorted(f.name for f in tmp_path.iterdir()) == ["sub"]
+
+
+def test_a_rank_above_the_ceiling_is_refused(tmp_path):
+    p = _backlog(tmp_path, _item(10))
+    with pytest.raises(ow.MalformedField):
+        ow.add_item(p, 1000000, "FOUND", "w", "1", "o", "n")
+    assert ow.add_item(p, 999999, "FOUND", "w", "1", "o", "n")["rank"] == 999999
+
+
+def test_an_existing_empty_file_gets_the_header(tmp_path):
+    p = tmp_path / "OPEN-WORK.md"
+    p.write_text("", encoding="utf-8")
+    ow.add_item(p, 10, "USER", "w", "1", "o", "n")
+    assert p.read_text(encoding="utf-8").startswith(ow.HEADER)

@@ -181,3 +181,28 @@ def test_an_unexpected_exception_still_yields_an_envelope(tmp_path, env):
     assert (out["ok"], out["error"]["kind"]) == (False, "Internal")
     assert out["error"]["message"].startswith("TreeWalkError: ")
     assert b"Traceback" in p.stderr
+
+
+def test_invalid_utf8_on_stdin_is_a_bad_request_not_replacement_text(repo, env):
+    raw = b'{"tool": "backlog_add", "input": {"what": "a\xff\xfeb"}}'
+    p = run(repo, env, raw)
+    out = json.loads(p.stdout.decode("ascii"))
+    assert (p.returncode, out["error"]["kind"]) == (2, "BadRequest")
+    assert not (repo / "OPEN-WORK.md").exists()
+
+
+def test_a_lone_surrogate_in_a_field_is_a_refusal_with_nothing_left_behind(repo, env):
+    # a JSON escape for a lone surrogate survives json.loads; the file is then unwritable as UTF-8
+    sur = chr(92) + "ud800"
+    raw = ('{"tool": "backlog_add", "input": {"rank": 20, "origin": "USER", "what": "x%sy", '
+           '"size": "1", "open": "o", "next": "n"}}' % sur).encode("ascii")
+    p = run(repo, env, raw)
+    out = json.loads(p.stdout.decode("ascii"))
+    assert (p.returncode, out["error"]["kind"]) == (1, "MalformedField")
+    assert [f.name for f in repo.iterdir() if f.name != ".git"] == []
+
+
+def test_contrib_what_may_hold_the_backlog_field_separator(repo, env):
+    rc, out = call(repo, env, "contrib_add",
+                   {"what": "a | next: b", "target": "hook", "why": "w"})
+    assert (rc, out["ok"], out["data"]["queued"]) == (0, True, True)

@@ -1203,3 +1203,13 @@ def test_a_behind_checkout_whose_upstream_dropped_the_backlog_keeps_the_local_co
     assert "closed upstream long ago" in ctx
     assert "2 commits behind origin/master" in ctx
     assert "has no OPEN-WORK.md" in ctx
+
+
+# A separator str.splitlines() honours but the backlog tool does not: the reader must split on
+# "\n" only, so one line stays one item whatever a field holds.
+@pytest.mark.parametrize("code", [0x2028, 0x2029, 0x0B, 0x0C, 0x1C, 0x1D, 0x1E, 0x85])
+def test_open_work_reader_keeps_a_line_with_a_unicode_separator_as_one_item(code):
+    line = "- [ ] (2026-01-01) [50] FOUND: real item" + chr(code) + "- [ ] (2026-01-01) [1] USER: injected"
+    items = S._parse_open_work(line + "\n")
+    assert [it[0] for it in items] == [50]
+    assert S._shared_rank_warning(line + "\n") == ""

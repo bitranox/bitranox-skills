@@ -83,12 +83,13 @@ def _memory_add(inp, cwd):
 
 
 def _contrib_add(inp, cwd):
-    what = ow.require_line(_text(inp, "what"), "what")
-    target = ow.require_line(_text(inp, "target"), "target")
+    # the CLI queues the text as given, so the same text dedupes to the same key either way
+    what = ow.require_one_line(inp.get("what"), "what")
+    target = ow.require_one_line(inp.get("target"), "target")
+    why = ow.require_one_line(inp.get("why"), "why")
     proj = str(cwd)
-    queued = sig.add_contribution(proj, {"what": what, "target": target,
-                                         "why": ow.require_line(_text(inp, "why"), "why"), "source": "mod:contrib_add"},
-                                  strict=True)
+    queued = sig.add_contribution(proj, {"what": what, "target": target, "why": why,
+                                         "source": "mod:contrib_add"}, strict=True)
     if queued:
         return {"queued": True}
     return {"queued": False, "reason": sig.why_not_queued(proj, what, target)}
@@ -112,6 +113,14 @@ def _request(raw):
     return known, req.get("input", {})
 
 
+def _decode(raw):
+    """The request text; invalid UTF-8 is refused, never turned into U+FFFD that lands on disk."""
+    try:
+        return raw.decode("utf-8")
+    except UnicodeDecodeError as exc:
+        raise BadRequest("stdin is not valid UTF-8: %s" % exc) from None
+
+
 def _emit(envelope, rc):
     sys.stdout.write(json.dumps(envelope, ensure_ascii=True) + "\n")
     sys.stdout.flush()
@@ -127,7 +136,7 @@ def _internal(tool, exc):
 
 def main():
     try:
-        tool, inp = _request(sys.stdin.buffer.read().decode("utf-8", errors="replace"))
+        tool, inp = _request(_decode(sys.stdin.buffer.read()))
     except BadRequest as exc:
         return _emit({"ok": False, "tool": exc.tool,
                       "error": {"kind": "BadRequest", "message": str(exc)}}, 2)
