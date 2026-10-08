@@ -68,6 +68,18 @@ def test_a_bearer_header_value_is_redacted():
     assert "abcDEF123456789xyz" not in text
 
 
+@pytest.mark.parametrize("token", [
+    "a1bcdefg",                 # short, but carries a digit
+    "k" * 20,                   # no digit, but token-length
+    "pyMoVxMBLqHnWwon/YfEowWVjpHJ",
+])
+def test_a_bearer_value_with_a_digit_or_token_length_is_still_redacted(token):
+    # Prose after "bearer" is a short all-letter word; a token has a digit or is long. Both
+    # token shapes must keep being redacted once the prose shape is not.
+    text, n = sp.redact("Authorization: Bearer " + token)
+    assert token not in text and n == 1
+
+
 def test_extra_literals_are_redacted_even_without_a_known_shape():
     # The classifier's own API key has no public format; it is passed as a literal.
     key = "q" * 108
@@ -288,6 +300,10 @@ def test_a_quoted_value_keeps_its_quotes_and_the_name():
     '"password": ""',
     "if password == other:",
     "let t = Token::new(1);",
+    # The two prose shapes the bearer rule matched in the transcript corpus.
+    "the API expects bearer authentication",
+    "Bearer Authentication is configured per route",
+    "bearer ntfy-priority-flat",
 ])
 def test_counts_working_dirs_and_prose_are_not_secrets(line):
     assert sp.redact(line) == (line, 0), line

@@ -147,7 +147,12 @@ _MYSQL_RX = re.compile(
 # rest of a long `a-b-c-...` run from every hyphen, which is quadratic in the run's length.
 _URL_USERINFO_RX = re.compile(
     r"(?i)((?<![a-z0-9+.-])[a-z][a-z0-9+.-]*://[^/\s:@]+:)([^/\s@]+)(@)")
-_BEARER_RX = re.compile(r"(?i)(\bbearer\s+)([A-Za-z0-9._~+/=-]{8,})")
+# "bearer" is also an ordinary word ("bearer authentication"), so the value must look like a token:
+# a digit somewhere in it, or token length. Measured over the transcript corpus, every prose hit was
+# a short all-letter word and every token-shaped hit met one of the two.
+_BEARER_TOKEN = r"[A-Za-z0-9._~+/=-]"
+_BEARER_RX = re.compile(
+    rf"(?i)(\bbearer\s+)((?={_BEARER_TOKEN}*[0-9]){_BEARER_TOKEN}{{8,}}|{_BEARER_TOKEN}{{20,}})")
 # GitHub's own scheme, `Authorization: token <x>`. `token` is an ordinary word, so only after the
 # header name.
 _AUTH_TOKEN_RX = re.compile(

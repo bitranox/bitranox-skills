@@ -29,6 +29,15 @@ than the change, so entries reconstructed from them would read like coverage wit
 a hole nobody has drawn a line under is one that gets rediscovered and half-filled - which is how
 two "versions with no entry" notes came to sit in this file disagreeing with it.
 
+## [8.7.2]
+
+### Fixed
+
+- `secret_patterns`: the bearer rule no longer reads prose as a credential. "bearer authentication"
+  was redacted in logs and transcripts and counted as a held secret; the value after `bearer` must
+  now carry a digit or be at least 20 characters long. Measured over the transcript corpus, every
+  prose match was a short all-letter word and every token-shaped match met one of the two.
+
 ## [8.7.1]
 
 ### Fixed
