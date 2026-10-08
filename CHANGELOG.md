@@ -29,6 +29,19 @@ than the change, so entries reconstructed from them would read like coverage wit
 a hole nobody has drawn a line under is one that gets rediscovered and half-filled - which is how
 two "versions with no entry" notes came to sit in this file disagreeing with it.
 
+## [8.4.0]
+
+### Added
+
+- toolbox-nudge: a hand-rolled `git show REV:f > f` whose redirect target is the shown path itself
+  (the work-tree file overwritten with its committed text, usually to run a test against it) now
+  points at `mutation_arm --revert FILE REV`, which restores the uncommitted work from a copy
+  taken first. Replayed over the transcript corpus: 112 firings through the hook; a redirect to any
+  other path is a read into scratch and does not fire.
+- compuse-toolbox: `## Tools` rows for `mutation_arm --revert` and `fanout_crosscheck`.
+- process-agents-dispatching-parallel: a sixth Verification item, cross-checking a per-target
+  fan-out with `fanout_crosscheck` before committing on the agents' reports.
+
 ## [8.3.1]
 
 ### Fixed

@@ -1193,3 +1193,31 @@ def test_main_powershell_control_a_real_pkill_still_nudges(home, monkeypatch, ca
     _feed(monkeypatch, _ev_as("PowerShell", "pkill -f vm", "ps-ctl"))
     N.main()
     assert "procsig" in capsys.readouterr().out
+
+
+# `git show REV:f > f` overwrites the work-tree file with its committed text by hand - the RED half
+# of proving a test pins an uncommitted fix, restored by a hand-rolled copy that parallel agents
+# took from a sibling. Replayed over 113,665 recorded Bash calls: 112 firings through the hook, 87
+# of the pattern's 125 with pytest in the same command. The redirect target must BE the shown path: a `git show X:f >
+# /tmp/...` is a read into scratch for a diff, and the looser shape fired 447 times for that.
+@pytest.mark.parametrize("command", [
+    "git show HEAD:src/x.py > src/x.py && pytest tests/test_x.py",
+    "git -C /repo show HEAD~1:src/x.py > src/x.py",
+    'git show "HEAD:src/x.py" > "src/x.py"',
+    "git show 03afbea^:src/x.py > ./src/x.py; python3 probe.py",
+    "for f in $(git diff --name-only HEAD); do git show HEAD:$f > $f; done",
+])
+def test_a_hand_rolled_revert_points_at_mutation_arm(command):
+    assert N.match_tool(command, "Bash")[0] == "mutation_arm"
+
+
+@pytest.mark.parametrize("command", [
+    "git show HEAD:src/x.py > /tmp/x_head.py",
+    'git show HEAD:src/x.py > "$S/old/src/x.py"',
+    "git show HEAD:src/x.py > src/x.py.orig",
+    "git show HEAD:a.py > b.py",
+    "git show HEAD:src/x.py | diff - src/x.py",
+])
+def test_a_committed_text_read_into_another_file_is_not_a_revert(command):
+    matched = N.match_tool(command, "Bash")
+    assert matched is None or matched[0] != "mutation_arm", matched

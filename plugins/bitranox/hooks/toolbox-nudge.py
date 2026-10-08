@@ -213,6 +213,15 @@ _SHELL_ONLY_RULES = [
      "a rate-capped transfer whose unit means something different per tool"),
     (re.compile(r"\bgit\s+worktree\s+(?:remove|prune)\b|\bdu\b[^|\n]*\|\s*sort\s+-[a-z]*h"),
      "wtclean", "reclaiming the disk a deleted worktree never gave back"),
+    # `git show REV:f > f`, the target being the shown path itself: the work-tree file overwritten
+    # with its committed text by hand. Replayed over 113,665 recorded Bash calls: the pattern fires
+    # 125 times in 75 sessions (87 with pytest in the same command), 112 through this hook once
+    # heredoc bodies are stripped and earlier rules have taken theirs. Any other target is a read into scratch
+    # for a diff; without the same-path condition the shape fired 447 times, mostly for that.
+    (re.compile(r"\bgit\s+(?:-C\s+\S+\s+)?show\s+[\"']?[^\s:\"'|;&]+:([^\s\"'>|;&]+)[\"']?"
+                r"\s*>\s*[\"']?(?:\./)?\1[\"']?(?![^\s;&|)])"),
+     "mutation_arm", "running a test against a file's committed text by overwriting it with "
+     "`git show REV:f > f` - `--revert FILE REV` does it and restores the uncommitted work"),
     (re.compile(r"\bgit\s+stash\b[^\n]*&&[^\n]*pytest|pytest[^\n]*&&[^\n]*git\s+checkout\s+--"),
      "mutation_arm", "proving a test is not vacuous by breaking the code under it"),
     # LAST of the shell-only rules: its shape is broad (5.2% of calls), so every more specific

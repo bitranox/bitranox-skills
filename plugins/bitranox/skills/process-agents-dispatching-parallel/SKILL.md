@@ -270,4 +270,12 @@ After agents return:
 5. **Check `git status --porcelain` before staging or committing** - A subagent dispatched with a
    read-only intent still holds Write/Edit/Bash and can write into the tree while reporting only
    text, so the write is silent. Check even when you believed the agent had no reason to write.
+6. **Cross-check a per-target fan-out with `fanout_crosscheck`** - when each agent owned one
+   target (a repo, a package, a memory level), an agent can write a sibling's text into the
+   wrong target and report success naming its own. Neither the reports nor a per-target diff
+   read by eye shows it. `fanout_crosscheck --target NAME=PATH ...` from
+   `bitranox:compuse-toolbox`, one `--target` per agent, reads only the lines each target
+   gained and flags the other targets' names there; exit 1 lists each finding. PATH is the
+   target's git work tree, or the file itself when the target is a gitignored file such as a
+   CLAUDE.local.md, which `git status` in step 5 never shows.
 
