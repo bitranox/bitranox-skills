@@ -46,6 +46,9 @@ two "versions with no entry" notes came to sit in this file disagreeing with it.
   `_why_not_queued`), providing a reusable path for determining why a contribution was refused.
 - `hooks/mod_bridge.py`: the JSON entry point the Claude Code mod relays tool calls through - one
   request on stdin, one ASCII envelope on stdout, exit 0 done, 1 refused, 2 could not run.
+- `hooks/mods/register.ts`: a hooks module, registered under `"modules"` in `hooks.json`, that gives
+  the model five tools - `mcp__bitranox__backlog_list`, `backlog_add`, `backlog_close`,
+  `memory_add` and `contrib_add` - each relayed to `mod_bridge.py`, whose envelope it returns as given.
 
 
 
