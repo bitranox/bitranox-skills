@@ -1,97 +1,122 @@
-# Handover - 2026-10-08 11:50, [14] shipped as 8.5.0 (CI green), [17] identified and probed (awaits the user's pick)
+# Handover - 2026-10-08 13:30, [16] shipped as 8.6.0/8.6.1 (automatic /tmp prune); [17] still awaits the user's pick
+
+Two sessions are in play. Session A (worktree `jev-shadow`) shipped [16]. Session B (worktree
+`notify-decide-failed`) shipped [14] as 8.5.0 and is on [17]; its 11:50 handover is in git as
+commit 31b9e205, and its state is carried below unchanged in substance.
 
 ## In flight
 
-- Nothing is running. 8.5.0 (2244924a) is on origin/master with CI green on every workflow,
-  windows-latest included (ci_wait exit 0 at 11:48).
-- [17] is part-done: the feature is identified and probed, and the user was asked which use to
-  build first. No answer yet. The recommendation was (1), a backlog/status band or pane.
-- Other sessions own other items right now: the jev-shadow session owns [12] (step 6 waits until
-  about 2026-10-13); another session is working [16] (/tmp cleanup). Do not start either here.
+- Session A: nothing is running. 8.6.0 (559d24ab) went red on windows-latest only: 22 prune tests
+  errored in a fixture calling `os.utime(follow_symlinks=False)`, which Windows lacks. 8.6.1 fixes
+  the fixture (45 passed, 6 POSIX-only skips on a real Windows machine). CI on 8.6.1 (f7326534): green
+  on every cell (ci_wait exit 0). CI on the 3.14 matrix commit 079f9a93:
+  green, windows-latest and macos-latest now on py3.14. Release v8.6.1 is published, its tag on
+  079f9a93 (same plugin content as f7326534); 8.6.0 has no release, since its CI was red.
+- Session B: [17] is part-done - identified and probed, and the user was asked which use to build
+  first, with (1) a backlog/status band or pane recommended. No answer yet.
+- [12] belongs to session A and waits on time: step 6 needs about a week of decide rows, earliest
+  2026-10-13.
 
 ## Committed, or not
 
-- Committed and pushed: 8.5.0 (skill-router decides a failed background command's notification,
-  [14] closed with its measurement, the meta-memory-settings row and docs/reference.md, the
-  skill-writer checklist).
-- Committed with this handover: OPEN-WORK [17] gains the probe findings and its next action.
-- Not in git: the probe mod, the notification tally script and the blind-panel packets lived in
-  the session scratchpad and are gone with it; the measurement itself is recorded on the [14] line.
-- The worktree `.claude/worktrees/notify-decide-failed` (branch `notify-decide-failed`) holds
-  nothing that is not on origin; remove it (CI is green).
+- Pushed: 8.5.0 (session B, [14]); a ci.yml change moving the windows-latest and macos-latest
+  cells to Python 3.14 (user request, 2026-10-08); 8.6.1 (session A, the Windows fixture fix); 8.6.0 (session A, [16]: `tmp-prune-hook.py`, `tmp_prune.py`,
+  `process_liveness.py`, knob `tmp_prune`, docs, the meta-memory-settings row and its skill-writer
+  checklist). Committed with this handover: OPEN-WORK [400], [410], [420].
+- Not in git, and nothing depends on them: session A's scratch scripts (arms, plan listing,
+  Windows probe) and session B's probe mod and tally scripts.
+- Worktree `.claude/worktrees/notify-decide-failed` holds nothing not on origin (session B may
+  still be using it). The `jev-shadow` worktree's gitignored `.plan/` is still the only copy of
+  three experiment records ([390]).
+- This machine still runs 8.4.1 in open sessions until `/reload-plugins`; the prune hook only
+  starts once a session is on 8.6.0.
 
 ## Decided, and why - do not reopen
 
-- [14]: decide mode covers FAILED BACKGROUND COMMANDS only (user's choice, 2026-10-08). Jev picked
-  a skill on 73 of 77 of them, the keyword match on none; a silent Jev nudges nothing there.
-  Cost was ruled out as an argument by the user ($0.042 per million input tokens); latency is
-  p50 0.53 s, capped at the 1.5 s deadline.
-- Every other notification kind stays nudged as with `off` and shadowed: 3 blind judges rated 4 of
-  Jev's 29 picks there helpful, 25 neutral, and named no helpful skill on 98 sampled notifications
-  (no planted positive control - "no benefit found", not "none possible").
-- A failed background command is recognised by status `failed` plus a summary opening
-  `Background command ` (`prompt_text.failed_background_command`): the envelope has no kind field.
-- [17]: a user mod CANNOT reach prompt.compose/section/context, attribution.text or any classic.*
-  event on build 2.1.290 (skipped by the prepend-tier cc-plugin-sec-default), so no system-prompt
-  or attribution rewrite and no wrapping of the Python hooks.
+- [16] design, every answer the user's (2026-10-08), recorded on the [16] line: SessionStart plus
+  a throttled Stop check, at most hourly across the machine; scope is Claude scratch (1 day) plus
+  the user's own one-off temp dirs (7 days, chosen over scratch-only); all platforms.
+- Liveness is the session registry `~/.claude/sessions/<pid>.json` plus a `procStart` match
+  (measured: field 22 of `/proc/<pid>/stat`, 9 of 9 live sessions matched). An unreadable registry
+  entry keeps every scratch dir.
+- Holders: `/proc` fd, cwd, root AND maps on Linux; `lsof` on macOS; on Windows a rename before
+  delete (measured on a real Windows machine: refused with WinError 5 for an open file, 32 for a
+  cwd, control renamed). One-offs are kept on a platform with no holder check.
+- With `CLAUDE_CODE_TMPDIR` set, scratch is scanned under it AND the system default (Claude Code's
+  long-path fallback); one-offs only in the system temp dir. Windows accepts `claude-0` (what the
+  2.1.294 binary builds) and `claude` (what the docs say); which is real is unverified.
+- `pluginprune.py` imports its liveness helpers from `hooks/process_liveness.py`, one copy.
+- Session B's [14] and [17] decisions: see commit 31b9e205 (decide covers failed background
+  commands only; a user mod cannot reach prompt composition or attribution on 2.1.290).
 
 ## Decided against, and why
 
-- Porting the Python guards to tool.call mods: a rewrite of heavily tested code onto an API the
-  docs call early access, for a latency gain on hooks that are not the slow part.
-- A fixed "failed command -> compuse-bash" rule instead of Jev: matches 87% but loses the specific
-  picks (devops-bmk, compuse-git), and cost/latency do not argue for it.
+- Pruning this machine by hand with `--apply`: the hook doing it after a reload is the
+  end-to-end proof ([400]); a dry run here listed 16 dirs / 182k inodes, every one cross-checked
+  dead (no registered session, newest file and transcript at least 42 h old).
+- Changing the meta-memory-settings description for the new knob: no routing keyword moves.
+- Session B: porting the Python guards to tool.call mods; a fixed rule instead of Jev for failed
+  commands (both in 31b9e205).
 
 ## Still open, untouched
 
-`OPEN-WORK.md` is the list: [12] (jev-shadow session), [16] (other session), [17] (user's pick),
+`OPEN-WORK.md` is the list: [12] (session A, after 2026-10-13), [17] (session B, user's pick),
 [18] deferred by the user, [19] dirty worktrees and branches left to judge, [245] a locked agent
-worktree, [390] copy the jev-shadow `.plan/` records out.
+worktree, [390] copy the `jev-shadow` `.plan/` records out, [400] observe the first hook-driven
+prune, [410] the foreign-mount guard's missing test, [420] two hook rows missing from
+docs/architecture.md.
 
 ## Lessons for the next nap
 
-- When a run, PR or job id is needed, take it from the listing's JSON in the same step: a typed
-  run id returned HTTP 404 while the real one was in the output just above.
-- When classifying a task notification's kind, match the summary's opening words: the word "agent"
-  inside a background command's summary mislabelled 11 rows (captured as a reference fact).
-- When a decision rests on a token count, convert it with the recorded price first: 15.5M Jev
-  tokens is about $0.65 (fact feedback-labelling-a-parameter-assumed-..., recurrence 3).
-- When a decide-mode cut is chosen from a shadow log, a blind panel over the NON-chosen kinds is
-  cheap (two packets, 6 sonnet judges, about 2 minutes) and turns "probably not useful" into a
-  measured answer.
-- tooling: EnterWorktree on an existing path makes every later Bash call in the session pass the
-  worktree-isolation guard (no `$VAR` arguments, no pipes into claude), and ExitWorktree is only
-  for when the user asks - for a short change, prefer `git worktree add` plus absolute paths.
-- tooling: `claude -p ... --allowedTools Read "prompt"` loses the prompt (variadic flag); put the
-  prompt right after `-p`.
-- Carried, not yet confirmed napped (from the 10:35 handover): raise `request_queue_size` on a
-  ThreadingHTTPServer test fake (Windows WinError 10053); assert a concurrency bound, never a
-  request count, under a deadline; reproduce Windows-only CI failures on the Windows dev box
-  first; present a pre-registered panel that lands in no branch as post-hoc and record the user's
-  choice; merge two simultaneous handovers rather than overwrite; reverse-apply a worktree diff
-  onto an index read from origin/master to test containment; `git merge-tree --write-tree` proves
-  a squash-merged branch landed; never `git add -N .` in another worktree; check the PREVIOUS
-  commit's CI before investigating a red after your push; tooling: bump pyproject.toml with
-  plugin.json; tooling: run pytest through a script in a worktree-isolated session.
+- When an rmtree onexc/onerror handler retries the failed call, re-call only a removal function:
+  rmtree also reports `os.open(path, flags, dir_fd=...)`, and re-calling that with one argument
+  raises TypeError, escapes rmtree and aborts every directory after it.
+- When a mutation arm is "killed", read its failure line: one killed by a TypeError instead of an
+  assertion exposed a production bug, and one that SURVIVED showed a test never isolated its guard.
+- When a test must show a file held only through a memory map, use `mmap(..., trackfd=False)`
+  (3.13+): plain `mmap` dups the fd, so an fd scan alone passes the test.
+- When a test binds a unix socket under pytest's tmp_path, chdir into the dir and bind a relative
+  name: the absolute path exceeds the socket path limit and a skip branch leaks the socket.
+- When a new test file must run on Windows, run it on the Windows dev box BEFORE the first push:
+  8.6.0 shipped with every prune test erroring there on a call Windows does not implement.
+- When a .github/workflows change is pushed while the previous commit's release run is still
+  pending, that run's tag push is refused ("refusing to allow a GitHub App to create or update
+  workflow ... without `workflows` permission"); the next green CI's release tags the newer sha.
+  Check `gh release list` and the tag target before calling a release lost.
+- When a doc names a command route ("run X for the list"), run it before shipping: the CLI printed
+  counts only until a test pinned the list.
+- When an outgoing handover belongs to a session that is still working, merge it into yours.
+- tooling: bump pyproject.toml together with plugin.json - repo-gate's version-drift check failed
+  the first gate run (recurred; carried from the 11:50 handover).
+- Carried from session B, not yet confirmed napped: take a run id from the listing's JSON in the
+  same step; classify a notification's kind by the summary's opening words; convert a token count
+  with the recorded price before deciding on it; a blind panel over the non-chosen kinds is cheap;
+  tooling: EnterWorktree on an existing path tightens every later Bash call - prefer
+  `git worktree add` plus absolute paths; tooling: `claude -p` takes the prompt right after `-p`;
+  and the 10:35 list in commit 31b9e205.
 
 ## The exact next action
 
-[17]: put the user's pick to them again - build (1) the
-backlog/status band or pane, or another of the four options on the [17] line. [17] is the
-top-ranked open item this session may take ([12] and [16] belong to other sessions).
+[17] is the top-ranked open item, and it is session B's: if that session is gone, put the
+user's pick to them again (build (1) the backlog/status band or pane, or another option on the
+[17] line). Otherwise take [19], the next live USER item: judge the 4 dirty worktrees and 24
+branches its line lists. [12] waits until 2026-10-13.
 
 ## Files that matter
 
-- `OPEN-WORK.md` ([14] closed with the measurement, [17] the probe findings and options)
-- `plugins/bitranox/hooks/skill-router.py` (`_decides`, `_shadows`)
-- `plugins/bitranox/hooks/prompt_text.py` (`failed_background_command`)
-- `plugins/bitranox/hooks/tests/test_skill_router_decide.py` (failed-command and other-kind tests)
+- `OPEN-WORK.md` ([16] closed with the outcome, [400]/[410]/[420] new, [17] options)
+- `plugins/bitranox/hooks/tmp_prune.py`, `plugins/bitranox/hooks/tmp-prune-hook.py`,
+  `plugins/bitranox/hooks/process_liveness.py`, `plugins/bitranox/hooks/tests/test_tmp_prune.py`
+- `plugins/bitranox/skills/meta-memory-settings/settings.py` (`ENUM_CHOICES["tmp_prune"]`)
 
 ## How to verify
 
-- `uv run <plugin>/skills/compuse-toolbox/scripts/ci_wait.py --sha 2244924ae26bf68f47ff2fdb714fb2c87cf6a64d`
-  exits 0 (every cell green, windows-latest included).
-- `git log --oneline -3 origin/master` shows this handover commit on top of 2244924a.
+- `uv run <plugin>/skills/compuse-toolbox/scripts/ci_wait.py --sha f73265348c6842bf1db3e635ba963313704bbf07`
+  exits 0.
+- `python3 plugins/bitranox/hooks/tmp_prune.py --json` prints a dry-run envelope with
+  `examined_dirs` > 0 and a `removed` list; nothing is deleted.
+- After `/reload-plugins` and one finished turn: a new last line in
+  `~/.claude/self-improve-audit/tmp-prune.log.jsonl` ([400]).
 
 Read this, then replace the first line with `# STALE - read <date>, work continued`. Do not delete
 it - if this session ends badly it is the only record of where things stood.
