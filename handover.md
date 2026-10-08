@@ -1,114 +1,97 @@
-# Handover - 2026-10-08 10:35, recall decide shipped (8.3.0-8.4.1), [11] shipped (8.4.0), CI green
-
-Two sessions handed over at the same moment; this file merges both. Session A worked in the
-`jev-shadow` worktree (recall decide). Session B worked in `handover-20261008` ([11] and the
-worktree/branch cleanup); its own text is in git as commit e0befd4f.
+# Handover - 2026-10-08 11:50, [14] shipped as 8.5.0 (CI green), [17] identified and probed (awaits the user's pick)
 
 ## In flight
 
-- Nothing is running in either session. origin/master carries 8.4.1 (53c9f85a); CI green on every
-  workflow, windows-latest included. 8.4.0 (1592043d) is session B's.
+- Nothing is running. 8.5.0 (2244924a) is on origin/master with CI green on every workflow,
+  windows-latest included (ci_wait exit 0 at 11:48).
+- [17] is part-done: the feature is identified and probed, and the user was asked which use to
+  build first. No answer yet. The recommendation was (1), a backlog/status band or pane.
+- Other sessions own other items right now: the jev-shadow session owns [12] (step 6 waits until
+  about 2026-10-13); another session is working [16] (/tmp cleanup). Do not start either here.
 
 ## Committed, or not
 
-- On origin: 8.3.0 recall decide mode; 8.3.1 and 8.4.1 its test and TLS fixes; 8.4.0 [11].
-  Committed with this handover: OPEN-WORK [19] (B) and [390] (A). Nothing else is uncommitted.
-- Not in git, gitignored, with no other copy:
-  - `jev-shadow` worktree `.plan/`: `openwork-batch-2026-10-04/`, `jev-stop-2026-10-06/`,
-    `jev-recall-2026-10-06/` - OPEN-WORK [390].
-  - main checkout `.plan/worktree-archive-2026-10-08/`: 34 archived worktree `.plan/` files plus
-    `deleted-branches.txt` (name and sha of 100 deleted branches; `git branch <name> <sha>`
-    restores one).
-- The main checkout is still far behind origin with a staged `TODO-JEV.md` ([150]).
-- This machine's config already has `classifier_recall_rerank = decide`; a running session needs
-  `/reload-plugins` to pick up 8.4.1.
+- Committed and pushed: 8.5.0 (skill-router decides a failed background command's notification,
+  [14] closed with its measurement, the meta-memory-settings row and docs/reference.md, the
+  skill-writer checklist).
+- Committed with this handover: OPEN-WORK [17] gains the probe findings and its next action.
+- Not in git: the probe mod, the notification tally script and the blind-panel packets lived in
+  the session scratchpad and are gone with it; the measurement itself is recorded on the [14] line.
+- The worktree `.claude/worktrees/notify-decide-failed` (branch `notify-decide-failed`) holds
+  nothing that is not on origin; remove it (CI is green).
 
 ## Decided, and why - do not reopen
 
-- recall_rerank goes to decide at 0.8 (user's choice: first 0.9, then "use 0.8"). Blind panel,
-  pre-registered, 10 opus judges, 8/8 controls, 91% unanimous: keyword top 4 relevant 6%, Jev at
-  0.8 44%, Jev at 0.9 74% (post-hoc, 46 notes). No pre-registered branch fired, so it was the
-  user's call. Record: `.plan/jev-recall-2026-10-06/` in the jev-shadow worktree.
-- Jev silent or every note under 0.8 injects NOTHING; the keyword ranking is not a fallback (6%).
-  All shortlisted notes are asked at once; one TLS context per classifier.
-- OPEN-WORK [10] deleted at the user's request after they rejected every fix option for recall
-  pulling other projects' notes; decide mode now filters those notes instead.
-- [11] GREEN was a quote-back retrieval run, not a fresh behavioural RED: the tree-top fact
-  `feedback-a-parallel-write-agent-can-clobber-a-sibling-target-and-report-success` names both
-  jigs, so a new RED passes on inherited context. compuse-toolbox's description got no trigger for
-  the jigs (1009 of 1024 characters); they are reached through toolbox-nudge, the Tools table and
-  the dispatching-parallel Verification item.
-- Cleanup removed only what was PROVEN contained (no live process or lock, every commit
-  patch-equivalent on origin, uncommitted patch reverse-applies onto origin/master; a branch when
-  `git cherry origin/master <b>` lists no `+`).
+- [14]: decide mode covers FAILED BACKGROUND COMMANDS only (user's choice, 2026-10-08). Jev picked
+  a skill on 73 of 77 of them, the keyword match on none; a silent Jev nudges nothing there.
+  Cost was ruled out as an argument by the user ($0.042 per million input tokens); latency is
+  p50 0.53 s, capped at the 1.5 s deadline.
+- Every other notification kind stays nudged as with `off` and shadowed: 3 blind judges rated 4 of
+  Jev's 29 picks there helpful, 25 neutral, and named no helpful skill on 98 sampled notifications
+  (no planted positive control - "no benefit found", not "none possible").
+- A failed background command is recognised by status `failed` plus a summary opening
+  `Background command ` (`prompt_text.failed_background_command`): the envelope has no kind field.
+- [17]: a user mod CANNOT reach prompt.compose/section/context, attribution.text or any classic.*
+  event on build 2.1.290 (skipped by the prepend-tier cc-plugin-sec-default), so no system-prompt
+  or attribution rewrite and no wrapping of the Python hooks.
 
 ## Decided against, and why
 
-- Rewording prompts to dodge recall: it works (`./handover.md` or `what next?` extract no
-  keywords) but is a workaround, not a fix.
-- Asserting an exact request count in a deadline-bound test: it raced a slow windows-latest
-  runner twice. The test asserts concurrency (> 8 in flight) instead.
+- Porting the Python guards to tool.call mods: a rewrite of heavily tested code onto an API the
+  docs call early access, for a latency gain on hooks that are not the slow part.
+- A fixed "failed command -> compuse-bash" rule instead of Jev: matches 87% but loses the specific
+  picks (devops-bmk, compuse-git), and cost/latency do not argue for it.
 
 ## Still open, untouched
 
-`OPEN-WORK.md` is the list. [12] step (6) waits about a week of decide rows (earliest
-2026-10-13); [16] /tmp cleanup needs the user's
-when/what/how; [17] identify the new Claude Code module feature; [18] deferred by the user;
-[19] 4 dirty worktrees + 24 branches left to judge; [245] `agent-a26b133c84c5141bb` was locked;
-[390] copy the jev-shadow `.plan/` records out.
+`OPEN-WORK.md` is the list: [12] (jev-shadow session), [16] (other session), [17] (user's pick),
+[18] deferred by the user, [19] dirty worktrees and branches left to judge, [245] a locked agent
+worktree, [390] copy the jev-shadow `.plan/` records out.
 
 ## Lessons for the next nap
 
-- When a test fake is a `ThreadingHTTPServer`, raise `request_queue_size` above its default 5:
-  Windows aborts the surplus of simultaneous connections (WinError 10053) before any handler runs.
-- When a test runs a client under a fixed deadline, assert a concurrency bound (max in flight),
-  never how many requests arrived: a slow windows-latest runner started 9 of 12 in 1.5 s while a
-  Windows dev box passed 5 of 5.
-- When CI fails only on Windows, reproduce on the Windows dev box (git archive, scp, `pwsh -File`
-  a .ps1 that loops the test) before changing code: it separated a timing race from a real defect.
-- When a pre-registered panel lands in no branch, present the options as post-hoc and record the
-  user's choice as theirs; do not adopt the best-looking post-hoc threshold yourself.
-- When two sessions hand over at once, the later push meets a conflicting `handover.md`: merge
-  both into one file rather than overwriting, and re-check the other's next action against your
-  own work (B's pointed at [12] step 5, which A had finished).
-- When deciding whether a worktree's uncommitted edits already landed, reverse-apply its
-  `git diff --binary HEAD` onto a throwaway index read from origin/master
-  (`GIT_INDEX_FILE=tmp git read-tree origin/master`, then `git apply --cached --check -R`).
-- When deciding whether a branch's work landed, `git cherry` matches rebased commits but not
-  squash merges; `git merge-tree --write-tree origin/master <b>` returning origin's own tree
-  proves containment, and a conflict proves nothing either way.
-- When probing dirty worktrees, never `git add -N .`: it writes intent-to-add entries into THEIR
-  index; read untracked files with `git ls-files -o --exclude-standard`.
-- When CI goes red right after your push, check the PREVIOUS commit's run for the same failing
-  test before investigating.
-- tooling: bump `pyproject.toml` together with `plugin.json` - repo-gate fails "version drift"
-  after a 7-minute suite otherwise.
-- tooling: in a worktree-isolated session, run pytest through a scratchpad wrapper script;
-  `env -u VIRTUAL_ENV` inline is refused, and so is a python run with `$VAR` or `$(...)`
-  arguments - pass literal paths.
-- Carried from the 2026-10-06 handover (not yet confirmed napped): when a gate or filter is keyed
-  on one field (prompt length), measure where the positives' evidence lives first; when a blind
-  panel needs more items than one judge can read, split into halves with their own judges and
-  controls and dry-run the scorer on all-true labels; when a shadow log grows during analysis,
-  freeze the data with a timestamp cutoff in the pre-registration.
+- When a run, PR or job id is needed, take it from the listing's JSON in the same step: a typed
+  run id returned HTTP 404 while the real one was in the output just above.
+- When classifying a task notification's kind, match the summary's opening words: the word "agent"
+  inside a background command's summary mislabelled 11 rows (captured as a reference fact).
+- When a decision rests on a token count, convert it with the recorded price first: 15.5M Jev
+  tokens is about $0.65 (fact feedback-labelling-a-parameter-assumed-..., recurrence 3).
+- When a decide-mode cut is chosen from a shadow log, a blind panel over the NON-chosen kinds is
+  cheap (two packets, 6 sonnet judges, about 2 minutes) and turns "probably not useful" into a
+  measured answer.
+- tooling: EnterWorktree on an existing path makes every later Bash call in the session pass the
+  worktree-isolation guard (no `$VAR` arguments, no pipes into claude), and ExitWorktree is only
+  for when the user asks - for a short change, prefer `git worktree add` plus absolute paths.
+- tooling: `claude -p ... --allowedTools Read "prompt"` loses the prompt (variadic flag); put the
+  prompt right after `-p`.
+- Carried, not yet confirmed napped (from the 10:35 handover): raise `request_queue_size` on a
+  ThreadingHTTPServer test fake (Windows WinError 10053); assert a concurrency bound, never a
+  request count, under a deadline; reproduce Windows-only CI failures on the Windows dev box
+  first; present a pre-registered panel that lands in no branch as post-hoc and record the user's
+  choice; merge two simultaneous handovers rather than overwrite; reverse-apply a worktree diff
+  onto an index read from origin/master to test containment; `git merge-tree --write-tree` proves
+  a squash-merged branch landed; never `git add -N .` in another worktree; check the PREVIOUS
+  commit's CI before investigating a red after your push; tooling: bump pyproject.toml with
+  plugin.json; tooling: run pytest through a script in a worktree-isolated session.
 
 ## The exact next action
 
-[14] is closed (8.5.0: decide mode now decides a failed background command's notification; see its
-OPEN-WORK line for the measurement). [12] is blocked on time (step 6 needs about a week of decide
-rows, earliest 2026-10-13), so start with [16]: ask the user its when/what/how.
+[17]: put the user's pick to them again - build (1) the
+backlog/status band or pane, or another of the four options on the [17] line. [17] is the
+top-ranked open item this session may take ([12] and [16] belong to other sessions).
 
 ## Files that matter
 
-- `plugins/bitranox/hooks/recall-memory.py` (`_decide_recall`, `_rerank_request`)
-- `plugins/bitranox/hooks/classifier.py` (`ask_in_hook(workers=)`, `JevClassifier._tls_context`)
-- `plugins/bitranox/hooks/tests/test_recall_memory_decide.py`, `tests/conftest.py` (`FakeJev`)
-- `OPEN-WORK.md` ([12], [14], [19], [245], [390])
+- `OPEN-WORK.md` ([14] closed with the measurement, [17] the probe findings and options)
+- `plugins/bitranox/hooks/skill-router.py` (`_decides`, `_shadows`)
+- `plugins/bitranox/hooks/prompt_text.py` (`failed_background_command`)
+- `plugins/bitranox/hooks/tests/test_skill_router_decide.py` (failed-command and other-kind tests)
 
 ## How to verify
 
-- `git log --oneline -3 origin/master` shows this handover commit on top of e0befd4f and 53c9f85a.
-- `gh run list --commit 53c9f85a9c6e13100c9825fee65d5c5a178af108` shows ci and workflow success.
+- `uv run <plugin>/skills/compuse-toolbox/scripts/ci_wait.py --sha 2244924ae26bf68f47ff2fdb714fb2c87cf6a64d`
+  exits 0 (every cell green, windows-latest included).
+- `git log --oneline -3 origin/master` shows this handover commit on top of 2244924a.
 
 Read this, then replace the first line with `# STALE - read <date>, work continued`. Do not delete
 it - if this session ends badly it is the only record of where things stood.
