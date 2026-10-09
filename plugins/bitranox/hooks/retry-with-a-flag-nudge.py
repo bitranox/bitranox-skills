@@ -22,7 +22,9 @@ WHAT COUNTS AS THE SAME COMMAND PLUS A FLAG. The pending command must have the s
 same non-flag operands as a command that already failed this session, and strictly more flags. That
 is deliberately narrow. Ordinary iteration changes the operands, the program, or the flags in both
 directions; only the "bolt an option onto the thing that just failed" shape adds flags while
-touching nothing else. A changed operand means a different target and is not this.
+touching nothing else. A changed operand means a different target and is not this. Only a
+SINGLE-statement failure is recorded: when a compound fails, nothing says which statement did, or
+whether any ran at all.
 
 Heredoc bodies are blanked before anything is compared, because a body is data being written and a
 script that CONTAINS a failing command is not that command. Statement and pipe separators are found
@@ -109,6 +111,23 @@ def _command_head(command: str, tool_name: str) -> str:
     is `sed` with the operand `f`, not `(sed` with `f)`; a process substitution is an ARGUMENT, so
     `diff <(sed a x) <(sed b y)` stays the command `diff`.
     """
+    text, walk = _walk(command, tool_name)
+    span = walk.frames[0].head
+    return text[span[0]:span[1]] if span else ""
+
+
+def is_single_statement(command: str, tool_name: str = "Bash") -> bool:
+    """True when `command` runs exactly ONE statement. PURE.
+
+    A pipeline is one statement, and so is a lone subshell; a substitution is a word of the
+    statement it sits in. Statements inside a subshell count, because `(cd x && sed f)` fails for
+    the same unattributable reasons as `cd x && sed f`.
+    """
+    return _walk(command, tool_name)[1].statements == 1
+
+
+def _walk(command: str, tool_name: str):
+    """(heredoc-blanked text, finished `_HeadWalk`) for `command`. PURE."""
     text = blank_heredoc_bodies(command)
     masked = mask_data_regions(text, tool_name=tool_name)
     walk = _HeadWalk()
@@ -117,8 +136,7 @@ def _command_head(command: str, tool_name: str) -> str:
         walk.separator(masked[previous_end:at])
         previous_end = at + len(segment)
         walk.segment(at, previous_end, bool(segment.strip()))
-    span = walk.frames[0].head
-    return text[span[0]:span[1]] if span else ""
+    return text, walk
 
 
 # A paren the walk reports that opens an ARGUMENT, not a statement: its contents are part of the
@@ -144,6 +162,7 @@ class _HeadWalk:
 
     def __init__(self):
         self.frames = [self._Frame("top", False)]
+        self.statements = 0                   # statements started, in the command and its subshells
 
     def separator(self, sep):
         frame = self.frames[-1]
@@ -167,6 +186,7 @@ class _HeadWalk:
             return                            # an argument's insides: part of the enclosing words
         if has_text and frame.expect_head:
             frame.head, frame.expect_head, frame.in_head = (start, end), False, True
+            self.statements += 1
         elif frame.in_head and frame.head:
             frame.head = (frame.head[0], end)
 
@@ -174,8 +194,10 @@ class _HeadWalk:
 def shape(command, tool_name="Bash"):
     """(program, sorted flags, operands) for the LAST statement of `command`, or None. PURE.
 
-    The last statement is the one whose failure the event reports; an earlier statement in a `&&`
-    chain succeeded. Heredoc bodies are dropped first so a written script is not read as a command.
+    For a PENDING command the last statement is the one being re-attempted. A FAILED command is
+    only recorded when it is a single statement (`_record`), because a compound's failure cannot be
+    pinned on its last statement. Heredoc bodies are dropped first so a written script is not read
+    as a command.
     `tool_name` picks the word-splitting and path rules (`split_for_tool`, `basename_for_tool`).
 
     Flags are a SET because reordering them is not a new attempt, and operands stay a LIST because
@@ -238,7 +260,15 @@ def _record(event) -> int:
     """PostToolUseFailure: remember the shape of the command that failed."""
     if not is_shell_tool(event.get("tool_name")) or event.get("is_interrupt"):
         return 0                                          # an interrupt is the user, not a failure
-    current = shape((event.get("tool_input") or {}).get("command"), event.get("tool_name"))
+    command = (event.get("tool_input") or {}).get("command")
+    # A compound's failure names no culprit: an earlier statement may be the one that failed, or
+    # another guard refused the whole line and NOTHING ran. Pinning it on the last statement told a
+    # later `git rev-parse --verify -q --short HEAD` it "already FAILED" when the failed compound's
+    # rev-parse never ran. Recording the compound's full shape instead was the alternative; over the
+    # real corpus it would have kept exactly one more firing, so the simpler rule wins.
+    if not isinstance(command, str) or not is_single_statement(command, event.get("tool_name")):
+        return 0
+    current = shape(command, event.get("tool_name"))
     if not current:
         return 0
     # Stored as JSON reads it back - lists all the way down - so the dedup compares like with like.

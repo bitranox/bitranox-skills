@@ -29,8 +29,9 @@ rule does not apply.
   green unit tests can still ship a broken contract. Treat the integration/e2e run as the proof.
 - **Avoid monkeypatching. Use dependency injection.** Pass the collaborator in (a port/protocol) and
   substitute a real-ish fake or the real thing in tests. Reach for `monkeypatch`/patch only at a true
-  external edge you cannot inject (a third-party global, the clock, the network) - never to reach into
-  your own internals. Patching your own code is a design smell: make it injectable instead.
+  external edge you cannot inject (a third-party global, the clock - with the caveat below, the
+  network) - never to reach into your own internals. Patching your own code is a design smell: make
+  it injectable instead.
 - **Fakes live behind the same interface as the real thing** (a `fake_*` implementation of the port),
   exercised by the same contract tests as the real adapter, so the fake cannot drift.
 - **"Patch the network/clock" is the fallback, not the choice, when you own the caller.** If the code
@@ -39,6 +40,15 @@ rule does not apply.
   correct only when nothing you own sits between the test and that global: third-party code you cannot
   change calls it, or the call is buried in a dependency. "It is an external edge" does not license
   patching a global you could have passed in.
+- **Never patch the clock function itself: it is process-global, and the runtime's own timers read
+  it.** In Python, `patch("time.monotonic", ...)` replaces it for the whole process, and so does
+  `patch("pkg.mod.time.monotonic", ...)` - that path reaches the SAME function object through the
+  module's `time` name. asyncio's `loop.time()` is `time.monotonic()`, so every `sleep`, `wait_for`
+  and `call_later` freezes and the test hangs, often in teardown. The same holds in any runtime whose
+  scheduler reads the clock you swap. Inject a clock; when the code is not yours, patch the
+  CONSUMER's own name for it - a module-level `_now = time.monotonic` it calls (patch `pkg.mod._now`),
+  or the module's `time` name replaced with a stub that keeps the rest of `time` - never the function
+  on the time module.
 - See `bitranox:process-test-driven-development` -> `testing-anti-patterns.md` (testing the mock,
   test-only methods in production, incomplete mocks, integration-as-afterthought).
 
@@ -106,7 +116,9 @@ bad double rather than as a missing annotation.
 **After adding a wait or retry to a shared path, read the test file's WALL CLOCK, not its pass
 count.** Every pre-existing test that goes through that path now pays the real delay. One 30-second
 settle took a file from 0.07s to 90.05s while staying fully green. A slow suite never fails; it
-decays until someone stops running it. Assert on elapsed time in CI, or inject the clock too.
+decays until someone stops running it. Inject the sleep or clock too, and watch the file's duration
+in CI (`pytest --durations`, the runner's slow-test report) rather than asserting elapsed time inside
+a test.
 
 ## Adversarial inputs at the boundary (the test side of sanitization)
 
@@ -161,8 +173,16 @@ enforced by the suite rather than remembered by a person.
 - **No dependence on test execution order.** No shared mutable module/global state between tests; each
   test sets up and tears down its own world (fixtures). A test must pass run alone and in any order
   (green with random ordering on and off).
-- **No real `sleep` for timing.** Poll a condition with a timeout (condition-based waiting), or inject
-  the clock. A fixed `sleep(n)` is either flaky (too short) or slow (too long).
+- **No timer in a test: no `sleep`, no poll-until-deadline loop, no `*_timeout` wait.** A fixed
+  `sleep(n)` is flaky or slow, and a deadline loop or `wait(timeout=5)` is the same bet against the
+  machine's load with a longer fuse. Block on an event the code under test signals - a channel/queue
+  receive, a thread `join`, a condition variable, an awaited future or promise. When the code offers
+  none, plant one: a sender dropped when the thread exits, a completion callback or hook the test
+  passes in. Let the runner's per-test timeout (pytest-timeout, nextest `terminate-after`, the
+  framework's test timeout; configure one suite-wide if the project has none) catch a wedge instead
+  of a deadline written into the test. Treat a sleep, deadline loop or timeout-bounded wait inside a
+  test as a review defect; code that has its own timeout is driven by injecting its clock, not by
+  waiting it out.
 - **Inject time and randomness.** No bare now-clock, RNG, or UUID call in code under test - pass a
   clock / seed so the test is reproducible. (`datetime.now()`/`random`/`uuid4` in Python;
   `Date.now()`/`Math.random()`/`crypto.randomUUID()` in JS, or `vi.useFakeTimers()` at the edge;
@@ -307,7 +327,8 @@ cannot see what it already swallowed.
 - [ ] Boundary inputs covered (UTF/emoji/CJK/binary/wrong-type/oversized/edge numbers), asserting specific behavior
 - [ ] Every error branch the code can raise has a test asserting the declared error type
 - [ ] Order-independent (passes alone and shuffled); no shared mutable state
-- [ ] No real `sleep`; time/randomness injected; unit suite offline
+- [ ] No timer in a test (`sleep`, deadline poll loop, `*_timeout` wait): block on an event the code signals, plant one if it has none, let the runner's per-test timeout catch a wedge
+- [ ] Time/randomness injected, never by patching the process-global clock function; unit suite offline
 - [ ] Runs against the project's own locked toolchain, not an ambient/global one; an environment-shaped failure is a wrong-env smell, not a code bug (Python: `env -u VIRTUAL_ENV uv run ...`)
 - [ ] One behavior per test; name states the behavior
 - [ ] No test that cannot fail for a real reason

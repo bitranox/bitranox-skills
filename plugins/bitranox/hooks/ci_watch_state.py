@@ -37,6 +37,7 @@ from pathlib import Path
 __all__ = [
     "MAX_AGE_SECONDS",
     "MAX_BLOCKS",
+    "STALE_FILE_SECONDS",
     "bump_session_blocks",
     "session_key",
     "clear_session",
@@ -49,6 +50,14 @@ __all__ = [
 
 # Beyond this, CI has finished and a block is noise rather than a save.
 MAX_AGE_SECONDS = 4 * 60 * 60
+
+# When a save prunes OTHER projects' state files, one untouched for this long is removed. Every
+# write replaces the file, so its mtime is at least as new as its newest entry: past
+# MAX_AGE_SECONDS nothing in it can be pending any more. The horizon still sits a working day out
+# rather than at those four hours, because an expired entry is not dead weight - re-pushing the
+# same sha carries its block count forward (record_push), and a session paused over a lunch or an
+# afternoon must not come back to a fresh set of reminders for a commit it already pushed.
+STALE_FILE_SECONDS = 24 * 60 * 60
 
 # How many times one push may block a stop before the gate gives up and says so. A block that
 # can never be escaped wedges a session whose CI genuinely cannot be reached; one that is
@@ -157,9 +166,51 @@ def _update(project_dir: str, change, default=None):
     try:
         with self_improve_signals.memory_lock(path, timeout=_LOCK_TIMEOUT):
             entries, result = change(_load(path))
-            return result if _save(path, entries) else default
+            saved = _save(path, entries)
     except (OSError, TimeoutError, ValueError):
         return default
+    if not saved:
+        return default
+    _prune_stale_files(path)
+    return result
+
+
+def _is_stale(path: Path, moment: float) -> bool:
+    try:
+        return moment - path.stat().st_mtime > STALE_FILE_SECONDS
+    except OSError:
+        return False                                   # vanished mid-scan, or not ours to judge
+
+
+def _remove_if_stale(path: Path, moment: float) -> None:
+    """Remove `path` only while holding its lock, and only if it is STILL stale under it: a writer
+    that refreshed it between the scan and the lock must keep its entries. A lock somebody else
+    holds means a live writer, so the file is skipped rather than waited for."""
+    import self_improve_signals  # noqa: PLC0415 - kept off the per-shell-call import path, as in _update
+
+    if not _is_stale(path, moment):
+        return
+    with contextlib.suppress(OSError, TimeoutError), \
+            self_improve_signals.memory_lock(path, timeout=0):
+        if _is_stale(path, moment):
+            path.unlink()
+
+
+def _prune_stale_files(keep: Path) -> None:
+    """Remove every OTHER project's state file untouched for STALE_FILE_SECONDS.
+
+    Each project a session ever ran in leaves one of these files in the temp dir, and nothing
+    else removes them: the generic temp pruner skips every `claude-` name. So the module that
+    creates them cleans them up, on the rare write rather than on every read. Races are expected
+    and harmless - a file another session removes first is simply gone."""
+    moment = time.time()
+    try:
+        candidates = list(keep.parent.glob("claude-ci-watch-*.json"))
+    except OSError:
+        return
+    for candidate in candidates:
+        if candidate != keep:
+            _remove_if_stale(candidate, moment)
 
 
 def _blocks(entry: dict) -> int:

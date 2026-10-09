@@ -1587,6 +1587,93 @@ def test_a_replay_reports_a_corpus_transcript_it_could_not_read(tmp_path, capsys
     assert "c.jsonl" in ce.render_replay(env["data"])
 
 
+# ---- report --notify: notification rows tallied by kind --------------------------------------
+
+def notify_row(status, summary, gate=0.2, winner="none_needed", prob=0.9, answered=True):
+    """A skill_router row the hook writes for a <task-notification> turn (notify_view set)."""
+    row = choice_router_row([], gate, winner, {winner: prob})
+    row["regex"]["notify_view"] = "fields-v1"
+    state = {"task_summary": summary, "project": "p"}
+    if status is not None:
+        state["task_status"] = status
+    row["states"] = [state]
+    if not answered:
+        row["results"] = []
+        row["reason"] = "timeout"
+    return row
+
+
+def test_notify_kind_is_taken_from_the_opening_words_only():
+    assert ce.notification_kind('Background command "x" failed with exit code 1') \
+        == "Background command"
+    assert ce.notification_kind('Agent "Review batch" finished') == "Agent"
+    assert ce.notification_kind('Monitor event: "cell count"') == "Monitor"
+    # 'agent' and 'Monitor' later in the text never decide the kind
+    assert ce.notification_kind('Background command "spawn the Agent" (Monitor) completed') \
+        == "Background command"
+    assert ce.notification_kind("Agents everywhere") == "other"
+    assert ce.notification_kind("Goal check-in: still running") == "other"
+    assert ce.notification_kind("") == "other"
+
+
+def test_notify_tally_counts_by_status_kind_and_verdict():
+    rows = [
+        notify_row("failed", 'Background command "pytest -q" failed with exit code 1',
+                   gate=0.8, winner="process-debug-systematic", prob=0.9),
+        notify_row("completed", 'Background command "run the agent harness" completed (exit 0)'),
+        notify_row("completed", 'Agent "Review batch E" finished'),
+        notify_row("completed", 'Monitor event: "cell count every 3 min"'),
+        notify_row(None, "Goal check-in: background work still running", answered=False),
+        router_row([], {"compuse-git": 0.9}),          # a typed prompt: no notify_view, not counted
+        stop_row(False, {"correction": 0.1}),
+    ]
+    t = ce.summarize_notifications(rows, threshold=0.5, top=2)
+    assert t["rows"] == 5
+    assert t["by_status"] == {"failed": 1, "completed": 3, "(none)": 1}
+    assert t["by_kind"] == {"Background command": 2, "Agent": 1, "Monitor": 1, "other": 1}
+    assert t["by_verdict"] == {"skill": 1, "none": 3, "unanswered": 1}
+    assert t["by_kind_status"]["Background command/failed"] == {"skill": 1, "none": 0,
+                                                               "unanswered": 0}
+    assert t["by_kind_status"]["Background command/completed"]["none"] == 1
+    assert t["picks"] == {"process-debug-systematic": 1}
+
+
+def test_cli_report_notify_prints_the_tally(tmp_path, capsys):
+    log = tmp_path / "classifier-shadow-2026-10-08.jsonl"
+    rows = [notify_row("failed", 'Background command "make" failed with exit code 2',
+                       gate=0.8, winner="compuse-bash", prob=0.8),
+            notify_row("completed", 'Background command "ask the Agent" completed (exit 0)'),
+            router_row([], {"compuse-git": 0.9})]
+    log.write_text("".join(json.dumps(r) + "\n" for r in rows), encoding="utf-8")
+    assert ce.main(["report", "--notify", "--log", str(log), "--json"]) == 0
+    env = json.loads(capsys.readouterr().out)
+    assert env["ok"] is True and env["command"] == "report"
+    assert env["data"]["by_kind"] == {"Background command": 2}
+    assert env["data"]["by_verdict"] == {"skill": 1, "none": 1, "unanswered": 0}
+    assert ce.main(["report", "--notify", "--log", str(log)]) == 0
+    text = capsys.readouterr().out
+    assert "notification rows 2" in text and "Background command/failed" in text
+
+
+def test_cli_report_notify_with_no_notification_rows_answers_no(tmp_path, capsys):
+    log = tmp_path / "shadow.jsonl"
+    log.write_text(json.dumps(router_row([], {"compuse-git": 0.9})) + "\n", encoding="utf-8")
+    assert ce.main(["report", "--notify", "--log", str(log), "--json"]) == 1
+    env = json.loads(capsys.readouterr().out)
+    assert env["ok"] is True and "no notification rows" in env["error"]
+
+
+def test_cli_report_notify_refuses_disagreements(tmp_path, capsys):
+    log = tmp_path / "shadow.jsonl"
+    log.write_text(json.dumps(notify_row("completed", 'Agent "x" finished')) + "\n",
+                   encoding="utf-8")
+    assert ce.main(["report", "--notify", "--log", str(log), "--json",
+                    "--disagreements", str(tmp_path / "d.jsonl")]) == 2
+    env = json.loads(capsys.readouterr().out)
+    assert env["ok"] is False and "--disagreements" in env["error"]
+    assert not (tmp_path / "d.jsonl").exists()
+
+
 # ---- this file stays ASCII: an invisible separator in a literal is unreviewable ----------------
 
 def test_this_test_file_holds_only_ascii():

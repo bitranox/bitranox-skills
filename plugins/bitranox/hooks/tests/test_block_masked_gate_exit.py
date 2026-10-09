@@ -593,3 +593,66 @@ def test_powershell_backtick_escaped_quotes_leave_the_status_read_expanding(monk
     assert B.reads_masked_status(command, "PowerShell") is True
     assert _rc_as(monkeypatch, "PowerShell", command) == 0
     assert "MASKED EXIT STATUS" in capsys.readouterr().out
+
+
+# ---------------------------------------------------------------------------
+# A gate NAMED in text is not a gate RUN - the background block too
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    ("label", "command"),
+    [
+        ("the reported backstop", 'sleep 1800; echo "BACKSTOP 3: fixer make test not reported by 15:15"'),
+        ("single-quoted mention", "sleep 60; echo 'waiting on make test, then tail the log'"),
+        ("unquoted echo operand", "sleep 60; echo waiting on make test; date"),
+        ("a heredoc body", "cat > note.md <<'EOF'\nrun make test then tail the log\nEOF\nsleep 5"),
+        ("a comment", "sleep 60  # then make test; tail log\ndate"),
+    ],
+)
+def test_a_backgrounded_command_that_only_names_a_gate_is_not_blocked(monkeypatch, label, command):
+    """No gate runs in any of these, so there is no gate verdict for the notice to misreport.
+    The gate name sat in a quoted argument, an echo operand, a heredoc body or a comment, and the
+    background block searched the RAW command for it, then treated a gate it could not find in
+    the masked text as a masked gate."""
+    assert run_main_bg(monkeypatch, command, True) == 0
+
+
+def test_a_backgrounded_real_gate_beside_a_quoted_mention_is_still_blocked(monkeypatch, capsys):
+    """The direction where the fix must NOT apply: a gate at command position is still a gate."""
+    assert run_main_bg(monkeypatch, "make test; echo done", True) == 2
+    assert run_main_bg(monkeypatch, 'echo "next: make test"; make test; tail log', True) == 2
+    assert "BLOCKED: a backgrounded gate" in capsys.readouterr().err
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        'out=$(make test 2>&1); echo "$out" ' + chr(124) + " tail -5",
+        'echo "$(pytest -q)"; date',
+    ],
+)
+def test_a_backgrounded_gate_inside_a_substitution_still_runs_and_is_blocked(monkeypatch, command):
+    """A `$(...)` body RUNS, double quotes or not, so a gate there is a gate. Masking every quoted
+    region as one string erased it, and so did gluing the mask's filler onto the gate name, which
+    removed the word boundary the gate pattern starts with."""
+    assert run_main_bg(monkeypatch, command, True) == 2
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        'bash -c "make test; tail x"',
+        "timeout 1500 ssh host \"cd /w && .venv/bin/python -m pytest -q > p.log 2>&1 & echo RC=$?\"",
+    ],
+)
+def test_a_backgrounded_gate_in_a_command_another_shell_runs_is_still_blocked(monkeypatch, command):
+    """The quoted operand of `ssh` or `bash -c` is not prose but a command, so a gate in it RUNS.
+    Its structure cannot be read here, so it stays blocked; the ssh shape is the one real firing
+    the corpus replay found the quoted-text exemption would otherwise have lost."""
+    assert run_main_bg(monkeypatch, command, True) == 2
+
+
+def test_a_backgrounded_lone_gate_assigned_from_a_substitution_is_allowed(monkeypatch):
+    """`x=$(make test)` exits with the substitution's status, which is the gate's own."""
+    assert run_main_bg(monkeypatch, "sleep 5; x=$(make test)", True) == 0

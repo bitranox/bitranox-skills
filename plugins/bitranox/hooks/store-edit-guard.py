@@ -3,7 +3,8 @@
 
 Two protected surfaces:
   1. ANY path inside a store dir - the live `.claude-memory/` (slug-named bodies + .archive) or the
-     legacy `.claude-bx-selflearning/` (kept for downstream installs mid-transition).
+     legacy `.claude-bx-selflearning/` (kept for downstream installs mid-transition) - except
+     `<live store>/OPEN-WORK.md`, the store's own backlog, which no engine verb writes.
   2. The managed POINTER BLOCK inside any `CLAUDE.local.md` (both fence generations). The rest of a
      `CLAUDE.local.md` is the user's own text and stays freely editable - the guard denies only an
      edit that touches the fenced region, a write that changes/deletes it, or an edit/write that
@@ -49,6 +50,9 @@ _MARKER_STEMS = ("BITRANOX-MEMORY-INDEX:", "BITRANOX-UUID-INDEX:")
 # any path segment `.claude-memory/` (live store) or `.claude-bx-selflearning/` (legacy store)
 _STORE = re.compile(r"(?:^|/)(?:\.claude-memory|\.claude-bx-selflearning)/")
 _TOOLS = {"Edit", "Write", "MultiEdit", "NotebookEdit"}
+# the one hand-editable file in a store: the live store's own backlog (see _is_store_backlog)
+_LIVE_STORE = ".claude-memory"
+_BACKLOG = "OPEN-WORK.md"
 # a Windows drive-letter path is absolute even when this runs on POSIX
 _DRIVE = re.compile(r"^[A-Za-z]:/")
 _BYPASS_ENV = "BITRANOX_MEMORY_ENGINE"
@@ -148,6 +152,24 @@ def _resolve(raw, cwd):
     return posixpath.normpath(raw)
 
 
+def _is_store_backlog(resolved):
+    """True for exactly `<live store>/OPEN-WORK.md`: the store's own standing backlog.
+
+    It is not a fact and not a pointer block, and no engine verb writes it, so denying it left a
+    work session no way to file or move a store item at all. Only the file DIRECTLY in the one
+    `.claude-memory/` segment of the path qualifies, and it must still be that file once symlinks
+    are resolved: the edit lands wherever a link points, which can be a fact body."""
+    if posixpath.basename(resolved) != _BACKLOG:
+        return False
+    if posixpath.basename(posixpath.dirname(resolved)) != _LIVE_STORE:
+        return False
+    if len(_STORE.findall(resolved)) != 1:
+        return False                                   # a store nested inside a store
+    real = os.path.realpath(resolved)
+    return (os.path.basename(real) == _BACKLOG
+            and os.path.basename(os.path.dirname(real)) == _LIVE_STORE)
+
+
 def _apply(text, old_s, new_s, replace_all):
     return text.replace(old_s, new_s) if replace_all else text.replace(old_s, new_s, 1)
 
@@ -216,6 +238,8 @@ def decide(event, env):
 
     resolved = _resolve(raw, event.get("cwd"))
     if _STORE.search(resolved):
+        if _is_store_backlog(resolved):
+            return None
         return _DENY % ("a store file", _BYPASS_ENV, raw)
     if posixpath.basename(resolved) != "CLAUDE.local.md":
         return None

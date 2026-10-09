@@ -9,6 +9,7 @@ All content is ASCII.
 
 import io
 import json
+import os
 import sys
 from pathlib import Path
 
@@ -382,3 +383,41 @@ def test_a_cd_inside_a_subshell_does_not_outlive_it(monkeypatch, nested):
     assert run_main(monkeypatch, cmd, skill) == 2      # the second run is back in the skill dir
     cmd = f"(cd {_sh(skill)} && pyright scripts tests) ; pyright scripts"
     assert run_main(monkeypatch, cmd, root) == 0       # control: back at the root, no tests/
+
+
+# --- a path outside the project is not a narrowed PROJECT check -----------------
+
+
+@pytest.fixture
+def scratch_file(tmp_path_factory) -> Path:
+    """A scratch probe that lives OUTSIDE the `project` fixture's directory."""
+    path = tmp_path_factory.mktemp("scratch") / "tcheck.py"
+    path.write_text("x: int = 1\n", encoding="utf-8")
+    return path
+
+
+def test_a_scratch_probe_outside_the_project_passes(monkeypatch, project, scratch_file):
+    """Type-checking a scratch file that lives OUTSIDE the project narrows nothing about the
+    project: its tests/ was never in that run's scope. Blocking it read
+    `pyright /tmp/.../scratch/tcheck.py` exactly like `pyright src/pkg/__init__.py`."""
+    assert run_main(monkeypatch, f"pyright {_sh(scratch_file)}", project) == 0
+    both = f"pyright {_sh(scratch_file)} {_sh(scratch_file.parent)}"
+    assert run_main(monkeypatch, both, project) == 0
+
+
+def test_a_relative_path_climbing_out_of_the_project_passes(monkeypatch, project, scratch_file):
+    """A `..` that leaves the project root is outside too: judged after resolving, not by spelling."""
+    rel = Path(os.path.relpath(scratch_file, project)).as_posix()
+    assert rel.startswith("../")
+    assert run_main(monkeypatch, f"pyright {rel}", project) == 0
+
+
+def test_an_outside_path_does_not_excuse_an_inside_narrowed_path(monkeypatch, project, scratch_file):
+    """Control: one outside path beside an inside non-test path is still a narrowed project run."""
+    assert run_main(monkeypatch, f"pyright {_sh(scratch_file)} src/pkg/__init__.py", project) == 2
+    assert run_main(monkeypatch, "pyright src/pkg/__init__.py", project) == 2
+
+
+def test_an_absolute_path_into_the_project_is_still_inside(monkeypatch, project):
+    """Control: an ABSOLUTE path into the project is inside it, whatever its spelling."""
+    assert run_main(monkeypatch, f"pyright {_sh(project / 'src')}", project) == 2

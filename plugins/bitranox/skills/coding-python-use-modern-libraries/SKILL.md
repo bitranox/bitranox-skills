@@ -114,3 +114,19 @@ swap it out.
   earlier the same line is a `SyntaxError` under the old Python-2 `except E, name:` grammar, so it
   reads like an obvious bug. Check `requires-python` or the interpreter and probe with `python -c`
   before "fixing" it; on 3.14+ adding parentheses is a style choice, not a correction.
+- **Prefixing a docstring with `r` to satisfy ruff D301 changes EVERY escape in it at once.** Written
+  non-raw, `\\` is one backslash and `\t`, `\n`, `\u2713` are real escapes; after `r"""` each is
+  literal, and only some of the damage is loud. A doctest written for the non-raw form fails
+  (`count("a\\tb")` now passes a backslash and a `t`, not a tab). Prose changes silently:
+  `%APPDATA%\\vendor` renders with two backslashes, `\u2713` as six characters instead of a check
+  mark. And an example can stay green on an input nobody meant: `"a\\nb".split("\\n")` still gives
+  `['a', 'b']`, now splitting on a literal backslash-n. So after any conversion, rewrite each escape
+  into its raw spelling - halve every `\\`, put the character itself in place of a `\u`/`\N{}`/`\x`
+  escape (or reword, where the project bans non-ASCII source). Then prove nothing moved: the
+  function's `__doc__` imported from the old source and from the new must be EQUAL, apart from any
+  deliberate rewording - a mechanical check that catches all three kinds of damage and scales to
+  a sweep of many hits - and run the doctests. Escaping only the offending backslash (`\d` to
+  `\\d`) silences Python's invalid-escape warning but NOT D301, which fires on any backslash
+  except a `\u`/`\N{}` escape or a line continuation (so a docstring whose only backslashes are
+  those needs no `r` at all). ruff offers the `r` prefix only as an UNSAFE fix; never bulk-apply it
+  with `--unsafe-fixes`.

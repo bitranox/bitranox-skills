@@ -52,7 +52,15 @@ Gates run WITHOUT a shell, so `cd sub && pytest` or `FOO=1 pytest` is not a gate
 options instead: `--cwd DIR` and `--env K=V` (repeatable) apply to every gate and to `--then`;
 `--gate-cwd DIR` and `--gate-env K=V` written AFTER a --gate apply to that gate only and override
 the global ones. An env value is ADDED to the inherited environment, never a replacement for it.
-A missing directory or a malformed K=V is a usage error, exit 2.
+A missing directory or a malformed K=V is a usage error, exit 2. `--gate-env K=@path` reads the
+value from that file (trailing newlines dropped, as `$(cat path)` would; `K=@@x` is the literal
+`@x`), which is how a commit message reaches `make push` with no shell anywhere.
+
+For the same reason a quoted gate string holding a command substitution (`$(...)` or a backtick)
+is a usage error, exit 2, naming the token: no shell would expand it, so the program would get the
+characters - measured, `make push MSG="$(cat msgfile)"` as a gate pushed a commit titled with the
+unexpanded text. Tokens after a word naming a shell (`bash -c '...'`) are that shell's script and
+are allowed; tokens after `--` are real argv and are taken verbatim, as always.
 
 Exit codes: 0 every gate passed (or, with --then, the follow-up's own code); a red run exits the
 single failing gate's OWN code where that is unambiguous (a taxonomy code such as 2 survives),
@@ -295,7 +303,53 @@ def gate_spec(spec: str):
     argv = split_command(spec)
     if not argv:
         raise ValueError(f"empty gate: {spec!r}")
+    token = shell_syntax_token(argv)
+    if token is not None:
+        raise ValueError(
+            f"gate {spec!r} holds shell syntax in {token!r}, but a gate runs without a shell, so "
+            "the program would receive it literally (a `make push MSG=\"$(cat f)\"` gate once "
+            "pushed a commit titled with the unexpanded text). Put the value in a file and pass "
+            "it as --gate-env K=@file, or put the command in a script; for real shell expansion "
+            "name the shell: --gate \"bash -c '...'\"; to pass the characters literally, give "
+            "the gate after --")
     return (name[:_NAME_WIDTH] if name else derived_name(argv)), argv
+
+
+_SHELL_SUBSTITUTIONS = ("$(", "`")
+"""What a shell would have EXPANDED in a quoted gate string. A bare `$VAR` is left alone: it is
+far commoner as literal text (a regex, a make variable) than as a forgotten expansion."""
+
+_SHELLS = frozenset({"sh", "bash", "dash", "zsh", "ksh", "mksh", "fish", "busybox",
+                     "pwsh", "powershell", "cmd"})
+
+
+def shell_syntax_token(argv: list[str]) -> str | None:
+    """The first argv token holding a command substitution no shell will expand, else None.
+
+    A gate runs with NO shell, so `$(cat msgfile)` or a backticked command in it reaches the
+    program as those characters. That passes silently whenever the program accepts any text,
+    which is exactly the dangerous case: measured, `make push MSG="$(cat msgfile)"` given as a
+    --gate went green and pushed a public commit whose subject was the literal `$(cat ...)`.
+
+    Tokens after a word naming a shell (`bash -c '...'`, `env -u X sh -c '...'`) are that
+    shell's own script and ARE expanded - by it - so they are not reported: that form is the
+    documented way to ask for shell syntax in a gate.
+
+    Examples:
+        >>> shell_syntax_token(["make", "push", "MSG=$(cat f)"])
+        'MSG=$(cat f)'
+        >>> shell_syntax_token(["bash", "-c", "echo $(date)"]) is None
+        True
+    """
+    for token in argv:
+        word = os.path.basename(token).lower()
+        if word.endswith(".exe"):
+            word = word[:-4]
+        if word in _SHELLS:
+            return None
+        if any(marker in token for marker in _SHELL_SUBSTITUTIONS):
+            return token
+    return None
 
 
 class _WrittenOrder(argparse.Action):
@@ -630,8 +684,30 @@ def gate_settings(parser: argparse.ArgumentParser, written) -> list[GateSettings
         if option == "gate_cwd":
             per_gate[-1] = GateSettings(_directory(parser, flag, value), last.env)
         else:
-            per_gate[-1] = GateSettings(last.cwd, (*last.env, _env_pair(parser, flag, value)))
+            key, raw = _env_pair(parser, flag, value)
+            per_gate[-1] = GateSettings(last.cwd, (*last.env, (key, _env_value(parser, flag, raw))))
     return per_gate
+
+
+def _env_value(parser: argparse.ArgumentParser, option: str, raw: str) -> str:
+    """A --gate-env value: `@path` is read from that file, `@@...` is a literal leading '@'.
+
+    The file form exists because a gate has no shell: `MSG="$(cat msgfile)"` in a gate string is
+    never expanded, so a commit message had no shell-free way in. Trailing newlines are dropped,
+    as `$(cat f)` drops them, so an editor's final newline does not end up in a commit subject.
+    The path is relative to where gate.py runs, not to --gate-cwd. `@@` keeps a real value that
+    starts with '@' (an npm scope such as `@scope/pkg`) writable.
+    """
+    if raw.startswith("@@"):
+        return raw[1:]
+    if not raw.startswith("@"):
+        return raw
+    path = raw[1:]
+    try:
+        return Path(path).read_text(encoding="utf-8").rstrip("\r\n")
+    except (OSError, UnicodeDecodeError) as exc:
+        parser.error(f"{option} cannot read the value file {path!r}: {exc}")
+        raise                                                   # unreachable: error() exits
 
 
 def main(argv=None) -> int:
@@ -673,7 +749,8 @@ def _main(argv=None) -> int:
                    help="the working directory of the --gate written BEFORE it (overrides --cwd)")
     p.add_argument("--gate-env", action=_WrittenOrder, default=None, metavar="K=V",
                    help="add K=V for the --gate written BEFORE it only (repeatable; wins over "
-                        "--env)")
+                        "--env). K=@FILE reads the value from FILE (trailing newlines dropped), "
+                        "K=@@x is the literal '@x'")
     # NOT argparse.REMAINDER: it swallows every option that follows the first positional, so
     # `gate.py "pytest -q" --then "git push"` collapsed into ONE nonsense gate and failed
     # rc=127 naming the whole command line - a usage error wearing a broken-gate costume.

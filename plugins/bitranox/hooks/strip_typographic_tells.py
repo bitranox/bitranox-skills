@@ -29,10 +29,12 @@ Usage:
   strip_typographic_tells.py FILE [FILE ...]   rewrite each file in place
   strip_typographic_tells.py --check FILE ...  exit 1 if any tell remains (no write)
   strip_typographic_tells.py -                 read stdin, write normalized stdout
+  strip_typographic_tells.py -- -FILE ...      a file whose name starts with '-' goes after --
+  strip_typographic_tells.py -h | --help       print this usage and exit 0
 
-Exit 0 done or clean, 1 (--check only) a tell remains, 2 could not run: a FILE missing,
-unreadable, not UTF-8 or not writable, or stdin not UTF-8. The other files are still processed,
-and 2 wins over 1.
+Exit 0 done or clean, 1 (--check only) a tell remains, 2 could not run: an unknown option, a FILE
+missing, unreadable, not UTF-8 or not writable, or stdin not UTF-8. The other files are still
+processed, and 2 wins over 1.
 
 The replacement table is built from code points with chr()/ranges so this script
 is itself pure ASCII and passes the same check.
@@ -213,13 +215,50 @@ def normalize(text):
         _break_prose_separators(text), _normalize_prose, edges=True)
 
 
-def _main(argv):
-    args = argv[1:]
-    check = False
-    if args and args[0] == "--check":
-        check, args = True, args[1:]
+USAGE = __doc__[__doc__.index("Usage:"):__doc__.index("The replacement table")].rstrip() + "\n"
 
-    if not args or args == ["-"]:
+
+class _UsageError(Exception):
+    """An argument this CLI does not accept; the message names it."""
+
+
+def _parse(args):
+    """(check, help, files) from the command-line arguments, or raise `_UsageError`.
+
+    Every argument starting with '-' before a `--` is an option, so an unknown one is refused
+    rather than opened as a file: `--help` used to come back as "could not process --help".
+    Everything after `--` is a file whatever it starts with. `files` is None for stdin mode: no
+    operand at all, or a lone '-' given before any `--`.
+    """
+    check = show_help = False
+    before, after = [], []
+    for at, arg in enumerate(args):
+        if arg == "--":
+            after = args[at + 1:]
+            break
+        if arg in ("-h", "--help"):
+            show_help = True
+        elif arg == "--check":
+            check = True
+        elif arg.startswith("-") and arg != "-":
+            raise _UsageError(f"unknown option: {arg}")
+        else:
+            before.append(arg)
+    stdin = not after and before in ([], ["-"])
+    return check, show_help, None if stdin else before + after
+
+
+def _main(argv):
+    try:
+        check, show_help, args = _parse(argv[1:])
+    except _UsageError as exc:
+        sys.stderr.write(f"{exc}\n{USAGE}")
+        return 2
+    if show_help:
+        sys.stdout.write(USAGE)
+        return 0
+
+    if args is None:
         # The stream's encoding is the locale's unless something overrides it, and a cp1252
         # console turns an em dash into three garbage bytes before this ever sees it. Same
         # newline="" reasoning as the file branch below: line endings pass through untouched.

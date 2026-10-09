@@ -29,7 +29,9 @@ def test_shape_splits_program_flags_and_operands():
     assert R.shape("rsync -a src dst") == ("rsync", ("-a",), ("src", "dst"))
 
 
-def test_shape_takes_the_last_statement_because_that_is_the_one_that_failed():
+def test_shape_reads_the_last_statement_of_a_compound():
+    """The PENDING side: the last statement is what is being re-attempted. (A compound is never
+    RECORDED as a failure - see test_a_failed_compound_is_not_attributed_to_its_last_statement.)"""
     assert R.shape("cd /tmp && rsync -a src dst") == ("rsync", ("-a",), ("src", "dst"))
 
 
@@ -311,3 +313,46 @@ def test_a_subshell_followed_by_a_redirect_is_still_its_last_statement():
 
 def test_a_quoted_paren_is_still_an_operand():
     assert R.shape('grep -n "(must PASS)" log.txt') == ("grep", ("-n",), ("(must PASS)", "log.txt"))
+
+
+# ---------------------------------------------------------------- a compound failure has no culprit
+
+@pytest.mark.skipif(sys.platform == "win32", reason="drives the bash shim directly")
+def test_a_failed_compound_is_not_attributed_to_its_last_statement(session):
+    """The reported false positive: the whole compound was refused by another guard, so its last
+    statement never ran, yet a later single `git rev-parse` with flags added was told it "already
+    FAILED". A compound's failure cannot be pinned on any one statement - an earlier one may have
+    failed, or a guard refused the lot - so it is not recorded at all."""
+    assert _run(_failure(session, "cd /x && git status && git rev-parse --short HEAD")) == (0, "", "")
+    assert _run(_pending(session, "git rev-parse --verify -q --short HEAD")) == (0, "", "")
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="drives the bash shim directly")
+@pytest.mark.parametrize("failed, retry", [
+    ("git rev-parse --short HEAD", "git rev-parse --verify -q --short HEAD"),
+    ("grep -n x f.md | head -5", "grep -n -E x f.md | head -5"),           # a pipeline is one
+    ("(sed -n 1p file.txt) | head -3", "sed -n -E 1p file.txt"),            # so is a lone subshell
+    ("diff <(sed -n 1p a.md) b.md", "diff -u <(sed -n 1p a.md) b.md"),      # a substitution is a word
+])
+def test_a_single_statement_failure_is_still_recorded(session, failed, retry):
+    """Control: the narrowing must not silence the case the nudge exists for."""
+    assert _run(_failure(session, failed)) == (0, "", "")
+    rc, out, _err = _run(_pending(session, retry))
+    assert rc == 0 and out, "a single-statement failure retried with a flag added must nudge"
+
+
+@pytest.mark.parametrize("command, single", [
+    ("rsync -a src dst", True),
+    ("rsync -a src dst;", True),
+    ("grep -n x f.md | head -5", True),
+    ("(sed -n 1p file.txt)", True),
+    ("diff <(sed a x) <(sed b y)", True),
+    ("cat > s.sh <<'EOF'\nrsync -a src dst\nEOF", True),
+    ("cd /x && rsync -a src dst", False),
+    ("true; rsync -a src dst", False),
+    ("rsync -a src dst\nrsync -a src2 dst", False),
+    ("(cd x && sed -n 1p file.txt)", False),
+    ("cd /tmp && (sed -n 1p file.txt)", False),
+])
+def test_single_statement_counts_statements_not_pipeline_elements(command, single):
+    assert R.is_single_statement(command) is single

@@ -23,7 +23,9 @@ invocation is judged, not only the first):
   - the directory the run lands in - the event cwd moved by every `cd` before it -
     HAS a test directory (nothing to miss otherwise; a `cd` this hook cannot follow
     leaves nothing to judge);
-  - none of the given paths covers that test directory.
+  - none of the given paths covers that test directory;
+  - at least one given path lies inside that directory, the project root (a scratch
+    file checked from elsewhere narrows nothing about the project).
 
 Pure standard library: no jq, no shell. Reads the PreToolUse event JSON on stdin.
 Exit 2 blocks the call and shows stderr to the model; every other path (including
@@ -310,18 +312,40 @@ def _covers(path_arg: str, cwd: Path, tests: Path) -> bool:
     return target == tests_resolved or tests_resolved.is_relative_to(target) or target.is_relative_to(tests_resolved)
 
 
+def _outside(path_arg: str, root: Path) -> bool:
+    """Whether ``path_arg`` resolves outside the project ``root`` entirely.
+
+    False when it cannot be told: `_covers` already lets an undecidable path through, and calling
+    it outside here as well would excuse the narrowed paths beside it.
+    """
+    if "\0" in path_arg:
+        return False
+    try:
+        target = (root / path_arg).resolve()
+        root_resolved = root.resolve()
+    except (OSError, ValueError):
+        return False
+    return not (target == root_resolved or target.is_relative_to(root_resolved)
+                or root_resolved.is_relative_to(target))
+
+
 def _excluded_tests(paths: list[str], where: str | None) -> tuple[list[str], Path] | None:
     """(paths, test dir) when a run narrowed to `paths` from `where` misses that dir's tests.
 
     None when the run gave no paths (the full project), when `where` cannot be read (a cd this
     hook could not follow - cannot tell, so do not block), when that directory has no tests to
-    miss, or when a path covers them.
+    miss, when a path covers them, or when EVERY path lies outside the project. The project root
+    is `where`, the directory that holds the test dir: a scratch probe elsewhere
+    (`pyright /tmp/x/tcheck.py`) never had the project's tests in scope, so it narrowed nothing.
+    One outside path does not excuse an inside one beside it - that run still narrows the project.
     """
     if not paths or where is None:
         return None
     base = Path(where)
     tests = _test_dir(base)
     if tests is None or any(_covers(p, base, tests) for p in paths):
+        return None
+    if all(_outside(p, base) for p in paths):
         return None
     return paths, tests
 

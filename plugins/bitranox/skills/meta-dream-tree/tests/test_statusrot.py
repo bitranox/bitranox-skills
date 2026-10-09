@@ -150,6 +150,53 @@ class TestSelfContradictionPrecision:
             "after a recovery partition was deleted. Seed it from install media.")
         assert statusrot.self_contradiction(ptr) is None
 
+    def test_broken_in_a_slug_is_the_trigger_not_what_turned_out(self):
+        # "broken" names the situation the lesson fires in; "turned out" reports an INSTANCE
+        # (the VM was unneeded). Neither reverses the other, and `clear` refuses a contradiction,
+        # so a false flag here can only be silenced by rewording a correct hook.
+        ptr = statusrot.Pointer(
+            "l", "feedback-ask-whether-a-broken-matrix-vm-is-needed-before-repairing-it",
+            "Ask whether a broken matrix VM is needed",
+            "When a matrix VM looks broken, ask if it is needed first; one turned out unneeded.")
+        assert statusrot.self_contradiction(ptr) is None
+
+    def test_broken_trigger_with_the_instance_in_the_same_sentence(self):
+        # The same lesson written as one sentence: the slug word sits in the When-clause, so it
+        # is the condition, not a state the trailing "turned out" could reverse.
+        ptr = statusrot.Pointer(
+            "l", "feedback-ask-whether-a-broken-matrix-vm-is-needed-before-repairing-it",
+            "Ask whether a broken matrix VM is needed",
+            "When a matrix VM looks broken, ask if it is needed first, since one turned out "
+            "to be unused.")
+        assert statusrot.self_contradiction(ptr) is None
+
+    def test_broken_slug_whose_hook_never_says_broken(self):
+        # The stored hook of that entry words the trigger differently ("fails the re-bake"), so
+        # the reversal marker cannot be about the slug's state at all.
+        ptr = statusrot.Pointer(
+            "l", "feedback-ask-whether-a-broken-matrix-vm-is-needed-before-repairing-it",
+            "Ask whether a broken matrix VM is needed before repairing it",
+            "When a proxmox06 matrix VM fails the re-bake and needs repair, first check whether "
+            "anything uses it and offer repair vs re-clone vs delete. 66001 cost two failed DISM "
+            "repairs before it turned out to be unused.")
+        assert statusrot.self_contradiction(ptr) is None
+
+    def test_broken_slug_under_a_hook_that_says_it_is_no_longer_broken(self):
+        # A real contradiction of the same slug word: the hook reverses the slug's own claim.
+        ptr = statusrot.Pointer(
+            "l", "project-nested-kvm-broken-on-kernel-6-14", "Nested KVM on 6.14",
+            "When running nested KVM on 6.14, know it is no longer broken: the 6.14.3 fix "
+            "landed, so plan guests on it normally.")
+        assert statusrot.self_contradiction(ptr) is not None
+
+    def test_a_reversal_that_never_names_the_state_is_missed_by_design(self):
+        # The price of the rule above: "it is superseded" cannot be told apart from an instance
+        # sentence that happens to use a marker, so it is not flagged. Precision wins here
+        # because this category sets exit 1 and `clear` refuses it.
+        ptr = statusrot.Pointer(
+            "l", "thing-blocked-by-x", "Thing", "When X, it is SUPERSEDED, it works.")
+        assert statusrot.self_contradiction(ptr) is None
+
     def test_works_in_a_slug_beside_a_cannot_in_the_hook(self):
         ptr = statusrot.Pointer(
             "l", "dm-linux-hotadd-works-on-stock-firmware-openvmm-clears-s4", "DM hot-add",
@@ -208,7 +255,8 @@ def _cli(*args: str, cwd: Path | None = None, env: dict | None = None):
 
 class TestCliArguments:
     def test_a_relative_level_and_a_chain_over_the_same_file_scan_it_once(self, tmp_path):
-        _level(tmp_path, "- [T](mem:thing-blocked-by-x) - When X, it is SUPERSEDED, it works.")
+        _level(tmp_path,
+               "- [T](mem:thing-blocked-by-x) - When X, the blocker is SUPERSEDED, it works.")
         proc = _cli("scan", "--level", "CLAUDE.local.md", "--chain", ".", "--json", cwd=tmp_path)
         assert proc.returncode == 1, proc.stderr
         env = json.loads(proc.stdout)

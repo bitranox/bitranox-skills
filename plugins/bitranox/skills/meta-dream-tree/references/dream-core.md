@@ -97,8 +97,10 @@ Read the mode first (`dream_state.py mode`; knobs in `~/.claude/.bitranox-memory
   `amend-pinned --title`, so a pinned fact's stale title is reported, never fixed in passing. Archiving is NOT gated by the engine (`reconcile_memory_index.py --archive`
   does not check `pin`) - treat it as un-archivable by the dream's own policy anyway: report it,
   never drop its pointer.
-- **Structural moves** (relocating a directory, migrating a memory slug, creating a rung): always
-  PROPOSED with consequences, never applied by the dream.
+- **Structural moves** (relocating a directory, migrating a memory slug, creating a rung - a new
+  curated level, i.e. a pointer block in a dir that has none): always PROPOSED with consequences,
+  never applied by the dream. A fact waiting on such a level stays where it is until the level
+  exists.
 
 ## Capture-first (unconditional on a manual run)
 

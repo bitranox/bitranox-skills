@@ -323,6 +323,11 @@ def main():
         # payload looks typed, so the scheduling call in this session's transcript decides.
         if transcript_turns.scheduled_by_the_session(prompt, ev.get("transcript_path")):
             return 0
+        # "read handover and continue" / "what's next" is about THIS project's own backlog, which
+        # recall never reads; other projects' handover notes injected there were taken for the
+        # handover skill reading other projects' handovers.
+        if prompt_text.asks_for_own_backlog(prompt):
+            return 0
         # Only the prose of a typed prompt: a path carries project and tool names, and a machine
         # turn (a task notification, a slash-command echo) is not somebody asking for anything -
         # the skill router had the same input and the same defect. An empty result recalls nothing.
@@ -438,9 +443,10 @@ def main():
     except OSError:
         pass
 
-    ctx = ("Relevant prior work found in your OTHER projects' memory / CLAUDE.md / global rules - read it "
-           "and draw on it before reinventing; verify any named file/flag still exists, and de-duplicate "
-           "against this project's own memory:\n\n" + "\n\n".join(blocks))
+    ctx = ("CROSS-PROJECT MEMORY (recall hook), not this project's handover or backlog: notes found in "
+           "your OTHER projects' memory / CLAUDE.md / global rules by keyword match on this prompt.\n"
+           "Draw on them before reinventing; verify any named file/flag still exists, and de-duplicate "
+           "against this project's own memory.\n\n" + "\n\n".join(blocks))
     out = {
         "hookSpecificOutput": {"hookEventName": "UserPromptSubmit", "additionalContext": ctx},
         "systemMessage": "Recalled %d related memory note(s) from elsewhere." % len(blocks),

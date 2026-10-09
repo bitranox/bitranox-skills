@@ -29,6 +29,61 @@ than the change, so entries reconstructed from them would read like coverage wit
 a hole nobody has drawn a line under is one that gets rediscovered and half-filled - which is how
 two "versions with no entry" notes came to sit in this file disagreeing with it.
 
+## [8.10.0]
+
+### Added
+
+- `compuse-toolbox` `gate.py`: `--gate-env K=@FILE` reads the value from a file (trailing newlines
+  dropped, `@@` a literal `@`), the shell-free way to hand a commit message to `make push`.
+- `classifier_eval.py report --notify` tallies the skill_router rows written for task notifications
+  by `task_status`, by kind (taken from the summary's opening words only) and by verdict.
+
+### Changed
+
+- `compuse-toolbox` `gate.py` refuses a quoted gate whose argv holds `$(` or a backtick (exit 2,
+  naming the token): it runs gates without a shell, so such text reached the program literally and
+  once pushed a commit titled with the unexpanded substitution. Tokens after `bash -c` and after
+  `--` are exempt.
+- `recall-memory` skips its cross-project section when the whole prompt asks for this project's own
+  handover or backlog ("read handover and continue", "what next", "what is still open"), and the
+  section's heading now says plainly it is cross-project memory.
+- `store-edit-guard` allows an Edit or Write to the memory store's own `OPEN-WORK.md` backlog; facts,
+  pointer blocks and every other store path stay engine-only.
+- `retry-with-a-flag-nudge` records a failure only for a single-statement command: a failed compound
+  names no culprit, so blaming its last statement told a corrected command it had "already FAILED"
+  (replayed over real history: 30 firings to 5, none of the 25 removed a clear true positive).
+- `ci_watch_state` prunes other projects' state files untouched for 24 hours after each save, so
+  `/tmp/claude-ci-watch-*.json` no longer accumulates.
+- infra-modulejail: the blacklist reaches the initramfs (initramfs-tools copies `/etc/modprobe.d`
+  into every initrd it builds) and is computed for one kernel, so the skill now gates each new
+  kernel's dependency closure with a `postinst.d` hook and keeps the proven kernel pinned until a
+  guarded boot succeeds; `sctp` replaces `dccp` (absent from 7.0.x PVE kernels) as the blocked
+  control, with a check that fails loudly when the control does not exist or is not blocked.
+- process-test-design: never patch `time.monotonic` itself (it is process-global and asyncio's loop
+  clock, so the test hangs); no timer in a test - block on an event the code signals and let the
+  runner's per-test timeout catch a hang.
+- files-edit-yml matches the file's existing null style instead of always installing a representer
+  that rewrote a bare `key:` to `key: null` (and leaked onto every later `YAML()` in the process).
+- meta-dream-tree step 3b keeps a worthwhile native entry native when its target dir is not yet a
+  curated level and lists it as a create-level proposal.
+- coding-resilience gains two asyncio teardowns that hang instead of failing (a cancel delivered
+  through an awaited child; `Server.wait_closed()` waiting on client transports since 3.12);
+  coding-python-use-modern-libraries notes the ruff D301 raw-docstring trap; compuse-git covers
+  `git rm --cached` refusing an AM/MM file.
+
+### Fixed
+
+- `block-masked-gate-exit` no longer blocks a background command that only NAMES a gate in quoted
+  text, an echo operand, a comment or a heredoc body; a gate in `$(...)`, `bash -c` or ssh still
+  blocks.
+- `shell-prefix-selfref-guard` no longer treats a standalone assignment (`p=$(ps -o ppid= -p "$p")`)
+  as a prefix assignment (replay: 42 firings to 7, all 35 removed were false positives).
+- `block-partial-typecheck` no longer blocks a pyright run whose paths all lie outside the project.
+- `strip_typographic_tells.py` has `-h/--help` and refuses an unknown option instead of opening it
+  as a file.
+- `statusrot` no longer reports a self-contradiction when the slug's state word names the trigger
+  situation rather than a claim.
+
 ## [8.9.2]
 
 ### Fixed

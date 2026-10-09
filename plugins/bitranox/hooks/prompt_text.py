@@ -124,6 +124,36 @@ def scorable_prose(prompt):
     return prose(prompt) if typed_by_a_person(prompt) else ""
 
 
+# A prompt that asks to resume THIS project's own handover or backlog. On such a prompt recall's
+# cross-project block was read as the handover skill reading OTHER projects' handovers, so recall
+# stays silent there. The match is the WHOLE prompt, never a substring: "write a handover function
+# for the API" and "continue the refactor" carry the same words with a subject of their own, and
+# those must still recall. A leading list bullet, one label ending in a colon and a politeness word
+# open the sentence without changing it, so each is stripped first, as subagent-probe-capability-
+# gate does for its declarations.
+_LEAD_IN = re.compile(
+    r"^\s*(?:[-*+\u2022]\s+|\d+[.)]\s+)?(?:[A-Za-z][A-Za-z ]*:\s+)?(?:(?:please|kindly)\b,?\s*)?",
+    re.IGNORECASE)
+_OWN_BACKLOG = re.compile(
+    r"read (?:the )?handover(?:\.md)?(?:,? (?:and|then) continue)?"
+    r"|continue"
+    r"|what(?:'?s| is)? next"
+    r"|what(?:'s| is) (?:still )?open",
+    re.IGNORECASE)
+# `what's` typed in a word processor or on a phone arrives with U+2019, which the bare form misses.
+_APOSTROPHES = {ord(c): "'" for c in (chr(0x2019), chr(0x02BC), chr(0xFF07))}
+
+
+def asks_for_own_backlog(prompt):
+    """True when the whole typed prompt asks to read this project's handover or backlog and go on:
+    "read handover and continue", "continue", "what's next", "what is still open"."""
+    if not typed_by_a_person(prompt):
+        return False
+    text = " ".join((prompt or "").translate(_APOSTROPHES).split())
+    text = _LEAD_IN.sub("", text, count=1).rstrip(" .!?")
+    return bool(text) and _OWN_BACKLOG.fullmatch(text) is not None
+
+
 # A task notification stores one child element per line - <task-id>, <tool-use-id>, <output-file>,
 # <status>, <summary>. Only the last two say anything: the ids are opaque and the path is what
 # made the envelope match eleven skills, so neither is read.

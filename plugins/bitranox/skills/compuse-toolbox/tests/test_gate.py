@@ -962,3 +962,109 @@ class TestCwdAndEnv:
                         "--log", str(tmp_path / "g.log")])
         assert rc == 0 and "[PASS] unit" in capsys.readouterr().out
 
+
+# ---- shell syntax in a --gate string reaches the program literally -----------------------------
+
+def _writes_env(out_file, var):
+    """A gate that records the value of `var` (or '-') into `out_file`, byte for byte."""
+    code = ("import os, pathlib; pathlib.Path(%r).write_text(os.environ.get(%r, '-'), "
+            "encoding='utf-8', newline='')" % (str(out_file), var))
+    return quoted(sys.executable, "-c", code)
+
+
+class TestShellSyntaxInAGate:
+    """A gate runs with no shell, so `$(cat f)` in it is never expanded. Measured: a gate
+    `make push MSG="$(cat msgfile)"` pushed a public commit whose subject was the literal text.
+    The gate passed, so nothing about the run looked wrong."""
+
+    @pytest.mark.parametrize("spec,token", [
+        ('echo $(echo x)', "$(echo"),
+        ('make push "MSG=$(cat msgfile)"', "MSG=$(cat msgfile)"),
+        ('echo `date`', "`date`"),
+    ])
+    def test_a_command_substitution_in_a_gate_is_a_usage_error(self, tmp_path, capsys, spec,
+                                                               token):
+        log = tmp_path / "g.log"
+        with pytest.raises(SystemExit) as exc:
+            gate.main(["--gate", spec, "--log", str(log)])
+        assert exc.value.code == 2
+        err = capsys.readouterr().err
+        assert token in err, err
+        assert "file" in err and "without a shell" in err, err
+        assert not log.exists() or log.read_text(encoding="utf-8") == "", \
+            "a refused gate must never have been run"
+
+    def test_the_lone_quoted_positional_is_refused_the_same_way(self, tmp_path, capsys):
+        """The single quoted positional is the --gate form without the flag."""
+        with pytest.raises(SystemExit) as exc:
+            gate.main(["--log", str(tmp_path / "g.log"), "echo $(echo x)"])
+        assert exc.value.code == 2
+        assert "$(echo" in capsys.readouterr().err
+
+    def test_tokens_after_double_dash_are_taken_verbatim(self, tmp_path):
+        """After `--` the CALLING shell already split and expanded; a literal `$(` there was
+        quoted on purpose, which is the documented way to pass those characters literally."""
+        rc = gate.main(["--log", str(tmp_path / "g.log"), "--",
+                        sys.executable, "-c", "import sys; sys.exit(0)", "$(literal)"])
+        assert rc == 0
+
+    def test_an_explicit_shell_owns_its_script_argument(self):
+        """`--gate "bash -c '...'"` is the documented escape hatch for shell syntax; the
+        substitution there IS expanded, by the shell the gate names."""
+        assert gate.shell_syntax_token(["bash", "-c", "echo $(date)"]) is None
+        assert gate.shell_syntax_token(["/usr/bin/env", "-u", "X", "sh", "-c", "`x`"]) is None
+        assert gate.shell_syntax_token(["make", "push", "MSG=$(cat f)"]) == "MSG=$(cat f)"
+        assert gate.shell_syntax_token(["echo", "a$b", "${HOME}"]) is None
+
+    def test_a_normal_gate_still_passes(self, tmp_path, capsys):
+        rc = gate.main(["--gate", OK, "--log", str(tmp_path / "g.log")])
+        assert rc == 0 and "ALL GATES PASSED" in capsys.readouterr().out
+
+    def test_then_keeps_its_shell(self, tmp_path):
+        """--then runs through a shell by design, so a substitution there is expanded and fine."""
+        if os.name == "nt":
+            pytest.skip("the substitution syntax under test is POSIX sh")
+        out = tmp_path / "then-out"
+        rc = gate.main(["--gate", OK, "--log", str(tmp_path / "g.log"),
+                        "--then", f"echo $(echo expanded) > {shlex.quote(str(out))}"])
+        assert rc == 0
+        assert out.read_text(encoding="utf-8").strip() == "expanded"
+
+
+class TestGateEnvFromFile:
+    """`--gate-env K=@path` reads the value from a file, so a commit message reaches a gate with
+    no shell anywhere: `--gate "make push" --gate-env MSG=@msgfile`."""
+
+    def test_the_value_is_read_from_the_file(self, tmp_path):
+        msg = tmp_path / "msg.txt"
+        msg.write_text("fix(gate): keep $(this) literal\n\nbody line\n", encoding="utf-8")
+        out = tmp_path / "o"
+        rc = gate.main(["--gate", _writes_env(out, "GATE_MSG"), "--gate-env", f"GATE_MSG=@{msg}",
+                        "--log", str(tmp_path / "g.log")])
+        assert rc == 0
+        # trailing newlines dropped, as `$(cat f)` would; everything else byte for byte
+        assert out.read_text(encoding="utf-8") == "fix(gate): keep $(this) literal\n\nbody line"
+
+    def test_a_double_at_is_a_literal_at(self, tmp_path):
+        """An npm scope (`@scope/pkg`) is a real value that starts with '@'."""
+        out = tmp_path / "o"
+        rc = gate.main(["--gate", _writes_env(out, "GATE_PKG"),
+                        "--gate-env", "GATE_PKG=@@scope/pkg", "--log", str(tmp_path / "g.log")])
+        assert rc == 0
+        assert out.read_text(encoding="utf-8") == "@scope/pkg"
+
+    def test_a_missing_file_is_a_usage_error_naming_it(self, tmp_path, capsys):
+        missing = tmp_path / "no-such-msg.txt"
+        with pytest.raises(SystemExit) as exc:
+            gate.main(["--gate", OK, "--gate-env", f"MSG=@{missing}",
+                       "--log", str(tmp_path / "g.log")])
+        assert exc.value.code == 2
+        err = capsys.readouterr().err
+        assert "--gate-env" in err and "no-such-msg.txt" in err
+
+    def test_a_plain_value_is_unchanged(self, tmp_path):
+        out = tmp_path / "o"
+        rc = gate.main(["--gate", _writes_env(out, "GATE_V"), "--gate-env", "GATE_V=a@b",
+                        "--log", str(tmp_path / "g.log")])
+        assert rc == 0 and out.read_text(encoding="utf-8") == "a@b"
+

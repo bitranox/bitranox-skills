@@ -17,8 +17,11 @@ host you cannot reach. This skill is the safe procedure.
    "obviously unused" modules (gpu, sound, bluetooth) - that barely dents the surface.
    Build the KEEP set, then block everything else. A real jail blocks the large majority
    of the tree.
-2. **Keep the block RUNTIME-ONLY. Never bake it into the initramfs.** This is what makes
-   a mistake survivable (see "Why runtime-only").
+2. **The block reaches early boot, and it is computed for ONE kernel.** On Debian/Proxmox
+   every initramfs built after the file exists carries it, so a wrong entry can stop the
+   boot before SSH. Gate every NEW kernel's dependency closure before booting it, and keep
+   the proven kernel pinned until a guarded boot of the new one succeeds (see "The blacklist
+   is in the initramfs, and it is per-kernel").
 3. **Gate the exact file you will install BEFORE it goes near `/etc/modprobe.d`**, and
    validate the gate against a known-negative.
 4. **A host with no console/OOB power is not hardened until a real reboot proved it while
@@ -28,7 +31,8 @@ host you cannot reach. This skill is the safe procedure.
 
 Use when: locking down a server, appliance, hypervisor (Proxmox/KVM host), or an
 about-to-relocate box; responding to a `request_module()`/autoload CVE class (obscure
-network protocols - `dccp`, `sctp`, `rds`, `tipc` - or filesystems autoloaded on mount).
+network protocols - `sctp`, `rds`, `tipc`, and `dccp` on kernels that still ship it - or
+filesystems autoloaded on mount).
 
 Do NOT use on a machine whose exact hardware/workload you cannot enumerate and reboot-test
 first, or where you have no way to recover a bad boot (no console, no OOB power, no on-site
@@ -53,7 +57,11 @@ blocking a dependency of a kept module silently breaks the kept module:
 # resolve depends recursively to convergence
 # `tr` to the underscore form: module FILE names are hyphenated (snd-hda-intel.ko) while
 # lsmod/modprobe names are underscored, and `comm` below compares the two sets literally.
-resolve() { modprobe --show-depends "$1" 2>/dev/null | awk '/^insmod/{print $2}' \
+# Two reads, unioned: with the system config (softdeps from modprobe.d), and with -C /dev/null
+# (no config) - when regenerating on a jailed host, an installed `install` line can stand in
+# for a blocked dependency's insmod line, and that dependency would stay blocked.
+resolve() { { modprobe --show-depends "$1"; modprobe --show-depends -C /dev/null "$1"; } \
+            2>/dev/null | awk '/^insmod/{print $2}' \
             | xargs -rn1 basename | sed 's/\.ko.*//' | tr '-' '_'; }
 ```
 
@@ -166,8 +174,9 @@ LC_ALL=C comm -12 keep.closure candidate.names                                  
 # repeat that comm against your boot-critical list (see the tier below)
 # Dry run of THIS file alone (-C), loads nothing. Use --show-depends, not -n -v: -n -v
 # prints NOTHING for a module that is already loaded, which reads like a missing module.
-modprobe --show-depends -C candidate.conf dccp   # blocked -> the logger `install` line
+modprobe --show-depends -C candidate.conf sctp   # blocked -> the logger `install` line
 modprobe --show-depends -C candidate.conf veth   # kept    -> an insmod path
+# The blocked control must be PROVEN, not assumed - see "Proving the blocked control".
 # If you drive this with a generator instead, capture BOTH streams and count both - some
 # print the would-be blacklist to stderr:
 #   <your-generator> --dry-run >out.txt 2>err.txt
@@ -179,22 +188,33 @@ modprobe --show-depends -C candidate.conf veth   # kept    -> an insmod path
 `candidate.conf`, and re-run the gate - it MUST flag it. A gate that passes your removal is not
 checking anything. See `bitranox:process-review-verification-before-completion`.
 
-### 5. Apply as a RUNTIME modprobe override - not the initramfs
+### 5. Install the override, then rebuild the initramfs so the reboot tests the real boot
 
-Only after step 4 passed, install the file the gate checked, unchanged:
+Only after step 4 passed, install the file the gate checked, unchanged, and rebuild the
+initramfs at once:
 
 ```bash
 install -m 0644 candidate.conf /etc/modprobe.d/modulejail-blacklist.conf
+update-initramfs -u -k all
+proxmox-boot-tool refresh          # Proxmox with proxmox-boot-tool-managed ESPs only
+lsinitramfs "/boot/initrd.img-$(uname -r)" | grep -c 'modprobe.d/modulejail-blacklist.conf'  # must be 1
 ```
 
-Do **not** run `update-initramfs`/`proxmox-boot-tool refresh` to "make it permanent" - the
-runtime file already blocks every post-boot load, and do **not** run `depmod -a` either: it
-only rebuilds `modules.dep` from the module files under `/lib/modules/$(uname -r)`, which a
-`modprobe.d` blacklist/install directive never touches, so it is a no-op here. `install`
-overrides only intercept FUTURE loads, so nothing already running is touched and the live host
-is safe by construction. The file takes effect on the NEXT load attempt immediately -
-`modprobe` re-reads `modprobe.d` on every call - so no reboot is needed to START blocking; the
-reboot in step 6 only proves the host still BOOTS with the block in place.
+The rebuild is not optional and not a way to "make it permanent": the next kernel, zfs or
+dkms update rebuilds the initramfs anyway, and it copies `/etc/modprobe.d` in (see "The
+blacklist is in the initramfs, and it is per-kernel"). Rebuilding NOW makes the step-6 reboot
+exercise the boot path every later initramfs will have, while you can still recover; skipping
+it means the first boot with the block in early userspace happens at some later update. Do
+**not** run `depmod -a`: it only rebuilds `modules.dep` from the module files under
+`/lib/modules/$(uname -r)`, which a `modprobe.d` blacklist/install directive never touches, so
+it is a no-op here. On the running system `install` overrides only intercept FUTURE loads, so
+nothing already loaded is touched; the file takes effect on the NEXT load attempt immediately -
+`modprobe` re-reads `modprobe.d` on every call. The reboot in step 6 proves the host still
+BOOTS with the block in place.
+
+In the same session, install the kernel-upgrade guard and pin the proven kernel (both in "The
+blacklist is in the initramfs, and it is per-kernel"). A jailed host without them is one
+unattended kernel update away from a NIC that does not come up.
 
 ### 6. The reboot-while-recoverable gate (mandatory)
 
@@ -205,15 +225,98 @@ of new module errors, and a differential check that a blocked module refuses whi
 still loads (below). Repeat 2-3 times. A config that was only written, never cold-booted, is
 not validated.
 
-## Why runtime-only, not initramfs
+## The blacklist is in the initramfs, and it is per-kernel
 
-A runtime `/etc/modprobe.d` block takes effect AFTER the kernel and initramfs have already
-mounted root and started userspace. So the worst case of a wrong entry is: the host boots,
-the network comes up, SSH works, and you fix the file over SSH. Bake the same block into the
-initramfs and a wrong entry can stop the machine BEFORE the root disk or the NIC driver
-loads - dead before SSH, and on a console-less/no-OOB-power host that is unrecoverable. The
-whole point of keeping it runtime-only is that a mistake stays an SSH-fixable annoyance
-instead of a brick.
+**It reaches early boot whatever you do.** Debian's initramfs-tools (Proxmox included) copies
+all of `/etc/modprobe.d` into every initramfs it builds, and a kernel install, a zfs or dkms
+update, or `proxmox-boot-tool refresh` builds one. So once the file exists, every later
+initramfs carries it - not running `update-initramfs` yourself keeps nothing out. Check rather
+than assume: `lsinitramfs /boot/initrd.img-<version> | grep modulejail`. A wrong entry can
+therefore stop the machine BEFORE the root disk or the NIC driver is up - dead before SSH. Do
+not "fix" that by stripping the file out of the initramfs, or by moving it out of
+`/etc/modprobe.d` around an upgrade: the NIC driver is often loaded by
+udev after the switch to the real root, under the same file, and early boot would then load
+unjailed. The safety is the step-4 gate, the step-6 reboot, and the per-kernel check below.
+
+**The list is computed against ONE kernel's dependency graph.** A kernel upgrade can give a
+KEPT module a new dependency that the old list blocks. Measured on an off-site host: a list
+generated on kernel 7.0.14-14 blocked `phylink`; on 7.0.14-20 the kept NIC driver `r8169`
+depends on `phylink`, so the NIC failed at boot with `Unknown symbol` - four failed boots of a
+host nobody could reach. Two guards, both mandatory on a host without a console:
+
+**1. Check the closure of every kept module against each NEW kernel when it is installed.**
+Persist the KEEP inputs that are not `lsmod` - the whitelist, the baseline and the boot-critical
+tier below, one name per line, in `/etc/modulejail/keep.list` - and install a hook that kernel
+packages run for every new kernel, with its version as `$1`. On a host jailed before this guard
+existed, write both now, before its next kernel update; a module you rely on that is in none of
+the three lists belongs in the whitelist first.
+
+```sh
+#!/bin/sh
+# /etc/kernel/postinst.d/05-modulejail-closure   (root:root 0755)
+# Fails when the installed jail blocks a dependency of a kept module ON THE NEW KERNEL,
+# or when a kept module does not exist there. -C /dev/null reads the dependency graph
+# without the blacklist, whose install lines would otherwise hide the very edge we check.
+set -eu
+new="$1"
+keep=/etc/modulejail/keep.list
+bl=${MODULEJAIL_BLACKLIST:-/etc/modprobe.d/modulejail-blacklist.conf}
+work=$(mktemp -d); trap 'rm -rf "$work"' EXIT
+awk '$1=="install"{print $2}' "$bl" | LC_ALL=C sort -u > "$work/blocked"
+LC_ALL=C sort -u "$keep" > "$work/closure"
+missing=""
+while read -r m; do
+  modprobe -S "$new" --show-depends -C /dev/null "$m" >/dev/null 2>&1 || missing="$missing $m"
+done < "$work/closure"
+while :; do
+  before=$(wc -l < "$work/closure")
+  while read -r m; do
+    modprobe -S "$new" --show-depends -C /dev/null "$m" 2>/dev/null \
+      | awk '/^insmod/{print $2}' | xargs -rn1 basename | sed 's/\.ko.*//' | tr '-' '_'
+  done < "$work/closure" | cat - "$work/closure" | LC_ALL=C sort -u > "$work/next"
+  mv "$work/next" "$work/closure"
+  [ "$(wc -l < "$work/closure")" = "$before" ] && break
+done
+hit=$(LC_ALL=C comm -12 "$work/closure" "$work/blocked" | paste -sd' ' -)
+[ -z "$hit$missing" ] && exit 0
+echo "modulejail: kernel $new - blocked dependencies: ${hit:-none}; missing kept:${missing:- none}" >&2
+echo "modulejail: DO NOT boot $new - rebuild the list for it (steps 1-5, with $new for uname -r)" >&2
+exit 1
+```
+
+A kernel installed before the hook existed was never checked: run the hook for it by hand,
+`sh /etc/kernel/postinst.d/05-modulejail-closure <version>`, before booting it. Read the hook's
+output after every kernel install, and treat a failure as "do not boot this kernel", not as an install error to clear: whether a failing hook also aborts the package
+depends on how the package calls its hooks, so the message is the guard, not the abort. Prove
+the hook can fire before trusting its silence - block one dependency of your NIC driver
+(`modinfo -F depends <driver>`) in a COPY of the blacklist and run the hook against it; it must
+exit 1 naming that module:
+
+```bash
+{ cat /etc/modprobe.d/modulejail-blacklist.conf; echo "install <dep> /bin/true"; } > /root/bl.test
+MODULEJAIL_BLACKLIST=/root/bl.test sh /etc/kernel/postinst.d/05-modulejail-closure "$(uname -r)"
+echo "rc=$?"   # must be 1, and the message must name <dep>
+```
+
+To rebuild the list for a kernel you have not booted yet, add `-S <version>` to every
+`modprobe` call in steps 1 and 4 and use `/lib/modules/<version>` in step 2, then re-run the
+hook for that version until it exits 0. One file serves every installed kernel, so a list
+rebuilt for the new kernel must still pass the hook for the pinned one.
+
+**2. Keep the proven kernel pinned until a guarded boot of the new one succeeds.**
+
+```bash
+proxmox-boot-tool kernel pin "$(uname -r)"           # before the upgrade (or right after it,
+                                                     # before any reboot): the default stays
+proxmox-boot-tool kernel pin <new-version> --next-boot  # one trial boot, only while recoverable
+# after the trial: NIC up, SSH, storage healthy, guests up, journalctl -k -b without
+# 'Unknown symbol' -> then pin the new kernel (or unpin)
+```
+
+`--next-boot` falls back to the pinned kernel only on the NEXT reset, and a boot that hangs
+does not reset itself. So the trial boot of a new kernel needs the same recovery path as the
+step-6 reboot (console, OOB power, or hands on site); without one, the new kernel stays
+installed but not booted, and a reboot for any other reason still lands on the pinned one.
 
 ## Boot-critical tier - hard-exempt, never block
 
@@ -303,13 +406,41 @@ refusal list as unfinished work even when the feature looks healthy.
 
 ```bash
 # --show-depends, not -n -v: -n -v prints NOTHING for a module that is already loaded
-modprobe --show-depends dccp   # a BLOCKED name -> an `install` line (the step-3 logger
+modprobe --show-depends sctp   # a BLOCKED name -> an `install` line (the step-3 logger
                                #                   command, or /bin/true), never an insmod path
 modprobe --show-depends veth   # a KEPT name    -> a real insmod path
 ```
 
+### Proving the blocked control
+
+A blocked control proves nothing unless the module EXISTS on the running kernel. Modules
+disappear between kernels - `dccp` is gone from 7.0.x Proxmox kernels (`modinfo -n dccp`:
+"Module dccp not found") - and an `install` line is matched by NAME, so a list generated on
+an older kernel still prints the `install` line for a module that can never load. Prove both
+halves before reading the result, and stop loudly when either fails:
+
+```bash
+# A subshell, so a failing check stops here without closing your SSH session.
+( ctl=sctp   # any module the list blocks; sctp, rds and tipc resolve on 7.0.x
+  bl=/etc/modprobe.d/modulejail-blacklist.conf     # or candidate.conf in step 4
+  modprobe --show-depends -C /dev/null "$ctl" | grep -q '^insmod ' \
+    || { echo "CONTROL INVALID: $ctl is no loadable module on $(uname -r)"; exit 1; }
+  awk '$1=="install"{print $2}' "$bl" | grep -qx "$ctl" \
+    || { echo "CONTROL INVALID: $ctl is not blocked by $bl"; exit 1; }
+  modprobe --show-depends -C "$bl" "$ctl" | grep -q '^install ' \
+    || { echo "JAIL BROKEN: $ctl is listed but modprobe would load it"; exit 1; }
+  echo "CONTROL OK: $ctl exists on $(uname -r) and is blocked" )
+```
+
+`-C /dev/null` reads no configuration at all, so an `insmod` line there means the module file
+is really on disk for this kernel; a missing module fails with "Module <name> not found", and a
+built-in one prints `builtin`, which no `install` line can block either. Pick
+the replacement from `candidate.names` (or the installed file) by running the first check over
+it - never by memory.
+
 Re-run any whitelist change through steps 1-5 - rebuild `candidate.conf`, gate it, then install
-it; the generated `/etc/modprobe.d/modulejail-blacklist.conf` is host-specific and per-kernel.
+it; the generated `/etc/modprobe.d/modulejail-blacklist.conf` is host-specific and per-kernel
+(see "The blacklist is in the initramfs, and it is per-kernel" for the kernel-upgrade guard).
 
 Regenerating alone is not enough: a unit that already failed on the missing module stays failed,
 so the correct fix reads as ineffective. Clear it and retry. Clear the whole chain, not just the
@@ -325,7 +456,9 @@ swapon --show                      # the outcome; the unit going active is not t
 
 | Mistake                                           | Consequence                                                      |
 |---------------------------------------------------|------------------------------------------------------------------|
-| Baking the block into the initramfs               | A wrong entry bricks early boot before SSH - unrecoverable       |
+| Believing the block stays out of the initramfs    | Every later initramfs carries it; a wrong entry stops early boot |
+| Booting a new kernel on the old kernel's list     | A kept module's new dependency is blocked: `Unknown symbol`      |
+| A blocked control that does not exist             | The `install` line prints by name; the check passes vacuously    |
 | Hand-picking a short blocklist                    | Barely reduces attack surface; misses the autoloaded classes     |
 | Blocking by name without the dependency closure   | Kills a dependency of a kept module; kept driver breaks          |
 | `blacklist X` instead of `install X /bin/true`    | `blacklist` only stops alias autoload, not an explicit load      |
@@ -342,5 +475,6 @@ swapon --show                      # the outcome; the unit going active is not t
 
 On a 2-NIC LXC host, this jailed ~97% of the module tree (thousands of modules blocked)
 with every guest, both NICs, and the pool unaffected across repeated cold reboots. The
-safety came entirely from runtime-only + the invariant gate + the reboot-recoverable gate,
-not from the block itself.
+safety came from the invariant gate + the reboot-recoverable gate, not from the block
+itself - and on every later kernel, from re-checking the closure against that kernel before
+booting it.

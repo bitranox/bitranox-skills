@@ -25,6 +25,9 @@ Standard library only.
 Usage:
   classifier_eval.py report   [--log PATH] [--threshold 0.5] [--top 2]
                               [--exclude-session PREFIX ...] [--disagreements OUT.jsonl] [--json]
+  classifier_eval.py report --notify [--log PATH] [--threshold T] [--top 2] [--json]
+                              the skill_router rows for task notifications, tallied by
+                              task_status, by kind (the summary's OPENING words) and by verdict
   classifier_eval.py replay   [--arm ARM] [--roster shipped|installed] [--prompts LOG]
                               [--description SKILL=FILE ...] [--limit N] [--out LOG] [--json]
   classifier_eval.py size     [--limit N] [--json]          what a replay would cost, calls nothing
@@ -421,6 +424,81 @@ def summarize_skill_router(rows, threshold, top):
                                                   if k in scores},
                                    "state": _first_state(row)})
     return s
+
+
+# ---- skill_router notification rows (report --notify) --------------------------------------
+
+# The envelope has no element naming what kind of task finished; only the summary's OPENING words
+# do ("Background command ...", "Agent ...", "Monitor event: ..."). Matched at the start and on a
+# word boundary, never as a substring: a command summary routinely quotes the word "agent", and a
+# substring match mislabelled 11 of 964 rows that way.
+_NOTIFY_KIND = re.compile(r"(Background command|Agent|Monitor)\b")
+NOTIFY_KIND_OTHER = "other"
+_VERDICTS = ("skill", "none", "unanswered")
+
+
+def notification_kind(summary):
+    """The task kind a notification's summary OPENS with, else "other".
+
+    Examples:
+        >>> notification_kind('Background command "make" failed with exit code 2')
+        'Background command'
+        >>> notification_kind('Agent "fix it" finished')
+        'Agent'
+        >>> notification_kind("Agents reported")
+        'other'
+    """
+    match = _NOTIFY_KIND.match((summary or "").lstrip())
+    return match.group(1) if match else NOTIFY_KIND_OTHER
+
+
+def _is_notification(row):
+    """A skill_router row the hook wrote for a <task-notification> turn: it records notify_view."""
+    return row.get("site") == "skill_router" and bool((row.get("regex") or {}).get("notify_view"))
+
+
+def summarize_notifications(rows, threshold, top):
+    """Tally the notification rows among `rows` by task_status, by kind and by Jev's verdict.
+
+    The verdict is the router's own (`_router_verdict`): "skill" when it would suggest one,
+    "none" when it would not, "unanswered" when the row has no result. `by_kind_status` crosses
+    kind and status, since a failed background command is the one kind a skill is known to fit.
+    """
+    t = {"rows": 0, "threshold": threshold, "top": top, "by_status": Counter(),
+         "by_kind": Counter(), "by_verdict": dict.fromkeys(_VERDICTS, 0),
+         "by_kind_status": {}, "picks": Counter()}
+    for row in filter(_is_notification, rows):
+        state = _first_state(row)
+        status = str(state.get("task_status") or "(none)")
+        kind = notification_kind(state.get("task_summary"))
+        verdict = _router_verdict(row, threshold, top)
+        label = "unanswered" if verdict is None else ("skill" if verdict[0] else "none")
+        t["rows"] += 1
+        t["by_status"][status] += 1
+        t["by_kind"][kind] += 1
+        t["by_verdict"][label] += 1
+        cell = t["by_kind_status"].setdefault("%s/%s" % (kind, status),
+                                              dict.fromkeys(_VERDICTS, 0))
+        cell[label] += 1
+        t["picks"].update(verdict[0] if verdict else ())
+    for key in ("by_status", "by_kind", "picks"):
+        t[key] = dict(t[key].most_common())
+    return t
+
+
+def render_notifications(t):
+    lines = ["skill_router notification rows %d at threshold %s, router top %s"
+             % (t["rows"], t["threshold"], t["top"]),
+             "   by status   " + ", ".join("%s %d" % kv for kv in t["by_status"].items()),
+             "   by kind     " + ", ".join("%s %d" % kv for kv in t["by_kind"].items()),
+             "   by verdict  " + ", ".join("%s %d" % kv for kv in t["by_verdict"].items()),
+             "   %-28s %5s %6s %11s" % ("kind/status", "skill", "none", "unanswered")]
+    for key, cell in sorted(t["by_kind_status"].items()):
+        lines.append("   %-28s %5d %6d %11d" % (key, cell["skill"], cell["none"],
+                                               cell["unanswered"]))
+    if t["picks"]:
+        lines.append("   picks       " + ", ".join("%s %d" % kv for kv in t["picks"].items()))
+    return "\n".join(lines)
 
 
 # ---- recall_rerank -------------------------------------------------------------------------
@@ -1364,6 +1442,10 @@ def _parser():
                    help="drop rows whose session id starts with PREFIX (default: probe-)")
     r.add_argument("--disagreements", type=Path, metavar="OUT",
                    help="write every disagreement as JSONL to OUT")
+    r.add_argument("--notify", action="store_true",
+                   help="tally only the skill_router rows for task notifications (notify_view), "
+                        "by task_status, by kind (the summary's opening words: Background "
+                        "command / Agent / Monitor / other) and by Jev's verdict")
     r.add_argument("--json", action="store_true", help="print a JSON envelope")
     _panel_parsers(sub)
     return p
@@ -1552,6 +1634,8 @@ def _emit(args, code, data=None, error=None, skipped=None):
             print(render_replay(data))
         elif args.command in ("packet", "harvest"):
             print(render_panel(data))
+        elif getattr(args, "notify", False):
+            print(render_notifications(data))
         else:
             print(render_text(data))
     if error and not args.json:
@@ -1607,6 +1691,10 @@ def main(argv=None, *, clf=None, skills=None):
             return 2
         _emit(args, code, data=data, error=error)
         return code
+    if args.notify and args.disagreements:
+        # The tally has no disagreement rows; writing an empty file would read as "none found".
+        _emit(args, 2, error="--notify writes no --disagreements file; run them separately")
+        return 2
     exclude = tuple(args.exclude_session if args.exclude_session is not None else DEFAULT_EXCLUDE)
     args.log = args.log or default_log()
     try:
@@ -1620,6 +1708,14 @@ def main(argv=None, *, clf=None, skills=None):
     if not rows:
         _emit(args, 1, error="no usable rows in %s" % args.log, skipped=skipped)
         return 1
+    if args.notify:
+        at = SITE_THRESHOLDS["skill_router"] if args.threshold is None else args.threshold
+        tally = summarize_notifications(rows, at, args.top)
+        if not tally["rows"]:
+            _emit(args, 1, error="no notification rows in %s" % args.log, skipped=skipped)
+            return 1
+        _emit(args, 0, data=tally, skipped=skipped)
+        return 0
     rep = summarize(rows, args.threshold, args.top)
     if args.disagreements:
         try:

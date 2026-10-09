@@ -718,3 +718,40 @@ def test_stdin_that_is_not_utf8_could_not_run(monkeypatch, capsys, check):
     monkeypatch.setattr("sys.stdin", io.TextIOWrapper(io.BytesIO(b"caf\xe9\n"), encoding="utf-8"))
     assert mod._main(["prog"] + (["--check"] if check else [])) == 2
     assert "stdin" in capsys.readouterr().err
+
+
+# ---- options: --help, an unknown option, and `--` ---------------------------
+
+@pytest.mark.parametrize("flag", ["--help", "-h"])
+def test_help_prints_usage_and_exits_zero(flag):
+    """`--help` was taken as a FILE name: "could not process --help: [Errno 2]", exit 2."""
+    result = _run([flag])
+    assert result.returncode == 0, result.stderr
+    assert "Usage:" in result.stdout
+    assert "--check" in result.stdout
+    assert result.stderr == ""
+
+
+@pytest.mark.parametrize("args", [["--bogus"], ["--check", "--bogus"], ["-x"]])
+def test_an_unknown_option_is_refused_with_usage_not_opened(args, tmp_path):
+    result = _run(args + [str(_write(tmp_path, "f.md", "plain\n"))])
+    assert result.returncode == 2
+    assert "Usage:" in result.stderr
+    assert args[-1] in result.stderr
+    assert "could not process" not in result.stderr
+    assert result.stdout == ""
+
+
+def test_a_file_named_with_a_leading_dash_goes_after_double_dash(tmp_path, monkeypatch):
+    p = _write(tmp_path, "-notes.md", "a" + EM_DASH + "b\n")
+    monkeypatch.chdir(tmp_path)
+    assert mod._main(["prog", "--check", "--", "-notes.md"]) == 1
+    assert mod._main(["prog", "--", "-notes.md"]) == 0
+    assert p.read_text(encoding="utf-8") == "a - b\n"
+
+
+def test_a_file_named_dash_after_double_dash_is_a_file_not_stdin(tmp_path, monkeypatch):
+    p = _write(tmp_path, "-", "a" + EM_DASH + "b\n")
+    monkeypatch.chdir(tmp_path)
+    assert mod._main(["prog", "--check", "--", "-"]) == 1
+    assert p.read_text(encoding="utf-8") == "a" + EM_DASH + "b\n"

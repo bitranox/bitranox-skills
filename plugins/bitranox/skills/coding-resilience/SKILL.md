@@ -66,6 +66,69 @@ For the modern Python pick behind each, see `bitranox:coding-python-use-modern-l
   failure with the unit's name, keep going, and exit non-zero at the END with a tally. Reserve
   fail-fast for a genuine DEPENDENCY chain, where later steps are meaningless once one fails.
 
+## Python asyncio: two shutdowns that hang instead of failing
+
+Both raise nothing: `stop()` simply never returns, and the service manager kills the process when
+its stop timeout expires. Bound every wait in the stop path (`asyncio.timeout(...)`), keeping their
+sum under that stop timeout (systemd `TimeoutStopSec`), so the hang becomes an error, and check
+these two first.
+
+- **A cancel of a task that is awaiting another task arrives THROUGH the awaited child.**
+  `parent.cancel()` cancels the child the parent is suspended on, and the parent then sees the
+  child's `CancelledError`. So `try: await child except CancelledError:`, written for "the child
+  was cancelled, restart it", also catches the parent's OWN cancellation and swallows it; the
+  parent loops on, and whatever gathers it waits forever. Prefer waiting without raising the
+  child's outcome: the two cancels can then never be confused, and a crash arrives as
+  `child.exception()` to inspect rather than an exception to catch. Re-raising when the cancel was
+  aimed at you also works:
+
+  ```python
+  child = asyncio.create_task(work())
+  try:
+      await asyncio.wait({child})   # never raises the child's CancelledError
+  finally:
+      child.cancel()                # WE were cancelled: take the child down too (no-op if done)
+  if child.cancelled():
+      ...                           # someone else cancelled the child: restart it
+
+  # or keep `await child` and tell the two cancels apart:
+  except asyncio.CancelledError:
+      task = asyncio.current_task()
+      if task is not None and task.cancelling():   # 3.11+: a cancel is pending on US
+          raise
+  ```
+
+- **`Server.wait_closed()` waits for every client connection (from 3.12.0; on 3.11 it returned at
+  once).** After `server.close()` it returns only when every accepted client transport has closed,
+  so one client that stays connected and idle - a handler parked in `readline()`, a peer that
+  never sends EOF - hangs the teardown forever. A server being stopped must close its clients. On
+  3.12 that means tracking them: the handler does `clients.add(writer)` on entry and
+  `clients.discard(writer)` plus `writer.close()` in its `finally`.
+
+  A graceful close is not enough on its own: a client that stopped READING while the server still
+  has data buffered for it never lets its transport finish closing, so `wait_closed()` hangs after
+  `close_clients()` or `writer.close()` too. Close gracefully, then abort what is left:
+
+  ```python
+  server.close()                            # stops listening only
+  if hasattr(server, "close_clients"):      # 3.13+
+      server.close_clients()                # graceful: tries to flush buffered writes first
+  else:                                     # 3.12: the tracked writers
+      for writer in list(clients):
+          writer.close()
+  try:
+      async with asyncio.timeout(5):
+          await server.wait_closed()
+  except TimeoutError:                      # a peer stopped reading: its buffer never drains
+      if hasattr(server, "abort_clients"):  # 3.13+
+          server.abort_clients()
+      else:
+          for writer in list(clients):
+              writer.transport.abort()
+      async with asyncio.timeout(5):
+          await server.wait_closed()
+  ```
+
 ## Common mistakes
 
 | Mistake                                         | Do instead                                                                  |

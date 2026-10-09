@@ -39,10 +39,13 @@ import sys
 
 from shell_text import (
     LIST_SEP,
+    basename_for_tool,
     blank_heredoc_bodies,
     blank_unexpanded_text,
     iter_segments,
     mask_data_regions,
+    past_command_prefix,
+    strip_data_sink_statements,
     strip_heredoc_bodies,
 )
 
@@ -140,10 +143,84 @@ def backgrounded_gate_without_the_jig(command: str, *, background: object) -> st
         return None
     if JIG.search(command):
         return None
-    found = BACKGROUND_GATE.search(command)
+    found = running_background_gate(command)
     if found is None:
         return None
     return found.group(0) if gate_status_is_not_the_tasks(command) else None
+
+
+def _joined(command: str) -> str:
+    """The command as the shell reads its statements: heredoc bodies gone, continuations joined."""
+    return _LINE_CONTINUATION.sub("  ", strip_heredoc_bodies(command))
+
+
+def _runnable_text(joined: str, tool_name: str = "Bash") -> str:
+    """`joined` with everything that cannot RUN as a command blanked, offsets preserved.
+
+    A gate NAMED is not a gate RUN: `sleep 1800; echo "BACKSTOP: make test not reported"` was
+    blocked as a backgrounded gate because the gate was searched on the raw command. Each
+    statement is masked on its own, so quoted text, comments and `${...}` are filler while the
+    body of a `$(...)` stays readable - the statement walk cuts at `$(`, so that body is its own
+    statement, and a gate in it really runs (`out=$(make test 2>&1)`). An `echo`/`printf`
+    operand is blanked before that, since an unquoted `echo waiting on make test` runs no gate
+    either. Both passes preserve length, so an offset found here indexes the masked command too.
+
+    What lies BETWEEN statements is kept as written (`;`, `$(`, `)`). Filling it with the mask's
+    word-character filler glued `QQmake test` together and erased the word boundary the gate
+    pattern starts with, so `out=$(make test 2>&1); ... | tail` lost its gate.
+
+    One quoted argument is a command after all: the one `ssh host "..."` or `bash -c "..."` hands
+    to another shell. Such a statement is kept as written, so a gate in it is found - the replay
+    that priced this fix found exactly one real backgrounded gate it would otherwise have lost,
+    `timeout 1500 ssh ... "cmd /c ... pytest ... & echo RC=%ERRORLEVEL%"`.
+    """
+    return _runnable_view(joined, tool_name)[0]
+
+
+def _runnable_view(joined: str, tool_name: str = "Bash") -> tuple[str, list[tuple[int, int]]]:
+    """`_runnable_text`, plus the (start, end) spans of statements that run a quoted command."""
+    sinkless = strip_data_sink_statements(joined, tool_name)
+    out = list(sinkless)
+    opaque: list[tuple[int, int]] = []
+    for at, segment in iter_segments(sinkless, tool_name):
+        masked = mask_data_regions(segment, tool_name=tool_name)
+        if _runs_a_quoted_command(masked, tool_name):
+            opaque.append((at, at + len(segment)))
+        else:
+            out[at:at + len(segment)] = masked
+    return "".join(out), opaque
+
+
+# Programs whose quoted operand is a COMMAND another shell runs. A shell counts only with a `-c`
+# flag (`bash -lc`, `sh -c`); `bash script.sh "arg"` runs a file, not its argument.
+_REMOTE_RUNNERS = frozenset({"ssh"})
+_SHELLS = frozenset({"bash", "sh", "zsh", "dash"})
+_SHELL_COMMAND_FLAG = re.compile(r"^-[A-Za-z]*c[A-Za-z]*$")
+
+
+def _runs_a_quoted_command(masked_segment: str, tool_name: str = "Bash") -> bool:
+    """True when this statement hands a quoted string to ssh or to a shell's `-c` to RUN."""
+    tokens = masked_segment.split()
+    at = 0
+    while at < len(tokens) and "=" in tokens[at] and not tokens[at].startswith("-"):
+        at += 1                                    # leading VAR=value environment assignments
+    if at >= len(tokens):
+        return False
+    launched = past_command_prefix(tokens, at, _REMOTE_RUNNERS | _SHELLS, tool_name)
+    at = at if launched is None else launched
+    program = basename_for_tool(tokens[at], tool_name)
+    if program in _REMOTE_RUNNERS:
+        return True
+    return program in _SHELLS and any(_SHELL_COMMAND_FLAG.match(t) for t in tokens[at + 1:])
+
+
+def running_background_gate(command: str, tool_name: str = "Bash") -> re.Match[str] | None:
+    """The first gate this command RUNS, or None when one is only named in text.
+
+    The match indexes `_runnable_text(_joined(command))`, which is as long as the masked command
+    `gate_status_is_not_the_tasks` reads, so its offsets cut that text too.
+    """
+    return BACKGROUND_GATE.search(_runnable_text(_joined(command), tool_name))
 
 
 def gate_status_is_not_the_tasks(command: str, tool_name: str = "Bash") -> bool:
@@ -155,18 +232,25 @@ def gate_status_is_not_the_tasks(command: str, tool_name: str = "Bash") -> bool:
     `cd DIR &&`, its argument built by a `$(...)`) is not masked: its status is the task's, which
     is exactly what the completion notice reports, so blocking it refused the correct form.
 
-    Read on the command with heredoc bodies, quoted text, substitutions and comments masked, so a
-    `;` inside `--sha "$(a; b)"` or a comment is not a statement. A gate visible ONLY in such a
-    region (`bash -c "make test; tail x"`) cannot be analysed here and still counts as masked -
-    the conservative direction for a guard whose miss is a believed false PASS.
+    The gate is located by `running_background_gate`, so a gate merely named in a quoted argument,
+    an echo operand, a comment or a heredoc body is no gate and nothing is masked. What runs AFTER
+    it is read on the command with quoted text, substitutions and comments masked, so a `;` inside
+    `--sha "$(a; b)"` or a comment is not a statement.
+
+    A gate inside the quoted command of `ssh host "..."` or `bash -c "..."` cannot be analysed
+    here, so it counts as masked - the conservative direction for a guard whose miss is a believed
+    false PASS.
     """
-    joined = _LINE_CONTINUATION.sub("  ", strip_heredoc_bodies(command))
-    text = mask_data_regions(joined, tool_name=tool_name)
-    first = BACKGROUND_GATE.search(text)
+    joined = _joined(command)
+    runnable, opaque = _runnable_view(joined, tool_name)
+    first = BACKGROUND_GATE.search(runnable)
     if first is None:
+        return False
+    if _WATCH_WITHOUT_VERDICT.match(runnable, first.start()):
         return True
-    if _WATCH_WITHOUT_VERDICT.match(text, first.start()):
+    if any(start <= first.start() < end for start, end in opaque):
         return True
+    text = mask_data_regions(joined, tool_name=tool_name)
     rest = text[first.end():]
     if "|" in rest:
         return True

@@ -567,3 +567,45 @@ def test_control_the_same_prompt_typed_is_recalled(monkeypatch, capsys, tmp_path
          "transcript_path": _cron_transcript(tmp_path, "run a different job")})))
     assert R.main() == 0
     assert "VIRTUAL_ENV" in capsys.readouterr().out
+
+
+
+# ---- this project's handover / backlog: no cross-project block -----------------------------------
+# A user read the recall block on "read handover and continue" as the handover skill reading other
+# projects' handovers. The control is the same store with a prompt that uses the word in another
+# sense: that one must still recall, or the suppression proves nothing about the matcher.
+
+def _handover_note():
+    _mem("/p/other", "handover-howto.md",
+         "When you read handover and continue, check what next in OPEN-WORK first; handover function "
+         "for the API gateway lives in gateway/handover.py")
+
+
+# Each of these recalls the note before the fix ("what next" alone has no keyword left after the
+# filler list, so it recalls nothing either way and would pass vacuously here; prompt_text's own
+# tests cover it).
+@pytest.mark.parametrize("prompt", ["read handover and continue", "- read handover and continue",
+                                    "Task: read the handover", "what is open?",
+                                    "what\u2019s still open"])
+def test_no_cross_project_block_on_a_prompt_resuming_this_projects_handover(monkeypatch, capsys,
+                                                                            prompt):
+    _handover_note()
+    rc, out = run(monkeypatch, capsys, prompt)
+    assert rc == 0
+    assert out == ""
+
+
+def test_handover_in_another_sense_still_recalls(monkeypatch, capsys):
+    _handover_note()
+    rc, out = run(monkeypatch, capsys, "write a handover function for the API gateway")
+    assert rc == 0
+    assert "handover-howto" in out
+
+
+def test_the_block_says_it_is_cross_project_memory_not_this_projects_handover(monkeypatch, capsys):
+    _mem("/p/other", "make-test.md", "Run make test with VIRTUAL_ENV=$PWD/.venv before committing")
+    _rc, out = run(monkeypatch, capsys, "run make test")
+    ctx = json.loads(out)["hookSpecificOutput"]["additionalContext"]
+    heading = ctx.split("\n", 1)[0]
+    assert "CROSS-PROJECT" in heading
+    assert "not this project's handover" in heading.lower()

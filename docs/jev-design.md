@@ -228,6 +228,9 @@ Each site gets one wrapper, and its regex function is not touched.
   a neutral override text for a description under test), and `harvest` turns the judges'
   transcripts into majority labels keyed by prompt uuid, with every split listed; the logic is in
   `judge_panel.py` beside it.
+- **Notifications:** `classifier_eval.py report --notify` tallies only the skill_router rows written
+  for task-notification turns, by `task_status`, by kind (the summary's opening words) and by
+  verdict.
 - **Output:** a results doc giving go/no-go per site and per language, cost and latency
   percentiles, and the privacy posture from finding 11.
 

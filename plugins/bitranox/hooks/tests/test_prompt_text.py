@@ -304,3 +304,47 @@ def test_a_person_writing_about_those_shapes_is_still_a_person():
                  "the [Request interrupted] banner keeps appearing, can we suppress it",
                  "run make test"):
         assert P.typed_by_a_person(text), text
+
+
+# ---- a prompt asking to resume THIS project's own handover / backlog -------------------------------
+# On such a prompt the cross-project recall block was read as the handover skill reading OTHER
+# projects' handovers, so recall must be able to recognise it. Four spellings of each sentence,
+# because a bullet, a label and a typographic apostrophe each defeat a matcher written for the bare
+# form; and negatives that use the same words in another sense.
+
+OWN_BACKLOG_PROMPTS = [
+    "read handover and continue", "read the handover", "read handover.md and continue",
+    "continue", "what next", "what's next", "whats next", "what is next", "what is open",
+    "what's still open", "What next?", "Read handover, then continue.",
+]
+
+
+def _spellings(text):
+    return [text, "- " + text, "* " + text, "1. " + text, "Task: " + text,
+            "please " + text, text.replace("'", "\u2019")]
+
+
+def test_a_prompt_asking_for_this_projects_handover_is_recognised_in_every_spelling():
+    for text in OWN_BACKLOG_PROMPTS:
+        for spelled in _spellings(text):
+            assert P.asks_for_own_backlog(spelled), spelled
+
+
+def test_the_typographic_apostrophe_form_is_the_one_measured():
+    assert P.asks_for_own_backlog("what\u2019s next")
+
+
+def test_handover_in_another_sense_is_not_a_backlog_request():
+    for text in ("write a handover function for the API",
+                 "read the handover protocol spec and implement it in the gateway",
+                 "continue the refactor of the parser module",
+                 "what next steps does the rust borrow checker take here",
+                 "what is open in the socket after close",
+                 "the handover failed, read the logs"):
+        for spelled in _spellings(text):
+            assert not P.asks_for_own_backlog(spelled), spelled
+
+
+def test_a_machine_turn_is_never_a_backlog_request():
+    assert not P.asks_for_own_backlog("<command-name>/continue</command-name>")
+    assert not P.asks_for_own_backlog("")

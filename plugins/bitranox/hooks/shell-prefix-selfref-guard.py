@@ -49,21 +49,28 @@ def strip_single_quoted(segment: str) -> str:
     return re.sub(r"'[^']*'", "''", segment)
 
 
-def _prefix_names(segment: str) -> list[str]:
-    """Return the variables assigned as a PREFIX to this segment's command.
+def _prefix_assignments(masked: str) -> tuple[list[str], int]:
+    """The variables assigned as a PREFIX to this statement's command, and where the command starts.
 
-    Only leading `NAME=...` tokens count. A `[ "$X" = "y" ]` test is not a prefix
-    assignment, and neither is an `export` (its variable outlives the command,
-    so referencing it later is correct).
+    `masked` is the statement with quoted text and substitutions as filler, so a value such as
+    `$(ps -o ppid= -p "$p")` is ONE word here. Read on the raw text it split into `p=$(ps`, `-o`,
+    `ppid=` ..., the words after the first looked like a command, and a standalone assignment
+    whose value reads the variable's own previous value was blocked as a self-reference.
+
+    Only LEADING `NAME=...` words standing BEFORE a command word count. With no command word
+    after them the assignments run in the current shell, left to right, so a later reference sees
+    them and nothing expands empty: `([], -1)` then. A `[ "$X" = "y" ]` test is not a prefix
+    assignment, and neither is an `export` (its variable outlives the command, so referencing it
+    later is correct).
     """
 
     names: list[str] = []
-    for token in segment.split():
-        match = ASSIGNMENT.match(token)
+    for word in re.finditer(r"\S+", masked):
+        match = ASSIGNMENT.match(word.group(0))
         if not match:
-            break
+            return (names, word.start()) if names else ([], -1)
         names.append(match.group(1))
-    return names
+    return [], -1
 
 
 # Flags whose argument is SELF-AUTHORED PROSE: a commit subject, a memory hook, a queue reason.
@@ -154,11 +161,6 @@ def _statement_pairs(text: str, tool_name: str = "Bash") -> list[tuple[str, str]
             for at, segment in iter_segments(masked, tool_name)]
 
 
-def _statements(text: str, tool_name: str = "Bash") -> list[str]:
-    """`text` split into raw statements (see `_statement_pairs`)."""
-    return [raw for _masked, raw in _statement_pairs(text, tool_name)]
-
-
 def self_referencing_prefix(command: str, tool_name: str = "Bash") -> bool:
     """Return whether any segment references a variable it assigns as a prefix."""
 
@@ -169,13 +171,13 @@ def self_referencing_prefix(command: str, tool_name: str = "Bash") -> bool:
     # at `$(`, which is right for statements and wrong here: `MSG="$(cat f)" make push` is ONE
     # assignment, and splitting it lost the prefix instead. Run on the masked text, where that
     # `$(` is already filler, the walk splits only at real separators and subshell parens.
-    for segment in _statements(strip_heredoc_bodies(command), tool_name):
-        names = _prefix_names(segment)
+    for masked, raw in _statement_pairs(strip_heredoc_bodies(command), tool_name):
+        names, command_at = _prefix_assignments(masked)
         if not names:
             continue
-        # Everything after the prefix tokens is where a reference would sit.
-        rest = segment.split(None, len(names))[len(names) :]
-        expandable = strip_single_quoted(" ".join(rest))
+        # Everything from the command word on is where a reference would sit. The mask preserves
+        # length, so the offset found on it cuts the raw statement at the same place.
+        expandable = strip_single_quoted(raw[command_at:])
         for name in names:
             if re.search(r"\$\{?" + re.escape(name) + r"\}?(?![A-Za-z0-9_])", expandable):
                 return True

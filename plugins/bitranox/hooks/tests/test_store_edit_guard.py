@@ -47,6 +47,64 @@ def test_deny_message_names_live_layout_and_engine_commands():
     assert "memory_engine" in msg and "add" in msg and "move" in msg
 
 
+# ---- the store's own backlog: <store>/OPEN-WORK.md is not a fact and no engine verb writes it ----
+
+def test_allows_edit_and_write_of_the_store_backlog():
+    edit = _event("Edit", "/tree/.claude-memory/OPEN-WORK.md", {"old_string": "a", "new_string": "b"})
+    write = _event("Write", "/tree/.claude-memory/OPEN-WORK.md", {"content": "# backlog\n"})
+    assert G.decide(edit, {}) is None
+    assert G.decide(write, {}) is None
+
+
+def test_allows_the_store_backlog_through_a_relative_path():
+    ev = _event("Edit", "OPEN-WORK.md", {"old_string": "a", "new_string": "b"}, cwd="/tree/.claude-memory")
+    assert G.decide(ev, {}) is None
+
+
+def test_a_fact_edit_beside_the_backlog_is_still_denied():
+    ev = _event("Edit", "/tree/.claude-memory/facts/some-fact.md", {"old_string": "a", "new_string": "b"})
+    assert G.decide(ev, {}) is not None
+
+
+@pytest.mark.parametrize("path", [
+    "/tree/.claude-memory/facts/OPEN-WORK.md",          # nested one level deeper
+    "/tree/.claude-memory/.archive/OPEN-WORK.md",
+    "/tree/.claude-memory/x/.claude-memory/OPEN-WORK.md",  # a store inside a store
+    "/tree/.claude-bx-selflearning/OPEN-WORK.md",       # the legacy store has no backlog
+    "/tree/.claude-memory/open-work.md",                 # the exact name only
+    "/tree/.claude-memory/OPEN-WORK.md.bak",
+])
+def test_other_backlog_shaped_paths_in_a_store_stay_denied(path):
+    assert G.decide(_event("Write", path, {"content": "x"}), {}) is not None
+
+
+def test_a_dotdot_that_lands_on_a_fact_is_judged_by_where_it_lands():
+    ev = _event("Write", "/tree/.claude-memory/OPEN-WORK.md/../facts/f.md", {"content": "x"})
+    assert G.decide(ev, {}) is not None
+
+
+def test_a_backlog_symlink_escaping_the_store_is_denied(tmp_path):
+    store = tmp_path / ".claude-memory"
+    (store / "facts").mkdir(parents=True)
+    fact = store / "facts" / "a-fact.md"
+    fact.write_text("body\n", encoding="utf-8")
+    link = store / "OPEN-WORK.md"
+    try:
+        link.symlink_to(fact)
+    except (OSError, NotImplementedError):
+        pytest.skip("symlinks need privileges on this platform")
+    ev = _event("Write", str(link), {"content": "x"})
+    assert G.decide(ev, {}) is not None
+
+
+def test_a_real_backlog_file_in_a_real_store_is_allowed(tmp_path):
+    store = tmp_path / ".claude-memory"
+    store.mkdir()
+    (store / "OPEN-WORK.md").write_text("# backlog\n", encoding="utf-8")
+    ev = _event("Edit", str(store / "OPEN-WORK.md"), {"old_string": "backlog", "new_string": "b"})
+    assert G.decide(ev, {}) is None
+
+
 # ---- CLAUDE.local.md block-region checks ---------------------------------------------------------
 
 @pytest.fixture

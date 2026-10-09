@@ -100,7 +100,7 @@ def test_every_powershell_mask_caller_passes_the_tool_through():
     assert len(spans) == 2
     masked, spans = git_wrong_repo_nudge._statements(ps, "PowerShell")
     assert len(spans) == 2
-    assert len(shell_prefix_selfref_guard._statements(ps, "PowerShell")) == 2
+    assert len(shell_prefix_selfref_guard._statement_pairs(ps, "PowerShell")) == 2
     target = 'echo "C:' + _B + '" > out.py'
     assert tooling_detour_nudge._redirect_targets(target, "PowerShell") == ["out.py"]
     assert tooling_detour_nudge._redirect_targets(target, "Bash") == []

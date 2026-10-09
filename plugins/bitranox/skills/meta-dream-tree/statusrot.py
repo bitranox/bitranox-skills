@@ -92,12 +92,30 @@ PATTERNS: dict[str, re.Pattern[str]] = {
 #   * "fails"/"missing" in a slug is a TRIGGER condition, not a status
 #     ("seed-winre-when-reagentc-enable-fails-1614"). Those tokens are gone.
 #   * a bare positive word in a hook is not a reversal; only an explicit reversal marker is.
+#   * a reversal marker must speak about the slug's STATE: the same sentence has to name it
+#     ("the blocker is superseded", "no longer broken"). A marker elsewhere reports an instance
+#     ("one turned out unneeded") under a slug word that names the TRIGGER ("ask whether a
+#     broken VM is needed"), and a state word inside the hook's leading When-clause is that
+#     trigger, not a claim. The cost: a reversal that never restates the state is missed.
 # Precision matters more than recall here because this is the one category that sets exit 1.
 _SLUG_BLOCKED = re.compile(r"(?:^|-)(blocked|broken|todo|not-started|unstarted|unsupported)(?:-|$)")
 _HOOK_REVERSAL = re.compile(
     r"\b(superseded|no longer|is now fixed|now fixed|turned out|refuted|"
     r"was a misdiagnosis|actually works|has since (?:shipped|been fixed))\b",
     re.IGNORECASE)
+# How a hook names each slug state: "blocked-by-x" is reversed as "the blocker is superseded".
+_STATE_IN_HOOK: dict[str, re.Pattern[str]] = {
+    "blocked": re.compile(r"\bblock(?:ed|er|ers|ing|s)?\b", re.IGNORECASE),
+    "broken": re.compile(r"\b(?:broken|breaks?|broke)\b", re.IGNORECASE),
+    "todo": re.compile(r"\b(?:todo|to-do)\b", re.IGNORECASE),
+    "not-started": re.compile(r"\b(?:not (?:yet )?started|unstarted)\b", re.IGNORECASE),
+    "unstarted": re.compile(r"\b(?:not (?:yet )?started|unstarted)\b", re.IGNORECASE),
+    "unsupported": re.compile(r"\b(?:unsupported|not supported)\b", re.IGNORECASE),
+}
+# A sentence ends at . ; : ! ? followed by whitespace or the end, so "MSVM.fd" stays whole.
+_SENTENCE_END = re.compile(r"[.;:!?](?=\s|$)")
+# The hook's leading condition, "When <situation>," - the trigger, not a claim about state.
+_WHEN_CLAUSE = re.compile(r"^\s*(?:when|if|before|after)\b[^,;:.]*,", re.IGNORECASE)
 
 
 @dataclass(frozen=True)
@@ -136,12 +154,18 @@ def self_contradiction(ptr: Pointer) -> str | None:
     """A slug asserting BLOCKED under a hook that explicitly reverses it - rot, no lookup needed.
 
     One direction only, and both sides narrow, because this is the category that sets exit 1.
-    See the pattern comments for the five measured false positives that shaped it.
+    The reversal counts only in a sentence that also names the slug's state, outside the hook's
+    leading When-clause. See the pattern comments for the measured false positives that shaped it.
     """
     slug_hit = _SLUG_BLOCKED.search(ptr.slug)
-    hook_hit = _HOOK_REVERSAL.search(ptr.hook)
-    if slug_hit and hook_hit:
-        return f"slug says {slug_hit.group(1)!r}, hook says {hook_hit.group(1)!r}"
+    if not slug_hit:
+        return None
+    state = slug_hit.group(1)
+    hook = _WHEN_CLAUSE.sub("", ptr.hook, count=1)
+    for sentence in _SENTENCE_END.split(hook):
+        reversal = _HOOK_REVERSAL.search(sentence)
+        if reversal and _STATE_IN_HOOK[state].search(sentence):
+            return f"slug says {state!r}, hook says {reversal.group(1)!r}"
     return None
 
 

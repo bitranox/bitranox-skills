@@ -473,3 +473,41 @@ def test_bash_control_the_same_backtick_pair_runs_there(monkeypatch: pytest.Monk
     command = 'git commit -m "line one`nline two`tend"'
     assert guard.substitutes_inside_text_arg(command, tool_name="Bash") is True
     assert _exit_as("Bash", command, monkeypatch) == 2
+
+
+# ------------------------------------- a standalone assignment is no prefix at all
+
+def test_standalone_assignments_in_a_loop_are_not_prefixes() -> None:
+    """The reported false positive. `p=$(ps -o ppid= -p "$p" | tr -d ' ')` is the WHOLE simple
+    command: it assigns in the current shell and its `$p` reads the shell's own previous value,
+    which is the point. Reading the raw statement word by word split the substitution into
+    tokens, so `-o ppid= -p "$p"` looked like a command that followed the prefix `p=$(ps`."""
+    command = ('p=$$; while [ "$p" -gt 1 ]; do c=$(ps -o comm= -p "$p"); '
+               '[ "$c" = claude ] && break; p=$(ps -o ppid= -p "$p" ' + chr(124)
+               + " tr -d ' '); done")
+    assert blocked('VAR=x echo "$VAR"')                                         # control
+    assert not blocked('p=1; echo "$p"')                                        # control
+    assert not blocked(command)
+
+
+@pytest.mark.parametrize("command", [
+    'x=$(foo "$x")',
+    'A=1 B=$(echo "$A")',
+    'if true; then n=$(expr "$n" + 1); fi',
+    'for f in a b; do n=$(printf "%s%s" "$n" "$f"); done',
+])
+def test_an_assignment_only_statement_never_blocks(command: str) -> None:
+    """With no command word after them the assignments run in the CURRENT shell, left to right,
+    so a reference in a later value sees the earlier one - nothing expands empty."""
+    assert not blocked(command)
+
+
+@pytest.mark.parametrize("command", [
+    'X="a b" cmd "$X"',
+    'A=1 B="$(cat f)" make push MSG="$B"',
+    'MSG="$(printf %s "$(cat f)")" make push MSG="$MSG"',
+])
+def test_a_prefix_before_a_command_word_is_still_blocked(command: str) -> None:
+    """The direction where the standalone-assignment exemption must NOT apply: once a command word
+    follows the assignments they are prefixes, whatever their values contain."""
+    assert blocked(command)

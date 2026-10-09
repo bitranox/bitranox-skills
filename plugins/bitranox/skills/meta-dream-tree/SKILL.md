@@ -27,7 +27,9 @@ Tools shipped here, runnable outside a dream run too: `dream_state.py` (mode + d
 `store_manifest.py` (backup and verify), `dedup_scan.py` (candidate pairs), `statusrot.py` (pointer
 lines still asserting a STATUS that shipped and was never updated; a hit is a CANDIDATE to check
 against its owner, and only a SELF-CONTRADICTION - a slug saying one thing under a hook saying
-another - is a defect on its own and sets exit 1; its UNEXAMINED list is split into RE-SURFACED,
+another - is a defect on its own and sets exit 1 (the hook must reverse the slug's state in a
+sentence that names it, so a slug word the hook uses as its When-condition is never one); its
+UNEXAMINED list is split into RE-SURFACED,
 WRITTEN SINCE the sweep and NEVER CHECKED, and only the last is a backlog of unchecked claims -
 read the count for that group, never the total; `clear` records an adjudication, which is what
 stops an entry being re-reported until its hook changes (a clear scoped to one level ADDS to
@@ -147,10 +149,15 @@ the success line, abort-and-show on a miss).
 
 3b. **De-double the tiers.** A fact lives in exactly ONE tier. Per native entry: already curated
    (by title/hook match) -> drop the native duplicate; native-only and
-   worthwhile -> PROMOTE via engine `add`; some-value -> leave in
+   worthwhile -> PROMOTE via engine `add` into a level that EXISTS; some-value -> leave in
    native. There is NO "native-only backend" mode - an absent pointer block is the trigger to
-   create one, not evidence of one. The only reasons a worthwhile fact stays native: some-value,
-   or the SECRETS carve-out (curated stores are git-tracked; the native tier is not - never stage
+   PROPOSE one, not evidence of one. Creating a level is a structural move (Boundaries in
+   references/dream-core.md), which the dream proposes and never applies, in every mode. So a
+   worthwhile entry whose target dir has no pointer block yet STAYS NATIVE: do not `add --proj`
+   into that dir (the engine would create the level silently), and list it in the report as a
+   create-level proposal - the dir, and the entries waiting on it. The only reasons a worthwhile
+   fact stays native: some-value, a target level that does not exist yet (proposed as above), or
+   the SECRETS carve-out (curated stores are git-tracked; the native tier is not - never stage
    credentials into a repo).
 
 4. **Dedup / merge ACROSS THE TREE.** Get the candidate pairs from `dedup_scan.py` (home:
@@ -331,7 +338,8 @@ the success line, abort-and-show on a miss).
 
 11. **Done + report + /clear nudge.** `dream_state.py done` (records the fact signature). Report
     counts + one line each: merges, placements (with direction), voice rewrites, prunes, skill
-    changes, toolbox proposals (merges/flags), pinned facts reported not rewritten, and
+    changes, toolbox proposals (merges/flags), create-level proposals (step 3b), pinned facts
+    reported not rewritten, and
     `jev shadow:` followed by one `<site> <form>` entry per site, joined by `; `, each in one of
     the four forms defined in meta-self-improve's `references/jev-shadow.md`, "The report line":
     the counts `run` printed, `off (<reason>)`, `no items`, or `error <message>`. Example:

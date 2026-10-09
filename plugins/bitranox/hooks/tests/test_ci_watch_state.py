@@ -9,6 +9,7 @@ import time
 import pytest
 
 import ci_watch_state as state
+import self_improve_signals
 
 
 def test_record_then_pending_round_trips(tmp_path):
@@ -206,3 +207,78 @@ def test_a_write_that_did_not_land_returns_the_default_not_the_unsaved_result(tm
 ])
 def test_entry_at_coerces_every_unreadable_value_to_long_expired(raw, expected):
     assert state.entry_at({"at": raw}) == expected
+
+
+# ---- stale state files of OTHER projects are pruned when this one saves --------------------------
+# Every project a session ever ran in leaves one claude-ci-watch-<hash>.json in the temp dir, and
+# the generic temp pruner skips every claude-* name, so nothing else ever removes them.
+
+@pytest.fixture
+def temp_dir(tmp_path, monkeypatch):
+    """A temp dir of this test's own, so the scan sees only the files the test planted."""
+    root = tmp_path / "tmp"
+    root.mkdir()
+    monkeypatch.setattr(state.tempfile, "tempdir", str(root))
+    return root
+
+
+def _plant(root, name, age_seconds):
+    path = root / name
+    path.write_text(json.dumps({"pending": []}), encoding="utf-8")
+    moment = time.time() - age_seconds
+    os.utime(path, (moment, moment))
+    return path
+
+
+def test_the_horizon_never_reaches_a_file_that_can_still_hold_a_pending_entry():
+    assert state.STALE_FILE_SECONDS > state.MAX_AGE_SECONDS
+
+
+def test_a_save_removes_another_projects_stale_state_file(tmp_path, temp_dir):
+    stale = _plant(temp_dir, "claude-ci-watch-0123456789abcdef.json", state.STALE_FILE_SECONDS + 60)
+    state.record_push(str(tmp_path / "proj"), "sess-a", "a" * 40)
+    assert not stale.exists()
+    assert state.state_path(str(tmp_path / "proj")).exists()
+
+
+def test_a_save_keeps_a_state_file_younger_than_the_horizon(tmp_path, temp_dir):
+    # older than MAX_AGE_SECONDS (nothing in it is pending) but inside the stale horizon
+    young = _plant(temp_dir, "claude-ci-watch-fedcba9876543210.json", state.MAX_AGE_SECONDS + 60)
+    state.record_push(str(tmp_path / "proj"), "sess-a", "a" * 40)
+    assert young.exists()
+
+
+def test_a_save_never_removes_its_own_file_or_files_it_does_not_own(tmp_path, temp_dir):
+    proj = str(tmp_path / "proj")
+    own = state.state_path(proj)
+    state.record_push(proj, "sess-a", "a" * 40)
+    old = time.time() - state.STALE_FILE_SECONDS - 60
+    os.utime(own, (old, old))
+    others = [_plant(temp_dir, name, state.STALE_FILE_SECONDS + 60)
+              for name in ("claude-other-state.json", "claude-ci-watch-x.json.lock",
+                           "claude-ci-watch-x.json.123.tmp", "ci-watch-x.json")]
+    state.clear_sha(proj, "b" * 40)
+    assert own.exists()
+    assert all(p.exists() for p in others)
+
+
+def test_a_candidate_that_vanishes_mid_scan_does_not_stop_the_prune_or_the_write(tmp_path, temp_dir):
+    # a dangling link fails stat exactly as a file removed by another session between the
+    # directory listing and the age check does
+    vanished = temp_dir / "claude-ci-watch-aaaaaaaaaaaaaaaa.json"
+    try:
+        vanished.symlink_to(temp_dir / "gone.json")
+    except (OSError, NotImplementedError):
+        pytest.skip("symlinks need privileges on this platform")
+    stale = _plant(temp_dir, "claude-ci-watch-bbbbbbbbbbbbbbbb.json", state.STALE_FILE_SECONDS + 60)
+    proj = str(tmp_path / "proj")
+    state.record_push(proj, "sess-a", "a" * 40)
+    assert [e["sha"] for e in state.pending_for(proj, "sess-a")] == ["a" * 40]
+    assert not stale.exists()
+
+
+def test_a_stale_file_another_writer_has_locked_is_left_alone(tmp_path, temp_dir):
+    held = _plant(temp_dir, "claude-ci-watch-cccccccccccccccc.json", state.STALE_FILE_SECONDS + 60)
+    with self_improve_signals.memory_lock(held, timeout=1.0):
+        state.record_push(str(tmp_path / "proj"), "sess-a", "a" * 40)
+    assert held.exists()
