@@ -157,10 +157,11 @@ top there, and a level without a pointer block is scaffolded.
 - **Guards judge the command they see**: a PreToolUse guard evaluates repo state when a command
   is submitted. A compound command that prepares state AND commits in one line is judged on the
   pre-command state - run the preparation as its own command first.
-- **Skill authoring is gated twice**: `SKILL.md` writes need the authoring session
-  (`BITRANOX_SKILL_WRITER=1`) and a fresh skill-writer receipt (issued by
-  `bitranox:meta-skill-writer`, 8-hour TTL); in this repo the repo gate additionally requires the
-  committed checklist artifacts. See [CONTRIBUTING.md](../CONTRIBUTING.md).
+- **Skill authoring is gated twice**: `SKILL.md` writes need a fresh skill-writer receipt (issued
+  by `bitranox:meta-skill-writer`, 8-hour TTL) AND that skill loaded by the editing agent itself, so
+  a subagent cannot edit on its parent's receipt; `BITRANOX_SKILL_WRITER=1` set at launch bypasses
+  both. In this repo the repo gate additionally requires the committed checklist artifacts. See
+  [CONTRIBUTING.md](../CONTRIBUTING.md).
 - **Description changes regenerate two artifacts**: the router map and the skill catalog are
   derived from skill descriptions; sync tests fail the suite until both are rebuilt.
 - **Recall noise filtering is learned per project**: a word judged conversational filler in one

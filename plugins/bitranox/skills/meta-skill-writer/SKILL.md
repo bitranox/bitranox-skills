@@ -976,8 +976,14 @@ description: use when implementing any feature or bugfix, before writing impleme
 
 **Step 0 - issue the session receipt (FIRST, before anything else):** run
 `bash <plugin>/hooks/run-python.sh <plugin>/hooks/skill_receipt.py start meta-skill-writer`.
-The skill-edit guard denies SKILL.md edits without a fresh receipt - holding one proves this
-procedure was ENTERED, not merely listed. A marketplace repo may additionally require a committed
+The skill-edit guard denies a SKILL.md edit unless BOTH hold: this session has a fresh receipt,
+AND the agent making the edit loaded this skill itself (the guard reads that agent's own
+transcript for the load). A subagent shares its parent's session, so the parent's receipt covers
+it too, but its own transcript does not show the skill loaded. A subagent that edits a SKILL.md
+must therefore invoke `bitranox:meta-skill-writer` through the Skill tool before its first edit;
+running `start` without that is still denied. It needs no `start` of its own and must not run
+`end`, which removes the receipt for every agent in the session. Otherwise, apply the edit in the
+agent that ran this procedure. A marketplace repo may additionally require a committed
 review artifact (a `.skillwriter/checklist-<date>.md` next to the SKILL.md, all boxes checked)
 co-changed with any SKILL.md change - its commit gate enforces that; see the repo's CONTRIBUTING.
 

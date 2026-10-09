@@ -188,12 +188,14 @@ def test_a_receipt_store_that_raises_falls_through_to_deny(monkeypatch):
     assert stub.calls == 1, "the stub was never consulted, so this test proved nothing"
 
 
-def test_a_fresh_receipt_from_the_same_seam_allows(monkeypatch):
+def test_a_fresh_receipt_from_the_same_seam_allows(monkeypatch, tmp_path):
     """Liveness pair for the test above: the same stub answering True must allow, which proves
-    the stub really replaces the store rather than being bypassed."""
+    the stub really replaces the store rather than being bypassed. The transcript records the
+    skill loading, the guard's second condition (see the [310] tests below)."""
     stub = _ReceiptStub(True)
     monkeypatch.setitem(sys.modules, "skill_receipt", stub)
-    assert G.decide({"session_id": "S", **_ev("Edit", "/repo/skills/foo/SKILL.md")}, {}) is None
+    main = _session(tmp_path, [_load_record(_CACHE + "meta-skill-writer")])
+    assert G.decide(_edit(main), {}) is None
     assert stub.calls == 1
 
 
@@ -211,3 +213,160 @@ def test_a_windows_backslash_path_to_a_skill_md_denies(path):
 def test_a_windows_backslash_path_to_another_file_is_allowed():
     """Control: normalising separators must not make a non-SKILL.md match."""
     assert G.decide(_ev("Edit", r"C:\repo\skills\foo\README.md"), {}) is None
+
+
+# --- [310]: a receipt proves only that SOMEBODY in the session ran `start` ------------------------
+#
+# Probed on Claude Code 2.1.295: inside a subagent the PreToolUse event carries the MAIN session's
+# `session_id` and `transcript_path` plus `agent_id`, and the subagent's Bash sees the parent's
+# CLAUDE_CODE_SESSION_ID. So a subagent that ran `skill_receipt.py start meta-skill-writer` without
+# loading the skill armed the receipt for itself AND every sibling. Loading a skill makes the
+# harness write an isMeta user record "Base directory for this skill: <dir>" into the LOADING
+# agent's own transcript (a subagent's lives at <session>/subagents/agent-<id>.jsonl). The guard
+# now requires that record too.
+
+_CACHE = "/home/u/.claude/plugins/cache/bitranox-skills/bitranox/8.10.0/skills/"
+
+
+def _load_record(skill_dir, *, is_meta=True, as_list=True):
+    text = "Base directory for this skill: %s\n\n# Writing Skills\n" % skill_dir
+    content = [{"type": "text", "text": text}] if as_list else text
+    record = {"type": "user", "message": {"role": "user", "content": content},
+              "sourceToolUseID": "toolu_x", "timestamp": "2026-10-09T13:21:00.000Z"}
+    if is_meta:
+        record["isMeta"] = True
+    return record
+
+
+def _session(tmp_path, main_records=(), agent=None, agent_records=()):
+    """A session laid out as Claude Code writes it; returns the main transcript path."""
+    main = tmp_path / "proj" / "S.jsonl"
+    main.parent.mkdir(parents=True, exist_ok=True)
+    main.write_text("".join(json.dumps(r) + "\n" for r in main_records), encoding="utf-8")
+    if agent is not None:
+        sub = main.with_suffix("") / "subagents" / ("agent-%s.jsonl" % agent)
+        sub.parent.mkdir(parents=True, exist_ok=True)
+        sub.write_text("".join(json.dumps(r) + "\n" for r in agent_records), encoding="utf-8")
+    return main
+
+
+def _edit(transcript, agent=None):
+    event = {"session_id": "S", "transcript_path": str(transcript) if transcript else None,
+             **_ev("Edit", "/repo/skills/foo/SKILL.md")}
+    if agent is not None:
+        event["agent_id"] = agent
+        event["agent_type"] = "general-purpose"
+    return event
+
+
+@pytest.fixture
+def armed(monkeypatch):
+    """A fresh receipt for this session, so every test below varies only the transcript evidence."""
+    stub = _ReceiptStub(True)
+    monkeypatch.setitem(sys.modules, "skill_receipt", stub)
+    return stub
+
+
+def test_a_receipt_plus_the_skill_loaded_in_this_agent_allows(tmp_path, armed):
+    main = _session(tmp_path, [_load_record(_CACHE + "meta-skill-writer")])
+    assert G.decide(_edit(main), {}) is None
+    assert armed.calls == 1
+
+
+def test_a_receipt_without_the_skill_ever_loaded_denies(tmp_path, armed):
+    """The [310] hole in the main agent: `start` run by hand, the skill never loaded."""
+    main = _session(tmp_path, [{"type": "user", "message": {"content": "edit the skill"}}])
+    reason = G.decide(_edit(main), {})
+    assert reason is not None and "loaded" in reason
+
+
+def test_a_subagent_cannot_ride_the_parents_load(tmp_path, armed):
+    """The case [310] was filed for: the PARENT loaded the skill, the subagent edits. The event
+    names the main transcript, so reading it would answer for the wrong agent."""
+    main = _session(tmp_path, [_load_record(_CACHE + "meta-skill-writer")],
+                    agent="a176a72d1e8646ccc", agent_records=[{"type": "user", "message": {"content": "go"}}])
+    assert G.decide(_edit(main, agent="a176a72d1e8646ccc"), {}) is not None
+
+
+def test_a_subagent_that_loaded_the_skill_itself_allows(tmp_path, armed):
+    """Liveness pair: the same layout with the record in the SUBAGENT's own file must allow."""
+    main = _session(tmp_path, [], agent="a176a72d1e8646ccc",
+                    agent_records=[_load_record(_CACHE + "meta-skill-writer")])
+    assert G.decide(_edit(main, agent="a176a72d1e8646ccc"), {}) is None
+
+
+def test_a_typed_message_quoting_the_load_line_is_not_evidence(tmp_path, armed):
+    """Only the harness writes isMeta; a person pasting the line must not open the guard."""
+    main = _session(tmp_path, [_load_record(_CACHE + "meta-skill-writer", is_meta=False)])
+    assert G.decide(_edit(main), {}) is not None
+
+
+def test_another_skill_loaded_is_not_evidence(tmp_path, armed):
+    main = _session(tmp_path, [_load_record(_CACHE + "docs-md-table-formatting"),
+                               _load_record(_CACHE + "meta-skill-writer-notes")])
+    assert G.decide(_edit(main), {}) is not None
+
+
+@pytest.mark.parametrize("skill_dir", [
+    _CACHE + "meta-skill-writer/",
+    r"C:\Users\u\.claude\plugins\cache\bitranox-skills\bitranox\8.10.0\skills\meta-skill-writer",
+])
+def test_a_trailing_slash_or_windows_load_path_still_counts(tmp_path, armed, skill_dir):
+    main = _session(tmp_path, [_load_record(skill_dir)])
+    assert G.decide(_edit(main), {}) is None
+
+
+def test_the_string_content_shape_still_counts(tmp_path, armed):
+    """Older transcripts store a user message's content as a bare string."""
+    main = _session(tmp_path, [_load_record(_CACHE + "meta-skill-writer", as_list=False)])
+    assert G.decide(_edit(main), {}) is None
+
+
+def test_a_corrupt_line_is_skipped_not_fatal(tmp_path, armed):
+    main = _session(tmp_path, [_load_record(_CACHE + "meta-skill-writer")])
+    main.write_text('{"truncated meta-skill-writer Base directory for this skill:\n'
+                    + main.read_text(encoding="utf-8"), encoding="utf-8")
+    assert G.decide(_edit(main), {}) is None
+
+
+@pytest.mark.parametrize("transcript", [None, "missing"])
+def test_no_readable_transcript_fails_closed(tmp_path, armed, transcript):
+    """Evidence that cannot be read is no evidence: same direction as an unreadable receipt."""
+    path = tmp_path / "nowhere.jsonl" if transcript else None
+    assert G.decide(_edit(path), {}) is not None
+
+
+@pytest.mark.parametrize("agent", ["../S", "a/b", "", "a\\b"])
+def test_an_agent_id_that_is_not_a_plain_name_fails_closed(tmp_path, armed, agent):
+    """agent_id becomes a path segment; one that could leave subagents/ is refused, and an empty
+    one must not silently fall back to the MAIN transcript's evidence."""
+    main = _session(tmp_path, [_load_record(_CACHE + "meta-skill-writer")])
+    event = _edit(main)
+    event["agent_id"] = agent
+    assert G.decide(event, {}) is not None
+
+
+def test_a_stale_receipt_still_denies_even_with_the_skill_loaded(tmp_path, monkeypatch):
+    """The transcript is an ADDITIONAL condition: it never stands in for the receipt, whose
+    `end` is how a finished procedure disarms the guard."""
+    stub = _ReceiptStub(False)
+    monkeypatch.setitem(sys.modules, "skill_receipt", stub)
+    main = _session(tmp_path, [_load_record(_CACHE + "meta-skill-writer")])
+    assert G.decide(_edit(main), {}) is not None
+
+
+def test_end_to_end_with_the_real_receipt_store(tmp_path, monkeypatch, capsys, home):
+    """No stub: the real skill_receipt module and the guard's main(), both arms."""
+    import io
+    import skill_receipt
+    monkeypatch.setitem(sys.modules, "skill_receipt", skill_receipt)
+    skill_receipt.start("meta-skill-writer", session_id="S")
+    loaded = _session(tmp_path / "a", [_load_record(_CACHE + "meta-skill-writer")])
+    bare = _session(tmp_path / "b", [])
+    monkeypatch.delenv("BITRANOX_SKILL_WRITER", raising=False)
+    results = []
+    for path in (loaded, bare):
+        monkeypatch.setattr("sys.stdin", io.StringIO(json.dumps(_edit(path))))
+        results.append(G.main())
+    assert results == [0, 2]
+    assert "SKILL-EDIT GUARD" in capsys.readouterr().err

@@ -1,11 +1,11 @@
 #!/usr/bin/env python3
 """Session receipts proving a procedure skill was actually ENTERED (not just listed).
 
-`bitranox:meta-skill-writer`'s step 0 runs `skill_receipt.py start meta-skill-writer` - the command
-is documented only inside that skill, so holding a fresh receipt implies the skill was loaded and
-its procedure begun. The skill-edit-guard then allows SKILL.md edits only while a fresh receipt
-exists (default TTL 8h), closing the "loaded but not executed" hole: the env bypass proved nothing
-about procedure, a receipt at least proves entry.
+`bitranox:meta-skill-writer`'s step 0 runs `skill_receipt.py start meta-skill-writer`, and the
+skill-edit-guard allows SKILL.md edits only while a fresh receipt exists (default TTL 8h). A receipt
+proves that SOME agent in the session ran `start`, not that any agent loaded the skill: a subagent
+shares its parent's session id, and anyone can run the command by hand. So the guard does not trust
+it alone - it also requires the skill's load record in the editing agent's own transcript.
 
     skill_receipt.py start <skill-name>       write/refresh this session's receipt (prints its path)
     skill_receipt.py check <skill-name>       exit 0 fresh / 1 stale-or-missing (prints age + session)

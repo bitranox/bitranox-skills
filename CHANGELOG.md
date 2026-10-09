@@ -29,6 +29,24 @@ than the change, so entries reconstructed from them would read like coverage wit
 a hole nobody has drawn a line under is one that gets rediscovered and half-filled - which is how
 two "versions with no entry" notes came to sit in this file disagreeing with it.
 
+## [8.10.1]
+
+### Fixed
+
+- `skill-edit-guard` no longer lets a SKILL.md edit through on the receipt alone. A receipt is keyed
+  by session, and a subagent shares its parent's session (its PreToolUse event carries the parent's
+  `session_id` and `transcript_path`, its Bash the parent's `CLAUDE_CODE_SESSION_ID`), so any agent
+  running `skill_receipt.py start` armed the guard for every agent without any of them loading
+  `meta-skill-writer`. The guard now also requires the editing agent's own transcript (a
+  subagent's is `<session>/subagents/agent-<agent_id>.jsonl`) to hold the harness's
+  `isMeta` "Base directory for this skill: .../meta-skill-writer" record, written whether the skill
+  came through the Skill tool or a slash command. An unreadable transcript, a missing
+  `transcript_path` and an `agent_id` that is not a plain name all deny.
+- `meta-skill-writer` Step 0 states both conditions and what they mean for a subagent: invoke the
+  skill through the Skill tool before its first edit, no `start` of its own, never `end`.
+- `docs/reference.md` described `BITRANOX_SKILL_WRITER=1` as a second requirement beside the
+  receipt; it is a bypass of both.
+
 ## [8.10.0]
 
 ### Added

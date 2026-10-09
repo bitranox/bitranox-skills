@@ -26,8 +26,25 @@ def home(tmp_path, monkeypatch):
     return h
 
 
+_TRANSCRIPT = {"path": None}
+
+
+@pytest.fixture(autouse=True)
+def loaded_transcript(tmp_path):
+    """Every guard call here varies only the RECEIPT, so the transcript always records the skill
+    loading - the guard's other condition, tested on its own in test_skill_edit_guard.py."""
+    path = tmp_path / "S.jsonl"
+    text = "Base directory for this skill: /p/skills/meta-skill-writer\n\n# Writing Skills\n"
+    record = {"type": "user", "isMeta": True,
+              "message": {"role": "user", "content": [{"type": "text", "text": text}]}}
+    path.write_text(json.dumps(record) + "\n", encoding="utf-8")
+    _TRANSCRIPT["path"] = str(path)
+    yield path
+    _TRANSCRIPT["path"] = None
+
+
 def _edit_event():
-    return {"tool_name": "Edit",
+    return {"tool_name": "Edit", "transcript_path": _TRANSCRIPT["path"],
             "tool_input": {"file_path": "/x/plugins/bitranox/skills/foo/SKILL.md"}}
 
 
