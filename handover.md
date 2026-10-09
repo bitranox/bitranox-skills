@@ -1,4 +1,4 @@
-# Handover - 2026-10-09 09:40, [170], [173], [245], [390], [450] closed; next is a question about [18]
+# STALE - read 2026-10-09, work continued
 
 ## In flight
 
