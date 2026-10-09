@@ -29,6 +29,15 @@ than the change, so entries reconstructed from them would read like coverage wit
 a hole nobody has drawn a line under is one that gets rediscovered and half-filled - which is how
 two "versions with no entry" notes came to sit in this file disagreeing with it.
 
+## [8.9.2]
+
+### Fixed
+
+- coding-python-gitignore: the `[performance]` section named the log scrubber as what masks
+  `max_token_bytes` in `igittigitt config`. lib_layered_config's `is_sensitive()` masks it, from
+  the key name alone; the text now says so, adds that no scrub-pattern setting, output format or
+  `config` switch reveals it, and keeps the one-liner that reads the default.
+
 ## [8.9.1]
 
 ### Fixed
