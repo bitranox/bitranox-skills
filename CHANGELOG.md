@@ -29,6 +29,14 @@ than the change, so entries reconstructed from them would read like coverage wit
 a hole nobody has drawn a line under is one that gets rediscovered and half-filled - which is how
 two "versions with no entry" notes came to sit in this file disagreeing with it.
 
+## [8.8.2]
+
+### Fixed
+
+- `infra-proxmox` ch18: the pveproxy cipher keys showed a LEFTWARDS DOUBLE ARROW (U+21D0) where the source has `<=`, an
+  artifact of a document conversion; it reads `CIPHERS (TLS <= 1.2)` again, matching the
+  `CIPHERSUITE (TLS >= 1.3)` beside it.
+
 ## [8.8.1]
 
 ### Fixed
