@@ -1,85 +1,88 @@
-# STALE - read 2026-10-09, work continued
+# Handover - 2026-10-09 12:40, [520] [177] [178] [182] [183] [184] closed; [186] mid-procedure
 
 ## In flight
 
-- Nothing part-done. Everything this session shipped is on origin/master with CI green on every
-  cell: 8.7.2 (bearer prose, 170.6), 8.7.3 (one hooks fence rule, 170.10), 8.7.4 (skill-script fence
-  parity test, mdwrap fix, [450]), 8.8.2 (infra-proxmox ch18 TLS line, [173] closed), plus the
-  backlog commit closing [245]/[390].
+- [186], last item 186.3 (coding-python-gitignore `max_token_bytes` paragraph). User chose option C:
+  correct the cause sentence in BOTH twins, bump both plugin.json, and file the root fix in
+  lib_layered_config. State: cause measured, RED run, NO file edited yet. The skill-writer receipt
+  of this session is not reused - the next session must enter bitranox:meta-skill-writer itself.
+  - Measured cause: lib_layered_config 7.0.1 `is_sensitive()` matches `_token_`
+    (`max_token_bytes` True, `stdin_chunk_bytes` False). Control: setting
+    `IGITTIGITT___LIB_LOG_RICH__SCRUB_PATTERNS__TOKEN=` leaves the value masked; `igittigitt config`
+    (2.2.4) has no unredact flag. The skill's "the log scrubber masks any key" is wrong.
+  - RED: a haiku baseline-probe given the current paragraph named the log scrubber as the masking
+    component and advised against weakening it.
 
 ## Committed, or not
 
-- This handover and OPEN-WORK.md's new [520] are committed and pushed together.
-- Gitignored, main checkout only: `.plan/jev-recall-2026-10-06/`, `.plan/jev-stop-2026-10-06/`,
-  `.plan/openwork-batch-2026-10-04/` (moved out of the removed jev-shadow worktree, [390]) and
-  `.plan/worktree-archive-2026-10-08/{jev-shadow,agent-a8b8519433cd6392c}/`.
-- Session B (the [17] mod tools) has ended; its worktree `notify-decide-failed` and five branches are
-  still on disk, now [520].
+- Pushed and CI green: cb4eaa8b ([520], [177]) and 9d378943 ([178] D20 replication note, [96] check).
+- OPEN-WORK.md closes of [182], [183], [184] and the [186] state note ship in this handover's commit.
+- `.plan/worktree-archive-2026-10-09/notify-decide-failed/` (gitignored, main checkout only) holds
+  session B's archived files and `deleted-branches.txt` with the five deleted branch shas.
 
 ## Decided, and why - do not reopen
 
-- Fence rule (170.10, user chose B, merge): `tell_chars.line_kinds` / `code_line_flags` follow
-  CommonMark with indentation judged against the enclosing list item (ported from reformat_tables).
-  Neither old rule was right: a census of 13,012 Markdown files showed any-depth closes a block early
-  on a nested indented example (our own code-reviewer.md) and 0-3 spaces misses list-item fences.
-- The four skill scripts with their own scanner stay standalone (no hooks import); the parity test in
-  `plugins/bitranox/hooks/tests/test_fence_walker_parity.py` holds them to the hooks rule instead.
-- Bearer rule (D8 A): the value after "bearer" needs a digit or 20+ chars; corpus census 78 prose /
-  109 token hits, no token lost.
-- U+2192 arrows stay: tell_chars allows them on purpose (122 of the 123 [173] flagged).
-- adjudicate's `data.summary.ok` is NOT renamed: it is false exactly on exit 2, the envelope rule.
+- [18] stays deferred: re-confirmed by the user 2026-10-09.
+- No PID nudge ([178] c): user's call after two measurements agreed (2026-10-08: 1 of 189 unshown;
+  2026-10-09 replay: 0 of 273, none of the 16 failed ones invented).
+- [182]-[184] closed only after each remaining decision was checked against CHANGELOG plus code or a
+  run (D7 probed: grep data exit 0, real `pkill -f` exit 2; D21 read from hooks.json).
+- [186] keeps the PerformanceSettings one-liner as the workaround until lib_layered_config ships an
+  app-declared not-sensitive key set; renaming the igittigitt key would break configs.
 
 ## Decided against, and why
 
-- Fixing 173.1b (D2 A): already implemented; all 25 `--json` jigs give an exit-2 envelope with
-  ok:false on a bad option, and a no answer is exit 1 with ok:true.
+- Fixing the redaction inside igittigitt or via its scrub patterns: the scrub patterns do not drive
+  the masking, and the heuristic lives in lib_layered_config.
 
 ## Still open, untouched
 
-OPEN-WORK.md is the list. [12] cannot start before 2026-10-13; [18] is USER, deferred by the user
-on 2026-09-27; [177] waits on 13 user decisions; [520] is new.
+OPEN-WORK.md is the list. [12] cannot start before 2026-10-13; [18] user-deferred; [96] blocked on
+shadow data (29 paired max); [200] taken by the peer session bitranox-skills-f0 (coordinate pushes
+with it via SendMessage); [290] and below unassigned.
 
 ## Lessons for the next nap
 
-- When copies of one parser are merged, census them on the real corpus first and decide the target
-  rule from the disagreements: here each old copy was wrong on a different shape.
-- When a parity test passes for copies that already agree, break each copy once and require its
-  test to fail before believing it guards them.
-- When a mutation arm's pytest exits 4, the run was a usage error (wrong cwd), not a survived
-  mutation: read rc 1 vs 4 and the passed/failed counts before drawing any conclusion.
-- When a backlog line says "decided, implementation pending", run the behaviour before building it:
-  D2 A had shipped with 8.0.0's exit-code work and nobody closed the line.
-- tooling: auto mode refused `git worktree remove --force --force` on worktrees whose lock holder pid
-  was dead; the user ran it with `!`. Prove the pid dead first, then hand the user the command.
-- Carried from session B's 2026-10-09 08:10 handover, not yet napped: record each plugin tool call's
-  envelope ok, not only is_error; extract a CHANGELOG section with its trailing blank line when a
-  rebase resolver inserts it; expect to lose the master race during the 4-minute pre-push gate and
-  re-check new backlog ranks after a rebase; ship a git-init probe to the Windows dev VM from a
-  worktree-isolated session; tooling: the isolation guard refuses any Bash text containing "git" in a
-  python heredoc.
-- Also not yet napped: the lessons of the 2026-10-08 17:10 handover (git history of this file).
+- When a backlog item says "measure X first", write the measurement's result and artifact path into
+  the item's line the moment it exists: D20 was measured on 2026-10-08 into a .plan archive the line
+  never cited, and was re-measured from scratch on 2026-10-09.
+- When a doc names the CAUSE of a behaviour (which component masks, blocks or rewrites), run a
+  control that removes that component before repeating the claim: emptying the scrub pattern left
+  the value masked, which exposed a wrong cause that had shipped in a skill.
+- When a "shown earlier" detector matches any numeric token, read its first-match context: ps and
+  pgrep output dominate, but short PIDs also match code line numbers, so a 0-unshown result needs
+  the coincidental matches checked by hand before it counts.
+- tooling: block-masked-gate-exit refused `ci_wait ... > log; echo RC=$? >> log` in a background
+  task; run `ci_wait` backgrounded alone.
+- Not yet napped: every bullet under this heading in the previous handover
+  (`git show cb4eaa8b:handover.md`), which itself carries session B's 2026-10-09 08:10 lessons and
+  points at the 2026-10-08 17:10 handover's.
 
 ## The exact next action
 
-Ask the user ONE question: take [18] ("push down") now, or keep it deferred? It is the top workable
-item by rank ([12] waits on a date), but the user deferred it themselves, so starting it is their
-call; session B's handover recommended it. If yes: read `.plan/new_placement_rules_plan.md` in the
-main checkout (gitignored - copy it first), re-check its file:line references, start with its
-section 0 invariant tests in its own worktree. If no: present [177]'s next design question with
-options and a recommendation.
+[186] goes first: it is the top workable open item ([12] waits on a date, [18] is user-deferred,
+[96] waits on data) and the user chose its option C this session. Start with
+`bitranox:meta-skill-writer` (it issues the receipt), work in a worktree, then edit lines ~189-191 of
+`plugins/bitranox/skills/coding-python-gitignore/SKILL.md` to name lib_layered_config's
+`is_sensitive()` as the cause, state that the log scrub patterns do not affect it and that `config`
+has no unredact switch, and keep the one-liner. Mirror into
+`libs/igittigitt/skills/python-gitignore/SKILL.md`. Then a GREEN haiku probe with the same question,
+a `.skillwriter/checklist-<date>.md`, `repo-gate.py --mirrors`, bump both plugin.json, ship both
+repos, and add the root-fix line to `libs/lib_layered_config`'s OPEN-WORK.md.
 
 ## Files that matter
 
-- `OPEN-WORK.md` ([18], [177], [520])
-- `plugins/bitranox/hooks/tell_chars.py` (`line_kinds`, `code_line_flags`)
-- `plugins/bitranox/hooks/tests/test_fence_walker_parity.py`
-- `.plan/new_placement_rules_plan.md` (main checkout, gitignored)
+- `OPEN-WORK.md` ([186], [96], [200])
+- `plugins/bitranox/skills/coding-python-gitignore/SKILL.md`
+- `../../libs/igittigitt/skills/python-gitignore/SKILL.md` (twin, from the public/ tree)
+- `plugins/bitranox/hooks/repo-gate.py` (`--mirrors`, `--mirror-of`)
 
 ## How to verify
 
-- `git log --oneline origin/master -8` shows 8.8.2 (374fb66f) and the 8.7.x commits.
-- `gh run list --commit 374fb66ff98554c8acc344d15b417daea10aba01` shows every workflow success.
-- `git worktree list` shows the main checkout and `notify-decide-failed` only.
+- `gh run list --commit 9d3789433350a927ea643b03c63e1587ddd33bf0` shows ci success.
+- `uvx --from igittigitt python -c "from lib_layered_config import is_sensitive; print(is_sensitive('max_token_bytes'))"` prints True.
+- `python3 plugins/bitranox/hooks/repo-gate.py --mirrors` reports the gitignore pair in sync before
+  the edit.
 
 Read this, then replace the first line with `# STALE - read <date>, work continued`. Do not delete it -
 if this session ends badly it is the only record of where things stood.
