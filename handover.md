@@ -1,88 +1,94 @@
-# Handover - 2026-10-09 12:40, [520] [177] [178] [182] [183] [184] closed; [186] mid-procedure
+# Handover - 2026-10-09 13:50, [178] [181] closed; [200] mostly done in 8.10.0
 
 ## In flight
 
-- [186], last item 186.3 (coding-python-gitignore `max_token_bytes` paragraph). User chose option C:
-  correct the cause sentence in BOTH twins, bump both plugin.json, and file the root fix in
-  lib_layered_config. State: cause measured, RED run, NO file edited yet. The skill-writer receipt
-  of this session is not reused - the next session must enter bitranox:meta-skill-writer itself.
-  - Measured cause: lib_layered_config 7.0.1 `is_sensitive()` matches `_token_`
-    (`max_token_bytes` True, `stdin_chunk_bytes` False). Control: setting
-    `IGITTIGITT___LIB_LOG_RICH__SCRUB_PATTERNS__TOKEN=` leaves the value masked; `igittigitt config`
-    (2.2.4) has no unredact flag. The skill's "the log scrubber masks any key" is wrong.
-  - RED: a haiku baseline-probe given the current paragraph named the log scrubber as the masking
-    component and advised against weakening it.
+- Nothing part-done. Everything this session made is on origin/master with CI green:
+  8.9.1 (b556feda: [178] and [181] closed, markitdown non-UTF-8 names, docs skill-count test) and
+  8.10.0 (3a1871f5: 20 contribution-queue entries fixed, see CHANGELOG 8.10.0). Release v8.10.0 is
+  published.
+- [200] (the contribution queue) is the only item worked and not closed: 8 entries remain, all needing
+  design or a user decision. They are listed in [200]'s 2026-10-09 note in OPEN-WORK.md and in
+  `contrib_queue.py queues` (5 queues).
 
 ## Committed, or not
 
-- Pushed and CI green: cb4eaa8b ([520], [177]) and 9d378943 ([178] D20 replication note, [96] check).
-- OPEN-WORK.md closes of [182], [183], [184] and the [186] state note ship in this handover's commit.
-- `.plan/worktree-archive-2026-10-09/notify-decide-failed/` (gitignored, main checkout only) holds
-  session B's archived files and `deleted-branches.txt` with the five deleted branch shas.
+- This handover plus OPEN-WORK.md's "20 fixed" correction (the 8.10.0 commit message and the [200]
+  note first said 21; the real count is 20) ship in this handover's commit.
+- Uncommitted, outside this repo (both are local backlogs, untracked or excluded by their repos):
+  `apps/utils/bmk/OPEN-WORK.md` gained [30] (pip-audit looks up the project itself on PyPI) and [40]
+  (devops-bmk twins: empty integration lane, with measured text ready);
+  `apps/utils/soundtouch-decloud/OPEN-WORK.md` gained [80] (find's needs-account on the 20.0.6
+  adapter) and [90] (document GET /api/setup/devices).
+- `~/.claude/commands/tfbpr.md` (user-level, in no repo) now keys the empty integration lane on its
+  "no tests collected" output: `make testintegration` exits 2 there, not 5.
+- `handover.prev.md` (the outgoing handover) is excluded via .git/info/exclude.
 
 ## Decided, and why - do not reopen
 
-- [18] stays deferred: re-confirmed by the user 2026-10-09.
-- No PID nudge ([178] c): user's call after two measurements agreed (2026-10-08: 1 of 189 unshown;
-  2026-10-09 replay: 0 of 273, none of the 16 failed ones invented).
-- [182]-[184] closed only after each remaining decision was checked against CHANGELOG plus code or a
-  run (D7 probed: grep data exit 0, real `pkill -f` exit 2; D21 read from hooks.json).
-- [186] keeps the PerformanceSettings one-liner as the workaround until lib_layered_config ships an
-  app-declared not-sensitive key set; renaming the igittigitt key would break configs.
+- Ten agent worktrees and the integration worktree were removed only after every one of their 41
+  changed files was byte-compared equal to 3a1871f5.
+- The 40 unused `noqa: E402` directives stay: ruff exempts sys.path.insert, but pycodestyle and flake8
+  still flag those imports ([181] closing line).
+- infra-modulejail step 5 now RUNS update-initramfs (the blacklist is copied into every initrd anyway,
+  so the reboot gate must test that boot) - measured on proxmox01, kernel 7.0.14-5-pve.
+- retry-with-a-flag-nudge records only single-statement failures (replay: 30 firings to 5; none of the
+  25 removed was a clear true positive).
 
 ## Decided against, and why
 
-- Fixing the redaction inside igittigitt or via its scrub patterns: the scrub patterns do not drive
-  the masking, and the heuristic lives in lib_layered_config.
+- devops-bmk and coding-python-new-public-library edits were NOT made here: both skills have twins in
+  other public repos (bmk, bitranox_template_py_lib) and need a coordinated two-repo change; filed as
+  bmk [40] and bitranox-skills [300].
 
 ## Still open, untouched
 
-OPEN-WORK.md is the list. [12] cannot start before 2026-10-13; [18] user-deferred; [96] blocked on
-shadow data (29 paired max); [200] taken by the peer session bitranox-skills-f0 (coordinate pushes
-with it via SendMessage); [290] and below unassigned.
+OPEN-WORK.md is the list. [12] cannot start before 2026-10-13; [18] user-deferred; [96] waits on
+shadow data; [200] has 8 entries needing decisions; [530] and [540] were filed today from the 8.10.0
+fixes.
 
 ## Lessons for the next nap
 
-- When a backlog item says "measure X first", write the measurement's result and artifact path into
-  the item's line the moment it exists: D20 was measured on 2026-10-08 into a .plan archive the line
-  never cited, and was re-measured from scratch on 2026-10-09.
-- When a doc names the CAUSE of a behaviour (which component masks, blocks or rewrites), run a
-  control that removes that component before repeating the claim: emptying the scrub pattern left
-  the value masked, which exposed a wrong cause that had shipped in a skill.
-- When a "shown earlier" detector matches any numeric token, read its first-match context: ps and
-  pgrep output dominate, but short PIDs also match code line numbers, so a 0-unshown result needs
-  the coincidental matches checked by hand before it counts.
-- tooling: block-masked-gate-exit refused `ci_wait ... > log; echo RC=$? >> log` in a background
-  task; run `ci_wait` backgrounded alone.
-- Not yet napped: every bullet under this heading in the previous handover
-  (`git show cb4eaa8b:handover.md`), which itself carries session B's 2026-10-09 08:10 lessons and
-  points at the 2026-10-08 17:10 handover's.
+- When a background task's cwd is a worktree, do not remove that worktree until the task has ended:
+  the wrapper's final `pwd` fails with getcwd, and the task reports exit 1 after printing a green
+  verdict.
+- When several subagents must commit to bitranox-skills in parallel, tell them up front to leave
+  their work uncommitted: the repo-gate refuses any plugins/ commit without a version bump, and the
+  coordinator bumps once; collect with `git diff --cached --binary <base>` per worktree.
+- When collecting subagent output, never trust a file they wrote to the shared session scratchpad:
+  two of nine commit-message files there were overwritten by sibling agents; take the text from the
+  report itself.
+- When the ExitWorktree tool says a worktree holds N commits "not on the original branch", it compares
+  against the main checkout's LOCAL master, which may be behind origin; check
+  `git merge-base --is-ancestor HEAD origin/master` before believing work would be lost.
+- When a contribution entry's claim is triaged, run the hook with a CONTROL that must fire first: a
+  probe of block-partial-typecheck from a repo with no root tests/ passed both arms and proved nothing.
+- tooling: block-masked-gate-exit refuses a background `pytest ...; echo RC=$?`; background the gate
+  alone and read its summary line.
+- Not yet napped: every bullet under this heading in the previous handover (`handover.prev.md`, or
+  `git show ed243976:handover.md`), which itself points further back.
 
 ## The exact next action
 
-[186] goes first: it is the top workable open item ([12] waits on a date, [18] is user-deferred,
-[96] waits on data) and the user chose its option C this session. Start with
-`bitranox:meta-skill-writer` (it issues the receipt), work in a worktree, then edit lines ~189-191 of
-`plugins/bitranox/skills/coding-python-gitignore/SKILL.md` to name lib_layered_config's
-`is_sensitive()` as the cause, state that the log scrub patterns do not affect it and that `config`
-has no unredact switch, and keep the one-liner. Mirror into
-`libs/igittigitt/skills/python-gitignore/SKILL.md`. Then a GREEN haiku probe with the same question,
-a `.skillwriter/checklist-<date>.md`, `repo-gate.py --mirrors`, bump both plugin.json, ship both
-repos, and add the root-fix line to `libs/lib_layered_config`'s OPEN-WORK.md.
+Take [200]'s remaining 8 entries one decision at a time (ask the user ONE question per turn, with a
+recommendation): start with the skill-edit receipt self-arming entry, which is the same item as [310]
+- decide whether `skill-edit-guard` should require a Skill tool call for meta-skill-writer in the
+transcript before accepting a receipt. [12] (top rank) cannot start before 2026-10-13 and [18] is
+user-deferred, so [200] is the top workable item.
 
 ## Files that matter
 
-- `OPEN-WORK.md` ([186], [96], [200])
-- `plugins/bitranox/skills/coding-python-gitignore/SKILL.md`
-- `../../libs/igittigitt/skills/python-gitignore/SKILL.md` (twin, from the public/ tree)
-- `plugins/bitranox/hooks/repo-gate.py` (`--mirrors`, `--mirror-of`)
+- `OPEN-WORK.md` ([200], [310], [530], [540])
+- `CHANGELOG.md` (8.10.0 entry: what shipped and the replay numbers)
+- `plugins/bitranox/skills/meta-self-improve/contrib_queue.py` (`queues`, `list queue_key:<k>`)
+- `plugins/bitranox/hooks/skill-edit-guard.py`, `plugins/bitranox/hooks/skill_receipt.py`
 
 ## How to verify
 
-- `gh run list --commit 9d3789433350a927ea643b03c63e1587ddd33bf0` shows ci success.
-- `uvx --from igittigitt python -c "from lib_layered_config import is_sensitive; print(is_sensitive('max_token_bytes'))"` prints True.
-- `python3 plugins/bitranox/hooks/repo-gate.py --mirrors` reports the gitignore pair in sync before
-  the edit.
+- `gh run list --commit 3a1871f5097b604644fed854701dec30ca984640` shows ci and both release
+  workflows success; `gh release list --limit 1` shows v8.10.0.
+- `python3 plugins/bitranox/skills/meta-self-improve/contrib_queue.py queues` lists 8 open entries in
+  5 queues.
+- `git worktree list` shows the main checkout only (plus any peer session's own worktree).
 
 Read this, then replace the first line with `# STALE - read <date>, work continued`. Do not delete it -
 if this session ends badly it is the only record of where things stood.
