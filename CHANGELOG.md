@@ -29,6 +29,14 @@ than the change, so entries reconstructed from them would read like coverage wit
 a hole nobody has drawn a line under is one that gets rediscovered and half-filled - which is how
 two "versions with no entry" notes came to sit in this file disagreeing with it.
 
+## [8.8.1]
+
+### Fixed
+
+- `coding-python-logging`: Graylog enabled without an endpoint is refused by `init()` and
+  `validate_config()` from lib_log_rich 6.5.1; the skill used to say it was accepted and built no
+  sink. Mirrored from the library repo; each changed line names the version it holds from.
+
 ## [8.8.0]
 
 ### Added
