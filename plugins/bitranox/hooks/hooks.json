@@ -208,6 +208,15 @@
             "command": "bash \"${CLAUDE_PLUGIN_ROOT}/hooks/run-python.sh\" --hook \"${CLAUDE_PLUGIN_ROOT}/hooks/tooling-detour-nudge.py\""
           }
         ]
+      },
+      {
+        "matcher": "Write|Edit|MultiEdit|NotebookEdit|Bash|PowerShell|Task|Agent",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash \"${CLAUDE_PLUGIN_ROOT}/hooks/run-python.sh\" --hook \"${CLAUDE_PLUGIN_ROOT}/hooks/raw-char-arg-nudge.py\""
+          }
+        ]
       }
     ],
     "PostToolUse": [

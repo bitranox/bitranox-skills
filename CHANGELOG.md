@@ -29,6 +29,21 @@ than the change, so entries reconstructed from them would read like coverage wit
 a hole nobody has drawn a line under is one that gets rediscovered and half-filled - which is how
 two "versions with no entry" notes came to sit in this file disagreeing with it.
 
+## [8.9.0]
+
+### Added
+
+- `raw-char-arg-nudge` (PreToolUse on Write, Edit, MultiEdit, NotebookEdit, Bash, PowerShell, Task,
+  Agent): warns when an argument a tool WRITES holds a raw control or invisible character - a C0
+  control other than tab, line feed and carriage return, DEL or a C1 control, a Unicode format
+  character (bidi override or isolate, zero-width character, soft hyphen, BOM, tag character), or a
+  line or paragraph separator - naming each by code point and Unicode name. Tool arguments are
+  JSON, which decodes a backslash-u escape, so an escape typed as Python source text lands as the
+  raw character; for a bidi override in test source that is a trojan-source hazard nothing local
+  shows. The hook reads the decoded argument, so it sees what will land. An Edit's `old_string` is
+  not checked (matching a raw character is how you remove one), printable non-ASCII is never
+  flagged, and it only warns, because a raw character can be meant.
+
 ## [8.8.2]
 
 ### Fixed
