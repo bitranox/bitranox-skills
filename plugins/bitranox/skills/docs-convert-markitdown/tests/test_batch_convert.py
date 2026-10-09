@@ -242,3 +242,14 @@ def test_case_only_collision_names_every_output_it_would_write(
     for line in lines:
         assert "X.md" in line and "x.md" in line, line
         assert "case" in line, line
+
+
+@pytest.mark.skipif(sys.platform != "linux", reason="only Linux file systems store a name that is not UTF-8")
+def test_name_that_is_not_utf8_converts(script_runner, tmp_path, fake_markitdown_dir):
+    stem = os.fsdecode(b"caf\xe9")  # Latin-1 bytes: a surrogate escape once decoded
+    _put(tmp_path / "in" / (stem + ".html"), "LATIN1")
+
+    run = _batch(script_runner, tmp_path, fake_markitdown_dir, "-e", ".html")
+
+    assert run.returncode == 0, run.output
+    assert "LATIN1" in (tmp_path / "out" / (stem + ".md")).read_text(encoding="utf-8")

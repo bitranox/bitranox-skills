@@ -26,6 +26,7 @@ import json
 import os
 import re
 import sys
+import urllib.parse
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, List, Optional
@@ -45,6 +46,25 @@ def _configure_console() -> None:
             reconfigure(errors="replace")
         except (ValueError, OSError):
             pass
+
+
+def _text_name(name: str) -> str:
+    """`name` as text that can be written to a UTF-8 file.
+
+    A Linux file name need not be UTF-8; Python decodes the stray bytes to surrogate escapes, which
+    a UTF-8 write refuses, so one such name failed the whole conversion. Each stray byte becomes
+    U+FFFD instead: the name stays readable and the file converts."""
+    return name.encode("utf-8", "surrogateescape").decode("utf-8", "replace")
+
+
+def _link_target(rel: str) -> str:
+    """`rel` as an INDEX.md link target that still reaches a file whose name is not UTF-8.
+
+    Such a name cannot be spelled in UTF-8, so its raw bytes are percent-encoded, which a Markdown
+    renderer resolves back to them; every other name is kept as it is, spaces included."""
+    if _text_name(rel) == rel:
+        return rel
+    return urllib.parse.quote(os.fsencode(rel), safe="/")
 
 
 def _make_converter() -> Any:
@@ -223,10 +243,10 @@ def convert_paper(
 
         # The title always comes from the filename: extract_metadata_from_filename sets
         # one for every name, and markitdown reports no title for a PDF anyway.
-        metadata = extract_metadata_from_filename(input_file.name)
-        metadata['source_file'] = input_file.name
+        metadata = extract_metadata_from_filename(_text_name(input_file.name))
+        metadata['source_file'] = _text_name(input_file.name)
         metadata['converted_date'] = datetime.now().isoformat()
-        metadata['output_file'] = output_file.relative_to(output_dir).as_posix()
+        metadata['output_file'] = _link_target(output_file.relative_to(output_dir).as_posix())
 
         output_file.parent.mkdir(parents=True, exist_ok=True)
         output_file.write_text(render_paper(metadata, result.text_content), encoding='utf-8')

@@ -187,17 +187,16 @@ def _non_utf8_named_file(directory, raw_name):
     return name
 
 
-def test_input_filename_with_non_utf8_bytes_is_reported_not_crashed(script_runner, tmp_path, fakes):
+def test_input_filename_with_non_utf8_bytes_converts(script_runner, tmp_path, fakes):
     """A POSIX filename may carry bytes that are not valid UTF-8 (surrogate-escaped on decode).
-    That text then flows into the written Markdown's "Source" line, where it cannot be UTF-8
-    encoded; the run must report that as [FAIL], never as an uncaught traceback."""
+    That text flows into the written Markdown's "Source" line, which is UTF-8; each stray byte is
+    written as U+FFFD there, so the file converts instead of failing on its own name."""
     bad_name = _non_utf8_named_file(tmp_path, b"bad_\xff_pic.png")
 
     run = _ai(script_runner, tmp_path, fakes, [bad_name, "out.md"])
 
-    assert "Traceback" not in run.output, run.output
-    assert run.returncode == 2, run.output
-    assert "[FAIL]" in run.stderr
+    assert run.returncode == 0, run.output
+    assert "**Source**: bad_\ufffd_pic.png" in (tmp_path / "out.md").read_text(encoding="utf-8")
 
 
 @pytest.mark.parametrize("name", ["paper.pdf", "notes.DOCX", "sheet.xlsx"])
@@ -371,3 +370,4 @@ def test_real_markitdown_png_without_a_caption_is_seen(script_runner, fake_opena
 
     assert run.returncode == expected_rc, run.output
     assert _calls(tmp_path) == 1
+

@@ -107,6 +107,15 @@ def _configure_console() -> None:
             pass
 
 
+def _text_name(name: str) -> str:
+    """`name` as text that can be written to a UTF-8 file.
+
+    A Linux file name need not be UTF-8; Python decodes the stray bytes to surrogate escapes, which
+    a UTF-8 write refuses, so one such name failed the whole conversion. Each stray byte becomes
+    U+FFFD instead: the name stays readable and the file converts."""
+    return name.encode("utf-8", "surrogateescape").decode("utf-8", "replace")
+
+
 def _caption_text(response: Any) -> str:
     """The description text a chat response carries, or "" when it carries none."""
     choices = getattr(response, "choices", None) or []
@@ -196,8 +205,8 @@ def convert_with_ai(
         result = md.convert(str(input_file))
 
         # Create output with metadata
-        content = f"# {result.title or input_file.stem}\n\n"
-        content += f"**Source**: {input_file.name}\n"
+        content = f"# {result.title or _text_name(input_file.stem)}\n\n"
+        content += f"**Source**: {_text_name(input_file.name)}\n"
         content += f"**Format**: {input_file.suffix}\n"
         content += f"**AI Model**: {model}\n"
         content += f"**Prompt Type**: {prompt_type if not custom_prompt else 'custom'}\n\n"

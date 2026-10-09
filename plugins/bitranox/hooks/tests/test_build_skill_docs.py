@@ -1,6 +1,7 @@
 """Tests for build_skill_docs.py (the generated docs/skills.md catalog) plus the
 docs fact-freshness guards (README skill count, reference.md knob table). ASCII."""
 import json
+import re
 from pathlib import Path
 
 import pytest
@@ -160,6 +161,20 @@ def test_readme_states_current_skill_count():
     count = len(sorted((REPO_ROOT / "plugins" / "bitranox" / "skills").glob("*/SKILL.md")))
     readme = (REPO_ROOT / "README.md").read_text(encoding="utf-8")
     assert ("%d skills" % count) in readme
+
+
+def test_every_skill_count_claim_in_the_docs_is_current():
+    # One correct mention used to satisfy the check above while another page went on stating an
+    # older count, so every whole-catalogue claim ("all <N> skills", "**<N> skills**") in the
+    # README and docs/ is held to the real number. A bare "<N> skills" is not one: "nudge up to 2
+    # skills" describes a hook, not the catalogue.
+    count = len(sorted((REPO_ROOT / "plugins" / "bitranox" / "skills").glob("*/SKILL.md")))
+    pages = [REPO_ROOT / "README.md"] + sorted((REPO_ROOT / "docs").glob("*.md"))
+    claims = [(page.name, int(n)) for page in pages
+              for n in re.findall(r"(?:\ball |\*\*)(\d+) skills\b",
+                                  page.read_text(encoding="utf-8"), re.IGNORECASE)]
+    assert claims, "no skill-count claim found; the scan is not reading the docs"
+    assert [c for c in claims if c[1] != count] == []
 
 
 def test_reference_doc_documents_every_config_knob():

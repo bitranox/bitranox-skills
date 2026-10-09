@@ -47,6 +47,15 @@ def _configure_console() -> None:
             pass
 
 
+def _text_name(name: str) -> str:
+    """`name` as text that can be written to a UTF-8 file.
+
+    A Linux file name need not be UTF-8; Python decodes the stray bytes to surrogate escapes, which
+    a UTF-8 write refuses, so one such name failed the whole conversion. Each stray byte becomes
+    U+FFFD instead: the name stays readable and the file converts."""
+    return name.encode("utf-8", "surrogateescape").decode("utf-8", "replace")
+
+
 def _make_converter(enable_plugins: bool) -> Any:
     """Build a MarkItDown instance.
 
@@ -147,8 +156,8 @@ def convert_file(md: Any, file_path: Path, output_file: Path) -> tuple[bool, str
         result = md.convert(str(file_path))
 
         # Write content with metadata header
-        content = f"# {result.title or file_path.stem}\n\n"
-        content += f"**Source**: {file_path.name}\n"
+        content = f"# {result.title or _text_name(file_path.stem)}\n\n"
+        content += f"**Source**: {_text_name(file_path.name)}\n"
         content += f"**Format**: {file_path.suffix}\n\n"
         content += "---\n\n"
         content += result.text_content

@@ -9,6 +9,7 @@ when markitdown (with its PDF extra) is not installed.
 import os
 import re
 import sys
+import urllib.parse
 
 import pytest
 import yaml
@@ -323,3 +324,20 @@ def test_real_markitdown_same_name_pdfs(script_runner, tmp_path):
     out = tmp_path / "out"
     assert "PAPER A CONTENT" in (out / "a" / "Smith_2023_Deep.md").read_text(encoding="utf-8")
     assert "PAPER B CONTENT" in (out / "b" / "Smith_2023_Deep.md").read_text(encoding="utf-8")
+
+
+@pytest.mark.skipif(sys.platform != "linux", reason="only Linux file systems store a name that is not UTF-8")
+def test_name_that_is_not_utf8_converts_and_is_indexed(script_runner, tmp_path, fake_markitdown_dir):
+    stem = os.fsdecode(b"M\xfcller_2021_Optik")  # Latin-1 bytes: a surrogate escape once decoded
+    _paper(tmp_path / "in" / (stem + ".pdf"), "LATIN1 PAPER")
+
+    run = _lit(script_runner, tmp_path, fake_markitdown_dir, "--create-index")
+
+    assert run.returncode == 0, run.output
+    papers = [p for p in (tmp_path / "out").rglob("*.md") if p.name != "INDEX.md"]
+    assert len(papers) == 1 and "LATIN1 PAPER" in papers[0].read_text(encoding="utf-8")
+    assert "M\ufffdller" in (tmp_path / "out" / "INDEX.md").read_text(encoding="utf-8")
+    [link] = _index_links(tmp_path / "out")
+    # The link spells the raw name byte for byte, so a renderer resolving it finds the file.
+    assert urllib.parse.unquote_to_bytes(link) == os.fsencode(
+        papers[0].relative_to(tmp_path / "out").as_posix())

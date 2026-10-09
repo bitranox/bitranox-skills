@@ -29,6 +29,19 @@ than the change, so entries reconstructed from them would read like coverage wit
 a hole nobody has drawn a line under is one that gets rediscovered and half-filled - which is how
 two "versions with no entry" notes came to sit in this file disagreeing with it.
 
+## [8.9.1]
+
+### Fixed
+
+- docs-convert-markitdown: `batch_convert.py`, `convert_with_ai.py` and `convert_literature.py`
+  now convert a file whose name is not valid UTF-8 (possible on Linux) instead of failing it: each
+  stray byte is written as U+FFFD in the Markdown's title and Source line, and
+  `convert_literature.py`'s INDEX.md links such a file by its percent-encoded raw bytes so the
+  link still reaches it.
+- `docs/installation.md` stated 82 skills where 83 ship. The docs freshness test now holds every
+  whole-catalogue count in the README and `docs/` ("all N skills", "**N skills**") to the real
+  number, where one correct mention in the README used to pass while another page went stale.
+
 ## [8.9.0]
 
 ### Added
