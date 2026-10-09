@@ -29,6 +29,17 @@ than the change, so entries reconstructed from them would read like coverage wit
 a hole nobody has drawn a line under is one that gets rediscovered and half-filled - which is how
 two "versions with no entry" notes came to sit in this file disagreeing with it.
 
+## [8.10.2]
+
+### Changed
+
+- `coding-python-layered-config` mirrors lib_layered_config 7.1.0: keys an application declares
+  not sensitive (`read_config*(not_sensitive=...)`), and a new "Python API beyond read_config"
+  section naming every public export the skill left out - the `ConfigError` family,
+  `is_sensitive`/`is_sensitive_at`/`redact_mapping`, the profile validators, `deploy_config` and
+  its `DeployResult.action` enum, `generate_examples`, `display_config`, `get_logger` and
+  `bind_trace_id` - plus the `fail` CLI command.
+
 ## [8.10.1]
 
 ### Fixed
