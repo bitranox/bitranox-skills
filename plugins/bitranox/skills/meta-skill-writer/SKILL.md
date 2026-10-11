@@ -982,17 +982,22 @@ transcript for the load). A subagent shares its parent's session, so the parent'
 it too, but its own transcript does not show the skill loaded. A subagent that edits a SKILL.md
 must therefore invoke `bitranox:meta-skill-writer` through the Skill tool before its first edit;
 running `start` without that is still denied. It needs no `start` of its own and must not run
-`end`, which removes the receipt for every agent in the session. Otherwise, apply the edit in the
-agent that ran this procedure. A marketplace repo may additionally require a committed
-review artifact (a `.skillwriter/checklist-<date>.md` next to the SKILL.md, all boxes checked)
-co-changed with any SKILL.md change - its commit gate enforces that; see the repo's CONTRIBUTING.
+`end`, which removes the receipt for every agent in the session. So a coordinator that dispatches
+subagents to edit SKILL.md files runs `start` itself BEFORE the first dispatch, and runs `end`
+only after the last of them has reported or been stopped: with no receipt armed, every subagent
+edit is denied however correctly it loaded the skill. A subagent that edits no SKILL.md needs
+neither the receipt nor the skill load. A SKILL.md edit that no skill-loading subagent will make
+is applied in the agent that ran this procedure. A marketplace repo may additionally require a
+committed review artifact (a `.skillwriter/checklist-<date>.md` next to the SKILL.md, all boxes
+checked) co-changed with any SKILL.md change - its commit gate enforces that; see the repo's CONTRIBUTING.
 
 **Last step - close the receipt when the procedure is finished** (the change and its review
-artifact committed): run
+artifact committed; for a coordinator, also every subagent it dispatched to edit a SKILL.md has
+reported or been stopped): run
 `bash <plugin>/hooks/run-python.sh <plugin>/hooks/skill_receipt.py end meta-skill-writer`.
 It removes this session's receipt, so a later SKILL.md edit in the same session is denied until the
 procedure is entered again, instead of riding on this receipt until it expires (8 hours after
-`start`).
+the latest `start`; running `start` again renews it).
 `skill_receipt.py check meta-skill-writer` reports whether this session holds a fresh one.
 
 **Before writing any skill, plan the work.** Use your task/todo tooling (e.g. TodoWrite) to build a task list, then execute it step by step. This prevents skipping steps and makes progress visible.

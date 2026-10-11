@@ -29,6 +29,17 @@ than the change, so entries reconstructed from them would read like coverage wit
 a hole nobody has drawn a line under is one that gets rediscovered and half-filled - which is how
 two "versions with no entry" notes came to sit in this file disagreeing with it.
 
+## [8.10.4]
+
+### Fixed
+
+- `meta-skill-writer` Step 0 now states when a coordinator handles the receipt: it runs `start`
+  itself before the first dispatch of a SKILL.md-editing subagent, and runs `end` only after the
+  last of those subagents has reported or been stopped. "Last step" says the same for a
+  coordinator, and that a second `start` renews the 8-hour lifetime. Before, a coordinator whose
+  own change was committed could read "when the procedure is finished" as "now", end the receipt,
+  and leave every later subagent edit denied.
+
 ## [8.10.3]
 
 ### Fixed
