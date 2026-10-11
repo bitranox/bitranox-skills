@@ -1221,3 +1221,100 @@ def test_a_hand_rolled_revert_points_at_mutation_arm(command):
 def test_a_committed_text_read_into_another_file_is_not_a_revert(command):
     matched = N.match_tool(command, "Bash")
     assert matched is None or matched[0] != "mutation_arm", matched
+
+
+# ---- a hand-rolled mutate-then-pytest arm points at mutation_arm --------------------------------
+#
+# The shape recurred three times as a prose rule and failed each time: a throwaway `arms.py` /
+# `mutate.py` that holds a table of exact-text mutations, writes each into a source, runs pytest
+# and puts the file back from a copy. Priced over the transcript corpus (151,271 distinct Bash,
+# Write and Edit calls): the authored shape fires on 106 calls in 55 sessions, and reading every
+# firing found a handful of documents (a plan, a report) and the rest hand-rolled arms. The inline
+# shell form (`sed -i` the source, pytest, copy the backup back) is a further 52 calls in 27
+# sessions, all real arms.
+
+_HAND_ROLLED_ARMS = '''"""Apply one mutation at a time, run the named tests, restore from a copy."""
+import shutil
+import subprocess
+from pathlib import Path
+
+ROOT = Path("/work/project")
+TARGET = ROOT / "src/pkg/policy.py"
+ARMS = {
+    "no_check": ("if self.cooldown < 0:", "if False:"),
+}
+
+
+def run(label):
+    old, new = ARMS[label]
+    shutil.copy(TARGET, TARGET.with_suffix(".saved"))
+    TARGET.write_text(TARGET.read_text().replace(old, new))
+    done = subprocess.run(["python", "-m", "pytest", "-q", "tests/test_policy.py"], cwd=ROOT)
+    shutil.copy(TARGET.with_suffix(".saved"), TARGET)
+    return done.returncode
+'''
+
+
+def test_a_hand_rolled_arm_script_points_at_mutation_arm():
+    assert N.match_tool(_HAND_ROLLED_ARMS, "Write")[0] == "mutation_arm"
+    assert N.match_authored(_HAND_ROLLED_ARMS)[0] == "mutation_arm"
+
+
+def test_the_same_arm_inside_a_bash_heredoc_points_at_mutation_arm():
+    command = "python3 - <<'EOF'\n" + _HAND_ROLLED_ARMS + "EOF"
+    assert N.match_authored(N.heredoc_bodies(command))[0] == "mutation_arm"
+
+
+def test_a_hand_rolled_arm_outranks_the_exact_text_replace_rule():
+    """The script also reads, replaces and writes text, which is anchor_edit's own shape."""
+    assert ".replace(" in _HAND_ROLLED_ARMS and "write_text(" in _HAND_ROLLED_ARMS
+    assert N.match_authored(_HAND_ROLLED_ARMS)[0] == "mutation_arm"
+
+
+@pytest.mark.parametrize("text", [
+    # A driver that already calls the jig is the answer, not the problem.
+    _HAND_ROLLED_ARMS + '\nJIG = "compuse-toolbox/scripts/mutation_arm.py"\n',
+    # A document ABOUT arms: a plan or report quotes the words but is not a script.
+    "# Task 6 report\n\nThe mutation arms ran under python -m pytest and each was restored from "
+    "a copy with shutil.copy; the driver used write_text().\n",
+    # An ordinary script that runs pytest and writes a file, with no mutation table.
+    'import subprocess\nfrom pathlib import Path\nsubprocess.run(["python", "-m", "pytest", "-q"])\n'
+    'Path("out.txt").write_text("done")\n',
+    # Test code that names the words without driving pytest or restoring anything.
+    "def test_mutation_is_reported():\n    assert report('mutated') == 'mutation'\n",
+])
+def test_authored_text_that_is_not_a_hand_rolled_arm_is_left_alone(text):
+    matched = N.match_authored(text)
+    assert matched is None or matched[0] != "mutation_arm", matched
+
+
+@pytest.mark.parametrize("command", [
+    "cp src/x.py src/x.py.bak && sed -i 's/>= 1/>= 2/' src/x.py && "
+    "python -m pytest -q tests/test_x.py; cp src/x.py.bak src/x.py",
+    "F=src/x.py; cp $F /tmp/x.orig; sed -i 's/a/b/' $F; pytest tests/test_x.py -q; mv /tmp/x.orig $F",
+    "sed -i 's/guard()/pass/' src/x.py && pytest tests/test_x.py -q; git checkout -- src/x.py",
+])
+def test_an_inline_sed_mutation_with_a_restore_points_at_mutation_arm(command):
+    text = N.extract_text("Bash", {"command": command})
+    assert N.match_tool(text, "Bash")[0] == "mutation_arm"
+
+
+@pytest.mark.parametrize("command", [
+    "sed -i 's/a/b/' src/x.py && pytest tests/test_x.py -q",
+    "pytest tests/test_x.py -q && cp build/out.txt dist/out.txt",
+    "cp src/x.py src/x.py.bak",
+])
+def test_an_ordinary_edit_or_test_run_is_not_an_inline_arm(command):
+    text = N.extract_text("Bash", {"command": command})
+    matched = N.match_tool(text, "Bash")
+    assert matched is None or matched[0] != "mutation_arm", matched
+
+
+def test_main_nudges_a_written_arm_script_toward_mutation_arm(tmp_path, monkeypatch, capsys):
+    event = {"tool_name": "Write", "session_id": "arm1",
+             "tool_input": {"file_path": "/tmp/s/arms.py", "content": _HAND_ROLLED_ARMS}}
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.setenv("USERPROFILE", str(tmp_path))
+    msg = _run(event, monkeypatch, capsys)
+    assert msg is not None and "mutation_arm.py" in msg, msg
+    assert "scratch copy" in msg and "--battery" in msg, msg

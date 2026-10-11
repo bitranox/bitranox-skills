@@ -380,6 +380,8 @@ def main() -> int:
     msg = [
         f"BLOCKED: this pyright run excludes '{rel}/', so a clean result would not mean the project type-checks.",
         f"  paths given: {' '.join(positionals)}",
+        "NOTHING in this command ran: the whole call was refused, not just the pyright part.",
+        "Any edit, write or other step bundled into it did not happen - re-run those on their own.",
         "",
         "Passing paths REPLACES the include list from the config, so the test files are",
         "never looked at. A strict-mode error there (untyped lambda, untyped fixture)",

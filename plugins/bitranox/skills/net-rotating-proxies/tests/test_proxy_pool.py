@@ -5,6 +5,7 @@ exercised; only the deterministic helpers and _run_item (with a local
 subprocess) are tested. All test data is ASCII; any non-ASCII would be
 embedded via chr(0xXXXX).
 """
+import functools
 import os
 import random
 import sys
@@ -79,6 +80,109 @@ def test_a_write_leaves_no_temp_file_behind(store):
     pp._grow(path, ["1.1.1.1:80"])
     pp._upsert_speeds(pp._p(store, "speeds.tsv"), {"1.1.1.1:80": 0.5})
     assert sorted(os.listdir(store)) == ["pool.txt", "speeds.tsv"]
+
+
+# ----------------------------------------------------------------------------
+# Windows sharing violations: os.replace racing a reader of the same store file
+# ----------------------------------------------------------------------------
+# On Windows os.replace holds a DELETE-access handle on the file it moves, and Python's open()
+# does not grant FILE_SHARE_DELETE, so a reader opening a store file in that window fails with
+# PermissionError errno 13; a replace onto a file a reader holds open fails the same way. With
+# --background-discovery the refresher replaces live.txt while every worker reads it. POSIX has
+# no such window, so the race is driven through the opener / replace seams, which raise exactly
+# what the Windows C runtime raises.
+def _sharing_violation(path):
+    return PermissionError(13, "Permission denied", path)
+
+
+def _flaky(real, failures):
+    """`real`, except that the first `failures` calls raise a sharing violation."""
+    calls = []
+
+    def wrapper(*args, **kwargs):
+        calls.append(args)
+        if failures is None or len(calls) <= failures:
+            raise _sharing_violation(args[0])
+        return real(*args, **kwargs)
+
+    wrapper.calls = calls
+    return wrapper
+
+
+def _windows_retry(sleeps):
+    return functools.partial(pp._retry_sharing_violation, windows=True, sleep=sleeps.append)
+
+
+def test_read_retries_while_a_replace_holds_the_file(store):
+    path = pp._p(store, "live.txt")
+    with open(path, "w", encoding="utf-8") as f:
+        f.write("a:1\n")
+    opener, sleeps = _flaky(open, 2), []
+    assert pp._read(path, opener=opener, retry=_windows_retry(sleeps)) == {"a:1"}
+    assert len(opener.calls) == 3
+    assert len(sleeps) == 2
+
+
+def test_read_speeds_retries_while_a_replace_holds_the_file(store):
+    path = pp._p(store, "speeds.tsv")
+    with open(path, "w", encoding="utf-8") as f:
+        f.write("a:1\t0.5\n")
+    opener, sleeps = _flaky(open, 1), []
+    assert pp._read_speeds(path, opener=opener, retry=_windows_retry(sleeps)) == {"a:1": 0.5}
+    assert len(sleeps) == 1
+
+
+def test_a_write_retries_a_replace_blocked_by_an_open_reader(store):
+    path = pp._p(store, "live.txt")
+    replace, sleeps = _flaky(os.replace, 2), []
+    pp._atomic_write(path, "a:1\n", replace=replace, retry=_windows_retry(sleeps))
+    with open(path, encoding="utf-8") as f:
+        assert f.read() == "a:1\n"
+    assert len(replace.calls) == 3
+    assert os.listdir(store) == ["live.txt"]
+
+
+def test_a_sharing_violation_that_never_clears_still_raises(store):
+    path = pp._p(store, "live.txt")
+    with open(path, "w", encoding="utf-8") as f:
+        f.write("a:1\n")
+    opener, sleeps = _flaky(open, None), []
+    with pytest.raises(PermissionError):
+        pp._read(path, opener=opener, retry=_windows_retry(sleeps))
+    assert sleeps == list(pp._SHARING_RETRY_DELAYS)
+    assert len(opener.calls) == len(pp._SHARING_RETRY_DELAYS) + 1
+
+
+def test_a_write_whose_replace_never_succeeds_leaves_no_temp_file(store):
+    path = pp._p(store, "live.txt")
+    with pytest.raises(PermissionError):
+        pp._atomic_write(path, "a:1\n", replace=_flaky(os.replace, None), retry=_windows_retry([]))
+    assert os.listdir(store) == []
+
+
+def test_a_permission_error_off_windows_is_real_and_not_retried(store):
+    """POSIX has no sharing violations: a PermissionError there is an access right, so waiting
+    would only delay the same error."""
+    path = pp._p(store, "live.txt")
+    opener, sleeps = _flaky(open, 1), []
+    retry = functools.partial(pp._retry_sharing_violation, windows=False, sleep=sleeps.append)
+    with pytest.raises(PermissionError):
+        pp._read(path, opener=opener, retry=retry)
+    assert len(opener.calls) == 1
+    assert sleeps == []
+
+
+def test_the_default_read_and_write_retry_exactly_on_windows(store):
+    """The production defaults, not a hand-built policy: retried on Windows, raised elsewhere."""
+    path = pp._p(store, "live.txt")
+    if os.name == "nt":
+        pp._atomic_write(path, "a:1\n", replace=_flaky(os.replace, 1))
+        assert pp._read(path, opener=_flaky(open, 1)) == {"a:1"}
+    else:
+        with pytest.raises(PermissionError):
+            pp._atomic_write(path, "a:1\n", replace=_flaky(os.replace, 1))
+        with pytest.raises(PermissionError):
+            pp._read(path, opener=_flaky(open, 1))
 
 
 # ----------------------------------------------------------------------------

@@ -74,6 +74,13 @@ the baseline is run again at the end to prove the restores left a green tree. Ex
 killed, 1 some arm survived (the finding), 2 any arm inconclusive, timed out or in error, a red
 baseline at either end, a failed restore, or a refused spec.
 
+A FULL-SUITE ARM, or any arm that must not touch the real tree, runs inside a SCRATCH COPY: every
+path the tool takes (`--mutate FILE`, `--revert FILE`, node ids, the `.venv` lookup) is relative to
+the directory it is started from, so extract a copy (`git archive HEAD | tar -x -C DIR`, or copy
+the tree), `cd DIR`, and start the tool there with `--python PATH` naming an interpreter that has
+the project's dependencies. The mutation and its restore happen in the copy; the real tree is
+never written, which also lets several arms run in parallel copies without racing on one file.
+
 Sources and anchor files are UTF-8 (an anchor file's BOM is ignored); a CRLF source keeps its
 CRLF while mutated, and an LF anchor file matches it.
 

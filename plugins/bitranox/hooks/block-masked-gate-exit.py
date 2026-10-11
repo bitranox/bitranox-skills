@@ -24,8 +24,10 @@ running the gate bare (no pipe) or ending the pipeline with the gate itself.
 
 A BACKGROUNDED gate (`run_in_background`) is blocked too when the task's exit code will not be
 the gate's own: something runs after it (`; tail`, `&& echo`, `| tee`, a newline), a trailing `&`
-detaches it, or it is a `gh run watch` without --exit-status. A gate backgrounded alone, and any
-gate run through gate.py, is allowed. gate.py launched under `uv run` gets an advisory.
+detaches it, or it is a `gh run watch` without --exit-status. A gate backgrounded alone is
+allowed. gate.py is the gate that decides when it runs, not an exemption: alone its status is
+the gate's, but `gate.py ... > log; tail log` reports tail's like any other. A gate whose program
+is a quoted path (`"$X/ci_wait.py"`) is still a gate. gate.py under `uv run` gets an advisory.
 
 Pure standard library: no jq, no shell. Reads the PreToolUse event JSON on stdin.
 Exit 2 blocks the call and shows stderr to the model; every other path (including
@@ -81,6 +83,13 @@ _PIPESTATUS_READ = re.compile(r"\$\{?PIPESTATUS\b")
 # the statement split has already consumed it.
 _PIPE = re.compile(r"\|&?")
 
+# The jig that returns the GATE's own status and can chain the follow-up itself. The file NAME
+# `gate.py`, never a longer name ending in it: `\b` sits between `-` and `g`, so a bare `\bgate`
+# read `hooks/repo-gate.py` (and `test_gate.py` is kept out by `_` being a word character).
+_JIG_NAME = r"(?<![\w.-])gate\.py\b"
+
+JIG = re.compile(_JIG_NAME)
+
 # A gate whose verdict a BACKGROUND job's completion notice will misreport. Broader than
 # GATE: a backgrounded `make push` or `ci_wait` is read for its verdict the same way, and
 # neither matches GATE's build-tool vocabulary.
@@ -92,12 +101,6 @@ BACKGROUND_GATE = re.compile(
     r")\b"
     r"|" + GATE.pattern
 )
-
-# The jig that returns the GATE's own status and can chain the follow-up itself. The file NAME
-# `gate.py`, never a longer name ending in it: `\b` sits between `-` and `g`, so a bare `\bgate`
-# read `hooks/repo-gate.py` (and `test_gate.py` is kept out by `_` being a word character).
-_JIG_NAME = r"(?<![\w.-])gate\.py\b"
-JIG = re.compile(_JIG_NAME)
 
 # The jig launched under `uv run`, which it asks never to be (its LAUNCH_WITH is python3).
 _JIG_UNDER_UV = re.compile(r"\buv\s+run\b[^\n;&|]*?" + _JIG_NAME)
@@ -115,8 +118,8 @@ _LINE_CONTINUATION = re.compile(r"\\\r?\n")
 _PLAIN_PYTHON = "python" if os.name == "nt" else "python3"
 
 
-def backgrounded_gate_without_the_jig(command: str, *, background: object) -> str | None:
-    """Name the gate in a BACKGROUNDED command that does not go through gate.py.
+def backgrounded_gate_with_a_misreported_status(command: str, *, background: object) -> str | None:
+    """Name the gate in a BACKGROUNDED command whose task exit code will not be the gate's own.
 
     A background job's completion is announced as `completed (exit code 0)`, and that code
     belongs to the compound's LAST command, not to the gate inside it. Measured 2026-09-02:
@@ -140,8 +143,6 @@ def backgrounded_gate_without_the_jig(command: str, *, background: object) -> st
         The matched gate text, or ``None`` when nothing should be blocked.
     """
     if background is not True:
-        return None
-    if JIG.search(command):
         return None
     found = running_background_gate(command)
     if found is None:
@@ -187,8 +188,94 @@ def _runnable_view(joined: str, tool_name: str = "Bash") -> tuple[str, list[tupl
         if _runs_a_quoted_command(masked, tool_name):
             opaque.append((at, at + len(segment)))
         else:
-            out[at:at + len(segment)] = masked
+            out[at:at + len(segment)] = _program_words_kept(segment, masked, tool_name)
     return "".join(out), opaque
+
+
+# Words that RUN the command word after them, so a quoted path there is the program, exactly as
+# it is at the start of a statement. `uv run` is `uv` plus the `run` subcommand, skipped below.
+_LAUNCHER = re.compile(
+    r"python[\d.]*|py|uvx?|node|bash|sh|zsh|dash|pwsh|powershell"
+    r"|nice|ionice|timeout|sudo|doas|env|stdbuf|nohup|setsid|chrt|taskset|time|command|exec",
+    re.IGNORECASE,
+)
+_OPERAND_SCAN_LIMIT = 12
+
+
+def _program_words_kept(raw: str, masked: str, tool_name: str = "Bash") -> str:
+    """`masked`, with a QUOTED program path put back as written.
+
+    Masking quoted text is what keeps a gate NAMED in an argument from reading as a gate RUN, but
+    it blanked the program too when its path was quoted: `uv run "$X/ci_wait.py" ...; echo x` and
+    `python3 "$TB/scripts/gate.py" --gate "make test" > log; tail log` ran a gate the walk could no
+    longer see. The program word is the first word of the statement, or the first operand of a
+    launcher in front of it (`python3`, `uv run`, `timeout 900`, `env A=1`). Only a quoted word
+    with no whitespace inside is restored: a program path rarely has one, while the code handed to
+    `python3 -c "..."` and every prose argument does. A quoted OPERAND stays masked
+    (`cat "$X/gate.py"`, `python3 tool.py "make test"`): the walk stops at the first unquoted
+    program that is no launcher.
+
+    An ASSIGNMENT runs nothing, so its word is blanked: `G=/p/scripts/gate.py; ...; python3 "$G"`
+    names the jig in `G=`, and reading that as the jig running judged everything after it - a
+    common idiom in real backgrounded commands, where the jig itself ran last and alone.
+    """
+    tokens = [(m.start(), m.end()) for m in re.finditer(r"\S+", masked)]
+    at = _past_assignments(tokens, raw, 0)
+    out = _blanked(masked, tokens[:at])
+    while at < len(tokens):
+        start, end = tokens[at]
+        word = raw[start:end]
+        if masked[start:end] != word:
+            if not any(c.isspace() for c in word):
+                return out[:start] + word + out[end:]
+            return out
+        program = basename_for_tool(word, tool_name)
+        if program in _DECLARATIONS:
+            return _blanked(out, [t for t in tokens[at + 1:] if _ASSIGNMENT.match(raw, t[0])])
+        if not _LAUNCHER.fullmatch(program):
+            return out
+        at = _launched_word(tokens, raw, at + 1)
+    return out
+
+
+_ASSIGNMENT = re.compile(r"[A-Za-z_]\w*=")
+_DECLARATIONS = frozenset({"export", "local", "declare", "readonly", "typeset"})
+
+
+def _blanked(text: str, spans: list[tuple[int, int]]) -> str:
+    """`text` with each (start, end) span replaced by spaces, length preserved."""
+    chars = list(text)
+    for start, end in spans:
+        chars[start:end] = " " * (end - start)
+    return "".join(chars)
+
+
+def _past_assignments(tokens: list[tuple[int, int]], raw: str, at: int) -> int:
+    """Index of the first token at or after `at` that is not a `NAME=value` assignment."""
+    while at < len(tokens) and _ASSIGNMENT.match(raw, tokens[at][0]):
+        at += 1
+    return at
+
+
+def _launched_word(tokens: list[tuple[int, int]], raw: str, at: int) -> int:
+    """Index of the word a launcher runs: past its flags, a long flag's value, counts, `run`.
+
+    A launcher's own operands sit between it and the program (`timeout 900`, `nice -n 19`,
+    `uv run --with pytest`), so skipping only dashed words is not enough. Bounded like
+    shell_text's prefix scan: past the limit the statement is read as having no program word.
+    """
+    takes_value = False
+    for index in range(_past_assignments(tokens, raw, at),
+                       min(len(tokens), at + _OPERAND_SCAN_LIMIT)):
+        word = raw[tokens[index][0]:tokens[index][1]]
+        if word.startswith("-"):
+            takes_value = word.startswith("--") and "=" not in word
+            continue
+        if takes_value or word.isdigit() or word == "run":
+            takes_value = False
+            continue
+        return index
+    return len(tokens)
 
 
 # Programs whose quoted operand is a COMMAND another shell runs. A shell counts only with a `-c`
@@ -215,18 +302,31 @@ def _runs_a_quoted_command(masked_segment: str, tool_name: str = "Bash") -> bool
 
 
 def running_background_gate(command: str, tool_name: str = "Bash") -> re.Match[str] | None:
-    """The first gate this command RUNS, or None when one is only named in text.
+    """The gate whose status the task should end on, or None when one is only named in text.
 
     The match indexes `_runnable_text(_joined(command))`, which is as long as the masked command
     `gate_status_is_not_the_tasks` reads, so its offsets cut that text too.
     """
-    return BACKGROUND_GATE.search(_runnable_text(_joined(command), tool_name))
+    return _deciding_gate(_runnable_text(_joined(command), tool_name))
+
+
+def _deciding_gate(runnable: str) -> re.Match[str] | None:
+    """gate.py when the command runs it, else the first gate it runs.
+
+    The jig exits with its gate's own status, so what follows the JIG is what can mask the verdict:
+    `gate.py --gate "make test" > log; tail log` reports tail's. The jig used to exempt the whole
+    command by NAME, and with the `--gate` text quoted, so masked, nothing else was left to see -
+    the notice said exit 0 while the gate was red. Gates BEFORE the jig keep that exemption
+    (`ruff format src && gate.py ...`): the reported miss is about what runs after it.
+    """
+    return JIG.search(runnable) or BACKGROUND_GATE.search(runnable)
 
 
 def gate_status_is_not_the_tasks(command: str, tool_name: str = "Bash") -> bool:
     """True when the task's exit code would NOT be the gate's own verdict.
 
-    That is so when anything runs after the FIRST gate - `; tail`, `&& echo`, `| tee`, `|| true`,
+    That is so when anything runs after the gate.py jig, or after the FIRST gate when no jig runs
+    - `; tail`, `&& echo`, `| tee`, `|| true`,
     a second gate on a new line - or a trailing `&` makes the task itself exit at once, and when
     the gate is a `gh run watch` without --exit-status. A LONE gate (redirected, prefixed by a
     `cd DIR &&`, its argument built by a `$(...)`) is not masked: its status is the task's, which
@@ -243,7 +343,7 @@ def gate_status_is_not_the_tasks(command: str, tool_name: str = "Bash") -> bool:
     """
     joined = _joined(command)
     runnable, opaque = _runnable_view(joined, tool_name)
-    first = BACKGROUND_GATE.search(runnable)
+    first = _deciding_gate(runnable)
     if first is None:
         return False
     if _WATCH_WITHOUT_VERDICT.match(runnable, first.start()):
@@ -506,7 +606,7 @@ def main() -> int:
     # A backgrounded gate that does not go through the jig: the completion notice will report
     # the compound's last command, and that is what gets believed. Checked BEFORE the heredoc
     # strip because the whole command is what runs in the background, body included.
-    backgrounded = backgrounded_gate_without_the_jig(
+    backgrounded = backgrounded_gate_with_a_misreported_status(
         cmd, background=(data.get("tool_input") or {}).get("run_in_background")
     )
     if backgrounded is not None:

@@ -87,17 +87,44 @@ def _p(store, name):
     return os.path.join(store, name)
 
 
-def _read(path):
+# Seconds slept between attempts; about 0.8 s in all before the error is raised.
+_SHARING_RETRY_DELAYS = (0.01, 0.02, 0.05, 0.1, 0.2, 0.4)
+
+
+def _retry_sharing_violation(op, windows=os.name == "nt", sleep=time.sleep):
+    """Return op(), retrying a bounded number of times while Windows reports a sharing violation.
+
+    Store files are replaced with os.replace while other threads (and other runs on the same
+    store) read them. On Windows the replace holds a DELETE-access handle on the file it moves and
+    open() does not grant FILE_SHARE_DELETE, so a reader opening the file in that window fails with
+    PermissionError (errno 13), and a replace onto a file a reader holds open fails the same way.
+    Both clear within milliseconds, so the operation is retried; a PermissionError that outlasts
+    the delays is raised. Off Windows a PermissionError is an access right, never a race, and is
+    raised at once."""
+    for delay in _SHARING_RETRY_DELAYS:
+        try:
+            return op()
+        except PermissionError:
+            if not windows:
+                raise
+            sleep(delay)
+    return op()
+
+
+def _read(path, opener=open, retry=_retry_sharing_violation):
     # utf-8-sig: a list saved by a Windows editor starts with a BOM, which would otherwise glue
     # itself onto the first entry and make it match nothing.
-    try:
-        with open(path, encoding="utf-8-sig") as f:
+    def load():
+        with opener(path, encoding="utf-8-sig") as f:
             return {l.strip() for l in f if l.strip()}
+
+    try:
+        return retry(load)
     except FileNotFoundError:
         return set()
 
 
-def _atomic_write(path, text):
+def _atomic_write(path, text, replace=os.replace, retry=_retry_sharing_violation):
     """Replace `path` with `text` in one step, through a temp file no other writer can share.
 
     _lock serialises threads, not processes: two runs on one store each wrote `path + ".tmp"`,
@@ -108,7 +135,7 @@ def _atomic_write(path, text):
     try:
         with os.fdopen(fd, "w", encoding="utf-8") as f:
             f.write(text)
-        os.replace(tmp, path)
+        retry(lambda: replace(tmp, path))
     except BaseException:
         try:
             os.unlink(tmp)
@@ -164,20 +191,27 @@ def discover(store, sources):
     return answered
 
 
-def _read_speeds(path):
+def _parse_speeds(f):
     d = {}
-    try:
-        with open(path, encoding="utf-8") as f:
-            for line in f:
-                a = line.rstrip("\n").split("\t")
-                if len(a) == 2:
-                    try:
-                        d[a[0]] = float(a[1])
-                    except ValueError:
-                        pass
-    except FileNotFoundError:
-        pass
+    for line in f:
+        a = line.rstrip("\n").split("\t")
+        if len(a) == 2:
+            try:
+                d[a[0]] = float(a[1])
+            except ValueError:
+                pass
     return d
+
+
+def _read_speeds(path, opener=open, retry=_retry_sharing_violation):
+    def load():
+        with opener(path, encoding="utf-8") as f:
+            return _parse_speeds(f)
+
+    try:
+        return retry(load)
+    except FileNotFoundError:
+        return {}
 
 
 def _upsert_speeds(path, new):

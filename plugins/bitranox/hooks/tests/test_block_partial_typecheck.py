@@ -177,6 +177,14 @@ def test_message_names_the_fix(monkeypatch, project, capsys):
     assert "pyright src tests" in err
 
 
+def test_refusal_says_nothing_in_the_command_ran(monkeypatch, project, capsys):
+    # The block refuses the WHOLE Bash call, so an edit bundled with the pyright run is lost too.
+    run_main(monkeypatch, "echo edit > f.txt && pyright src", project)
+    err = capsys.readouterr().err
+    assert "NOTHING in this command ran" in err
+    assert "re-run" in err
+
+
 def test_test_dir_named_test_is_honoured(monkeypatch, tmp_path):
     (tmp_path / "src").mkdir()
     (tmp_path / "test").mkdir()

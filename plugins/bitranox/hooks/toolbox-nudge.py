@@ -35,6 +35,17 @@ from shell_text import (  # noqa: F401
 # 220 firings, and the ones it dropped were mostly a `.jsonl` mention kilobytes away from a
 # `json.loads` of some other file.
 _ONE_LOGICAL_LINE = r"(?:[^\n\\]|\\.|\\\n)*"
+
+# The one reason both hand-rolled-arm rules (an authored script, an inline `sed -i` command) give.
+# It carries the two usages a reader would otherwise have to find: `--battery` for many labelled
+# arms, and a SCRATCH COPY for an arm that must run the whole suite - the jig takes its paths
+# relative to the directory it is run from, so running it inside a copy of the tree (`git archive
+# HEAD | tar -x -C DIR`, then cd there, with `--python PATH`) leaves the real tree untouched.
+_HAND_ROLLED_ARM_WHY = (
+    "hand-rolling a mutate-then-pytest arm (edit a source, run the test, put the file back): it "
+    "applies exact anchors, restores from a copy it took first and names the failing assertion; "
+    "`--battery arms.json` runs many labelled arms, and for an arm that must run the full suite, "
+    "run it from inside a scratch copy of the tree with `--python PATH`")
 _SCRIPT_WINDOW = r".{0,800}"
 
 
@@ -196,6 +207,17 @@ _SHELL_ONLY_RULES = [
                 r"\bsleep\s+\d)"
                 r"|\bps\b[^\n|]*\|\s*grep\b[^\n]*\|\|\s*\{?\s*echo\s+[\"']?(?:FINISHED|DONE|finished|done)\b"),
      "backstop", "a long job with a hand-rolled wait loop that cannot tell hung from finished"),
+    # The INLINE spelling of the same arm: `sed -i` the source, run pytest, put the backup back,
+    # all in one command. Before `renamescope` and `anchor_edit`, which claim every `sed -i`; every
+    # part is required, so an edit followed by a test run, or a bare backup copy, is not an arm.
+    # Priced over the same corpus: 52 Bash calls in 27 sessions, every one a real arm, none of
+    # them from a heredoc (that body is the rule above's). 21 of the 52 also carry a `grep -c` that
+    # proves the sed landed, which `claim_check` (in the first list) keeps.
+    (re.compile(r"(?s)\A(?=.*\bsed\s+-i\b)(?=.*\bpytest\b)"
+                r"(?=.*(?:\bcp\s+\S+\s+\S+(?:\.bak|\.orig|\.saved|\.bk)\b"
+                r"|\bcp\s+\S+(?:\.bak|\.orig|\.saved|\.bk)\s+\S+"
+                r"|\bmv\s+\S+(?:\.bak|\.orig|\.saved)\s+\S+|\bgit\s+(?:checkout\s+--|restore\b)))"),
+     "mutation_arm", _HAND_ROLLED_ARM_WHY),
     # Before anchor_edit, which claims every `sed -i`: measured, all 23 firings of this shape were
     # swallowed by that broader rule, so listed after it this one would be dead on arrival.
     (re.compile(r"\bsed\s+-i[^\n]*s/[A-Za-z_][A-Za-z0-9_]{3,}/"), "renamescope",
@@ -255,6 +277,26 @@ _ANY_TOOL_RULES = [
     (re.compile(r"\bfind\b[^\n]*-name\s+['\"]?CLAUDE\.md"
                 r"|\bgrep\s+-[A-Za-z]*r[A-Za-z]*\b[^\n]*CLAUDE\.md"), "claudemd_variance",
      "finding duplicated CLAUDE.md sections by hand"),
+    # A hand-rolled MUTATE-THEN-PYTEST ARM: a throwaway `arms.py` / `mutate.py` holding a table of
+    # exact-text mutations that writes each into a source, runs pytest and puts the file back from
+    # a copy. It recurred three times as a prose rule and failed each time, because a rule read
+    # before the work is not in view while the script is being typed. Every part is required: an
+    # invoked pytest, a write, a copy or restore, and a mutation word - and a text that already
+    # names the jig is the answer, not the problem. A document opening on a heading is a plan or a
+    # report ABOUT arms and is skipped (the five noisy firings were all such documents). Priced
+    # over the transcript corpus (151,271 distinct Bash, Write and Edit calls, a heredoc body
+    # counted as authored): 106 firings in 55 sessions, 93 of which an earlier rule - nearly always
+    # `anchor_edit`, since an arm also reads, replaces and writes text - had been claiming. Read
+    # whole, the firings were hand-rolled arms apart from two documents. Listed before the
+    # `anchor_edit` rules for that reason.
+    (re.compile(r"(?s)\A(?!\s*#{1,6}\s)"
+                r"(?=.*(?:-m[ ,\"']+pytest\b|[\"']pytest[\"']|\bpytest\s+(?:-|tests?/|\$|\"\$)))"
+                r"(?=.*(?:write_text\(|\.write\(|open\([^)\n]*[\"']w|\bsed\s+-i\b))"
+                r"(?=.*(?:shutil\.copy|copyfile|read_bytes\(|\bcp\s+[\"$]|\bmv\s+[\"$]|\.saved\b"
+                r"|\.orig\b|\bgit\s+show\b|\bgit\s+archive\b|\bcopytree\b))"
+                r"(?=.*(?:\b(?:ARMS|MUTATIONS|MUTANTS?|SURVIVED|KILLED)\b"
+                r"|\b[Mm]utat(?:e|es|ed|ion|ions|or)\b|\b[Mm]utants?\b))"
+                r"(?!.*mutation_arm)"), "mutation_arm", _HAND_ROLLED_ARM_WHY),
     # A hand-rolled plan DRY-RUN: a driver that pulls a plan's python fences out with a regex or an
     # index() and then writes and checks them. The extraction call on a literal python fence is
     # the shape; a plan that merely CONTAINS python blocks is not. Priced over the transcript

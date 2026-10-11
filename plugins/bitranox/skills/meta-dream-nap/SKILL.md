@@ -56,6 +56,11 @@ than deleting it.
    enter the store) - via `bitranox:meta-self-improve`, at the level that OWNS each fact's
    pointer (see the Scope carve-out: this is the one step that may write a sibling, and only for
    that reason).
+   **Fanned out to subagents**, every brief states two rules. (a) A delta to an EXISTING fact is
+   folded with `python3 <plugin>/skills/meta-dream-tree/factedit.py apply --slug <slug>
+   --body-file <f> [--hook-file <f>] [--type <kind>]` (read it first with `factedit.py show --body --slug
+   <slug>`), never with a hand-rolled fold script. (b) A fold target named by two batches goes to
+   ONE batch, or is folded sequentially, each fold preceded by a fresh `show`, so no update is lost.
 2. **Back up + manifest** the CHAIN's levels only (per the core).
 2b. **Read the toolbox inventory** - `uv run ~/.claude/skills/toolbox/tools/toolbox.py list`, the
    READ half of the toolbox pass (per the core); skip only if that path does not exist. It runs

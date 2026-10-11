@@ -270,12 +270,16 @@ def test_bg_refresh_tops_the_pool_up_from_its_sources(tmp_path, list_server, mon
                                       "sources": [list_server + "/list.txt"]})
     thread.start()
     deadline = threading.Event()
-    for _ in range(200):
-        if pp._read(pp._p(store, "live.txt")):
-            break
-        deadline.wait(0.05)
-    stop.set()
-    thread.join(timeout=5)
+    # The loop must be stopped however the poll ends: left running, it keeps writing into a store
+    # the session teardown deletes, and every write fails with ENOENT on its pool.txt temp file.
+    try:
+        for _ in range(200):
+            if pp._read(pp._p(store, "live.txt")):
+                break
+            deadline.wait(0.05)
+    finally:
+        stop.set()
+        thread.join(timeout=5)
     assert not thread.is_alive()
     assert len(pp._read(pp._p(store, "live.txt"))) >= 1
 

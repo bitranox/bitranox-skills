@@ -120,6 +120,13 @@ the success line, abort-and-show on a miss).
     calibrated: read the names now and check them before hand-rolling any scan below. The
     CONSOLIDATE judgement is a separate half and stays at step 10b.
 
+    Also run `jev_shadow.py status` HERE, once (home `<plugin>/skills/meta-self-improve/`, launch
+    via `hooks/run-python.sh`; exit 0 is on), and keep the result for the whole run. When it is on,
+    three sites need YOUR own verdict on every fact, and those verdicts can only be made while the
+    pass is under way, not afterwards: `dream-placement` (step 5), `dream-firing` (step 6) and
+    `dream-prune` (step 7). Record each verdict as you judge the fact, in the format of that
+    step's shadow bullet. A site you did not feed is reported at step 11 as `off (<reason>)`.
+
 1. **Capture first (unconditional on a manual dream).** Enumerate this session's durable learnings
    and capture via `bitranox:meta-self-improve` BEFORE consolidating, so the dream works on a
    complete store. Read the `## Lessons for the next nap` heading of every `handover.md` on the
@@ -231,7 +238,7 @@ the success line, abort-and-show on a miss).
    `amend-pinned` on its behalf. `move` carries the pin through unchanged and never refuses on it,
    so re-leveling a pinned fact is ordinary placement work like any other entry - no exception, no
    separate approval step.
-   - **Jev shadow on placement** (only when `jev_shadow.py status` exits 0; home
+   - **Jev shadow on placement** (only when step 0c found `jev_shadow.py status` on; home
      `<plugin>/skills/meta-self-improve/`, launch via `hooks/run-python.sh`; procedure in its
      `references/jev-shadow.md`; both files in a fresh `D=$(mktemp -d)` outside any repo, since
      they hold unredacted fact text), in this order: (1) `jev_shadow.py items --site
@@ -259,7 +266,7 @@ the success line, abort-and-show on a miss).
    the level that OWNS the pointer - a title-derived slug mints a duplicate when the fact was
    retitled, and any other level is refused as a collision), propose-diff, apply.
    Bodies missing the frame or the **Why:**/**How to apply:** sections get the same treatment.
-   - **Jev shadow on the firing check** (only when `jev_shadow.py status` exits 0; home, launch and
+   - **Jev shadow on the firing check** (only when step 0c found `jev_shadow.py status` on; home, launch and
      procedure as in step 5's shadow bullet; a fresh `D=$(mktemp -d)` of its own outside any repo):
      `jev_shadow.py items --site dream-firing --anchor <anchor> --out "$D/items.jsonl"` writes one
      line per fact in the tree. YOU judge every hook; write YOUR verdict for every fact to
@@ -283,7 +290,7 @@ the success line, abort-and-show on a miss).
    2. Does this describe a session that never reached a working end state, without
       labelling it unsolved? If so, relabel it as unsolved.
 
-   - **Jev shadow on those two questions** (only when `jev_shadow.py status` exits 0; home, launch
+   - **Jev shadow on those two questions** (only when step 0c found `jev_shadow.py status` on; home, launch
      and procedure as in step 5's shadow bullet; a fresh `D=$(mktemp -d)` of its own outside any
      repo): `jev_shadow.py items --site dream-prune --anchor <anchor> --out "$D/items.jsonl"` writes
      one line per fact in the tree. YOU answer both questions for every fact; write YOUR answers to

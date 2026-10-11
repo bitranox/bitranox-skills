@@ -380,6 +380,69 @@ def test_what_the_background_block_must_never_refuse(monkeypatch, label, command
 
 
 # ---------------------------------------------------------------------------
+# gate.py is the remedy, not an exemption: its status is the verdict only when nothing follows it
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    ("label", "command"),
+    [
+        # The reported miss: the completion notice said exit code 0 (tail's) while the gate was
+        # RED, and only gate.py's [FAIL] line in the log carried the verdict.
+        ("the jig, then tail", 'python3 /p/scripts/gate.py --gate "make test" > f 2>&1; tail f'),
+        ("the jig, then echo", 'python3 gate.py --gate "make test" > f 2>&1; echo done'),
+        ("the jig piped into tee", 'python3 /p/scripts/gate.py --gate "pytest -q" | tee log'),
+        ("the jig detached", 'python3 /p/scripts/gate.py --gate "make test" > f 2>&1 &'),
+        ("the jig on a quoted path, then tail",
+         'python3 "$TB/scripts/gate.py" --gate "make test" > f 2>&1; tail f'),
+        # OPEN-WORK [540]: a gate named only in a QUOTED program path.
+        ("ci_wait on a quoted path, then echo", 'uv run "$X/ci_wait.py" --sha abc; echo x'),
+        ("a quoted gate binary, then tail", '"$VENV/bin/pytest" -q > log 2>&1; tail log'),
+        ("a quoted path behind timeout", 'timeout 900 "$X/ci_wait.py" --sha abc; tail log'),
+        ("an assignment, then the jig, then tail",
+         'S=/tmp/x && python3 /p/scripts/gate.py --gate "make test" > $S/o 2>&1; tail $S/o'),
+    ],
+)
+def test_a_backgrounded_jig_with_something_after_it_is_blocked(monkeypatch, capsys, label, command):
+    """gate.py returns the GATE's status, but the notice reports the LAST command's, so `; tail`
+    after the jig masks it exactly as after a bare gate. The jig used to exempt the whole command
+    on its name alone, and the quoted `--gate` text the masking blanks left nothing else to see."""
+    assert run_main_bg(monkeypatch, command, True) == 2, label
+    assert "BLOCKED: a backgrounded gate" in capsys.readouterr().err
+
+
+@pytest.mark.parametrize(
+    ("label", "command", "background"),
+    [
+        ("the jig alone, redirected", 'python3 /p/scripts/gate.py --gate "make test" > f 2>&1', True),
+        ("the jig on a quoted path, alone",
+         'python3 "$TB/scripts/gate.py" --gate "make test" --then "git push"', True),
+        ("separators inside the quoted gate",
+         'cd /w && python3 /p/scripts/gate.py --gate "make test; tail x" --then "echo ok"', True),
+        ("the jig then tail, in the foreground",
+         'python3 /p/scripts/gate.py --gate "make test" > f 2>&1; tail f', False),
+        ("ci_wait on a quoted path, alone", 'uv run "$X/ci_wait.py" --sha abc', True),
+        # A quoted PATH is a command word only where a program goes; as an operand it is data.
+        ("a quoted jig path as an operand", 'cat "$X/gate.py" > copy.py; tail copy.py', True),
+        ("a quoted gate text as a script operand", 'python3 tool.py "make test"; tail log', True),
+        ("a quoted prose operand after an interpreter", 'python3 -c "print(1)"; tail log', True),
+        # Naming the jig in an assignment runs nothing; the jig runs last, alone.
+        ("the jig path in an assignment",
+         'G=/p/scripts/gate.py; S=/tmp/x; cd /w && python3 "$G" --log "$S/g.log" --gate "make test"',
+         True),
+        ("the jig path exported", 'export G=/p/gate.py\npython3 "$G" --gate "make test"', True),
+        # A gate BEFORE the jig keeps the exemption it always had; the miss was what runs AFTER.
+        ("a formatter before the jig",
+         'ruff format src > /dev/null && python3 /p/scripts/gate.py --gate "pytest -q"', True),
+    ],
+)
+def test_a_jig_whose_verdict_is_the_tasks_is_allowed(monkeypatch, label, command, background):
+    """The direction the fix must NOT reach: the jig alone (its status is the task's), the jig in
+    the foreground, and a quoted path that is an operand rather than the program."""
+    assert run_main_bg(monkeypatch, command, background) == 0, label
+
+
+# ---------------------------------------------------------------------------
 # The remedy the block names must be one that works
 # ---------------------------------------------------------------------------
 

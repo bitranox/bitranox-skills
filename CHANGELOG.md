@@ -29,6 +29,39 @@ than the change, so entries reconstructed from them would read like coverage wit
 a hole nobody has drawn a line under is one that gets rediscovered and half-filled - which is how
 two "versions with no entry" notes came to sit in this file disagreeing with it.
 
+## [8.10.3]
+
+### Fixed
+
+- `block-masked-gate-exit` no longer exempts every backgrounded command that names `gate.py`. A
+  jig run followed by `; tail`, `; echo`, `| tee` or a trailing `&` is refused like a bare gate,
+  since the task's exit status is then the follower's; the jig run alone, or in the foreground,
+  still passes. A gate launched from a quoted program path (`uv run "$X/ci_wait.py" ...; echo x`)
+  is recognised again, and a jig path in a variable assignment no longer counts as the jig running.
+- `net-rotating-proxies` `proxy_pool.py`: on Windows a `run --background-discovery` job no longer
+  aborts with "Permission denied" when a worker reads `live.txt` while the background refresh
+  replaces it. Store reads and the atomic replace retry a sharing violation for up to about 0.8 s;
+  elsewhere a PermissionError is raised at once. The CLI test no longer leaks its refresh thread.
+- `block-partial-typecheck`'s refusal says that nothing in the refused command ran, so an edit or
+  write bundled with a narrowed pyright run must be re-run on its own.
+
+### Changed
+
+- The toolbox nudge recognises a hand-rolled mutate-then-pytest arm - a throwaway arms/mutate
+  script (Write body or Bash heredoc) or an inline `sed -i` + pytest + restore - and points at
+  `mutation_arm`, naming `--battery` and running full-suite arms from a scratch copy of the tree.
+- `compuse-git` warns that `pull`, `merge`, `checkout` and `switch` overwrite a gitignored local
+  file when an incoming commit adds that path, exiting 0 with no output, and gives the pre-pull
+  check `git diff --name-only --diff-filter=A HEAD..@{upstream} | git check-ignore -v --stdin`.
+- `compuse-bash` documents the interactive grep's `ugrep: error ... exceeds complexity limits` on
+  bounded repeats such as `.{0,160}`, and the workaround (`bash -c 'grep -E ...'` or
+  `/usr/bin/grep`).
+- `meta-dream-tree` runs `jev_shadow.py status` once in step 0c and names the three shadow sites
+  (placement, firing, prune) that need the session's own per-fact verdicts during steps 5-7.
+- `meta-dream-nap` step 1: a capture fanned out to subagents names `factedit.py apply` (after
+  `show --body`) in each brief as the only way to fold a delta into an existing fact, and gives a
+  fold target shared by two batches to one batch.
+
 ## [8.10.2]
 
 ### Changed
