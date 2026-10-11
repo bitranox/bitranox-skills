@@ -29,6 +29,24 @@ than the change, so entries reconstructed from them would read like coverage wit
 a hole nobody has drawn a line under is one that gets rediscovered and half-filled - which is how
 two "versions with no entry" notes came to sit in this file disagreeing with it.
 
+## [8.11.0]
+
+### Added
+
+- `git-worktrees` ships `scripts/landed.py`, which answers whether a leftover worktree or branch
+  already landed on the target branch, read-only. A worktree's changed, deleted and untracked
+  files are hashed as git would store them and compared with the target's copy and with every
+  target commit since the merge-base that touched the path. A branch's commits count as landed
+  when each is patch-equivalent or every line it added is present in the target's copy, so work
+  that landed squashed or copied in by hand - which `git cherry` reports as unlanded - is found.
+  Exit 0 landed, 1 not landed, 2 could not run; `--json` emits the envelope. The skill gets a new
+  Step 4 for it (the build-cache cleanup is now Step 5), and its description names the case.
+
+### Changed
+
+- `wtclean.py` refusing a worktree with uncommitted or untracked work now names `landed.py` as
+  the way to find out whether that work is already on the target branch.
+
 ## [8.10.4]
 
 ### Fixed

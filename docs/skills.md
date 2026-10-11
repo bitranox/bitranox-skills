@@ -102,7 +102,7 @@ Programmatic create/edit/validate of machine-readable file formats.
 
 Version-control workflows: branching, worktrees, gitignore, history.
 
-- [`git-worktrees`](../plugins/bitranox/skills/git-worktrees/SKILL.md) - Use when starting feature work that needs an isolated workspace or worktree separate from the current branch, or before executing an implementation plan that should not disturb the current checkout, or when finishing with a worktree - deleting one leaves its per-topic build cache behind outside the checkout, so the disk stays full and nothing lists what to reclaim
+- [`git-worktrees`](../plugins/bitranox/skills/git-worktrees/SKILL.md) - Use when starting feature work that needs an isolated workspace or worktree separate from the current branch, or before executing an implementation plan that should not disturb the current checkout, or when finishing with a worktree - deleting one leaves its per-topic build cache behind outside the checkout, so the disk stays full and nothing lists what to reclaim - or before discarding a leftover worktree's uncommitted files or deleting a branch whose work may already be on master, merged squashed, cherry-picked or copied in by hand, where git cherry says it is not
 
 ## compuse
 

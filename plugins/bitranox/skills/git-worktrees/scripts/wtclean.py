@@ -49,7 +49,8 @@ Refusals, because this runs on machines whose layout is not yours:
   the base itself, is refused.
 * A worktree holding uncommitted or untracked work is refused unless you pass
   `--discard-uncommitted`, which forwards `--force` to `git worktree remove` and DISCARDS that
-  work. Nothing is discarded by default.
+  work. Nothing is discarded by default. `landed.py`, beside this script, says whether that work
+  is already on the target branch, which is the question to settle before discarding it.
 
 Windows: the symlink refusal does not cover a directory JUNCTION, which Windows does not report
 as a symbolic link; the "resolves outside base" refusal is what covers that case, because
@@ -654,7 +655,8 @@ def worktree_refusal(
         return plan.worktree_refusal
     if plan.worktree_status in _OVERRIDABLE_STATUSES and not discard_uncommitted:
         detail = (
-            "holds uncommitted or untracked work"
+            "holds uncommitted or untracked work (scripts/landed.py on it says whether that work"
+            " is already on the target branch)"
             if plan.worktree_status == STATUS_DIRTY
             else "state could not be read (git unavailable, or not a worktree)"
         )

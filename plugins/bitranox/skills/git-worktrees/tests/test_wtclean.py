@@ -417,6 +417,23 @@ def test_a_dirty_worktree_is_refused_by_default(tmp_path):
     assert "--discard-uncommitted" in reason
 
 
+def test_a_dirty_refusal_names_the_tool_that_says_whether_the_work_landed(tmp_path):
+    """The refusal is where the reader decides whether to discard, so it names the instrument."""
+    worktree = tmp_path / "wt-topic"
+    worktree.mkdir()
+    plan = W.build_plan("topic", base=tmp_path, status_probe=lambda _p: W.STATUS_DIRTY)
+    reason = W.worktree_refusal(plan)
+    assert reason is not None and "landed.py" in reason
+
+
+def test_an_unreadable_worktree_state_is_not_sent_to_the_landed_check(tmp_path):
+    """landed.py cannot read a state git could not read either, so it is not offered there."""
+    (tmp_path / "wt-topic").mkdir()
+    plan = W.build_plan("topic", base=tmp_path, status_probe=lambda _p: W.STATUS_UNKNOWN)
+    reason = W.worktree_refusal(plan)
+    assert reason is not None and "landed.py" not in reason
+
+
 def test_an_unreadable_worktree_state_is_treated_like_a_dirty_one(tmp_path):
     """'I could not check' must never be the permissive answer for a delete."""
     (tmp_path / "wt-topic").mkdir()

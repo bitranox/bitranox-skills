@@ -604,7 +604,8 @@
   "plan",
   "disturb",
   "checkout",
-  "per-topic"
+  "per-topic",
+  "cherry-picked"
  ],
  "infra-chrome-remote-desktop": [
   "installing",
