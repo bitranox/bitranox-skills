@@ -588,6 +588,15 @@ def test_a_term_matches_by_casefold_not_lower():
     assert [h.kind for h in hits] == ["denylist"]
 
 
+def test_a_rule_digest_folds_case_the_way_the_rule_matches():
+    """The digest names a pattern in reports without showing it, and it promises to fold case
+    as the match does: two spellings that match the same lines must not get two names, or a
+    report reads as two rules where the list holds one term."""
+    sharp, upper, plain = (PC.Rule(1, 1, p).digest for p in ("Straße", "STRASSE", "Strasse"))
+    assert sharp == upper == plain
+    assert PC.Rule(1, 1, "Strasse").digest != PC.Rule(1, 1, "Strase").digest
+
+
 def test_a_sharp_s_spelling_in_the_push_is_found_by_a_rule_from_the_file(tmp_path):
     r = _check_with_list(tmp_path, b"Strasse==>Road1\n", "doc.md", "meet at STRA\u00dfE 5\n")
     assert r.returncode == 1, r.stdout + r.stderr

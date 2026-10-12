@@ -29,6 +29,21 @@ than the change, so entries reconstructed from them would read like coverage wit
 a hole nobody has drawn a line under is one that gets rediscovered and half-filled - which is how
 two "versions with no entry" notes came to sit in this file disagreeing with it.
 
+## [8.17.3]
+
+### Fixed
+
+- compuse-toolbox `pushcheck`/`redaction_scan`: `Rule.digest`, the hash that names a pattern in a
+  report without showing it, now folds case with `fold_case` (`str.casefold`) as the match does,
+  instead of `lower()`. Two spellings that match the same lines (`Strasse`, `STRASSE` with a
+  sharp s) no longer get two different names. The printed `sha256:` / `pattern_hash` changes for
+  every pattern whose casefold differs from its `lower()` (one holding a sharp s, for example);
+  every other pattern keeps its hash.
+- compuse-toolbox SKILL.md: the `pushcheck` row states the `--denylist-file` line format: the
+  `redaction_scan` list format (`#` and blank lines are comments, `term==>replacement` searches
+  the term, terms stripped and matched by casefold), and a non-UTF-8 or zero-term list is refused
+  with exit 2.
+
 ## [8.17.2]
 
 ### Fixed

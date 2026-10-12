@@ -246,7 +246,7 @@ class Rule:
     @property
     def digest(self) -> str:
         """A short hash naming the pattern without showing it (case-folded, as it matches)."""
-        return hashlib.sha256(self.pattern.lower().encode("utf-8")).hexdigest()[:12]
+        return hashlib.sha256(fold_case(self.pattern).encode("utf-8")).hexdigest()[:12]
 
 
 @dataclass(frozen=True)

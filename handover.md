@@ -1,4 +1,4 @@
-# Handover - 2026-10-12 19:40, [200] six decisions taken, three shipped (8.16.0, 8.17.0), four builds open as [9]
+# STALE - read 2026-10-12 20:15, work continued
 
 ## In flight
 
