@@ -4,8 +4,10 @@
 
 - Nothing part-done. 8.11.1 (d4bb74af, mirror gate: a commit passes on a byte-matching
   uncommitted twin) is on origin with CI green. 8.13.0 (40eeeb05, new hook
-  `block-write-after-sibling-cd`) is on origin; its CI was still running when this was written -
-  check it first (see "How to verify").
+  `block-write-after-sibling-cd`) failed CI on windows-latest py3.14 only: its absolute-path test
+  used `os.path.isabs`, which rejects a drive-less root on Windows from 3.13. 8.13.1 fixes it by
+  reusing `shell_text.is_rooted`; it is pushed with this handover - check its CI first (see
+  "How to verify"), since the fix could not be run on Windows locally.
 
 ## Committed, or not
 
@@ -58,6 +60,9 @@ other sessions queued on 2026-10-12 (11 open across 8 queues, untriaged); [560] 
   checkout first: the isolation refuses even their `!` command (recurrence 2, fact already updated).
 - When pushing to bitranox-skills behind its ~5 min pre-push gate, ask the live peer sessions to
   hold first: two pushes raced this session's gate before it asked.
+- When a hook decides whether a path is absolute, use `shell_text.is_rooted`, never
+  `os.path.isabs`: on Windows from Python 3.13 isabs rejects `/work/x`, which only the
+  windows-latest CI cell shows.
 - When a repo test pins every Bash hook to PowerShell, register a new shell hook under
   `Bash|PowerShell` from the start and make it read both tools.
 - tooling: none new beyond the queued EnterWorktree note ([200]).
@@ -83,8 +88,8 @@ recommendation.
 
 ## How to verify
 
-- `uv run <plugin>/skills/compuse-toolbox/scripts/ci_wait.py --sha 40eeeb0561c0fe90c3257ee6e241d909550b06cf`
-  exits 0 (8.13.0's CI).
+- `uv run <plugin>/skills/compuse-toolbox/scripts/ci_wait.py --sha $(git rev-parse --verify origin/master)`
+  exits 0 - the windows-latest cell is the one that failed on 8.13.0.
 - `python3 <plugin>/skills/meta-self-improve/contrib_queue.py queues` lists 11 open entries in 8
   queues as of this writing: the 5 decision entries named in [200] (lsdsk x2, soundtouch-zonemaster,
   provmm-umbrella, bitranox-skills) and 6 new ones from other sessions (projects, bmk fix-60,
