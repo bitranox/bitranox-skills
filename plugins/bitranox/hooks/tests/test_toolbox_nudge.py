@@ -285,6 +285,61 @@ def test_claim_check_does_not_hijack_an_ordinary_grep():
         assert matched is None or matched[0] != "claim_check", cmd
 
 
+# ---- suite_busy: is a test suite already running in this checkout? ------------------------------
+
+@pytest.mark.parametrize("cmd", [
+    "pgrep -af pytest",
+    "pgrep -x pytest >/dev/null && echo busy",
+    'pgrep -f "[b]mk test"',
+    "ps -eo args | grep -c '[r]epo/.venv/bin/python -m pytest'",
+    "ps aux | grep -i pytest",
+])
+def test_match_suite_busy_on_a_hand_rolled_running_suite_check(cmd):
+    """Every recorded firing of this shape was a check for a running pytest, bmk or make gate,
+    and the `-f` and `-c` spellings must not be lost to procsig or claim_check listed after it."""
+    assert N.match_tool(cmd, tool_name="Bash")[0] == "suite_busy"
+
+
+@pytest.mark.parametrize("cmd, other", [
+    ("pkill -f pytest", "procsig"),
+    ("pgrep -f openvmm", "procsig"),
+])
+def test_suite_busy_leaves_killing_and_other_processes_to_procsig(cmd, other):
+    assert N.match_tool(cmd, tool_name="Bash")[0] == other
+
+
+def test_suite_busy_does_not_fire_on_running_a_suite():
+    for cmd in ("python -m pytest -q", "make test", "bmk test", "grep -rn pytest docs/"):
+        matched = N.match_tool(cmd, tool_name="Bash")
+        assert matched is None or matched[0] != "suite_busy", cmd
+
+
+# ---- redaction_scan: a diff grepped against a private name list ----------------------------------
+
+@pytest.mark.parametrize("cmd", [
+    "git diff origin/main..HEAD | grep -iFf tools/names-private.txt",
+    "git diff HEAD > d.txt; grep -icFf pats.txt d.txt",
+    "grep -c -F -f tools/redactions.txt out.log",
+    "git log -p -3 | grep --fixed-strings --file=names.txt",
+])
+def test_match_redaction_scan_on_a_hand_rolled_list_grep(cmd):
+    """The `-c` spellings must reach this rule, not claim_check listed after it."""
+    assert N.match_tool(cmd, tool_name="Bash")[0] == "redaction_scan"
+
+
+@pytest.mark.parametrize("cmd", [
+    "grep -vxFf tpl_files.txt changed.txt; git diff --stat",
+    "grep -xFf a.txt b.txt; git diff",
+    "grep -Ff names.txt notes.md",
+    "git diff | grep -i needle",
+])
+def test_redaction_scan_does_not_fire_on_a_set_difference_or_a_plain_grep(cmd):
+    """`-v`/`-x` with -Ff is a set difference between file lists; with no diff and no list name
+    beside it, `-Ff` is an ordinary fixed-string search."""
+    matched = N.match_tool(cmd, tool_name="Bash")
+    assert matched is None or matched[0] != "redaction_scan", cmd
+
+
 def test_conflict_scan_still_wins_its_own_shape():
     """conflict_scan's rule is listed first and uses -rn, so the new rule must not shadow it."""
     assert N.match_tool("grep -rn '^<<<<<<<' .")[0] == "conflict_scan"

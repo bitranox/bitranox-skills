@@ -68,8 +68,8 @@ from pathlib import Path
 
 from _cli_envelope import EXIT_ERROR, EnvelopeArgumentParser, emit, guarded
 
-__all__ = ["Finding", "Verdict", "parse_remote", "scan_text", "scan_diff", "scan_messages",
-           "decide"]
+__all__ = ["Finding", "Verdict", "added_lines", "decide", "parse_remote", "scan_diff",
+           "scan_messages", "scan_text", "split_lines"]
 
 # A remote URL in any of the shapes git accepts. Owner and repo are what the visibility lookup
 # needs; the host decides whether we can ask at all.
@@ -210,7 +210,7 @@ def _private_ip_hits(line: str) -> list[str]:
     return out
 
 
-def _lines(text: str) -> list[str]:
+def split_lines(text: str) -> list[str]:
     """`text` split on newlines ONLY, with a trailing CR dropped.
 
     `str.splitlines()` also splits on form feed, U+2028 and the other Unicode separators. In a
@@ -227,7 +227,7 @@ def scan_text(text: str, path: str, denylist: tuple[str, ...] | list[str] = ()) 
     """Every private-looking value in `text`, with 1-based line numbers. PURE."""
     terms = [t.strip().lower() for t in denylist if t.strip()]
     found: list[Finding] = []
-    for n, line in enumerate(_lines(text), start=1):
+    for n, line in enumerate(split_lines(text), start=1):
         for hit in _abs_path_hits(line):
             found.append(Finding("abs_path", path, n, hit))
         for hit in _hostname_hits(line):
@@ -286,7 +286,7 @@ def _changed_lines(diff: str):
     `+`, `-`, a space or a backslash), so those two are the only way out of one.
     """
     path, lineno, in_header = "?", 0, True
-    for raw in _lines(diff):
+    for raw in split_lines(diff):
         if raw.startswith("diff "):
             in_header = True
             continue
@@ -307,7 +307,7 @@ def _changed_lines(diff: str):
             lineno += 1
 
 
-def _added_lines(diff: str):
+def added_lines(diff: str):
     """(path, new-file line, text) for every ADDED line of a unified diff."""
     for path, lineno, sign, text in _changed_lines(diff):
         if sign == "+":
@@ -322,7 +322,7 @@ def scan_diff(diff: str, denylist: tuple[str, ...] | list[str] = ()) -> list[Fin
     place (a merge's first-parent diff repeats its side branch's commits) is reported once.
     """
     found: list[Finding] = []
-    for path, lineno, text in _added_lines(diff):
+    for path, lineno, text in added_lines(diff):
         found.extend(Finding(f.kind, path, lineno, f.text_excerpt)
                      for f in scan_text(text, path, denylist))
     return list(dict.fromkeys(found))
@@ -330,7 +330,7 @@ def scan_diff(diff: str, denylist: tuple[str, ...] | list[str] = ()) -> list[Fin
 
 def added_line_count(diff: str) -> int:
     """How many added lines the scan actually read - the denominator the verdict must report."""
-    return sum(1 for _ in _added_lines(diff))
+    return sum(1 for _ in added_lines(diff))
 
 
 def removed_line_count(diff: str) -> int:
@@ -353,7 +353,7 @@ def binary_files(diff: str) -> list[str]:
     Their content is never scanned - a byte-level search of images and archives would flood the
     report with noise - so they are NAMED in the verdict instead of passing unmentioned."""
     names: list[str] = []
-    for line in _lines(diff):
+    for line in split_lines(diff):
         match = _BINARY_RX.match(line)
         if match:
             side = match.group("new") if match.group("new") != "/dev/null" else match.group("old")
@@ -375,7 +375,7 @@ def scan_messages(messages: list[tuple[str, str]],
 
 def message_line_count(messages: list[tuple[str, str]]) -> int:
     """How many message lines the scan read - reported beside the added-line count."""
-    return sum(len(_lines(message)) for _, message in messages)
+    return sum(len(split_lines(message)) for _, message in messages)
 
 
 def exclude_findings(findings: list[Finding], patterns: list[str]) -> tuple[list[Finding],
@@ -596,7 +596,7 @@ def _denylist(path: str | None) -> list[str]:
         # the terms are what this file exists to keep out of every log.
         raise PushCheckError(f"--denylist-file is not UTF-8 text (undecodable byte at offset "
                              f"{exc.start}); re-save it as UTF-8") from None
-    return _lines(text)
+    return split_lines(text)
 
 
 def _tolerate_unencodable_output() -> None:

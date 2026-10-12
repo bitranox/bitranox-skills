@@ -142,6 +142,52 @@ class _RepoSweep:
         return None
 
 
+# A test-runner name as a whole word, optionally with its first letter bracketed so the grep cannot
+# match its own command line (`[p]ytest`, `[b]mk`).
+_SUITE_NAME = r"(?<![\w-])\[?(?:p\]?ytest|p\]?y\.test|b\]?mk)\b"
+
+
+class _ListGrep:
+    """A `grep` reading FIXED-STRING patterns from a FILE (`-F` and `-f`), next to a diff or a
+    file named as a private list - a hand-rolled "does this change add a listed name?".
+
+    That grep reads every line of the list as a pattern, so a bare `#` comment matches every
+    `#` and a `name==>replacement` rule is searched whole and never matches the name. `-v` and
+    `-x` are left out: with those the same flags are a set difference between two file lists,
+    which is a different chore. Priced through this hook over the transcript corpus: 4 of
+    131,982 Bash calls, three of them hand-rolled redaction scans and one prose describing exactly
+    that trap (before `-v`/`-x` were left out it was 7, the other three set differences); 5 of
+    7,383 Write bodies, all text spelling out the same grep; 0 of 11,072 Edit fragments.
+
+    Regex-shaped on purpose: `match_tool` needs nothing but `.search(text)`.
+    """
+
+    _GREP = re.compile(r"\bgrep\b([^\n|;&]*)")
+    _CONTEXT = re.compile(r"redact|denylist|deny-list"
+                          r"|\bgit\s+(?:-C\s+\S+\s+)?(?:diff|log\s+-p|show)\b")
+
+    @staticmethod
+    def _flags(args):
+        flags = set()
+        for tok in args.split():
+            if tok == "--fixed-strings":
+                flags.add("F")
+            elif tok == "--file" or tok.startswith("--file="):
+                flags.add("f")
+            elif tok.startswith("-") and not tok.startswith("--"):
+                flags.update(tok[1:])
+        return flags
+
+    def search(self, text):
+        if not self._CONTEXT.search(text):
+            return None
+        for hit in self._GREP.finditer(text):
+            flags = self._flags(hit.group(1))
+            if {"F", "f"} <= flags and not flags & {"v", "x"}:
+                return hit
+        return None
+
+
 # (regex over the command, tool name, one-line "why"). First match wins. STRONG signatures only, to
 # keep false positives + noise low; the per-session dedup then nudges each tool at most once.
 _RULES = [
@@ -161,11 +207,30 @@ _RULES = [
      "checking git branch/status across repo(s)"),
     (re.compile(r"git rev-parse --abbrev-ref HEAD"), "git_state",
      "checking git branch/status across repo(s)"),
+    # Before procsig and claim_check, which would otherwise take a `pgrep` or `ps | grep -c`
+    # for pytest: the question asked there is "is a suite already running in this checkout?",
+    # which suite_busy answers per checkout and worktree without matching its own shell. Only
+    # `pgrep` and `ps | grep` - a `pkill` is killing, which stays procsig's. Priced through this
+    # hook over the transcript corpus: 260 of 131,968 Bash calls (0.20%), every one read and every
+    # one a check for a running pytest or bmk; 10 of 7,383 Write bodies and 1 of 11,071 Edit
+    # fragments, plans and handovers spelling out that same hand-rolled check.
+    # The names may carry the bracket trick (`[p]ytest`, `[b]mk`). A `ps | grep` that reads an
+    # empty table as FINISHED is the backstop chore (absence is not success) and is left to it.
+    (re.compile(r"(?!.*\|\|\s*\{?\s*echo\s+[\"']?(?:FINISHED|DONE|finished|done)\b)"
+                r"(?:\bpgrep\b[^\n|;&]*" + _SUITE_NAME
+                + r"|\bps\b[^\n|;&]*\|\s*grep\b[^\n|;&]*" + _SUITE_NAME + r")"), "suite_busy",
+     "checking by hand whether a test suite is already running in this checkout"),
     (re.compile(r"\b(?:pkill|pgrep)\s+[^\n]*-f\b"), "procsig",
      "hand-rolling pgrep/pkill -f (self-match risk)"),
     (re.compile(r"\bip\s+neigh\b|getent\s+hosts\s+OVM-|tcpdump[^\n]*\btap"), "guestip",
      "resolving a guest IP by hand"),
     (re.compile(r"/var/log/openvmm/"), "ovmlog", "reading an openvmm per-VM log by hand"),
+    # Before claim_check, which takes any `grep -c`: the hand-rolled redaction scans in the
+    # record were all `grep -icFf <list>`, and claim_check cannot parse the list's comments and
+    # `==>` rules either.
+    (_ListGrep(), "redaction_scan",
+     "grepping a diff against a private name list with -Ff, where a `#` comment matches every `#` "
+     "and a `name==>replacement` rule never matches the name"),
     # LAST, so a more specific rule above keeps its own shape. A `grep` carrying -c/-l/-L is being
     # asked "is this THERE?", and its NEGATIVE answer is the one that cannot be trusted: `grep -c`
     # exits 1 on zero and prints file:count under -r, `-l` prints nothing for both "absent" and

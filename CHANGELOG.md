@@ -29,6 +29,31 @@ than the change, so entries reconstructed from them would read like coverage wit
 a hole nobody has drawn a line under is one that gets rediscovered and half-filled - which is how
 two "versions with no entry" notes came to sit in this file disagreeing with it.
 
+## [8.14.0]
+
+### Added
+
+- `compuse-toolbox` ships `scripts/suite_busy.py`, which answers whether a test suite is already
+  running in a repository's main checkout or any of its git worktrees. Each process's cwd is read
+  from `/proc` and attributed to the deepest checkout holding it; pytest, bmk and make gate runs
+  are matched by argv token (never a substring of the joined command line), `--match` adds your
+  own tokens, and the jig's own process and every ancestor are excluded. It reports how many
+  processes and checkouts it examined, refuses zero, and `--wait-s` waits for the checkouts to
+  come free. Linux only: without `/proc` it says so and exits 2.
+- `compuse-toolbox` ships `scripts/redaction_scan.py`, which answers whether the lines a change
+  ADDS hold a name from a private redaction list (`--range`, with every commit and its message,
+  `--staged` or `--worktree`). Blank and `#` lines are comments, a rule's pattern is the text
+  before `==>`, and matching is a case-insensitive literal substring. A planted added line per
+  pattern must hit before a clean answer is given, and `--redact-hits` names a hit's rule by
+  index, list line and hash instead of its text. Exit 0 clean, 1 a hit, 2 could not run.
+- `toolbox-nudge` points a hand-rolled `pgrep`/`ps | grep` for pytest or bmk at `suite_busy`, and a
+  `grep -Ff` of a diff against a private name list at `redaction_scan`.
+
+### Changed
+
+- `pushcheck.py` exposes its diff walker as `added_lines` and `split_lines`, which
+  `redaction_scan` reads diffs with, so the two cannot disagree about what a change adds.
+
 ## [8.13.2]
 
 ### Changed
