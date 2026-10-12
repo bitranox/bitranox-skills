@@ -87,7 +87,7 @@ def _run(event: object) -> subprocess.CompletedProcess[str]:
 
 def test_the_hook_emits_pretooluse_context_and_exits_0():
     done = _run({"hook_event_name": "PreToolUse", "tool_name": "Write",
-                 "tool_input": {"file_path": "/x/t.py", "content": RLO}})
+                 "tool_input": {"file_path": "/x/t.txt", "content": RLO}})
     assert done.returncode == 0
     output = json.loads(done.stdout)["hookSpecificOutput"]
     assert output["hookEventName"] == "PreToolUse"
@@ -99,3 +99,85 @@ def test_the_hook_is_silent_on_clean_input_and_on_junk_stdin():
     assert (clean.returncode, clean.stdout) == (0, "")
     junk = subprocess.run([sys.executable, str(HOOK)], input="not json", capture_output=True, text=True, check=False)
     assert (junk.returncode, junk.stdout) == (0, "")
+
+
+# --- the blocking half: where a raw character is never wanted and the damage is lasting ---------
+
+BOM = chr(0xFEFF)
+DE_OPEN, DE_CLOSE = chr(0x201E), chr(0x201C)  # German quotation marks: visible, never a tell
+GUILLEMETS = chr(0xBB) + "x" + chr(0xAB)
+
+
+@pytest.mark.parametrize("command", [
+    # The shape that shipped a RIGHT-TO-LEFT OVERRIDE: the heredoc writes the message file and the
+    # same call commits it, so a check reading the -F file before the call finds nothing yet.
+    f"cat > /tmp/m.txt <<'EOF'\nfix: the {RLO} thing\nEOF\ngit commit a.py -F /tmp/m.txt",
+    f'git -C /repo commit -m "fix{ZWSP}"',
+    f"git tag -a v1.0.0 -m 'release {LSEP}'",
+    f"cd /repo && git -c user.name=x commit --amend -F m.txt  # {RLO}",
+])
+def test_a_shell_call_that_commits_or_tags_with_a_raw_character_is_blocked(command):
+    reason = N.block_reason("Bash", {"command": command})
+    assert reason is not None
+    assert "U+" in reason and "chr(92)" in reason
+
+
+@pytest.mark.parametrize("command", [
+    f"printf 'a{LSEP}b' > f",
+    f"echo 'git commit -m x' {RLO}",
+    f"cat > run.sh <<'EOF'\ngit commit -m x{RLO}\nEOF",
+    f"git log --format=%s{ZWSP}",
+])
+def test_a_shell_call_that_neither_commits_nor_tags_is_only_nudged(command):
+    assert N.block_reason("Bash", {"command": command}) is None
+    assert N.notice("Bash", {"command": command}) is not None
+
+
+@pytest.mark.parametrize(("tool", "tool_input"), [
+    ("Write", {"file_path": "/x/t.py", "content": f'x = "a{RLO}b"\n'}),
+    ("Write", {"file_path": "/x/README.MD", "content": f"{BOM}# Title\n"}),
+    ("Write", {"file_path": "/x/pyproject.toml", "content": f'name = "x{ZWSP}"\n'}),
+    ("Edit", {"file_path": "/x/t.Py", "old_string": "a", "new_string": f"a{CSI}"}),
+    ("MultiEdit", {"file_path": "/x/doc.md", "edits": [{"old_string": "a", "new_string": f"b{TAG}"}]}),
+])
+def test_a_write_or_edit_to_source_docs_or_toml_with_a_raw_character_is_blocked(tool, tool_input):
+    assert N.block_reason(tool, tool_input) is not None
+
+
+@pytest.mark.parametrize(("tool", "tool_input"), [
+    ("Write", {"file_path": "/x/data.bin.txt", "content": f"{BOM}payload"}),
+    ("NotebookEdit", {"notebook_path": "/x/n.ipynb", "new_source": f"print('{ZWSP}')"}),
+    ("Agent", {"prompt": f"x{RLO}"}),
+    ("Edit", {"file_path": "/x/t.py", "old_string": f"a{RLO}b", "new_string": "ab"}),
+])
+def test_other_targets_and_removals_are_not_blocked(tool, tool_input):
+    assert N.block_reason(tool, tool_input) is None
+
+
+@pytest.mark.parametrize("text", [f"K{UMLAUT}che", f"{DE_OPEN}Zitat{DE_CLOSE}", GUILLEMETS, "plain"])
+def test_visible_non_ascii_is_never_blocked(text):
+    assert N.block_reason("Write", {"file_path": "/x/a.md", "content": text}) is None
+    assert N.block_reason("Bash", {"command": f"git commit -m '{text}'"}) is None
+
+
+@pytest.mark.parametrize("tool_input", [None, "x", {"file_path": 5, "content": RLO},
+                                        {"command": None}, {"file_path": "/a.py", "edits": "no"}])
+def test_block_reason_never_raises_on_malformed_input(tool_input):
+    for tool in ("Write", "Edit", "MultiEdit", "Bash"):
+        assert N.block_reason(tool, tool_input) is None
+
+
+def test_the_hook_blocks_with_exit_2_and_names_the_character_without_quoting_the_text():
+    secretish = "do-not-echo-me"
+    done = _run({"hook_event_name": "PreToolUse", "tool_name": "Bash",
+                 "tool_input": {"command": f"git commit -m '{secretish}{RLO}'"}})
+    assert done.returncode == 2
+    assert "U+202E RIGHT-TO-LEFT OVERRIDE" in done.stderr
+    assert secretish not in done.stderr
+    assert done.stdout == ""
+
+
+def test_the_hook_still_only_nudges_where_it_does_not_block():
+    done = _run({"tool_name": "Write", "tool_input": {"file_path": "/x/notes.txt", "content": RLO}})
+    assert done.returncode == 0
+    assert "U+202E" in json.loads(done.stdout)["hookSpecificOutput"]["additionalContext"]

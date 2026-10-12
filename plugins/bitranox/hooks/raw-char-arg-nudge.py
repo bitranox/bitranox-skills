@@ -24,14 +24,33 @@ format characters (bidi overrides and isolates, zero-width characters, the soft 
 characters); the line and paragraph separators. Printable non-ASCII (umlauts, CJK, emoji) is
 never flagged.
 
-NON-BLOCKING: emits additionalContext and exits 0, because a raw character can be meant (a file
-that must hold a BOM). Fail-open on any error. ASCII only.
+BLOCKS where a raw character is never wanted and the damage outlives the call (exit 2, the
+characters named by code point on stderr, the text itself never quoted back):
+
+- a shell call that runs `git commit` or `git tag` (a commit message is permanent once pushed, and
+  the shape that shipped one - a heredoc writes the -F file and the same call commits it - is
+  invisible to commit-tell-sweep, which reads the file before the call has written it);
+- a Write/Edit/MultiEdit to a `.py`, `.md` or `.toml` file (source, docs and config, where a
+  bidi override is a trojan-source hazard and nothing renders it).
+
+Everywhere else it only NUDGES (additionalContext, exit 0), because a raw character can be meant
+there - a BOM a data format requires, a subagent brief quoting one. Owner decision 2026-10-12, after
+the fact recording the trap reached recurrence 5 as a warning. Fail-open on any error. ASCII only.
+
+Priced 2026-10-12 by replaying the transcript corpus (guard_replay, deduped by tool_use id): the
+shell arm fires on 1 of 130,609 Bash calls, and that one is the commit that shipped a raw
+RIGHT-TO-LEFT OVERRIDE; the file arm fires on 92 of 18,421 Write/Edit calls, each one a raw
+invisible character landing in a .py, .md or .toml file - mostly test source where an escape was
+meant. Not classified one by one beyond that; every refused call has the chr() route.
 """
 from __future__ import annotations
 
 import json
 import sys
 import unicodedata
+from pathlib import PurePath
+
+import shell_text
 
 #: The argument fields each tool WRITES. Anything else (paths, old_string, descriptions) is not
 #: content that lands somewhere.
@@ -45,6 +64,12 @@ _FIELDS = {
     "Agent": ("prompt",),
 }
 _FLAGGED_CATEGORIES = frozenset({"Cf", "Zl", "Zp"})
+#: Files a raw invisible character never belongs in: source, docs, config.
+_BLOCKED_SUFFIXES = frozenset({".py", ".md", ".toml"})
+_FILE_TOOLS = frozenset({"Write", "Edit", "MultiEdit"})
+_SHELL_TOOLS = frozenset({"Bash", "PowerShell"})
+#: git verbs whose text is permanent once pushed.
+_PERMANENT_VERBS = frozenset({"commit", "tag"})
 _ALLOWED_CONTROLS = frozenset("\t\n\r")
 
 _ADVICE = (
@@ -83,8 +108,8 @@ def _texts(tool_name: str, tool_input: object) -> list[tuple[str, str]]:
             if isinstance(tool_input.get(field), str)]
 
 
-def notice(tool_name: str, tool_input: object) -> str | None:
-    """The nudge text when an argument this tool writes holds a flagged character, else None."""
+def _reports(tool_name: str, tool_input: object) -> list[str]:
+    """One "field: U+XXXX NAME xN, ..." line per written argument that holds a flagged character."""
     reports = []
     for field, text in _texts(tool_name, tool_input):
         counts: dict[str, int] = {}
@@ -94,10 +119,57 @@ def notice(tool_name: str, tool_input: object) -> str | None:
         if counts:
             found = ", ".join(f"{_label(c)}" + (f" x{n}" if n > 1 else "") for c, n in counts.items())
             reports.append(f"{field}: {found}")
+    return reports
+
+
+def notice(tool_name: str, tool_input: object) -> str | None:
+    """The nudge text when an argument this tool writes holds a flagged character, else None."""
+    reports = _reports(tool_name, tool_input)
     if not reports:
         return None
     return (f"RAW INVISIBLE OR CONTROL CHARACTER in this {tool_name} call - " + "; ".join(reports)
             + ". " + _ADVICE)
+
+
+def _commits_or_tags(command: str, tool_name: str) -> bool:
+    """True when the shell will EXECUTE a `git commit` or `git tag` in `command`.
+
+    Heredoc bodies and quoted text are data, so a script that merely MENTIONS `git commit` is
+    not a commit; `commands_only` removes both before the segments are judged.
+    """
+    executed = shell_text.commands_only(command, tool_name)
+    return any(shell_text.is_git_verb(segment.strip().lstrip("(").strip(), _PERMANENT_VERBS, tool_name)
+               for _offset, segment in shell_text.iter_segments(executed, tool_name))
+
+
+def _permanent_target(tool_name: str, tool_input: dict) -> str | None:
+    """What makes this call's text lasting (a commit, a source file), or None."""
+    if tool_name in _SHELL_TOOLS:
+        command = tool_input.get("command")
+        if isinstance(command, str) and _commits_or_tags(command, tool_name):
+            return "a shell call that runs git commit or git tag"
+        return None
+    path = tool_input.get("file_path")
+    if tool_name in _FILE_TOOLS and isinstance(path, str):
+        suffix = PurePath(path).suffix.lower()
+        if suffix in _BLOCKED_SUFFIXES:
+            return f"a {tool_name} to a {suffix} file"
+    return None
+
+
+def block_reason(tool_name: str, tool_input: object) -> str | None:
+    """The refusal text when this call writes a flagged character where it is never wanted."""
+    if not isinstance(tool_input, dict):
+        return None
+    target = _permanent_target(tool_name, tool_input)
+    reports = _reports(tool_name, tool_input) if target else []
+    if not reports:
+        return None
+    return (f"BLOCKED: raw invisible or control character in {target} - " + "; ".join(reports)
+            + ". A backslash-u escape typed into a tool argument is decoded by JSON into the raw "
+            "character. " + _ADVICE.split(" If the raw character is meant")[0]
+            + " A character that must be raw here has to be written by a script that builds it "
+            "with chr().")
 
 
 def main() -> int:
@@ -107,6 +179,10 @@ def main() -> int:
         return 0
     if not isinstance(event, dict) or not isinstance(event.get("tool_name"), str):
         return 0
+    refusal = block_reason(event["tool_name"], event.get("tool_input"))
+    if refusal:
+        sys.stderr.write(refusal + "\n")
+        return 2
     message = notice(event["tool_name"], event.get("tool_input"))
     if message:
         sys.stdout.write(json.dumps({"hookSpecificOutput": {

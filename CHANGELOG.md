@@ -29,6 +29,20 @@ than the change, so entries reconstructed from them would read like coverage wit
 a hole nobody has drawn a line under is one that gets rediscovered and half-filled - which is how
 two "versions with no entry" notes came to sit in this file disagreeing with it.
 
+## [8.12.0]
+
+### Changed
+
+- `raw-char-arg-nudge` now BLOCKS (exit 2) where a raw invisible or control character is never
+  wanted: a shell call that runs `git commit` or `git tag`, and a Write/Edit/MultiEdit to a `.py`,
+  `.md` or `.toml` file. Everywhere else it still only nudges. A backslash-u escape typed into a
+  tool argument is decoded by JSON into the raw character, and the warning alone did not stop it
+  (five recurrences, one a RIGHT-TO-LEFT OVERRIDE in a commit message). The commit shape it closes,
+  a heredoc writing the `-F` file in the same call that commits it, is invisible to
+  `commit-tell-sweep`, which reads the file before the call has written it. The refusal names each
+  character by code point and never quotes the text back. Visible non-ASCII (German quotes,
+  guillemets, accented letters) is never blocked.
+
 ## [8.11.3]
 
 ### Fixed
