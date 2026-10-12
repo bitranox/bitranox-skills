@@ -29,6 +29,17 @@ than the change, so entries reconstructed from them would read like coverage wit
 a hole nobody has drawn a line under is one that gets rediscovered and half-filled - which is how
 two "versions with no entry" notes came to sit in this file disagreeing with it.
 
+## [8.15.1]
+
+### Added
+
+- `process-test-design`: a section on building a permission-wall test on Windows. `os.stat` of a
+  denied directory succeeds there (CPython reads the entry from the parent's listing), so the wall
+  has to deny the directory's read-attributes AND the parent's listing; an elevated session with
+  `SeBackupPrivilege` enabled sees through every deny entry, so the wall disables the backup and
+  restore privileges for its lifetime; and the test asserts the wall holds before relying on it.
+  One checklist line generalises the last point to any precondition a test builds.
+
 ## [8.15.0]
 
 ### Added

@@ -247,6 +247,35 @@ Python specifics, where the trap is most common:
   gitignore it (and untrack it if it slipped in). Mechanics: `bitranox:compuse-git` "Don't track local
   build artifacts".
 
+## A permission-wall test on Windows: build the wall stat cannot see past
+
+A test that needs a path the user cannot check (so `stat` raises `PermissionError`) is built with
+`chmod` on POSIX. On Windows the obvious version - deny the user on the directory - does not
+work, for two reasons that both leave the test passing for the wrong reason:
+
+- **`os.stat` of a denied directory succeeds.** CPython falls back to reading the entry from the
+  PARENT directory's listing, so `stat` raises only when the directory's read-attributes AND the
+  parent's list-directory right are both denied. Deny only those two rights: a full-control deny
+  also removes your own right to change the ACL back, so the wall cannot be taken down.
+- **An elevated session can see through any ACL.** An admin token with `SeBackupPrivilege`
+  enabled (an OpenSSH session typically has it enabled, not merely present - check `whoami /priv`)
+  opens files with backup semantics and ignores every deny entry. Disable the backup and restore
+  privileges for the wall's lifetime and restore their previous state after.
+
+Inside the test, assert the wall holds (`stat` raises) BEFORE asserting the behaviour under test,
+so a runner whose token or ACL handling differs fails loudly instead of passing vacuously. Build
+the wall through the Win32 security API rather than `icacls` by account name, which fails when the
+name does not map to a SID:
+
+- Take the user's SID from the process token (`GetTokenInformation`, `TokenUser`).
+- Per path, save the DACL (`GetNamedSecurityInfoW`), add ONE non-inheritable deny entry
+  (`SetEntriesInAclW` with `DENY_ACCESS`; `FILE_READ_ATTRIBUTES` (0x80) on the directory,
+  `FILE_LIST_DIRECTORY` (0x1) on a parent the test owns, such as a `tmp_path` subdirectory), and
+  apply it (`SetNamedSecurityInfoW`).
+- Disable the privileges with `AdjustTokenPrivileges` (attributes 0, keeping the previous state it
+  returns). The token is process-wide, so the wall must not span tests running in parallel threads.
+- Take it down in reverse: privileges first, then the parent's saved DACL, then the directory's.
+
 ## Prune low-value tests
 
 Delete a test when it:
@@ -331,6 +360,7 @@ cannot see what it already swallowed.
 - [ ] Time/randomness injected, never by patching the process-global clock function; unit suite offline
 - [ ] Runs against the project's own locked toolchain, not an ambient/global one; an environment-shaped failure is a wrong-env smell, not a code bug (Python: `env -u VIRTUAL_ENV uv run ...`)
 - [ ] One behavior per test; name states the behavior
+- [ ] A test that builds a precondition (a permission wall, a missing file, a dead port) asserts it holds before relying on it
 - [ ] No test that cannot fail for a real reason
 
 ## Common mistakes
