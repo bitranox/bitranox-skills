@@ -29,6 +29,15 @@ than the change, so entries reconstructed from them would read like coverage wit
 a hole nobody has drawn a line under is one that gets rediscovered and half-filled - which is how
 two "versions with no entry" notes came to sit in this file disagreeing with it.
 
+## [8.12.2]
+
+### Changed
+
+- `coding-python-layered-config` follows lib_layered_config 7.1.5: `read_config*` keeps the
+  caller's bound trace id instead of resetting it to `None`; the logging paragraph now names the
+  two renderers' different provenance comments (`display_config` and the `read` command do not
+  share a format); the ordered-YAML bullet says a plain mapping keeps the file's key order.
+
 ## [8.12.1]
 
 ### Changed
