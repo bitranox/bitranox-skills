@@ -106,6 +106,8 @@ published until both sides are committed. Nothing fetches; the audits, and every
   repo's pair only. It is what a tool repo's release pipeline runs before pushing, where another
   repo's drift would be no reason to block. Safe to run anywhere: a repo with no mirrored skill, a
   machine with no marketplace checkout, and a path outside the tree all print why and pass.
+  Run from a linked worktree of the tool repo, it and the commit gate judge that worktree's
+  text: ownership is decided in the main checkout, which is where `MIRRORED_SKILLS` points.
 - To fix drift, regenerate the stale side from the other, re-apply the three divergences, and bump
   THAT repo's `plugin.json` - both copies ship, so both need a version the installer can see.
 

@@ -1751,6 +1751,82 @@ def test_a_push_never_accepts_an_uncommitted_twin(tmp_path, monkeypatch, capsys)
     assert notices == []
 
 
+# --- a tool repo committed from a LINKED WORKTREE is still that tool repo -------------------------
+#
+# Measured 2026-10-12 (lib_layered_config 7.1.4): commits changing a mirrored SKILL.md were made in
+# that repo's .claude/worktrees/yaml-omap. Both the gate and `--mirror-of` asked whether the twin's
+# path lies inside the repo at hand, and a linked worktree never contains its main checkout's path:
+# the gate was silent and `--mirror-of .` printed "ships no skill mirrored" with exit 0 while the
+# pair had drifted. Only a later push from the main checkout caught it.
+
+def _tool_worktree(tool, where):
+    """A linked worktree of the tool repo at `where`, on its own branch from HEAD."""
+    _g(tool, "worktree", "add", "-q", "-b", "wt", str(where))
+    return where
+
+
+def test_a_tool_repo_commit_from_a_linked_worktree_blocks_on_drift(tmp_path, monkeypatch, capsys):
+    public, _root, tool = _published_pair(tmp_path, monkeypatch)
+    wt = _tool_worktree(tool, tool / ".claude" / "worktrees" / "wt")
+    _drift(wt / TW_SKILL, TWIN_BODY)
+    _g(wt, "add", "-A")
+    _tool_repo_commit(monkeypatch, public, wt)
+
+    assert RG.main() == 2
+    err = capsys.readouterr().err
+    assert "DRIFT" in err and IN_PROGRESS in err
+
+
+def test_a_tool_repo_commit_from_a_linked_worktree_reads_the_worktree_not_the_main_checkout(
+        tmp_path, monkeypatch, capsys):
+    # The worktree is in sync and the MAIN checkout committed drift after the worktree forked. The
+    # commit ships the worktree's text, so a gate that recognised the worktree but still read the
+    # twin at the main checkout's path would block an in-sync commit.
+    public, _root, tool = _published_pair(tmp_path, monkeypatch)
+    wt = _tool_worktree(tool, tool / ".claude" / "worktrees" / "wt")
+    _drift(tool / TW_SKILL, TWIN_BODY)
+    _g(tool, "commit", "-qam", "drift in the main checkout")
+    _tool_repo_commit(monkeypatch, public, wt)
+
+    assert RG.main() == 0
+    assert "DRIFT" not in capsys.readouterr().err
+    _tool_repo_commit(monkeypatch, public, tool)             # control: the main checkout does block
+    assert RG.main() == 2
+
+
+def test_mirror_of_run_in_a_linked_worktree_compares_that_worktree(tmp_path, monkeypatch, capsys):
+    _public, _root, tool = _published_pair(tmp_path, monkeypatch)
+    wt = _tool_worktree(tool, tool / ".claude" / "worktrees" / "wt")
+    _drift(wt / TW_SKILL, TWIN_BODY)
+
+    rc = RG.audit_mirror_of(wt)
+    out = capsys.readouterr().out
+
+    assert "ships no skill mirrored" not in out
+    assert rc == 1 and "DRIFT" in out and IN_PROGRESS in out
+    assert RG.audit_mirror_of(tool) == 0                     # the main checkout is still in sync
+
+
+def test_mirror_of_finds_the_tree_through_a_worktree_outside_it(tmp_path, monkeypatch, capsys):
+    # A worktree may live anywhere; the public/ tree is found from the main checkout it belongs to.
+    _public, _root, tool = _published_pair(tmp_path, monkeypatch)
+    wt = _tool_worktree(tool, tmp_path / "elsewhere" / "wt")
+    _drift(wt / TW_SKILL, TWIN_BODY)
+
+    assert RG.audit_mirror_of(wt) == 1
+    assert IN_PROGRESS in capsys.readouterr().out
+
+
+def test_mirror_of_run_in_a_subdirectory_keeps_only_the_twins_beneath_it(tmp_path, monkeypatch, capsys):
+    _public, _root, tool = _published_pair(tmp_path, monkeypatch)
+    (tool / "docs").mkdir()
+
+    assert RG.audit_mirror_of(tool / "docs") == 0
+    assert "ships no skill mirrored" in capsys.readouterr().out
+    assert RG.audit_mirror_of(tool / "skills") == 0
+    assert "in sync" in capsys.readouterr().out
+
+
 @pytest.mark.parametrize("command, stage", [
     ("git commit -m x", "index"),
     ("git commit -m x && git push", "index"),

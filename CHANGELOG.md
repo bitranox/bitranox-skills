@@ -29,6 +29,20 @@ than the change, so entries reconstructed from them would read like coverage wit
 a hole nobody has drawn a line under is one that gets rediscovered and half-filled - which is how
 two "versions with no entry" notes came to sit in this file disagreeing with it.
 
+## [8.17.1]
+
+### Fixed
+
+- `repo-gate.py`: a tool repo worked in from a linked worktree (`.claude/worktrees/<name>`) is now
+  recognised as that tool repo. Both the commit and push gate and `--mirror-of` decided which
+  mirrored skills a repo owns by asking whether the twin's path lies inside it, and a linked
+  worktree never contains its main checkout's path, so the gate was silent there and
+  `--mirror-of .` printed "ships no skill mirrored" with exit 0 while the pair had drifted.
+  Ownership is now decided in the main checkout (found through `git rev-parse --git-common-dir`)
+  and the twin is read at the same place in the worktree, because that is the text the commit
+  ships. A worktree placed outside `public/` finds the tree through its main checkout; a path
+  below a repo's top level still keeps only the twins beneath it.
+
 ## [8.17.0]
 
 ### Added

@@ -1488,7 +1488,7 @@ def _matches_uncommitted_other_side(committing, here_dir, twin_dir, mine_files, 
     return bool(mine_files and their_files) and not _mirror_differences(mine_files, their_files)[0]
 
 
-def mirror_failures(root, names, committing=None, stage=STAGE_INDEX, notices=None):
+def mirror_failures(root, names, committing=None, stage=STAGE_INDEX, notices=None, twins=None):
     """Return a failure per mirrored skill in ``names`` whose twin has drifted.
 
     A mirrored skill is a DIRECTORY. Several pairs ship `references/` and `scripts/` beside their
@@ -1516,6 +1516,9 @@ def mirror_failures(root, names, committing=None, stage=STAGE_INDEX, notices=Non
     passes a ``notices`` list gets that reading, so the pass can never arrive without its notice.
     A push still reads the other side at what it committed, so the pair cannot be published
     until both sides are.
+
+    ``twins`` maps a skill name to the twin directory to read instead of its main-checkout path, for
+    a tool repo worked in from a linked worktree (`_tool_repo_twins`).
     """
 
     public = _public_tree(root)
@@ -1530,7 +1533,7 @@ def mirror_failures(root, names, committing=None, stage=STAGE_INDEX, notices=Non
         if relative is None:
             continue
         here_dir = Path(root) / "plugins" / "bitranox" / "skills" / name
-        twin_dir = public / relative
+        twin_dir = Path((twins or {}).get(name) or public / relative)
         if not (here_dir / "SKILL.md").exists() or not (twin_dir / "SKILL.md").exists():
             # The tool repo is not checked out on this machine, so there is nothing to
             # compare against. Silence is right: the audit mode reports the skip.
@@ -1610,6 +1613,51 @@ def _marketplace_checkout(public):
     return public / "KI" / "bitranox-skills"
 
 
+def _checkouts(directory):
+    """(top level of the worktree holding `directory`, main checkout of its repository).
+
+    A linked worktree (`git worktree add`, such as `.claude/worktrees/<name>`) is the same repository
+    as its main checkout at another path. Its common git dir is `<main>/.git`; a bare repository or
+    a separate git dir has no such parent, and then the worktree is its own answer. Outside git,
+    `directory` is both.
+    """
+    directory = Path(directory).resolve()
+    rc, out, _ = _git(directory, "rev-parse", "--show-toplevel", "--git-common-dir")
+    lines = out.splitlines()
+    if rc or len(lines) != 2:
+        return directory, directory
+    top, common = Path(lines[0]).resolve(), Path(lines[1])
+    if not common.is_absolute():
+        common = directory / common  # git prints a relative common dir relative to the cwd
+    common = common.resolve()
+    return top, (common.parent if common.name == ".git" else top)
+
+
+def _tool_repo_twins(tool_repo):
+    """(public tree, {skill name: twin dir as checked out here}) for the tool repo at `tool_repo`.
+
+    MIRRORED_SKILLS names a twin by its path in the MAIN checkout, so ownership is decided there, and
+    the twin is then read at the same place in the worktree being worked in: committed from a linked
+    worktree, that worktree's text is what ships. Measured 2026-10-12: keyed on the worktree's own
+    path, a commit in `.claude/worktrees/<name>` owned no mirrored skill, so the commit gate was
+    silent and `--mirror-of` passed while the pair had drifted. `tool_repo` below its top level
+    keeps only the twins beneath it, as before. The tree is found from the main checkout, so a
+    worktree placed outside `public/` still finds it. (None, {}) when there is no tree.
+    """
+    here = Path(tool_repo).resolve()
+    top, main = _checkouts(here)
+    public = _public_tree(main / "x")  # _public_tree looks at parents, so descend one
+    if public is None:
+        return None, {}
+    scope = main / here.relative_to(top) if here.is_relative_to(top) else main
+    twins = {}
+    for name, rel in MIRRORED_SKILLS.items():
+        twin = (public / rel).resolve()
+        if twin.is_relative_to(scope):
+            twins[name] = top / twin.relative_to(main)
+    return public, twins
+
+
 def audit_mirror_of(tool_repo):
     """Print the state of the mirrored pair belonging to one tool repo.
 
@@ -1621,7 +1669,7 @@ def audit_mirror_of(tool_repo):
     """
 
     tool = Path(tool_repo).resolve()
-    public = _public_tree(tool / "x")  # _public_tree looks at parents, so descend one
+    public, twins = _tool_repo_twins(tool)
     if public is None:
         print("mirror check: no public/ tree above %s - nothing to compare" % tool)
         return 0
@@ -1629,11 +1677,11 @@ def audit_mirror_of(tool_repo):
     if not (marketplace / "plugins" / "bitranox" / "skills").is_dir():
         print("mirror check: no bitranox-skills checkout at %s - nothing to compare" % marketplace)
         return 0
-    mine = sorted(name for name, rel in MIRRORED_SKILLS.items() if (public / rel).resolve().is_relative_to(tool))
+    mine = sorted(twins)
     if not mine:
         print("mirror check: %s ships no skill mirrored in bitranox-skills" % tool.name)
         return 0
-    fails = mirror_failures(marketplace, set(mine))
+    fails = mirror_failures(marketplace, set(mine), twins=twins)
     for name in mine:
         print("%-8s%-34s %s" % ("DRIFT" if any(name in f for f in fails) else "in sync", name, MIRRORED_SKILLS[name]))
     for note in stale_ref_notes([marketplace, tool]):
@@ -1796,11 +1844,9 @@ def gate_tool_repo_mirror(root, stage=STAGE_INDEX):
     if root is None:
         return 0
 
-    public = _public_tree(root / "x")
-    if public is None:
-        return 0
-    mine = sorted(name for name, rel in MIRRORED_SKILLS.items() if (public / rel).resolve().is_relative_to(root))
-    if not mine:
+    public, twins = _tool_repo_twins(root)
+    mine = sorted(twins)
+    if public is None or not mine:
         return 0
 
     marketplace = _marketplace_checkout(public)
@@ -1809,7 +1855,8 @@ def gate_tool_repo_mirror(root, stage=STAGE_INDEX):
         return 0
 
     notices = []
-    fails = mirror_failures(marketplace, set(mine), committing="twin", stage=stage, notices=notices)
+    fails = mirror_failures(marketplace, set(mine), committing="twin", stage=stage, notices=notices,
+                            twins=twins)
     if not fails:
         _say_context(notices)
         return 0
