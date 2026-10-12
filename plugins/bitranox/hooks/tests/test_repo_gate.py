@@ -1508,6 +1508,93 @@ def test_a_commit_in_a_tool_repo_passes_when_the_mirror_is_in_sync(tmp_path, mon
     assert RG.main() == 0
 
 
+def _tagged_tool_repo(repo):
+    """Make `repo` a git repository with tag `v1.0`, branch `main`, and `both` as tag AND branch."""
+    def git(*args):
+        subprocess.run(["git", "-C", str(repo), *args], check=True, capture_output=True,
+                       env={**os.environ, "GIT_AUTHOR_NAME": "t", "GIT_AUTHOR_EMAIL": "t@example.com",
+                            "GIT_COMMITTER_NAME": "t", "GIT_COMMITTER_EMAIL": "t@example.com"})
+    repo.mkdir(parents=True, exist_ok=True)
+    (repo / "README").write_text("x\n", encoding="utf-8")
+    git("init", "-q", "-b", "main")
+    git("add", "-A")
+    git("commit", "-q", "-m", "init")
+    git("tag", "v1.0")
+    git("tag", "both")
+    git("branch", "both")
+    return repo
+
+
+@pytest.mark.parametrize("command", [
+    "git push origin v1.0",
+    "git push origin refs/tags/v1.0",
+    "git push --tags",
+    "git push origin --tags",
+    "git push origin +v1.0",
+    "git push origin v1.0:refs/tags/v1.0",
+    "git push origin :refs/tags/v1.0",
+    "git push origin :v1.0",                      # deletes the remote tag
+    "git push --delete origin v1.0",
+    "git -c core.quotePath=false push origin v1.0",
+    "git push -o ci.skip origin v1.0",
+])
+def test_a_push_of_tags_only_is_recognised(tmp_path, command):
+    # The tool repo's release order pushes the TAG first, so PyPI publishes the version the
+    # SKILL.md floors name, and syncs the marketplace twin only after that. A tag ships no
+    # SKILL.md to installers (the marketplace serves the default branch), so gating it on the
+    # mirror deadlocks the release: the twin may not name an unpublished version, and the tag
+    # that publishes it may not be pushed while the twin differs.
+    repo = _tagged_tool_repo(tmp_path / "repo")
+    assert RG.pushes_only_tags(command, repo) is True
+
+
+@pytest.mark.parametrize("command", [
+    "git push",                                   # the default push sends a branch
+    "git push origin",
+    "git push origin main",
+    "git push origin v1.0 main",                  # one tag, one branch
+    "git push origin HEAD",
+    "git push origin both",                       # a tag AND a branch of that name: ambiguous
+    "git push origin v9.9",                       # resolves to nothing: fail closed
+    "git push --follow-tags origin main",
+    "git push --all origin",
+    "git push --all --tags origin",               # every branch AND every tag
+    "git push --branches --tags origin",
+    "git push --mirror origin",
+    "git push origin :main",                      # deletes a branch
+    "git push --tags origin main",
+    "git commit -m x && git push origin v1.0",    # the commit is still gated
+    "git push origin v1.0 && git push origin main",
+    "git push origin v1.0:refs/heads/v1.0",       # a tag pushed INTO a branch
+    "git status",                                 # no push at all
+])
+def test_a_push_that_can_carry_a_branch_is_not_tags_only(tmp_path, command):
+    repo = _tagged_tool_repo(tmp_path / "repo")
+    assert RG.pushes_only_tags(command, repo) is False
+
+
+def test_a_tag_push_in_a_tool_repo_passes_while_its_mirror_has_drifted(tmp_path, monkeypatch, capsys):
+    public = _mirror_tree(tmp_path, twin_body=TWIN_BODY.replace(
+        "One paragraph of content.", "DRIFTED: a capability the mirror never heard of."))
+    monkeypatch.setattr(RG, "MIRRORED_SKILLS", {"coding-python-thing": "libs/thing/skills/python-thing"})
+    repo = _tagged_tool_repo(public / "libs" / "thing")
+    _tool_repo_commit(monkeypatch, public, repo, command="git push origin v1.0")
+
+    assert RG.main() == 0
+    # Not a silent pass: the model is told the mirror was not checked, and why.
+    assert "only tags" in capsys.readouterr().out
+
+
+def test_a_branch_push_in_a_tool_repo_still_blocks_on_a_drifted_mirror(tmp_path, monkeypatch):
+    public = _mirror_tree(tmp_path, twin_body=TWIN_BODY.replace(
+        "One paragraph of content.", "DRIFTED: a capability the mirror never heard of."))
+    monkeypatch.setattr(RG, "MIRRORED_SKILLS", {"coding-python-thing": "libs/thing/skills/python-thing"})
+    repo = _tagged_tool_repo(public / "libs" / "thing")
+    _tool_repo_commit(monkeypatch, public, repo, command="git push origin main")
+
+    assert RG.main() == 2
+
+
 def test_a_repo_that_ships_no_mirrored_skill_is_still_silent(tmp_path, monkeypatch, capsys):
     # The gate must not start narrating in every unrelated repo on the machine.
     public = _mirror_tree(tmp_path)

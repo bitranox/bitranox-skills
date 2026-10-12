@@ -97,7 +97,10 @@ published until both sides are committed. Nothing fetches; the audits, and every
 7 days ago, because a stale ref is the likeliest source of a false drift.
 
 - The commit and push gates check the twin of any mirrored skill the current change touches.
-  Pre-existing drift elsewhere does not block an unrelated commit.
+  Pre-existing drift elsewhere does not block an unrelated commit. In a tool repo, a push that
+  sends only tags is not checked: a tag ships no SKILL.md to installers, and a release must push
+  its tag (so PyPI serves the version) before the twin may name that version. The gate judges a
+  command before it runs, so create the tag in an earlier command than the push.
 - `python3 plugins/bitranox/hooks/repo-gate.py --mirrors` audits every pair, changed or not, and
   exits 1 when any pair has drifted or a twin is missing from `MIRRORED_SKILLS`, 2 when it could
   not run (outside the repo, or a crash). This is local only: the twins are sibling repos that a CI

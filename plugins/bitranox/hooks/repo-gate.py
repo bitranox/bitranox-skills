@@ -43,7 +43,11 @@ Checks:
                     another session's half-done edit never blocks a commit. A commit that
                     matches the other side's uncommitted text EXACTLY passes with a notice to
                     commit that side next (a change made to both copies at once); a push
-                    never does. Never fetches.
+                    never does. Never fetches. In a tool repo, a push that sends only tags
+                    is not checked (`pushes_only_tags`): a tag ships no SKILL.md, and the
+                    release order pushes the tag before the twin may name its version. The
+                    tag must already exist when the push is judged, so create it in an
+                    earlier command; a name that resolves to nothing stays gated.
                     Run `repo-gate.py --mirrors` to audit every pair, changed or not, at the
                     newest text of both sides, with any ref last fetched over 7 days ago named.
   7. changelog    - BOTH MODES: the version plugin.json names must have a `## [version]`
@@ -1597,6 +1601,80 @@ def mirror_stage(command, tool_name=None):
     return STAGE_HEAD
 
 
+#: `git push` options that take their VALUE as the next token.
+_PUSH_VALUE_OPTS = frozenset({"-o", "--push-option", "--repo", "--receive-pack", "--exec"})
+#: `git push` options that send branches whatever the refspecs say.
+_PUSH_BRANCH_OPTS = frozenset({"--all", "--branches", "--mirror", "--follow-tags"})
+
+
+def _is_tag_ref(repo, name):
+    """True when `name` resolves in `repo` as a tag and NOT as a branch (ambiguous is not a tag)."""
+    if name.startswith("refs/tags/"):
+        return True
+    if not name or name.startswith("refs/"):
+        return False
+
+    def exists(ref):
+        return subprocess.run(["git", "-C", str(repo), "show-ref", "--verify", "--quiet", ref],
+                              capture_output=True).returncode == 0
+    return exists("refs/tags/" + name) and not exists("refs/heads/" + name)
+
+
+def _push_sends_only_tags(operands, repo):
+    """True when one `git push` statement's operands can send nothing but tags."""
+    positional, tags_flag, i = [], False, 0
+    while i < len(operands):
+        tok = operands[i]
+        if tok in _PUSH_VALUE_OPTS:
+            i += 2
+            continue
+        if tok in _PUSH_BRANCH_OPTS:
+            return False
+        if tok == "--tags":
+            tags_flag = True
+        elif not tok.startswith("-"):
+            positional.append(tok)
+        i += 1
+    refspecs = positional[1:]                     # the first positional is the remote
+    if not refspecs:
+        return tags_flag                          # a bare push sends the current branch
+    for spec in refspecs:
+        src, _, dst = spec.lstrip("+").partition(":")
+        if dst and not _is_tag_ref(repo, dst):
+            return False
+        if src and not _is_tag_ref(repo, src):
+            return False
+    return True
+
+
+def pushes_only_tags(command, repo, tool_name=None):
+    """True when every gated statement in `command` is a `git push` that can send only tags.
+
+    A tag ships no SKILL.md to installers - a marketplace serves its default branch - so the
+    mirror gate has nothing to protect on such a push. Gating it anyway deadlocks a tool repo's
+    release: its SKILL.md floors may not name a version PyPI does not serve yet, the tag push is
+    what publishes that version, and the twin cannot be synced before it.
+
+    Fails closed: a commit or `gh pr create` anywhere, a refspec that names a branch, resolves to
+    nothing, or is both a tag and a branch, and any push option that sends branches, all answer
+    False, so the ordinary gate still runs. A name is resolved in `repo`, the repository the
+    command lands in; a name the tokenizer mangled resolves to nothing and therefore stays gated.
+    """
+    found_push = False
+    for _at, seg in shell_text.iter_segments(shell_text.strip_heredoc_bodies(command or ""), tool_name):
+        seg = seg.strip().lstrip("(").strip()
+        if shell_text.PR_RE.match(seg) or shell_text.is_git_verb(seg, {"commit"}, tool_name or "Bash"):
+            return False
+        operands = shell_text.git_verb_operands(shell_text.argv_for_match(seg, tool_name or "Bash"),
+                                                {"push"}, tool_name or "Bash")
+        if operands is None:
+            continue
+        if not _push_sends_only_tags(operands, repo):
+            return False
+        found_push = True
+    return found_push
+
+
 def _marketplace_checkout(public):
     """The marketplace checkout a mirror is compared against: the one being run from, if any.
 
@@ -1980,6 +2058,12 @@ def main():
         # Hook mode outside the marketplace. Not "never interfere" any more: if THIS repo
         # ships a skill mirrored into the marketplace, the pair is checked from this side
         # too. Everything else still passes untouched.
+        if root is not None and pushes_only_tags(command, root, event.get("tool_name")):
+            if _tool_repo_twins(root)[1]:
+                _say_context(["repo-gate: this push sends only tags, so the marketplace mirror was "
+                              "not checked - a tag ships no SKILL.md to installers. Sync the twin "
+                              "before pushing the branch."])
+            return 0
         return gate_tool_repo_mirror(root, stage)
 
     if mirrors:

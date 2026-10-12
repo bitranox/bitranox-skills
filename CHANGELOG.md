@@ -29,6 +29,19 @@ than the change, so entries reconstructed from them would read like coverage wit
 a hole nobody has drawn a line under is one that gets rediscovered and half-filled - which is how
 two "versions with no entry" notes came to sit in this file disagreeing with it.
 
+## [8.17.4]
+
+### Fixed
+
+- repo-gate: in a tool repo that ships a mirrored skill, a `git push` that sends only tags is no
+  longer blocked when the marketplace twin differs. A tag ships no SKILL.md to installers (a
+  marketplace serves its default branch), and a tool repo's release pushes the tag first so PyPI
+  serves the version its SKILL.md floors name, then syncs the twin; gating the tag deadlocked
+  that order. Every refspec must resolve in the repo as a tag and not as a branch, and a commit,
+  `gh pr create`, `--all`, `--branches`, `--mirror` or `--follow-tags` in the command keeps the
+  gate on; a name that resolves to nothing stays gated, so create the tag in an earlier command.
+  The skip is announced through `additionalContext`.
+
 ## [8.17.3]
 
 ### Fixed
