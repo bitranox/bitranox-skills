@@ -29,6 +29,14 @@ than the change, so entries reconstructed from them would read like coverage wit
 a hole nobody has drawn a line under is one that gets rediscovered and half-filled - which is how
 two "versions with no entry" notes came to sit in this file disagreeing with it.
 
+## [8.11.3]
+
+### Fixed
+
+- `coding-python-gitignore` follows igittigitt 2.2.5: `igittigitt config` now prints
+  `performance.max_token_bytes` in both formats, so the skill no longer says the value is always
+  masked; it now says only releases before 2.2.5 print it as `***REDACTED***`.
+
 ## [8.11.2]
 
 ### Changed
