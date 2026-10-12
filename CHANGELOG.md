@@ -42,6 +42,10 @@ two "versions with no entry" notes came to sit in this file disagreeing with it.
   comments and a rule's term is the text before `==>`, stripped. A denylist file that parses to
   zero terms (empty, all comments, or only `==>x` rules) is refused with exit 2 rather than
   checking nothing and reporting clean.
+- `compuse-toolbox`: `pushcheck`'s denylist matches by `str.casefold`, the comparison
+  `redaction_scan` uses, through one shared `fold_case` in `pushcheck.py`. It compared with
+  `lower()`, which leaves the German sharp s alone, so a term `Strasse` missed the same name
+  written with one.
 
 ## [8.14.0]
 

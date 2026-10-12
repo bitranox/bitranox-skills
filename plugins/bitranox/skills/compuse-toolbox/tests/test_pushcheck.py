@@ -577,6 +577,21 @@ def test_pushcheck_and_redaction_scan_share_one_list_parser():
     """Two parsers of one format drift apart; the two jigs read the same lists."""
     assert RS.parse_rules is PC.parse_rules
     assert RS.Rule is PC.Rule
+    assert RS.fold_case is PC.fold_case
+
+
+def test_a_term_matches_by_casefold_not_lower():
+    """`lower()` leaves the German sharp s alone, so a term spelled `Strasse` misses an added
+    `STRASSE` written with it; `casefold()` maps it to `ss`. Missing a private name is the
+    dangerous direction, so the wider match wins, the same one redaction_scan uses."""
+    hits = PC.scan_text("meet at STRA\u00dfE 5", "f", denylist=["Strasse"])
+    assert [h.kind for h in hits] == ["denylist"]
+
+
+def test_a_sharp_s_spelling_in_the_push_is_found_by_a_rule_from_the_file(tmp_path):
+    r = _check_with_list(tmp_path, b"Strasse==>Road1\n", "doc.md", "meet at STRA\u00dfE 5\n")
+    assert r.returncode == 1, r.stdout + r.stderr
+    assert [f["kind"] for f in json.loads(r.stdout)["data"]["findings"]] == ["denylist"]
 
 
 # ---- running it the way the skill documents it ---------------------------------------------

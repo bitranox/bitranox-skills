@@ -44,7 +44,9 @@ them with --denylist-file; the file is yours and is never shipped, which is what
 public while the terms stay private. It is read as a redaction list, the format `redaction_scan`
 reads, through the same parser (`parse_rules`): one rule per line, blank lines and lines whose
 first non-blank character is `#` are comments, and a rule is `term` or `term==>replacement`, the
-term being the text before the first `==>`, stripped. A term matches case-insensitively. A list
+term being the text before the first `==>`, stripped. A term matches case-insensitively by
+`str.casefold` (`fold_case`, shared with `redaction_scan`), so `Strasse` also finds the spelling
+with the German sharp s, which `lower()` would miss. A list
 that parses to zero terms is refused (exit 2), because a denylist that checked nothing would
 otherwise print the same clean result as one that checked everything.
 
@@ -74,8 +76,8 @@ from pathlib import Path
 
 from _cli_envelope import EXIT_ERROR, EnvelopeArgumentParser, emit, guarded
 
-__all__ = ["Finding", "Rule", "RuleList", "Verdict", "added_lines", "decide", "parse_remote",
-           "parse_rules", "scan_diff", "scan_messages", "scan_text", "split_lines"]
+__all__ = ["Finding", "Rule", "RuleList", "Verdict", "added_lines", "decide", "fold_case",
+           "parse_remote", "parse_rules", "scan_diff", "scan_messages", "scan_text", "split_lines"]
 
 # A remote URL in any of the shapes git accepts. Owner and repo are what the visibility lookup
 # needs; the host decides whether we can ask at all.
@@ -256,6 +258,20 @@ class RuleList:
     empty_rules: int                # `==>x` or whitespace before `==>`: nothing to match
 
 
+def fold_case(text: str) -> str:
+    """`text` as both jigs compare it: `str.casefold`, never `lower()`.
+
+    `lower()` leaves the German sharp s as it is, so a term written `Strasse` misses `STRASSE`
+    spelled with one; casefold maps it to `ss`. A missed private name is the dangerous direction,
+    so the wider match is the one both pushcheck's denylist and redaction_scan use.
+
+    Examples:
+        >>> fold_case("STRA\\u00dfE") == fold_case("Strasse")
+        True
+    """
+    return text.casefold()
+
+
 def parse_rules(text: str) -> RuleList:
     """Parse a redaction list. PURE, and the ONE parser of the format: pushcheck's
     --denylist-file and redaction_scan's --list both read through it, so the two jigs cannot
@@ -291,7 +307,7 @@ def parse_rules(text: str) -> RuleList:
 
 def scan_text(text: str, path: str, denylist: tuple[str, ...] | list[str] = ()) -> list[Finding]:
     """Every private-looking value in `text`, with 1-based line numbers. PURE."""
-    terms = [t.strip().lower() for t in denylist if t.strip()]
+    terms = [fold_case(t.strip()) for t in denylist if t.strip()]
     found: list[Finding] = []
     for n, line in enumerate(split_lines(text), start=1):
         for hit in _abs_path_hits(line):
@@ -300,9 +316,9 @@ def scan_text(text: str, path: str, denylist: tuple[str, ...] | list[str] = ()) 
             found.append(Finding("hostname", path, n, hit))
         for hit in _private_ip_hits(line):
             found.append(Finding("private_ip", path, n, hit))
-        low = line.lower()
+        folded = fold_case(line)
         for term in terms:
-            if term in low:
+            if term in folded:
                 found.append(Finding("denylist", path, n, line.strip()[:120]))
     return found
 

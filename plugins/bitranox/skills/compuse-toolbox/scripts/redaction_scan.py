@@ -71,6 +71,7 @@ from pushcheck import (
     RuleList,
     added_lines,
     binary_files,
+    fold_case,
     parse_rules,
     range_diff,
     range_messages,
@@ -114,8 +115,8 @@ Matcher = Callable[[str, tuple[Rule, ...]], list[Rule]]
 
 def match_rules(text: str, rules: tuple[Rule, ...]) -> list[Rule]:
     """The rules whose pattern is a case-insensitive literal substring of `text`. PURE."""
-    folded = text.casefold()
-    return [r for r in rules if r.pattern.casefold() in folded]
+    folded = fold_case(text)
+    return [r for r in rules if fold_case(r.pattern) in folded]
 
 
 def scan_added(lines: Iterable[tuple[str, int, str]], rules: tuple[Rule, ...],
