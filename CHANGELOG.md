@@ -29,6 +29,16 @@ than the change, so entries reconstructed from them would read like coverage wit
 a hole nobody has drawn a line under is one that gets rediscovered and half-filled - which is how
 two "versions with no entry" notes came to sit in this file disagreeing with it.
 
+## [8.11.1]
+
+### Fixed
+
+- `repo-gate`'s mirror check no longer deadlocks a change made to both copies of a mirrored skill.
+  Each side's commit read the other at what it had committed, so neither could commit first. A
+  commit whose text matches the other repo's uncommitted text exactly now passes, and the model is
+  told to commit that repo next. A different uncommitted edit still blocks, and a push still reads
+  the other side at what it committed, so the pair cannot be published until both sides are.
+
 ## [8.11.0]
 
 ### Added

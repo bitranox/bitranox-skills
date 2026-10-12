@@ -1673,6 +1673,84 @@ def test_pre_push_reads_the_marketplace_at_head(tmp_path, monkeypatch, capsys):
     assert "drifted from its twin" in capsys.readouterr().err
 
 
+# --- a coordinated two-repo change: the commit gate accepts a MATCHING uncommitted twin ----------
+#
+# User decision 2026-10-12 ([200], btx_lib_mail queue): with each side read at what it ships and the
+# other at what it committed, a change made to BOTH copies could commit on neither side first.
+# A COMMIT now also accepts the other side's uncommitted text when it matches exactly, and says
+# to commit that side next. A non-matching edit, a push and the audits read as before.
+
+def _same_edit_on_both_sides(root, tool):
+    _drift(root / MP_SKILL, MIRROR_BODY)
+    _drift(tool / TW_SKILL, TWIN_BODY)
+
+
+def test_a_marketplace_commit_passes_when_the_twin_holds_the_same_edit_uncommitted(tmp_path, monkeypatch):
+    _public, root, tool = _published_pair(tmp_path, monkeypatch)
+    _same_edit_on_both_sides(root, tool)
+    _g(root, "add", "-A")
+    notices = []
+
+    assert RG.check_skill_mirrors(root, notices=notices) == []
+    assert len(notices) == 1
+    assert "coding-python-thing" in notices[0] and "uncommitted" in notices[0]
+    assert str(tool) in notices[0]                          # names the repo to commit next
+
+
+def test_a_caller_that_collects_no_notices_keeps_the_strict_reading(tmp_path, monkeypatch):
+    # The acceptance must be impossible to take without its notice: a caller that cannot pass the
+    # notice on gets the old refusal, never a silent pass.
+    _public, root, tool = _published_pair(tmp_path, monkeypatch)
+    _same_edit_on_both_sides(root, tool)
+    _g(root, "add", "-A")
+
+    assert len(RG.check_skill_mirrors(root)) == 1
+
+
+def test_a_tool_repo_commit_passes_when_the_marketplace_holds_the_same_edit_uncommitted(tmp_path, monkeypatch,
+                                                                                     capsys):
+    public, root, tool = _published_pair(tmp_path, monkeypatch)
+    _same_edit_on_both_sides(root, tool)
+    _g(tool, "add", "-A")
+    _tool_repo_commit(monkeypatch, public, tool)
+
+    assert RG.main() == 0
+    printed = capsys.readouterr()
+    assert "DRIFT" not in printed.err
+    context = json.loads(printed.out)["hookSpecificOutput"]["additionalContext"]
+    assert "uncommitted" in context and str(root) in context
+
+
+def test_a_different_uncommitted_edit_on_the_other_side_still_blocks_the_commit(tmp_path, monkeypatch, capsys):
+    public, root, tool = _published_pair(tmp_path, monkeypatch)
+    _drift(tool / TW_SKILL, TWIN_BODY)
+    _g(tool, "add", "-A")
+    write(root / MP_SKILL, MIRROR_BODY.replace("One paragraph of content.", "A DIFFERENT edit."))
+    _tool_repo_commit(monkeypatch, public, tool)
+
+    assert RG.main() == 2
+    assert IN_PROGRESS in capsys.readouterr().err
+    notices = []
+    _g(root, "add", "-A")
+    write(tool / TW_SKILL, TWIN_BODY.replace("One paragraph of content.", "A THIRD edit."))
+    assert len(RG.check_skill_mirrors(root, notices=notices)) == 1 and notices == []
+
+
+def test_a_push_never_accepts_an_uncommitted_twin(tmp_path, monkeypatch, capsys):
+    public, root, tool = _published_pair(tmp_path, monkeypatch)
+    _same_edit_on_both_sides(root, tool)
+    _g(tool, "commit", "-qam", "edit")                      # the tool side is committed...
+    _tool_repo_commit(monkeypatch, public, tool, command="git push")
+
+    assert RG.main() == 2                                   # ...the marketplace side is not
+    assert IN_PROGRESS in capsys.readouterr().err
+    notices = []
+    _g(root, "commit", "-qam", "edit")                      # now the reverse: marketplace committed,
+    _g(tool, "reset", "-q", "--soft", "HEAD~1")             # the tool's same edit uncommitted again
+    assert len(RG.check_skill_mirrors(root, stage=RG.STAGE_HEAD, notices=notices)) == 1
+    assert notices == []
+
+
 @pytest.mark.parametrize("command, stage", [
     ("git commit -m x", "index"),
     ("git commit -m x && git push", "index"),

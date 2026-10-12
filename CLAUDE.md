@@ -89,8 +89,11 @@ read each side at its NEWEST text, never at whatever a checkout holds: a file ed
 the published `origin` ref, so a checkout behind origin neither reports false drift nor hides real
 drift. The commit and push gates read what the change SHIPS: the repo being committed at its index
 on a commit and at HEAD on a push, the other repo at its published ref plus what it committed
-since forking from it, so another session's uncommitted edit there never decides a commit. Nothing
-fetches; the audits, and every DRIFT message, name a repo whose `origin` was last fetched more than
+since forking from it, so another session's half-done edit there never blocks a commit. One
+exception keeps a change made to BOTH copies from deadlocking, where each side waits for the other
+to commit first: a COMMIT whose text matches the other repo's uncommitted text exactly passes, with
+a notice naming that repo as the one to commit next. A push never takes it, so the pair cannot be
+published until both sides are committed. Nothing fetches; the audits, and every DRIFT message, name a repo whose `origin` was last fetched more than
 7 days ago, because a stale ref is the likeliest source of a false drift.
 
 - The commit and push gates check the twin of any mirrored skill the current change touches.

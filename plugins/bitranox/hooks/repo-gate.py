@@ -40,7 +40,10 @@ Checks:
                     because the twins are sibling repos that a CI clone does not have.
                     The side being committed is read at its index (commit) or HEAD (push);
                     the other side at its published ref plus what it committed since, so
-                    another session's uncommitted edit never decides a commit. Never fetches.
+                    another session's half-done edit never blocks a commit. A commit that
+                    matches the other side's uncommitted text EXACTLY passes with a notice to
+                    commit that side next (a change made to both copies at once); a push
+                    never does. Never fetches.
                     Run `repo-gate.py --mirrors` to audit every pair, changed or not, at the
                     newest text of both sides, with any ref last fetched over 7 days ago named.
   7. changelog    - BOTH MODES: the version plugin.json names must have a `## [version]`
@@ -1449,7 +1452,43 @@ def _mirror_readers(committing, stage):
     return published_files, shipped, ("marketplace",)
 
 
-def mirror_failures(root, names, committing=None, stage=STAGE_INDEX):
+def _mirror_differences(mine_files, their_files):
+    """(differing paths, sample diff lines of SKILL.md) between the marketplace and twin readings."""
+    differing, sample = [], []
+    for rel in sorted(set(mine_files) | set(their_files)):
+        mine, theirs = mine_files.get(rel), their_files.get(rel)
+        if mine is None:
+            differing.append("%s (only in the twin)" % rel)
+        elif theirs is None:
+            differing.append("%s (only in the marketplace)" % rel)
+        elif rel == "SKILL.md":
+            a = normalise_mirror(theirs.decode("utf-8"))
+            b = normalise_mirror(mine.decode("utf-8"))
+            if a != b:
+                differing.append(rel)
+                diff = difflib.unified_diff(a.splitlines(), b.splitlines(), "twin", "marketplace",
+                                            lineterm="", n=0)
+                sample = [line for line in diff
+                          if line[:1] in "+-" and line[:3] not in ("---", "+++")]
+        elif mine != theirs:
+            differing.append(rel)
+    return differing, sample
+
+
+def _matches_uncommitted_other_side(committing, here_dir, twin_dir, mine_files, their_files):
+    """True when the side being committed matches the OTHER side's uncommitted text exactly.
+
+    A change made to both copies of a mirrored skill could otherwise commit on neither side first:
+    each commit reads the other side at what it committed, and neither has (user decision
+    2026-10-12, [200]). The other side is re-read at its newest text, the audits' reading."""
+    if committing == "marketplace":
+        their_files = mirror_files(twin_dir)
+    else:
+        mine_files = mirror_files(here_dir)
+    return bool(mine_files and their_files) and not _mirror_differences(mine_files, their_files)[0]
+
+
+def mirror_failures(root, names, committing=None, stage=STAGE_INDEX, notices=None):
     """Return a failure per mirrored skill in ``names`` whose twin has drifted.
 
     A mirrored skill is a DIRECTORY. Several pairs ship `references/` and `scripts/` beside their
@@ -1470,12 +1509,21 @@ def mirror_failures(root, names, committing=None, stage=STAGE_INDEX):
     A drift message names every side read from a published ref that was last fetched over
     STALE_REF_DAYS ago (`stale_ref_notes`): stale text is the likeliest false drift, and the
     gates never fetch.
+
+    A COMMIT (a gate at ``STAGE_INDEX``) that drifts only from the other side's COMMITTED text but
+    matches its uncommitted text exactly is a coordinated change to both copies, and passes: the
+    pair is reported in ``notices`` instead, naming the repo to commit next. Only a caller that
+    passes a ``notices`` list gets that reading, so the pass can never arrive without its notice.
+    A push still reads the other side at what it committed, so the pair cannot be published
+    until both sides are.
     """
 
     public = _public_tree(root)
     if public is None:
         return []
     read_here, read_twin, from_published = _mirror_readers(committing, stage)
+    # An audit (committing None) already reads both sides at their newest text, so it never matches here.
+    lenient = stage == STAGE_INDEX and notices is not None
     fails = []
     for name in sorted(names):
         relative = MIRRORED_SKILLS.get(name)
@@ -1490,25 +1538,15 @@ def mirror_failures(root, names, committing=None, stage=STAGE_INDEX):
         mine_files, their_files = read_here(here_dir), read_twin(twin_dir)
         if not mine_files or not their_files:
             continue  # nothing committed on one side yet: no text either commit could ship
-        differing, sample = [], []
-        for rel in sorted(set(mine_files) | set(their_files)):
-            mine, theirs = mine_files.get(rel), their_files.get(rel)
-            if mine is None:
-                differing.append("%s (only in the twin)" % rel)
-            elif theirs is None:
-                differing.append("%s (only in the marketplace)" % rel)
-            elif rel == "SKILL.md":
-                a = normalise_mirror(theirs.decode("utf-8"))
-                b = normalise_mirror(mine.decode("utf-8"))
-                if a != b:
-                    differing.append(rel)
-                    diff = difflib.unified_diff(a.splitlines(), b.splitlines(), "twin", "marketplace",
-                                                lineterm="", n=0)
-                    sample = [line for line in diff
-                              if line[:1] in "+-" and line[:3] not in ("---", "+++")]
-            elif mine != theirs:
-                differing.append(rel)
+        differing, sample = _mirror_differences(mine_files, their_files)
         if not differing:
+            continue
+        if lenient and _matches_uncommitted_other_side(committing, here_dir, twin_dir, mine_files, their_files):
+            other = twin_dir if committing == "marketplace" else here_dir
+            notices.append(
+                "skills/%s matches its twin only through uncommitted text at %s, so this commit is "
+                "allowed; commit that side next - a push from either repo is refused until both "
+                "sides are committed." % (name, other))
             continue
         detail = "\n      ".join(sample[:6]) if sample else "\n      ".join(differing[:6])
         dirs = {"marketplace": here_dir, "twin": twin_dir}
@@ -1524,20 +1562,22 @@ def mirror_failures(root, names, committing=None, stage=STAGE_INDEX):
     return fails
 
 
-def check_skill_mirrors(root, stage=STAGE_INDEX):
+def check_skill_mirrors(root, stage=STAGE_INDEX, notices=None):
     """Gate the mirrored twin of every skill this change touches.
 
     Scoped to what changed, like the review and description checks: pre-existing drift in
     a skill nobody is editing must not block an unrelated commit, and the maintainer has
     ``--mirrors`` for the full sweep. The marketplace is the side being committed, read at
-    ``stage`` (the index on a commit, HEAD on a push); the twin at what its repo committed.
+    ``stage`` (the index on a commit, HEAD on a push); the twin at what its repo committed,
+    or on a commit with ``notices`` given, at a matching uncommitted text (`mirror_failures`).
     """
 
     changed = _changed_vs_origin(root)
     if changed is None:
         return []
     touched = {m.group(1) for m in (_SKILL_MD_RX.match(p) for p in changed) if m}
-    return mirror_failures(root, touched & set(MIRRORED_SKILLS), committing="marketplace", stage=stage)
+    return mirror_failures(root, touched & set(MIRRORED_SKILLS), committing="marketplace", stage=stage,
+                           notices=notices)
 
 
 def mirror_stage(command, tool_name=None):
@@ -1676,12 +1716,14 @@ def unlisted_mirrors(root, public):
     return found
 
 
-def run_checks(root, ci, full_pytest=None, run_pytest=True, baseline=0, mirror_at=STAGE_INDEX):
+def run_checks(root, ci, full_pytest=None, run_pytest=True, baseline=0, mirror_at=STAGE_INDEX,
+               notices=None):
     """`ci` picks the CHECK SET (CI omits the maintainer-only ones); `full_pytest` picks the pytest
     SCOPE and defaults to `ci`. They are separate axes because a pre-push is BOTH: the maintainer
     (so version-bump, skill-review and mirrors apply) and the last gate before CI (so it runs the
     whole suite CI runs, not just hooks/tests). `mirror_at` is what the commit or push ships of the
-    marketplace (`mirror_stage`): the index on a commit, HEAD on a push."""
+    marketplace (`mirror_stage`): the index on a commit, HEAD on a push. `notices`, when given,
+    collects what passed but must still reach the model (`check_skill_mirrors`)."""
     if full_pytest is None:
         full_pytest = ci
     failures = []
@@ -1710,7 +1752,7 @@ def run_checks(root, ci, full_pytest=None, run_pytest=True, baseline=0, mirror_a
         failures += check_version_bumped(root)
         failures += check_ragged_tables(root)
         failures += check_skill_review(root)
-        failures += check_skill_mirrors(root, stage=mirror_at)
+        failures += check_skill_mirrors(root, stage=mirror_at, notices=notices)
     # Preflight the dependencies, and run pytest only when they are all there. Running it anyway
     # would report the SAME problem a second time as a failed assertion in an unrelated test,
     # and that second message is the one a reader acts on.
@@ -1766,8 +1808,10 @@ def gate_tool_repo_mirror(root, stage=STAGE_INDEX):
         _say_unverifiable(mine, marketplace)
         return 0
 
-    fails = mirror_failures(marketplace, set(mine), committing="twin", stage=stage)
+    notices = []
+    fails = mirror_failures(marketplace, set(mine), committing="twin", stage=stage, notices=notices)
     if not fails:
+        _say_context(notices)
         return 0
     # All of it on STDERR: on a PreToolUse exit 2 that is what the model is shown, and stdout is
     # not. The table and the diff are the actionable part, so they cannot go anywhere else.
@@ -1788,7 +1832,15 @@ def _say_unverifiable(names, marketplace):
         "The commit is allowed, but nothing confirmed the twin is in sync; run "
         "'repo-gate.py --mirror-of <this repo>' where the marketplace is checked out." % (", ".join(names), marketplace)
     )
-    print(json.dumps({"hookSpecificOutput": {"hookEventName": "PreToolUse", "additionalContext": note}}))
+    _say_context([note])
+
+
+def _say_context(notes):
+    """Pass ``notes`` to the model on the one exit-0 channel it reads; print nothing for none."""
+
+    if notes:
+        text = "\n".join(notes)
+        print(json.dumps({"hookSpecificOutput": {"hookEventName": "PreToolUse", "additionalContext": text}}))
 
 
 
@@ -1888,18 +1940,21 @@ def main():
         # including the ones no current change touches.
         return 1 if audit_mirrors(root) else 0
 
+    notices = [] if hook_mode else None
     failures = run_checks(root, ci, full_pytest=ci or pre_push,
-                          run_pytest=run_pytest, baseline=expected_collected(root), mirror_at=stage)
+                          run_pytest=run_pytest, baseline=expected_collected(root), mirror_at=stage,
+                          notices=notices)
 
     if not failures:
         if ci or pre_push:
             print("repo-gate: all checks passed.")
+        _say_context(notices)
         return 0
 
     header = ("repo-gate: FAILED" if ci else
               "repo-gate: push blocked - fix these first:" if pre_push else
               "repo-gate: commit/push blocked - fix these first:")
-    print("\n".join([header, *failures]), file=sys.stderr)
+    print("\n".join([header, *failures, *(notices or [])]), file=sys.stderr)
     if not (ci or pre_push):
         return 2  # the PreToolUse block code, whatever kind the failure was
     return 2 if is_could_not_run(failures) else 1
