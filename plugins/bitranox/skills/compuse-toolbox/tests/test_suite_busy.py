@@ -159,6 +159,63 @@ def test_an_unreadable_cwd_is_counted_not_examined(tmp_path):
     assert (result.processes_examined, result.unreadable_cwd, result.busy) == (1, 1, ())
 
 
+def _hosted_runner_proc(root: Path, work: str, *, self_cwd: bool = True) -> int:
+    """A /proc shaped like a hosted CI runner, with the CALLER as the jig. Returns the jig's pid.
+
+    Every process the test user can read is the jig or one of its ancestors (an agent, its
+    worker, the step's shell); everything else belongs to another user, so its cwd link cannot
+    be read. The jig's pid is this test process's own, which is how `execute` finds its chain in
+    the fake tree through the `proc_root` seam, exactly as it does in the real one.
+    """
+    me = os.getpid()
+    (root / "1").mkdir(parents=True)                                       # init: root's, unreadable
+    (root / "1" / "stat").write_text("1 (init) S 0 0 0\n", encoding="utf-8")
+    (root / "2").mkdir()                                                   # another user's daemon
+    (root / "2" / "stat").write_text("2 (daemon) S 1 0 0\n", encoding="utf-8")
+    _fake_proc(root, 50, "/home/ci-user", ["ci-agent", "run"], 1)
+    _fake_proc(root, 60, "/home/ci-user", ["ci-worker", "spawnclient"], 50)
+    _fake_proc(root, 70, work, ["bash", "-e", "step.sh"], 60)
+    if self_cwd:
+        _fake_proc(root, me, work, ["python3", "suite_busy.py", "--json"], 70)
+    else:                                                                  # listed, cwd unreadable
+        (root / str(me)).mkdir()
+        (root / str(me) / "stat").write_text(f"{me} (python3) S 70 0 0\n", encoding="utf-8")
+    return me
+
+
+@needs_proc
+def test_a_runner_where_only_the_jig_s_own_chain_is_readable_answers_free(repo, tmp_path,
+                                                                           capsys):
+    """The hosted-runner shape that made CI red: nothing readable is left once the jig's own
+    chain is set aside. /proc WAS read - the chain itself was - so the answer is "nothing is
+    running" with the unreadable processes in `skipped`, never "no answer is possible"."""
+    proc = tmp_path / "runner-proc"
+    _hosted_runner_proc(proc, str(repo["linked"]))
+    code = S.execute(["--repo", str(repo["main"]), "--json-bare"], proc_root=proc)
+    env = json.loads(capsys.readouterr().out)
+    assert code == 0, env
+    assert env["ok"] is True and env["data"]["busy"] == []
+    assert env["data"]["processes_examined"] == 0
+    assert env["data"]["processes_excluded"] == 4                 # the jig, bash, worker, agent
+    assert env["data"]["processes_unreadable"] == 1               # pid 2; init is an ancestor
+    assert env["skipped"] == ["1 process(es) whose cwd could not be read"]
+
+
+@needs_proc
+def test_a_runner_where_nothing_at_all_is_readable_is_still_a_refusal(repo, tmp_path, capsys):
+    """The guard the counting change must keep: the jig's chain is LISTED, but not one cwd in the
+    whole tree could be read, so the scan read nothing and the answer is a refusal."""
+    proc = tmp_path / "blind-proc"
+    _hosted_runner_proc(proc, str(repo["linked"]), self_cwd=False)
+    for pid in (50, 60, 70):                                       # the whole chain unreadable too
+        (proc / str(pid) / "cwd").unlink()
+    code = S.execute(["--repo", str(repo["main"]), "--json-bare"], proc_root=proc)
+    env = json.loads(capsys.readouterr().out)
+    assert code == 2, env
+    assert env["ok"] is False and "zero processes" in env["error"]
+    assert env["data"]["processes_excluded"] == 0 and env["data"]["processes_examined"] == 0
+
+
 # ---- real processes in a real repository --------------------------------------------------------
 
 def _git(cwd: Path, *args: str) -> None:

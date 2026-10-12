@@ -29,6 +29,21 @@ than the change, so entries reconstructed from them would read like coverage wit
 a hole nobody has drawn a line under is one that gets rediscovered and half-filled - which is how
 two "versions with no entry" notes came to sit in this file disagreeing with it.
 
+## [8.14.2]
+
+### Fixed
+
+- `compuse-toolbox`: `suite_busy` no longer refuses on a machine where every process the user can
+  read is the jig's own chain, which is the normal shape of a hosted CI runner (the agent, its
+  worker, the step's shell, pytest, all ancestors; everything else another user's, its cwd
+  unreadable). Those ancestors were set aside before they were counted, so `processes_examined`
+  reached zero and the jig exited 2 with "zero processes could be examined" although `/proc` was
+  read fine and the true answer was "nothing is running". The refusal now means what it says: not
+  one cwd in the process table could be read (examined plus excluded is zero). The envelope gains
+  `processes_excluded` (own process and ancestors whose cwd was read and set aside) and
+  `processes_unreadable` (the count behind `skipped`); exit codes and the existing fields are
+  unchanged.
+
 ## [8.14.1]
 
 ### Fixed

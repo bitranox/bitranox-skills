@@ -33,10 +33,13 @@ argv says - can never be reported. A shell handed a command string (`bash -c '..
 never matches either, since that string is one token; the suite it starts is its own process
 and is found as one.
 
-It reports each busy process (pid, rule, cwd, checkout, argv truncated) and how many processes
-and checkouts it examined. Examining zero checkouts, or zero processes, is a refusal, never a
-clean answer. A process whose cwd cannot be read (another user's) is counted in `skipped`, since
-it might be a suite this jig cannot see.
+It reports each busy process (pid, rule, cwd, checkout, argv truncated), how many processes and
+checkouts it examined, and how many of its own chain it set aside (`processes_excluded`).
+Examining zero checkouts is a refusal, and so is a process table in which not one cwd could be
+read (examined plus excluded is zero), never a clean answer. Zero EXAMINED alone is not: on a
+hosted CI runner every process the user can read is the jig's own chain, and "nothing else is
+running" is then the true answer. A process whose cwd cannot be read (another user's) is counted
+in `skipped` and `processes_unreadable`, since it might be a suite this jig cannot see.
 
 `--wait-s N` polls (every `--interval` seconds) until the checkouts are free or N seconds pass,
 and says which happened.
@@ -45,8 +48,8 @@ Linux only: it needs `/proc`. On macOS, Windows or anywhere without it, it says 
 rather than guess.
 
 Exit codes: 0 = nothing is running, 1 = a suite is running (or still running when `--wait-s`
-ran out), 2 = could not answer (no /proc, not a git repository, zero checkouts or processes
-examined, bad arguments, an internal error).
+ran out), 2 = could not answer (no /proc, not a git repository, zero checkouts examined, no
+readable process at all, bad arguments, an internal error).
 
 Run:
   `uv run scripts/suite_busy.py`                       (the cwd's repository)
@@ -116,9 +119,22 @@ class Busy:
 
 @dataclass(frozen=True)
 class Scan:
+    """What one pass over /proc found, and how much of the table it could actually read.
+
+    `processes_examined` counts the processes judged against the rules; `excluded` counts the
+    jig's own process and ancestors whose cwd was read and then set aside. Their sum is what the
+    zero-is-a-refusal rule tests: on a hosted CI runner every readable process can be the jig's
+    own chain, which leaves zero examined although /proc was read fine.
+    """
     busy: tuple[Busy, ...]
     processes_examined: int
     unreadable_cwd: int
+    excluded: int = 0
+
+    @property
+    def processes_read(self) -> int:
+        """Processes whose cwd could be read at all, examined or excluded."""
+        return self.processes_examined + self.excluded
 
 
 # ---- argv rules ----------------------------------------------------------------------------------
@@ -317,12 +333,17 @@ def scan(proc_root: Path, checkouts: Sequence[Checkout], matchers: Sequence[Matc
          exclude: set[int]) -> Scan:
     """Busy processes under `proc_root` inside one of `checkouts`. PURE over proc_root."""
     busy: list[Busy] = []
-    examined = unreadable = 0
+    examined = unreadable = excluded = 0
     for pdir in sorted(proc_root.glob("[0-9]*"), key=lambda p: int(p.name)):
         pid = int(pdir.name)
-        if pid in exclude:
-            continue
         cwd = _read_cwd(pdir)
+        if pid in exclude:
+            # Counted only when its cwd was READ, so a table in which nothing at all is readable
+            # still sums to zero; an unreadable ancestor (init, as root) is in neither count,
+            # since being excluded it could never be the suite this jig failed to see.
+            if cwd is not None:
+                excluded += 1
+            continue
         if cwd is None:
             if pdir.exists():
                 unreadable += 1
@@ -335,7 +356,7 @@ def scan(proc_root: Path, checkouts: Sequence[Checkout], matchers: Sequence[Matc
         rule = _first_rule(argv, matchers)
         if rule is not None:
             busy.append(Busy(pid, rule, cwd, checkout.path, " ".join(argv)[:_ARGV_SHOWN]))
-    return Scan(tuple(busy), examined, unreadable)
+    return Scan(tuple(busy), examined, unreadable, excluded)
 
 
 # ---- adapters ----------------------------------------------------------------------------------
@@ -428,7 +449,7 @@ def _render(result: Scan, checkouts: list[Checkout], waited: float, wait_s: floa
     if wait_s:
         head += f" after waiting {waited:.1f}s" + (" (deadline reached)" if result.busy else "")
     lines = [f"{head}; examined {result.processes_examined} process(es) across "
-             f"{len(checkouts)} checkout(s)"]
+             f"{len(checkouts)} checkout(s), set aside {result.excluded} of its own chain"]
     if result.unreadable_cwd:
         lines.append(f"  not examined: {result.unreadable_cwd} process(es) whose cwd could not "
                      "be read (another user's?)")
@@ -466,13 +487,18 @@ def execute(argv: list[str] | None = None, *, proc_root: Path = PROC,
             "checkouts": [co.__dict__ for co in checkouts],
             "checkouts_examined": len(checkouts),
             "processes_examined": result.processes_examined,
+            "processes_excluded": result.excluded,
+            "processes_unreadable": result.unreadable_cwd,
             "rules": [name for name, _ in matchers],
             "waited_s": round(waited, 3), "polls": polls,
             "timed_out": bool(args.wait_s) and bool(result.busy)}
     skipped = ([f"{result.unreadable_cwd} process(es) whose cwd could not be read"]
                if result.unreadable_cwd else [])
-    if result.processes_examined == 0:
-        return _refuse(args, "zero processes could be examined, so no answer is possible", data)
+    if result.processes_read == 0:
+        # Not "nothing left once the jig's own chain is set aside" (a hosted runner, where every
+        # readable process IS that chain): only a table in which no cwd could be read at all.
+        return _refuse(args, "zero processes could be examined (no cwd in the process table "
+                             "could be read), so no answer is possible", data)
     code = EXIT_NO if result.busy else EXIT_YES
     if args.json or args.json_bare:
         return emit(code, COMMAND, data, skipped=skipped, indent=_indent(args))
