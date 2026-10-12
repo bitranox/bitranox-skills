@@ -29,6 +29,25 @@ than the change, so entries reconstructed from them would read like coverage wit
 a hole nobody has drawn a line under is one that gets rediscovered and half-filled - which is how
 two "versions with no entry" notes came to sit in this file disagreeing with it.
 
+## [8.13.0]
+
+### Added
+
+- `block-write-after-sibling-cd` (PreToolUse, Bash and PowerShell) refuses a call that writes to a repository
+  (`git commit/add/push/checkout/reset/...`, `make`, a `bmk` subcommand, `gate.py --gate`) without
+  an absolute target of its own when an earlier Bash call of the same assistant message changed
+  directory. A writing call starts where the previous call of the message left the shell, so a
+  bare `git commit` after a sibling's `cd` commits in the sibling's repository. The siblings are
+  read from the transcript tail; a call it cannot find there passes. Replayed over 131,293
+  recorded Bash calls it refuses 33 (0.025%), 5 of which had landed in the wrong repository.
+- `shell_text` gains `statement_program` (the program a statement runs, past keywords, assignments
+  and launchers) and `git_segment_dir` (where one `git <verb>` statement runs).
+
+### Changed
+
+- `compuse-git`: the "bare `git` after an earlier `cd`" row says that writing calls in one message
+  inherit each other's `cd` while read-only calls do not, and names the new guard for that shape.
+
 ## [8.12.2]
 
 ### Changed

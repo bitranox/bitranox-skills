@@ -349,6 +349,26 @@ def past_command_prefix(tokens, idx, programs, tool_name="Bash"):
     return None
 
 
+def statement_program(tokens, programs, tool_name="Bash"):
+    """Index of the program a statement runs when it is one of `programs`, else None.
+
+    Loop and branch keywords, leading `VAR=value` assignments and a known launcher in front of the
+    program (`timeout 900 make test`, `env -u VIRTUAL_ENV make test`) are skipped, so the program
+    is found where the shell finds it rather than at the first word.
+    """
+    idx = 0
+    while idx < len(tokens) and (
+        tokens[idx] in _STATEMENT_KEYWORDS
+        or ("=" in tokens[idx] and not tokens[idx].startswith("-"))
+    ):
+        idx += 1                                  # loop/branch keywords, then VAR=value env prefix
+    if idx < len(tokens) and basename_for_tool(tokens[idx], tool_name) in _COMMAND_PREFIXES:
+        idx = past_command_prefix(tokens, idx, programs, tool_name)
+    if idx is None or idx >= len(tokens) or basename_for_tool(tokens[idx], tool_name) not in programs:
+        return None
+    return idx
+
+
 def git_verb_operands(tokens, verbs, tool_name="Bash"):
     r"""Tokens after git's SUBCOMMAND when this really is `git <global opts> <verb>`; else None.
 
@@ -368,15 +388,8 @@ def git_verb_operands(tokens, verbs, tool_name="Bash"):
     Leading `VAR=value` environment assignments are skipped, and the program name is taken with
     `basename_for_tool`, so `/usr/bin/git` and `git.exe` both count.
     """
-    idx = 0
-    while idx < len(tokens) and (
-        tokens[idx] in _STATEMENT_KEYWORDS
-        or ("=" in tokens[idx] and not tokens[idx].startswith("-"))
-    ):
-        idx += 1                                  # loop/branch keywords, then VAR=value env prefix
-    if idx < len(tokens) and basename_for_tool(tokens[idx], tool_name) in _COMMAND_PREFIXES:
-        idx = past_command_prefix(tokens, idx, ("git",), tool_name)
-    if idx is None or idx >= len(tokens) or basename_for_tool(tokens[idx], tool_name) != "git":
+    idx = statement_program(tokens, ("git",), tool_name)
+    if idx is None:
         return None
     idx += 1
     while idx < len(tokens) and tokens[idx].startswith("-"):
@@ -595,10 +608,22 @@ def git_verb_dir(command, cwd, verbs, tool_name=None):
         changed, here = _directory_change_tokens(tokens, here, tool)
         if changed:
             continue
-        operands = git_verb_operands(tokens, verbs, tool)
-        if operands is not None:
-            return _apply_git_options(tokens[:len(tokens) - len(operands) - 1], here, tool)
+        is_verb, where = git_segment_dir(tokens, verbs, here, tool)
+        if is_verb:
+            return where
     return None
+
+
+def git_segment_dir(tokens, verbs, here, tool_name="Bash"):
+    """(is this statement `git <verb>` for one of `verbs`, the directory it runs in or None).
+
+    `here` is where the statement starts; the verb's own `-C` values move it, and a `--git-dir`,
+    `--work-tree` or `GIT_DIR` points it somewhere nothing here models (None)."""
+    tool = tool_name or "Bash"
+    operands = git_verb_operands(tokens, verbs, tool)
+    if operands is None:
+        return False, here
+    return True, _apply_git_options(tokens[:len(tokens) - len(operands) - 1], here, tool)
 
 
 def iter_segments(text, tool_name=None):

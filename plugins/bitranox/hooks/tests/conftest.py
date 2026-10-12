@@ -23,6 +23,7 @@ _HOOK_MODULES = {
     "validate-structured-files": "validate_structured_files",
     "git-path-not-here-nudge": "git_path_not_here_nudge",
     "block-pgrep-self-match": "block_pgrep_self_match",
+    "block-write-after-sibling-cd": "block_write_after_sibling_cd",
     "block-partial-typecheck": "block_partial_typecheck",
     "block-masked-gate-exit": "block_masked_gate_exit",
     "self-improve-gate": "self_improve_gate",

@@ -131,6 +131,10 @@
           },
           {
             "type": "command",
+            "command": "bash \"${CLAUDE_PLUGIN_ROOT}/hooks/run-python.sh\" --hook \"${CLAUDE_PLUGIN_ROOT}/hooks/block-write-after-sibling-cd.py\""
+          },
+          {
+            "type": "command",
             "command": "bash \"${CLAUDE_PLUGIN_ROOT}/hooks/run-python.sh\" --hook \"${CLAUDE_PLUGIN_ROOT}/hooks/git-path-not-here-nudge.py\""
           }
         ]
