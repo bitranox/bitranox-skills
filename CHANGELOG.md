@@ -29,6 +29,15 @@ than the change, so entries reconstructed from them would read like coverage wit
 a hole nobody has drawn a line under is one that gets rediscovered and half-filled - which is how
 two "versions with no entry" notes came to sit in this file disagreeing with it.
 
+## [8.13.2]
+
+### Changed
+
+- `coding-python-layered-config` follows lib_layered_config 7.1.6: a YAML `!!set` or `!!binary`
+  value refuses the file (write a list or a base64 string); a deploy source or `.d` file behind a
+  permission wall raises `PermissionError` on every Python, a missing one `FileNotFoundError`; the
+  `read` command quotes keys, headers and strings like `display_config`.
+
 ## [8.13.1]
 
 ### Fixed
