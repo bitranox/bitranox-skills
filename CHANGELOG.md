@@ -29,6 +29,17 @@ than the change, so entries reconstructed from them would read like coverage wit
 a hole nobody has drawn a line under is one that gets rediscovered and half-filled - which is how
 two "versions with no entry" notes came to sit in this file disagreeing with it.
 
+## [8.17.2]
+
+### Fixed
+
+- Tests: `test_secret_patterns.py`'s tick probe (`_clock_tick`) now takes a minimum number of reads
+  before its 0.2 s wall budget can stop it. The coarse-clock tests drive a virtual clock that
+  advances 1 us per read, which needs ~31k reads to show two 15.625 ms ticks; a slow macOS runner
+  ran out of wall budget first, measured no tick, lost the five-tick floor, and failed
+  `test_a_coarse_clock_does_not_inflate_a_linear_ratio` (1.29 against 1.25). A clock that never
+  advances still returns 0.0. New test: a zero wall budget still measures the virtual tick.
+
 ## [8.17.1]
 
 ### Fixed

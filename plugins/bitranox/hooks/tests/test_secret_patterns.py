@@ -653,16 +653,23 @@ _REPEATS = 3
 # the worst linear reading of the A/B (29x) under the bound (36x against 64x).
 _TICKS_PER_ARM = 5
 _TICK_PROBE_BUDGET_S = 0.2
+# A test clock that advances 1 us per read needs ~31k reads to show two 15.625 ms ticks, so these
+# reads are always taken, whatever the wall says; about 3x that, and still only milliseconds.
+_TICK_PROBE_MIN_READS = 100_000
 
 
-def _clock_tick(clock, budget_s=_TICK_PROBE_BUDGET_S):
+def _clock_tick(clock, budget_s=_TICK_PROBE_BUDGET_S, min_reads=_TICK_PROBE_MIN_READS):
     """The step by which `clock` advances, found by spinning until it has moved twice - the
-    first move ends a partial tick, the second spans a whole one. The spin is bounded by the
-    wall, not by `clock`: a clock that never advances returns 0.0 instead of hanging."""
+    first move ends a partial tick, the second spans a whole one. The spin is bounded, never by
+    `clock`: it takes `min_reads` reads, then stops at the wall deadline, so a clock that never
+    advances returns 0.0 instead of hanging, and a clock that advances only when read is measured
+    however slow the runner is."""
     deadline = time.monotonic() + budget_s
     moves = []
     last = clock()
-    while len(moves) < 2 and time.monotonic() < deadline:
+    reads = 0
+    while len(moves) < 2 and (reads < min_reads or time.monotonic() < deadline):
+        reads += 1
         now = clock()
         if now != last:
             moves.append(now - last)
@@ -813,6 +820,15 @@ class _TickingClock:
 
 def test_the_tick_of_a_coarse_clock_is_measured():
     assert _clock_tick(_TickingClock()) == pytest.approx(_WINDOWS_TICK_S)
+
+
+def test_the_tick_of_a_virtual_clock_does_not_depend_on_how_fast_the_runner_is():
+    """A clock that advances only when it is read needs ~31k reads to show two 15.625 ms ticks.
+    Bounded by the wall alone, a slow runner ran out of budget first, measured no tick, dropped
+    the five-tick floor, and failed the ratio bound below on macOS CI (1.29 against 1.25). A
+    zero wall budget stands in for the slowest runner."""
+    # Offset 0 is the longest spin: a whole tick before the first move, another before the second.
+    assert _clock_tick(_TickingClock(offset=0.0), budget_s=0.0) == pytest.approx(_WINDOWS_TICK_S)
 
 
 def test_a_clock_that_never_advances_measures_no_tick_and_returns():
