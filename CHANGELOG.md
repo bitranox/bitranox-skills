@@ -29,6 +29,13 @@ than the change, so entries reconstructed from them would read like coverage wit
 a hole nobody has drawn a line under is one that gets rediscovered and half-filled - which is how
 two "versions with no entry" notes came to sit in this file disagreeing with it.
 
+## [8.12.1]
+
+### Changed
+
+- `coding-python-new-public-library` names Python 3.10-3.15 as the CI range: the library
+  template now declares and tests Python 3.15.
+
 ## [8.12.0]
 
 ### Changed
