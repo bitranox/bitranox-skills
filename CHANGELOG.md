@@ -29,6 +29,14 @@ than the change, so entries reconstructed from them would read like coverage wit
 a hole nobody has drawn a line under is one that gets rediscovered and half-filled - which is how
 two "versions with no entry" notes came to sit in this file disagreeing with it.
 
+## [8.17.5]
+
+### Changed
+
+- ai-llm-jev-judge: mirrors jev-judge 0.2.5; every `uvx --from 'btx-skill-jev-judge>=...'` floor
+  is now `>=0.2.5`, which coerces an all-digit `.env` value to a string where the settings expect
+  one. meta-self-improve's `jev_shadow.py` runs jev-judge at the same floor (`JEV_JUDGE_FLOOR`).
+
 ## [8.17.4]
 
 ### Fixed
