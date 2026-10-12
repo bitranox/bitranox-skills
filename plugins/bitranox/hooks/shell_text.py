@@ -485,12 +485,12 @@ def _readable_dir(target, base):
     """
     if not target or target == "-" or target.startswith("~") or _UNKNOWABLE_DIR.search(target):
         return None
-    if _is_rooted(target):
+    if is_rooted(target):
         return os.path.normpath(target)
     return os.path.normpath(os.path.join(base, target)) if base else None
 
 
-def _is_rooted(path):
+def is_rooted(path):
     """True when `cd path` lands in the same place whatever directory the shell is in.
 
     Not `os.path.isabs` alone: from Python 3.13 it answers False on Windows for a root with no

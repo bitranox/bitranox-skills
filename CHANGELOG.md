@@ -29,6 +29,15 @@ than the change, so entries reconstructed from them would read like coverage wit
 a hole nobody has drawn a line under is one that gets rediscovered and half-filled - which is how
 two "versions with no entry" notes came to sit in this file disagreeing with it.
 
+## [8.13.1]
+
+### Fixed
+
+- `block-write-after-sibling-cd` judged an absolute target with `os.path.isabs`, which on Windows
+  from Python 3.13 answers False for a drive-less root such as `/work/repo`, so `cd /abs`,
+  `git -C /abs` and `--gate-cwd /abs` were refused there as if they named no directory. It now
+  uses `shell_text.is_rooted`, the rule the cd reader already applied (made public for this).
+
 ## [8.13.0]
 
 ### Added

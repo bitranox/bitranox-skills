@@ -56,6 +56,7 @@ from shell_text import (
     blank_heredoc_bodies,
     directory_change,
     git_segment_dir,
+    is_rooted,
     is_shell_tool,
     iter_segments,
     statement_program,
@@ -101,7 +102,9 @@ def _option_value(tokens, start, names):
 
 
 def _absolute(path):
-    return bool(path) and os.path.isabs(path)
+    # Not os.path.isabs: from Python 3.13 it answers False on Windows for a drive-less root (`/work`),
+    # where Git Bash and PowerShell still land at that root. `is_rooted` is the one shared rule.
+    return bool(path) and is_rooted(path)
 
 
 def _write_target(tokens, here, tool_name):
