@@ -33,9 +33,10 @@ directory their author happened to want - mostly workflow agents running `cd $W`
 bare `git add` in the next. Those 25 pay one retry with an explicit target; the shape they relied
 on is the one that failed the other 5, and nothing in the command tells the two apart.
 
-The siblings are read from the transcript tail: the records for one message carry one `message.id`,
-one tool_use per record, written before the call they belong to runs. When this call cannot be found
-in the tail, nothing is known about its siblings and the hook passes.
+The siblings come from `transcript_siblings` (shared with block-commit-beside-sibling-gate): the
+records for one message carry one `message.id`, one tool_use per record, written before the call
+they belong to runs, and a call made inside a subagent is looked up in that subagent's own
+transcript. When this call cannot be found, nothing is known about its siblings and the hook passes.
 
 The PowerShell tool is read the same way: `Set-Location`/`sl`/`cd`, `git -C` and `make -C` mean
 the same there, and its calls count as siblings of each other. Siblings are parsed with the calling
@@ -47,7 +48,6 @@ statement. BLOCKING: exit 2 with the reason on stderr. Fail-open on any error. A
 from __future__ import annotations
 
 import json
-import os
 import sys
 
 from shell_text import (
@@ -61,6 +61,7 @@ from shell_text import (
     iter_segments,
     statement_program,
 )
+from transcript_siblings import siblings_for_event
 
 #: git subcommands that change a repository, its index or its remote.
 WRITE_VERBS = frozenset({
@@ -72,8 +73,6 @@ _BMK = ("bmk",)
 _HELP = frozenset({"--help", "-h", "--version", "-V"})
 _PYTHON = ("python", "python3", "py", "uv", "uvx")
 _GATE_SCRIPT = "gate.py"
-#: How far the transcript tail is read before giving up: the current message sits at the very end.
-_TAIL_BYTES = (256 * 1024, 4 * 1024 * 1024)
 
 
 def _statements(command, tool_name="Bash"):
@@ -170,54 +169,6 @@ def verdict(command, siblings, tool_name="Bash"):
     return statement, moved
 
 
-def _bash_uses(record):
-    message = record.get("message") or {}
-    content = message.get("content")
-    if record.get("type") != "assistant" or not isinstance(content, list):
-        return
-    for block in content:
-        if isinstance(block, dict) and block.get("type") == "tool_use":
-            yield message.get("id"), block
-
-
-def earlier_siblings(records, tool_use_id):
-    """Commands of the shell calls in the same message as `tool_use_id` that come before it.
-
-    None when `tool_use_id` is not among `records`: then nothing is known about its siblings."""
-    uses = [(mid, block) for record in records for mid, block in _bash_uses(record)]
-    position = next((i for i, (_mid, block) in enumerate(uses) if block.get("id") == tool_use_id), None)
-    if position is None:
-        return None
-    message_id = uses[position][0]
-    return [block.get("input", {}).get("command", "") for mid, block in uses[:position]
-            if mid == message_id and is_shell_tool(block.get("name"))]
-
-
-def _tail_records(path, size):
-    with open(path, "rb") as handle:
-        handle.seek(0, os.SEEK_END)
-        end = handle.tell()
-        handle.seek(max(0, end - size))
-        lines = handle.read().split(b"\n")
-    if end > size:
-        lines = lines[1:]                          # the first line was cut by the seek
-    records = []
-    for line in lines:
-        try:
-            records.append(json.loads(line))
-        except ValueError:
-            continue
-    return records
-
-
-def siblings_from_transcript(path, tool_use_id):
-    for size in _TAIL_BYTES:
-        found = earlier_siblings(_tail_records(path, size), tool_use_id)
-        if found is not None:
-            return found
-    return None
-
-
 def refusal(statement, moved):
     return "\n".join([
         "BLOCKED: this call writes to a repository without naming one, after an earlier call in",
@@ -244,11 +195,7 @@ def main() -> int:
     command = (event.get("tool_input") or {}).get("command") or ""
     if targetless_write(command, tool_name) is None:
         return 0                                    # the common case never opens the transcript
-    path, tool_use_id = event.get("transcript_path"), event.get("tool_use_id")
-    if not path or not tool_use_id or not os.path.isfile(path):
-        return 0
-    siblings = siblings_from_transcript(path, tool_use_id)
-    found = verdict(command, siblings or [], tool_name)
+    found = verdict(command, siblings_for_event(event) or [], tool_name)
     if found is None:
         return 0
     print(refusal(*found), file=sys.stderr)

@@ -29,6 +29,33 @@ than the change, so entries reconstructed from them would read like coverage wit
 a hole nobody has drawn a line under is one that gets rediscovered and half-filled - which is how
 two "versions with no entry" notes came to sit in this file disagreeing with it.
 
+## [8.15.0]
+
+### Added
+
+- Hook `block-commit-beside-sibling-gate` (PreToolUse Bash|PowerShell): refuses a `git commit`,
+  `git push` or `gh pr create` sent after an earlier shell call of the SAME assistant message that
+  runs a gate (`pytest`, `make test`, `ruff`, `pyright`, `cargo test`, the gate.py jig, ...). Calls
+  in one message do not wait for each other's verdict, so a refused, failed or red gate never stops
+  the commit after it. The fix it names: chain the gate into the commit with `&&` in one call, or
+  commit in the next message after reading the gate's exit code. A gate or commit that is only
+  text (a heredoc body, a quoted string, an argument such as `grep -rn pytest`) does not count. A
+  replay over 131,830 recorded shell calls refused 19, every one the intended shape. A commit sent
+  BEFORE its gate in the same message is not caught: its hook runs before the message is on disk.
+
+### Changed
+
+- The same-message sibling reader moved out of `block-write-after-sibling-cd` into the shared
+  `hooks/transcript_siblings.py`, and the gate vocabulary out of `block-masked-gate-exit` into
+  `shell_text` (`GATE_RE`, `GATE_JIG_RE`), so the guards cannot disagree about either.
+
+### Fixed
+
+- `block-write-after-sibling-cd` now judges a call made inside a subagent. A subagent's event
+  carries the parent's `transcript_path` plus `agent_id`, and the guard read the parent's
+  transcript, never found the call and let it pass; it now reads
+  `<parent>/subagents/agent-<agent_id>.jsonl`.
+
 ## [8.14.2]
 
 ### Fixed

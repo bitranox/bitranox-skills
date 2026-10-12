@@ -11,6 +11,7 @@ import sys
 import pytest
 
 import block_write_after_sibling_cd as guard
+import transcript_siblings
 
 PLANNING_COMMIT = "cd /work/umbrella/planning && git commit notes.md -F /tmp/msg-a.txt -q"
 UMBRELLA_COMMIT = "git commit scripts/refresh.sh -F /tmp/msg-b.txt -q && git push -q origin HEAD"
@@ -119,16 +120,16 @@ def test_earlier_siblings_are_the_bash_calls_of_the_same_message_before_this_one
         _record("msg_now", "t3", UMBRELLA_COMMIT),
         _record("msg_now", "t4", "cd /later && true"),
     ]
-    assert guard.earlier_siblings(records, "t3") == [PLANNING_COMMIT]
+    assert transcript_siblings.earlier_siblings(records, "t3") == [PLANNING_COMMIT]
 
 
 def test_a_call_from_an_earlier_message_is_not_a_sibling():
     records = [_record("msg_old", "t0", PLANNING_COMMIT), _result("t0"), _record("msg_now", "t1", UMBRELLA_COMMIT)]
-    assert guard.earlier_siblings(records, "t1") == []
+    assert transcript_siblings.earlier_siblings(records, "t1") == []
 
 
 def test_a_call_missing_from_the_transcript_has_no_known_siblings():
-    assert guard.earlier_siblings([_record("m", "t1", PLANNING_COMMIT)], "t9") is None
+    assert transcript_siblings.earlier_siblings([_record("m", "t1", PLANNING_COMMIT)], "t9") is None
 
 
 # --- the hook end to end ------------------------------------------------------------------------------
@@ -184,3 +185,20 @@ def test_the_hook_reads_only_the_tail_of_a_long_transcript(monkeypatch, capsys, 
     records = filler + [_record("m", "t1", PLANNING_COMMIT), _record("m", "t2", UMBRELLA_COMMIT)]
     code, _err = _run(monkeypatch, capsys, tmp_path, records, "t2", UMBRELLA_COMMIT)
     assert code == 2
+
+
+def test_a_call_inside_a_subagent_is_judged_against_the_subagent_s_own_siblings(monkeypatch, capsys, tmp_path):
+    # A subagent's event carries the PARENT's transcript_path plus agent_id; its records sit in
+    # <parent minus .jsonl>/subagents/agent-<agent_id>.jsonl. Reading the parent never found the call.
+    main = tmp_path / "session.jsonl"
+    main.write_text(json.dumps(_record("p", "p1", "echo parent")) + "\n", encoding="utf-8")
+    sub = tmp_path / "session" / "subagents"
+    sub.mkdir(parents=True)
+    (sub / "agent-a1.jsonl").write_text(
+        json.dumps(_record("m", "t1", PLANNING_COMMIT)) + "\n" + json.dumps(_record("m", "t2", UMBRELLA_COMMIT)) + "\n",
+        encoding="utf-8")
+    event = {"tool_name": "Bash", "tool_input": {"command": UMBRELLA_COMMIT}, "transcript_path": str(main),
+             "tool_use_id": "t2", "agent_id": "a1"}
+    monkeypatch.setattr(sys, "stdin", io.StringIO(json.dumps(event)))
+
+    assert guard.main() == 2

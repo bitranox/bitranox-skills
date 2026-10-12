@@ -809,6 +809,25 @@ def is_shell_tool(tool_name) -> bool:
     return tool_name in SHELL_TOOLS
 
 
+# Commands whose exit status is a quality verdict worth protecting: a test run, a linter, a type
+# checker, a build. Two guards ask about them - one about a pipe that masks the verdict, one about a
+# commit sent beside the run in the same message - so the vocabulary lives here, once.
+GATE_RE = re.compile(
+    r"\b(?:"
+    r"cargo\s+(?:fmt|clippy|test|build|check|xtask)"
+    r"|pytest|ruff|pyright|mypy|tsc|bandit"
+    r"|go\s+(?:test|vet)"
+    r"|npm\s+(?:run\s+)?(?:test|lint)"
+    r"|dotnet\s+test"
+    r"|make\s+\S*(?:test|check|lint)"
+    r")\b"
+)
+
+# The gate.py jig (compuse-toolbox) runs a gate and exits with the gate's own status.
+GATE_JIG_NAME = r"(?<![\w.-])gate\.py\b"
+GATE_JIG_RE = re.compile(GATE_JIG_NAME)
+
+
 def is_gated_command(command, tool_name=None):
     """True when a statement in `command` is a git commit, a git push, or a gh pr create.
 

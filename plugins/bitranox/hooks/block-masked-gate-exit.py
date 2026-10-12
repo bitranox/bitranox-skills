@@ -40,6 +40,8 @@ import re
 import sys
 
 from shell_text import (
+    GATE_JIG_NAME,
+    GATE_RE,
     LIST_SEP,
     basename_for_tool,
     blank_heredoc_bodies,
@@ -51,17 +53,8 @@ from shell_text import (
     strip_heredoc_bodies,
 )
 
-# Commands whose exit status is a quality verdict worth protecting.
-GATE = re.compile(
-    r"\b(?:"
-    r"cargo\s+(?:fmt|clippy|test|build|check|xtask)"
-    r"|pytest|ruff|pyright|mypy|tsc|bandit"
-    r"|go\s+(?:test|vet)"
-    r"|npm\s+(?:run\s+)?(?:test|lint)"
-    r"|dotnet\s+test"
-    r"|make\s+\S*(?:test|check|lint)"
-    r")\b"
-)
+# Commands whose exit status is a quality verdict worth protecting (shared: shell_text.GATE_RE).
+GATE = GATE_RE
 
 # Filters that swallow the upstream status by becoming the pipeline's exit code. A filter written
 # as a subshell element (`gate | (tail -3)`) still sets the status - the subshell's is tail's.
@@ -86,7 +79,7 @@ _PIPE = re.compile(r"\|&?")
 # The jig that returns the GATE's own status and can chain the follow-up itself. The file NAME
 # `gate.py`, never a longer name ending in it: `\b` sits between `-` and `g`, so a bare `\bgate`
 # read `hooks/repo-gate.py` (and `test_gate.py` is kept out by `_` being a word character).
-_JIG_NAME = r"(?<![\w.-])gate\.py\b"
+_JIG_NAME = GATE_JIG_NAME
 
 JIG = re.compile(_JIG_NAME)
 
