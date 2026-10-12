@@ -29,6 +29,14 @@ than the change, so entries reconstructed from them would read like coverage wit
 a hole nobody has drawn a line under is one that gets rediscovered and half-filled - which is how
 two "versions with no entry" notes came to sit in this file disagreeing with it.
 
+## [8.11.2]
+
+### Changed
+
+- `coding-python-layered-config` follows lib_layered_config 7.1.4: write ordered YAML as a plain
+  mapping, because the loader now refuses a `!!omap` or `!!pairs` value, whose `(key, value)`
+  tuples hide their keys from redaction.
+
 ## [8.11.1]
 
 ### Fixed
