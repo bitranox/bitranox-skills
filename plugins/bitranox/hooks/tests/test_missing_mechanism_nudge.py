@@ -7,6 +7,7 @@ where the check belongs - not a broad scan of every markdown file.
 """
 import importlib.util
 import json
+import os
 import pathlib
 import shlex
 import subprocess
@@ -216,13 +217,13 @@ _QUESTION = {"questions": [{"question": "Which way?", "header": "Route",
 
 
 @pytest.mark.parametrize("tool_input", [_QUESTION, {}, {"questions": []}, None])
-def test_every_askuserquestion_call_gets_the_premise_reminder(tool_input):
-    """No wording match, by the user's choice: the reminder rides on EVERY question.
+def test_a_question_without_a_session_gets_the_premise_reminder(tool_input):
+    """No wording match, by the user's choice: whatever the input, the reminder rides on it.
 
     A premise test on the option text would miss the shapes nobody listed ('X has no flag for',
-    'Y only runs as root'), and one line on a question costs little. Probe-verified on CLI 2.1.289:
-    the context is recorded as a hook_additional_context attachment on the tool use and reaches the
-    model WITH the user's answer, so the text has to say what to do after the fact.
+    'Y only runs as root'). Probe-verified on CLI 2.1.289: the context reaches the model WITH the
+    user's answer, so the text has to say what to do after the fact. These events carry no
+    session_id, so the refuse-first path below cannot key its flag and never refuses.
     """
     r = _run(json.dumps({"tool_name": "AskUserQuestion", "tool_input": tool_input}))
     assert r.returncode == 0
@@ -243,6 +244,90 @@ def test_a_shell_command_still_gets_only_the_memory_add_check():
     """Control: the AskUserQuestion branch must not leak into the shell path."""
     r = _run(json.dumps({"tool_name": "Bash", "tool_input": {"command": "echo hi"}}))
     assert r.returncode == 0 and r.stdout.strip() == ""
+
+
+# --- AskUserQuestion: refuse the first ask of each question ([200], user decision 2026-10-12) ------
+#
+# The reminder above reaches the model only WITH the user's answer, so an option built on an
+# unmeasured premise has already been chosen by the time it lands. A PreToolUse deny is the one
+# channel that reaches the model BEFORE the dialog is shown (probe, interactive CLI 2.1.296: the
+# hook fired, no dialog appeared, the model quoted the reason verbatim). The pass condition is
+# "the previous AskUserQuestion of this session was refused", not a hash of the question text: a
+# hash would refuse a REVISED re-send again, and revising is exactly what the refusal asks for.
+
+def _ask(home, session="sess-1", tool_input=None):
+    event = {"tool_name": "AskUserQuestion", "tool_input": tool_input or _QUESTION}
+    if session is not None:
+        event["session_id"] = session
+    env = {**os.environ, "HOME": str(home), "USERPROFILE": str(home)}
+    return subprocess.run(
+        [sys.executable, str(_HOOK)], input=json.dumps(event), capture_output=True, text=True,
+        encoding="utf-8", check=False, env=env,
+    )
+
+
+def _decision(r):
+    assert r.returncode == 0
+    out = json.loads(r.stdout)["hookSpecificOutput"]
+    assert out["hookEventName"] == "PreToolUse"
+    return out
+
+
+def _refused(r):
+    out = _decision(r)
+    return out.get("permissionDecision") == "deny"
+
+
+def test_the_first_question_of_a_session_is_refused_with_the_premise_check(tmp_path):
+    out = _decision(_ask(tmp_path))
+    assert out.get("permissionDecision") == "deny"
+    reason = out["permissionDecisionReason"]
+    assert reason == N.QUESTION_REFUSAL
+    assert "premise" in reason and "unverified" in reason and "re-send" in reason
+
+
+def test_the_identical_resend_after_a_refusal_passes_with_the_reminder(tmp_path):
+    assert _refused(_ask(tmp_path))
+    out = _decision(_ask(tmp_path))
+    assert "permissionDecision" not in out
+    assert out["additionalContext"] == N.QUESTION_REMINDER
+
+
+def test_a_revised_resend_after_a_refusal_passes(tmp_path):
+    """Must NOT refuse the revision the refusal asked for (the reason a text hash was rejected)."""
+    assert _refused(_ask(tmp_path))
+    revised = {"questions": [{"question": "Which way, measured?", "header": "Route",
+                              "options": [{"label": "A", "description": "X cannot (unverified)"},
+                                          {"label": "B", "description": "use Y"}],
+                              "multiSelect": False}]}
+    assert not _refused(_ask(tmp_path, tool_input=revised))
+
+
+def test_the_next_new_question_is_refused_again_and_never_twice_in_a_row(tmp_path):
+    verdicts = [_refused(_ask(tmp_path)) for _ in range(5)]
+    assert verdicts == [True, False, True, False, True]
+
+
+def test_sessions_do_not_share_the_refusal_flag(tmp_path):
+    assert _refused(_ask(tmp_path, session="sess-a"))
+    assert _refused(_ask(tmp_path, session="sess-b"))
+    assert not _refused(_ask(tmp_path, session="sess-a"))
+
+
+def test_without_a_session_id_the_question_passes_with_the_reminder(tmp_path):
+    """No key, no flag: refusing here could never be followed by a pass, so it must not refuse."""
+    for _ in range(2):
+        out = _decision(_ask(tmp_path, session=None))
+        assert "permissionDecision" not in out
+        assert out["additionalContext"] == N.QUESTION_REMINDER
+
+
+def test_an_unwritable_state_store_passes_instead_of_refusing_forever(tmp_path):
+    """A refusal whose flag cannot be stored would refuse every re-send: fail open instead."""
+    home = tmp_path / "home-is-a-file"
+    home.write_text("not a directory\n", encoding="utf-8")
+    for _ in range(2):
+        assert not _refused(_ask(home))
 
 
 def test_hooks_json_registers_this_hook_for_askuserquestion():

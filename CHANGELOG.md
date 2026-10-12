@@ -29,6 +29,23 @@ than the change, so entries reconstructed from them would read like coverage wit
 a hole nobody has drawn a line under is one that gets rediscovered and half-filled - which is how
 two "versions with no entry" notes came to sit in this file disagreeing with it.
 
+## [8.16.0]
+
+### Changed
+
+- `missing-mechanism-nudge` now REFUSES the first ask of each AskUserQuestion once, with a reason
+  telling the model to measure every option's premise (a tool, OS, library or build claim) or mark
+  it `unverified` in the option itself, then re-send. The re-send that follows - identical or
+  revised - passes, still carrying the one-line reminder, and the next new question is refused
+  again; two refusals never follow each other. Before, the reminder rode on the question as
+  additionalContext, which reaches the model only together with the user's answer, so an option
+  built on an unmeasured premise had already been chosen. A PreToolUse deny is shown to the model
+  before the dialog opens (probed on interactive CLI 2.1.296: no dialog appeared, the reason was
+  quoted verbatim). The pass condition is one per-session flag, "the previous ask was refused",
+  rather than a hash of the question, which would refuse the revision the refusal asks for. With
+  no session id, or a flag that cannot be stored, the question passes rather than being refused
+  for good. Cost: one extra tool round-trip per question.
+
 ## [8.15.1]
 
 ### Added

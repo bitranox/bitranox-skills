@@ -21,13 +21,18 @@ than guessed at.
 
 The second enshrining moment is a QUESTION to the user: an option built on "X cannot" or "Y is
 missing" gets chosen on that premise, and the choice outlives the session. So every AskUserQuestion
-call gets one fixed line, with no wording match (the user chose that over a premise detector, which
-would miss every shape nobody listed). Probe-verified on CLI 2.1.289: the line is recorded as a
-`hook_additional_context` attachment on the tool use, but the model first reads it together with
-the user's ANSWER, so it cannot reshape the question it rides on. The text therefore says what to
-do once answered (flag an unmeasured premise and re-ask) and primes the next question.
+call is handled with no wording match (the user chose that over a premise detector, which would
+miss every shape nobody listed). additionalContext alone cannot reshape the question: probed on
+CLI 2.1.289, it reaches the model together with the user's ANSWER. A deny does reach it first:
+probed on interactive CLI 2.1.296, the dialog was never shown and the model quoted the reason. So
+the FIRST ask of each question is refused with the premise check, and the re-send that follows -
+identical or revised - passes with the after-the-fact reminder. "The previous ask of this session
+was refused" is one per-session flag; a hash of the question text would refuse the revision the
+refusal asks for. No session id, or a flag that cannot be stored, means no refusal: a refusal
+that could not be recorded would refuse every re-send.
 
-NON-BLOCKING: emits additionalContext and exits 0. Fail-open on any error. ASCII only.
+The memory-add check is NON-BLOCKING (additionalContext). Exits 0 always; fail-open on any
+error. ASCII only.
 """
 from __future__ import annotations
 
@@ -36,6 +41,7 @@ import os
 import re
 import sys
 
+from self_improve_signals import session_state_path
 from shell_text import (
     argv_for_match,
     basename_for_tool,
@@ -84,6 +90,19 @@ QUESTION_REMINDER = (
     "already answered offered such a premise unmeasured, tell the user now and re-ask after "
     "measuring; apply it before the next question."
 )
+
+
+QUESTION_REFUSAL = (
+    "QUESTION PREMISES, checked BEFORE the user sees this question (the first ask of each question "
+    "is refused once on purpose; the user chose this on 2026-10-12): read every option's "
+    "description. Any premise about a tool, OS, library or the build ('X cannot', 'Y is missing', "
+    "'Z defaults off', 'this will stay at N') must have been measured with a named instrument - "
+    "measure it now - or the option must say 'unverified' in its own text. Then re-send the "
+    "question, revised or unchanged; the re-send is not refused."
+)
+
+# Suffix of the per-session flag that says "this session's previous AskUserQuestion was refused".
+_REFUSED_FLAG = ".question-refused"
 
 
 def _memory_add_args(argv, tool_name):
@@ -159,7 +178,7 @@ def main() -> int:
     except Exception:  # noqa: BLE001 - no/invalid stdin: do nothing
         return 0
     if isinstance(event, dict) and event.get("tool_name") == "AskUserQuestion":
-        _emit(QUESTION_REMINDER)
+        _answer_question(event.get("session_id"))
         return 0
     if not isinstance(event, dict) or not is_shell_tool(event.get("tool_name")):
         return 0
@@ -171,6 +190,52 @@ def main() -> int:
     if message:
         _emit(message)
     return 0
+
+
+def _answer_question(session):
+    """Refuse the first ask of a question, let the re-send through with the reminder.
+
+    Every AskUserQuestion of a session passes through here, so one flag is the whole history
+    needed: set means the previous ask was refused, so this one is the re-send and passes. The
+    flag is set only once it is STORED - a refusal that could not be recorded would refuse every
+    re-send forever - and with no session to key it on the question simply passes.
+    """
+    flag = _refused_flag(session)
+    if flag is None:
+        _emit(QUESTION_REMINDER)
+        return
+    if flag.exists():
+        try:
+            flag.unlink()
+        except OSError:
+            pass
+        _emit(QUESTION_REMINDER)
+        return
+    try:
+        flag.parent.mkdir(parents=True, exist_ok=True)
+        flag.write_text("refused\n", encoding="utf-8")
+    except OSError:
+        _emit(QUESTION_REMINDER)
+        return
+    _deny(QUESTION_REFUSAL)
+
+
+def _refused_flag(session):
+    """The session's refused-question flag path, or None when there is no usable session id."""
+    if not isinstance(session, str) or not session.strip():
+        return None
+    try:
+        return session_state_path(session, _REFUSED_FLAG)
+    except Exception:  # noqa: BLE001 - no state, no refusal: the question passes
+        return None
+
+
+def _deny(reason):
+    sys.stdout.write(json.dumps({"hookSpecificOutput": {
+        "hookEventName": "PreToolUse",
+        "permissionDecision": "deny",
+        "permissionDecisionReason": reason,
+    }}) + "\n")
 
 
 def _emit(message):
