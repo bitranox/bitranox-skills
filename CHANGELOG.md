@@ -29,6 +29,20 @@ than the change, so entries reconstructed from them would read like coverage wit
 a hole nobody has drawn a line under is one that gets rediscovered and half-filled - which is how
 two "versions with no entry" notes came to sit in this file disagreeing with it.
 
+## [8.14.1]
+
+### Fixed
+
+- `compuse-toolbox`: `pushcheck --denylist-file` reads its file as a redaction list, through the
+  parser `redaction_scan` uses (`parse_rules`, now in `pushcheck.py` and imported by
+  `redaction_scan`), so the two jigs cannot disagree about the format. Before, every non-blank
+  line was a search term: a bare `#` comment line matched every `#` in the push and refused it
+  with noise, and a `name==>replacement` rule was searched whole, so the name it lists was never
+  found and a public push carrying it passed. Blank lines and lines starting with `#` are now
+  comments and a rule's term is the text before `==>`, stripped. A denylist file that parses to
+  zero terms (empty, all comments, or only `==>x` rules) is refused with exit 2 rather than
+  checking nothing and reporting clean.
+
 ## [8.14.0]
 
 ### Added

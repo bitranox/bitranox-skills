@@ -40,8 +40,13 @@ home paths like `/home/user/`. Flagging those trains a reader to skim the report
 real finding gets waved through.
 
 The pattern list is a FLOOR, never a proof. It cannot know your infrastructure's names, so pass
-them with --denylist-file (one term per line); the file is yours and is never shipped, which is
-what lets this tool be public while the terms stay private.
+them with --denylist-file; the file is yours and is never shipped, which is what lets this tool be
+public while the terms stay private. It is read as a redaction list, the format `redaction_scan`
+reads, through the same parser (`parse_rules`): one rule per line, blank lines and lines whose
+first non-blank character is `#` are comments, and a rule is `term` or `term==>replacement`, the
+term being the text before the first `==>`, stripped. A term matches case-insensitively. A list
+that parses to zero terms is refused (exit 2), because a denylist that checked nothing would
+otherwise print the same clean result as one that checked everything.
 
 Run:
   `uv run scripts/pushcheck.py --repo . --json`
@@ -58,6 +63,7 @@ internal error).
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import re
 import subprocess
@@ -68,8 +74,8 @@ from pathlib import Path
 
 from _cli_envelope import EXIT_ERROR, EnvelopeArgumentParser, emit, guarded
 
-__all__ = ["Finding", "Verdict", "added_lines", "decide", "parse_remote", "scan_diff",
-           "scan_messages", "scan_text", "split_lines"]
+__all__ = ["Finding", "Rule", "RuleList", "Verdict", "added_lines", "decide", "parse_remote",
+           "parse_rules", "scan_diff", "scan_messages", "scan_text", "split_lines"]
 
 # A remote URL in any of the shapes git accepts. Owner and repo are what the visibility lookup
 # needs; the host decides whether we can ask at all.
@@ -221,6 +227,66 @@ def split_lines(text: str) -> list[str]:
     if parts and parts[-1] == "":
         parts.pop()
     return [p[:-1] if p.endswith("\r") else p for p in parts]
+
+
+# ---- the redaction-list format, shared with redaction_scan ------------------------------------
+
+_SEPARATOR = "==>"
+
+
+@dataclass(frozen=True)
+class Rule:
+    """One parsed pattern: its 1-based index among patterns and the list line it came from."""
+    index: int
+    list_line: int
+    pattern: str
+
+    @property
+    def digest(self) -> str:
+        """A short hash naming the pattern without showing it (case-folded, as it matches)."""
+        return hashlib.sha256(self.pattern.lower().encode("utf-8")).hexdigest()[:12]
+
+
+@dataclass(frozen=True)
+class RuleList:
+    """The parsed list, with the counts a report must state."""
+    rules: tuple[Rule, ...]
+    comment_lines: int
+    blank_lines: int
+    empty_rules: int                # `==>x` or whitespace before `==>`: nothing to match
+
+
+def parse_rules(text: str) -> RuleList:
+    """Parse a redaction list. PURE, and the ONE parser of the format: pushcheck's
+    --denylist-file and redaction_scan's --list both read through it, so the two jigs cannot
+    disagree about which lines are terms.
+
+    One rule per line. A blank line, and a line whose first non-blank character is `#`, is a
+    comment. A rule is `literal` or `literal==>replacement`; the pattern is the text before the
+    FIRST `==>`, stripped. A rule whose pattern is empty after that is counted, never used: an
+    empty pattern is a substring of every line.
+
+    Examples:
+        >>> rl = parse_rules("# names\\n\\nAlpha Corp==>Org1\\nbeta\\n")
+        >>> [r.pattern for r in rl.rules], rl.comment_lines, rl.blank_lines
+        (['Alpha Corp', 'beta'], 1, 1)
+    """
+    rules: list[Rule] = []
+    comments = blanks = empty = 0
+    for n, raw in enumerate(split_lines(text), start=1):
+        stripped = raw.strip()
+        if not stripped:
+            blanks += 1
+            continue
+        if stripped.startswith("#"):
+            comments += 1
+            continue
+        pattern = stripped.split(_SEPARATOR, 1)[0].strip()
+        if not pattern:
+            empty += 1
+            continue
+        rules.append(Rule(len(rules) + 1, n, pattern))
+    return RuleList(tuple(rules), comments, blanks, empty)
 
 
 def scan_text(text: str, path: str, denylist: tuple[str, ...] | list[str] = ()) -> list[Finding]:
@@ -573,7 +639,9 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--visibility", default=None, choices=["public", "private", "internal"],
                    help="skip the forge lookup and state the visibility")
     p.add_argument("--denylist-file", default=None,
-                   help="your own hostnames/usernames, one per line; never shipped")
+                   help="your own hostnames/usernames as a redaction list: one rule per line, "
+                        "`term` or `term==>replacement`; blank and `#` lines are comments. "
+                        "Never shipped; a list with no term is refused")
     p.add_argument("--exclude", action="append", default=[], metavar="GLOB",
                    help="skip findings in these paths (security fixtures); repeatable. An "
                         "exclusion matching nothing is reported, not ignored")
@@ -596,7 +664,16 @@ def _denylist(path: str | None) -> list[str]:
         # the terms are what this file exists to keep out of every log.
         raise PushCheckError(f"--denylist-file is not UTF-8 text (undecodable byte at offset "
                              f"{exc.start}); re-save it as UTF-8") from None
-    return split_lines(text)
+    parsed = parse_rules(text)
+    if not parsed.rules:
+        # A denylist that yields no term checked nothing; a clean verdict after it would read
+        # exactly like one that checked every term.
+        raise PushCheckError(f"--denylist-file parsed to zero terms ({parsed.comment_lines} "
+                             f"comment line(s), {parsed.blank_lines} blank line(s), "
+                             f"{parsed.empty_rules} rule(s) with nothing before `==>`), so it "
+                             f"would check nothing - check the path and that its rules are not "
+                             f"all commented out")
+    return [rule.pattern for rule in parsed.rules]
 
 
 def _tolerate_unencodable_output() -> None:

@@ -25,6 +25,7 @@ from pathlib import Path
 import pytest
 
 import pushcheck as PC
+import redaction_scan as RS
 
 TOOL = Path(__file__).resolve().parents[1] / "scripts" / "pushcheck.py"
 
@@ -499,6 +500,83 @@ def test_a_non_utf8_denylist_is_a_typed_refusal_not_a_traceback(tmp_path):
     env = json.loads(r.stdout)
     assert env["ok"] is False and "denylist" in env["data"]["reason"]
     assert "px-m" not in r.stdout + r.stderr, "the term itself must never be echoed"
+
+
+# ---- the denylist file is a redaction list: comments, and `name==>replacement` rules --------
+
+def _check_with_list(tmp_path: Path, list_bytes: bytes, name: str, text: str,
+                     msg: str = "add") -> subprocess.CompletedProcess:
+    repo = _repo(tmp_path)
+    _commit_file(repo, name, text, msg)
+    deny = tmp_path / "deny.txt"
+    deny.write_bytes(list_bytes)
+    return run_cli(["--repo", str(repo), "--range", "HEAD~1..HEAD", "--visibility", "public",
+                    "--denylist-file", str(deny), "--json"], tmp_path)
+
+
+def test_a_comment_line_in_the_denylist_is_not_a_term(tmp_path):
+    """A bare `#` line read as a term matches every `#` in the push, burying a real finding
+    under noise. Blank lines and lines whose first non-blank character is `#` are comments."""
+    r = _check_with_list(tmp_path, b"# private names\n#\n   # indented note\n\nzorbleton\n",
+                         "tool.py", "# a heading\nx = 1  # a trailing comment\n")
+    assert r.returncode == 0, r.stdout + r.stderr
+    env = json.loads(r.stdout)
+    assert env["data"]["safe"] is True and env["data"]["findings"] == []
+
+
+def test_a_rule_with_a_replacement_finds_the_name_before_the_separator(tmp_path):
+    """`zorbleton==>Site1` searched whole matches nothing, so the private name it exists to
+    catch passes the gate silently. The term is the text before the first `==>`, stripped."""
+    r = _check_with_list(tmp_path, b"zorbleton==>Site1\n", "deploy.md",
+                         "deploy to zorbleton tonight\n")
+    assert r.returncode == 1, r.stdout + r.stderr
+    assert [f["kind"] for f in json.loads(r.stdout)["data"]["findings"]] == ["denylist"]
+
+
+def test_a_rule_term_is_matched_case_insensitively_with_its_padding_stripped(tmp_path):
+    r = _check_with_list(tmp_path, b"  ZorbleTon  ==> Site1\n", "deploy.md",
+                         "DEPLOY TO ZORBLETON TONIGHT\n")
+    assert r.returncode == 1, r.stdout + r.stderr
+    assert [f["kind"] for f in json.loads(r.stdout)["data"]["findings"]] == ["denylist"]
+
+
+def test_a_rule_term_is_found_in_a_commit_message_too(tmp_path):
+    r = _check_with_list(tmp_path, b"zorbleton==>Site1\n", "notes.md", "nothing here\n",
+                         msg="move the job to zorbleton")
+    assert r.returncode == 1, r.stdout + r.stderr
+    files = [f["file"] for f in json.loads(r.stdout)["data"]["findings"]]
+    assert len(files) == 1 and files[0].endswith(" message")
+
+
+def test_the_replacement_text_is_not_searched(tmp_path):
+    """Control: the right-hand side is what the name is REPLACED with, so it is public."""
+    r = _check_with_list(tmp_path, b"zorbleton==>Site1\n", "doc.md", "only Site1 appears\n")
+    assert r.returncode == 0, r.stdout + r.stderr
+
+
+def test_a_hash_inside_a_rule_is_part_of_the_term(tmp_path):
+    """Only a line STARTING with `#` is a comment; a term may hold one."""
+    r = _check_with_list(tmp_path, b"build#7quix\n", "doc.md", "see build#7quix\n")
+    assert r.returncode == 1, r.stdout + r.stderr
+
+
+@pytest.mark.parametrize("list_bytes", [b"", b"\n\n", b"# nothing listed yet\n#\n",
+                                        b"==>Site1\n   ==>Site2\n"],
+                         ids=["empty", "blank", "comments", "empty-rules"])
+def test_a_denylist_that_parses_to_zero_terms_is_refused(tmp_path, list_bytes):
+    """A --denylist-file that yields no term checked nothing, and a gate that examined zero
+    things refuses rather than report clean: the likeliest cause is a list whose every rule
+    was commented out, or the wrong file."""
+    r = _check_with_list(tmp_path, list_bytes, "doc.md", "plain words only\n")
+    assert r.returncode == 2, r.stdout + r.stderr
+    env = json.loads(r.stdout)
+    assert env["ok"] is False and "zero" in env["data"]["reason"]
+
+
+def test_pushcheck_and_redaction_scan_share_one_list_parser():
+    """Two parsers of one format drift apart; the two jigs read the same lists."""
+    assert RS.parse_rules is PC.parse_rules
+    assert RS.Rule is PC.Rule
 
 
 # ---- running it the way the skill documents it ---------------------------------------------

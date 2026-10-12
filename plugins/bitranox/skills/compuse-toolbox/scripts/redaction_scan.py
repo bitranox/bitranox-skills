@@ -15,7 +15,8 @@ redaction. Checking a change against that list by hand goes wrong in two silent 
   reads as one that adds it, and the hit that matters is buried among those that do not.
 
 This jig parses the list properly (blank lines and `#` lines are comments; the pattern is the
-text before `==>`, stripped), matches each pattern as a case-insensitive literal substring (never
+text before `==>`, stripped - the parser is pushcheck's `parse_rules`, which its --denylist-file
+reads through too), matches each pattern as a case-insensitive literal substring (never
 a regex; `str.casefold`, so an upper-case `STRASSE` also matches a pattern spelled with the
 German sharp s), and scans ONLY the added lines of the change:
 
@@ -56,7 +57,6 @@ Run:
 from __future__ import annotations
 
 import argparse
-import hashlib
 import subprocess
 import sys
 from dataclasses import dataclass
@@ -67,8 +67,11 @@ from typing import Any
 from _cli_envelope import EXIT_ERROR, EXIT_NO, EXIT_YES, EnvelopeArgumentParser, emit, guarded
 from pushcheck import (
     PushCheckError,
+    Rule,
+    RuleList,
     added_lines,
     binary_files,
+    parse_rules,
     range_diff,
     range_messages,
     repo_root,
@@ -79,7 +82,6 @@ __all__ = ["Hit", "Matcher", "Rule", "RuleList", "control_failures", "execute", 
            "parse_rules", "scan_added", "scan_diff", "scan_messages", "scan_untracked_text"]
 
 COMMAND = "redaction_scan"
-_SEPARATOR = "==>"
 _SHORT_PATTERN = 3                  # a pattern this short matches nearly every line; warn about it
 _EXCERPT = 120
 _DIFF_FLAGS = ["--unified=0", "--no-color", "--no-ext-diff"]
@@ -87,28 +89,6 @@ _DIFF_FLAGS = ["--unified=0", "--no-color", "--no-ext-diff"]
 
 class ScanError(Exception):
     """Reported as one line and exit 2, never as a traceback."""
-
-
-@dataclass(frozen=True)
-class Rule:
-    """One parsed pattern: its 1-based index among patterns and the list line it came from."""
-    index: int
-    list_line: int
-    pattern: str
-
-    @property
-    def digest(self) -> str:
-        """A short hash naming the pattern without showing it (case-folded, as it matches)."""
-        return hashlib.sha256(self.pattern.lower().encode("utf-8")).hexdigest()[:12]
-
-
-@dataclass(frozen=True)
-class RuleList:
-    """The parsed list, with the counts the report must state."""
-    rules: tuple[Rule, ...]
-    comment_lines: int
-    blank_lines: int
-    empty_rules: int                # `==>x` or whitespace before `==>`: nothing to match
 
 
 @dataclass(frozen=True)
@@ -126,37 +106,6 @@ class Hit:
             out["pattern"] = self.rule.pattern
             out["excerpt"] = self.excerpt
         return out
-
-
-def parse_rules(text: str) -> RuleList:
-    """Parse a redaction list. PURE.
-
-    One rule per line. A blank line, and a line whose first non-blank character is `#`, is a
-    comment. A rule is `literal` or `literal==>replacement`; the pattern is the text before the
-    FIRST `==>`, stripped. A rule whose pattern is empty after that is counted, never used: an
-    empty pattern is a substring of every line.
-
-    Examples:
-        >>> rl = parse_rules("# names\\n\\nAlpha Corp==>Org1\\nbeta\\n")
-        >>> [r.pattern for r in rl.rules], rl.comment_lines, rl.blank_lines
-        (['Alpha Corp', 'beta'], 1, 1)
-    """
-    rules: list[Rule] = []
-    comments = blanks = empty = 0
-    for n, raw in enumerate(split_lines(text), start=1):
-        stripped = raw.strip()
-        if not stripped:
-            blanks += 1
-            continue
-        if stripped.startswith("#"):
-            comments += 1
-            continue
-        pattern = stripped.split(_SEPARATOR, 1)[0].strip()
-        if not pattern:
-            empty += 1
-            continue
-        rules.append(Rule(len(rules) + 1, n, pattern))
-    return RuleList(tuple(rules), comments, blanks, empty)
 
 
 #: Which rules a line holds. Injectable so the liveness control can be shown to refuse a broken one.
