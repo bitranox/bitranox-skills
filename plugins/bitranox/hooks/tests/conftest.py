@@ -27,6 +27,7 @@ _HOOK_MODULES = {
     "block-partial-typecheck": "block_partial_typecheck",
     "block-masked-gate-exit": "block_masked_gate_exit",
     "block-commit-beside-sibling-gate": "block_commit_beside_sibling_gate",
+    "user-decision-log": "user_decision_log",
     "self-improve-gate": "self_improve_gate",
     "self-improve-audit": "self_improve_audit",
     "decision-review-nudge": "decision_review_nudge",

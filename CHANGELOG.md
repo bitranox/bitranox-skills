@@ -29,6 +29,22 @@ than the change, so entries reconstructed from them would read like coverage wit
 a hole nobody has drawn a line under is one that gets rediscovered and half-filled - which is how
 two "versions with no entry" notes came to sit in this file disagreeing with it.
 
+## [8.17.0]
+
+### Added
+
+- Hook `user-decision-log` (PostToolUse AskUserQuestion): appends one JSON line per answered
+  question to `USER-DECISIONS.jsonl` - the question, its header, every option's label AND
+  description, the chosen label with the options it maps to (each label of a multi-select, none
+  for a typed answer), the user's notes, the session id and a UTC timestamp - so a decision log
+  or a subagent brief can quote the user's own option text instead of a summary. The file sits at
+  the root of the MAIN checkout (a linked worktree logs there too, so removing the worktree keeps
+  it) and its name goes into the repository's own exclude file unless git already ignores it,
+  whatever `track_private` says; outside a repository it goes to
+  `~/.claude/self-improve-audit/<project-slug>.USER-DECISIONS.jsonl`. Probed on interactive CLI
+  2.1.296: the event carries `answers` and `annotations`, and a question refused at PreToolUse
+  produces none, so only questions the user actually saw are logged.
+
 ## [8.16.0]
 
 ### Changed
