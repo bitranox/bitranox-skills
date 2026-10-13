@@ -1,48 +1,43 @@
-# Handover - 2026-10-13, review-loop gate (8.18.0)
+# Handover - 2026-10-13 13:05, worktree cleanup done ([560] closed); [9] not started
 
 ## In flight
 
-- 8.18.0 (2b617bba) is on origin/master: the code-quality sweep gate holds only on wrong
-  behaviour, subagent-driven development has no minor-only fix rounds, and meta-context-watcher
-  resumes a skill's item by invoking the skill. The pre-push gate passed (12411 tests). CI on
-  2b617bba was still running when this was written - confirm it first (How to verify).
+- Nothing part-done. This session only cleaned up: all 16 leftover worktrees under
+  `.claude/worktrees/` were removed with `wtclean.py`, each after `landed.py` exited 0 on it, and
+  their 16 branches were deleted with `git branch -d` (none refused). No build caches existed.
+- CI on 2b617bba (8.18.0) and a90d11c6 (previous handover) is green.
 
 ## Committed, or not
 
-- All skill changes, the three `.skillwriter/` checklists, CHANGELOG and the version bump are
-  committed and pushed. This handover ships in its own commit from the worktree
-  `.claude/worktrees/9-pushcheck-digest-casefold` (branch `review-loop-gate`).
-- Two always-loaded memory facts were amended through the engine
-  (`feedback-your-own-verification-is-blind-in-the-direction-your-fix-is-wrong`,
-  `pathfinder-no-technical-debt`; pointer lines updated, pins intact). The store's git commit is
-  left to the dream: other sessions have uncommitted fact edits there too.
-- EXECUTION-USER-REVIEW.md (MAIN checkout, gitignored) has the user's decision verbatim, entry
-  2026-10-13 10:2x ("Keep loop, tighten gate").
+- `OPEN-WORK.md` ([560] closed) and this handover are committed together in the handover commit.
+- Main checkout is on master, `git worktree list` shows only it.
 
 ## Decided, and why - do not reopen
 
-- User decision: keep the open-ended loops, tighten the gate; no sweep or round cap, no delta-only
-  re-review. The per-round ledger counts in SDD are a report to the user, never a stop.
-- Non-behavioural findings (test gaps over correct behaviour, doc wording that misleads no caller,
-  clarity of correct code) keep their severity but do not hold the loop; restructuring correct
-  code is never "cheap".
+- The 7 `agent-*` worktrees were removed WITH `--discard-uncommitted`: `landed.py` (worktree
+  mode) reported every dirty file `in_target`, and one was checked by hand (the worktree blob of
+  `block-masked-gate-exit.py` equals its copy in 8a8ad98a, 8.10.3). The user approved explicitly.
 
 ## Decided against, and why
 
-- Asking the live lsdsk session to rewrite its backlog line: this worktree-isolated session is
-  blocked from that repo, and routing it through a peer would bypass the block.
+- Nothing new.
 
 ## Still open, untouched
 
-- lsdsk `OPEN-WORK.md` item `[20]` still restates the pre-7.42.0 exit rule in its `size:` field
-  ("until one full sweep finds nothing and changes nothing"). It is deferred by the user, so it
-  cannot fire until resumed; fix it from an lsdsk session (point the field at the skill).
-- Open sessions keep running the old plugin text until `/reload-plugins` (plus one
-  `/plugin marketplace update` per machine).
-- Everything else: OPEN-WORK.md, top item [9].
+- lsdsk `OPEN-WORK.md` item `[20]` still restates the pre-7.42.0 exit rule in its `size:` field;
+  fix it from an lsdsk session (point the field at the skill). Carried from the previous handover.
+- Open sessions run old plugin text until `/reload-plugins` (plus one `/plugin marketplace update`
+  per machine).
+- A memory consolidation is due (`bitranox:meta-dream-tree`); the user has not been asked yet.
+- Everything else: `OPEN-WORK.md`, top item [9].
 
 ## Lessons for the next nap
 
+- When auto mode refuses `wtclean.py --discard-uncommitted` after a general "yes" to a cleanup
+  plan, ask the user for an explicit "do it" naming the discard: it passed only after that.
+- When a batch of worktree-dispatched items ships, remove its worktrees with `wtclean.py` in the
+  same session: the cleanup line [560] counted 11 while 16 had piled up by the time it was worked.
+- Carried from the 2026-10-13 morning handover (not yet napped):
 - When a review loop will not end, look for a backlog or handover line that RESTATES the skill's
   exit rule: sessions resuming with "what next" follow the frozen paraphrase, not the skill.
 - When a gate says "a realistic caller reaches it", ask whether the finding is wrong BEHAVIOUR:
@@ -54,21 +49,22 @@
 
 ## The exact next action
 
-Confirm CI for 2b617bba (below). Then [9], the top item in `OPEN-WORK.md`.
+[9], the top item in `OPEN-WORK.md`: close the soundtouch-zonemaster pushcheck queue entry
+(`contrib_queue.py queues`, then `ship --match` on it with queue_key, fixed in 8.17.3), then build
+(1), the compuse-toolbox `adjudicate` file mode, TDD with mutation arms in a fresh worktree from
+origin/master.
 
 ## Files that matter
 
-- `plugins/bitranox/skills/process-review-enhance-code-quality/SKILL.md` (Step 7)
-- `plugins/bitranox/skills/process-agents-subagent-driven-development/SKILL.md`,
-  `.../task-reviewer-prompt.md` (Calibration)
-- `plugins/bitranox/skills/meta-context-watcher/SKILL.md` ("When you are the one READING")
+- `OPEN-WORK.md` (item [9], line 35)
+- `plugins/bitranox/skills/compuse-toolbox/scripts/adjudicate.py`,
+  `plugins/bitranox/skills/compuse-toolbox/tests/test_adjudicate.py`
+- `plugins/bitranox/skills/compuse-toolbox/SKILL.md` (the adjudicate row)
 
 ## How to verify
 
-- `uv run <plugin>/skills/compuse-toolbox/scripts/ci_wait.py --sha 2b617bbaba76b9cc2e0638246623132c2530e38f --repo bitranox/bitranox-skills`
-  exits 0.
-- `grep -c 'gate-holding' plugins/bitranox/skills/process-review-enhance-code-quality/SKILL.md`
-  is non-zero on origin/master.
+- `git worktree list` prints one line (the main checkout).
+- `grep -c '^- \[x\] (2026-10-11) \[560\]' OPEN-WORK.md` prints 1.
 
 Read this, then replace the first line with `# STALE - read <date>, work continued`. Do not delete it -
 if this session ends badly it is the only record of where things stood.
