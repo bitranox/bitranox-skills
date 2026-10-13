@@ -29,6 +29,16 @@ than the change, so entries reconstructed from them would read like coverage wit
 a hole nobody has drawn a line under is one that gets rediscovered and half-filled - which is how
 two "versions with no entry" notes came to sit in this file disagreeing with it.
 
+## [8.19.4]
+
+### Changed
+
+- `coding-python-send-mail`: mirrors btx_lib_mail's EHLO-name change. With `delivery_deadline`
+  set, a delivery waits for the default lookup of this host's own name, before connecting, at most
+  half the time the deadline has left, then announces its connection's own address as an address
+  literal; later deliveries announce the name once found. Without a deadline the lookup is waited
+  for.
+
 ## [8.19.3]
 
 ### Changed
