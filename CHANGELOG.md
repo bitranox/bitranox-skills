@@ -29,6 +29,16 @@ than the change, so entries reconstructed from them would read like coverage wit
 a hole nobody has drawn a line under is one that gets rediscovered and half-filled - which is how
 two "versions with no entry" notes came to sit in this file disagreeing with it.
 
+## [8.19.1]
+
+### Changed
+
+- `coding-python-send-mail`: mirrors btx_lib_mail 4.2.0. Internationalised addresses (RFC 6531
+  SMTPUTF8): what works, the relay requirement, `SMTPUTF8NotSupportedError` and the host order,
+  NFC. Install and run with uv / uvx and a 7-day `--exclude-newer` cooldown, with the
+  supply-chain reason and the uv installer; the description's zero-install example carries the
+  cooldown.
+
 ## [8.19.0]
 
 ### Added

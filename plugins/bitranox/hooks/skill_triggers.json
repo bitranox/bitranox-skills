@@ -271,6 +271,7 @@
   "btx_lib_mail",
   "btx-lib-mail",
   "zero-install",
+  "exclude-newer",
   "dot-stuffing"
  ],
  "coding-python-textual": [
