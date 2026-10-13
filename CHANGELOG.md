@@ -29,6 +29,26 @@ than the change, so entries reconstructed from them would read like coverage wit
 a hole nobody has drawn a line under is one that gets rediscovered and half-filled - which is how
 two "versions with no entry" notes came to sit in this file disagreeing with it.
 
+## [8.19.0]
+
+### Added
+
+- `compuse-toolbox`: `adjudicate` gains a path mode for a detector or scan written during a
+  review. `--probe-path` / `--control-path` (or `probe_path` / `control_path` in a claim file) run
+  the subject on a planted path and a clean path instead of stdin; everything after a bare `--` is
+  the subject's argv, with `{path}` where each side's path goes, and with no `--` the path is its
+  only argument. A missing path, the same place on both sides, half a pair, a template without
+  `{path}` for path claims and a `{path}` template for stdin-only claims are each refused (exit 2)
+  before the subject runs, since each would run both sides alike or score a missing path as fired.
+  `--subject` is an alias for `--hook`. Stdin mode and the exit codes are unchanged.
+
+### Changed
+
+- `compuse-toolbox`: the skill text names the jigs that must be launched with plain `python3`
+  (`gate`, `adjudicate`, `diffbehave`, `ci_triage --cmd`, `transfer check --cmd`) where it used to
+  call `gate` the only exception, says `mutation_arm` picks its own interpreter, and calls
+  `adjudicate`'s `--probe` / `--control` values the text fed on each side's stdin.
+
 ## [8.18.0]
 
 ### Changed

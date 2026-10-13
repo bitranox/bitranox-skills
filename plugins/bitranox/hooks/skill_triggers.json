@@ -431,10 +431,10 @@
   "pkill",
   "gate",
   "real",
-  "merge-conflict",
   "utf-16",
   "rate-capped",
-  "one-liner"
+  "one-liner",
+  "mid-review"
  ],
  "compuse-vnc": [
   "drive",

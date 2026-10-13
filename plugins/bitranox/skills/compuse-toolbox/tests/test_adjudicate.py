@@ -532,3 +532,179 @@ def test_a_crash_under_json_is_exit_2_with_an_envelope(tmp_path, monkeypatch, ca
     assert payload["ok"] is False and "harness broke" in payload["error"]
     assert "Traceback" not in cap.err
 
+
+
+# ---- path mode: a file-walking detector run on a planted path and a clean path -------------------
+#
+# A detector or scan hand-rolled during a review takes a PATH, not stdin. Without a control path,
+# "it found the planted file" and "it reports every tree" are the same observation.
+
+_WALKER = ('import os, sys\n'
+           'root = sys.argv[-1]\n'
+           'for d, _, fs in os.walk(root):\n'
+           '    for f in fs:\n'
+           '        if "TRAP" in open(os.path.join(d, f), encoding="utf-8").read(): print(f)\n')
+
+
+def _trees(tmp_path):
+    planted, clean = tmp_path / "planted", tmp_path / "clean"
+    planted.mkdir()
+    clean.mkdir()
+    (planted / "a.txt").write_text("has TRAP in it", encoding="utf-8")
+    (clean / "a.txt").write_text("nothing here", encoding="utf-8")
+    return planted, clean
+
+
+def test_a_detector_that_finds_only_the_planted_tree_confirms(tmp_path, capsys):
+    hook = _fake_hook(tmp_path, _WALKER)
+    planted, clean = _trees(tmp_path)
+    rc = A.main(["--hook", str(hook), "--name", "walk", "--probe-path", str(planted),
+                 "--control-path", str(clean), "--json"])
+    payload = json.loads(capsys.readouterr().out)
+    assert rc == 0
+    assert payload["data"]["results"][0]["verdict"] == "CONFIRMED"
+
+
+def test_a_scan_that_flags_both_trees_is_unusable(tmp_path):
+    hook = _fake_hook(tmp_path, _WALKER)
+    planted, _ = _trees(tmp_path)
+    dirty = tmp_path / "dirty"
+    dirty.mkdir()
+    (dirty / "b.txt").write_text("TRAP again", encoding="utf-8")
+    rc = A.main(["--hook", str(hook), "--name", "walk", "--probe-path", str(planted),
+                 "--control-path", str(dirty)])
+    assert rc == 2
+
+
+def test_a_template_after_the_separator_puts_the_path_at_the_placeholder(tmp_path, capsys):
+    """A detector taking `--root <path> --json` needs the path in the middle, not appended."""
+    body = ('import argparse, os\n'
+            'p = argparse.ArgumentParser(); p.add_argument("--root", required=True)\n'
+            'p.add_argument("--json", action="store_true"); a = p.parse_args()\n'
+            'assert a.json\n'
+            'if os.path.exists(os.path.join(a.root, "a.txt")) and "TRAP" in '
+            'open(os.path.join(a.root, "a.txt"), encoding="utf-8").read(): print("hit")\n')
+    hook = _fake_hook(tmp_path, body)
+    planted, clean = _trees(tmp_path)
+    rc = A.main(["--hook", str(hook), "--name", "t", "--probe-path", str(planted),
+                 "--control-path", str(clean), "--fired-when", "match", "--fired-pattern", "^hit",
+                 "--json", "--", "--root", "{path}", "--json"])
+    payload = json.loads(capsys.readouterr().out)
+    assert rc == 0, payload
+    assert payload["data"]["results"][0]["verdict"] == "CONFIRMED"
+
+
+def test_a_template_without_a_placeholder_is_a_usage_error(tmp_path):
+    """The path would be dropped and both sides would run identically - an UNUSABLE or REFUTED
+    that measured nothing about the path."""
+    hook = _fake_hook(tmp_path, _WALKER)
+    planted, clean = _trees(tmp_path)
+    rc = A.main(["--hook", str(hook), "--probe-path", str(planted), "--control-path", str(clean),
+                 "--", "--json"])
+    assert rc == 2
+
+
+def test_a_placeholder_template_with_stdin_claims_only_is_a_usage_error(tmp_path):
+    hook = _fake_hook(tmp_path, "sys.stdin.read()\n")
+    rc = A.main(["--hook", str(hook), "--probe", "a", "--control", "b", "--", "{path}"])
+    assert rc == 2
+
+
+@pytest.mark.parametrize("missing_side", ["probe", "control"])
+def test_a_missing_path_is_a_usage_error_not_a_fired_side(tmp_path, capsys, missing_side):
+    """A detector that exits non-zero on a missing path would otherwise score that side as FIRED,
+    so a typo in the probe path reads as CONFIRMED under --fired-when nonzero."""
+    hook = _fake_hook(tmp_path, 'import os\nsys.exit(0 if os.path.isdir(sys.argv[-1]) else 3)\n')
+    planted, clean = _trees(tmp_path)
+    paths = {"probe": str(planted), "control": str(clean)}
+    paths[missing_side] = str(tmp_path / "no-such-dir")
+    rc = A.main(["--hook", str(hook), "--probe-path", paths["probe"],
+                 "--control-path", paths["control"], "--fired-when", "nonzero", "--json"])
+    payload = json.loads(capsys.readouterr().out)
+    assert rc == 2
+    assert payload["data"]["reason"] == (f"claim 'claim': {missing_side} path does not exist: "
+                                         f"{paths[missing_side]}")
+
+
+def test_the_same_path_on_both_sides_is_refused_before_the_subject_runs(tmp_path, capsys):
+    """Run, it would score UNUSABLE - also exit 2, but blaming a control that was never a
+    control. Refused, it names the real mistake and the subject never runs."""
+    marker = tmp_path / "ran"
+    hook = _fake_hook(tmp_path, f"open({str(marker)!r}, 'w').close()\n" + _WALKER)
+    planted, _ = _trees(tmp_path)
+    rc = A.main(["--hook", str(hook), "--probe-path", str(planted),
+                 "--control-path", str(planted / ".." / "planted"), "--json"])
+    payload = json.loads(capsys.readouterr().out)
+    assert rc == 2
+    assert "same place" in payload["data"]["reason"]
+    assert not marker.exists()
+
+
+def test_probe_path_without_control_path_exits_2(tmp_path, capsys):
+    hook = _fake_hook(tmp_path, _WALKER)
+    planted, _ = _trees(tmp_path)
+    assert A.main(["--hook", str(hook), "--probe-path", str(planted), "--json"]) == 2
+    reason = json.loads(capsys.readouterr().out)["data"]["reason"]
+    assert reason == ("--probe-path/--control-path: a probe path and a control path must be "
+                      "given together")
+
+
+def test_a_claim_file_can_carry_paths(tmp_path, capsys):
+    hook = _fake_hook(tmp_path, _WALKER)
+    planted, clean = _trees(tmp_path)
+    f = tmp_path / "claims.jsonl"
+    f.write_text(json.dumps({"name": "walk", "probe_path": str(planted),
+                             "control_path": str(clean)}) + "\n", encoding="utf-8")
+    rc = A.main(["--hook", str(hook), "--claim-file", str(f), "--json"])
+    payload = json.loads(capsys.readouterr().out)
+    assert rc == 0
+    assert payload["data"]["summary"]["confirmed_names"] == ["walk"]
+
+
+def test_a_claim_file_line_with_only_a_probe_path_is_rejected(tmp_path, capsys):
+    hook = _fake_hook(tmp_path, _WALKER)
+    planted, _ = _trees(tmp_path)
+    f = tmp_path / "claims.jsonl"
+    f.write_text(json.dumps({"name": "walk", "probe_path": str(planted)}) + "\n", encoding="utf-8")
+    assert A.main(["--hook", str(hook), "--claim-file", str(f), "--json"]) == 2
+    reason = json.loads(capsys.readouterr().out)["data"]["reason"]
+    assert reason.endswith("a probe path and a control path must be given together")
+
+
+def test_subject_is_an_alias_for_hook(tmp_path):
+    hook = _fake_hook(tmp_path, _WALKER)
+    planted, clean = _trees(tmp_path)
+    rc = A.main(["--subject", str(hook), "--probe-path", str(planted),
+                 "--control-path", str(clean)])
+    assert rc == 0
+
+
+def test_a_path_with_spaces_and_non_ascii_reaches_the_subject_intact(tmp_path):
+    hook = _fake_hook(tmp_path, _WALKER)
+    planted, clean = tmp_path / "pl anted äö", tmp_path / "cl ean ß"
+    planted.mkdir()
+    clean.mkdir()
+    (planted / "a.txt").write_text("TRAP", encoding="utf-8")
+    (clean / "a.txt").write_text("none", encoding="utf-8")
+    rc = A.main(["--hook", str(hook), "--probe-path", str(planted), "--control-path", str(clean)])
+    assert rc == 0
+
+
+def test_a_subjects_own_json_flag_after_the_separator_does_not_switch_on_the_envelope(
+        tmp_path, capsys):
+    hook = _fake_hook(tmp_path, _WALKER)
+    planted, clean = _trees(tmp_path)
+    rc = A.main(["--hook", str(hook), "--probe-path", str(planted), "--control-path", str(clean),
+                 "--", "--json", "{path}"])
+    out = capsys.readouterr().out
+    assert rc == 0
+    assert "CONFIRMED" in out and not out.lstrip().startswith("{")
+
+
+def test_stdin_claims_are_unchanged_when_no_path_is_given(tmp_path):
+    """The existing mode must not regress: no path, no template, stdin carries the probe."""
+    hook = _fake_hook(tmp_path, 'data = sys.stdin.read()\nprint(len(sys.argv))\n'
+                                'sys.exit(3 if "TRAP" in data else 0)\n')
+    rc = A.main(["--hook", str(hook), "--probe", "TRAP", "--control", "clean",
+                 "--fired-when", "nonzero"])
+    assert rc == 0

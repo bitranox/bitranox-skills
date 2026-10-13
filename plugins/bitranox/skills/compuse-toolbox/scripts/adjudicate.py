@@ -1,11 +1,13 @@
 # /// script
 # requires-python = ">=3.10"
 # ///
-"""Is this claim about a guard REAL? Run the subject on a probe and a CONTROL, and score the pair.
+"""Is this claim about a guard, detector or scan REAL? Run the subject on a probe and a CONTROL, and
+score the pair.
 
 The mistake this replaces: confirming a claim by running the ONE input that shows it. A guard that
-fires on your probe has told you nothing until you know it does NOT fire on an input differing only
-in the thing claimed. Without that second run "it fired" and "it fires on everything" are the same
+fires on your probe - or a detector hand-rolled during a review that finds the file you planted -
+has told you nothing until you know it does NOT fire on an input differing only in the thing
+claimed. Without that second run "it fired" and "it fires on everything" are the same
 observation, and the second one is a broken instrument reporting a finding.
 
 So a claim is scored only when the probe and the control DISAGREE in the claimed direction, and the
@@ -36,6 +38,15 @@ Typical uses:
   * adjudicating review claims about a PreToolUse hook, one JSON payload per side
   * checking a guard you just fixed still fires on the case it was built for
   * proving a "false positive" report is real before changing anything
+  * checking a hand-rolled detector or scan written during a review: run it on a PLANTED path and
+    a CLEAN one (path mode, below) before believing what it reports on the real tree
+
+Path mode: `--probe-path P --control-path C` (or `probe_path`/`control_path` in a claim file) hands
+each side's path to the subject instead of stdin, which is then empty. Without a template the path
+is the subject's only argument; everything after a bare `--` is the subject's argv template, with
+`{path}` where each side's path goes. Both paths must exist and be different places, and a
+template must contain `{path}` exactly when the claims carry paths - each mismatch is refused
+before anything runs, because each would run both sides alike, or score a missing path as fired.
 
 Run (plain python3, NOT uv run: the subject runs on THIS interpreter, and under uv run that is uv's
 throwaway env, where a hook's optional imports such as PyYAML or lxml are missing, so it degrades in
@@ -44,6 +55,8 @@ a way it never does under hooks/run-python.sh in production):
       --name "fires on a mention" --probe '{"tool_input":{"command":"echo x"}}' \\
                                   --control '{"tool_input":{"command":"echo y"}}'`
   `python3 scripts/adjudicate.py --hook hooks/some-guard.py --claim-file claims.jsonl --json`
+  `python3 scripts/adjudicate.py --subject find_leaks.py --probe-path planted/ \\
+      --control-path clean/ -- --root {path} --json`
 
 The subject gets the UTF-8 environment run-python.sh exports (PYTHONUTF8=1,
 PYTHONIOENCODING=utf-8). `--timeout` is seconds per side and must be a positive finite number.
@@ -70,7 +83,7 @@ import os
 import re
 import subprocess
 import sys
-from dataclasses import asdict, dataclass, field
+from dataclasses import asdict, dataclass, field, replace
 from pathlib import Path
 
 from _cli_envelope import emit, run_guarded
@@ -107,6 +120,9 @@ class Claim:
     control: str
     probe_args: list[str] = field(default_factory=list)
     control_args: list[str] = field(default_factory=list)
+    # Path mode: the planted and the clean path a file-walking subject is pointed at. Both or none.
+    probe_path: str | None = None
+    control_path: str | None = None
 
 
 @dataclass(frozen=True)
@@ -247,22 +263,44 @@ def _argv_list(value, where: str, key: str) -> list[str]:
     return list(value)
 
 
+def _path_pair(probe_path, control_path, where: str) -> tuple[str | None, str | None]:
+    """Both paths or neither. Half a pair is refused for the same reason a missing control is."""
+    if probe_path is None and control_path is None:
+        return None, None
+    if probe_path is None or control_path is None:
+        raise ValueError(f"{where}: a probe path and a control path must be given together")
+    for value in (probe_path, control_path):
+        if not isinstance(value, str) or not value:
+            raise ValueError(f"{where}: a path must be a non-empty string")
+    return probe_path, control_path
+
+
 def _claim_from_line(line: str, where: str, number: int) -> Claim:
     obj = json.loads(line)
-    if not isinstance(obj, dict) or "probe" not in obj or "control" not in obj:
+    if not isinstance(obj, dict):
+        raise ValueError(f"{where}: a claim must be a JSON object")
+    probe_path, control_path = _path_pair(obj.get("probe_path"), obj.get("control_path"), where)
+    # A path claim may carry no stdin at all; a stdin claim still needs both sides.
+    if probe_path is None and ("probe" not in obj or "control" not in obj):
+        raise ValueError(f"{where}: a claim needs both 'probe' and 'control' "
+                         f"(or both 'probe_path' and 'control_path')")
+    if ("probe" in obj) != ("control" in obj):
         raise ValueError(f"{where}: a claim needs both 'probe' and 'control'")
     return Claim(name=str(obj.get("name") or f"line{number}"),
-                 probe=_stdin_payload(obj["probe"], where, "probe"),
-                 control=_stdin_payload(obj["control"], where, "control"),
+                 probe=_stdin_payload(obj.get("probe", ""), where, "probe"),
+                 control=_stdin_payload(obj.get("control", ""), where, "control"),
                  probe_args=_argv_list(obj.get("probe_args", []), where, "probe_args"),
-                 control_args=_argv_list(obj.get("control_args", []), where, "control_args"))
+                 control_args=_argv_list(obj.get("control_args", []), where, "control_args"),
+                 probe_path=probe_path, control_path=control_path)
 
 
-def load_claims(claim_file, name, probe, control) -> list[Claim]:
+def load_claims(claim_file, name, probe, control, *, probe_path=None,
+                control_path=None) -> list[Claim]:
     """Build the claim list from a JSONL file and/or one inline claim.
 
     A line without both `probe` and `control` raises ValueError rather than defaulting the missing
-    side: a claim with no control is not a weaker claim, it is an unscoreable one.
+    side: a claim with no control is not a weaker claim, it is an unscoreable one. A path claim
+    (`probe_path` and `control_path`) needs no stdin; its stdin defaults to empty.
     """
     claims: list[Claim] = []
     if claim_file:
@@ -272,11 +310,69 @@ def load_claims(claim_file, name, probe, control) -> list[Claim]:
                 line = line.strip()
                 if line:
                     claims.append(_claim_from_line(line, f"{claim_file}:{number}", number))
+    inline_paths = _path_pair(probe_path, control_path, "--probe-path/--control-path")
     if probe is not None or control is not None:
         if probe is None or control is None:
             raise ValueError("--probe and --control must be given together")
-        claims.append(Claim(name=name or "claim", probe=probe, control=control))
+    if probe is not None or inline_paths[0] is not None:
+        claims.append(Claim(name=name or "claim", probe=probe or "", control=control or "",
+                            probe_path=inline_paths[0], control_path=inline_paths[1]))
     return claims
+
+
+PATH_PLACEHOLDER = "{path}"
+
+
+def bind_paths(claims: list[Claim], template: list[str] | None) -> list[Claim]:
+    """Turn each path claim into plain argv, so scoring never needs to know about paths.
+
+    The template is the subject's argv with `{path}` where the side's path goes; with no template
+    the path is the subject's only template argument, ahead of any per-claim args. Raises
+    ValueError when the template and the claims disagree, because either mismatch runs both sides
+    identically: a template with no placeholder drops the path, and a placeholder with no path
+    has nothing to substitute.
+    """
+    has_placeholder = any(PATH_PLACEHOLDER in arg for arg in template or [])
+    path_claims = [c for c in claims if c.probe_path is not None]
+    if template and path_claims and not has_placeholder:
+        raise ValueError(f"the template after -- has no {PATH_PLACEHOLDER} placeholder, so the probe and "
+                         f"control paths would never reach the subject")
+    if has_placeholder and len(path_claims) != len(claims):
+        raise ValueError(f"the template after -- uses {PATH_PLACEHOLDER}, but a claim has no "
+                         f"probe/control path to put there")
+    template = list(template) if template else [PATH_PLACEHOLDER] if path_claims else []
+    return [_bound(c, template) for c in claims]
+
+
+def _bound(claim: Claim, template: list[str]) -> Claim:
+    if claim.probe_path is None:
+        return replace(claim, probe_args=[*template, *claim.probe_args],
+                       control_args=[*template, *claim.control_args])
+    return replace(claim,
+                   probe_args=[*_fill(template, claim.probe_path), *claim.probe_args],
+                   control_args=[*_fill(template, claim.control_path), *claim.control_args])
+
+
+def _fill(template: list[str], path) -> list[str]:
+    return [arg.replace(PATH_PLACEHOLDER, path) for arg in template]
+
+
+def check_paths(claims: list[Claim]) -> None:
+    """Every path must exist, and the two sides must be different places.
+
+    A missing path is refused BEFORE the subject runs: a detector that exits non-zero on a missing
+    path would score that side as fired, so a typo in the probe path reads as CONFIRMED. The same
+    place on both sides cannot discriminate anything, so it is refused rather than run.
+    """
+    for claim in claims:
+        if claim.probe_path is None:
+            continue
+        for side, path in (("probe", claim.probe_path), ("control", claim.control_path)):
+            if not os.path.exists(path):
+                raise ValueError(f"claim {claim.name!r}: {side} path does not exist: {path}")
+        if os.path.samefile(claim.probe_path, claim.control_path):
+            raise ValueError(f"claim {claim.name!r}: the probe path and the control path are the "
+                             f"same place, so the control cannot discriminate")
 
 
 def unusable_cause(summary: dict) -> str | None:
@@ -356,12 +452,22 @@ def _positive_seconds(text: str) -> float:
 
 def _parser() -> argparse.ArgumentParser:
     parser = _Parser(
-        description="Score a claim about a guard by running it on a probe AND a control.")
-    parser.add_argument("--hook", help="a hook/script path, run with the current interpreter")
+        description="Score a claim about a guard, detector or scan by running it on a probe AND a "
+                    "control.",
+        epilog="Everything after a bare -- is the subject's argv template, with {path} where each "
+               "side's path goes; without one, the path is the subject's only argument.")
+    parser.add_argument("--hook", "--subject", dest="hook",
+                        help="the subject: a hook, detector or scan script, run with the current "
+                             "interpreter")
     parser.add_argument("--name", help="name for the inline claim")
     parser.add_argument("--probe", help="stdin for the run that is claimed to FIRE")
     parser.add_argument("--control", help="stdin for the run that is claimed NOT to fire")
-    parser.add_argument("--claim-file", help="JSONL: one {name, probe, control} per line")
+    parser.add_argument("--probe-path", help="path mode: the PLANTED path the subject is claimed "
+                                             "to fire on")
+    parser.add_argument("--control-path", help="path mode: the CLEAN path the subject is claimed "
+                                               "not to fire on")
+    parser.add_argument("--claim-file", help="JSONL: one {name, probe, control} or "
+                                             "{name, probe_path, control_path} per line")
     parser.add_argument("--fired-when", choices=FIRED_MODES, default="output",
                         help="what counts as firing (default: any output on stdout/stderr)")
     parser.add_argument("--fired-pattern", help="regex, required when --fired-when match")
@@ -385,14 +491,20 @@ def _validate(args) -> list[Claim]:
         except re.error as exc:
             raise UsageError(f"--fired-pattern is not a valid regex: {exc}") from exc
     try:
-        claims = load_claims(args.claim_file, args.name, args.probe, args.control)
+        claims = load_claims(args.claim_file, args.name, args.probe, args.control,
+                             probe_path=args.probe_path, control_path=args.control_path)
     except OSError as exc:
         raise UsageError(f"cannot read --claim-file {args.claim_file!r}: {exc}") from exc
     except ValueError as exc:  # json.JSONDecodeError is a ValueError
         raise UsageError(str(exc)) from exc
     if not claims:
-        raise UsageError("no claims - pass --probe/--control or --claim-file")
-    return claims
+        raise UsageError("no claims - pass --probe/--control, --probe-path/--control-path or "
+                         "--claim-file")
+    try:
+        check_paths(claims)
+        return bind_paths(claims, args.subject_args)
+    except (OSError, ValueError) as exc:
+        raise UsageError(str(exc)) from exc
 
 
 def _usage_failure(reason: str, as_json: bool) -> int:
@@ -420,12 +532,13 @@ def main(argv=None) -> int:
 
 def _main(argv=None) -> int:
     _reconfigure_streams()
-    raw = list(sys.argv[1:] if argv is None else argv)
+    raw, template = _split_template(list(sys.argv[1:] if argv is None else argv))
     try:
         args = _parser().parse_args(raw)
     except UsageError as exc:
         # SystemExit(2) keeps argparse's contract for callers; the envelope is printed first.
         raise SystemExit(_usage_failure(str(exc), "--json" in raw)) from exc
+    args.subject_args = template
     try:
         claims = _validate(args)
     except UsageError as exc:
@@ -443,6 +556,19 @@ def _main(argv=None) -> int:
     else:
         _report(results, summary)
     return code
+
+
+def _split_template(raw: list[str]) -> tuple[list[str], list[str] | None]:
+    """Our own argv, and the subject's argv template after the first bare `--`.
+
+    A separator rather than a repeatable option: a template is mostly flags (`--root {path}
+    --json`), and argparse reads an option value starting with `--` as the next option. Splitting
+    here also keeps a subject's own `--json` from switching on OUR envelope.
+    """
+    if "--" not in raw:
+        return raw, None
+    cut = raw.index("--")
+    return raw[:cut], raw[cut + 1:] or None
 
 
 def _failure_reason(summary: dict) -> str | None:
