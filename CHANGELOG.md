@@ -29,6 +29,29 @@ than the change, so entries reconstructed from them would read like coverage wit
 a hole nobody has drawn a line under is one that gets rediscovered and half-filled - which is how
 two "versions with no entry" notes came to sit in this file disagreeing with it.
 
+## [8.18.0]
+
+### Changed
+
+- `process-review-enhance-code-quality`: only wrong behaviour holds the sweep loop open - a SEVERE
+  or MEDIUM that gives a realistic caller a wrong result or exit code, a crash, lost data, a
+  security hole, or a doc statement it acts on and is misled by. A test gap over correct behaviour
+  (a surviving mutant, an invariant the code obeys but no test pins), doc wording that misleads no
+  caller and clarity of correct code keep their severity but are settled by fix-when-cheap or
+  accept; restructuring correct code is never cheap. A sweep that found a gate-holding finding is
+  not the last one even after the fix. Under a standing "fix all", non-gating findings that are
+  not cheap are presented once as `accept:` proposals. A review parked in a handover or backlog
+  line names the skill instead of restating its exit rule.
+- `process-agents-subagent-driven-development`: the task review loop repeats only while a Critical
+  or Important issue is open; Minors never get a fix round of their own, and a minor-only round is
+  never the recommended option. The ledger records each review's counts and how many Important
+  findings sit in the previous fix round's code. The task-reviewer template grades reach as well as
+  kind: a defect only an exotic path reaches (a micro- to millisecond signal or race, input no
+  documented use produces, a platform path alias) is Minor unless it loses data or opens a
+  security hole.
+- `meta-context-watcher`: a backlog item that continues a skill's procedure is resumed by invoking
+  that skill again, and the skill's current text wins over the item's wording.
+
 ## [8.17.5]
 
 ### Changed

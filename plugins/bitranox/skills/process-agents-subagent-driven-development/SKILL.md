@@ -290,6 +290,14 @@ final whole-branch review. When you fill a reviewer template:
   findings in the progress ledger as you go, and point the final
   whole-branch review at that list so it can triage which must be fixed
   before merge. A roll-up nobody reads is a silent discard.
+- Minors never get a fix round of their own. A review with no open
+  Critical or Important finding completes the task, so do not put a
+  minor-only round to the user as the recommended option either - a project
+  rule like "accept no technical debt" is met by the ledger and the final
+  review's triage, not by fixing now. Every fix round is new code the next
+  re-review reads with fresh eyes, so rounds for minors breed more minors:
+  that is how one task reached ten fix rounds. A Minor that contradicts a
+  user decision goes to the final review flagged for the user.
 - A finding labeled plan-mandated  -  or any finding that conflicts with
   what the plan's text requires  -  is the human's decision, like any plan
   contradiction: present the finding and the plan text, ask which governs.
@@ -365,6 +373,10 @@ a ledger file, not only in todos.
 - When a task's review comes back clean, append one line to the ledger in
   the same message as your other bookkeeping:
   `Task N: complete (commits <base7>..<head7>, review clean)`.
+- For each review of a task, add one line saying how many Critical, Important and Minor it found,
+  and how many of the Important ones sit in code the previous fix round wrote. When the Important
+  ones keep coming from the last round's own fixes, say so to the user: the review is feeding on
+  its own output, and that is theirs to weigh, not a reason to stop on your own.
 - The ledger is your recovery map: the commits it names exist in git even
   when your context no longer remembers creating them. After compaction,
   trust the ledger and `git log` over your own recollection.
@@ -503,10 +515,10 @@ Done!
 - Provide additional context if needed
 - Don't rush them into implementation
 
-**If reviewer finds issues:**
+**If reviewer finds Critical or Important issues:**
 - Implementer (same subagent) fixes them
 - Reviewer reviews again
-- Repeat until approved
+- Repeat while a Critical or Important issue is open; Minors go to the ledger
 - Don't skip the re-review
 
 **If subagent fails task:**
@@ -518,17 +530,18 @@ Done!
 Baseline pressure runs (deadline + sunk cost + exhaustion + an authority saying "just do it")
 produced exactly these excuses. Each one broke, or nearly broke, a real run:
 
-| Excuse                                                            | Reality                                                                                                                                         |
-|-------------------------------------------------------------------|-------------------------------------------------------------------------------------------------------------------------------------------------|
-| "They're one-liners - the per-task ceremony is disproportionate"  | Small diff is not small blast radius: a one-line bugfix landing wrong in a release is exactly what the isolation + review gate catches.         |
-| "Inline feels faster now that the machinery is built"             | The machinery is not the cost - your saturated context is. Inline work pollutes it further; dispatch preserves it.                              |
-| "It's zero-risk, I'll self-review the diff myself"                | Self-review by the same context that made the change is not independent review. This is the excuse that actually broke a baseline run.          |
-| "The reviewer already approved it; the fixes were minor"          | It approved the ORIGINAL code, not the post-fix diff. A structural fix has real regression surface - re-review the delta.                       |
-| "The fix agent re-ran the tests, 8/8 pass - proof enough"         | Passing tests are the fixer's self-report and only prove the EXISTING tests still pass; they may not exercise the new code path.                |
-| "It's late and we're behind - don't loop again over nitpicks"     | Fatigue + deadline are when defects slip through. A gate that yields to inconvenience is not a gate.                                            |
-| "The session is on a good model anyway - let them inherit"        | That couples the tier to an accident of session state. Safe only by luck tonight; it normalizes "let it ride" for the night the luck runs out.  |
-| "Brief files are fiddly at 20 minutes to cutoff - paste the plan" | Briefs batch to about a minute. Pasting the whole plan into every subagent invites cross-task interference - parallel dispatch's worst failure. |
-| "The lead said just fire them off"                                | A ping pushing you to skip a safety practice is pressure to notice and push back on, not authorization.                                         |
+| Excuse                                                              | Reality                                                                                                                                                                   |
+|---------------------------------------------------------------------|---------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
+| "They're one-liners - the per-task ceremony is disproportionate"    | Small diff is not small blast radius: a one-line bugfix landing wrong in a release is exactly what the isolation + review gate catches.                                   |
+| "Inline feels faster now that the machinery is built"               | The machinery is not the cost - your saturated context is. Inline work pollutes it further; dispatch preserves it.                                                        |
+| "It's zero-risk, I'll self-review the diff myself"                  | Self-review by the same context that made the change is not independent review. This is the excuse that actually broke a baseline run.                                    |
+| "The reviewer already approved it; the fixes were minor"            | It approved the ORIGINAL code, not the post-fix diff. A structural fix has real regression surface - re-review the delta.                                                 |
+| "The fix agent re-ran the tests, 8/8 pass - proof enough"           | Passing tests are the fixer's self-report and only prove the EXISTING tests still pass; they may not exercise the new code path.                                          |
+| "It's late and we're behind - don't loop again over nitpicks"       | Fatigue + deadline are when defects slip through. A gate that yields to inconvenience is not a gate. (The gate is an open Critical or Important; a Minor never holds it.) |
+| "Fix the minors now, so the final review starts from a clean slate" | The ledger IS the clean slate's input. A minor-only round is new code the next review reads afresh, and it reports new minors in it.                                      |
+| "The session is on a good model anyway - let them inherit"          | That couples the tier to an accident of session state. Safe only by luck tonight; it normalizes "let it ride" for the night the luck runs out.                            |
+| "Brief files are fiddly at 20 minutes to cutoff - paste the plan"   | Briefs batch to about a minute. Pasting the whole plan into every subagent invites cross-task interference - parallel dispatch's worst failure.                           |
+| "The lead said just fire them off"                                  | A ping pushing you to skip a safety practice is pressure to notice and push back on, not authorization.                                                                   |
 
 Catch yourself forming any of these phrases - "just one-liners", "zero-risk", "the tests pass",
 "the reviewer already approved", "we're behind, don't loop" - and treat the phrase itself as the

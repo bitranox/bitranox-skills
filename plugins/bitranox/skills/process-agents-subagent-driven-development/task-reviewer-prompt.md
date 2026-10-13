@@ -135,6 +135,13 @@ Subagent (general-purpose):
     would block a merge over  -  verbatim duplication of a logic block,
     swallowed errors, tests that assert nothing. "Coverage could be broader"
     and polish suggestions are Minor.
+    Judge reach as well as kind. A defect only an exotic path reaches - a
+    signal or race landing in a window of micro- to milliseconds, input no
+    documented use produces, a platform path alias - is Minor unless it
+    loses data or opens a security hole; name that path in the finding. So
+    is a test that asserts less than it could while the behaviour is
+    correct, and doc wording that misleads no caller. Important is wrong
+    behaviour a caller using the task's documented entry points can get.
     If the plan or brief explicitly mandates something this rubric calls a
     defect (a test that asserts nothing, verbatim duplication of a logic
     block), that IS a finding  -  report it as Important, labeled

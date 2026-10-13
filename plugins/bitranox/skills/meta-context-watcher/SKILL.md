@@ -237,6 +237,13 @@ the item is misfiled: move it to the owning repo's `OPEN-WORK.md`, close it here
 the next item that is this repo's own. Work the moved one only from a session in that repo, or
 when the user asks for it here.
 
+**An item that continues a skill's procedure (a review sweep, a plan being executed) is resumed by
+invoking that skill again,** and where the item's wording and the skill's current text disagree,
+the skill wins. The line paraphrases the rule as it stood the day it was written; a skill can
+change its exit rule after that, and a session resuming from the paraphrase follows the old rule
+while believing it follows the skill. When writing such an item, name the skill and record where
+the work stands, never restate the skill's rules.
+
 ## When it fires on its own
 
 A `Stop` hook measures context from the transcript's last recorded usage - the real per-request
