@@ -29,6 +29,15 @@ than the change, so entries reconstructed from them would read like coverage wit
 a hole nobody has drawn a line under is one that gets rediscovered and half-filled - which is how
 two "versions with no entry" notes came to sit in this file disagreeing with it.
 
+## [8.19.3]
+
+### Changed
+
+- `missing-mechanism-nudge`: the docstring states why every AskUserQuestion is refused once with
+  no wording match - whether an option's premise was measured is not in the question text, so
+  neither a wording rule nor a text classifier can pick out the questions that need the second
+  look. It no longer claims the refusal was chosen over a premise detector. Behaviour unchanged.
+
 ## [8.19.2]
 
 ### Fixed

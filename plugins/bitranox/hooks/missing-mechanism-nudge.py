@@ -21,8 +21,11 @@ than guessed at.
 
 The second enshrining moment is a QUESTION to the user: an option built on "X cannot" or "Y is
 missing" gets chosen on that premise, and the choice outlives the session. So every AskUserQuestion
-call is handled with no wording match (the user chose that over a premise detector, which would
-miss every shape nobody listed). additionalContext alone cannot reshape the question: probed on
+call is handled with no wording match: whether an option's premise was MEASURED is not in the
+question text, so neither a wording rule nor a text classifier can tell a question that needs the
+second look from one that does not - a replay of the refused first asks through a Jev premise
+question scored nearly every one as positive, and a stakes-only gate let close to half of the real
+corrections through unrefused. additionalContext alone cannot reshape the question: probed on
 CLI 2.1.289, it reaches the model together with the user's ANSWER. A deny does reach it first:
 probed on interactive CLI 2.1.296, the dialog was never shown and the model quoted the reason. So
 the FIRST ask of each question is refused with the premise check, and the re-send that follows -
