@@ -1,4 +1,4 @@
-# Handover - 2026-10-13 13:05, worktree cleanup done ([560] closed); [9] not started
+# STALE - read 2026-10-13, work continued
 
 ## In flight
 
