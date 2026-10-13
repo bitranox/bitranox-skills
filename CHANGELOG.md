@@ -36,6 +36,8 @@ two "versions with no entry" notes came to sit in this file disagreeing with it.
 - `ai-llm-jev-judge`: the uvx floors name `btx-skill-jev-judge>=0.2.6`, mirroring the tool
   repo's 0.2.6 release (committed uv.lock with a supply-chain cooldown, Python 3.15 declared), so
   uvx re-fetches instead of keeping a cached 0.2.5 install.
+- `meta-self-improve`: `jev_shadow.py`'s `JEV_JUDGE_FLOOR` follows to `0.2.6`, so its uvx call
+  names the same floor as the skill.
 
 ## [8.19.1]
 
