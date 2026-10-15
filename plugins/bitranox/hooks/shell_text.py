@@ -827,6 +827,19 @@ GATE_RE = re.compile(
 GATE_JIG_NAME = r"(?<![\w.-])gate\.py\b"
 GATE_JIG_RE = re.compile(GATE_JIG_NAME)
 
+# A gate whose verdict a BACKGROUND job loses: broader than GATE_RE, because a backgrounded
+# `make push` or `ci_wait` is read for its verdict the same way, and neither matches GATE_RE's
+# build-tool vocabulary. Two guards ask about it - one about a run_in_background compound whose
+# notice reports the wrong command, one about a gate detached with a trailing `&`.
+BACKGROUND_GATE_RE = re.compile(
+    r"\b(?:"
+    r"make\s+\S*(?:test|check|lint|push|release)"
+    r"|ci_wait(?:\.py)?"
+    r"|gh\s+run\s+watch"
+    r")\b"
+    r"|" + GATE_RE.pattern
+)
+
 
 def is_gated_command(command, tool_name=None):
     """True when a statement in `command` is a git commit, a git push, or a gh pr create.

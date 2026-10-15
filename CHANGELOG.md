@@ -29,6 +29,26 @@ than the change, so entries reconstructed from them would read like coverage wit
 a hole nobody has drawn a line under is one that gets rediscovered and half-filled - which is how
 two "versions with no entry" notes came to sit in this file disagreeing with it.
 
+## [8.20.0]
+
+### Changed
+
+- `arbitrary-sleep-nudge`: a waiter detached with a trailing `&` (a sleep, a poll loop, gate.py,
+  ci_wait, backstop.py, `gh run watch`) is now REFUSED (exit 2) instead of warned about, and the
+  check also covers a GATE detached that way - `make test &`, a backgrounded pytest, pyright or
+  ruff, and `make test && git push &`, which detaches the whole list. The refusal says to run the
+  job with run_in_background and no `&`, or, for a job that must outlive the session, from a
+  script that appends its own RC, launched with setsid nohup. A long foreground sleep is still a
+  nudge. Replayed over 143,483 past shell commands: 49 refusals, 47 of them real detached jobs and
+  2 a test fixture naming a fake process `pytest-control`.
+- `block-masked-gate-exit` and `arbitrary-sleep-nudge` share one backgrounded-gate vocabulary,
+  `shell_text.BACKGROUND_GATE_RE`.
+
+### Fixed
+
+- `arbitrary-sleep-nudge`: a job collected by a later `wait` with a space before it (`a & b & wait`)
+  counted as orphaned, so a correctly collected pair was flagged.
+
 ## [8.19.4]
 
 ### Changed

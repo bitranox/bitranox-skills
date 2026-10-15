@@ -12,14 +12,17 @@ the sleep merely pacing the checks - so `until ... do sleep N; done` and friends
 however long the pause. Short pauses are left alone too: a couple of seconds to let a service
 settle is not a wait on an event.
 
-A second shape is a WAITER detached with a trailing `&` (a sleep, a poll loop, gate.py, ci_wait,
-backstop.py, `gh run watch`). Under run_in_background the task exits at once, so nothing is
-armed; in a foreground call the waiter is orphaned - no completion notice, its verdict only in a
-redirect file. Corpus replay (103,932 shell commands): 19 firings, all foreground, 17 of them a
-`nohup ... gate.py/ci_wait.py ... &`, and 2 test fixtures whose `( sleep 0.5; ... ) &` a later
-`wait` collects, which is exempt. Bash only: in PowerShell `&` is the call operator.
+A second shape is a WAITER or a GATE detached with a trailing `&` (a sleep, a poll loop, gate.py,
+ci_wait, backstop.py, `gh run watch`, or a gate such as `make test` or pytest). Under
+run_in_background the task exits at once, so nothing is armed; in a foreground call the job is
+orphaned - no completion notice, its verdict only in a redirect file. A `( ... ) &` that a later
+`wait` collects is exempt, and so is PowerShell, where `&` is the call operator. Corpus replay
+2026-10-15 (143,483 shell commands): 21 waiter firings and 30 gate firings, 48 of them real
+detached jobs.
 
-NON-BLOCKING: emits additionalContext and exits 0. Fail-open on any error. ASCII only.
+The long sleep is a NUDGE (additionalContext, exit 0). The detached waiter or gate is a REFUSAL
+(stderr, exit 2): the warning recurred while it existed, including a subagent's `make test &`, so
+the user turned it into a block on 2026-10-12. Fail-open on any error. ASCII only.
 """
 from __future__ import annotations
 
@@ -28,6 +31,7 @@ import re
 import sys
 
 from shell_text import (
+    BACKGROUND_GATE_RE,
     blank_heredoc_bodies,
     is_shell_tool,
     mask_data_regions,
@@ -156,14 +160,19 @@ _WAITER = re.compile(
     r"|\bgate\.py\b|\bbackstop\.py\b|\bci_wait(?:\.py)?\b|\bgh\s+run\s+watch\b")
 _LOOP_HEAD = re.compile(r"(?:^|[\s;&|(])(?:while|until|for|select)\b")
 _LOOP_CLOSE = re.compile(r"(?:^|[\s;&|(])done\b")
-_LATER_WAIT = re.compile(r"(?:^|[;&|\n(]\s*)wait\b")
+# `\s*` sits OUTSIDE the alternation so the text after the LAST `&` - ` wait`, space first - is
+# collected too; inside it, `^` had to meet `wait` with nothing between and a pair read as orphaned.
+_LATER_WAIT = re.compile(r"(?:^|[;&|\n(])\s*wait\b")
 
 
-def _unit_start(masked, end):
+def _unit_start(masked, end, *, and_or=False):
     """Where the statement backgrounded by the `&` at `end` begins.
 
     Walks back over a `( ... )` group and over a whole `while/until ... do ... done` loop, so
     `(sleep 600; kill $P) &` and `until X; do sleep 5; done &` are judged as one unit each.
+    With `and_or`, `&&` and `||` do not end it: `make test && git push &` detaches the whole list,
+    gate included, which is what the gate check must see. The waiter check keeps the narrower unit
+    because its pattern is anchored at the unit's start (`cd x && sleep 600 &`).
     """
     depth, at = 0, end - 1
     while at >= 0:
@@ -174,8 +183,8 @@ def _unit_start(masked, end):
             if depth == 0:
                 return at
             depth -= 1
-        elif depth == 0 and (char in ";\n" or masked[at - 1:at + 1] in ("&&", "||")
-                             or _is_lone_ampersand(masked, at)):
+        elif depth == 0 and (char in ";\n" or _is_lone_ampersand(masked, at)
+                             or (not and_or and masked[at - 1:at + 1] in ("&&", "||"))):
             # Inside a loop the unit runs back to its HEAD: keep walking while the text after
             # this separator closes more loops than it opens.
             tail = masked[at + 1:end]
@@ -191,30 +200,53 @@ def _is_lone_ampersand(text, at):
             and text[at + 1:at + 2] not in (">", "&"))
 
 
-_WAITER_NOTICE = {
-    True: ("BACKGROUNDED WAITER: `%s` ends in `&` inside a run_in_background task, so the task "
-           "exits at once and nothing is armed. Let the task itself BE the waiter: drop the `&`."),
-    False: ("BACKGROUNDED WAITER: `%s` ends in `&` in a foreground call, so the waiter is "
-            "orphaned: untracked, no completion notice, its verdict only in a redirect file. Run "
-            "it with run_in_background and no `&`; if it must outlive the session, launch it with "
-            "setsid nohup from a script that appends its own RC, and judge it by that RC."),
+_WAITER_REFUSAL = {
+    True: ("`%s` ends in `&` inside a run_in_background task, so the task exits at once and "
+           "nothing is armed - the completion notice will be about the launcher, not the wait. Let "
+           "the task itself BE the waiter: drop the `&`."),
+    False: ("`%s` ends in `&` in a foreground call, so it is orphaned: untracked, no completion "
+            "notice, its verdict only in a redirect file. Run it with run_in_background and no "
+            "`&`, so the harness tells you when it ends."),
 }
+
+_REFUSAL_TAIL = (
+    "If it must outlive the session (run_in_background is reaped when the session ends), put it "
+    "in a script that appends its own RC to its log, launch that script with setsid nohup, and "
+    "judge it by that RC. Several jobs at once are fine when a later `wait` collects them.")
 
 
 def backgrounded_waiter(command, tool_name="Bash"):
-    """The waiter a lone `&` detaches, or None. Bash only; a later `wait` collects it."""
+    """The waiter or gate a lone `&` detaches, or None. Bash only; a later `wait` collects it.
+
+    A gate counts as a waiter: its verdict is what the session waits for, and detaching it loses
+    that verdict the same way. It is searched on the MASKED list, so a gate named in quoted text
+    or a heredoc body is not one.
+    """
     if tool_name != "Bash" or not command or not isinstance(command, str):
         return None
     raw = blank_heredoc_bodies(command)
     masked = mask_data_regions(raw, tool_name=tool_name)
     for at in (i for i, char in enumerate(masked) if char == "&" and _is_lone_ampersand(masked, i)):
-        unit = raw[_unit_start(masked, at):at]
-        if not _WAITER.search(unit.strip()):
-            continue
         if _LATER_WAIT.search(masked[at + 1:]):
             continue
-        return " ".join(unit.split())[:100]
+        unit = raw[_unit_start(masked, at):at]
+        if _WAITER.search(unit.strip()):
+            return " ".join(unit.split())[:100]
+        start = _unit_start(masked, at, and_or=True)
+        if BACKGROUND_GATE_RE.search(masked[start:at]):
+            return " ".join(raw[start:at].split())[:100]
     return None
+
+
+def refusal(waiter, *, background):
+    """The stderr text for a refused detached waiter."""
+    return "\n".join([
+        "BLOCKED: a waiter or gate detached with a trailing `&`.",
+        "",
+        _WAITER_REFUSAL[bool(background)] % waiter,
+        "",
+        _REFUSAL_TAIL,
+    ])
 
 
 def main() -> int:
@@ -226,11 +258,13 @@ def main() -> int:
         return 0
     tool_input = event.get("tool_input") or {}
     tool_name = event.get("tool_name") or "Bash"
-    notes = [notice(tool_input.get("command"), tool_name)]
     waiter = backgrounded_waiter(tool_input.get("command"), tool_name)
     if waiter:
-        notes.append(_WAITER_NOTICE[bool(tool_input.get("run_in_background"))] % waiter)
-    message = "\n\n".join(n for n in notes if n)
+        # A refusal, not a nudge: the warning recurred while it existed (user decision 2026-10-12).
+        # The sleep notice is not added here - the re-sent command gets it, if it still applies.
+        print(refusal(waiter, background=tool_input.get("run_in_background")), file=sys.stderr)
+        return 2
+    message = notice(tool_input.get("command"), tool_name)
     if message:
         # ONE document: Claude Code reads a single JSON object from a hook's stdout.
         sys.stdout.write(json.dumps({"hookSpecificOutput": {

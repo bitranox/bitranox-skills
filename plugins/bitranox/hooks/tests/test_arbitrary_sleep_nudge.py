@@ -173,10 +173,12 @@ def test_main_forwards_the_event_s_tool_to_the_exemption(tool_name, expect_silen
     assert (proc.stdout.strip() == "") is expect_silence
 
 
-# --- a trailing & on a waiter (contrib #22) --------------------------------------------------------
-# Corpus replay (103,932 shell commands): 19 firings, all foreground; 17 detached a gate.py or
-# ci_wait.py with `nohup ... &` (verdict only in a log, no completion notice), 2 were test fixtures
-# whose `( sleep 0.5; ... ) &` a later `wait` collects - the exemption below.
+# --- a trailing & on a waiter or a gate (contrib #22, refusal since OPEN-WORK [9](2)) -------------
+# Corpus replay 2026-10-15 (143,483 shell commands): the waiter shape fired 21 times, every one a
+# gate.py, ci_wait.py or `gh run watch` detached with `&`. Widened to a GATE detached with `&` it
+# fired 30 more: 27 real detached gates (the 2026-10-09 subagent `make test &` among them), 1 a
+# pair a later ` wait` collects (missed by the old wait pattern, fixed below), 2 one fixture that
+# names a fake process `pytest-control`.
 
 
 @pytest.mark.parametrize("command", [
@@ -209,22 +211,88 @@ def test_powershell_is_out_of_scope_for_the_ampersand_check():
     assert N.backgrounded_waiter("& python gate.py --gate 'x'", "PowerShell") is None
 
 
+@pytest.mark.parametrize("command", [
+    "make test &",
+    "nohup env -u VIRTUAL_ENV make test > /tmp/g.log 2>&1 &\necho \"started pid $!\"",
+    "(make test > g.log 2>&1; echo RC=$? >> g.log) &",
+    ".venv/bin/python -m pytest -q -p no:cacheprovider > full.log 2>&1 &",
+    "timeout 600 .venv/bin/pyright -p . > pyr.txt 2>&1 &",
+    "BMK_OUTPUT_FORMAT=text make test-all > all.log 2>&1 &",
+    "cd /repo && make test > g.log 2>&1 &",
+    "make test && git push &",
+])
+def test_a_gate_detached_with_an_ampersand_is_named(command):
+    """The 2026-10-09 recurrence was a subagent's `make test &`, which no waiter word matched.
+
+    The last case backgrounds the whole AND-list, gate included: `a && b &` detaches `a` too.
+    """
+    assert N.backgrounded_waiter(command, "Bash") is not None
+
+
+@pytest.mark.parametrize("command", [
+    "(pytest a > r.log 2>&1) & (pytest b > s.log 2>&1) & wait; tail r.log s.log",
+    "(sleep 600; touch a) & (sleep 600; touch b) & wait",
+    "make test > g.log 2>&1 & pid=$!; do_other_work; wait $pid",
+    "make test > g.log 2>&1",
+    "echo 'make test' &",
+    "cat > notes.md <<'EOF'\nmake test &\nEOF",
+])
+def test_a_collected_or_a_quoted_gate_is_silent(command):
+    """A `wait` after the last `&` collects it, a space before `wait` included.
+
+    The first case is a real corpus command: the old pattern needed `wait` glued to the separator,
+    so ` & wait` after the second job did not count and a correctly collected pair was flagged.
+    """
+    assert N.backgrounded_waiter(command, "Bash") is None
+
+
+def _run_hook(command, *, background=False, tool_name="Bash"):
+    event = {"hook_event_name": "PreToolUse", "tool_name": tool_name,
+             "tool_input": {"command": command, "run_in_background": background}}
+    return subprocess.run([sys.executable, str(_HOOK)], input=json.dumps(event),
+                          capture_output=True, text=True, encoding="utf-8", errors="replace")
+
+
 @pytest.mark.parametrize("background,phrase", [(True, "exits at once"), (False, "orphan")])
-def test_main_says_what_the_ampersand_does_in_each_mode(background, phrase):
-    event = {"hook_event_name": "PreToolUse", "tool_name": "Bash",
-             "tool_input": {"command": "nohup python3 gate.py --gate 'make test' > g.log 2>&1 &",
-                            "run_in_background": background}}
-    proc = subprocess.run([sys.executable, str(_HOOK)], input=json.dumps(event),
-                          capture_output=True, text=True, encoding="utf-8", errors="replace")
+@pytest.mark.parametrize("command", [
+    "nohup python3 gate.py --gate 'make test' > g.log 2>&1 &",
+    "nohup make test > g.log 2>&1 &",
+])
+def test_main_refuses_a_detached_waiter_and_says_why_in_each_mode(command, background, phrase):
+    """A REFUSAL, by the user's decision of 2026-10-12: the warning recurred while it existed.
+
+    Replaces a test that pinned exit 0 with an advisory - the behaviour the decision changed.
+    Exit 2 is the block code, the reason goes to stderr, and stdout stays empty so no
+    additionalContext competes with it.
+    """
+    proc = _run_hook(command, background=background)
+    assert proc.returncode == 2
+    assert phrase in proc.stderr
+    assert "BLOCKED" in proc.stderr
+    assert proc.stdout.strip() == ""
+
+
+def test_the_refusal_names_the_way_out_for_a_job_that_must_outlive_the_session():
+    """run_in_background is reaped with the session, so the refusal must name the other route."""
+    proc = _run_hook("nohup make test > g.log 2>&1 &")
+    assert "setsid nohup" in proc.stderr and "script" in proc.stderr
+
+
+@pytest.mark.parametrize("command", [
+    "nohup myserver --port 8080 > s.log 2>&1 &",
+    "(sleep 0.5; rm -rf /tmp/x) & python3 -m pytest -q; wait",
+])
+def test_main_lets_a_daemon_or_a_collected_job_through(command):
+    assert _run_hook(command).returncode == 0
+
+
+def test_main_never_refuses_the_powershell_call_operator():
+    proc = _run_hook("& make test", tool_name="PowerShell")
     assert proc.returncode == 0
-    assert phrase in json.loads(proc.stdout)["hookSpecificOutput"]["additionalContext"]
 
 
-def test_a_long_backgrounded_sleep_carries_both_notes_in_one_envelope():
-    """Claude Code reads ONE JSON document from stdout, so the two notes must share it."""
-    event = {"hook_event_name": "PreToolUse", "tool_name": "Bash",
-             "tool_input": {"command": "(sleep 600; echo TIMEOUT >> run.log) &"}}
-    proc = subprocess.run([sys.executable, str(_HOOK)], input=json.dumps(event),
-                          capture_output=True, text=True, encoding="utf-8", errors="replace")
-    text = json.loads(proc.stdout)["hookSpecificOutput"]["additionalContext"]
-    assert "ARBITRARY SLEEP" in text and "orphan" in text
+def test_a_long_bare_sleep_stays_advisory():
+    """Only the detached shape became a refusal; a long sleep in the foreground is still a nudge."""
+    proc = _run_hook("sleep 300 && echo done")
+    assert proc.returncode == 0
+    assert "ARBITRARY SLEEP" in json.loads(proc.stdout)["hookSpecificOutput"]["additionalContext"]

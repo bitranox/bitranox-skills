@@ -40,6 +40,7 @@ import re
 import sys
 
 from shell_text import (
+    BACKGROUND_GATE_RE,
     GATE_JIG_NAME,
     GATE_RE,
     LIST_SEP,
@@ -83,17 +84,9 @@ _JIG_NAME = GATE_JIG_NAME
 
 JIG = re.compile(_JIG_NAME)
 
-# A gate whose verdict a BACKGROUND job's completion notice will misreport. Broader than
-# GATE: a backgrounded `make push` or `ci_wait` is read for its verdict the same way, and
-# neither matches GATE's build-tool vocabulary.
-BACKGROUND_GATE = re.compile(
-    r"\b(?:"
-    r"make\s+\S*(?:test|check|lint|push|release)"
-    r"|ci_wait(?:\.py)?"
-    r"|gh\s+run\s+watch"
-    r")\b"
-    r"|" + GATE.pattern
-)
+# A gate whose verdict a BACKGROUND job's completion notice will misreport (shared:
+# shell_text.BACKGROUND_GATE_RE, which arbitrary-sleep-nudge reads for a gate detached with `&`).
+BACKGROUND_GATE = BACKGROUND_GATE_RE
 
 # The jig launched under `uv run`, which it asks never to be (its LAUNCH_WITH is python3).
 _JIG_UNDER_UV = re.compile(r"\buv\s+run\b[^\n;&|]*?" + _JIG_NAME)
