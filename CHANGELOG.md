@@ -29,6 +29,17 @@ than the change, so entries reconstructed from them would read like coverage wit
 a hole nobody has drawn a line under is one that gets rediscovered and half-filled - which is how
 two "versions with no entry" notes came to sit in this file disagreeing with it.
 
+## [8.21.0]
+
+### Added
+
+- `enter-worktree-first-refusal` (PreToolUse on EnterWorktree): the first EnterWorktree of a session
+  is refused once, before the switch, with a note. Once a session is isolated in a worktree, every
+  git aimed at another checkout is refused, a `!` command the user types included, so any git it
+  asked the user to run in the main checkout has to happen first. The re-call passes, and so does
+  every later entry of the session, by `name` or by `path`. A missing session id or an unwritable
+  state store lets the call through rather than refusing it forever.
+
 ## [8.20.0]
 
 ### Changed
