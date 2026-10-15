@@ -8,6 +8,12 @@ list in Hermes Agent's agent/background_review.py (read 2026-08-15):
 2. An UNRESOLVED failure presents untested attempts as validated guidance a
    later session trusts and repeats.
 
+A third class is our own: a hook whose lesson is VERSION HISTORY ("fixed in
+bmk 3.13.0", "from lib 5.7.0", "before 3.13.2") is true when written and
+stale a few releases later, while staying in the always-loaded index. The
+dream's versionrot scan finds the old ones; this advisory names the shape at
+write time, so the author states the current behaviour instead.
+
 These are ADVISORIES, never refusals: an incident record legitimately describes
 a broken thing, and refusing would make it unrecordable. Every hook whose
 NEGATIVE_RX matches gets the negative-claim advisory - whether a version or
@@ -23,7 +29,7 @@ from __future__ import annotations
 
 import re
 
-__all__ = ["advise", "NEGATIVE_RX", "UNRESOLVED_RX"]
+__all__ = ["advise", "NEGATIVE_RX", "UNRESOLVED_RX", "VERSION_HISTORY_RX"]
 
 # Both patterns match the SPELLED-OUT forms. `advise` expands contractions first (`_spelled_out`),
 # so "isn't supported" and "can't be used" are read as "is not supported" and "cannot be used".
@@ -48,6 +54,17 @@ UNRESOLVED_RX = re.compile(
     re.IGNORECASE,
 )
 
+# A version introduced by a word that makes it history: "fixed in", "from", "since", "before",
+# "until". An optional package name may sit between ("fixed in bmk 3.13.0"). A bare floor such
+# as "pydantic>=2.13" or "Python 3.10" is a requirement, not history, and does not match; nor
+# does an interpreter boundary ("before Python 3.14"), which stays true while the supported
+# Python range spans it.
+VERSION_HISTORY_RX = re.compile(
+    r"\b(?:(?:fixed|resolved|changed|added|removed|introduced)\s+in|from|since|before|until"
+    r"|up\s+to)\s+(?!c?python\b)(?:[A-Za-z][\w.-]*\s+){0,2}v?\d+\.\d+(?:\.\d+)?\b(?!\.\d)",
+    re.IGNORECASE,
+)
+
 _NEGATIVE_ADVICE = (
     "hook reads as a bare negative claim about a tool; these harden into "
     "refusals cited long after the fix. Record the WORKING alternative "
@@ -58,6 +75,13 @@ _UNRESOLVED_ADVICE = (
     "body describes an unresolved failure; that presents untested attempts as "
     "validated guidance. Label the dead ends as unsolved, or do not capture "
     "until a working method exists."
+)
+
+
+_VERSION_ADVICE = (
+    "hook ties its lesson to a version (fixed in / from / since / before X.Y); "
+    "a few releases on, that is history still loaded every session. State the "
+    "CURRENT behaviour, and leave the version history to the CHANGELOG."
 )
 
 
@@ -84,6 +108,8 @@ def advise(hook: str, body: str) -> list[str]:
         out.append(_NEGATIVE_ADVICE)
     if UNRESOLVED_RX.search(body):
         out.append(_UNRESOLVED_ADVICE)
+    if VERSION_HISTORY_RX.search(hook):
+        out.append(_VERSION_ADVICE)
     return out
 
 

@@ -130,7 +130,7 @@ def test_memory_system_end_to_end(sandbox):
     dream = SK / "meta-dream-tree" / "dream_state.py"
     _, out, _ = _cli(dream, "mode", proj_b)
     assert out == "propose"
-    assert _cli(dream, "done", proj_b)[0] == 0
+    assert _cli(dream, "done", proj_b, "--kind", "nap")[0] == 0
     _, out, _ = _cli(dream, "due", proj_b)
     assert out == "not-due"
 

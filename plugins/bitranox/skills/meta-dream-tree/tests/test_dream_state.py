@@ -38,7 +38,7 @@ def test_due_reports_due_with_fresh_memory(home, capsys):
 
 def test_done_marks_and_silences(home, capsys):
     _mem()
-    assert D.main(["done", "/p/x"]) == 0
+    assert D.main(["done", "/p/x", "--kind", "nap"]) == 0
     capsys.readouterr()
     D.main(["due", "/p/x"])
     assert capsys.readouterr().out.strip() == "not-due"  # just dreamed -> not due
@@ -365,7 +365,7 @@ def locked_audit(home):
 @pytest.mark.skipif(NO_CHMOD, reason="needs a non-root POSIX user for a read-only dir")
 def test_done_reports_a_marker_it_could_not_write(home, locked_audit, capsys):
     _mem("/p/y")
-    assert D.main(["done", "/p/y"]) == 2
+    assert D.main(["done", "/p/y", "--kind", "nap"]) == 2
     captured = capsys.readouterr()
     assert "marked done" not in captured.out and "error" in captured.err
 
@@ -506,7 +506,8 @@ def test_help_lists_every_verb_and_exits_0(home, flag, capsys):
     assert D.main([flag]) == 0
     out = capsys.readouterr().out
     for verb in ("due", "done", "mode", "saw-promotable", "should-promote", "promoted",
-                 "session-review", "session-reviewed", "--structured-only"):
+                 "session-review", "session-reviewed", "--structured-only", "--kind",
+                 "--dream", "--jev-skip"):
         assert verb in out
 
 
@@ -627,3 +628,111 @@ def test_the_offer_is_bounded_and_says_how_many_it_left_out(home, capsys):
     assert "old00.jsonl" in out                              # newest first
     assert "and 3 more" in out
     assert "old%02d.jsonl" % (D.OFFER_LIMIT + 2) not in out
+
+
+# ---- done --kind: a tree dream proves its Jev shadow ran, or says why not ---------------------
+# The tree dream's Jev shadow step was prose a session could skip, and nothing noticed: one site
+# was fed once in two weeks and another never. `done --kind tree` now runs the receipt first.
+
+TREE_SITES = ("dream-placement", "dream-firing", "dream-prune")
+FAKE_UVX = (
+    "import sys\n"
+    "args = sys.argv[1:]\n"
+    "args = args[2:] if args[:1] == ['--from'] else args\n"
+    "sys.exit(0 if args[1:2] == ['check-key'] else 2)\n"
+)
+posix_only = pytest.mark.skipif(os.name == "nt", reason="the fake uvx is a POSIX shell wrapper")
+
+
+@pytest.fixture
+def shadow_on(home, tmp_path, monkeypatch):
+    """Jev shadow switched on: the knobs set, and a uvx whose check-key finds a key."""
+    (home / ".claude" / ".bitranox-memory.json").write_text(
+        '{"classifier_backend": "jev", "classifier_skills": "shadow"}', encoding="utf-8")
+    bindir = tmp_path / "bin"
+    bindir.mkdir()
+    script = bindir / "fake_uvx.py"
+    script.write_text(FAKE_UVX, encoding="utf-8")
+    wrapper = bindir / "uvx"
+    wrapper.write_text(f'#!/bin/sh\nexec "{sys.executable}" "{script}" "$@"\n', encoding="utf-8")
+    wrapper.chmod(0o755)
+    monkeypatch.setenv("PATH", str(bindir) + os.pathsep + os.environ.get("PATH", ""))
+    return home
+
+
+def _shadow_rows(home, dream, sites):
+    """Shadow records for `dream`, as `jev_shadow.py run --dream` logs them."""
+    import datetime as _dt
+    audit = home / ".claude" / "self-improve-audit"
+    audit.mkdir(parents=True, exist_ok=True)
+    month = _dt.datetime.now(_dt.timezone.utc).strftime("%Y-%m")
+    with open(audit / f"jev-skill-shadow-{month}.jsonl", "a", encoding="utf-8") as fh:
+        for site in sites:
+            fh.write('{"dream_id": "%s", "site": "%s", "item_id": "x"}\n' % (dream, site))
+
+
+def _due(capsys, proj):
+    capsys.readouterr()
+    D.main(["due", proj])
+    return capsys.readouterr().out.strip()
+
+
+def test_done_requires_a_kind(home, capsys):
+    _mem()
+    assert D.main(["done", "/p/x"]) == 2
+    assert "done needs --kind" in capsys.readouterr().err
+    assert _due(capsys, "/p/x") == "due"
+
+
+def test_done_refuses_an_unknown_kind(home, capsys):
+    assert D.main(["done", "/p/x", "--kind", "deep"]) == 2
+    assert "--kind must be one of: nap, tree" in capsys.readouterr().err
+
+
+def test_a_tree_dream_needs_its_dream_id(home, capsys):
+    _mem()
+    assert D.main(["done", "/p/x", "--kind", "tree"]) == 2
+    assert "--kind tree needs --dream" in capsys.readouterr().err
+    assert _due(capsys, "/p/x") == "due"
+
+
+def test_a_nap_takes_no_jev_skip(home, capsys):
+    assert D.main(["done", "/p/x", "--kind", "nap", "--jev-skip", "dream-prune=x"]) == 2
+    assert "--dream and --jev-skip apply to --kind tree only" in capsys.readouterr().err
+
+
+def test_a_tree_dream_with_shadow_off_is_marked_done(home, capsys):
+    _mem()
+    assert D.main(["done", "/p/x", "--kind", "tree", "--dream", "d1"]) == 0
+    out = capsys.readouterr().out
+    assert "dream marked done" in out
+    assert "off" in out
+    assert _due(capsys, "/p/x") == "not-due"
+
+
+@posix_only
+def test_a_tree_dream_that_fed_no_site_is_not_marked_done(shadow_on, capsys):
+    _mem()
+    assert D.main(["done", "/p/x", "--kind", "tree", "--dream", "d1"]) == 1
+    err = capsys.readouterr().err
+    for site in TREE_SITES:
+        assert site in err
+    assert _due(capsys, "/p/x") == "due"
+
+
+@posix_only
+def test_a_tree_dream_that_fed_or_skipped_every_site_is_marked_done(shadow_on, capsys):
+    _mem()
+    _shadow_rows(shadow_on, "d1", ["dream-placement", "dream-prune"])
+    _shadow_rows(shadow_on, "other-dream", ["dream-firing"])
+    rc = D.main(["done", "/p/x", "--kind", "tree", "--dream", "d1",
+                 "--jev-skip", "dream-firing=no hook was rewritten this dream"])
+    assert rc == 0, capsys.readouterr().err
+    assert _due(capsys, "/p/x") == "not-due"
+
+
+@posix_only
+def test_another_dreams_rows_do_not_count(shadow_on, capsys):
+    _mem()
+    _shadow_rows(shadow_on, "old", TREE_SITES)
+    assert D.main(["done", "/p/x", "--kind", "tree", "--dream", "new"]) == 1

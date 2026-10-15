@@ -7,7 +7,13 @@ ONE place and never drifts from the SessionStart nudge that uses the same functi
 
 Usage (cwd defaults to the current directory):
   dream_state.py due  [cwd]               print "due" (exit 0) or "not-due" (exit 1)
-  dream_state.py done [cwd]               record that a dream just completed (silences the nudge)
+  dream_state.py done [cwd] --kind nap|tree [--dream ID] [--jev-skip SITE=REASON ...]
+                                          record that a dream just completed (silences the nudge).
+                                          A TREE dream passes the id it tagged its Jev shadow runs
+                                          with; with shadow on, done refuses (exit 1, nothing
+                                          marked) until each tree site (dream-placement,
+                                          dream-firing, dream-prune) has rows for that dream or a
+                                          --jev-skip reason. A nap has no Jev sites.
   dream_state.py mode [cwd]               print the dream mode: off | auto | propose
   dream_state.py saw-promotable  S [proj] record that PROJ sighted tree-top-promotion candidate S;
                                           print its dwell (how many DISTINCT projects have sighted
@@ -84,6 +90,10 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 from tree_support import utf8_stdio  # noqa: E402
 
 _PROMOTE_CMDS = ("saw-promotable", "should-promote", "promoted")
+_KINDS = ("nap", "tree")
+# The Jev shadow sites a tree dream feeds (meta-dream-tree steps 5-7). A nap has none.
+TREE_SITES = ("dream-placement", "dream-firing", "dream-prune")
+_DONE_FLAGS = ("--kind", "--dream", "--jev-skip")
 _PROJ_CMDS = ("due", "done", "mode", "session-review", "session-reviewed")
 _FLAGS = ("--structured-only",)
 _REVIEW_CMDS = ("session-review", "session-reviewed")
@@ -102,6 +112,7 @@ OFFER_LIMIT = 10
 
 USAGE = ("usage: dream_state.py [due|done|mode|session-review|session-reviewed] [cwd] "
          "[--structured-only] [--transcript PATH]\n"
+         "       dream_state.py done [cwd] --kind nap|tree [--dream ID] [--jev-skip SITE=REASON]\n"
          "       dream_state.py [saw-promotable|should-promote|promoted] <slug> [proj]\n"
          "       dream_state.py -h | --help")
 
@@ -358,7 +369,47 @@ def _promote_cmd(cmd, slug, proj):
     return 0
 
 
-def _proj_cmd(cmd, proj, structured_only, named=None):
+def _jev_receipt(dream, skips):
+    """(exit code, data) from jev_shadow's receipt for the tree sites, or an error string."""
+    sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "meta-self-improve"))
+    import jev_shadow  # noqa: PLC0415 - heavy, and only `done --kind tree` needs it
+    try:
+        return jev_shadow.receipt(dream, list(TREE_SITES), list(skips))
+    except jev_shadow.ShadowError as exc:
+        return str(exc)
+
+
+def _receipt_line(data):
+    parts = []
+    for site, st in data["sites"].items():
+        detail = st.get("reason") or ("%d rows" % st["rows"] if "rows" in st else "")
+        parts.append("%s %s%s" % (site, st["status"], " (%s)" % detail if detail else ""))
+    return "jev shadow: " + "; ".join(parts)
+
+
+def _done(proj, opts):
+    """Mark the dream done - for a tree dream only once its Jev shadow receipt passes."""
+    if opts["kind"] == "tree":
+        got = _jev_receipt(opts["dream"], opts["skips"])
+        if isinstance(got, str):
+            print("error: %s" % got, file=sys.stderr)
+            return 2
+        code, data = got
+        if code != 0:
+            dream = opts["dream"]
+            print("not marked done: no Jev shadow rows for dream %s at: %s. Shadow a sample "
+                  "(jev_shadow.py items --sample 40 --seed %s, then run --dream %s) or pass "
+                  "--jev-skip SITE=REASON" % (dream, ", ".join(data["missing"]), dream, dream),
+                  file=sys.stderr)
+            return 1
+        print(_receipt_line(data))
+    if not sig.mark_dream_done(proj):
+        return _write_failed("the dream-done marker for %s" % proj)
+    print("dream marked done for %s" % proj)
+    return 0
+
+
+def _proj_cmd(cmd, proj, structured_only, named=None, done_opts=None):
     if cmd == "session-review":
         return _session_review(proj, structured_only, named)
     if cmd == "session-reviewed":
@@ -368,9 +419,7 @@ def _proj_cmd(cmd, proj, structured_only, named=None):
         print("due" if due else "not-due")
         return 0 if due else 1                                       # a yes/no verb: not-due is no
     if cmd == "done":
-        if not sig.mark_dream_done(proj):
-            return _write_failed("the dream-done marker for %s" % proj)
-        print("dream marked done for %s" % proj)
+        return _done(proj, done_opts)
     else:                                                            # mode
         print(sig.dream_mode(proj))
     return 0
@@ -399,6 +448,47 @@ def _take_transcript(argv):
     return rest, named
 
 
+def _take_done_flags(argv):
+    """(argv without the done flags, {kind, dream, skips}), or an error string."""
+    rest, opts, i = [], {"kind": None, "dream": None, "skips": []}, 0
+    while i < len(argv):
+        arg = argv[i]
+        flag, eq, inline = arg.partition("=")
+        if flag not in _DONE_FLAGS:
+            rest.append(arg)
+            i += 1
+            continue
+        if eq:
+            value, i = inline, i + 1
+        elif i + 1 < len(argv):
+            value, i = argv[i + 1], i + 2
+        else:
+            return "%s needs a value" % flag
+        if flag == "--jev-skip":
+            opts["skips"].append(value)
+        elif opts[flag[2:]] is not None:
+            return "%s given twice" % flag
+        else:
+            opts[flag[2:]] = value
+    return rest, opts
+
+
+def _check_done_opts(cmd, opts):
+    """Why these done flags are refused, or None."""
+    given = opts["kind"] is not None or opts["dream"] is not None or opts["skips"]
+    if cmd != "done":
+        return "--kind, --dream and --jev-skip apply to done only" if given else None
+    if opts["kind"] is None:
+        return "done needs --kind nap|tree (a tree dream also passes --dream ID)"
+    if opts["kind"] not in _KINDS:
+        return "--kind must be one of: %s" % ", ".join(_KINDS)
+    if opts["kind"] == "nap" and (opts["dream"] is not None or opts["skips"]):
+        return "--dream and --jev-skip apply to --kind tree only"
+    if opts["kind"] == "tree" and not opts["dream"]:
+        return "--kind tree needs --dream ID (the id its Jev shadow runs were tagged with)"
+    return None
+
+
 def _parse(argv):
     """(cmd, positionals, structured_only, named transcript), or an error string for a usage the
     CLI refuses.
@@ -409,6 +499,10 @@ def _parse(argv):
     if isinstance(taken, str):
         return taken
     argv, named = taken
+    taken = _take_done_flags(argv)
+    if isinstance(taken, str):
+        return taken
+    argv, done_opts = taken
     unknown = [a for a in argv if a.startswith("-") and a not in _FLAGS]
     if unknown:
         return "unknown option(s): %s" % " ".join(unknown)
@@ -424,7 +518,10 @@ def _parse(argv):
             return "%s takes at most one [cwd], got %d" % (cmd, len(pos))
     else:
         return "unknown command %r" % cmd
-    return cmd, pos, "--structured-only" in argv, named
+    why = _check_done_opts(cmd, done_opts)
+    if why:
+        return why
+    return cmd, pos, "--structured-only" in argv, named, done_opts
 
 
 def main(argv=None):
@@ -438,10 +535,10 @@ def main(argv=None):
     if isinstance(parsed, str):
         print("error: %s\n%s" % (parsed, USAGE), file=sys.stderr)
         return 2
-    cmd, pos, structured_only, named = parsed
+    cmd, pos, structured_only, named, done_opts = parsed
     if cmd in _PROMOTE_CMDS:
         return _promote_cmd(cmd, pos[0], pos[1] if len(pos) > 1 else os.getcwd())
-    return _proj_cmd(cmd, pos[0] if pos else os.getcwd(), structured_only, named)
+    return _proj_cmd(cmd, pos[0] if pos else os.getcwd(), structured_only, named, done_opts)
 
 
 if __name__ == "__main__":

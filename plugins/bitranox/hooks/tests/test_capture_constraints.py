@@ -2,6 +2,8 @@
 import pathlib
 import sys
 
+import pytest
+
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1]))
 
 import capture_constraints as cc
@@ -128,3 +130,34 @@ def test_control_spelled_out_forms_still_flag():
 def test_control_a_contraction_that_is_not_a_negative_claim_is_quiet():
     assert not _negative("When releasing, don't skip the gate; run make test first.")
     assert cc.advise("When X, run Y.", "It didn't take long.") == []
+
+
+# ---- version history in a hook -----------------------------------------------------------------
+# "fixed in bmk 3.13.0" is a true sentence and a stale lesson a few releases later; no dream pass
+# looked for it, so 122 such facts sat in one store. The advisory names it at write time.
+
+VERSION_ADVICE = "ties its lesson to a version"
+
+
+@pytest.mark.parametrize("hook", [
+    "When make test dies in bmk's own deps, the tool env was rebuilt (fixed in bmk 3.13.0).",
+    "When reading provenance, know Config.with_overrides names the override from lib 5.7.0.",
+    "When releasing, know since plugin 7.22.10 the gate reads the index.",
+    "When bmk lints, it skipped nested checkouts before 3.13.2.",
+])
+def test_a_hook_with_version_history_gets_the_advisory(hook):
+    assert any(VERSION_ADVICE in a for a in cc.advise(hook, ""))
+
+
+@pytest.mark.parametrize("hook", [
+    "When releasing, run make test.",
+    "When pinning, require pydantic>=2.13 in pyproject.",
+    "When a host answers on 10.0.0.12, it is the gateway.",
+    "When on Python 3.10, tomllib is missing.",
+    # An interpreter boundary stays true while the supported range spans it (measured: 2 of the
+    # 21 hooks the first version of this pattern flagged on the real store).
+    "When probing with Path.is_file(), wrap it: before Python 3.14 it re-raises EACCES.",
+    "When deciding absolute paths, from Python 3.13 on Windows isabs rejects /work/x.",
+])
+def test_a_hook_without_version_history_gets_none(hook):
+    assert not any(VERSION_ADVICE in a for a in cc.advise(hook, ""))

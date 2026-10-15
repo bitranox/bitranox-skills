@@ -342,16 +342,19 @@ def test_happy_path_logs_one_record_per_item_and_pairs_the_judged_ones(
     assert recs["slug-alpha"]["agree"] == {
         "untestable_negative": True,
         "unlabelled_unsolved": False,
+        "version_bound": None,
     }
     # a question the agent left out is null, not a disagreement
     assert recs["slug-beta"]["agree"] == {
         "untestable_negative": False,
         "unlabelled_unsolved": None,
+        "version_bound": None,
     }
     assert recs["slug-gamma"]["agent"] is None
     assert recs["slug-gamma"]["agree"] == {
         "untestable_negative": None,
         "unlabelled_unsolved": None,
+        "version_bound": None,
     }
     assert recs["slug-alpha"]["agent_note"] == "claims a tool fails, no version"
     assert recs["slug-alpha"]["jev"]["untestable_negative"]["value"] == 0.9
@@ -365,6 +368,7 @@ def test_every_record_carries_the_documented_fields(tmp_path, fake, home):
     expected = {
         "ts",
         "run_id",
+        "dream_id",
         "site",
         "site_version",
         "questions_sha",
@@ -433,7 +437,11 @@ def test_a_failed_jev_row_is_still_logged_with_its_reason(tmp_path, fake, home):
     assert beta["jev"] is None
     assert "canned failure" in beta["jev_reason"]
     assert beta["agent"] == {"untestable_negative": True}
-    assert beta["agree"] == {"untestable_negative": None, "unlabelled_unsolved": None}
+    assert beta["agree"] == {
+        "untestable_negative": None,
+        "unlabelled_unsolved": None,
+        "version_bound": None,
+    }
 
 
 @posix_only
@@ -1558,6 +1566,7 @@ def test_a_malformed_jev_value_is_no_answer_and_every_record_is_still_logged(
     assert recs["slug-alpha"]["agree"] == {
         "untestable_negative": None,
         "unlabelled_unsolved": False,
+        "version_bound": None,
     }
 
 
@@ -1639,3 +1648,123 @@ def test_retention_counts_a_side_file_as_its_own_month(home):
     removed = slog.prune_logs(d, now)
     assert removed == [old]
     assert new.exists()
+
+
+# ---- a dream's sample and its receipt ----------------------------------------------------------
+# A tree dream asks the session for its own verdict on every fact at three sites, which it
+# skipped in practice; nothing noticed. The dream now shadows a SAMPLE per site and cannot be
+# marked done until each switched-on site has rows for that dream, or a stated reason.
+
+
+def _items(store, tmp_path, *extra):
+    out = tmp_path / "items.jsonl"
+    rc = js.main(["items", "--site", "dream-prune", "--anchor", str(store["anchor"]),
+                  "--out", str(out), *extra])
+    return rc, [i["id"] for i in read_jsonl(out)] if out.exists() else []
+
+
+def test_items_sample_takes_n_items_reproducibly_by_seed(store, tmp_path, home):
+    rc, ids = _items(store, tmp_path, "--sample", "2", "--seed", "dream-1")
+    assert rc == 0
+    assert len(ids) == 2
+    assert set(ids) <= {"top-rule", "proj-rule", "beta-deploy"}
+    _rc, again = _items(store, tmp_path, "--sample", "2", "--seed", "dream-1")
+    assert again == ids
+
+
+def test_items_sample_larger_than_the_store_takes_every_item(store, tmp_path, home):
+    _rc, ids = _items(store, tmp_path, "--sample", "40", "--seed", "x")
+    assert sorted(ids) == ["beta-deploy", "proj-rule", "top-rule"]
+
+
+def test_items_sample_must_be_positive(store, tmp_path, home, capsys):
+    rc, _ids = _items(store, tmp_path, "--sample", "0", "--seed", "x")
+    assert rc == 2
+    assert "--sample must be 1 or more" in capsys.readouterr().err
+
+
+@posix_only
+def test_run_tags_every_record_with_its_dream(tmp_path, fake, home):
+    knob(home)
+    assert run_prune(tmp_path, fake, extra=("--dream", "dream-42")) == 0
+    recs = read_jsonl(shadow_logs(home)[0])
+    assert {r["dream_id"] for r in recs} == {"dream-42"}
+
+
+def _receipt(capsys, *argv):
+    rc = js.main(["receipt", *argv, "--json"])
+    return rc, json.loads(capsys.readouterr().out)
+
+
+@posix_only
+def test_receipt_passes_for_a_site_the_dream_fed(tmp_path, fake, home, capsys):
+    knob(home)
+    assert run_prune(tmp_path, fake, extra=("--dream", "d1")) == 0
+    capsys.readouterr()
+    rc, env = _receipt(capsys, "--dream", "d1", "--site", "dream-prune")
+    assert rc == 0
+    assert env["data"]["sites"]["dream-prune"] == {"status": "fed", "rows": 3}
+
+
+@posix_only
+def test_receipt_refuses_a_site_the_dream_never_fed(tmp_path, fake, home, capsys):
+    knob(home)
+    assert run_prune(tmp_path, fake, extra=("--dream", "d1")) == 0
+    capsys.readouterr()
+    rc, env = _receipt(capsys, "--dream", "d1", "--site", "dream-prune", "--site", "dream-firing")
+    assert rc == 1
+    assert env["data"]["missing"] == ["dream-firing"]
+
+
+@posix_only
+def test_receipt_does_not_count_another_dreams_rows(tmp_path, fake, home, capsys):
+    knob(home)
+    assert run_prune(tmp_path, fake, extra=("--dream", "old")) == 0
+    capsys.readouterr()
+    rc, env = _receipt(capsys, "--dream", "new", "--site", "dream-prune")
+    assert rc == 1
+    assert env["data"]["missing"] == ["dream-prune"]
+
+
+@posix_only
+def test_receipt_accepts_a_stated_skip(tmp_path, fake, home, capsys):
+    knob(home)
+    rc, env = _receipt(capsys, "--dream", "d1", "--site", "dream-firing",
+                       "--skip", "dream-firing=no hook changed since the last dream")
+    assert rc == 0
+    assert env["data"]["sites"]["dream-firing"] == {
+        "status": "skipped", "reason": "no hook changed since the last dream"}
+
+
+@posix_only
+def test_receipt_refuses_an_empty_skip_reason(tmp_path, fake, home, capsys):
+    knob(home)
+    rc, env = _receipt(capsys, "--dream", "d1", "--site", "dream-firing",
+                       "--skip", "dream-firing=")
+    assert rc == 2
+    assert env["ok"] is False
+    assert "needs a reason" in env["data"]["error"]
+
+
+@posix_only
+def test_receipt_refuses_a_skip_for_a_site_it_was_not_asked_about(tmp_path, fake, home, capsys):
+    # A typo in the skip would otherwise pass silently while the real site stays unfed.
+    knob(home)
+    rc, env = _receipt(capsys, "--dream", "d1", "--site", "dream-firing",
+                       "--skip", "dream-fiirng=typo")
+    assert rc == 2
+    assert "dream-fiirng" in env["data"]["error"]
+
+
+def test_receipt_passes_when_shadow_is_off(home, capsys):
+    knob(home, on=False)
+    rc, env = _receipt(capsys, "--dream", "d1", "--site", "dream-prune")
+    assert rc == 0
+    assert env["data"]["sites"]["dream-prune"]["status"] == "off"
+
+
+def test_receipt_refuses_an_unknown_site(home, capsys):
+    knob(home)
+    rc, env = _receipt(capsys, "--dream", "d1", "--site", "no-such-site")
+    assert rc == 2
+    assert "no-such-site" in env["data"]["error"]

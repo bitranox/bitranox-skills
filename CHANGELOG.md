@@ -29,6 +29,28 @@ than the change, so entries reconstructed from them would read like coverage wit
 a hole nobody has drawn a line under is one that gets rediscovered and half-filled - which is how
 two "versions with no entry" notes came to sit in this file disagreeing with it.
 
+## [8.24.0]
+
+### Added
+
+- `meta-dream-tree/versionrot.py` lists memory facts that name a version a newer release has
+  superseded ("fixed in bmk 3.13.0" while bmk is at 3.21.1). It reads every pointed-at fact, hook
+  and body, ties each version to its package, and compares it with the current version from the
+  repos on disk, `--current NAME=VERSION`, or PyPI with `--pypi`; a package it cannot resolve is
+  reported unresolved, never guessed. Exit 1 when any fact is superseded.
+- `jev_shadow.py items --sample N --seed TEXT`, `run --dream ID` and a `receipt` verb: a dream
+  shadows a sample per site and tags its runs, and `receipt` reports each site as fed, skipped
+  (with a reason), off, or missing.
+- The `dream-prune` Jev site asks a third question, `version_bound`.
+- A write-time advisory when a hook's lesson is version history ("fixed in", "from", "since",
+  "before" a version); an interpreter boundary such as "before Python 3.14" is not flagged.
+
+### Changed
+
+- `dream_state.py done` requires `--kind nap|tree`. A tree dream also passes `--dream ID`, and
+  with Jev shadow on it is not marked done (exit 1) until every tree site has rows for that dream
+  or a `--jev-skip SITE=REASON`.
+
 ## [8.23.0]
 
 ### Changed

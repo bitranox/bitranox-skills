@@ -1,6 +1,6 @@
 {
   "site": "dream-prune",
-  "version": 1,
+  "version": 2,
   "questions": [
     {
       "id": "untestable_negative",
@@ -18,6 +18,15 @@
       "criteria": {
         "true": "the attempt it describes never worked, and nothing in the note marks it unsolved",
         "false": "it describes a working end state, or it is explicitly labelled unsolved or open"
+      }
+    },
+    {
+      "id": "version_bound",
+      "type": "noul",
+      "instructions": "`hook` is the one-line summary of a stored memory note and `body` is the full note. Is the note's lesson tied to one specific past version of a tool or library - a bug fixed in a named release, an upgrade or migration that has been completed, a result measured on one named version - rather than to how the tool behaves in general?",
+      "criteria": {
+        "true": "its lesson stands or falls with one named past version, release, upgrade or migration",
+        "false": "its lesson is about general behaviour, or a version it names is only an example"
       }
     }
   ],

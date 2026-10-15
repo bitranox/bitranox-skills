@@ -95,6 +95,7 @@ class RunContext:
     git_head: str | None
     plugin_version: str
     jev: JevRun
+    dream_id: str | None = None
 
 
 def audit_dir() -> Path:
@@ -205,6 +206,7 @@ def build_record(
     return {
         "ts": ctx.ts,
         "run_id": ctx.run_id,
+        "dream_id": ctx.dream_id,
         "site": ctx.site.name,
         "site_version": ctx.site.version,
         "questions_sha": ctx.site.questions_sha,

@@ -25,15 +25,24 @@ jev_shadow_ports.py.
 
 Usage:
   jev_shadow.py status [--json]
-  jev_shadow.py items  --site S [--anchor DIR | --firings F --hazard TEXT] --out items.jsonl [--json]
-  jev_shadow.py run    --site S --items items.jsonl --verdicts verdicts.jsonl [--workdir DIR] [--json]
+  jev_shadow.py items  --site S [--anchor DIR | --firings F --hazard TEXT] --out items.jsonl
+                       [--sample N --seed TEXT] [--json]
+  jev_shadow.py run    --site S --items items.jsonl --verdicts verdicts.jsonl [--dream ID]
+                       [--workdir DIR] [--json]
   jev_shadow.py report [--site S] [--since YYYY-MM-DD] [--disagreements OUT.jsonl] [--json]
+  jev_shadow.py receipt --dream ID --site S [--site S ...] [--skip S=REASON ...] [--json]
+
+A dream shadows a SAMPLE per site (`items --sample 40 --seed <dream id>`), tags its runs with
+`run --dream <dream id>`, and before it may be marked done `receipt` checks that every site it
+names has rows for that dream, or a stated `--skip` reason; with shadow off every site passes as
+`off`. Judging every fact was the step dreams skipped, and nothing noticed.
 
 Verdicts file, one line per item the agent judged (unjudged items are allowed):
   {"id": "<item id>", "verdict": {"<qid>": true|false|"<choice key>"|<score index>}, "note": "..."}
 
 Exit codes: 0 done (or shadow off, or no items to ask about); 1 no (status: no run would happen;
-items: none built; run: jev-judge ran and Jev answered no item; report: no records); 2 could not
+items: none built; run: jev-judge ran and Jev answered no item; report: no records; receipt: a
+site has neither rows for the dream nor a skip reason); 2 could not
 run: a usage, input or IO error, including a missing verdicts file, or a `run` whose jev-judge
 could not start, timed out, wrote no row or exited other than 0 or 1 before answering any item
 (its records are still logged). `--json` prints `{ok, command, data, skipped}` on every exit; `ok`
@@ -44,12 +53,14 @@ from __future__ import annotations
 
 import argparse
 import json
+import random
 import re
 import shutil
 import subprocess
 import sys
 import tempfile
 import uuid
+from collections import Counter
 from collections.abc import Generator, Iterator, Mapping
 from contextlib import contextmanager
 from dataclasses import dataclass
@@ -80,6 +91,7 @@ __all__ = [
     "main",
     "read_items",
     "read_verdicts",
+    "receipt",
 ]
 
 # Pinned by a test to the floor in ai-llm-jev-judge/SKILL.md: a sync that raises it there fails
@@ -472,6 +484,8 @@ def cmd_items(args: argparse.Namespace) -> int:
         hazard=args.hazard,
     )
     items = sites.build_items(site, req)
+    if args.sample is not None:
+        items = _sample(items, args.sample, args.seed)
     out = Path(args.out)
     try:
         _write_jsonl(out, [{"id": i.id, "state": i.state} for i in items])
@@ -482,6 +496,19 @@ def cmd_items(args: argparse.Namespace) -> int:
     code = EXIT_OK if items else EXIT_NO
     _emit(args, "items", code, data, human)
     return code
+
+
+def _sample(items: list[sites.ShadowItem], n: int, seed: str) -> list[sites.ShadowItem]:
+    """`n` items chosen by `seed`, in their original order; every item when there are fewer.
+
+    Seeded by the dream id, so re-building a dream's items gives the same sample.
+    """
+    if n < 1:
+        raise ShadowError(f"--sample must be 1 or more, got {n}")
+    if n >= len(items):
+        return items
+    chosen = set(random.Random(seed).sample(range(len(items)), n))
+    return [item for i, item in enumerate(items) if i in chosen]
 
 
 def _quiet(args: argparse.Namespace, data: dict[str, object], human: str) -> int:
@@ -545,7 +572,7 @@ def _no_answer_reason(records: list[dict[str, Any]], jev: slog.JevRun) -> str:
 
 
 def _context(
-    site: sites.Site, uvx: str, jev: slog.JevRun, now: datetime
+    site: sites.Site, uvx: str, jev: slog.JevRun, now: datetime, dream_id: str | None
 ) -> slog.RunContext:
     cwd = str(Path.cwd())
     return slog.RunContext(
@@ -557,6 +584,7 @@ def _context(
         git_head=_git_head(cwd),
         plugin_version=ports.plugin_version(),
         jev=jev,
+        dream_id=dream_id,
     )
 
 
@@ -595,7 +623,7 @@ def _ask_and_log(args: argparse.Namespace, uvx: str, plan: _RunPlan) -> int:
             uvx, JevRequest(plan.site, [i for i, _n in prepared], workdir, plan.model)
         )
     now = datetime.now(timezone.utc)
-    ctx = _context(plan.site, uvx, jev, now)
+    ctx = _context(plan.site, uvx, jev, now, getattr(args, "dream", None))
     records = [
         slog.build_record(ctx, i, n, plan.verdicts.get(i.id)) for i, n in prepared
     ]
@@ -680,6 +708,97 @@ def cmd_report(args: argparse.Namespace) -> int:
     return EXIT_OK
 
 
+def _skips(pairs: list[str], asked: list[str]) -> dict[str, str]:
+    """--skip SITE=REASON pairs, each naming a site the receipt was asked about."""
+    out: dict[str, str] = {}
+    for pair in pairs:
+        name, sep, reason = pair.partition("=")
+        name, reason = name.strip(), reason.strip()
+        if not sep or not reason:
+            raise ShadowError(f"--skip {pair!r} needs a reason: SITE=REASON")
+        if name not in asked:
+            # A typo here would pass silently while the real site stays unfed.
+            raise ShadowError(
+                f"--skip names {name!r}, which is not one of the --site values "
+                f"({', '.join(asked)})"
+            )
+        out[name] = reason
+    return out
+
+
+def _dream_rows(dream_id: str) -> Counter[str]:
+    """How many shadow records each site logged for `dream_id`."""
+    rows: Counter[str] = Counter()
+    for path in slog.log_files(slog.audit_dir()):
+        try:
+            lines = path.read_text(encoding="utf-8").split("\n")
+        except OSError:
+            continue
+        for line in lines:
+            try:
+                rec = json.loads(line)
+            except ValueError:
+                continue
+            if isinstance(rec, dict) and rec.get("dream_id") == dream_id:
+                rows[str(rec.get("site"))] += 1
+    return rows
+
+
+def receipt(
+    dream_id: str, asked: list[str], skip_pairs: list[str]
+) -> tuple[int, dict[str, object]]:
+    """Whether a dream fed every site it names: (exit code, data).
+
+    Each site is `fed` (rows logged with this dream id), `skipped` (a reason was given), `off`
+    (shadow is off, so there was nothing to feed) or `missing`. Any `missing` makes it exit 1.
+
+    Raises:
+        ShadowError: an empty dream id, an unknown site, or a malformed or stray --skip.
+    """
+    if not dream_id.strip():
+        raise ShadowError("--dream must not be empty")
+    unknown = [s for s in asked if s not in sites.site_names()]
+    if unknown:
+        raise ShadowError(f"unknown site(s): {', '.join(unknown)}")
+    skips = _skips(skip_pairs, asked)
+    gate = with_key(gate_without_key(ports.load_config()))
+    result: dict[str, dict[str, object]] = {}
+    missing: list[str] = []
+    rows = _dream_rows(dream_id) if gate.on else Counter()
+    for site in asked:
+        if not gate.on:
+            result[site] = {"status": "off", "reason": str(gate.reason)}
+        elif rows[site]:
+            result[site] = {"status": "fed", "rows": rows[site]}
+        elif site in skips:
+            result[site] = {"status": "skipped", "reason": skips[site]}
+        else:
+            result[site] = {"status": "missing"}
+            missing.append(site)
+    code = EXIT_NO if missing else EXIT_OK
+    return code, {"dream": dream_id, "sites": result, "missing": missing}
+
+
+def _render_receipt(data: Mapping[str, Any]) -> str:
+    lines = []
+    for site, st in data["sites"].items():
+        detail = st.get("reason") or (f"{st['rows']} rows" if "rows" in st else "")
+        lines.append(f"{site}: {st['status']}" + (f" ({detail})" if detail else ""))
+    if data["missing"]:
+        lines.append(
+            "not fed and no reason given: " + ", ".join(data["missing"])
+            + " - shadow a sample (items --sample, run --dream) or pass --skip SITE=REASON"
+        )
+    return "\n".join(lines)
+
+
+def cmd_receipt(args: argparse.Namespace) -> int:
+    """Did the dream feed every site it names, or say why not?"""
+    code, data = receipt(args.dream, args.site, args.skip)
+    _emit(args, "receipt", code, data, _render_receipt(data))
+    return code
+
+
 # ---- argv -----------------------------------------------------------------------------------
 
 
@@ -697,6 +816,8 @@ def _parser() -> argparse.ArgumentParser:
     it.add_argument("--firings", help="guard_replay.py --firings output (guard-firing)")
     it.add_argument("--hazard", help="what the guard warns about (guard-firing)")
     it.add_argument("--out", required=True)
+    it.add_argument("--sample", type=int, help="keep N items chosen by --seed (a dream: 40)")
+    it.add_argument("--seed", default="", help="what chooses the sample (a dream: its id)")
     rn = sub.add_parser("run", help="ask Jev beside the agent's verdicts and log both")
     rn.add_argument("--site", required=True)
     rn.add_argument("--items", required=True)
@@ -704,13 +825,18 @@ def _parser() -> argparse.ArgumentParser:
     rn.add_argument(
         "--workdir", help="keep jev-judge's input and rows here (default: a temp dir)"
     )
+    rn.add_argument("--dream", help="the dream this run belongs to (receipt counts by it)")
     rp = sub.add_parser("report", help="agreement per site and question")
     rp.add_argument("--site")
     rp.add_argument("--since", help="only records on or after YYYY-MM-DD")
     rp.add_argument(
         "--disagreements", help="write the disagreeing paired items here (JSONL)"
     )
-    for p in (st, it, rn, rp):
+    rc = sub.add_parser("receipt", help="did a dream feed every site it names?")
+    rc.add_argument("--dream", required=True)
+    rc.add_argument("--site", action="append", required=True)
+    rc.add_argument("--skip", action="append", default=[], metavar="SITE=REASON")
+    for p in (st, it, rn, rp, rc):
         p.add_argument(
             "--json", action="store_true", help="{ok, command, data, skipped}"
         )
@@ -722,6 +848,7 @@ _COMMANDS = {
     "items": cmd_items,
     "run": cmd_run,
     "report": cmd_report,
+    "receipt": cmd_receipt,
 }
 
 
