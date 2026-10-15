@@ -1,82 +1,72 @@
-# Handover - 2026-10-13 17:00, [9](1) shipped in 8.19.0, premise hook kept (8.19.3); next is [9](2)
+# Handover - 2026-10-15 12:45, [9] closed (8.20.0, 8.21.0), ci_wait --ref shipped (8.22.0); next is [12] step (6)
 
 ## In flight
 
-- Nothing part-done by this session. Everything it changed is on origin/master and CI-green:
-  8.19.0 (1a14e172, adjudicate path mode), ac16326e (backlog), 8.19.3 (bdc9c485, premise-hook
-  docstring + [21] closed). 8.19.1 and 8.19.2 are other sessions' (btx-lib-mail-35, projects-33).
+- Nothing part-done. 8.20.0 (27c81af8), 8.21.0 (3027f3f8) and 8.22.0 (96b4c427) are on
+  origin/master, each CI-green (`ci` and `workflow` runs).
 
 ## Committed, or not
 
-- The main checkout is NOT clean, and none of it is this session's: btx-lib-mail-35 has an
-  uncommitted `plugins/bitranox/skills/coding-python-send-mail/SKILL.md` edit plus an untracked
-  `.skillwriter/checklist-20261013-ehlo-deadline-mirror.md`. repo-gate judges the whole working
-  tree, so any commit from the main checkout is refused while that sits there: commit and push from
-  a clean worktree off origin/master (this handover was committed that way). Do not touch their files.
-- Worktree `.claude/worktrees/jev-judge-floor` belongs to projects-33; leave it.
+- This handover is committed from the worktree `.claude/worktrees/bg-waiter-refusal` (branch
+  `worktree-bg-waiter-refusal`), which holds nothing else uncommitted. Remove it with git-worktrees'
+  `wtclean.py bg-waiter-refusal` once this is on origin.
+- The MAIN checkout's local `master` is 3+ commits behind origin, and its `handover.md` carries an
+  uncommitted STALE first line written by this session. Discard that line (`git checkout --
+  handover.md` there) and fast-forward `master` before working in the main checkout.
+- Open sessions keep old plugin text until `/plugin marketplace update` plus `/reload-plugins`.
 
 ## Decided, and why - do not reopen
 
-- Premise hook (`plugins/bitranox/hooks/missing-mechanism-nudge.py`) keeps refusing EVERY first
-  AskUserQuestion. User, verbatim: "keep it" (EXECUTION-USER-REVIEW.md, 2026-10-13 15:2x). Basis:
-  of 61 refused first asks, 20 re-sends corrected a wrong premise, 17 dropped an unmeasured claim,
-  22 only gained labels, 2 unchanged; no Jev question separated them ([21], closed).
-- adjudicate's path-mode template goes after a bare `--`, not a repeatable `--subject-arg`:
-  argparse reads an option value starting with `--` as the next option.
-
-## Decided against, and why
-
-- A Jev gate for the premise hook: a premise question went flat (0.62-0.94 on every pilot item),
-  a stakes gate let 9 of 20 real corrections through.
+- [9](2) the refusal covers a GATE detached with `&`, not only a waiter: the user's 2026-10-12
+  answer recorded that the recurrence was a subagent's `make test &`. Replay over 143,483 commands:
+  49 refusals, 47 real detached jobs, 2 a fixture naming a fake process `pytest-control` (accepted).
+  The 8 inline `( gate; echo RC=$? >> log ) &` forms are refused too; the refusal names the route
+  for a job that must outlive the session (a script appending its own RC, launched with setsid nohup).
+- [9](3) refuses the first EnterWorktree once per SESSION (flag stays set), unlike the question
+  refusal, which refuses each new question. Probed first on CLI 2.1.300: the deny stops it before
+  the switch.
+- `ci_wait --ref` was built on the user's word ("build the ci_wait --ref option"); `--sha` stays for
+  a sha from outside. Making sha-literal-nudge BLOCK stays rejected (priced at 39% precision earlier).
 
 ## Still open, untouched
 
-- lsdsk: its OPEN-WORK [20] line still restates the old review exit rule; lsdsk-2f confirmed it is
-  on that session's ledger, to fix when it leaves its fragmentation worktree. Not this repo's work.
-- Open sessions run old plugin text until `/plugin marketplace update` + `/reload-plugins`.
+- Everything else: `OPEN-WORK.md`, top open item [12].
 - A memory consolidation is due (`bitranox:meta-dream-tree`); the user has not been asked.
-- Everything else: `OPEN-WORK.md`, top item [9].
 
 ## Lessons for the next nap
 
-- When a background job's cwd is a worktree you later remove, its exit code can read 1 from a
-  failed getcwd after a successful run; read its output (ci_wait printed all-success, then failed).
-- tooling: a worktree-isolated session cannot write the gitignored EXECUTION-USER-REVIEW.md in the
-  main checkout (Edit refused); the entry has to wait for ExitWorktree (lsdsk 2026-10-13 did that),
-  while USER-DECISIONS.jsonl already holds the answer verbatim.
-- Carried from the 2026-10-13 handovers (not yet napped):
-- When auto mode refuses `wtclean.py --discard-uncommitted` after a general "yes" to a cleanup
-  plan, ask the user for an explicit "do it" naming the discard: it passed only after that.
-- When a batch of worktree-dispatched items ships, remove its worktrees with `wtclean.py` in the
-  same session: the cleanup line [560] counted 11 while 16 had piled up by the time it was worked.
-- When a review loop will not end, look for a backlog or handover line that RESTATES the skill's
-  exit rule: sessions resuming with "what next" follow the frozen paraphrase, not the skill.
-- When a gate says "a realistic caller reaches it", ask whether the finding is wrong BEHAVIOUR:
-  test gaps and doc wording are always "reachable", so a reach-only gate never closes.
-- When testing a skill text against a model, run `claude -p --tools "" --disable-slash-commands
-  --setting-sources project` from a directory whose cascade assembles 0 documents.
-- tooling: a worktree-isolated session refuses `$VAR`-built paths and heredoc-fed python; use
-  literal paths and a script file in the scratchpad.
+- When classifying replay firings, read each command WHOLE before judging it: a 700-character view
+  hid the `& wait` that made firing #23 a correctly collected pair, and it was misread as a miss.
+- When a mutation arm survives on text that appears twice in the subject, pin each clause in the
+  test rather than one substring: removing one copy cannot fail a check the other copy satisfies.
+- When a regex alternation is `(?:^|[;&]\s*)word`, the `^` branch allows no leading space: move
+  `\s*` outside the group, or ` word` at the start of the remainder never matches.
+- tooling: a worktree-isolated session refuses a Bash command whose argument merely contains the
+  word git, a heredoc whose body names git, and `$(git ...)` as an option value (recorded in the
+  worktree-isolation fact; the store already has it).
 
 ## The exact next action
 
-[9](2), the top item in `OPEN-WORK.md`: the trailing-`&` waiter shape in
-`plugins/bitranox/hooks/arbitrary-sleep-nudge.py` becomes a refusal, widened to a gate detached with
-`&` (`( ... ) &` collected by a later wait and PowerShell exempt). Corpus replay FIRST
-(compuse-toolbox `guard_replay.py`), then TDD with mutation arms, in a fresh worktree from
-origin/master. Read the decision verbatim in EXECUTION-USER-REVIEW.md (2026-10-12 18:3x-19:2x).
+[12] step (6), the top open item in `OPEN-WORK.md`: a fresh pre-registered blind panel on
+recall_rerank DECIDE rows since 8.3.0 (bar: Jev picks >= 60% relevant), and the decide rows'
+fallback-deadline share. Start by counting eligible rows with
+`python3 plugins/bitranox/skills/meta-self-improve/classifier_eval.py report` (read `--help`
+first), write the PREREG before any label, and model it on `.plan/jev-recall-2026-10-06/`
+(PREREG.md, RESULTS.md) in the MAIN checkout (gitignored `.plan/`). Build packets with
+`classifier_eval.py packet` and labels with `harvest`.
 
 ## Files that matter
 
-- `OPEN-WORK.md` (items [9], [21])
-- `plugins/bitranox/hooks/arbitrary-sleep-nudge.py`, `plugins/bitranox/hooks/tests/`
-- `EXECUTION-USER-REVIEW.md` (gitignored; the decisions)
+- `OPEN-WORK.md` ([12] line, its "step (5) DONE" note names the bar and the record)
+- `plugins/bitranox/skills/meta-self-improve/classifier_eval.py`, `judge_panel.py`
+- `plugins/bitranox/hooks/arbitrary-sleep-nudge.py`, `plugins/bitranox/hooks/enter-worktree-first-refusal.py`
+- `plugins/bitranox/skills/compuse-toolbox/scripts/ci_wait.py`
 
 ## How to verify
 
-- `git log --oneline -1 origin/master` is bdc9c485 or later; `gh run list --commit bdc9c485...`
-  shows ci and workflow success.
-- `grep -c '^- \[x\] (2026-10-13) \[21\]' OPEN-WORK.md` prints 1.
+- `python3 plugins/bitranox/skills/compuse-toolbox/scripts/ci_wait.py --ref origin/master` exits 0
+  on the commit carrying this handover.
+- `grep -c '^- \[x\] (2026-10-12) \[9\]' OPEN-WORK.md` prints 1.
 
 Read this, then replace the first line with `# STALE - read <date>, work continued`. Do not delete it -
 if this session ends badly it is the only record of where things stood.
