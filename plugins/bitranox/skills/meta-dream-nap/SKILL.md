@@ -75,15 +75,21 @@ than deleting it.
    like any other entry, pin intact; only its CONTENT is out of reach (per the core's Boundaries).
 5. **Prune the obvious**: leaked task-state and dead-content entries AT the chain's levels
    (propose-first per the removal policy in `bitranox:meta-dream-tree` -> references/dream-passes.md).
+   Include version-bound facts: run `versionrot.py scan --chain <cwd> --json` (home:
+   `<plugin>/skills/meta-dream-tree/`, launch via `hooks/run-python.sh`; exit 1 lists candidates,
+   0 none, 2 is an error to report) and handle each candidate whose level is ON the chain exactly
+   as `bitranox:meta-dream-tree` step 7, question 3 says: re-check against the current release,
+   then reword, archive or merge.
 6. **Verify + report + state the leftovers**: the core's verification contract (manifest diff,
    reconcile `TOTAL problems: 0` over the chain), then report counts AND an explicit
    "deferred to the full dream" list (sibling dedup, tree-wide placement, descriptor synthesis,
    behavioral passes, unshipped skill/hook contributions (skill-fit) queued but not delivered, and
    the toolbox CONSOLIDATE half per dream-core.md - machine-global, outside the nap's chain-only
    budget; its READ half already ran at step 2b). A nap is PARTIAL BY DESIGN and says so - never silently incomplete.
-   Run `dream_state.py done` (home: `<plugin>/skills/meta-dream-tree/dream_state.py`, via
-   `hooks/run-python.sh` - see dream-core.md "Script homes") ONLY if the nudge that triggered
-   you asked for a nap; a consolidation-due nudge still needs the full dream.
+   Run `dream_state.py done --kind nap` (home: `<plugin>/skills/meta-dream-tree/dream_state.py`,
+   via `hooks/run-python.sh` - see dream-core.md "Script homes"; a nap has no Jev shadow sites, so
+   it takes no `--dream`) ONLY if the nudge that triggered you asked for a nap; a
+   consolidation-due nudge still needs the full dream.
 
 ## Deliverables (a completed nap has ALL of these)
 
@@ -111,7 +117,7 @@ than deleting it.
 
 - Touching a sibling project/department or another tree (scope violation; harness-asserted).
 - Skipping the DEFERRED list (the next full dream needs to know what a nap left behind).
-- Running `dream_state.py done` after a nap that was triggered by a consolidation-due nudge
+- Running `dream_state.py done --kind nap` after a nap that was triggered by a consolidation-due nudge
   (silences the nudge without the tree-wide work having happened).
 - Restating core semantics here instead of following dream-core.md (the contract test fails
   duplicated family literals).

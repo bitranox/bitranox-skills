@@ -105,8 +105,10 @@ to a pinned fact's title, which `retitle` refuses by design.
 `python3 <plugin>/skills/meta-self-improve/reconcile_memory_index.py --check <dirs...>` (a level
 dir or an altitude chain) - must end `TOTAL problems: 0`; consolidations verify with it.
 
-**Dream scheduling**: `python3 <plugin>/skills/meta-dream-tree/dream_state.py due|done|mode [cwd]` -
-query whether a consolidation is due, mark one done, or print the effective dream mode.
+**Dream scheduling**: `python3 <plugin>/skills/meta-dream-tree/dream_state.py due|mode [cwd]` -
+query whether a consolidation is due, or print the effective dream mode; `dream_state.py done
+[cwd] --kind nap|tree [--dream ID] [--jev-skip SITE=REASON]` marks one done (a tree dream only
+once each of its Jev shadow sites has rows for that id or a skip reason).
 
 **Generated artifacts** (contributors): `python3 <plugin>/hooks/build_skill_triggers.py` rebuilds
 the router map, `python3 <plugin>/hooks/build_skill_docs.py` rebuilds the

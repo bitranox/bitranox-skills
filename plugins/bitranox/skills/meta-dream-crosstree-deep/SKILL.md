@@ -58,10 +58,14 @@ duplication to avoid. Everything else, do not duplicate: follow crosstree.
    ones moved - a rejected candidate is a result, not a non-event.
    - **Jev shadow:** crosstree 4b's Jev shadow bullet applies on EVERY tree swept (only when
      `jev_shadow.py status` exits 0), its files per tree in a fresh `D=$(mktemp -d)` of its own
-     outside any repo: `items --site crosstree-misplaced --anchor <anchor> --out "$D/items.jsonl"`,
-     YOUR `wrong_tree` verdict for every candidate in `$D/verdicts.jsonl` FIRST, then `run`, then
-     `rm -rf "$D"`. `run` prints counts only. Relocate or reject by your own verdicts, whatever
-     `run` printed or exited with; the result goes on crosstree's `jev shadow:` report line.
+     outside any repo, one `<dream id>` (`crosstree-deep-<YYYYMMDD-HHMM>`) for the whole run:
+     `items --site crosstree-misplaced --anchor <anchor> --sample 40 --seed <dream id> --out
+     "$D/items.jsonl"`, YOUR `wrong_tree` verdict for every sampled candidate in
+     `$D/verdicts.jsonl` FIRST, then `run --dream <dream id>`, then `rm -rf "$D"`. `run` prints
+     counts only. Relocate or reject by your own verdicts - every candidate, not only the sample -
+     whatever `run` printed or exited with. Before the report, run crosstree step 8's
+     `jev_shadow.py receipt` for this `<dream id>`; its result goes on crosstree's `jev shadow:`
+     report line.
 
 4. **Org-chart audit (deep dream only - propose, never apply).** With the cross-tree view, assess whether
    the directory structure still fits. Using each project's scope descriptor + what it has learned, look

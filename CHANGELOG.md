@@ -50,6 +50,13 @@ two "versions with no entry" notes came to sit in this file disagreeing with it.
 - `dream_state.py done` requires `--kind nap|tree`. A tree dream also passes `--dream ID`, and
   with Jev shadow on it is not marked done (exit 1) until every tree site has rows for that dream
   or a `--jev-skip SITE=REASON`.
+- `meta-dream-tree` step 7 asks a third question of every fact - is its lesson tied to one past
+  version? - answered with `versionrot.py scan --tree`: each candidate is re-checked against the
+  current release, then reworded (still true), archived (a fixed bug, a finished migration, a
+  result on that version) or merged. `meta-dream-nap` runs the same scan over its chain.
+- The dream skills shadow a sample of 40 per Jev site, tagged with the dream's id, and end with
+  `done --kind tree --dream <id>` (tree), `done --kind nap` (nap) or `jev_shadow.py receipt`
+  (crosstree); the `jev shadow:` report line gains a `skipped (<reason>)` form.
 
 ## [8.23.0]
 

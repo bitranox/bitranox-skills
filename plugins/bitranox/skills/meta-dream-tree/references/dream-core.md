@@ -19,11 +19,13 @@ instead (the contract test fails duplicated family literals).
 - `dream_state.py` (mode / due / done / session-review / session-reviewed / saw-promotable /
   should-promote / promoted) -> `<plugin>/skills/meta-dream-tree/dream_state.py`
 - `reconcile_memory_index.py` (--check) -> `<plugin>/skills/meta-self-improve/reconcile_memory_index.py`
+- `versionrot.py` (scan --tree / --chain: facts naming a superseded version) ->
+  `<plugin>/skills/meta-dream-tree/versionrot.py`
 
-Launch either cross-platform through the same shim as the engine:
+Launch any of them cross-platform through the same shim as the engine:
 `bash <plugin>/hooks/run-python.sh <script> ...`, where `<plugin>` is the installed plugin dir
 (`~/.claude/plugins/cache/bitranox-skills/bitranox/<version>`) or the source repo's
-`plugins/bitranox`. Bare script names below refer to these two homes.
+`plugins/bitranox`. Bare script names below refer to these homes.
 
 ## Level enumeration - `find`, never a bare `grep -r` (and cross-check the count)
 
@@ -252,8 +254,10 @@ TREE-WIDE run (meta-dream-tree and the crosstree variants) ALSO run
 `reconcile_memory_index.py --check-tree <anchor>` and require `TOTAL tree problems: 0` - the
 chain-only `--check` structurally cannot see a slug DUPLICATED across sibling chains (slugs are
 tree-unique), which `heal` also misses. Report counts (merges, placements with direction, prunes,
-pinned untouched) and, for nap/project, run `dream_state.py done` when the run covered what the
-nudge asked for. A run that has Jev shadow sites (meta-dream-tree and the crosstree variants; a nap
+pinned untouched) and, when the run covered what the nudge asked for, run `dream_state.py done
+--kind nap` (a nap) or `dream_state.py done --kind tree --dream <dream id>` (meta-dream-tree, whose
+`done` refuses until each of its Jev shadow sites logged rows for that id or was skipped with a
+reason); a bare `done` is refused. A run that has Jev shadow sites (meta-dream-tree and the crosstree variants; a nap
 has none) also reports one `jev shadow:` line, one entry per site in one of the four forms defined
 once in `bitranox:meta-self-improve` -> references/jev-shadow.md, "The report line".
 

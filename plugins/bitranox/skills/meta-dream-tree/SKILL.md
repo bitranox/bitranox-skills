@@ -121,11 +121,15 @@ the success line, abort-and-show on a miss).
     CONSOLIDATE judgement is a separate half and stays at step 10b.
 
     Also run `jev_shadow.py status` HERE, once (home `<plugin>/skills/meta-self-improve/`, launch
-    via `hooks/run-python.sh`; exit 0 is on), and keep the result for the whole run. When it is on,
-    three sites need YOUR own verdict on every fact, and those verdicts can only be made while the
-    pass is under way, not afterwards: `dream-placement` (step 5), `dream-firing` (step 6) and
-    `dream-prune` (step 7). Record each verdict as you judge the fact, in the format of that
-    step's shadow bullet. A site you did not feed is reported at step 11 as `off (<reason>)`.
+    via `hooks/run-python.sh`; exit 0 is on), and keep the result for the whole run. Name this
+    dream now, `tree-<YYYYMMDD-HHMM>` from the time you start, and use that id wherever a step
+    below says `<dream id>`. When shadow is on, three sites shadow a SAMPLE of 40 items each,
+    drawn by `items --sample 40 --seed <dream id>`: `dream-placement` (step 5), `dream-firing`
+    (step 6) and `dream-prune` (step 7). The pass itself still covers every fact; only the shadow
+    is sampled. Judge the sampled items while the pass is under way, in the format of that step's
+    shadow bullet, and tag each `run` with `--dream <dream id>`. Step 11's `done` refuses to mark
+    the dream done until each of the three logged rows for that id, or you named why not with
+    `--jev-skip SITE=REASON`.
 
 1. **Capture first (unconditional on a manual dream).** Enumerate this session's durable learnings
    and capture via `bitranox:meta-self-improve` BEFORE consolidating, so the dream works on a
@@ -242,16 +246,14 @@ the success line, abort-and-show on a miss).
      `<plugin>/skills/meta-self-improve/`, launch via `hooks/run-python.sh`; procedure in its
      `references/jev-shadow.md`; both files in a fresh `D=$(mktemp -d)` outside any repo, since
      they hold unredacted fact text), in this order: (1) `jev_shadow.py items --site
-     dream-placement --anchor <anchor> --out "$D/items.jsonl"`, one line per fact AND level on its
-     chain (id `<slug>|<level>`, the level relative to the anchor, `.` for the anchor) - tens of
-     thousands on a large tree; (2) YOU route every fact; (3) cut `$D/items.jsonl` down to each
-     fact's line for its current level and for the level you routed it to (one line when it stays),
-     lines unchanged - BEFORE `run`, which asks Jev about every line in the file; (4) write YOUR
-     score for every remaining line to `$D/verdicts.jsonl` (`{"id": "<slug>|<level>", "verdict":
-     {"fits_level": 2}}`: 2 belongs here, 1 could live here but is narrower or broader, 0 does not
-     belong); (5) `jev_shadow.py run --site dream-placement --items "$D/items.jsonl" --verdicts
-     "$D/verdicts.jsonl"`, then `rm -rf "$D"`. `run` prints counts only. Move by your own routing,
-     whatever `run` printed or exited with.
+     dream-placement --anchor <anchor> --sample 40 --seed <dream id> --out "$D/items.jsonl"`, 40
+     lines drawn from every pairing of a fact with a level on its chain (id `<slug>|<level>`, the
+     level relative to the anchor, `.` for the anchor); (2) YOU route every fact, as above; (3)
+     write YOUR score for every sampled line to `$D/verdicts.jsonl` (`{"id": "<slug>|<level>",
+     "verdict": {"fits_level": 2}}`: 2 belongs here, 1 could live here but is narrower or broader,
+     0 does not belong; none left out); (4) `jev_shadow.py run --site dream-placement --dream
+     <dream id> --items "$D/items.jsonl" --verdicts "$D/verdicts.jsonl"`, then `rm -rf "$D"`. `run`
+     prints counts only. Move by your own routing, whatever `run` printed or exited with.
 
 6. **Voice + firing check (maintenance).** The engine lints new hooks at add-time; here, sweep the
    whole store for residue with `memory_engine.py lint --tree "<cwd>"` (reports, tree-wide, hooks over
@@ -268,20 +270,21 @@ the success line, abort-and-show on a miss).
    Bodies missing the frame or the **Why:**/**How to apply:** sections get the same treatment.
    - **Jev shadow on the firing check** (only when step 0c found `jev_shadow.py status` on; home, launch and
      procedure as in step 5's shadow bullet; a fresh `D=$(mktemp -d)` of its own outside any repo):
-     `jev_shadow.py items --site dream-firing --anchor <anchor> --out "$D/items.jsonl"` writes one
-     line per fact in the tree. YOU judge every hook; write YOUR verdict for every fact to
-     `$D/verdicts.jsonl` FIRST (`{"id": "<slug>", "verdict": {"trigger_fires": false}}` for each
-     hook whose trigger is missing or does not name what its body covers, `true` for the rest; none
-     left out, since the check sweeps the whole store), then `jev_shadow.py run --site dream-firing
-     --items "$D/items.jsonl" --verdicts "$D/verdicts.jsonl"`, then `rm -rf "$D"`. `run` prints
-     counts only. Queue rewrites by your own verdicts, whatever `run` printed or exited with.
+     `jev_shadow.py items --site dream-firing --anchor <anchor> --sample 40 --seed <dream id> --out
+     "$D/items.jsonl"` writes 40 facts of the tree. YOU judge every hook in the store, as above;
+     write YOUR verdict for every sampled fact to `$D/verdicts.jsonl` FIRST (`{"id": "<slug>",
+     "verdict": {"trigger_fires": false}}` for a hook whose trigger is missing or does not name what
+     its body covers, `true` for the rest; none left out), then `jev_shadow.py run --site
+     dream-firing --dream <dream id> --items "$D/items.jsonl" --verdicts "$D/verdicts.jsonl"`, then
+     `rm -rf "$D"`. `run` prints counts only. Queue rewrites by your own verdicts, whatever `run`
+     printed or exited with.
 
 7. **Prune (content-based only, tree-wide).** Archive obsolete/superseded/task-state entries at
    EVERY level of the tree (siblings included) per the removal policy in
    references/dream-passes.md (propose-first; the backup makes it safe). Never
    usage/age/size-based.
 
-   Two questions to ask of every entry reviewed, because an accumulated bad fact
+   Three questions to ask of every fact in the tree, because an accumulated bad fact
    survives longest here:
 
    1. Does this assert a tool does NOT work, without a version or date that makes
@@ -289,16 +292,42 @@ the success line, abort-and-show on a miss).
       worse than a missing fact: it actively steers away from something that works.
    2. Does this describe a session that never reached a working end state, without
       labelling it unsolved? If so, relabel it as unsolved.
+   3. Is its lesson tied to one past version - a bug fixed in a named release, a finished
+      upgrade or migration, a result measured on one version? These pass every other check (the
+      claim was true, the file it names still exists, a named version even reads as re-testable),
+      so find them with `versionrot.py scan --tree <anchor> --json` (home:
+      `<plugin>/skills/meta-dream-tree/`, launch via `hooks/run-python.sh`). Exit 1 lists the
+      facts naming a version a newer release replaced, each with the level that owns its pointer;
+      exit 0 lists none; exit 2 is an error to report, never a clean tree. A listed claim is a
+      CANDIDATE: re-check it against the CURRENT release (its `--help`, its changelog, or a rerun)
+      before acting, then do exactly one of:
+      - **still true** -> reword it to the current state with the version history dropped:
+        `factedit.py show --body --slug <slug> --level <its level>`, edit that text in a file,
+        then `factedit.py apply --slug <slug> --level <its level> --body-file <f>`, adding
+        `--hook-file <f2>` when
+        the HOOK names the version too - a body-only edit leaves the always-loaded line saying it
+        (home `<plugin>/skills/meta-dream-tree/`);
+      - **a fixed bug, a finished upgrade or migration, or a result on that version** ("tests
+        PASS on 1.5.0") -> archive it (`reconcile_memory_index.py --archive <slug> <its level>`,
+        removal policy in references/dream-passes.md; recoverable from `.archive/`); when only
+        one line of an otherwise valid body is such history, drop that line the same
+        `show` / `apply --body-file` way and keep the fact;
+      - **several facts on one library that the re-check reduces to one current lesson** ->
+        merge them as in step 4.
+      Not candidates: a package it reports `unresolved` (nothing is guessed), `ahead` (the local
+      clone is stale, not the fact), a version given only as an example, and a Python boundary
+      ("before Python 3.14") that the supported range still spans.
 
-   - **Jev shadow on those two questions** (only when step 0c found `jev_shadow.py status` on; home, launch
-     and procedure as in step 5's shadow bullet; a fresh `D=$(mktemp -d)` of its own outside any
-     repo): `jev_shadow.py items --site dream-prune --anchor <anchor> --out "$D/items.jsonl"` writes
-     one line per fact in the tree. YOU answer both questions for every fact; write YOUR answers to
-     `$D/verdicts.jsonl` FIRST (`{"id": "<slug>", "verdict": {"untestable_negative": false,
-     "unlabelled_unsolved": false}}`, `true` for each question the fact trips; none left out, since
-     both are asked of every entry), then `jev_shadow.py run --site dream-prune --items
-     "$D/items.jsonl" --verdicts "$D/verdicts.jsonl"`, then `rm -rf "$D"`. `run` prints counts only.
-     Re-test, delete or relabel by your own answers, whatever `run` printed or exited with.
+   - **Jev shadow on those three questions** (only when step 0c found `jev_shadow.py status` on;
+     home, launch and procedure as in step 5's shadow bullet; a fresh `D=$(mktemp -d)` of its own
+     outside any repo): `jev_shadow.py items --site dream-prune --anchor <anchor> --sample 40
+     --seed <dream id> --out "$D/items.jsonl"` writes 40 facts of the tree. YOU answer all three
+     questions for every sampled fact; write YOUR answers to `$D/verdicts.jsonl` FIRST (`{"id":
+     "<slug>", "verdict": {"untestable_negative": false, "unlabelled_unsolved": false,
+     "version_bound": false}}`, `true` for each question the fact trips; none left out), then
+     `jev_shadow.py run --site dream-prune --dream <dream id> --items "$D/items.jsonl" --verdicts
+     "$D/verdicts.jsonl"`, then `rm -rf "$D"`. `run` prints counts only. Act by your own answers,
+     whatever `run` printed or exited with.
 
 8. **Re-dedup, then verify.** Sweep the entries placement touched (a lifted general now overlaps
    its origin and siblings) and normalize - re-run `dedup_scan.py` from step 4, whose control line
@@ -343,14 +372,26 @@ the success line, abort-and-show on a miss).
     propose ONLY; the actual merge is a TDD change through `bitranox:meta-self-improve`'s tool
     endpoint, never edited here. Skip if the toolbox path does not exist.
 
-11. **Done + report + /clear nudge.** `dream_state.py done` (records the fact signature). Report
-    counts + one line each: merges, placements (with direction), voice rewrites, prunes, skill
+11. **Done + report + /clear nudge.** Run `dream_state.py done --kind tree --dream <dream id>`
+    (home: `<plugin>/skills/meta-dream-tree/`, launch via `hooks/run-python.sh`; it records the
+    fact signature). With shadow on it first checks each tree site logged rows for `<dream id>`,
+    and exits 1 having marked NOTHING done when one did not, naming the site. Then feed that
+    site's sample (its step's shadow bullet) and run `done` again; only when it genuinely could
+    not be fed, add `--jev-skip <site>=<reason>` (a reason such as `items exited 2: <its
+    message>`). A skip is reported, so "no time" is not a reason. A `run` that exited 2 because
+    jev-judge answered no item (it timed out, could not start, or wrote no row) still logged its
+    rows, so the site counts as fed and its report entry is
+    `error <message>`; one that exited 2 before asking (a missing verdicts file, a malformed line)
+    logged nothing - fix the input and run it again. Exit 0 prints the receipt line. Report
+    counts + one line each: merges, placements (with direction), voice rewrites, prunes (the
+    versionrot candidates by outcome: reworded, archived, merged, kept), skill
     changes, toolbox proposals (merges/flags), create-level proposals (step 3b), pinned facts
     reported not rewritten, and
     `jev shadow:` followed by one `<site> <form>` entry per site, joined by `; `, each in one of
-    the four forms defined in meta-self-improve's `references/jev-shadow.md`, "The report line":
-    the counts `run` printed, `off (<reason>)`, `no items`, or `error <message>`. Example:
-    `jev shadow: dream-firing 20 items, 20 paired, 18 of 20 answers agreed, ...`.
+    the forms defined in meta-self-improve's `references/jev-shadow.md`, "The report line":
+    the counts `run` printed, `off (<reason>)`, `skipped (<reason>)`, `no items`, or
+    `error <message>`. Example:
+    `jev shadow: dream-firing 40 items, 40 paired, 36 of 40 answers agreed, ...`.
     CLAUDE.md edits are APPLIED, so the report is the only place the user sees them: per RULE,
     name every file touched, the ANCESTOR covering home it now relies on, and the transformation
     (removed / rewritten in place); a rule left alone for want of an ancestor is listed too, never
@@ -397,7 +438,10 @@ tests/README-acceptance.md); the bar is all-hard + >= 5/6 judgment on two consec
 - [ ] `reconcile ... --check-tree "<cwd>"` printed `TOTAL tree problems: 0` (the cross-sibling
       duplicate/orphan check the chain-only `--check` structurally cannot make).
 - [ ] Each behavioral pass reported against ITS OWN trigger (ran / no-op with the verified reason).
-- [ ] `dream_state.py done` ran; report + `/clear` nudge delivered.
+- [ ] `versionrot.py scan --tree` ran, and each candidate was reworded, archived, merged or kept
+      after a re-check against the current release.
+- [ ] `dream_state.py done --kind tree --dream <dream id>` exited 0 (every shadow site fed, or
+      skipped with a stated reason); report + `/clear` nudge delivered.
 
 An ended run missing any box is not done - finish it or say plainly what was skipped and why.
 
@@ -433,4 +477,7 @@ An ended run missing any box is not done - finish it or say plainly what was ski
 - Running CLAUDE.md reconciliation as a keyword-grep of only the newly-written entries (misses all
   pre-existing duplication; the pass is rule-by-rule over the entire chain, both directions).
 - A downward or cross-tree `[[reference]]` (dangles on deletion; cross-tree is always a copy).
-- Forgetting `dream_state.py done`, so the nudge keeps firing.
+- Forgetting `dream_state.py done --kind tree --dream <dream id>`, so the nudge keeps firing; or
+  reading its exit 1 as a failed write - it is the receipt refusing an unfed shadow site.
+- Archiving a version-bound fact without re-checking it: a claim naming an old version can still
+  be true, and then it is reworded, not removed.

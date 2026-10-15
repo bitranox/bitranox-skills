@@ -68,6 +68,28 @@ letting Jev DECIDE; calibration data from a small batch is still data.
    step's outcome is yours. A non-zero exit is reported in the step's output in one line (see
    "The report line") and changes nothing else.
 
+## A dream: a sample, tagged, and a receipt
+
+The dream sites (`dream-placement`, `dream-firing`, `dream-prune`, `crosstree-misplaced`) shadow a
+SAMPLE, not the whole store. Judging every fact twice, once for the step and once for the shadow,
+was the step dreams skipped, and nothing noticed. So:
+
+- The dream names itself once (`tree-<YYYYMMDD-HHMM>`, `crosstree-<...>`) and uses that id as the
+  sample's seed and as the run's tag:
+  `items --site <site> --anchor <anchor> --sample 40 --seed <dream id> --out items.jsonl`, then
+  `run --site <site> --dream <dream id> --items items.jsonl --verdicts verdicts.jsonl`.
+  `--sample N` keeps N items chosen by the seed, all of them when there are fewer; for
+  `dream-placement` it samples fact-and-level LINES, not facts. Re-building a dream's items with
+  the same seed gives the same sample.
+- The step itself still covers every fact; only the shadow is sampled, and every sampled item
+  gets a verdict.
+- Before the dream is reported done, `receipt --dream <dream id> --site <site> [--site ...]
+  [--skip <site>=<reason>]` says per site `fed (<N> rows)`, `skipped (<reason>)`, `off
+  (<reason>)` (shadow off: nothing to feed) or `missing`, and exits 1 while any is `missing`.
+  A `--skip` must name one of the `--site` values and carry a reason. A tree dream does not call
+  `receipt` itself: `dream_state.py done --kind tree --dream <dream id> [--jev-skip SITE=REASON]`
+  runs it for the three tree sites and marks nothing done while it exits 1.
+
 The verdicts file must exist BEFORE `run`; without it `run` exits 2 and asks nothing. That and the
 counts-only output keep the agent blind: knowing which items Jev disagreed on mid-task would pull
 the agent's own judgments toward Jev's, and the comparison would measure nothing. Read the
@@ -77,14 +99,15 @@ do not open it until your own step is finished, for the same reason.
 ## The report line
 
 A step whose skill reports its shadow sites (the dream skills' `jev shadow:` line) gives each site
-one entry, `<site> <form>`, in exactly one of four forms:
+one entry, `<site> <form>`, in exactly one of five forms:
 
-| Form              | When                                                                                  |
-|-------------------|---------------------------------------------------------------------------------------|
-| `<counts>`        | `run` exited 0 or 1: what it printed after its own `shadow: ` prefix, verbatim        |
-| `off (<reason>)`  | `status` was not 0, or `run` printed `shadow: off (<reason>)`                         |
-| `no items`        | `items` exited 1: nothing to judge, so `run` was skipped                              |
-| `error <message>` | `items` or `run` exited 2: its one `jev_shadow: ...` stderr line, without that prefix |
+| Form                 | When                                                                                  |
+|----------------------|---------------------------------------------------------------------------------------|
+| `<counts>`           | `run` exited 0 or 1: what it printed after its own `shadow: ` prefix, verbatim        |
+| `off (<reason>)`     | `status` was not 0, or `run` printed `shadow: off (<reason>)`                         |
+| `skipped (<reason>)` | the site was not fed and the receipt was given that reason (`--skip`/`--jev-skip`)    |
+| `no items`           | `items` exited 1: nothing to judge, so `run` was skipped                              |
+| `error <message>`    | `items` or `run` exited 2: its one `jev_shadow: ...` stderr line, without that prefix |
 
 Exit 1 from `run` means jev-judge ran and Jev answered no item; its counts say so themselves
 (they end in `<N> without a Jev answer`), so they are reported as counts, not as an error. Exit 2
@@ -97,18 +120,18 @@ dream-prune off (classifier_skills is not shadow)`.
 
 ## Sites
 
-| Site                  | Skill step                                         | Items                                               | State fields                                 | Questions (type)                                    |
-|-----------------------|----------------------------------------------------|-----------------------------------------------------|----------------------------------------------|-----------------------------------------------------|
-| `guard-firing`        | compuse-toolbox, guard_replay classify-all         | `items --firings F --hazard TEXT`; id = tool_use id | `hazard`, `command`, `error`                 | `real_hazard` (noul)                                |
-| `quality-polarity`    | enhance-code-quality, "Cap it when sites are many" | agent-built; id = `file:line`                       | `function`, `source_line`, `convention`      | `agrees` (noul)                                     |
-| `quality-param-hit`   | enhance-code-quality, "Resolve each hit"           | agent-built; id = `file:line`                       | `parameter`, `hit`, `context`                | `is_parameter` (noul)                               |
-| `dream-prune`         | meta-dream-tree step 7                             | `items --anchor`; id = slug                         | `hook`, `body`                               | `untestable_negative`, `unlabelled_unsolved` (noul) |
-| `dream-firing`        | meta-dream-tree step 6                             | `items --anchor`; id = slug                         | `hook`, `body`                               | `trigger_fires` (noul)                              |
-| `crosstree-misplaced` | dream-crosstree 4b, dream-crosstree-deep 3b        | `items --anchor`; id = slug                         | `hook`, `body`, `level_scope`, `cited_paths` | `wrong_tree` (noul)                                 |
-| `data-arch-dict`      | enforce-data-architecture-strict STEP D            | agent-built; id = `file:line`                       | `hit`, `context`                             | `real_violation` (noul)                             |
-| `dream-placement`     | meta-dream-tree step 5                             | `items --anchor`; id = `slug\|level`                | `hook`, `body`, `level_scope`                | `fits_level` (score, 3 levels)                      |
-| `consolidate-cause`   | meta-consolidate-claude-md step 1                  | agent-built; id = section group                     | `heading`, `copies`, `variants`              | `cause` (choice, 5 causes plus `none`)              |
-| `collect-relevance`   | meta-collect-knowledge stage 2                     | agent-built; id = candidate path                    | `project`, `candidate`                       | `useful_here` (noul)                                |
+| Site                  | Skill step                                         | Items                                               | State fields                                 | Questions (type)                                                     |
+|-----------------------|----------------------------------------------------|-----------------------------------------------------|----------------------------------------------|----------------------------------------------------------------------|
+| `guard-firing`        | compuse-toolbox, guard_replay classify-all         | `items --firings F --hazard TEXT`; id = tool_use id | `hazard`, `command`, `error`                 | `real_hazard` (noul)                                                 |
+| `quality-polarity`    | enhance-code-quality, "Cap it when sites are many" | agent-built; id = `file:line`                       | `function`, `source_line`, `convention`      | `agrees` (noul)                                                      |
+| `quality-param-hit`   | enhance-code-quality, "Resolve each hit"           | agent-built; id = `file:line`                       | `parameter`, `hit`, `context`                | `is_parameter` (noul)                                                |
+| `dream-prune`         | meta-dream-tree step 7                             | `items --anchor`; id = slug                         | `hook`, `body`                               | `untestable_negative`, `unlabelled_unsolved`, `version_bound` (noul) |
+| `dream-firing`        | meta-dream-tree step 6                             | `items --anchor`; id = slug                         | `hook`, `body`                               | `trigger_fires` (noul)                                               |
+| `crosstree-misplaced` | dream-crosstree 4b, dream-crosstree-deep 3b        | `items --anchor`; id = slug                         | `hook`, `body`, `level_scope`, `cited_paths` | `wrong_tree` (noul)                                                  |
+| `data-arch-dict`      | enforce-data-architecture-strict STEP D            | agent-built; id = `file:line`                       | `hit`, `context`                             | `real_violation` (noul)                                              |
+| `dream-placement`     | meta-dream-tree step 5                             | `items --anchor`; id = `slug\|level`                | `hook`, `body`, `level_scope`                | `fits_level` (score, 3 levels)                                       |
+| `consolidate-cause`   | meta-consolidate-claude-md step 1                  | agent-built; id = section group                     | `heading`, `copies`, `variants`              | `cause` (choice, 5 causes plus `none`)                               |
+| `collect-relevance`   | meta-collect-knowledge stage 2                     | agent-built; id = candidate path                    | `project`, `candidate`                       | `useful_here` (noul)                                                 |
 
 The questions themselves are in `jev_sites/<site>.json` beside the tool: `{"site", "version",
 "questions", "state_fields"}`, the questions in jev-judge's format. A question names a state field
@@ -125,7 +148,8 @@ the anchor (`.` for the anchor). Pick the best level per fact in code; Jev score
 
 One record per item in `~/.claude/self-improve-audit/jev-skill-shadow-YYYY-MM.jsonl`, appended
 under the memory lock: `ts`, `run_id`, `site`, `site_version`, `questions_sha`, `plugin_version`,
-`jev_judge_version`, `model`, `cwd`, `git_head` (of the cwd, or null), `item_id`, `state`,
+`jev_judge_version`, `model`, `cwd`, `git_head` (of the cwd, or null), `dream_id` (the `run
+--dream` tag, or null; `receipt` counts by it), `item_id`, `state`,
 `redactions`, `jev` (`{question id: {type, value, probabilities, confidence}}`, or null),
 `jev_reason` (why there is no Jev answer), `agent` (the verdict, or null when there is none or
 it is empty), `agent_note`, `agree`, `latency_ms`, `input_tokens`, `cost_usd` (this item's
@@ -178,12 +202,13 @@ reading by hand. Either side can be the wrong one; deciding which is the point.
 
 ## Exit codes and output
 
-| Command  | 0                                                  | 1                             | 2                                                                                                                                                 |
-|----------|----------------------------------------------------|-------------------------------|---------------------------------------------------------------------------------------------------------------------------------------------------|
-| `status` | a run would happen                                 | it would not (reason printed) | usage error                                                                                                                                       |
-| `items`  | items written                                      | none built (empty file)       | unknown site, agent-built site, missing source                                                                                                    |
-| `run`    | records logged, shadow off, or an empty items file | logged, but Jev answered none | missing verdicts file, malformed items or verdicts, unwritable log, workdir or output; jev-judge could not answer any item (records still logged) |
-| `report` | records summarized                                 | no records match              | bad `--since`, unwritable `--disagreements`                                                                                                       |
+| Command   | 0                                                  | 1                             | 2                                                                                                                                                 |
+|-----------|----------------------------------------------------|-------------------------------|---------------------------------------------------------------------------------------------------------------------------------------------------|
+| `status`  | a run would happen                                 | it would not (reason printed) | usage error                                                                                                                                       |
+| `items`   | items written                                      | none built (empty file)       | unknown site, agent-built site, missing source                                                                                                    |
+| `run`     | records logged, shadow off, or an empty items file | logged, but Jev answered none | missing verdicts file, malformed items or verdicts, unwritable log, workdir or output; jev-judge could not answer any item (records still logged) |
+| `report`  | records summarized                                 | no records match              | bad `--since`, unwritable `--disagreements`                                                                                                       |
+| `receipt` | every site fed, skipped or off                     | a site is `missing`           | empty `--dream`, unknown site, a `--skip` with no reason or naming a site not asked about                                                         |
 
 `--json` prints `{ok, command, data, skipped}` on stdout on every exit, a usage error included;
 `ok` means the command ran without error, so it is true on 0 and 1 and false on 2. Diagnostics go

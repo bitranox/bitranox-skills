@@ -14,7 +14,10 @@ silent, so absence of a signal does NOT mean unused), and age and detail/size ar
 metrics. Detail belongs in the pulled body - near-free, never a delete reason. The ONLY removals,
 all content-based and propose-first (the backup makes them safe): (1) dedup/merge duplicates;
 (2) obsolete/superseded pruning - archive a note ONLY if its CONTENT is dead (references a deleted
-file/flag, a resolved issue, superseded by a newer entry, leaked task-state), via
+file/flag, a resolved issue, superseded by a newer entry, leaked task-state, or a version-bound
+lesson a newer release made history - a fixed bug, a finished migration, a test result on that
+version - found by `versionrot.py` and confirmed by a re-check against the current release, while
+a version-bound claim the re-check finds still true is REWORDED, not archived), via
 `reconcile_memory_index.py --archive <slug> <level>` (home:
 `<plugin>/skills/meta-self-improve/`, launch through `hooks/run-python.sh`; it archives the body only
 when NO level still points at the slug). Launch it as a real script file, never a heredoc piped into
