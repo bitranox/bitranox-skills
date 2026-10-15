@@ -29,6 +29,25 @@ than the change, so entries reconstructed from them would read like coverage wit
 a hole nobody has drawn a line under is one that gets rediscovered and half-filled - which is how
 two "versions with no entry" notes came to sit in this file disagreeing with it.
 
+## [8.22.0]
+
+### Added
+
+- `compuse-toolbox` `ci_wait`: `--ref REF` (`HEAD`, `origin/master`, a tag) resolves the commit
+  itself with `git rev-parse --verify` in the current repository and prints the sha it resolved to,
+  so a caller never types or completes one. A sha padded from a short display is 40 hex characters
+  and passes every format check while matching no run; `--ref` also works where a caller's own
+  `$(git rev-parse ...)` is refused, as in a worktree-isolated session. A name that is not a commit
+  there, an option-shaped ref, or a cwd outside any repository exits 2 before any poll. Exactly one
+  of `--sha` and `--ref` is required, and the `--json` envelope's `data` now carries `sha`, the
+  commit watched.
+
+### Changed
+
+- `compuse-toolbox` SKILL.md: the `ci_wait` row and the launch example use `--ref HEAD`; the row
+  also names the `no-runs` verdict and says `--appear-grace` is in seconds, default 120, counted
+  from the first poll that found nothing.
+
 ## [8.21.0]
 
 ### Added

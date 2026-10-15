@@ -53,14 +53,22 @@ The repository is resolved ONCE, before the first poll (`--repo`, else `gh repo 
 cwd), and named on every poll: a cwd removed mid-wait - a worktree deleted while CI runs - would
 otherwise turn every later poll into a gh failure.
 
-Run: `uv run scripts/ci_wait.py --sha $(git rev-parse HEAD)`
-     `uv run scripts/ci_wait.py --sha $(git rev-parse HEAD) --repo OWNER/REPO --json`
-     `uv run scripts/ci_wait.py --sha $(git rev-parse HEAD) --timeout 1800 --interval 30`
+`--ref REF` (HEAD, origin/master, a tag) asks this tool to resolve the sha itself, with
+`git rev-parse --verify` in the cwd's repository, and prints what it resolved to. Prefer it to
+`--sha`: a sha the caller types is one it can pad from a short display or splice onto a guessed
+prefix, and both are 40 hex characters that pass every format check here. It also works where the
+caller's own `$(git rev-parse ...)` is refused, as in a worktree-isolated Claude Code session.
+Exactly one of `--sha` and `--ref` is required.
+
+Run: `uv run scripts/ci_wait.py --ref HEAD`
+     `uv run scripts/ci_wait.py --ref origin/master --repo OWNER/REPO --json`
+     `uv run scripts/ci_wait.py --sha <full sha from a CI URL> --timeout 1800 --interval 30`
 Exit 0 = every run for that sha succeeded (or was skipped), 1 = at least one did not, 2 = could
-not tell (bad sha, a bad flag value, no runs for it, a run awaiting approval, timed out, `gh`
-failed, or the tool itself crashed). `--json` prints the envelope
-`{ok, command, data: {state, summary, runs}, skipped}` on every exit, a usage error included;
-`ok` is false exactly on exit 2, with `error` repeating the summary.
+not tell (bad sha, a ref that does not resolve, a bad flag value, no runs for it, a run awaiting
+approval, timed out, `gh` failed, or the tool itself crashed). `--json` prints the envelope
+`{ok, command, data: {state, summary, runs, sha}, skipped}` on every exit, a usage error included
+(`sha` is absent when the sha itself was refused); `ok` is false exactly on exit 2, with `error`
+repeating the summary.
 """
 from __future__ import annotations
 
@@ -112,6 +120,10 @@ _EXIT_CODES = {"success": 0, "failed": 1, "timeout": 2, "no-runs": 2, "error": 2
 
 class BadSha(ValueError):
     """The sha is not a full 40-character hex commit id - the trap this tool exists to close."""
+
+
+class BadRef(ValueError):
+    """`--ref` did not resolve to a commit here: unknown, not a commit, option-shaped, or no git."""
 
 
 class GhFailed(RuntimeError):
@@ -171,9 +183,45 @@ def require_full_sha(sha: str) -> str:
     if not FULL_SHA_RE.match(candidate):
         raise BadSha(
             f"{sha!r} is not a full 40-character sha; a short one matches no run and the wait "
-            f"would spin to its deadline. Use `git rev-parse HEAD`, never `--short`."
+            f"would spin to its deadline. Pass --ref HEAD and let the tool resolve it, or use "
+            f"`git rev-parse HEAD`, never `--short`."
         )
     return candidate
+
+
+def resolve_ref(ref: str, *, run: Callable[..., object] = subprocess.run) -> str:
+    """The full sha the cwd's repository holds for ``ref``, or a refusal.
+
+    The point of ``--ref``: a caller that names a ref never types a sha, so it cannot pad a short
+    one or splice a guessed prefix onto a derived tail - the invented-identifier mistake that
+    recurred nine times by hand. It also works where the caller's own `$(git rev-parse ...)`
+    cannot: a worktree-isolated Claude Code session refuses that substitution, not this process.
+
+    Args:
+        ref: Anything ``git rev-parse`` accepts that names a commit (``HEAD``, ``origin/master``,
+            a tag, ``HEAD~1``).
+        run: Injected process runner, so the no-git path is testable.
+
+    Returns:
+        The lowercased 40-character sha.
+
+    Raises:
+        BadRef: empty or option-shaped (``--all`` would be read as a FLAG by rev-parse, so it is
+            refused before git runs), not a commit in this repository (an unknown name, a tree,
+            outside a repository), or git could not be run. Never falls back to the text itself.
+    """
+    if not ref or ref.startswith("-"):
+        raise BadRef(f"{ref!r} is not a ref: it is empty or starts with '-', which git reads as an option")
+    try:
+        proc = run(["git", "rev-parse", "--verify", "-q", f"{ref}^{{commit}}"], capture_output=True,
+                   text=True, encoding="utf-8", errors="replace", check=False)
+    except OSError as exc:
+        raise BadRef(f"could not run git to resolve {ref!r}: {exc}") from exc
+    out = (getattr(proc, "stdout", "") or "").strip().lower()
+    if getattr(proc, "returncode", 1) != 0 or not FULL_SHA_RE.match(out):
+        raise BadRef(f"{ref!r} does not name a commit in this repository "
+                     f"(git rev-parse --verify {ref}^{{commit}} gave no full sha)")
+    return out
 
 
 def sha_is_known_locally(sha: str, *, run: Callable[..., object] = subprocess.run) -> bool | None:
@@ -633,7 +681,10 @@ def _parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     parser = EnvelopeArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter,
                                     envelope_command="ci_wait")
     positive, non_negative = _seconds(allow_zero=False), _seconds(allow_zero=True)
-    parser.add_argument("--sha", required=True, help="the FULL 40-character commit sha (git rev-parse HEAD)")
+    target = parser.add_mutually_exclusive_group(required=True)
+    target.add_argument("--sha", help="the FULL 40-character commit sha (git rev-parse HEAD)")
+    target.add_argument("--ref", help="a ref this tool resolves to its sha in the cwd's repository "
+                                      "(HEAD, origin/master, a tag), so no sha is typed")
     parser.add_argument("--repo", default=None, help="OWNER/NAME; default is the cwd's repo")
     parser.add_argument("--timeout", type=positive, default=1500.0, help="seconds to wait (default 1500)")
     parser.add_argument("--interval", type=_interval, default=30.0,
@@ -703,11 +754,18 @@ def _tolerant_streams() -> None:
             continue
 
 
-def _run(args: argparse.Namespace) -> int:
-    try:
-        sha = require_full_sha(args.sha)
-    except BadSha as exc:
-        return _emit(Verdict("error", str(exc)), as_json=args.json)
+def _target_sha(args: argparse.Namespace) -> str:
+    """The sha to watch: ``--ref`` resolved here, or ``--sha`` through the format guard.
+
+    Raises:
+        BadRef: ``--ref`` did not resolve.
+        BadSha: ``--sha`` is not a full sha.
+    """
+    if args.ref is not None:
+        sha = resolve_ref(args.ref)
+        print(f"resolved {args.ref} to {sha}", file=sys.stderr, flush=True)
+        return sha
+    sha = require_full_sha(args.sha)
     # WARN, never refuse. git not holding the sha is strong evidence of a caller bug, but it is not
     # proof: watching a sha you have not fetched (someone else's push, a sha from a notification, a
     # shallow clone) is legitimate, and `gh` is the authority on whether runs exist - not this
@@ -717,14 +775,22 @@ def _run(args: argparse.Namespace) -> int:
         print(
             f"warning: {sha} is not a commit in this repository. If you did not fetch it, that is "
             f"expected; if you completed it from a short one, it will match no run and this wait "
-            f"will end in 'no-runs'. Derive it in the same command: --sha $(git rev-parse HEAD).",
+            f"will end in 'no-runs'. Let the tool derive it: --ref HEAD.",
             file=sys.stderr,
         )
+    return sha
+
+
+def _run(args: argparse.Namespace) -> int:
+    try:
+        sha = _target_sha(args)
+    except (BadRef, BadSha) as exc:
+        return _emit(Verdict("error", str(exc)), as_json=args.json)
     started = time.monotonic()
     try:
         repo = args.repo or _resolve_repo_once(args.timeout)
     except GhUnavailable as exc:
-        return _emit(Verdict("error", str(exc)), as_json=args.json)
+        return _emit(Verdict("error", str(exc)), as_json=args.json, sha=sha)
 
     def fetch() -> list[dict[str, object]]:
         # A single gh call may not outlive the whole wait: bound it by what is left, too.
@@ -748,8 +814,8 @@ def _run(args: argparse.Namespace) -> int:
             event=args.event,
         )
     except (GhFailed, GhUnavailable) as exc:
-        return _emit(Verdict("error", str(exc)), as_json=args.json)
-    return _emit(result, as_json=args.json)
+        return _emit(Verdict("error", str(exc)), as_json=args.json, sha=sha)
+    return _emit(result, as_json=args.json, sha=sha)
 
 
 def _resolve_repo_once(timeout_s: float) -> str | None:
@@ -768,13 +834,19 @@ def _resolve_repo_once(timeout_s: float) -> str | None:
         return None
 
 
-def _emit(result: Verdict, *, as_json: bool) -> int:
-    """Print the verdict and return its exit code; diagnostics to stderr, never into the data."""
+def _emit(result: Verdict, *, as_json: bool, sha: str | None = None) -> int:
+    """Print the verdict and return its exit code; diagnostics to stderr, never into the data.
+
+    ``sha`` is the commit that was watched, once known, so a ``--ref`` caller learns what it
+    resolved to; it is absent when the sha itself was refused.
+    """
     code = exit_code_for(result.state)
     if as_json:
-        emit(code, "ci_wait", {"state": result.state, "summary": result.summary,
-                               "runs": list(result.runs)},
-             error=result.summary if code == 2 else None, indent=None)
+        data: dict[str, object] = {"state": result.state, "summary": result.summary,
+                                   "runs": list(result.runs)}
+        if sha is not None:
+            data["sha"] = sha
+        emit(code, "ci_wait", data, error=result.summary if code == 2 else None, indent=None)
     elif code == 0:
         print(result.summary)
     else:

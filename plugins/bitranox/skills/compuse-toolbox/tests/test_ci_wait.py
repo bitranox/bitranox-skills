@@ -1188,3 +1188,122 @@ class TestTheRepoIsResolvedOnce:
         with pytest.raises(getattr(ci_wait, exc)):
             REAL_RESOLVE_REPO()
 
+
+# --- --ref: the jig derives the sha itself, so no caller types or pads one -------------------------
+# Recurrence 9 of the invented-identifier rule (2026-10-15): a sha completed from a short one went
+# into a backgrounded ci_wait, and in a worktree-isolated session the inline `$(git rev-parse ...)`
+# remedy is refused by Claude Code's isolation guard. A ref the jig resolves leaves nothing to type.
+
+
+def _git(repo: Path, *args: str) -> str:
+    return subprocess.run(["git", "-C", str(repo), *args], capture_output=True, text=True,
+                          encoding="utf-8", check=True).stdout.strip()
+
+
+@pytest.fixture()
+def repo(tmp_path, monkeypatch):
+    """A real repository with one commit on `main`, as the cwd. git is the thing under test here."""
+    root = tmp_path / "repo"
+    root.mkdir()
+    _git(root, "init", "-q", "-b", "main")
+    (root / "f.txt").write_text("x\n", encoding="utf-8")
+    _git(root, "add", "f.txt")
+    _git(root, "-c", "user.name=t", "-c", "user.email=t@example.invalid", "commit", "-q", "-m", "c1")
+    monkeypatch.chdir(root)
+    return root
+
+
+class TestResolveRef:
+    def test_head_resolves_to_the_full_sha_git_reports(self, repo):
+        assert ci_wait.resolve_ref("HEAD") == _git(repo, "rev-parse", "HEAD")
+
+    @pytest.mark.parametrize("ref", ["main", "HEAD~0", "refs/heads/main"])
+    def test_a_branch_or_revision_expression_resolves(self, repo, ref):
+        assert ci_wait.resolve_ref(ref) == _git(repo, "rev-parse", "HEAD")
+
+    def test_an_unknown_ref_is_refused(self, repo):
+        with pytest.raises(ci_wait.BadRef, match="nope"):
+            ci_wait.resolve_ref("nope")
+
+    def test_a_ref_naming_a_tree_not_a_commit_is_refused(self, repo):
+        """`HEAD^{tree}` is a real object, but no CI run is keyed on a tree."""
+        with pytest.raises(ci_wait.BadRef):
+            ci_wait.resolve_ref("HEAD^{tree}")
+
+    @pytest.mark.parametrize("ref", ["--all", "-q", ""])
+    def test_an_option_shaped_or_empty_ref_never_reaches_git(self, ref):
+        """`--all` would be read as an OPTION by rev-parse, not as a ref to resolve."""
+        def must_not_run(argv, **kw):
+            raise AssertionError(f"git was run: {argv}")
+
+        with pytest.raises(ci_wait.BadRef):
+            ci_wait.resolve_ref(ref, run=must_not_run)
+
+    def test_outside_a_repository_it_is_refused(self, tmp_path, monkeypatch):
+        monkeypatch.chdir(tmp_path)
+        with pytest.raises(ci_wait.BadRef):
+            ci_wait.resolve_ref("HEAD")
+
+    def test_no_git_on_path_is_a_typed_refusal_not_a_traceback(self):
+        def no_git(argv, **kw):
+            raise FileNotFoundError("git")
+
+        with pytest.raises(ci_wait.BadRef, match="git"):
+            ci_wait.resolve_ref("HEAD", run=no_git)
+
+    def test_output_that_is_not_a_full_sha_is_refused(self):
+        """Never pass on whatever git printed: the format guard still decides."""
+        def short(argv, **kw):
+            return subprocess.CompletedProcess(argv, 0, stdout="abc1234\n", stderr="")
+
+        with pytest.raises(ci_wait.BadRef):
+            ci_wait.resolve_ref("HEAD", run=short)
+
+
+class TestRefOnTheCommandLine:
+    def test_main_polls_the_resolved_sha_and_names_it(self, repo, monkeypatch, capsys):
+        asked: list[str] = []
+
+        def fake_runs(sha, **kw):
+            asked.append(sha)
+            return [run("CI", "completed", "success", sha=sha)]
+
+        monkeypatch.setattr(ci_wait, "gh_runs", fake_runs)
+        head = _git(repo, "rev-parse", "HEAD")
+        assert ci_wait.main(["--ref", "HEAD", "--settle", "0"]) == 0
+        assert asked and set(asked) == {head}
+        assert f"resolved HEAD to {head}" in capsys.readouterr().err
+
+    def test_the_json_envelope_carries_the_resolved_sha(self, repo, monkeypatch, capsys):
+        monkeypatch.setattr(ci_wait, "gh_runs", lambda sha, **kw: [run("CI", "completed", "success", sha=sha)])
+        assert ci_wait.main(["--ref", "main", "--settle", "0", "--json"]) == 0
+        data = json.loads(capsys.readouterr().out)["data"]
+        assert data["sha"] == _git(repo, "rev-parse", "HEAD")
+
+    def test_an_unresolvable_ref_is_could_not_tell_and_never_polls(self, repo, monkeypatch, capsys):
+        def must_not_poll(sha, **kw):
+            raise AssertionError("polled")
+
+        monkeypatch.setattr(ci_wait, "gh_runs", must_not_poll)
+        assert ci_wait.main(["--ref", "nope", "--json"]) == 2
+        envelope = json.loads(capsys.readouterr().out)
+        assert envelope["ok"] is False and envelope["data"]["state"] == "error"
+        assert "nope" in envelope["error"]
+
+    @pytest.mark.parametrize("argv,message", [
+        (["--sha", "a" * 40, "--ref", "HEAD"], "not allowed with argument"),
+        ([], "one of the arguments --sha --ref is required"),
+    ])
+    def test_exactly_one_of_sha_and_ref_is_required(self, argv, message, capsys):
+        """A usage error, through the envelope parser like every other one: SystemExit(2).
+
+        The MESSAGE is asserted, not only the exit: before --ref existed the first case also exited
+        2, because argparse refused `--ref` as an unknown flag.
+        """
+        with pytest.raises(SystemExit) as info:
+            ci_wait.main([*argv, "--json"])
+        assert info.value.code == 2
+        envelope = json.loads(capsys.readouterr().out)
+        assert envelope["ok"] is False
+        assert message in envelope["error"]
+
