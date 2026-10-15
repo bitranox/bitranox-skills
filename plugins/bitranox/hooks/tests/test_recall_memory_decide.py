@@ -7,7 +7,8 @@ so every test states exactly what Jev said about which note. Nothing inside the 
 `subprocess.Popen` is recorded (and still run) at the process edge to see whether a shadow child
 was started.
 
-What decide mode promises (a blind panel on 2026-10-06 found the keyword top 4 6% relevant):
+What decide mode promises (a blind panel on 2026-10-06 found the keyword top 4 6% relevant; a
+second on 2026-10-15 found Jev 47% relevant at 0.8 and 65% at 0.9, so the threshold is 0.9):
 
 * only the shortlisted notes Jev scores at or above the site threshold are injected, best first,
   whatever the keyword ranking thought of them;
@@ -86,7 +87,7 @@ def _rows(env):
 
 def test_injects_only_notes_scored_at_or_above_the_threshold_best_first(env, monkeypatch, capsys):
     _serve(env)
-    for name, score in (("note-high", "0.85"), ("note-edge", "0.80"), ("note-under", "0.79"),
+    for name, score in (("note-high", "0.95"), ("note-edge", "0.90"), ("note-under", "0.89"),
                         ("note-low", "0.10")):
         _note(name, score)
     rc, out = _run(monkeypatch, capsys)
@@ -100,7 +101,7 @@ def test_injects_only_notes_scored_at_or_above_the_threshold_best_first(env, mon
 def test_injects_nothing_when_jev_scores_every_note_low(env, monkeypatch, capsys):
     _serve(env)
     _note("note-a", "0.30")
-    _note("note-b", "0.79")
+    _note("note-b", "0.85")
     rc, out = _run(monkeypatch, capsys)
     assert rc == 0 and out.strip() == ""
     (row,) = _rows(env)

@@ -122,7 +122,12 @@ SITE_MODES = ("off", "shadow", "decide")
 # keyword patterns catch 9 of 51 at 90% precision, Jev's firings beyond them are 70% precise at
 # 0.7 (recall 94%) and 82% at 0.8 (recall 90%). Decide mode blocks on keywords OR Jev, and 0.8
 # was chosen for it: recall barely moves, while every false block costs the person a turn.
-SITE_THRESHOLDS = {"stop_signal": 0.8, "skill_router": 0.5, "recall_rerank": 0.8}
+# `recall_rerank` was adjudicated blind twice, five judges per pair. Over 381 prompts the keyword
+# top 4 was 6% relevant and Jev at 0.8 44%. Then, pre-registered, over 322 fresh prompts with
+# every pair Jev kept judged: 47% at 0.8 against a 60% bar, 65% (36 of 55) at 0.9. 0.9 drops
+# 143 of 162 irrelevant injections and 110 of 146 relevant ones; an injected note is a cost on
+# every prompt it reaches, so precision is what the bar is set on.
+SITE_THRESHOLDS = {"stop_signal": 0.8, "skill_router": 0.5, "recall_rerank": 0.9}
 # Stop-gate families whose score is LOGGED but never counted as a firing. `endorsement` was the
 # only reason to fire on 12 turns across two shadow windows, every one a plain approval ("yes",
 # "go", "lets try 1-4"): approving a proposal the assistant made is not a learning signal. The

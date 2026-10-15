@@ -29,6 +29,20 @@ than the change, so entries reconstructed from them would read like coverage wit
 a hole nobody has drawn a line under is one that gets rediscovered and half-filled - which is how
 two "versions with no entry" notes came to sit in this file disagreeing with it.
 
+## [8.23.0]
+
+### Changed
+
+- Memory recall in decide mode (`classifier_recall_rerank = decide`) injects only the notes Jev
+  scores at 0.9 or more, up from 0.8. A pre-registered blind panel (ten judges, five per pair, 8 of
+  8 planted controls right) judged every pair Jev kept over 322 live prompts: 47% relevant at 0.8,
+  under the 60% bar decide was held to, and 65% at 0.9. At 0.9 an injected note is right about two
+  times in three; the cost is fewer notes, on about 15% of matching prompts instead of 42%.
+  `classifier_eval.py report` judges the site at the same 0.9.
+- `meta-memory-settings` and `docs/reference.md`: the recall decide row names 0.9. A new test pins
+  each decide row's stated threshold to `SITE_THRESHOLDS`, so a later retune cannot leave the doc
+  promising the old bar.
+
 ## [8.22.0]
 
 ### Added

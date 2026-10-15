@@ -7,6 +7,7 @@ as escapes.
 import os
 import subprocess
 import sys
+from pathlib import Path
 
 import pytest
 
@@ -73,6 +74,17 @@ def test_classifier_site_refuses_a_mode_it_does_not_have(capsys, key, value):
     assert ST.main(["set", key, value]) == 2
     assert "must be one of" in capsys.readouterr().err
     assert sig.load_config()[key] == "off"
+
+
+@pytest.mark.parametrize("site", ["recall_rerank", "stop_signal"])
+def test_a_decide_row_states_the_threshold_the_site_acts_at(site):
+    # The table is what a person reads before choosing decide; the number it names must be the
+    # one the hook compares against, or a retune of SITE_THRESHOLDS leaves the doc promising the
+    # old bar while every gate stays green.
+    import classifier  # noqa: PLC0415 - importable only after settings put hooks/ on sys.path
+    text = (Path(ST.__file__).resolve().parent / "SKILL.md").read_text(encoding="utf-8")
+    (row,) = [line for line in text.splitlines() if line.startswith("| `classifier_%s`" % site)]
+    assert "at %s or more" % classifier.SITE_THRESHOLDS[site] in row
 
 
 def test_classifier_skills_defaults_to_off_and_accepts_shadow(capsys):

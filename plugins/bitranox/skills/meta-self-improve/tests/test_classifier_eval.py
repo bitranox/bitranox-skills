@@ -532,7 +532,9 @@ def test_a_non_firing_family_keeps_its_score_in_the_row():
 # 20% of them (about 5.9 notes a prompt) and 0.8 keeps 4% (about 1.1).
 
 def test_each_site_is_judged_at_its_own_default_threshold():
-    assert ce.SITE_THRESHOLDS["recall_rerank"] == 0.8
+    # 0.9, not the 0.8 decide shipped with: the pre-registered panel of 2026-10-15 judged every
+    # pair Jev kept over 322 live prompts, 47% relevant at 0.8 against a 60% bar, 65% at 0.9.
+    assert ce.SITE_THRESHOLDS["recall_rerank"] == 0.9
     # 0.8, the threshold decide mode blocks at: on the blind adjudication of 158 live turns it kept
     # 90% recall at 82% precision for the firings beyond the keywords, against 94% at 70% for 0.7.
     assert ce.SITE_THRESHOLDS["stop_signal"] == 0.8
@@ -544,11 +546,11 @@ def test_each_site_is_judged_at_its_own_default_threshold():
 
 
 def test_summarize_applies_the_per_site_default_when_no_threshold_is_given():
-    rows = [recall_row(["n1", "n2"], ["n1"], [0.75, 0.85])]
+    rows = [recall_row(["n1", "n2"], ["n1"], [0.85, 0.95])]
     rep = ce.summarize(rows, threshold=None, top=2)
-    # 0.75 is relevant at the old flat 0.7 and not at recall's own 0.8
+    # 0.85 is relevant at the old 0.8 and not at recall's own 0.9
     assert rep["sites"]["recall_rerank"]["jev_relevant"] == 1
-    assert rep["sites"]["recall_rerank"]["threshold"] == 0.8
+    assert rep["sites"]["recall_rerank"]["threshold"] == 0.9
 
 
 def test_an_explicit_threshold_overrides_every_site():
