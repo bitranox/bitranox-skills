@@ -1,49 +1,53 @@
-# Handover - 2026-10-15 14:00, [12] step (6) done, recall decide at 0.9 shipped (8.23.0); next is the due dream, covering [22]
+# Handover - 2026-10-15 16:20, [22] stale-version facts: code done on a branch, skill text next
 
 ## In flight
 
-- Nothing part-done. 8.23.0 (f3548893) is on origin/master, pre-push gate passed (12,477 tests),
-  CI green (`ci` and `workflow` runs).
+- [22] + [430], one change. CODE DONE and committed, NOT pushed: branch `stale-version-pass`,
+  commit 1e937bba, in the worktree `.claude/worktrees/recall-threshold-09` (the worktree name is
+  historical; do NOT wtclean it). Plugin bumped to 8.24.0 there with a CHANGELOG entry; 8.24.0 is
+  not on origin.
+  - `plugins/bitranox/skills/meta-dream-tree/versionrot.py` + `tests/test_versionrot.py` (37 tests)
+  - `meta-self-improve/jev_shadow.py`: `items --sample N --seed`, `run --dream ID`, `receipt`
+  - `meta-dream-tree/dream_state.py`: `done` now REQUIRES `--kind nap|tree`; tree takes
+    `--dream ID [--jev-skip SITE=REASON]` and refuses (exit 1) while a switched-on site is unfed
+  - `jev_sites/dream-prune.json`: third question `version_bound` (version 2)
+  - `hooks/capture_constraints.py`: version-history advisory (21 of 1,602 real hooks fire)
+- SKILL TEXT NOT WRITTEN YET. The skill-writer RED is done and recorded in
+  `meta-dream-tree/.skillwriter/red-20261015-version-rot-and-jev-receipt.md` (committed); its
+  "What GREEN must make true" section is the spec. Until the text lands, the shipped SKILL.md
+  files still say plain `dream_state.py done`, which the new code REFUSES - so the branch must
+  not be pushed without the text.
 
 ## Committed, or not
 
-- This handover is committed from the worktree `.claude/worktrees/recall-threshold-09` (branch
-  `worktree-recall-threshold-09`), which holds nothing else uncommitted. Remove it with
-  git-worktrees' `wtclean.py recall-threshold-09 --apply` (after `landed.py`) once this is on
-  origin.
-- The MAIN checkout's `master` is behind origin, and its `handover.md` carries an uncommitted STALE
-  first line written by this session. Discard that line (`git checkout -- handover.md` there) and
-  fast-forward `master` before working in the main checkout.
-- Machine-local, not in git: `~/.claude/.bitranox-memory.json` now has
-  `classifier_recall_rerank = decide` (set 2026-10-15 11:14:21Z through meta-memory-settings).
-- The panel record is gitignored: `.plan/jev-recall-2026-10-15/` in the MAIN checkout (PREREG.md,
-  RESULTS.md, labels.json, judges/, build_packets.py, score.py). Its key is in this session's
-  scratchpad, not in the repo.
-- Open sessions keep old plugin text until `/plugin marketplace update` plus `/reload-plugins`.
+- Committed on the branch: everything above. Unpushed.
+- This handover and the OPEN-WORK edits are committed from a separate worktree
+  `.claude/worktrees/handover-1015` (branch `handover-1015`, from origin/master) and pushed to
+  master. Remove that worktree after this is on origin.
+- MAIN checkout: `master` is behind origin and its `handover.md` carries an uncommitted STALE
+  line from an earlier session; auto mode refused discarding it. To fix, the user runs:
+  `! git checkout -- handover.md && git merge --ff-only origin/master` (from the main checkout)
+- Gitignored, main checkout: `EXECUTION-USER-REVIEW.md` has the 2026-10-15 13:47Z user decision.
 
 ## Decided, and why - do not reopen
 
-- Recall decide had NEVER run: the config was last written 2026-10-02 and said `shadow`, with 0
-  decide rows in the log; the 10-08 handover's "already set" was false. The user chose to run the
-  step (6) panel on the 322 fresh shadow rows (shadow and decide build the same request in
-  `_rerank_request`) and to set decide the same day. Logged in EXECUTION-USER-REVIEW.md.
-- Panel (pre-registered, 10 opus judges, 8/8 controls, 88% unanimous, every Jev-kept pair
-  judged): 47% relevant at 0.8, 65% at 0.9, keywords 7%. Branch 4 fired; the user chose 0.9.
-- A new test pins each decide row's "at N or more" in meta-memory-settings SKILL.md to
-  `SITE_THRESHOLDS`, so a retune cannot leave the doc on the old bar.
-
-## Decided against, and why
-
-- 0.85: 56% on these labels, still under the 60% bar, and chosen after seeing labels, so it would
-  need its own panel.
+- [430], the user's choice "Sample + receipt (Recommended)": about 40 facts per site per dream,
+  the session's own verdicts, and `done` refuses until each switched-on site has rows for that
+  dream or a stated reason. Full option text in EXECUTION-USER-REVIEW.md.
+- [18] closed on the user's "delete 18" (cf0e1686); the file's header forbids dropping lines.
+- "Deleted" stale facts go through the existing archive verb (`reconcile_memory_index.py
+  --archive`), recoverable; no new delete verb.
+- versionrot attribution: a version belongs to the word right before it; only a preposition
+  (in, since, from, fixed...) lets the search pass an unknown word; a run ("8.4.2 -> 8.5.0",
+  "from X to Y") keeps its first package. Before this rule, "click 8.2.1" in a lib_shopware6
+  sentence was credited to lib_shopware6. `ahead` (named > local) means a stale local clone and is
+  not flagged.
+- The version advisory skips an explicit Python boundary ("before Python 3.14"): those facts stay
+  true while the supported range spans them.
 
 ## Still open, untouched
 
-- [12]: its remaining step waits for decide rows (read `decide_path` for the fallback-deadline
-  share in a few days, earliest about 2026-10-18).
-- A memory consolidation is due (`bitranox:meta-dream-tree`); [22] is, in the user's words,
-  "a dream job".
-- Everything else: `OPEN-WORK.md`.
+- [12] waits for decide rows (earliest about 2026-10-18). Everything else: `OPEN-WORK.md`.
 
 ## Lessons for the next nap
 
@@ -53,28 +57,47 @@
   without a mode field are shadow rows whatever the docs say.
 - When a doc table restates a code constant (a threshold, a deadline), pin it with a test that
   reads the row and compares it with the constant.
-- tooling: the repo-gate version check also needs `pyproject.toml` bumped beside `plugin.json`;
-  the first `--ci` run failed on that alone.
+- When a `find` starting at `.` prunes `-name '.*'`, it prunes the start dir itself and prints
+  nothing; add `-mindepth 1`.
+- When checking that a push landed, read `git ls-remote origin refs/heads/<branch>`; a
+  `git rev-parse --verify -q A B` with two refs exits 1 and reads like a failed push.
+- When a number in prose must be tied to the package it versions, credit it to the word right
+  before it unless a preposition intervenes; nearest-known-name lookback misattributes.
+- tooling: the repo-gate version check also needs `pyproject.toml` bumped beside `plugin.json`,
+  and it fires on COMMIT, not only on push.
 
 ## The exact next action
 
-[12] is the top open item but is blocked on time (its decide-row read is earliest about
-2026-10-18), and [18] is deferred by the user, so the next live USER item is [22]. Run
-`bitranox:meta-dream-tree` (due), scoped to include [22]: find facts about superseded library or
-tool versions (btx-lib-mail first, per the user) at every level, and fix or retire them.
+[12] is blocked on time and [18] is closed, so the top live item is [22] (with [430]). In the
+worktree `.claude/worktrees/recall-threshold-09` on branch `stale-version-pass`: invoke
+`bitranox:meta-skill-writer` (run its receipt `start`), then write the GREEN text per the RED
+file's spec - meta-dream-tree SKILL.md steps 0c, 5, 6, 7 (third question fed by `versionrot.py
+scan --tree <anchor> --json`, re-check against the current release, then reword / archive /
+merge), 11 (`dream_state.py done --kind tree --dream <id>`, home and launch named), checklist
+lines 400/436; meta-dream-nap step 5 (`versionrot.py scan --chain`) and step 6 (`done --kind
+nap`); crosstree 4b and crosstree-deep 3b (sample + `jev_shadow.py receipt`);
+`references/dream-passes.md` removal policy and `references/dream-core.md:255`;
+`meta-self-improve/references/jev-shadow.md` (`dream_id` field, sample + receipt, dream-prune's
+`version_bound` row). GREEN-probe with the same two scenarios, plus haiku. Then amend the facts
+feedback-keep-status-out-of-memory-entries and forgetting-is-usage-based-only through the engine,
+rebase on origin/master, `repo-gate.py --ci`, push `HEAD:master`, `ci_wait.py --ref HEAD`. Then
+run the dream with versionrot, btx-lib-mail facts first.
 
 ## Files that matter
 
-- `OPEN-WORK.md` ([12] line, its "step (6) DONE" note)
-- `plugins/bitranox/hooks/classifier.py` (`SITE_THRESHOLDS`), `plugins/bitranox/hooks/recall-memory.py`
-  (`_decide_recall`)
-- `plugins/bitranox/skills/meta-memory-settings/tests/test_settings.py` (decide-row pin)
+- `plugins/bitranox/skills/meta-dream-tree/versionrot.py`, `dream_state.py`, `SKILL.md`,
+  `references/dream-passes.md`, `references/dream-core.md`
+- `plugins/bitranox/skills/meta-self-improve/jev_shadow.py`, `references/jev-shadow.md`
+- `plugins/bitranox/skills/meta-dream-nap/SKILL.md`, `meta-dream-crosstree/SKILL.md`,
+  `meta-dream-crosstree-deep/SKILL.md`
+- `~/.claude/plans/fancy-meandering-hejlsberg.md` (the approved plan)
 
 ## How to verify
 
-- `uv run <plugin>/skills/compuse-toolbox/scripts/ci_wait.py --ref origin/master` exits 0 on the
-  commit carrying this handover (and 8.23.0's CI, f3548893, is green).
-- `grep -c '"recall_rerank": 0.9' plugins/bitranox/hooks/classifier.py` prints 1.
+- In the branch worktree: `env -u VIRTUAL_ENV uv run --with pytest --with PyYAML --with lxml
+  --with defusedxml --with ruamel.yaml --with httpx2 python -m pytest plugins/bitranox/ -q`
+- `python3 plugins/bitranox/skills/meta-dream-tree/versionrot.py scan --tree
+  <memory tree top> --json` exits 1 and reports about 115 superseded facts.
 
 Read this, then replace the first line with `# STALE - read <date>, work continued`. Do not delete it -
 if this session ends badly it is the only record of where things stood.
