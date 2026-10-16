@@ -72,7 +72,7 @@ Create one todo per step.
    dream that writes nothing is the correct outcome. Only if there is genuinely new cross-project material
    (or the user wants a fresh deep read), **ASK the user before launching the fan-out**. For an
    always-run deep semantic scan with no asking, that is its own skill: `bitranox:meta-dream-crosstree-deep`.
-   - **Deep scan (on confirmation): FAN OUT** one **`sonnet`** subagent per project store (or per thematic
+   - **Deep scan (on confirmation): FAN OUT** one **`opus`** subagent per project store (or per thematic
      batch for many stores), in parallel, each returning recurring / broadly-useful candidate entries.
      Instruct each subagent to flag a DUPLICATE/MERGE only from the BODIES (not a title/topic match),
      and treat every such finding as a CANDIDATE the main agent VERIFIES before merging (see "Dedup

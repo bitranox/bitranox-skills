@@ -83,7 +83,7 @@ the success line, abort-and-show on a miss).
     tree-uniqueness violations `heal` cannot see. Fix a duplicate deliberately (keep the better hook)
     rather than with a blind `move`.
 
-0b. **Scope-descriptor synthesis (freshness-gated, parallel sonnet subagents).** The per-level
+0b. **Scope-descriptor synthesis (freshness-gated, parallel opus subagents).** The per-level
     descriptors are the PLACEMENT ROUTING KEY, so every level needs a meaningful one. LEVELS MEANS
     THE WHOLE TREE: every pointer-block-bearing dir under the anchor - SIBLING projects and
     departments included - not just the cwd's ancestor chain. Enumerate them with
@@ -92,7 +92,7 @@ the success line, abort-and-show on a miss).
     `grep` honors `.gitignore` and silently misses every gitignored store, while a bare `find`
     OVER-counts a vendored plugin copy under a repo's `.venv`). Only synthesize levels whose descriptor is EMPTY,
     INCOMPLETE (missing template keys), or whose CHILDREN list is stale vs the actual
-    subdirectories. Dispatch one `sonnet` subagent per stale
+    subdirectories. Dispatch one `opus` subagent per stale
     level, in parallel (bottom-up in two waves when a leaf and its parent are both stale, so the
     parent can read fresh child descriptors). An upper level's subagent reads each child dir's
     README/CLAUDE.md/docs headings + child descriptors; the project level's subagent reads the
@@ -263,7 +263,7 @@ the success line, abort-and-show on a miss).
    top: a hook whose trigger does not actually name the situations its body applies to (the FIRING
    check - would this line catch your attention at the right moment?). Do
    NOT rewrite a hook merely for exceeding the 350 SOFT cap - a complete trigger-first hook may run up
-   to the hard cap, which the engine enforces by refusal. Queue offenders to a sonnet
+   to the hard cap, which the engine enforces by refusal. Queue offenders to an opus
    rewrite (trigger-first, facts preserved, slug-stable via `add --slug <the stored slug>` aimed at
    the level that OWNS the pointer - a title-derived slug mints a duplicate when the fact was
    retitled, and any other level is refused as a collision), propose-diff, apply.

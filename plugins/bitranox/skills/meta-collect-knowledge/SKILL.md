@@ -42,7 +42,7 @@ unknown, defer - a blind gather pulls noise.
    - Optional MCP boost: with the `mcp_search` knob `auto` and a covering `basic-memory` index,
      the same command prints `MCP-CANDIDATES` (read-only search, never the store; the keyword
      grep is always the base).
-2. **Stage 2 - inspect (model, context-isolated).** Dispatch a `sonnet` subagent to read the
+2. **Stage 2 - inspect (model, context-isolated).** Dispatch an `opus` subagent to read the
    candidate files and return only what is genuinely useful to THIS project, privacy-scrubbed;
    discard near-misses. (Tier per `bitranox:process-agents-subagent-driven-development`.)
    - **Jev shadow on that keep/discard** (only when `jev_shadow.py status` exits 0; home

@@ -106,7 +106,7 @@ same loud behaviour on a `--hook` launch, which these scripts never use.
 
 The same harness reviews a plugin's shipped Python and JavaScript - hooks, skill scripts, the shim -
 with `--scripts`. It is a different job from the skill sweep and its defaults say so: one reviewer
-per FILE rather than per skill, `opus` rather than `sonnet`, because judging a script needs a
+per FILE rather than per skill, and a longer timeout, because judging a script needs a
 concrete failing input and a decision about whether a fail-open path is house style or a defect.
 
 ```bash

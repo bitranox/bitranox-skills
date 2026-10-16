@@ -100,9 +100,8 @@ Each agent gets:
   8 items across 4 files"* is obeying this skill while every finding is lost - the detail it refers
   to was never in what came back, and the count makes the loss read as a result. Re-run that agent;
   never reconstruct its numbers from the summary.
-- **An explicit model tier:** pin `model` per agent (do not inherit the session model - it is often
-  `opus`, the most expensive). Default fan-out to `sonnet`; use `haiku` for mechanical domains and
-  `opus` only for a domain needing deep design judgment. Full mapping: see "Concrete tiers" in
+- **An explicit model tier:** pin `model` per agent (do not inherit the session model). Fan out on
+  `opus`; use `haiku` only for purely mechanical domains. Full mapping: see "Concrete tiers" in
   `bitranox:process-agents-subagent-driven-development`. Omitting `model` trips the PreToolUse
   `subagent-model-gate` hook: a warning normally, a DENY while a plan execution is armed (the
   `plan-execution` receipt). Dispatching a batch as part of a plan? The plan skill already armed

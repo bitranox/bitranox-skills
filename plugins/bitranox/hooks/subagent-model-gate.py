@@ -3,15 +3,18 @@
 
 The Agent tool takes a subagent's model from the dispatch's `model`, else from the agent type's
 own definition (`model:` in its frontmatter), else from the default - the session's model unless a
-default subagent model is configured, usually the most capable and most expensive tier. Landing on
+default subagent model is configured, which may be a premium tier or a weaker one. Landing on
 that default silently defeats per-role model tiering.
 bitranox:process-agents-subagent-driven-development ("Concrete tiers") requires pinning the tier
-explicitly: `haiku` (mechanical / scan), `sonnet` (default fan-out / bounded judgment), `opus`
-(deep reasoning where being wrong is costly). Reasoning EFFORT is not a per-dispatch field - it
-rides the agent-type definition or a Workflow agent() call - so picking the tier (plus the right
-agent type) is also how effort is chosen.
+explicitly: `haiku` (purely mechanical work / scan) or `opus` (everything else). Reasoning EFFORT
+is not a per-dispatch field - it rides the agent-type definition or a Workflow agent() call - so
+picking the tier (plus the right agent type) is also how effort is chosen.
 
-Two enforcement levels:
+A dispatch that IS pinned, but to a sonnet model (on the dispatch, or in its agent type's
+definition), is warned about at every level and never denied: it satisfies the pin rule, but the
+tier mapping excludes sonnet because across a whole job it costs more than opus.
+
+Two enforcement levels for an UNPINNED dispatch:
 - Normally: WARN (additionalContext on stdout, exit 0) - some dispatches legitimately inherit
   (a `fork` always inherits by design, and sometimes the session model is genuinely right). The
   warn rides `hookSpecificOutput.additionalContext` (no `permissionDecision`), which reaches the
@@ -52,10 +55,16 @@ _FRONTMATTER_BYTES = 64 * 1024
 
 _TIERS = (
     "Pin the tier per bitranox:process-agents-subagent-driven-development (Concrete tiers): "
-    "`haiku` = mechanical / transcription / scan, `sonnet` = default fan-out and bounded judgment, "
-    "`opus` = deep reasoning where being wrong is costly (architecture, synthesis, adversarial "
-    "verify). Effort rides the agent type or a Workflow agent() call, not the dispatch - the tier "
+    "`haiku` = purely mechanical work (transcription, scan, formatting), `opus` = everything else "
+    "(fan-out, bounded judgment, deep reasoning) - the `opus` alias always resolves to the latest "
+    "Opus. Effort rides the agent type or a Workflow agent() call, not the dispatch - the tier "
     "(plus the right agent type) is how effort is chosen."
+)
+
+_SONNET_MESSAGE = (
+    "Subagent pinned to a sonnet model. sonnet is not a dispatch tier: across a whole job it costs "
+    "more than `opus` (more turns and more reasoning tokens for the same work). " + _TIERS +
+    " Re-dispatch with `model: opus`, or `haiku` for purely mechanical work."
 )
 
 _WARN_MESSAGE = (
@@ -154,14 +163,19 @@ def _pins(model):
     return isinstance(model, str) and bool(model.strip()) and model.strip().lower() != "inherit"
 
 
+def _is_sonnet(model):
+    return isinstance(model, str) and "sonnet" in model.lower()
+
+
 def assess(tool_name, tool_input, plan_armed=False, definition_model=None):
     """Pure: return (action, message) with action in {'deny', 'warn', None}.
 
     A non-fork subagent dispatch with no `model`, whose agent type's definition pins none
     (`definition_model`, resolved by the caller), warns - or denies while a plan execution is
-    armed. Everything else passes silently, including a tool name that is not a string: testing
-    that against the set would raise, and the fail-open wrapper would turn the exception into a
-    lost verdict.
+    armed. A dispatch whose effective model (the dispatch's, else the definition's) is a sonnet
+    model warns, armed or not. Everything else passes silently, including a tool name that is not
+    a string: testing that against the set would raise, and the fail-open wrapper would turn the
+    exception into a lost verdict.
     """
     if not isinstance(tool_name, str) or tool_name not in SUBAGENT_TOOLS:
         return (None, "")
@@ -172,9 +186,10 @@ def assess(tool_name, tool_input, plan_armed=False, definition_model=None):
         return (None, "")
     model = tool_input.get("model")
     if isinstance(model, str) and model.strip():
-        return (None, "")  # explicitly pinned - good
+        return ("warn", _SONNET_MESSAGE) if _is_sonnet(model) else (None, "")
     if _pins(definition_model):
-        return (None, "")  # the agent type pins its own model, which the dispatch then uses
+        # the agent type pins its own model, which the dispatch then uses
+        return ("warn", _SONNET_MESSAGE) if _is_sonnet(definition_model) else (None, "")
     if plan_armed:
         return ("deny", _DENY_MESSAGE)
     return ("warn", _WARN_MESSAGE)

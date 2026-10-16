@@ -260,8 +260,8 @@ INITIALIZATION:
   STEP A - PARALLEL ANALYSIS (use subagents):
      - Read `.data_arch_violations.json`
      - Increment "pass" counter
-     - Launch subagents (Task tool, subagent_type="Explore", model="sonnet") in PARALLEL for each file
-       (pin the tier; per-file scanning is bounded sonnet work - see "Concrete tiers" in
+     - Launch subagents (Task tool, subagent_type="Explore", model="opus") in PARALLEL for each file
+       (pin the tier; per-file scanning is bounded judgment, an `opus` job - see "Concrete tiers" in
        bitranox:process-agents-subagent-driven-development)
      - Each subagent prompt MUST include:
        * The file path to analyze
@@ -292,8 +292,8 @@ INITIALIZATION:
        import from it). Measured: three agents editing one checkout in parallel produced a
        transient test failure from a half-written sibling edit, and one agent had to re-read
        files before every write to avoid clobbering another's work.
-     - Launch subagents (Task tool, subagent_type="general-purpose", model="sonnet") in PARALLEL,
-       one per file SET (per-file refactor is bounded sonnet work; pin the tier)
+     - Launch subagents (Task tool, subagent_type="general-purpose", model="opus") in PARALLEL,
+       one per file SET (per-file refactor is bounded judgment, an `opus` job; pin the tier)
      - Each subagent prompt MUST include:
        * The full Architecture Rules section (copy from this document)
        * The specific violations for that file (from state file)

@@ -77,7 +77,7 @@ Judge each claim against the system, not against the other copies:
 A claim you cannot verify is not automatically false, but do not enshrine it at an ancestor. Drop it
 and say so.
 
-Dispatch this as one subagent per heading (`sonnet` is enough), each returning the canonical text
+Dispatch this as one subagent per heading (`opus`), each returning the canonical text
 plus what it fixed, what it dropped, and what was false in which copies. Read their evidence, not
 their verdicts: spot-check at least one claim per report with your own control, because a
 hand-rolled detector reports what its pattern can see, not what is true.

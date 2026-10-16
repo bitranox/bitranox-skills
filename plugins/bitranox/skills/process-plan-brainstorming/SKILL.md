@@ -31,7 +31,7 @@ Start by understanding the current project context, then ask questions one at a 
 
 **Capability check.** Generating and weighing 2-3 genuinely different designs is capability-sensitive -
 a weaker model produces shallow, near-duplicate options. If the session is on a lesser tier, delegate
-the approach-generation/synthesis to a pinned `sonnet`/`opus` subagent or offer
+the approach-generation/synthesis to a pinned `opus` subagent or offer
 switch-model-or-continue (the main agent cannot self-switch its model). See
 `bitranox:process-agents-subagent-driven-development` ("The session model is fixed").
 

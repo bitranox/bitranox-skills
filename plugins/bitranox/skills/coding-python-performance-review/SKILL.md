@@ -67,7 +67,7 @@ Use the Read tool to load referenced files for full details.
 
 > Tiering: the profiling runs (Step 3) are mechanical - run them in parallel/background, no model. The
 > bounded judgment work (Step 4's existing-cache audit, and review-pipeline claim-validation below) is
-> ideal **`sonnet`** subagent work. The final synthesis/prioritization call warrants **`opus`**: if it
+> **`opus`** subagent work. The final synthesis/prioritization call warrants **`opus`** too: if it
 > runs inline (not dispatched), and the session is not on `opus`, offer switch-model-or-continue per
 > "The session model is fixed" in `bitranox:process-agents-subagent-driven-development` (the main agent
 > cannot self-switch its model). See "Concrete tiers" in the same skill.
@@ -117,7 +117,7 @@ Collect all **previously reviewed items**  -  both fixes already implemented and
 
 Also scan codebase for inline comments containing "by design", "intentional", or "performance: accepted".
 
-Respect previously reviewed items by DEFAULT, but they are not frozen: RE-ASSESS a declined finding against current ground truth (an already-implemented fix stays done - never re-suggest it). Do not casually re-raise a declined finding; re-open one ONLY when concrete ground truth shows its premise no longer holds (the data it was sized against grew, the code moved onto a hot path, it now blows up memory/time). Then surface it as a propose-first "Reconsider" finding (Step 6) - never silently skip a declined item ground truth now contradicts, and never silently change one. This "does the premise still hold?" judgment is bounded work a weak/literal session model gets wrong: run it on a **`sonnet`** subagent (pin the tier per dispatch; the main agent cannot self-switch its model - see "The session model is fixed" in `bitranox:process-agents-subagent-driven-development`), or inline when already on a capable model.
+Respect previously reviewed items by DEFAULT, but they are not frozen: RE-ASSESS a declined finding against current ground truth (an already-implemented fix stays done - never re-suggest it). Do not casually re-raise a declined finding; re-open one ONLY when concrete ground truth shows its premise no longer holds (the data it was sized against grew, the code moved onto a hot path, it now blows up memory/time). Then surface it as a propose-first "Reconsider" finding (Step 6) - never silently skip a declined item ground truth now contradicts, and never silently change one. This "does the premise still hold?" judgment is bounded work a weak/literal session model gets wrong: run it on an **`opus`** subagent (pin the tier per dispatch; the main agent cannot self-switch its model - see "The session model is fixed" in `bitranox:process-agents-subagent-driven-development`), or inline when already on a capable model.
 
 ### Step 2: Setup
 

@@ -24,7 +24,7 @@ Default to advisor mode unless the user signals they want the persona.
 
 **Capability check.** This psychological/strategic synthesis - reframing the problem and finding a
 counter-intuitive, credible lever - is capability-sensitive; a weaker model returns generic, obvious
-advice. If the session is on a lesser tier, delegate the synthesis to a pinned `sonnet`/`opus`
+advice. If the session is on a lesser tier, delegate the synthesis to a pinned `opus`
 subagent or offer switch-model-or-continue (the main agent cannot self-switch its model). See
 `bitranox:process-agents-subagent-driven-development` ("The session model is fixed").
 

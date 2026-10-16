@@ -31,7 +31,7 @@ Before defining tasks, map out which files will be created or modified and what 
 
 **Capability check.** Decomposing a spec into well-bounded units is capability-sensitive - a weaker
 model produces a shallow or incoherent decomposition. If the session is on a lesser tier, delegate
-the design/decomposition to a pinned `sonnet`/`opus` subagent, or offer switch-model-or-continue
+the design/decomposition to a pinned `opus` subagent, or offer switch-model-or-continue
 (the main agent cannot self-switch its model). The Self-Review below is NOT delegable at any tier -
 it is a fresh-eyes pass over the plan YOU just wrote against the spec, and a subagent that never saw
 the plan take shape cannot know what was considered and rejected. See `bitranox:process-agents-subagent-driven-development` ("The session model is fixed").

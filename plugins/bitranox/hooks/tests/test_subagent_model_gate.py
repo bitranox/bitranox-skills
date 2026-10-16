@@ -2,8 +2,8 @@
 
 Contract: WARN (additionalContext JSON on stdout, exit 0) when a Task/Agent dispatch omits
 `model`, is not a fork, and its agent type's own definition pins no model; DENY (PreToolUse deny
-JSON on stdout) for the same dispatch while a fresh `plan-execution` receipt is armed. Every other
-path exits 0 and writes nothing to stderr. All content is ASCII.
+JSON on stdout) for the same dispatch while a fresh `plan-execution` receipt is armed. WARN, never
+DENY, when the effective model is a sonnet one, armed or not. Every other path exits 0 and writes nothing to stderr. All content is ASCII.
 """
 
 import io
@@ -52,7 +52,39 @@ def test_assess_denies_when_plan_armed():
 
 
 def test_assess_pinned_passes_even_when_armed():
-    assert W.assess("Task", {"subagent_type": "x", "model": "sonnet"}, plan_armed=True)[0] is None
+    assert W.assess("Task", {"subagent_type": "x", "model": "opus"}, plan_armed=True)[0] is None
+
+
+def test_assess_haiku_pin_passes():
+    assert W.assess("Task", {"subagent_type": "x", "model": "haiku"})[0] is None
+
+
+@pytest.mark.parametrize("model", ["sonnet", " Sonnet ", "claude-sonnet-4-6", "claude-sonnet-5"])
+def test_assess_warns_on_a_sonnet_pin(model):
+    action, msg = W.assess("Task", {"subagent_type": "x", "model": model})
+    assert action == "warn"
+    assert "sonnet" in msg and "`opus`" in msg and "`haiku`" in msg
+
+
+def test_a_sonnet_pin_warns_but_is_not_denied_when_armed():
+    """A sonnet pin IS a pin, which is all the plan rule demands - so it never blocks."""
+    assert W.assess("Task", {"subagent_type": "x", "model": "sonnet"}, plan_armed=True)[0] == "warn"
+
+
+def test_assess_warns_when_the_agent_definition_pins_sonnet():
+    assert W.assess("Agent", {"subagent_type": "scout"}, definition_model="sonnet")[0] == "warn"
+
+
+def test_a_dispatch_model_overrides_a_sonnet_definition():
+    assert W.assess("Agent", {"subagent_type": "scout", "model": "opus"},
+                    definition_model="sonnet")[0] is None
+
+
+def test_the_sonnet_warning_reaches_main_as_additional_context(monkeypatch, capsys):
+    run_main(monkeypatch, {"tool_name": "Task", "tool_input": {"subagent_type": "x", "model": "sonnet"}})
+    out = json.loads(capsys.readouterr().out)["hookSpecificOutput"]
+    assert "permissionDecision" not in out
+    assert "sonnet" in out["additionalContext"]
 
 
 def test_assess_fork_exempt_even_when_armed():
@@ -179,9 +211,9 @@ def _armed_dispatch(subagent_type, **extra):
 
 
 def test_the_plugins_own_self_pinned_agent_is_not_denied_when_armed(monkeypatch, capsys):
-    """bitranox:baseline-probe pins `model: sonnet` in plugins/bitranox/agents/baseline-probe.md,
+    """bitranox:baseline-probe pins `model: opus` in plugins/bitranox/agents/baseline-probe.md,
     and the Agent tool uses that when the dispatch omits one - so it is pinned, not unpinned."""
-    assert W.agent_definition_model("bitranox:baseline-probe") == "sonnet"
+    assert W.agent_definition_model("bitranox:baseline-probe") == "opus"
     assert run_main(monkeypatch, _armed_dispatch("bitranox:baseline-probe")) == 0
     out = capsys.readouterr()
     assert out.out == "" and out.err == ""

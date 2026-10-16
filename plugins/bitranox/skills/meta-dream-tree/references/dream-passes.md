@@ -117,7 +117,7 @@ is its value.
 ## Filler-word classification (keeps recall precise) - PER PROJECT
 
 The per-prompt recall hook is model-free: it queues any not-yet-classified keyword for THIS
-project (`load_pending_keywords(proj)`). If the queue is non-empty, hand it to a `sonnet` subagent
+project (`load_pending_keywords(proj)`). If the queue is non-empty, hand it to an `opus` subagent
 to classify each word as **filler** (no topical signal: "again", "previous") or **topical** (a
 real term: "bindsnap"). Apply per-project: `add_filler_words(filler, proj)`,
 `add_topical_words(topical, proj)`, `clear_pending_keywords(proj)`, in that order: the two adds

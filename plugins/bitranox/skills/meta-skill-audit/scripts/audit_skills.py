@@ -839,7 +839,7 @@ def _subprocess_runner(prompt, cwd, model, timeout):
     return RunnerOutcome(text, "claude exited %d" % proc.returncode)
 
 
-def audit_one(name, room, reports_dir, model="sonnet", timeout=900, prefix="bitranox",
+def audit_one(name, room, reports_dir, model="opus", timeout=900, prefix="bitranox",
               runner=_subprocess_runner):
     """Review one skill and write its report. `runner` is the injectable reviewer seam."""
     project_local = (Path(room) / REPO_MANIFEST).is_file()
@@ -916,7 +916,7 @@ def _run_pool(jobs, items, work, log):
     return results
 
 
-def audit_all(plugin_src, room_root, model="sonnet", jobs=6, timeout=900, only=(),
+def audit_all(plugin_src, room_root, model="opus", jobs=6, timeout=900, only=(),
               prefix="bitranox", reuse=False, runner=_subprocess_runner, log=print,
               skills_dir=None, hooks_dir=None):
     """Audit every selected skill. Returns {skill: finding_count}."""
@@ -1140,7 +1140,7 @@ def _sweep(args, only):
                                 skip_existing=args.skip_existing)
         stems = [report_stem(rel) for rel in results]
     else:
-        results = audit_all(args.plugin, args.room, args.model or "sonnet", args.jobs or 6,
+        results = audit_all(args.plugin, args.room, args.model or "opus", args.jobs or 6,
                             args.timeout or 900, only, args.prefix, args.reuse_room,
                             skills_dir=args.skills_dir, hooks_dir=args.hooks_dir)
         stems = list(results)

@@ -29,6 +29,26 @@ than the change, so entries reconstructed from them would read like coverage wit
 a hole nobody has drawn a line under is one that gets rediscovered and half-filled - which is how
 two "versions with no entry" notes came to sit in this file disagreeing with it.
 
+## [9.1.0]
+
+### Changed
+
+- Subagents dispatch on `opus` wherever a skill used to pin `sonnet`; `haiku` stays for purely
+  mechanical work. Across a whole job `sonnet` costs more than `opus`: it takes more turns and more
+  reasoning tokens for the same work. The canonical mapping in
+  `process-agents-subagent-driven-development` ("Concrete tiers") now has two working tiers,
+  `haiku` and `opus` (plus `fable` above it), always passed as the alias so `opus` resolves to the
+  latest Opus. Every skill that fanned out on `sonnet` - the dream skills, the code-quality and
+  code-review reviewers, `meta-skill-writer`'s baseline example, the clean-architecture and
+  data-architecture sweeps, and the rest - now names `opus`. `meta-skill-audit`'s skill sweep and
+  the `baseline-probe` agent default to `opus`.
+
+### Added
+
+- `subagent-model-gate` warns (never denies) on a dispatch whose model is a sonnet one, on the
+  dispatch or in its agent type's definition.
+- A test fails when any shipped skill text, agent definition or script names `sonnet` as a tier.
+
 ## [9.0.0]
 
 ### Changed

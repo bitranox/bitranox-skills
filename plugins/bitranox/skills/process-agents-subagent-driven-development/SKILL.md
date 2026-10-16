@@ -1,6 +1,6 @@
 ---
 name: process-agents-subagent-driven-development
-description: Use when executing an implementation plan with mostly independent tasks in the current session, or when choosing the model tier for ANY dispatched subagent - this is the canonical model-tier reference (haiku / sonnet / opus / fable; the session model is fixed) that other skills cite. Keywords - subagent-driven development, dispatch per task, parallel agents, task brief, model tier.
+description: Use when executing an implementation plan with mostly independent tasks in the current session, or when choosing the model tier for ANY dispatched subagent - this is the canonical model-tier reference (haiku / opus / fable; the session model is fixed) that other skills cite. Keywords - subagent-driven development, dispatch per task, parallel agents, task brief, model tier.
 ---
 
 # Subagent-Driven Development
@@ -104,23 +104,21 @@ conflicts that only emerge from implementation.
 
 ## Model Selection
 
-Use the least powerful model that can handle each role to conserve cost and increase speed.
+There are two working tiers: `haiku` for purely mechanical work, `opus` for everything else
+(`fable`, above `opus`, is a rare exception for single judgments - see "Concrete tiers"). The test
+is whether anything is JUDGED: if the output follows from the input by a fixed rule (match a
+regex, copy, reformat, transcribe given code), it is mechanical; the moment the agent decides
+whether something is a violation, a duplicate, relevant or correct, it is `opus`.
 
-**Mechanical implementation tasks** (isolated functions, clear specs, 1-2 files): use a fast, cheap model. Most implementation tasks are mechanical when the plan is well-specified.
+**Mechanical implementation tasks** (the plan text holds the complete CODE, or a single-file
+mechanical fix): `haiku`. A complete spec written as prose is not complete code: `opus`.
 
-**Integration and judgment tasks** (multi-file coordination, pattern matching, debugging): use a standard model.
-
-**Architecture and design tasks**: use the most capable available model.
-The final whole-branch review is one of these  -  dispatch it on the most
-capable available model, not the session default.
-
-**Review tasks**: choose the model with the same judgment, scaled to the
-diff's size, complexity, and risk. A small mechanical diff does not need the
-most capable model; a subtle concurrency change does.
+**Everything else** - integration, judgment, debugging, review, architecture and design, the final
+whole-branch review: `opus`.
 
 **Always specify the model explicitly when dispatching a subagent.** An
-omitted model inherits your session's model - often the most capable and
-most expensive - which silently defeats this section. This is ENFORCED, not
+omitted model inherits your session's model, which may be a premium tier or a
+weaker one - either way it silently defeats this section. This is ENFORCED, not
 just documented: **arm the model gate before dispatching Task 1** -
 
     bash "$CLAUDE_PLUGIN_ROOT/hooks/run-python.sh" "$CLAUDE_PLUGIN_ROOT/hooks/skill_receipt.py" start plan-execution
@@ -150,46 +148,51 @@ which costs more than the tokens it saves.
 | Role                                                | Effort                                       |
 |-----------------------------------------------------|----------------------------------------------|
 | `haiku`-tier mechanical scan / transcribe / extract | `low` (the big saver on fleet-scale fan-out) |
-| `sonnet` default fan-out / bounded judgment         | inherit - do not set                         |
-| `opus` deep reasoning                               | `high`, if set at all                        |
+| `opus` fan-out / bounded judgment / deep reasoning  | inherit - do not set                         |
 | Adversarial verify / judge panel / final synthesis  | `xhigh` or `max`                             |
 
 ### Concrete tiers (canonical mapping - other skills reference this section)
 
 Map the generic tiers to the current Claude lineup, and pass the **stable tier ALIAS**
-(`haiku` / `sonnet` / `opus`), never a pinned version like `claude-opus-4-8` - the alias
-auto-resolves to the latest model in that tier, so a new version needs no edit.
+(`haiku` / `opus`), never a pinned version like `claude-opus-4-8` - the alias
+auto-resolves to the latest model in that tier, so `opus` is always the newest Opus and a new
+version needs no edit.
 
-- **`haiku`** (cheap, fastest) = mechanical / transcription / pattern-scan: secret/PII scans,
-  license accept-reject mapping, formatting, 1-2-file complete-spec implementers.
-- **`sonnet`** (standard, fast, cheaper than opus - the DEFAULT fan-out tier) = bounded judgment and
-  the workhorse for parallel fan-out: per-file/per-dimension/per-store reviewers and scanners,
-  relevance filtering, extraction, summarize, integration, reference hunting, most implementers.
-- **`opus`** (deep reasoning, slow/pricey - the DEFAULT deep tier) = reserve for reasoning where
-  being wrong is costly: architecture/design, final SYNTHESIS, adversarial CORRECTNESS
-  verification, root-cause judgment, the final whole-branch review.
+- **`haiku`** (cheap, fastest) = purely mechanical / transcription / pattern-scan with no
+  judgment: regex secret/PII scans, license accept-reject mapping against a fixed table,
+  formatting, 1-2-file implementers whose brief holds the complete code.
+- **`opus`** (the DEFAULT for everything that is not purely mechanical) = fan-out that judges
+  (per-file/per-dimension/per-store reviewers, and scanners that judge what they find - fanned out
+  or not, the judging decides the tier, not the fan-out), bounded judgment, relevance
+  filtering, summarizing, integration, reference hunting, implementers working from
+  prose, architecture/design, final SYNTHESIS, adversarial CORRECTNESS verification, root-cause
+  judgment, the final whole-branch review.
 - **`fable`** (Mythos-class, ABOVE opus; premium-priced and only available on paid API credits -
   many plans cannot resolve it) = the exceptional top tier for the hardest single judgments where
   even opus-level error is too costly. Use sparingly and only where the plan/credits allow;
-  `opus` stays the universally-available deep default.
+  `opus` stays the universally-available default.
 
-Reserve `opus`/`fable` for genuine deep reasoning; do NOT use them for mechanical or pure fan-out
-work, and do NOT leave fan-out work on the session default (often opus- or fable-class). The lineup ages: the model hierarchy is
+**`sonnet` is not a tier here.** Across a whole job it costs more than `opus`: it takes more turns
+and more reasoning tokens for the same work, which outweighs its lower price per token. Do not
+fall back to it for "cheaper" fan-out; the only step down from `opus` is `haiku`, and only for
+purely mechanical work. The `subagent-model-gate` hook warns on a dispatch pinned to `sonnet`.
+
+Do NOT use `fable` for fan-out or mechanical work, and do NOT leave any dispatch on the session
+default. The lineup ages: the model hierarchy is
 re-evaluated periodically by `bitranox:meta-dream-tree` (it asks the `claude-code-guide` agent for the
 current Claude model lineup and proposes a re-tier if the ordering shifts), so this mapping stays current.
 
 **Turn count beats token price.** Wall-clock and context cost scale with how
-many turns a subagent takes, and the cheapest models routinely take 2-3× the
-turns on multi-step work  -  costing more overall. Use a mid-tier model as the
+many turns a subagent takes, and cheaper models routinely take 2-3× the
+turns on multi-step work  -  costing more overall. That is why `opus` is the
 floor for reviewers and for implementers working from prose descriptions.
 When the task's plan text contains the complete code to write, the
-implementation is transcription plus testing: use the cheapest tier for
-that implementer. Single-file mechanical fixes also take the cheapest tier.
+implementation is transcription plus testing: use `haiku` for
+that implementer. Single-file mechanical fixes also take `haiku`.
 
 **Task complexity signals (implementation tasks):**
-- Touches 1-2 files with a complete spec → cheap model
-- Touches multiple files with integration concerns → standard model
-- Requires design judgment or broad codebase understanding → most capable model
+- Touches 1-2 files and the brief holds the complete code, or is a single-file mechanical fix → `haiku`
+- Anything else → `opus`
 
 ### The session model is fixed: delegate, or offer a choice for inline work
 
