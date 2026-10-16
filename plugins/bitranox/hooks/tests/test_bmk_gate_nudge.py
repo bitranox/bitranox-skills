@@ -42,12 +42,14 @@ def test_a_bmk_target_in_a_bmk_repo_fires(bmk_repo, command):
     assert nudge.notice(command, str(bmk_repo)) is not None
 
 
+# as_posix(): the Bash tool is POSIX even on Windows, so an unquoted C:\Users\... path loses its
+# backslashes as escapes (C:Users...) exactly as Git Bash would; C:/Users/... is what a user types.
 def test_make_dash_c_into_a_bmk_repo_fires(bmk_repo, tmp_path):
-    assert nudge.notice(f"make -C {bmk_repo} test", str(tmp_path)) is not None
+    assert nudge.notice(f"make -C {bmk_repo.as_posix()} test", str(tmp_path)) is not None
 
 
 def test_a_leading_cd_into_the_bmk_repo_fires(bmk_repo, tmp_path):
-    assert nudge.notice(f"cd {bmk_repo} && make test", str(tmp_path)) is not None
+    assert nudge.notice(f"cd {bmk_repo.as_posix()} && make test", str(tmp_path)) is not None
 
 
 @pytest.mark.parametrize("command", ["bmk test", "uvx bmk@latest install", "uvx bmk deps --update"])

@@ -1,4 +1,4 @@
-# Handover 2026-10-16: [23] phase 2 committed as 9.2.0, not pushed
+# STALE - read 2026-10-16, work continued
 
 ## In flight
 

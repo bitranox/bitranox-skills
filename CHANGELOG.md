@@ -29,6 +29,15 @@ than the change, so entries reconstructed from them would read like coverage wit
 a hole nobody has drawn a line under is one that gets rediscovered and half-filled - which is how
 two "versions with no entry" notes came to sit in this file disagreeing with it.
 
+## [9.2.1]
+
+### Fixed
+
+- `bmk-gate-nudge` tests: the `make -C <dir>` and leading-`cd` cases built a Bash command from a
+  native Windows path, whose unquoted backslashes the Bash tokenizer reads as escapes (exactly as
+  Git Bash does), so both failed on the Windows CI cell. They now pass the path in its forward-slash
+  form, as the sibling hook tests do. The hook itself was right.
+
 ## [9.2.0]
 
 ### Added
