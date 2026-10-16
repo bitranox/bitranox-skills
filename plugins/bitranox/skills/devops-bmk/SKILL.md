@@ -367,10 +367,13 @@ that drops the fast local coverage `local_only` exists to provide.
 
 `make test-all` applies the same selection on every declared Python version, so it is the only
 cross-version run your `local_only` tests ever get: CI excludes them. Run it before a release.
-`make testintegration` in a project with no `integration`-marked tests ends with pytest's exit 5
-("no tests collected"), and bmk passes that through as a failed stage. That red is not a test
-failure: confirm the lane is empty (no `mark.integration` in the tests) and report it as nothing to
-run; do not add a placeholder test. `push`, `ship` and `release` do not run this lane.
+When `make testintegration` collects no test, pytest exits 5 ("no tests collected"): bmk prints
+`[pytest_integration] (exit code: 5)` and exits 5, and make then prints `Error 5` and exits 2, its
+code for any failed recipe. Key on the bmk line, not on make's exit code. If no test carries the
+marker (no `mark.integration` in the tests), the lane is empty by construction: report it as an
+empty lane, neither passed nor failed, and do not add a placeholder test. If integration tests exist
+and none were collected, something is filtering them out, which is a real fault: run
+`.venv/bin/python -m pytest --collect-only -m integration` to see what the lane collects. `push`, `ship` and `release` do not run this lane.
 
 bmk runs pytest in **this project's own `.venv`** (section 1), which it syncs with the project's
 `[dev]` extra, so `[dev]`-only test-import deps (fakes, test-support libraries, property-test
@@ -421,7 +424,7 @@ gate to go red. A gate that has only ever passed has not been shown to gate. See
 | `make release` refuses: version is not canonical / carries a local segment          | Not a read failure - the version WAS read. bmk accepts any canonical PEP 440 version but refuses a spelling `packaging` would normalise (`v1.0.0`, `1.0.0-beta`) or a local segment (`1.2.3+local`); the message names the canonical form to write. See section 3. |
 | `make push` fails at `[deps] (exit code: 1)` with `(no output captured)`            | A dependency floor is behind a new PyPI release, not your edit. `bmk deps --update`, then push again (section 3).                                                                                                                                                  |
 | `ModuleNotFoundError` inside bmk's own dependencies                                 | bmk's shared env, not your code; the next `make` repairs it (section 1).                                                                                                                                                                                           |
-| `make testintegration` fails with exit code 5                                       | The lane has no `integration`-marked tests; nothing to run (section 6).                                                                                                                                                                                            |
+| `make testintegration` fails: `[pytest_integration] (exit code: 5)`                 | pytest collected no test: an empty lane, or a filter hiding the tests (section 6).                                                                                                                                                                                 |
 | Private GitHub deps fail to resolve                                                 | `git config --global url."https://<TOKEN>@github.com/<ORG>/".insteadOf "https://github.com/<ORG>/"` before install.                                                                                                                                                |
 
 ## Further reading

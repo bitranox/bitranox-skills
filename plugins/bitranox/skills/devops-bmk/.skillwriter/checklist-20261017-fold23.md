@@ -48,3 +48,14 @@
 - [x] Description measured: unchanged (440 characters)
 - [x] Mirror: byte-identical to the tool repo's `skills/devops-bmk/SKILL.md`
 - [x] Security scan: prose only; no secrets, hostnames, private paths or addresses
+- [x] Follow-up (9.2.4 / bmk 3.21.4): the exit-5 text said `make testintegration` exits 5; make
+      exits 2 after `Error 5` and only bmk exits 5, so the text now keys on the
+      `[pytest_integration] (exit code: 5)` line. A declined round-2 gap (integration tests exist
+      but none were collected) is now closed: that case is a filter fault, not an empty lane.
+      Quote-back on opus and haiku for the three exit-5 scenarios.
+- [x] Round-3 gap closed: `testintegration` passes a fixed `-m integration`, so "the marker
+      expression" was not a cause a reader can change; the text now names the diagnostic
+      (`pytest --collect-only -m integration`) instead. Declined: where to report an empty lane
+      (the caller's own reporting), dynamically added markers and tests outside `tests/` (the
+      collect-only command covers both), how a caller keeps an exit-5 lane from going red (the
+      caller's choice).
