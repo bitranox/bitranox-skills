@@ -29,6 +29,14 @@ than the change, so entries reconstructed from them would read like coverage wit
 a hole nobody has drawn a line under is one that gets rediscovered and half-filled - which is how
 two "versions with no entry" notes came to sit in this file disagreeing with it.
 
+## [9.1.1]
+
+### Changed
+
+- `coding-python-send-mail` documents `DeliveryError.rejected_recipients` (btx_lib_mail 4.4.0): the failed
+  recipients every host refused permanently, which a caller drops instead of retrying. Mirrors the
+  twin in btx_lib_mail.
+
 ## [9.1.0]
 
 ### Changed
