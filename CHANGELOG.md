@@ -29,6 +29,22 @@ than the change, so entries reconstructed from them would read like coverage wit
 a hole nobody has drawn a line under is one that gets rediscovered and half-filled - which is how
 two "versions with no entry" notes came to sit in this file disagreeing with it.
 
+## [9.2.3]
+
+### Changed
+
+- `devops-bmk`: the reds that come from bmk itself rather than from the change being gated. A
+  `ModuleNotFoundError` inside bmk's own dependencies is bmk's shared env, repaired on the next
+  `make`; the "waited 10s for the lock ... gave up. Nothing was changed." line speaks only for the
+  skipped upgrade; `make push`'s `deps` stage fails with only `(no output captured)` when a
+  dependency floor falls behind a fresh PyPI release; `release` tags the version already in
+  `pyproject.toml` (bumping first skips it) and pushes branch then tag, while `push` commits with
+  `git add -A`; `make test-all` is the only cross-version run `local_only` tests get; an empty
+  integration lane exits 5. Corrected: a version mismatch is cured by the next sync, not by
+  `rm -rf .venv`; the shell-lint gate runs `shfmt -d -i 4 -bn -ci` and takes bashate's settings
+  from `[tool.bashate]`; the Makefile no longer passes `--refresh-package bmk`. Synced with bmk
+  3.21.3.
+
 ## [9.2.2]
 
 ### Changed

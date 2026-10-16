@@ -87,6 +87,16 @@ environments.
   until its next `make` regenerates it, and a hand-run `uv tool install bmk` always is. So when a
   command fails and the env turns out to have been replaced mid-run, bmk says so on stderr rather
   than leaving an ImportError inside its own dependencies to look like a flake.
+- **A `ModuleNotFoundError` whose traceback runs through bmk's own entry point and names a module
+  inside bmk's dependencies is bmk's env, not your code.** Before every target the Makefile runs
+  `bmk_selfcheck`, which compares each installed package's file list against the disk and
+  reinstalls on a missing file, so the next `make` repairs it. Meanwhile check your change with the
+  project venv's own tools (`.venv/bin/python -m pytest`, `-m pyright`), then re-run `make` once.
+- **`[bmk] another bmk is using the shared tool environment; waited 10s ... and gave up. Nothing
+  was changed.`** speaks only for the bmk upgrade, which is skipped; the target you ran continues
+  and its result is its own. Do not re-run a `release` or bump past a version on that line: check
+  the outcome where it lands (`git ls-remote --tags origin v<version>`, `gh release view
+  v<version>`, the release workflow, PyPI).
 - Right after a release there is a brief window where uv's index still reports only the previous
   version; the next `make` picks the new one up.
 
@@ -161,6 +171,16 @@ Set `UV_PROJECT_ENVIRONMENT` when one checkout is used from more than one OS (a 
 both Linux and Windows): a single venv cannot serve both, so give each its own (e.g. `.venv-win`).
 If provisioning fails, bmk falls back to its own interpreter rather than failing the command.
 
+**A gate reporting versions that disagree with `pyproject.toml`** (pip-audit flagging a version the
+manifest excludes, or the project's own package at an old version) is not cured by deleting
+`.venv`: the next env-touching `make` re-syncs it, and deleting it only forces a full re-resolve.
+When the mismatch survives a re-run, check `BMK_NO_VENV_SYNC`, then re-run with
+`BMK_OUTPUT_FORMAT=text`: JSON mode hides the provisioning output, so that is where a failed sync
+and the fall-back to bmk's interpreter show. To resync by hand, target the venv explicitly
+(`uv pip install -e ".[dev]" --python .venv/bin/python --exact --upgrade`, or the venv
+`UV_PROJECT_ENVIRONMENT` names) and name EVERY extra the project uses: `--exact` uninstalls
+whatever no extra on that command line pulls in.
+
 `clean` does not delete the venv (that would throw away what bmk just built and force a full
 re-resolve); `make clean-all` removes every `.venv*` alongside the build artifacts when you do
 want them gone. bmk also keeps venvs out of git: it adds a single `.venv*` glob to `.gitignore`
@@ -206,6 +226,23 @@ forwarded (e.g. `make push fix login bug`). Most have short aliases.
 | `make ensure`                           | Install missing external tools for this OS (see section 5)                                    |
 | `make custom <name> [args...]`          | Run a user-defined pipeline (section 6)                                                       |
 | `make help`                             | List available targets                                                                        |
+
+**`release` does not bump; `push` always commits.**
+
+- `release` tags `v` + the version already in `pyproject.toml`, on HEAD, and refuses a dirty tree;
+  it pushes the branch, then the tag, so a local release commit needs no separate push.
+  When that version is committed but not yet tagged (`git tag --list "v<version>"` is empty),
+  release it directly: running `bump` first moves past it and that version is never published.
+- `push` stages with `git add -A`, so every untracked, non-ignored file rides along; check
+  `git status` first. With nothing staged it makes an empty commit, so a `push` after the release
+  commit is already pushed leaves `release` tagging that empty commit. That is expected, not a
+  broken release.
+- `push` starts with a `deps` stage that FAILS when any dependency floor in `pyproject.toml` is
+  behind the latest PyPI release, which can be minutes old. In the default JSON mode it prints only
+  `[deps] (exit code: 1)` / `(no output captured)`. Do not bisect your edits: the cause is a new
+  upstream release. `BMK_OUTPUT_FORMAT=text` prints the report above that line; `bmk deps --update`
+  (or a `make test`, whose first stage raises floors) fixes it. In a multi-repo sweep, one release
+  of a shared dependency breaks every pending repo, so update them all before resuming.
 
 ### What version `bump` and `release` accept, and what they produce
 
@@ -266,6 +303,9 @@ tool output is captured and shown **only when a stage fails**. To get the full v
 - `make test-human` / any command with `--human`, **or**
 - set `BMK_OUTPUT_FORMAT=text`.
 
+A stage bmk runs in-process rather than as a tool, such as `deps`, fails in JSON mode with only
+`(no output captured)`; `BMK_OUTPUT_FORMAT=text` shows what it printed.
+
 Precedence: `--human` (forces text) > `BMK_OUTPUT_FORMAT` > default (`json`). If a run "does nothing
 visible", that is JSON mode succeeding -- add `--human` to watch it work.
 
@@ -274,22 +314,24 @@ visible", that is JSON mode succeeding -- add `--human` to watch it work.
 Some pipeline stages call external tools (git, pwsh, shellcheck, shfmt, bashate, PSScriptAnalyzer).
 If a run complains one is missing:
 
-**The `.sh` shell-lint gate's settings (know these before "fixing" a diff).** bmk runs `shfmt -i 4 -ci`
-and `bashate --max-line-length 120`. Both matter: matching shfmt's indent but omitting `-ci` (indent
-switch cases) still yields a rejected diff, and `bashate` reads NO config file - not `pyproject.toml`,
-not `.bashaterc` - so without the explicit flag it falls back to its 79-char default and flags lines
-the project considers fine. Reformatting to your local defaults instead of these values is the usual
-cause of "passes locally, fails the gate".
-
-Before bmk 3.13.2 the gate's file discovery also descended into a NESTED git worktree and linted
-another branch's checkout as part of yours. The tell is a lint error naming a path you do not
-recognise; upgrade, or move the nested checkout outside the tree.
-
 ```bash
 make ensure                 # install everything missing for this OS
 bmk ensure --dry-run        # just report what would be installed
 bmk ensure --strict         # non-zero exit if anything is still missing
 ```
+
+**The `.sh` shell-lint gate's settings (know these before "fixing" a diff).** bmk runs
+`shfmt -d -i 4 -bn -ci` and `bashate --max-line-length=<N> --ignore=<codes>`, taking `N` and the
+codes from `[tool.bashate]` in `pyproject.toml` (`max-line-length`, `ignores`); with no such section
+it warns and uses 120 and `E003`. Every flag matters: shfmt with the right indent but without
+`-bn` (binary operators like `&&` and `|` may start a line) or `-ci` (indent switch cases) still
+yields a rejected diff. And `bashate` itself reads NO config file, so run by hand without those
+flags it falls back to its 79-char default and flags lines the gate accepts. Reformatting to your
+local defaults instead of these values is the usual cause of "passes locally, fails the gate".
+
+Before bmk 3.13.2 the gate's file discovery also descended into a NESTED git worktree and linted
+another branch's checkout as part of yours. The tell is a lint error naming a path you do not
+recognise; upgrade, or move the nested checkout outside the tree.
 
 ## 6. Configuration and custom pipelines
 
@@ -322,6 +364,13 @@ Raise `exclude-markers` only to skip MORE from `make test` - e.g. a project whos
 tests MUTATE the host and are unsafe on a real dev machine can tag them `mutating` and set
 `exclude-markers = "mutating"` (a common project-specific marker). Do NOT set it to "match CI" -
 that drops the fast local coverage `local_only` exists to provide.
+
+`make test-all` applies the same selection on every declared Python version, so it is the only
+cross-version run your `local_only` tests ever get: CI excludes them. Run it before a release.
+`make testintegration` in a project with no `integration`-marked tests ends with pytest's exit 5
+("no tests collected"), and bmk passes that through as a failed stage. That red is not a test
+failure: confirm the lane is empty (no `mark.integration` in the tests) and report it as nothing to
+run; do not add a placeholder test. `push`, `ship` and `release` do not run this lane.
 
 bmk runs pytest in **this project's own `.venv`** (section 1), which it syncs with the project's
 `[dev]` extra, so `[dev]`-only test-import deps (fakes, test-support libraries, property-test
@@ -365,11 +414,14 @@ gate to go red. A gate that has only ever passed has not been shown to gate. See
 | `make: command not found` (Windows)                                                 | Install a `make`: non-admin box -> `winget install --id ezwinports.make -e --scope user` (run make from Git Bash so `SHELL := /bin/bash` resolves); `choco install make` needs an elevated shell. bmk itself needs no shell.                                       |
 | `make release` runs green but no GitHub Release appears (Windows)                   | `make release` detects `gh` via `shutil.which` and SILENTLY skips the GitHub Release when `gh` is not on the INVOKING process's PATH (tag push + PyPI publish still succeed). Put gh's dir on PATH first, or run `gh release create v<version>` after.             |
 | `bmk: command not found`                                                            | uv's tool bin dir is not on your PATH. You do not need it there - inside a project use `make <target>` (the Makefile calls the absolute path); to bootstrap a new one use `uvx bmk install`. To put it on PATH anyway: `uv tool update-shell`.                     |
-| Tools resolve the wrong deps / import errors                                        | Rebuild the PROJECT's venv (that is what the gates resolve): `rm -rf .venv && make test`.                                                                                                                                                                          |
-| `make` keeps using an old bmk right after a release                                 | uv's cached index has not caught up. The Makefile already passes `--refresh-package bmk`; just re-run `make`.                                                                                                                                                      |
+| Tools resolve the wrong deps / import errors                                        | Re-run `make`: it re-syncs the PROJECT's venv (what the gates resolve) before every env-touching target. If it persists, check `BMK_NO_VENV_SYNC` (section 1); deleting `.venv` only forces a full re-resolve.                                                     |
+| `make` keeps using an old bmk right after a release                                 | uv's index has not caught up yet, or another bmk held the tool lock and the upgrade was skipped (section 1). Either way the next `make` upgrades; just re-run it.                                                                                                  |
 | `make test` runs host-mutating `local_only` tests you want only on a throwaway host | Tag those tests `mutating` and set `[tool.scripts.test].exclude-markers = "mutating"` (section 6). `make test` running `local_only` is by design - do NOT exclude `local_only` to "match CI".                                                                      |
-| `make test` fails on a `[dev]`-only import                                          | bmk runs pytest in this project's `.venv`, synced with the `[dev]` extra. Rebuild it: `rm -rf .venv && make test`.                                                                                                                                                 |
+| `make test` fails on a `[dev]`-only import                                          | bmk runs pytest in this project's `.venv`, synced with the `[dev]` extra before every env-touching target. Re-run `make`; if it persists, check `BMK_NO_VENV_SYNC` (section 1).                                                                                    |
 | `make release` refuses: version is not canonical / carries a local segment          | Not a read failure - the version WAS read. bmk accepts any canonical PEP 440 version but refuses a spelling `packaging` would normalise (`v1.0.0`, `1.0.0-beta`) or a local segment (`1.2.3+local`); the message names the canonical form to write. See section 3. |
+| `make push` fails at `[deps] (exit code: 1)` with `(no output captured)`            | A dependency floor is behind a new PyPI release, not your edit. `bmk deps --update`, then push again (section 3).                                                                                                                                                  |
+| `ModuleNotFoundError` inside bmk's own dependencies                                 | bmk's shared env, not your code; the next `make` repairs it (section 1).                                                                                                                                                                                           |
+| `make testintegration` fails with exit code 5                                       | The lane has no `integration`-marked tests; nothing to run (section 6).                                                                                                                                                                                            |
 | Private GitHub deps fail to resolve                                                 | `git config --global url."https://<TOKEN>@github.com/<ORG>/".insteadOf "https://github.com/<ORG>/"` before install.                                                                                                                                                |
 
 ## Further reading
