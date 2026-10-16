@@ -12,8 +12,10 @@ Guards that need this: `block-write-after-sibling-cd` (an earlier sibling moved 
 One reader, so the two cannot disagree about which calls are siblings.
 
 A subagent's event carries the PARENT's `transcript_path` plus `agent_id`, and the subagent's own
-records sit in `<parent minus .jsonl>/subagents/agent-<agent_id>.jsonl` (probed on 2.1.295), so a
-call made inside a subagent is looked up there.
+records sit in `<parent minus .jsonl>/subagents/agent-<agent_id>.jsonl` (probed on 2.1.295), or
+one level deeper, in `subagents/workflows/<wf_id>/`, for an agent a Workflow script started. A
+call made inside a subagent is looked up there; `agent_transcript` is the one resolver every hook
+that needs a subagent's own file uses.
 
 Only the tail of the transcript is read: the current message sits at the very end. Every failure
 answers None ("nothing known"), which a guard must read as "allow".
@@ -21,12 +23,39 @@ answers None ("nothing known"), which a guard must read as "allow".
 
 import json
 import os
+import re
 from pathlib import Path
 
 from shell_text import is_shell_tool
 
 #: How far the transcript tail is read before giving up: the current message sits at the very end.
 TAIL_BYTES = (256 * 1024, 4 * 1024 * 1024)
+
+# agent_id becomes a file-name segment and a glob pattern; anything but a plain name could leave
+# subagents/ or match another agent's file.
+_AGENT_ID = re.compile(r"[A-Za-z0-9_-]+")
+
+
+def agent_transcript(main_path, agent_id):
+    """The subagent `agent_id`'s own transcript in the session at `main_path`, as a Path.
+
+    A Task subagent's file is `subagents/agent-<id>.jsonl`; a Workflow agent's is
+    `subagents/workflows/<wf_id>/agent-<id>.jsonl`, and the event does not name the workflow.
+    When neither exists the direct path is returned, so a caller reports it as unreadable. None
+    when the id is not a plain name, or when it matches in more than one workflow: neither file
+    can then be told to be this agent's own.
+    """
+    if not isinstance(agent_id, str) or not _AGENT_ID.fullmatch(agent_id):
+        return None
+    agents = Path(main_path).with_suffix("") / "subagents"
+    name = "agent-%s.jsonl" % agent_id
+    direct = agents / name
+    if direct.is_file():
+        return direct
+    found = sorted((agents / "workflows").glob("*/" + name))
+    if len(found) > 1:
+        return None
+    return found[0] if found else direct
 
 
 def _tool_uses(record):
@@ -87,8 +116,8 @@ def transcript_of(event):
         return None
     agent_id = event.get("agent_id")
     if agent_id:
-        main = Path(path)
-        return str(main.with_suffix("") / "subagents" / f"agent-{agent_id}.jsonl")
+        own = agent_transcript(path, agent_id)
+        return str(own) if own is not None else None
     return path
 
 

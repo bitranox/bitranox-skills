@@ -238,13 +238,19 @@ def _load_record(skill_dir, *, is_meta=True, as_list=True):
     return record
 
 
-def _session(tmp_path, main_records=(), agent=None, agent_records=()):
-    """A session laid out as Claude Code writes it; returns the main transcript path."""
+def _session(tmp_path, main_records=(), agent=None, agent_records=(), workflow=None):
+    """A session laid out as Claude Code writes it; returns the main transcript path.
+
+    A Workflow agent's file sits one level deeper, under subagents/workflows/<wf_id>/.
+    """
     main = tmp_path / "proj" / "S.jsonl"
     main.parent.mkdir(parents=True, exist_ok=True)
     main.write_text("".join(json.dumps(r) + "\n" for r in main_records), encoding="utf-8")
     if agent is not None:
-        sub = main.with_suffix("") / "subagents" / ("agent-%s.jsonl" % agent)
+        agents = main.with_suffix("") / "subagents"
+        if workflow is not None:
+            agents = agents / "workflows" / workflow
+        sub = agents / ("agent-%s.jsonl" % agent)
         sub.parent.mkdir(parents=True, exist_ok=True)
         sub.write_text("".join(json.dumps(r) + "\n" for r in agent_records), encoding="utf-8")
     return main
@@ -293,6 +299,21 @@ def test_a_subagent_that_loaded_the_skill_itself_allows(tmp_path, armed):
     main = _session(tmp_path, [], agent="a176a72d1e8646ccc",
                     agent_records=[_load_record(_CACHE + "meta-skill-writer")])
     assert G.decide(_edit(main, agent="a176a72d1e8646ccc"), {}) is None
+
+
+def test_a_workflow_agent_that_loaded_the_skill_itself_allows(tmp_path, armed):
+    """A Workflow agent's transcript is under subagents/workflows/<wf_id>/; looking only in
+    subagents/ refused every SKILL.md edit of a 26-agent fan-out that had loaded the skill."""
+    main = _session(tmp_path, [], agent="a0a803103acf6811b", workflow="wf_928ebb87-156",
+                    agent_records=[_load_record(_CACHE + "meta-skill-writer")])
+    assert G.decide(_edit(main, agent="a0a803103acf6811b"), {}) is None
+
+
+def test_a_workflow_agent_cannot_ride_the_parents_load(tmp_path, armed):
+    main = _session(tmp_path, [_load_record(_CACHE + "meta-skill-writer")],
+                    agent="a0a803103acf6811b", workflow="wf_928ebb87-156",
+                    agent_records=[{"type": "user", "message": {"content": "go"}}])
+    assert G.decide(_edit(main, agent="a0a803103acf6811b"), {}) is not None
 
 
 def test_a_typed_message_quoting_the_load_line_is_not_evidence(tmp_path, armed):

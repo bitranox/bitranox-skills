@@ -29,6 +29,18 @@ than the change, so entries reconstructed from them would read like coverage wit
 a hole nobody has drawn a line under is one that gets rediscovered and half-filled - which is how
 two "versions with no entry" notes came to sit in this file disagreeing with it.
 
+## [9.1.3]
+
+### Fixed
+
+- `skill-edit-guard` finds a Workflow agent's own transcript. A Workflow agent's records sit in
+  `subagents/workflows/<wf_id>/agent-<id>.jsonl`, one level below where the guard looked, so it
+  refused every SKILL.md edit from a Workflow fan-out, including agents that had loaded
+  `meta-skill-writer`. `sha-literal-nudge` and `transcript_siblings` (used by
+  `block-write-after-sibling-cd` and `block-commit-beside-sibling-gate`) built the same path and
+  now share one resolver, `transcript_siblings.agent_transcript`. An agent id found in two
+  workflows names no transcript, so the guard still fails closed.
+
 ## [9.1.2]
 
 ### Changed

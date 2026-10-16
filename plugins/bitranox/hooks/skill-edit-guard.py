@@ -24,14 +24,17 @@ after backslashes become `/` and `.`/`..` segments collapse:
     session's `session_id` and `transcript_path` plus its own `agent_id`, and its Bash sees the
     parent's CLAUDE_CODE_SESSION_ID. So a subagent running `start` by hand armed every agent in the
     session without any of them loading the skill. The editing agent's transcript is the main one,
-    or `<transcript_path minus .jsonl>/subagents/agent-<agent_id>.jsonl` when `agent_id` is set.
+    or, when `agent_id` is set, `<transcript_path minus .jsonl>/subagents/agent-<agent_id>.jsonl`
+    (a Task subagent) or `.../subagents/workflows/<wf_id>/agent-<agent_id>.jsonl` (a Workflow
+    agent), resolved by `transcript_siblings.agent_transcript`.
   - UNLESS the env `BITRANOX_SKILL_WRITER` is set: the emergency bypass. NOTE: a shell `export` in a
     Bash tool call does NOT reach this hook (separate process) - the env must be set at SESSION start.
 
 Errors split by direction. Unparseable stdin and any error escaping `main` fail OPEN (exit 0): a broken
 guard must never wedge a turn. An error while consulting the receipt store, a transcript that cannot
-be read, and an `agent_id` that is not a plain name all fail CLOSED: they count as no evidence and the
-edit is blocked, because evidence that cannot be read must not disarm the guard.
+be read, and an `agent_id` that is not a plain name or matches in two workflows all fail CLOSED: they
+count as no evidence and the edit is blocked, because evidence that cannot be read must not disarm
+the guard.
 Pure standard library; launched via run-python.sh so it works on Windows too.
 """
 import json
@@ -41,6 +44,8 @@ import re
 import sys
 from pathlib import Path
 
+from transcript_siblings import agent_transcript
+
 # IGNORECASE because macOS and Windows filesystems are case-insensitive: there `Skills/x/skill.md`
 # opens the real SKILL.md, and the guard cannot tell from a path string which filesystem it names.
 _SKILL_MD = re.compile(r"(?:^|/)skills/[^/]+/SKILL\.md$", re.IGNORECASE)
@@ -48,8 +53,6 @@ _TOOLS = {"Edit", "Write", "MultiEdit", "NotebookEdit"}
 _BYPASS_ENV = "BITRANOX_SKILL_WRITER"
 _SKILL = "meta-skill-writer"
 _LOAD_PREFIX = "Base directory for this skill:"
-# agent_id becomes a file-name segment; anything but a plain name could leave subagents/.
-_AGENT_ID = re.compile(r"[A-Za-z0-9_-]+")
 
 
 def _agent_transcript(event):
@@ -59,10 +62,7 @@ def _agent_transcript(event):
         return None
     if "agent_id" not in event or event["agent_id"] is None:
         return Path(main)
-    agent = event["agent_id"]
-    if not isinstance(agent, str) or not _AGENT_ID.fullmatch(agent):
-        return None
-    return Path(main).with_suffix("") / "subagents" / ("agent-%s.jsonl" % agent)
+    return agent_transcript(main, event["agent_id"])
 
 
 def _texts(record):

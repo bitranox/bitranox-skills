@@ -502,12 +502,17 @@ def test_main_is_silent_when_the_transcript_showed_the_sha(monkeypatch, capsys, 
     assert out == ""
 
 
-def _subagent(tmp_path, parent_records, agent_records, write_parent=True):
-    """A session file plus one subagent file at the path Claude Code uses for it."""
+def _subagent(tmp_path, parent_records, agent_records, write_parent=True, workflow=None):
+    """A session file plus one subagent file at the path Claude Code uses for it.
+
+    A Workflow agent's file sits one level deeper, under subagents/workflows/<wf_id>/.
+    """
     main_path = tmp_path / "sess.jsonl"
     if write_parent:
         _transcript(tmp_path, "sess.jsonl", parent_records)
     agents = tmp_path / "sess" / "subagents"
+    if workflow is not None:
+        agents = agents / "workflows" / workflow
     agents.mkdir(parents=True)
     return main_path, _transcript(agents, "agent-abc123.jsonl", agent_records)
 
@@ -554,6 +559,23 @@ def test_a_transcript_path_naming_the_subagent_file_finds_the_parent(
         monkeypatch, capsys, tmp_path, shown_in_parent):
     parent = [_tool_result(f"{S}\n" if shown_in_parent else "unrelated")]
     _main, agent_path = _subagent(tmp_path, parent, [_brief(f"watch CI for {S}")])
+    out = _run_in_subagent(monkeypatch, capsys, agent_path)
+    assert (out == "") is shown_in_parent
+
+
+def test_a_sha_a_workflow_agent_s_own_tool_printed_is_not_nudged(monkeypatch, capsys, tmp_path):
+    main_path, _agent = _subagent(tmp_path, [_tool_result("unrelated")],
+                                  [_brief("watch CI for HEAD"), _tool_result(f"{S}\n")],
+                                  workflow="wf_928ebb87-156")
+    assert _run_in_subagent(monkeypatch, capsys, main_path) == ""
+
+
+@pytest.mark.parametrize("shown_in_parent", [True, False])
+def test_a_transcript_path_naming_a_workflow_agent_file_finds_the_parent(
+        monkeypatch, capsys, tmp_path, shown_in_parent):
+    parent = [_tool_result(f"{S}\n" if shown_in_parent else "unrelated")]
+    _main, agent_path = _subagent(tmp_path, parent, [_brief(f"watch CI for {S}")],
+                                  workflow="wf_928ebb87-156")
     out = _run_in_subagent(monkeypatch, capsys, agent_path)
     assert (out == "") is shown_in_parent
 

@@ -50,6 +50,35 @@ def test_a_subagent_call_is_looked_up_in_the_subagent_s_own_transcript(tmp_path)
     assert ts.siblings_for_event(event) == ["make test"]
 
 
+def test_a_workflow_agent_call_is_looked_up_under_subagents_workflows(tmp_path):
+    # A Workflow agent's event has the same shape, but its own records sit one level deeper, in
+    # <parent minus .jsonl>/subagents/workflows/<wf_id>/agent-<agent_id>.jsonl.
+    main = _write(tmp_path / "s.jsonl", [_record("m", "p1", "echo parent")])
+    wf_dir = tmp_path / "s" / "subagents" / "workflows" / "wf_928ebb87-156"
+    wf_dir.mkdir(parents=True)
+    _write(wf_dir / "agent-a7.jsonl", [_record("n", "c1", "make test"), _record("n", "c2", "git push")])
+    event = {"transcript_path": str(main), "tool_use_id": "c2", "agent_id": "a7"}
+
+    assert ts.siblings_for_event(event) == ["make test"]
+
+
+def test_an_agent_id_in_two_workflows_names_no_transcript(tmp_path):
+    """Two candidates cannot both be the agent's own file, so neither is evidence."""
+    main = _write(tmp_path / "s.jsonl", [])
+    for wf in ("wf_1", "wf_2"):
+        (tmp_path / "s" / "subagents" / "workflows" / wf).mkdir(parents=True)
+        _write(tmp_path / "s" / "subagents" / "workflows" / wf / "agent-a7.jsonl", [])
+
+    assert ts.agent_transcript(str(main), "a7") is None
+
+
+def test_an_agent_id_that_is_not_a_plain_name_names_no_transcript(tmp_path):
+    main = _write(tmp_path / "s.jsonl", [])
+
+    assert ts.agent_transcript(str(main), "../x") is None
+    assert ts.agent_transcript(str(main), "*") is None
+
+
 def test_an_unreadable_or_missing_transcript_yields_none(tmp_path):
     assert ts.siblings_for_event({"transcript_path": str(tmp_path / "nope.jsonl"), "tool_use_id": "t"}) is None
     assert ts.siblings_for_event({"tool_use_id": "t"}) is None

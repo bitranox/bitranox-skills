@@ -85,6 +85,7 @@ from shell_text import (
     strip_data_sink_statements,
     strip_heredoc_bodies,
 )
+from transcript_siblings import agent_transcript
 
 __all__ = ["main", "notice", "shas_in", "shown_shas"]
 
@@ -632,19 +633,25 @@ def _transcripts(event):
     """(own, relayed): the session transcripts that vouch for a sha, and a subagent's own file.
 
     Inside a subagent `transcript_path` is the MAIN session's and `agent_id` names the subagent,
-    whose file sits at `<session>/subagents/agent-<id>.jsonl`. A `transcript_path` that already
-    names such a file is read the same way, with the session file beside its directory as parent.
+    whose file sits at `<session>/subagents/agent-<id>.jsonl`, or under
+    `subagents/workflows/<wf_id>/` for a Workflow agent. A `transcript_path` that already names
+    such a file is read the same way, with the session file beside its `<session>` dir as parent.
     """
     main_path = event.get("transcript_path")
     if not main_path:
         return [], []
     path = Path(main_path)
-    if path.parent.name == "subagents" and path.name.startswith("agent-"):
-        session_dir = path.parent.parent
-        return [session_dir.parent / (session_dir.name + ".jsonl")], [path]
+    if path.name.startswith("agent-"):
+        subagents = path.parent
+        if subagents.parent.name == "workflows":
+            subagents = subagents.parent.parent
+        if subagents.name == "subagents":
+            session_dir = subagents.parent
+            return [session_dir.parent / (session_dir.name + ".jsonl")], [path]
     agent = event.get("agent_id")
     if agent:
-        return [path], [path.with_suffix("") / "subagents" / ("agent-%s.jsonl" % agent)]
+        own = agent_transcript(path, agent)
+        return [path], ([own] if own is not None else [])
     return [path], []
 
 
