@@ -36,6 +36,7 @@ two "versions with no entry" notes came to sit in this file disagreeing with it.
 - `ai-llm-jev-judge`: synced with btx-skill-jev-judge 0.3.0. Every `uvx --from` line now asks
   for `btx-skill-jev-judge>=0.3.0`, the release that names the project, its config folder and its
   commands `btx-skill-jev-judge` throughout and drops the `btx_skill_jev_judge` command.
+  `meta-self-improve`'s `jev_shadow.py` runs the same package and moves its floor to 0.3.0 with it.
 
 ## [9.2.1]
 
