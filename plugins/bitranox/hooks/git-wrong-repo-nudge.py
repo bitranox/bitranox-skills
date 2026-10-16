@@ -51,7 +51,6 @@ is text rather than a statement - prose documenting this footgun must not trip t
 
 NON-BLOCKING: emits additionalContext and exits 0. Fail-open on any error. ASCII only.
 """
-from __future__ import annotations
 
 import json
 import os

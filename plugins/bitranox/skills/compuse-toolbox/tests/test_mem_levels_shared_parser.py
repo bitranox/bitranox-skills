@@ -4,7 +4,6 @@ Its own regex matched `](mem:slug)` anywhere in the file, so a pointer-shaped li
 around the managed block, or a slug merely linked from a sentence, counted as a fact at that level
 - and could hide a real dangling body behind it.
 """
-from __future__ import annotations
 
 import sys
 from pathlib import Path

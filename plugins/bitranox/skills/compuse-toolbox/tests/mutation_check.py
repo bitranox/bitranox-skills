@@ -27,7 +27,6 @@ shown to fail against a deliberate break. Add a mutant before claiming they have
 
 Run: `uv run tests/mutation_check.py`   (exit 0 = every mutant killed exactly its tests)
 """
-from __future__ import annotations
 
 import re
 import shutil

@@ -71,8 +71,6 @@ run exit 2: a mandate checked against part of the files cannot come back clean. 
 `{ok, command, data, skipped}` on every exit; `ok` is false exactly when the exit is 2.
 """
 
-from __future__ import annotations
-
 import argparse
 import ast
 import io
@@ -800,8 +798,7 @@ def _binding_holder(
 def _parse(source: str, path: str) -> ast.Module:
     try:
         return ast.parse(source)
-    except (SyntaxError, ValueError) as exc:
-        # ValueError: a NUL byte on Python 3.10, where ast.parse does not report it as SyntaxError.
+    except SyntaxError as exc:
         line = getattr(exc, "lineno", None)
         raise Unparseable(f"{path}: {getattr(exc, 'msg', exc)} (line {line})") from exc
 

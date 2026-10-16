@@ -19,8 +19,6 @@ Exit status: 0 every file converted, 1 no matching files found,
 an unreadable subdirectory, or markitdown missing).
 """
 
-from __future__ import annotations
-
 import argparse
 import os
 import sys

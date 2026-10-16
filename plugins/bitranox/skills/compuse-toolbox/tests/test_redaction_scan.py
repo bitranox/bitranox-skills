@@ -7,7 +7,6 @@ The two hand-rolled traps the jig replaces are pinned first: a bare `#` comment 
 matching every `#` in the change, and a `name==>replacement` rule searched as its whole text and
 so never matching the name.
 """
-from __future__ import annotations
 
 import json
 import subprocess

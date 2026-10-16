@@ -36,8 +36,6 @@ before it is deleted: Windows refuses to rename a directory while a process has 
 open, so a failed rename means "in use" and the dir is left alone.
 """
 
-from __future__ import annotations
-
 import argparse
 import json
 import os

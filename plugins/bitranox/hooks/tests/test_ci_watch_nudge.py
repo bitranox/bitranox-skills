@@ -4,7 +4,6 @@ These drive a real git repository with a real remote rather than patching the gi
 subtlety of the hook is its landed-test (`HEAD` == `@{u}`), and a patched `_git` would assert the
 shape of the mock instead of the behaviour that matters.
 """
-from __future__ import annotations
 
 import json
 import subprocess

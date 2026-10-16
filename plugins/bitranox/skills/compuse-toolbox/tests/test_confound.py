@@ -10,8 +10,6 @@ calls a two-dimension pair clean is worse than no tool, because it launders the 
 it was built to stop.
 """
 
-from __future__ import annotations
-
 import io
 import json
 import os

@@ -11,7 +11,6 @@ Three defects of one shape - an answer that cannot be told apart from a clean on
 
 All content ASCII.
 """
-from __future__ import annotations
 
 import sys
 from pathlib import Path

@@ -40,7 +40,6 @@ path EXISTS but could not be stat'd (permission denied) - the newest may be exac
 `--json` prints `{ok, command, data, skipped}` on every exit, 2 included; `ok` is false exactly
 when the exit is 2, so a no-match (exit 1) is `ok: true` with `data: []`.
 """
-from __future__ import annotations
 
 import errno
 import glob

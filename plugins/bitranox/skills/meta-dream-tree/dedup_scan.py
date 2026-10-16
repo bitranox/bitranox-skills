@@ -36,7 +36,6 @@ Exit codes: 0 = scanned, no candidates at or above the threshold (and the contro
 --json prints the envelope {ok, command, data, skipped} on every exit, an `error` key added
 on exit 2; `ok` means the run worked and is false only on exit 2.
 """
-from __future__ import annotations
 
 import argparse
 import json

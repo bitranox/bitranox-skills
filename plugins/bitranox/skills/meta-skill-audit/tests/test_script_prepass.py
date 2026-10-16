@@ -4,6 +4,9 @@ Every check gets a positive AND a negative case: a check that only ever fires is
 from one that always fires, and the negative is what proves it could have answered the other way.
 The subprocess seams are injected, so nothing here spawns a process."""
 
+import re
+from pathlib import Path
+
 import script_prepass as P
 
 
@@ -150,9 +153,18 @@ def test_a_floor_above_the_ci_minimum_is_reported(tmp_path):
 
 
 def test_a_floor_below_the_ci_minimum_is_correct_and_is_not_reported(tmp_path):
-    """ci.yml: 3.11 is the supported minimum and shipped scripts declare their OWN floors, so a
-    wider promise (>=3.10) is deliberate. Reporting it flagged 27 correct files."""
+    """Shipped scripts declare their OWN floors, so a wider promise than CI's minimum is
+    deliberate. Reporting it flagged 27 correct files."""
     assert P.pep723_problems(_write(tmp_path, "s.py", _BLOCK % "3.10"), ci_min="3.11") == []
+
+
+def test_ci_min_is_the_oldest_python_cell_ci_tests():
+    """CI_MIN is a copy of ci.yml's matrix floor; a floor raise that misses it fires here."""
+    ci = Path(__file__).resolve().parents[5] / ".github" / "workflows" / "ci.yml"
+    matrix = re.search(r"python-version: \[([^\]]*)\]", ci.read_text(encoding="utf-8"))
+    assert matrix, ci
+    cells = [tuple(int(p) for p in v.strip().strip('"').split(".")) for v in matrix.group(1).split(",")]
+    assert "%d.%d" % min(cells) == P.CI_MIN
 
 
 def test_a_script_with_no_block_is_not_reported(tmp_path):

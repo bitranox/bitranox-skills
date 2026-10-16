@@ -11,7 +11,6 @@ properties are pinned with a planted positive and a planted negative each:
 
 Linux only, like the jig: the real-process tests are skipped where there is no /proc.
 """
-from __future__ import annotations
 
 import json
 import os

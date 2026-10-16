@@ -1,5 +1,4 @@
 """A Windows-written log must read back as text, whatever encoding the writer used."""
-from __future__ import annotations
 
 import json
 import os

@@ -45,7 +45,6 @@ Cannot block: `SubagentStart` ignores the exit code (stderr surfaces in the suba
 transcript, and Claude does not see it). Emits `additionalContext` and exits 0, fail-open on any
 error. Pure standard library, ASCII only; launched via run-python.sh so it works on Windows too.
 """
-from __future__ import annotations
 
 import json
 import sys

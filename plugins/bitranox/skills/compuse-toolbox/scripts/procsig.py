@@ -100,7 +100,6 @@ the target already exited between the scan and the signal - said as "already exi
 Run: `uv run scripts/procsig.py --exe myserver`
      `uv run scripts/procsig.py --kill --signal TERM --cmdline job-1234`
 """
-from __future__ import annotations
 
 import argparse
 import os

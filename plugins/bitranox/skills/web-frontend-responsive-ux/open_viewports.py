@@ -19,8 +19,6 @@ no window loaded, the browser failed, Chromium cannot start, or bad arguments.
 Import-safe: the browser only opens under ``__main__``.
 """
 
-from __future__ import annotations
-
 import argparse
 import sys
 import time

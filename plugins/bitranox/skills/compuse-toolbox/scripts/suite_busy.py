@@ -56,7 +56,6 @@ Run:
   `uv run scripts/suite_busy.py --repo ~/src/app --json`
   `uv run scripts/suite_busy.py --wait-s 600 --match "cargo test"`
 """
-from __future__ import annotations
 
 import argparse
 import os

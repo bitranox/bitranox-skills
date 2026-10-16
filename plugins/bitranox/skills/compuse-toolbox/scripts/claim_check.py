@@ -34,7 +34,6 @@ a crash included; `ok` is false only on exit 2 (BROKEN), so ABSENT is ok with ex
 Run: uv run scripts/claim_check.py FILE... --pattern REGEX --control REGEX [--json] [--case-sensitive]
      uv run scripts/claim_check.py skills/*/SKILL.md --pattern 'LC_ALL=C' --control 'git'
 """
-from __future__ import annotations
 
 import re
 import sys

@@ -1,5 +1,4 @@
 """Tests for ci_watch_state - the pending-push record shared by the nudge and the Stop gate."""
-from __future__ import annotations
 
 import json
 import os

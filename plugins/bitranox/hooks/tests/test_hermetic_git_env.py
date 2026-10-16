@@ -13,8 +13,6 @@ itself immune, so no other launcher can reopen it. This drives the real conftest
 pytest with a sentinel repository as the leaked GIT_DIR, and asserts the sentinel is untouched.
 """
 
-from __future__ import annotations
-
 import os
 import subprocess
 import sys

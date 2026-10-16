@@ -10,8 +10,6 @@ Claude Code registers each running session as `~/.claude/sessions/<pid>.json` wi
 clock ticks). Comparing that start time is what tells a live session from a recycled pid.
 """
 
-from __future__ import annotations
-
 import json
 import os
 from dataclasses import dataclass

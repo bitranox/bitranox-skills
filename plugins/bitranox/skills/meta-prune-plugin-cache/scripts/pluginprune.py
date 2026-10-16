@@ -101,8 +101,6 @@ plan never touched it; also in `data.refused`, each with its `reason_code`) or `
 time, such as `in_use`).
 """
 
-from __future__ import annotations
-
 import argparse
 import json
 import os

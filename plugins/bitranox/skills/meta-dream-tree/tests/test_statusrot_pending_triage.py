@@ -22,8 +22,6 @@ because keeping a checked entry on the worklist costs a re-read, while filing an
 as "just written" hides it for good.
 """
 
-from __future__ import annotations
-
 import json
 import subprocess
 import sys

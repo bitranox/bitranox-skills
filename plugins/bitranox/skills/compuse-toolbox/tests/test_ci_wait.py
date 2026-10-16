@@ -4,7 +4,6 @@ Both are the same bug wearing two hats. A sha shorter than 40 characters matches
 `gh run list --commit` and equally in a client-side `select(.headSha==...)` - and a "are they all
 terminal yet?" test over an empty list is vacuous, so the loop spins to its deadline looking busy.
 """
-from __future__ import annotations
 
 import json
 import os

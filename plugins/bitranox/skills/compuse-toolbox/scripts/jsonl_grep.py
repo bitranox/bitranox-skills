@@ -42,7 +42,6 @@ nothing matched - the filter's "no", 2 could not answer: a usage error, nothing 
 named path missing or unreadable, or no *.jsonl found), or a NAMED path that does not exist or
 cannot be opened, even beside others that were read (what was read is still printed).
 """
-from __future__ import annotations
 
 import argparse
 import fnmatch

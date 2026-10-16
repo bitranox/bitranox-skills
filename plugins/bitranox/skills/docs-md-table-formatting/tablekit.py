@@ -28,7 +28,6 @@ Run:
 Exit codes: 0 = done, 1 = no table at that index, 2 = refused or error (a row with more cells than
 the headers, which a round trip would delete; an unknown alignment; invalid JSON; an unreadable file).
 """
-from __future__ import annotations
 
 import argparse
 import json

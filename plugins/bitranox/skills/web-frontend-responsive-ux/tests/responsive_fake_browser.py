@@ -5,8 +5,6 @@ answers: the raw detector measurements, the axe result (or an exception to raise
 i18n result (or an exception), a navigation error, and whether the page is already closed.
 """
 
-from __future__ import annotations
-
 import json
 from contextlib import contextmanager
 from dataclasses import dataclass, field

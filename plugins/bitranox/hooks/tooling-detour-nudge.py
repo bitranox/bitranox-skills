@@ -26,7 +26,6 @@ source, the hook is silent rather than guessing by directory name.
 
 Fail-open on any error. ASCII only.
 """
-from __future__ import annotations
 
 import json
 import os

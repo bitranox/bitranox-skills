@@ -14,8 +14,6 @@ matter are the ones that stop it lying:
 * clearing must be explicit, so nothing enters the baseline as a side effect of scanning.
 """
 
-from __future__ import annotations
-
 import json
 import os
 import subprocess

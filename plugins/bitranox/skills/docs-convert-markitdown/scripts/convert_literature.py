@@ -19,8 +19,6 @@ Exit status: 0 every paper converted, 1 no PDF files found,
 an unreadable subdirectory, or markitdown missing).
 """
 
-from __future__ import annotations
-
 import argparse
 import json
 import os

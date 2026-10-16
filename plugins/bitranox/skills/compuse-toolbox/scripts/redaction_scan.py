@@ -54,7 +54,6 @@ Run:
   `uv run scripts/redaction_scan.py --list tools/names-private.txt --range origin/main..HEAD`
   `uv run scripts/redaction_scan.py --list names.txt --staged --redact-hits --json`
 """
-from __future__ import annotations
 
 import argparse
 import subprocess

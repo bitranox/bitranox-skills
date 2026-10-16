@@ -20,8 +20,6 @@ navigation or the write failed).
 Import-safe: logic lives in functions; the browser only opens under ``__main__``.
 """
 
-from __future__ import annotations
-
 import argparse
 import json
 import os

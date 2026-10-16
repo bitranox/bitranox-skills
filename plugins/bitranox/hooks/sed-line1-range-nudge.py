@@ -19,7 +19,6 @@ rather than silent. An exact `1,5d` has no regex end and cannot overshoot.
 The scan runs with heredoc bodies AND data-sink statements stripped: both are DATA, and a guard that
 reads them fires on the prose documenting the very footgun it guards.
 """
-from __future__ import annotations
 
 import json
 import re

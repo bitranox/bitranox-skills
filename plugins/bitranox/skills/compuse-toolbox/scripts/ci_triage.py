@@ -30,7 +30,6 @@ Windows) and run without a shell; quote with DOUBLE quotes, which both honour.
 The default keywords ignore a keyword that is only a path component (`src/errors/mod.rs`) or part
 of a command-line flag (`-Wno-error=foo`, `--fail-under=80`); `--keywords` matches raw text.
 """
-from __future__ import annotations
 
 # Run with plain python3, never `uv run`: the command this jig runs inherits the launcher's
 # environment, and under uv run a child `python3` resolves to uv's throwaway build env, where

@@ -36,8 +36,6 @@ does not resolve, no common history, git missing). `--json` emits {ok, command, 
 on every exit, ok false only on exit 2; errors go to stderr in text mode.
 """
 
-from __future__ import annotations
-
 import argparse
 import json
 import os

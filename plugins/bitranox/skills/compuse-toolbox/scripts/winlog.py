@@ -27,7 +27,6 @@ that is not a valid regex, a negative --tail, an internal error).
 `--json` prints `{ok, command, data, skipped}` on every exit, 2 included (with an `error` key
 there); `ok` is false exactly when the exit is 2, so a --grep miss (exit 1) is `ok: true`.
 """
-from __future__ import annotations
 
 import argparse
 import re

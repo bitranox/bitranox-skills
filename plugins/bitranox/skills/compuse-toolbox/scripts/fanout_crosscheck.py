@@ -33,7 +33,6 @@ target and the token, the line), 2 = a usage error (fewer than two targets, a na
 target that is neither a file nor a git work tree, a `--since` that does not resolve), a target
 that could not be read, zero added lines, or an internal error.
 """
-from __future__ import annotations
 
 import re
 import subprocess

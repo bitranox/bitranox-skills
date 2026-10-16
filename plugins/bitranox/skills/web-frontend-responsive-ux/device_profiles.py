@@ -10,8 +10,6 @@ Kinds drive severity (see analysis.py): ``phone`` and ``tablet`` get SEVERE for 
 overflow; ``phone`` is checked for vertical fit; ``desktop`` is checked for over-sparse layouts.
 """
 
-from __future__ import annotations
-
 # name, css width, css height (portrait), device pixel ratio, kind, touch
 _BASE = [
     ("iPhone SE", 375, 667, 2.0, "phone", True),

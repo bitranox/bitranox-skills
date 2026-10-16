@@ -43,7 +43,6 @@ RIGHT-TO-LEFT OVERRIDE; the file arm fires on 92 of 18,421 Write/Edit calls, eac
 invisible character landing in a .py, .md or .toml file - mostly test source where an escape was
 meant. Not classified one by one beyond that; every refused call has the chr() route.
 """
-from __future__ import annotations
 
 import json
 import sys

@@ -4,7 +4,6 @@ The anchor tests use the REAL engine resolver from the plugin's hooks dir, never
 whole point of the module is that the tools agree with the engine, and a copy of the rule would be
 a second source of truth.
 """
-from __future__ import annotations
 
 import io
 import subprocess

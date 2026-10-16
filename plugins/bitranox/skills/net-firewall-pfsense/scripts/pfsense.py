@@ -50,7 +50,6 @@ A removal that removed nothing is a failed action, exit 2: `dhcp rm`, `dhcp rm-s
 `snort unblock` that leaves every requested address present (one address asked for included).
 Only some of several addresses left present is a partial outcome, exit 1, naming them.
 """
-from __future__ import annotations
 
 import argparse
 import configparser

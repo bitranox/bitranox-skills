@@ -17,8 +17,6 @@ Threshold rationale (see references/touch-and-gestures.md for citations):
     large viewport with no scroll is over-sparse -> MINOR (advisory).
 """
 
-from __future__ import annotations
-
 # --- thresholds (CSS pixels) -------------------------------------------------
 
 TOUCH_MIN_AA = 24.0  # WCAG 2.5.8 Target Size (Minimum), Level AA

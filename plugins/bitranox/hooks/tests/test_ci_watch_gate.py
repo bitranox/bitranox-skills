@@ -1,5 +1,4 @@
 """Tests for ci-watch-gate - the Stop hook that refuses to end a turn with unwatched CI."""
-from __future__ import annotations
 
 import errno
 import json

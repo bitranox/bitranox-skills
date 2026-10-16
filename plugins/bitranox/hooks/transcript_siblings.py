@@ -18,7 +18,6 @@ call made inside a subagent is looked up there.
 Only the tail of the transcript is read: the current message sits at the very end. Every failure
 answers None ("nothing known"), which a guard must read as "allow".
 """
-from __future__ import annotations
 
 import json
 import os

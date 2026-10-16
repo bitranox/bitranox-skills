@@ -15,7 +15,6 @@ others allow.
 Import it directly (`import shell_text`); the hooks directory is on `sys.path` for both the
 `run-python.sh` launch and the test conftest.
 """
-from __future__ import annotations
 
 import bisect
 import os

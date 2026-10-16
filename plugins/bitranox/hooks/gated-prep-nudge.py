@@ -76,7 +76,6 @@ masks quoted text, so a commit message that MENTIONS a redirect is not a write. 
 rather than delete, so a write's offset and the verb's offset stay comparable: only a write BEFORE
 the gated verb is prep for it.
 """
-from __future__ import annotations
 
 import json
 import re

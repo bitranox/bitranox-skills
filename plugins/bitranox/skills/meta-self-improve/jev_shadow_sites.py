@@ -13,8 +13,6 @@ of those two imports the other. Standard library only; the store readers come fr
 meta-self-improve/.
 """
 
-from __future__ import annotations
-
 import hashlib
 import json
 from collections.abc import Callable, Iterable

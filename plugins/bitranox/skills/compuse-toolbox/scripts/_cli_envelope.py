@@ -1,5 +1,5 @@
 # /// script
-# requires-python = ">=3.14"
+# requires-python = ">=3.10"
 # dependencies = []
 # ///
 """The one JSON envelope and exit-code boundary every compuse-toolbox jig shares.

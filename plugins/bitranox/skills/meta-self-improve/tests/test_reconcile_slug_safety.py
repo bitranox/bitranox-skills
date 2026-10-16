@@ -5,7 +5,6 @@ POINTER line, so a hand-damaged `mem:../../CLAUDE` pointer archived the tree's C
 `rehome_dangling_bodies` passed a body's FILENAME to the engine, which now refuses a name that is
 not a valid slug with InvalidSlug - so one badly named body crashed the whole re-home.
 """
-from __future__ import annotations
 
 import sys
 from pathlib import Path

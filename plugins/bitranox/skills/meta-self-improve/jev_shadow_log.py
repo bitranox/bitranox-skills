@@ -15,8 +15,6 @@ A record keeps the item's state, redacted and capped exactly as it was sent, so 
 question can be replayed over logged items without re-running the skill. Standard library only.
 """
 
-from __future__ import annotations
-
 import json
 import os
 import re

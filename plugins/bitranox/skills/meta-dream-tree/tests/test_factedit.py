@@ -13,7 +13,6 @@ one the suite believes.
 Pure judging (judge_hook) still takes a fake EngineRules: that is the tool's own injection seam,
 a set of predicates, not a borrowed grammar that can silently disagree with the engine.
 """
-from __future__ import annotations
 
 import json
 import os

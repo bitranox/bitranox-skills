@@ -44,6 +44,8 @@ _PEP723_OPEN = re.compile(r"^#\s*///\s*script\s*$", re.M)
 _PEP723_CLOSE = re.compile(r"^#\s*///\s*$", re.M)
 _REQUIRES_PY = re.compile(r"requires-python\s*=\s*[\"']([^\"']+)[\"']")
 _FLOOR = re.compile(r">=\s*(\d+)\.(\d+)")
+# The oldest Python cell .github/workflows/ci.yml tests; a test pins the two together.
+CI_MIN = "3.14"
 # A quoted /tmp or /var, bare or followed by a path: `Path("/tmp") / "x"` is the same hazard as
 # "/tmp/x". A longer name that merely starts with those letters ("/variable") is not.
 _TMP_LITERAL = re.compile(r"[\"'](/tmp|/var)(/|[\"'])")
@@ -427,15 +429,15 @@ def pep723_block(path):
     return text[opened.end():closed.start()] if closed else ""
 
 
-def pep723_problems(paths, ci_min="3.11", hook_kinds=()):
+def pep723_problems(paths, ci_min=CI_MIN, hook_kinds=()):
     """A hook must carry NO PEP 723 block, and no script may demand MORE than CI's oldest cell.
 
     A hook is launched by `run-python.sh`, which resolves nothing, so inline metadata on one is a
     claim the runtime never honours.
 
-    On floors: ci.yml states 3.11 is the supported minimum and that shipped scripts declare their
-    own floors, so a floor BELOW that (`>=3.10`) is a deliberate, wider promise and is correct. Only
-    a floor ABOVE ci_min is a defect - that script cannot run on the oldest cell CI tests."""
+    On floors: ci.yml states CI_MIN is the supported minimum and that shipped scripts declare their
+    own floors, so a floor BELOW that is a deliberate, wider promise and is correct. Only a floor
+    ABOVE ci_min is a defect - that script cannot run on the oldest cell CI tests."""
     minimum = tuple(int(p) for p in ci_min.split("."))
     hook_rels = set(hook_kinds)
     out = []
@@ -639,7 +641,7 @@ def group_by_file(hits):
     return out
 
 
-def run_prepass(room, targets, ci_min="3.11", vendored=(), run=_run, unmeasured=None):
+def run_prepass(room, targets, ci_min=CI_MIN, vendored=(), run=_run, unmeasured=None):
     """Every deterministic check over the enumerated corpus.
 
     Returns (facts_per_file, leads_per_file, summary_lines). The two maps carry opposite

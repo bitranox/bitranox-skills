@@ -45,7 +45,6 @@ tool's rules, since one session drives one shell.
 Data regions are masked first, so a `cd` inside a heredoc body or a quoted string is text, not a
 statement. BLOCKING: exit 2 with the reason on stderr. Fail-open on any error. ASCII only.
 """
-from __future__ import annotations
 
 import json
 import sys

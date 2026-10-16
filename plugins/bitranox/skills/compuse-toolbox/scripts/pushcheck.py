@@ -62,7 +62,6 @@ internal error).
 `--json` prints `{ok, command, data, skipped}` on every exit, 2 included. `ok` means the check RAN
 (false exactly on exit 2); the verdict is `data.safe` - so a leak found is `ok: true, safe: false`.
 """
-from __future__ import annotations
 
 import argparse
 import hashlib

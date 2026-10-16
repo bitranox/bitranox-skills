@@ -70,7 +70,6 @@ line `fleet_ssh: ...` is what marks one of ours.) `--json` with `--dry-run` prin
 `{ok, command, data: {argv}, skipped}`, and any exit 2 under `--json` prints one too; a `--json`
 written after the host belongs to the remote command, never to this script.
 """
-from __future__ import annotations
 
 import argparse
 import getpass

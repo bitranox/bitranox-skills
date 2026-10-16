@@ -79,7 +79,6 @@ out to `python3 -m pytest` then died with `No module named pytest` and reported 
       --then "git push origin HEAD"
   python3 scripts/gate.py --cwd sub/project --env PYTHONUTF8=1 --gate "python3 -m pytest -q"
 """
-from __future__ import annotations
 
 # Run with plain python3, never `uv run`: the command this jig runs inherits the launcher's
 # environment, and under uv run a child `python3` resolves to uv's throwaway build env, where

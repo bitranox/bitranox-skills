@@ -52,8 +52,6 @@ the heading with two different bodies is a copy of each variant, so more than on
 means a share below 100%.
 """
 
-from __future__ import annotations
-
 import argparse
 import hashlib
 import json

@@ -36,10 +36,9 @@ Run (from the plugin root):
   `uv run skills/meta-dream-tree/statusrot.py scan --tree /path/to/project`   # whole tree
   `uv run skills/meta-dream-tree/statusrot.py scan --level a/CLAUDE.local.md --json`
 It needs no third-party package, runs no command of the caller's, and sets UTF-8 on its own output
-streams, so any Python 3.10+ runs it identically - the plugin's run-python.sh launcher, which the
+streams, so any Python 3.14+ runs it identically - the plugin's run-python.sh launcher, which the
 dream passes use, included.
 """
-from __future__ import annotations
 
 import argparse
 import datetime as dt

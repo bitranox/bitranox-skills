@@ -19,7 +19,6 @@ The flag is set only once it is STORED: a refusal that could not be recorded wou
 re-call forever, so an unwritable store, a missing session id or any error lets the call through.
 Exit 0 always; the refusal is a permissionDecision on stdout. ASCII only.
 """
-from __future__ import annotations
 
 import json
 import sys

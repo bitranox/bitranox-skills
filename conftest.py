@@ -17,8 +17,6 @@ enough to exhaust the inodes of a shared tmpfs /tmp. `tests/test_hermetic_tempdi
 `plugins/bitranox/hooks/` proves that end to end.
 """
 
-from __future__ import annotations
-
 import os
 import shutil
 import tempfile

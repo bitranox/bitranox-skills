@@ -37,7 +37,6 @@ that could not be recorded would refuse every re-send.
 The memory-add check is NON-BLOCKING (additionalContext). Exits 0 always; fail-open on any
 error. ASCII only.
 """
-from __future__ import annotations
 
 import json
 import os

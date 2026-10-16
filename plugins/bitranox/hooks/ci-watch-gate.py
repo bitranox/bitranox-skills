@@ -20,7 +20,6 @@ nap-owed gate that insisted the current session's context had been cleared when 
 
 Set BITRANOX_CI_WATCH to any value to bypass entirely.
 """
-from __future__ import annotations
 
 import json
 import os

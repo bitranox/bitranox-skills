@@ -33,7 +33,6 @@ nothing - because "nothing matched" and "could not classify anything" must not l
 Under --json, `ok` means the check ran (exit 0 or 1) and is false only on exit 2; a usage error
 or a crash prints the envelope too, and exits 2.
 """
-from __future__ import annotations
 
 import json
 import os

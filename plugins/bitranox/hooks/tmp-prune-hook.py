@@ -13,8 +13,6 @@ It prints nothing: SessionStart stdout would be injected into the session's cont
 exits 0, because a cleanup chore must never wedge a turn.
 """
 
-from __future__ import annotations
-
 import json
 import os
 import subprocess

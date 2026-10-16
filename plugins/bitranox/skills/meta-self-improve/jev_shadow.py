@@ -49,8 +49,6 @@ could not start, timed out, wrote no row or exited other than 0 or 1 before answ
 is true unless the exit is 2. Standard library only.
 """
 
-from __future__ import annotations
-
 import argparse
 import json
 import random

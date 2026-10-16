@@ -5,8 +5,6 @@ an exit condition satisfiable while the worker is still going, and a deadline wi
 way to be cancelled, which fires a false alarm at a job that finished on time.
 """
 
-from __future__ import annotations
-
 import os
 import shutil
 import stat

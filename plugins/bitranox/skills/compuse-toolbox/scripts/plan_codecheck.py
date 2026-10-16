@@ -50,7 +50,6 @@ cannot be found or crashed, or an internal error. `--json` prints `{ok, command,
 every exit, 2 included; `ok` is false exactly on exit 2; `skipped` names the unplaced blocks and
 any check that did not apply.
 """
-from __future__ import annotations
 
 import json
 import os

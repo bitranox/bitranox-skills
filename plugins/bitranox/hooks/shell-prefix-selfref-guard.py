@@ -22,8 +22,6 @@ call and shows stderr to the model; every other path (including any error) exits
 so a broken guard never wedges a turn.
 """
 
-from __future__ import annotations
-
 import json
 import re
 import sys

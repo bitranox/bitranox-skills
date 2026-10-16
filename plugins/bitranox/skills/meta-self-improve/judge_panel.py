@@ -22,7 +22,6 @@ is typed many times, so keying by its text collapsed distinct rows into one labe
 
 Standard library only; `classifier_eval.py packet` and `harvest` are the CLI.
 """
-from __future__ import annotations
 
 import json
 import random

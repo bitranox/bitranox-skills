@@ -8,8 +8,6 @@ A fact like "fixed in bmk 3.13.0" stays correct as a sentence and wrong as a les
 * be able to say "nothing superseded" over a non-empty store, and refuse a scan of zero facts.
 """
 
-from __future__ import annotations
-
 import json
 import sys
 from pathlib import Path

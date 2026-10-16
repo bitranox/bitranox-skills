@@ -61,8 +61,6 @@ guess that reports a falsely clean corpus on someone else's machine. Point `--co
 explicitly when you know where they live.
 """
 
-from __future__ import annotations
-
 import argparse
 import json
 import math

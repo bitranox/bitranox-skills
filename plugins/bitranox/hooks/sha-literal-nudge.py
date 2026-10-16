@@ -70,7 +70,6 @@ exit 0 on nothing, anything after `--` is a pathspec, and `git branch <sha>`, `g
 NON-BLOCKING: emits additionalContext and exits 0, because a sha legitimately arriving from outside
 (a CI URL, a pasted commit) must stay usable. Fail-open on any error. ASCII only.
 """
-from __future__ import annotations
 
 import json
 import re

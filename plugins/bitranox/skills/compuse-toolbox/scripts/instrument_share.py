@@ -45,7 +45,6 @@ or directory that could not be read (the figures then cover only what was read, 
 paths are listed), or a crash. `--json` prints `{ok, command, data, skipped}` on every exit, 2
 included; `ok` is false exactly on exit 2.
 """
-from __future__ import annotations
 
 import json
 import os

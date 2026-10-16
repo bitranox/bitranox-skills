@@ -4,7 +4,6 @@ Every character under test is built with chr(): this file exists because an esca
 tool argument arrives as the raw character, so writing one here would plant the very thing the
 hook reports.
 """
-from __future__ import annotations
 
 import json
 import subprocess

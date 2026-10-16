@@ -3,7 +3,6 @@
 Exit contract under test: 0 = clean, 1 = errors found (or the command under triage failed),
 2 = the tool could not do its job (bad argument, unreadable source, gh failed, step not found).
 """
-from __future__ import annotations
 
 import os
 import subprocess

@@ -55,8 +55,6 @@ Exit 0 = enforced (a decision exists), 1 = parsed but never enforced, 2 = not fo
 a crash. Under --json the envelope is printed on every exit; `ok` is false only on exit 2.
 """
 
-from __future__ import annotations
-
 import argparse
 import ast
 import io

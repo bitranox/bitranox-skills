@@ -10,8 +10,6 @@ written to a file correctly, then delivered with
 `MSG="$(cat f)" make push MSG="$MSG"`, and the program received an empty string.
 """
 
-from __future__ import annotations
-
 import shell_prefix_selfref_guard as guard
 import pytest
 

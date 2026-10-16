@@ -8,8 +8,6 @@ No recursion risk - mutation_check copies conftest.py and test_srccount.py expli
 this file, so the sub-run cannot re-enter the harness.
 """
 
-from __future__ import annotations
-
 import subprocess
 import sys
 from pathlib import Path

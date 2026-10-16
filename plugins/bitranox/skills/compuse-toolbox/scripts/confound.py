@@ -67,8 +67,6 @@ Under --json the envelope {ok, command, data, skipped} is printed on every exit,
 a crash included; ok is false exactly on exit 2.
 """
 
-from __future__ import annotations
-
 import argparse
 import math
 import re

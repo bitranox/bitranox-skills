@@ -28,8 +28,6 @@ every exit prints the envelope {ok, command, data, skipped}; ok means the run fi
 error, so it is false only on exit 2.
 """
 
-from __future__ import annotations
-
 import argparse
 import hashlib
 import json

@@ -4,10 +4,9 @@ Each test names the defect it guards. The two positives are commands that burned
 session; the negatives are the shapes a careless matcher would fire on.
 """
 
-from __future__ import annotations
-
 import importlib.util
 import json
+import os
 import subprocess
 import sys
 from pathlib import Path
@@ -245,20 +244,18 @@ def test_the_hook_reads_tool_name_for_powershell(tmp_path):
 # --- the venv probe's error path --------------------------------------------------------
 
 
-class _UnreadableTree:
-    """A cwd whose venv probe raises, as `Path.is_dir` does on Python 3.10-3.13 when a parent
-    directory denies search permission (EACCES is not one of the errnos it swallows there)."""
-
-    def __truediv__(self, _other):
-        return self
-
-    def is_dir(self):
-        raise PermissionError(13, "Permission denied")
-
-
-def test_an_unreadable_tree_is_silent_rather_than_raising():
+@pytest.mark.skipif(sys.platform == "win32" or not hasattr(os, "geteuid") or os.geteuid() == 0,
+                    reason="a mode-0 directory denies search only to a non-root POSIX user")
+def test_an_unsearchable_tree_is_silent_rather_than_raising(tmp_path):
+    """A parent that denies search permission hides its .venv; Path.is_dir answers False."""
+    locked = tmp_path / "locked"
+    (locked / ".venv").mkdir(parents=True)
     statements = mod._tokens("pyright --outputjson")
-    assert mod.pyright_without_pinned_interpreter(statements, _UnreadableTree()) is False
+    locked.chmod(0)
+    try:
+        assert mod.pyright_without_pinned_interpreter(statements, locked) is False
+    finally:
+        locked.chmod(0o755)
 
 
 # --- grep -c ... || echo 0 (contrib #1) -----------------------------------------------------------

@@ -25,8 +25,6 @@ settled before matching: contractions count as their spelled-out forms, and a
 clause-initial "do not work" is an instruction, not a claim about a tool.
 """
 
-from __future__ import annotations
-
 import re
 
 __all__ = ["advise", "NEGATIVE_RX", "UNRESOLVED_RX", "VERSION_HISTORY_RX"]

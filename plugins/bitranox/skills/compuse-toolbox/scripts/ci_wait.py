@@ -70,7 +70,6 @@ approval, timed out, `gh` failed, or the tool itself crashed). `--json` prints t
 (`sha` is absent when the sha itself was refused); `ok` is false exactly on exit 2, with `error`
 repeating the summary.
 """
-from __future__ import annotations
 
 import argparse
 import itertools

@@ -43,7 +43,6 @@ Exit codes: 0 = backed up / verified identical, 1 = the tree differs from the ma
 --json prints the envelope {ok, command, data, skipped} on every exit, an `error` key added
 on exit 2; `ok` means the run worked and is false only on exit 2.
 """
-from __future__ import annotations
 
 import argparse
 import json

@@ -6,8 +6,6 @@ pytest process as the live pid and a genuinely exited subprocess as the dead one
 detector that is only ever shown the answer it expects proves nothing.
 """
 
-from __future__ import annotations
-
 import json
 import os
 import subprocess

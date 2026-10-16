@@ -35,7 +35,6 @@ network, ssh), could not be launched, or is missing, or a usage error (bad rate,
 There is no 1: an action whose action failed has no "no" answer. An internal error exits 2 in
 every mode. --pid reads /proc, so it is Linux-only; elsewhere its signals read unusable.
 """
-from __future__ import annotations
 
 # Run with plain python3, never `uv run`: the command this jig runs inherits the launcher's
 # environment, and under uv run a child `python3` resolves to uv's throwaway build env, where

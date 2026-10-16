@@ -28,8 +28,6 @@ This module is import-safe: all work is inside functions guarded by ``__main__``
 helpers can be imported in tests; the heavy browser path is only reached when run directly.
 """
 
-from __future__ import annotations
-
 import argparse
 import json
 import os

@@ -38,7 +38,6 @@ before any segment match; a `/`-anchored comparison would silently never fire th
 
 Pure standard library, ASCII only; launched via run-python.sh so it works on Windows too.
 """
-from __future__ import annotations
 
 import json
 import os

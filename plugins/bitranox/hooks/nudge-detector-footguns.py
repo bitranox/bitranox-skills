@@ -52,8 +52,6 @@ writes `hookSpecificOutput.additionalContext` on stdout, and ALWAYS exits 0 - a 
 must never wedge a turn, and every error path is swallowed for the same reason.
 """
 
-from __future__ import annotations
-
 import json
 import re
 import sys
@@ -168,12 +166,7 @@ def pyright_without_pinned_interpreter(
     if any(t in _PYRIGHT_PIN_FLAGS or t.startswith(("--pythonpath=", "--venvpath="))
            for run in runs for t in run):
         return False
-    # `Path.is_dir` swallows only some errnos before Python 3.14: a parent directory that denies
-    # search permission raises PermissionError there (measured on 3.10, 3.12 and 3.13).
-    try:
-        return any((cwd / d).is_dir() for d in _VENV_DIRS if d)
-    except OSError:
-        return False
+    return any((cwd / d).is_dir() for d in _VENV_DIRS if d)
 
 
 def _executed_matches(pattern, command: str, tool_name: str, *anchors: str):

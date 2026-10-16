@@ -14,7 +14,6 @@ Two properties matter more than the pattern list and are what most of these test
   all refusals, not passes. A gate that reports "nothing found" after examining nothing is the
   failure this whole file guards against.
 """
-from __future__ import annotations
 
 import json
 import os

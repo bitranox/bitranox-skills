@@ -1,5 +1,4 @@
 """Tests for _cli_envelope: the shared {ok, command, data, skipped} envelope and exit-code boundary."""
-from __future__ import annotations
 
 import json
 import subprocess

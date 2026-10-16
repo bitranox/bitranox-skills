@@ -17,8 +17,6 @@ The band is the one the jev-judge skill reads by hand: a noul strictly between 0
 choice or score with confidence below 0.6. Standard library only.
 """
 
-from __future__ import annotations
-
 import json
 import statistics
 from collections import Counter

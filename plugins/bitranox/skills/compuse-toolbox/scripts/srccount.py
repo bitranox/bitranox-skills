@@ -55,7 +55,6 @@ have been. Both modes, --audit too.
 `--json` prints `{ok, command, data, skipped}` on every exit, 2 included; `ok` is false exactly
 when the exit is 2.
 """
-from __future__ import annotations
 
 import argparse
 import fnmatch

@@ -34,7 +34,6 @@ readable file (a role never seen is reported as empty, not as no-match).
 when the exit is 2, so a whole-transcript miss (exit 1) is `ok: true` with `data: []`. `skipped`
 lists the line numbers of unparseable lines.
 """
-from __future__ import annotations
 
 import argparse
 import json

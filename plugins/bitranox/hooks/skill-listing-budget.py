@@ -185,8 +185,7 @@ def _epoch(stamp):
     if not isinstance(stamp, str):
         return None
     try:
-        # fromisoformat accepts a trailing Z only from Python 3.11
-        return datetime.fromisoformat(stamp.replace("Z", "+00:00")).timestamp()
+        return datetime.fromisoformat(stamp).timestamp()
     except (ValueError, OverflowError, OSError):
         return None
 

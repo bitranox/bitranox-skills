@@ -19,8 +19,6 @@ The grading functions are pure (header value string -> findings) so they unit-te
 network; only `fetch` touches the wire. Run: `uv run audit_headers.py https://host`.
 """
 
-from __future__ import annotations
-
 import argparse
 import ipaddress
 import json

@@ -23,7 +23,6 @@ drop each other's entries.
 Every function here swallows its own IO errors and degrades to "nothing pending". A hook must never
 wedge a turn, and a state file that cannot be read is not evidence that a push needs watching.
 """
-from __future__ import annotations
 
 import contextlib
 import hashlib

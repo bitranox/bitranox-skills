@@ -14,7 +14,6 @@ Three properties make the difference, and they are what most of this file pins:
 - The output is CANDIDATES. The tool never says two facts are duplicates; it says which two
   bodies to read.
 """
-from __future__ import annotations
 
 import json
 import os

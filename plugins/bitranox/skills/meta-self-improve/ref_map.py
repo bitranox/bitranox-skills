@@ -24,7 +24,6 @@ Refs resolve exactly as the engine resolves them (`[[slug|label]]`, `[[type:slug
 
     python3 ref_map.py --root <anchor> <slug> [<slug> ...] [--json]
 """
-from __future__ import annotations
 
 import argparse
 import json

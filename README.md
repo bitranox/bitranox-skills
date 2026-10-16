@@ -21,8 +21,8 @@ re-derived every time.
 
 Install at **user scope** (the default) - the memory files lessons across projects, so it must
 run everywhere. Then enable auto-update once via `/plugin` -> **Marketplaces** ->
-`bitranox-skills` -> **Enable auto-update**. Windows needs
-[Git for Windows](https://gitforwindows.org/); details and verification in
+`bitranox-skills` -> **Enable auto-update**. The hooks need Python 3.14 or newer on the machine,
+and Windows needs [Git for Windows](https://gitforwindows.org/); details and verification in
 [docs/installation.md](docs/installation.md).
 
 Skills are invoked as `/bitranox:<skill>`, and Claude picks one up automatically whenever a task

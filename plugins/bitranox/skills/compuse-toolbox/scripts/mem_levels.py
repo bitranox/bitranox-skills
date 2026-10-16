@@ -42,8 +42,6 @@ never holds a '/', so the two kinds cannot be confused).
 Read-only: it never writes to the store. Writes go through the engine (`memory_engine.py`).
 """
 
-from __future__ import annotations
-
 import sys
 from dataclasses import dataclass, field
 from pathlib import Path

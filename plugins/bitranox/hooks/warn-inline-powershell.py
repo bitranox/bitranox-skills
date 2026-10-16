@@ -20,7 +20,6 @@ other command-scanning guards rather than copied here, because two private copie
 drifted apart once. The cost of a false fire here is one extra line of context, never a blocked
 command.
 """
-from __future__ import annotations
 
 import json
 import re

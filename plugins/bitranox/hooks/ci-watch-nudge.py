@@ -32,7 +32,6 @@ ref either, so it cannot pass the test and is not recorded.
 
 Exits 0 always, and emits nothing when it has no opinion.
 """
-from __future__ import annotations
 
 import json
 import os

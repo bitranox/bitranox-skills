@@ -10,7 +10,6 @@ files (they are gitignored), and a bare walk over-counts: the plugin vendors CLA
 into site-packages, so any unpruned virtualenv turns a vendored copy into an apparent level.
 Those two are pinned here rather than left to each re-implementation.
 """
-from __future__ import annotations
 
 import json
 import os

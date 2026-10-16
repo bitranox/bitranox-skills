@@ -4,8 +4,6 @@ The corpus is injected, so these exercise the real core function against real-is
 rather than patching internals.
 """
 
-from __future__ import annotations
-
 import json
 import ntpath
 import os

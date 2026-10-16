@@ -9,8 +9,6 @@ and editing a user's settings from a CLI is a different and riskier job - `bitra
 path` prints where the hooks live so they can be wired deliberately.
 """
 
-from __future__ import annotations
-
 import argparse
 import json
 import shutil

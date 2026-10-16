@@ -7,8 +7,6 @@ parse, a docstring mention and a test fixture must all stay OUT of it, or the to
 "enforced" for a field that is documentation.
 """
 
-from __future__ import annotations
-
 import json
 import os
 import subprocess

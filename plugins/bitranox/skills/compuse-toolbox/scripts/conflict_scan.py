@@ -24,7 +24,6 @@ you pass as PATH is walked even when it is a link, and a link to a FILE is alway
 
 Run: `uv run scripts/conflict_scan.py [PATH ...]`  (a dir is walked, skipping .git)
 """
-from __future__ import annotations
 
 import argparse
 import os

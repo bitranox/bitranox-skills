@@ -8,8 +8,6 @@ owned elsewhere, so a ship-state claim rots silently. Two properties matter most
 * it must be able to report NOTHING, or it asserts nothing at all.
 """
 
-from __future__ import annotations
-
 import json
 import os
 import subprocess

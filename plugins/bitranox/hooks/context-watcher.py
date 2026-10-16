@@ -79,7 +79,6 @@ same turn. Fail-open on every error path - a broken watcher must never wedge a t
 
 Pure standard library, ASCII only; launched via run-python.sh so it works on Windows too.
 """
-from __future__ import annotations
 
 import json
 import os

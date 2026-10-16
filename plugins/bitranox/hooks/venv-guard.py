@@ -27,7 +27,6 @@ Fires only when ALL of these hold for one statement, which keeps it quiet in nor
 Heredoc bodies and quoted text are data, never statements. The remediation is written in the
 calling tool's language: `env -u` does not exist in PowerShell.
 """
-from __future__ import annotations
 
 import json
 import os

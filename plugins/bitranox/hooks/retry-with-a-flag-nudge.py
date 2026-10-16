@@ -46,7 +46,6 @@ too often - a second failing attempt is sometimes exactly the right diagnostic s
 
 Pure standard library, ASCII only; launched via run-python.sh so it works on Windows too.
 """
-from __future__ import annotations
 
 import json
 import sys

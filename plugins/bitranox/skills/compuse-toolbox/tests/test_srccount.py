@@ -9,8 +9,6 @@ plus a known-negative that must report zero.
 Every tree here is planted explicitly under tmp_path - nothing reads ambient machine state.
 """
 
-from __future__ import annotations
-
 import json
 import os
 import subprocess

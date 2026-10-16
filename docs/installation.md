@@ -56,7 +56,7 @@ Two things this route does NOT give you, both of which the marketplace install d
   ```
 
   `--hook` is what makes a hook fail open: without it, a script the shim cannot run (moved,
-  no Python 3 found) exits 2, which Claude Code reads as a BLOCK on a PreToolUse or Stop event, and
+  no Python 3.14 or newer found) exits 2, which Claude Code reads as a BLOCK on a PreToolUse or Stop event, and
   the `BITRANOX_HOOKS_OFF` kill-switch does not silence it. Always keep `--hook` in a hook
   registration - it is the difference between a silent skip and a blocked turn. `hooks/hooks.json`
   lists every event, matcher and script to copy.
@@ -99,6 +99,16 @@ The marketplace clone and the plugin cache are machine-global, so one
 - **New sessions** pick up the new version automatically.
 - **A session that is already running** keeps the version it started with until you run
   `/reload-plugins` in it (or restart it). Updating alone does not change a live session.
+
+## Python 3.14 or newer
+
+The hooks run on the machine's own Python, not one the plugin installs, and they need **Python
+3.14 or newer**. The hook launcher (`hooks/run-python.sh`) takes `python3` when it is new enough,
+and otherwise looks for `python3.15`, `python3.14`, `py -3.15` and `py -3.14` by name, so a 3.14
+installed beside an older system Python is found. If none qualifies, every hook is skipped with
+one stderr line naming what it found, for example `needs Python 3.14 or newer, found only python3
+3.12.3`; nothing errors a turn, but no guard fires and nothing is captured until a 3.14 is
+installed. Skill scripts run through `uv run` fetch a 3.14 themselves.
 
 ## Windows: install Git for Windows
 

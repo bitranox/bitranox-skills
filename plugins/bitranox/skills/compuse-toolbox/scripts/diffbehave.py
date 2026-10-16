@@ -41,7 +41,6 @@ Exit codes: 0 = expectation met, 1 = expectation not met (or nothing differed wh
 envelope `{ok, command, data, skipped}` on every exit, a usage error and a crash included; `ok` is
 false exactly on exit 2 (with an `error` saying why), so an unmet expectation is ok with exit 1.
 """
-from __future__ import annotations
 
 # Run with plain python3, never `uv run`: the command this jig runs inherits the launcher's
 # environment, and under uv run a child `python3` resolves to uv's throwaway build env, where

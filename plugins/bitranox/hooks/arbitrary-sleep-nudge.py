@@ -24,7 +24,6 @@ The long sleep is a NUDGE (additionalContext, exit 0). The detached waiter or ga
 (stderr, exit 2): the warning recurred while it existed, including a subagent's `make test &`, so
 the user turned it into a block on 2026-10-12. Fail-open on any error. ASCII only.
 """
-from __future__ import annotations
 
 import json
 import re

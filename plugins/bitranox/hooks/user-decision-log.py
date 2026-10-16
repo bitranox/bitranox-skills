@@ -21,7 +21,6 @@ EXECUTION-USER-REVIEW.md is never touched.
 
 Prints nothing, exits 0 always; any failure loses one record rather than wedging a turn.
 """
-from __future__ import annotations
 
 import datetime
 import json

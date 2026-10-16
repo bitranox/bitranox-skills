@@ -18,8 +18,6 @@ so the excluded names never enter the mapping in the first place.
 Pure standard library.
 """
 
-from __future__ import annotations
-
 import os
 
 from hatchling.builders.hooks.plugin.interface import BuildHookInterface

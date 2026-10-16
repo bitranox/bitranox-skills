@@ -29,7 +29,6 @@ Run (from the plugin root):
   `uv run skills/meta-dream-tree/versionrot.py scan --chain . --current "claude-code=2.1.300"`
 Pure standard library; Python 3.14+.
 """
-from __future__ import annotations
 
 import argparse
 import json

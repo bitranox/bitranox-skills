@@ -1,5 +1,4 @@
 """Is it stalled, or is my instrument lying? The jig must never answer from one signal."""
-from __future__ import annotations
 
 import argparse
 import functools

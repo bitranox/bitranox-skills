@@ -39,8 +39,6 @@ failed, or --repo stopped being a repository root), which cannot tell finished f
 and look.
 """
 
-from __future__ import annotations
-
 import argparse
 import enum
 import math

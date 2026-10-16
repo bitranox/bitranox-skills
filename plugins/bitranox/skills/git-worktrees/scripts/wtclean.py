@@ -73,8 +73,6 @@ blocked entry's `kind` (refused / bad_input / failed) under `data.blocked`; warn
 stderr so stdout stays parseable.
 """
 
-from __future__ import annotations
-
 import argparse
 import json
 import os

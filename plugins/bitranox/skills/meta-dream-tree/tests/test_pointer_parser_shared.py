@@ -6,7 +6,6 @@ would copy into the block on the next write) counted as a fact at that level, an
 twice counted twice. They now all parse through `uuid_store.parse_pointer_index`, so a tool and
 the engine cannot disagree about which facts a level holds.
 """
-from __future__ import annotations
 
 import sys
 from pathlib import Path

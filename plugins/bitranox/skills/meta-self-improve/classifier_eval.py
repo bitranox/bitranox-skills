@@ -49,7 +49,6 @@ the wrong way, so no number from the run may be read (its message says which). U
 exit prints `{ok, command, data, skipped}` (plus `error` when there is one); `ok` is true unless the
 exit is 2.
 """
-from __future__ import annotations
 
 import argparse
 import json

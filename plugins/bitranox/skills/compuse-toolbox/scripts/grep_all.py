@@ -31,7 +31,6 @@ anything matched is the exit code. A usage error or a crash under `--json` print
 
     uv run scripts/grep_all.py PATTERN [PATH ...] [--glob '*.md'] [--json] [-i]
 """
-from __future__ import annotations
 
 import json
 import os

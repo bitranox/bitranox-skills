@@ -9,8 +9,6 @@ It also puts the hooks dir on sys.path, the same setup `classifier_eval.py` uses
 only.
 """
 
-from __future__ import annotations
-
 import sys
 from collections.abc import Callable, Mapping
 from contextlib import AbstractContextManager

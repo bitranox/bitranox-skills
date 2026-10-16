@@ -4,8 +4,6 @@ The wheel carries the whole plugin tree as package data under `bitranox_skills/p
 so the version a user installs and the skills they get are always the same build.
 """
 
-from __future__ import annotations
-
 import json
 from pathlib import Path
 

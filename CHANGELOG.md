@@ -38,9 +38,20 @@ two "versions with no entry" notes came to sit in this file disagreeing with it.
   `py -3.15` and `py -3.14` by name, and on a machine with only an older interpreter it skips the
   hook with one stderr line naming what it found (`needs Python 3.14 or newer, found only python3
   3.12.3`). Install Python 3.14 to get the hooks back. Shipped scripts declare `>=3.14` in their
-  PEP 723 headers, so `uv run` fetches a 3.14 for them. The mirrored skills whose tool repos own
-  their scripts keep those repos' floors.
+  PEP 723 headers, so `uv run` fetches a 3.14 for them. Three groups keep a lower floor: the
+  mirrored skills, whose tool repos own their scripts; `coding-python-performance-review`, whose
+  scripts run under the profiled project's interpreter; and `mutation_arm` with the
+  `anchor_edit` and `_cli_envelope` modules it imports, launched with the project's own
+  interpreter. A test in each of the last two skills pins them to 3.10.
 - CI tests Linux on 3.14 and 3.15, Windows and macOS on 3.15.
+
+### Removed
+
+- Pre-3.14 compatibility code: the `tomllib` fallbacks (repo-gate's "no tomllib" report,
+  `fanout_crosscheck`'s and `versionrot`'s no-parser paths, `adopt_skill`'s line-reading license
+  parser), the `rmtree(onerror=)` branches, the `is_dir` guard for a 3.13 `PermissionError`,
+  `from __future__ import annotations` (redundant under PEP 649), and the `typing` aliases that
+  ruff's pyupgrade rules replace at the 3.14 target.
 
 ## [8.24.0]
 

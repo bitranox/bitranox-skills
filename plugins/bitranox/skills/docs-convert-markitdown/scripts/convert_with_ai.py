@@ -26,8 +26,6 @@ not a file or not a supported format, or a conversion or image description that 
 Converting has no "no" answer, so no run exits 1.
 """
 
-from __future__ import annotations
-
 import argparse
 import os
 import sys

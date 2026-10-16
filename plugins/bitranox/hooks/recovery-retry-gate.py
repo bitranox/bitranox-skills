@@ -48,7 +48,6 @@ to anything in a subagent transcript (sidechain entries are skipped).
 
 Non-blocking (additionalContext), one message per undo event, capped per session, silent on any error.
 """
-from __future__ import annotations
 
 import json
 import os

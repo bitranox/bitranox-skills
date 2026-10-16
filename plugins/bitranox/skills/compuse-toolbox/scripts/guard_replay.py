@@ -55,7 +55,6 @@ whatever it fired on. The last two say which in `data.inconclusive` ("nothing re
 `--json` prints `{ok, command, data, skipped}` on every exit, 2 included; `ok` is false exactly
 when the exit is 2, so a never-fired run (exit 1) is `ok: true`.
 """
-from __future__ import annotations
 
 import fnmatch
 import importlib.util

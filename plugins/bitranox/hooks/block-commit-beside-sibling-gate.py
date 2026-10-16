@@ -34,7 +34,6 @@ The siblings come from `transcript_siblings` (shared with block-write-after-sibl
 a subagent's own transcript when the event carries an `agent_id`. BLOCKING: exit 2 with the reason
 on stderr. Fail-open on any error. ASCII only.
 """
-from __future__ import annotations
 
 import json
 import sys

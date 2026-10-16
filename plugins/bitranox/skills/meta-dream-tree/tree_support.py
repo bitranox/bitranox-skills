@@ -14,7 +14,6 @@
 
 Pure standard library. Not a CLI.
 """
-from __future__ import annotations
 
 import os
 import sys

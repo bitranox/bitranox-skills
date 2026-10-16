@@ -56,7 +56,6 @@ printed on every exit, and `ok` means "ran without error": true on 0 and 1, fals
 Advisories are PRODUCT, so they ride in the envelope's `data`; operational warnings go to stderr
 and never into stdout.
 """
-from __future__ import annotations
 
 import argparse
 import importlib

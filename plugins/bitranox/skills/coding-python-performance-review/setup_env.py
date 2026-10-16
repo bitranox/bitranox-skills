@@ -1,5 +1,5 @@
 # /// script
-# requires-python = ">=3.14"
+# requires-python = ">=3.10"
 # dependencies = []
 # ///
 """Portable, stdlib-only bootstrap for the python-performance-review skill.

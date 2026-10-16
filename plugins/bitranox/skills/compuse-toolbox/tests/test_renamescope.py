@@ -14,8 +14,6 @@ prettier grep.
 a later reader learns the limit from the suite instead of from a bad rename.
 """
 
-from __future__ import annotations
-
 import json
 import os
 import re

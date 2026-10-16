@@ -44,8 +44,6 @@ internal error).
 `ok` is false exactly when the exit is 2, and a miss adds a `caveat` key.
 """
 
-from __future__ import annotations
-
 import argparse
 import json
 import os

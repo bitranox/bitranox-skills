@@ -70,7 +70,6 @@ is an adjudicated one. `--json` emits the envelope `{ok, command, data, skipped}
 `ok` false exactly on exit 2 with an `error` saying why; a usage error gives
 `data: {"reason": ...}`.
 """
-from __future__ import annotations
 
 # Run with plain python3, never `uv run`: the subject runs on sys.executable, which under uv run is
 # uv's throwaway env without the optional deps a hook degrades without. toolbox-nudge reads this.

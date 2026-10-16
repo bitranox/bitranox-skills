@@ -3,7 +3,6 @@
 Its own regex read every pointer-shaped line of a level file, so a line in the prose outside the
 block (which the engine never reads) could claim a fact for the wrong level.
 """
-from __future__ import annotations
 
 import sys
 from pathlib import Path
