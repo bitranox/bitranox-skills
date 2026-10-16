@@ -90,6 +90,42 @@ def test_no_interpreter_fails_loud_for_a_cli_caller_and_open_in_hook_mode(tmp_pa
     assert _run(["--hook", str(s)], strict=True, env_extra=env, bash=bash).returncode == 3
 
 
+def _fake_old_python3(bin_dir):
+    """A `python3` that runs but reports 3.12: it answers the version print and fails the floor."""
+    fake = bin_dir / "python3"
+    fake.write_text('#!/bin/sh\ncase "$2" in *print*) echo 3.12.3 ;; *) exit 1 ;; esac\n',
+                    encoding="utf-8")
+    fake.chmod(0o755)
+
+
+def test_an_interpreter_older_than_3_14_is_refused_by_name(tmp_path):
+    s = tmp_path / "ok.py"
+    s.write_text("print('ok')\n", encoding="utf-8")
+    path = _path_without_python(tmp_path)
+    _fake_old_python3(Path(path))
+    env = {"PATH": path}
+    bash = shutil.which("bash")
+    cli = _run([str(s)], env_extra=env, bash=bash)
+    hook = _run(["--hook", str(s)], env_extra=env, bash=bash)
+    assert cli.returncode == 2, cli.stderr
+    assert hook.returncode == 0, hook.stderr
+    for r in (cli, hook):
+        assert r.stdout == ""                           # the script never ran
+        assert "needs Python 3.14 or newer, found only python3 3.12.3" in r.stderr
+        assert r.stderr.startswith("run-python.sh: ")
+
+
+def test_a_versioned_3_14_beside_an_old_python3_is_used(tmp_path):
+    s = tmp_path / "ok.py"
+    s.write_text("import sys; print(sys.version_info >= (3, 14))\n", encoding="utf-8")
+    path = _path_without_python(tmp_path)
+    _fake_old_python3(Path(path))
+    (Path(path) / "python3.14").symlink_to(sys.executable)
+    r = _run([str(s)], env_extra={"PATH": path}, bash=shutil.which("bash"))
+    assert r.returncode == 0, r.stderr
+    assert r.stdout.strip() == "True"
+
+
 def test_a_hook_scripts_own_exit_2_still_passes_through(tmp_path):
     # the shim never invents a 2, but a guard's deliberate block must reach Claude Code intact
     s = tmp_path / "block.py"

@@ -1,5 +1,5 @@
 # /// script
-# requires-python = ">=3.10"
+# requires-python = ">=3.14"
 # ///
 """Wait until every GitHub Actions run for ONE commit is finished, and say whether they passed.
 

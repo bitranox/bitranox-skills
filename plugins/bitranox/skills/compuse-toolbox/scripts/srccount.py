@@ -1,5 +1,5 @@
 # /// script
-# requires-python = ">=3.10"
+# requires-python = ">=3.14"
 # ///
 """Count first-party source files per tree, and show how much of the raw count was excluded.
 

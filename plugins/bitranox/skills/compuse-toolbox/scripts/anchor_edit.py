@@ -1,5 +1,5 @@
 # /// script
-# requires-python = ">=3.10"
+# requires-python = ">=3.14"
 # ///
 """Edit a file at an EXACT anchor, or refuse - never a computed span between two markers.
 

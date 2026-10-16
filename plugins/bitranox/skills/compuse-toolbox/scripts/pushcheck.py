@@ -1,5 +1,5 @@
 # /// script
-# requires-python = ">=3.10"
+# requires-python = ">=3.14"
 # ///
 """Would this push publish something private? Answer BEFORE pushing, not after.
 

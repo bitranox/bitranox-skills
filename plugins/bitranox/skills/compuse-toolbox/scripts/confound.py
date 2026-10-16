@@ -1,5 +1,5 @@
 # /// script
-# requires-python = ">=3.10"
+# requires-python = ">=3.14"
 # ///
 """Can I say A caused this, or did something ELSE move between those two arms as well?
 

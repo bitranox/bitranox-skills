@@ -29,6 +29,19 @@ than the change, so entries reconstructed from them would read like coverage wit
 a hole nobody has drawn a line under is one that gets rediscovered and half-filled - which is how
 two "versions with no entry" notes came to sit in this file disagreeing with it.
 
+## [9.0.0]
+
+### Changed
+
+- Python 3.14 is the floor, for hooks and scripts alike. `run-python.sh` launches a hook only on
+  Python 3.14 or newer: it prefers `python3`, then looks for `python3.15`, `python3.14`,
+  `py -3.15` and `py -3.14` by name, and on a machine with only an older interpreter it skips the
+  hook with one stderr line naming what it found (`needs Python 3.14 or newer, found only python3
+  3.12.3`). Install Python 3.14 to get the hooks back. Shipped scripts declare `>=3.14` in their
+  PEP 723 headers, so `uv run` fetches a 3.14 for them. The mirrored skills whose tool repos own
+  their scripts keep those repos' floors.
+- CI tests Linux on 3.14 and 3.15, Windows and macOS on 3.15.
+
 ## [8.24.0]
 
 ### Added

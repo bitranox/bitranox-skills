@@ -1,5 +1,5 @@
 # /// script
-# requires-python = ">=3.10"
+# requires-python = ">=3.14"
 # ///
 """Rewrap exactly ONE paragraph of a markdown file, and prove nothing else moved.
 

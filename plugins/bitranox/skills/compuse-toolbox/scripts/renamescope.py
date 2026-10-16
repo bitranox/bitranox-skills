@@ -1,5 +1,5 @@
 # /// script
-# requires-python = ">=3.10"
+# requires-python = ">=3.14"
 # ///
 r"""I am substituting an identifier across a file - which FUNCTIONS do the hits land in, and which
 of those was I not refactoring?

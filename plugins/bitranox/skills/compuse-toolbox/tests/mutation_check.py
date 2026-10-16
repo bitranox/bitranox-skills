@@ -1,5 +1,5 @@
 # /// script
-# requires-python = ">=3.10"
+# requires-python = ">=3.14"
 # dependencies = ["pytest"]
 # ///
 """Prove srccount's safety tests are not vacuous, by breaking the code and requiring them to fail.

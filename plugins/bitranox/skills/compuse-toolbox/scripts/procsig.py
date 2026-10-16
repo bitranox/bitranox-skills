@@ -1,5 +1,5 @@
 # /// script
-# requires-python = ">=3.10"
+# requires-python = ">=3.14"
 # ///
 """Find or signal processes safely - the self-match-proof replacement for `pgrep -f` / `pkill -f`.
 

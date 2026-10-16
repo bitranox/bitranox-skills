@@ -1,5 +1,5 @@
 # /// script
-# requires-python = ">=3.10"
+# requires-python = ">=3.14"
 # ///
 """Run quality gates, keep their REAL exit status, and only then run a follow-up action.
 

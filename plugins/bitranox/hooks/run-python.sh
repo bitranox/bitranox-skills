@@ -6,11 +6,12 @@
 #   bash run-python.sh --hook <script>.py [args...]   hooks.json registration: fail-OPEN
 #
 # When the shim itself cannot run the script (the script is missing or unreadable, no Python 3
-# interpreter, an unexpected shell, a failed path conversion) a CLI caller gets exit 2 - could not
-# run, the plugin-wide code - and a stderr line, so a mistyped path in a gate never reads as a
-# clean pass. A hook must never wedge a turn, so `--hook` turns the same conditions into exit 0
-# after the stderr line. Hook mode never produces exit 2 on its own (the code Claude Code treats as
-# a block); a script's OWN exit code, 2 included, always passes through in both modes.
+# interpreter or none new enough, an unexpected shell, a failed path conversion) a CLI caller
+# gets exit 2 - could not run, the plugin-wide code - and a stderr line, so a mistyped path in a
+# gate never reads as a clean pass. A hook must never wedge a turn, so `--hook` turns the same
+# conditions into exit 0 after the stderr line. Hook mode never produces exit 2 on its own (the
+# code Claude Code treats as a block); a script's OWN exit code, 2 included, always passes through
+# in both modes.
 # BITRANOX_RUN_PYTHON_STRICT=1 makes hook mode loud too, with exit 3 - still never the block code.
 #
 # Claude Code runs hook commands through bash on every desktop platform (Git Bash
@@ -21,8 +22,9 @@
 #   - python3 is canonical on macOS/Linux; on Windows it is usually the Microsoft
 #     Store stub, which exits non-zero in a non-TTY subprocess - the probe skips it.
 #   - python is the python.org install on Windows (and Python 2 on some EOL Linux,
-#     guarded by the >= 3 check).
-#   - py -3 is the Windows Python launcher.
+#     guarded by the >= 3.14 check).
+#   - python3.15 / python3.14 find a new enough Python installed beside an older distro python3.
+#   - py -3.15 / py -3.14 / py -3 are the Windows Python launcher.
 # Approach adapted from Anthropic's claude-plugins-official sg-python.sh.
 set -e
 
@@ -125,14 +127,26 @@ except OSError as exc:
     sys.exit(rc)
 '
 
-_is_py3() { "$@" -c 'import sys; sys.exit(0 if sys.version_info[0] >= 3 else 1)' >/dev/null 2>&1; }
+# Python 3.14 is the plugin's floor: its scripts use 3.14 syntax and lazy annotations, so an older
+# interpreter would die at import on every call. The default python3 is preferred when it is new
+# enough; the versioned names find a 3.14 installed beside an older distro python3. An interpreter
+# that runs but is too old is named in the refusal, so "skipped" says what to install.
+_is_supported() { "$@" -c 'import sys; sys.exit(0 if sys.version_info >= (3, 14) else 1)' >/dev/null 2>&1; }
+_version_of() { "$@" -c 'import sys; print("%d.%d.%d" % tuple(sys.version_info[:3]))' 2>/dev/null; }
 
-for cmd in python3 python "py -3"; do
+_too_old=""
+for cmd in python3 python python3.15 python3.14 "py -3.15" "py -3.14" "py -3"; do
   # shellcheck disable=SC2086
-  if _is_py3 $cmd; then
+  if _is_supported $cmd; then
     # shellcheck disable=SC2086
     _BITRANOX_RUN_PYTHON_DEGRADE_RC=$_degrade_rc exec $cmd -c "$_bootstrap" "$@"
   fi
+  # shellcheck disable=SC2086
+  _v=$(_version_of $cmd) || _v=""
+  if [ -n "$_v" ]; then _too_old="${_too_old:+$_too_old, }$cmd $_v"; fi
 done
 
-_degrade "no Python 3 interpreter found (tried python3, python, py -3); script not run."
+if [ -n "$_too_old" ]; then
+  _degrade "needs Python 3.14 or newer, found only $_too_old; script not run."
+fi
+_degrade "no Python 3 interpreter found (tried python3, python, python3.15, python3.14, py -3.15, py -3.14, py -3); script not run."

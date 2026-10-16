@@ -1,5 +1,5 @@
 # /// script
-# requires-python = ">=3.11"
+# requires-python = ">=3.14"
 # dependencies = ["httpx2>=2.5.0"]
 # ///
 """Audit a live URL's HTTP web-security baseline: security headers, cookie flags, the

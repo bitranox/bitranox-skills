@@ -1,5 +1,5 @@
 # /// script
-# requires-python = ">=3.10"
+# requires-python = ">=3.14"
 # ///
 """Arm a time-bounded backstop over async work, and REFUSE to arm one that is already satisfied.
 

@@ -29,14 +29,15 @@ jobs:
       fail-fast: false
       matrix:
         os: [ubuntu-latest]
-        # 3.11 is the supported minimum. Shipped scripts declare their own floors in PEP 723
-        # headers; every one of them sits inside this range, so the matrix verifies them.
-        python-version: ["3.11", "3.12", "3.13", "3.14"]
+        # 3.14 is the supported minimum, the same floor run-python.sh enforces for hooks. Shipped
+        # scripts declare their own floors in PEP 723 headers; every one of them sits inside this
+        # range, so the matrix verifies them. Windows and macOS run the newest version only.
+        python-version: ["3.14", "3.15"]
         include:
           - os: windows-latest
-            python-version: "3.14"
+            python-version: "3.15"
           - os: macos-latest
-            python-version: "3.14"
+            python-version: "3.15"
     steps:
       # The gate fails any tracked .py/.sh/.json containing CRLF, so a Windows checkout must not
       # rewrite them on the way in. BOTH settings are required and they stop different things:
@@ -77,7 +78,7 @@ jobs:
 
       - uses: actions/setup-python@v7
         with:
-          python-version: "3.13"
+          python-version: "3.14"
 
       - name: Run repo gate (tests-exist, json, LF, skills index)
         run: python plugins/bitranox/hooks/repo-gate.py --ci --no-pytest

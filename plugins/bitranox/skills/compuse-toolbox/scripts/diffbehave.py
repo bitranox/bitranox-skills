@@ -1,5 +1,5 @@
 # /// script
-# requires-python = ">=3.10"
+# requires-python = ">=3.14"
 # ///
 """Do two implementations BEHAVE the same on the same inputs? Run both, diff what they actually did.
 

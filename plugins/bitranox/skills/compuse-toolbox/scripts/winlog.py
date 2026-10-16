@@ -1,5 +1,5 @@
 # /// script
-# requires-python = ">=3.10"
+# requires-python = ">=3.14"
 # ///
 """Read a Windows-written log as text, whatever encoding the writer used - including mixed.
 

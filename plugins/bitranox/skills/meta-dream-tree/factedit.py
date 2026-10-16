@@ -1,5 +1,5 @@
 # /// script
-# requires-python = ">=3.10"
+# requires-python = ">=3.14"
 # ///
 """Read a bitranox memory fact, and recompose its hook plus body through the engine.
 
@@ -440,8 +440,8 @@ def _in_a_venv(interpreter: Path) -> bool:
 _PROBE_TIMEOUT_S = 15
 
 
-def runs_python3(interpreter: Path) -> bool:
-    """True when `interpreter` actually STARTS and reports Python 3 - the bar run-python.sh sets.
+def runs_supported_python(interpreter: Path) -> bool:
+    """True when `interpreter` actually STARTS and reports Python 3.14+ - the bar run-python.sh sets.
 
     Existing on disk proves nothing on Windows: %LOCALAPPDATA%/Microsoft/WindowsApps holds
     python.exe and python3.exe App Execution Aliases that pass is_file() and os.access(X_OK) and,
@@ -449,7 +449,7 @@ def runs_python3(interpreter: Path) -> bool:
     """
     try:
         proc = subprocess.run(
-            [str(interpreter), "-c", "import sys; sys.exit(0 if sys.version_info[0] >= 3 else 1)"],
+            [str(interpreter), "-c", "import sys; sys.exit(0 if sys.version_info >= (3, 14) else 1)"],
             capture_output=True, check=False, timeout=_PROBE_TIMEOUT_S)
     except (OSError, subprocess.SubprocessError):
         return False
@@ -457,14 +457,14 @@ def runs_python3(interpreter: Path) -> bool:
 
 
 def default_python(path_env: str | None = None, base_prefix: Path | None = None, *,
-                   runs: Callable[[Path], bool] = runs_python3) -> str:
-    """The interpreter to launch the engine with: the first NON-VENV python3 on PATH that RUNS.
+                   runs: Callable[[Path], bool] = runs_supported_python) -> str:
+    """The interpreter to launch the engine with: the first NON-VENV python3 on PATH that RUNS 3.14+.
 
     Neither of the obvious answers works. `sys.executable` under `uv run` is an EPHEMERAL build
     venv under the uv cache, so a --dry-run command printed for a human to paste names a path that
     is already gone; and a bare `shutil.which("python3")` finds that same venv, because uv puts it
     first on PATH. So venv interpreters are skipped explicitly. The engine is pure stdlib, so any
-    real python3 runs it.
+    real python3 at the plugin's 3.14 floor runs it.
 
     Windows names its interpreter `python.exe` (there is no python3.exe in a python.org install)
     and keeps it at the ROOT of the base prefix, not under bin/, so both are tried before falling

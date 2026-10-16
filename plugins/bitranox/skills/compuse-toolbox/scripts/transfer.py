@@ -1,5 +1,5 @@
 # /// script
-# requires-python = ">=3.10"
+# requires-python = ">=3.14"
 # ///
 """Move big files with a real speed cap, and judge whether a long transfer is still alive.
 

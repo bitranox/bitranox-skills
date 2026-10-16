@@ -1,5 +1,5 @@
 # /// script
-# requires-python = ">=3.10"
+# requires-python = ">=3.14"
 # ///
 """Is this claim about a guard, detector or scan REAL? Run the subject on a probe and a CONTROL, and
 score the pair.

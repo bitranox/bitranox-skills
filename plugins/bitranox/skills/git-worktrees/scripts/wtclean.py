@@ -1,5 +1,5 @@
 # /// script
-# requires-python = ">=3.10"
+# requires-python = ">=3.14"
 # ///
 """Remove a git worktree AND the per-topic build caches it leaves behind.
 

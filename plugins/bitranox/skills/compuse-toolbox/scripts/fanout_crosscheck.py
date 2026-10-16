@@ -1,5 +1,5 @@
 # /// script
-# requires-python = ">=3.10"
+# requires-python = ">=3.14"
 # ///
 """After a per-target fan-out, find text that landed in the WRONG target.
 

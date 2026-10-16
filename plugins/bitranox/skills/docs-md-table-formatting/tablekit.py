@@ -1,5 +1,5 @@
 # /// script
-# requires-python = ">=3.10"
+# requires-python = ">=3.14"
 # ///
 """Round-trip a GitHub-flavored markdown table to JSON, let you edit the JSON, and re-emit it aligned.
 

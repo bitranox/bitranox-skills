@@ -1,5 +1,5 @@
 # /// script
-# requires-python = ">=3.10"
+# requires-python = ">=3.14"
 # ///
 """Scan files (or a repo tree) for git merge-conflict markers, reporting file:line.
 

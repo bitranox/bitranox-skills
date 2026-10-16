@@ -1,5 +1,5 @@
 # /// script
-# requires-python = ">=3.10"
+# requires-python = ">=3.14"
 # dependencies = []
 # ///
 """Prove the Python a written PLAN contains before it is handed off: extract the ```python blocks

@@ -1,5 +1,5 @@
 # /// script
-# requires-python = ">=3.10"
+# requires-python = ">=3.14"
 # dependencies = ["orjson"]
 # ///
 """Filter a JSONL stream (a Claude Code transcript or any JSONL) by top-level type / message.role,

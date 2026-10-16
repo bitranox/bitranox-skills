@@ -1,5 +1,5 @@
 # /// script
-# requires-python = ">=3.11"
+# requires-python = ">=3.14"
 # dependencies = ["playwright>=1.44"]
 # ///
 """Open one LIVE, INTERACTIVE browser window per device viewport.

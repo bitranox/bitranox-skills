@@ -1,5 +1,5 @@
 # /// script
-# requires-python = ">=3.10"
+# requires-python = ">=3.14"
 # ///
 """Drive a pfSense firewall from the command line instead of hand-rolling PHP over SSH.
 

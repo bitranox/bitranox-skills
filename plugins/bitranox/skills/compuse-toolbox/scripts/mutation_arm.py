@@ -1,5 +1,5 @@
 # /// script
-# requires-python = ">=3.10"
+# requires-python = ">=3.14"
 # ///
 """Break the code on purpose, run ONE test arm, and report whether the arm noticed - then restore.
 

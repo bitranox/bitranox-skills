@@ -1,5 +1,5 @@
 # /// script
-# requires-python = ">=3.10"
+# requires-python = ">=3.14"
 # ///
 """Report git state for one or more repos: branch, HEAD vs origin (ahead/behind/diverged, or an
 upstream that is GONE on the remote), dirty count, and the staged files, one indented `staged`

@@ -1,5 +1,5 @@
 # /// script
-# requires-python = ">=3.10"
+# requires-python = ">=3.14"
 # ///
 """Pick the latest timestamped file or directory by MTIME, never by name sort.
 

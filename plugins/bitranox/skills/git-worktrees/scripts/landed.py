@@ -1,5 +1,5 @@
 # /// script
-# requires-python = ">=3.10"
+# requires-python = ">=3.14"
 # ///
 """Did a leftover worktree or branch already land on the target branch? Read-only.
 

@@ -880,13 +880,23 @@ def test_a_base_prefix_interpreter_that_does_not_run_is_not_chosen(tmp_path):
 def test_the_run_probe_accepts_a_real_interpreter_and_refuses_a_file_that_is_not_one(tmp_path):
     """The default seam, on every platform: a real interpreter passes, and an empty file named
     like one - which is_file() and os.access(X_OK) both accept - does not."""
-    assert FE.runs_python3(Path(sys.executable)) is True
+    assert FE.runs_supported_python(Path(sys.executable)) is True
     fake = tmp_path / ("python.exe" if sys.platform == "win32" else "python3")
     fake.write_text("", encoding="utf-8")
     fake.chmod(0o755)
     assert fake.is_file() and os.access(fake, os.X_OK)
-    assert FE.runs_python3(fake) is False
-    assert FE.runs_python3(tmp_path / "missing") is False
+    assert FE.runs_supported_python(fake) is False
+    assert FE.runs_supported_python(tmp_path / "missing") is False
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="the fake interpreter is a POSIX shell script")
+def test_the_run_probe_refuses_an_interpreter_older_than_3_14(tmp_path):
+    """A real interpreter that reports 3.12 runs, and is still refused: 3.14 is the floor."""
+    old = tmp_path / "python3"
+    old.write_text("#!/bin/sh\nexec %s -c 'import sys; sys.version_info = (3, 12, 0); exec(sys.argv[1])' \"$2\"\n"
+                   % sys.executable, encoding="utf-8")
+    old.chmod(0o755)
+    assert FE.runs_supported_python(old) is False
 
 
 def test_a_cp1252_stdout_does_not_crash_on_a_non_ascii_hook(tmp_path):

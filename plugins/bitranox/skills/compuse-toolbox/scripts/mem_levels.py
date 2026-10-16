@@ -1,5 +1,5 @@
 # /// script
-# requires-python = ">=3.10"
+# requires-python = ">=3.14"
 # ///
 """Enumerate a curated memory tree's levels and the slugs at each, and look a slug's level up.
 

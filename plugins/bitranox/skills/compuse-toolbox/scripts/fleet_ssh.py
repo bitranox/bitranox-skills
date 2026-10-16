@@ -1,5 +1,5 @@
 # /// script
-# requires-python = ">=3.10"
+# requires-python = ">=3.14"
 # ///
 """Run ssh or scp against a host with one option set, one resolved key, and no interactive prompt.
 

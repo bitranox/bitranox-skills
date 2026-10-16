@@ -1,5 +1,5 @@
 # /// script
-# requires-python = ">=3.10"
+# requires-python = ">=3.14"
 # ///
 """Measure duplicated `## ` sections across a tree of CLAUDE.md files.
 

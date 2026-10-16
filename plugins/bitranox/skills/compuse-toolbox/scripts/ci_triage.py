@@ -1,5 +1,5 @@
 # /// script
-# requires-python = ">=3.10"
+# requires-python = ">=3.14"
 # ///
 """Triage a build/CI log: strip ANSI, optionally isolate one step's block, and surface only the
 error/warning lines with their line numbers.

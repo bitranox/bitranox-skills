@@ -1,5 +1,5 @@
 # /// script
-# requires-python = ">=3.10"
+# requires-python = ">=3.14"
 # ///
 """Near-duplicate CANDIDATES across a curated memory tree - with a control that proves it fired.
 

@@ -1,5 +1,5 @@
 # /// script
-# requires-python = ">=3.10"
+# requires-python = ">=3.14"
 # ///
 """Reclaim the disk a Claude Code plugin cache keeps, without breaking a running session.
 

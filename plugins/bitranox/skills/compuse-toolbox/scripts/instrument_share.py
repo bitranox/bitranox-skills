@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # /// script
-# requires-python = ">=3.10"
+# requires-python = ">=3.14"
 # dependencies = ["orjson"]
 # ///
 """How much of real working time goes to the INSTRUMENTATION - memory upkeep, handovers, and

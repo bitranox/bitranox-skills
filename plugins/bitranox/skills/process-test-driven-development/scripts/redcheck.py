@@ -1,5 +1,5 @@
 # /// script
-# requires-python = ">=3.10"
+# requires-python = ">=3.14"
 # ///
 """Will this RED/baseline scenario actually be ABLE to fail, or does it only look like it did?
 

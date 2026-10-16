@@ -7,10 +7,10 @@ name = "bitranox-skills"
 # Kept equal to plugins/bitranox/.claude-plugin/plugin.json by repo-gate.py
 # (check_version_sync). The plugin manifest is the source of truth; this is the copy
 # the build backend can read, and the gate is what stops the two drifting.
-version = "8.24.0"
+version = "9.0.0"
 description = "The bitranox Claude Code skill collection: 82 skills and 64 hooks, installable without the plugin marketplace."
 readme = "README.md"
-requires-python = ">=3.11"
+requires-python = ">=3.14"
 license = { file = "LICENSE" }
 authors = [{ name = "bitranox" }]
 keywords = ["claude-code", "claude", "anthropic", "agent-skills", "ai-agents"]
@@ -19,10 +19,8 @@ classifiers = [
     "Environment :: Console",
     "Intended Audience :: Developers",
     "License :: OSI Approved :: MIT License",
-    "Programming Language :: Python :: 3.11",
-    "Programming Language :: Python :: 3.12",
-    "Programming Language :: Python :: 3.13",
     "Programming Language :: Python :: 3.14",
+    "Programming Language :: Python :: 3.15",
     "Topic :: Software Development",
 ]
 # Deliberately none. The hooks run under a bare interpreter with nothing to provision

@@ -1,5 +1,5 @@
 # /// script
-# requires-python = ">=3.10"
+# requires-python = ">=3.14"
 # dependencies = ["orjson"]
 # ///
 """Read a Claude Code JSONL transcript: the last user/assistant text, or the WHOLE thing.

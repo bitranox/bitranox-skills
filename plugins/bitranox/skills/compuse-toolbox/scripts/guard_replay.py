@@ -1,5 +1,5 @@
 # /// script
-# requires-python = ">=3.10"
+# requires-python = ">=3.14"
 # dependencies = ["orjson"]
 # ///
 """Replay every real Bash command in a Claude Code transcript corpus through a guard predicate,

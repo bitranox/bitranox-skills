@@ -1,5 +1,5 @@
 # /// script
-# requires-python = ">=3.10"
+# requires-python = ">=3.14"
 # ///
 """Back up the stores a dream is about to rewrite, and prove afterwards that nothing was lost.
 

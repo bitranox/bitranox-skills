@@ -1,5 +1,5 @@
 # /// script
-# requires-python = ">=3.10"
+# requires-python = ">=3.14"
 # ///
 """Find memory pointer lines that assert STATUS - the claims that rot without anyone noticing.
 
