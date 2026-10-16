@@ -11,6 +11,7 @@ description: Use when sending email from Python or the shell, especially with la
 |-------------------------------------------------------|------------------------------------------------------|---------------------------------------------------|
 | Send mail from Python (multipart, UTF-8, attachments) | `btx_lib_mail.send(...)`                             | hand-rolling `smtplib` + `email` MIME assembly    |
 | Send a large attachment on a low-memory box           | `send(..., attachment_file_paths=[...])` (streamed)  | reading the file into RAM, `sendmail(msg_str)`    |
+| A logo or picture shown inside the HTML body          | `send(..., inline_images={"logo": path})`            | `data:` URIs, hand-built `multipart/related`      |
 | Send from a shell / an agent with nothing installed   | `uvx --exclude-newer "7 days" btx-lib-mail send ...` | installing a mailer, writing a throwaway script   |
 | A script must read the result                         | `btx-lib-mail --json send ...`                       | scraping the human text or stderr                 |
 | Test code that sends mail, no server                  | `send(..., transport=your_recorder)`                 | patching `smtplib` or your own `send` wrapper     |
@@ -279,6 +280,51 @@ tests can inject the recorder. The CLI takes one through its context:
 `CliRunner().invoke(cli, ["send", ...], obj=CliContext(transport=recorder))` with
 `from btx_lib_mail.cli import CliContext, cli`.
 
+### Inline images (a logo inside the HTML body)
+
+Since btx_lib_mail 4.5.0, the `send()` keyword `inline_images` (there is no `ConfMail` field for it)
+maps a Content-ID to an image file; the HTML shows each one as
+`<img src="cid:<Content-ID>">`, and the image travels inside the message, so no remote URL has to
+be loaded and no `data:` URI is needed. It requires `mail_body_html`:
+
+```python
+from pathlib import Path
+
+from btx_lib_mail import send
+
+send(
+    mail_from="shop@example.com",
+    mail_recipients="customer@example.com",
+    mail_subject="Your order has shipped",
+    mail_body="Your order has shipped.",  # plain-text alternative
+    mail_body_html='<img src="cid:logo" alt="Shop" width="200"><p>Your order has shipped.</p>',
+    smtphosts=["smtp.example.com:587"],
+    inline_images={"logo": Path("assets/logo.png")},
+)
+```
+
+The HTML and the images go out as `multipart/related`, inside `multipart/alternative` when there is
+a plain body and inside `multipart/mixed` when there are attachments; each image part carries
+`Content-ID: <key>` and `Content-Disposition: inline`. Without `inline_images` the message is
+unchanged. A Content-ID is 1 to 250 printable ASCII characters other than space, `<`, `>` and `"`;
+a bad one, or images without `mail_body_html`, is an `InvalidInputError`. Only the extensions in
+`INLINE_IMAGE_TYPES` are accepted (`.png`, `.jpg`, `.jpeg`, `.gif`, `.webp`); another one is an
+`AttachmentSecurityError` (`EXTENSION`). Every image passes the attachment security checks, and a
+violation always raises, even with `attachment_raise_on_security_violation=False`; a missing image is
+always an `AttachmentNotFoundError`, because the HTML references it. Images do not count toward
+`attachment_max_count`, but `attachment_max_size_bytes` applies to each one (`SIZE`). The library
+does not read the HTML: an image nothing references is sent anyway, and a `cid:` with no entry shows
+as a broken image.
+
+Mind the default blocked directories, which are the attachment ones: an image under `/root`, `/var`
+or `/etc` (a package installed for root by `uv tool install` lives under `/root/.local`) is refused
+as `DIRECTORY`. Ship the image from a path outside them (install the tool elsewhere, e.g. with
+`UV_TOOL_DIR`), or pass `attachment_blocked_directories` / `attachment_allowed_directories` for that
+call; both govern inline images exactly as they govern attachments.
+
+On the CLI, `--inline-image CID=PATH` (repeatable, split at the first `=`, no environment
+variable); without `--html-body` the send is refused with exit code `22`.
+
 ### Large attachments (streamed, bounded memory)
 
 Attachments are streamed from disk and sent to the server in chunks, so a multi-gigabyte file never
@@ -357,7 +403,7 @@ reads `BTX_MAIL_SMTP_TIMEOUT`, `--recipient-max-count` reads `BTX_MAIL_RECIPIENT
 `--attachment-*` rules read `BTX_MAIL_ATTACHMENT_{ALLOWED_EXT,BLOCKED_EXT,ALLOWED_DIRS,BLOCKED_DIRS,
 MAX_SIZE,MAX_COUNT,ALLOW_SYMLINKS,RAISE_ON_SECURITY}` (booleans take `1/true/yes/on` and
 `0/false/no/off`). The MESSAGE-CONTENT options have no environment
-variable at all: `--subject`, `--body` (both required), `--html-body` and `--attachment` must be
+variable at all: `--subject`, `--body` (both required), `--html-body`, `--attachment` and `--inline-image` must be
 passed on the command line.
 
 For a script or an agent, put `--json` (`-j`; or `--json-bare` for the payload alone) BEFORE the
@@ -560,7 +606,8 @@ The API and CLI surface is discoverable from the INSTALL (always matches your ve
 (`BtxMailError`, `InvalidInputError`, `ConfigurationError`, `AttachmentNotFoundError`,
 `AttachmentSecurityError`, `DeliveryError`), `AttachmentViolation`, `SecretSafeModel`,
 `redact_validation_error`, `REDACTED_INPUT` (the `"[redacted]"` stand-in a redacted error input
-reads as), `logger` (the `btx_lib_mail` logger, to attach a handler or set a level), and the
+reads as), `logger` (the `btx_lib_mail` logger, to attach a handler or set a level),
+`INLINE_IMAGE_TYPES` (the image extensions `inline_images` accepts), and the
 attachment-security constants, all re-exported from the package root. The root also exports the
 scaffold helpers behind the `hello` and `fail` commands (`CANONICAL_GREETING`, `emit_greeting`,
 `noop_main`, `raise_intentional_failure`, `print_info`);

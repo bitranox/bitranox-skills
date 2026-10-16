@@ -29,6 +29,15 @@ than the change, so entries reconstructed from them would read like coverage wit
 a hole nobody has drawn a line under is one that gets rediscovered and half-filled - which is how
 two "versions with no entry" notes came to sit in this file disagreeing with it.
 
+## [9.1.2]
+
+### Changed
+
+- `coding-python-send-mail` documents `send(inline_images=...)` and `--inline-image` (btx_lib_mail 4.5.0):
+  a logo or picture shown inside the HTML body travels in the mail as a CID image, with the MIME
+  structure, the Content-ID rules, the accepted types and the blocked-directory trap for a package
+  installed under /root. Mirrors the twin in btx_lib_mail.
+
 ## [9.1.1]
 
 ### Changed
