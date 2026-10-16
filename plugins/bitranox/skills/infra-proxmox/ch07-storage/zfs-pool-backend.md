@@ -98,6 +98,16 @@ This specifies the owner VM.
 This can be an arbitrary name (ascii) without white space. The backend uses disk[N] as default,
 where [N] is replaced by an integer to make the name unique.
 
+> **Warning: guest volume properties are configuration.** PVE enforces a container's configured
+> disk size (`size=` on `rootfs`/`mpN`) as the `refquota` of its `subvol-<VMID>-<NAME>` dataset,
+> and a non-sparse VM zvol carries a `refreservation`. Clearing them raises no error, the guest
+> keeps running and `pct config` still reports the old size, but nothing stops that guest from
+> filling the pool. When a script or deploy hook sets ZFS properties across all datasets, skip
+> every dataset whose leaf name starts with `subvol-`, `vm-` or `base-`, and inspect first with
+> `zfs list -H -o name,refquota,refreservation`: any non-`none` value on a guest volume is
+> load-bearing. Test the exclusion against the real dataset list plus a lookalike name that must
+> NOT be skipped.
+
 
 ### 7.9.3 Storage Features
 

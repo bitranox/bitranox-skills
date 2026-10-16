@@ -54,7 +54,10 @@ The date is when it was FIRST raised and never changes. `ORIGIN` is `USER:` (the
 they gave any) or `FOUND:`. `size` is how much is left; it is the field that disappears first when
 a list is retyped, and it breaks ties within an origin, so it is not optional. It is NOT the first
 ranking key - see below, where reading it as one is a named failure. Closing an item is `- [x]` plus
-`| closed: <reason>`; the line stays. A SessionStart hook prints the top ranks with their age.
+`| closed: <reason>`; the line stays. When you close several items in one pass, tag each reason
+`measured:` or `argued:`, because afterwards a closure settled by evidence and one settled by
+reasoning look identical, and only the second is open to reopening. A SessionStart hook prints the
+top ranks with their age.
 
 That closing rule is the default, not an override: when a backlog file's own header states a
 different one ("a solved item is DELETED"), the header governs that file. Before deleting a line,
@@ -95,7 +98,10 @@ another line - give the open item a free number before citing it.
    after the sized ones of its origin, and sizing it is then its own next action.
 4. Blocked keeps its rank. Being blocked on the user is a reason to go and ask, not a demotion.
    Blocked is a value for `open:`, never a third `ORIGIN` - there are two origins and inventing a
-   third puts the item in a category nothing sorts.
+   third puts the item in a category nothing sorts. When you park several items behind ONE
+   resource (a test window, a node, a device due back), check once that the resource is durable
+   and write in each `open:` field what it was checked against: a resource that is transient or
+   already gone stalls every dependent with nothing showing it.
 
 **Never infer a date you do not have.** When the source does not say when an item was first
 raised, write TODAY's date with a question mark - `(2026-08-31?)` - or the bare word
@@ -106,7 +112,10 @@ goes for `size`: `size: unknown` is a usable line, an invented count is not.
 
 ## What belongs in it
 
-- **In flight** - what is part-done, how far it got, and what state it is in right now.
+- **In flight** - what is part-done, how far it got, and what state it is in right now. A
+  background subagent still running is in flight too: `/clear` resets the conversation, not the
+  session process, so it keeps working, can commit and push, and reports into the NEXT
+  conversation. Name it, its branch, and what to do with its report.
 - **Committed, or not** - uncommitted work can vanish; the reader cannot guess which they got.
 - **Decided, and why** - choices a reader would otherwise reopen, with the reason that settled them.
 - **Decided against, and why** - so it is not mistaken for an oversight and redone.
@@ -123,7 +132,11 @@ goes for `size`: `size: unknown` is a usable line, an invented count is not.
   written, and none of them outranks a bigger item the user is still waiting on.
 - **Files that matter** - repo-relative PATHS, not bare filenames; inferring them is the work
   this file exists to save.
-- **How to verify** - the commands that prove the work still stands.
+- **How to verify** - the commands that prove the work still stands. Never write HEAD's sha, "tree
+  is clean" or "CI is green on HEAD" as a result: committing the handover moves HEAD, so the line is
+  stale on landing and each correction moves it again. State the property plus the command that
+  checks it (for CI: `ci_wait.py --ref HEAD` from `bitranox:compuse-toolbox`), or quote a result for an earlier, final sha and
+  say which commit it belongs to.
 
 ## What does NOT belong
 
@@ -159,14 +172,23 @@ goes for `size`: `size: unknown` is a usable line, an invented count is not.
    words. A request that lives only in the sentence they typed is one re-ask away from being lost,
    and they will not know to re-ask.
 
+   Decisions and trap notes get the same audit ("do not change X, it looks wrong but is right"):
+   grep the code, the tests and `OPEN-WORK.md` for each one, and re-home any that has no other home
+   into the code it protects, as a comment or docstring saying WHY, before the overwrite. A trap
+   note exists because the code looks wrong, so nothing else records it.
+
 3. **Copy the outgoing `handover.md` to `handover.prev.md` first, unless git already holds it
    exactly.** Git holds it exactly when `git ls-files --error-unmatch handover.md` and
    `git diff --quiet HEAD -- handover.md` both exit 0. In every other case - gitignored, never
-   added, or edited since its last commit - copy it, replacing any older copy, and keep the copy out
+   added, or edited since its last commit - copy it, and keep the copy out
    of commits (ignore it beside `handover.md`, or list it in `.git/info/exclude` where `handover.md`
    is tracked). An overwrite is a one-way step: a rewrite that truncates the old lessons
    mid-sentence leaves nothing showing it unless an earlier text survives to diff against. After
    writing, diff the new file against that earlier text and account for every item that vanished.
+   Copy only before a WHOLESALE rewrite, never before an in-place edit such as the STALE line: the
+   `.prev` copy is the one step of history, and an unneeded copy replaces the last rewrite's backup
+   with a near-identical file. Before replacing an existing `handover.prev.md`, check what it holds
+   and diff it first if it backs a rewrite nobody has checked yet.
 4. **Write `handover.md` at the repo root, OVERWRITING whatever is there.** A stale handover from an
    earlier session is superseded the moment you write yours - replace it wholesale, never append to
    it and never keep both. There is exactly one `handover.md`, and it describes one moment; two of
@@ -231,6 +253,22 @@ holds two moments with no way to tell them apart.
 stopped; the backlog tells you what is actually worth doing, and the two answers are routinely
 different. A handover's next action is one session's view of one moment, and the item that has
 been waiting longest is the one least likely to be in it.
+
+**Before naming the next item, or saying nothing here can be worked, classify EVERY open line.**
+Run `grep -n '^- \[ \]' OPEN-WORK.md`, put each line in blocked, deferred, other-repo or workable,
+and state that classification with your answer. Reasoning down from the top ranks stops at the
+first run of blocked items and declares the backlog exhausted while workable items sit below it.
+
+**A line saying a PR is blocked on the maintainer, with nothing open, is a snapshot.** Reviewers,
+the maintainer and the user can all post after it was written, and neither PR state nor the check
+list shows a review thread. Read references/stale-pr-verdict.md before acting on such a line: it
+gives the commands that list later reviews, unresolved threads and comments, and says what to do
+with a public promise the user made on the PR.
+
+**A background agent the handover names as running is LIVE.** It survived the `/clear`, may have
+committed or pushed since, and will report into this conversation. Check its branch
+(`git log origin/<default>..<its branch>`) and origin for new commits, and wait for or message it
+instead of starting the same fix in parallel.
 
 **Before working an item, check which repo its fix lands in.** If that is not the repo you are in,
 the item is misfiled: move it to the owning repo's `OPEN-WORK.md`, close it here as moved, and take

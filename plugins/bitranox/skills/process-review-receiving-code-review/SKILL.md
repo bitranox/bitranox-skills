@@ -96,6 +96,19 @@ IF conflicts with your human partner's prior decisions:
   Stop and discuss with your human partner first
 ```
 
+**A prescribed fix is a hypothesis, even when the finding is right.** When a finding cites a
+precedent ("library X handles it this way"), open that precedent and quote its GUARD, not just the
+call: trace into the callee for an early return and up to the caller for state set first. A
+precedent that applies only on one platform, or returns early otherwise, still supports the defect
+and contradicts the remedy. The "prior decisions" check above only fires if you LOOK for one: before
+a remove/trim/reverse recommendation, grep the decisions log and the repo's docs (CLAUDE.md, command
+reference, ADRs) and tests for the behaviour by name, because a broad fix can silently reverse a
+recorded decision. Prefer the narrowest form that fixes the defect, and pin the recorded decision
+with a test the broad form would fail. When YOU write a fix brief for someone else, state the
+requirements and the inputs to probe, label any named mechanism or wording as a CANDIDATE to
+verify, never the remedy, and have the re-reviewer check any invariant the brief states against
+the real producer's behaviour, not against the brief.
+
 **your human partner's rule:** "External feedback - be skeptical, but check carefully"
 
 ## YAGNI Check for "Professional" Features
@@ -259,6 +272,15 @@ required:
 ```bash
 gh api -X POST repos/{owner}/{repo}/pulls/{pr}/comments/{id}/replies -f body='...'
 ```
+
+## Bot Reviews (Copilot)
+
+When judging whether a bot review is converged, read the review BODY, not only its findings count
+and the unresolved-thread list: the summary sentence under the verdict heading (`### Needs a closer
+look`, `### Changes recommended`) can name a real defect while the body says `Findings: None` and
+creates no thread, so every mechanical signal reads clean. Adjudicate that sentence like a finding,
+verify it against the code, and answer it on the PR either way, so the next round does not re-raise
+it into a silence that looks like agreement.
 
 ## The Bottom Line
 

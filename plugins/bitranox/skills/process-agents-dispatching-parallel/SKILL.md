@@ -126,6 +126,16 @@ Each agent gets:
   TOOLS cannot, and match the type to the job: a read-only reviewer needs Read but no Write, Edit
   or Bash (Bash alone is enough to write a file), while a text-only probe that must not reach the
   filesystem at all is `bitranox:baseline-probe`. A reviewer stripped of Read cannot review.
+- **"ASK before running anything on a real host."** Put it in every fixer brief. Without it a
+  fixer treats a production server or cluster node as a scratch directory.
+- **A FOREGROUND wait, when the agent must wait for CI or a gate.** Write into the FIRST brief:
+  "run the wait with run_in_background false; never background a wait and end your turn." A
+  background agent that backgrounds its own wait and ends its turn goes idle, and that task's
+  completion does not wake it, so you read it as busy while nothing happens; a correction sent
+  later in a wake-up message tends not to hold. When one idles saying it is waiting, check the
+  ground truth yourself (the CI run for its commit finished, no gate process left in its checkout,
+  the commit not yet made) and SendMessage it the verdict. Keep your own backstop armed until the
+  COMMIT lands, not until the gate starts.
 
 ### 3. Dispatch in Parallel
 
@@ -143,6 +153,10 @@ Multiple dispatch calls in one response = parallel execution. One per response =
 ### 4. Review and Integrate
 
 When agents return:
+- Tick each dispatched name (R1..Rn, or the agent ids) off a written checklist ONLY when its
+  hand-back has been READ. Say "all in" only when none is unticked, and name the total and the
+  last one ticked. Hand-backs arriving in a burst make the count an impression, and a
+  still-running agent gets announced as finished while its findings are yet to come.
 - Read each summary
 - Verify fixes don't conflict
 - Run full test suite
@@ -277,4 +291,14 @@ After agents return:
    gained and flags the other targets' names there; exit 1 lists each finding. PATH is the
    target's git work tree, or the file itself when the target is a gitignored file such as a
    CLAUDE.local.md, which `git status` in step 5 never shows.
+7. **Grep each fixer's diff for what its brief forbade** - a prohibition in a brief is advice, not
+   a constraint: under pressure to go green some fixers take the forbidden shortcut and report a
+   clean fix, and the gate cannot see it (a monkeypatched test is green, a suppression is silent).
+   Before merging, grep the ADDED lines, e.g.
+   `git diff <base> | grep -E '^\+.*(monkeypatch|patch\(|type: ignore|pyright: ignore|noqa)'`,
+   plus any forbidden test marker, and check the other way for a REQUIRED marker that is missing.
+   Grep `git log --format=%B <base>..HEAD` for trailers the brief forbade (such as an attribution
+   line). To strip a forbidden marker, remove only the ADDED lines, never a file-wide substitution
+   that also hits pre-existing ones. Send each hit back with the seam to use instead; never merge
+   on the report alone.
 

@@ -35,8 +35,12 @@ DOES NOT APPLY - internal seams between trusted code:
   validates type and shape, coerces, and REJECTS what does not fit. Never pass a raw dict / JSON /
   ORM row inward; convert to a typed domain object immediately.
 - **Bound length and size.** Max string length, collection size, numeric range, request-body size.
-  Unbounded input is a DoS vector; stream or paginate large data, never materialize unbounded. For
-  the wider self-healing/resource-guard patterns (bounding concurrency/memory, headroom checks), see
+  Unbounded input is a DoS vector; stream or paginate large data, never materialize unbounded. A
+  whole-document or request-body cap does NOT bound any single field inside it: one plain-string
+  field can still carry megabytes into parsing, formatting or a per-character loop whose cost grows
+  faster than its length. So give every text field on a boundary model its own `max_length` and
+  every collection an item-count bound, at least where the field reaches parsing, formatting or
+  allocation (a field only compared for equality needs none). For the wider self-healing/resource-guard patterns (bounding concurrency/memory, headroom checks), see
   `bitranox:coding-resilience`.
 - **Handle arbitrary bytes/chars.** non-ASCII, emoji, CJK, control chars, NUL, binary: reject,
   normalize (e.g. Unicode NFC), or escape - never trust raw. Decide the allowed charset explicitly.

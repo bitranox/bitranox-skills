@@ -1,0 +1,213 @@
+# Silent test defeaters: the detail
+
+Read this when a test patches a name, parses tool output, asserts on an exception message or on
+rendered output, loops until a condition holds, carries a skip or an exclusion, judges an
+artifact, compares against a git ref, guards against cost, or tests environment isolation - or
+when you are about to claim a code path is untested, or a mutation survives. Each entry names the
+trigger, the mechanism that makes the test pass (or fail) for the wrong reason, and the fix.
+
+## Determinism and environment
+
+### Bound every loop in a test by something the subject does not control
+
+First choice is no loop at all: block on an event the code under test signals, or plant one (the
+"No timer in a test" rule in SKILL.md). This entry covers the loops that remain - a production
+`while` loop driven by a fake, which IS the code under test, and a spin on cooperative tasks
+(`while x not in started: await asyncio.sleep(0)`) where the code offers no event and none can be
+planted. Unbounded, either HANGS the suite when a regression makes its exit condition unreachable:
+no failing assertion, only a timeout that names no cause. Bound it by a COUNT, never a wall-clock
+deadline (a deadline is the timer the SKILL.md rule forbids): give a spin a helper with a
+predicate, a message and a tick ceiling; give a production loop an independent backstop (a hard
+cap that never binds while the real guard works) and assert in the test that it never fired. Make the fake
+advance every counter the real system advances (distinct ids, growing totals), or a
+de-duplicating consumer freezes the loop for a reason unrelated to the change. Then mutate the
+guard the loop depends on and require a fast, NAMED failure.
+
+### Pin the environment an output premise depends on
+
+When a test's premise is a property of its output (no escape bytes, no colour, no control
+characters, a width), set the variables that decide it - `FORCE_COLOR`, `NO_COLOR`, `TERM`,
+`COLUMNS`, the locale - in the suite's own fixture (`monkeypatch.setenv` / `delenv`) instead of
+inheriting them, and add a control asserting the premise holds (the output DOES contain colour
+when the test is about stripping it). Inherited, the same test is a guard on one machine and a
+wall of unrelated red on another.
+
+### Build a missing path under the test's temp dir
+
+A path chosen as "obviously absent" is not absent everywhere: `/nonexistent` is the `nobody`
+account's home on Debian and Ubuntu, mode 0700, so the error is a permission error on some
+machines and a missing-file error on others. Use `tmp_path / "absent.json"`, absent by
+construction on every platform; in a doctest use a relative, obviously fictional path. Assert the
+error TYPE, not the operating system's message text.
+
+### Reproducing a flake against a UI framework's tick
+
+A race against a timer reproduces by slowing that timer, not by starving the CPU. Textual, for
+example, repaints every 1/`TEXTUAL_FPS` seconds (default 60) while `Pilot.pause()` waits only a
+short idle sleep, so running the exact failing pytest node with `TEXTUAL_FPS=10` is the RED arm;
+keep it as the RED for the fix.
+
+## Skips, exclusions and mutations
+
+### A skip's reason is prose nothing executes
+
+The skip condition is code; the reason is not checked by anything, so a reason copied from a
+neighbouring test keeps a platform cell dark while the real failure goes unseen. When you write a
+skip or meet one, check that the mechanism its reason names (a subprocess, a binary, a filesystem
+behaviour) occurs in THAT test at all. If it does not, find what really fails, then fix it or
+rewrite the reason to name it - do not just delete the skip, which may be load-bearing.
+
+### Make an exclusion assert its own premise
+
+An exclusion in a guard ("nothing in this cell can change", "this code is never raised here") is
+written with a reason that later expires unnoticed, and widening it is always the smaller diff.
+Make the exclusion test its own premise (for "never raised here", assert the value is not
+referenced in the source) so it fails when the premise expires and asks to be promoted into
+coverage. When a fix starts producing an exempted value, grep the tests for exemptions naming it
+and narrow them in the same change - the fix never touches the test file, so nothing else prompts
+the re-read.
+
+### A surviving mutation can be absorbed by the fixture
+
+If every fixture that triggers the mutated condition also triggers another condition that yields
+the same result, the mutation changes nothing and the test looks protective while it cannot tell
+the code with and without the check apart. Add a case where only the mutated condition varies,
+re-run the mutation, and require RED.
+
+## Rendered output and fixtures
+
+### An absence can be the column's doing
+
+When asserting a payload is ABSENT from rendered output (a table, a TUI screen), a sanitiser that
+strips control bytes keeps the letters, so a narrow column can clip the payload and the assertion
+holds by layout. Render at a width that cannot clip, or assert on the model rather than the page,
+and keep width claims in their own test. Prove it by lengthening the payload until the assertion
+would have to fail if the column were the only reason it passed.
+
+### Give a synthetic identifier the real one's width
+
+A made-up address, serial, WWN or hostname wider than the real ones is clipped by a column sized
+for the real width, so the arm fails on its own fixture and reads like a defect in the code. Copy
+the shape from a real capture, keeping length and separators and changing only the characters;
+where the width IS the subject, state it in the test and assert it.
+
+## Python patch and import mechanics
+
+### A patch reaches a reader only if the reader looks the name up at call time
+
+Four bindings happen before the test runs, and each turns `monkeypatch.setattr` into a silent
+no-op that still PASSES:
+
+- `from config import X` copies the value into the importer at import time. Better than any patch,
+  inject the value. Where you own the reader, read the qualified `config.X` at call time and
+  remove the bare import, so a missed qualification fails as a `NameError` instead of reading the
+  stale copy; where you do not, patch the copy at the CONSUMER (`setattr(consumer, "X", v)`).
+- `def f(paths=CONST)` evaluates `CONST` when the `def` executes. Patching the module constant
+  never reaches the default, so a test that substitutes "the search paths" keeps reading the real
+  system file. Pass the constant explicitly at the call site (`f(paths=mod.CONST)`) or resolve it
+  inside the body.
+- A module SPLIT. A bare global inside a function resolves against the module the function is
+  DEFINED in. Before splitting, run `grep -n 'monkeypatch.setattr' tests/` and list every patched
+  name; keep each in the same file as its callers, or call through a module object
+  (`mod.helper(...)`), which every importer shares.
+- A composition container (a services object, a DI container) captures its collaborators when it
+  is built. Patching the function's module attribute afterwards is never consulted. Build the
+  container inside the test with the substitute passed in, or expose the collaborator as a
+  parameter.
+
+Prove the seam: break what the test claims to depend on (delete the file, empty the directory,
+make the substitute raise) and require the test to FAIL. A patch-based test never seen red is not
+evidence.
+
+### Patching `pkg.mod.subprocess.run` patches every caller in the process
+
+`pkg.mod.subprocess` IS the shared `subprocess` module, so `mock.patch("pkg.mod.subprocess.run")`
+and `monkeypatch.setattr` on that dotted path set `run` for every module in the process until the
+patch ends. A git helper, another module or a fixture that shells out during that test goes
+through the fake, and the test then measures the fake's call log. Prefer injecting the runner. If
+you must patch, patch a name the module owns (`from subprocess import run` in the module, then
+patch `pkg.mod.run`), or make the fake dispatch on `argv[0]` and raise on any command it was not
+written for.
+
+### Import sibling test helpers by bare module name
+
+In a `tests/` directory without `__init__.py`, write `from helpers import ...`, never
+`from tests.helpers import ...`. `python -m pytest` puts the current directory on `sys.path`, so
+`tests` imports as a namespace package and the suite passes locally; bare `pytest` (the usual CI
+invocation) does not, and collection dies with `ModuleNotFoundError: No module named 'tests'`,
+reddening every test in the run. Grep `from tests\.` before pushing tests someone else wrote; a CI
+collection error naming `tests` is this, not a missing dependency.
+
+### pytest names `tmp_path` after the test function
+
+`tmp_path` is `.../pytest-<n>/<test_function_name><n>`, so every path the test prints, logs or
+parses contains the test's own name. A test named `test_skipped_rows` that splits tool output on
+`"skipped"` cuts inside a path, and the failure looks like a defect in the code under test. Keep
+the split or match token out of the test function's name, and better, anchor on structure (a
+header line, a JSON field, a line prefix) rather than a bare substring. When a parse in a test
+misbehaves, print the raw output and look for your own identifiers in it before suspecting the
+code.
+
+### Harvest a `pytest.raises(match=...)` pattern per parametrized arm
+
+Two inputs can be refused by two different layers (a grammar error, and a runtime limit below
+it), with different messages. A pattern harvested from the first arm then fails the second, and
+the failure reads like the code under test. Give every arm an impossible `match=` first and read
+what pytest prints for each - reading the raising code gets it wrong when the refusal comes from a
+lower layer - then parametrize the pattern alongside the input, or match only a substring every
+arm shares.
+
+### Prove "untested" with branch coverage, not by grepping the name
+
+Run the one test module under branch coverage with the data file outside the tree, and quote the
+Missing ranges:
+
+```bash
+python -m coverage run --branch --data-file=<tmp> -m pytest -p no:cacheprovider -q <test module>
+python -m coverage report -m --data-file=<tmp>
+```
+
+Then grep the function name and read each hit: a test that does
+`monkeypatch.setattr(mod, "fn", lambda *a: SENTINEL)` names the function without ever running it,
+and a test can reach only its early return. With pytest-cov, `--cov=` must name the IMPORTABLE
+module: a file loaded under an alias (a hyphenated script that a conftest registers in
+`sys.modules`) prints `Module ... was never imported` and `No data was collected`, yet the run
+still exits 0. Check the report has a `Stmts` count before quoting any range. `--cov=` also writes
+`.coverage` into the tree.
+
+## Gates and guards
+
+### Produce and judge an artifact in one test
+
+A gate split into one test that produces an artifact and another that judges it can pass
+vacuously in either half: `-k`, a deleted partner, a marker or an environment variable (with
+`NO_COLOR=1` a "no forbidden colour" check has no colour to search) leaves the judge with nothing
+to judge. Do both in one test, and assert the artifact makes the question meaningful (at least one
+colour, one row, a non-empty capture) before asserting what must be absent.
+
+### A check diffing against a moving git ref goes inert
+
+A check written as "what changed versus `origin/main`" sees an empty diff in CI on a push to that
+branch (the ref IS the pushed commit), and in your own RED/GREEN script after you push - it reports
+"nothing changed", indistinguishable from "nothing wrong". State the rule as an invariant of the
+tree as it stands ("the version the manifest names has a changelog heading"); it holds on a push,
+a pull request and a shallow clone, and needs no `fetch-depth: 0`. For a one-off RED/GREEN, pin RED
+to an immutable sha (`git rev-parse <commit>^`), say in the script why it is pinned, and report a
+passing RED arm as a failure of the instrument. Build both arms and require the control to fire.
+
+### Calibrate a cost or complexity guard at the real entry point
+
+Time the crafted arm and the control through the seam the input actually arrives at, not the hot
+helper inside: the surrounding linear work lands in both arms and shrinks the ratio, so a ceiling
+picked from the helper's own number passes against the same defect end to end. Record both
+numbers in the test, assert the crafted arm reached the hot code (a fast run can be an early
+return), and when the seam truncates or caps its input, lift that bound past the crafted size for
+the test. Then RED the arm on the pre-fix code.
+
+### An environment-isolation test must expect what only the right repository holds
+
+To prove code ignores an inherited `GIT_DIR` (or another repo-scoping `GIT_*` variable), do not
+expect a plain untracked file: through a foreign `GIT_DIR` git still takes the work tree from the
+cwd, so `git ls-files --others` lists it and the arm passes with the scrub deleted. Expect
+something only the right index or config holds - a file force-added (`git add -f`) under an
+ignored path, a committed blob, a repo-local config value - then delete the scrub and require RED.

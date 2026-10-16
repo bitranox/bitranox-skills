@@ -49,6 +49,13 @@ For a machine-owned data file where comments do not matter, `rtoml.dump(data, f)
 fine. For a quick syntax check without editing:
 `python3 -c "import tomllib,sys; tomllib.load(open(sys.argv[1],'rb')); print('ok')" file.toml`
 
+**tomlkit is not always diff-minimal.** Before editing, check `tomlkit.dumps(tomlkit.parse(src)) == src`:
+on a file that interleaves table families it can be False, because tomlkit regroups `[a.*]` sub-tables even
+with no edit, and such a file is edited by exact text at an asserted unique anchor instead. A new
+`[tool.x]` table and a `del` also produce surprise diffs. Read `references/tomlkit-not-diff-minimal.md`
+when that check is False, when a diff shows tables moved that you did not touch, or after adding a
+table or deleting a key.
+
 ## Common mistakes
 
 | Mistake                                                                      | Do instead                                                                                                                                                         |

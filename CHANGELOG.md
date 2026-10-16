@@ -29,6 +29,40 @@ than the change, so entries reconstructed from them would read like coverage wit
 a hole nobody has drawn a line under is one that gets rediscovered and half-filled - which is how
 two "versions with no entry" notes came to sit in this file disagreeing with it.
 
+## [9.2.0]
+
+### Added
+
+- `bmk-gate-nudge` (PreToolUse, Bash/PowerShell): the first time a session runs a bmk gate (`make
+  test`/`push`/bump/release in a directory whose Makefile bmk wrote, or `bmk`/`uvx bmk` directly) it
+  names `bitranox:devops-bmk` once, because a gate's failure modes read like defects in the change
+  being gated. Non-blocking, once per session.
+- Rules that lived only in an always-loaded index now sit in the skills that own them, 78 in all
+  across 25 skills. Among them: `meta-context-watcher` (committed handovers cannot state facts about their own
+  commit, audit trap notes before overwriting, classify every open backlog line, stale PR
+  verdicts, live background agents after `/clear`), `process-test-design` (a new
+  `references/silent-test-defeaters.md`), `compuse-toolbox` (new `references/` for anchored edits,
+  mutation arms and the transcript corpus), `meta-dream-nap`, `process-test-driven-development`,
+  `process-agents-dispatching-parallel`, `process-review-receiving-code-review`,
+  `process-plan-writing-plans` (three-altitude plans), `process-debug-systematic` (diff a working
+  peer first), `files-edit-toml` (when a tomlkit round-trip is not diff-minimal),
+  `coding-python-enforce-data-architecture-strict` (rendering a `ValidationError` for the caller),
+  `coding-input-sanitization`, `coding-python-use-modern-libraries` and
+  `coding-python-performance-review`.
+
+### Fixed
+
+- `coding-python-clean-architecture`: every import-linter `layers` contract listed the layers
+  domain-first. import-linter reads the list highest-first, so those contracts reported correct
+  code as broken (`adapters is not allowed to import domain`) and let the domain import adapters.
+  They now run composition, adapters, application, domain.
+- `process-debug-systematic`: the secret-presence example printed the secret's value, through
+  `${VAR:-...}` and through `env | grep`; both lines now print only whether it is set.
+- `coding-python-use-modern-libraries`: a guard for a stdlib name missing on the project's floor
+  catches `ImportError`, not `ModuleNotFoundError`; `except*` needs a raised floor.
+- Contradictions inside `meta-skill-writer`, `meta-dream-tree`, `compuse-ssh`, `compuse-toolbox`
+  and `process-test-design`, each settled against the code or the bundled docs it describes.
+
 ## [9.1.3]
 
 ### Fixed

@@ -207,6 +207,14 @@ const mockResponse = {
 };
 ```
 
+**Once the fix is verified, swap the stub for the real type.** A hand-built stand-in (a
+`SimpleNamespace`, a dict, a two-field fake) is frozen at the fields the test needed the day it was
+written; when the real type later gains a field the code reads, the stub silently supplies nothing
+that fails and the test keeps passing. Construct the real type, or derive the double from a real
+instance (`dataclasses.replace` of one, a factory beside the type), so a new field becomes a
+construction error rather than a silent absence. If the real type is awkward to build, that is a
+finding about the type, not a reason to keep the fake.
+
 ### Gate Function
 
 ```

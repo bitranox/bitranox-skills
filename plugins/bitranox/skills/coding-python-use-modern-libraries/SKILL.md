@@ -114,6 +114,17 @@ swap it out.
   earlier the same line is a `SyntaxError` under the old Python-2 `except E, name:` grammar, so it
   reads like an obvious bug. Check `requires-python` or the interpreter and probe with `python -c`
   before "fixing" it; on 3.14+ adding parentheses is a style choice, not a correction.
+- **Before importing a stdlib name added after the project's floor, read its own `requires-python`
+  in `pyproject.toml`.** `tomllib`, `enum.StrEnum` and `ExceptionGroup` (with `except*`) arrived
+  in 3.11 and `typing.override` in 3.12. Such an import passes every local gate on a newer
+  interpreter and fails only in the oldest CI cell, often as unrelated-looking pyright-strict
+  "partially unknown" errors. Take the version from the docs' "Added in version", not from memory.
+  New projects start at `>=3.11`; an existing project's declared floor binds its CI. A name missing
+  from an existing module raises plain `ImportError`, not `ModuleNotFoundError` (`from typing import
+  override` on 3.11, `from enum import StrEnum` on 3.10), so guard with `except ImportError`, or use
+  `typing_extensions.override`; `ExceptionGroup` is a builtin and needs the `exceptiongroup`
+  backport; `except*` is syntax no guard can catch, so it means raising the floor. For TOML the
+  floor is moot: `tomllib` is read-only and `tomli_w` is third-party, so `rtoml` stays the choice.
 - **Prefixing a docstring with `r` to satisfy ruff D301 changes EVERY escape in it at once.** Written
   non-raw, `\\` is one backslash and `\t`, `\n`, `\u2713` are real escapes; after `r"""` each is
   literal, and only some of the damage is loud. A doctest written for the non-raw form fails

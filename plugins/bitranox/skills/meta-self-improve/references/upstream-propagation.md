@@ -29,7 +29,13 @@ it landed>` for one that DELIVERED; `drop --match <text> --reason "<why>"` for o
 FALSE (you verified the claim and it is wrong) or SUPERSEDED (a later release already covers it).
 Either way it has to leave the queue, or every future dream re-reads and re-evaluates it forever.
 Select with `--match`, not `--index`: an index comes from a listing and SHIFTS under the previous
-close, so two closes from one listing hit the wrong second entry. `drain` closes the WHOLE queue at
+close, so two closes from one listing hit the wrong second entry. Every verb acts on the queue of
+ONE project, keyed by a hash of the cwd (or the path passed) at
+`~/.claude/self-improve-audit/<hash>.contrib.jsonl`, so a `list`/`ship`/`drop` run from a different
+directory than the `add` sees another or an empty queue and refuses with `no queued contribution
+matches`. Run `contrib_queue.py queues` first: it lists every queue with its key, open count and
+project path; then close the entry from that project's dir or address it as `queue_key:<hash>`,
+which every verb accepts. `drain` closes the WHOLE queue at
 once and fits only a sweep where every entry shipped. `contrib_queue.py shipped` and
 `contrib_queue.py rejected` show what left and why. The drop writes a TOMBSTONE, which is
 the part that makes it stick: `add` dedups only against the LIVE queue, so without the tombstone the

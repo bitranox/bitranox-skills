@@ -163,6 +163,13 @@ internal = Internal(**pydantic_model.model_dump())
 output = OutputModel(**asdict(internal))
 ```
 
+A refusal is a boundary output too: never interpolate `str(ValidationError)` into one, because it
+hands the caller pydantic's union-arm tags, a versioned docs URL and a slice of their own input.
+Emit your own sentence plus one `<dotted loc>: <reason>` line per `error.errors()` entry and keep
+the exception as `__cause__`. When writing or reviewing any such refusal (including one whose
+`ValidationError` arrives wrapped in a library's exception, or a union field that reports once per
+arm), read `references/validation-error-messages.md`.
+
 ---
 
 ## Instructions
@@ -379,9 +386,10 @@ STEP C - RUN TESTS:
      Every single-fault input the old code refused keeps its type, exit code and message, or the
      change is listed in the CHANGELOG with the input, the old result and the new one. To keep
      it, re-raise the model's refusal as the old exception type carrying the validator's own
-     text (`error.errors()[i]["msg"]`, minus pydantic's `Value error, ` prefix; one line per
-     entry when there are several), and run a check ahead of the model where the model would
-     redact what the old message quoted.
+     text (`item["msg"]`, or `str(item["ctx"]["error"])` for a `value_error` entry; never
+     `str(exc)`; one line per
+     entry when there are several - see `references/validation-error-messages.md`), and run a
+     check ahead of the model where the model would redact what the old message quoted.
      Multi-fault ORDER is inherent to parsing at the boundary: document it, do not fight it.
 
   >>> DO NOT proceed to STEP D until all tests/linters pass and the error-surface diff shows no
@@ -515,8 +523,9 @@ Order of preference:
 Worked example - rich-click's `option`/`argument`/`version_option` decorators have a
 partially-unknown return type, so pyright strict reports `reportUnknownMemberType` at every
 `@click.option(...)`. This is a stub gap, not a language rule: reproduced on rich-click 1.9.8
-with pyright 1.1.411 (2026-08-28). Run pyright first - if a newer rich-click ships complete
-stubs it reports nothing, and the facade below would be solving a problem you no longer have. click's own decorators are fully typed, but they default the parameter class
+with pyright 1.1.411 (2026-08-28). Run pyright first - once rich-click ships complete stubs it
+reports nothing, and the facade below would be solving a problem you no longer have; a rich-click
+DOWNGRADE never gets you there (see the diagnosis note after the example). click's own decorators are fully typed, but they default the parameter class
 to `click.Option` rather than rich-click's `RichOption` (which changes help rendering), so you
 cannot just import them from click. Cast the MODULE to a `Protocol`: the `cast` is a runtime no-op,
 so the wrappers forward to rich-click's own decorators (RichOption preserved) while pyright sees
@@ -547,6 +556,13 @@ def option(*param_decls: str, **attrs: Any) -> _CommandDecorator:
 Casting the FUNCTION, or `from rich_click import option`, still evaluates the partially-unknown
 member access and stays flagged; only casting the MODULE onto a typed Protocol moves the access to
 a typed surface.
+
+The flood arrives with a PYRIGHT upgrade, not with your edit and not with a rich-click change: it
+reproduces at an untouched HEAD once the lock carries a recent pyright, and downgrading rich-click
+does not clear it, so do not bisect your own change or pin rich-click. Keep `@click.command` and
+`@click.group` from rich-click (already fully typed) and route only the three decorators through
+the facade. Then verify behaviour, not just the checker: an option declared through the facade is
+still a `RichOption` (`cmd.params[0]`), and `--help` still renders through rich-click.
 
 Second worked example - a lambda cannot satisfy a keyword-only `Protocol`. Two house defaults
 collide and the diagnostic blames the wrong one. Ruff's `FBT` forbids a boolean POSITIONAL
@@ -629,6 +645,18 @@ not what separates them.
 
 Ruff's `RUF036` requires `None` LAST in the union (`None` not at the end of the type union), which
 is why the alias ends rather than begins with it.
+
+### Worked example - a mutable-state dataclass with `field(default_factory=...)`
+
+When pyright strict reports "Type of x is partially unknown" on `x: set[str] =
+field(default_factory=set)` (likewise `dict` or `list`), it inferred `set[Unknown]` from the bare
+factory instead of the annotation, so adding the annotation again does nothing. For a class that is
+pure mutable state (a registry, a session bucket) rather than a value object, convert it to a plain
+class with a typed `__init__` (`self.x: set[str] = set()`), keeping the class and attribute names so
+callers and tests are untouched; first confirm nothing uses it AS a dataclass
+(`dataclasses.replace`, `asdict`, `fields`). Value objects with immutable defaults stay
+dataclasses. Re-run pyright before converting after a pyright upgrade, since a newer release may
+infer the type from the annotation.
 
 ---
 

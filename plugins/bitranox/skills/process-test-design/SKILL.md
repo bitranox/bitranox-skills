@@ -181,7 +181,9 @@ enforced by the suite rather than remembered by a person.
   passes in. Let the runner's per-test timeout (pytest-timeout, nextest `terminate-after`, the
   framework's test timeout; configure one suite-wide if the project has none) catch a wedge instead
   of a deadline written into the test. Treat a sleep, deadline loop or timeout-bounded wait inside a
-  test as a review defect; code that has its own timeout is driven by injecting its clock, not by
+  test as a review defect. The one exception, a COUNT-bounded spin (a zero-duration yield such as
+  `await asyncio.sleep(0)`, which yields rather than waits) or a fake-driven production loop where
+  no event exists or can be planted, is in `references/silent-test-defeaters.md`. Code that has its own timeout is driven by injecting its clock, not by
   waiting it out.
 - **Inject time and randomness.** No bare now-clock, RNG, or UUID call in code under test - pass a
   clock / seed so the test is reproducible. (`datetime.now()`/`random`/`uuid4` in Python;
@@ -315,8 +317,10 @@ Four mechanics worth stating because they silently defeat a test that looks righ
 
 - **`from m import X` binds a COPY at import time.** `monkeypatch.setattr(m, "X", v)` mutates `m`'s
   namespace and never reaches the consumer's already-bound name, so the test runs against the
-  original value and passes for the wrong reason. Patch at the CONSUMER (`setattr(consumer, "X")`)
-  or, better, inject - which is why this skill prefers a seam over patching in the first place.
+  original value and passes for the wrong reason. Best, inject - which is why this skill prefers a
+  seam over patching in the first place; where you own the reader, read the qualified `m.X` at call
+  time and drop the bare import; else patch at the CONSUMER (`setattr(consumer, "X")`). Default
+  arguments, module splits and composition containers bind early the same way (reference below).
 - **A correctness test cannot prove an INDEX is used.** Results rank correctly whether the store
   used the index or full-scanned. Assert the plan (`EXPLAIN` shows an index scan, `list_indices` is
   non-empty), or the check silently passes on an O(n) path.
@@ -347,6 +351,12 @@ concretely what its own parser forgives (a duplicated block, a glued-on closing 
 duplicate key a dict-based loader overwrites), then verify each one STRUCTURALLY against the raw
 text - a delimiter count, a line scan - rather than through the same parser, which by construction
 cannot see what it already swallowed.
+
+**Read `references/silent-test-defeaters.md` (Read tool)** when a test patches a name, parses tool
+output, asserts on an exception message or on rendered output, loops until a condition holds,
+carries a skip or an exclusion, judges an artifact, compares against a git ref, guards against
+cost, or tests environment isolation - or before you claim a code path is untested or accept a
+surviving mutation.
 
 ## Quick checklist
 

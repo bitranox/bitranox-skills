@@ -424,6 +424,11 @@ Use skill name only, with explicit requirement markers:
 
 **Why no @ links:** `@` syntax force-loads files immediately, consuming 200k+ context before you need them.
 
+**A skill that ships in its own plugin must not point at another plugin's skill.** The two install
+separately, so the referenced skill may not be installed and the pointer leaves the reader without
+the instructions. Copy the content the skill needs into its own files (a distilled reference file
+in its directory) instead of a `REQUIRED SUB-SKILL` that crosses a plugin boundary.
+
 **Referencing a SCRIPT is the opposite of referencing a skill: state the home path.** A skill name
 resolves through the skill system; a script filename resolves through nothing. A bare
 `helper.py --check` in prose is unrunnable for a reader whose context lacks the owning skill's base
@@ -1110,7 +1115,8 @@ when the lesson under test is ALREADY recorded there, the RED cannot fail honest
 before trusting it with `redcheck --corpus-cascade <dir>` from
 `bitranox:process-test-driven-development`, which assembles that machine's cascade and memory fact
 bodies itself and names the document that already teaches your scenario. Read a hit as strong
-evidence, a clean result as only "not caught", and exit 2 with `data.unchecked` true as "the
+evidence once you have opened the named document and seen it state the claim (a hit is a term
+overlap, not a reading), a clean result as only "not caught", and exit 2 with `data.unchecked` true as "the
 corpus was empty, nothing was checked". If it is inherited, either make the coverage check against the skill FILE the
 evidence (a text check of the artifact, immune to inherited context) or de-telegraph the
 behavioural arm into a domain that text does not teach - and state in the review artifact which
@@ -1320,9 +1326,18 @@ Deploying untested skills = deploying untested code. It's a violation of quality
 - [ ] External doc references are INSTALL-REACHABLE (see "Referencing external DOCS"): every `README`/`docs/`/`see ...md` the reader is sent to either ships in the skill dir, is a version-pinned URL, or is install-local `--help`/`help()` - no bare package-local path. Verify: `grep -nE '(docs/|README|see [^ ]*\.md)' SKILL.md | grep -v http` shows only bundled-or-discoverable hits
 
 **Deployment:**
-- [ ] Place skill in the correct directory:
-  - **Project skills** (shared with team): `<project-root>/.claude/skills/skill-name/SKILL.md`
-  - **Personal skills** (your own): `~/.claude/skills/skill-name/SKILL.md`
+- [ ] Place skill in the correct directory, chosen by what it teaches:
+  - **USING a tool or library** (install, configure, operate): make the tool's own repo a
+    single-plugin marketplace (`.claude-plugin/plugin.json` plus a `marketplace.json` listing one
+    plugin with `"source": "."`, skill at `skills/skill-name/SKILL.md`), and mirror it into your
+    central marketplace if you keep one, keeping both copies in sync. Never
+    `<repo>/.claude/skills/`: that loads only while editing that one repo, so the skill silently
+    never loads where the tool is actually used.
+  - **DEVELOPING one repo** (shared with team): `<project-root>/.claude/skills/skill-name/SKILL.md`
+  - **A generic procedure across projects** (your own): `~/.claude/skills/skill-name/SKILL.md`,
+    with no project paths in it and any hook it needs registered in `~/.claude/settings.json`; put
+    project-specific bindings in a small extension skill under that project's `.claude/skills/`
+    that runs the universal procedure with those bindings.
 - [ ] Verify frontmatter parses: `head -5 SKILL.md` - confirm `---` delimiters and valid YAML
 - [ ] Check token budget: `wc -w SKILL.md` - target under 500 words for process/technique SKILL.md bodies; reference/hub skills may exceed but should keep the body lean and push detail to reference files
 - [ ] **If the skill ships Python scripts: `tests/` exists, covers every main function, and PASSES** (`uv run --with pytest pytest tests/`). Do not ship with missing or failing tests.

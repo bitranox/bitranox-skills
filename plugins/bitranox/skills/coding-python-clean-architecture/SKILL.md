@@ -649,7 +649,8 @@ root_package = "<pkg>"
 [[tool.importlinter.contracts]]
 name = "Clean layers"
 type = "layers"
-layers = ["<pkg>.domain", "<pkg>.application", "<pkg>.adapters"]
+# HIGHEST first: a module may import only layers listed BELOW its own
+layers = ["<pkg>.composition", "<pkg>.adapters", "<pkg>.application", "<pkg>.domain"]
 
 [[tool.importlinter.contracts]]
 name = "No cross-context imports"
@@ -658,6 +659,14 @@ modules = ["<pkg>.orders", "<pkg>.billing", "<pkg>.shipping"]
 ```
 
 Multi-context: add per-context layering + independence contracts. See `review-checklists.md`.
+
+**A `layers` list runs from the HIGHEST layer to the lowest.** Written domain-first, the contract
+forbids every adapter from importing the domain and lets the domain import adapters - the exact
+inversion - and `lint-imports` reports correct code as broken
+(`<pkg>.adapters is not allowed to import <pkg>.domain`). List `composition` too: nothing may
+import it, and a contract that does not list it cannot see an adapter reaching it. A package with
+no `composition` subpackage drops that entry: `lint-imports` refuses a layer that does not exist
+("Missing layer").
 
 **These contracts are `root_package`-scoped, so a THIRD-PARTY import into the domain is INVISIBLE to
 them.** `layers` and `independence` reason only about modules under `root_package`; `myapp.domain`

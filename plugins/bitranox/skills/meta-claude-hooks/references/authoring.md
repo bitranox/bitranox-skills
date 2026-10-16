@@ -120,9 +120,29 @@ stdout, each string on its own, and cannot be raised. Longer output is written t
 2,000-character preview plus the path, and Claude is not asked to read the file, so anything appended after a long
 block never reaches context.
 
+**Sections sharing one capped injection get the remainder, never a fixed share.** Overrunning the cap hides every
+section behind the preview, not just the one that overran, and no section can know its safe share in isolation.
+Assemble the other sections first, pass what they left as the budget, fill it item by item, and degrade to a
+one-line pointer (a count plus where to read the rest) when there is no room. A fixed share passes a test that
+populates two sections and overruns when a third is present, and a guaranteed minimum breaches the very ceiling it
+protects; test with every section that shares the cap populated.
+
 **A guard judges the whole command it is handed.** A `PreToolUse` Bash hook sees the entire pending command
 string and evaluates state as it was *before* any of it ran. A compound command that prepares state and then acts
 is judged on the pre-command state.
+
+**A guard that scans the raw command string blocks its own documentation.** That string also carries data:
+heredoc bodies, quoted message arguments such as `git commit -m "..."`, prose being written to a file. So a bare
+substring match fires on a doc or commit message that merely MENTIONS the pattern. Strip the data regions first
+(heredoc bodies at minimum, ending at the terminator so a real invocation after the heredoc is still seen) and
+match the token's structural position: is it the actual subcommand, after skipping `VAR=` assignments and global
+options like `-C`? Require a whole token, not a word boundary (`\bpgrep\b` matches inside a filename such as
+`block-pgrep.py`; `(?<![\w-])pgrep(?![\w.-])` does not). Strip heredocs exactly ONCE: a stripper that keeps the
+opener line and drops the body is not idempotent, so a second pass sees an unterminated opener and swallows every
+line after it; when you need positions, blank the data regions in place and slice values from the raw text at the
+same offsets. Do not mask quoted strings when the guard's subject is a command inside a quoted argument that
+something else executes (`ssh host '...'`, `bash -c '...'`). Test both directions: text mentioning the pattern
+passes, and a genuine invocation, with quoted operands or after a heredoc, still blocks.
 
 **`if` fails open.** When the Bash command cannot be parsed, the handler runs regardless of the pattern. Use the
 permission system for a hard allow or deny.

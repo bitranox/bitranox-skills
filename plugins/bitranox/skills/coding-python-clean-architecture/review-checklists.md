@@ -41,6 +41,7 @@ Example:
 | A3 | Ports are narrow and cohesive                            | MEDIUM   | One port with 15 methods spanning unrelated concerns |
 | A4 | Domain is pure: no framework imports, no logging, no I/O | CRITICAL | `import logging` or `import django` in domain        |
 | A5 | Adapters implement only declared ports                   | MEDIUM   | Adapter adds public methods not on any port          |
+| A6 | Adapters resolve in-package paths locally                | HIGH     | `import <pkg>` in an adapter to read `__file__`      |
 
 ## Reliability
 
@@ -91,15 +92,18 @@ Example:
 
 ## Import Enforcement
 
+Every `layers` list runs from the HIGHEST layer to the lowest; a module may import only the layers
+listed below its own.
+
 Multi-context example:
 ```toml
 [[tool.importlinter.contracts]]
 name = "Layering within <bounded_context>"
 type = "layers"
 layers = [
-  "<pkg>.<bounded_context>.domain",
-  "<pkg>.<bounded_context>.application",
   "<pkg>.<bounded_context>.adapters",
+  "<pkg>.<bounded_context>.application",
+  "<pkg>.<bounded_context>.domain",
 ]
 
 [[tool.importlinter.contracts]]
@@ -118,5 +122,36 @@ Flat (single domain):
 [[tool.importlinter.contracts]]
 name = "Clean layers (flat)"
 type = "layers"
-layers = ["<pkg>.domain", "<pkg>.application", "<pkg>.adapters"]
+layers = ["<pkg>.composition", "<pkg>.adapters", "<pkg>.application", "<pkg>.domain"]
 ```
+
+### Adapters locating files inside their own package (A6)
+
+When an adapter needs something inside its own distribution (package data, a template, a bundled
+script), `import <pkg>` plus `Path(<pkg>.__file__).parent` looks like a harmless lookup but drags in
+whatever the root package's `__init__` imports. When that `__init__` re-exports from
+`<pkg>.composition` (an entry point, a wired facade) and the contract lists `composition` above
+`adapters`, `lint-imports` breaks on the chain
+`<pkg>.adapters.<module> -> <pkg> -> <pkg>.composition...` as
+`<pkg>.adapters is not allowed to import <pkg>.composition`. A contract that omits `composition`,
+or a root `__init__` that imports nothing above `adapters` yet, stays green while the adapter
+still depends on the package's public surface. Resolve the path from
+the adapter's own location with `Path(__file__).resolve().parents[N]` (count the levels up to the
+package root), or with `importlib.resources.files("<pkg>.<subpackage>")` when the target is genuinely
+package data.
+
+### Reading the result
+
+- **Read the `Contracts: N kept, M broken` line, not the exit code.** A `[tool.importlinter]`
+  section with a `root_package` and ZERO contracts reports `Contracts: 0 kept, 0 broken` and exits 0,
+  so a green gate proves nothing until N matches the contracts you declared.
+- **Contracts see only the internal import graph of `root_package`.** `layers` and `independence`
+  never ban a third-party package such as `pydantic` from a layer; keeping a framework out of the
+  domain takes an explicit `forbidden` contract (see SKILL.md, Import Enforcement).
+- **When a contract breaks after a refactor, look at module PLACEMENT first, not at the dependency
+  stack.** The cause is a move that changed which internal layer imports which: a model moved into a
+  module that imports upward, or an adapter reaching into a root package that re-exports from
+  `composition` (A6).
+- **`independence` contracts follow TRANSITIVE imports.** Importing a helper from a sibling module
+  that itself imports another contract member breaks the contract, so check the helper's own imports
+  before adding a module to one.

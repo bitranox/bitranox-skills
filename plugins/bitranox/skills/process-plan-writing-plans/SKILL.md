@@ -23,6 +23,15 @@ Assume they are a skilled developer, but know almost nothing about our toolset o
 
 If the spec covers multiple independent subsystems, it should have been broken into sub-project specs during brainstorming. If it wasn't, suggest breaking this into separate plans, one per subsystem. Each plan should produce working, testable software on its own.
 
+## Plans Over a Day's Work: Three Altitudes
+
+When the work spans more than a day, do not write one detailed plan: a plan written at task altitude is reviewed at task altitude, so scope, sequencing, prerequisites in other projects and adopt-versus-rebuild stay invisible. Instead:
+
+1. **Freeze the inputs.** Snapshot the spec/design set into a staging dir and note the commit, so every plan references a fixed design.
+2. **Run an elephants-in-the-room review** before planning: scope for one builder, riskiest assumptions ranked, over-engineering versus need, what existing thing already does 80 percent (adopt versus rebuild, costed), and whether it solves the actual problem.
+3. **Write three plans top-down:** HIGH (milestones, MVP slice, what is cut, risks), then MID (components, interfaces, verification per milestone), then DETAILED (tasks, files, tests, in the format below). Check each lower plan against the one above it, never the reverse.
+4. **Detail only to the next decision checkpoint** in the high plan, and say in the file that later milestones get their tasks once that checkpoint is decided: task-level code written for a choice not yet made is a stale brief waiting to be dispatched.
+
 ## File Structure
 
 Before defining tasks, map out which files will be created or modified and what each one is responsible for. This is where decomposition decisions get locked in.
@@ -165,7 +174,7 @@ After writing the complete plan, look at the spec with fresh eyes and check the 
 
 **3. Type consistency:** Do the types, method signatures, and property names you used in later tasks match what you defined in earlier tasks? A function called `clearLayers()` in Task 3 but `clearFullLayers()` in Task 7 is a bug.
 
-If you find issues, fix them inline. No need to re-review, just fix and move on. If you find a spec requirement with no task, add the task.
+If you find issues, fix them inline. No need to re-review, just fix and move on. If you find a spec requirement with no task, add the task - except for a milestone past the next decision checkpoint of a three-altitude plan: there the file's note that its tasks come once that checkpoint is decided is the intended state, not a gap or a placeholder.
 
 ## Execution Handoff
 

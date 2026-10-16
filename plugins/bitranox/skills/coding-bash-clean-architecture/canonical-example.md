@@ -193,6 +193,8 @@ adapter__check_tcp_nc() {
     # Positional args into a SINGLE-quoted body: interpolating them makes `bash -c` re-parse the
     # values as code, so a host of `a;id;x` from the config file would run `id`.
     # The single quotes above ARE the fix; expanding here would be the bug, so silence SC2016.
+    # The reason goes on its own line ABOVE a bare directive: a trailing `-- reason` fails
+    # SC1072/SC1073, aborts parsing and reports a bogus error elsewhere (rc 1); re-run for rc 0.
     # shellcheck disable=SC2016
     if timeout "$timeout_sec" bash -c 'exec 3<>"/dev/tcp/$1/$2"' _ "$host" "$port" 2>/dev/null; then
         end=$(date +%s%N)

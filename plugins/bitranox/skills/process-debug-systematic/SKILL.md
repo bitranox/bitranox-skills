@@ -92,11 +92,11 @@ You MUST complete each phase before proceeding to the next.
    ```bash
    # Layer 1: Workflow
    echo "=== Secrets available in workflow: ==="
-   echo "IDENTITY: ${IDENTITY:+SET}${IDENTITY:-UNSET}"
+   [ -n "${IDENTITY-}" ] && echo "IDENTITY: SET" || echo "IDENTITY: UNSET"  # never ${VAR:-...}: it prints the value
 
    # Layer 2: Build script
    echo "=== Env vars in build script: ==="
-   env | grep IDENTITY || echo "IDENTITY not in environment"
+   env | grep -q '^IDENTITY=' && echo "IDENTITY in environment" || echo "IDENTITY not in environment"
 
    # Layer 3: Signing script
    echo "=== Keychain state: ==="
@@ -136,6 +136,8 @@ You MUST complete each phase before proceeding to the next.
 1. **Find Working Examples**
    - Locate similar working code in same codebase
    - What works that's similar to what's broken?
+   - For a service or host fault: is there a comparable host where it works? Diff them
+     (see "Diff a working peer" below)
 
 2. **Compare Against References**
    - If implementing pattern, read reference implementation COMPLETELY
@@ -317,6 +319,15 @@ If systematic investigation reveals issue is truly environmental, timing-depende
 **But:** most "no root cause" verdicts are incomplete investigation. Before accepting one,
 name the evidence that RULED OUT a code cause - the absence of a cause you found is not
 the same as a cause you excluded.
+
+**Diff a working peer before calling a fault external.** When a service fails on one host
+and a comparable host (same network, account, client, time) works, diff the two FIRST -
+software VERSION first, then config, then environment - before concluding external or
+telling anyone to wait it out: the peer holds everything outside the box constant, so it
+beats every inference drawn from the broken box alone. "Nothing changed locally" is no
+evidence of an external fault (a long-installed component can break when the far end
+changes), and "no error was logged" is NOT "it succeeded": get the positive signal (the
+status code, the success line) or state the conclusion as an unproven inference.
 
 ## Supporting Techniques
 

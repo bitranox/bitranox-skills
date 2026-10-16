@@ -248,7 +248,13 @@ genuine promotion candidate later.
 
 Fail-loud engine calls throughout (strict env, require each command's success line, abort-and-show
 on a miss; the command table is in `bitranox:meta-self-improve` -> references/memory-backend.md).
-Post-run: re-derive the manifest and diff against the pre-run one;
+Post-run: re-derive the manifest and diff against the pre-run one. The store is shared by every
+session on the host, so a fact can appear or change mid-run: a diff row that matches no decision
+this run took is a PEER session's work, not your subagents'. Confirm with `ListAgents`, leave those
+rows alone, and at commit time stage path-scoped (never a bare `git add -A`, which sweeps the peer's
+in-flight files into your commit) and `git restore --staged` anything a live peer is still writing.
+At nap commit, a fold target whose pre-nap backup already differs from `git show HEAD:facts/<slug>.md`
+was dirtied by a peer before you touched it - leave it out of your commit.
 `reconcile_memory_index.py --check <chain narrow->broad>` must end `TOTAL problems: 0`. For a
 TREE-WIDE run (meta-dream-tree and the crosstree variants) ALSO run
 `reconcile_memory_index.py --check-tree <anchor>` and require `TOTAL tree problems: 0` - the

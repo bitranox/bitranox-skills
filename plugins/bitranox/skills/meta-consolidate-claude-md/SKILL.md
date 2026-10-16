@@ -130,6 +130,12 @@ Snapshot every file first (a copy OUT of the tree - `git checkout` restores only
 - Confirm with a CONTROL that your checker can still find something that IS present, or a zero
   proves nothing.
 - Spot-read one member file end to end for a mangled structure or an orphaned anchor link.
+- When the trim deleted a line or bullet from many files, diff EVERY touched file against its
+  snapshot and read the line now sitting at each deletion point: a wrapped bullet's continuation
+  can start at column 0, so a matcher that swallows only indented continuations leaves it behind
+  as a silent sentence fragment. Flag any such line that is non-empty, starts lowercase, and does
+  not open a bullet, heading, table, quote or code fence; prove the check fires on one known-bad
+  file first, and repair an orphan by keeping any delta it carried as its own clean bullet.
 
 ## Rationalizations
 

@@ -43,6 +43,14 @@ than deleting it.
 - Around a context compaction: the PreCompact hook salvaged candidate learnings; nap them into
   the store while the detail is still warm. PostCompact only records that a nap is owed; the Stop
   gate reads that obligation and blocks on it, pointing here.
+  When the block names an EARLIER session's transcript, read that file: the gate already drops a
+  flag whose transcript is missing (past retention) or already read to its end by the `dream`
+  watermark, so a block that remains points at unread material. A completed nap does NOT clear the
+  flag; only `dream_state.py done` (step 6) or that auto-drop does, so a flag still set after a nap
+  that was not allowed to call `done` is expected, not a failure. Never delete the flag by hand.
+- Owed while plan mode is active: plan mode blocks the engine writes a nap needs, so it cannot run
+  there. Write "run the owed nap" as step 0 of the plan, naming the specific learnings, and run it
+  right after ExitPlanMode.
 - The session accumulated several learning signals and a full dream is not worth its cost now.
 - Manual: "nap", "dream nap", "/dream-nap", "quick tidy".
 - NOT a replacement for the full dream: the SessionStart consolidation-due nudge still means
@@ -56,6 +64,10 @@ than deleting it.
    enter the store) - via `bitranox:meta-self-improve`, at the level that OWNS each fact's
    pointer (see the Scope carve-out: this is the one step that may write a sibling, and only for
    that reason).
+   When the nap was DEFERRED from an earlier session that handed over, the transcript keeps the
+   facts but not which ones mattered: start from the learnings the handover names, and read the
+   last turns before the handover closely, since a lesson formed at the end was never captured by
+   the session that formed it. Deferral is cheaper, never better.
    **Fanned out to subagents**, every brief states two rules. (a) A delta to an EXISTING fact is
    folded with `python3 <plugin>/skills/meta-dream-tree/factedit.py apply --slug <slug>
    --body-file <f> [--hook-file <f>] [--type <kind>]` (read it first with `factedit.py show --body --slug

@@ -87,6 +87,21 @@ Each altitude's `CLAUDE.local.md` carries ONE managed, fenced pointer block:
 
       **How to apply:** <the concrete procedure or check>
 
+- **Write the hook AND the body in English, whatever the conversation's language**, so the store
+  stays uniform. When you rewrite or touch a fact whose body is in another language, translate it;
+  do not mass-translate the store unprompted.
+- **No STATUS in a hook, body or slug** - shipped/deployed/TODO, issue or task IDs, branch names,
+  "fixed in X.Y". An always-loaded pointer never updates, so it rots while still reading like a
+  durable lesson, and a slug outlives every body edit. State the mechanism or decision and point
+  at the owner that does update (TODO.md, git, a doc's status section). Reword or narrow a stale
+  one, never delete it; `statusrot.py` and `versionrot.py` in `bitranox:meta-dream-tree` scan for
+  them.
+- **Resolve a fact's LEVEL from its pointer, never from its body's path.** Every body sits at
+  `<anchor>/.claude-memory/facts/` whatever level owns it, so the body path reads "tree top" for
+  every fact. Before an amend, any claim about a fact's altitude, or a backlog note calling it out
+  of reach, find the level whose `CLAUDE.local.md` carries `mem:<slug>` (with `find`, since those
+  files are usually gitignored) and pass that to `--proj`/`--level`. A tool reporting
+  `no pointer for <slug> at any level` means the level is wrong, not the fact.
 - Related facts link with `[[slug]]` references - UPWARD ONLY along ONE ancestor chain (a project
   entry may cite a tree-top rule; a higher entry never cites a lower one, or deleting the project
   would dangle it). Citing a SIBLING project's slug is as invalid as citing a child: the cascade
@@ -95,6 +110,15 @@ Each altitude's `CLAUDE.local.md` carries ONE managed, fenced pointer block:
   `--check-tree` catches it TREE-WIDE (a ref whose target is not on the citing fact's ancestor-or-self
   path, even though the target resolves somewhere in the tree). When in doubt, demote the link to plain
   prose - or, if the target is genuinely shared, lift it to a common ancestor so the ref becomes upward.
+- **Before writing a ref, ask where its TARGET lives, not only whether it exists.** At write time
+  `add` warns only about a ref whose target exists nowhere; a ref whose target exists but sits off
+  the citing fact's ancestor chain passes silently, and only `--check-tree` reports it
+  (`sideways/downward ref ... target exists but not on this level's ancestor chain`). At the tree top almost
+  everything is below you, so prefer prose naming the lower fact's subject over a link to it.
+- **Every double-bracket token in PROSE is a live ref**, including an illustrative example and a
+  TOML array-of-tables header, and `--check-tree` then reports an orphan ref to a fact named after
+  the bracketed word. Only an inline code span or a fenced block is masked, so quote such syntax in
+  code ticks or write it as plain words.
 
 ## Two tiers and the capture flow
 
@@ -135,6 +159,13 @@ absent MCP, the keyword scan is the fallback. Wire one only via the `update-conf
 All writes go through `hooks/memory_engine.py`, launched cross-platform via `hooks/run-python.sh`.
 Never hand-edit a pointer block or a body - a PreToolUse guard denies it (bypass only via a
 `BITRANOX_MEMORY_ENGINE=1` session for deliberate hand-repair).
+
+**Capture with `add`, never with a hand-written body plus `--rehome`.** `reconcile_memory_index.py
+--rehome` is a REPAIR verb that re-attaches a body which lost its pointer; it runs none of `add`'s
+validation (hook hard cap, type vocabulary, slug), so a hand-written `facts/<slug>.md` attached that
+way can put an over-cap hook straight into the always-loaded index while `--check-tree` still
+reports `TOTAL tree problems: 0` (reference integrity is a different question from entry validity).
+If a body was already hand-written, re-run `add --slug <slug>` over it so the validation executes.
 
 | Command                                                                                                                                                                                                                                                                                | Success line to REQUIRE               |
 |----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|---------------------------------------|
@@ -218,9 +249,11 @@ instead).
 
 **`move` is CHAIN-ONLY, and it guards only INBOUND refs - promoting a fact strands its OWN outbound
 refs.** It walks the altitude chain, so it accepts ancestor <-> descendant only and REFUSES a
-SIBLING move (`sibling levels - a move follows the altitude chain`) as well as a cross-tree one; a
-fact that belongs under a sibling subtree cannot be relocated there at all, which is a placement
-finding to report, not a move to retry. And its ref guard is one-directional: it refuses a DOWN-move
+SIBLING move (`sibling levels - a move follows the altitude chain`) as well as a cross-tree one.
+Do not retry the refused sideways command: a fact that belongs under a sibling subtree is re-homed
+in TWO moves through the common ancestor (up, then down), and the second leg strands any outbound
+ref whose target sits on the old chain only, so run `--check-tree` afterwards and require
+`TOTAL tree problems: 0`. And its ref guard is one-directional: it refuses a DOWN-move
 that would dangle refs pointing AT the fact, but never checks the refs the fact itself MAKES. So
 lifting a fact to a common ancestor silently strands every `[[ref]]` it makes to facts left below
 (measured: a crosstree promotion round took a tree from 2 to 14 `--check-tree` problems). Before

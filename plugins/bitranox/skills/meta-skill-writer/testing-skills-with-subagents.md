@@ -109,6 +109,12 @@ the skill change, the lesson is already in the always-loaded index by constructi
 two arms of the SAME pre-change text disagreeing: one never reaches for the technique, the other
 reaches for it and cites the stored rule by name.
 
+Capturing the lesson yourself is the same contamination with your own hands: a session that records
+a learning in the memory store and then edits the skill teaching it has put the lesson into the
+cascade minutes earlier. Run the RED BEFORE the capture where you can; when you cannot, fall back
+to route 1 below (the coverage check against the skill file, run on the text as it stood BEFORE
+your edit) and say in the review artifact which route you took and why.
+
 **So before trusting a RED, check whether the lesson is already in the CLAUDE.md cascade or the
 memory store on this machine.** If it is, the behavioural RED is not evidence and must not be
 reported as one. It cannot fail honestly, and re-running it only reshuffles which arm wins.
@@ -123,10 +129,14 @@ the scenario:
 uv run scripts/redcheck.py --scenario scenario.txt --corpus-cascade . --json
 ```
 
-Read the two directions differently, because they are not worth the same. A hit is STRONG: the
-lesson is demonstrably in reachable context and the report names the file. A clean result is WEAK:
-the check compares distinctive terms, so it cannot see a paraphrase, and "no hit" means not caught
-rather than absent. Exit 2 with `data.unchecked` true means the corpus came back empty and
+Read the two directions differently, because they are not worth the same. A hit is the STRONG
+direction: the report names the file that shares the scenario's rare distinctive terms, and that
+file usually does teach the lesson. It is still a term-overlap match, not a reading of the claim
+(the tool counts a document once it shares enough rare terms), and in a domain corpus those terms
+can be the domain's own vocabulary. So open the named document and check it states the lesson's
+CLAIM before treating the RED as contaminated - never judge from the shared-terms list alone. A
+clean result is WEAK: the same term comparison cannot see a paraphrase, and "no hit" means not
+caught rather than absent. Exit 2 with `data.unchecked` true means the corpus came back empty and
 nothing was checked at all, which is the one result that would otherwise read as a pass.
 
 Two honest routes when it IS already inherited. The review artifact must say which one you took:
@@ -135,14 +145,24 @@ Two honest routes when it IS already inherited. The review artifact must say whi
    absent. That is a fact about the artifact you are about to change, so inherited context cannot
    forge it. Gate the negative on a control pattern you know appears in those files, so a check
    that never really looked reports BROKEN rather than ABSENT - `bitranox:compuse-toolbox` ships
-   such a checker. A PRESENT verdict ends the job: the guidance already ships, so there is nothing
-   to add.
+   such a checker. Run it on the pre-edit text (for example `git show HEAD:<path>` saved to a
+   file): it reads the file as given, so after your edit it answers PRESENT by construction. A
+   PRESENT verdict on the pre-edit text ends the job: the guidance already ships, so there is
+   nothing to add.
 2. **De-telegraph a behavioural arm into a domain the cascade does NOT teach.** Choose that domain
    with `redcheck --corpus-cascade` above, which scores a candidate scenario against the assembled
    cascade and store rather than against the skill file. Restate the trap in a subject they are
    silent on, and keep the scenario from naming or pre-diagnosing it - the same run flags prose
    that hands over its own answer. A scenario that carries its own answer measures the prompt, not
    the skill.
+
+**The reverse case: you are CHANGING a behaviour the cascade already documents.** Then the cascade
+teaches the OLD answer, and a behavioural arm answers from it in BOTH arms: the RED passes for the
+wrong reason, and the GREEN can fail while the corrected text sits right in front of the agent. Use
+a text check that ties the prose to the code it describes (assert against the real table or
+constant, never a second copy of the list, so drift on either side fails). Then treat every
+document `redcheck --corpus-cascade` names as a worklist and update each one in the same change,
+not only the one the task named.
 
 **A RED that does not flip is a legitimate, reportable outcome.** Record it as one. Do not escalate
 into progressively harder scenarios until something finally fails - that manufactures a RED to
@@ -341,6 +361,12 @@ Agent should now:
 
 **If agent follows rule:** Success - skill is bulletproof for this scenario.
 
+**A gap declined as "covered elsewhere" needs a grep of the elsewhere.** "Owned by another skill"
+or "the skill already says X" is a presence claim: grep that place for the wording and quote the
+line you found in the review artifact. When a quote-back returns NONE for something the artifact
+says is already covered, the artifact is the suspect, not the probe: grep first, then fix the
+artifact or the text, never the probe's verdict.
+
 ## Meta-Testing (When GREEN Isn't Working)
 
 **After agent chooses wrong option, ask:**
@@ -463,6 +489,10 @@ OK Fix: Continue REFACTOR cycle until no new rationalizations.
 **NO Leaky RED/GREEN fixture (shares a namespace with the live system)**
 If the real resource the scenario is about still exists and is reachable, the subagent finds it and routes around your fixture - a PASS via a path you never put in the prompt (the tell is an effort/tool-call spike). Worst when you test a DOC after fixing the underlying bug: the fix itself is the leak, so a correct answer looks like proof the doc is adequate.
 OK Fix: Make the fixture hermetic - use paths with no real counterpart (a scratch root, a fake tool name, sanitized repo/branch names) and no access to the live repo, so the only reachable answer is the one under test. Verify a PASS against ground truth (tool count, readlink), never at face value.
+
+**NO Fixture that gives its planted defect away**
+Three ways a fixture finds the defect for the reviewer: it is too SMALL (a defect visible only in aggregate, such as a shape repeated across many modules, is spotted at one glance in a single short file, so both arms find it and the RED proves nothing), the plant ANNOUNCES itself (a comment or docstring describing the defect), or the fixture does not BUILD (the reviewer reports the compile error instead of the question).
+OK Fix: Build at real scale (spread the instances over many small modules so no single read sees the recurrence), make the plant as silent as the real defect, and compile or type-check the fixture (for example `tsc --noEmit` exits 0) before handing it to a reviewer.
 
 ## Quick Reference (TDD Cycle)
 

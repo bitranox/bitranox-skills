@@ -133,6 +133,17 @@ Confirm:
 
 **Test errors?** Fix error, re-run until it fails correctly.
 
+**New behaviour is a refusal?** Assert the specific message or field, not only the exit code. An
+argument parser refusing a not-yet-existing flag (argparse exits 2) makes an exit-code-only test
+pass before the feature exists, green for the wrong reason. Run it against the pre-feature code
+and require RED.
+
+**Defect is in a cleanup path (reset, close, teardown, eviction)?** Ask what the probe does AFTER
+the cleanup runs. If the cleanup makes the probe succeed (it removed the state the probe would
+have failed on), the arm measures the cleanup, not the defect, and passes against the unfixed
+code. Use a probe whose outcome the cleanup cannot change - an unsupported command, a malformed
+request - and confirm it reds on the unfixed source.
+
 ### GREEN - Minimal Code
 
 Write simplest code to pass the test.
@@ -187,6 +198,13 @@ Confirm:
 **Test fails?** Fix code, not test.
 
 **Other tests fail?** Fix now.
+
+**An existing test asserts the very behaviour a user reported as a defect?** REPLACE it; do not
+bend the fix to keep it green or keep both tests. It passed only because its fixture never reached
+the user's case. Say why the old fixture missed it, give the replacement a fixture that does reach
+it, and name the changed assertion in the commit message, so a reviewer sees an assertion changing
+meaning rather than a test deleted to get green. If the old behaviour was deliberate somewhere,
+that is a design question for your human partner, not a reason to keep the test.
 
 ### Scenario-Based RED: Can It Even Fail? (redcheck)
 

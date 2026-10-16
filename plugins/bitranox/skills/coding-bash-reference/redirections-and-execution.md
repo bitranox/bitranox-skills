@@ -138,6 +138,21 @@ set -o noclobber
 echo "data" >| protected_file.txt
 ```
 
+**Lock files: use noclobber or `flock`, not `mkdir`.** When a script needs a mutex, do not use `mkdir "$lockdir"`: some coreutils builds (for example uutils coreutils, the Rust rewrite some distributions ship as `/usr/bin/mkdir`) let two racing `mkdir` calls on the same fresh path BOTH exit 0, so two holders run the guarded work at once. A sequential test or a slow traced run (`bash -x`) hides it; only real concurrency shows it. With `noclobber` set, `>` on a missing file opens it with `O_CREAT|O_EXCL`, so the shell itself makes the create atomic:
+
+```bash
+# BAD: exclusivity depends on which mkdir binary is installed
+mkdir "$lockdir" 2>/dev/null || exit 1
+
+# GOOD: exclusive create by the shell (exit status 1 if the file already exists)
+( set -C; : > "$lockfile" ) 2>/dev/null || exit 1
+
+# OR: flock(1) on a held file descriptor
+exec {lock_fd}> "$lockfile"; flock -n "$lock_fd" || exit 1
+```
+
+When testing a lock, race the same script against GNU `mkdir` as a control, so a clean result proves the test can tell an exclusive lock from a non-exclusive one.
+
 ---
 
 ### 3.6.3 Appending Redirected Output (`>>`)

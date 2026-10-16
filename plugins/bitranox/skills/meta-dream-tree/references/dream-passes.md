@@ -172,17 +172,49 @@ twin gets edited. Findings follow this project's dream mode. No `.claude/skills`
 
 Every dream, ensure the anchor's `.claude-memory/` is version-controlled by a LOCAL git repo
 (store-own-repo: `git init` inside `.claude-memory/`; ephemeral `state/` + `*.lock` gitignored),
-then commit the dream's changes. LOCAL-ONLY, never a remote. A private project with
+then commit the dream's changes. Local first: the dream never creates a remote and never pushes on
+its own. A PRIVATE off-site backup remote the user created may be configured on the store repo;
+pushing to it stays a deliberate act, and the one push this file describes (the force-push in step
+4 of "Bound history growth") runs only inside a squash the user approved. A private project with
 `track_private` on tracks the store in the project's own repo instead. Public project / non-git:
 the store-own-repo keeps private memory out of any public push. Safe machine-local move ->
 auto-apply even in `propose` mode.
 
+When a store lives directly under `~/.claude`, track it with ONE repo AT `~/.claude` behind a
+WHITELIST `.gitignore`: `/*`, then `!/.gitignore`, `!/CLAUDE.md`, `!/<store-dir>/`, plus
+`<store-dir>/state/` and `<store-dir>/*.lock`. Never blanket-track `~/.claude` (session
+transcripts, `file-history/`, backups and nested plugin git repos under `plugins/cache/`), and
+before the first commit run `git add -A -n` and require that nothing outside those paths appears.
+
+A NEW remote is propose-first even when one already exists: the store holds no single sensitive
+fact, but the assembled set (subnets, host addresses, credential file paths) is an infrastructure
+map. Scan for literal credentials (assigned password/token/key values, PEM blocks, long base64
+blobs) against a positive control, and verify the remote's privacy from the hosting API after
+creation, not from the creation dialog.
+
 ## Bound history growth (squash, count-gated)
 
 When a store repo exceeds ~50 commits (`git rev-list --count HEAD`), squash to a single fresh
-snapshot commit (orphan branch, re-add, replace). Memory values current state, not history. Safe
-for these LOCAL repos; NEVER squash/force-push a shared or published repo (marketplace append-only
-rule).
+snapshot commit. Memory values current state, not history. Safe for these LOCAL repos and a
+personal private backup remote; NEVER squash/force-push a shared or published repo (marketplace
+append-only rule). The count gate is not authority on its own: squash only in a quiet window (no
+peer session writing the store, no store file written for about 15 minutes, no `.git/index.lock`,
+HEAD already on the remote), and propose it first.
+
+Squash by compare-and-swap, never an orphan branch (`checkout --orphan; add -A; commit;
+branch -m` is not atomic against a peer's commit, and its `add -A` sweeps a peer's UNCOMMITTED
+edits into your snapshot):
+
+1. `git bundle create <backup-outside-the-repo> --all`, then prove it by cloning it back: the
+   bundled branch's commit count and tree must match the repo's.
+2. `new=$(git commit-tree <old>^{tree} -F <msgfile>)` builds the single root from HEAD's tree
+   without touching the index or working tree.
+3. `git update-ref refs/heads/<branch> "$new" <old>` swaps it in only if the branch still points
+   at `<old>`, so a racing peer commit is refused rather than lost.
+4. A backup remote needs `git push --force-with-lease=<branch>:<old>`, run only on the user's go for
+   this squash (or left for the user to run); if it refuses,
+   `git update-ref refs/heads/<branch> <old> "$new"` puts the branch back. The bundle and the
+   reflog are the revert paths. Confirm `git status --porcelain` is unchanged before and after.
 
 ## Off-machine backup reminder (time-gated)
 

@@ -101,6 +101,13 @@ discovery steps and use the two checker tools directly:
   commands. If it says PART of your changes was re-applied, it prints no command to run: the
   stash still holds all of them, and the rest is restored by hand.
 
+When the defect you are fixing already has a recorded BEFORE figure (a backlog item, an issue, a
+saved profile), run your probe or test against the UNFIXED code first and require it to land within
+an order of magnitude of that figure before you trust your AFTER number. A probe that hits an early
+return is fast in both arms, so the fix looks enormous while the slow path never ran. If BEFORE is
+far too fast, count calls into the hot function to find the guard that returns early, and leave a
+comment in the test saying why its input has that shape.
+
 Report findings with measured numbers from the real test suite; never accept a claim on
 synthetic benchmarks.
 
