@@ -26,7 +26,7 @@ def synchronize(lock):
     return sync_func
 
 
-class SharingComponent(object):
+class SharingComponent:
     """Initialized in the class definition of SharingService and shared by all instances of SharingService"""
 
     lock = threading.Lock()

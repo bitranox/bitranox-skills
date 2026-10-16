@@ -1123,10 +1123,7 @@ def apply_plan(plan: Plan) -> ApplyResult:
 
 def _remove_tree(path: Path) -> None:
     """rmtree that clears the read-only attribute Windows puts on git pack files, then retries."""
-    if sys.version_info >= (3, 12):
-        shutil.rmtree(path, onexc=_retry_writable)
-    else:
-        shutil.rmtree(path, onerror=_retry_writable)  # onexc does not exist before 3.12
+    shutil.rmtree(path, onexc=_retry_writable)
 
 
 def _retry_writable(func: Callable[[str], object], path: str, exc: object) -> None:

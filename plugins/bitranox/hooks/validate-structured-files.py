@@ -332,7 +332,7 @@ def main() -> int:
     try:
         # utf-8-sig: a byte-order mark is legal at the start of a UTF-8 file and says nothing
         # about validity; plain utf-8 hands it to json.loads, which rejects it.
-        with open(path, "r", encoding="utf-8-sig") as fh:
+        with open(path, encoding="utf-8-sig") as fh:
             text = fh.read()
     except Exception:  # noqa: BLE001 - unreadable/binary/gone -> nothing to validate
         return 0

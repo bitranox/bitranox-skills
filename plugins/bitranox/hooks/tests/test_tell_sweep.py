@@ -120,7 +120,7 @@ def test_a_non_utf8_file_is_blocked_for_its_encoding_not_as_a_tell(tmp_path, mon
     that is worse than a single false block: this hook blocks the whole file until it is clean,
     and a manufactured character cannot be edited out, so the file can never become clean.
     """
-    head = "Plain ASCII prose - no tells.\n".encode("utf-8")
+    head = b"Plain ASCII prose - no tells.\n"
     f = tmp_path / "a.txt"
     f.write_bytes(head + b"\xff\xfe\x00\n")
     assert _run(monkeypatch, {"tool_input": {"file_path": str(f)}}) == 2

@@ -26,7 +26,7 @@ import os
 import sys
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
-from typing import Any, List, Optional
+from typing import Any
 
 EXIT_OK = 0
 EXIT_NONE_FOUND = 1
@@ -72,13 +72,13 @@ def _make_converter(enable_plugins: bool) -> Any:
     return MarkItDown(enable_plugins=enable_plugins)
 
 
-def _matches(name: str, extensions: List[str]) -> bool:
+def _matches(name: str, extensions: list[str]) -> bool:
     lowered = name.lower()
     return any(lowered.endswith(ext.lower()) for ext in extensions)
 
 
-def find_files(input_dir: Path, extensions: List[str], recursive: bool,
-               walk_errors: List[str]) -> List[Path]:
+def find_files(input_dir: Path, extensions: list[str], recursive: bool,
+               walk_errors: list[str]) -> list[Path]:
     """
     List the files under input_dir whose name ends in one of the extensions.
 
@@ -97,7 +97,7 @@ def find_files(input_dir: Path, extensions: List[str], recursive: bool,
     return sorted(found)
 
 
-def plan_outputs(files: List[Path], input_dir: Path,
+def plan_outputs(files: list[Path], input_dir: Path,
                  output_dir: Path) -> tuple[dict[Path, Path], dict[Path, str]]:
     """
     Map each input to its output path, mirroring the input's subdirectory.
@@ -108,7 +108,7 @@ def plan_outputs(files: List[Path], input_dir: Path,
         another input to a failure message. Paths are compared case-folded,
         because Windows and macOS file systems do.
     """
-    by_output: dict[str, List[Path]] = {}
+    by_output: dict[str, list[Path]] = {}
     target = {}
     for file_path in files:
         rel = file_path.relative_to(input_dir)
@@ -126,7 +126,7 @@ def plan_outputs(files: List[Path], input_dir: Path,
     return planned, collisions
 
 
-def collision_message(group: List[Path], input_dir: Path, target: dict[Path, Path]) -> str:
+def collision_message(group: list[Path], input_dir: Path, target: dict[Path, Path]) -> str:
     """The failure line for inputs that share one output, naming every output they would write.
 
     Names that differ only in case are one file on Windows and macOS, so they are refused on
@@ -180,7 +180,7 @@ def _record(results: dict, success: bool, path: str, message: str) -> None:
 def batch_convert(
     input_dir: Path,
     output_dir: Path,
-    extensions: Optional[List[str]] = None,
+    extensions: list[str] | None = None,
     recursive: bool = False,
     workers: int = 4,
     verbose: bool = False,
@@ -208,7 +208,7 @@ def batch_convert(
     if extensions is None:
         extensions = DEFAULT_EXTENSIONS
 
-    walk_errors: List[str] = []
+    walk_errors: list[str] = []
     files = find_files(input_dir, extensions, recursive, walk_errors)
     # An unreadable directory is one of the failures, so it counts in the total as well:
     # total == success + failed always holds.
@@ -241,7 +241,7 @@ def batch_convert(
     return results
 
 
-def _parse_args(argv: Optional[List[str]]) -> argparse.Namespace:
+def _parse_args(argv: list[str] | None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description="Batch convert files to Markdown using MarkItDown",
         formatter_class=argparse.RawDescriptionHelpFormatter,
@@ -336,7 +336,7 @@ def _run(args: argparse.Namespace) -> int:
     return EXIT_OK if results['total'] > 0 else EXIT_NONE_FOUND
 
 
-def main(argv: Optional[List[str]] = None) -> int:
+def main(argv: list[str] | None = None) -> int:
     _configure_console()
     args = _parse_args(argv)
     try:

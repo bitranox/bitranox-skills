@@ -665,7 +665,7 @@ def _shadow_rows(home, dream, sites):
     import datetime as _dt
     audit = home / ".claude" / "self-improve-audit"
     audit.mkdir(parents=True, exist_ok=True)
-    month = _dt.datetime.now(_dt.timezone.utc).strftime("%Y-%m")
+    month = _dt.datetime.now(_dt.UTC).strftime("%Y-%m")
     with open(audit / f"jev-skill-shadow-{month}.jsonl", "a", encoding="utf-8") as fh:
         for site in sites:
             fh.write('{"dream_id": "%s", "site": "%s", "item_id": "x"}\n' % (dream, site))

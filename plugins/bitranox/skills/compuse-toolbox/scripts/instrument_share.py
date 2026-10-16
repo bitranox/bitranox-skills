@@ -54,7 +54,7 @@ import sys
 from collections import defaultdict
 from collections.abc import Iterable, Sequence
 from dataclasses import dataclass, field
-from datetime import date, datetime, timezone
+from datetime import date, datetime, timezone, UTC
 from pathlib import Path
 from typing import Any
 
@@ -174,7 +174,7 @@ def _when(raw: Any) -> datetime | None:
         stamp = datetime.fromisoformat(raw.replace("Z", "+00:00"))
     except ValueError:
         return None
-    return stamp if stamp.tzinfo else stamp.replace(tzinfo=timezone.utc)
+    return stamp if stamp.tzinfo else stamp.replace(tzinfo=UTC)
 
 
 def _user_text(message: Any) -> str | None:
@@ -305,8 +305,8 @@ def measure(root: Path, *, since: date | None = None, until: date | None = None,
     """Measure the corpus below `root`. Returns (report, unread paths, files read)."""
     skipped: list[str] = []
     files = _transcripts(root, skipped) if root.is_dir() else [root]
-    window = (datetime(since.year, since.month, since.day, tzinfo=timezone.utc) if since else None,
-              datetime(until.year, until.month, until.day, tzinfo=timezone.utc) if until else None)
+    window = (datetime(since.year, since.month, since.day, tzinfo=UTC) if since else None,
+              datetime(until.year, until.month, until.day, tzinfo=UTC) if until else None)
     exclude = re.compile(exclude_cwd) if exclude_cwd else None
     report, seen, read = Report(), set(), 0
     for path in files:

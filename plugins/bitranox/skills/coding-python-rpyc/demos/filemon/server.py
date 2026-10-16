@@ -5,7 +5,7 @@ from threading import Thread
 
 
 class FileMonitorService(rpyc.Service):
-    class exposed_FileMonitor(object):
+    class exposed_FileMonitor:
         def __init__(self, filename, callback, interval=1):
             self.filename = filename
             self.interval = interval

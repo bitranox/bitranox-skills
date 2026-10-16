@@ -5,7 +5,7 @@ import time
 
 
 class MyServiceFactory(rpyc.Service):
-    class exposed_MyService(object):  # exposing names is not limited to methods :)
+    class exposed_MyService:  # exposing names is not limited to methods :)
         def __init__(self, filename, callback, interval=1):
             print("news client with " + filename + " " + str(callback))
             self.filename = filename

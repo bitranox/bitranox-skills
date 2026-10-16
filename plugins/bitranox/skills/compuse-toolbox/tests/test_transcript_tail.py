@@ -287,7 +287,7 @@ def test_a_bom_does_not_drop_the_first_record(tmp_path, backend):
 
 @pytest.mark.parametrize("extra", [[], ["--json"]])
 def test_cp1252_stdout_does_not_crash(tmp_path, backend, extra):
-    text = "done \\u2713 \\U0001f600".encode().decode("unicode_escape")
+    text = b"done \\u2713 \\U0001f600".decode("unicode_escape")
     p = tmp_path / "uni.jsonl"
     p.write_text(json.dumps({"type": "user", "message": {"content": text}}) + "\n", encoding="utf-8")
     r = _cli(backend, str(p), "--all", *extra,

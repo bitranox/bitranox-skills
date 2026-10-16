@@ -13,7 +13,7 @@ import os
 import re
 import stat
 import sys
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timedelta, timezone, UTC
 from pathlib import Path
 
 import pytest
@@ -566,7 +566,7 @@ def test_retention_drops_a_month_past_400_days_and_never_the_current_one(
     tmp_path, fake, home
 ):
     knob(home)
-    today = datetime.now(timezone.utc).date()
+    today = datetime.now(UTC).date()
     d = audit(home)
     d.mkdir(parents=True)
     old = d / _month_name(
@@ -589,7 +589,7 @@ def test_retention_drops_oldest_past_the_size_cap_but_not_the_current_month(
     tmp_path, fake, home
 ):
     knob(home)
-    today = datetime.now(timezone.utc).date()
+    today = datetime.now(UTC).date()
     d = audit(home)
     d.mkdir(parents=True)
     big = d / _month_name(today - timedelta(days=70))
@@ -608,7 +608,7 @@ def test_the_current_month_survives_even_when_it_alone_is_over_the_cap(
     tmp_path, fake, home
 ):
     knob(home)
-    today = datetime.now(timezone.utc).date()
+    today = datetime.now(UTC).date()
     d = audit(home)
     d.mkdir(parents=True)
     current = d / _month_name(today)
@@ -1621,7 +1621,7 @@ def test_a_locked_log_after_a_paid_run_keeps_the_records_in_a_side_file(
     """Jev was already paid when the append finds the lock held: the records must survive,
     and `report` must read them."""
     knob(home)
-    month = slog.log_path(audit(home), datetime.now(timezone.utc))
+    month = slog.log_path(audit(home), datetime.now(UTC))
     month.parent.mkdir(parents=True, exist_ok=True)
     Path(str(month) + ".lock").write_text("held by another writer", encoding="utf-8")
     assert run_prune(tmp_path, fake) == 0
@@ -1638,7 +1638,7 @@ def test_retention_counts_a_side_file_as_its_own_month(home):
     """A side file of an old month expires with that month; one of this month never does."""
     d = audit(home)
     d.mkdir(parents=True, exist_ok=True)
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     old = d / f"jev-skill-shadow-2000-01-{'a' * 32}.jsonl"
     new = slog.log_path(d, now).with_name(
         slog.log_path(d, now).stem + f"-{'b' * 32}.jsonl"

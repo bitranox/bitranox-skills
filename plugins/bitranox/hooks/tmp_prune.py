@@ -449,10 +449,7 @@ def _remove(path: Path, result: ApplyResult) -> bool:
         _retry_writable(func, failed, errors)
 
     try:
-        if sys.version_info >= (3, 12):
-            shutil.rmtree(target, onexc=retry)
-        else:  # onexc arrived in 3.12; onerror is deprecated from there on
-            shutil.rmtree(target, onerror=retry)
+        shutil.rmtree(target, onexc=retry)
     except OSError as exc:
         errors.append(f"{target}: {exc.strerror or exc}")
     if errors or target.exists():

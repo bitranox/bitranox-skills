@@ -369,15 +369,12 @@ def test_a_repo_that_vanishes_mid_run_is_a_lost_signal_not_a_crash(repo: Path) -
 
 def _remove_repo(path: Path) -> None:
     """git marks object files read-only and Windows refuses to delete those, so clear the bit and
-    retry. `onexc` replaced the deprecated `onerror` in 3.12; 3.11 is still in the CI matrix."""
+    retry."""
     def retry(func, target, _exc) -> None:
         os.chmod(target, stat.S_IWRITE)
         func(target)
 
-    if sys.version_info >= (3, 12):
-        shutil.rmtree(path, onexc=retry)
-    else:
-        shutil.rmtree(path, onerror=retry)
+    shutil.rmtree(path, onexc=retry)
 
 
 def test_a_cancel_still_wins_over_a_lost_repo(repo: Path, tmp_path: Path) -> None:

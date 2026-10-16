@@ -10,7 +10,7 @@ import os
 import subprocess
 import sys
 import time
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timedelta, timezone, UTC
 from pathlib import Path
 
 import pytest
@@ -465,7 +465,7 @@ def test_shadow_guard_writes_nothing_when_the_block_succeeds(tmp_path, monkeypat
 
 # ---- the shadow log's retention --------------------------------------------------------------
 
-NOW = datetime(2026, 9, 25, 0, 30, tzinfo=timezone.utc)
+NOW = datetime(2026, 9, 25, 0, 30, tzinfo=UTC)
 
 
 def _day_file(audit, days_ago, size=10):

@@ -2,7 +2,7 @@ import rpyc
 from time import sleep
 
 
-class MyClient(object):
+class MyClient:
     def __init__(self):
         self.conn = rpyc.connect("localhost", 18000)
         self.bgsrv = rpyc.BgServingThread(self.conn)

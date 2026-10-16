@@ -42,7 +42,7 @@ import time
 import urllib.error
 import urllib.request
 from dataclasses import dataclass, field
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timedelta, timezone, UTC
 from pathlib import Path
 from urllib.parse import urlparse
 
@@ -827,7 +827,7 @@ def _error_record(payload, exc):
     """The row for a comparison that failed: no answers, and the cause as its `reason`."""
     message, _n = prepare_state({"e": "%s: %s" % (type(exc).__name__, exc)}, cap=ERROR_CAP)
     return _stamp({
-        "ts": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+        "ts": datetime.now(UTC).isoformat(timespec="seconds"),
         "site": str(payload.get("site") or ""),
         "session_id": payload.get("session_id"),
         "regex": payload.get("regex"),
@@ -873,7 +873,7 @@ def run_shadow(payload, cfg, env=None, home=None, deadline=SHADOW_DEADLINE, work
     results = clf.ask_many(items, workers=workers)
     first_text = " ".join(str(v) for v in (requests[0].get("fields") or {}).values()) if requests else ""
     return _stamp({
-        "ts": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+        "ts": datetime.now(UTC).isoformat(timespec="seconds"),
         "site": site,
         "session_id": payload.get("session_id"),
         "lang": detect_language(first_text),
@@ -902,7 +902,7 @@ def decided_row(site, session_id, regex, transcript=""):
     """The row for a decide-mode turn settled WITHOUT asking Jev (the keywords already decided):
     the regex verdict, no answers. The caller adds how it decided and appends it."""
     payload = _payload(site, session_id, regex, [], transcript)
-    return _stamp({"ts": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+    return _stamp({"ts": datetime.now(UTC).isoformat(timespec="seconds"),
                    "site": site, "session_id": session_id, "regex": regex, "reason": None,
                    "redactions": 0, "input_tokens": 0, "latency_ms": 0, "results": [],
                    "states": []}, payload)
@@ -961,7 +961,7 @@ def _log_day(path):
     m = _SHADOW_DAY_RE.match(path.name)
     if m:
         return datetime.strptime(m.group(1), "%Y-%m-%d").date()
-    return datetime.fromtimestamp(path.stat().st_mtime, timezone.utc).date()
+    return datetime.fromtimestamp(path.stat().st_mtime, UTC).date()
 
 
 def _unlink(path):
@@ -1005,7 +1005,7 @@ def prune_shadow_logs(audit, now, keep_days=SHADOW_KEEP_DAYS, max_bytes=SHADOW_M
 
 def _append_log(record, audit=None, now=None):
     d = Path(audit) if audit is not None else _audit_dir()
-    now = now or datetime.now(timezone.utc)
+    now = now or datetime.now(UTC)
     d.mkdir(parents=True, exist_ok=True)
     with open(shadow_log_path(d, now), "a", encoding="utf-8") as fh:
         fh.write(json.dumps(record, ensure_ascii=False) + "\n")

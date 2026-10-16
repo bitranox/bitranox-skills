@@ -27,7 +27,7 @@ envelope {ok, command, data, skipped} on every exit, with an `error` key on exit
 Run (from the plugin root):
   `uv run skills/meta-dream-tree/versionrot.py scan --tree /path/to/project --json`
   `uv run skills/meta-dream-tree/versionrot.py scan --chain . --current "claude-code=2.1.300"`
-Pure standard library; any Python 3.10+ runs it.
+Pure standard library; Python 3.14+.
 """
 from __future__ import annotations
 
@@ -36,6 +36,7 @@ import json
 import os
 import re
 import sys
+import tomllib
 import urllib.error
 import urllib.request
 from collections.abc import Callable, Iterable
@@ -55,11 +56,6 @@ from statusrot import (  # noqa: E402
     tree_levels,
 )
 from tree_support import store_anchor, utf8_stdio  # noqa: E402
-
-try:
-    import tomllib
-except ModuleNotFoundError:  # Python 3.10: read the two keys this tool needs by hand
-    tomllib = None  # type: ignore[assignment]
 
 __all__ = ["Claim", "Known", "Registry", "compare", "discover", "find_claims", "main", "normalize"]
 
@@ -238,18 +234,12 @@ def find_claims(text: str, reg: Registry, where: str = "") -> list[Claim]:
 def _toml_project(path: Path) -> tuple[str | None, str | None]:
     """[project] name and version from a pyproject.toml; a missing or dynamic one is None."""
     text = path.read_text(encoding="utf-8", errors="replace")
-    if tomllib is not None:
-        try:
-            proj = tomllib.loads(text).get("project", {})
-        except tomllib.TOMLDecodeError:
-            return None, None
-        name, ver = proj.get("name"), proj.get("version")
-        return (name if isinstance(name, str) else None), (ver if isinstance(ver, str) else None)
-    section = re.search(r"^\[project\]\s*$(.*?)(?=^\[|\Z)", text, re.M | re.S)
-    if not section:
+    try:
+        proj = tomllib.loads(text).get("project", {})
+    except tomllib.TOMLDecodeError:
         return None, None
-    found = dict(re.findall(r'^(name|version)\s*=\s*"([^"]*)"', section.group(1), re.M))
-    return found.get("name"), found.get("version")
+    name, ver = proj.get("name"), proj.get("version")
+    return (name if isinstance(name, str) else None), (ver if isinstance(ver, str) else None)
 
 
 def _json(path: Path) -> dict:

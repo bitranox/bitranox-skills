@@ -111,7 +111,7 @@ class Entry:
         return {"level": self.level, "slug": self.slug, "title": self.title, "pin": self.pin}
 
     @staticmethod
-    def from_dict(d: dict) -> "Entry":
+    def from_dict(d: dict) -> Entry:
         return Entry(str(d["level"]), str(d["slug"]), str(d.get("title", "")),
                      bool(d.get("pin", False)))
 

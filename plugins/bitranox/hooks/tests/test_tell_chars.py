@@ -212,7 +212,7 @@ def test_find_tell_codepoints_is_empty_on_clean_text():
 
 
 def test_decode_utf8_returns_no_offset_for_valid_text():
-    assert TC.decode_utf8("plain %s text\n".encode("utf-8") % b"ascii") == ("plain ascii text\n", None)
+    assert TC.decode_utf8(b"plain %s text\n" % b"ascii") == ("plain ascii text\n", None)
 
 
 def test_decode_utf8_reports_the_first_bad_byte_and_keeps_the_rest():

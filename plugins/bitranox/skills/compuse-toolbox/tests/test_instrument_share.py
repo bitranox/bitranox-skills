@@ -7,7 +7,7 @@ record, and a tool call is a `tool_use` block inside an `assistant` record.
 import json
 import subprocess
 import sys
-from datetime import date, datetime, timedelta, timezone
+from datetime import date, datetime, timedelta, timezone, UTC
 from pathlib import Path
 
 import pytest
@@ -15,7 +15,7 @@ import pytest
 import instrument_share as ish
 
 TOOL = Path(__file__).resolve().parents[1] / "scripts" / "instrument_share.py"
-T0 = datetime(2026, 9, 30, 10, 0, tzinfo=timezone.utc)          # ISO week 2026-W40
+T0 = datetime(2026, 9, 30, 10, 0, tzinfo=UTC)          # ISO week 2026-W40
 
 
 def _ts(minutes):

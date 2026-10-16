@@ -38,7 +38,8 @@ import re
 import sys
 import threading
 from pathlib import Path
-from typing import Any, Callable, Iterable
+from typing import Any
+from collections.abc import Callable, Iterable
 
 __all__ = [
     "ControlError",

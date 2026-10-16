@@ -64,7 +64,7 @@ from collections import Counter
 from collections.abc import Generator, Iterator, Mapping
 from contextlib import contextmanager
 from dataclasses import dataclass
-from datetime import date, datetime, timezone
+from datetime import date, datetime, timezone, UTC
 from pathlib import Path
 from typing import Any
 
@@ -522,7 +522,7 @@ def _off(args: argparse.Namespace, reason: str) -> int:
 
 
 @contextmanager
-def _workdir(given: str | None) -> Generator[Path, None, None]:
+def _workdir(given: str | None) -> Generator[Path]:
     """--workdir when given (kept), else a temporary directory removed afterwards."""
     if given:
         path = Path(given)
@@ -622,7 +622,7 @@ def _ask_and_log(args: argparse.Namespace, uvx: str, plan: _RunPlan) -> int:
         jev = ask_jev(
             uvx, JevRequest(plan.site, [i for i, _n in prepared], workdir, plan.model)
         )
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     ctx = _context(plan.site, uvx, jev, now, getattr(args, "dream", None))
     records = [
         slog.build_record(ctx, i, n, plan.verdicts.get(i.id)) for i, n in prepared

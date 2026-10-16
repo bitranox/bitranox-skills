@@ -25,7 +25,7 @@ safe_gtk_classes = set(
 )
 
 
-class SafeGTK(object):
+class SafeGTK:
     for _name in dir(gtk):
         if _name in safe_gtk_classes or _name.isupper():
             exec(f"exposed_{_name} = gtk.{_name}")

@@ -471,7 +471,7 @@ class GateSettings:
     cwd: str | None = None
     env: tuple[tuple[str, str], ...] = ()
 
-    def over(self, base: "GateSettings") -> "GateSettings":
+    def over(self, base: GateSettings) -> GateSettings:
         """These settings on top of `base`: a cwd replaces, env entries merge (these win)."""
         return GateSettings(self.cwd or base.cwd, (*base.env, *self.env))
 

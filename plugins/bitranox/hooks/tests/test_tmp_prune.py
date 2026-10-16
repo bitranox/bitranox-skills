@@ -288,7 +288,6 @@ def test_a_oneoff_with_a_file_held_open_is_kept(machine: Machine) -> None:
 
 
 @pytest.mark.skipif(not ON_LINUX, reason="the /proc holder index is Linux-only")
-@pytest.mark.skipif(sys.version_info < (3, 13), reason="mmap(trackfd=False) arrived in 3.13")
 def test_a_oneoff_with_a_file_only_mmapped_is_kept(machine: Machine) -> None:
     old = make_dir(machine.base / "mapped", days=8)
     # trackfd=False keeps no file descriptor behind the mapping, so only /proc/<pid>/maps shows it.

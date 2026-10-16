@@ -49,7 +49,7 @@ import os
 import re
 import sys
 import time
-from datetime import datetime, timezone
+from datetime import datetime, timezone, UTC
 from pathlib import Path
 
 from _cli_envelope import EXIT_ERROR, EXIT_NO, EXIT_YES, EnvelopeArgumentParser, emit, guarded
@@ -124,7 +124,7 @@ def parse_name_stamp(name) -> float | None:
                 continue                       # right width, not a real date
             zulu = text[hit.end():hit.end() + 1] in ("Z", "z")
             # A naive datetime's timestamp() reads it as local time, DST included.
-            moment = parsed.replace(tzinfo=timezone.utc) if zulu else parsed
+            moment = parsed.replace(tzinfo=UTC) if zulu else parsed
             candidate = (hit.start(), rank, moment.timestamp())
             best = candidate if best is None or candidate < best else best
             break                              # later hits of this pattern are further right

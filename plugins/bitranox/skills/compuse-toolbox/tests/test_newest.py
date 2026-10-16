@@ -4,7 +4,7 @@ import os
 import subprocess
 import sys
 import time
-from datetime import datetime, timezone
+from datetime import datetime, timezone, UTC
 from pathlib import Path
 
 import pytest
@@ -522,7 +522,7 @@ def test_an_unzoned_stamp_is_local_time_and_a_z_stamp_is_utc():
     naive = datetime(2026, 1, 2, 3, 4, 5)
     assert N.parse_name_stamp("x-20260102-030405.gz") == naive.timestamp()
     assert N.parse_name_stamp("x-20260102T030405Z.gz") == naive.replace(
-        tzinfo=timezone.utc).timestamp()
+        tzinfo=UTC).timestamp()
 
 
 @pytest.mark.skipif(not hasattr(time, "tzset"), reason="time.tzset is POSIX-only")

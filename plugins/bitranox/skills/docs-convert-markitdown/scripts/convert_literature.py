@@ -29,7 +29,7 @@ import sys
 import urllib.parse
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any
 
 EXIT_OK = 0
 EXIT_NONE_FOUND = 1
@@ -83,7 +83,7 @@ def _make_converter() -> Any:
     return MarkItDown()
 
 
-def extract_metadata_from_filename(filename: str) -> Dict[str, str]:
+def extract_metadata_from_filename(filename: str) -> dict[str, str]:
     """
     Try to extract metadata from filename.
     Supports patterns like: Author_Year_Title.pdf
@@ -114,7 +114,7 @@ def extract_metadata_from_filename(filename: str) -> Dict[str, str]:
     return metadata
 
 
-def find_pdfs(input_dir: Path, recursive: bool, walk_errors: List[str]) -> List[Path]:
+def find_pdfs(input_dir: Path, recursive: bool, walk_errors: list[str]) -> list[Path]:
     """
     List the PDFs under input_dir, matching the .pdf suffix in any case.
 
@@ -132,8 +132,8 @@ def find_pdfs(input_dir: Path, recursive: bool, walk_errors: List[str]) -> List[
     return sorted(found)
 
 
-def plan_outputs(pdf_files: List[Path], input_dir: Path, output_dir: Path,
-                 organize_by_year: bool) -> tuple[Dict[Path, Path], Dict[Path, str]]:
+def plan_outputs(pdf_files: list[Path], input_dir: Path, output_dir: Path,
+                 organize_by_year: bool) -> tuple[dict[Path, Path], dict[Path, str]]:
     """
     Map each PDF to its Markdown output, keeping its subdirectory.
 
@@ -144,7 +144,7 @@ def plan_outputs(pdf_files: List[Path], input_dir: Path, output_dir: Path,
         Windows and macOS file systems do.
     """
     target = {}
-    by_output: Dict[str, List[Path]] = {}
+    by_output: dict[str, list[Path]] = {}
     for pdf in pdf_files:
         base = output_dir
         year = extract_metadata_from_filename(pdf.name).get('year')
@@ -164,7 +164,7 @@ def plan_outputs(pdf_files: List[Path], input_dir: Path, output_dir: Path,
     return planned, collisions
 
 
-def collision_message(group: List[Path], input_dir: Path, target: Dict[Path, Path]) -> str:
+def collision_message(group: list[Path], input_dir: Path, target: dict[Path, Path]) -> str:
     """The failure line for papers that share one output, naming every output they would write.
 
     Names that differ only in case are one file on Windows and macOS, so they are refused on
@@ -192,7 +192,7 @@ def _yaml_str(value: str) -> str:
     return _YAML_UNSAFE.sub(lambda m: f"\\u{ord(m.group()):04x}", quoted)
 
 
-def render_paper(metadata: Dict[str, str], text_content: str) -> str:
+def render_paper(metadata: dict[str, str], text_content: str) -> str:
     """The Markdown document for one paper: YAML front matter, a header block, the text."""
     title = metadata['title']
     content = "---\n"
@@ -224,7 +224,7 @@ def convert_paper(
     input_file: Path,
     output_file: Path,
     output_dir: Path
-) -> tuple[bool, Dict]:
+) -> tuple[bool, dict]:
     """
     Convert a single paper to Markdown with metadata extraction.
 
@@ -258,7 +258,7 @@ def convert_paper(
     return True, metadata
 
 
-def create_index(papers: List[Dict], output_dir: Path):
+def create_index(papers: list[dict], output_dir: Path):
     """Create an index/catalog of all converted papers."""
 
     # Sort by year (if available) and title
@@ -310,7 +310,7 @@ def create_index(papers: List[Dict], output_dir: Path):
     print(f"[OK] Created catalog: {catalog_file}")
 
 
-def _parse_args(argv: Optional[List[str]]) -> argparse.Namespace:
+def _parse_args(argv: list[str] | None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description="Convert scientific literature PDFs to Markdown",
         formatter_class=argparse.RawDescriptionHelpFormatter,
@@ -357,7 +357,7 @@ Exit status: 0 all converted, 1 no PDF files found, 2 an error.
     return parser.parse_args(argv)
 
 
-def _print_summary(total: int, success_count: int, failures: List[str],
+def _print_summary(total: int, success_count: int, failures: list[str],
                    unreadable_dirs: int = 0) -> None:
     """Print the run summary. total counts every paper found plus every unreadable
     directory, so total == successful + failed."""
@@ -385,7 +385,7 @@ def _run(args: argparse.Namespace) -> int:
         print(f"Error: '{args.input_dir}' is not a directory", file=sys.stderr)
         return EXIT_ERROR
 
-    walk_errors: List[str] = []
+    walk_errors: list[str] = []
     pdf_files = find_pdfs(args.input_dir, args.recursive, walk_errors)
     failures = [f"cannot read directory {error}" for error in walk_errors]
     for failure in failures:
@@ -419,7 +419,7 @@ def _run(args: argparse.Namespace) -> int:
     return EXIT_ERROR if failures else EXIT_OK
 
 
-def main(argv: Optional[List[str]] = None) -> int:
+def main(argv: list[str] | None = None) -> int:
     _configure_console()
     args = _parse_args(argv)
     try:

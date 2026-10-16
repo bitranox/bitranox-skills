@@ -83,7 +83,7 @@ import subprocess
 import sys
 from dataclasses import dataclass
 from pathlib import Path, PurePosixPath, PureWindowsPath
-from typing import Callable, Sequence
+from collections.abc import Callable, Sequence
 
 __all__ = [
     "CacheTarget",

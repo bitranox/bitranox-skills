@@ -292,8 +292,8 @@ def test_resolve_collects_all_bodies_from_cwd_up_to_anchor(tmp_path):
 def test_resolve_is_mount_independent(tmp_path):
     projA, bodiesA = _build_tree(tmp_path / "mountA")
     projB, bodiesB = _build_tree(tmp_path / "mountB")
-    outA = sorted((r.body for r in us.resolve(str(projA))))
-    outB = sorted((r.body for r in us.resolve(str(projB))))
+    outA = sorted(r.body for r in us.resolve(str(projA)))
+    outB = sorted(r.body for r in us.resolve(str(projB)))
     assert outA == outB                               # same logical tree, different prefix -> identical
 
 

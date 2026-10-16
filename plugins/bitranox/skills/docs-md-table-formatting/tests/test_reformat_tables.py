@@ -574,7 +574,7 @@ def test_a_fence_inside_a_nested_list_item_still_hides_its_table(tmp_path):
 def test_a_ragged_table_after_an_inline_span_line_is_still_reported(tmp_path):
     """The repo gate's ragged check reads through reformat_file, so it went blind here too."""
     f = tmp_path / "r.md"
-    f.write_bytes(("```sh``` prose\n\n| a | b |\n|---|---|\n| 1 | 2 | 3 |\n").encode("utf-8"))
+    f.write_bytes(b"```sh``` prose\n\n| a | b |\n|---|---|\n| 1 | 2 | 3 |\n")
     warnings = []
     R.reformat_file(f, check_only=True, warnings=warnings)
     assert len(warnings) == 1 and "LOSES CONTENT" in warnings[0], warnings

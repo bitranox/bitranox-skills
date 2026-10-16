@@ -18,7 +18,7 @@ has every line treated as added.
 Identifiers default to each target NAME in its snake_case, kebab-case and space-separated spellings,
 case-insensitive, matched as a whole word (`alpha_library` is not `alpha_lib`), plus any
 `--ident NAME=TOKEN`. A name the scanned target declares as a dependency in its pyproject.toml
-(Python 3.11+, which reads TOML) is not a finding, nor is a `--allow NAME=TOKEN` for that target.
+is not a finding, nor is a `--allow NAME=TOKEN` for that target.
 
   `python3 scripts/fanout_crosscheck.py --target alpha_lib=../alpha_lib --target beta-tool=../beta-tool`
   `... --since beta-tool=<sha>`  per target, or `--since <rev>` for every target; repeatable
@@ -38,6 +38,7 @@ from __future__ import annotations
 import re
 import subprocess
 import sys
+import tomllib
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -49,11 +50,6 @@ from _cli_envelope import (
     emit,
     guarded,
 )
-
-try:
-    import tomllib
-except ImportError:  # Python 3.10: dependencies cannot be read, --allow still works
-    tomllib = None  # type: ignore[assignment]
 
 COMMAND = "fanout_crosscheck"
 _HUNK = re.compile(r"^@@ -\d+(?:,\d+)? \+(\d+)(?:,\d+)? @@")
@@ -154,8 +150,6 @@ def declared_dependencies(path: Path) -> tuple[set[str], str | None]:
     pyproject = path / "pyproject.toml" if path.is_dir() else None
     if pyproject is None or not pyproject.is_file():
         return set(), None
-    if tomllib is None:
-        return set(), f"{pyproject}: dependencies not read (Python 3.10 has no tomllib); use --allow"
     try:
         doc = tomllib.loads(pyproject.read_text(encoding="utf-8"))
     except (OSError, ValueError) as exc:

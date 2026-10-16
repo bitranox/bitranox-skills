@@ -67,6 +67,7 @@ import re
 import subprocess
 import tempfile
 import time
+import tomllib
 import traceback
 import xml.etree.ElementTree as ET
 import sys
@@ -370,10 +371,10 @@ def changelog_documents(root, version):
 class VersionUnreadable(Exception):
     """pyproject.toml is present but its version could not be read, carrying the reason why.
 
-    A reason rather than a bare None because the three causes send a reader to different places:
-    a missing key is an edit to make, invalid TOML is a file to repair, and an interpreter with
-    no tomllib is a toolchain to change. Reporting "no version could be read" for all three sent
-    someone looking for a missing key that was sitting right there.
+    A reason rather than a bare None because the causes send a reader to different places: a
+    missing key is an edit to make, and an unreadable file or invalid TOML is a file to repair.
+    Reporting "no version could be read" for all of them sent someone looking for a missing key
+    that was sitting right there.
     """
 
 
@@ -384,11 +385,6 @@ def pyproject_version(root):
     Python distribution. Every other way of not getting a version raises VersionUnreadable,
     because "there is nothing to check" and "I could not check" are different answers and
     collapsing them into one None is what let this check pass on unreadable input.
-
-    There is deliberately no fallback parser for interpreters below 3.11. One shipped in 5.294.2
-    and was removed: a hand-rolled TOML reader answers wrongly in silence, and only below 3.11
-    where nothing exercises it, which trades a silent skip for a silent wrong answer. The repo
-    declares requires-python >=3.11, so reporting is both honest and the same verdict everywhere.
     """
     pp = root / "pyproject.toml"
     if not pp.is_file():
@@ -397,13 +393,6 @@ def pyproject_version(root):
         text = pp.read_text(encoding="utf-8")
     except OSError as exc:
         raise VersionUnreadable("pyproject.toml could not be read: %s" % exc)
-    try:
-        import tomllib  # noqa: PLC0415 - stdlib only from 3.11; absence is reported, not skipped
-    except ImportError:
-        raise VersionUnreadable(
-            "this interpreter has no tomllib, which is stdlib from 3.11, and the repo declares "
-            "requires-python >=3.11"
-        )
     try:
         data = tomllib.loads(text)
     except Exception as exc:  # noqa: BLE001

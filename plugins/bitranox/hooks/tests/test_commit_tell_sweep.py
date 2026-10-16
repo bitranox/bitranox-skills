@@ -178,7 +178,7 @@ def test_a_non_utf8_message_file_is_blocked_for_its_encoding_not_as_a_tell(
     encoding is reported as its own finding, at the byte that failed. git assumes UTF-8 for a
     commit message (i18n.commitEncoding), so this is a real problem in its own right.
     """
-    head = "Subject line, plain ASCII\n".encode("utf-8")
+    head = b"Subject line, plain ASCII\n"
     f = tmp_path / "msg.txt"
     f.write_bytes(head + b"\xff\xfe\x00tail\n")
     assert _run(monkeypatch, 'git commit -F "%s"' % f.as_posix()) == 2

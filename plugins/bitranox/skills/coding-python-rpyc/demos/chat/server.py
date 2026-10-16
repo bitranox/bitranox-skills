@@ -1,4 +1,3 @@
-from __future__ import with_statement
 from rpyc import Service, async_
 from rpyc.utils.server import ThreadedServer
 from threading import RLock
@@ -13,7 +12,7 @@ broadcast_lock = RLock()
 tokens = set()
 
 
-class UserToken(object):
+class UserToken:
     def __init__(self, name, callback):
         self.name = name
         self.stale = False

@@ -2521,26 +2521,6 @@ def test_version_sync_fires_on_a_pyproject_that_is_not_valid_toml(tmp_path):
     assert any("not valid TOML" in f for f in failures)
 
 
-def test_version_sync_reports_rather_than_passing_without_tomllib(tmp_path, monkeypatch):
-    """Below 3.11 the check says it could not verify, instead of answering that they agree.
-
-    The two versions here MATCH, so a check able to read them would pass. It must still fire,
-    which is what makes this test about verifiability rather than about drift.
-
-    A hand-rolled TOML reader shipped in 5.294.2 to avoid this and was removed: its wrong
-    answers would be silent and reachable only below 3.11, where nothing exercises them, and
-    it left a malformed pyproject passing there while firing on 3.11+. The repo declares
-    requires-python >=3.11, so an interpreter without tomllib cannot develop it anyway.
-    """
-    monkeypatch.setitem(sys.modules, "tomllib", None)
-    write(tmp_path / "plugins/bitranox/.claude-plugin/plugin.json",
-          json.dumps({"name": "bitranox", "version": "7.8.9"}))
-    write(tmp_path / "pyproject.toml", '[project]\nname = "x"\nversion = "7.8.9"\n')
-    failures = RG.check_version_sync(tmp_path)
-    assert failures, "an interpreter that cannot parse TOML must report, not pass"
-    assert any("tomllib" in f for f in failures)
-
-
 def test_changelog_fires_on_an_undocumented_version_with_no_bump(tmp_path):
     """The discriminating case against the diff-shaped predecessor.
 

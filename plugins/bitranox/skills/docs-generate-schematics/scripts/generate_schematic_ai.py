@@ -41,7 +41,7 @@ import shutil
 import sys
 import time
 from pathlib import Path
-from typing import Optional, Dict, Any, List, Tuple
+from typing import Any
 
 try:
     import httpx2 as httpx
@@ -91,7 +91,7 @@ _FALLBACK_LABEL = re.compile(
 _LINE_START_MARKUP = re.compile(r'[\s*_#>]*')
 
 
-def _score_rank(content: str, match: "re.Match[str]") -> Tuple[int, int, int]:
+def _score_rank(content: str, match: re.Match[str]) -> tuple[int, int, int]:
     """Lower sorts first: how closely one candidate matches the requested "SCORE: <total>" line."""
     line_prefix = content[content.rfind("\n", 0, match.start()) + 1:match.start()]
     at_line_start = _LINE_START_MARKUP.fullmatch(line_prefix) is not None
@@ -103,7 +103,7 @@ def _score_rank(content: str, match: "re.Match[str]") -> Tuple[int, int, int]:
     )
 
 
-def _parse_score(content: str) -> Optional[float]:
+def _parse_score(content: str) -> float | None:
     """The review's total score out of 10, or None when the review states none.
 
     The review prompt grades five criteria 0-2 each and then asks for "SCORE: [total score
@@ -199,7 +199,7 @@ IMPORTANT - NO FIGURE NUMBERS:
 - The diagram should contain only the visual content itself
 """
     
-    def __init__(self, api_key: Optional[str] = None, verbose: bool = False,
+    def __init__(self, api_key: str | None = None, verbose: bool = False,
                  image_model: str = DEFAULT_IMAGE_MODEL, review_model: str = DEFAULT_REVIEW_MODEL):
         """
         Initialize the generator.
@@ -230,8 +230,8 @@ IMPORTANT - NO FIGURE NUMBERS:
         if self.verbose:
             print(f"[{time.strftime('%H:%M:%S')}] {message}")
     
-    def _make_request(self, model: str, messages: List[Dict[str, Any]], 
-                     modalities: Optional[List[str]] = None) -> Dict[str, Any]:
+    def _make_request(self, model: str, messages: list[dict[str, Any]], 
+                     modalities: list[str] | None = None) -> dict[str, Any]:
         """
         Make a request to OpenRouter API.
         
@@ -286,7 +286,7 @@ IMPORTANT - NO FIGURE NUMBERS:
         except httpx.RequestError as e:
             raise RuntimeError(f"API request failed: {str(e)}")
     
-    def _extract_image_from_response(self, response: Dict[str, Any]) -> Optional[bytes]:
+    def _extract_image_from_response(self, response: dict[str, Any]) -> bytes | None:
         """
         Extract base64-encoded image from API response.
         
@@ -393,7 +393,7 @@ IMPORTANT - NO FIGURE NUMBERS:
         base64_data = base64.b64encode(image_data).decode("utf-8")
         return f"data:{mime_type};base64,{base64_data}"
     
-    def generate_image(self, prompt: str) -> Optional[bytes]:
+    def generate_image(self, prompt: str) -> bytes | None:
         """
         Generate an image using Nano Banana 2.
         
@@ -473,7 +473,7 @@ IMPORTANT - NO FIGURE NUMBERS:
     
     def review_image(self, image_path: str, original_prompt: str, 
                     iteration: int, doc_type: str = "default",
-                    max_iterations: int = 2) -> Tuple[str, float, bool]:
+                    max_iterations: int = 2) -> tuple[str, float, bool]:
         """
         Review generated image using Gemini 3.1 Pro Preview for quality analysis.
         
@@ -640,7 +640,7 @@ Generate an improved version that addresses all the critique points while mainta
     
     def generate_iterative(self, user_prompt: str, output_path: str,
                           iterations: int = 2, 
-                          doc_type: str = "default") -> Dict[str, Any]:
+                          doc_type: str = "default") -> dict[str, Any]:
         """
         Generate scientific schematic with smart iterative refinement.
         
@@ -912,7 +912,7 @@ as a [WARN] on stderr.
     return parser
 
 
-def main(argv: Optional[List[str]] = None) -> int:
+def main(argv: list[str] | None = None) -> int:
     """Command-line interface."""
     _configure_console()
     parser = build_parser()

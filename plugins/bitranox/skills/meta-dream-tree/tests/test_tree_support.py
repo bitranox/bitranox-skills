@@ -66,7 +66,7 @@ def test_utf8_stdio_turns_a_cp1252_crash_into_replacement(monkeypatch):
     TS.utf8_stdio()
     print("path 日本")
     stream.flush()
-    assert "日本".encode("utf-8") in buf.getvalue()
+    assert "日本".encode() in buf.getvalue()
 
 
 def test_utf8_stdio_leaves_a_stream_without_reconfigure_alone(monkeypatch):

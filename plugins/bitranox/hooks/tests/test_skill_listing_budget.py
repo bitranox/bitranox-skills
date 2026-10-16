@@ -9,7 +9,7 @@ import os
 import subprocess
 import sys
 import time
-from datetime import datetime, timezone
+from datetime import datetime, timezone, UTC
 from pathlib import Path
 
 import pytest
@@ -281,7 +281,7 @@ def test_required_fraction_always_covers_its_demand(demand):
 
 def iso(epoch):
     """Render an epoch the way a transcript record stamps itself: UTC, milliseconds, a Z."""
-    return datetime.fromtimestamp(epoch, timezone.utc).isoformat(timespec="milliseconds").replace("+00:00", "Z")
+    return datetime.fromtimestamp(epoch, UTC).isoformat(timespec="milliseconds").replace("+00:00", "Z")
 
 
 def listing_record(content, timestamp=None, cwd=None, initial=True):

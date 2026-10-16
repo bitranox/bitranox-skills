@@ -16,9 +16,8 @@ Usage:
 SKILL.md.
 
 Exit codes: 0 adopted, 1 the license gate stopped the adoption (nothing was written),
-2 error (bad source, clone failure, no marketplace checkout, an existing destination, a license
-file the gate could not read or a pyproject license table with no tomllib to parse it - nothing
-was written then either).
+2 error (bad source, clone failure, no marketplace checkout, an existing destination, or a
+license file the gate could not read - nothing was written then either).
 
 Pure standard library. Cross-platform: paths via pathlib, git via argv lists (never shell=True).
 """
@@ -31,6 +30,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import tomllib
 from pathlib import Path
 
 # Permissive licenses we may redistribute inside this MIT collection.
@@ -144,13 +144,6 @@ _LICENSE_NAME_RX = re.compile(r"^(?:(?:UN)?LICEN[CS]ES?|COPYING)(?:[-.][A-Za-z0-
 _LICENSE_DIRS = {"licenses", "licences"}
 _CODE_SUFFIXES = {".py", ".js", ".mjs", ".cjs", ".ts", ".sh", ".ps1", ".json", ".toml", ".yml",
                   ".yaml", ".html", ".css", ".go", ".rs", ".rb", ".java", ".c", ".h"}
-
-try:
-    import tomllib
-    _TOML_LOADS = tomllib.loads
-except ImportError:  # Python 3.10 has no stdlib TOML parser; see _pyproject_license_lines
-    _TOML_LOADS = None
-_USE_MODULE_PARSER = object()   # resolve _TOML_LOADS at call time, so the default follows it
 
 
 class CannotRead(str):
@@ -300,37 +293,11 @@ def _json_license_decls(text):
             for decl in _license_value(value)]
 
 
-_TOML_LICENSE_LINE = re.compile(r"(?m)^[ \t]*(license(?:-files)?)\b[^=\n]*=[ \t]*(.*)$")
-_TOML_LICENSE_TABLE = re.compile(r"(?m)^[ \t]*\[[^\]\n]*\blicense\b[^\]\n]*\]")
-_TOML_PLAIN_STRING = re.compile(r"""(?:"([^"\\]*)"|'([^']*)')[ \t]*(?:#.*)?""")
-
-
-def _pyproject_license_lines(text):
-    """The no-tomllib reading: only `license = "<id>"` on one line is understood. Every other
-    license key, dotted key or [..license..] table is reported unreadable, so the gate stops."""
-    out = []
-    for m in _TOML_LICENSE_LINE.finditer(text):
-        plain = _TOML_PLAIN_STRING.fullmatch(m.group(2).strip())
-        if m.group(1) == "license" and plain and re.match(r"^[ \t]*license[ \t]*=", m.group(0)):
-            out.append(("id", plain.group(1) if plain.group(1) is not None else plain.group(2)))
-        else:
-            out.append(("unreadable", CannotRead(
-                f"`{m.group(0).strip()[:60]}` needs tomllib (Python 3.11+)")))
-    out += [("unreadable", CannotRead(f"`{m.group(0).strip()}` needs tomllib (Python 3.11+)"))
-            for m in _TOML_LICENSE_TABLE.finditer(text)]
-    return out
-
-
-def _pyproject_license_decls(text, loads=_USE_MODULE_PARSER):
+def _pyproject_license_decls(text):
     """[(kind, value)] for every `license` and `license-files` key in a pyproject.toml, in any
-    table ([project], [tool.poetry], ...). `loads` is the TOML parser (default: the module's);
-    None reads lines instead."""
-    if loads is _USE_MODULE_PARSER:
-        loads = _TOML_LOADS
-    if loads is None:
-        return _pyproject_license_lines(text)
+    table ([project], [tool.poetry], ...)."""
     try:
-        doc = loads(text)
+        doc = tomllib.loads(text)
     except ValueError as exc:  # tomllib.TOMLDecodeError is a ValueError
         return [("unreadable", f"does not parse as TOML ({exc})")]
     out = []
@@ -510,8 +477,7 @@ def find_license(tree, skill_dir=None):
     whose target would ship unread, an unreadable or unparseable file, a license text it does not
     recognise, an id it can neither accept nor reject, a named license file that is missing -
     stops it for a human ('absent') rather than letting a permissive declaration decide. A file it
-    could not READ, a dir it could not list, or a pyproject license table on an interpreter with
-    no tomllib is 'unreadable' instead: the source was not judged (and a reject or an absent
+    could not READ or a dir it could not list is 'unreadable' instead: the source was not judged (and a reject or an absent
     verdict outranks it). Returns a dict: {id, status, copyright, text, notice, where}; status
     is 'accept', 'reject', 'absent' or 'unreadable'.
     """
@@ -987,8 +953,8 @@ def _gate(lic):
     if lic["status"] == "unreadable":
         # Not the gate's 'no': it could not look, so this is an error (exit 2), still fail-closed.
         raise AdoptError(f"LICENSE GATE: CANNOT READ ({lic['where']}). The source was not "
-                         "judged, so nothing was scaffolded: fix the read (a file permission, a "
-                         "Python 3.11+ interpreter for a pyproject.toml license table) and rerun.")
+                         "judged, so nothing was scaffolded: fix the read (a file permission) and "
+                         "rerun.")
 
 
 _CROSS_REF_SUFFIXES = {".md", ".py", ".txt", ".json", ".yml", ".yaml"}

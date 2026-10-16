@@ -293,7 +293,7 @@ def cleared_digests(rec: dict) -> set[str]:
     return out
 
 
-def _flagged_digests(result: "ScanResult") -> dict[str, set[str]]:
+def _flagged_digests(result: ScanResult) -> dict[str, set[str]]:
     """slug -> the digests of EVERY flagged copy of it in scope."""
     seen: dict[str, set[str]] = {}
     for ptrs in result.by_kind.values():
@@ -302,7 +302,7 @@ def _flagged_digests(result: "ScanResult") -> dict[str, set[str]]:
     return seen
 
 
-def new_or_changed(result: "ScanResult", cleared: dict[str, dict[str, str]]) -> list[str]:
+def new_or_changed(result: ScanResult, cleared: dict[str, dict[str, str]]) -> list[str]:
     """Flagged slugs that are unexamined: never cleared, or ANY copy's hook is not one cleared.
 
     Every copy counts. Keeping one digest per slug let the copy iterated last stand for all of
@@ -347,7 +347,7 @@ def fact_added_on(store: Path | None, slug: str) -> str | None:
     return dates[-1] if dates else None
 
 
-def triage_pending(result: "ScanResult", cleared: dict[str, dict[str, str]],
+def triage_pending(result: ScanResult, cleared: dict[str, dict[str, str]],
                    pending: list[str], store: Path | None) -> dict[str, list[str]]:
     """Split the unexamined list into the three situations that all answer "nobody checked this".
 
@@ -424,7 +424,7 @@ def _clear_error(msg: str, as_json: bool) -> int:
     return 2
 
 
-def _record_cleared(result: "ScanResult", cleared: dict[str, dict[str, str]],
+def _record_cleared(result: ScanResult, cleared: dict[str, dict[str, str]],
                     wanted: set[str], note: str) -> int:
     """Enter every flagged slug in scope (or the `wanted` ones) into `cleared`; return how many.
 
@@ -461,7 +461,7 @@ def _record_cleared(result: "ScanResult", cleared: dict[str, dict[str, str]],
     return added
 
 
-def _do_clear(result: "ScanResult", bl_path: Path | None, args: argparse.Namespace) -> int:
+def _do_clear(result: ScanResult, bl_path: Path | None, args: argparse.Namespace) -> int:
     """Record the currently-flagged entries as verified - all of them, or the ones `--slug` names.
 
     Explicit by design: nothing enters the baseline as a side effect of scanning, because a verdict

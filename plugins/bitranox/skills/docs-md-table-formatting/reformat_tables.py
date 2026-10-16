@@ -471,7 +471,7 @@ def _ragged_messages(filepath, first_line, contents):
 
 def _read_document(filepath):
     """(text without BOM, had_bom). newline="" keeps every CR, so line endings survive a rewrite."""
-    with open(filepath, "r", encoding="utf-8", newline="") as f:
+    with open(filepath, encoding="utf-8", newline="") as f:
         original = f.read()
     if original.startswith("\ufeff"):
         return original[1:], True

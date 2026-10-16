@@ -657,7 +657,7 @@ def test_stdin_mode_reads_and_writes_utf8_under_a_legacy_locale():
 def test_stdin_check_mode_under_a_legacy_locale():
     env = {**os.environ, "PYTHONIOENCODING": "cp1252", "PYTHONUTF8": "0"}
     res = subprocess.run([sys.executable, SCRIPT_PATH, "--check", "-"],
-                         input="clean\r\n".encode("utf-8"), capture_output=True, env=env)
+                         input=b"clean\r\n", capture_output=True, env=env)
     assert res.returncode == 0, res.stderr
 
 

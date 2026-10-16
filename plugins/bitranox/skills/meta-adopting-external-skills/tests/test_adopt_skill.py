@@ -602,24 +602,7 @@ def _dangling_link(at, target):
         pytest.skip("cannot create a symlink here")
 
 
-def test_adopt_with_no_toml_parser_exits_2_and_scaffolds_nothing(tmp_path, record_subprocess,
-                                                                  capsys, monkeypatch):
-    # The interpreter capability is the external edge here: Python 3.10 has no tomllib.
-    monkeypatch.setattr(AS, "_TOML_LOADS", None)
-    repo, skills = _fake_repo(tmp_path)
-    src = _fake_source(tmp_path)
-    (src / "pyproject.toml").write_text('[project]\nlicense = {text = "MIT"}\n',
-                                        encoding="utf-8", newline="")
-    assert AS.main([str(src), "--dest", str(skills)]) == 2
-    err = capsys.readouterr().err
-    assert "CANNOT READ" in err and "tomllib" in err
-    assert not (skills / "upstream-skill").exists()
-
-
-def test_a_toml_parser_reads_the_same_source_and_adopts_it(tmp_path, record_subprocess):
-    """Control for the test above: with a parser the same table is read and accepted."""
-    if AS._TOML_LOADS is None:
-        pytest.skip("this interpreter has no tomllib")
+def test_a_pyproject_license_table_is_read_and_adopted(tmp_path, record_subprocess):
     repo, skills = _fake_repo(tmp_path)
     src = _fake_source(tmp_path)
     (src / "pyproject.toml").write_text('[project]\nlicense = {text = "MIT"}\n',
@@ -645,12 +628,11 @@ def test_a_copyleft_verdict_still_wins_over_an_unreadable_file(tmp_path):
     assert AS.find_license(tmp_path)["status"] == "reject"
 
 
-def test_an_unrecognised_license_still_wins_over_an_unread_one(tmp_path, monkeypatch):
+def test_an_unrecognised_license_still_wins_over_an_unread_one(tmp_path):
     """Something the gate READ and cannot vouch for is already its 'no' (1); a file it could not
     read beside it cannot turn that into an accept, so the verdict stays 'absent'."""
-    monkeypatch.setattr(AS, "_TOML_LOADS", None)
-    _tree(tmp_path, {"LICENSE": "some random text\n",
-                     "pyproject.toml": '[project]\nlicense = {text = "MIT"}\n'})
+    _tree(tmp_path, {"LICENSE": "some random text\n"})
+    _dangling_link(tmp_path / "COPYING", tmp_path / "gone.txt")
     assert AS.find_license(tmp_path)["status"] == "absent"
 
 
@@ -659,13 +641,6 @@ def test_two_different_permissive_license_files_are_both_credited(tmp_path):
     lic = AS.find_license(tmp_path)
     assert lic["status"] == "accept" and lic["id"] == "Apache-2.0 AND MIT"
     assert "Permission is hereby granted" in lic["text"] and "Apache License" in lic["text"]
-
-
-def test_pyproject_without_tomllib_fails_closed_on_anything_but_a_plain_string():
-    table = AS._pyproject_license_decls('[project]\nlicense = {text = "MIT"}\n', loads=None)
-    plain = AS._pyproject_license_decls('[project]\nlicense = "GPL-3.0"\n', loads=None)
-    assert [kind for kind, _v in table] == ["unreadable"]
-    assert plain == [("id", "GPL-3.0")]
 
 
 # --------------------------------------------------------------------------

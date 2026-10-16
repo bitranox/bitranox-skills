@@ -82,7 +82,7 @@ import sys
 import time
 import traceback
 from dataclasses import dataclass, replace
-from typing import Callable, Iterable, Sequence
+from collections.abc import Callable, Iterable, Sequence
 
 from _cli_envelope import EnvelopeArgumentParser, emit
 
