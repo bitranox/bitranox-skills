@@ -1,78 +1,96 @@
-# Handover 2026-10-16 (late): [23] phase 2 step 6 done, 9.2.1 shipped
+# Handover 2026-10-17: [23] steps 1-3 (bmk group) done, 9.2.4 and bmk 3.21.4 shipped
 
 ## In flight
 
-- Nothing part-done. One background watcher may report into the next conversation: `ci_wait.py`
-  on `2d056f71` (the OPEN-WORK-only commit). If it never arrives, run the check under "How to
-  verify" yourself.
-- No subagents are running.
+- Nothing part-done. No subagents or background jobs are running. Both temporary worktrees
+  (`bitranox-skills-wt-fold23-bmk`, `bmk-wt-fold23`) and their branches are removed.
 
 ## Committed, or not
 
-- Pushed: 9.2.0 (the fold) and 9.2.1 (`bmk-gate-nudge` test fixture fix; CI green on
-  `0b4288ad`), and `2d056f71` (OPEN-WORK [23] update). This handover is committed on top.
-- Memory store (`<softdev-root>/.claude-memory`, the tree-top store): uncommitted, as before, plus this
-  session's changes: 29 facts archived, 25 citing facts re-pointed, 41 hooks shortened, one fact
-  updated (`reference-split-a-hook-s-tool-input-command-by-the-tool-never-by-os-name`, test-side
-  delta). Peer sessions' captures sit there too; the next dream commits them, staging
-  deliberately (never bare `git add -A`).
-- `uv.lock` holds a local 9.2.0 -> 9.2.1 edit; it is gitignored, so it is harmless.
+- Pushed, CI green: bitranox-skills 9.2.3 (`ac494793`) and 9.2.4 (`ea6b8170`); bmk 3.21.3
+  (`9ecf0fa`) and 3.21.4 (`8006727`). bmk was pushed, NOT released (no tag, no PyPI), the same as
+  3.17.1, its earlier skill-only bump.
+- Memory store (`<softdev-root>/.claude-memory`): still uncommitted. Besides the prior sessions'
+  changes it now holds three shortened pointers (`remote-powershell-file-not-inline`,
+  `memory-store-local-git-durability`,
+  `feedback-a-recorded-review-verdict-goes-stale-when-the-reviewer-posts-again`; hooks and titles
+  only, bodies untouched). The next dream commits it, staging deliberately.
+- This handover and `OPEN-WORK.md` are committed together.
 
 ## Decided, and why - do not reopen
 
-- Pointers were removed or shortened only after a fresh verifier quoted the governing line from
-  the INSTALLED 9.2.1 text and the quote was substring-checked. `.plan/fold-23/edits-verify.json`
-  is the FIRST verify round only (13 of the 32 read FAIL/NOT-ADDED there and were in fact applied
-  later); the `.skillwriter` checklists and `.plan/fold-23/step6/*.json` hold the final evidence.
-- The 3 PARTIAL FOLD-THEN-REMOVE pointers stay because what the skill lacks is machine-local and
-  cannot ship publicly (see [23] in `OPEN-WORK.md`).
-- The 10 FOLD-KEEP-POINTER rows owned by mirrored skills (devops-bmk, coding-python-pwshpy,
-  coding-python-send-mail) and provmm-benchmark keep their full hooks: never folded.
-- The 9.2.0 CI red was the test, not the hook: a Bash command built from a native Windows path
-  loses its backslashes exactly as Git Bash does. Fixed with `as_posix()` in the test.
+- User 2026-10-17, verbatim label "bmk first (Recommended)": only bitranox/bmk this round; pwshpy
+  and btx_lib_mail were NOT to be pushed (logged in `EXECUTION-USER-REVIEW.md`).
+- `devops-bmk` folds were checked against bmk's source, not the fact bodies. Three body claims were
+  stale or wrong, and the skill follows the source: the "gave up" line comes from `bmk_toollock`'s
+  skipped upgrade (`--on-timeout skip`), so the target continues; `make testintegration` exits 2
+  (make) with bmk's `exit code: 5` line; bmk's `-m integration` is fixed, so an uncollected
+  integration suite is diagnosed with `pytest --collect-only -m integration`.
+- "Serialize all bmk-local commands across repos" was NOT folded: the tool-env lock and the
+  per-venv provisioning lock make it obsolete, and the skill already says a caller-side lock is
+  worse.
+- A mirrored-skill change on both sides is committed with the twin text temporarily copied into
+  the OTHER repo's main checkout working tree, and pushed after a `git merge --ff-only <branch>` in
+  the tool repo's main checkout: the push gate reads that checkout's HEAD, never a worktree branch.
 
 ## Still open, untouched
 
-- [12] waits for decide rows (earliest ~2026-10-18). [26] (the user's request about skill-caused
-  memory entries) and everything else: `OPEN-WORK.md`.
+- [23] step 3a, the next action below; 3b (pwshpy, btx_lib_mail) needs a new approval; 3c
+  provmm-benchmark (private Gitea). [12] waits for decide rows (earliest ~2026-10-18). [26] and
+  the rest: `OPEN-WORK.md`.
 
 ## Lessons for the next nap
 
-- When deleting always-loaded pointers after a fold, verify each rule against the INSTALLED plugin cache text with a substring-checked quote, never against a pipeline's verify record: the round-1 record showed 13 of 32 as not applied that a later round had applied.
-- When a new hook test passes a pytest `tmp_path` into a Bash-tool command string, run it on the Windows VM before pushing: both local gates run on Linux, and the 9.2.0 push went red only on the Windows cell (already captured in the hooks-level fact; nap: confirm, no new fact).
-- When extracting a subagent's JSON result from its transcript, read assistant records only: the brief you sent it contains the same keys and matches first.
-- When building a dash/underscore-tolerant slug regex, join the escaped parts with `[-_]`; a chained `.replace()` rewrites the `-` inside the class it just inserted.
-- tooling: `factedit apply --body-file` with a body that starts with a blank line doubles the blank line after the frontmatter; strip leading newlines (or the engine could normalise them).
-- Carried over, not napped yet: the three lessons in `git show 2d056f71:handover.md` and the ten in `git show 6c1370ea:handover.md` (section "Lessons for the next nap" in each).
+- When folding a memory rule into a skill, grep the user's local commands and skills
+  (`~/.claude/commands/`, `~/.claude/skills/`) for the same topic first: `tfbpr.md` already held
+  the measured make-exits-2 detail that the fold got wrong and shipped once.
+- When a fact body describes a tool's behaviour, re-check it against the tool's CURRENT source
+  before folding it: 3 of 6 bmk bodies were stale (lock message, exit code, marker expression).
+- When a verifier reports a gap you are about to decline, check the claim against the source first:
+  the declined "tests exist but none collected" case was a real defect in the text.
+- tooling: `repo-gate --mirrors` lists a tool repo's own linked worktree as an UNLISTED twin;
+  harmless, but it reads like a missing `MIRRORED_SKILLS` entry.
+- Carried over, not napped yet: the five lessons in `git show 6cdee6d3:handover.md`, and the
+  ones that file itself carries over (`2d056f71`, `6c1370ea`).
 
 ## The exact next action
 
-[12] is blocked until ~2026-10-18, so [23] is the top workable item. Shorten the 3 kept
-FOLD-THEN-REMOVE pointers to their machine-local delta, through the engine:
+[12] is blocked until ~2026-10-18, so [23] step 3a. The user first runs
+`/plugin marketplace update bitranox-skills` and `/reload-plugins` so 9.2.4 is installed. Then:
 
-    python3 <plugin>/skills/meta-dream-tree/factedit.py show --slug remote-powershell-file-not-inline
+1. Quote-check each of the 6 bmk rules against the INSTALLED
+   `~/.claude/plugins/cache/bitranox-skills/bitranox/9.2.4/skills/devops-bmk/SKILL.md`
+   (substring-checked quotes).
+2. Re-point the 14 citing facts: in each, replace `[[<one of the 6 slugs>]]` with
+   `bitranox:devops-bmk` through `factedit.py apply --body-file` (strip leading newlines, see the
+   tooling lesson in `6cdee6d3`); each body diff must be the ref lines only. Find them with
+   `find <softdev-root>/.claude-memory/facts -name '*.md' -print0 | xargs -0 grep -l -F '[[<slug>]]'`.
+3. Archive the 6 with `reconcile_memory_index.py --archive <slug> <softdev-root>` (home
+   `skills/meta-self-improve/`), after a backup tgz.
 
-then the same for `memory-store-local-git-durability` and
-`feedback-a-recorded-review-verdict-goes-stale-when-the-reviewer-posts-again`; write a
-trigger-first hook naming only what the skill lacks plus `Detail: bitranox:<skill>.`, and apply
-with `factedit.py apply --slug <s> --level <softdev-root> --hook-file <f>
---stage-dir <scratch>`. After that, [23] next items (2)-(4).
+The 6 slugs: `reference-bmk-make-test-can-lie-via-a-concurrent-uv-reinstall-race-on-bmks-shared-tool-venv`,
+`reference-bmk-deps-fails-push-on-an-outdated-floor-and-hides-why`,
+`project-a-stale-project-venv-makes-the-bmk-gate-lie`,
+`reference-multi-repo-bmk-release-serialize-local-gates-overlap-remote-ci-watches`,
+`reference-bmk-test-lanes-marker-model-cross-version-coverage-and-the-project-venv`,
+`reference-bmk-make-release-can-succeed-after-printing-that-it-gave-up-on-the-lock`.
+`project-tfbpr-local-run-gotchas` and `reference-ghrunner-linux-tools-...` cite the multi-repo one,
+which also covers the tfbpr test-lane order (`~/.claude/commands/tfbpr.md` holds it).
 
 ## Files that matter
 
-- `OPEN-WORK.md` ([23] carries the step-6 numbers and next steps; [590], [610])
-- `.plan/fold-23/step6/` (`verify32.json`, `plan32.json`, `keep-verify.json`, `keep57.json`,
-  `refmap32.json`), `.plan/fold-23/rows.json`
-- `.plan/fold-23/backup-pre-archive-32.tgz`, `.plan/fold-23/backup-pre-hookcap-41.tgz`
-- `~/.claude/plans/curried-mapping-dolphin.md` (the [23] plan; Phase 3 = lower levels)
+- `OPEN-WORK.md` ([23] carries step-by-step state and the 3a/3b/3c split)
+- `plugins/bitranox/skills/devops-bmk/SKILL.md`, its `.skillwriter/checklist-20261017-fold23.md`
+- `.plan/fold-23/` (rows, reach, step-6 evidence, backups)
+- `EXECUTION-USER-REVIEW.md` (the "Step 3 push" decision)
 
 ## How to verify
 
-- CI on the pushed commits: `ci_wait.py --ref HEAD` (bitranox:compuse-toolbox `scripts/`).
-- `grep -c '](mem:' <softdev-root>/CLAUDE.local.md` printed 321 after step 6 (more if
-  peer sessions captured since).
-- `reconcile_memory_index.py --check-tree <softdev-root>` reported TOTAL 1 after step 6:
-  the rct-bose sideways ref already in [590].
+- CI: `ci_wait.py --ref HEAD` (bitranox:compuse-toolbox `scripts/`) here and in
+  `projects/public/apps/utils/bmk`.
+- Twins: `python3 plugins/bitranox/hooks/repo-gate.py --mirrors` reports 0 drifted.
+- Memory tree: `reconcile_memory_index.py --check-tree <softdev-root>` reports TOTAL 1 (the known
+  rct-bose sideways ref, [590]).
 
 Read this, then replace the first line with `# STALE - read <date>, work continued`. Do not delete
 it - if this session ends badly it is the only record of where things stood.
