@@ -29,7 +29,13 @@ intervention is to tell the model what it is about to misread.
    dependency installed only there reports `reportMissingImports`, plus a cascade of
    unknown-type errors. The output looks like a broken codebase and is a broken
    invocation. Fires only when a venv directory is actually present and no
-   `--pythonpath` / `--venvpath` / `-p` / `--project` is given.
+   `--pythonpath` / `--venvpath` / `-p` / `--project` is given, and only for a statement that
+   RUNS pyright (`_pyright_runs`): `uv run pyright` is pinned by PATH and stays silent.
+   Corpus replay 2026-10-18 (157,117 commands): the earlier any-token reading fired 386 times;
+   the statement reading fires 161, every one inside that 386. Of the 225 it no longer flags, 161
+   were `uv run pyright` and the rest were greps, `ls`, echoes and package-name loops, except 4
+   runs of a binary assigned to a variable and started as `$P`, which it now misses on purpose.
+   Subagent briefs get the same rule from `subagent-brief-pyright-nudge`.
 
 3. `grep -c PAT FILE || echo 0`
 
@@ -62,6 +68,7 @@ from shell_text import (
     basename_for_tool,
     iter_segments,
     mask_data_regions,
+    statement_program,
     strip_heredoc_bodies,
 )
 
@@ -100,6 +107,13 @@ _RELATIVE_TIME_RE = re.compile(
 _PYRIGHT_PIN_FLAGS = frozenset({"--pythonpath", "--venvpath", "-p", "--project"})
 
 _VENV_DIRS = (".venv", "venv", ".virtualenv")
+
+# Programs that run pyright themselves or start it as their first operand. `uv` is absent on
+# purpose: `uv run pyright` is pinned (see `_pyright_runs`).
+_PYRIGHT_RUNNERS = frozenset({"pyright", "uvx", "npx", "pipx"})
+_PYTHON_NAME = re.compile(r"^(?:python(?:\d+(?:\.\d+)?)?|py)$")
+# gate.py's optional `name=` label in front of a `--gate` command.
+_GATE_LABEL = re.compile(r"^[\w.-]+=(?=\S)")
 
 
 def _tokens(command: str, tool_name: str = "Bash") -> list[list[str]]:
@@ -154,11 +168,102 @@ def find_newermt_relative(statements: list[list[str]], tool_name: str = "Bash") 
     return None
 
 
+def _is_python(token: str, tool_name: str) -> bool:
+    """`python`, `python3`, `python3.12`, `py` and their `.exe` forms, by basename."""
+    return bool(_PYTHON_NAME.match(basename_for_tool(token, tool_name).lower()))
+
+
+def _after_python_m(argv: list[str], idx: int) -> list[str] | None:
+    """pyright's arguments when `argv[idx]` is a python running `-m pyright`, else None."""
+    at = idx + 1
+    while at < len(argv) and argv[at].startswith("-") and argv[at] != "-m":
+        at += 1                                   # interpreter flags: -I, -u, -B ...
+    if at + 1 < len(argv) and argv[at] == "-m" and argv[at + 1].lower() == "pyright":
+        return argv[at + 2:]
+    return None
+
+
+def _after_runner(argv: list[str], idx: int, tool_name: str) -> list[str] | None:
+    """pyright's arguments when the runner at `argv[idx]` (`uvx`, `npx`, `pipx run`) starts it."""
+    at = idx + 1
+    if basename_for_tool(argv[idx], tool_name).lower() == "pipx":
+        if at >= len(argv) or argv[at] != "run":
+            return None
+        at += 1
+    while at < len(argv) and argv[at].startswith("-"):
+        at += 1                                   # the runner's own options
+    if at < len(argv) and basename_for_tool(argv[at], tool_name).lower() == "pyright":
+        return argv[at + 1:]
+    return None
+
+
+def _behind_uv_run(argv: list[str], idx: int, tool_name: str) -> bool:
+    """True when the program at `idx` is started by a `uv run` earlier in the statement.
+
+    A launcher scan (`timeout 600 uv run pyright`) steps over `uv`, which is not a pyright runner,
+    and lands on `pyright`; `uv run` still put the venv on PATH, so that run is pinned too.
+    """
+    return any(basename_for_tool(argv[at], tool_name).lower() == "uv" and argv[at + 1] == "run"
+               for at in range(idx - 1))
+
+
+def _gate_commands(statements: list[list[str]], tool_name: str) -> list[list[str]]:
+    """The argv of each command handed to compuse-toolbox `gate.py` as `--gate "[name=]CMD"`.
+
+    gate.py runs that string as a command of its own, so a pyright inside it is a real run that
+    the statement walk cannot see: the whole string is one quoted token. A `name=` label in front
+    is dropped. Other indirection - a binary path assigned to a variable and run later as `$P` -
+    stays out of reach on purpose; following it would need data flow this nudge does not have.
+    """
+    nested: list[list[str]] = []
+    for argv in statements:
+        for at in range(len(argv) - 1):
+            if argv[at] != "--gate":
+                continue
+            spec = _GATE_LABEL.sub("", argv[at + 1], count=1)
+            nested.extend(_tokens(spec, tool_name))
+    return nested
+
+
+def _pyright_runs(statements: list[list[str]], tool_name: str = "Bash") -> list[list[str]]:
+    """pyright's arguments for each statement that RUNS pyright, one list per run.
+
+    pyright counts where the shell would run it: as the statement's program (launchers such as
+    `timeout`, `env -u VIRTUAL_ENV` and leading assignments skipped), as `python -m pyright`, or
+    behind `uvx` / `npx` / `pipx run`. A bare word anywhere in the argv does NOT count: reading
+    every token as a possible program made `grep -n pyright file` and `cat notes/pyright.md` fire.
+
+    `uv run pyright` is left out on purpose. It puts the project venv first on PATH, where pyright
+    looks for `python`, so it IS pinned: measured 2026-10-18 in soundtouch-watchdog over the same
+    235 files, bare `.venv/bin/pyright` 3904 errors, `uv run --no-sync pyright` 0, pinned 0.
+    """
+    runs: list[list[str]] = []
+    for argv in [*statements, *_gate_commands(statements, tool_name)]:
+        # statement_program matches basenames exactly, so hand it THIS statement's own spellings
+        # of the programs that can start pyright: that keeps `PYRIGHT.EXE` and `python3.12` in
+        # without listing every case and minor version.
+        names = {basename_for_tool(t, tool_name) for t in argv}
+        candidates = {n for n in names if n.lower() in _PYRIGHT_RUNNERS or _PYTHON_NAME.match(n.lower())}
+        idx = statement_program(argv, candidates, tool_name) if candidates else None
+        if idx is None or _behind_uv_run(argv, idx, tool_name):
+            continue
+        if basename_for_tool(argv[idx], tool_name).lower() == "pyright":
+            runs.append(argv[idx + 1:])
+            continue
+        if _is_python(argv[idx], tool_name):
+            found = _after_python_m(argv, idx)
+        else:
+            found = _after_runner(argv, idx, tool_name)
+        if found is not None:
+            runs.append(found)
+    return runs
+
+
 def pyright_without_pinned_interpreter(
     statements: list[list[str]], cwd: Path, tool_name: str = "Bash"
 ) -> bool:
     """True when pyright runs unpinned in a tree that actually has a virtualenv."""
-    runs = _invocation_tokens(statements, "pyright", tool_name)
+    runs = _pyright_runs(statements, tool_name)
     if not runs:
         return False
     # A pin flag counts only if it is PYRIGHT's. `-p` is also mkdir's, and reading `mkdir -p build

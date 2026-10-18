@@ -64,6 +64,46 @@ def test_unpinned_pyright_is_flagged_when_a_venv_exists(tmp_path: Path) -> None:
     assert notice is not None and "pyright" in notice
 
 
+@pytest.mark.parametrize("command", [
+    "grep -n -i 'pyright' hooks/x.py",
+    "grep -rln pyright plugins/",
+    "cat docs/pyright",
+    "echo pyright",
+    "git log -S pyright",
+    "uv run pyright --outputjson",
+    "env -u VIRTUAL_ENV uv run --frozen pyright src",
+    "timeout 600 uv run pyright",
+    "python3 -c 'import pyright'",
+    "python3 gate.py --gate \"pyright=.venv/bin/pyright --pythonpath .venv/bin/python\"",
+    "ls .venv/bin/ruff .venv/bin/pyright",
+])
+def test_pyright_as_an_argument_or_under_uv_run_is_silent(command: str, tmp_path: Path) -> None:
+    """Only a statement that RUNS pyright counts. Reading every token as a possible program made
+    `grep pyright file` fire; `uv run` puts the venv on PATH, so its pyright is pinned (measured
+    0 errors against bare .venv/bin/pyright's 3904 on the same 235 files)."""
+    (tmp_path / ".venv").mkdir()
+    assert mod.build_notice(command, tmp_path) is None
+
+
+@pytest.mark.parametrize("command", [
+    "timeout 600 .venv/bin/pyright",
+    "env -u VIRTUAL_ENV .venv/bin/python -m pyright",
+    "python3.12 -I -m pyright src",
+    "uvx pyright --pythonversion 3.11 scripts",
+    "uvx --from pyright pyright src",
+    "npx pyright",
+    "pipx run pyright",
+    "PYTHONPATH=src python -m pyright tests",
+    "ruff check . && .venv/bin/pyright",
+    "python3 gate.py --gate \"pyright=.venv/bin/pyright\" --gate \"ruff=.venv/bin/ruff check .\"",
+    "python3 gate.py --gate \".venv/bin/python -m pyright src\"",
+])
+def test_every_launcher_spelling_of_an_unpinned_run_still_fires(command: str, tmp_path: Path) -> None:
+    (tmp_path / ".venv").mkdir()
+    notice = mod.build_notice(command, tmp_path)
+    assert notice is not None and "pyright" in notice
+
+
 def test_unpinned_pyright_is_silent_without_a_venv(tmp_path: Path) -> None:
     # No venv means no ambient/venv split to warn about; firing here would be noise.
     assert mod.build_notice("pyright --outputjson", tmp_path) is None

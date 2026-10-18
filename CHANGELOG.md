@@ -29,6 +29,31 @@ than the change, so entries reconstructed from them would read like coverage wit
 a hole nobody has drawn a line under is one that gets rediscovered and half-filled - which is how
 two "versions with no entry" notes came to sit in this file disagreeing with it.
 
+## [9.4.0]
+
+### Added
+
+- `subagent-brief-pyright-nudge` (PreToolUse, Task and Agent, warn-only): a dispatch whose brief
+  tells the subagent to run pyright in command shape (`.venv/bin/pyright`, `python -m pyright`,
+  `uvx pyright`, a backtick-quoted `pyright ...`) with no `--pythonpath`/`--venvpath`/`venvPath`
+  anywhere now gets advice to put the pin in the brief itself. pyright takes its environment from
+  configuration, so an unpinned run analyses the ambient interpreter and reports every venv-only
+  dependency as missing; five refactor subagents chased exactly that on 2026-10-16 although the Bash
+  nudge already existed, because a subagent follows the gate line its brief spells out. Replayed
+  over 2565 recorded dispatches: 75 fire (2.9%), and 37 of 40 sampled firings were real unpinned
+  gate lines. `uv run pyright` stays quiet: it puts the venv on PATH, where pyright finds its
+  python (measured: 0 errors where bare `.venv/bin/pyright` reported 3904 on the same 235 files).
+
+### Fixed
+
+- `nudge-detector-footguns`: the pyright arm fired on any word `pyright` in a command, so
+  `grep -n pyright file`, `ls .venv/bin/pyright` and package-name loops got the
+  unpinned-interpreter warning. It now counts only a statement that RUNS pyright (as the program,
+  behind `timeout`/`env`/assignments, as `python -m pyright`, behind `uvx`/`npx`/`pipx run`, or
+  inside a compuse-toolbox `gate.py --gate` string), and treats `uv run pyright` as pinned. Corpus
+  replay: 386 firings down to 161, all inside the old set; the 4 runs it now misses start a binary
+  assigned to a variable (`$P`).
+
 ## [9.3.1]
 
 ### Added
