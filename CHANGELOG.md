@@ -29,6 +29,20 @@ than the change, so entries reconstructed from them would read like coverage wit
 a hole nobody has drawn a line under is one that gets rediscovered and half-filled - which is how
 two "versions with no entry" notes came to sit in this file disagreeing with it.
 
+## [9.3.1]
+
+### Added
+
+- `coding-python-pwshpy`: six `.ps1` traps for when a script is still the deliverable, each with the
+  shell it occurs in (Windows PowerShell 5.1, pwsh 7) and what to do instead: an advanced script
+  binding a forwarded `-v`, a function returning its narration with its value, the `curl` alias,
+  native stderr as error records under `Stop`, `pwsh -File` splitting `--out=C:\data` at the colon,
+  and an unguarded read probe before a lock. Synced with pwshpy 1.5.1.
+- `coding-python-send-mail`: a test that patches `smtplib.SMTP` intercepts nothing, because the
+  library connects through its own `smtplib.SMTP` subclass, so the test opens a real connection and
+  fails with `DeliveryError`; forward `transport` through the application's wrappers instead.
+  Synced with btx_lib_mail 4.5.1.
+
 ## [9.3.0]
 
 ### Added

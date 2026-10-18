@@ -123,6 +123,24 @@ ps.write_records("report.jsonl", errors, jsonl=True)  # streams record-by-record
 (pwshpy writes JSON/JSONL, not CSV; if you specifically need CSV, use the stdlib `csv` module inside
 the `for e in errors:` loop - it still streams.)
 
+## Still writing a `.ps1`? Six traps
+
+When a `.ps1` is still the deliverable (pwshpy is not wanted on the target, or the script only
+forwards to a native tool), each of these passes a quick test and fails in use. `5.1` is Windows
+PowerShell, `7` is pwsh 7 (checked on 5.1.26100 and 7.6.6); a trap listed for one shell does not
+occur on the other.
+
+| Trap                                                                                                                                                                                             | Shells                                    | Do instead                                                                                                                                 |
+|--------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|-------------------------------------------|--------------------------------------------------------------------------------------------------------------------------------------------|
+| `[CmdletBinding()]` or any `[Parameter()]` attribute makes the script advanced, so a forwarded `-v` / `-d` / `-ea` binds to `-Verbose` / `-Debug` / `-ErrorAction` and never reaches the child   | 5.1 and 7                                 | no param block in a forwarding wrapper; read `$args` by hand (it keeps empty strings, quotes and `-v`)                                     |
+| A function returns everything written to its output stream: `Write-Output "--- step"` then `return $p.ExitCode` makes `$rc = Step` an array, so `exit (Step)` and `if ($rc -ne 0)` both go wrong | 5.1 and 7                                 | narrate with `Write-Host`, so the value is the function's only output; or call `exit` inside the function that ran the child               |
+| `curl` and `wget` are aliases of `Invoke-WebRequest`: `curl -fsSL -o f url` fails on the parameter name, writes no file, and `$LASTEXITCODE` stays empty                                         | 5.1                                       | spell the binary: `curl.exe` (and `tar.exe`)                                                                                               |
+| Native stderr becomes error records: under `$ErrorActionPreference = 'Stop'`, `& tool 2>&1 \| ForEach-Object { ... }` dies with `NativeCommandError` even when the tool succeeded                | 5.1                                       | `& tool > out.txt 2>&1`, then read the file; check `$LASTEXITCODE` and the tool's result before believing it failed                        |
+| `pwsh -File s.ps1 --out=C:\data` is split at the colon before the script runs: it arrives as `--out=C` and `\data`                                                                               | 7 (`powershell.exe -File` keeps it whole) | document the space form `--out C:\data`; nothing inside the script can repair it                                                           |
+| A probe reading a file another process may be writing (`Get-FileHash` or `Get-Content` in an "is the cache valid?" check before taking a lock) throws under `Stop` and ends the script           | 5.1 and 7                                 | wrap the probe in `try/catch` returning `$false`, so a race means "re-extract under the lock"; the lock never covers a read made before it |
+
+Test a forwarding wrapper with an empty string, an embedded double quote, `-v` and a `C:\` path.
+
 ## Ship a script to a machine without Python - `pwshpy pack`
 
 Hand someone a Python tool as ONE self-extracting file: it unpacks itself into a per-user cache,
