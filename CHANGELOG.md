@@ -29,6 +29,18 @@ than the change, so entries reconstructed from them would read like coverage wit
 a hole nobody has drawn a line under is one that gets rediscovered and half-filled - which is how
 two "versions with no entry" notes came to sit in this file disagreeing with it.
 
+## [9.3.0]
+
+### Added
+
+- `pct-path-nudge` (PreToolUse, Bash and PowerShell, warn-only): a `pct exec <vmid> --` call
+  that sets a hand-typed PATH missing any of the six standard dirs now gets a warning naming
+  the missing ones and the full line to copy. `pct exec` hands a container a minimal PATH, and
+  the recurring miss is a shorter value typed from memory: `/usr/local/bin:/usr/bin:/bin` runs
+  uv and then fails on runuser, postfix and postmap in /usr/sbin. A value extending `$PATH`,
+  a bare `pct exec` with no PATH, and text in `echo`, commit messages and heredoc bodies stay
+  quiet.
+
 ## [9.2.5]
 
 ### Added

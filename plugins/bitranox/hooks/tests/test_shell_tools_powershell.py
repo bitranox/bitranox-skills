@@ -43,6 +43,7 @@ TRIGGERS = {
     "block-sed-structured-files.py": "sed -i s/a/b/ pkg.json",
     "shell-prefix-selfref-guard.py": 'VAR=hello echo "$VAR"',
     "sed-line1-range-nudge.py": "sed '1,/^---$/d' f.md",
+    "pct-path-nudge.py": "pct exec 101 -- env PATH=/usr/bin:/bin uv sync",
     "git-revparse-nudge.py": "git rev-parse master",
     "gated-prep-nudge.py": "cat > /tmp/m <<'EOF'\nx\nEOF\ngit commit -F /tmp/m",
     "warn-inline-powershell.py": "ssh host 'powershell -Command Get-ChildItem | Select-Object'",
