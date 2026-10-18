@@ -233,6 +233,15 @@ forwarded (e.g. `make push fix login bug`). Most have short aliases.
   it pushes the branch, then the tag, so a local release commit needs no separate push.
   When that version is committed but not yet tagged (`git tag --list "v<version>"` is empty),
   release it directly: running `bump` first moves past it and that version is never published.
+- `release` counts only TRACKED changes as dirty (`git diff`, `git diff --cached`); an untracked
+  file does not stop it. On `[release] Working tree not clean. Commit or stash changes first.`, do
+  not commit an edit that is not part of this release to get past it: the tag lands on HEAD, so it
+  would land on a commit CI never ran. Copy the edit aside (or `git stash push -m <name>`, then
+  pop the `stash@{N}` that `git stash list` shows under that name, never a bare `pop`: the stash
+  list is shared by every worktree), run `release`, then restore it. An edit that belongs in the
+  release, bmk's own Makefile or floor churn from a `make test` included, is committed (with git
+  and those paths, since `push` would sweep in untracked files too) and pushed first; `release`
+  never checks CI, so you wait until CI is green on that commit before running it.
 - `push` stages with `git add -A`, so every untracked, non-ignored file rides along; check
   `git status` first. With nothing staged it makes an empty commit, so a `push` after the release
   commit is already pushed leaves `release` tagging that empty commit. That is expected, not a
@@ -422,6 +431,7 @@ gate to go red. A gate that has only ever passed has not been shown to gate. See
 | `make test` runs host-mutating `local_only` tests you want only on a throwaway host | Tag those tests `mutating` and set `[tool.scripts.test].exclude-markers = "mutating"` (section 6). `make test` running `local_only` is by design - do NOT exclude `local_only` to "match CI".                                                                      |
 | `make test` fails on a `[dev]`-only import                                          | bmk runs pytest in this project's `.venv`, synced with the `[dev]` extra before every env-touching target. Re-run `make`; if it persists, check `BMK_NO_VENV_SYNC` (section 1).                                                                                    |
 | `make release` refuses: version is not canonical / carries a local segment          | Not a read failure - the version WAS read. bmk accepts any canonical PEP 440 version but refuses a spelling `packaging` would normalise (`v1.0.0`, `1.0.0-beta`) or a local segment (`1.2.3+local`); the message names the canonical form to write. See section 3. |
+| `make release` refuses: `Working tree not clean. Commit or stash changes first.`    | A tracked edit is pending. Never commit an unrelated one to get past it: set it aside, release, restore it (section 3).                                                                                                                                            |
 | `make push` fails at `[deps] (exit code: 1)` with `(no output captured)`            | A dependency floor is behind a new PyPI release, not your edit. `bmk deps --update`, then push again (section 3).                                                                                                                                                  |
 | `ModuleNotFoundError` inside bmk's own dependencies                                 | bmk's shared env, not your code; the next `make` repairs it (section 1).                                                                                                                                                                                           |
 | `make testintegration` fails: `[pytest_integration] (exit code: 5)`                 | pytest collected no test: an empty lane, or a filter hiding the tests (section 6).                                                                                                                                                                                 |

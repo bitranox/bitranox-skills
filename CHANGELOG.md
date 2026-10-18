@@ -29,6 +29,16 @@ than the change, so entries reconstructed from them would read like coverage wit
 a hole nobody has drawn a line under is one that gets rediscovered and half-filled - which is how
 two "versions with no entry" notes came to sit in this file disagreeing with it.
 
+## [9.2.5]
+
+### Added
+
+- `devops-bmk`: what `make release` counts as a dirty tree (tracked changes only) and what to
+  do when it refuses one: set an unrelated edit aside and restore it after the release, never
+  commit it to get past the refusal, since the tag lands on HEAD and that commit never ran in
+  CI; commit bmk's own Makefile and floor churn first and wait for CI, because `release` does
+  not check it. Synced with bmk 3.21.5.
+
 ## [9.2.4]
 
 ### Fixed
