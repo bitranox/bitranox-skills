@@ -29,6 +29,14 @@ than the change, so entries reconstructed from them would read like coverage wit
 a hole nobody has drawn a line under is one that gets rediscovered and half-filled - which is how
 two "versions with no entry" notes came to sit in this file disagreeing with it.
 
+## [9.7.4]
+
+### Fixed
+
+- `coding-python-logging` (mirror of lib_log_rich 6.5.5): `configuration.md` says a cwd removed
+  after the chdir makes `enable_dotenv()` return `None`, while an explicit missing `search_from`
+  still raises `FileNotFoundError`.
+
 ## [9.7.3]
 
 ### Changed
