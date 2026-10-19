@@ -136,7 +136,19 @@ foreach ($f in Get-ChildItem $root -Recurse -File -Force) {
 ```
 
 Order matters when both faults are present: `attrib` itself needs access, so ownership and
-rights come first - `takeown /r`, then `icacls /grant`, then the attribute, then the delete.
+rights come first, then the attribute, then the delete. In PowerShell (the SID makes `icacls`
+locale-independent; `takeown`'s `/d` letter is not, so match it to the target's language):
+
+```powershell
+takeown /f <root> /r /a /d J            # /d takes the LOCALISED yes letter: J in German, Y in English
+icacls <root> /grant '*S-1-5-32-544:(OI)(CI)F' /t /c /q   # a SID: a group NAME does not resolve across locales
+attrib -R -S -H "<root>\*.*" /S /D      # still a batch walk: if it errors, use the per-entry loop above
+```
+
+When the delete itself is `rd /s /q` or `Remove-Item -Recurse`, run it per TOP-LEVEL entry rather
+than once on the root, so one blocker cannot strand the rest and the log names which entry it was.
+Never start a second recursive enumeration of a big tree just to check progress - that hung three
+times in one day; watch the worker's CPU instead.
 
 ## Never `icacls /reset` a Windows.old
 
@@ -339,10 +351,21 @@ judge it by whether `RestoreHealth` can actually resolve what it wants, which is
 try the repair first and let `0x800F0915` make the decision for you. On a fleet, run it on ONE
 machine as a cheap probe before committing to the expensive path everywhere.
 
+The upgrade is the stronger end state even when the repair succeeds: `RestoreHealth` leaves a
+patched store, with any damage DISM did not detect still in it, so after hundreds of
+`CorruptPayloadFile` events "ScanHealth passes now" is a weak statement. Its costs, so the trade is
+honest: hours per machine (see "Durations"), a `Windows.old` holding 7-20 GB of unique data
+(measured under "Deleting a Windows.old"), the loss of other languages' components with a
+single-language image, and Setup must READ the damaged install to plan the migration, so a bad
+enough store fails the upgrade outright - the risk to test on ONE machine first. The image must be a
+build >= the target's, which for a fully patched machine means slipstreaming the current CU into the
+media.
+
 A real installed peer beats an ISO as a repair source - it carries the actual language variants
-and revisions, which a single-language ISO cannot. Point `/Source:` at a mounted image or a
-peer's live store, and add `/LimitAccess` only if you want to forbid the fallback to Windows
-Update (usually leave it off - WU covers post-RTM payloads no local source has):
+and revisions, which a single-language ISO cannot - provided its WinSxS still holds the
+superseded revisions you need, which `StartComponentCleanup` may have pruned. Point `/Source:`
+at a mounted image or a peer's live store, and add `/LimitAccess` only if you want to forbid the
+fallback to Windows Update (usually leave it off - WU covers post-RTM payloads no local source has):
 
 ```
 DISM /Online /Cleanup-Image /RestoreHealth /Source:wim:D:\sources\install.wim:1

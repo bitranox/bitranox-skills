@@ -29,6 +29,19 @@ than the change, so entries reconstructed from them would read like coverage wit
 a hole nobody has drawn a line under is one that gets rediscovered and half-filled - which is how
 two "versions with no entry" notes came to sit in this file disagreeing with it.
 
+## [9.7.1]
+
+### Changed
+
+- `compuse-ssh`: reading a remote file through a helper that merges stdout and stderr gains the
+  `json.loads` symptom, a sentinel wrapper for a helper you cannot change, and the `od -c` check;
+  the fresh-Alpine-account row gains the log line, the exact unlock command, the busybox edit-lock
+  fix, sudo setup and the `sudo id` verification.
+- `infra-windows-servicing`: the delete recipe gives the exact `takeown`/`icacls`/`attrib` forms and
+  says which part is locale-dependent; "Choosing the remedy" says why a successful repair is the
+  weaker end state, what the upgrade costs, which image build it needs, and that a peer used as
+  `/Source` may have had the needed revisions pruned.
+
 ## [9.7.0]
 
 ### Added
