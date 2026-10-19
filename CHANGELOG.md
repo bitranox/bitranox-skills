@@ -29,6 +29,15 @@ than the change, so entries reconstructed from them would read like coverage wit
 a hole nobody has drawn a line under is one that gets rediscovered and half-filled - which is how
 two "versions with no entry" notes came to sit in this file disagreeing with it.
 
+## [9.7.3]
+
+### Changed
+
+- `coding-python-layered-config` (mirror of lib_layered_config 7.2.0): names `deploy_config_paths` and
+  `read_deploy_config`, the public way to list the files a deploy writes and to read the configuration
+  it takes its modes from, and how to turn that into the modes with `deploy_permissions_from_config`;
+  the deploy paragraph also names `force=` and `batch=`.
+
 ## [9.7.2]
 
 ### Fixed
