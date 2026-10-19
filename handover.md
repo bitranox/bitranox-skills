@@ -1,70 +1,63 @@
-# Handover 2026-10-19: [23] step 3c done, nap done, next [23] Phase 3
+# Handover 2026-10-19: [26] closed (9.6.0, 9.7.0), next [23] Phase 3
 
 ## In flight
 
-- Nothing part-done. No subagents or background jobs of this session are running; the
-  provmm-umbrella worktree `fold23-3c` is removed and its branch deleted.
-- A PEER session (`btx-skill-jev-judge-37`) is running a deep crosstree dream on the shared memory
-  store. It committed the earlier fold work as store `83dfc19` and is rewording stale
-  bitranox-skills-level facts. Do not edit memory facts until it is finished, or ask it first
-  (SendMessage); it was told which slugs this session wrote.
+- Nothing part-done. No subagents or background jobs of this session are running; both worktrees
+  (`skill-routed-capture`, `memory-skill-field`) are removed and their branches deleted.
+- The peer `btx-skill-jev-judge-37` finished its deep memory dream (store commit `2c4dbea`). The
+  store-edit block the previous handover named is lifted; it left one uncommitted fact there that
+  belongs to session `virtual-35` - leave it.
 
 ## Committed, or not
 
-- Pushed: provmm_umbrella `86f643a` (Gitea, provmm-benchmark skill + `.skillwriter/` checklist),
-  provmm_proxmox `8c76172` (Gitea, quirks doc pointer), bitranox-skills `b3ac1ac4` (OPEN-WORK
-  [23] 3c). No plugin version change today: nothing under `plugins/` moved.
-- Memory store: committed path-scoped, NOT pushed - `7389120` (the shortened benchmark fact) and
-  `3acec0f` (nap: one new fact, five body deltas). The peer's dream may push.
-- 7 tooling defects queued in this repo's contrib_queue (repo-gate UNLISTED worktree, memory_engine
-  blank line, factedit framed body, store_manifest --out, archive vs inbound refs, anchor_edit
-  absolute paths, CLAUDE.md bump instructions vs pyproject.toml).
-- `EXECUTION-USER-REVIEW.md` (gitignored) holds today's user decision verbatim.
-- The provmm-umbrella main checkout belongs to a live peer session, has an uncommitted
-  OPEN-WORK.md and is one commit behind origin; that session was told to `git pull --ff-only`.
+- Pushed, CI green: `ef0bad0e` (9.6.0) and `e3687144` (9.7.0). The memory store is pushed.
+- Plugin cache here is still 9.5.0 until `/plugin marketplace update bitranox-skills` plus
+  `/reload-plugins`, so this session's own Stop gate still showed the old reason text.
+- `EXECUTION-USER-REVIEW.md` (gitignored) holds today's "Skill field" decision verbatim.
 
 ## Decided, and why - do not reopen
 
-- feedback-benchmark-fair-settings stays at the tree top, cut to the general rule (user, verbatim
-  label "Keep it, shortened (Recommended)"): two tree-top facts cite it and the project skill does
-  not load outside provmm-umbrella.
-- The skill names the axes and the diff, never a fixed vCPU/RAM/cache target: the live matrix
-  cells match none of the numbers the old fact carried.
-- The nap left the 56 versionrot flags on the chain for the full dream: the [22] pass reviewed the
-  version-flagged set on 2026-10-16, and the peer dream is editing the same store now.
+- [26]: a lesson learned inside a loaded skill's domain, or one a never-loaded shipped skill
+  covers, is queued against that skill with NO memory fact, unless the rule binds work outside the
+  skill; then the fact carries `--skill <name>`. RED (haiku, opus) wrote facts; GREEN queued all.
+- The `--skill` field is written with NO consumer: the user chose "Add an optional --skill field"
+  over the dream-consumer option. Do not build a reader without a new ask.
+- The Stop gate's old "highest-altitude store (.claude-bx-selflearning/...)" sentence was removed
+  as stale: capture writes at one project level, the dream raises altitude.
 
 ## Still open, untouched
 
-- [23] Phase 3, [26], [28] and the FOUND items: `OPEN-WORK.md`. [590] part (2) only.
-- 38 other unreviewed transcripts of this project (listed by `dream_state.py session-review`).
+- [23] Phase 3, [28], and the FOUND items in `OPEN-WORK.md`; new today: [620] repo-gate LF check
+  reads worktree bytes (peer report, unverified), [630] CLAUDE.md probe-order and duplicate
+  paragraph (peer report, unverified), [640] `--proj`/queue cwd rule inside a worktree.
+- The peer queued 15 contributions in the btx-skill-jev-judge queue (queue_key 114e718bde5eba4a).
+- [590] part (2) only; unreviewed transcripts of this project: `dream_state.py session-review`.
 
 ## Lessons for the next nap
 
-- When briefing nap readers with a "known, do not report" list, keep the handover's own lessons
-  off it unless they are already in the store: known to the coordinator is not captured.
-- When a doc points at a section of another file by name, check the section still exists when the
-  rule moves: provmm_proxmox's quirks doc pointed at a CLAUDE.md section removed months earlier.
+- When writing a RED for a SKILL.md change whose companion reference was already edited, paste the
+  PRE-change reference too: a probe shown the new flag in the reference passed the RED.
+- When an opus RED arm queues a skill fix, check whether it ALSO wrote a fact: the duplicate, not
+  the missing queue entry, was the failure there.
+- tooling: block-masked-gate-exit refused a backgrounded `ci_wait ... > log; echo RC=$?`; background
+  ci_wait alone (its own exit is the task's), as gated-rc-from-log already says - a repeat.
 
 ## The exact next action
 
-[23] is the top-ranked open item; its next step is Phase 3. Read the [23] line in `OPEN-WORK.md`
-and the plan `~/.claude/plans/curried-mapping-dolphin.md`, pick the first lower-level batch from
-`.plan/fold-23/rows.json` (main checkout), and put it to the user as ONE question before any edit:
-each batch needs its own approval.
+[23] is the top-ranked open item. Read its line in `OPEN-WORK.md` and the plan
+`~/.claude/plans/curried-mapping-dolphin.md`, pick the first lower-level batch from
+`.plan/fold-23/rows.json` (main checkout), and put it to the user as ONE question before any edit.
 
 ## Files that matter
 
-- `OPEN-WORK.md` ([23] carries the step state)
-- `.plan/fold-23/` (main checkout: rows.json, backups)
-- `~/.claude/plans/curried-mapping-dolphin.md`
+- `OPEN-WORK.md`, `.plan/fold-23/`, `~/.claude/plans/curried-mapping-dolphin.md`
+- `plugins/bitranox/skills/meta-self-improve/SKILL.md` (step 2), `plugins/bitranox/hooks/self-improve-gate.py`,
+  `plugins/bitranox/hooks/memory_engine.py` (`--skill`)
 
 ## How to verify
 
-- CI: `ci_wait.py --ref HEAD` (bitranox:compuse-toolbox `scripts/`).
-- Memory tree: `reconcile_memory_index.py --check-tree <softdev-root>` (home
-  `skills/meta-self-improve/`) reports TOTAL 0.
-- Twins: `python3 plugins/bitranox/hooks/repo-gate.py --mirrors` from inside this repo reports
-  0 of 12 drifted.
+- CI: `ci_wait.py --ref HEAD` (bitranox:compuse-toolbox `scripts/`); 9.7.0 was green on `e3687144`.
+- `python3 plugins/bitranox/hooks/repo-gate.py --ci` reports all checks passed.
 
 Read this, then replace the first line with `# STALE - read <date>, work continued`. Do not delete
 it - if this session ends badly it is the only record of where things stood.
