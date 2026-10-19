@@ -696,6 +696,81 @@ def test_git_verb_dir_refuses_what_the_text_cannot_name():
     assert S.git_verb_dir("git status", "/s", verbs) is None
 
 
+def test_git_verb_dir_follows_a_variable_the_same_command_assigned_literally():
+    """Measured 2026-10-19: `W=<worktree>; cd "$W" && git commit` was read as unreadable, so the
+    commit gate judged the SESSION's repository and blocked a commit that repo was not making."""
+    verbs, moved = S.GATED_GIT_VERBS, os.path.normpath("/r")
+    assert S.git_verb_dir('W=/r; cd "$W" && git commit -m x', "/s", verbs) == moved
+    assert S.git_verb_dir("W=/r && cd $W && git push", "/s", verbs) == moved
+    assert S.git_verb_dir('export W=/r; cd "${W}" && git commit -m x', "/s", verbs) == moved
+    assert S.git_verb_dir('W=/r; git -C "$W" commit -m x', "/s", verbs) == moved
+    assert S.git_verb_dir('W=/r; cd "$W/sub" && git commit -m x', "/s", verbs) == os.path.normpath("/r/sub")
+    assert S.git_verb_dir('W="/a b"; cd "$W" && git commit -m x', "/s", verbs) == os.path.normpath("/a b")
+
+
+def test_git_verb_dir_does_not_trust_a_variable_it_cannot_know():
+    verbs = S.GATED_GIT_VERBS
+    # the value itself is not static
+    assert S.git_verb_dir('W=$(mktemp -d); cd "$W" && git commit -m x', "/s", verbs) is None
+    # a later assignment the text cannot read replaces the literal one
+    assert S.git_verb_dir('W=/r; W=$(pwd); cd "$W" && git commit -m x', "/s", verbs) is None
+    assert S.git_verb_dir('W=/r; W=`pwd`; cd "$W" && git commit -m x', "/s", verbs) is None
+    # the segmenter cuts `W=$(...)` at the substitution, leaving `W=` or `W="`; neither is the value
+    assert S.git_verb_dir('W=$(mktemp -d); cd "$W/sub" && git commit -m x', "/s", verbs) is None
+    assert S.git_verb_dir('W="$(pwd)"; cd "$W" && git commit -m x', "/s", verbs) is None
+    # a prefix assignment sets the variable for that one command, never for the shell after it
+    assert S.git_verb_dir('W=/r true; cd "$W" && git commit -m x', "/s", verbs) is None
+    # assigned AFTER the cd, so the cd still reads the inherited (unknown) value
+    assert S.git_verb_dir('cd "$W" && W=/r && git commit -m x', "/s", verbs) is None
+    # never assigned at all: an inherited variable stays unknown
+    assert S.git_verb_dir('cd "$HOME/r" && git commit -m x', "/s", verbs) is None
+
+
+@pytest.mark.parametrize("command", [
+    # the assignment may not run, or runs in another shell
+    'W=/b; false && W=/a; cd "$W"; git commit -m x',
+    'W=/b; true || W=/a; cd "$W"; git commit -m x',
+    'W=/b; ( W=/a ); cd "$W"; git commit -m x',
+    'W=/b; W=/a | true; cd "$W"; git commit -m x',
+    'W=/b; W=/a & cd "$W"; git commit -m x',
+    'W=/b; if false; then\n W=/a\nfi\ncd "$W"; git commit -m x',
+    'W=/b; x=$(W=/a); cd "$W"; git commit -m x',
+    # a later statement may reassign or unset the name in a form nothing here reads
+    'W=/b; declare W=/a; cd "$W"; git commit -m x',
+    'W=/b; read W <<< /a; cd "$W"; git commit -m x',
+    'W=/a; W+=/sub; cd "$W"; git commit -m x',
+    'W=/a; unset W; cd "$W"; git commit -m x',
+    # the shell would not expand it to exactly the value
+    "W=/a; cd '$W'; git commit -m x",
+    'W=/a; cd \\$W; git commit -m x',
+    "W='/a b'; cd $W; git commit -m x",
+    'W=/[a]; cd $W; git commit -m x',
+    'W=/x:~/y; cd "$W"; git commit -m x',
+    # a relative value, which CDPATH can redirect
+    'W=sub; cd "$W"; git commit -m x',
+    # a continued line makes the assignment a prefix of the cd
+    'W=/a\\\ncd "$W"; git commit -m x',
+])
+def test_git_verb_dir_never_reads_a_variable_it_cannot_be_sure_of(command):
+    """Adversarial review 2026-10-19 found ~40 commands where following any assignment anywhere
+    produced a WRONG directory, which is worse than None (None falls back). Each of these must stay
+    None, or land where bash does."""
+    assert S.git_verb_dir(command, "/s", S.GATED_GIT_VERBS) in (None, "/s")
+
+
+def test_git_verb_dir_follows_variables_only_in_bash():
+    assert S.git_verb_dir('W=/r; cd "$W"; git commit -m x', "/s", S.GATED_GIT_VERBS, "PowerShell") is None
+
+
+def test_a_backgrounded_or_piped_cd_does_not_move_the_next_statement():
+    """`cd x & git commit` runs the cd in a subshell, so git runs where the command started."""
+    verbs = S.GATED_GIT_VERBS
+    assert S.git_verb_dir("cd /r & git commit -m x", "/s", verbs) == "/s"
+    assert S.git_verb_dir("cd /r | cat; git commit -m x", "/s", verbs) == "/s"
+    assert S.git_verb_dir('W=/r; cd "$W" & git commit -m x', "/s", verbs) == "/s"
+    assert S.git_verb_dir("cd /r || exit; git commit -m x", "/s", verbs) == os.path.normpath("/r")
+
+
 def test_git_verb_dir_reads_a_continued_line_with_a_quoted_dash_c_value():
     # Each statement here ends in `\<newline>`; git_verb_dir strip()s the segment before tokenizing,
     # which used to leave a lone backslash, split the quoted -c value and hide the push.

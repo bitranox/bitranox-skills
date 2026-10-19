@@ -586,6 +586,75 @@ def _apply_git_options(prefix, here, tool):
     return here
 
 
+#: One literal assignment in a statement that does nothing else: a bare word of path characters, or
+#: a quoted string with nothing inside it the shell would expand.
+_LITERAL_VALUE = r"""(?:[A-Za-z0-9_./:@%+,-]+|"[^"$`\\]*"|'[^']*')"""
+_ASSIGNMENT_STATEMENT = re.compile(
+    r"^(?:export\s+)?[A-Za-z_][A-Za-z0-9_]*=%s(?:\s+[A-Za-z_][A-Za-z0-9_]*=%s)*$" % (_LITERAL_VALUE, _LITERAL_VALUE))
+_ONE_ASSIGNMENT = re.compile(r"([A-Za-z_][A-Za-z0-9_]*)=(%s)" % _LITERAL_VALUE)
+#: Separators after which the next statement always runs, in the same shell.
+_SEQUENCING = frozenset({";", "&&"})
+
+
+def _sequenced(gap):
+    """True when the text between two statements is `;`, `&&` or a plain newline - never `||`, a
+    pipe, `&`, a parenthesis, or a backslash continuation, after which the assignment may not run,
+    or runs in another shell."""
+    stripped = gap.strip(" \t")
+    return stripped in _SEQUENCING or stripped == "\n"
+
+
+def _leading_assignments(raw, gap_before, gap_after):
+    """{name: value} for a statement that only assigns absolute literal paths, else None.
+
+    None also when the statement is not fenced in by plain sequencing on both sides, so a value is
+    read only where bash certainly sets it in the shell the next statement runs in. A value that
+    bash would still expand or that is not an absolute path (a tilde, a glob, a relative path that
+    CDPATH could redirect) also gives None.
+    """
+    statement = raw.strip()
+    if not _ASSIGNMENT_STATEMENT.match(statement) or gap_before.strip(" \t\n") or not _sequenced(gap_after):
+        return None
+    found = {}
+    for name, value in _ONE_ASSIGNMENT.findall(statement):
+        value = value[1:-1] if value[:1] in "\"'" else value
+        if not is_rooted(value) or _UNKNOWABLE_DIR.search(value) or re.search(r"[~\[\]{}]", value):
+            return None
+        found[name] = value
+    return found
+
+
+def _expansions(raw, known):
+    """The names in `known` that `raw` may have replaced by their value, and nothing else.
+
+    A reference counts only when the shell expands it to exactly the value: inside double quotes
+    (`"$W"`, `"${W}/x"`), or unquoted when the value holds no whitespace. A single quote anywhere in
+    the statement, or a backslash or other character in front of the `$`, leaves every name out -
+    the tokenizer has already removed the quotes, so `cd '$W'` would otherwise read as the variable.
+    """
+    if "'" in raw:
+        return {}
+    usable = {}
+    for name, value in known.items():
+        hits = [m.start() for m in re.finditer(r"\$(?:\{%s\}|%s(?![A-Za-z0-9_]))" % (name, name), raw)]
+        before = [raw[i - 1] if i else " " for i in hits]
+        if hits and all(c == '"' or (c in " \t" and not re.search(r"\s", value)) for c in before):
+            usable[name] = value
+    return usable
+
+
+_LEADING_REFERENCE = re.compile(r"^\$(?:\{([A-Za-z_][A-Za-z0-9_]*)\}|([A-Za-z_][A-Za-z0-9_]*))(.*)$", re.DOTALL)
+
+
+def _expand_known(token, usable):
+    """`token` with a leading `$NAME`/`${NAME}` replaced by its value when `usable` has it."""
+    match = _LEADING_REFERENCE.match(token)
+    name = match and (match.group(1) or match.group(2))
+    if not name or name not in usable:
+        return token
+    return usable[name] + match.group(3)
+
+
 def git_verb_dir(command, cwd, verbs, tool_name=None):
     """The directory the first `git <verb>` in `command` runs in, or None when it is unreadable.
 
@@ -598,14 +667,42 @@ def git_verb_dir(command, cwd, verbs, tool_name=None):
     Operands come from `argv_for_match`, which eats POSIX backslashes, so a backslash-separated
     Windows path resolves to a directory that does not exist; callers then find no repository
     there and must treat that like None.
+
+    One narrow variable form is followed: `W=/r; cd "$W" && git commit` lands in /r. Measured
+    2026-10-19: read as unreadable, that commit was judged in the session's repository, which it was
+    not touching, and blocked for it. The values come only from LEADING statements that do nothing
+    but assign absolute literal paths, each followed by `;`, `&&` or a newline
+    (`_leading_assignments`), and they are used only in the ONE statement right after them, through
+    a reference the shell expands to exactly that value (`_expansions`); then they are forgotten.
+    Anything wider - control flow, subshells, pipelines, `read`, `declare`, `+=`, a later statement
+    that might reassign the name - is a shell this reader does not model, and a wrong directory is
+    worse than None, which falls back. Bash only: PowerShell assigns with `$W = ...`.
     """
     tool, here = tool_name or "Bash", cwd
-    for _at, segment in iter_segments(blank_heredoc_bodies(command or ""), tool_name):
+    text = blank_heredoc_bodies(command or "")
+    segments = list(iter_segments(text, tool_name))
+    known, leading, previous_end = {}, tool == "Bash", 0
+    for index, (at, segment) in enumerate(segments):
+        following = segments[index + 1][0] if index + 1 < len(segments) else len(text)
+        gap_after = text[at + len(segment):following]
+        if leading:
+            found = _leading_assignments(segment, text[previous_end:at], gap_after)
+            previous_end = at + len(segment)
+            if found is not None:
+                known.update(found)
+                continue
+            leading = False
         tokens = argv_for_match(segment.strip().lstrip("(").strip(), tool)
+        usable, known = _expansions(segment, known), {}
         if not tokens:
             continue
-        changed, here = _directory_change_tokens(tokens, here, tool)
+        tokens = [_expand_known(token, usable) for token in tokens]
+        changed, landing = _directory_change_tokens(tokens, here, tool)
         if changed:
+            # `cd x & ...` and `cd x | ...` run the cd in a subshell: the next statement starts
+            # where this one did.
+            if gap_after.strip(" \t") not in ("&", "|"):
+                here = landing
             continue
         is_verb, where = git_segment_dir(tokens, verbs, here, tool)
         if is_verb:

@@ -111,6 +111,8 @@ published until both sides are committed. Nothing fetches; the audits, and every
   machine with no marketplace checkout, and a path outside the tree all print why and pass.
   Run from a linked worktree of the tool repo, it and the commit gate judge that worktree's
   text: ownership is decided in the main checkout, which is where `MIRRORED_SKILLS` points.
+  A linked worktree of the MARKETPLACE placed outside `public/` (a scratch directory) finds the
+  twins through its main checkout the same way, so a commit there is still compared.
 - To fix drift, regenerate the stale side from the other, re-apply the three divergences, and bump
   THAT repo's `plugin.json` - both copies ship, so both need a version the installer can see.
 

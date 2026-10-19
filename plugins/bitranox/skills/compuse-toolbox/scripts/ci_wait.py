@@ -49,6 +49,13 @@ ones included. A run
 concluding `action_required` (a fork pull request awaiting a maintainer's approval) is reported at
 once as `pending-approval`, exit 2: no wait resolves it, and it is not a failure.
 
+A run that stays `queued` for `--queued-grace` seconds (900; 0 disables) while nothing else on the
+sha is still going is reported as `stuck-queued`, exit 2, naming the run id - not waited out to the
+deadline. Measured: a duplicate `workflow_run` trigger of a release workflow sat queued with no
+runner for 35 minutes after its twin on the same sha had already published, and the wait polled it
+73 times. When a run of the same workflow on that sha already succeeded, the summary says the stuck
+one is likely a duplicate trigger; it never cancels anything itself.
+
 The repository is resolved ONCE, before the first poll (`--repo`, else `gh repo view` from the
 cwd), and named on every poll: a cwd removed mid-wait - a worktree deleted while CI runs - would
 otherwise turn every later poll into a gh failure.
@@ -65,7 +72,7 @@ Run: `uv run scripts/ci_wait.py --ref HEAD`
      `uv run scripts/ci_wait.py --sha <full sha from a CI URL> --timeout 1800 --interval 30`
 Exit 0 = every run for that sha succeeded (or was skipped), 1 = at least one did not, 2 = could
 not tell (bad sha, a ref that does not resolve, a bad flag value, no runs for it, a run awaiting
-approval, timed out, `gh` failed, or the tool itself crashed). `--json` prints the envelope
+approval, a run stuck in the queue, timed out, `gh` failed, or the tool itself crashed). `--json` prints the envelope
 `{ok, command, data: {state, summary, runs, sha}, skipped}` on every exit, a usage error included
 (`sha` is absent when the sha itself was refused); `ok` is false exactly on exit 2, with `error`
 repeating the summary.
@@ -113,8 +120,11 @@ ANY_EVENT = "any"
 #: verdict wait for (or fail on) a nightly job. Excluded client-side, because gh's `--event` takes
 #: one event to KEEP and has no way to drop one.
 _EXCLUDED_BY_DEFAULT = frozenset({"schedule"})
+#: The run-level status of a run no runner has started. One job starting moves the RUN to
+#: `in_progress`, so this alone says nothing has picked it up - no per-job API call needed.
+_QUEUED = "queued"
 _EXIT_CODES = {"success": 0, "failed": 1, "timeout": 2, "no-runs": 2, "error": 2,
-               "pending-approval": 2}
+               "pending-approval": 2, "stuck-queued": 2}
 
 
 class BadSha(ValueError):
@@ -154,7 +164,8 @@ class Verdict:
     """What one look at the run list means.
 
     Attributes:
-        state: ``success``, ``failed``, ``pending``, ``no-runs``, ``timeout`` or ``error``.
+        state: ``success``, ``failed``, ``pending``, ``pending-approval``, ``stuck-queued``,
+            ``no-runs``, ``timeout`` or ``error``.
         summary: One human line naming the runs that decided it.
         runs: The rows the verdict was computed from.
     """
@@ -332,6 +343,7 @@ def wait_for(
     appear_grace_s: float = 120.0,
     error_grace_s: float = 300.0,
     settle_s: float = 20.0,
+    queued_grace_s: float = 900.0,
     report: Callable[[str], None] = lambda _m: None,
     deadline_s: float | None = None,
     clock: Callable[[], float] | None = None,
@@ -381,6 +393,12 @@ def wait_for(
     and running out of deadline mid-confirmation reports the green, never a timeout - with the
     summary saying it was not confirmed, or that the deadline cut the settle short.
 
+    A run that sits ``queued`` for ``queued_grace_s`` while every other run is terminal ends the
+    wait as ``stuck-queued`` (:func:`_stuck_queued`): no deadline helps a run no runner will take,
+    and waiting it out reads as "CI is slow" for the whole timeout. Each run's queued time is its
+    current streak, restarted whenever it leaves ``queued``, and the check waits while any run is
+    still working, so a failure beside the stuck run is still reported in its summary.
+
     Only :class:`GhFailed` is retried. :class:`GhUnavailable` - the OS refusing to spawn `gh` -
     propagates at once, because it is a local fact that will not change during this process, and
     spending the grace on it only delays the report. The line is drawn there, where it is
@@ -400,6 +418,8 @@ def wait_for(
             ``error``.
         settle_s: How long to wait before CONFIRMING an all-green result, so a run created after
             the first all-terminal poll is still counted. ``0`` returns on the first one.
+        queued_grace_s: How long a run may stay ``queued``, with nothing else still going, before
+            the wait reports ``stuck-queued``. ``0`` disables the check.
         report: Where a per-poll progress line goes.
         event: The event ``fetch`` filters to, so a ``no-runs`` verdict can name the filter.
         deadline_s: A wall-clock bound on the whole wait, checked after every poll. A sleep is
@@ -408,7 +428,8 @@ def wait_for(
         clock: Returns the current time in seconds; see above for the default.
 
     Returns:
-        The terminal verdict: ``success``, ``failed``, ``no-runs``, ``timeout`` or ``error``.
+        The terminal verdict: ``success``, ``failed``, ``pending-approval``, ``stuck-queued``,
+        ``no-runs``, ``timeout`` or ``error``.
 
     Raises:
         GhUnavailable: `gh` cannot be run here; no budget can fix that.
@@ -427,6 +448,7 @@ def wait_for(
     settled: frozenset[tuple[object, object]] | None = None
     green_since = 0.0
     last_success: Verdict | None = None
+    queued_since: dict[tuple[object, object], float] = {}
 
     def may_poll_again(poll: int) -> bool:
         if deadline_polls is not None and poll + 1 >= deadline_polls:
@@ -457,6 +479,7 @@ def wait_for(
             continue
         errors_seen = 0
         error_since = None
+        _track_queued(queued_since, rows, timer.now())
         current = verdict(rows, event=event)
         last_summary = current.summary
         if current.state == "no-runs":
@@ -486,6 +509,9 @@ def wait_for(
             empty_since = None
             settled = None
             last_success = None
+            stuck = _stuck_queued(rows, queued_since, timer.now(), queued_grace_s)
+            if stuck is not None:
+                return stuck
             report(f"{label(poll)}: {current.summary}")
         if not may_poll_again(poll):
             break
@@ -503,6 +529,54 @@ def wait_for(
     if errors_seen:
         return _gh_gave_up(errors_seen, last_error)
     return Verdict("timeout", last_summary)
+
+
+def _track_queued(since: dict[tuple[object, object], float], rows: Sequence[dict[str, object]],
+                  now: float) -> None:
+    """Record when each run's current ``queued`` streak began; forget a run that left ``queued``.
+
+    Keyed like :func:`_run_key`. A run that went ``in_progress`` and back to ``queued`` starts a new
+    streak, so two short waits for a runner never add up to one long one.
+    """
+    queued = {_run_key(r) for r in rows if r.get("status") == _QUEUED}
+    for key in list(since):
+        if key not in queued:
+            del since[key]
+    for key in queued:
+        since.setdefault(key, now)
+
+
+def _stuck_queued(rows: Sequence[dict[str, object]], since: dict[tuple[object, object], float],
+                  now: float, grace_s: float) -> Verdict | None:
+    """``stuck-queued`` when every unfinished run has been queued for ``grace_s``, else None.
+
+    Only when NOTHING else is still going: a run in progress beside the stuck one is an outcome
+    still to come, and reporting before it lands would hide a failure. The summary names each stuck
+    run by id, so the caller can look at it or cancel it, and the terminal runs by conclusion; a
+    run of the same workflow on the sha that already SUCCEEDED is named as the likely original,
+    because a duplicate trigger is the measured cause. Without one, no cause is claimed.
+    """
+    if grace_s <= 0:
+        return None
+    unfinished = [r for r in rows if r.get("status") != _TERMINAL]
+    if not unfinished or any(r.get("status") != _QUEUED for r in unfinished):
+        return None
+    if any(now - since.get(_run_key(r), now) < grace_s for r in unfinished):
+        return None
+    parts = []
+    for row in unfinished:
+        line = (f"run {row.get('databaseId')} ({row.get('workflowName')}) has been queued for "
+                f"{now - since[_run_key(row)]:.0f}s with no runner starting it")
+        twin = next((r for r in rows if r.get("workflowName") == row.get("workflowName")
+                     and r.get("status") == _TERMINAL and r.get("conclusion") == "success"), None)
+        if twin is not None:
+            line += (f"; run {twin.get('databaseId')} of the same workflow on this sha already "
+                     f"succeeded, so this is likely a duplicate trigger")
+        parts.append(line)
+    finished = [r for r in rows if r.get("status") == _TERMINAL]
+    if finished:
+        parts.append("the other runs: " + _named(finished, "conclusion"))
+    return Verdict("stuck-queued", "; ".join(parts), tuple(rows))
 
 
 def _cut_settle_said(confirmed: Verdict, waited: float, settle_s: float) -> Verdict:
@@ -716,6 +790,12 @@ def _parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
              "rescue it",
     )
     parser.add_argument(
+        "--queued-grace", type=non_negative, default=900.0,
+        help="seconds a run may stay queued, with nothing else on the sha still going, before the "
+             "wait reports stuck-queued (exit 2) naming it (default 900; 0 disables). No deadline "
+             "helps a run no runner will take, such as a duplicate workflow_run trigger",
+    )
+    parser.add_argument(
         "--event", default=None,
         help="count only runs of this event, e.g. push or pull_request ('any' counts every run). "
              "Default: every event except schedule - a nightly run GitHub queues on the same "
@@ -807,6 +887,7 @@ def _run(args: argparse.Namespace) -> int:
             appear_grace_s=args.appear_grace,
             error_grace_s=args.error_grace,
             settle_s=args.settle,
+            queued_grace_s=args.queued_grace,
             report=lambda line: print(line, file=sys.stderr, flush=True),
             deadline_s=args.timeout,
             clock=time.monotonic,

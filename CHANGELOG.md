@@ -29,6 +29,36 @@ than the change, so entries reconstructed from them would read like coverage wit
 a hole nobody has drawn a line under is one that gets rediscovered and half-filled - which is how
 two "versions with no entry" notes came to sit in this file disagreeing with it.
 
+## [9.8.0]
+
+### Added
+
+- `compuse-toolbox` `ci_wait`: `--queued-grace` (default 900 seconds, 0 disables). A run left
+  `queued` that long while nothing else on the sha is still going ends the wait as `stuck-queued`,
+  exit 2, naming the run id, and calls it a likely duplicate trigger when a run of the same workflow
+  on that sha already succeeded. Such a run used to hold the wait to its deadline.
+
+### Fixed
+
+- `repo-gate` and every hook that asks `shell_text.git_verb_dir` where a commit lands: the form
+  `W=/abs/path; cd "$W" && git commit` is followed, so that commit is judged in that repo rather
+  than in the session's. Only leading statements that do nothing but assign absolute literal paths
+  count, and only in the one statement after them through a reference the shell expands to exactly
+  that value; any other variable use (control flow, subshells, pipes, `read`, `declare`, `+=`,
+  `unset`, substitutions, single quotes, relative values, PowerShell) still reads as unknown.
+- `shell_text.git_verb_dir`: `cd x & git commit` and `cd x | ...` run the cd in a subshell, so the
+  next statement is no longer read as running in `x`.
+- `repo-gate`: a block now names the repository it judged, and says when that was the session's own
+  because the command's directory could not be read.
+- `repo-gate`: a marketplace worktree outside `public/` finds the mirrored twins through its main
+  checkout, so the commit gate and `--mirrors` compare them instead of passing with nothing checked.
+
+### Changed
+
+- `process-test-design`: a fifth silent-test-defeater, a standard-library wrapper holding its own
+  copy of the function a test patches on some interpreter versions only (Python 3.10 `Path.cwd`
+  never sees a patched `os.getcwd`).
+
 ## [9.7.4]
 
 ### Fixed

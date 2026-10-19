@@ -1306,3 +1306,123 @@ class TestRefOnTheCommandLine:
         assert envelope["ok"] is False
         assert message in envelope["error"]
 
+
+
+def queued_row(workflow: str, run_id: int, status: str = "queued", conclusion: str | None = None,
+               event: str = "workflow_run") -> dict[str, object]:
+    """A run row with its own id, so the stuck-queued verdict can name WHICH run is stuck."""
+    return {"headSha": SHA, "workflowName": workflow, "status": status, "conclusion": conclusion,
+            "databaseId": run_id, "event": event}
+
+
+class TestARunNoRunnerPicksUpIsReportedNotWaitedOut:
+    """Measured 2026-10-19: a second workflow_run trigger of a release workflow sat `queued` for 35
+    minutes with no runner while its twin on the same sha had already published the release, and
+    the wait polled it 73 times to the deadline. A run queued past --queued-grace with nothing else
+    still going is a verdict of its own, naming the run."""
+
+    def test_a_run_queued_past_the_grace_ends_the_wait_naming_its_id(self):
+        polls: list[int] = []
+
+        def fetch():
+            polls.append(1)
+            return [queued_row("release", 777)]
+
+        result = ci_wait.wait_for(fetch, deadline_polls=200, sleep=lambda _s: None,
+                                  interval_s=30.0, queued_grace_s=600.0)
+
+        assert result.state == "stuck-queued"
+        assert "777" in result.summary
+        assert len(polls) == 21  # queued at 0, 30, ... 600s: the whole grace was waited, no more
+        assert ci_wait.exit_code_for(result.state) == 2
+
+    def test_a_sibling_success_of_the_same_workflow_is_named_as_a_likely_duplicate(self):
+        rows = [queued_row("release", 777),
+                queued_row("release", 555, status="completed", conclusion="success"),
+                queued_row("ci", 111, status="completed", conclusion="success", event="push")]
+
+        result = ci_wait.wait_for(lambda: rows, deadline_polls=200, sleep=lambda _s: None,
+                                  interval_s=30.0, queued_grace_s=60.0)
+
+        assert result.state == "stuck-queued"
+        assert "555" in result.summary and "duplicate" in result.summary
+
+    def test_without_a_sibling_success_it_does_not_claim_a_duplicate(self):
+        rows = [queued_row("release", 777),
+                queued_row("ci", 111, status="completed", conclusion="success", event="push")]
+
+        result = ci_wait.wait_for(lambda: rows, deadline_polls=200, sleep=lambda _s: None,
+                                  interval_s=30.0, queued_grace_s=60.0)
+
+        assert result.state == "stuck-queued"
+        assert "duplicate" not in result.summary
+
+    def test_a_run_that_starts_inside_the_grace_is_waited_for_as_before(self):
+        """Control: queued for a while and then picked up is the ordinary case, never stuck."""
+        polls = [[queued_row("ci", 1)]] * 2 + [[queued_row("ci", 1, status="in_progress")]] * 3 \
+            + [[queued_row("ci", 1, status="completed", conclusion="success")]] * 2
+
+        calls: list[int] = []
+
+        def fetch():
+            calls.append(1)
+            return polls[min(len(calls) - 1, len(polls) - 1)]
+
+        result = ci_wait.wait_for(fetch, deadline_polls=200, sleep=lambda _s: None,
+                                  interval_s=30.0, queued_grace_s=60.0)
+
+        assert result.state == "success"
+
+    def test_the_queued_clock_restarts_when_a_run_leaves_queued(self):
+        """A run that went in_progress and back to queued (a re-run of a job) starts a new streak,
+        so two short queued spells never add up to one long one."""
+        spell = [[queued_row("ci", 1)]] * 2 + [[queued_row("ci", 1, status="in_progress")]]
+        polls = spell * 4 + [[queued_row("ci", 1, status="completed", conclusion="success")]] * 2
+        calls: list[int] = []
+
+        def fetch():
+            calls.append(1)
+            return polls[min(len(calls) - 1, len(polls) - 1)]
+
+        result = ci_wait.wait_for(fetch, deadline_polls=200, sleep=lambda _s: None,
+                                  interval_s=30.0, queued_grace_s=60.0)
+
+        assert result.state == "success"
+
+    def test_a_queued_run_beside_one_still_running_keeps_the_wait_open(self):
+        """Only a run with NOTHING else going is stuck: while another run works, its outcome is
+        still coming, and a failure there must be reported as a failure."""
+        polls = [[queued_row("release", 777), queued_row("ci", 1, status="in_progress", event="push")]] * 5 \
+            + [[queued_row("release", 777), queued_row("ci", 1, status="completed", conclusion="failure",
+                                                       event="push")]]
+        calls: list[int] = []
+
+        def fetch():
+            calls.append(1)
+            return polls[min(len(calls) - 1, len(polls) - 1)]
+
+        result = ci_wait.wait_for(fetch, deadline_polls=200, sleep=lambda _s: None,
+                                  interval_s=30.0, queued_grace_s=60.0)
+
+        assert len(calls) >= 6, "the wait must not end while the ci run is still in progress"
+        assert result.state == "stuck-queued"
+        assert "ci=failure" in result.summary
+
+    def test_a_grace_of_zero_disables_the_check(self):
+        result = ci_wait.wait_for(lambda: [queued_row("release", 777)], deadline_polls=5,
+                                  sleep=lambda _s: None, interval_s=30.0, queued_grace_s=0.0)
+        assert result.state == "timeout"
+
+    def test_the_cli_takes_the_flag_and_reports_the_state_in_the_envelope(self, monkeypatch, capsys):
+        monkeypatch.setattr(ci_wait, "sha_is_known_locally", lambda sha, **kw: True)
+        monkeypatch.setattr(ci_wait, "gh_runs", lambda sha, **kw: [queued_row("release", 777)])
+        monkeypatch.setattr(ci_wait.time, "sleep", lambda _s: None)
+        clock = iter(range(0, 100000, 30))
+        monkeypatch.setattr(ci_wait.time, "monotonic", lambda: next(clock))
+
+        rc = ci_wait.main(["--sha", SHA, "--json", "--queued-grace", "300"])
+
+        payload = json.loads(capsys.readouterr().out)
+        assert rc == 2 and payload["ok"] is False
+        assert payload["data"]["state"] == "stuck-queued"
+        assert "777" in payload["error"]

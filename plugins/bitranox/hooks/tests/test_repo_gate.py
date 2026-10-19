@@ -2995,3 +2995,81 @@ def test_a_continued_line_push_with_a_quoted_dash_c_is_judged_where_it_lands(tmp
     _hook_event(monkeypatch, session, cmd)
 
     assert RG.main() == 0
+
+
+# --- a commit whose target sits in a variable, and a marketplace worktree outside public/ ---------
+#
+# Measured 2026-10-19: `W=<marketplace worktree under /tmp>; cd "$W" && git commit` from a session
+# parked in a tool repo was refused DRIFT. The gate could not read `cd "$W"`, fell back to the
+# session's repository and judged THAT repo's mirror - a repo the commit was not touching - and the
+# message said "a skill this repo ships", naming neither repo. Had it followed the cd, the worktree
+# sat outside public/, where the marketplace side found no twin tree and checked nothing at all.
+
+def _marketplace_worktree(root, where):
+    _g(root, "worktree", "add", "-q", "-b", "mwt", str(where))
+    return where
+
+
+def test_hook_root_follows_a_cd_into_a_variable_the_command_assigned(tmp_path):
+    session = _init_git(tmp_path / "session")
+    target = _init_git(tmp_path / "target")
+    event = {"cwd": str(session), "tool_name": "Bash",
+             "tool_input": {"command": f'W={_sh(target)}; cd "$W" && git commit -m x'}}
+
+    assert RG.hook_root(event).resolve() == target.resolve()
+
+
+def test_a_fallback_block_names_the_repo_it_judged_and_why(tmp_path, monkeypatch, capsys):
+    public, _root, tool = _published_pair(tmp_path, monkeypatch)
+    _drift(tool / TW_SKILL, TWIN_BODY)
+    _g(tool, "add", "-A")
+    monkeypatch.setattr(RG, "_public_tree", lambda _start: public)
+    _hook_event(monkeypatch, tool, 'cd "$SOMEWHERE" && git commit -m x')
+
+    assert RG.main() == 2
+    err = capsys.readouterr().err
+    assert str(tool) in err, "the block must name the repository it judged"
+    assert "could not be read" in err, "and say it judged the session's repo because the cd was unreadable"
+
+
+def test_a_block_after_a_readable_cd_names_the_repo_without_a_fallback_note(tmp_path, monkeypatch, capsys):
+    # Control: the note is about the fallback, so a commit the gate followed must not carry it.
+    public, _root, tool = _published_pair(tmp_path, monkeypatch)
+    _drift(tool / TW_SKILL, TWIN_BODY)
+    _g(tool, "add", "-A")
+    monkeypatch.setattr(RG, "_public_tree", lambda _start: public)
+    _hook_event(monkeypatch, tool, f"cd {_sh(tool)} && git commit -m x")
+
+    assert RG.main() == 2
+    err = capsys.readouterr().err
+    assert str(tool) in err and "could not be read" not in err
+
+
+def test_a_marketplace_worktree_outside_public_still_checks_its_mirror(tmp_path, monkeypatch):
+    _public, root, tool = _published_pair(tmp_path, monkeypatch)
+    mwt = _marketplace_worktree(root, tmp_path / "elsewhere" / "mwt")
+    _drift(tool / TW_SKILL, TWIN_BODY)
+    _g(tool, "commit", "-qam", "drift")
+    _touch_marketplace_skill(mwt)
+
+    fails = RG.check_skill_mirrors(mwt)
+
+    assert len(fails) == 1 and IN_PROGRESS in fails[0]
+
+
+def test_a_marketplace_worktree_outside_public_passes_when_in_sync(tmp_path, monkeypatch):
+    # Control for the arm above: the same worktree with the twin unchanged has nothing to report.
+    _public, root, _tool = _published_pair(tmp_path, monkeypatch)
+    mwt = _marketplace_worktree(root, tmp_path / "elsewhere" / "mwt")
+    _touch_marketplace_skill(mwt)
+
+    assert RG.check_skill_mirrors(mwt) == []
+
+
+def test_the_mirror_audit_runs_from_a_marketplace_worktree_outside_public(tmp_path, monkeypatch, capsys):
+    _public, root, tool = _published_pair(tmp_path, monkeypatch)
+    mwt = _marketplace_worktree(root, tmp_path / "elsewhere" / "mwt")
+    _drift(tool / TW_SKILL, TWIN_BODY)
+
+    assert RG.audit_mirrors(mwt) == 1
+    assert IN_PROGRESS in capsys.readouterr().out

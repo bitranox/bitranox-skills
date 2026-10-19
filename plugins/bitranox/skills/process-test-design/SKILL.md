@@ -313,7 +313,7 @@ should. Then keep the case the guard was built to catch as a permanent test, re-
 exemption added later: two narrow-looking exemptions added in the same change can each pass alone
 and still add up to silencing the guard on its own motivating case.
 
-Four mechanics worth stating because they silently defeat a test that looks right:
+Five mechanics worth stating because they silently defeat a test that looks right:
 
 - **`from m import X` binds a COPY at import time.** `monkeypatch.setattr(m, "X", v)` mutates `m`'s
   namespace and never reaches the consumer's already-bound name, so the test runs against the
@@ -321,6 +321,17 @@ Four mechanics worth stating because they silently defeat a test that looks righ
   seam over patching in the first place; where you own the reader, read the qualified `m.X` at call
   time and drop the bare import; else patch at the CONSUMER (`setattr(consumer, "X")`). Default
   arguments, module splits and composition containers bind early the same way (reference below).
+- **A standard-library wrapper can hold its OWN copy of the function you patch, on some
+  interpreter versions only.** Python 3.10's `pathlib.Path.cwd()` calls `os.getcwd` through an
+  accessor that bound it at import, so `monkeypatch.setattr(os, "getcwd", fake)` never reaches it
+  there, while 3.11 and later read `os.getcwd` at call time and the same test is right. The test
+  then runs the REAL lookup on the oldest cell only, and does whatever a real run does from that
+  directory - it read the repository's own config file. Patch the name the code under test calls
+  (`Path.cwd`), or better make the real lookup fail (chdir into a directory, then remove it: any
+  POSIX `getcwd` then raises). Prove the patch reaches it on the OLDEST interpreter the project
+  declares - undo the fix and require the test RED there, not only on the newest - and give the
+  test a sandbox a missed patch would FAIL on, so a miss shows up as red instead of silently
+  reading real files.
 - **A correctness test cannot prove an INDEX is used.** Results rank correctly whether the store
   used the index or full-scanned. Assert the plan (`EXPLAIN` shows an index scan, `list_indices` is
   non-empty), or the check silently passes on an O(n) path.

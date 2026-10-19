@@ -126,7 +126,12 @@ def repo_root(start=None):
 
 
 def hook_root(event):
-    """The repository a gated hook command lands in, or None when it lands in no repository.
+    """The repository a gated hook command lands in, or None; see `hook_landing`."""
+    return hook_landing(event)[0]
+
+
+def hook_landing(event):
+    """(the repository a gated hook command lands in or None, whether that was a FALLBACK guess).
 
     A hook runs where the SESSION sits, not where `cd <repo> && git commit` or `git -C <repo> push`
     lands. Measured 2026-09-27: commits made that way from a session parked in a stale main
@@ -134,17 +139,24 @@ def hook_root(event):
     later ones were blocked for a version they did not carry.
 
     Falls back to the session's own repository when the command does not move, or moves somewhere
-    the text cannot name (`cd "$X"`) or that does not exist (a Windows path whose backslashes the
-    tokenizer ate) - that is the old behaviour, so an unreadable command is no worse than before.
+    the text cannot name (`cd "$X"` with an `X` the command did not assign a literal) or that does
+    not exist (a Windows path whose backslashes the tokenizer ate) - that is the old behaviour, so
+    an unreadable command is no worse than before.
     A readable target outside any repository gives None: the git command fails there by itself,
     and there is nothing to judge.
+
+    The second value is True exactly when the command moved somewhere the text could not name and
+    the session's repository was judged instead, so a block can say so: measured 2026-10-19, such a
+    fallback blocked a commit for a repository it was not touching, and the message gave no hint.
     """
     command = (event.get("tool_input") or {}).get("command") or ""
     base = os.path.normpath(event.get("cwd") or os.getcwd())
     target = shell_text.git_verb_dir(command, base, shell_text.GATED_GIT_VERBS, event.get("tool_name"))
-    if not target or not os.path.isdir(target) or os.path.normcase(target) == os.path.normcase(base):
-        return repo_root()
-    return repo_root(target)
+    if target and os.path.normcase(target) == os.path.normcase(base):
+        return repo_root(), False
+    if not target or not os.path.isdir(target):
+        return repo_root(), True
+    return repo_root(target), False
 
 
 def is_bitranox_skills(root):
@@ -1166,6 +1178,16 @@ def _public_tree(root):
     return None
 
 
+def _marketplace_public(root):
+    """The `public/` tree a marketplace checkout at `root` compares its twins in, or None.
+
+    A linked worktree may sit outside the tree (a scratch directory), and then its own parents
+    hold no `public/`; the main checkout it belongs to does. Without this, a commit from such a
+    worktree compared nothing and passed, whatever the twin said.
+    """
+    return _public_tree(root) or _public_tree(_checkouts(root)[1])
+
+
 def normalise_mirror(text):
     """Return the comparable body of a mirrored SKILL.md.
 
@@ -1514,7 +1536,7 @@ def mirror_failures(root, names, committing=None, stage=STAGE_INDEX, notices=Non
     a tool repo worked in from a linked worktree (`_tool_repo_twins`).
     """
 
-    public = _public_tree(root)
+    public = _marketplace_public(root)
     if public is None:
         return []
     read_here, read_twin, from_published = _mirror_readers(committing, stage)
@@ -1764,7 +1786,7 @@ def audit_mirrors(root):
     A finding is a drifted pair or a twin MIRRORED_SKILLS does not list: unlisted, that pair is
     never compared by any gate, so it is as much a defect as drift and counts toward the exit."""
 
-    public = _public_tree(root)
+    public = _marketplace_public(root)
     if public is None:
         print("no public/ tree above %s - nothing to compare" % root)
         return 0
@@ -1881,7 +1903,7 @@ def run_checks(root, ci, full_pytest=None, run_pytest=True, baseline=0, mirror_a
     return failures
 
 
-def gate_tool_repo_mirror(root, stage=STAGE_INDEX):
+def gate_tool_repo_mirror(root, stage=STAGE_INDEX, guessed=False):
     """Check the mirror of a skill edited in its OWN repo, before it is committed or pushed.
 
     `main` has already read the event and confirmed it is a gated command, and `root` is the
@@ -1898,7 +1920,9 @@ def gate_tool_repo_mirror(root, stage=STAGE_INDEX):
     uncommitted edit there (#84).
 
     Returns 2 to block a drifted pair, 0 otherwise. Silent when this repo owns no
-    mirrored skill, so it does not narrate in every unrelated repo.
+    mirrored skill, so it does not narrate in every unrelated repo. A block names the repository
+    it judged, and with ``guessed`` (`hook_landing`) says it was the session's own because the
+    command's directory could not be read.
 
     The "cannot compare" case is deliberately NOT a bare 0. With no marketplace checkout
     there is nothing to diff, and passing in silence is indistinguishable from passing
@@ -1934,8 +1958,17 @@ def gate_tool_repo_mirror(root, stage=STAGE_INDEX):
               file=sys.stderr)
     for failure in fails:
         print("\n" + failure, file=sys.stderr)
-    print("repo-gate: blocked - a skill this repo ships has drifted from its marketplace twin.", file=sys.stderr)
+    print("repo-gate: blocked - %s ships a skill that has drifted from its marketplace twin." % root,
+          file=sys.stderr)
+    if guessed:
+        print(_FALLBACK_NOTE % root, file=sys.stderr)
     return 2
+
+
+#: Said under any block whose repository came from `hook_landing`'s fallback.
+_FALLBACK_NOTE = ("repo-gate: the directory this command runs git in could not be read from its text, "
+                  "so the session's repository %s was judged. If the commit lands elsewhere, name the "
+                  "target literally (cd /path/to/repo && git commit, or git -C /path/to/repo commit).")
 
 
 def _say_unverifiable(names, marketplace):
@@ -2030,10 +2063,10 @@ def main():
         command = (event.get("tool_input") or {}).get("command") or ""
         if not is_gated_command(command, event.get("tool_name")):
             return 0
-        root = hook_root(event)
+        root, guessed = hook_landing(event)
         stage = mirror_stage(command, event.get("tool_name"))
     else:
-        root = repo_root()
+        root, guessed = repo_root(), False
     if root is None or not is_bitranox_skills(root):
         if pre_push:
             # Someone pointed core.hooksPath here from another repo. Say so rather than blocking
@@ -2053,7 +2086,7 @@ def main():
                               "not checked - a tag ships no SKILL.md to installers. Sync the twin "
                               "before pushing the branch."])
             return 0
-        return gate_tool_repo_mirror(root, stage)
+        return gate_tool_repo_mirror(root, stage, guessed)
 
     if mirrors:
         # The full sweep the commit gate deliberately does not do: it reports every pair,
@@ -2073,8 +2106,9 @@ def main():
 
     header = ("repo-gate: FAILED" if ci else
               "repo-gate: push blocked - fix these first:" if pre_push else
-              "repo-gate: commit/push blocked - fix these first:")
-    print("\n".join([header, *failures, *(notices or [])]), file=sys.stderr)
+              "repo-gate: commit/push blocked in %s - fix these first:" % root)
+    fallback = [_FALLBACK_NOTE % root] if guessed else []
+    print("\n".join([header, *failures, *(notices or []), *fallback]), file=sys.stderr)
     if not (ci or pre_push):
         return 2  # the PreToolUse block code, whatever kind the failure was
     return 2 if is_could_not_run(failures) else 1
