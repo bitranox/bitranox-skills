@@ -33,6 +33,7 @@ SHIM = HOOKS_DIR / "run-python.sh"
 # where one existed, so a trigger going stale shows up as a vacuity failure here rather than silence.
 TRIGGERS = {
     "arbitrary-sleep-nudge.py": "sleep 300",
+    "unbuffered-python-nudge.py": "ssh host python3 probe.py",
     "block-pgrep-self-match.py": "pgrep -f myworker",
     "git-footgun-guard.py": "git rev-parse --short A B",
     "block-git-semicolon-chain.py": "git commit -m x ; git push",

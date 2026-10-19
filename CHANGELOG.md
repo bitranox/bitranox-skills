@@ -29,6 +29,21 @@ than the change, so entries reconstructed from them would read like coverage wit
 a hole nobody has drawn a line under is one that gets rediscovered and half-filled - which is how
 two "versions with no entry" notes came to sit in this file disagreeing with it.
 
+## [9.5.0]
+
+### Added
+
+- `unbuffered-python-nudge` (PreToolUse, Bash and PowerShell, warn-only): a Python run where its
+  stdout is not a terminal AND the process can die before it exits now gets advice to run it as
+  `python -u` or with `PYTHONUNBUFFERED=1`. Off a tty Python block-buffers and flushes only at exit,
+  so a probe that hangs over ssh, or a detached job whose log is read while it runs, shows nothing,
+  not even the last line it reached; a hung remote probe hid where it hung twice in two months. It
+  speaks on a Python behind `ssh` without `-t` (through `cd ... &&`, pipes, `bash -c` and
+  `uv run`), and on one started by `nohup`/`setsid` or as a background task writing a log file.
+  Replayed over 158,608 recorded Bash calls: 205 fire (0.13%). `timeout` alone is not a trigger:
+  it was 2,320 of the first draft's 2,526 firings, nearly all `timeout N python -m pytest` gates
+  whose output arrives at their normal exit.
+
 ## [9.4.0]
 
 ### Added
