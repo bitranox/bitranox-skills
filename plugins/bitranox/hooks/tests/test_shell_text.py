@@ -771,6 +771,86 @@ def test_a_backgrounded_or_piped_cd_does_not_move_the_next_statement():
     assert S.git_verb_dir("cd /r || exit; git commit -m x", "/s", verbs) == os.path.normpath("/r")
 
 
+_AT_R, _AT_A = os.path.normpath("/r"), os.path.normpath("/a")
+
+
+@pytest.mark.parametrize("command, lands", [
+    # a cd inside a subshell is undone when the subshell closes (OPEN-WORK [650])
+    ("(cd /r); git commit -m x", "/s"),
+    ("( cd /r ) && git push", "/s"),
+    ("x=$(cd /r; pwd); git commit -m x", "/s"),
+    ("echo `cd /r`; git commit -m x", "/s"),
+    ("diff <(cd /r; ls) x; git commit -m x", "/s"),
+    ("(cd /a; (cd /b); git commit -m x)", _AT_A),
+    # inside the subshell the cd still holds, and a cd outside one still moves
+    ("(cd /r && git commit -m x)", _AT_R),
+    ("cd /r && (git commit -m x)", _AT_R),
+    ("(cd /a); cd /r; git commit -m x", _AT_R),
+    # arithmetic and quoted parentheses open no subshell that a cd could be in
+    ("echo $((1+2)); cd /r; git commit -m x", _AT_R),
+    ("cd /r; git commit -m 'fix (x)'", _AT_R),
+    # braces group in the SAME shell, so the cd persists
+    ("{ cd /r; }; git commit -m x", _AT_R),
+])
+def test_git_verb_dir_undoes_a_cd_made_inside_a_subshell(command, lands):
+    assert S.git_verb_dir(command, "/s", S.GATED_GIT_VERBS) == lands
+
+
+@pytest.mark.parametrize("command", [
+    "(cd /r && files=(a b) && git commit -m x)",
+    "(cd /r; a+=(z); git commit -m x)",
+    "x=$(cd /r; a=(x); git commit -m x)",
+    "(cd /r; f() { :; }; git commit -m x)",
+    "(cd /r; echo ${x:-(a)}; git commit -m x)",
+    "(cd /r; ls !(x) >/dev/null; git commit -m x)",
+    "(cd /r; [[ x == @(x|y) ]] && git commit -m x)",
+    "(cd /r; echo a\\); git commit -m x)",
+    "(cd /r; echo ')'; git commit -m x)",
+])
+def test_a_close_paren_that_ends_no_subshell_keeps_the_subshell_open(command):
+    """Adversarial review: an array, f(), ${x:-(a)} and extglob send only their `)` to the gap, and
+    a first version popped the subshell on it - the git after it then read as running OUTSIDE."""
+    for tool in (None, "Bash"):
+        assert S.git_verb_dir(command, "/s", S.GATED_GIT_VERBS, tool) == _AT_R
+
+
+@pytest.mark.parametrize("command", [
+    "(cd /r; case a in a) ;; esac; git commit -m x)",
+    "(case a in a) cd /r;; esac); git commit -m x",
+    "x=$(case a in a) cd /r;; esac); git commit -m x",
+    "(cd /r; : # )\ngit commit -m x)",
+    "(cd /r # )\n); git commit -m x",
+])
+def test_a_case_pattern_inside_or_around_a_subshell_gives_up(command):
+    """A case pattern's `)`, or one inside a comment, looks like a subshell closer: None, never a guess."""
+    assert S.git_verb_dir(command, "/s", S.GATED_GIT_VERBS) is None
+
+
+@pytest.mark.parametrize("command, lands", [
+    ("(echo ${x:-(a)}; cd /r; true); git commit -m x", "/s"),
+    ("(ls @(x|y) >/dev/null; cd /r; true); git commit -m x", "/s"),
+    ("x=$(a=(1 2); cd /r; echo); git commit -m x", "/s"),
+])
+def test_a_subshell_holding_a_non_subshell_paren_still_closes(command, lands):
+    assert S.git_verb_dir(command, "/s", S.GATED_GIT_VERBS) == lands
+
+
+def test_a_relative_cd_after_the_command_sets_cdpath_is_unknown():
+    """bash resolves a relative cd against CDPATH first, so `CDPATH=/a; cd sub` lands in /a/sub
+    when that exists - which the text cannot tell. An absolute cd is unaffected."""
+    verbs = S.GATED_GIT_VERBS
+    assert S.git_verb_dir("CDPATH=/a; cd sub; git commit -m x", "/s", verbs) is None
+    assert S.git_verb_dir("export CDPATH=/a; cd sub && git push", "/s", verbs) is None
+    assert S.git_verb_dir("CDPATH=/a cd sub; git commit -m x", "/s", verbs) is None
+    assert S.git_verb_dir("CDPATH=/a; cd /r; git commit -m x", "/s", verbs) == _AT_R
+    assert S.git_verb_dir("cd sub; git commit -m x", "/s", verbs) == os.path.normpath("/s/sub")
+
+
+def test_powershell_parentheses_do_not_open_a_subshell():
+    """PowerShell's ( ) and $( ) run in the same runspace, so Set-Location inside them persists."""
+    assert S.git_verb_dir("(cd /r); git commit -m x", "/s", S.GATED_GIT_VERBS, "PowerShell") == _AT_R
+
+
 def test_git_verb_dir_reads_a_continued_line_with_a_quoted_dash_c_value():
     # Each statement here ends in `\<newline>`; git_verb_dir strip()s the segment before tokenizing,
     # which used to leave a lone backslash, split the quoted -c value and hide the push.

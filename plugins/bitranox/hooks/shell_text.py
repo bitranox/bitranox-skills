@@ -655,6 +655,81 @@ def _expand_known(token, usable):
     return usable[name] + match.group(3)
 
 
+#: `CDPATH=...` as a word, as a statement, a prefix, or after `export`.
+_CDPATH_ASSIGNMENT = re.compile(r"(?:^|\s)CDPATH=")
+
+
+#: Quoted text and backslash escapes, removed before counting a statement's own parentheses.
+_QUOTED_OR_ESCAPED = re.compile(r"""'[^']*'|"(?:[^"\\]|\\.)*"|\\.""", re.DOTALL)
+
+
+#: A shell comment: `#` at the start of a word.
+_COMMENT_START = re.compile(r"(?:^|\s)#")
+
+
+class _SubshellTracker:
+    """Where a Bash statement runs, given the subshells opened and closed before it.
+
+    Bash runs `( ... )`, `$( ... )`, `<( ... )` and a backtick pair in a CHILD shell, so a cd
+    inside one is undone when it closes. The segmenter leaves those openers and closers in the gaps
+    between statements, and braces `{ ...; }` group in the same shell, so they are not counted.
+
+    A `)` in a gap does not always close a subshell. An array `a=(x)`, a function `f()`,
+    `${x:-(a)}` and extglob `!(x)` keep their `(` INSIDE the statement text and send only the `)`
+    to the gap; those are counted per statement (`statement`) and absorb the next closer first. A
+    case pattern `a)` has no `(` at all: inside `case ... esac` a closer that could be either kind
+    makes the tracker give up (`lost`), and so does a closer matching no opener - a wrong directory
+    is worse than None, which falls back.
+    """
+
+    def __init__(self):
+        self.open = []          # per open subshell: (its opener, the directory it was entered from)
+        self.inner = 0          # statement-text `(` whose `)` has not arrived yet
+        self.cases = 0          # `case ... esac` blocks open
+        self.commented = False  # a `#` comment was seen: a later paren may be the comment's
+        self.lost = False
+
+    def statement(self, segment, tokens):
+        """Count a statement's own parentheses and case/esac nesting; return its excess closers.
+
+        A closer the statement's text holds beyond its own openers first closes an earlier inner
+        `(`; any left over closes a subshell, which the caller applies AFTER the statement ran -
+        the segmenter can glue a subshell's `)` to its last word (`(a=(1); cd /r; echo); ...`).
+        """
+        bare = _QUOTED_OR_ESCAPED.sub("", segment)
+        # The segmenter does not know comments, so a `)` inside `# ...` reaches a gap like a real one.
+        self.commented = self.commented or _COMMENT_START.search(bare) is not None
+        excess = bare.count(")") - bare.count("(")
+        absorbed = min(self.inner, max(excess, 0))
+        self.inner += -absorbed if excess > 0 else -excess
+        if tokens[:1] == ["case"]:
+            self.cases += 1
+        elif tokens[:1] == ["esac"] and self.cases:
+            self.cases -= 1
+        return max(excess, 0) - absorbed
+
+    def gap(self, gap, here):
+        """`here` after the subshell boundaries in `gap`, the text between two statements."""
+        if self.commented and any(char in gap for char in "()`"):
+            self.lost = True
+            return None
+        for char in gap:
+            if char == "(":
+                self.open.append(("(", here))
+            elif char == "`" and not (self.open and self.open[-1][0] == "`"):
+                self.open.append(("`", here))
+            elif char == ")" and self.inner:
+                self.inner -= 1
+            elif char == ")" and self.cases:
+                self.lost = self.lost or bool(self.open)   # a pattern, or this subshell's closer
+            elif char in ")`":
+                if not self.open or self.open[-1][0] != ("(" if char == ")" else "`"):
+                    self.lost = True
+                    return None
+                here = self.open.pop()[1]
+        return here
+
+
 def git_verb_dir(command, cwd, verbs, tool_name=None):
     """The directory the first `git <verb>` in `command` runs in, or None when it is unreadable.
 
@@ -677,12 +752,27 @@ def git_verb_dir(command, cwd, verbs, tool_name=None):
     Anything wider - control flow, subshells, pipelines, `read`, `declare`, `+=`, a later statement
     that might reassign the name - is a shell this reader does not model, and a wrong directory is
     worse than None, which falls back. Bash only: PowerShell assigns with `$W = ...`.
+
+    A cd inside a subshell - `(cd /r); git commit`, `x=$(cd /r; pwd)` - holds only until that
+    subshell closes (`_SubshellTracker`), so the git after it runs where the command started.
+    Bash only again: PowerShell's `( )` and `$( )` run in the same runspace, so its location sticks.
+
+    Once the command assigns `CDPATH` (`CDPATH=/a; cd sub`, `export CDPATH=...`, or as a prefix),
+    a RELATIVE cd is unknown: bash tries each CDPATH entry first, and whether `/a/sub` exists is not
+    in the text. A CDPATH inherited from the environment is invisible here and not modelled.
     """
     tool, here = tool_name or "Bash", cwd
     text = blank_heredoc_bodies(command or "")
-    segments = list(iter_segments(text, tool_name))
+    segments = list(iter_segments(text, tool))
     known, leading, previous_end = {}, tool == "Bash", 0
+    subshells, gap_start, cdpath_set = _SubshellTracker(), 0, False
     for index, (at, segment) in enumerate(segments):
+        if tool == "Bash":
+            here = subshells.gap(text[gap_start:at], here)
+        gap_start = at + len(segment)
+        # Read off the raw text, before the leading-assignment block can consume the statement. A
+        # quoted `CDPATH=` in an echo also counts; that only costs a None, never a wrong directory.
+        cdpath_set = cdpath_set or _CDPATH_ASSIGNMENT.search(segment) is not None
         following = segments[index + 1][0] if index + 1 < len(segments) else len(text)
         gap_after = text[at + len(segment):following]
         if leading:
@@ -697,16 +787,21 @@ def git_verb_dir(command, cwd, verbs, tool_name=None):
         if not tokens:
             continue
         tokens = [_expand_known(token, usable) for token in tokens]
-        changed, landing = _directory_change_tokens(tokens, here, tool)
+        closers = subshells.statement(segment, tokens) if tool == "Bash" else 0
+        # With CDPATH set, a relative target is unknown: reading it from no directory (None) makes
+        # `_readable_dir` refuse exactly the relative ones and keep the rooted ones.
+        changed, landing = _directory_change_tokens(tokens, None if cdpath_set else here, tool)
         if changed:
             # `cd x & ...` and `cd x | ...` run the cd in a subshell: the next statement starts
             # where this one did.
             if gap_after.strip(" \t") not in ("&", "|"):
                 here = landing
-            continue
-        is_verb, where = git_segment_dir(tokens, verbs, here, tool)
-        if is_verb:
-            return where
+        else:
+            is_verb, where = git_segment_dir(tokens, verbs, here, tool)
+            if is_verb:
+                return None if subshells.lost else where
+        if closers:
+            here = subshells.gap(")" * closers, here)
     return None
 
 

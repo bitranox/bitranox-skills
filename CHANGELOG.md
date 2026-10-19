@@ -29,6 +29,20 @@ than the change, so entries reconstructed from them would read like coverage wit
 a hole nobody has drawn a line under is one that gets rediscovered and half-filled - which is how
 two "versions with no entry" notes came to sit in this file disagreeing with it.
 
+## [9.8.3]
+
+### Fixed
+
+- `shell_text.git_verb_dir` (repo-gate, git-commit-branch-guard, git-footgun-guard): a cd inside a
+  subshell - `( ... )`, `$( ... )`, `<( ... )`, backticks - is undone when it closes, so
+  `(cd /r); git commit` is judged where the command started rather than in `/r`; a cd and a git in
+  the SAME subshell still pair up. Bash only: PowerShell's `( )` and `$( )` keep the location.
+  A parenthesis that ends no subshell (an array, `f()`, `${x:-(a)}`, extglob) is told apart from a
+  closer, and a `)` that could be a case pattern's or a comment's makes it give up (None, which
+  falls back) instead of guessing.
+- `shell_text.git_verb_dir`: once the command sets `CDPATH`, a relative cd reads as unknown, since
+  bash tries each CDPATH entry first.
+
 ## [9.8.2]
 
 ### Changed
