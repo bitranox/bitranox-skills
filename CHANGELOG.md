@@ -29,6 +29,14 @@ than the change, so entries reconstructed from them would read like coverage wit
 a hole nobody has drawn a line under is one that gets rediscovered and half-filled - which is how
 two "versions with no entry" notes came to sit in this file disagreeing with it.
 
+## [9.8.2]
+
+### Changed
+
+- `coding-python-layered-config` (mirror of lib_layered_config 7.3.0): says to write an integer outside
+  `-2**63` to `2**64-1` as a string, since a TOML or YAML file holding one is refused whole; the
+  `LayerLoadError` entry also covers a file the loader refused under a "Designing config files" rule.
+
 ## [9.8.1]
 
 ### Changed
