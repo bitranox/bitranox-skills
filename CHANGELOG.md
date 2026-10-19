@@ -29,6 +29,14 @@ than the change, so entries reconstructed from them would read like coverage wit
 a hole nobody has drawn a line under is one that gets rediscovered and half-filled - which is how
 two "versions with no entry" notes came to sit in this file disagreeing with it.
 
+## [9.7.2]
+
+### Fixed
+
+- `coding-python-logging` (mirror of lib_log_rich 6.5.4): `configuration.md` names
+  `DotenvDecodeError`, says an uninspectable directory ends the `.env` search with `None`, and
+  documents `interpret_dotenv_toggle`.
+
 ## [9.7.1]
 
 ### Changed
