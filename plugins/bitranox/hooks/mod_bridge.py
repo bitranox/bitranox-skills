@@ -32,7 +32,7 @@ class BadRequest(ValueError):
 
 
 REFUSALS = (ow.BacklogError, BadInput, ME.SlugCollision, ME.HookTooLong, ME.EmptyBody,
-            ME.PinnedEntry, ME.InvalidSlug, ME.ExcludedLevel, OSError)
+            ME.PinnedEntry, ME.InvalidSlug, ME.InvalidSkill, ME.ExcludedLevel, OSError)
 
 
 def _backlog_list(inp, cwd):
@@ -77,7 +77,7 @@ def _memory_add(inp, cwd):
         raise BadInput("type must be one of user, feedback, project, reference, got %r" % (type_,))
     slug, created, advice = ME.add_with_advice(
         str(level), title=_text(inp, "title"), hook=_text(inp, "hook"), body=_text(inp, "body"),
-        type_=type_, slug=inp.get("slug"))
+        type_=type_, slug=inp.get("slug"), skill=inp.get("skill"))
     return {"slug": slug, "level": str(level.resolve()),
             "action": "created" if created else "updated", "warnings": advice}
 

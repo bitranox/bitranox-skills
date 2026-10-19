@@ -96,6 +96,31 @@ def _require_known_type(type_):
         raise ValueError("unknown type %r - use one of %s" % (type_, ", ".join(_TYPE_PREFIXES)))
 
 
+# A skill name as the Skill tool takes it: `name` or `plugin:name`, lower case. Checked with fullmatch
+# on [a-z0-9] classes (never `$`, which also matches before a trailing newline) because the value is
+# written as a frontmatter line: a newline in it would inject a second key.
+_SKILL_RX = re.compile(r"[a-z0-9][a-z0-9._-]*(?::[a-z0-9][a-z0-9._-]*)?")
+_SKILL_MAX = 128
+
+
+class InvalidSkill(ValueError):
+    """Raised for a `skill` value that is not a plain skill name (`name` or `plugin:name`)."""
+
+    def __init__(self, skill):
+        super().__init__("invalid skill %r - use a skill name as the Skill tool takes it, e.g. "
+                         "bitranox:compuse-git (lower case, at most %d chars)" % (skill, _SKILL_MAX))
+        self.skill = skill
+
+
+def _require_valid_skill(skill):
+    """Raise `InvalidSkill` unless `skill` is None/empty (not given) or a plain skill name. A
+    non-string (the mod bridge passes JSON through) is refused, not handed to the regex."""
+    if skill is None or skill == "":
+        return
+    if not isinstance(skill, str) or len(skill) > _SKILL_MAX or not _SKILL_RX.fullmatch(skill):
+        raise InvalidSkill(skill)
+
+
 class EmptyBody(ValueError):
     """Raised when a NEW fact is given no body. The frame alone would ship an always-loaded pointer
     promising a rule with nothing behind it, and no integrity check reports an absent body - so it is
@@ -265,18 +290,18 @@ def _framed_body(slug, hook, type_, body):
 
 def add_or_update_entry(proj, title, hook, body="", type_=None, pin=False,
                         scope_default="", slug=None, allow_over_cap_hook=False,
-                        allow_pinned_overwrite=False):
+                        allow_pinned_overwrite=False, skill=None):
     """`upsert_entry` returning only the slug: the single write path for every caller that does not
     need to know whether the fact was new."""
     return upsert_entry(proj, title, hook, body=body, type_=type_, pin=pin,
                         scope_default=scope_default, slug=slug,
                         allow_over_cap_hook=allow_over_cap_hook,
-                        allow_pinned_overwrite=allow_pinned_overwrite)[0]
+                        allow_pinned_overwrite=allow_pinned_overwrite, skill=skill)[0]
 
 
 def upsert_entry(proj, title, hook, body="", type_=None, pin=False,
                  scope_default="", slug=None, allow_over_cap_hook=False,
-                 allow_pinned_overwrite=False):
+                 allow_pinned_overwrite=False, skill=None):
     """Upsert a curated fact into `<proj>`'s pointer block + the anchor's central store (the single write
     path). Ensures the level's pointer block + scope, and writes under a lock, mtime-neutral.
     Returns (slug, created): `created` is True when this call made a new fact, decided under the
@@ -294,9 +319,14 @@ def upsert_entry(proj, title, hook, body="", type_=None, pin=False,
 
     A slug that is not a plain filename raises `InvalidSlug`, and a `type_` outside the four kinds
     raises ValueError, both BEFORE any write. On an UPDATE, a `type_` with no body re-types the
-    stored body in place (its prose untouched). A relative `proj` is taken relative to the cwd."""
+    stored body in place (its prose untouched). A relative `proj` is taken relative to the cwd.
+
+    `skill` ties the fact to the skill it belongs with (`metadata: skill:`); it follows the same
+    rules as `type_` - kept on an update that does not name it, set in place by one with no body -
+    and an invalid name raises `InvalidSkill` before any write."""
     proj = os.path.abspath(str(proj))
     _require_known_type(type_)
+    _require_valid_skill(skill)
     slug = slug or slugify(title, type_)
     _require_valid_slug(slug)
     hook = (hook or "").strip()
@@ -343,7 +373,9 @@ def upsert_entry(proj, title, hook, body="", type_=None, pin=False,
                 # No explicit --type on an UPDATE means "leave the kind alone": re-deriving it from
                 # the slug discards what the stored body already records, and for a prefix-less slug
                 # that always lands on "project".
-                e.body = _framed_body(slug, e.hook, type_ or _body_type(e.body), body)
+                kept_skill = skill or _body_skill(body) or _body_skill(e.body)
+                e.body = _with_skill(_framed_body(slug, e.hook, type_ or _body_type(e.body), body),
+                                     kept_skill)
             else:
                 if e.hook != old_hook:
                     e.body = _reframe_description(e.body, e.hook)   # keep body description in sync
@@ -351,6 +383,9 @@ def upsert_entry(proj, title, hook, body="", type_=None, pin=False,
                     # An explicit kind with no new body is a re-type: without this the call printed
                     # the slug and exited 0 while the stored body kept its old kind.
                     e.body = _retype_body(slug, e.hook, type_, e.body)
+                if skill and _body_skill(e.body) != skill:
+                    # Tagging an existing fact with its skill must not need its body re-supplied.
+                    e.body = _with_skill(_framed_body(slug, e.hook, _body_type(e.body), e.body), skill)
             e.pin = e.pin or pin
             if e.legacy:                             # first update flips a legacy entry: the body
                 _archive_legacy_body(anchor, e)      # moves to the slug path, the old file archives
@@ -361,7 +396,7 @@ def upsert_entry(proj, title, hook, body="", type_=None, pin=False,
             if us.body_path(anchor, slug).is_file():
                 raise SlugCollision(slug, _free_slug(anchor, slug))
             e = Entry(slug=slug, title=title, hook=hook,
-                      body=_framed_body(slug, hook, type_, body), pin=pin)
+                      body=_with_skill(_framed_body(slug, hook, type_, body), skill), pin=pin)
             entries.append(e)
         bodies[slug] = e.body
         _commit_store(proj, scope or scope_default, entries, bodies)
@@ -372,7 +407,7 @@ def upsert_entry(proj, title, hook, body="", type_=None, pin=False,
 
 
 def add_with_advice(proj, title, hook, body="", type_=None, pin=False, scope_default="",
-                    slug=None):
+                    slug=None, skill=None):
     """`add_or_update_entry` plus the advisories the CLI prints after it, returned as data.
 
     The CLI `add` and the mod bridge both write a fact through here, so a capture made either way
@@ -381,10 +416,11 @@ def add_with_advice(proj, title, hook, body="", type_=None, pin=False, scope_def
     '~ note: ...' lines in the order the CLI prints them. Raises what `add_or_update_entry` raises."""
     hook = (hook or "").strip()
     _require_known_type(type_)                # same refusal order as add_or_update_entry
+    _require_valid_skill(skill)
     target = slug or slugify(title, type_)
     _require_valid_slug(target)
     slug, created = upsert_entry(proj, title=title, hook=hook, body=body, type_=type_, pin=pin,
-                                 scope_default=scope_default, slug=slug)
+                                 scope_default=scope_default, slug=slug, skill=skill)
     return slug, created, _add_advice(hook, body)
 
 
@@ -504,6 +540,42 @@ def _body_type(text):
         return ""
     t = re.search(r"(?m)^[ \t]+type:[ \t]*(\S+)[ \t]*\r?$", m.group(1))
     return t.group(1) if t else ""
+
+
+def _body_skill(text):
+    """The `metadata: skill:` value from a framed body's frontmatter, or '' if absent - the skill a
+    fact is tied to (meta-self-improve step 2). Scoped to the leading frontmatter block like
+    `_body_type`, so a `  skill:` line in the prose cannot answer for it."""
+    _head, m = _frontmatter(text)
+    if m is None:
+        return ""
+    s = re.search(r"(?m)^[ \t]+skill:[ \t]*(\S+)[ \t]*\r?$", m.group(1))
+    return s.group(1) if s else ""
+
+
+def _with_skill(text, skill):
+    """Return framed `text` with its frontmatter `metadata: skill:` set to `skill`, prose untouched.
+
+    Rewrites the line `_body_skill` reads; frontmatter without one gains it under `metadata:` (after
+    the `type:` line when there is one, so the two metadata keys sit together). `text` must already
+    be framed - every caller frames first - and an unframed one is returned unchanged rather than
+    framed with a guessed kind."""
+    head, m = _frontmatter(text)
+    if m is None or not skill:
+        return text
+    inner = m.group(1)
+    nl = "\r\n" if inner.endswith("\r\n") else "\n"
+    new_inner, n = re.subn(r"(?m)^([ \t]+skill:)[ \t]*[^\s]*[ \t]*(?=\r?$)",
+                           lambda s: "%s %s" % (s.group(1), skill), inner, count=1)
+    if n == 0:
+        new_inner, n = re.subn(r"(?m)^([ \t]+type:[^\r\n]*)(?=\r?$)",
+                               lambda s: "%s%s  skill: %s" % (s.group(1), nl, skill), inner, count=1)
+    if n == 0:
+        new_inner, n = re.subn(r"(?m)^(metadata:)[ \t]*(?=\r?$)",
+                               lambda s: "%s%s  skill: %s" % (s.group(1), nl, skill), inner, count=1)
+    if n == 0:
+        new_inner = inner + "metadata:%s  skill: %s%s" % (nl, skill, nl)
+    return _with_frame(head, m, new_inner)
 
 
 def _with_frame(head, m, inner):
@@ -1790,6 +1862,11 @@ def _main(argv=None):
                         "passing neither --scope nor --scope-file is not an error")
     a.add_argument("--slug", default=None,
                    help="target an existing identity explicitly (title can then change freely)")
+    a.add_argument("--skill", default=None,
+                   help="the skill this fact is tied to (e.g. bitranox:compuse-git), recorded as "
+                        "metadata: skill: in the body - for a fact written beside a fix queued "
+                        "against that skill (meta-self-improve step 2); kept on an update that "
+                        "omits it, and given alone it tags the stored body")
     ap_ = sub.add_parser("amend-pinned",
                          help="deliberately change a pinned fact (human use only; "
                               "no autonomous pass invokes this)")
@@ -2022,8 +2099,8 @@ def _main(argv=None):
         try:
             slug, _created, advice = add_with_advice(
                 args.proj, title=args.title, hook=hook, body=body, type_=args.type_,
-                pin=args.pin, scope_default=scope_default, slug=args.slug)
-        except (SlugCollision, HookTooLong, EmptyBody, PinnedEntry, InvalidSlug) as c:
+                pin=args.pin, scope_default=scope_default, slug=args.slug, skill=args.skill)
+        except (SlugCollision, HookTooLong, EmptyBody, PinnedEntry, InvalidSlug, InvalidSkill) as c:
             return _refused(c)
         print(slug)
         for line in advice:

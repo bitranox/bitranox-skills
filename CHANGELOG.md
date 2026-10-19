@@ -29,6 +29,18 @@ than the change, so entries reconstructed from them would read like coverage wit
 a hole nobody has drawn a line under is one that gets rediscovered and half-filled - which is how
 two "versions with no entry" notes came to sit in this file disagreeing with it.
 
+## [9.7.0]
+
+### Added
+
+- `memory_engine.py add --skill NAME` records the skill a fact is tied to as `metadata: skill:` in
+  the body's frontmatter (`name` or `plugin:name`, lower case, at most 128 characters; anything else
+  is refused as `InvalidSkill` before a write). It follows `--type`: kept on an update that omits
+  it, replaced by one that names it, and given with no body it tags the stored body in place;
+  `amend-pinned` keeps it. The `memory_add` mod tool takes the same optional `skill`.
+- `meta-self-improve` step 2: a fact written beside a fix queued against a skill passes `--skill`,
+  and that field is the record rather than a sentence in the body. Nothing reads the field yet.
+
 ## [9.6.0]
 
 ### Added

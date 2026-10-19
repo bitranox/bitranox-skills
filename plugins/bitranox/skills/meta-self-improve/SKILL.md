@@ -147,8 +147,10 @@ plus a generic git habit) is split, and each half routed on its own. Take the FI
    Proxmox skill was loaded) and no shipped skill covering this domain: use the table below.
 
 In cases 1 and 2 the entry carries the lesson itself, and you write NO memory fact - unless the
-rule also binds work outside that skill's description, and then name the queued skill in the
-fact's body. A release check fires only while releasing, which loads the release skill: no fact. A
+rule also binds work outside that skill's description, and then pass `--skill <name>` (the name
+as the Skill tool takes it, e.g. `bitranox:compuse-git`) to the engine `add`, which records it in
+the fact's frontmatter; the field is the record, the body need not repeat it. A release check
+fires only while releasing, which loads the release skill: no fact. A
 quoting rule for ANY self-authored shell text binds far more than git commits: a fact too. A fact
 beside a queued skill fix is otherwise a duplicate that outlives the fix.
 
@@ -255,7 +257,7 @@ Then ONE engine call per fact, and REQUIRE its success line (the printed slug):
 
     bash <plugin>/hooks/run-python.sh <plugin>/hooks/memory_engine.py add \
       --proj "<cwd>" --type feedback|project|reference|user \
-      --title "..." --hook "When ..., ..." --body-file <tmpfile> [--pin] [--slug s]
+      --title "..." --hook "When ..., ..." --body-file <tmpfile> [--pin] [--slug s] [--skill n]
 
 Risk ladder: engine `add` at the project level is additive - auto-apply. Rewriting/deleting an
 existing entry, restructuring or editing any CLAUDE.md, pruning - propose-first
@@ -420,7 +422,8 @@ when a write is about to land in the plugin source from elsewhere.
 - [ ] Dedup grep ran over the pointer blocks + `facts/` bodies + native tier BEFORE any write.
 - [ ] Each candidate was checked against the skills loaded when it happened (step 2); one that
       arose inside a loaded skill's domain, or that a shipped skill should have triggered for, was
-      queued against that skill, with no fact beside it unless the rule binds work outside it.
+      queued against that skill, with no fact beside it unless the rule binds work outside it
+      (and then written with `--skill <name>`).
 - [ ] ONE engine `add` per fact; its printed slug captured (fail-loud - no silent results).
 - [ ] Every hook trigger-first ("When <situation>, <directive>.") and self-sufficient. The 350-char
       soft-cap warning is advisory - acceptable; the 500-char HARD cap is a refusal, so an add that

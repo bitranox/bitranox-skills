@@ -55,6 +55,7 @@ const TOOLS = [
         level: str("directory to capture at; default the session cwd"),
         type: { type: "string", enum: ["user", "feedback", "project", "reference"] },
         slug: str("target an existing fact explicitly"),
+        skill: str("the skill this fact is tied to, e.g. bitranox:compuse-git"),
       },
     },
   },

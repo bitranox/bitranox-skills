@@ -169,7 +169,7 @@ If a body was already hand-written, re-run `add --slug <slug>` over it so the va
 
 | Command                                                                                                                                                                                                                                                                                | Success line to REQUIRE               |
 |----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|---------------------------------------|
-| `add --proj D --title T --hook H\|--hook-file F --body-file F [--type feedback\|project\|reference\|user] [--pin] [--scope TEXT] [--slug S]`                                                                                                                                           | the printed slug                      |
+| `add --proj D --title T --hook H\|--hook-file F --body-file F [--type feedback\|project\|reference\|user] [--pin] [--scope TEXT] [--slug S]` [--skill NAME]                                                                                                                            | the printed slug                      |
 | `amend-pinned --proj D --slug S [--title T] [--hook H\|--hook-file F] [--body-file F] [--type feedback\|project\|reference\|user]` (the deliberate way through - an ordinary `add` REFUSES a pinned slug, and so does `retitle`; human use only, no autonomous pass invokes this verb) | the printed slug                      |
 | `heal --proj D`                                                                                                                                                                                                                                                                        | `healed N file(s) across M level(s)`  |
 | `set-scope --proj D --scope TEXT\|--scope-file F`                                                                                                                                                                                                                                      | `scope updated:` / `scope unchanged:` |
@@ -215,7 +215,11 @@ body, enforces tree-unique slugs, refuses a pinned target (`PinnedEntry` - `amen
 deliberate way through). A slug names the body FILE, so `add`, `amend-pinned`, `rename --to-slug`
 and `relocate` refuse one that is not a plain filename (lowercase letters, digits, hyphens and
 dots, starting and ending with a letter or digit) before anything is written. On an update,
-`--type` with no body re-types the stored body in place; an unknown `--type` is refused. A hook or
+`--type` with no body re-types the stored body in place; an unknown `--type` is refused.
+`--skill NAME` (`bitranox:compuse-git`) records the skill a fact is tied to as `metadata: skill:`
+in the body's frontmatter, for a fact written beside a fix queued against that skill; like
+`--type` it is kept on an update that omits it, and given with no body it tags the stored body. A
+name that is not `name` or `plugin:name` in lower case is refused (`InvalidSkill`). A hook or
 title that spans several lines (a wrapped `--hook-file`) is joined onto one pointer line, since a
 line break would split it. `--proj .` means the cwd; HOME, the temp dir and the filesystem root are
 refused, a symlink to one of them included. `move` relocates only a pointer LINE (the body never moves); if the
