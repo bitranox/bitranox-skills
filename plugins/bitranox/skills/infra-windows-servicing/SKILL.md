@@ -31,6 +31,9 @@ do not tell you.
 | Strip pass "completed", 48 of 51 links removed  | 3 benign leftovers                | **the 3 the encoding mangled** - and those are the ones pointing out of the tree                            |
 | Week-old failure, `CBS.log` grep finds nothing  | no evidence, so not the store     | **the live logs cover days** - the history is in `CbsPersist_*.cab`, unreadable by a grep                   |
 | `0xC1900200` survives the MoSetup waiver        | the key did not take effect       | **several blocks at once** - and the key does not waive an ABSENT TPM                                       |
+| KB "cannot install" via WU, WU logs clean       | the update service is broken      | **not offered** - a preview CU is never applied automatically, so nothing was attempted                     |
+| DISM `0x80070228` blames an Unattend.xml ACL    | a permission fault                | **a second .msu beside the target** - `dism.log` holds the real error, a ModelCompDB.xml parse failure      |
+| Live `/Capture-Image` fails `0x80070020`        | exclude that file and retry       | **a live volume** - each exclusion surfaces the next locked file; capture from a VSS shadow                 |
 
 ## A clean health check does not mean an update will install
 
@@ -98,6 +101,49 @@ gone, and the `Setup` event log entry plus the Panther logs are all that is left
 Take the SYMBOLIC error name CBS prints beside the HRESULT rather than looking the number up: the
 line reads `[HRESULT = 0x80071a2d - ERROR_TRANSACTION_NOT_ACTIVE]`, and the name is the part that
 tells you what happened.
+
+### A cumulative update Windows Update will not offer
+
+A "cannot install KB<n>" report with a CLEAN `Microsoft-Windows-WindowsUpdateClient/Operational`
+and `Setup` log means nothing was ATTEMPTED, not that the update service is broken, so resetting
+`SoftwareDistribution` fixes nothing. Check the update's class first: an optional (preview)
+cumulative update is never applied automatically, and a scan that does not surface it reports
+nothing to do. Read the build from the registry `UBR` (hex, see "Monitoring"), never from
+`Get-HotFix`: it reads `Win32_QuickFixEngineering`, which misses most CBS-installed cumulative
+updates, and it has listed a KB as installed while the build had not moved.
+
+**Fetching the .msu.** The Update Catalog has no plain download link: the file URL comes back only
+from a POST to `DownloadDialog.aspx` with the row's updateID,
+`updateIDs=[{"size":0,"languages":"","uidInfo":"<guid>","updateID":"<guid>"}]`. Two scraper traps
+both return ZERO rows, which reads as "this KB is not in the catalog": the row anchor is
+SINGLE-quoted (`<a id='<guid>_link'`), so an `id="..."` pattern matches nothing, and result titles
+have come back in a different language per request, so match Latin tokens such as `25H2` and
+`x64`, never an English word like "Cumulative". Stage the file off `C:`.
+
+**A second, smaller .msu is a CHECKPOINT cumulative update, not a prerequisite.** From 24H2 on, a
+catalog download can list an earlier checkpoint CU beside the target (for 24H2 and 25H2,
+KB5043080, about 509 MB - far too big for a servicing stack update, which is the tell). What to do
+depends on the build (Microsoft Learn, "Checkpoint cumulative updates and the Microsoft Update
+Catalog"):
+
+- At or past the checkpoint (compare the build with the checkpoint's OS build in its KB article):
+  install the TARGET alone, as the only .msu in its folder.
+- Not yet on it: install each .msu in order, checkpoint first; or put the target and its
+  checkpoints, and no other .msu, in one folder and give DISM the target as the sole package.
+
+Measured on a 25H2 guest already past KB5043080: adding the checkpoint explicitly, with both .msu
+in one folder, failed after about 8 minutes with exit 552 / `0x80070228`, "An error occurred
+applying the Unattend.xml file from the .msu package" / "The passed ACL did not contain the minimum
+required information". The ACL wording is a red herring: `C:\Windows\Logs\DISM\dism.log` showed an
+XML parse error in `metadata\SessionCompDBs\ModelCompDB.xml`, then "Failed to install UUP
+package". Read `dism.log` before believing any DISM exit message.
+
+Install with `dism /Online /Add-Package /PackagePath:<msu> /NoRestart /Quiet` (exit 3010 is
+success with a reboot pending), from a one-shot scheduled task so the run outlives an SSH
+disconnect. Log it with ONE writer and an explicit encoding (`Add-Content -Encoding utf8`): Windows
+PowerShell 5.1's `Tee-Object` appends UTF-16, and the mixed file defeats a completion-marker match
+on a run that succeeded (the `winlog` jig in `bitranox:compuse-toolbox` reads such a file). Done
+means the `UBR` reached the target build.
 
 ## "Access is denied" is usually the read-only attribute
 
@@ -375,6 +421,33 @@ DISM /Online /Cleanup-Image /RestoreHealth /Source:\\PEER\C$\Windows\WinSxS
 Pick the image INDEX by matching the edition, never by position - index 1 is Home on a retail
 ISO and will not repair a Pro install.
 
+### Capturing a live install as a repair source: snapshot it first
+
+`DISM /Capture-Image` of a LIVE volume fails `0x80070020` (ERROR_SHARING_VIOLATION, error 32)
+naming ONE file a service holds open. Excluding it only surfaces the next one after another full
+run: measured, the first attempt died in 4 seconds on `C:\DumpStack.log.tmp` (DISM's built-in
+exclusions skip `pagefile.sys` and `hiberfil.sys`, not this), and the retry ran 9.5 minutes before
+dying on the BITS `edb.log`. Capture from a VSS shadow copy instead: it has no open handles, so the
+whole failure class disappears.
+
+```powershell
+$c = Invoke-CimMethod -ClassName Win32_ShadowCopy -MethodName Create `
+         -Arguments @{ Volume = 'C:\'; Context = 'ClientAccessible' }
+$s = Get-CimInstance Win32_ShadowCopy | Where-Object { $_.ID -eq $c.ShadowID }
+try {
+    cmd /c "mklink /d C:\shadowroot `"$($s.DeviceObject)\`""   # the trailing backslash is required
+    dism /Capture-Image /ImageFile:D:\out.wim /CaptureDir:C:\shadowroot /Compress:fast /Name:src
+} finally {
+    cmd /c rmdir C:\shadowroot          # removes the link only
+    Remove-CimInstance $s               # the shadow pins space on C: until it is removed
+}
+Get-WindowsImage -ImagePath D:\out.wim  # a zero exit is not proof of a readable image
+```
+
+Write the WIM to a different volume than the one captured, and use `/Compress:fast`: `max` costs
+hours of CPU for space a repair source rarely needs. `vssadmin create shadow` is Server-only; the
+WMI method works on client Windows.
+
 Running the upgrade unattended:
 
 ```
@@ -503,6 +576,17 @@ Watch phase markers plus worker CPU, never disk delta or log size - both go flat
 stretches during real work. Choose a log by `LastWriteTime`, never by size: size correlates with
 age, so "biggest" actively selects the stalest file. Print the chosen path with its age.
 
+For an in-place upgrade the markers are in the live
+`C:\$WINDOWS.~BT\Sources\Panther\setupact.log`, in order: `MOUPG  Action progress: [NN%]` (a real
+percentage of the down-level phase; match it with a regex such as `MOUPG\s+Action progress`, since
+the log pads it with more than one space), `SPWIMCallback: Image unmount. Progress: NN` and
+`Operation completed successfully: <step>` (per step, monotonic), then `C:\$WINDOWS.~BT\NewOS\`
+appearing (the reboot is near). `SetupHost` CPU is the rate signal that keeps moving through every
+phase. Measured mid down-level: disk moved by tens of MB and the log sat unwritten for 27 minutes
+while `SetupHost` CPU climbed from 5669 to 9738 s - image mount/unmount and registry work, not a
+hang. Done is `C:\Windows.old` plus a changed build/`UBR` after the apply reboot, never elapsed
+time.
+
 Keep one non-log signal. When comparing a counter across samples for STALL detection use a
 tolerance, never exact equality - a value that jitters resets an exact-match stall counter every
 sample, so the stall branch can never fire. (The blast-radius counters above are a different job
@@ -592,12 +676,16 @@ unmeasured.
 - You are believing a wrapper's failure verdict without asking the guest
 - A `wmic` query came back empty and you read it as the machine having none, without checking
   stderr or the exit code
+- You are resetting `SoftwareDistribution` for a KB whose WU logs show no error, or confirming
+  an install with `Get-HotFix` instead of the `UBR`
+- You are putting a checkpoint CU in the target's folder on a build already past the checkpoint
+- You are adding an exclusion for a file a live `/Capture-Image` could not open
 
 ## Common mistakes
 
 - Adding an exclusion for each locked file during a live capture. Snapshot instead - a VSS
-  shadow copy has no open handles, so the whole failure class disappears
-  (`Invoke-CimMethod Win32_ShadowCopy Create`; `vssadmin create shadow` is Server-only).
+  shadow copy has no open handles, so the whole failure class disappears (recipe under "Capturing
+  a live install as a repair source").
 - Reading `cleanmgr`'s exit code. It returns 0 while silently declining the "Previous
   Installations" handler under a non-interactive session. Check the directory.
 - Hard-stopping a guest mid-update. That is how component stores get damaged in the first place.

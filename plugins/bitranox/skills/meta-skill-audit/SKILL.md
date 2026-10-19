@@ -163,6 +163,17 @@ reader who can answer, in the files most likely to hold a real defect.
 | **UNEXECUTABLE** | A required value, path, order or precondition is genuinely absent.                    | A placeholder the skill tells the reader to fill in, read as an omission.   |
 | **STALE**        | The claim is version-bound and carries no version, date, or way to check it.          | A deliberately generic example.                                             |
 
+**A project-local skill's DANGLING list is candidates, not findings.** Auditing a repo's own
+`.claude/skills` (`--skills-dir`), the room carries `REPO_FILES.txt` so repo-relative paths
+resolve, but a reference to an INSTALLED marketplace skill (`<plugin>:<skill>`) still reads
+DANGLING. Batch-check every DANGLING target before reading any closely - `test -e` per repo path
+against the real tree, `test -d` per marketplace skill against the installed plugin
+(`~/.claude/plugins/cache/<marketplace>/<plugin>/<version>/skills/<skill>`) - discard the false
+class in one pass, and record how many you discarded: a raw finding total is not the audit's
+result (measured: 26 of 43 raw findings were this class, and every path-qualified target existed).
+What survives is real even when the file exists: a script named bare, with no home path, cannot
+be resolved by its reader.
+
 Rank by what a reader DOES with the defect. A wrong command outranks every missing cross-reference,
 because the reader runs the one and merely fails to follow the other.
 

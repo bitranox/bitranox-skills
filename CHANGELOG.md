@@ -29,6 +29,21 @@ than the change, so entries reconstructed from them would read like coverage wit
 a hole nobody has drawn a line under is one that gets rediscovered and half-filled - which is how
 two "versions with no entry" notes came to sit in this file disagreeing with it.
 
+## [9.8.1]
+
+### Changed
+
+- `infra-windows-servicing`: a new section for a cumulative update Windows Update will not offer
+  (check the update's class, read the build from `UBR` rather than `Get-HotFix`, fetch the .msu
+  from the Update Catalog, and when a checkpoint CU belongs in the folder by build), with
+  `dism.log` read before the DISM exit text; a VSS-shadow recipe for capturing a live install as a
+  repair source; in-place-upgrade monitoring names the `setupact.log` phase markers and
+  `SetupHost` CPU as the rate signal.
+- `meta-context-watcher`: before retiring, migrating or summarising a backlog, scan the full body
+  of every closed item for open markers and carry real ones over with their first-raised date.
+- `meta-skill-audit`: a project-local skill's DANGLING list is batch-checked as candidates, and the
+  discarded count is reported.
+
 ## [9.8.0]
 
 ### Added

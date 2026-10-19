@@ -74,6 +74,17 @@ Where a line sits reads as who owns the work: the next session picks the top ite
 backlog and starts editing another repo's code from here, so a general-purpose library ends up
 doing an application's work.
 
+**Before retiring, migrating or summarising a backlog, read its CLOSED items too** - folding an old
+`TODO.md` into `OPEN-WORK.md` and answering "what is still open" both count. Scan the FULL BODY of
+every item under a Completed/Done/Closed heading, and of every `- [x]` line, for open markers
+(case-insensitive):
+`NOT built`, `still open`, `stays open`, `REMAINING`, `Wanted:`, `left open`, `Follow-up filed`,
+`not yet`. A dated Completed heading describes the parent work, not every follow-up filed beside
+it, and the marker usually sits past the first line, so a heading-only or first-line scan misses it
+(measured: three never-shipped items among 214 Completed ones). Adjudicate each hit against its
+sentence - most are history - check each real one against the code, and carry it over with its
+first-raised date before the source file goes: once it is deleted, nothing points at the item.
+
 **Rank in TENS** - 10, 20, 30. An insertion is then a new number instead of a renumbering of
 every line below it, which keeps a reorder out of the diff of an unrelated change.
 
