@@ -1,4 +1,4 @@
-# Handover 2026-10-19: [23] step 3b done (9.3.1, pwshpy 1.5.1, btx_lib_mail 4.5.1), next 3c
+# STALE - read 2026-10-19, work continued
 
 ## In flight
 
