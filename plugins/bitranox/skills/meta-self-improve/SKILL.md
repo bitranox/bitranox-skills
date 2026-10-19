@@ -78,12 +78,12 @@ The audit scans THREE sources, because a learning does not always reach prose:
   discovery, with no sentence anywhere. The gate never reads tool blocks, so every tool signal is
   by definition a miss.
 - **The skill tally** - which skills actually ran. If a candidate miss is a bug that shipped
-  DESPITE a skill that ran, that is that SKILL's coverage gap, not just a memory: flag it and fix
-  the skill (see `flag-a-skill-when-a-real-bug-slips-past-it`). This is real invocation data read
-  from the transcript, not recall - in a long session the early invocations have scrolled out.
+  DESPITE a skill that ran, that is that SKILL's coverage gap, not a memory: queue it against the
+  skill per step 2's skill check. This is real invocation data read from the transcript, not
+  recall - in a long session the early invocations have scrolled out.
 Premature signals ("wait...", "let me double-check") stay audit-only - the lesson is not formed
-yet. Skill-coverage gaps are NOT this loop's job: a defect that slipped past a skill you followed
-goes to the dream's skill-gap pass.
+yet. Extending the gate's patterns never fixes a skill gap: capture queues it (step 2), and the
+dream's skill-gap pass catches the ones capture missed.
 
 ## Procedure
 
@@ -130,13 +130,35 @@ judgement it is prompting for.
 
 ### 2. Classify each candidate
 
+**First, ask which skill was in use.** For each candidate, name the skills loaded when it
+happened: the Stop-gate nudge lists them under `SKILLS IN USE`, otherwise read the Skill calls in
+this session's transcript, never your recall. A candidate carrying two lessons (a release step
+plus a generic git habit) is split, and each half routed on its own. Take the FIRST case that fits:
+
+1. **It arose while following a loaded skill, inside that skill's domain** - a step of the skill
+   led you into it, was wrong, or was silent where it should have spoken. The fix is to THAT
+   skill: `contrib_queue.py add --target skill:<name> --what <the lesson> --why <what it cost>
+   "<cwd>"` (home `<plugin>/skills/meta-self-improve/`, launch via `hooks/run-python.sh`). Whether
+   the skill already mentioned it does not change the route: silent means a missing line,
+   mentioned-but-missed means a wording or placement fix.
+2. **A shipped skill covers the domain but was never loaded** - a trigger miss. Queue it against
+   that skill the same way, naming what you were doing when it should have loaded.
+3. **Otherwise** - no skill in use, or one loaded for unrelated work (a git quirk hit while a
+   Proxmox skill was loaded) and no shipped skill covering this domain: use the table below.
+
+In cases 1 and 2 the entry carries the lesson itself, and you write NO memory fact - unless the
+rule also binds work outside that skill's description, and then name the queued skill in the
+fact's body. A release check fires only while releasing, which loads the release skill: no fact. A
+quoting rule for ANY self-authored shell text binds far more than git commits: a fact too. A fact
+beside a queued skill fix is otherwise a duplicate that outlives the fix.
+
 | Kind                                                                                            | Home                                                                                                                                           |
 |-------------------------------------------------------------------------------------------------|------------------------------------------------------------------------------------------------------------------------------------------------|
 | User correction or working-style directive ("from now on...", "always/never...")                | a `feedback` memory AND, if it must bind future sessions, a CLAUDE.md guardrail line                                                           |
 | Recurring process/tooling/environment mistake (wrong command, shell/SSH/OS quirk, stale output) | the project's recurring-error record if it has one (bump count + date), else a `feedback` memory phrased as the check that avoids it           |
 | Discovery or miss (a re-derived tool/path, a measured timing, a gotcha, a working procedure)    | the most relevant existing `project`/`reference` memory, or a new one                                                                          |
 | Architecture/topology/data-flow realization                                                     | the right altitude per step 3b; unsure -> ask the user                                                                                         |
-| A skill was wrong, missing, or mis-triggered                                                    | PROPOSE (step 5); never rewrite an existing skill inline (sole exception: this skill, see the meta-loop)                                       |
+| A skill was wrong, missing, or mis-triggered                                                    | QUEUE a fix to that skill (skill check above), no fact; no such skill yet -> PROPOSE (step 5); never edit inline (except this skill)           |
 | A multi-step manual chore re-done from scratch a 2nd time (or a local tool that came up short)  | PROPOSE a LOCAL tool in `toolbox` (step 6); build/enhance it TDD only after user OK - never auto-author, never hand-roll around a fixable tool |
 | Nothing durable                                                                                 | drop it                                                                                                                                        |
 
@@ -396,6 +418,9 @@ when a write is about to land in the plugin source from elsewhere.
 - [ ] The tool inventory (local `toolbox list` + the shipped `bitranox:compuse-toolbox` table) was
       read BEFORE any script was hand-rolled - step 0, not step 6.
 - [ ] Dedup grep ran over the pointer blocks + `facts/` bodies + native tier BEFORE any write.
+- [ ] Each candidate was checked against the skills loaded when it happened (step 2); one that
+      arose inside a loaded skill's domain, or that a shipped skill should have triggered for, was
+      queued against that skill, with no fact beside it unless the rule binds work outside it.
 - [ ] ONE engine `add` per fact; its printed slug captured (fail-loud - no silent results).
 - [ ] Every hook trigger-first ("When <situation>, <directive>.") and self-sufficient. The 350-char
       soft-cap warning is advisory - acceptable; the 500-char HARD cap is a refusal, so an add that

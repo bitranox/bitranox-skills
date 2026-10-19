@@ -29,6 +29,36 @@ than the change, so entries reconstructed from them would read like coverage wit
 a hole nobody has drawn a line under is one that gets rediscovered and half-filled - which is how
 two "versions with no entry" notes came to sit in this file disagreeing with it.
 
+## [9.6.0]
+
+### Added
+
+- `self-improve-gate` (Stop): when it blocks, the reason now names the skills this session invoked
+  (`SKILLS IN USE`, read off the transcript's Skill calls, at most 12 named) and says that a lesson
+  learned while following one of them belongs in that skill, queued with `contrib_queue.py add
+  --target skill:<name>`, rather than in a new memory fact. In a long session the early skill loads
+  have scrolled out of context, so recall cannot answer which skill was in use.
+
+### Changed
+
+- `meta-self-improve` step 2 first asks which skill was in use when each lesson happened, and takes
+  the first case that fits: inside a loaded skill's domain, queue a fix to that skill; a shipped
+  skill that covers the domain but never loaded, queue a trigger fix; otherwise classify by the
+  table. Neither queued case writes a memory fact unless the rule also binds work outside that
+  skill. A candidate carrying two lessons is split first. Probed on opus and haiku: without the
+  change, lessons from a followed release and SSH procedure became memory facts (haiku) or a fact
+  beside each queued fix (opus); with it, both queued all three skill lessons with no duplicate
+  fact.
+- The skill's miss-audit section no longer says skill gaps are "not this loop's job"; capture
+  queues them and the dream's skill-gap pass catches what capture missed.
+
+### Fixed
+
+- The `self-improve-gate` block reason told the model to write facts "useful across projects" to a
+  tree-top store under a directory name the engine no longer writes, contradicting the skill's
+  rule that capture writes at one project level and the dream raises altitude. It now states that
+  rule.
+
 ## [9.5.0]
 
 ### Added

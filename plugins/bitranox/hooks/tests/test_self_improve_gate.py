@@ -148,7 +148,64 @@ def test_block_reason_has_no_routing_hint_when_only_cwd_touched(tmp_path, monkey
     tp = make_transcript(tmp_path, user="No, that's wrong")
     run_gate(monkeypatch, tmp_path, {"transcript_path": tp, "cwd": cwd, "session_id": "sY"})
     reason = _reason_of(capsys)
-    assert "This turn also edited" not in reason           # no noise when the subject IS cwd
+    assert reason                                          # the gate did block
+    assert "ROUTING EVIDENCE" not in reason                # no noise when the subject IS cwd
+
+
+def _transcript_with_skills(tmp_path, skills, user):
+    """A transcript where the assistant invoked each of `skills` via the Skill tool, then `user`."""
+    lines = [json.dumps({"type": "assistant", "message": {"content": [
+        {"type": "tool_use", "name": "Skill", "input": {"skill": name}}]}}) for name in skills]
+    lines.append(json.dumps({"type": "user", "message": {"content": user}}))
+    p = tmp_path / "transcript.jsonl"
+    p.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    return str(p)
+
+
+def test_block_reason_names_the_skills_this_session_invoked(tmp_path, monkeypatch, capsys):
+    # A lesson learned WHILE following a skill is usually that skill's gap, not a new memory fact.
+    # Capture can only route it there if it knows which skills ran, and in a long session the early
+    # invocations have scrolled out of context - so the gate reads them off the transcript.
+    tp = _transcript_with_skills(
+        tmp_path, ["bitranox:devops-bmk", "bitranox:compuse-ssh", "bitranox:devops-bmk"],
+        "No, that's wrong, the release needs a clean tree")
+    run_gate(monkeypatch, tmp_path, {"transcript_path": tp, "cwd": str(tmp_path)})
+    reason = _reason_of(capsys)
+    assert "SKILLS IN USE" in reason
+    assert "bitranox:devops-bmk (x2)" in reason
+    assert "bitranox:compuse-ssh" in reason
+    assert "--target skill:<name>" in reason               # tells it WHERE such a lesson goes
+
+
+def test_block_reason_has_no_skill_hint_when_no_skill_ran(tmp_path, monkeypatch, capsys):
+    tp = make_transcript(tmp_path, user="No, that's wrong, the flag is --tree")
+    run_gate(monkeypatch, tmp_path, {"transcript_path": tp, "cwd": str(tmp_path)})
+    reason = _reason_of(capsys)
+    assert reason                                          # it blocked
+    assert "SKILLS IN USE" not in reason
+
+
+def test_skill_hint_is_bounded(tmp_path, monkeypatch, capsys):
+    # A block reason past the hook output cap is truncated; the list must not grow without bound.
+    names = ["bitranox:skill-%02d" % i for i in range(G._SKILL_HINT_MAX + 5)]
+    tp = _transcript_with_skills(tmp_path, names, "No, that's wrong")
+    run_gate(monkeypatch, tmp_path, {"transcript_path": tp, "cwd": str(tmp_path)})
+    reason = _reason_of(capsys)
+    assert "and 5 more" in reason
+    assert sum(n in reason for n in names) == G._SKILL_HINT_MAX
+
+
+def test_block_reason_routes_capture_to_the_subject_level_not_a_tree_top_store(
+        tmp_path, monkeypatch, capsys):
+    # Capture writes at ONE project level and the dream raises altitude (meta-self-improve step 3b);
+    # a reason telling it to write "useful across projects" facts to a tree-top store contradicts
+    # that, and named a store directory the engine no longer writes.
+    tp = make_transcript(tmp_path, user="No, that's wrong")
+    run_gate(monkeypatch, tmp_path, {"transcript_path": tp, "cwd": str(tmp_path)})
+    reason = _reason_of(capsys)
+    assert ".claude-bx-selflearning" not in reason
+    assert "highest-altitude" not in reason
+    assert "project level" in reason
 
 
 def _iso_home(tmp_path, monkeypatch):

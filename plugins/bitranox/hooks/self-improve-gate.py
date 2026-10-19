@@ -40,6 +40,10 @@ _SUBAGENT_HINT_MAX = 10
 # capture step needs the candidates, not the session's full reach.
 _ROUTING_LEVELS_MAX = 8
 
+# How many invoked skills the skill hint names. A long session can load dozens, and the block reason
+# shares the 10,000-character hook output cap with the subagent and routing hints.
+_SKILL_HINT_MAX = 12
+
 # Learning-signal patterns live in the shared self_improve_signals module (single source
 # of truth, also used by the SessionEnd audit hook). Re-bound to the private names this
 # module and its tests use. Signals cluster in FAMILIES (user correction / "remember";
@@ -61,10 +65,9 @@ _REASON = (
     'endorsing yours (a confirmed approach) - a self-admitted miss, or a realization such as '
     '"now I understand the real ..."). Before you '
     'stop: invoke the self-improve skill (Skill tool, name "meta-self-improve") to capture this '
-    "session's learnings per its procedure. A discovered fact goes at the right altitude BY SCOPE, "
-    "kept concrete: useful across projects -> the highest-altitude curated store (.claude-bx-selflearning/ "
-    "at the TOPMOST ancestor directory that has a CLAUDE.md - share-visible, not ~/.claude); "
-    "one project -> its memory; a must-hold intermediate-subtree rule -> that level's CLAUDE.md; "
+    "session's learnings per its procedure. Capture writes each fact at ONE project level, the level "
+    "of the fact's SUBJECT, kept concrete; raising it to a higher altitude is the dream's job, never "
+    "capture's. A must-hold intermediate-subtree rule is proposed for that level's CLAUDE.md; "
     "unsure -> ask the user where it belongs. If a project-specific "
     "extension skill exists (a repo-local *-self-improve), follow its bindings too. If on "
     "reflection there is genuinely nothing worth recording, say so in one line and then stop."
@@ -102,6 +105,33 @@ def _routing_hint(event, proj):
                 ". Capture defaults to the cwd, which is WRONG when the learning is ABOUT one of "
                 "those repos: in that case pass `--proj <that level>` to `memory_engine.py add`, not "
                 "the cwd. If the learning is really about the cwd's own workflow, keep the cwd.")
+    except Exception:                                     # noqa: BLE001 - a hint must never wedge a turn
+        return ""
+
+
+def _skill_hint(transcript_path):
+    """Prose naming the skills this session invoked, or '' when none ran.
+
+    A lesson learned while following a skill is usually that skill's gap: recording it as a memory
+    fact leaves the skill wrong for every other install and adds a pointer competing with it. The
+    capture step can only make that call if it knows which skills ran, and in a long session the early
+    invocations have scrolled out of context, so they are read off the transcript, not recalled.
+    It names candidates and never decides: a skill loaded for one task says nothing about a lesson
+    from another."""
+    try:
+        with open(transcript_path, encoding="utf-8", errors="replace") as fh:
+            tally = _sig.skills_invoked(fh.read())
+        if not tally:
+            return ""
+        names = sorted(tally)
+        shown, left = names[:_SKILL_HINT_MAX], len(names) - _SKILL_HINT_MAX
+        bits = ["%s (x%d)" % (n, tally[n]) if tally[n] > 1 else n for n in shown]
+        if left > 0:
+            bits.append("and %d more" % left)
+        return (" SKILLS IN USE - this session invoked: " + ", ".join(bits) + ". For each learning, "
+                "ask whether it arose WHILE following one of these, in that skill's domain: then the "
+                "skill is what was wrong or silent, so queue the fix with `contrib_queue.py add "
+                "--target skill:<name>` instead of writing a memory fact (meta-self-improve step 2).")
     except Exception:                                     # noqa: BLE001 - a hint must never wedge a turn
         return ""
 
@@ -371,8 +401,8 @@ def main():
             except OSError:
                 pass
         out["decision"] = "block"
-        out["reason"] = ((nap_hint + _REASON + _routing_hint(event, proj) + sub_hint) if nap_hint
-                         else (_REASON + _routing_hint(event, proj) + sub_hint))
+        hints = _routing_hint(event, proj) + _skill_hint(transcript) + sub_hint
+        out["reason"] = nap_hint + _REASON + hints
         if sub_hint:
             # A non-empty hint ALWAYS blocks, so the quoted findings are consumed here.
             _consume_subagent_hint(event.get("session_id") or "")
