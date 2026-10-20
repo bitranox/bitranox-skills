@@ -20,6 +20,15 @@ trap below fails as a plausible NEGATIVE or a slightly-off count, never as an er
   file that begins with a copy of the earlier one, so one real call appears in several files and a
   per-file walk counts it once per copy, inflating the denominator. Skip a repeated id, but never
   collapse records whose id is MISSING, and report how many duplicates were dropped.
+- **Report two denominators when a sweep measures a detector: every file, and the ELIGIBLE
+  subset** that contains the detector's precondition at all (for example at least one recovery
+  event), and say which one each figure uses. Many transcripts are stubs, a session that opened and
+  went nowhere, and cannot hold a multi-step pattern, so a rate over the raw file count makes the
+  detector look quieter, and a corpus-wide precision or coverage look better, than it is. Measure
+  the stub share on your own corpus rather than assuming one:
+  `find <root> -name '*.jsonl' -exec wc -l {} + | awk '$2 != "total" && $1 < 50' | wc -l`.
+  As a rule of thumb, a rate or precision resting on fewer than about 30 eligible sessions is weak
+  evidence, not a headline.
 - **Task notifications are not `type: "user"` records.** A `<task-notification>` (a background
   command, agent, monitor or workflow finishing or failing) is stored as a `queue-operation` record
   with `operation: "enqueue"` (text in `content`) and as an `attachment` record of type

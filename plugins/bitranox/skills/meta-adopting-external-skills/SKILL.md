@@ -126,6 +126,17 @@ never as prose history. The helper fills both from a `<name> (upstream)` placeho
 credit line and the notice `Source:` field to the curated house style (e.g. `the superpowers plugin`;
 `Obra Superpowers plugin (URL)`) so a new entry reads like the existing ones.
 
+**Every derived skill needs both, including one brought in without the helper.** The helper writes
+the credit line and the notice for the skill it adopts; a skill copied wholesale or adapted by hand
+gets neither, and `repo-gate.py` only checks that credit lines and notices are in SYNC, so a skill
+with neither passes it. When you review the catalogue, or before a release, audit for missing
+attribution: list each upstream's skills (for example
+`gh api repos/<owner>/<repo>/contents/<skills-dir>`), strip the category prefix from each local
+name and match the rest against those names, and check a skill renamed on adoption by distinctive
+text instead, since it matches no upstream name at all. A derived skill with no `> Adapted from`
+line is missing attribution: MIT requires the notice to travel with every adapted copy. Fix every
+affected skill in one change.
+
 ## Step 5 - Upstream-first and coexist
 
 **REQUIRED: `bitranox:meta-self-improve`, its "Propagating skill (or hook) improvements upstream"
@@ -141,4 +152,6 @@ plugins are left untouched - the bitranox copy coexists, and the user chooses wh
 - Restating skill-writer or self-improve here instead of cross-referencing them.
 - Writing provenance narrative ("ported from X") instead of the structured credit line plus the
   notices entry.
+- Reading a green gate as proof of attribution: it passes a derived skill that has neither the
+  credit line nor the notice.
 - Skipping the index/version/tests gate, so the change ships to no one.

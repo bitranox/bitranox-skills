@@ -227,12 +227,40 @@ Fixed topic: Core API - Client, Session, request(), Streaming, Connection, Retry
     restored by how often and how recently each skill was used, so a skill never invoked loses its
     description first. Length does not protect against this; a shorter description only costs the
     listing less.
+    - The budget is `context_tokens * chars_per_token * skillListingBudgetFraction`, with
+      `chars_per_token` 4 for some models and 3 for the rest. Over it, descriptions are restored in
+      descending `usageCount * 0.5^(days_since_last_use / 7)`, so a skill nobody has used yet
+      scores 0, loses its description first and stays unused. Anthropic's bundled skills are
+      exempt.
+    - **Fix it by raising `skillListingBudgetFraction`, never by trimming the description.**
+      Trimming deletes the keywords the router matches on, and the budget is a ceiling, not a
+      reservation, so raising it costs nothing when the catalogue is small. Size it for the
+      smallest context you run: the same fraction buys a 200k-token model a fifth of what it buys a
+      1M one. Uninstalling other plugins frees little, since their entries are usually already
+      bare names. This plugin's SessionStart hook `skill-listing-budget.py` raises the user-level
+      value in `settings.json` to fit the installed catalogue and never lowers it; a project that
+      sets its own fraction in `.claude/settings.json` is left alone, so check that value there.
+    - Confirm it in the session's `skill_listing` attachment (below): the skill's line is
+      `- <name>` with no `: <description>` after it.
   - **A bloated description is a REWRITE, not an append.** An appended trigger lands in the dead
     tail, and inserting one early only pushes a different one out.
   - To see what a live session actually received, read that session's own `skill_listing`
     attachment from its transcript (a record whose attachment `type` is `skill_listing`, usually
     written only after the first prompt) and diff the entry for that skill against the field in the
     file. A bare name with nothing after it is a description the listing budget dropped.
+    - **Where and how:** the transcript is the session's `.jsonl` under `~/.claude/projects/`.
+      Parse it as JSON lines and select records with `type == "attachment"` and
+      `attachment.type == "skill_listing"`. Take the latest `isInitial: true` record (one is
+      written at startup and again after each plugin reload) and merge the `isInitial: false`
+      deltas after it, which carry only the skills added since. In its `content`, each entry is
+      `- <name>: <description>`; a description can run over several lines, so anchor on the names
+      in `names`, not on every line starting with `- `.
+    - **Pitfalls that report the wrong text:** grepping the transcript for the description's
+      prose finds `tool_result` blocks from a session that READ the SKILL.md or a catalogue file,
+      which describe the file on disk, not the listing; a delta read alone is not the installed
+      set; a dispatched subagent's listing is in its own `subagents/agent-<id>.jsonl`, not in the
+      parent transcript. The listing is built from the INSTALLED plugin, so a repo commit alone
+      does not change it: check a session started after the new version was installed.
 - `name`: Use letters, numbers, and hyphens only (no parentheses, special chars)
 - `description`: Third-person, describes ONLY when to use (NOT what it does)
   - Start with "Use when..." to focus on triggering conditions
@@ -1212,6 +1240,16 @@ without looking, so a required success statement converts a silent miss into a c
 all-clear. Require the concrete artifact instead: the quoted line it acted on, the command it
 actually ran, the question it could not answer from the text.
 
+**A pass gets the same re-run as a failure.** Before believing a GREEN pass, or recording any
+"X does not happen" verdict from subagent arms, also run the arm that would expose X pinned to the
+weakest tier (`haiku`), beside the `opus` arm - an added verification arm, as for a RED that will
+not fail, not a replacement. Following a prescribed template or literal value too literally is a
+weak-model failure that a capable model reasons past, so a single-tier pass hides it. When a fix
+loosens a rule, add a control arm for the opposite failure (does it now over-trigger?) on every
+tier the claim covers. State the tiers and the cell count in the review artifact, never a bare
+verdict. If a verdict already published is overturned later, correct the artifact in place and
+say so in the commit message.
+
 ### REFACTOR: Close Loopholes
 
 Agent found new rationalization? Add explicit counter. Re-test until bulletproof.
@@ -1254,6 +1292,15 @@ A gap RED and GREEN both report - a question answered NOT STATED in both arms - 
 edit. It is still a gap a reader hits, so it goes on the list like any other, and "not caused by
 this change" is not a decline reason: close it in this change and re-probe that question, or
 decline it for one of the reasons above.
+
+**A probe stops at the first gap it trips on,** so nothing past that point was exercised, and
+closing the gap can expose the next one. A gap marked closed in the review artifact is a claim
+until the probe says so: after each fix, re-run the SAME probe - the questions your fix touched,
+plus any the first gap kept the probe from reaching, asked in full, not a summary of them - on the
+final text, and repeat after each further fix.
+Stop only when a re-run turns up no new undecided gap, and keep that last run's output in the
+review artifact as the evidence. The same holds for a probe over any doc text, such as a README
+or a CLAUDE.md.
 
 **Verify each fix by quote-back.** Re-ask the contested question and require the answer to be a
 DIRECT QUOTE of the governing text, or the single word NONE. A paraphrase proves the model can
@@ -1349,6 +1396,10 @@ Deploying untested skills = deploying untested code. It's a violation of quality
 - [ ] GREEN diffed against RED in BOTH directions, with every baseline result missing from GREEN
       accounted for - a lost result is a REFACTOR requirement, not a trade
 - [ ] Each fix verified by quote-back (a direct quote of the governing text, or NONE)
+- [ ] After the last fix, the same probe re-run on the final text found no new undecided gap,
+      and that run's output is in the review artifact
+- [ ] Every pass and every "X does not happen" verdict also ran on `haiku`; the artifact states
+      the tiers and cell count
 - [ ] Identify NEW rationalizations from testing
 - [ ] Add explicit counters (if discipline skill)
 - [ ] Build rationalization table from all test iterations

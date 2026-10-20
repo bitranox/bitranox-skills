@@ -29,6 +29,37 @@ than the change, so entries reconstructed from them would read like coverage wit
 a hole nobody has drawn a line under is one that gets rediscovered and half-filled - which is how
 two "versions with no entry" notes came to sit in this file disagreeing with it.
 
+## [9.10.3]
+
+### Changed
+
+- `meta-skill-writer`: how the listing budget is computed, why a never-used skill loses its
+  description first, and the fix (raise `skillListingBudgetFraction`, never trim); how to read a
+  session's `skill_listing` attachment and the pitfalls that report the wrong text; a GREEN pass and
+  any "X does not happen" verdict also run on `haiku`; after a fix, re-run the same probe,
+  including the questions the first gap kept it from reaching.
+- `meta-dream-tree`: scaffold-noise levels are set aside before descriptor synthesis and proposed
+  for removal; `heal` takes the project root, never a subdirectory; a destructive duplicate verdict
+  needs an adversarial loss-finding second pass; a `decoy anchor` is drained, then moved to the
+  backup root, never deleted, with a one-store invariant check.
+- `meta-self-improve`: never aim `--proj` at an installed copy under `~/.claude`; a stranded body
+  does not fail `--check-tree`; an empty ancestor-chain search is not proof a fact is missing; a
+  queued contribution's fix and figures are hypotheses to measure.
+- `compuse-toolbox`: measuring a guard's misses with a wider oracle; report two denominators when a
+  corpus sweep measures a detector.
+- `ai-llm-jev-judge`: name the state field that carries the deciding fact before a pilot; the
+  version floors name `btx-skill-jev-judge` 0.3.1, and so does `jev_shadow.py`'s
+  `JEV_JUDGE_FLOOR`.
+- `meta-adopting-external-skills`: audit attribution debt for skills brought in without the helper.
+- `process-test-design`: a green `windows-latest` cell is weaker evidence than a real Windows
+  machine.
+- `process-test-driven-development`: a `redcheck` hit is a term overlap; read its shared terms
+  before trusting it.
+- `process-review-receiving-code-review`: your own looser reading of a finding is a hypothesis;
+  test both against real data.
+- `process-debug-systematic`: name a cause from the minimal set of ingredients that flips a real
+  failing input.
+
 ## [9.10.2]
 
 ### Changed

@@ -45,6 +45,20 @@ refused and says so. An out-of-range index is refused rather than deleting the w
 Dropping is a JUDGEMENT, so record the evidence in `--reason`: "verified false, <the check you ran>"
 or "shipped in <version>". A queue entry you merely doubt is not a drop - test it and find out.
 
+**A queued entry's FIX and its numbers are hypotheses; only its DEFECT was observed.** The fix was
+written in the moment the defect was noticed, by someone busy with something else, and nothing has
+tested it; a figure the entry cites can come from documentation rather than from a measurement.
+Because the entry reads like a decision already taken, the measurement is the step that gets
+skipped. So before writing code: re-check the evidence (re-run the measurement it cites, and check
+the gap is not already shipped, see below), re-derive the fix from the defect, write at least one
+alternative shape, and measure the shapes against each other. For anything that fires on a pattern
+(a router, a guard, a nudge), that measurement is a replay of the real corpus with `guard_replay`
+or `corpus_prompts` from `bitranox:compuse-toolbox`. Measured once: a queued router fix lost far
+more fires than it gained on such a replay, while the opposite shape gained. Ship what the
+measurement supports, and when it differs from what was queued, say so in `ship --note`: the note
+is the only record a later reader gets, and one reading "as queued" makes an untested approach look
+validated.
+
 **Before writing a queued documentation contribution, check it is not already shipped elsewhere.**
 The entry's `--target` is a guess made when the learning was captured, and the rule often already
 lives in a sibling skill that owns the TRIGGER rather than the topic (one measured queue drain: 4

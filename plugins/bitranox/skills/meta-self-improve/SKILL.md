@@ -187,6 +187,15 @@ then upserts (keeps the pin). New entry only when nothing covers it.
   refuse - the derived slug is free - so `add` mints a SECOND fact, pointer and body, and says
   nothing. Read the slug off the pointer line and pass it.
 
+**An empty search of the ancestor chain is not proof a fact is missing.** The loaded index and a
+grep of the `CLAUDE.local.md` files on the ancestor chain answer "does this load HERE", not "does
+this exist": the pointer blocks cascade from ANCESTORS of the cwd only, so a fact correctly placed
+at a level BELOW the cwd is invisible from it by design. Before reporting a fact as missing,
+unreachable or misplaced (one an earlier session says it captured included), run the tree-wide
+`find` above, run `reconcile_memory_index.py --check-tree <anchor>` (a body that really lost its
+pointer shows there as a `~ dangling body` line), and read the owning level's scope descriptor (its
+PLACE-HERE line) before calling the placement wrong.
+
 ### 3b. Choose the altitude - by SCOPE, placed concretely
 
 - **Per-turn capture writes at ONE PROJECT level - the level of the fact's SUBJECT, which is
@@ -202,6 +211,18 @@ then upserts (keeps the pin). New entry only when nothing covers it.
   This matters most CROSS-TREE: a fact misfiled into another tree can NEVER be re-homed by a dream
   (`move` refuses to cross trees) - it is wrong until a human finds it. Same-tree misfiling is
   recoverable (the tree dream re-levels), but still capture it right.
+- **Never aim `--proj` at an installed copy under `~/.claude`** (a marketplace clone under
+  `~/.claude/plugins/marketplaces/`, a plugin cache version dir under `~/.claude/plugins/cache/`),
+  even when the cwd is there and the lesson is about the code in it: route it to that code's SOURCE
+  repo. `add` writes the BODY to the tree anchor's `.claude-memory/facts/` but the POINTER to
+  `<--proj>/CLAUDE.local.md`, two different directories. An installed copy is re-cloned (a
+  marketplace remove and re-add) or pruned (old cache versions), its `CLAUDE.local.md` is untracked
+  so nothing restores it, and the pointer goes with it while the body stays behind, stranded and
+  unseen. No engine check refuses such a `--proj`. To confirm the tree afterwards, run
+  `reconcile_memory_index.py --check-tree <anchor>` and read its
+  `~ dangling body (no pointer at any level)` lines and its `TOTAL dangling bodies` line: both are
+  ADVISORY and outside `TOTAL tree problems`, so a total of 0 is not a clean tree. Repair:
+  references/memory-backend.md, "A stranded body does not fail `--check-tree`".
 - Decide the eventual home by **scope of applicability, not abstractness**: the narrowest level
   that still covers everywhere the lesson applies. Concrete knowledge useful tree-wide belongs at
   the tree's top KEPT CONCRETE. The per-level scope descriptors (the `bitranox:self-learning`

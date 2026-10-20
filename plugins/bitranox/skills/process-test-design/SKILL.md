@@ -267,6 +267,17 @@ Python specifics, where the trap is most common:
   gitignore it (and untrack it if it slipped in). Mechanics: `bitranox:compuse-git` "Don't track local
   build artifacts".
 
+**A green `windows-latest` cell is WEAKER evidence than a real Windows machine.** CI is usually the
+stricter environment; here it is the better-equipped one. GitHub's Windows runner has been observed
+to carry Git for Windows' `usr/bin` on PATH, so `true`, `false`, `env`, `touch` and `sh` resolve
+there. A plain Windows install has none of them, and neither, by default, does one with Git
+installed (the binaries exist on disk, but `shutil.which("true")` returns `None`). A test that uses
+them as throwaway child commands passes in CI and fails on the machines the code ships to, so the
+green cell describes the runner, not your users. Spawn `sys.executable` with `-c` instead, which
+exists wherever the suite runs: `[sys.executable, "-c", "raise SystemExit(1)"]` for a child that
+exits 1. When triaging Windows failures, run the suite on a real Windows machine rather than
+iterating against the CI log; where the two disagree, believe the real machine.
+
 ## A permission-wall test on Windows: build the wall stat cannot see past
 
 A test that needs a path the user cannot check (so `stat` raises `PermissionError`) is built with

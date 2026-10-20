@@ -174,6 +174,13 @@ You MUST complete each phase before proceeding to the next.
      arm tends to be the more flattering result, which is what makes it survive review. Swap the
      versions IN PLACE (stash, checkout, or a symlink the program resolves identically) and keep
      every path the same across arms.
+   - **Name a cause from the minimal set that flips it, not from a correlation.** A shape common
+     to the failing items in a sample is only the most visible ingredient, not the sufficient set.
+     Before naming the cause, start from a captured failing input, not a hand-built one, change or
+     remove one ingredient per run and record pass or fail; if no single change flips it, test
+     pairs. The cause is the smallest set that flips the result, and the regression test is built
+     from exactly that set. A fix aimed at one ingredient of a two-ingredient defect passes a test
+     built from the same reading and leaves the defect live.
 
 3. **Verify Before Continuing**
    - Did it work? Yes → Phase 4

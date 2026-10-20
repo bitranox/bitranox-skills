@@ -167,6 +167,17 @@ way can put an over-cap hook straight into the always-loaded index while `--chec
 reports `TOTAL tree problems: 0` (reference integrity is a different question from entry validity).
 If a body was already hand-written, re-run `add --slug <slug>` over it so the validation executes.
 
+**A stranded body does not fail `--check-tree`.** A body no level points at (its level dir was
+deleted or re-cloned, or its pointer line was lost) prints as
+`~ dangling body (no pointer at any level): <slug>` plus a `TOTAL dangling bodies: N` line marked
+advisory, and neither counts toward `TOTAL tree problems`, so a run ending
+`TOTAL tree problems: 0` can still carry stranded bodies: read the dangling lines, not only the
+total. With any level or store dir unreadable the danglers are not assessed at all (that run exits
+2). `--check-misplaced` cannot see a stranded body either: it judges a fact only by the absolute
+paths in its body. Re-attach with `--rehome` (default target the tree top; `--rehome-to LEVEL`
+keeps a subtree's danglers in that subtree), or re-run `add --slug <slug> --proj <owning level>`,
+which adopts a dangling body there when no other level on that chain still points at it.
+
 | Command                                                                                                                                                                                                                                                                                | Success line to REQUIRE               |
 |----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|---------------------------------------|
 | `add --proj D --title T --hook H\|--hook-file F --body-file F [--type feedback\|project\|reference\|user] [--pin] [--scope TEXT] [--slug S]` [--skill NAME]                                                                                                                            | the printed slug                      |
@@ -183,6 +194,8 @@ If a body was already hand-written, re-run `add --slug <slug>` over it so the va
 | `skills/meta-self-improve/reconcile_memory_index.py --check <chain narrow->broad>` (a SEPARATE script, NOT an engine verb - it lives in this skill's dir, same `run-python.sh` launch)                                                                                                 | `TOTAL problems: 0`                   |
 | `skills/meta-self-improve/reconcile_memory_index.py --check-tree D` (TREE-WIDE: cross-sibling duplicate pointers, orphans, sideways/downward refs, dangling that `--check`/`heal` miss)                                                                                                | `TOTAL tree problems: 0`              |
 | `skills/meta-self-improve/reconcile_memory_index.py --archive S D` (forget a fact: drop its pointer at D + move its body to `.archive/`)                                                                                                                                               | `archived <slug> ...`                 |
+The `--check-tree` success line counts problems only: a run that prints it can still carry
+advisory `~ dangling body` lines, which the paragraph above the table says how to read.
 
 **Fail-loud contract:** run engine calls with `BITRANOX_RUN_PYTHON_STRICT=1`, require the command's
 success line in the output, and ABORT-AND-SHOW on any miss (a refused move prints `! refused:` and

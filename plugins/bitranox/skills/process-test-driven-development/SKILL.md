@@ -242,16 +242,22 @@ Installed plugin skills are deliberately not assembled - where they live depends
 plugin cache and installed versions, and a built-in guess would report a falsely clean corpus on
 someone else's machine. Pass `--corpus ~/.claude/skills` or wherever yours actually are.
 
-**The two answers are not worth the same, and the tool says which one it gave you.** A hit is
-STRONG evidence: the lesson demonstrably sits in reachable context, and the report names the file
-it is in. A clean result is WEAK: the check compares distinctive terms, so it cannot see a
-paraphrase, and "no hit" means NOT CAUGHT rather than absent. Do not read a clean run as a sealed
-fixture.
+**The two answers are not worth the same, and the tool says which one it gave you.** A hit is a
+term overlap, not a reading, even though the report labels it STRONG and names the file. Before
+treating it as strong evidence or dropping the baseline over it, read the hit's shared-terms list
+(printed under the file name, `shared` in `--json`). If the terms are ordinary words ("going",
+"walk", "replacement") rather than the subject's own vocabulary, it is a false positive. Otherwise
+open the named document and grep it for the lesson's real keywords. A document on the chain that
+is about something else is no evidence the lesson is reachable: the text that really teaches it
+may sit on a sibling branch the dispatched agent never inherits. When the hit does not hold up,
+run the behavioural RED and read whether it actually fails. A clean result is WEAK: the check
+compares distinctive terms, so it cannot see a paraphrase, and "no hit" means NOT CAUGHT rather
+than absent. Do not read a clean run as a sealed fixture.
 
 | Exit | Meaning                                                                                                           |
 |------|-------------------------------------------------------------------------------------------------------------------|
 | 0    | clean - neither leak found. Rules out these two reasons; does not prove the RED CAN fail                          |
-| 1    | a leak was found - the report names the document that teaches it, or the phrase that telegraphs it                |
+| 1    | a leak was found - the report names the document whose terms overlap it, or the phrase that telegraphs it         |
 | 2    | usage or IO error, or unchecked (see below); `--json` `data.unchecked` tells them apart and `ok` is false on both |
 
 Unchecked is its own outcome for a reason (exit 2, with `data.unchecked` true): an empty corpus

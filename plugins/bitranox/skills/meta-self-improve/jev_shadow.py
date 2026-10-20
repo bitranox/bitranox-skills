@@ -94,7 +94,7 @@ __all__ = [
 
 # Pinned by a test to the floor in ai-llm-jev-judge/SKILL.md: a sync that raises it there fails
 # until this follows.
-JEV_JUDGE_FLOOR = "0.3.0"
+JEV_JUDGE_FLOOR = "0.3.1"
 JEV_JUDGE_SPEC = "btx-skill-jev-judge>=" + JEV_JUDGE_FLOOR
 EXIT_OK, EXIT_NO, EXIT_ERROR = 0, 1, 2
 # uvx may download jev-judge and its Python on first use; a run is paced by Jev's rate limit.

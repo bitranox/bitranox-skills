@@ -76,7 +76,9 @@ the success line, abort-and-show on a miss).
 0a. **Deterministic scaffold + tree-wide integrity (scripts, no model).**
     `memory_engine.py heal --proj "<cwd>"` (via `run-python.sh`): creates every missing marker
     `CLAUDE.md` + `CLAUDE.local.md` pointer block from the project up to the anchor, plus the central
-    store; normalizes drifted grammar. Require `healed N file(s) across M level(s)`. `heal` is
+    store; normalizes drifted grammar. `<cwd>` here means the PROJECT root: when the session sits
+    in a subdirectory, pass the root instead, because heal creates a level for every directory it
+    climbs through. Require `healed N file(s) across M level(s)`. `heal` is
     CHAIN-scoped and only normalizes grammar, so FOLLOW it with
     `reconcile_memory_index.py --check-tree "<cwd>"` (home: `<plugin>/skills/meta-self-improve/`) to
     surface any cross-sibling DUPLICATE pointer / orphan / dangling body BEFORE consolidating - the
@@ -90,7 +92,17 @@ the success line, abort-and-show on a miss).
     `find <anchor> -name CLAUDE.local.md -not -path '*/.venv*' -not -path '*/site-packages/*'`,
     NEVER a bare `grep -r` (see "Level enumeration" in references/dream-core.md: the session
     `grep` honors `.gitignore` and silently misses every gitignored store, while a bare `find`
-    OVER-counts a vendored plugin copy under a repo's `.venv`). Only synthesize levels whose descriptor is EMPTY,
+    OVER-counts a vendored plugin copy under a repo's `.venv`).
+    **Set aside the scaffold-noise levels FIRST.** A level whose `bitranox:self-learning` block is
+    EMPTY and whose pointer block holds no `- [` line is scaffolding, not a level: `heal --proj D`,
+    and the SessionStart self-heal of the session's cwd, create a marker and a pointer block for
+    EVERY directory from D up to the anchor, so a session or a capture run from a source
+    subdirectory mints one, and heal, `lint --tree` and `--check-tree` all report it clean. Do NOT
+    dispatch a descriptor subagent for it (a descriptor turns the noise into a permanent level), do
+    not count it as a level, and PROPOSE its removal as a structural move (Boundaries in
+    references/dream-core.md), never apply it. Judge on BOTH signals together: pointers but no
+    descriptor is a real level that needs one; a descriptor but no pointers is usually a real level
+    not used yet. Of the rest, only synthesize levels whose descriptor is EMPTY,
     INCOMPLETE (missing template keys), or whose CHILDREN list is stale vs the actual
     subdirectories. Dispatch one `opus` subagent per stale
     level, in parallel (bottom-up in two waves when a leaf and its parent are both stale, so the
@@ -159,7 +171,10 @@ the success line, abort-and-show on a miss).
    misses exactly where duplicates and misplaced facts live: the siblings.
 
 3b. **De-double the tiers.** A fact lives in exactly ONE tier. Per native entry: already curated
-   (by title/hook match) -> drop the native duplicate; native-only and
+   (by title/hook match) -> drop the native duplicate, but a title/hook match, or a reviewer's
+   "already curated, safe to drop", is a CANDIDATE: before dropping, run the loss-finding second
+   pass in references/dream-core.md "Dedup semantics" and drop only the entries it clears;
+   native-only and
    worthwhile -> PROMOTE via engine `add` into a level that EXISTS; some-value -> leave in
    native. There is NO "native-only backend" mode - an absent pointer block is the trigger to
    PROPOSE one, not evidence of one. Creating a level is a structural move (Boundaries in
@@ -185,7 +200,9 @@ the success line, abort-and-show on a miss).
    frontmatter keys are stripped, its `description:` value kept.
 
    The output is CANDIDATES, not duplicates - it scores words, so read BOTH bodies before folding
-   anything. Fold near-duplicates into one sharpened entry (engine `add`, same slug), comparing
+   anything, and pass every drafted merge through the loss-finding second pass in
+   references/dream-core.md "Dedup semantics". Fold near-duplicates into one sharpened entry
+   (engine `add`, same slug), comparing
    across ALL levels, especially SIBLING projects (the classic duplicate is the same lesson
    captured independently in two siblings; it merges at their common parent). Cross-link related
    entries with `[[slug]]`. Dedup runs TWICE - here, and again in step 8, because placement
@@ -345,6 +362,9 @@ the success line, abort-and-show on a miss).
    AND `reconcile_memory_index.py --check-tree "<cwd>"` for `TOTAL tree problems: 0` (the cross-sibling
    duplicate/orphan check the chain-only `--check` cannot make); fix integrity failures via the engine
    (re-point a downward ref, resolve an orphan, dedup a duplicate pointer). Size warnings are advisory.
+   A `decoy anchor` line is never fixed by deleting the directory: drain it first, then move it
+   out of the tree and assert one store remains, per references/dream-core.md "Verification
+   contract".
 
 9. **Behavioral passes.** Run the catalog in references/dream-passes.md (each pass on its own
    trigger): CLAUDE.md reconciliation (chain-gated - runs EVERY dream, rule-by-rule, both
@@ -429,7 +449,8 @@ tests/README-acceptance.md); the bar is all-hard + >= 5/6 judgment on two consec
 ## Deliverables (a completed dream has ALL of these)
 
 - [ ] heal success line ("healed N file(s) across M level(s)").
-- [ ] Scope descriptors fresh: every chain level carries the template keys (or was verified fresh).
+- [ ] Scope descriptors fresh: every chain level carries the template keys (or was verified fresh);
+      a scaffold-noise level set aside in step 0b is excepted and listed as a proposed removal.
 - [ ] Capture ran BEFORE consolidation (or a verified "nothing durable" statement).
 - [ ] Backup taken + the (level, slug, title, pin) manifest recorded pre-dream.
 - [ ] Placement report: applied moves (with direction; pinned entries re-level like any other),

@@ -88,6 +88,7 @@ BEFORE implementing:
 
 IF suggestion seems wrong:
   Push back with technical reasoning
+  (if it only seems stricter than needed, test both on real data first - see below)
 
 IF can't easily verify:
   Say so: "I can't verify this without [X]. Should I [investigate/ask/proceed]?"
@@ -108,6 +109,16 @@ with a test the broad form would fail. When YOU write a fix brief for someone el
 requirements and the inputs to probe, label any named mechanism or wording as a CANDIDATE to
 verify, never the remedy, and have the re-reviewer check any invariant the brief states against
 the real producer's behaviour, not against the brief.
+
+**Your own reading is a hypothesis too.** When your reading of a finding is looser than its
+literal prescription, do not quietly ship your version, and do not push back on argument alone. A
+review arrives compressed, and the gap between what it prescribes and what you reconstruct is
+often where the reviewer's unstated evidence lives; your looser version passes its own tests
+because you wrote them to your reading. Example: a review said a test-run detector must require
+pytest's `in N.NNs` suffix; a bare test count looked sufficient, but a type checker reports its
+findings as a bare count too, so the looser rule matched the wrong tool. Test BOTH versions against
+real data (real tool output, not fixtures you wrote) and let the data decide, never argument in
+your own head. Doubting a prescription is a reason to test it, not a license to swap in your own.
 
 **your human partner's rule:** "External feedback - be skeptical, but check carefully"
 

@@ -100,7 +100,9 @@ Read the mode first (`dream_state.py mode`; knobs in `~/.claude/.bitranox-memory
   does not check `pin`) - treat it as un-archivable by the dream's own policy anyway: report it,
   never drop its pointer.
 - **Structural moves** (relocating a directory, migrating a memory slug, creating a rung - a new
-  curated level, i.e. a pointer block in a dir that has none): always PROPOSED with consequences,
+  curated level, i.e. a pointer block in a dir that has none - or removing a scaffold-noise level,
+  i.e. the marker `CLAUDE.md` and empty pointer block heal minted): always PROPOSED with
+  consequences,
   never applied by the dream. A fact waiting on such a level stays where it is until the level
   exists.
 
@@ -198,6 +200,21 @@ common ancestor, not that it duplicates the citer). Only merge when both bodies 
 and one adds nothing the other lacks. (Measured: a deep fan-out's 3 merge suggestions were all
 complementary on inspection - evidence decides, not the agent's topic guess.)
 
+**A destructive duplicate verdict needs an adversarial second pass.** Before any merge, archive or
+drop resting on "this duplicates that" - step 3b's drop of a native entry judged already curated
+included - run a second, independent pass whose brief is to find what would be LOST, defaulting to
+loss when unsure. Tell it that different wording, a shorter rewrite and a missing anecdote are NOT
+loss, and require a verbatim quote from the entry being dropped for every loss it claims. Give
+each skeptic a distinct lens: a second lesson bundled in the entry and specifics the survivor
+omits; a later decision that supersedes the survivor's text and a project-specific delta; for a
+merge, a trigger or symptom the merged hook no longer names, and whether it is really one fact.
+Settle every split YOURSELF by checking the quoted line against both files, never by majority: a
+wrong "covered" retires a lesson silently, a wrong "keep" costs one duplicate. A link or note
+claiming one fact absorbed the other is not evidence the lesson survived, and low word overlap is
+normal for a well-curated fact, so a scanner score cannot clear a pair either. (Measured: skeptics
+overturned 18 of 27 "safe to drop" verdicts, a 2-to-1 majority was wrong where the lone dissent
+carried a quote, and a trigger-coverage skeptic found a dropped trigger in all 5 drafted merges.)
+
 ## The placement routing prompt (verbatim - lives only here)
 
 > Given this fact (title + hook + body) and the scope descriptors of every level on the chain:
@@ -273,7 +290,27 @@ was dirtied by a peer before you touched it - leave it out of your commit.
 TREE-WIDE run (meta-dream-tree and the crosstree variants) ALSO run
 `reconcile_memory_index.py --check-tree <anchor>` and require `TOTAL tree problems: 0` - the
 chain-only `--check` structurally cannot see a slug DUPLICATED across sibling chains (slugs are
-tree-unique), which `heal` also misses. Report counts (merges, placements with direction, prunes,
+tree-unique), which `heal` also misses.
+
+**A `decoy anchor` line is data loss in progress, not clutter: drain it, then move it out.** It names
+a `.claude-memory` left BELOW the tree top. The engine ignores it (the anchor is the topmost dir
+holding a `CLAUDE.md` and a store), but the walk-up retrieval recipe stops at the NEAREST store, so
+it serves a stale body or an empty stub while the real body at the top goes unread, and a body
+that exists only there leaves its pointer resolving to nothing. In this order: (1) for each body
+only the decoy holds, re-add it through engine `add` at the level that owns its pointer (one no
+pointer names goes where the placement routing prompt sends it); (2) for each that also exists at
+the anchor, compare the prose - a size delta of a few dozen bytes is usually CRLF, not loss, a stub
+is never the one to keep, and a real difference is decided before anything is removed; (3) only
+then move the directory OUT of the tree, into the backup root
+(`~/.claude/self-improve-audit/backups/<key>-<ts>/`), which keeps it recoverable; never delete
+it. Removal is not durable - a
+removed decoy has been seen to come back with new files - so after any dream or store migration
+re-run `--check-tree` and also assert the invariant directly:
+`find <anchor> -type d -name .claude-memory -not -path '*/.claude-memory*/*'` must print exactly
+one path, the anchor's own store (the `-not -path` drops stores nested in a backup copy, which
+`--check-tree` skips too). The dream is not finished while a second path prints.
+
+Report counts (merges, placements with direction, prunes,
 pinned untouched) and, when the run covered what the nudge asked for, run `dream_state.py done
 --kind nap` (a nap) or `dream_state.py done --kind tree --dream <dream id>` (meta-dream-tree, whose
 `done` refuses until each of its Jev shadow sites logged rows for that id or was skipped with a
