@@ -232,6 +232,8 @@ def test_cli_resolves_and_reports_clean(tmp_path):
     assert "hunk 1" in proc.stdout and "no markers remain" in proc.stdout
 
 
+@pytest.mark.skipif(sys.platform == "win32",
+                    reason="Windows has no POSIX mode bits: os.chmod(0o750) only clears read-only and reads back as 0o666")
 def test_cli_preserves_the_file_mode(tmp_path):
     p = _file(tmp_path, TWO_HUNKS)
     os.chmod(p, 0o750)

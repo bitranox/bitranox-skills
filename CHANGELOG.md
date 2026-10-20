@@ -29,6 +29,13 @@ than the change, so entries reconstructed from them would read like coverage wit
 a hole nobody has drawn a line under is one that gets rediscovered and half-filled - which is how
 two "versions with no entry" notes came to sit in this file disagreeing with it.
 
+## [9.10.1]
+
+### Fixed
+
+- `compuse-toolbox` tests: the `conflict_resolve` file-mode test runs on POSIX only; Windows has no mode bits
+  to keep (`os.chmod(0o750)` reads back as `0o666` there), and it failed the Windows CI cell.
+
 ## [9.10.0]
 
 ### Added
