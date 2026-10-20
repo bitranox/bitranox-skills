@@ -1,4 +1,4 @@
-# Handover 2026-10-20: [28] site A shipped (9.10.0, subagent_signal shadow), next [23] Phase 3
+# STALE - read 2026-10-20, work continued
 
 ## In flight
 
