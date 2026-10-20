@@ -221,10 +221,14 @@ the success line, abort-and-show on a miss).
    - anything else - the hook names its project, or its level's PLACE-HERE covers it, or you
      cannot tell - is a PROMOTION, and passes the corroboration gate (user-stated: eager;
      model-inferred: >= 2 DISTINCT PROJECTS). Record the sighting with
-     `dream_state.py saw-promotable <slug> <project the fact came from>`, ask
+     `dream_state.py saw-promotable <slug> <ABSOLUTE path of the project the fact came from>`
+     (a bare name keys a directory that may not exist), ask
      `dream_state.py should-promote <slug>`, and obey the word it prints (`promote` exits 0,
-     `hold` exits 1 - an answer, not a failure). `promote`: move it to
-     the tree top, then run `dream_state.py promoted <slug>` to clear every project's sighting.
+     `hold` exits 1 - an answer, not a failure), with one exception: a `promote` resting on a
+     project key you cannot resolve to a real directory is a `hold` (how to resolve the keys:
+     references/dream-core.md, "A `promote` is only as good as the keys behind it"). `promote`:
+     move it to the tree top, then run `dream_state.py promoted <slug>` to clear every project's
+     sighting.
      `hold`: it STAYS at its project level - no move to the tree top and no move part-way up as
      a compromise, however general its body reads; report it as held. A fact that looks
      universal on ONE project's evidence is exactly what the gate exists to stop, so "it plainly

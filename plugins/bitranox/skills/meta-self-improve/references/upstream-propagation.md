@@ -45,6 +45,22 @@ refused and says so. An out-of-range index is refused rather than deleting the w
 Dropping is a JUDGEMENT, so record the evidence in `--reason`: "verified false, <the check you ran>"
 or "shipped in <version>". A queue entry you merely doubt is not a drop - test it and find out.
 
+**Before writing a queued documentation contribution, check it is not already shipped elsewhere.**
+The entry's `--target` is a guess made when the learning was captured, and the rule often already
+lives in a sibling skill that owns the TRIGGER rather than the topic (one measured queue drain: 4
+of 9 documentation entries were already shipped, 3 of them in a sibling). So search EVERY shipped
+skill (each `SKILL.md` and its `references/`), not only the one the entry names, plus the local
+layer (`~/.claude/skills/`, `~/.claude/commands/`), which can hold detail no shipped skill has.
+Read the matching lines instead of trusting a hit count or a miss, and try each spelling: a
+hyphenated pattern misses the spaced form (`defense-in-depth` does not find "defense in depth"),
+and a literal command such as `cp -a` misses the same rule worded as prose. When a sibling already
+carries the rule and its trigger fires where the reader needs it, drop the entry with
+`--reason "already in <skill>/<file>"` rather than adding a second copy, which will drift. When it
+carries the rule but is not loaded where the reader needs it, add a one-line pointer to it in the
+skill that IS loaded there, never a second copy of the rule. Re-check
+the file even for a rule queued earlier in this session: context can hold text the repo has since
+changed.
+
 When you add or change a shared skill or hook:
 
 1. **Confirm scope.** Shared/distributed, not project-specific. If unsure, stop and keep it local.

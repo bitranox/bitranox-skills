@@ -207,24 +207,32 @@ Fixed topic: Core API - Client, Session, request(), Streaming, Connection, Retry
 **Frontmatter (YAML):**
 - Only two fields supported: `name` and `description` (custom fields are stripped by Claude Code)
 - Caps are PER FIELD, not combined: `name` 64 characters, `description` 1024
-- **Over the cap is not refused, it is silently truncated.** No warning, no error, and nothing in the
-  file to see: the SKILL.md still reads perfectly while the injected available-skills listing cuts
-  the description mid-word and ends it with an ellipsis, so every trigger past the cut is invisible
-  to the router. The skill then behaves as if its newest triggers were never written - documented,
-  tested, listed in its own table, and never suggested.
+- **Over the cap is not refused, and past the harness cut it is silently truncated.** No warning, no
+  error, and nothing in the file to see: the SKILL.md still reads perfectly while the injected
+  available-skills listing cuts the description mid-word and ends it with an ellipsis, so every
+  trigger past the cut is invisible to the router. The skill then behaves as if its newest triggers
+  were never written - documented, tested, listed in its own table, and never suggested.
   - **Measure the field, do not eyeball it:** extract the frontmatter `description` and take `len()`.
     This repo's commit gate measures it too and fails over the cap, so the rule is mechanical rather
     than remembered.
-  - **The observed cut falls LATER than 1024, not earlier.** A 1060-character description was
-    delivered whole; a 2124-character one lost its last 597 characters. So nothing under the
-    documented cap is at risk, and the reason to stay under it is that the real boundary is a
-    harness detail that can move - not that your 900-character description is in danger. Do not
-    probe for the knife; the 500-character target below is the margin worth aiming at.
+  - **The cut is a setting, not the documented 1024.** Claude Code keeps a description whole up to
+    `skillListingMaxDescChars` (settings.json, default 1536) and truncates anything longer, so a
+    description between 1024 and 1536 still arrives whole today and one under 1024 is not at risk
+    from truncation. Stay under 1024 anyway: the default is a harness detail that can change, the
+    commit gate above fails anything over 1024 whatever the harness delivers, and the 500-character
+    target below is the margin worth aiming at.
+  - **A description under every cap can still be dropped WHOLE.** When the available-skills listing
+    as a whole runs over its character budget (sized by `skillListingBudgetFraction` of the
+    context, default 0.01), every non-bundled entry falls back to its bare name and descriptions are
+    restored by how often and how recently each skill was used, so a skill never invoked loses its
+    description first. Length does not protect against this; a shorter description only costs the
+    listing less.
   - **A bloated description is a REWRITE, not an append.** An appended trigger lands in the dead
     tail, and inserting one early only pushes a different one out.
-  - To see where a live session actually cut, ask a running agent to quote its own available-skills
-    entry for that skill verbatim, and diff it against the field in the file. The listing is
-    injected into the system prompt, so it cannot be read off disk.
+  - To see what a live session actually received, read that session's own `skill_listing`
+    attachment from its transcript (a record whose attachment `type` is `skill_listing`, usually
+    written only after the first prompt) and diff the entry for that skill against the field in the
+    file. A bare name with nothing after it is a description the listing budget dropped.
 - `name`: Use letters, numbers, and hyphens only (no parentheses, special chars)
 - `description`: Third-person, describes ONLY when to use (NOT what it does)
   - Start with "Use when..." to focus on triggering conditions
@@ -977,6 +985,23 @@ Add to description: symptoms of when you're ABOUT to violate the rule:
 description: use when implementing any feature or bugfix, before writing implementation code
 ```
 
+### Say Whose Verdict Is the Result
+
+When a step has the agent make its own judgement AND run a second opinion on the same item (a
+classifier or judge call, a shadow measurement), the text must name the agent's own verdict as the
+step's output. Left unsaid, a weak, literal model hands the decision to the second opinion.
+
+- **Shadow step** (the second opinion is measured, never acted on): have the agent record its own
+  verdict for every item BEFORE it runs the second opinion, and act on its own verdict whatever the
+  second opinion returns or exits with. Do not call it "advisory": that word invites the agent to
+  adjust toward it.
+- **Advisory step:** say exactly how far the second opinion may move the agent's verdict, for
+  example "where the two disagree, re-examine the item, then keep or change your own verdict and
+  say why".
+- **Test the wording on the weakest tier** (`haiku`) before shipping: a capable model may infer
+  whose call it is, a literal one does what the text says. Ask the probe what it does on an item
+  where its own verdict and the second opinion disagree, and require it to quote the deciding line.
+
 ## Planning Before You Start
 
 **Step 0 - issue the session receipt (FIRST, before anything else):** run
@@ -1123,6 +1148,22 @@ behavioural arm into a domain that text does not teach - and state in the review
 route you took. A RED that does not flip is a reportable outcome, not a reason to escalate the
 scenario until something fails.
 
+**The probe can also fetch the skill under test.** The `baseline-probe` agent drops Bash, Read,
+Write and Edit but keeps the Skill tool, so when the skill is installed a "no skill" arm can load it
+and answer from the shipped text. For a NEW skill, test a draft that is not installed yet. For an
+EDIT, the old version stays installed, so that arm measures the old text, not a no-skill baseline:
+make the coverage check against the skill FILE the evidence, run on the pre-edit text
+(`git show HEAD:<path>`). Naming the skill off-limits in the prompt is prose and does not bind. In
+a RETRIEVAL or GREEN arm it is worse than weak, it inverts the result: when the tool under test
+lives inside that skill, the agent finds the right row and still answers NONE, because it may not
+open the skill to produce a command. There, drop the off-limits line, say the index in the message
+is complete and no tool call is needed, show the whole row including its invocation column, and
+ask which row it would REACH FOR rather than for a verified command. Decide the guard per arm
+instead of reusing one prompt, and record a void arm as void in the review artifact: a
+contaminated arm manufactures a pass, an inverted one a failure, and both look like data. A GREEN
+arm with the edited text pasted in can load the installed OLD version the same way, so tell it the
+pasted text is the skill under test and check every quote it returns against the pasted text.
+
 ### GREEN: Write Minimal Skill
 
 Write skill that addresses those specific rationalizations. Don't add extra content for hypothetical cases.
@@ -1209,6 +1250,10 @@ review artifact with a reason (out of scope, owned by another skill, judgement t
 leave open). A surviving gap is fine; a surviving gap nobody decided about is not, so the exit
 condition is an empty undecided list, never an empty list. Re-test only the questions your fix
 touched, not the whole skill - a full re-run costs a cycle and answers nothing you changed.
+A gap RED and GREEN both report - a question answered NOT STATED in both arms - predates your
+edit. It is still a gap a reader hits, so it goes on the list like any other, and "not caused by
+this change" is not a decline reason: close it in this change and re-probe that question, or
+decline it for one of the reasons above.
 
 **Verify each fix by quote-back.** Re-ask the contested question and require the answer to be a
 DIRECT QUOTE of the governing text, or the single word NONE. A paraphrase proves the model can

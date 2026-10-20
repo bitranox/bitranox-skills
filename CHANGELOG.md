@@ -29,6 +29,34 @@ than the change, so entries reconstructed from them would read like coverage wit
 a hole nobody has drawn a line under is one that gets rediscovered and half-filled - which is how
 two "versions with no entry" notes came to sit in this file disagreeing with it.
 
+## [9.10.2]
+
+### Changed
+
+- `meta-skill-writer`: the description truncation boundary is named as the `skillListingMaxDescChars`
+  setting (default 1536); a description under every cap can still be dropped whole by the listing
+  budget; a live session's listing is read from its `skill_listing` transcript attachment. New:
+  whose verdict is the result when a step adds a second opinion; a probe that keeps the Skill tool
+  can load the skill under test (a third contamination route); a gap NOT STATED in both RED and
+  GREEN is still a gap.
+- `process-test-design`: a test double must have the seam's shape or a fail-open caller goes inert;
+  a consistency test enumerates every declared entry; a fixture built to make code fail can run the
+  success path.
+- `process-agents-subagent-driven-development`: a "Stale brief" rule for re-reading later tasks and
+  Global Constraints after a review changed behaviour, an accepted deviation or a changed way of
+  working.
+- `meta-dream-tree`: `saw-promotable` takes an absolute project path, and a `promote` resting on a
+  key that resolves to no directory is a `hold`.
+- `meta-self-improve`: check a queued documentation contribution against every shipped skill
+  first; `heal` never reads fact bodies, and a body's `description:` never updates its hook.
+
+### Fixed
+
+- `process-agents-subagent-driven-development`: the effort paragraph said a dispatch has no
+  per-call reasoning-effort field. The Agent tool has one, settable only when the user, CLAUDE.md
+  or a skill explicitly asks; agent-type definitions and Workflow `agent()` calls are the other two
+  channels.
+
 ## [9.10.1]
 
 ### Fixed

@@ -132,13 +132,22 @@ When the plan is complete (after the final review), DISARM it -
 
 Outside an armed plan execution the same hook only warns.
 
-**Effort is chosen through the tier, not the dispatch.** A dispatch has no
-per-call reasoning-effort field: effort rides the agent-type definition
+**Three channels set a subagent's reasoning effort; only the Agent tool's own
+field needs an explicit ask.** (1) The Agent tool's own `effort`
+field (`low`, `medium`, `high`, `xhigh`, `max`): the tool permits it ONLY when
+the user, or instructions such as CLAUDE.md or a skill, explicitly ask that the
+agent run at a specific level, never on the dispatcher's own judgment; otherwise
+omit it and the agent runs at its usual effort. It is ignored for a `fork`, which
+runs at the parent's effort. A skill step that names the effort for a dispatch it
+prescribes is such an ask. That restriction is the Agent tool's own and binds
+this channel only: for an Agent-tool dispatch the table below is not itself an
+ask, it says which level fits once one is asked for, while channels (2) and (3)
+take the table's level directly. (2) The agent-type definition
 (`.claude/agents/*.md` frontmatter, key `effort`; the agent roster is fixed when
 the session STARTS, so a definition added mid-session cannot be dispatched until
 a NEW session - measured on Claude Code 2.1.250, where a new project agents dir
 and a new file in the already-loaded user dir both failed with "Agent type not
-found" while definitions present at session start resolved) or a Workflow
+found" while definitions present at session start resolved). (3) A Workflow
 `agent()` call (`opts.effort`). Probe-verified: the knob swings the same
 model's thinking budget by orders of magnitude, so it cuts both ways - set it
 only at the EXTREMES and leave everything else at the default (inherit).
@@ -150,6 +159,9 @@ which costs more than the tokens it saves.
 | `haiku`-tier mechanical scan / transcribe / extract | `low` (the big saver on fleet-scale fan-out) |
 | `opus` fan-out / bounded judgment / deep reasoning  | inherit - do not set                         |
 | Adversarial verify / judge panel / final synthesis  | `xhigh` or `max`                             |
+
+Set these through an agent-type definition or a Workflow `agent()` call freely; on an Agent-tool
+dispatch, only once the user, CLAUDE.md or a skill step has asked for a level.
 
 ### Concrete tiers (canonical mapping - other skills reference this section)
 
@@ -288,7 +300,8 @@ final whole-branch review. When you fill a reviewer template:
   paste accumulated prior-task summaries ("state after Tasks 1-3") into
   later dispatches  -  a real session's dispatch hit 42k chars of which 99%
   was pasted history. A fresh subagent needs its task, the interfaces it
-  touches, and the global constraints. Nothing else.
+  touches, the global constraints, and any earlier review finding restated as
+  a short rule (see "Stale brief" under File Handoffs). Nothing else.
 - Dispatch fix subagents for Critical and Important findings. Record Minor
   findings in the progress ledger as you go, and point the final
   whole-branch review at that list so it can triage which must be fixed
@@ -351,6 +364,37 @@ and is re-read on every later turn. Hand artifacts over as files:
   any ambiguity you noticed in the brief; (5) the report-file path and
   report contract. Exact values (numbers, magic strings, signatures, test
   cases) appear only in the brief.
+- **Stale brief:** a brief is a snapshot of the plan, and the work moves under
+  it. The brief is the implementer's requirements, so a stale line arrives with
+  full authority. Before generating or dispatching any task after the first,
+  re-read it and the plan's Global Constraints against the shipped code when
+  any of these happened since the plan was written:
+  - a review round changed behaviour (removed or reshaped a mechanism), not
+    just fixed a bug: later tasks still describe the old behaviour, in prose,
+    docs and CHANGELOG lines alike;
+  - a fix changed code the plan pins verbatim as a code block: a regenerated
+    brief, even for the same task's next fix round, hands the old block back;
+  - a task review ACCEPTED a deviation from its brief (a keyword not added, a
+    renamed function, a different signature): before marking the task
+    complete (or, once it is complete, now), grep the remaining tasks and the
+    plan for the planned name, then either have the deviation fixed in the
+    task's own fix round or correct every later task that depends on it - a
+    deviation the review rated Minor gets no fix round of its own, so for it
+    correct the later tasks - and record the deviation in the progress ledger
+    beside the task;
+  - a decision changed how work is DONE (the gate command, a lock, the commit
+    form, the test invocation), wherever it was recorded: grep the Global
+    Constraints for the retired mechanism and replace it with the new one in
+    the same turn, because that block
+    reaches every later implementer with the most authority, and re-reading
+    "the task" never covers it.
+
+  Amend the PLAN, then regenerate the brief. When a correction cannot wait, put
+  it in the dispatch as governing over the brief and name the brief text it
+  supersedes. Check by grep that each symbol the Files list names lives where
+  the plan says. When an earlier task needed fix rounds, forward the review
+  findings that apply to later tasks as short rules under dispatch item (3),
+  never as that task's history.
 - **Report file:** name the implementer's report file after the brief
   (brief `.../task-<ID>-<plan8>-brief.md` -> report `.../task-<ID>-<plan8>-report.md`, where
   `<plan8>` is the plan-path digest `task_brief.py` puts in the brief's name) and put it in

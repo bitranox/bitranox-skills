@@ -219,12 +219,26 @@ the corroboration gate: a user-stated concrete rule promotes eagerly; a model-IN
 needs >= 2 DISTINCT PROJECTS. The gate is backed by a real dwell store (out of the dreamed store, so
 counting never bumps its mtime) that counts distinct projects, not sightings - a dream re-reads
 UNCHANGED fact bodies on every run, so counting sightings let one act of judgement corroborate itself.
-Record each sighting with `dream_state.py saw-promotable <slug> <project the fact came from>` (the
-project defaults to the cwd, which is wrong for a fan-out reading other projects' stores), ask
+Record each sighting with `dream_state.py saw-promotable <slug> <ABSOLUTE path of the project the
+fact came from>` (the project defaults to the cwd, which is wrong for a fan-out reading other
+projects' stores, and a bare name keys a directory that may not exist - see below), ask
 `dream_state.py should-promote <slug>` (prints `promote` with exit 0 or `hold` with exit 1, an
 answer either way), and after an actual promotion run
 `dream_state.py promoted <slug>` to clear every project's sighting at once. HOLD keeps the fact at
 the project level until a SECOND project sights it.
+
+**A `promote` is only as good as the keys behind it.** The dwell store
+(`~/.claude/self-improve-audit/promotion-candidates.json`) maps each slug to the project KEYS that
+sighted it, each `sha1(os.path.abspath(project))[:16]` - hashes, not names - and `saw-promotable`
+never checks that the path exists. A bare project NAME is resolved against the cwd into
+`<cwd>/<name>`, a directory that may never have existed, and it still counts as a second project.
+So when recording, always pass the project's ABSOLUTE path, never a bare name and never the cwd
+when the fact came from elsewhere. Before acting on `promote`, resolve the slug's keys: hash the
+candidate directories (the tree's level dirs, and any project dir a sighting may have named) the
+same way and match, with a positive control (at least one key must resolve, or the resolver is
+broken). Require two keys that name real, DIFFERENT directories. A key that matches no directory
+is not corroboration, so treat the verdict as `hold`: a hold costs one more dream, a wrong promote
+a line that loads in every session under the tree top.
 
 **The corroboration gate answers a PROMOTION question, never a MISPLACEMENT one.** Promotion asks
 "does this project-level fact generalise?", and holding it until a second project sights it is

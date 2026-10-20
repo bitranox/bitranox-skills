@@ -269,6 +269,16 @@ target drags its own refs up with it.
 CHAIN-scoped and normalizes drifted grammar only; a pointer whose body is missing is REPORTED, never
 fabricated - it does NOT detect cross-sibling duplicate pointers, which is `--check-tree`'s job.
 A level `heal` cannot read is reported and left untouched, and the run then exits 2.
+`heal` re-renders each level's pointer block from the parsed pointer LINES alone and never opens a
+fact body, so it is safe to run while other sessions hold uncommitted body edits in the shared
+store: those edits cannot reach the always-loaded index through it. The converse bites: editing a
+body's `description:` never updates its pointer hook, heal or no heal, so a body-only correction
+stays invisible to every later session. Change what a fact broadcasts through the engine at the
+level that owns its pointer (`add --proj <owning level> --slug <stored slug>` with the new hook,
+or `skills/meta-dream-tree/factedit.py apply --hook-file`). The only place a body's `description:`
+becomes a hook is `add` adopting a DANGLING body (one whose pointer was lost). What heal does drop:
+a pointer line whose slug is not a plain filename is removed by the normalisation and reported
+under `invalid_pointers` - read that list rather than assuming the block came back unchanged.
 `lint --tree` is the read-only voice/style sweep (over-hard-cap hooks, trigger-less hooks, bodies
 without the Why/How labels - a style advisory, not a backlog to clear). It exits 1 when it reports
 anything and 0 on a clean tree; the 1 is the answer of a check, not a failure to act on.

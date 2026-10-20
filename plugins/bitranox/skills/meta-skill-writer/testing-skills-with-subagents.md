@@ -54,7 +54,7 @@ This is identical to TDD's "write failing test first" - you MUST see what agents
 - [ ] **Identify patterns** - which excuses appear repeatedly?
 - [ ] **Note effective pressures** - which scenarios trigger violations?
 
-**Watch for baseline contamination - it arrives by two routes, and the obvious fix closes only one.**
+**Watch for baseline contamination - it arrives by three routes, and the obvious fix closes only one.**
 
 **Route 1, the agent GOES and gets it (tool/library-usage skills).** A baseline subagent whose cwd
 is the tool's own repo will explore the files, discover the tool, and use it - so the "clean
@@ -70,6 +70,14 @@ then once the rule you are testing exists in that corpus, it is handed to the ba
 wherever it runs. A scratch dir with no project files above it changes nothing, because the
 injection is keyed to the PROMPT, not the directory. The RED then passes on knowledge the skill
 never taught, and it passes silently: you see a correct answer and conclude there is no gap.
+
+**Route 3, the agent LOADS the skill under test.** A probe agent type that drops Bash, Read and
+Write still keeps the Skill tool, so when the skill is installed the "no skill" arm can invoke it
+and answer from the shipped text. A scratch dir and a neutral framing close neither this route nor
+route 2. For a new skill, test a draft that is not installed; for an edit, make the evidence a
+coverage check against the pre-edit FILE. Do not close it by naming the skill off-limits in the
+prompt: that line does not bind, and in a retrieval or GREEN arm it inverts the result (SKILL.md,
+"The probe can also fetch the skill under test").
 
 The tell is a CITATION YOU CANNOT FIND. The reply quotes a sentence and attributes it to the file
 you supplied, and the sentence is not in that file - the model presents injected text as if it read

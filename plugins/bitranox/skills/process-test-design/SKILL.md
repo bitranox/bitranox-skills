@@ -95,9 +95,9 @@ enough to prove the contract while staying offline, deterministic and fast, so i
 DEFAULT run. "Uses the real implementation" and "must be marked and skipped" are different
 questions; answer them separately.
 
-## Injecting a callable as a seam: two traps a green suite cannot show
+## Injecting a callable as a seam: three traps a green suite cannot show
 
-Injecting a stdlib callable so a test can substitute it is the right shape. Two things about it
+Injecting a stdlib callable so a test can substitute it is the right shape. Three things about it
 fail silently.
 
 **Annotate the attribute with YOUR contract, not the stdlib's.** A bare assignment makes pyright
@@ -112,6 +112,24 @@ Under `typeCheckingMode: strict`, assigning a double declared `(_seconds: float)
 first form is an error - the parameter is positional-only and `_SupportsFloatOrIndex` is not
 assignable to `float`. The second form accepts it. The failure lands on the TEST, so it reads as a
 bad double rather than as a missing annotation.
+
+**A double must have the seam's SHAPE, or a fail-open caller goes inert.** A double written as
+`*a, **k` that returns whatever the caller expects accepts calls the real seam rejects: a keyword
+the seam does not take (`capture_output=` passed to a seam whose signature is
+`(argv, *, stdin_text=None, timeout=30)`), or `.returncode` read off a result the seam returns as
+an `(rc, stdout, stderr)` tuple. Against the real callable that call raises `TypeError`, and a
+fail-open `except Exception: return False` turns the crash into "allowed", the same answer a
+correct check gives. The guard then refuses nothing while every unit test passes, because the
+suite never constructs the real callable; the tell is the unit tests and one real invocation
+disagreeing. Green tests against a hand-written double are not enough to ship such a guard. After
+wiring a new call through a seam:
+
+- run it ONCE against the real callable and assert the observable outcome (the guard actually
+  refuses an input that must be refused), not merely that it returns;
+- build the double from the seam's signature rather than `*a, **k`, and assert on the arguments it
+  received;
+- add a test that fails when the seam's contract moves (check the call's keywords against
+  `inspect.signature(seam).parameters`), and RED it by restoring the mismatched call.
 
 **After adding a wait or retry to a shared path, read the test file's WALL CLOCK, not its pass
 count.** Every pre-existing test that goes through that path now pays the real delay. One 30-second
@@ -313,7 +331,19 @@ should. Then keep the case the guard was built to catch as a permanent test, re-
 exemption added later: two narrow-looking exemptions added in the same change can each pass alone
 and still add up to silencing the guard on its own motivating case.
 
-Five mechanics worth stating because they silently defeat a test that looks right:
+**A consistency test pays on the code it did not grow up with, so it enumerates every entry.** A
+test that pins declarations to implementations (a hook registry against its handlers' docstrings,
+a plugin manifest, a CLI command table) must iterate EVERY declared entry, never only the ones your
+change touched. The change that adds the test is already consistent, because you wrote both sides
+while looking at them; the drift sits in the older entries, and a stale registration fails
+silently: it never fires, which looks exactly like a feature nobody used. Scoping the test to your
+diff removes the one population where its defects live. Make it also assert how many entries it
+read, so an entry its pattern cannot parse fails the test instead of dropping out of the
+comparison. Expect the first run to fail on code you did not write and treat that as the test
+working, not as scope creep: fix that defect in its own commit, so the new test and the old defect
+stay separable.
+
+Six mechanics worth stating because they silently defeat a test that looks right:
 
 - **`from m import X` binds a COPY at import time.** `monkeypatch.setattr(m, "X", v)` mutates `m`'s
   namespace and never reaches the consumer's already-bound name, so the test runs against the
@@ -347,6 +377,17 @@ Five mechanics worth stating because they silently defeat a test that looks righ
   every test collected after it, and under `--doctest-modules` the doctest executes in the collected
   module's namespace, so the leak is global. The resulting failures land far away and look unrelated
   to the doctest. Prefer a real injectable seam over patching inside a doctest at all.
+- **A fixture built to make code FAIL can run the success path instead.** Tolerant APIs absorb the
+  "broken" input: `Path.rglob()` and `glob()` over a regular file or a missing path yield nothing
+  rather than raising (Python 3.10 through 3.14), and a `dict.get` default, an `except OSError` two
+  layers down, or an empty list meaning both "none found" and "never looked" do the same. The test
+  then asserts nothing, and its RED ("DID NOT RAISE") reads as a missing fix when the fixture never
+  produced the condition. Make the failure come from a collaborator injected at a real seam (the
+  code's `run=` / `runner=` parameter; add one when the code has none) that raises by construction,
+  not from an input you believe
+  is malformed, and assert the condition happened (the collaborator was called) before reading the
+  RED. Once the fix exists, RED it by mutating the fix back with `__pycache__` cleared. If the RED
+  message is about the fixture rather than your case, the fixture is the bug.
 
 Prove a codec/serializer swap by SEMANTIC equivalence - decode the new output with the OLD decoder
 and compare the values - not by byte-equality, which fails on harmless ordering or padding changes
