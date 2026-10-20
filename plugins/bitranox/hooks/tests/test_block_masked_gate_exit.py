@@ -503,12 +503,17 @@ def test_the_jig_launched_under_uv_run_gets_an_advisory(monkeypatch, capsys, bac
 
 
 @pytest.mark.parametrize("command", [
-    "uv run --with pytest python plugins/bitranox/hooks/repo-gate.py --ci > log 2>&1; tail log",
+    "make test > log 2>&1 && uv run --with pytest python plugins/bitranox/hooks/repo-gate.py --ci",
     "uv run --with pytest python -m pytest tests/test_gate.py > log 2>&1; tail log",
 ])
 def test_a_file_merely_ending_in_gate_py_is_not_the_jig(monkeypatch, capsys, command):
     """`\\bgate\\.py` matched inside `repo-gate.py`, which both exempted a masked backgrounded
-    gate as if it ran through the jig and drew the uv-run advisory for a different program."""
+    gate as if it ran through the jig and drew the uv-run advisory for a different program.
+
+    The first command tells the two readings apart by its exit: read as the jig, `repo-gate.py`
+    would decide the task and the `make test` before it keeps the jig's exemption (exit 0); read
+    as the program it is, `make test` is the first gate and the `&&` after it masks it (exit 2).
+    The `pytest` in `--with pytest` is an option's value, never a gate that runs."""
     assert run_main_bg(monkeypatch, command, True) == 2
     assert capsys.readouterr().out == ""
 
@@ -719,3 +724,52 @@ def test_a_backgrounded_gate_in_a_command_another_shell_runs_is_still_blocked(mo
 def test_a_backgrounded_lone_gate_assigned_from_a_substitution_is_allowed(monkeypatch):
     """`x=$(make test)` exits with the substitution's status, which is the gate's own."""
     assert run_main_bg(monkeypatch, "sleep 5; x=$(make test)", True) == 0
+
+
+# ---------------------------------------------------------------------------
+# A gate word that is an ARGUMENT is no gate: only the program word decides
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    ("label", "command"),
+    [
+        ("grep for a gate word, then commit", "grep pytest docs/x.md | tail -5 && git commit -m x"),
+        ("grep -c for a gate word, then OK", "grep -c ruff CHANGELOG.md | head -1; echo OK"),
+        ("cat a gate's config file, then push", "cat pytest.ini | head; git push"),
+    ],
+)
+def test_a_gate_word_as_an_argument_is_not_a_masked_gate(monkeypatch, capsys, label, command):
+    """These pipe grep or cat, whose status the filter may mask without harm: no gate RAN. The
+    gate word was searched anywhere in the pipeline element, so the file name or search term
+    `pytest` read as pytest running, and a read-only look at a file blocked the commit after it."""
+    assert run_main(monkeypatch, command) == 0, label
+    assert capsys.readouterr().err == ""
+
+
+def test_a_backgrounded_read_of_a_gate_word_is_not_a_backgrounded_gate(monkeypatch):
+    """The background path searched the runnable text for a gate word the same way."""
+    assert run_main_bg(monkeypatch, "grep pytest docs/x.md | tail -5", True) == 0
+
+
+@pytest.mark.parametrize(
+    ("label", "command"),
+    [
+        ("env -u in front", "env -u X pytest -q | tail -3; git commit -m x"),
+        ("python3 -m", "python3 -m pytest | tail; git push"),
+        ("timeout with a duration", "timeout 900 make test | tail -5 && git push"),
+        ("grep -q as the filter", "pytest --co -q | grep -q 12 && git commit -m x"),
+        ("commit from a message file", "make test | tail -5 && git commit -F m.txt"),
+        ("uv run in front", "uv run pytest -q | tail -3; git commit -m x"),
+        ("a path-qualified gate", ".venv/bin/pytest -q | tail; git push"),
+        ("a gate in a subshell element", "( pytest -q ) | tail; git push"),
+    ],
+)
+def test_a_gate_at_the_program_word_is_still_a_masked_gate(monkeypatch, label, command):
+    """The direction the fix must not touch: a gate that RUNS, behind any launcher the guard
+    already saw through, is still a gate whose status the filter masks."""
+    assert run_main(monkeypatch, command) == 2, label
+
+
+def test_a_backgrounded_gate_at_the_program_word_is_still_blocked(monkeypatch):
+    assert run_main_bg(monkeypatch, "ruff check . | tail -3", True) == 2

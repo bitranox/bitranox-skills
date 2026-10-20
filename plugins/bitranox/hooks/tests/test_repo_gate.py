@@ -1838,6 +1838,75 @@ def test_a_push_never_accepts_an_uncommitted_twin(tmp_path, monkeypatch, capsys)
     assert notices == []
 
 
+# --- the marketplace side of a tool-repo COMMIT may live in a LINKED WORKTREE of the marketplace ---
+#
+# Measured 2026-10-20: a session parked in the tool repo, the mirror edit committed in a marketplace
+# linked worktree. The tool-repo commit read the marketplace at its stale MAIN checkout and was
+# refused as drift, while the worktree's push was refused because the tool repo had not committed:
+# neither side could move. A commit now also accepts any linked worktree of the marketplace; a push
+# still reads only the main checkout, so the pair cannot be published until both sides are.
+
+def test_a_tool_repo_commit_passes_when_a_marketplace_worktree_committed_the_same_edit(tmp_path, monkeypatch,
+                                                                                     capsys):
+    public, root, tool = _published_pair(tmp_path, monkeypatch)
+    mwt = _marketplace_worktree(root, public / "KI" / "bitranox-skills-wt-edit")
+    _drift(mwt / MP_SKILL, MIRROR_BODY)
+    _g(mwt, "commit", "-qam", "edit in the marketplace worktree")
+    _drift(tool / TW_SKILL, TWIN_BODY)
+    _g(tool, "add", "-A")
+    _tool_repo_commit(monkeypatch, public, tool)
+
+    assert RG.main() == 0
+    assert "DRIFT" not in capsys.readouterr().err
+
+
+def test_a_tool_repo_commit_passes_when_a_marketplace_worktree_holds_the_same_edit_uncommitted(
+        tmp_path, monkeypatch, capsys):
+    public, root, tool = _published_pair(tmp_path, monkeypatch)
+    mwt = _marketplace_worktree(root, public / "KI" / "bitranox-skills-wt-edit")
+    _drift(mwt / MP_SKILL, MIRROR_BODY)                     # uncommitted in the worktree
+    _drift(tool / TW_SKILL, TWIN_BODY)
+    _g(tool, "add", "-A")
+    _tool_repo_commit(monkeypatch, public, tool)
+
+    assert RG.main() == 0
+    printed = capsys.readouterr()
+    assert "DRIFT" not in printed.err
+    context = json.loads(printed.out)["hookSpecificOutput"]["additionalContext"]
+    assert "uncommitted" in context and str(mwt) in context  # names the worktree to commit next
+
+
+def test_a_tool_repo_commit_still_blocks_when_no_marketplace_worktree_holds_the_edit(tmp_path, monkeypatch,
+                                                                                    capsys):
+    # Control: worktrees exist, but neither they nor the main checkout carry the tool repo's edit.
+    public, root, tool = _published_pair(tmp_path, monkeypatch)
+    mwt = _marketplace_worktree(root, public / "KI" / "bitranox-skills-wt-edit")
+    write(mwt / MP_SKILL, MIRROR_BODY.replace("One paragraph of content.", "A DIFFERENT edit."))
+    _g(mwt, "commit", "-qam", "a different edit")
+    _drift(tool / TW_SKILL, TWIN_BODY)
+    _g(tool, "add", "-A")
+    _tool_repo_commit(monkeypatch, public, tool)
+
+    assert RG.main() == 2
+    assert IN_PROGRESS in capsys.readouterr().err
+
+
+def test_a_tool_repo_push_does_not_read_a_marketplace_worktree(tmp_path, monkeypatch, capsys):
+    # Control: a push publishes, so it reads the marketplace main checkout alone, as before.
+    public, root, tool = _published_pair(tmp_path, monkeypatch)
+    mwt = _marketplace_worktree(root, public / "KI" / "bitranox-skills-wt-edit")
+    _drift(mwt / MP_SKILL, MIRROR_BODY)                     # uncommitted in the worktree
+    _drift(tool / TW_SKILL, TWIN_BODY)
+    _g(tool, "commit", "-qam", "edit")
+    _tool_repo_commit(monkeypatch, public, tool, command="git push")
+
+    assert RG.main() == 2
+    assert IN_PROGRESS in capsys.readouterr().err
+    _g(mwt, "commit", "-qam", "edit")                       # committed in the worktree, still unpublished
+    _tool_repo_commit(monkeypatch, public, tool, command="git push")
+    assert RG.main() == 2
+
+
 # --- a tool repo committed from a LINKED WORKTREE is still that tool repo -------------------------
 #
 # Measured 2026-10-12 (lib_layered_config 7.1.4): commits changing a mirrored SKILL.md were made in

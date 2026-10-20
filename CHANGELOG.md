@@ -29,6 +29,34 @@ than the change, so entries reconstructed from them would read like coverage wit
 a hole nobody has drawn a line under is one that gets rediscovered and half-filled - which is how
 two "versions with no entry" notes came to sit in this file disagreeing with it.
 
+## [9.9.0]
+
+### Added
+
+- `compuse-toolbox`: `conflict_resolve` resolves a merge conflict hunk by hunk, one rule per hunk
+  (`ours`, `theirs`, `base`, `both`, `both-theirs-first`, `file:<path>`; by number, by `--match`
+  regex or `--all`), refuses and writes nothing on a wrong `--expect-hunks`, an unruled or
+  doubly-ruled hunk or malformed markers, keeps line endings, writes atomically and re-scans for
+  markers. `--list` shows the hunks. `toolbox-nudge` points a hand-written marker resolver at it.
+
+### Fixed
+
+- `repo-gate`: a commit in a tool repo that ships a mirrored skill also reads every linked worktree
+  of the marketplace, so a mirror edit made in a marketplace worktree no longer deadlocks the
+  tool-repo commit against the worktree's push. A push still reads only the published side.
+- `block-masked-gate-exit`: a gate is recognised only as the program a statement runs, not as any
+  word in it, so `grep pytest docs | tail -5 && git commit` is no longer refused. The program-word
+  helper moved to `shell_text` and `block-commit-beside-sibling-gate` uses the same one.
+- `block-sed-structured-files`: the refusal says that nothing in the command ran, so a step
+  chained after the `sed -i` is re-run instead of assumed done.
+- `ci_wait`: when the default filter leaves a scheduled run out, the verdict says so
+  (`(1 scheduled run not counted; --event any counts it)`, `data.not_counted` in `--json`).
+
+### Changed
+
+- `compuse-bash`: two calls in one message are not a chain - a red gate in the first does not stop
+  a commit in the second - and the Hooks section names `block-commit-beside-sibling-gate`.
+
 ## [9.8.3]
 
 ### Fixed

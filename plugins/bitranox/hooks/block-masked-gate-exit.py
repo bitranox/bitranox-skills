@@ -12,7 +12,8 @@ sequences on regardless. The result is a printed "OK" while the gate was red, or
 commit of a red state - and the output scrolling past looks like it was checked.
 
 This blocks exactly that shape and nothing else:
-  - the command must run a recognised GATE (cargo/pytest/ruff/pyright/... );
+  - the command must run a recognised GATE (cargo/pytest/ruff/pyright/... ) as a program
+    word (`shell_text.gate_program_in`), never as an argument: `grep pytest docs/x.md` runs grep;
   - that gate must sit in a pipeline where it is NOT the last element, so its
     status is masked;
   - and a LATER statement must claim success (an OK-ish echo) or commit/push.
@@ -47,6 +48,7 @@ from shell_text import (
     basename_for_tool,
     blank_heredoc_bodies,
     blank_unexpanded_text,
+    gate_program_in,
     iter_segments,
     mask_data_regions,
     past_command_prefix,
@@ -293,10 +295,12 @@ def running_background_gate(command: str, tool_name: str = "Bash") -> re.Match[s
     The match indexes `_runnable_text(_joined(command))`, which is as long as the masked command
     `gate_status_is_not_the_tasks` reads, so its offsets cut that text too.
     """
-    return _deciding_gate(_runnable_text(_joined(command), tool_name))
+    runnable, opaque = _runnable_view(_joined(command), tool_name)
+    return _deciding_gate(runnable, opaque, tool_name)
 
 
-def _deciding_gate(runnable: str) -> re.Match[str] | None:
+def _deciding_gate(runnable: str, opaque: list[tuple[int, int]],
+                   tool_name: str = "Bash") -> re.Match[str] | None:
     """gate.py when the command runs it, else the first gate it runs.
 
     The jig exits with its gate's own status, so what follows the JIG is what can mask the verdict:
@@ -304,8 +308,24 @@ def _deciding_gate(runnable: str) -> re.Match[str] | None:
     command by NAME, and with the `--gate` text quoted, so masked, nothing else was left to see -
     the notice said exit 0 while the gate was red. Gates BEFORE the jig keep that exemption
     (`ruff format src && gate.py ...`): the reported miss is about what runs after it.
+
+    A gate RUNS only as a statement's program word: searched anywhere, the file name and the
+    search term of `grep pytest docs/x.md | tail -5` read as pytest backgrounded. The `opaque`
+    statements are the exception: they hand a quoted string to ssh or `bash -c`, whose own
+    statements cannot be walked here, so a gate anywhere in them still counts.
     """
-    return JIG.search(runnable) or BACKGROUND_GATE.search(runnable)
+    jig = gate = None
+    for at, segment in iter_segments(runnable, tool_name):
+        end = at + len(segment)
+        if any(start <= at < stop for start, stop in opaque):
+            found_jig = JIG.search(runnable, at, end)
+            found_gate = BACKGROUND_GATE.search(runnable, at, end)
+        else:
+            found_jig = gate_program_in(runnable, tool_name, JIG, at, end)
+            found_gate = gate_program_in(runnable, tool_name, BACKGROUND_GATE, at, end)
+        jig = jig or found_jig
+        gate = gate or found_gate
+    return jig or gate
 
 
 def gate_status_is_not_the_tasks(command: str, tool_name: str = "Bash") -> bool:
@@ -329,7 +349,7 @@ def gate_status_is_not_the_tasks(command: str, tool_name: str = "Bash") -> bool:
     """
     joined = _joined(command)
     runnable, opaque = _runnable_view(joined, tool_name)
-    first = _deciding_gate(runnable)
+    first = _deciding_gate(runnable, opaque, tool_name)
     if first is None:
         return False
     if _WATCH_WITHOUT_VERDICT.match(runnable, first.start()):
@@ -528,28 +548,56 @@ def _status_reads(expanding: str, *, tool_name: str = "Bash") -> list[int]:
     return reads
 
 
+def _pipeline_elements(statement: str, tool_name: str = "Bash") -> list[str]:
+    """The non-empty pipeline elements of one statement, read with its quoted regions masked.
+
+    The split runs on the MASKED text, so a `|` inside a quoted argument is not an element
+    boundary; `|&` counts as one (it pipes stderr too, and the filter still sets the status).
+    """
+    masked = mask_data_regions(statement, tool_name=tool_name)
+    return [e for e in _PIPE.split(masked) if e.strip()]
+
+
+def _first_gate(elements: list[str], tool_name: str = "Bash") -> tuple[int, re.Match[str]] | None:
+    """(index, match) of the first element whose PROGRAM is a gate, or None.
+
+    Only the program word counts: `grep pytest docs/x.md` and `cat pytest.ini` run grep and cat,
+    and reading their arguments as a gate refused a read-only look at a file before a commit.
+    """
+    for index, element in enumerate(elements):
+        found = gate_program_in(element, tool_name, GATE)
+        if found is not None:
+            return index, found
+    return None
+
+
 def masks_a_gate(statement: str, tool_name: str = "Bash") -> bool:
     """True when a gate runs in this pipeline but is not what sets its status.
 
-    The GATE search runs on the statement with quoted regions masked, because a gate NAME inside
-    an argument is not a gate being run: `grep -rn "npm test" . | head -20` runs grep. The mask is
-    scoped to this search on purpose - `CONSUMER` must still READ quoted text, since the success
-    claim it looks for IS a quoted string (`echo "PASS"`), and masking there deletes the evidence.
+    The gate is looked for at each element's program word, on the statement with quoted regions
+    masked, because a gate NAME inside an argument is not a gate being run: `grep -rn "npm test" .
+    | head -20` and `grep pytest docs/x.md | tail -5` both run grep. The mask is scoped to this
+    question on purpose - `CONSUMER` must still READ quoted text, since the success claim it looks
+    for IS a quoted string (`echo "PASS"`), and masking there deletes the evidence.
     """
-    # The pipeline is split on the MASKED text, so a `|` inside a quoted argument is not an element
-    # boundary; `|&` counts as one (it pipes stderr too, and the filter still sets the status).
-    masked = mask_data_regions(statement, tool_name=tool_name)
-    elements = [e for e in _PIPE.split(masked) if e.strip()]
+    elements = _pipeline_elements(statement, tool_name)
     if len(elements) < 2:
         return False
-    if not GATE.search(masked):
+    first = _first_gate(elements, tool_name)
+    if first is None:
         return False
     # If the gate IS the last element, the pipeline's status is the gate's.
-    if GATE.search(elements[-1]):
+    if gate_program_in(elements[-1], tool_name, GATE):
         return False
-    # Only a swallowing filter actually masks it. Filter names stand outside quotes, so the masked
-    # element reads the same as the raw one here.
-    return any(FILTER.match(e) for e in elements[1:])
+    # Only a swallowing filter AFTER the gate masks it. Filter names stand outside quotes, so the
+    # masked element reads the same as the raw one here.
+    return any(FILTER.match(e) for e in elements[first[0] + 1:])
+
+
+def _runs_a_gate(command: str, tool_name: str = "Bash") -> bool:
+    """True when any pipeline element of any statement runs a gate as its program word."""
+    return any(_first_gate(_pipeline_elements(raw, tool_name), tool_name)
+               for raw, _readable in _statements(command, tool_name))
 
 
 def main() -> int:
@@ -629,7 +677,7 @@ def main() -> int:
     # Measured live: that shape blocked a real command while this guard was under investigation.
 
     # Fast path: nothing further to protect if no gate runs here.
-    if not GATE.search(strip_heredoc_bodies(cmd)):
+    if not _runs_a_gate(cmd, tool_name):
         return 0
     # The author already handles the pipe's status correctly.
     if handles_pipe_status(cmd, tool_name):
@@ -645,7 +693,8 @@ def main() -> int:
                 masked_at = i
             continue
         if CONSUMER.search(readable):
-            gate = GATE.search(statements[masked_at][0])
+            first = _first_gate(_pipeline_elements(statements[masked_at][0], tool_name), tool_name)
+            gate = first[1] if first else None
             msg = [
                 "BLOCKED: this claims success on a gate whose exit status the pipe threw away.",
                 "",

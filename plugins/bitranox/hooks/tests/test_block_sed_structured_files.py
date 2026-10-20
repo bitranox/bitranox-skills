@@ -85,6 +85,22 @@ def test_main_blocks_with_exit_2(monkeypatch):
     assert _run(monkeypatch, "sed -i 's/a/b/' x.json") == 2
 
 
+def test_a_refused_compound_command_says_nothing_in_it_ran(monkeypatch, capsys):
+    """The whole call is refused, so a step chained after the sed never happened.
+
+    Without saying so, the reader fixes the sed and assumes the chained edit already landed.
+    """
+    assert _run(monkeypatch, "sed -i 's/a/b/' config.json && python3 edit.py") == 2
+    err = capsys.readouterr().err
+    assert "NOTHING in this command ran" in err
+    assert "not just the sed -i part" in err
+
+
+def test_a_refused_perl_names_perl_in_the_nothing_ran_sentence(monkeypatch, capsys):
+    assert _run(monkeypatch, "perl -pi -e 's/a/b/' pyproject.toml && python3 edit.py") == 2
+    assert "not just the perl -i part" in capsys.readouterr().err
+
+
 def test_main_warn_exits_0(monkeypatch):
     assert _run(monkeypatch, "cat a > b.yaml") == 0
 

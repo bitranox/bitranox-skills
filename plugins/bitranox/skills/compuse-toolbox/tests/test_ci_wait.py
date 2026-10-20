@@ -1087,6 +1087,63 @@ class TestTheDefaultEventIsAnyButSchedule:
         assert "except schedule" in " ".join(capsys.readouterr().out.split())
 
 
+class TestARunLeftOutByTheDefaultIsNamed:
+    """A green "CodeQL=success CI=success" while a scheduled CI run for the same sha was still
+    queued read as a bug: the default filter dropped that run and the output never said so."""
+
+    def _main(self, monkeypatch, rows, *extra):
+        monkeypatch.setattr(ci_wait.subprocess, "run", event_gh(rows, []))
+        monkeypatch.setattr(ci_wait.time, "sleep", lambda _s: None)
+        return ci_wait.main(["--sha", SHA, "--repo", "o/r", "--settle", "0", "--appear-grace", "0",
+                             "--timeout", "60", *extra])
+
+    def test_a_dropped_scheduled_run_is_named_in_the_green_summary(self, monkeypatch, capsys):
+        rows = [evrun("CI", "completed", "success", "push"),
+                evrun("CI", "queued", None, "schedule")]
+        rc = self._main(monkeypatch, rows)
+        out = capsys.readouterr().out
+        assert rc == 0
+        assert "(1 scheduled run not counted; --event any counts it)" in out
+
+    def test_several_dropped_runs_are_counted_in_the_plural(self, monkeypatch, capsys):
+        rows = [evrun("CI", "completed", "success", "push"),
+                evrun("CI", "queued", None, "schedule"),
+                evrun("nightly", "completed", "failure", "schedule")]
+        assert self._main(monkeypatch, rows) == 0
+        assert "(2 scheduled runs not counted; --event any counts them)" in capsys.readouterr().out
+
+    def test_a_failed_verdict_names_it_too(self, monkeypatch, capsys):
+        rows = [evrun("CI", "completed", "failure", "push"),
+                evrun("CI", "queued", None, "schedule")]
+        assert self._main(monkeypatch, rows) == 1
+        assert "1 scheduled run not counted" in capsys.readouterr().err
+
+    def test_control_no_scheduled_row_leaves_the_summary_unchanged(self, monkeypatch, capsys):
+        rc = self._main(monkeypatch, [evrun("CI", "completed", "success", "push")])
+        assert rc == 0
+        assert capsys.readouterr().out == "CI=success\n"
+
+    def test_control_event_any_reports_nothing_as_not_counted(self, monkeypatch, capsys):
+        rows = [evrun("CI", "completed", "success", "push"),
+                evrun("nightly", "completed", "success", "schedule")]
+        assert self._main(monkeypatch, rows, "--event", "any") == 0
+        assert "not counted" not in capsys.readouterr().out
+
+    def test_json_adds_the_count_and_keeps_every_existing_key(self, monkeypatch, capsys):
+        rows = [evrun("CI", "completed", "success", "push"),
+                evrun("CI", "queued", None, "schedule")]
+        assert self._main(monkeypatch, rows, "--json") == 0
+        data = json.loads(capsys.readouterr().out)["data"]
+        assert data["not_counted"] == 1
+        assert {"state", "summary", "runs", "sha"} <= set(data)
+        assert data["summary"] == "CI=success"
+
+    def test_control_json_with_event_any_carries_no_count(self, monkeypatch, capsys):
+        rows = [evrun("CI", "completed", "success", "push")]
+        assert self._main(monkeypatch, rows, "--event", "any", "--json") == 0
+        assert "not_counted" not in json.loads(capsys.readouterr().out)["data"]
+
+
 class TestAwaitingApproval:
     """#92: a fork PR's run waiting for approval is not a failure, and no wait resolves it."""
 

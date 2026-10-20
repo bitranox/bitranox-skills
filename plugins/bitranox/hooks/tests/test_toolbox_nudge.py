@@ -345,6 +345,36 @@ def test_conflict_scan_still_wins_its_own_shape():
     assert N.match_tool("grep -rn '^<<<<<<<' .")[0] == "conflict_scan"
 
 
+# --- a hand-rolled conflict RESOLVER: the three markers in one pattern, then a write --------------
+# Markers are built with "<" * 7 so this file never carries a line-start marker of its own.
+_LT, _EQ, _GT = "<" * 7, "=" * 7, ">" * 7
+_RESOLVER = ("import re\n"
+             "s = open(p).read()\n"
+             "pat = re.compile(r'%s app\\n(.*?)%s\\n(.*?)%s template\\n', re.S)\n"
+             "open(p, 'w').write(pat.sub(lambda m: m.group(2), s))\n" % (_LT, _EQ, _GT))
+
+
+def test_a_resolver_authored_in_a_heredoc_is_routed_to_conflict_resolve():
+    cmd = "cd /w && python3 - %s\n%sPY\n" % ("<<" + "'PY'", _RESOLVER)
+    assert N.match_authored(shell_text.heredoc_bodies(cmd))[0] == "conflict_resolve"
+
+
+def test_a_resolver_written_to_a_file_is_routed_to_conflict_resolve_not_conflict_scan():
+    assert N.match_tool(_RESOLVER, tool_name="Write")[0] == "conflict_resolve"
+
+
+def test_a_marker_grep_with_all_three_markers_stays_conflict_scan():
+    # one line names all three markers, but nothing is written: that is a scan
+    cmd = "grep -n '^%s \\|^%s$\\|^%s ' f.py" % (_LT, _EQ, _GT)
+    assert N.match_tool(cmd, tool_name="Bash")[0] == "conflict_scan"
+
+
+def test_a_resolver_that_already_uses_the_jig_is_not_nudged_toward_it():
+    text = _RESOLVER + "# then: conflict_resolve.py f --list\n"
+    hit = N.match_tool(text, tool_name="Write")
+    assert hit is None or hit[0] != "conflict_resolve"
+
+
 # --- a heredoc body is DATA, not a command ------------------------------------------------------
 
 def test_a_tool_name_inside_a_heredoc_body_does_not_nudge():

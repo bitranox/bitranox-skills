@@ -38,75 +38,10 @@ on stderr. Fail-open on any error. ASCII only.
 import json
 import sys
 
-from shell_text import (
-    GATE_JIG_RE,
-    GATE_RE,
-    basename_for_tool,
-    commands_only,
-    is_gated_command,
-    is_shell_tool,
-    iter_segments,
-)
+# `runs_a_gate` lives in shell_text beside the gate vocabulary, so block-masked-gate-exit reads the
+# program word the same way when it asks whether a piped element is a gate.
+from shell_text import is_gated_command, is_shell_tool, runs_a_gate
 from transcript_siblings import siblings_for_event
-
-
-# Words that run the program after them. Their own operands sit in between and are skipped: the
-# value of a short option that takes one (`env -u NAME`, `nice -n 19`, `env -C DIR`), a long
-# option's value (`uv run --with pytest`), a duration (`timeout 900`), `run` after `uv`, and
-# `NAME=value` assignments (`env A=1 make test`).
-_LAUNCHERS = frozenset({
-    "env", "timeout", "nice", "ionice", "nohup", "setsid", "stdbuf", "time", "command", "exec",
-    "sudo", "doas", "uv", "uvx", "python", "python3", "py",
-})
-_SHORT_WITH_VALUE = frozenset({"-u", "-n", "-C", "-c", "-k", "-s", "-S", "-p", "-o"})
-_SCAN_LIMIT = 16
-
-
-def _is_assignment(word):
-    name, sep, _value = word.partition("=")
-    return bool(sep) and name.replace("_", "a").isalnum() and not name[:1].isdigit()
-
-
-def _program_at(words, tool_name):
-    """Index of the word a statement RUNS, past assignments and launchers; None when there is none.
-
-    `python -m X` runs X. `python -c ...` runs code, never a gate by name, so it answers None.
-    """
-    at = 0
-    for _ in range(_SCAN_LIMIT):
-        while at < len(words) and _is_assignment(words[at]):
-            at += 1
-        if at >= len(words):
-            return None
-        program = basename_for_tool(words[at], tool_name).lower()
-        if program not in _LAUNCHERS and not program.startswith("python"):
-            return at
-        at += 1
-        while at < len(words) and (words[at].startswith("-") or words[at] == "run"
-                                   or words[at][:1].isdigit() or _is_assignment(words[at])):
-            word = words[at]
-            if word == "-c" and program.startswith(("python", "py")):
-                return None
-            if word == "-m":
-                return at + 1 if at + 1 < len(words) else None
-            at += 2 if (word in _SHORT_WITH_VALUE or (word.startswith("--") and "=" not in word)) else 1
-    return None
-
-
-def runs_a_gate(command, tool_name="Bash"):
-    """True when a statement of `command` RUNS a recognised gate as its program.
-
-    A gate that is only text - inside a heredoc body or quotes, or an argument of another program
-    (`grep -rn pytest docs/`, `cat pytest.ini`) - does not count.
-    """
-    for _at, segment in iter_segments(commands_only(command or "", tool_name), tool_name):
-        words = segment.split()
-        at = _program_at(words, tool_name)
-        if at is None:
-            continue
-        if GATE_JIG_RE.search(words[at]) or GATE_RE.match(" ".join(words[at:at + 3])):
-            return True
-    return False
 
 
 def verdict(command, siblings, tool_name="Bash"):

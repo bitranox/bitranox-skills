@@ -1702,6 +1702,30 @@ def _marketplace_checkout(public):
     return public / "KI" / "bitranox-skills"
 
 
+def _other_marketplace_checkouts(marketplace):
+    """Every other checkout of the marketplace repository at `marketplace`: its main checkout and
+    each linked worktree, as `git worktree list` names them, that holds the skills tree.
+
+    A tool-repo commit is judged against these too (`gate_tool_repo_mirror`): the marketplace side
+    of a coordinated edit is often made in a linked worktree, and reading only the checkout the
+    session stands in, or the main one, refused the tool-repo commit while the worktree's push was
+    refused for the tool repo not having committed - neither side could move. Measured 2026-10-20.
+    """
+    _top, main = _checkouts(marketplace)
+    rc, out, _ = _git(main, "worktree", "list", "--porcelain", "-z")
+    if rc:
+        return []
+    seen, found = {Path(marketplace).resolve()}, []
+    for field in out.split("\0"):
+        if not field.startswith("worktree "):
+            continue
+        path = Path(field[len("worktree "):]).resolve()
+        if path not in seen and (path / "plugins" / "bitranox" / "skills").is_dir():
+            seen.add(path)
+            found.append(path)
+    return found
+
+
 def _checkouts(directory):
     """(top level of the worktree holding `directory`, main checkout of its repository).
 
@@ -1945,9 +1969,25 @@ def gate_tool_repo_mirror(root, stage=STAGE_INDEX, guessed=False):
         _say_unverifiable(mine, marketplace)
         return 0
 
-    notices = []
-    fails = mirror_failures(marketplace, set(mine), committing="twin", stage=stage, notices=notices,
-                            twins=twins)
+    # A COMMIT passes a skill that matches ANY checkout of the marketplace, linked worktrees
+    # included (`_other_marketplace_checkouts`); each is read as the main checkout is. A push stays
+    # on `marketplace` alone: it publishes, so the other side must have published or committed there.
+    candidates = [marketplace]
+    if stage == STAGE_INDEX:
+        candidates += _other_marketplace_checkouts(marketplace)
+    notices, fails = [], []
+    for name in mine:
+        refusals = []
+        for candidate in candidates:
+            found = []
+            failed = mirror_failures(candidate, {name}, committing="twin", stage=stage, notices=found,
+                                     twins=twins)
+            if not failed:
+                notices += found
+                break
+            refusals.append(failed)
+        else:
+            fails += refusals[0]  # the checkout a push would read is the one to report
     if not fails:
         _say_context(notices)
         return 0

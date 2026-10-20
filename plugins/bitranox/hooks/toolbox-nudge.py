@@ -188,9 +188,25 @@ class _ListGrep:
         return None
 
 
+# A hand-rolled conflict RESOLVER: all three markers inside one line - the regex or the split a
+# resolver is built around - and a write-back. A marker scan names the three markers on one line
+# too (`grep -n '^<<<<<<< \|^=======$\|^>>>>>>> '`) but writes nothing, so the write is what
+# separates the two. Listed ahead of conflict_scan's broad `<{7}` and again in the authored rules,
+# because a resolver is usually authored in a heredoc body, which only those rules read.
+_CONFLICT_RESOLVER_RX = re.compile(
+    r"(?s)\A(?=.*<{7}[^\n]{0,160}?={7}[^\n]{0,160}?>{7})"
+    r"(?=.*(?:write_text\(|\.write\(|open\([^)\n]*[\"']w|os\.replace\())"
+    r"(?!.*conflict_resolve)")
+_CONFLICT_RESOLVER_WHY = (
+    "resolving merge-conflict hunks with a hand-written regex and write-back, where a pattern "
+    "spanning two hunks, a diff3 base section or CRLF lines go wrong silently - it applies a rule "
+    "per hunk (ours/theirs/both/both-theirs-first/base/file:), refuses what it cannot place and "
+    "re-scans the result")
+
 # (regex over the command, tool name, one-line "why"). First match wins. STRONG signatures only, to
 # keep false positives + noise low; the per-session dedup then nudges each tool at most once.
 _RULES = [
+    (_CONFLICT_RESOLVER_RX, "conflict_resolve", _CONFLICT_RESOLVER_WHY),
     (re.compile(r"<{7}|>{7}"), "conflict_scan", "scanning for git conflict markers"),
     (re.compile(r"\.jsonl\b" + _SCRIPT_WINDOW + r"(?:json\.loads|json\.load|for line in)"
                 r"|(?:json\.loads|json\.load)" + _SCRIPT_WINDOW + r"\.jsonl", re.S), "jsonl_grep",
@@ -323,6 +339,9 @@ _SHELL_ONLY_RULES = [
 # shell-only: a script walking the transcript corpus or the memory levels by hand is exactly the
 # hand-roll the tool replaces.
 _ANY_TOOL_RULES = [
+    # First: a resolver also reads, replaces and writes text, which the anchor_edit rules below
+    # would otherwise claim.
+    (_CONFLICT_RESOLVER_RX, "conflict_resolve", _CONFLICT_RESOLVER_WHY),
     (re.compile(r"\.claude/projects\b"), "transcript_index",
      "walking past Claude Code transcripts by hand"),
     (re.compile(r"(?:grep|find|glob|rglob)[^\n]*CLAUDE\.local\.md"

@@ -44,6 +44,8 @@ Run shell commands so the result is unambiguous, and read that result truthfully
 
 A block like `mutate ... ; echo done ; verify` returns ONLY the last command's status. So a failed critical command is hidden by a succeeding trailing command (false success), or a trivial trailing failure makes a successful critical command look failed (false failure) which then gets waved off as "a quirk". Both are real defects. Run the critical command alone (clean, unambiguous status), then verify separately. When you must chain, use `&&` (status reflects the first failure), and for pipelines read `${PIPESTATUS[@]}`.
 
+Two calls in ONE message are not a chain: each call is decided before any of them runs, so a red or refused gate in the first does not stop a `git commit` or `git push` in the second. Put the gate and the commit in one call joined by `&&`, or send the commit in the next message after reading the gate's real exit code. `block-commit-beside-sibling-gate` refuses a commit, push or `gh pr create` sent after a gate call in the same message. It cannot see a commit sent BEFORE its gate, so do not put that order in one message either.
+
 ## Never "quirk" an error
 
 A non-zero exit always has a deterministic cause. Reproduce the smallest failing form and isolate it (for example `git rev-parse --short A B` fails because `--short` abbreviates one revision, a knowable rule, not a quirk). Dismissing the error guarantees the same confusion next time and can hide a real failure.
@@ -72,6 +74,8 @@ instead. To ask whether the session is alive, use `has-session`; to see what it 
 `list-panes -F '#{pane_current_command}'`. Never `pgrep -f`, which matches the shell running your
 own check (see the process row above).
 
-## Hook
+## Hooks
 
 `block-pgrep-self-match` (PreToolUse on Bash and PowerShell) blocks the `pgrep`/`pkill -f` echo-label self-match. It does not replace preferring pidfile/port/unit signals over a name grep.
+
+`block-commit-beside-sibling-gate` (PreToolUse on Bash and PowerShell) refuses a commit, push or `gh pr create` whose message also holds an earlier call that ran a gate (`make test`, `pytest`, `ruff check`, `pyright`, gate.py).

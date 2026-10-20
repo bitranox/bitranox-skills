@@ -45,7 +45,8 @@ the same head sha would otherwise hold a push's verdict open until the deadline,
 reason the push did not cause. The exclusion is client-side and covers only `schedule`, so a fork
 pull request's head - whose only runs are `pull_request` - is seen by a bare wait. `--event NAME`
 counts only runs of that event (asked for server-side); `--event any` counts every run, scheduled
-ones included. A run
+ones included. When the default leaves a run out, the verdict says how many, so a green
+beside a still-queued nightly run does not read as the tool missing it. A run
 concluding `action_required` (a fork pull request awaiting a maintainer's approval) is reported at
 once as `pending-approval`, exit 2: no wait resolves it, and it is not a failure.
 
@@ -70,12 +71,14 @@ Exactly one of `--sha` and `--ref` is required.
 Run: `uv run scripts/ci_wait.py --ref HEAD`
      `uv run scripts/ci_wait.py --ref origin/master --repo OWNER/REPO --json`
      `uv run scripts/ci_wait.py --sha <full sha from a CI URL> --timeout 1800 --interval 30`
-Exit 0 = every run for that sha succeeded (or was skipped), 1 = at least one did not, 2 = could
+Exit 0 = every counted run for that sha succeeded (or was skipped; scheduled runs are not counted
+unless `--event any`), 1 = at least one did not, 2 = could
 not tell (bad sha, a ref that does not resolve, a bad flag value, no runs for it, a run awaiting
 approval, a run stuck in the queue, timed out, `gh` failed, or the tool itself crashed). `--json` prints the envelope
-`{ok, command, data: {state, summary, runs, sha}, skipped}` on every exit, a usage error included
-(`sha` is absent when the sha itself was refused); `ok` is false exactly on exit 2, with `error`
-repeating the summary.
+`{ok, command, data: {state, summary, runs, sha, not_counted}, skipped}` on every exit, a usage
+error included (`sha` is absent when the sha itself was refused; `not_counted`, the scheduled runs
+the default filter left out of the last answered poll, is present only under the default filter
+once a poll answered); `ok` is false exactly on exit 2, with `error` repeating the summary.
 """
 
 import argparse
@@ -629,6 +632,7 @@ def gh_runs(
     limit: int = 30,
     timeout_s: float = GH_CALL_TIMEOUT_S,
     event: str | None = None,
+    on_not_counted: Callable[[int], None] | None = None,
 ) -> list[dict[str, object]]:
     """Fetch the runs whose ``headSha`` is ``sha``: asked for SERVER-side, checked client-side.
 
@@ -642,6 +646,11 @@ def gh_runs(
     the rows that carry the field. ``None`` - the default - asks for every event and drops the
     rows whose event is in :data:`_EXCLUDED_BY_DEFAULT` (``schedule``) client-side; ``any`` keeps
     every row.
+
+    ``on_not_counted`` is handed, once per answered call, how many of this sha's rows the event
+    filter dropped. A callback rather than a second return value keeps the fetch shape that
+    :func:`wait_for` and every injected fake share; the caller needs the number only to SAY a run
+    was left out, never to decide the verdict.
 
     Raises:
         GhFailed: `gh` exited non-zero, did not answer within ``timeout_s``, or returned
@@ -674,8 +683,11 @@ def gh_runs(
         raise GhFailed(f"gh returned unparseable output: {exc}") from exc
     if not isinstance(rows, list):
         raise GhFailed(f"gh returned {type(rows).__name__}, not a list")
-    return [r for r in rows if isinstance(r, dict) and r.get("headSha") == sha
-            and _event_counts(r, event)]
+    same_sha = [r for r in rows if isinstance(r, dict) and r.get("headSha") == sha]
+    kept = [r for r in same_sha if _event_counts(r, event)]
+    if on_not_counted is not None:
+        on_not_counted(len(same_sha) - len(kept))
+    return kept
 
 
 def _event_counts(row: dict[str, object], event: str | None) -> bool:
@@ -870,13 +882,16 @@ def _run(args: argparse.Namespace) -> int:
         repo = args.repo or _resolve_repo_once(args.timeout)
     except GhUnavailable as exc:
         return _emit(Verdict("error", str(exc)), as_json=args.json, sha=sha)
+    # One entry per ANSWERED poll, so the last one belongs to the rows the verdict was computed
+    # from. Collected only under the default filter: that is the filter that drops runs silently.
+    not_counted: list[int] = []
 
     def fetch() -> list[dict[str, object]]:
         # A single gh call may not outlive the whole wait: bound it by what is left, too.
         left = args.timeout - (time.monotonic() - started)
         return gh_runs(
             sha, repo=repo, limit=args.limit, timeout_s=max(1.0, min(GH_CALL_TIMEOUT_S, left)),
-            event=args.event,
+            event=args.event, on_not_counted=not_counted.append if args.event is None else None,
         )
 
     try:
@@ -895,7 +910,8 @@ def _run(args: argparse.Namespace) -> int:
         )
     except (GhFailed, GhUnavailable) as exc:
         return _emit(Verdict("error", str(exc)), as_json=args.json, sha=sha)
-    return _emit(result, as_json=args.json, sha=sha)
+    return _emit(result, as_json=args.json, sha=sha,
+                 not_counted=not_counted[-1] if not_counted else None)
 
 
 def _resolve_repo_once(timeout_s: float) -> str | None:
@@ -914,11 +930,15 @@ def _resolve_repo_once(timeout_s: float) -> str | None:
         return None
 
 
-def _emit(result: Verdict, *, as_json: bool, sha: str | None = None) -> int:
+def _emit(result: Verdict, *, as_json: bool, sha: str | None = None,
+          not_counted: int | None = None) -> int:
     """Print the verdict and return its exit code; diagnostics to stderr, never into the data.
 
     ``sha`` is the commit that was watched, once known, so a ``--ref`` caller learns what it
-    resolved to; it is absent when the sha itself was refused.
+    resolved to; it is absent when the sha itself was refused. ``not_counted`` is how many runs
+    the default event filter left out of the last answered poll (``None``: not measured). JSON
+    carries it as its own field and leaves ``summary`` as it was, so a consumer matching the
+    summary is unaffected; the text line gets :func:`_not_counted_note` appended.
     """
     code = exit_code_for(result.state)
     if as_json:
@@ -926,12 +946,31 @@ def _emit(result: Verdict, *, as_json: bool, sha: str | None = None) -> int:
                                    "runs": list(result.runs)}
         if sha is not None:
             data["sha"] = sha
+        if not_counted is not None:
+            data["not_counted"] = not_counted
         emit(code, "ci_wait", data, error=result.summary if code == 2 else None, indent=None)
-    elif code == 0:
-        print(result.summary)
+        return code
+    summary = result.summary + _not_counted_note(not_counted, result.state)
+    if code == 0:
+        print(summary)
     else:
-        print(f"{result.state}: {result.summary}", file=sys.stderr)
+        print(f"{result.state}: {summary}", file=sys.stderr)
     return code
+
+
+def _not_counted_note(not_counted: int | None, state: str) -> str:
+    """`` (N scheduled run(s) not counted; --event any counts it/them)``, or ``""``. PURE.
+
+    Measured: "CodeQL=success CI=success" and exit 0, while a scheduled CI run on the same sha was
+    still queued, read as the tool missing a run, because nothing said one was left out on purpose.
+    Skipped for ``no-runs``, whose summary already says scheduled runs are not counted, and for
+    ``error``, whose summary is about gh or a crash rather than about the runs.
+    """
+    if not not_counted or state in ("no-runs", "error"):
+        return ""
+    if not_counted == 1:
+        return " (1 scheduled run not counted; --event any counts it)"
+    return f" ({not_counted} scheduled runs not counted; --event any counts them)"
 
 
 if __name__ == "__main__":

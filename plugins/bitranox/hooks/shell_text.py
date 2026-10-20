@@ -1032,6 +1032,105 @@ BACKGROUND_GATE_RE = re.compile(
 )
 
 
+# Words that run the program after them. Their own operands sit in between and are skipped: the
+# value of a short option that takes one (`env -u NAME`, `nice -n 19`, `env -C DIR`), a long
+# option's value (`uv run --with pytest`), a duration (`timeout 900`), `run` after `uv`, and
+# `NAME=value` assignments (`env A=1 make test`).
+_GATE_LAUNCHERS = frozenset({
+    "env", "timeout", "nice", "ionice", "nohup", "setsid", "stdbuf", "time", "command", "exec",
+    "sudo", "doas", "uv", "uvx", "python", "python3", "py",
+})
+_GATE_SHORT_WITH_VALUE = frozenset({"-u", "-n", "-C", "-c", "-k", "-s", "-S", "-p", "-o"})
+_GATE_SCAN_LIMIT = 16
+
+# Words in front of a pipeline's program that are syntax, not a program: a subshell or group
+# opener and the `!` that negates the pipeline. `( pytest -q ) | tail` still runs pytest.
+_GROUP_OPENERS = frozenset({"(", "{", "!"})
+
+
+def _is_assignment_word(word):
+    name, sep, _value = word.partition("=")
+    return bool(sep) and name.replace("_", "a").isalnum() and not name[:1].isdigit()
+
+
+def program_word_at(words, tool_name="Bash"):
+    """Index of the word a statement RUNS, past assignments and launchers; None when there is none.
+
+    `python -m X` runs X. `python -c ...` runs code, never a gate by name, so it answers None.
+    Shared by the two gate guards so they agree on which word is the program: a gate word
+    searched ANYWHERE in a statement made `grep pytest docs/x.md` read as pytest running.
+    """
+    at = 0
+    for _ in range(_GATE_SCAN_LIMIT):
+        while at < len(words) and _is_assignment_word(words[at]):
+            at += 1
+        if at >= len(words):
+            return None
+        program = basename_for_tool(words[at], tool_name).lower()
+        if program not in _GATE_LAUNCHERS and not program.startswith("python"):
+            return at
+        at += 1
+        while at < len(words) and (words[at].startswith("-") or words[at] == "run"
+                                   or words[at][:1].isdigit() or _is_assignment_word(words[at])):
+            word = words[at]
+            if word == "-c" and program.startswith(("python", "py")):
+                return None
+            if word == "-m":
+                return at + 1 if at + 1 < len(words) else None
+            at += 2 if (word in _GATE_SHORT_WITH_VALUE
+                        or (word.startswith("--") and "=" not in word)) else 1
+    return None
+
+
+def runs_a_gate(command, tool_name="Bash"):
+    """True when a statement of `command` RUNS a recognised gate (or the gate.py jig) as its program.
+
+    A gate that is only text - inside a heredoc body or quotes, or an argument of another program
+    (`grep -rn pytest docs/`, `cat pytest.ini`) - does not count. The program word is matched as
+    written, path and all, which is the reading block-commit-beside-sibling-gate was priced on.
+    """
+    for _at, segment in iter_segments(commands_only(command or "", tool_name), tool_name):
+        words = segment.split()
+        at = program_word_at(words, tool_name)
+        if at is None:
+            continue
+        if GATE_JIG_RE.search(words[at]) or GATE_RE.match(" ".join(words[at:at + 3])):
+            return True
+    return False
+
+
+def gate_program_in(text, tool_name="Bash", pattern=GATE_RE, start=0, end=None):
+    """The `pattern` match at the PROGRAM word of the statement `text[start:end]`, else None.
+
+    One pipeline element or one statement, already split by the caller. The match is taken where
+    the program's NAME begins - past a path and any opening quote, so `.venv/bin/pytest` and the
+    restored quoted `"$X/ci_wait.py"` are gates - and it may run on into the following words, so
+    `make test`, `cargo test` and `go vet` match as they do in the vocabulary. An argument is
+    never the program, so `grep pytest docs/x.md` and `cat pytest.ini` answer None.
+
+    The returned match indexes `text` itself, so a caller cutting a longer command at
+    `match.start()` cuts it where the gate runs.
+    """
+    end = len(text) if end is None else end
+    tokens = [(start + m.start(), start + m.end()) for m in re.finditer(r"\S+", text[start:end])]
+    while tokens and text[tokens[0][0]:tokens[0][1]] in _GROUP_OPENERS:
+        tokens = tokens[1:]
+    if tokens:
+        lead, last = tokens[0]
+        while lead < last - 1 and text[lead] in "({":
+            lead += 1                              # `(pytest`, the opener glued to the program
+        tokens[0] = (lead, last)
+    at = program_word_at([text[a:b] for a, b in tokens], tool_name)
+    if at is None:
+        return None
+    word_start, word_end = tokens[at]
+    word = text[word_start:word_end]
+    name_at = word_start + max(word.rfind("/"), word.rfind("\\")) + 1
+    while name_at < word_end and text[name_at] in "\"'":
+        name_at += 1
+    return pattern.match(text, name_at, end)
+
+
 def is_gated_command(command, tool_name=None):
     """True when a statement in `command` is a git commit, a git push, or a gh pr create.
 
