@@ -65,7 +65,7 @@ __all__ = [
     "recall_questions", "shadow_enabled", "shadow_log_files", "shadow_log_path", "site_mode",
     "short_description", "skill_router_choice_questions",
     "shadow_guard", "skill_router_questions", "skill_router_rerank_questions", "spawn_shadow",
-    "stop_signal_questions", "with_previous",
+    "stop_signal_questions", "subagent_signal_questions", "with_previous",
 ]
 
 DEFAULT_BASE_URL = "https://api.typesafe.ai"
@@ -91,9 +91,11 @@ FIELD_CAP = 4000
 # An error row carries the message, not a traceback: enough to group failures by cause.
 ERROR_CAP = 200
 CAP_MARK = "\n[... truncated ...]\n"
-# The first-wave sites. Each has its own config knob `classifier_<site>`: off | shadow, plus
-# decide where the site's hook implements it (all three; meta-memory-settings validates which).
-SITES = ("stop_signal", "skill_router", "recall_rerank")
+# The hook sites. Each has its own config knob `classifier_<site>`: off | shadow, plus decide
+# where the site's hook implements it (the first three; meta-memory-settings validates which).
+# `subagent_signal` is shadow only: SubagentStop's capture buffers on its BROAD patterns too, and
+# the shadow exists to measure that before anything decides on it.
+SITES = ("stop_signal", "skill_router", "recall_rerank", "subagent_signal")
 SITE_MODES = ("off", "shadow", "decide")
 # The threshold each site's gate or score is read at - by `classifier_eval.py report` when judging
 # a log, and by a site in decide mode when acting on an answer, so the two can never disagree.
@@ -127,7 +129,10 @@ SITE_MODES = ("off", "shadow", "decide")
 # every pair Jev kept judged: 47% at 0.8 against a 60% bar, 65% (36 of 55) at 0.9. 0.9 drops
 # 143 of 162 irrelevant injections and 110 of 146 relevant ones; an injected note is a cost on
 # every prompt it reaches, so precision is what the bar is set on.
-SITE_THRESHOLDS = {"stop_signal": 0.8, "skill_router": 0.5, "recall_rerank": 0.9}
+# `subagent_signal` asks two of the Stop gate's questions word for word, so it starts at the Stop
+# gate's bar. It has never been adjudicated on subagent text: that is what its shadow log is for.
+SITE_THRESHOLDS = {"stop_signal": 0.8, "skill_router": 0.5, "recall_rerank": 0.9,
+                   "subagent_signal": 0.8}
 # Stop-gate families whose score is LOGGED but never counted as a firing. `endorsement` was the
 # only reason to fire on 12 turns across two shadow windows, every one a plain approval ("yes",
 # "go", "lets try 1-4"): approving a proposal the assistant made is not a learning signal. The
@@ -470,6 +475,18 @@ def stop_signal_questions():
                  "`previous_assistant_message`, or does `assistant_reply` agree to adopt an idea "
                  "the user suggested?"),
     ]
+
+
+# The Stop gate's families that read only `assistant_reply`. A subagent's transcript has no typed
+# prompt of its own - its user-role text is the parent's dispatch brief - so the families about
+# the user's message would be judging the parent's instructions.
+_REPLY_FAMILIES = ("self_admission", "realization")
+
+
+def subagent_signal_questions():
+    """The Stop gate's reply questions, verbatim, over {assistant_reply}: one subagent message."""
+    stop = {q.id: q for q in stop_signal_questions()}
+    return [stop[family] for family in _REPLY_FAMILIES]
 
 
 def load_skill_descriptions(skills_dir=None):

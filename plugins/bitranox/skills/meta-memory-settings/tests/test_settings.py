@@ -69,6 +69,8 @@ def test_a_site_whose_hook_implements_decide_accepts_it(capsys, key):
     # classifier_skills gates the Jev-shadow skill-steps pipeline; "decide" is a later task
     # (per-site decide mode), not yet implemented here.
     ("classifier_skills", "decide"),
+    # subagent_signal is shadow only: subagent-capture.py has no decide path.
+    ("classifier_subagent_signal", "decide"),
 ])
 def test_classifier_site_refuses_a_mode_it_does_not_have(capsys, key, value):
     assert ST.main(["set", key, value]) == 2
@@ -398,3 +400,9 @@ def test_a_cp1252_console_survives_a_value_it_cannot_encode(home):
     assert "UnicodeEncodeError" not in r.stderr
     r = _run_cli(home, "view")
     assert r.returncode == 0, r.stderr
+
+
+def test_classifier_subagent_signal_defaults_to_off_and_accepts_shadow(capsys):
+    assert sig.load_config()["classifier_subagent_signal"] == "off"
+    assert ST.main(["set", "classifier_subagent_signal", "shadow"]) == 0
+    assert sig.load_config()["classifier_subagent_signal"] == "shadow"

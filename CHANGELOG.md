@@ -29,6 +29,21 @@ than the change, so entries reconstructed from them would read like coverage wit
 a hole nobody has drawn a line under is one that gets rediscovered and half-filled - which is how
 two "versions with no entry" notes came to sit in this file disagreeing with it.
 
+## [9.10.0]
+
+### Added
+
+- Jev classifier site `subagent_signal` (knob `classifier_subagent_signal`: `off` | `shadow`). With
+  `classifier_backend = jev` and the knob at `shadow`, `subagent-capture.py` hands every assistant
+  message of a finished subagent (the last 12) to the detached shadow child, labelled with the
+  verdict its learning-signal patterns reached: strict, broad-only or none. Jev is asked the Stop
+  gate's two reply questions, word for word (`classifier.subagent_signal_questions`). Nothing acts
+  on the answer; the buffer is the same as with `off`. The capture still buffers broad-only
+  matches, and the Stop gate blocks on them, so the log is what can show how often those are
+  learnings at all.
+- `classifier_eval.py report`: a `subagent_signal` section counting Jev's firings per pattern
+  verdict, with each disagreement carrying its message for adjudication.
+
 ## [9.9.0]
 
 ### Added

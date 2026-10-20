@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Compare the regex verdicts with Jev's per classifier site, from the shadow log.
 
-The first-wave classifier sites (hooks/classifier.py) run in shadow mode: the hook keeps its regex
+The hook classifier sites (hooks/classifier.py) run in shadow mode: the hook keeps its regex
 verdict and a detached child logs Jev's answers beside it, one JSON line per prompt or turn, in
 ~/.claude/self-improve-audit/classifier-shadow-<UTC date>.jsonl (the hook keeps the last 30 days,
 at most 200 MB). `report` reads every one of those logs, oldest first, and answers, per site:
@@ -11,6 +11,9 @@ at most 200 MB). `report` reads every one of those logs, oldest first, and answe
   recall_rerank  per prompt: the notes injected by keyword rank against the shortlisted notes Jev
                  scores relevant, plus the spread of Jev's scores (a narrow spread means Jev is not
                  telling the notes apart)
+  subagent_signal  per subagent message: how often Jev fires on each verdict the capture's
+                 patterns reached (strict, broad_only, none), since a broad-only hit still
+                 buffers and blocks the main Stop
 
 plus latency and token percentiles, the error reasons, and how many rows each plugin release
 wrote. Every disagreement can be written to a JSONL file, carrying the text it was judged on, for
@@ -88,7 +91,7 @@ NON_FIRING_FAMILIES = cl.NON_FIRING_FAMILIES
 DEFAULT_TOP = 2
 # Rows written by a hand-run probe of a hook, not by a real session.
 DEFAULT_EXCLUDE = ("probe-",)
-SITES = ("stop_signal", "skill_router", "recall_rerank")
+SITES = ("stop_signal", "skill_router", "recall_rerank", "subagent_signal")
 
 
 # ---- loading -------------------------------------------------------------------------------
@@ -532,6 +535,38 @@ def summarize_recall(rows, threshold):
     return s
 
 
+# ---- subagent_signal -----------------------------------------------------------------------
+
+def summarize_subagent_signal(rows, threshold):
+    """Per message: Jev's firing against the verdict the capture's patterns reached.
+
+    A buffered message (strict or broad_only) Jev does not fire on is `regex_only`, an unbuffered
+    one it fires on is `jev_only`. An unanswered message is counted apart and never as a no.
+    """
+    s = {"subagents": 0, "by_kind": {}, "unanswered": 0, "disagreements": []}
+    for row in rows:
+        verdicts = (row.get("regex") or {}).get("messages") or []
+        states = row.get("states") or []
+        s["subagents"] += 1
+        for i, (verdict, scores) in enumerate(zip(verdicts, _answered(row))):
+            if scores is None:
+                s["unanswered"] += 1
+                continue
+            kind = verdict.get("kind") or "none"
+            families = sorted(k for k, v in scores.items() if v >= threshold)
+            counts = s["by_kind"].setdefault(kind, {"messages": 0, "jev_fires": 0})
+            counts["messages"] += 1
+            counts["jev_fires"] += bool(families)
+            buffered = kind != "none"
+            if buffered != bool(families):
+                s["disagreements"].append({
+                    **_base(row), "kind": "regex_only" if buffered else "jev_only",
+                    "pattern_verdict": kind, "broad": verdict.get("broad") or [],
+                    "jev_families": families, "scores": scores,
+                    "state": states[i] if i < len(states) else {}})
+    return s
+
+
 # ---- cost, latency, errors -----------------------------------------------------------------
 
 def percentiles(values):
@@ -593,6 +628,8 @@ def summarize(rows, threshold, top):
             detail = summarize_stop_signal(site_rows, at)
         elif site == "skill_router":
             detail = summarize_skill_router(site_rows, at, top)
+        elif site == "subagent_signal":
+            detail = summarize_subagent_signal(site_rows, at)
         else:
             detail = summarize_recall(site_rows, at)
         sites[key] = {**_cost(site_rows), **detail, "threshold": at}
@@ -624,6 +661,11 @@ def render_text(rep):
             lines.append("   prompts %d, identical %d; picks regex %d, jev %d, agreed %d"
                          % (s["prompts"], s["identical"], s["regex_picks"], s["jev_picks"],
                             s["agreed_picks"]))
+        elif _base_site(site) == "subagent_signal":
+            lines.append("   subagents %d" % s["subagents"])
+            for kind, c in sorted(s["by_kind"].items()):
+                lines.append("   %-11s messages %d, jev fires %d"
+                             % (kind, c["messages"], c["jev_fires"]))
         else:
             lines.append("   prompts %d; injected %d, jev relevant %d, agreed %d"
                          % (s["prompts"], s["regex_injected"], s["jev_relevant"], s["agreed"]))

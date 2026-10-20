@@ -37,10 +37,11 @@ ENUM_CHOICES = {
     "mcp_search": ("off", "auto"),
     "classifier_backend": ("off", "jev"),
     # decide only where the site's hook implements it: skill-router.py, self-improve-gate.py and
-    # recall-memory.py do; the skill-step pipeline does not.
+    # recall-memory.py do; the skill-step pipeline and subagent-capture.py do not.
     "classifier_stop_signal": ("off", "shadow", "decide"),
     "classifier_skill_router": ("off", "shadow", "decide"),
     "classifier_recall_rerank": ("off", "shadow", "decide"),
+    "classifier_subagent_signal": ("off", "shadow"),
     "classifier_skills": ("off", "shadow"),
     "tmp_prune": ("on", "dry-run", "off"),
 }

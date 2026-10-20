@@ -240,3 +240,42 @@ def test_a_tail_cap_landing_inside_a_record_drops_that_partial_record(tmp_path, 
     # Control for the other direction: a seek one byte INTO the learning record must not parse
     # its truncated remainder.
     assert _tail_capped(tmp_path, monkeypatch, 1) == []
+
+
+# ---- the Jev shadow request (site subagent_signal) -------------------------------------------
+
+def test_shadow_request_labels_each_message_with_the_verdict_the_capture_reached(tmp_path):
+    ev = _event(tmp_path, agent_msgs=[
+        ("user", "always use uv"),                                    # the dispatch prompt: skipped
+        ("assistant", "I was wrong - the real cause is the stale venv"),
+        ("assistant", "Done, per the repo iron rule."),
+        ("assistant", "Listed the files.")])
+    regex, requests = C.shadow_request(ev)
+    assert [m["kind"] for m in regex["messages"]] == ["strict", "broad_only", "none"]
+    assert [m["buffered"] for m in regex["messages"]] == [True, True, False]
+    assert regex["fires"] is True
+    assert [r["fields"] for r in requests] == [
+        {"assistant_reply": "I was wrong - the real cause is the stale venv"},
+        {"assistant_reply": "Done, per the repo iron rule."},
+        {"assistant_reply": "Listed the files."}]
+
+
+def test_shadow_request_keeps_the_last_messages_when_over_the_cap(tmp_path):
+    texts = ["Step %d done." % i for i in range(C.SHADOW_MAX_MESSAGES + 3)]
+    ev = _event(tmp_path, agent_msgs=[("assistant", t) for t in texts])
+    regex, requests = C.shadow_request(ev)
+    sent = [r["fields"]["assistant_reply"] for r in requests]
+    assert sent == texts[-C.SHADOW_MAX_MESSAGES:]
+    assert regex["dropped"] == 3 and len(regex["messages"]) == len(sent)
+
+
+def test_shadow_request_sends_the_final_message_once(tmp_path):
+    ev = _event(tmp_path, agent_msgs=[("assistant", "Report: the build is green.")],
+                final="Report: the build is green.")
+    _regex, requests = C.shadow_request(ev)
+    assert len(requests) == 1
+
+
+def test_a_subagent_with_no_assistant_text_asks_nothing(tmp_path):
+    regex, requests = C.shadow_request(_event(tmp_path, agent_msgs=[("user", "go")]))
+    assert requests == [] and regex["fires"] is False

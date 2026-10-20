@@ -560,6 +560,60 @@ def test_an_explicit_threshold_overrides_every_site():
     assert rep["sites"]["recall_rerank"]["threshold"] == 0.7
 
 
+# ---- subagent_signal -----------------------------------------------------------------------
+
+def subagent_row(messages, session="s1"):
+    """One SubagentStop row: `messages` is [(kind, {family: score} or None, text), ...]."""
+    return {"ts": "2026-10-20T12:00:00+00:00", "site": "subagent_signal", "session_id": session,
+            "lang": "en", "reason": None, "redactions": 0, "input_tokens": 500,
+            "latency_ms": 800,
+            "regex": {"messages": [{"kind": k, "buffered": k != "none", "broad": []}
+                                   for k, _s, _t in messages],
+                      "fires": any(k != "none" for k, _s, _t in messages), "dropped": 0},
+            "results": [_result(sc) if sc is not None else None for _k, sc, _t in messages],
+            "states": [{"assistant_reply": t} for _k, _s, t in messages]}
+
+
+def test_subagent_signal_counts_jev_firings_per_pattern_verdict():
+    rows = [subagent_row([("strict", {"self_admission": 0.9}, "I was wrong"),
+                          ("broad_only", {"realization": 0.2}, "per the repo iron rule"),
+                          ("none", {"realization": 0.85}, "the root cause is X")]),
+            subagent_row([("broad_only", {"realization": 0.9}, "found it: Y")])]
+    s = ce.summarize_subagent_signal(rows, threshold=0.8)
+    assert s["by_kind"] == {"strict": {"messages": 1, "jev_fires": 1},
+                            "broad_only": {"messages": 2, "jev_fires": 1},
+                            "none": {"messages": 1, "jev_fires": 1}}
+    assert s["subagents"] == 2
+
+
+def test_subagent_signal_disagreements_carry_the_message_for_adjudication():
+    rows = [subagent_row([("broad_only", {"realization": 0.2}, "per the repo iron rule"),
+                          ("none", {"realization": 0.85}, "the root cause is X"),
+                          ("strict", {"self_admission": 0.95}, "my mistake")])]
+    s = ce.summarize_subagent_signal(rows, threshold=0.8)
+    got = [(d["kind"], d["pattern_verdict"], d["state"]["assistant_reply"])
+           for d in s["disagreements"]]
+    assert got == [("regex_only", "broad_only", "per the repo iron rule"),
+                   ("jev_only", "none", "the root cause is X")]
+
+
+def test_subagent_signal_counts_an_unanswered_message_and_judges_the_rest():
+    rows = [subagent_row([("strict", None, "I was wrong"),
+                          ("none", {"realization": 0.1}, "listed files")])]
+    s = ce.summarize_subagent_signal(rows, threshold=0.8)
+    assert s["unanswered"] == 1
+    assert s["by_kind"]["none"] == {"messages": 1, "jev_fires": 0}
+    assert "strict" not in s["by_kind"]
+
+
+def test_summarize_reports_the_subagent_site_at_its_own_threshold(tmp_path, capsys):
+    rows = [subagent_row([("broad_only", {"realization": 0.75}, "per the repo iron rule")])]
+    rep = ce.summarize(rows, threshold=None, top=2)
+    site = rep["sites"]["subagent_signal"]
+    assert site["threshold"] == 0.8 and site["by_kind"]["broad_only"]["jev_fires"] == 0
+    assert "broad_only" in ce.render_text(rep)
+
+
 # ---- CLI -----------------------------------------------------------------------------------
 
 def test_cli_json_envelope_and_disagreement_file(tmp_path, capsys):

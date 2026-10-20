@@ -1,4 +1,4 @@
-"""End-to-end tests for the three first-wave classifier sites in SHADOW mode.
+"""End-to-end tests for the hook classifier sites in SHADOW mode.
 
 Each hook runs in-process exactly as Claude Code drives it (event JSON on stdin), with a real
 config file, a real API key env var and the loopback base-URL override pointing at a local fake
@@ -21,6 +21,7 @@ import recall_memory as RM
 import self_improve_gate as G
 import self_improve_signals as sig
 import skill_router as SR
+import subagent_capture as SC
 
 GHP = "ghp_" + "A1b2C3d4E5f6G7h8I9j0K1l2M3n4O5p6Q7r8"
 
@@ -105,6 +106,63 @@ def test_stop_gate_spawns_nothing_while_the_site_is_off(env, tmp_path, monkeypat
     _run(G, monkeypatch, capsys, _stop_event(tmp_path, "No, wrong.", "ok"))
     time.sleep(1.0)
     assert not _log(env["home"]).exists() and env["fake"].requests == []
+
+
+# ---- subagent capture ---------------------------------------------------------------------
+
+# One assistant message per regex verdict the capture can reach: strict, broad-only (the shape the
+# live corpus showed as noise), and none.
+_STRICT = "You are right, I was wrong: the cache was stale and I missed it."
+_BROAD_ONLY = "Gate green (10257 passed). Commit message, no attribution per the repo iron rule."
+_PLAIN = "Listed the three files in the directory. token " + GHP
+
+
+def _subagent_event(tmp_path, texts, final=None):
+    t = tmp_path / "agent.jsonl"
+    t.write_text("".join(json.dumps({"type": "assistant", "message": {"content": x}}) + "\n"
+                         for x in texts), encoding="utf-8")
+    ev = {"hook_event_name": "SubagentStop", "session_id": "s-sub", "agent_id": "a1",
+          "agent_type": "general-purpose", "agent_transcript_path": str(t),
+          "transcript_path": str(tmp_path / "main.jsonl")}
+    if final is not None:
+        ev["last_assistant_message"] = final
+    return ev
+
+
+def test_subagent_capture_shadow_logs_every_message_and_buffers_exactly_as_before(
+        env, tmp_path, monkeypatch, capsys):
+    ev = _subagent_event(tmp_path, [_STRICT, _BROAD_ONLY, _PLAIN])
+    _config(env["home"])
+    assert _run(SC, monkeypatch, capsys, ev) == ""
+    off = sig.read_subagent_learnings("s-sub")
+    sig.drain_subagent_learnings("s-sub")
+    _config(env["home"], classifier_backend="jev", classifier_subagent_signal="shadow")
+    assert _run(SC, monkeypatch, capsys, ev) == ""
+    assert sig.read_subagent_learnings("s-sub") == off
+    line = _wait_for_log(env["home"])[-1]
+    assert line["site"] == "subagent_signal" and line["session_id"] == "s-sub"
+    assert [m["kind"] for m in line["regex"]["messages"]] == ["strict", "broad_only", "none"]
+    assert line["regex"]["fires"] is True
+    assert len(line["results"]) == 3
+    assert set(line["results"][0]["answers"]) == {q.id for q in cl.subagent_signal_questions()}
+    assert all(set(s) == {"assistant_reply"} for s in line["states"])
+    assert GHP not in _log(env["home"]).read_text(encoding="utf-8")
+    assert GHP not in json.dumps(env["fake"].requests)
+
+
+def test_subagent_capture_spawns_nothing_while_the_site_is_off(env, tmp_path, monkeypatch,
+                                                               capsys):
+    _config(env["home"], classifier_backend="jev", classifier_stop_signal="shadow")
+    _run(SC, monkeypatch, capsys, _subagent_event(tmp_path, [_STRICT]))
+    time.sleep(1.0)
+    assert not _log(env["home"]).exists() and env["fake"].requests == []
+
+
+def test_subagent_signal_asks_the_stop_gate_s_reply_questions_verbatim():
+    stop = {q.id: q for q in cl.stop_signal_questions()}
+    asked = cl.subagent_signal_questions()
+    assert [q.id for q in asked] == ["self_admission", "realization"]
+    assert all(q.to_json() == stop[q.id].to_json() for q in asked)
 
 
 # ---- skill router -------------------------------------------------------------------------

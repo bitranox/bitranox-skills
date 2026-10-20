@@ -1179,6 +1179,7 @@ DEFAULT_CONFIG = {
     "classifier_stop_signal": "off",   # off | shadow | decide - self-improve Stop gate signal
     "classifier_skill_router": "off",  # off | shadow | decide - UserPromptSubmit skill router
     "classifier_recall_rerank": "off",  # off | shadow | decide - UserPromptSubmit memory recall ranking
+    "classifier_subagent_signal": "off",  # off | shadow - SubagentStop learning-signal capture
     "classifier_skills": "off",        # off | shadow - skill-step Jev shadow (needs classifier_backend=jev too)
     # tmp-prune-hook.py: at most once an hour, delete dead Claude Code session scratch and old
     # one-off dirs from the temp dir (tmp_prune.py says what counts as dead).

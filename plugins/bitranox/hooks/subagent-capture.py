@@ -17,16 +17,28 @@ wrong conversation. The subagent's own transcript is `agent_transcript_path`
 (`.../<session>/subagents/agent-<agent_id>.jsonl`, isSidechain). `last_assistant_message` carries the
 subagent's final text for free. Re-run the probe after a Claude Code upgrade.
 
+With `classifier_backend = jev` and `classifier_subagent_signal = shadow`, every assistant message
+of the subagent is also handed to the classifier's detached shadow child, labelled with the verdict
+the patterns reached (strict, broad_only or none), so the log can show how often a broad-only hit -
+which still buffers, and so still blocks the main Stop - is a learning at all. The buffer itself is
+never changed by it.
+
 Pure standard library. ALWAYS exits 0 and never emits a decision: a subagent finishing must never be
 blocked or wedged by this.
 """
 import json
 import sys
 
+import classifier
 import self_improve_signals as sig
 
 _MAX_BYTES = 2_000_000        # tail cap: a subagent transcript is small, but never read unbounded
 _SNIPPET = 200
+SITE = "subagent_signal"
+# Messages per shadow request set, the LAST ones kept: a subagent's report and its discoveries sit
+# at the end. Measured over 30 days of transcripts: 16,089 assistant messages in 2,998 subagent
+# runs, about 5.4 a run, so the cap binds only on long runs and bounds what one run can cost.
+SHADOW_MAX_MESSAGES = 12
 
 
 def _text(content):
@@ -119,6 +131,68 @@ def find_signals(event):
     return hits
 
 
+def _assistant_texts(event):
+    """Every distinct non-empty assistant message of the subagent, in order, the final one last.
+
+    Distinct by the same containment rule `find_signals` dedups by, so the final message that
+    repeats the transcript's last one is asked about once.
+    """
+    msgs = _messages(event.get("agent_transcript_path") or "")
+    final = event.get("last_assistant_message")
+    if isinstance(final, str) and final.strip():
+        msgs.append(("assistant", final))
+    texts, seen = [], []
+    for role, text in msgs:
+        if role != "assistant" or not text.strip():
+            continue
+        normalised = " ".join(text.split())
+        if any(normalised in s or s in normalised for s in seen):
+            continue
+        seen.append(normalised)
+        texts.append(text)
+    return texts
+
+
+def _verdict(text):
+    """What the capture's patterns say about one message, as `find_signals` judges it."""
+    broad = sig.broad_matches("assistant", text)
+    if sig.strict_asst_hit(text):
+        kind = "strict"
+    elif broad:
+        kind = "broad_only"
+    else:
+        kind = "none"
+    return {"kind": kind, "buffered": kind != "none", "broad": broad}
+
+
+def shadow_request(event):
+    """(regex, requests) for the classifier shadow: one request per message, newest kept.
+
+    `regex["messages"][i]` is the patterns' verdict on the text of `requests[i]`, `fires` is
+    whether this subagent buffered anything at all, `dropped` how many earlier messages the cap
+    left out.
+    """
+    texts = _assistant_texts(event)
+    verdicts = [_verdict(t) for t in texts]
+    kept = texts[-SHADOW_MAX_MESSAGES:]
+    regex = {"messages": verdicts[len(texts) - len(kept):],
+             "fires": any(v["buffered"] for v in verdicts),
+             "dropped": len(texts) - len(kept)}
+    questions = classifier.subagent_signal_questions()
+    return regex, [{"fields": {"assistant_reply": t}, "questions": questions} for t in kept]
+
+
+def _shadow(event, session):
+    """Hand the subagent's messages to the detached shadow child. Never raises, never decides."""
+    with classifier.shadow_guard(SITE, session):
+        if not classifier.shadow_enabled(sig.load_config(), SITE):
+            return
+        regex, requests = shadow_request(event)
+        if requests:
+            classifier.spawn_shadow(SITE, session, regex, requests,
+                                    transcript=event.get("agent_transcript_path") or "")
+
+
 def main() -> int:
     try:
         event = json.load(sys.stdin)
@@ -130,6 +204,7 @@ def main() -> int:
             return 0
         for hit in find_signals(event):
             sig.buffer_subagent_learning(session, hit)
+        _shadow(event, session)
     except Exception:                                     # noqa: BLE001 - fail open, always
         return 0
     return 0

@@ -180,7 +180,8 @@ meta-memory-settings docs.
 - One flat knob per site, `classifier_<site>`: `off` (default) or `shadow`, with `decide` joining
   the enum when a site is wired for it (the settings CLI validates flat enums, not dicts). First-wave
   sites: `stop_signal`, `skill_router`, `recall_rerank`. Second-wave site ids: `filler_topical`,
-  `fact_type`, `statusrot`, `dedup`, `advisories`, `tool_failure`.
+  `fact_type`, `statusrot`, `dedup`, `advisories`, `tool_failure`. The `subagent-capture.py` part
+  of `tool_failure` is wired as its own hook site, `subagent_signal` (shadow only).
 - `BITRANOX_HOOKS_OFF` still disables everything.
 
 ### 4. Modes
