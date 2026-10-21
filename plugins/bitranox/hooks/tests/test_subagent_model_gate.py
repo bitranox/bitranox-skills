@@ -10,11 +10,11 @@ a probe/baseline/pressure dispatch is never review-shaped, and a review sent as 
 """
 
 import io
-import time
 import json
 import os
 import subprocess
 import sys
+import time
 from pathlib import Path
 
 import pytest
@@ -537,6 +537,32 @@ def test_a_review_of_a_synthesis_still_warns():
     action, msg = W.assess("Agent", {"description": "Review the synthesis draft", "model": "opus",
                                      "prompt": "x"})
     assert action == "warn" and "`effort: medium`" in msg
+
+
+def test_a_haiku_scan_shaped_like_a_review_still_warns_and_may_be_ignored():
+    """A review mis-tiered to haiku is what the rule catches, so a haiku dispatch that reads as a
+    review still warns; the message tells a mechanical scan that it may ignore the advice."""
+    action, msg = W.assess("Agent", {"description": "scan: verify link targets exist",
+                                     "model": "haiku", "effort": "low", "prompt": "x"})
+    assert action == "warn"
+    assert "`haiku` mechanical scan" in msg and "ignore" in msg.lower()
+
+
+@pytest.mark.parametrize("description", [
+    "Synthetic-data audit for Task 4", "[29] review of the synthesizer module",
+    "[29] review of the synthesis draft",
+])
+def test_a_synthesis_lookalike_or_a_tagged_review_still_warns(description):
+    """Only synthesis words silence the rule ("synthetic" and "synthesizer" are not one), and a
+    bracket tag in front does not hide a leading review verb."""
+    action, msg = W.assess("Agent", {"description": description, "model": "opus",
+                                     "prompt": "x"})
+    assert action == "warn" and "`effort: medium`" in msg, description
+
+
+def test_a_tagged_fixer_is_not_a_review():
+    assert W.assess("Agent", {"description": "[29] Fix the review findings", "model": "opus",
+                              "prompt": "x"}) == (None, "")
 
 
 # ---- a pathological description cannot stall the hook -------------------------------------------

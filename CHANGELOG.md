@@ -44,14 +44,15 @@ two "versions with no entry" notes came to sit in this file disagreeing with it.
   re-assessment, the parallel review fan-out, plan-executor and writing-plans reviewers, the
   Python and Bash REVIEW modes, performance audits, data-architecture per-file analysis, the
   Proxmox steelman / red-team gate, CLAUDE.md claim verification, dream-tree skeptics, the
-  skill-writer quote-back and the skill-audit reviewers (`claude -p --model opus --effort medium`).
+  skill-writer quote-back and the skill-audit reviewers.
   `meta-skill-writer`'s team and verification dispatch examples gain a `model` line, and the
   implementer template says an omitted model inherits the session's, a premium tier or a weaker one.
 - `subagent-model-gate` hook: warns (never blocks) when a review-shaped dispatch is not on `opus`
   at effort `medium`, and when a review is sent as a `fork` (a fork ignores `model` and `effort`).
   An unpinned review in an armed plan execution keeps its existing deny, with the review rule
-  appended. Probes, fixers, implementers and a final synthesis stay silent. Its tier message no
-  longer says effort cannot be set on the dispatch.
+  appended. Probes, fixers, implementers and a final synthesis stay silent; a `haiku` dispatch that
+  reads as a review still warns, and the message tells a mechanical scan to ignore it. Its tier
+  message no longer says effort cannot be set on the dispatch.
 - `meta-skill-audit`: the headless reviewers run `claude -p --model opus --effort medium`.
 
 ## [9.10.3]

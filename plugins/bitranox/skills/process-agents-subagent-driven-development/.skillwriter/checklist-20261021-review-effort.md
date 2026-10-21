@@ -95,7 +95,9 @@
       output tokens it spent at `medium`"). The table row reads "`medium` on `opus`", re-padded to
       the existing column width.
 - [x] "It does NOT cover" now names the final synthesis (keeps `xhigh` or `max`) and `haiku`
-      mechanical scans (keep `low`), the sentence `subagent-model-gate` mirrors.
+      mechanical scans (keep `low`). `subagent-model-gate` keeps warning on a `haiku`
+      review-shaped dispatch on purpose (a review mis-tiered to haiku is what it catches), and its
+      message tells a mechanical scan that makes no judgment to ignore it.
 - [x] `task-reviewer-prompt.md`: the stale `[MODEL]` placeholder line is gone (the template
       hard-codes `model: opus`).
 - [x] Quote-back on the final text, `bitranox:baseline-probe`, haiku and opus, one cell per

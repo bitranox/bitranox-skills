@@ -18,7 +18,9 @@ review sent as a `fork` warns (never denies): a fork ignores `model` and `effort
 probe, baseline or pressure arm is the thing under test, not a review, and keeps its own tier;
 a fixer or implementer (a description leading with fix/implement/apply/address, or naming a
 "review fix round/wave/batch" with no review verb in front) is out of scope and stays silent, and
-so is a synthesis (it keeps `xhigh`/`max`) unless a review verb leads its description.
+so is a synthesis (it keeps `xhigh`/`max`) unless a review verb leads its description. A `haiku`
+dispatch that reads as a review still warns, since a review mis-tiered to haiku is what the rule
+catches; the message tells a mechanical scan that makes no judgment to ignore it.
 
 A dispatch that IS pinned, but to a sonnet model (on the dispatch, or in its agent type's
 definition), is warned about at every level and never denied: it satisfies the pin rule, but the
@@ -112,8 +114,9 @@ _MAX_LABEL_CHARS = 512
 # Fixers and implementers are out of scope: a dispatch whose description LEADS with
 # fix/implement/apply/address acts on review findings rather than judging, so the nudge would be
 # wrong advice. The verb must be followed by whitespace, so "Fix-wave re-review" stays a review.
-# An optional "<label>:" prefix of up to 30 characters ("Task 15: Fix ...") is skipped first.
-_LABEL = r"^\W*(?:[^:]{1,30}:\s*)?"
+# An optional bracket tag ("[29] Fix ...") and an optional "<label>:" prefix of up to 30
+# characters ("Task 15: Fix ...") are skipped first.
+_LABEL = r"^\W*(?:\[[^\]]{1,30}\]\s*)?(?:[^:]{1,30}:\s*)?"
 _FIXER_RE = re.compile(_LABEL + r"(?:fix|implement|apply|address)\s", re.I)
 # "Final-review fix round" names the fix round, not a review of it - unless a review verb leads.
 _REVIEW_FIX_RE = re.compile(r"\breview\w*[ -]fix(?:es)?\b(?:\s+(?:round|wave|batch)\b|\s*$)",
@@ -121,8 +124,8 @@ _REVIEW_FIX_RE = re.compile(r"\breview\w*[ -]fix(?:es)?\b(?:\s+(?:round|wave|bat
 _LEADING_REVIEW_RE = re.compile(_LABEL + _REVIEW_RE.pattern, re.I)
 # A synthesis merges reviewers' findings into one verdict and keeps `xhigh`/`max` per the skill's
 # effort table, so it is not a review - unless a review verb leads ("Review the synthesis draft"
-# judges a finished draft).
-_SYNTHESIS_RE = re.compile(r"\bsynth\w*", re.I)
+# judges a finished draft). Synthesis words only: "synthetic" and "synthesizer" name no synthesis.
+_SYNTHESIS_RE = re.compile(r"\bsynthes(?:[ei]s|i[sz](?:e[sd]?|ing))\b", re.I)
 # The jev-judge product name (btx-skill-jev-judge, ai-llm-jev-judge) is not the act of judging.
 _PRODUCT_RE = re.compile(r"[\w:-]*jev-judge[\w-]*", re.I)
 
@@ -131,7 +134,8 @@ _REVIEW_MESSAGE = (
     "lens, verify, adjudication, quote-back, audit, judge panel) runs on `model: opus` with "
     "`effort: medium` - the review rule in bitranox:process-agents-subagent-driven-development "
     "\"Review dispatches\". Pass both fields; an omitted effort inherits the session or settings "
-    "default, which is often higher. Ignore this if the dispatch is not a review.")
+    "default, which is often higher. Ignore this if the dispatch is not a review, or is a "
+    "`haiku` mechanical scan that makes no judgment.")
 
 _FORK_REVIEW_MESSAGE = (
     "Review-shaped dispatch sent as a `fork`: a fork inherits the parent's model and effort and "
