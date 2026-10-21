@@ -806,10 +806,15 @@ def manifest_drift(before, after):
 # setting the same probe ran none and the room stayed empty.
 REVIEWER_SETTINGS = '{"disableAllHooks":true}'
 
+# Reviewers judge finished work: the user's directive (2026-10-21) runs every review on opus at
+# effort medium, and naming it here overrides the user's higher default effort from settings.json.
+REVIEWER_EFFORT = "medium"
+
 
 def reviewer_command(exe, model):
-    """argv for one headless reviewer: print mode, the model, and every hook switched off."""
-    return [exe, "-p", "--model", model, "--settings", REVIEWER_SETTINGS]
+    """argv for one headless reviewer: print mode, the model, effort medium, every hook switched off."""
+    return [exe, "-p", "--model", model, "--effort", REVIEWER_EFFORT,
+            "--settings", REVIEWER_SETTINGS]
 
 
 def _subprocess_runner(prompt, cwd, model, timeout):
@@ -1056,7 +1061,8 @@ def _parser():
                     help="with --skills-dir: a hooks dir to stage alongside, so a skill's "
                          "reference to a sibling hook still resolves in the room")
     ap.add_argument("--room", required=True, help="clean-room root, OUTSIDE the knowledge tree")
-    ap.add_argument("--model", default="")
+    ap.add_argument("--model", default="",
+                    help="reviewer model (default opus); every reviewer runs at effort medium")
     ap.add_argument("--jobs", type=int, default=0)
     ap.add_argument("--timeout", type=int, default=0)
     ap.add_argument("--only", default="", help="comma-separated skill names, or path substrings "
