@@ -169,14 +169,24 @@ trade-off: **packages you installed into the venv by hand do not survive a sync.
 
 Set `UV_PROJECT_ENVIRONMENT` when one checkout is used from more than one OS (a share mounted on
 both Linux and Windows): a single venv cannot serve both, so give each its own (e.g. `.venv-win`).
-If provisioning fails, bmk falls back to its own interpreter rather than failing the command.
+If provisioning fails, the command still runs: the gates use the venv as the failed sync left it,
+or bmk's own interpreter when no real venv (no `pyvenv.cfg`) is left at that path.
 
 **A gate reporting versions that disagree with `pyproject.toml`** (pip-audit flagging a version the
 manifest excludes, or the project's own package at an old version) is not cured by deleting
 `.venv`: the next env-touching `make` re-syncs it, and deleting it only forces a full re-resolve.
-When the mismatch survives a re-run, check `BMK_NO_VENV_SYNC`, then re-run with
-`BMK_OUTPUT_FORMAT=text`: JSON mode hides the provisioning output, so that is where a failed sync
-and the fall-back to bmk's interpreter show. To resync by hand, target the venv explicitly
+When the mismatch survives a re-run, check `BMK_NO_VENV_SYNC`, then read the stderr of a run that
+showed it (send stderr to a file for an unattended run). A failed sync prints, in every output mode,
+`[venv] uv sync from uv.lock failed for <venv> (exit <rc>; venv afterwards: <state>)`: in JSON mode
+a colon and all of uv's own stderr follow it, indented; in text mode it comes after uv's live
+output. `<state>` says what the gates ran in: `venv` is the unsynced venv (the stale versions you
+see), while `directory without pyvenv.cfg`, `empty directory` or `absent` means bmk's own
+interpreter, so pip-audit audited bmk's packages rather than the project's. A `[venv] uv lock
+failed` line instead means no lock could be made, so bmk provisioned from `pyproject.toml`.
+Do not re-run just to see the error: a sync failure can be intermittent, and a re-run that passes
+leaves nothing to read. Only when no failed run's stderr was kept, run again with stderr going to a
+file; text mode adds nothing, since the line prints in JSON mode too. To resync by hand, target the
+venv explicitly
 (`uv pip install -e ".[dev]" --python .venv/bin/python --exact --upgrade`, or the venv
 `UV_PROJECT_ENVIRONMENT` names) and name EVERY extra the project uses: `--exact` uninstalls
 whatever no extra on that command line pulls in.

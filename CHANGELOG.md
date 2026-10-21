@@ -29,6 +29,17 @@ than the change, so entries reconstructed from them would read like coverage wit
 a hole nobody has drawn a line under is one that gets rediscovered and half-filled - which is how
 two "versions with no entry" notes came to sit in this file disagreeing with it.
 
+## [9.11.1]
+
+### Fixed
+
+- `devops-bmk`: a failed provisioning sync is no longer described as hidden in JSON mode. The skill
+  now says the `[venv] uv sync from uv.lock failed for <venv> (exit <rc>; venv afterwards: <state>)`
+  line prints in every output mode, with all of uv's stderr after it in JSON mode, and to read it
+  from the run that failed rather than re-running in text mode. `<state>` tells whether the gates
+  ran in the unsynced venv or in bmk's own interpreter, and a `[venv] uv lock failed` line marks
+  the fallback to provisioning from `pyproject.toml`. Mirrors the bmk repo's copy.
+
 ## [9.11.0]
 
 ### Changed
