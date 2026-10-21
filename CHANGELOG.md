@@ -29,6 +29,17 @@ than the change, so entries reconstructed from them would read like coverage wit
 a hole nobody has drawn a line under is one that gets rediscovered and half-filled - which is how
 two "versions with no entry" notes came to sit in this file disagreeing with it.
 
+## [9.11.0]
+
+### Changed
+
+- `process-agents-subagent-driven-development`: new "Review dispatches" rule. Every dispatch that
+  judges finished work (task and final reviews, code review, skeptic and adversarial lenses, verify
+  passes, adjudicators, quote-back checks, audit reviewers, judge panels) runs on `opus` at effort
+  `medium`, passed explicitly on the Agent tool, a Workflow `agent()` call or `claude -p`. The effort
+  table gains a review row; final synthesis keeps `xhigh`/`max`, haiku mechanical scans keep `low`.
+  The task-reviewer template pins `model: opus` and `effort: medium`.
+
 ## [9.10.3]
 
 ### Changed

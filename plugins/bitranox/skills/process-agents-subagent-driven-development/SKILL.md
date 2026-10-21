@@ -114,7 +114,7 @@ whether something is a violation, a duplicate, relevant or correct, it is `opus`
 mechanical fix): `haiku`. A complete spec written as prose is not complete code: `opus`.
 
 **Everything else** - integration, judgment, debugging, review, architecture and design, the final
-whole-branch review: `opus`.
+whole-branch review: `opus`. Every review also carries effort `medium` (see "Review dispatches").
 
 **Always specify the model explicitly when dispatching a subagent.** An
 omitted model inherits your session's model, which may be a premium tier or a
@@ -131,6 +131,28 @@ When the plan is complete (after the final review), DISARM it -
     bash "$CLAUDE_PLUGIN_ROOT/hooks/run-python.sh" "$CLAUDE_PLUGIN_ROOT/hooks/skill_receipt.py" end plan-execution
 
 Outside an armed plan execution the same hook only warns.
+
+### Review dispatches: `opus` at effort `medium`
+
+Every dispatch whose job is to JUDGE work or a verdict already produced runs on `model: "opus"`
+with `effort: "medium"`: the per-task reviewer and its re-reviews, the final whole-branch review,
+code review, skeptic and adversarial lenses, verify passes, adjudicators, quote-back checks, audit
+reviewers and judge panels. A fan-out of such reviewers (one per file, dimension or store) is a
+review too; a scanner that judges raw material nobody has produced a result from yet (log lines,
+search hits, records) is not, and takes the non-review `opus` row below. User directive 2026-10-21;
+this paragraph is the explicit ask the Agent tool's `effort` field requires, so pass the field on
+every such dispatch. On a Workflow `agent()` call pass `{model: 'opus', effort: 'medium'}`; on a
+headless reviewer pass `claude -p --model opus --effort medium`. Name the field even when it looks
+redundant: the user's default effort is high, and an omitted field inherits it (measured
+2026-10-21: an opus reviewer with no field spent two to three times the output tokens of the same
+prompt at `medium`). Never send a review as a `fork`: a fork ignores both fields and runs on the
+parent's model and effort.
+
+It does NOT cover implementers and fixers, scenario writers, or RED/GREEN and baseline probe
+subjects: a probe is the thing under test, and its tier pairs stay as `bitranox:meta-skill-writer`
+prescribes. `subagent-model-gate` warns on a review-shaped dispatch that is missing either value.
+
+### Reasoning effort: the channels and the levels
 
 **Three channels set a subagent's reasoning effort; only the Agent tool's own
 field needs an explicit ask.** (1) The Agent tool's own `effort`
@@ -152,16 +174,19 @@ found" while definitions present at session start resolved). (3) A Workflow
 model's thinking budget by orders of magnitude, so it cuts both ways - set it
 only at the EXTREMES and leave everything else at the default (inherit).
 Pinning `low` broadly silently degrades tasks that occasionally need depth,
-which costs more than the tokens it saves.
+which costs more than the tokens it saves. Reviews are the one user-directed
+exception to "extremes only": every review carries `medium` (see "Review dispatches").
 
 | Role                                                | Effort                                       |
 |-----------------------------------------------------|----------------------------------------------|
 | `haiku`-tier mechanical scan / transcribe / extract | `low` (the big saver on fleet-scale fan-out) |
-| `opus` fan-out / bounded judgment / deep reasoning  | inherit - do not set                         |
-| Adversarial verify / judge panel / final synthesis  | `xhigh` or `max`                             |
+| Any review (see "Review dispatches")                | `medium` on `opus` (user, 2026-10-21)        |
+| Non-review `opus` fan-out / judgment / reasoning    | inherit - do not set                         |
+| Final synthesis                                     | `xhigh` or `max`                             |
 
 Set these through an agent-type definition or a Workflow `agent()` call freely; on an Agent-tool
-dispatch, only once the user, CLAUDE.md or a skill step has asked for a level.
+dispatch, only once the user, CLAUDE.md or a skill step has asked for a level - a review dispatch
+is always asked (see "Review dispatches").
 
 ### Concrete tiers (canonical mapping - other skills reference this section)
 
@@ -174,11 +199,11 @@ version needs no edit.
   judgment: regex secret/PII scans, license accept-reject mapping against a fixed table,
   formatting, 1-2-file implementers whose brief holds the complete code.
 - **`opus`** (the DEFAULT for everything that is not purely mechanical) = fan-out that judges
-  (per-file/per-dimension/per-store reviewers, and scanners that judge what they find - fanned out
-  or not, the judging decides the tier, not the fan-out), bounded judgment, relevance
-  filtering, summarizing, integration, reference hunting, implementers working from
-  prose, architecture/design, final SYNTHESIS, adversarial CORRECTNESS verification, root-cause
-  judgment, the final whole-branch review.
+  (per-file/per-dimension/per-store reviewers at effort `medium`, and scanners that judge what
+  they find at inherited effort - fanned out or not, the judging decides the tier, not the
+  fan-out), bounded judgment, relevance filtering, summarizing, integration, reference hunting,
+  implementers working from prose, architecture/design, final SYNTHESIS, root-cause judgment, and
+  adversarial CORRECTNESS verification and the final whole-branch review, both at effort `medium`.
 - **`fable`** (Mythos-class, ABOVE opus; premium-priced and only available on paid API credits -
   many plans cannot resolve it) = the exceptional top tier for the hardest single judgments where
   even opus-level error is too costly. Use sparingly and only where the plan/credits allow;
@@ -197,7 +222,7 @@ current Claude model lineup and proposes a re-tier if the ordering shifts), so t
 **Turn count beats token price.** Wall-clock and context cost scale with how
 many turns a subagent takes, and cheaper models routinely take 2-3× the
 turns on multi-step work  -  costing more overall. That is why `opus` is the
-floor for reviewers and for implementers working from prose descriptions.
+floor for reviewers (at effort `medium`) and for implementers working from prose descriptions.
 When the task's plan text contains the complete code to write, the
 implementation is transcription plus testing: use `haiku` for
 that implementer. Single-file mechanical fixes also take `haiku`.
