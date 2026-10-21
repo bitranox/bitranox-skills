@@ -1,14 +1,14 @@
-# [29] Review dispatches run on opus at effort low - Implementation Plan
+# [29] Review dispatches run on opus at effort medium - Implementation Plan
 
 > **For Claude:** REQUIRED SUB-SKILL: Use bitranox:process-agents-subagent-driven-development (recommended) or bitranox:process-plan-executor to implement this plan task-by-task. Every SKILL.md / skill reference edit goes through REQUIRED SUB-SKILL bitranox:meta-skill-writer (its checklist, one task per phase; the skill-edit-guard hook refuses the edit otherwise). Steps use checkbox (`- [ ]`) syntax.
 
 **Goal:** Every judging-review subagent dispatch the bitranox plugin prescribes runs on `opus` at
-effort `low`, stated at the point of dispatch, with a warn-only hook that flags a review dispatch
+effort `medium`, stated at the point of dispatch, with a warn-only hook that flags a review dispatch
 missing either.
 
 **Architecture:** One canonical rule ("Review dispatches") in
 process-agents-subagent-driven-development replaces the effort table's inherit / xhigh-max rows for
-reviews; every review dispatch site in 19 skills names `model: opus` + `effort: low` and points at
+reviews; every review dispatch site in 19 skills names `model: opus` + `effort: medium` and points at
 that section; the two reviewer templates and `audit_skills.py` carry the field; the existing
 `subagent-model-gate.py` gains a review nudge, replay-measured before shipping.
 
@@ -18,6 +18,11 @@ that section; the two reviewer templates and `audit_skills.py` carry the field; 
 ## Context
 
 OPEN-WORK.md [29], USER, 2026-10-21, verbatim: "for reviewing tasks use opus 5.5 effort low !"
+
+Superseded the same day by the user (2026-10-21, /goal), verbatim: "we want to use "medium"
+effort, not "low" throughout, so change the plan first." Every review dispatch below
+therefore runs at effort `medium`; `low` survives only where it already meant something else
+(the haiku mechanical-scan row, quotes of existing text, probe-agent file names).
 
 User decisions this session (2026-10-21, AskUserQuestion; quote them verbatim from
 USER-DECISIONS.jsonl into EXECUTION-USER-REVIEW.md in Task 0):
@@ -38,8 +43,8 @@ only when the user, CLAUDE.md or a skill asks, so each skill step must say it wh
 
 ## Global Constraints
 
-- Review dispatch = `model: "opus"` (alias, never a pinned id) + `effort: "low"`. Workflow:
-  `agent(..., {model: 'opus', effort: 'low'})`. Headless: `claude -p --model opus --effort low`.
+- Review dispatch = `model: "opus"` (alias, never a pinned id) + `effort: "medium"`. Workflow:
+  `agent(..., {model: 'opus', effort: 'medium'})`. Headless: `claude -p --model opus --effort medium`.
 - Out of scope, do NOT change tier or effort: implementers, fixers, scenario writers, RED/GREEN /
   baseline / pressure probes (`bitranox:baseline-probe`, meta-skill-writer probe arms,
   testing-skills-with-subagents RED/GREEN, process-test-driven-development scenario checks,
@@ -121,17 +126,20 @@ dispatch examples carry no `model:` line, against the skill's own rule at :1142 
 
 ### Task 1: Probe that the effort field takes effect (iron rule: probe harness behaviour first)
 
-Nothing is built until this proves `effort: low` overrides the settings.json default on both
-channels the plan uses.
+Nothing is built until this proves the `effort` field overrides the settings.json default on both
+channels the plan uses. `low` is the INSTRUMENT here, not the shipped value: it is the arm far
+enough from the default to show the field reaches the model at all; `medium` is the value the plan
+ships, measured beside it so its effect is on record.
 
-- [ ] Agent tool: dispatch 6 `general-purpose` agents with `model: "opus"`, interleaved A,B,A,B,A,B
-      (A = `effort: "low"`, B = no effort), identical prompt: a short multi-step puzzle answered in
-      one line, no tools. Read each subagent transcript
-      (`~/.claude/projects/<this dashkey>/<session>/subagents/agent-<id>.jsonl`, resolve via
-      session id, rglob) and sum `usage.output_tokens` per agent.
-      Pre-registered: if every A < every B by >= 3x, the field works -> continue; else STOP and
-      report (the whole plan rests on it).
-- [ ] Headless: same interleave with `claude -p --model opus --effort low --settings '{"disableAllHooks":true}' "<puzzle>" --output-format json`
+- [ ] Agent tool: dispatch 9 `general-purpose` agents with `model: "opus"`, interleaved
+      L,M,B,L,M,B,L,M,B (L = `effort: "low"`, M = `effort: "medium"`, B = no effort), identical
+      prompt: a short multi-step puzzle answered in one line, no tools. Read each subagent
+      transcript (`~/.claude/projects/<this dashkey>/<session>/subagents/agent-<id>.jsonl`, resolve
+      via session id, rglob) and sum `usage.output_tokens` per agent.
+      Pre-registered: if every L < every B by >= 3x, the field works -> continue; else STOP and
+      report (the whole plan rests on it). M is recorded, not gating (the user chose medium): if
+      the M median is not below the B median, say so in the final report as a finding for the user.
+- [ ] Headless: same interleave with `claude -p --model opus --effort <low|medium> --settings '{"disableAllHooks":true}' "<puzzle>" --output-format json`
       vs no `--effort`; compare `usage.output_tokens` from the JSON. Same pre-registered rule.
 - [ ] Record both results (numbers + commands) in the [29] OPEN-WORK line (`measured:`).
 
@@ -153,15 +161,15 @@ row and the "final synthesis xhigh/max" part (synthesis is not review).
       paragraph:
 
 ```markdown
-### Review dispatches: `opus` at effort `low`
+### Review dispatches: `opus` at effort `medium`
 
 Every dispatch whose job is to JUDGE work already done runs on `model: "opus"` with
-`effort: "low"`: the per-task reviewer and its re-reviews, the final whole-branch review, code
+`effort: "medium"`: the per-task reviewer and its re-reviews, the final whole-branch review, code
 review, skeptic and adversarial lenses, verify passes, adjudicators, quote-back checks, audit
 reviewers and judge panels. User directive 2026-10-21; this paragraph is the explicit ask the
 Agent tool's `effort` field requires, so pass the field on every such dispatch. On a Workflow
-`agent()` call pass `{model: 'opus', effort: 'low'}`; on a headless reviewer pass
-`claude -p --model opus --effort low`. Name the field even when it looks redundant: the user's
+`agent()` call pass `{model: 'opus', effort: 'medium'}`; on a headless reviewer pass
+`claude -p --model opus --effort medium`. Name the field even when it looks redundant: the user's
 default effort is high, and an omitted field inherits it.
 
 It does NOT cover implementers and fixers, scenario writers, or RED/GREEN and baseline probe
@@ -175,18 +183,18 @@ prescribes. `subagent-model-gate` warns on a review-shaped dispatch that is miss
 | Role                                                | Effort                                       |
 |-----------------------------------------------------|----------------------------------------------|
 | `haiku`-tier mechanical scan / transcribe / extract | `low` (the big saver on fleet-scale fan-out) |
-| Any review (see "Review dispatches")                | `low` on `opus` (user directive 2026-10-21)  |
+| Any review (see "Review dispatches")                | `medium` on `opus` (user, 2026-10-21)        |
 | `opus` fan-out / bounded judgment / deep reasoning  | inherit - do not set                         |
 | Final synthesis                                     | `xhigh` or `max`                             |
 ```
 
 - [ ] Reword :152-155 so the "extremes only / pinning low broadly degrades" warning names reviews
       as the user-directed exception; :163-164 add "a review dispatch is always asked (see
-      'Review dispatches')". :176-181 and :200: append "at effort `low`" to the reviewer mentions.
+      'Review dispatches')". :176-181 and :200: append "at effort `medium`" to the reviewer mentions.
 - [ ] task-reviewer-prompt.md: under `model:` add
-      `  effort: low   # review dispatch - see SKILL.md "Review dispatches"` and set the model line
+      `  effort: medium   # review dispatch - see SKILL.md "Review dispatches"` and set the model line
       to `model: opus` (reviewer is always opus; the placeholder stays for nothing else).
-- [ ] GREEN: same probe on post-edit text, haiku + opus; pass = all three answered opus/low with a
+- [ ] GREEN: same probe on post-edit text, haiku + opus; pass = all three answered opus/medium with a
       quoted line. Re-run on the final text after any fix (re-run-the-probe rule).
 - [ ] Commit in worktree: `git -C <wt> add <paths> && git -C <wt> commit -F <msgfile>`.
 
@@ -197,15 +205,15 @@ model lines. One `.skillwriter/checklist-20261021-review-effort.md` per edited s
 (generate with the precedent `.plan/fold-23/batch3/fold18/mkchecklists.py` pattern).
 
 **Pattern** at each site (adapt the sentence, keep it one clause):
-- dispatch named with opus already -> "a pinned `opus` subagent at effort `low` (review dispatch,
+- dispatch named with opus already -> "a pinned `opus` subagent at effort `medium` (review dispatch,
   see bitranox:process-agents-subagent-driven-development \"Review dispatches\")";
 - dispatch with no model -> add both values with the same pointer;
-- template / code block -> add `model: "opus"` and `effort: "low"` lines;
-- workflow prose -> `{model: 'opus', effort: 'low'}`.
+- template / code block -> add `model: "opus"` and `effort: "medium"` lines;
+- workflow prose -> `{model: 'opus', effort: 'medium'}`.
 Representative: `process-review-requesting-code-review/code-reviewer.md:8-12` gains
-`effort: "low"` beside `model: "opus"` and the meta-review sentence says "opus at effort low";
+`effort: "medium"` beside `model: "opus"` and the meta-review sentence says "opus at effort medium";
 `meta-dream-tree/references/dream-core.md:203-216` "Give each skeptic a distinct lens" gains
-"(each an `opus` subagent at effort `low`)".
+"(each an `opus` subagent at effort `medium`)".
 
 **Out of scope:** meta-self-improve SKILL.md:348/:399, meta-skill-writer RED/GREEN arms (:1029,
 :1129, :1157, :1243, :1296), testing-skills-with-subagents RED/GREEN table, TDD :225/:274,
@@ -223,7 +231,7 @@ or write descriptors (all non-review), docs-generate-schematics (Gemini API).
       the prompt): "Your skill tells you to dispatch <the site's reviewer>. Which model and effort
       do you pass? Quote the line."
 - [ ] Edit all sites per the pattern.
-- [ ] GREEN: same questions on post-edit text; every answer opus/low with an exact quote
+- [ ] GREEN: same questions on post-edit text; every answer opus/medium with an exact quote
       (substring-check the quotes against the files, `.plan/fold-23/batch3/fold18/qcheck.py`
       pattern). Fix and re-run until clean.
 - [ ] Coverage check: re-run the inventory grep; every review hit's line or its paragraph now
@@ -231,7 +239,7 @@ or write descriptors (all non-review), docs-generate-schematics (Gemini API).
       unlisted review hits allowed.
 - [ ] Commit.
 
-### Task 4: audit_skills.py headless reviewers at effort low
+### Task 4: audit_skills.py headless reviewers at effort medium
 
 **Files:** Modify `plugins/bitranox/skills/meta-skill-audit/scripts/audit_skills.py:810-812` (and
 the `--model` CLI block :1059, :1137-1143); Test `plugins/bitranox/skills/meta-skill-audit/tests/test_audit_reports.py:305`
@@ -243,7 +251,7 @@ neighbourhood; SKILL.md :68-77 mention.
 def test_reviewer_command_runs_opus_at_effort_low():
     argv = A.reviewer_command("claude", "opus")
     assert argv[argv.index("--model") + 1] == "opus"
-    assert argv[argv.index("--effort") + 1] == "low"
+    assert argv[argv.index("--effort") + 1] == "medium"
     assert argv[-2:] == ["--settings", A.REVIEWER_SETTINGS]
 ```
 
@@ -252,17 +260,17 @@ def test_reviewer_command_runs_opus_at_effort_low():
 
 ```python
 # Reviewers judge finished work: the user's directive (2026-10-21) runs every review on opus at
-# effort low, and naming it here overrides the user's higher default effort from settings.json.
-REVIEWER_EFFORT = "low"
+# effort medium, and naming it here overrides the user's higher default effort from settings.json.
+REVIEWER_EFFORT = "medium"
 
 
 def reviewer_command(exe, model):
-    """argv for one headless reviewer: print mode, the model, effort low, every hook switched off."""
+    """argv for one headless reviewer: print mode, the model, effort medium, every hook switched off."""
     return [exe, "-p", "--model", model, "--effort", REVIEWER_EFFORT, "--settings", REVIEWER_SETTINGS]
 ```
 
 - [ ] Run the skill's whole tests dir -> PASS; meta-skill-audit SKILL.md line mentioning the
-      `claude -p` command gains `--effort low`.
+      `claude -p` command gains `--effort medium`.
 - [ ] Commit.
 
 ### Task 5: subagent-model-gate review nudge + wording fix
@@ -278,15 +286,15 @@ def reviewer_command(exe, model):
 def test_review_dispatch_without_low_effort_warns():
     action, msg = G.assess("Agent", {"description": "Review Task 3 (spec + quality)",
                                      "model": "opus", "prompt": "x"})
-    assert action == "warn" and "effort" in msg and "low" in msg
+    assert action == "warn" and "effort" in msg and "medium" in msg
 
 def test_review_dispatch_on_opus_low_is_silent():
     assert G.assess("Agent", {"description": "skeptic lens on duplicate verdicts",
-                              "model": "opus", "effort": "low", "prompt": "x"}) == (None, "")
+                              "model": "opus", "effort": "medium", "prompt": "x"}) == (None, "")
 
 def test_review_dispatch_on_haiku_warns_for_the_model():
     action, msg = G.assess("Agent", {"description": "verify the fix", "model": "haiku",
-                                     "effort": "low", "prompt": "x"})
+                                     "effort": "medium", "prompt": "x"})
     assert action == "warn" and "opus" in msg
 
 def test_probe_dispatch_is_not_a_review():
@@ -325,7 +333,7 @@ _PROBE_TYPES = ("baseline-probe", "probe-effort")
 _REVIEW_MESSAGE = (
     "Review-shaped dispatch: every judging review (task/final/code review, skeptic or adversarial "
     "lens, verify, adjudication, quote-back, audit, judge panel) runs on `model: opus` with "
-    "`effort: low` - user directive 2026-10-21, see bitranox:process-agents-subagent-driven-"
+    "`effort: medium` - user directive 2026-10-21, see bitranox:process-agents-subagent-driven-"
     "development \"Review dispatches\". Pass both fields; an omitted effort inherits the user's "
     "higher default. Ignore this if the dispatch is not a review.")
 
@@ -340,7 +348,7 @@ def review_shaped(tool_input):
 ```
 
   In `assess`, compute the existing verdict first, then: if `review_shaped(tool_input)` and
-  (effective model lacks "opus" or `str(tool_input.get("effort") or "").lower() != "low"`),
+  (effective model lacks "opus" or `str(tool_input.get("effort") or "").lower() != "medium"`),
   return `("deny", deny_msg + " " + _REVIEW_MESSAGE)` when the existing verdict was deny, else
   `("warn", (existing_msg + " " if existing_msg else "") + _REVIEW_MESSAGE)`. Effective model =
   dispatch model, else `definition_model`. Rewrite `_TIERS` and the module docstring :9-11:
@@ -356,7 +364,7 @@ def review_shaped(tool_input):
       reviews; otherwise narrow `_REVIEW_RE` (drop the noisy word) and re-replay. Record the
       numbers in the commit message.
 - [ ] Update `docs/architecture.md:89` row: "... DENY while a plan execution is armed; warn on a
-      review dispatch not on opus at effort low" (fit column width).
+      review dispatch not on opus at effort medium" (fit column width).
 - [ ] Commit.
 
 ### Task 6: Memory facts and docs
@@ -364,12 +372,12 @@ def review_shaped(tool_input):
 **Files:** facts `reference-subagent-effort-working-channels-and-the-a-b-proof`,
 `reference-substrate-constraints-for-a-claude-agent-team` (via the engine); `docs/concepts.md`.
 
-- [ ] Read both bodies in full. Effort fact: rewrite body :17 to "low for mechanical fan-out AND
+- [ ] Read both bodies in full. Effort fact: rewrite body :17 to "low for mechanical fan-out; medium for
       every judging review (opus, user directive 2026-10-21); xhigh/max for final synthesis;
       inherit otherwise"; body :12 adds "a skill naming the level counts as the ask - the review
       rule in process-agents-subagent-driven-development is one". New hook (<= 250 chars):
       "When setting a subagent's effort: the Agent tool's effort field works once a skill/user asks;
-      Workflow agent() opts.effort and claude -p --effort too. Reviews: opus at low. Detail:
+      Workflow agent() opts.effort and claude -p --effort too. Reviews: opus at medium. Detail:
       bitranox:process-agents-subagent-driven-development."
 - [ ] `memory_engine.py add --slug reference-subagent-effort-working-channels-and-the-a-b-proof --proj /media/srv-main-softdev/projects/public/KI/bitranox-skills --hook-file <f> --body-file <f>`
       (owning level = the CLAUDE.local.md that holds the pointer; confirm with find + grep first).
@@ -382,9 +390,9 @@ def review_shaped(tool_input):
 
 ### Task 7: Ship
 
-- [ ] CHANGELOG.md entry under a new 9.11.0 heading: "Review dispatches run on opus at effort low:
+- [ ] CHANGELOG.md entry under a new 9.11.0 heading: "Review dispatches run on opus at effort medium:
       canonical rule in process-agents-subagent-driven-development, every review site in 19
-      skills, reviewer templates, meta-skill-audit's headless reviewers (`--effort low`); the
+      skills, reviewer templates, meta-skill-audit's headless reviewers (`--effort medium`); the
       subagent-model-gate hook warns on a review dispatch missing either."
 - [ ] Bump plugin.json after asserting the origin/master value (Global Constraints).
 - [ ] `python3 plugins/bitranox/hooks/repo-gate.py --mirrors` -> exit 0; `python3 plugins/bitranox/hooks/repo-gate.py --ci` (CI deps) -> pass; regenerate derived artifacts only if a description changed (`build_skill_docs.py`, `build_skill_triggers.py`).
@@ -395,10 +403,11 @@ def review_shaped(tool_input):
 
 ## Verification (end to end)
 
-1. Task 1 numbers: Agent `effort: low` and `claude -p --effort low` both cut output tokens >= 3x vs inherited.
-2. GREEN quote-back on haiku + opus: every review site answered opus/low with an exact quote.
+1. Task 1 numbers: Agent `effort: low` and `claude -p --effort low` both cut output tokens >= 3x vs
+   inherited (the field works); the medium arm's figures are recorded beside them.
+2. GREEN quote-back on haiku + opus: every review site answered opus/medium with an exact quote.
 3. Coverage script: zero review-shaped hits in skills without `effort` within 3 lines.
 4. Hook: new tests pass; replay precision >= 80 % on 30 sampled firings; a live dispatch in a new
    session (after reload) of `description: "Review Task 1"` with `model: opus` and no effort shows
-   the SUBAGENT-MODEL GATE review warning; the same with `effort: low` shows nothing.
+   the SUBAGENT-MODEL GATE review warning; the same with `effort: medium` shows nothing.
 5. `repo-gate.py --ci` green; CI green on the pushed sha (`ci_wait.py --ref HEAD`).
