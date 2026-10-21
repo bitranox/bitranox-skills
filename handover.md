@@ -1,83 +1,92 @@
-# Handover 2026-10-21 (2): [29] planned (review dispatches on opus at effort low), [23] hook cut not started
+# Handover 2026-10-21 (3): [29] shipped as 9.11.0 (review dispatches on opus at effort medium); [23] hook cut next
 
 ## In flight
 
-- Nothing part-done. No subagent, workflow or worktree is running or left over.
-- [23] (3b-hooks) was started and stopped at the reading stage: no hook was cut, no fact touched.
-  The user switched to planning [29]. bitranox-skills 9.10.3 IS installed now
-  (`~/.claude/plugins/cache/bitranox-skills/bitranox/9.10.3`), so the hook cut is unblocked.
-- [29] has a full plan, NOT started: `docs/plans/2026-10-21-review-dispatch-effort-plan.md`
-  (same text at `~/.claude/plans/plan-29-be-glittery-wave.md`). The user stopped at plan review
-  with "save the plan and handover"; they have not approved it for execution.
+- Nothing part-done. No subagent, workflow or worktree is running or left over (both [29]
+  worktrees removed, branches deleted).
+- bitranox-skills 9.11.0 is installed and reloaded in the user's session; the review warning was
+  seen live (a "Review Task 1" opus dispatch with no effort warned, the same with effort medium did
+  not).
 
 ## Committed, or not
 
-- This commit: `OPEN-WORK.md` ([23] `next:` field corrected, [29] sized and pointed at the plan),
-  the plan file, and this handover. Nothing else changed.
-- Gitignored: `handover.prev.md` (the outgoing handover), the two user decisions below in
-  `USER-DECISIONS.jsonl` (hook-written). They are NOT yet copied into `EXECUTION-USER-REVIEW.md`;
-  plan Task 0 does that.
+- This commit: `OPEN-WORK.md` ([23] `next:` now says quote-check against the installed 9.11.0, not
+  9.10.3) and this handover.
+- Gitignored: `EXECUTION-USER-REVIEW.md` holds this session's decisions (user section: scope,
+  enforcement, effort medium, haiku warn kept; autonomous section: the headless probe that missed
+  its 3x bar, the haiku warning). The [29] SDD ledger and review files were copied to the session
+  scratch dir only and are not needed further.
 
 ## Decided, and why - do not reopen
 
-- [29] scope (user, 2026-10-21, "All judging review (Recommended)"): task/final/code review,
-  skeptic and adversarial lenses, verify, adjudication, quote-back, audit reviewers, judge panels
-  run on `opus` at `effort: low`. Implementers, fixers, scenario writers and RED/GREEN probe
-  subjects keep their tiers; final synthesis keeps xhigh/max.
-- [29] enforcement (user, 2026-10-21, "Warn-only nudge (Recommended)"): extend
-  `plugins/bitranox/hooks/subagent-model-gate.py`, never block, replay-measure before shipping.
-- `~/.claude/settings.json` (effortLevel xhigh, high for claude-opus-5-5) is NOT edited: the
-  explicit per-dispatch field is the override.
+- Review dispatches run at effort `medium`, not `low` (user, 2026-10-21 /goal, verbatim in
+  `EXECUTION-USER-REVIEW.md`). `low` stays only on the haiku mechanical-scan row.
+- subagent-model-gate keeps warning on a haiku dispatch that reads as a review (user re-asked and
+  chose "Keep warning (Recommended)"; the first, unread answer "Skip haiku + effort low" is
+  superseded). Its message tells a haiku mechanical scan to ignore it.
+- Fixers, implementers, probes (any case for probe/baseline/pressure), final synthesis and the
+  product name jev-judge are not review-shaped in the hook; a review sent as a fork warns.
+- Shipped skill text carries no maintainer provenance (no directive dates, no "the user's default
+  effort is high"); the dated `.skillwriter/` checklist titles are the repo convention and stay.
 
 ## Decided against, and why
 
-- Editing `~/.claude/agents/probe-effort-{low,max}.md` (sonnet) and `agents/baseline-probe.md`:
-  probe scope, which the user excluded.
+- Fixing the four accepted hook Minors (doubled or >30-char bracket tags, bare "synth", a review
+  word inside the tag): each only makes a warn-only hook silent; recorded in the re-review.
 
 ## Still open, untouched
 
-- [23] hook cut for the 18 rows, then REACH-FAILS / SAFE / KEEP-SHORTENED / STAY rows: see `OPEN-WORK.md`.
-- [29] execution: the plan above. [28], [335]: blocked on Jev shadow data. Everything else: `OPEN-WORK.md`.
+- [23] hook cut for the 18 folded rows, then REACH-FAILS / SAFE / KEEP-SHORTENED / STAY rows: `OPEN-WORK.md`.
+- [28], [335]: blocked on Jev shadow data. Everything else: `OPEN-WORK.md`.
 
 ## Lessons for the next nap
 
-- When an OPEN-WORK line carries several dated segments, the latest segment's "Next:" is current
-  and the `next:` field can be stale: fix the field whenever you touch the item.
-- When a rule depends on what an OMITTED subagent field inherits, read `~/.claude/settings.json`
-  (effortLevel, modelSettings) first and probe the override before building on it.
-- tooling: subagent-model-gate's message says effort "rides the agent type or a Workflow agent()
-  call, not the dispatch", which is false (the Agent tool has `effort`, `claude -p` has
-  `--effort`); [29] plan Task 5 fixes it.
-- Carried from the previous handover (not yet napped):
-  - When a handover's next action names counts, recount them from the cited data first: the last
-    one said 9 better owners and 18 partial rows, `merged.json` held 5 and 19.
+- When measuring a subagent's output by effort, use the notification's subagent_tokens minus the
+  transcript input: transcript usage.output_tokens is the message_start partial (8 every time) and
+  thinking text is redacted to a signature. Use a prompt that must be computed, not recalled.
+- When a /goal's pre-registered threshold misses but the arms do not overlap, decide on what the
+  plan actually rests on, record the weaker reading and the miss in EXECUTION-USER-REVIEW.md.
+- When a user answers an AskUserQuestion without reading it and asks again, the superseding answer
+  governs; log both, the second marked as replacing the first.
+- tooling: `repo-gate.py --mirrors` counts a tool repo's linked worktrees (apps/utils/pwshpy-wt-*)
+  as UNLISTED twins and exits 1 though 0 of 12 pairs drifted (queued in contrib_queue).
+- tooling: the auto-mode classifier refused a subagent's Bash edit of plugin.json ("Modify Shared
+  Resources") and then a read-only grep ("Auto-Mode Bypass"); keep version bumps in the controller.
+- Carried from earlier handovers (not yet napped):
+  - When a rule depends on what an OMITTED subagent field inherits, read `~/.claude/settings.json`
+    (effortLevel, modelSettings) first and probe the override before building on it.
+  - When an OPEN-WORK line carries several dated segments, the latest segment's "Next:" is current
+    and the `next:` field can be stale: fix the field whenever you touch the item.
+  - When a handover's next action names counts, recount them from the cited data first: one said
+    9 better owners and 18 partial rows, `merged.json` held 5 and 19.
   - When a mirrored skill's text carries a package version floor, check every pin of that floor
     first (the twin's metadata test, `jev_shadow.py`): a skill-only change then needs a package
     release, and the marketplace push has to be ordered around PyPI.
-  - tooling: bmk's floor-pin reconcile drops a hand-written `exclude-newer-package` timestamp for
-    a package no declared floor needs; declare the floor (a CVE pin) and let bmk write the pin.
+  - tooling: bmk's floor-pin reconcile drops a hand-written `exclude-newer-package` timestamp for a
+    package no declared floor needs; declare the floor (a CVE pin) and let bmk write the pin.
   - When a PreToolUse gate refuses a git command, stage or fetch in a separate earlier command:
     the gate judges the index as it was before the command ran.
 
 ## The exact next action
 
-[23] is the top-ranked open item: in `.plan/fold-23/batch3/fold18/`, quote-check the 18 rows'
-GREEN quotes against `~/.claude/plugins/cache/bitranox-skills/bitranox/9.10.3/skills` (adapt
-`.plan/fold-23/batch3/quotecheck_installed.py`: set INST to 9.10.3, read `fold-result.json` here),
-then cut each hook to <= 250 chars ending "Detail: bitranox:<skill>." with factedit. If the user
-picks [29] instead, start at plan Task 0 (worktree from origin/master), then Task 1 (the probe).
+[23] is the top-ranked open item: in `.plan/fold-23/batch3/fold18/`, quote-check the 18 rows' GREEN
+quotes against `~/.claude/plugins/cache/bitranox-skills/bitranox/9.11.0/skills` (adapt
+`.plan/fold-23/batch3/quotecheck_installed.py`: set INST to 9.11.0, read `fold-result.json` here).
+A quote 9.11.0 rewrote (review-dispatch lines) must be re-checked against the new text before its
+fact is cut. Then cut each hook to <= 250 chars ending "Detail: bitranox:<skill>." with factedit.
 
 ## Files that matter
 
-- `docs/plans/2026-10-21-review-dispatch-effort-plan.md` - the [29] plan with the full inventory.
-- `plugins/bitranox/skills/process-agents-subagent-driven-development/SKILL.md:135-164` - the effort table [29] rewrites.
-- `plugins/bitranox/hooks/subagent-model-gate.py` - the hook [29] extends.
-- `.plan/fold-23/batch3/fold18/` (gitignored) - [23] batch-3b data: g1-g5.json, fold-result.json, qcheck.py.
+- `plugins/bitranox/skills/process-agents-subagent-driven-development/SKILL.md` - the canonical
+  "Review dispatches" rule and the effort table.
+- `plugins/bitranox/hooks/subagent-model-gate.py` - the review nudge (warn-only).
+- `docs/plans/2026-10-21-review-dispatch-effort-plan.md` - the [29] plan as amended to medium.
+- `.plan/fold-23/batch3/fold18/` (gitignored) - [23] batch-3b data: fold-result.json, qcheck.py.
 
 ## How to verify
 
 - `git status --porcelain` in the repo: empty after this commit except gitignored files.
-- `grep -n '^- \[ \] (2026-10-2' OPEN-WORK.md` shows [29] with the plan path in `next:`.
+- `gh release view v9.11.0` resolves; `git rev-list -n1 v9.11.0` is cb4d0857, the [29] close commit.
 - CI for the commit carrying this file: `ci_wait.py --ref HEAD` (bitranox:compuse-toolbox).
 
 Read this, then replace the first line with `# STALE - read <date>, work continued`. Do not
