@@ -22,3 +22,10 @@
 - [x] Description measured: unchanged (frontmatter not edited).
 - [x] Security scan: prose only, no secrets, hostnames, private paths or PII; ASCII only; no
       provenance or dates in the skill text.
+
+## Fix round (final whole-branch review)
+
+- [x] Step 3b names the skeptics' tier with the pointer the other sites carry: "`opus` subagents at
+      effort `medium`, review dispatches, see bitranox:process-agents-subagent-driven-development
+      "Review dispatches"". Wording-only addition of a cross-reference; the value is unchanged, so
+      the earlier probe results stand. ASCII only.

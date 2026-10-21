@@ -180,7 +180,6 @@ Subagent (general-purpose):
 ```
 
 **Placeholders:**
-- `[MODEL]`  -  REQUIRED: reviewer model per SKILL.md Model Selection
 - `[BRIEF_FILE]`  -  REQUIRED: the task brief file (`python3 "$CLAUDE_PLUGIN_ROOT/skills/process-agents-subagent-driven-development/scripts/task_brief.py" PLAN N`, from the repo under review
   prints the path; same file the implementer worked from)
 - `[GLOBAL_CONSTRAINTS]`  -  the binding requirements copied verbatim from

@@ -174,7 +174,8 @@ the success line, abort-and-show on a miss).
    (by title/hook match) -> drop the native duplicate, but a title/hook match, or a reviewer's
    "already curated, safe to drop", is a CANDIDATE: before dropping, run the loss-finding second
    pass in references/dream-core.md "Dedup semantics" (its skeptics are `opus` subagents at effort
-   `medium`) and drop only the entries it clears;
+   `medium`, review dispatches, see bitranox:process-agents-subagent-driven-development "Review
+   dispatches") and drop only the entries it clears;
    native-only and
    worthwhile -> PROMOTE via engine `add` into a level that EXISTS; some-value -> leave in
    native. There is NO "native-only backend" mode - an absent pointer block is the trigger to

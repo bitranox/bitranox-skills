@@ -10,6 +10,7 @@ a probe/baseline/pressure dispatch is never review-shaped, and a review sent as 
 """
 
 import io
+import time
 import json
 import os
 import subprocess
@@ -357,7 +358,7 @@ def test_the_script_entry_point_exits_zero_when_main_raises(home):
     assert "Traceback" not in r.stderr
 
 
-# ---- review dispatches run on opus at effort medium (user, 2026-10-21) --------------------------
+# ---- review dispatches run on opus at effort medium ---------------------------------------------
 
 def test_review_dispatch_without_medium_effort_warns():
     action, msg = W.assess("Agent", {"description": "Review Task 3 (spec + quality)",
@@ -477,8 +478,8 @@ def test_main_emits_the_review_warning(monkeypatch, capsys):
     "Task 15: Fix final-review findings",
 ])
 def test_fixer_description_is_silent(description):
-    """Fixers and implementers are out of scope for the review rule (plan [29]): a nudge telling
-    them to run at effort medium would be wrong advice."""
+    """Fixers and implementers are out of scope for the review rule: a nudge telling them to run
+    at effort medium would be wrong advice."""
     assert W.assess("Agent", {"description": description, "model": "opus",
                               "prompt": "x"}) == (None, "")
 
@@ -516,3 +517,34 @@ def test_a_review_that_names_jev_judge_still_warns():
     action, _ = W.assess("Agent", {"description": "Review the jev-judge docs", "model": "opus",
                                    "prompt": "x"})
     assert action == "warn"
+
+
+# ---- final synthesis keeps its own effort --------------------------------------------------------
+
+@pytest.mark.parametrize("description", [
+    "Final synthesis of review findings", "Synthesize the audit results",
+    "Task 9: synthesis of the verify passes",
+])
+def test_synthesis_is_not_a_review(description):
+    """The final synthesis keeps `xhigh`/`max` per the effort table, so advising it to drop to
+    medium would be wrong advice."""
+    assert W.assess("Agent", {"description": description, "model": "opus", "effort": "xhigh",
+                              "prompt": "x"}) == (None, "")
+
+
+def test_a_review_of_a_synthesis_still_warns():
+    """Reviewing a synthesis draft judges finished work, so it is a review."""
+    action, msg = W.assess("Agent", {"description": "Review the synthesis draft", "model": "opus",
+                                     "prompt": "x"})
+    assert action == "warn" and "`effort: medium`" in msg
+
+
+# ---- a pathological description cannot stall the hook -------------------------------------------
+
+@pytest.mark.parametrize("description", ["a" * 50000, "review " + "-" * 50000,
+                                         "Fix " + "b" * 50000],
+                         ids=["word-run", "review-dashes", "fixer-word-run"])
+def test_a_huge_description_returns_quickly(description):
+    start = time.monotonic()
+    W.review_shaped({"description": description, "subagent_type": "c" * 50000})
+    assert time.monotonic() - start < 0.5

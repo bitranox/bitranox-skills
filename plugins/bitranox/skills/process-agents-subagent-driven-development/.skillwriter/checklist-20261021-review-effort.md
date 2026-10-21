@@ -9,7 +9,7 @@
       scenario writers and probe subjects, and separates a reviewer fan-out (a review) from a
       scanner judging raw material (not a review). The effort table gains a review row; adversarial
       verify and judge panels leave the `xhigh`/`max` row, which keeps final synthesis; the haiku
-      `low` row is unchanged. The "extremes only" warning names reviews as the user-directed
+      `low` row is unchanged. The "extremes only" warning names reviews as the one
       exception; the reviewer mentions in Concrete tiers and Turn count carry the effort.
       `task-reviewer-prompt.md` pins `model: opus` and `effort: medium`. The effort paragraph gets
       its own heading so it no longer reads as part of the review subsection.
@@ -85,3 +85,32 @@
 - [x] ASCII only in the added lines; no addresses, hostnames or private paths added
 - [x] Tests: `test_model_tiers.py` and the skill's own `tests/` pass with CI's dependency set
 - [x] Security scan: prose edits only, no secrets, hostnames, paths or PII
+
+## Fix round (final whole-branch review)
+
+- [x] Review dispatches paragraph, effort warning and table row state the rule as the skill's own:
+      no dates, no attribution, no maintainer setting. The omitted-field sentence now reads "an
+      omitted field inherits the session or settings default, which is often higher", and the
+      token figure is narrowed to what was measured ("on one measured prompt ... about twice the
+      output tokens it spent at `medium`"). The table row reads "`medium` on `opus`", re-padded to
+      the existing column width.
+- [x] "It does NOT cover" now names the final synthesis (keeps `xhigh` or `max`) and `haiku`
+      mechanical scans (keep `low`), the sentence `subagent-model-gate` mirrors.
+- [x] `task-reviewer-prompt.md`: the stale `[MODEL]` placeholder line is gone (the template
+      hard-codes `model: opus`).
+- [x] Quote-back on the final text, `bitranox:baseline-probe`, haiku and opus, one cell per
+      question per tier (2 x 3). Question: per-task reviewer, final synthesis, fixer - which model
+      and effort, quote the line. Both tiers: (a) opus / medium, quoting "Every dispatch whose job
+      is to JUDGE work ... runs on `model: "opus"` with `effort: "medium"`"; (b) opus / `xhigh` or
+      `max`, quoting "the final synthesis (it keeps `xhigh` or `max`, see the table below)" and the
+      Final synthesis row; (c) opus with no effort field, quoting "It does NOT cover implementers
+      and fixers" and "Non-review `opus` fan-out / judgment / reasoning | inherit - do not set".
+      Every quote checked against the pasted excerpt.
+- [x] Gaps from the quote-back, declined: no rule for choosing `xhigh` over `max` (the table row
+      predates this change and leaves the level to the dispatcher by design); where the final
+      synthesis ends and the final whole-branch review or an adjudicator begins (both role names
+      are listed explicitly; a sharper boundary is outside this fix round's scope); fixers are not
+      named in Concrete tiers (they map to "implementers working from prose"; out of scope here);
+      the fork warning is stated for reviews only (a synthesis sent as a fork is a separate
+      question, out of scope); the elided channel paragraph (deliberately cut from the excerpt).
+- [x] ASCII only; no addresses, hostnames, private paths or provenance added.

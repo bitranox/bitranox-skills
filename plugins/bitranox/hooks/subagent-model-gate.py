@@ -12,12 +12,13 @@ does), or by the agent type / a Workflow `agent()` call.
 
 A REVIEW-shaped dispatch (its description or agent type reads as a judging review: task/final/code
 review, skeptic or adversarial lens, verify, adjudication, quote-back, audit, judge panel) must run
-on `model: opus` with `effort: medium` (user directive 2026-10-21). One that does not warns - or,
-when the dispatch is also unpinned while a plan is armed, the deny names it too. A review sent
-as a `fork` warns (never denies): a fork ignores `model` and `effort`. A RED/GREEN
+on `model: opus` with `effort: medium` (the skill's "Review dispatches" rule). One that does not
+warns - or, when the dispatch is also unpinned while a plan is armed, the deny names it too. A
+review sent as a `fork` warns (never denies): a fork ignores `model` and `effort`. A RED/GREEN
 probe, baseline or pressure arm is the thing under test, not a review, and keeps its own tier;
 a fixer or implementer (a description leading with fix/implement/apply/address, or naming a
-"review fix round/wave/batch" with no review verb in front) is out of scope and stays silent.
+"review fix round/wave/batch" with no review verb in front) is out of scope and stays silent, and
+so is a synthesis (it keeps `xhigh`/`max`) unless a review verb leads its description.
 
 A dispatch that IS pinned, but to a sonnet model (on the dispatch, or in its agent type's
 definition), is warned about at every level and never denied: it satisfies the pin rule, but the
@@ -96,7 +97,7 @@ _DENY_MESSAGE = (
 
 # Judging-review vocabulary, matched on the description and agent type only: the prompt carries
 # the reviewed text itself, which names these words for reasons of its own. Probe words win:
-# a RED/GREEN probe subject is the thing under test and keeps its tier pair (user, 2026-10-21).
+# a RED/GREEN probe subject is the thing under test and keeps its tier pair.
 # RED and GREEN stay case-sensitive so the colour words in ordinary prose do not count.
 _REVIEW_RE = re.compile(
     r"\b(re-?review\w*|review\w*|skeptic\w*|adversarial|verif\w*|audit\w*|adjudicat\w*|"
@@ -104,7 +105,11 @@ _REVIEW_RE = re.compile(
 _PROBE_RE = re.compile(r"\b((?i:probe\w*|baseline|pressure)|RED|GREEN)\b")
 _PROBE_TYPES = ("baseline-probe", "probe-effort")
 _REVIEW_EFFORT = "medium"
-# Fixers and implementers are out of scope (plan [29]): a dispatch whose description LEADS with
+# Only the head of the description and agent type is read: a review is named in its first words,
+# and several of these patterns backtrack quadratically, so a pathological 50k-character
+# description must not cost the turn seconds.
+_MAX_LABEL_CHARS = 512
+# Fixers and implementers are out of scope: a dispatch whose description LEADS with
 # fix/implement/apply/address acts on review findings rather than judging, so the nudge would be
 # wrong advice. The verb must be followed by whitespace, so "Fix-wave re-review" stays a review.
 # An optional "<label>:" prefix of up to 30 characters ("Task 15: Fix ...") is skipped first.
@@ -113,16 +118,20 @@ _FIXER_RE = re.compile(_LABEL + r"(?:fix|implement|apply|address)\s", re.I)
 # "Final-review fix round" names the fix round, not a review of it - unless a review verb leads.
 _REVIEW_FIX_RE = re.compile(r"\breview\w*[ -]fix(?:es)?\b(?:\s+(?:round|wave|batch)\b|\s*$)",
                             re.I)
-_LEADING_REVIEW_RE = re.compile(r"^\W*(?:[^:]{1,30}:\s*)?" + _REVIEW_RE.pattern, re.I)
+_LEADING_REVIEW_RE = re.compile(_LABEL + _REVIEW_RE.pattern, re.I)
+# A synthesis merges reviewers' findings into one verdict and keeps `xhigh`/`max` per the skill's
+# effort table, so it is not a review - unless a review verb leads ("Review the synthesis draft"
+# judges a finished draft).
+_SYNTHESIS_RE = re.compile(r"\bsynth\w*", re.I)
 # The jev-judge product name (btx-skill-jev-judge, ai-llm-jev-judge) is not the act of judging.
 _PRODUCT_RE = re.compile(r"[\w:-]*jev-judge[\w-]*", re.I)
 
 _REVIEW_MESSAGE = (
     "Review-shaped dispatch: every judging review (task/final/code review, skeptic or adversarial "
     "lens, verify, adjudication, quote-back, audit, judge panel) runs on `model: opus` with "
-    "`effort: medium` - user directive 2026-10-21, see bitranox:process-agents-subagent-driven-"
-    "development \"Review dispatches\". Pass both fields; an omitted effort inherits the user's "
-    "higher default. Ignore this if the dispatch is not a review.")
+    "`effort: medium` - the review rule in bitranox:process-agents-subagent-driven-development "
+    "\"Review dispatches\". Pass both fields; an omitted effort inherits the session or settings "
+    "default, which is often higher. Ignore this if the dispatch is not a review.")
 
 _FORK_REVIEW_MESSAGE = (
     "Review-shaped dispatch sent as a `fork`: a fork inherits the parent's model and effort and "
@@ -133,14 +142,19 @@ _FORK_REVIEW_MESSAGE = (
 
 def review_shaped(tool_input):
     """True when the dispatch's description or agent type reads as a judging review - not a
-    probe, not a fixer or implementer acting on review findings, not the jev-judge name."""
-    agent_type = str(tool_input.get("subagent_type") or "").lower()
+    probe, not a fixer or implementer acting on review findings, not a synthesis, not the
+    jev-judge name."""
+    agent_type = str(tool_input.get("subagent_type") or "")[:_MAX_LABEL_CHARS].lower()
     if any(p in agent_type for p in _PROBE_TYPES):
         return False
-    description = _PRODUCT_RE.sub(" ", str(tool_input.get("description") or ""))
+    description = _PRODUCT_RE.sub(
+        " ", str(tool_input.get("description") or "")[:_MAX_LABEL_CHARS])
     if _FIXER_RE.match(description):
         return False
-    if _REVIEW_FIX_RE.search(description) and not _LEADING_REVIEW_RE.match(description):
+    leads_with_review = bool(_LEADING_REVIEW_RE.match(description))
+    if _REVIEW_FIX_RE.search(description) and not leads_with_review:
+        return False
+    if _SYNTHESIS_RE.search(description) and not leads_with_review:
         return False
     label = "%s %s" % (description, agent_type)
     return bool(_REVIEW_RE.search(label)) and not _PROBE_RE.search(label)

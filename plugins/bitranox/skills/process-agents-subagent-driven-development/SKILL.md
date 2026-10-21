@@ -139,18 +139,19 @@ with `effort: "medium"`: the per-task reviewer and its re-reviews, the final who
 code review, skeptic and adversarial lenses, verify passes, adjudicators, quote-back checks, audit
 reviewers and judge panels. A fan-out of such reviewers (one per file, dimension or store) is a
 review too; a scanner that judges raw material nobody has produced a result from yet (log lines,
-search hits, records) is not, and takes the non-review `opus` row below. User directive 2026-10-21;
-this paragraph is the explicit ask the Agent tool's `effort` field requires, so pass the field on
-every such dispatch. On a Workflow `agent()` call pass `{model: 'opus', effort: 'medium'}`; on a
-headless reviewer pass `claude -p --model opus --effort medium`. Name the field even when it looks
-redundant: the user's default effort is high, and an omitted field inherits it (measured
-2026-10-21: an opus reviewer with no field spent two to three times the output tokens of the same
-prompt at `medium`). Never send a review as a `fork`: a fork ignores both fields and runs on the
-parent's model and effort.
+search hits, records) is not, and takes the non-review `opus` row below. This paragraph is the
+explicit ask the Agent tool's `effort` field requires, so pass the field on every such dispatch.
+On a Workflow `agent()` call pass `{model: 'opus', effort: 'medium'}`; on a headless reviewer pass
+`claude -p --model opus --effort medium`. Name the field even when it looks redundant: an omitted
+field inherits the session or settings default, which is often higher (on one measured prompt, an
+opus reviewer with no field spent about twice the output tokens it spent at `medium`). Never send
+a review as a `fork`: a fork ignores both fields and runs on the parent's model and effort.
 
-It does NOT cover implementers and fixers, scenario writers, or RED/GREEN and baseline probe
-subjects: a probe is the thing under test, and its tier pairs stay as `bitranox:meta-skill-writer`
-prescribes. `subagent-model-gate` warns on a review-shaped dispatch that is missing either value.
+It does NOT cover implementers and fixers, scenario writers, RED/GREEN and baseline probe
+subjects, the final synthesis (it keeps `xhigh` or `max`, see the table below), or `haiku`
+mechanical scans (they keep `low`): a probe is the thing under test, and its tier pairs stay as
+`bitranox:meta-skill-writer` prescribes. `subagent-model-gate` warns on a review-shaped dispatch
+that is missing either value.
 
 ### Reasoning effort: the channels and the levels
 
@@ -174,13 +175,13 @@ found" while definitions present at session start resolved). (3) A Workflow
 model's thinking budget by orders of magnitude, so it cuts both ways - set it
 only at the EXTREMES and leave everything else at the default (inherit).
 Pinning `low` broadly silently degrades tasks that occasionally need depth,
-which costs more than the tokens it saves. Reviews are the one user-directed
-exception to "extremes only": every review carries `medium` (see "Review dispatches").
+which costs more than the tokens it saves. Reviews are the one exception to
+"extremes only": every review carries `medium` (see "Review dispatches").
 
 | Role                                                | Effort                                       |
 |-----------------------------------------------------|----------------------------------------------|
 | `haiku`-tier mechanical scan / transcribe / extract | `low` (the big saver on fleet-scale fan-out) |
-| Any review (see "Review dispatches")                | `medium` on `opus` (user, 2026-10-21)        |
+| Any review (see "Review dispatches")                | `medium` on `opus`                           |
 | Non-review `opus` fan-out / judgment / reasoning    | inherit - do not set                         |
 | Final synthesis                                     | `xhigh` or `max`                             |
 

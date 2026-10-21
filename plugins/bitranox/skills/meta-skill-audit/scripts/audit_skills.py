@@ -806,8 +806,9 @@ def manifest_drift(before, after):
 # setting the same probe ran none and the room stayed empty.
 REVIEWER_SETTINGS = '{"disableAllHooks":true}'
 
-# Reviewers judge finished work: the user's directive (2026-10-21) runs every review on opus at
-# effort medium, and naming it here overrides the user's higher default effort from settings.json.
+# Reviewers judge finished work, so they run on opus at effort medium (the review rule in
+# bitranox:process-agents-subagent-driven-development "Review dispatches"). Naming the effort here
+# overrides the session or settings default, which is often higher.
 REVIEWER_EFFORT = "medium"
 
 

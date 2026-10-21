@@ -306,8 +306,8 @@ def test_reviewer_settings_carry_nothing_cmd_exe_would_reinterpret():
 
 
 def test_reviewer_command_runs_opus_at_effort_medium():
-    """Every reviewer judges finished work, so it runs at effort medium (user, 2026-10-21): naming
-    the effort on the argv is what overrides the user's higher default from settings.json."""
+    """Every reviewer judges finished work, so it runs at effort medium: naming the effort on the
+    argv is what overrides the session or settings default, which is often higher."""
     argv = A.reviewer_command("claude", "opus")
     assert argv[argv.index("--model") + 1] == "opus"
     assert argv[argv.index("--effort") + 1] == "medium"
