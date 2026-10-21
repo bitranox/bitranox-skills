@@ -3,7 +3,10 @@
 Contract: WARN (additionalContext JSON on stdout, exit 0) when a Task/Agent dispatch omits
 `model`, is not a fork, and its agent type's own definition pins no model; DENY (PreToolUse deny
 JSON on stdout) for the same dispatch while a fresh `plan-execution` receipt is armed. WARN, never
-DENY, when the effective model is a sonnet one, armed or not. Every other path exits 0 and writes nothing to stderr. All content is ASCII.
+DENY, when the effective model is a sonnet one, armed or not. WARN when a review-shaped dispatch
+(description or agent type) is not on opus at effort medium, appended to a deny it already earned;
+a probe/baseline/pressure dispatch is never review-shaped, and a review sent as a fork warns
+(never denies) because a fork ignores model and effort. Every other path exits 0 and writes nothing to stderr. All content is ASCII.
 """
 
 import io
@@ -352,3 +355,164 @@ def test_the_script_entry_point_exits_zero_when_main_raises(home):
                        timeout=60)
     assert r.returncode == 0, r.stderr
     assert "Traceback" not in r.stderr
+
+
+# ---- review dispatches run on opus at effort medium (user, 2026-10-21) --------------------------
+
+def test_review_dispatch_without_medium_effort_warns():
+    action, msg = W.assess("Agent", {"description": "Review Task 3 (spec + quality)",
+                                     "model": "opus", "prompt": "x"})
+    assert action == "warn" and "effort" in msg and "medium" in msg
+
+
+def test_review_dispatch_on_opus_medium_is_silent():
+    assert W.assess("Agent", {"description": "skeptic lens on duplicate verdicts",
+                              "model": "opus", "effort": "medium", "prompt": "x"}) == (None, "")
+
+
+def test_review_dispatch_at_another_effort_warns():
+    for effort in ("low", "high", "xhigh", "max"):
+        action, msg = W.assess("Agent", {"description": "adversarial review of the diff",
+                                         "model": "opus", "effort": effort, "prompt": "x"})
+        assert action == "warn" and "medium" in msg, effort
+
+
+def test_review_dispatch_on_haiku_warns_for_the_model():
+    action, msg = W.assess("Agent", {"description": "verify the fix", "model": "haiku",
+                                     "effort": "medium", "prompt": "x"})
+    assert action == "warn" and "opus" in msg
+
+
+def test_review_dispatch_takes_its_model_from_the_definition():
+    assert W.assess("Agent", {"subagent_type": "reviewer", "description": "code review",
+                              "effort": "medium", "prompt": "x"},
+                    definition_model="opus") == (None, "")
+    action, _ = W.assess("Agent", {"subagent_type": "reviewer", "description": "code review",
+                                   "effort": "medium", "prompt": "x"},
+                         definition_model="haiku")
+    assert action == "warn"
+
+
+def test_probe_dispatch_is_not_a_review():
+    for d in ("GREEN probe: verify the skill text", "RED baseline pressure test",
+              "Baseline arm: review the scenario", "Probe: audit wording"):
+        assert W.assess("Agent", {"description": d, "model": "haiku", "prompt": "x"}) == (None, ""), d
+    assert W.assess("Agent", {"subagent_type": "bitranox:baseline-probe",
+                              "description": "review quote-back", "prompt": "x"},
+                    definition_model="opus") == (None, "")
+    assert W.assess("Agent", {"subagent_type": "probe-effort-low",
+                              "description": "judge the puzzle", "model": "opus",
+                              "prompt": "x"}) == (None, "")
+
+
+def test_review_words_in_the_prompt_alone_do_not_make_a_review():
+    assert W.assess("Agent", {"description": "Implement Task 2", "model": "opus",
+                              "prompt": "review and verify and audit everything"}) == (None, "")
+
+
+def test_non_review_dispatch_unchanged():
+    assert W.assess("Agent", {"description": "Implement Task 2", "model": "opus",
+                              "prompt": "x"}) == (None, "")
+
+
+def test_fork_review_warns_that_a_fork_ignores_model_and_effort():
+    """A fork inherits the parent's model and effort and ignores both fields, so a review sent as
+    a fork cannot run on opus at effort medium even when the fields are present."""
+    for extra in ({}, {"model": "opus", "effort": "medium"}):
+        action, msg = W.assess("Agent", dict({"subagent_type": "fork",
+                                              "description": "review the branch",
+                                              "prompt": "x"}, **extra))
+        assert action == "warn", extra
+        assert "fork" in msg and "ignore" in msg and "`effort: medium`" in msg, extra
+
+
+def test_fork_review_while_armed_warns_never_denies():
+    action, _ = W.assess("Agent", {"subagent_type": "fork", "description": "Final review",
+                                   "prompt": "x"}, plan_armed=True)
+    assert action == "warn"
+
+
+def test_fork_non_review_and_fork_probe_stay_silent():
+    for d in ("Implement Task 2", "GREEN probe: verify the skill text"):
+        assert W.assess("Agent", {"subagent_type": "fork", "description": d,
+                                  "prompt": "x"}) == (None, ""), d
+
+
+def test_sonnet_review_carries_both_messages():
+    action, msg = W.assess("Agent", {"description": "Review Task 1", "model": "sonnet",
+                                     "prompt": "x"})
+    assert action == "warn" and "sonnet is not a dispatch tier" in msg and "medium" in msg
+
+
+def test_unpinned_review_while_armed_still_denies_and_names_effort():
+    action, msg = W.assess("Agent", {"description": "Final whole-branch review", "prompt": "x"},
+                           plan_armed=True)
+    assert action == "deny" and msg.startswith("DENIED") and "`effort: medium`" in msg
+
+
+def test_review_shaped_reads_description_and_type_only():
+    assert W.review_shaped({"description": "Re-review the fix"})
+    assert W.review_shaped({"subagent_type": "feature-dev:code-reviewer", "description": "x"})
+    assert not W.review_shaped({"description": "write docs", "prompt": "review"})
+    assert not W.review_shaped({"description": None, "subagent_type": None})
+
+
+def test_tier_message_no_longer_says_effort_cannot_go_on_the_dispatch():
+    assert "not the dispatch" not in W._TIERS
+    assert "effort" in W._TIERS
+
+
+def test_main_emits_the_review_warning(monkeypatch, capsys):
+    assert run_main(monkeypatch, {"tool_name": "Agent", "tool_input": {
+        "description": "Review Task 3", "model": "opus", "prompt": "x"}}) == 0
+    out = json.loads(capsys.readouterr().out)["hookSpecificOutput"]
+    assert "permissionDecision" not in out and "effort: medium" in out["additionalContext"]
+
+
+# ---- fixers and the jev-judge product name are not reviews --------------------------------------
+
+@pytest.mark.parametrize("description", [
+    "Fix Task 5 review findings", "Implement Task 4: judge use case",
+    "Apply fact-body review (210)", "Address the re-review findings",
+    "Task 15: Fix final-review findings",
+])
+def test_fixer_description_is_silent(description):
+    """Fixers and implementers are out of scope for the review rule (plan [29]): a nudge telling
+    them to run at effort medium would be wrong advice."""
+    assert W.assess("Agent", {"description": description, "model": "opus",
+                              "prompt": "x"}) == (None, "")
+
+
+@pytest.mark.parametrize("description", [
+    "Final-review fix round", "Final review fix wave 2", "M2 final-review fix batch",
+    "Task 15: final-review fixes",
+])
+def test_review_fix_round_without_a_leading_review_verb_is_silent(description):
+    assert W.assess("Agent", {"description": description, "model": "opus",
+                              "prompt": "x"}) == (None, "")
+
+
+@pytest.mark.parametrize("description", [
+    "Review the fix for Task 3", "Re-review final-review fix round 2",
+    "Fix-wave re-review: core groups", "Opus re-review of fix round 4",
+    "Adversarial review of bmk floor fix",
+])
+def test_a_real_review_of_a_fix_still_warns(description):
+    action, msg = W.assess("Agent", {"description": description, "model": "opus",
+                                     "prompt": "x"})
+    assert action == "warn" and "`effort: medium`" in msg
+
+
+@pytest.mark.parametrize("description", [
+    "Screen skills for jev-judge fit", "Descriptor: btx-skill-jev-judge",
+    "Read the bitranox:ai-llm-jev-judge skill",
+])
+def test_jev_judge_product_name_is_not_a_review(description):
+    assert W.assess("Agent", {"description": description, "model": "opus",
+                              "prompt": "x"}) == (None, "")
+
+
+def test_a_review_that_names_jev_judge_still_warns():
+    action, _ = W.assess("Agent", {"description": "Review the jev-judge docs", "model": "opus",
+                                   "prompt": "x"})
+    assert action == "warn"

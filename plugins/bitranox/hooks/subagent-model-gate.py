@@ -6,9 +6,18 @@ own definition (`model:` in its frontmatter), else from the default - the sessio
 default subagent model is configured, which may be a premium tier or a weaker one. Landing on
 that default silently defeats per-role model tiering.
 bitranox:process-agents-subagent-driven-development ("Concrete tiers") requires pinning the tier
-explicitly: `haiku` (purely mechanical work / scan) or `opus` (everything else). Reasoning EFFORT
-is not a per-dispatch field - it rides the agent-type definition or a Workflow agent() call - so
-picking the tier (plus the right agent type) is also how effort is chosen.
+explicitly: `haiku` (purely mechanical work / scan) or `opus` (everything else). Effort is set
+per dispatch with the Agent tool's `effort` field when a skill or the user asks (every review
+does), or by the agent type / a Workflow `agent()` call.
+
+A REVIEW-shaped dispatch (its description or agent type reads as a judging review: task/final/code
+review, skeptic or adversarial lens, verify, adjudication, quote-back, audit, judge panel) must run
+on `model: opus` with `effort: medium` (user directive 2026-10-21). One that does not warns - or,
+when the dispatch is also unpinned while a plan is armed, the deny names it too. A review sent
+as a `fork` warns (never denies): a fork ignores `model` and `effort`. A RED/GREEN
+probe, baseline or pressure arm is the thing under test, not a review, and keeps its own tier;
+a fixer or implementer (a description leading with fix/implement/apply/address, or naming a
+"review fix round/wave/batch" with no review verb in front) is out of scope and stays silent.
 
 A dispatch that IS pinned, but to a sonnet model (on the dispatch, or in its agent type's
 definition), is warned about at every level and never denied: it satisfies the pin rule, but the
@@ -40,6 +49,7 @@ works on Windows too. ASCII only.
 """
 import json
 import os
+import re
 import sys
 from pathlib import Path
 
@@ -57,8 +67,8 @@ _TIERS = (
     "Pin the tier per bitranox:process-agents-subagent-driven-development (Concrete tiers): "
     "`haiku` = purely mechanical work (transcription, scan, formatting), `opus` = everything else "
     "(fan-out, bounded judgment, deep reasoning) - the `opus` alias always resolves to the latest "
-    "Opus. Effort rides the agent type or a Workflow agent() call, not the dispatch - the tier "
-    "(plus the right agent type) is how effort is chosen."
+    "Opus. Effort is set per dispatch with the Agent tool's `effort` field when a skill or the "
+    "user asks (every review does), or by the agent type / a Workflow `agent()` call."
 )
 
 _SONNET_MESSAGE = (
@@ -83,6 +93,65 @@ _DENY_MESSAGE = (
     " Re-dispatch with `model` set. When the plan is complete, disarm with "
     "`skill_receipt.py end plan-execution`."
 )
+
+# Judging-review vocabulary, matched on the description and agent type only: the prompt carries
+# the reviewed text itself, which names these words for reasons of its own. Probe words win:
+# a RED/GREEN probe subject is the thing under test and keeps its tier pair (user, 2026-10-21).
+# RED and GREEN stay case-sensitive so the colour words in ordinary prose do not count.
+_REVIEW_RE = re.compile(
+    r"\b(re-?review\w*|review\w*|skeptic\w*|adversarial|verif\w*|audit\w*|adjudicat\w*|"
+    r"judge\w*|quote-back|red-team\w*|second opinion|cross-check\w*)\b", re.I)
+_PROBE_RE = re.compile(r"\b((?i:probe\w*|baseline|pressure)|RED|GREEN)\b")
+_PROBE_TYPES = ("baseline-probe", "probe-effort")
+_REVIEW_EFFORT = "medium"
+# Fixers and implementers are out of scope (plan [29]): a dispatch whose description LEADS with
+# fix/implement/apply/address acts on review findings rather than judging, so the nudge would be
+# wrong advice. The verb must be followed by whitespace, so "Fix-wave re-review" stays a review.
+# An optional "<label>:" prefix of up to 30 characters ("Task 15: Fix ...") is skipped first.
+_LABEL = r"^\W*(?:[^:]{1,30}:\s*)?"
+_FIXER_RE = re.compile(_LABEL + r"(?:fix|implement|apply|address)\s", re.I)
+# "Final-review fix round" names the fix round, not a review of it - unless a review verb leads.
+_REVIEW_FIX_RE = re.compile(r"\breview\w*[ -]fix(?:es)?\b(?:\s+(?:round|wave|batch)\b|\s*$)",
+                            re.I)
+_LEADING_REVIEW_RE = re.compile(r"^\W*(?:[^:]{1,30}:\s*)?" + _REVIEW_RE.pattern, re.I)
+# The jev-judge product name (btx-skill-jev-judge, ai-llm-jev-judge) is not the act of judging.
+_PRODUCT_RE = re.compile(r"[\w:-]*jev-judge[\w-]*", re.I)
+
+_REVIEW_MESSAGE = (
+    "Review-shaped dispatch: every judging review (task/final/code review, skeptic or adversarial "
+    "lens, verify, adjudication, quote-back, audit, judge panel) runs on `model: opus` with "
+    "`effort: medium` - user directive 2026-10-21, see bitranox:process-agents-subagent-driven-"
+    "development \"Review dispatches\". Pass both fields; an omitted effort inherits the user's "
+    "higher default. Ignore this if the dispatch is not a review.")
+
+_FORK_REVIEW_MESSAGE = (
+    "Review-shaped dispatch sent as a `fork`: a fork inherits the parent's model and effort and "
+    "ignores `model` and `effort` even when they are passed, so it cannot run the review on opus "
+    "at effort medium. Re-dispatch it as a non-fork subagent (e.g. `general-purpose`). "
+    + _REVIEW_MESSAGE)
+
+
+def review_shaped(tool_input):
+    """True when the dispatch's description or agent type reads as a judging review - not a
+    probe, not a fixer or implementer acting on review findings, not the jev-judge name."""
+    agent_type = str(tool_input.get("subagent_type") or "").lower()
+    if any(p in agent_type for p in _PROBE_TYPES):
+        return False
+    description = _PRODUCT_RE.sub(" ", str(tool_input.get("description") or ""))
+    if _FIXER_RE.match(description):
+        return False
+    if _REVIEW_FIX_RE.search(description) and not _LEADING_REVIEW_RE.match(description):
+        return False
+    label = "%s %s" % (description, agent_type)
+    return bool(_REVIEW_RE.search(label)) and not _PROBE_RE.search(label)
+
+
+def _review_compliant(tool_input, definition_model):
+    """A review runs on an opus model (the dispatch's, else its definition's) at effort medium."""
+    model = tool_input.get("model")
+    effective = model if isinstance(model, str) and model.strip() else definition_model
+    effort = str(tool_input.get("effort") or "").strip().lower()
+    return isinstance(effective, str) and "opus" in effective.lower() and effort == _REVIEW_EFFORT
 
 
 def _frontmatter(path):
@@ -167,23 +236,8 @@ def _is_sonnet(model):
     return isinstance(model, str) and "sonnet" in model.lower()
 
 
-def assess(tool_name, tool_input, plan_armed=False, definition_model=None):
-    """Pure: return (action, message) with action in {'deny', 'warn', None}.
-
-    A non-fork subagent dispatch with no `model`, whose agent type's definition pins none
-    (`definition_model`, resolved by the caller), warns - or denies while a plan execution is
-    armed. A dispatch whose effective model (the dispatch's, else the definition's) is a sonnet
-    model warns, armed or not. Everything else passes silently, including a tool name that is not
-    a string: testing that against the set would raise, and the fail-open wrapper would turn the
-    exception into a lost verdict.
-    """
-    if not isinstance(tool_name, str) or tool_name not in SUBAGENT_TOOLS:
-        return (None, "")
-    if not isinstance(tool_input, dict):
-        return (None, "")
-    subagent_type = str(tool_input.get("subagent_type") or "").strip().lower()
-    if subagent_type == "fork":  # a fork always inherits the parent model by design
-        return (None, "")
+def _tier_verdict(tool_input, plan_armed, definition_model):
+    """The pin and sonnet verdict alone, as (action, message); see assess."""
     model = tool_input.get("model")
     if isinstance(model, str) and model.strip():
         return ("warn", _SONNET_MESSAGE) if _is_sonnet(model) else (None, "")
@@ -193,6 +247,34 @@ def assess(tool_name, tool_input, plan_armed=False, definition_model=None):
     if plan_armed:
         return ("deny", _DENY_MESSAGE)
     return ("warn", _WARN_MESSAGE)
+
+
+def assess(tool_name, tool_input, plan_armed=False, definition_model=None):
+    """Pure: return (action, message) with action in {'deny', 'warn', None}.
+
+    A non-fork subagent dispatch with no `model`, whose agent type's definition pins none
+    (`definition_model`, resolved by the caller), warns - or denies while a plan execution is
+    armed. A dispatch whose effective model (the dispatch's, else the definition's) is a sonnet
+    model warns, armed or not. A review-shaped dispatch not on opus at effort medium warns, or
+    adds the review advice to the deny it already earned. Everything else passes silently,
+    including a tool name that is not a string: testing that against the set would raise, and the
+    fail-open wrapper would turn the exception into a lost verdict.
+    """
+    if not isinstance(tool_name, str) or tool_name not in SUBAGENT_TOOLS:
+        return (None, "")
+    if not isinstance(tool_input, dict):
+        return (None, "")
+    subagent_type = str(tool_input.get("subagent_type") or "").strip().lower()
+    if subagent_type == "fork":
+        # A fork inherits the parent's model and effort and ignores both fields, so the pin rule
+        # cannot bind it; only a review sent as one is worth a word, and never a deny.
+        return ("warn", _FORK_REVIEW_MESSAGE) if review_shaped(tool_input) else (None, "")
+    action, message = _tier_verdict(tool_input, plan_armed, definition_model)
+    if not review_shaped(tool_input) or _review_compliant(tool_input, definition_model):
+        return (action, message)
+    if action == "deny":
+        return ("deny", message + " " + _REVIEW_MESSAGE)
+    return ("warn", (message + " " if message else "") + _REVIEW_MESSAGE)
 
 
 def main():
