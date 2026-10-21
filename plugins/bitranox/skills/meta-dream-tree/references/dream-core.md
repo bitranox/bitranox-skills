@@ -204,16 +204,18 @@ complementary on inspection - evidence decides, not the agent's topic guess.)
 drop resting on "this duplicates that" - step 3b's drop of a native entry judged already curated
 included - run a second, independent pass whose brief is to find what would be LOST, defaulting to
 loss when unsure. Tell it that different wording, a shorter rewrite and a missing anecdote are NOT
-loss, and require a verbatim quote from the entry being dropped for every loss it claims. Give
-each skeptic a distinct lens: a second lesson bundled in the entry and specifics the survivor
-omits; a later decision that supersedes the survivor's text and a project-specific delta; for a
-merge, a trigger or symptom the merged hook no longer names, and whether it is really one fact.
-Settle every split YOURSELF by checking the quoted line against both files, never by majority: a
-wrong "covered" retires a lesson silently, a wrong "keep" costs one duplicate. A link or note
-claiming one fact absorbed the other is not evidence the lesson survived, and low word overlap is
-normal for a well-curated fact, so a scanner score cannot clear a pair either. (Measured: skeptics
-overturned 18 of 27 "safe to drop" verdicts, a 2-to-1 majority was wrong where the lone dissent
-carried a quote, and a trigger-coverage skeptic found a dropped trigger in all 5 drafted merges.)
+loss, and require a verbatim quote from the entry being dropped for every loss it claims. Give each
+skeptic (each an `opus` subagent at effort `medium`, review dispatch, see
+bitranox:process-agents-subagent-driven-development "Review dispatches") a distinct lens: a second
+lesson bundled in the entry and specifics the survivor omits; a later decision that supersedes the
+survivor's text and a project-specific delta; for a merge, a trigger or symptom the merged hook no
+longer names, and whether it is really one fact. Settle every split YOURSELF by checking the quoted
+line against both files, never by majority: a wrong "covered" retires a lesson silently, a wrong
+"keep" costs one duplicate. A link or note claiming one fact absorbed the other is not evidence the
+lesson survived, and low word overlap is normal for a well-curated fact, so a scanner score cannot
+clear a pair either. (Measured: skeptics overturned 18 of 27 "safe to drop" verdicts, a 2-to-1
+majority was wrong where the lone dissent carried a quote, and a trigger-coverage skeptic found a
+dropped trigger in all 5 drafted merges.)
 
 ## The placement routing prompt (verbatim - lives only here)
 

@@ -1095,10 +1095,10 @@ For complex skills, if you have agent-team tooling available, you can paralleliz
 ```
 TeamCreate: team_name="skill-creation"
 
-Task (subagent_type="general-purpose", team_name="skill-creation"):
+Task (subagent_type="general-purpose", model="opus", team_name="skill-creation"):
   "Run 3 baseline pressure scenarios WITHOUT the skill, document rationalizations"
 
-Task (subagent_type="general-purpose", team_name="skill-creation"):
+Task (subagent_type="general-purpose", model="opus", team_name="skill-creation"):
   "Draft SKILL.md structure: frontmatter, overview, core pattern sections"
 ```
 
@@ -1207,6 +1207,7 @@ Write skill that addresses those specific rationalizations. Don't add extra cont
 ```
 Task tool call:
   subagent_type: "general-purpose"
+  model: "opus"     # pin a tier; never inherit the session model.
   prompt: |
     You have access to this skill:
     [Paste the full SKILL.md content here]
@@ -1305,7 +1306,10 @@ or a CLAUDE.md.
 **Verify each fix by quote-back.** Re-ask the contested question and require the answer to be a
 DIRECT QUOTE of the governing text, or the single word NONE. A paraphrase proves the model can
 reason to the answer; only a quote proves the skill says it. NONE means you have not written the
-rule yet, however clear it felt while editing.
+rule yet, however clear it felt while editing. Dispatch the quote-back as an `opus` subagent at
+effort `medium` (review dispatch, see bitranox:process-agents-subagent-driven-development "Review
+dispatches"); the `haiku` re-run under "A pass gets the same re-run as a failure" is a probe arm
+and passes no `effort` field.
 
 **REQUIRED REFERENCE:** See testing-skills-with-subagents.md for the complete testing methodology:
 - How to write pressure scenarios

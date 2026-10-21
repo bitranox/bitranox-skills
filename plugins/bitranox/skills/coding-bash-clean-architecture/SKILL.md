@@ -27,7 +27,8 @@ Framework-agnostic, structured Bash architecture optimized for **change**, **tes
 
 **Capability check (REVIEW / judgment).** Judging architecture/layer violations (I/O mixed with logic,
 wrong function placement) is capability-sensitive - a weaker model misjudges it. Run REVIEW mode on a
-pinned `opus` subagent; pin the tier per dispatch,
+pinned `opus` subagent at effort `medium` (review dispatch, see
+bitranox:process-agents-subagent-driven-development "Review dispatches"); pin both per dispatch,
 never inherit the session model. If you keep it inline and the session is on a lesser tier, offer
 switch-model-or-continue. See `bitranox:process-agents-subagent-driven-development` ("The session
 model is fixed" / "Concrete tiers").

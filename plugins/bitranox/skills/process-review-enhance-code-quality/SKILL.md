@@ -79,12 +79,17 @@ Record tool output (pass/fail, coverage %, lint warnings). Use this objective da
 
 ## Step 3: Score With Rubric
 
-For a large project, FAN OUT: dispatch one **`opus`** subagent per rubric dimension (each returns its
-0-10 score + concrete evidence) in parallel, then one **`opus`** pass to synthesize the weighted total
-and adversarially sanity-check the score. Small project: score inline. If that synthesis runs inline on
-the main agent and the session is not on `opus`, offer switch-model-or-continue per "The session model
-is fixed" in `bitranox:process-agents-subagent-driven-development` (the main agent cannot self-switch its
-model). (Tiers: see "Concrete tiers" in the same skill; fan-out pattern: `bitranox:process-agents-dispatching-parallel`.)
+For a large project, FAN OUT: dispatch one **`opus`** subagent per rubric dimension at effort
+`medium` (review dispatch, see bitranox:process-agents-subagent-driven-development "Review
+dispatches"; each returns its 0-10 score + concrete evidence) in parallel, then one **`opus`** pass
+to synthesize the weighted total and adversarially sanity-check the score (final synthesis, not a
+review: its effort is the "Final synthesis" row of the effort table in
+bitranox:process-agents-subagent-driven-development, never `medium`). Small project: score inline.
+If that synthesis runs inline on the main agent and the session is not on `opus`, offer
+switch-model-or-continue per "The session model is fixed" in
+`bitranox:process-agents-subagent-driven-development` (the main agent cannot self-switch its model).
+(Tiers: see "Concrete tiers" in the same skill; fan-out pattern:
+`bitranox:process-agents-dispatching-parallel`.)
 
 Use this rubric to score the project. Each dimension is 0-10, final score is the weighted average.
 
@@ -413,7 +418,7 @@ Cross-reference your findings against **all** deliberately accepted items from S
 
 Verify against ground truth (read the code / data / measurements). If you cannot establish whether the acceptance still holds, do NOT silently keep or drop it - include it and ASK the user (a hand-written instructions file can rot; never silently prefer either side - see `bitranox:meta-self-improve`).
 
-**Re-assess with a capable model, not whatever the session happens to run.** Judging "does this premise still hold?" is bounded judgment a weaker/literal model gets wrong - it honors a stale premise and silently misses a live issue. Dispatch an **`opus`** subagent (pin the tier per dispatch) to evaluate each accepted item against ground truth and return a respect-or-reconsider verdict with evidence. The main agent cannot self-switch its model (see "The session model is fixed" in `bitranox:process-agents-subagent-driven-development`); on a small project already on a known-capable session model, inline is fine.
+**Re-assess with a capable model, not whatever the session happens to run.** Judging "does this premise still hold?" is bounded judgment a weaker/literal model gets wrong - it honors a stale premise and silently misses a live issue. Dispatch an **`opus`** subagent at effort `medium` (pin both per dispatch; review dispatch, see bitranox:process-agents-subagent-driven-development "Review dispatches") to evaluate each accepted item against ground truth and return a respect-or-reconsider verdict with evidence. The main agent cannot self-switch its model (see "The session model is fixed" in `bitranox:process-agents-subagent-driven-development`); on a small project already on a known-capable session model, inline is fine.
 
 **Externally-enforced off-limits** (a `.github/` tree or vendored files "managed by an external template"): "propose a change" means FLAG it for the user to take up at the SOURCE (the template / owner) - do not edit the managed file directly.
 
@@ -631,7 +636,7 @@ asks which of your own calls are still unsettled.
 | Vague suggested fixes ("improve this")                                           | Write specific, actionable instructions                                                                                                                                    |
 | Skip saving declined items                                                       | ALWAYS append to project instructions file                                                                                                                                 |
 | Subjective scoring without rubric                                                | Use the weighted rubric table                                                                                                                                              |
-| Leaving the respect-or-reconsider call to a weak/literal session model           | Delegate it to a pinned `opus` subagent                                                                                                                                    |
+| Leaving the respect-or-reconsider call to a weak/literal session model           | Delegate it to a pinned `opus` subagent at effort `medium` (a review dispatch)                                                                                             |
 | Present MINOR issues before SEVERE                                               | Sort by severity: SEVERE > MEDIUM > MINOR                                                                                                                                  |
 | Silently skip an accepted item ground truth now contradicts                      | Re-open it as a propose-first "Reconsider" finding                                                                                                                         |
 | Review only the one code path in front of you                                    | Walk the full input/variant/caller matrix (types, sizes, states, callers) of the changed code, one check per branch, on the FIRST pass                                     |

@@ -27,7 +27,10 @@ Load plan, review critically, execute tasks in batches, report for review betwee
 
    While armed, any subagent dispatched during this plan (a review helper, a
    verification agent) is DENIED unless it pins `model` explicitly - tiers per
-   "Concrete tiers" in bitranox:process-agents-subagent-driven-development.
+   "Concrete tiers" in bitranox:process-agents-subagent-driven-development. A
+   review helper or verification agent is a review dispatch: pass `model: "opus"`
+   and `effort: "medium"` (see bitranox:process-agents-subagent-driven-development
+   "Review dispatches").
 
 ### Step 2: Execute Batch
 **Default: First 3 tasks**

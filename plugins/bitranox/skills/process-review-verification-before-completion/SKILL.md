@@ -101,12 +101,14 @@ AFTER it - that is the only read that covers both.
 ## Key Patterns
 
 **For a risky/large completion claim, get an INDEPENDENT verifier.** You cannot fully check your own
-work (you share the doer's optimism). Dispatch an **`opus`** adversarial verifier subagent with fresh
-context (re-run the commands ITSELF, check requirements line-by-line, try to DISPROVE "done") -
-correctness verification is exactly the deep-reasoning role that warrants opus. The verifier RUNS the
-commands rather than reading yours: a verifier handed your output inherits the same optimism this
-section says you cannot check in yourself, and a misreported result is exactly what survives that.
-(Tiers: "Concrete tiers" in `bitranox:process-agents-subagent-driven-development`.)
+work (you share the doer's optimism). Dispatch an **`opus`** adversarial verifier subagent at effort
+`medium` (review dispatch, see bitranox:process-agents-subagent-driven-development "Review
+dispatches") with fresh context (re-run the commands ITSELF, check requirements line-by-line, try to
+DISPROVE "done") - correctness verification is exactly the deep-reasoning role that warrants opus.
+The verifier RUNS the commands rather than reading yours: a verifier handed your output inherits the
+same optimism this section says you cannot check in yourself, and a misreported result is exactly
+what survives that. (Tiers: "Concrete tiers" in
+`bitranox:process-agents-subagent-driven-development`.)
 
 **Tests:**
 ```

@@ -9,7 +9,9 @@ Subagent (general-purpose):
   description: "Review code changes"
   model: "opus"     # pin a tier (see bitranox:process-agents-subagent-driven-development "Concrete
                     # tiers"); for a big diff, fan out parallel opus per-concern reviewers plus
-                    # one opus meta-review.
+                    # one opus meta-review, every one at effort medium.
+  effort: "medium"  # review dispatch, see bitranox:process-agents-subagent-driven-development
+                    # "Review dispatches"
   prompt: |
     You are a Senior Code Reviewer with expertise in software architecture,
     design patterns, and best practices. Your job is to review completed work

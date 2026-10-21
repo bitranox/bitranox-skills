@@ -267,8 +267,9 @@ INITIALIZATION:
   STEP A - PARALLEL ANALYSIS (use subagents):
      - Read `.data_arch_violations.json`
      - Increment "pass" counter
-     - Launch subagents (Task tool, subagent_type="Explore", model="opus") in PARALLEL for each file
-       (pin the tier; per-file scanning is bounded judgment, an `opus` job - see "Concrete tiers" in
+     - Launch subagents (Task tool, subagent_type="Explore", model="opus", effort="medium") in
+       PARALLEL for each file (pin both; per-file analysis judges code already written, a review
+       dispatch - see "Concrete tiers" and "Review dispatches" in
        bitranox:process-agents-subagent-driven-development)
      - Each subagent prompt MUST include:
        * The file path to analyze
@@ -437,7 +438,8 @@ STEP A -> no violations? -> STEP C (run make test!) -> STEP D -> DONE
 
 **Subagent Prompt Templates:**
 
-Analysis subagent:
+Analysis subagent (`model: "opus"`, `effort: "medium"` - review dispatch, see
+bitranox:process-agents-subagent-driven-development "Review dispatches"):
 ```
 Analyze {file_path} for data architecture violations:
 - dict parameters (`: dict`, `-> dict`)

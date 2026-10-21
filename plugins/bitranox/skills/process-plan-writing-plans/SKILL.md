@@ -191,7 +191,8 @@ After saving the plan, offer execution choice:
 **If Subagent-Driven chosen:**
 - **REQUIRED SUB-SKILL:** Use bitranox:process-agents-subagent-driven-development
 - Stay in this session
-- Fresh subagent per task + two-stage review
+- Fresh subagent per task + two-stage review (each reviewer an `opus` subagent at effort `medium`,
+  review dispatch, see bitranox:process-agents-subagent-driven-development "Review dispatches")
 
 **If Parallel Session chosen:**
 - Guide them to open a new session in the worktree

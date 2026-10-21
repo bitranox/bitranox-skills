@@ -173,7 +173,8 @@ the success line, abort-and-show on a miss).
 3b. **De-double the tiers.** A fact lives in exactly ONE tier. Per native entry: already curated
    (by title/hook match) -> drop the native duplicate, but a title/hook match, or a reviewer's
    "already curated, safe to drop", is a CANDIDATE: before dropping, run the loss-finding second
-   pass in references/dream-core.md "Dedup semantics" and drop only the entries it clears;
+   pass in references/dream-core.md "Dedup semantics" (its skeptics are `opus` subagents at effort
+   `medium`) and drop only the entries it clears;
    native-only and
    worthwhile -> PROMOTE via engine `add` into a level that EXISTS; some-value -> leave in
    native. There is NO "native-only backend" mode - an absent pointer block is the trigger to

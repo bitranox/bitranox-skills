@@ -70,7 +70,9 @@ same loud behaviour on a `--hook` launch, which these scripts never use.
    the room, runs one reviewer per skill at `--jobs` at a time, and writes
    `<room>/reports/<skill>.audit.txt`. Reviewers are slow because they verify - budget minutes per
    skill, not seconds. `--skills-dir <dir>` audits a loose skills dir instead of a plugin.
-   - **Reviewers run with every hook disabled** (`claude -p --settings '{"disableAllHooks":true}'`).
+   - **Reviewers run on `opus` at effort `medium` with every hook disabled**
+     (`claude -p --model opus --effort medium --settings '{"disableAllHooks":true}'`; review
+     dispatch, see bitranox:process-agents-subagent-driven-development "Review dispatches").
      Otherwise each inherits your hooks and every installed plugin's: Stop hooks replace the final
      message, which is the report; SessionStart hooks write `CLAUDE.md` into the shared room; the
      recall hook is the contamination step 1 walls off. Keep step 1 anyway - it also covers a

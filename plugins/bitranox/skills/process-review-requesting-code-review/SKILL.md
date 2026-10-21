@@ -33,7 +33,9 @@ HEAD_SHA=$(git rev-parse HEAD)
 
 **2. Dispatch code reviewer subagent:**
 
-Dispatch a `general-purpose` subagent, filling the template at [code-reviewer.md](code-reviewer.md)
+Dispatch a `general-purpose` subagent with `model: "opus"` and `effort: "medium"` (review dispatch,
+see bitranox:process-agents-subagent-driven-development "Review dispatches"), filling the template
+at [code-reviewer.md](code-reviewer.md)
 
 **Placeholders:**
 - `[DESCRIPTION]` - Brief summary of what you built
@@ -86,7 +88,7 @@ You: Let me request code review before proceeding.
 BASE_SHA=$(git log --oneline | grep "Task 1" | head -1 | awk '{print $1}')
 HEAD_SHA=$(git rev-parse HEAD)
 
-[Dispatch code reviewer subagent]
+[Dispatch code reviewer subagent: model opus, effort medium]
   DESCRIPTION: Added verifyIndex() and repairIndex() with 4 issue types
   PLAN_OR_REQUIREMENTS: Task 2 from docs/plans/deployment-plan.md
   BASE_SHA: a7981ec

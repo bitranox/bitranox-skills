@@ -32,7 +32,8 @@ modes. Do not drop the skill for them.
 
 **Capability check (REVIEW / judgment).** Spotting architecture/layer violations and the
 true-vs-accidental-duplication call is capability-sensitive - a weaker model misjudges it. Run REVIEW
-mode on a pinned `opus` subagent; pin the tier per
+mode on a pinned `opus` subagent at effort `medium` (review dispatch, see
+bitranox:process-agents-subagent-driven-development "Review dispatches"); pin both per
 dispatch, never inherit the session model. If you keep it inline and the session is on a lesser tier,
 offer switch-model-or-continue. See `bitranox:process-agents-subagent-driven-development` ("The
 session model is fixed" / "Concrete tiers").

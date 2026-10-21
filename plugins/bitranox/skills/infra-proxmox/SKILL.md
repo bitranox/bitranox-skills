@@ -51,9 +51,11 @@ patterns, see `bitranox:coding-resilience`.
 
 > **Run this gate on `opus`.** This steelman / red-team judgment gates a change to LIVE
 > infrastructure - a weaker model under-weights outage, data-loss, and quorum risk. Do the review on
-> `opus`: delegate it to a pinned `opus` subagent, or (if you keep it inline) offer
-> switch-model-or-continue BEFORE executing. Never run this gate on an unknown lesser tier. See
-> `bitranox:process-agents-subagent-driven-development` ("The session model is fixed" / "Concrete tiers").
+> `opus`: delegate it to a pinned `opus` subagent at effort `medium` (review dispatch, see
+> bitranox:process-agents-subagent-driven-development "Review dispatches"), or (if you keep it
+> inline) offer switch-model-or-continue BEFORE executing. Never run this gate on an unknown lesser
+> tier. See `bitranox:process-agents-subagent-driven-development` ("The session model is fixed" /
+> "Concrete tiers").
 
 ### 3.1 Steelman Prompt
 

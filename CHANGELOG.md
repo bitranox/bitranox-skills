@@ -39,6 +39,14 @@ two "versions with no entry" notes came to sit in this file disagreeing with it.
   `medium`, passed explicitly on the Agent tool, a Workflow `agent()` call or `claude -p`. The effort
   table gains a review row; final synthesis keeps `xhigh`/`max`, haiku mechanical scans keep `low`.
   The task-reviewer template pins `model: opus` and `effort: medium`.
+- Review dispatch sites in 16 skills name `opus` at effort `medium` and point at that rule:
+  requesting, receiving and verification reviews, the code-quality rubric fan-out and its
+  re-assessment, the parallel review fan-out, plan-executor and writing-plans reviewers, the
+  Python and Bash REVIEW modes, performance audits, data-architecture per-file analysis, the
+  Proxmox steelman / red-team gate, CLAUDE.md claim verification, dream-tree skeptics, the
+  skill-writer quote-back and the skill-audit reviewers (`claude -p --model opus --effort medium`).
+  `meta-skill-writer`'s team and verification dispatch examples gain a `model` line, and the
+  implementer template says an omitted model inherits the session's, a premium tier or a weaker one.
 
 ## [9.10.3]
 

@@ -33,9 +33,10 @@ WHEN receiving code review feedback:
 **Capability check (EVALUATE).** Deciding whether external review feedback is technically sound for
 THIS codebase - and whether to push back - is capability-sensitive; a weaker model wrongly defers to
 plausible-but-wrong feedback (or wrongly rejects good feedback). If the session is on a lesser tier,
-delegate the EVALUATE judgment to a pinned `opus` subagent or offer switch-model-or-continue
-(the main agent cannot self-switch its model). See `bitranox:process-agents-subagent-driven-development`
-("The session model is fixed").
+delegate the EVALUATE judgment to a pinned `opus` subagent at effort `medium` (review dispatch, see
+bitranox:process-agents-subagent-driven-development "Review dispatches") or offer
+switch-model-or-continue (the main agent cannot self-switch its model). See
+`bitranox:process-agents-subagent-driven-development` ("The session model is fixed").
 
 ## Forbidden Responses
 
@@ -107,8 +108,9 @@ reference, ADRs) and tests for the behaviour by name, because a broad fix can si
 recorded decision. Prefer the narrowest form that fixes the defect, and pin the recorded decision
 with a test the broad form would fail. When YOU write a fix brief for someone else, state the
 requirements and the inputs to probe, label any named mechanism or wording as a CANDIDATE to
-verify, never the remedy, and have the re-reviewer check any invariant the brief states against
-the real producer's behaviour, not against the brief.
+verify, never the remedy, and have the re-reviewer (an `opus` subagent at effort `medium`, review
+dispatch, see bitranox:process-agents-subagent-driven-development "Review dispatches") check any
+invariant the brief states against the real producer's behaviour, not against the brief.
 
 **Your own reading is a hypothesis too.** When your reading of a finding is looser than its
 literal prescription, do not quietly ship your version, and do not push back on argument alone. A

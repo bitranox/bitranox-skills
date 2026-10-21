@@ -106,7 +106,10 @@ Each agent gets:
   `subagent-model-gate` hook: a warning normally, a DENY while a plan execution is armed (the
   `plan-execution` receipt). Dispatching a batch as part of a plan? The plan skill already armed
   the gate. Running a standalone batch you want gated the same way? Arm it yourself first
-  (`skill_receipt.py start plan-execution` via run-python.sh) and `end` it after the batch.
+  (`skill_receipt.py start plan-execution` via run-python.sh) and `end` it after the batch. A
+  fan-out that REVIEWS (audits, verifies or adjudicates work already produced) passes
+  `model: "opus"` and `effort: "medium"` on every agent (review dispatch, see
+  bitranox:process-agents-subagent-driven-development "Review dispatches").
 - **The handling rules you are working under, copied in verbatim.** An agent inherits your model
   tier only because you pinned it, and it inherits your standing rules NOT AT ALL - not the
   project instructions, not a memory entry, not a skill you have loaded. Anything that must hold
