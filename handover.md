@@ -1,4 +1,4 @@
-# Handover 2026-10-22: [23] batch 3 finished (9.11.2 + btx-skill-jev-judge 0.3.2); batch 4 next
+# STALE - read 2026-10-22, work continued
 
 ## In flight
 
