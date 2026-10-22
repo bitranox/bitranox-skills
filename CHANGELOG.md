@@ -29,6 +29,26 @@ than the change, so entries reconstructed from them would read like coverage wit
 a hole nobody has drawn a line under is one that gets rediscovered and half-filled - which is how
 two "versions with no entry" notes came to sit in this file disagreeing with it.
 
+## [9.11.2]
+
+### Changed
+
+- `meta-claude-hooks`: the I/O contract gains "Reading the transcript a hook is handed": which
+  `user` records are the person (tool results, `isMeta` skill bodies and hook feedback, command
+  echoes, queued prompts, SDK and `claude -p` records), the four tests a record must pass, a
+  start-anchored case-insensitive skill-body marker, and how a guard finds the earlier calls of the
+  same assistant message. Inside a subagent `session_id` and `transcript_path` are the parent's, so
+  a guard identifies the agent by `agent_id` and reads that agent's own transcript.
+- `meta-claude-hooks`: authoring gains the interactive probe for `AskUserQuestion` (a deny stops
+  the dialog before the person sees it), launchers and shell keywords in a statement walk, masking
+  for structure but comparing values on the raw text, write guards that also match the shell
+  (heredocs, redirects, PowerShell cmdlets), and the formatting variants a prose intent matcher
+  must be tested against. SKILL.md: diff firing SETS, not counts, when you narrow a matcher.
+- `ai-llm-jev-judge`: a question naming a state field an item lacks does not fail, Jev hedges; send
+  the field everywhere with an explicit empty marker or ask a variant that does not name it, and
+  pilot the sparsest item. The version floors name `btx-skill-jev-judge` 0.3.2. Mirrors the
+  btx-skill-jev-judge repo's copy.
+
 ## [9.11.1]
 
 ### Fixed

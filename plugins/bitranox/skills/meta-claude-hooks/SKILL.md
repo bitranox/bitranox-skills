@@ -84,8 +84,8 @@ Use the Read tool to load the file identified as relevant for full details.
 |--------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|-------------------------------|
 | **All 33 events** - SessionStart, Setup, InstructionsLoaded, UserPromptSubmit, UserPromptExpansion, MessageDisplay, PreToolUse, PermissionRequest, PostToolUse, PostToolUseFailure, PostToolBatch, PermissionDenied, Notification, SubagentStart, SubagentStop, TaskCreated, TaskCompleted, Stop, StopFailure, TeammateIdle, ConfigChange, CwdChanged, DirectoryAdded, FileChanged, WorktreeCreate, WorktreeRemove, PreCompact, PostCompact, PreModelSwitch, PostModelSwitch, SessionEnd, Elicitation, ElicitationResult | `references/events.md`        |
 | **Configuration** - hook locations and precedence, matcher patterns and the exact-match vs regex rule, MCP tool matchers, the five handler types, common fields, `if` and Bash pattern matching, exec form vs shell form, HTTP and MCP tool and prompt fields, path placeholders, hooks in skill and subagent frontmatter, `/hooks`, `disableAllHooks`                                                                                                                                                                   | `references/configuration.md` |
-| **I/O contract** - common input fields, exit codes 0/2/other, timeouts, exit-code-2-per-event table, HTTP response handling, JSON output, `continue`, `stopReason`, `systemMessage`, `terminalSequence`, `additionalContext`, decision control per event, `updatedInput` and `updatedToolOutput`                                                                                                                                                                                                                         | `references/io-contract.md`   |
-| **Authoring** - which handler types each event supports, prompt and agent response schema and `continueOnBlock`, async and `asyncRewake`, testing a hook from stdin, `claude --debug`, traps, no dependency provisioning and the lazy-import degrade, security and workspace trust, Windows PowerShell, environment variables                                                                                                                                                                                            | `references/authoring.md`     |
+| **I/O contract** - common input fields, exit codes 0/2/other, timeouts, exit-code-2-per-event table, HTTP response handling, JSON output, `continue`, `stopReason`, `systemMessage`, `terminalSequence`, `additionalContext`, decision control per event, `updatedInput` and `updatedToolOutput`, reading typed prompts and skill bodies out of the transcript, subagent transcripts, same-message sibling calls                                                                                                         | `references/io-contract.md`   |
+| **Authoring** - which handler types each event supports, prompt and agent response schema and `continueOnBlock`, async and `asyncRewake`, testing a hook from stdin, `claude --debug`, traps, no dependency provisioning and the lazy-import degrade, security and workspace trust, Windows PowerShell, environment variables, probing `AskUserQuestion` interactively, write guards and the shell, launchers, value vs structure, prose intent matchers                                                                 | `references/authoring.md`     |
 
 Upstream, for detail beyond these files: <https://code.claude.com/docs/en/hooks.md> (reference) and
 <https://code.claude.com/docs/en/hooks-guide.md> (guide). Both serve raw markdown.
@@ -156,7 +156,7 @@ uv run <plugin>/skills/compuse-toolbox/scripts/guard_replay.py \
   --module path/to/your-hook.py --func notice --root ~/.claude/projects
 ```
 
-Three things make the number trustworthy:
+Four things make the number trustworthy:
 
 - **Run a control arm first.** Replay the guard UNCHANGED and require it to reproduce whatever
   figures are already recorded for it. If it does not, the harness is wired wrong and no number
@@ -164,6 +164,13 @@ Three things make the number trustworthy:
 - **Price the variant you are actually proposing, not the whole hook.** A narrowing that sounds
   obviously safer can score WORSE than the thing it narrows, and the arm you meant to downgrade can
   turn out to have the HIGHER precision - which inverts the proposal rather than trimming it.
+- **Diff firing SETS, not counts, when you narrow a matcher.** A narrowing is quieter whether it
+  dropped noise or real work, so a falling count cannot tell the two apart, and the unit tests were
+  written from the same imagination as the narrowing. Replay the old and the new predicate over the
+  same corpus (`guard_replay.py --firings OUT.jsonl` once per predicate, then diff the two files by
+  `id`; or `diffbehave` from the same skill), list what the old set fired on and the new one does
+  not, and read every row: each is either data you meant to drop or a real command you went blind
+  to, typically one behind a launcher or after a shell keyword (see `references/authoring.md`).
 - **Say what your rule cannot classify, before quoting a number.** A predicate declared
   `(command, cwd)` receives the recorded cwd, so a rule about paths can be measured rather than
   guessed; but any shape it cannot decide (an interpreter write exposes no filename) is silently

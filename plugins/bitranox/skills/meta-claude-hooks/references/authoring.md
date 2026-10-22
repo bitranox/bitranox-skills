@@ -98,6 +98,26 @@ Assert on **both** the exit code and the parsed stdout. Then check the pieces th
 > hook's first run, look for `Failed with non-blocking status code: ... No such file or directory` - a mistyped
 > path in `settings.json` leaves the gate silently disabled while reading as clean.
 
+**An interactive-only tool needs an interactive probe.** Headless `claude -p` does not offer `AskUserQuestion`
+(observed on CLI 2.1.296; check `ExitPlanMode` the same way), so the model reports no matching tool and the hook
+never fires - a non-answer that looks like a hook that found nothing. Probe in a real interactive session under
+tmux, with a throwaway settings file in a scratch directory that registers a `PreToolUse` hook (matcher
+`AskUserQuestion`) which appends its stdin to a log and denies with a unique marker string:
+
+```bash
+tmux new-session -d -s probe -c /path/to/scratch "claude --settings /path/to/scratch/settings.json"
+tmux capture-pane -t probe -p          # the folder-trust prompt: answer it with send-keys
+tmux send-keys -t probe -l 'ask me which of two options I prefer'
+tmux send-keys -t probe Enter
+tmux capture-pane -t probe -p          # what the person would see; then read the hook's log
+tmux kill-session -t probe
+```
+
+Observed that way: a `permissionDecision: "deny"` stops the call BEFORE the dialog opens and the model receives
+the `permissionDecisionReason` verbatim, as `PreToolUse:AskUserQuestion hook error: <reason>` (CLI 2.1.296),
+while `additionalContext` reaches the model only together with the person's answer (CLI 2.1.289). So of the two,
+only a deny can make the model rework a question before the person reads it. Re-probe after a CLI upgrade.
+
 ## Traps worth knowing before you write one
 
 **Exit 1 does not block.** It is a non-blocking error and the action proceeds. Policy hooks use `exit 2`, which
@@ -136,13 +156,49 @@ heredoc bodies, quoted message arguments such as `git commit -m "..."`, prose be
 substring match fires on a doc or commit message that merely MENTIONS the pattern. Strip the data regions first
 (heredoc bodies at minimum, ending at the terminator so a real invocation after the heredoc is still seen) and
 match the token's structural position: is it the actual subcommand, after skipping `VAR=` assignments and global
-options like `-C`? Require a whole token, not a word boundary (`\bpgrep\b` matches inside a filename such as
-`block-pgrep.py`; `(?<![\w-])pgrep(?![\w.-])` does not). Strip heredocs exactly ONCE: a stripper that keeps the
-opener line and drops the body is not idempotent, so a second pass sees an unterminated opener and swallows every
-line after it; when you need positions, blank the data regions in place and slice values from the raw text at the
-same offsets. Do not mask quoted strings when the guard's subject is a command inside a quoted argument that
-something else executes (`ssh host '...'`, `bash -c '...'`). Test both directions: text mentioning the pattern
-passes, and a genuine invocation, with quoted operands or after a heredoc, still blocks.
+options like `-C`? Skip launchers too (`nice`, `ionice`, `timeout`, `sudo`, `env`, `command`, `exec` and the like)
+and the shell keywords a statement can open with (`if`, `while`, `until`, `do`, `then`, `else`, `!`), or the walk
+goes blind to real commands written behind them, such as `nice -n 19 git commit` or `do git push`. Keep the
+launcher list a FIXED allowlist widened on evidence, never "any leading token is a launcher", which turns
+`ssh host 'git commit'` back into a local commit. A narrowing like this is quieter whether it dropped noise or
+real work, so diff the old and the new predicate's firing SETS over one corpus before shipping (SKILL.md, "Before you
+escalate a nudge to a block, price it"). Require a whole token, not a word boundary (`\bpgrep\b` matches
+inside a filename such as `block-pgrep.py`; `(?<![\w-])pgrep(?![\w.-])` does not). Strip heredocs exactly ONCE: a
+stripper that keeps the opener line and drops the body is not idempotent, so a second pass sees an unterminated
+opener and swallows every line after it; when you need positions, blank the data regions in place and slice
+values from the raw text at the same offsets. The same split governs quote and substitution masking: mask to read
+STRUCTURE (where statements start), but read every VALUE you compare (two `-C` paths, a redirect target) from the
+raw text. Equal-length filler makes two different quoted paths compare EQUAL, so `git -C "$PLAN"` beside
+`git -C "$PROX"` and `git -C "$PLANNING"` beside `git -C "$PROX"` get opposite verdicts, decided by a variable
+name's length. If the masking preserves length, cut the raw string at the masked text's offsets; if not, record
+spans. Normalise the extracted value separately, for its own reasons (strip quotes, a trailing slash). Tests with
+literal paths cannot see this: add two different quoted values of the same length, and whenever a scanner
+compares two extracted tokens, check which string it read them from. Do not mask quoted strings when the guard's
+subject is a command inside a quoted argument that something else executes (`ssh host '...'`, `bash -c '...'`).
+Test both directions: text mentioning the pattern passes, and a genuine invocation, with quoted operands or after
+a heredoc, still blocks.
+
+**A guard about FILE WRITES must match the shell too.** `cat > f <<'EOF'`, `tee f`, a `>` redirect, or
+`python - <<'EOF'` opening a file all write without touching `Write` or `Edit`, and in one measured transcript
+corpus about half of the writes that carried a decision went that way. The tool a write arrives through is the
+agent's choice, not a property of the write, so a `Write|Edit` matcher looks complete, stays green, and is
+blind. Register on `Bash|PowerShell` as well as the file tools (see [io-contract.md](io-contract.md)) and match the
+redirect or heredoc target, and in PowerShell the `-Path` or `-FilePath` of `Set-Content`, `Add-Content` and
+`Out-File` as well as a `>` redirect; put a heredoc case and a redirect case in the guard's tests, since a guard exercised
+only through `Edit` passes its own tests forever. Where it cannot cover the shell (an interpreter write exposes no
+filename), say so in a comment where it is registered, and add a second gate at a choke point that sees the
+RESULT, such as a pre-push hook or a CI check on the changed file.
+
+**A matcher that decides on INTENT in prose is defeated by formatting its author never wrote.** A guard reading a
+prompt or a dispatch message gets tested in its author's own spelling, so write the case list before the regex:
+the bare sentence, the same sentence behind a list bullet (`- `), behind a short label (`IMPORTANT: `), and with
+typographic punctuation (U+2019 as the apostrophe of `don't`); then the negatives - a sentence stating the
+OPPOSITE in the same words (an exception clause: "do not use any tools other than Read") and prose that merely
+discusses the subject. Normalise punctuation before matching rather than enumerating quote characters. Refuse any
+length cap or window you cannot justify: it fails by MISSING, the same silent direction as the bug, so where a
+bound is unavoidable make it fail loud. Keep the plain case as a permanent test beside the widened ones, and pin
+each newly accepted false positive with its own test. This plugin's `hooks/subagent-probe-capability-gate.py` is
+a worked example.
 
 **`if` fails open.** When the Bash command cannot be parsed, the handler runs regardless of the pattern. Use the
 permission system for a hard allow or deny.

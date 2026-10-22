@@ -22,8 +22,24 @@ reach the user and `terminalSequence` to ring a bell or set a title.
 | `agent_id`        | inside a subagent only          | use it to tell subagent calls from main-thread calls                                                                                                                                     |
 | `agent_type`      | with `--agent` or in a subagent | e.g. `Explore`. A subagent's own type wins over the session `--agent` value                                                                                                              |
 
+**Inside a subagent, `session_id` and `transcript_path` are the PARENT's.** A subagent's event carries the main
+session's `session_id` and `transcript_path` plus its own `agent_id`, and its Bash sees the parent's
+`CLAUDE_CODE_SESSION_ID` (observed on CLI 2.1.295). Only `agent_id` identifies the acting agent, so never treat a
+session id as an agent identity: a state file or receipt keyed by it is shared by every agent in the session. The
+agent's own records sit at `<transcript_path minus .jsonl>/subagents/agent-<agent_id>.jsonl` for a Task subagent,
+or one level deeper at `.../subagents/workflows/<wf_id>/agent-<agent_id>.jsonl` for an agent a Workflow script
+started, and the event does not name the workflow. A record the agent causes, such as a skill load, lands only in
+that agent's own file, so a hook asking what THIS agent did reads that file, never `transcript_path`. Resolve it
+through one shared resolver rather than building the path by hand (this plugin's reference implementation is
+`agent_transcript` in `hooks/transcript_siblings.py`, which refuses an id that is not a plain name or that matches
+in two workflows), decide deliberately what an unreadable file means for your guard, and cover BOTH layouts in
+test fixtures: a guard that built only the Task path refuses every agent of a Workflow fan-out. Re-probe after a
+CLI upgrade, since the event shape and the layout are harness behaviour, not a contract; and after fixing a guard,
+reload plugins before a fan-out that needs it, because a running session keeps the hooks it started with.
+
 Do not read the transcript for the current turn's final assistant text; it may not be there yet. Use
-`last_assistant_message` on `Stop` and `SubagentStop`.
+`last_assistant_message` on `Stop` and `SubagentStop`. For the person's side and for sibling calls, see
+"Reading the transcript a hook is handed" below.
 
 Only `SessionStart` can receive a `model` field, and it is **not guaranteed**. There is no `$CLAUDE_MODEL`.
 `$ANTHROPIC_MODEL` is inherited from your shell if set, but does not change when you switch with `/model`.
@@ -32,6 +48,63 @@ Only `SessionStart` can receive a `model` field, and it is **not guaranteed**. T
 
 `OTEL_*` exporter variables are **removed** from every subprocess Claude Code spawns, hooks included, and so are
 the credentials `CLAUDE_CODE_SUBPROCESS_ENV_SCRUB=1` strips (see the environment variables in `authoring.md`).
+
+## Reading the transcript a hook is handed
+
+### Which `user` records are the person
+
+Not every `type: "user"` record is the person, and in a real turn the last one almost never is:
+
+- every tool call is answered by a `user` record holding only a `tool_result` block, with no text block;
+- hook feedback, and the whole SKILL.md of an invoked skill or slash command, are `user` records with
+  `isMeta: true`; an injected skill body's text starts `Base directory for this skill:`;
+- a slash-command echo starts `<command-` or `<local-command`, a task notification `<task-notification`;
+- a prompt typed while the assistant is busy is written only as an `attachment` record of type
+  `queued_command`, never as a `user` record.
+
+So a scanner that reads `user` records for meaning (a learning-signal gate, a correction detector, an audit
+script over the corpus) reads shipped documentation and tool traffic as the person's own words: a skill whose
+text says "never" or "always" reports itself as a correction in every session that loads it. A record is the
+person's when it passes all four tests below; a scanner over every record applies them to each, and one that
+needs only the person's last message walks back to the last record that:
+
+1. is `type: "user"` and not `isMeta` (or is a `queued_command` attachment);
+2. has no `entrypoint` starting `sdk` - a headless SDK run writes no `origin` key and marks every record
+   `entrypoint: "sdk-cli"` or `"sdk-py"`;
+3. has `origin.kind == "human"` WHEN the `origin` key is present (`origin: null` marks a `claude -p` prompt or a
+   teammate message); a transcript old enough to lack the key falls back to excluding the injected prefixes
+   above;
+4. carries a text block.
+
+Read only the tail, but widen the window until a match is found: one tool output can exceed 64 KiB. Take the
+final reply from `last_assistant_message`, not from the transcript (above). This plugin's reference
+implementation is `human_text` in `hooks/transcript_turns.py`.
+
+If you exclude skill bodies by their marker rather than by `isMeta`, test for `Base directory for this skill:`
+at the START of the text (after leading whitespace, case-insensitively), never as a substring: a person quoting
+the marker inside a real correction must still be scanned.
+
+Prove a filter like this by driving the scanner's real entry point over real transcripts before and after the
+change, with the firings split by `origin` and `entrypoint`. A unit test, or a re-check of whether the raw
+pattern still matches, measures the input rather than the code path you changed.
+
+### Same-message sibling calls
+
+The hook's stdin describes only the current call. Several tool calls in one assistant message are siblings:
+each `tool_use` is its own transcript record carrying the message's `message.id`, and sibling shell calls run
+one after another, not side by side (observed on CLI 2.1.296). From the second call on, the siblings are on disk
+when the call's `PreToolUse` hook runs; the FIRST call's hook sees none of them. A guard that judges a call
+against its siblings (an earlier `cd`, an earlier gate run nobody has read):
+
+- reads the transcript tail, finds the `tool_use` with its own `tool_use_id`, and takes the `tool_use` blocks
+  with the same `message.id` that come BEFORE it - only those have run;
+- inside a subagent, reads the agent's own transcript (above), not `transcript_path`;
+- reads "own call not found" or an unreadable transcript as nothing known, and allows;
+- is tested on the first-call case on its own (no sibling visible), beside an earlier sibling that matters, one
+  that does not, and a sibling in a subagent's transcript.
+
+This plugin's shared reader is `hooks/transcript_siblings.py`, so every sibling-aware guard agrees on which
+calls are siblings.
 
 ## What `tool_input` holds, per tool
 
