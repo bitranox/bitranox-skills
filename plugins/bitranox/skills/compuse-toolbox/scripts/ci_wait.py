@@ -35,7 +35,11 @@ below 5 is refused, since each poll is one API request and a tiny one polls back
 The timeout is wall-clock time, and each `gh` call is itself bounded (60 seconds, or what is left
 of the timeout), so a stalled API connection cannot hold the wait past it. The runs are asked for
 by sha (`gh run list --commit`), so newer runs of other commits cannot push them out of the
-`--limit` window.
+`--limit` window. That sha-filtered listing can DROP a run it already returned - measured: a ci
+run listed in_progress for 27 polls vanished as it completed, and the listing answered [] for
+minutes - so every run once listed is remembered, and one missing from a later listing is re-read
+by id (`gh run view`), with a stderr line naming it. An empty listing then means "no runs" only
+for a sha never seen with any, and a failing run cannot drop out beside a listed success.
 
 A run concluding `skipped` (a workflow whose jobs were all `if:`-gated off) does not fail the push;
 a push on which every run was skipped tested nothing and is reported `failed`, never green.
@@ -664,6 +668,79 @@ def gh_runs(
     filtered = event not in (None, ANY_EVENT)
     if filtered:
         argv += ["--event", str(event)]
+    rows = _gh_json(argv, timeout_s)
+    if not isinstance(rows, list):
+        raise GhFailed(f"gh returned {type(rows).__name__}, not a list")
+    same_sha = [r for r in rows if isinstance(r, dict) and r.get("headSha") == sha]
+    kept = [r for r in same_sha if _event_counts(r, event)]
+    if on_not_counted is not None:
+        on_not_counted(len(same_sha) - len(kept))
+    return kept
+
+
+def gh_run(run_id: object, *, repo: str | None = None,
+           timeout_s: float = GH_CALL_TIMEOUT_S) -> dict[str, object]:
+    """Re-read ONE run by its id with `gh run view`, in the same row shape `gh_runs` returns.
+
+    The by-id read is what :func:`keep_seen_runs` falls back on when the sha-filtered listing
+    drops a run it already returned: a run's own endpoint answers from the run itself, not from
+    the index the filtered listing is served from.
+
+    Raises:
+        GhFailed: as :func:`gh_runs`, and also for a run gh cannot read - a deleted run answers
+            HTTP 404 with exit 1. Raised rather than dropped, because dropping a run the wait has
+            already seen is the defect the caller exists to close.
+        GhUnavailable: as :func:`gh_runs`.
+    """
+    argv = ["gh", "run", "view", str(run_id), "--json", _FIELDS]
+    if repo:
+        argv += ["--repo", repo]
+    row = _gh_json(argv, timeout_s)
+    if not isinstance(row, dict):
+        raise GhFailed(f"gh run view {run_id} returned {type(row).__name__}, not one run")
+    return row
+
+
+def keep_seen_runs(
+    fetch: Callable[[], list[dict[str, object]]],
+    fetch_one: Callable[[object], dict[str, object]],
+    *,
+    report: Callable[[str], None] = lambda _m: None,
+) -> Callable[[], list[dict[str, object]]]:
+    """Wrap ``fetch`` so a run it returned once is never lost when a later listing omits it.
+
+    Measured 2026-10-22: `gh run list --commit <sha>` listed a ci run as in_progress for 27
+    polls, then answered [] around the moment it completed, and kept answering [] for minutes,
+    while `gh run view <id>` and the unfiltered runs API both had it as completed success. The
+    wait read the empty listing as "this sha has no runs" and exited 2. Worse is a PARTIAL drop:
+    the verdict is computed over whatever is still listed, so a failing run that drops out beside
+    a listed success reads as a green push. A run that was listed is a fact; its absence from a
+    later listing is the index lagging, so each such run is re-read by id with ``fetch_one`` and
+    put back. A run the listing still carries is never re-read, so a normal poll costs no extra
+    call, and a sha never seen with runs keeps the appear-grace path untouched.
+
+    Keyed on ``databaseId``: a row without one cannot be re-read, so it is not remembered.
+    """
+    seen: dict[object, dict[str, object]] = {}
+
+    def fetch_with_seen() -> list[dict[str, object]]:
+        rows = list(fetch())
+        listed = {row.get("databaseId") for row in rows}
+        missing = [run_id for run_id in seen if run_id not in listed]
+        if missing:
+            report(f"{len(missing)} run(s) dropped from the listing, re-read by id: "
+                   f"{', '.join(str(run_id) for run_id in missing)}")
+            rows += [fetch_one(run_id) for run_id in missing]
+        for row in rows:
+            if row.get("databaseId") is not None:
+                seen[row["databaseId"]] = row
+        return rows
+
+    return fetch_with_seen
+
+
+def _gh_json(argv: list[str], timeout_s: float) -> object:
+    """Run one gh command and parse its JSON, mapping every failure onto the retry contract."""
     try:
         proc = subprocess.run(
             argv, capture_output=True, text=True, encoding="utf-8", errors="replace", check=False,
@@ -678,16 +755,9 @@ def gh_runs(
     if proc.returncode != 0:
         raise GhFailed(f"gh exited {proc.returncode}: {(proc.stderr or '').strip()}")
     try:
-        rows = json.loads(proc.stdout)
+        return json.loads(proc.stdout)
     except ValueError as exc:
         raise GhFailed(f"gh returned unparseable output: {exc}") from exc
-    if not isinstance(rows, list):
-        raise GhFailed(f"gh returned {type(rows).__name__}, not a list")
-    same_sha = [r for r in rows if isinstance(r, dict) and r.get("headSha") == sha]
-    kept = [r for r in same_sha if _event_counts(r, event)]
-    if on_not_counted is not None:
-        on_not_counted(len(same_sha) - len(kept))
-    return kept
 
 
 def _event_counts(row: dict[str, object], event: str | None) -> bool:
@@ -886,14 +956,21 @@ def _run(args: argparse.Namespace) -> int:
     # from. Collected only under the default filter: that is the filter that drops runs silently.
     not_counted: list[int] = []
 
-    def fetch() -> list[dict[str, object]]:
+    def call_timeout() -> float:
         # A single gh call may not outlive the whole wait: bound it by what is left, too.
-        left = args.timeout - (time.monotonic() - started)
+        return max(1.0, min(GH_CALL_TIMEOUT_S, args.timeout - (time.monotonic() - started)))
+
+    def fetch_listing() -> list[dict[str, object]]:
         return gh_runs(
-            sha, repo=repo, limit=args.limit, timeout_s=max(1.0, min(GH_CALL_TIMEOUT_S, left)),
+            sha, repo=repo, limit=args.limit, timeout_s=call_timeout(),
             event=args.event, on_not_counted=not_counted.append if args.event is None else None,
         )
 
+    fetch = keep_seen_runs(
+        fetch_listing,
+        lambda run_id: gh_run(run_id, repo=repo, timeout_s=call_timeout()),
+        report=lambda line: print(line, file=sys.stderr, flush=True),
+    )
     try:
         result = wait_for(
             fetch,

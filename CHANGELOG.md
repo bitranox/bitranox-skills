@@ -29,6 +29,16 @@ than the change, so entries reconstructed from them would read like coverage wit
 a hole nobody has drawn a line under is one that gets rediscovered and half-filled - which is how
 two "versions with no entry" notes came to sit in this file disagreeing with it.
 
+## [9.11.5]
+
+### Fixed
+
+- `compuse-toolbox` `ci_wait.py`: a run the sha-filtered `gh run list --commit` listing drops after
+  returning it is re-read by id (`gh run view`) instead of being lost. The listing dropped a ci run
+  as it completed and answered `[]` for minutes, so the wait exited 2 "no runs found for that sha"
+  for a push whose CI was green; a PARTIAL drop could also hide a failing run beside a listed
+  success and report the push green. A stderr line names every run re-read this way.
+
 ## [9.11.4]
 
 ### Fixed

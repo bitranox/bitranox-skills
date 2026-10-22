@@ -1483,3 +1483,130 @@ class TestARunNoRunnerPicksUpIsReportedNotWaitedOut:
         assert rc == 2 and payload["ok"] is False
         assert payload["data"]["state"] == "stuck-queued"
         assert "777" in payload["error"]
+
+
+def vanishing_gh(listings: list[list[dict[str, object]]], by_id: dict[int, dict[str, object]],
+                 calls: list[list[str]]):
+    """`gh run list` answering ``listings`` in turn (the last repeats), `gh run view <id>` answering
+    from ``by_id`` - the shape GitHub served on 2026-10-22, where the head_sha-filtered listing
+    dropped runs it had already returned while each run stayed readable by its id."""
+
+    def fake_run(argv, **kwargs):
+        calls.append(list(argv))
+        if argv[1:3] == ["run", "view"]:
+            row = by_id.get(int(argv[3]))
+            if row is None:
+                return subprocess.CompletedProcess(argv, 1, stdout="", stderr="HTTP 404: Not Found")
+            return subprocess.CompletedProcess(argv, 0, stdout=json.dumps(row), stderr="")
+        listed = sum(1 for c in calls if c[1:3] == ["run", "list"])
+        rows = listings[min(listed - 1, len(listings) - 1)]
+        return subprocess.CompletedProcess(argv, 0, stdout=json.dumps(rows), stderr="")
+
+    return fake_run
+
+
+def row_id(workflow: str, run_id: int, status: str, conclusion: str | None) -> dict[str, object]:
+    return {**run(workflow, status, conclusion), "databaseId": run_id, "event": "push"}
+
+
+class TestARunThatVanishesFromTheListingIsReReadById:
+    """Measured 2026-10-22 on a real push: `gh run list --commit <sha>` returned the ci run as
+    in_progress for 27 polls, then [] while that run completed green, and `gh run list --commit`
+    kept answering [] minutes later while `gh run view <id>` and the unfiltered runs API both
+    showed it completed success. The wait spent its appear-grace on the empty listing and exited 2
+    'no runs found for that sha' - for a sha it had watched running. A run once seen is a fact; the
+    listing losing it is the index lagging, not the run ceasing to exist."""
+
+    def test_the_incident_through_the_command_line_ends_green(self, monkeypatch, capsys):
+        monkeypatch.setattr(ci_wait, "sha_is_known_locally", lambda sha, **kw: True)
+        monkeypatch.setattr(ci_wait.time, "sleep", lambda _s: None)
+        calls: list[list[str]] = []
+        listings = [[row_id("ci", 7, "in_progress", None)], []]
+        by_id = {7: row_id("ci", 7, "completed", "success")}
+        monkeypatch.setattr(ci_wait.subprocess, "run", vanishing_gh(listings, by_id, calls))
+
+        rc = ci_wait.main(["--sha", SHA, "--appear-grace", "0", "--settle", "0"])
+
+        assert rc == 0, "a run seen in_progress and then dropped by the listing must be re-read"
+        assert any(c[1:4] == ["run", "view", "7"] for c in calls)
+        assert "re-read" in capsys.readouterr().err
+
+    def test_a_vanished_failure_beside_a_listed_success_is_still_a_failure(self):
+        """The worse half: a PARTIAL drop. Judged on what the listing still shows, the failing run
+        is gone and the remaining success reads as a green push."""
+        listings = iter([
+            [row_id("ci", 1, "in_progress", None), row_id("codeql", 2, "completed", "success")],
+            [row_id("codeql", 2, "completed", "success")],
+        ])
+        reread: list[object] = []
+
+        def fetch_one(run_id):
+            reread.append(run_id)
+            return row_id("ci", 1, "completed", "failure")
+
+        fetch = ci_wait.keep_seen_runs(lambda: next(listings), fetch_one)
+        fetch()
+        result = ci_wait.verdict(fetch())
+
+        assert reread == [1]
+        assert result.state == "failed"
+
+    def test_a_sha_never_seen_with_runs_reads_no_runs_without_any_re_read(self):
+        fetch_one_calls: list[object] = []
+        fetch = ci_wait.keep_seen_runs(lambda: [], lambda rid: fetch_one_calls.append(rid) or {})
+
+        assert ci_wait.verdict(fetch()).state == "no-runs"
+        assert fetch_one_calls == []
+
+    def test_a_run_still_listed_is_not_re_read(self):
+        """The re-read costs one gh call per vanished run; a run the listing still carries must
+        never cost one, or every poll doubles its API spend."""
+        fetch_one_calls: list[object] = []
+        rows = [row_id("ci", 3, "in_progress", None)]
+        fetch = ci_wait.keep_seen_runs(lambda: rows, lambda rid: fetch_one_calls.append(rid) or {})
+
+        fetch()
+        fetch()
+
+        assert fetch_one_calls == []
+
+    def test_the_listing_answer_wins_once_the_run_is_listed_again(self):
+        listings = iter([[row_id("ci", 4, "in_progress", None)], [],
+                         [row_id("ci", 4, "completed", "success")]])
+        fetch = ci_wait.keep_seen_runs(lambda: next(listings),
+                                       lambda rid: row_id("ci", 4, "in_progress", None))
+        fetch()
+        fetch()
+
+        assert ci_wait.verdict(fetch()).state == "success"
+
+
+class TestGhRun:
+    """`gh run view <id>`: the by-id read the vanished-run fallback relies on."""
+
+    def test_it_asks_for_the_same_fields_and_the_repo(self, monkeypatch):
+        calls: list[list[str]] = []
+        monkeypatch.setattr(ci_wait.subprocess, "run",
+                            vanishing_gh([[]], {9: row_id("ci", 9, "completed", "success")}, calls))
+
+        row = ci_wait.gh_run(9, repo="o/r")
+
+        assert row["conclusion"] == "success"
+        assert calls[0][:4] == ["gh", "run", "view", "9"]
+        assert calls[0][calls[0].index("--json") + 1] == ci_wait._FIELDS
+        assert calls[0][calls[0].index("--repo") + 1] == "o/r"
+
+    def test_a_run_gh_cannot_read_is_raised_for_the_retry_budget(self, monkeypatch):
+        """A deleted run answers HTTP 404 with exit 1. Raised as GhFailed, never dropped: dropping
+        it is the vanished-run defect again, one call later."""
+        monkeypatch.setattr(ci_wait.subprocess, "run", vanishing_gh([[]], {}, []))
+
+        with pytest.raises(ci_wait.GhFailed):
+            ci_wait.gh_run(5)
+
+    def test_an_answer_that_is_not_one_row_is_raised(self, monkeypatch):
+        monkeypatch.setattr(ci_wait.subprocess, "run",
+                            lambda argv, **kw: subprocess.CompletedProcess(argv, 0, stdout="[]", stderr=""))
+
+        with pytest.raises(ci_wait.GhFailed):
+            ci_wait.gh_run(5)
