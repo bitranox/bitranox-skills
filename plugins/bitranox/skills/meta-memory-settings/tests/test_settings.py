@@ -55,7 +55,7 @@ def test_reset_restores_defaults(capsys):
 
 
 @pytest.mark.parametrize("key", ["classifier_skill_router", "classifier_stop_signal",
-                                 "classifier_recall_rerank"])
+                                 "classifier_recall_rerank", "classifier_subagent_signal"])
 def test_a_site_whose_hook_implements_decide_accepts_it(capsys, key):
     assert ST.main(["set", key, "decide"]) == 0
     assert sig.load_config()[key] == "decide"
@@ -69,8 +69,7 @@ def test_a_site_whose_hook_implements_decide_accepts_it(capsys, key):
     # classifier_skills gates the Jev-shadow skill-steps pipeline; "decide" is a later task
     # (per-site decide mode), not yet implemented here.
     ("classifier_skills", "decide"),
-    # subagent_signal is shadow only: subagent-capture.py has no decide path.
-    ("classifier_subagent_signal", "decide"),
+    ("classifier_subagent_signal", "decides"),
 ])
 def test_classifier_site_refuses_a_mode_it_does_not_have(capsys, key, value):
     assert ST.main(["set", key, value]) == 2
@@ -78,7 +77,7 @@ def test_classifier_site_refuses_a_mode_it_does_not_have(capsys, key, value):
     assert sig.load_config()[key] == "off"
 
 
-@pytest.mark.parametrize("site", ["recall_rerank", "stop_signal"])
+@pytest.mark.parametrize("site", ["recall_rerank", "stop_signal", "subagent_signal"])
 def test_a_decide_row_states_the_threshold_the_site_acts_at(site):
     # The table is what a person reads before choosing decide; the number it names must be the
     # one the hook compares against, or a retune of SITE_THRESHOLDS leaves the doc promising the

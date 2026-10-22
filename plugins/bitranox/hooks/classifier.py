@@ -16,7 +16,8 @@ exits 0 when it logged its row and 2 when it could not run (an unreadable or mal
 internal error), having appended an error row; no hook waits for it, so the code is for a person
 running it by hand. Without `--shadow` the script prints its usage and exits 2.
 
-Decide mode (`decide`, skill_router only) asks the same questions INSIDE the hook, under
+Decide mode (`decide`: stop_signal, skill_router, recall_rerank and subagent_signal; the
+skill-step pipeline has none) asks the same questions INSIDE the hook, under
 DEFAULT_DEADLINE, and lets the answer decide; the hook appends the same row a shadow child would,
 plus how the answer was used, and keeps its regex decision whenever Jev does not answer.
 
@@ -92,9 +93,9 @@ FIELD_CAP = 4000
 ERROR_CAP = 200
 CAP_MARK = "\n[... truncated ...]\n"
 # The hook sites. Each has its own config knob `classifier_<site>`: off | shadow, plus decide
-# where the site's hook implements it (the first three; meta-memory-settings validates which).
-# `subagent_signal` is shadow only: SubagentStop's capture buffers on its BROAD patterns too, and
-# the shadow exists to measure that before anything decides on it.
+# where the site's hook implements it (all four; meta-memory-settings validates which).
+# `subagent_signal` gained decide only after its shadow passed the pre-registered decide rule:
+# SubagentStop's capture buffers on its BROAD patterns too, and the blind review found those noise.
 SITES = ("stop_signal", "skill_router", "recall_rerank", "subagent_signal")
 SITE_MODES = ("off", "shadow", "decide")
 # The threshold each site's gate or score is read at - by `classifier_eval.py report` when judging

@@ -181,7 +181,8 @@ meta-memory-settings docs.
   the enum when a site is wired for it (the settings CLI validates flat enums, not dicts). First-wave
   sites: `stop_signal`, `skill_router`, `recall_rerank`. Second-wave site ids: `filler_topical`,
   `fact_type`, `statusrot`, `dedup`, `advisories`, `tool_failure`. The `subagent-capture.py` part
-  of `tool_failure` is wired as its own hook site, `subagent_signal` (shadow only).
+  of `tool_failure` is wired as its own hook site, `subagent_signal` (shadow, and decide since it
+  passed the pre-registered decide rule).
 - `BITRANOX_HOOKS_OFF` still disables everything.
 
 ### 4. Modes

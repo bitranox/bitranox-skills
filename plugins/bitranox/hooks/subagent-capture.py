@@ -23,6 +23,15 @@ the patterns reached (strict, broad_only or none), so the log can show how often
 which still buffers, and so still blocks the main Stop - is a learning at all. The buffer itself is
 never changed by it.
 
+With `classifier_subagent_signal = decide`, Jev decides instead of the patterns: the same messages
+are asked from inside the hook, in parallel and under the classifier's deadline, and a message is
+buffered when either question reaches the site threshold. The site earned that by passing the
+pre-registered decide rule: in a blind review of every disagreement the patterns were wrong on 24
+of 30 and Jev on 6, and all seven broad-only hits in it were noise. A message Jev does not answer,
+and an earlier one the request cap left out, falls back to the STRICT patterns alone - the broad
+ones are what the review showed to be noise, so they never decide. One row per subagent is
+appended to the shadow log, naming the path and each asked message's decision.
+
 Pure standard library. ALWAYS exits 0 and never emits a decision: a subagent finishing must never be
 blocked or wedged by this.
 """
@@ -112,11 +121,7 @@ def find_signals(event):
             matched = sorted(set(matched) | {"strict"})
         if not matched:
             continue
-        # Window the snippet on the learning itself. A head cap kept the first 200 characters, so
-        # a learning stated after a long preamble was buffered with the learning cut away.
         normalised = " ".join(text.split())
-        snippet = sig.inert_snippet(normalised, _SNIPPET, around=sig.asst_signal_offset(normalised))
-        escaped = sig.snippet_was_escaped(text)   # control signal, kept OUT of the snippet
         # Containment dedup, not exact-match: `last_assistant_message` is normally the same finding
         # as the transcript's last assistant message (often a substring of it), so an exact-match
         # check buffers one discovery twice. Compared on the FULL normalised text, never on the
@@ -124,11 +129,22 @@ def find_signals(event):
         if any(normalised in s or s in normalised for s in seen):
             continue
         seen.add(normalised)
-        hits.append({"agent_id": event.get("agent_id") or "",
-                     "agent_type": event.get("agent_type") or "",
-                     "role": role, "matched": matched, "snippet": snippet,
-                     "escaped": escaped})
+        hits.append(_hit(event, text, matched))
     return hits
+
+
+def _hit(event, text, matched):
+    """The buffer record for one assistant message and the signals it was buffered for."""
+    normalised = " ".join(text.split())
+    # Window the snippet on the learning itself. A head cap kept the first 200 characters, so a
+    # learning stated after a long preamble was buffered with the learning cut away. A message
+    # only Jev fired on has no pattern offset, and keeps the head.
+    snippet = sig.inert_snippet(normalised, _SNIPPET, around=sig.asst_signal_offset(normalised))
+    return {"agent_id": event.get("agent_id") or "",
+            "agent_type": event.get("agent_type") or "",
+            "role": "assistant", "matched": matched, "snippet": snippet,
+            # control signal, kept OUT of the snippet
+            "escaped": sig.snippet_was_escaped(text)}
 
 
 def _assistant_texts(event):
@@ -172,7 +188,11 @@ def shadow_request(event):
     whether this subagent buffered anything at all, `dropped` how many earlier messages the cap
     left out.
     """
-    texts = _assistant_texts(event)
+    return _requests_for(_assistant_texts(event))
+
+
+def _requests_for(texts):
+    """`shadow_request` over texts already read, so decide mode reads the transcript once."""
     verdicts = [_verdict(t) for t in texts]
     kept = texts[-SHADOW_MAX_MESSAGES:]
     regex = {"messages": verdicts[len(texts) - len(kept):],
@@ -193,6 +213,59 @@ def _shadow(event, session):
                                     transcript=event.get("agent_transcript_path") or "")
 
 
+def _jev_families(result):
+    """The questions one answered message fires on, sorted: each at least the site threshold."""
+    threshold = classifier.SITE_THRESHOLDS[SITE]
+    answers = (result or {}).get("answers") or {}
+    return sorted(k for k, a in answers.items()
+                  if isinstance(a, dict) and isinstance(a.get("value"), (int, float))
+                  and a["value"] >= threshold)
+
+
+def _ask(session, regex, requests, cfg, transcript):
+    """(row, results) from asking every request at once; results None where Jev did not answer."""
+    try:
+        row = classifier.ask_in_hook(SITE, session, regex, requests, cfg, transcript=transcript,
+                                     workers=max(1, len(requests)))
+    except Exception as exc:  # noqa: BLE001 - a failure to ask is a failure to answer
+        row = classifier.error_row(SITE, session, exc)
+        row["reason"] = "error: %s" % type(exc).__name__
+    results = list(row.get("results") or [])
+    return row, (results + [None] * len(requests))[:len(requests)]
+
+
+def _decide(event, session, cfg):
+    """Decide mode: buffer what Jev fires on, the strict patterns where Jev gave no answer."""
+    texts = _assistant_texts(event)
+    regex, requests = _requests_for(texts)
+    if not texts:
+        return
+    transcript = event.get("agent_transcript_path") or ""
+    row, results = _ask(session, regex, requests, cfg, transcript) if requests else ({}, [])
+    first_asked = len(texts) - len(requests)
+    decided = []
+    for i, text in enumerate(texts):
+        result = results[i - first_asked] if i >= first_asked else None
+        if result is None:
+            matched = ["strict"] if sig.strict_asst_hit(text) else []
+            how = "fallback-strict" if matched else "fallback-none"
+        else:
+            matched = ["jev:" + f for f in _jev_families(result)]
+            how = "jev" if matched else "none"
+        if i >= first_asked:
+            decided.append(how)
+        if matched:
+            sig.buffer_subagent_learning(session, _hit(event, text, matched))
+    if not requests:
+        return
+    if all(r is None for r in results):
+        path = "fallback-%s" % (row.get("reason") or "no answer")
+    else:
+        path = "jev" if "jev" in decided else "none"
+    row.update(mode="decide", decide_path=path, decided=decided)
+    classifier.append_row(row)
+
+
 def main() -> int:
     try:
         event = json.load(sys.stdin)
@@ -201,6 +274,10 @@ def main() -> int:
     try:
         session = event.get("session_id") or ""
         if not session:
+            return 0
+        cfg = sig.load_config()
+        if classifier.site_mode(cfg, SITE) == "decide":
+            _decide(event, session, cfg)
             return 0
         for hit in find_signals(event):
             sig.buffer_subagent_learning(session, hit)

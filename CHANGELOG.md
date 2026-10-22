@@ -29,6 +29,25 @@ than the change, so entries reconstructed from them would read like coverage wit
 a hole nobody has drawn a line under is one that gets rediscovered and half-filled - which is how
 two "versions with no entry" notes came to sit in this file disagreeing with it.
 
+## [9.12.0]
+
+### Added
+
+- `subagent-capture.py`: `classifier_subagent_signal = decide`. Jev decides which of a finished
+  subagent's messages are buffered as learning signals: the last 12 are asked in parallel while
+  the subagent's stop waits (1.5 s at most), and a message is buffered when Jev scores a
+  self-admitted mistake or a realization at 0.8 or more, whatever the patterns said. A message Jev
+  does not answer, and an earlier one beyond the 12, falls back to the strict patterns only; the
+  broad patterns never decide in this mode. Each stop appends one row to the shadow log naming
+  the path and each message's decision. The site passed the pre-registered decide rule first: in a
+  blind three-judge review of every disagreement the patterns were wrong on 24 of 30 and Jev on 6,
+  and all seven broad-only matches reviewed were noise. `off` and `shadow` are unchanged.
+- `meta-memory-settings` accepts `decide` for `classifier_subagent_signal`.
+
+### Fixed
+
+- `classifier.py`'s docstring named `skill_router` as the only decide site; it lists all four.
+
 ## [9.11.6]
 
 ### Fixed
