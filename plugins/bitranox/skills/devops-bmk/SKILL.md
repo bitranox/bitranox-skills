@@ -227,8 +227,10 @@ own: `pypy@3.11`), `X.Yt` for a free-threaded build (`3.13t`, where
 `.venv/bin/python -c "import sysconfig; print(sysconfig.get_config_var('Py_GIL_DISABLED'))"`
 prints `1`), otherwise the bare minor (`.venv/bin/python --version` printing `Python 3.10.19`
 means `--python 3.10`). Use these and nothing else: a bare minor for a PyPy or free-threaded venv
-lets a recreate fall back to uv's default CPython, and bmk never passes the interpreter's path, on
-any version, because on CPython 3.10 and older it leaves an empty venv when uv recreates it. Pass
+lets a recreate fall back to uv's default CPython. bmk passes the interpreter's path only when that
+interpreter cannot report its version (then uv could not build from it either); never type the path
+by hand, on any version, because on CPython 3.10 and older it leaves an empty venv when uv
+recreates it. Pass
 `--extra dev` only if the project declares a `dev` extra, since uv refuses an undeclared one
 (exit 2), and `--no-default-groups` keeps `[dependency-groups]` out, as bmk does. For a
 `test-all` cell use its `.venv-<minor>` and that minor, and for another venv path the one
