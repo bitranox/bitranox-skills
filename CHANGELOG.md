@@ -42,7 +42,12 @@ two "versions with no entry" notes came to sit in this file disagreeing with it.
   only, lists every `[venv]` provisioning failure header (`uv venv`, `uv lock` with its exit code,
   the fallback install, `uv sync`), says when `make test`'s `deps_update` stage stops the run after
   a failed provisioning and that `BMK_NO_VENV_SYNC=1` skips its re-sync, and no longer says every
-  in-process stage fails with only `(no output captured)`. Mirrors the bmk repo's copy.
+  in-process stage fails with only `(no output captured)`. It names `make test`'s first stage
+  correctly, `update_deps` (it runs the `deps_update` pipeline, so JSON mode shows
+  `[update_deps] (exit code: 1)` with the nested `[deps_update]` block), says a failed
+  `uv lock --upgrade` is named by its step without uv's reason while a failed re-sync carries it,
+  and its hand resync for a project without a Python classifier passes the venv's minor
+  (`--python 3.10`), never the interpreter's path. Mirrors the bmk repo's copy.
 
 ## [9.11.3]
 

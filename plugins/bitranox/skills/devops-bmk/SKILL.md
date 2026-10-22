@@ -171,8 +171,8 @@ survive a sync.**
 Only when no lock can be made (a `[venv] uv lock failed` line, below) does bmk fall back to
 installing from `pyproject.toml`, with `--exact --upgrade`. Moving the lock onto newer releases is
 not provisioning's job: provisioning's `uv lock` only brings an existing lock in line with the
-manifest, and `make test`'s first stage, `deps_update`, runs `uv lock --upgrade` and then re-syncs
-the venv from the new lock.
+manifest, and `make test`'s first stage, `update_deps` (it runs the `deps_update` pipeline), runs
+`uv lock --upgrade` and then re-syncs the venv from the new lock.
 
 | Env var                  | Effect                                                                                                    |
 |--------------------------|-----------------------------------------------------------------------------------------------------------|
@@ -184,12 +184,13 @@ both Linux and Windows): a single venv cannot serve both, so give each its own (
 If provisioning fails, the command still runs: the gates use the venv as the failed step left it, or
 bmk's own interpreter when no real venv (no `pyvenv.cfg`) is left at that path. `make test` (and
 `make push`, which runs it after its own `deps` check) is the exception whenever a venv is still
-there to sync: its first stage, `deps_update`, re-syncs from the lock its `uv lock --upgrade`
-produced and fails the run if that sync fails. When this run's provisioning already failed and the
-upgrade left `uv.lock` byte-for-byte unchanged, it does not retry; it fails with one line,
-`<project>: venv provisioning already failed above; uv.lock unchanged by the update, not retrying`,
-and the report to read is the `[venv]` one printed before the pipeline. A failed provisioning that
-left no venv passes that stage, and the gates fall back to bmk's own interpreter.
+there to sync: its first stage, `update_deps`, runs the `deps_update` pipeline, which re-syncs from
+the lock its `uv lock --upgrade` produced and fails the run if that sync fails. When this run's
+provisioning already failed and the upgrade left `uv.lock` byte-for-byte unchanged, it does not
+retry; it fails with one line, `<project>: venv provisioning already failed above; uv.lock unchanged
+by the update, not retrying`, and the report to read is the `[venv]` one printed before the
+pipeline. A failed provisioning that left no venv passes that stage, and the gates fall back to
+bmk's own interpreter.
 
 **A gate reporting versions that disagree with `pyproject.toml`** (pip-audit flagging a version the
 manifest excludes, or the project's own package at an old version) is not cured by deleting
@@ -219,8 +220,10 @@ stderr under the header.
 
 To resync by hand, do what bmk does: `uv lock`, then
 `UV_PROJECT_ENVIRONMENT=.venv uv sync --locked --python <X.Y> --no-default-groups --extra dev`.
-`<X.Y>` is your highest `:: Python :: X.Y` classifier (with none, bmk passes the venv's own
-interpreter, `--python .venv/bin/python`, on Windows `.venv\Scripts\python.exe`); pass
+`<X.Y>` is your highest `:: Python :: X.Y` classifier (with none, bmk passes the minor the venv's
+own interpreter reports - `.venv/bin/python --version` printing `Python 3.10.19` means
+`--python 3.10` - never the interpreter's path, which on CPython 3.10 and older leaves an empty venv
+when uv recreates it); pass
 `--extra dev` only if the project declares a `dev` extra, since uv refuses an undeclared one
 (exit 2), and `--no-default-groups` keeps `[dependency-groups]` out, as bmk does. For a
 `test-all` cell use its `.venv-<minor>` and that minor, and for another venv path the one
@@ -364,10 +367,16 @@ tool output is captured and shown **only when a stage fails**. To get the full v
 
 The dependency check `deps` (the first stage of `make push`) runs in-process rather than as a tool
 and prints nothing in JSON mode, so its `[deps] (exit code: 1)` block holds only
-`(no output captured)`; `BMK_OUTPUT_FORMAT=text` shows its report. `deps_update` (the first stage
-of `make test`) puts the lines saying why its lock upgrade or re-sync failed, any `[venv]` report
-from that re-sync included, into its captured output, so its `[deps_update] (exit code: 1)` block
-says why in JSON mode too.
+`(no output captured)`; `BMK_OUTPUT_FORMAT=text` shows its report. `deps_update` puts its failure
+lines into its captured output, so its `[deps_update] (exit code: 1)` block names the failure in
+JSON mode too: a failed re-sync shows the `[venv]` report with uv's reason, a `[tool.uv]` cooldown
+uv refuses shows uv's refusal, and a failed lock upgrade is named by its step only
+(`<project>: uv lock --upgrade failed after the floor update`), without uv's reason - run
+`uv lock --upgrade` by hand in the project directory to see it (the floors bmk raised stay in
+`pyproject.toml`, so it resolves the same manifest). `bmk deps update` /
+`make dependencies-update` show that `[deps_update]` block directly; in `make test` the first stage
+is `update_deps`, which runs the `deps_update` pipeline, so the block is
+`[update_deps] (exit code: 1)` with the nested `[deps_update] (exit code: 1)` block inside it.
 
 Precedence: `--human` (forces text) > `BMK_OUTPUT_FORMAT` > default (`json`). If a run "does nothing
 visible", that is JSON mode succeeding -- add `--human` to watch it work.
