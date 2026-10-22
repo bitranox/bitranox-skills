@@ -29,6 +29,19 @@ than the change, so entries reconstructed from them would read like coverage wit
 a hole nobody has drawn a line under is one that gets rediscovered and half-filled - which is how
 two "versions with no entry" notes came to sit in this file disagreeing with it.
 
+## [9.11.6]
+
+### Fixed
+
+- `process-agents-subagent-driven-development`: a restriction the coordinator adds to a dispatch
+  beyond the brief ("do not run X") now has a rule. Such a line reaches the implementer with more
+  force than the brief, and in auto mode the permission classifier enforces it, so it can block a
+  step the brief requires. Before adding one, read the task's full step text in the brief file,
+  never a filtered view of the step headers, which drops a step's continuation lines. A restriction
+  no step contradicts is dropped, a step that needs the action wins, a real ambiguity the plan
+  settles becomes a positive pointer quoting the brief, and anything the plan does not settle goes
+  to the human before dispatch and then into the plan.
+
 ## [9.11.5]
 
 ### Fixed

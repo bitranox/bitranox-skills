@@ -390,6 +390,31 @@ and is re-read on every later turn. Hand artifacts over as files:
   any ambiguity you noticed in the brief; (5) the report-file path and
   report contract. Exact values (numbers, magic strings, signatures, test
   cases) appear only in the brief.
+- **A restriction you add beyond the brief** ("do not run X", "skip Y", "leave
+  Z alone") reaches the implementer with MORE force than the brief, and in auto
+  mode the permission classifier enforces it too, refusing the step the brief
+  asks for. Before adding one, read the task's FULL text in the brief file -
+  every step body, not only the step headers - and never decide from a filtered
+  view (a `grep` of step headers, `cut -c`, `head`): it drops a step's
+  continuation lines, which is where a step's second action ("roll back, then
+  restore-wu") sits. Short context is no exception: one brief costs less to
+  read than the rerun a wrong restriction causes. Then:
+  - no step needs the action and nothing is ambiguous: drop the restriction -
+    the brief already does not ask for the thing you feared;
+  - a step needs the action you meant to forbid: the step wins. Drop the
+    restriction when your worry was the action itself; when the action is
+    still unacceptable HERE (the target it runs against, data it would
+    destroy), that is a constraint the plan does not state - last bullet;
+  - the brief is genuinely ambiguous and the plan or an earlier task settles
+    it: write that under item (4) as a positive pointer that quotes the brief
+    text it clarifies ("the rollback is Step 6's command"), never as a bare
+    prohibition;
+  - the plan settles nothing - a meaning nobody chose, or a constraint it does
+    not state ("never against staging", or a restriction you still want
+    although the first bullet says to drop it): ask the human before
+    dispatching, then put the answer into the PLAN and regenerate the brief,
+    as for a stale brief below. Never pick the answer yourself, in the
+    dispatch or in the plan.
 - **Stale brief:** a brief is a snapshot of the plan, and the work moves under
   it. The brief is the implementer's requirements, so a stale line arrives with
   full authority. Before generating or dispatching any task after the first,
