@@ -29,6 +29,21 @@ than the change, so entries reconstructed from them would read like coverage wit
 a hole nobody has drawn a line under is one that gets rediscovered and half-filled - which is how
 two "versions with no entry" notes came to sit in this file disagreeing with it.
 
+## [9.11.4]
+
+### Fixed
+
+- `devops-bmk`: describes the lock-first project venv. It said bmk syncs the venv to
+  `pyproject.toml` with an exact, upgrading install and gave
+  `uv pip install --exact --upgrade -e ".[dev]"` as the hand resync. bmk syncs from `uv.lock`
+  (`uv lock`, then `uv sync --locked`), because a manifest install keeps a release newer than the
+  `[tool.uv]` cooldown, and installs from `pyproject.toml` only when no lock can be made. The skill
+  now gives the lock-first resync, keeps the manifest install for a `[venv] uv lock failed` line
+  only, lists every `[venv]` provisioning failure header (`uv venv`, `uv lock` with its exit code,
+  the fallback install, `uv sync`), says when `make test`'s `deps_update` stage stops the run after
+  a failed provisioning and that `BMK_NO_VENV_SYNC=1` skips its re-sync, and no longer says every
+  in-process stage fails with only `(no output captured)`. Mirrors the bmk repo's copy.
+
 ## [9.11.3]
 
 ### Changed

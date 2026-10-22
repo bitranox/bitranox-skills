@@ -103,11 +103,12 @@ environments.
 ### The project venv `.venv`
 
 This is where **your** dependencies live. Before any command that touches the Python environment
-(`test`, `push`, `deps`, `build`, ...), bmk creates the project's own `.venv` if it is missing and
-syncs it to `pyproject.toml`. pytest, pyright and pip-audit all resolve **that** venv, never bmk's
-own and never whatever venv happens to be active in your shell -- so the environment you test in,
-type-check in and audit are one and the same, and no project can quietly install its dependencies
-into an environment it does not own.
+(`test`, `push`, `deps`, `build`, ...), bmk creates the project's own `.venv` if it is missing,
+locks the project (`uv lock`) and syncs the venv from that lock (`uv sync --locked`), so it holds
+exactly what `uv.lock` pins and CI installs. pytest, pyright and pip-audit all resolve **that**
+venv, never bmk's own and never whatever venv happens to be active in your shell -- so the
+environment you test in, type-check in and audit are one and the same, and no project can quietly
+install its dependencies into an environment it does not own.
 
 **One bmk provisions a venv at a time.** The sync is serialised by an exclusive lock scoped to
 that one venv path, so a subagent's `make test` beside yours - or `test-all` beside `test` - can no
@@ -157,39 +158,77 @@ run) to run the version cells serially instead. Plain `make test` stays on the n
 with no `:: Python :: X.Y` classifier, `test-all` tests the default interpreter once and prints a
 WARNING naming the version it used.
 
-The sync is exact *and* upgrading: it removes packages the manifest no longer asks for and
-re-resolves the ones it does. A venv left to drift makes the gates lie -- pip-audit reports CVEs for
-packages the project does not actually resolve, while the real resolution stays hidden. The
-trade-off: **packages you installed into the venv by hand do not survive a sync.**
+The venv is synced FROM THE LOCK, not from `pyproject.toml`: `uv lock` brings `uv.lock` in line
+with the manifest, then `uv sync --locked` makes the venv exactly what the lock pins. Installing
+from the manifest instead (`uv pip install --upgrade`) keeps any installed release that still
+satisfies it, even one newer than your `[tool.uv]` cooldown admits, so the gates would check a
+different tree from the one the lock pins and CI installs. The sync is exact: it removes every
+package the lock does not pin for the extras bmk requests. A venv left to drift makes the gates
+lie -- pip-audit reports CVEs for packages the project does not actually resolve, while the real
+resolution stays hidden. The trade-off: **packages you installed into the venv by hand do not
+survive a sync.**
 
-| Env var                  | Effect                                                             |
-|--------------------------|--------------------------------------------------------------------|
-| `UV_PROJECT_ENVIRONMENT` | Venv path (absolute, or relative to the project). Default `.venv`. |
-| `BMK_NO_VENV_SYNC=1`     | Skip provisioning entirely; use the environment as-is.             |
+Only when no lock can be made (a `[venv] uv lock failed` line, below) does bmk fall back to
+installing from `pyproject.toml`, with `--exact --upgrade`. Moving the lock onto newer releases is
+not provisioning's job: provisioning's `uv lock` only brings an existing lock in line with the
+manifest, and `make test`'s first stage, `deps_update`, runs `uv lock --upgrade` and then re-syncs
+the venv from the new lock.
+
+| Env var                  | Effect                                                                                                    |
+|--------------------------|-----------------------------------------------------------------------------------------------------------|
+| `UV_PROJECT_ENVIRONMENT` | Venv path (absolute, or relative to the project). Default `.venv`.                                        |
+| `BMK_NO_VENV_SYNC=1`     | Skip provisioning and the `deps_update` re-sync (it still upgrades `uv.lock`); use the environment as-is. |
 
 Set `UV_PROJECT_ENVIRONMENT` when one checkout is used from more than one OS (a share mounted on
 both Linux and Windows): a single venv cannot serve both, so give each its own (e.g. `.venv-win`).
-If provisioning fails, the command still runs: the gates use the venv as the failed sync left it,
-or bmk's own interpreter when no real venv (no `pyvenv.cfg`) is left at that path.
+If provisioning fails, the command still runs: the gates use the venv as the failed step left it, or
+bmk's own interpreter when no real venv (no `pyvenv.cfg`) is left at that path. `make test` (and
+`make push`, which runs it after its own `deps` check) is the exception whenever a venv is still
+there to sync: its first stage, `deps_update`, re-syncs from the lock its `uv lock --upgrade`
+produced and fails the run if that sync fails. When this run's provisioning already failed and the
+upgrade left `uv.lock` byte-for-byte unchanged, it does not retry; it fails with one line,
+`<project>: venv provisioning already failed above; uv.lock unchanged by the update, not retrying`,
+and the report to read is the `[venv]` one printed before the pipeline. A failed provisioning that
+left no venv passes that stage, and the gates fall back to bmk's own interpreter.
 
 **A gate reporting versions that disagree with `pyproject.toml`** (pip-audit flagging a version the
 manifest excludes, or the project's own package at an old version) is not cured by deleting
 `.venv`: the next env-touching `make` re-syncs it, and deleting it only forces a full re-resolve.
 When the mismatch survives a re-run, check `BMK_NO_VENV_SYNC`, then read the stderr of a run that
-showed it (send stderr to a file for an unattended run). A failed sync prints, in every output mode,
-`[venv] uv sync from uv.lock failed for <venv> (exit <rc>; venv afterwards: <state>)`: in JSON mode
-a colon and all of uv's own stderr follow it, indented; in text mode it comes after uv's live
-output. `<state>` says what the gates ran in: `venv` is the unsynced venv (the stale versions you
-see), while `directory without pyvenv.cfg`, `empty directory` or `absent` means bmk's own
-interpreter, so pip-audit audited bmk's packages rather than the project's. A `[venv] uv lock
-failed` line instead means no lock could be made, so bmk provisioned from `pyproject.toml`.
+showed it (send stderr to a file for an unattended run). Every failed provisioning step prints a
+`[venv]` header, in every output mode: in JSON mode a colon and all of uv's own stderr follow it,
+indented (the header stands alone when uv printed nothing); in text mode the header comes alone,
+after uv's live output.
+
+| Header                                                                                                         | Means                                                                 |
+|----------------------------------------------------------------------------------------------------------------|-----------------------------------------------------------------------|
+| `[venv] uv venv failed for <venv> (exit <rc>; venv afterwards: <state>)`                                       | The venv could not be created; nothing was synced.                    |
+| `[venv] uv lock failed in <project> (exit <rc>); provisioning <venv> from pyproject.toml instead`              | No lock could be made, so bmk falls back to the manifest install.     |
+| `[venv] uv pip install (fallback from pyproject.toml) failed for <venv> (exit <rc>; venv afterwards: <state>)` | That fallback failed too.                                             |
+| `[venv] uv sync from uv.lock failed for <venv> (exit <rc>; venv afterwards: <state>)`                          | The lock was made but the venv could not be synced; no fallback runs. |
+
+A `[venv] uv lock failed` line WITHOUT `(exit <rc>)` means uv never ran: another bmk held the
+project's lock, and an earlier stderr line says so (`[venv] another bmk is still locking ...`).
+`<state>` says what the gates ran in: `venv` is the unsynced venv (the stale versions you see),
+while `directory without pyvenv.cfg`, `empty directory` or `absent` means bmk's own interpreter, so
+pip-audit audited bmk's packages rather than the project's.
 Do not re-run just to see the error: a sync failure can be intermittent, and a re-run that passes
 leaves nothing to read. Only when no failed run's stderr was kept, run again with stderr going to a
-file; text mode adds nothing, since the line prints in JSON mode too. To resync by hand, target the
-venv explicitly
-(`uv pip install -e ".[dev]" --python .venv/bin/python --exact --upgrade`, or the venv
-`UV_PROJECT_ENVIRONMENT` names) and name EVERY extra the project uses: `--exact` uninstalls
-whatever no extra on that command line pulls in.
+file; for a `[venv]` failure a text-mode re-run adds nothing, since JSON mode already prints uv's
+stderr under the header.
+
+To resync by hand, do what bmk does: `uv lock`, then
+`UV_PROJECT_ENVIRONMENT=.venv uv sync --locked --python <X.Y> --no-default-groups --extra dev`.
+`<X.Y>` is your highest `:: Python :: X.Y` classifier (with none, bmk passes the venv's own
+interpreter, `--python .venv/bin/python`, on Windows `.venv\Scripts\python.exe`); pass
+`--extra dev` only if the project declares a `dev` extra, since uv refuses an undeclared one
+(exit 2), and `--no-default-groups` keeps `[dependency-groups]` out, as bmk does. For a
+`test-all` cell use its `.venv-<minor>` and that minor, and for another venv path the one
+`UV_PROJECT_ENVIRONMENT` names. The sync uninstalls whatever no extra on that command line pulls
+in. The manifest install, `uv pip install --python .venv/bin/python --exact --upgrade -e ".[dev]"`
+(`-e .` for a project without a `dev` extra), is the right resync ONLY after a `[venv] uv lock
+failed` line, never after a sync failure: it keeps releases newer than the lock pins, which is the
+drift the lock-first sync exists to prevent.
 
 `clean` does not delete the venv (that would throw away what bmk just built and force a full
 re-resolve); `make clean-all` removes every `.venv*` alongside the build artifacts when you do
@@ -207,11 +246,12 @@ uvx bmk install    # writes / updates a bmk-managed Makefile in the current dire
 make test          # from now on, drive everything through make
 ```
 
-The Makefile keeps bmk installed and your project's `.venv` synced to `pyproject.toml`, so once it
-is in place you rarely call `bmk` directly. On **Windows** you still need a `make` implementation. On a
-non-admin box install it user-scope with `winget install --id ezwinports.make -e --scope user` (run
-`make` from Git Bash so the Makefile's `SHELL := /bin/bash` resolves); `choco install make` needs an
-elevated shell. bmk itself needs no shell.
+The Makefile keeps bmk installed and your project's `.venv` synced from `uv.lock` (which bmk keeps
+in line with `pyproject.toml`), so once it is in place you rarely call `bmk` directly. On
+**Windows** you still need a `make` implementation. On a non-admin box install it user-scope with
+`winget install --id ezwinports.make -e --scope user` (run `make` from Git Bash so the Makefile's
+`SHELL := /bin/bash` resolves); `choco install make` needs an elevated shell. bmk itself needs no
+shell.
 
 ## 3. Everyday commands
 
@@ -322,8 +362,12 @@ tool output is captured and shown **only when a stage fails**. To get the full v
 - `make test-human` / any command with `--human`, **or**
 - set `BMK_OUTPUT_FORMAT=text`.
 
-A stage bmk runs in-process rather than as a tool, such as `deps`, fails in JSON mode with only
-`(no output captured)`; `BMK_OUTPUT_FORMAT=text` shows what it printed.
+The dependency check `deps` (the first stage of `make push`) runs in-process rather than as a tool
+and prints nothing in JSON mode, so its `[deps] (exit code: 1)` block holds only
+`(no output captured)`; `BMK_OUTPUT_FORMAT=text` shows its report. `deps_update` (the first stage
+of `make test`) puts the lines saying why its lock upgrade or re-sync failed, any `[venv]` report
+from that re-sync included, into its captured output, so its `[deps_update] (exit code: 1)` block
+says why in JSON mode too.
 
 Precedence: `--human` (forces text) > `BMK_OUTPUT_FORMAT` > default (`json`). If a run "does nothing
 visible", that is JSON mode succeeding -- add `--human` to watch it work.
