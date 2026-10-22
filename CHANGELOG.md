@@ -29,6 +29,15 @@ than the change, so entries reconstructed from them would read like coverage wit
 a hole nobody has drawn a line under is one that gets rediscovered and half-filled - which is how
 two "versions with no entry" notes came to sit in this file disagreeing with it.
 
+## [9.11.3]
+
+### Changed
+
+- `coding-python-gitignore`: says that git reads a path segment of three or more asterisks as
+  `**` (`***/build` matches `build`, `x/build` and `x/y/build`, but not `xbuild`), that a run inside
+  a segment such as `a***b` stays a single `*`, and that igittigitt follows git here from 2.2.9,
+  while earlier releases matched `***/build` like `*/build`. Mirrors the igittigitt repo's copy.
+
 ## [9.11.2]
 
 ### Changed
