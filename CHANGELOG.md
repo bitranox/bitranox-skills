@@ -46,8 +46,9 @@ two "versions with no entry" notes came to sit in this file disagreeing with it.
   correctly, `update_deps` (it runs the `deps_update` pipeline, so JSON mode shows
   `[update_deps] (exit code: 1)` with the nested `[deps_update]` block), says a failed
   `uv lock --upgrade` is named by its step without uv's reason while a failed re-sync carries it,
-  and its hand resync for a project without a Python classifier passes the venv's minor
-  (`--python 3.10`), never the interpreter's path. Mirrors the bmk repo's copy.
+  and its hand resync for a project without a Python classifier asks for what the venv's
+  interpreter reports (`pypy@X.Y` for PyPy, `X.Yt` for a free-threaded build, otherwise the bare
+  minor such as `--python 3.10`), never the interpreter's path. Mirrors the bmk repo's copy.
 
 ## [9.11.3]
 

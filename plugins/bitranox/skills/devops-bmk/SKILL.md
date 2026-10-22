@@ -220,10 +220,15 @@ stderr under the header.
 
 To resync by hand, do what bmk does: `uv lock`, then
 `UV_PROJECT_ENVIRONMENT=.venv uv sync --locked --python <X.Y> --no-default-groups --extra dev`.
-`<X.Y>` is your highest `:: Python :: X.Y` classifier (with none, bmk passes the minor the venv's
-own interpreter reports - `.venv/bin/python --version` printing `Python 3.10.19` means
-`--python 3.10` - never the interpreter's path, which on CPython 3.10 and older leaves an empty venv
-when uv recreates it); pass
+`<X.Y>` is your highest `:: Python :: X.Y` classifier. With none, bmk asks for what the venv's own
+interpreter (`.venv/bin/python`, on Windows `.venv\Scripts\python.exe`) reports: `pypy@X.Y` for
+PyPy (its `--version` output names PyPy; `X.Y` is the Python version on the first line, not PyPy's
+own: `pypy@3.11`), `X.Yt` for a free-threaded build (`3.13t`, where
+`.venv/bin/python -c "import sysconfig; print(sysconfig.get_config_var('Py_GIL_DISABLED'))"`
+prints `1`), otherwise the bare minor (`.venv/bin/python --version` printing `Python 3.10.19`
+means `--python 3.10`). Use these and nothing else: a bare minor for a PyPy or free-threaded venv
+lets a recreate fall back to uv's default CPython, and bmk never passes the interpreter's path, on
+any version, because on CPython 3.10 and older it leaves an empty venv when uv recreates it. Pass
 `--extra dev` only if the project declares a `dev` extra, since uv refuses an undeclared one
 (exit 2), and `--no-default-groups` keeps `[dependency-groups]` out, as bmk does. For a
 `test-all` cell use its `.venv-<minor>` and that minor, and for another venv path the one
