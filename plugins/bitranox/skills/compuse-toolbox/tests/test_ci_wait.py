@@ -1473,6 +1473,7 @@ class TestARunNoRunnerPicksUpIsReportedNotWaitedOut:
     def test_the_cli_takes_the_flag_and_reports_the_state_in_the_envelope(self, monkeypatch, capsys):
         monkeypatch.setattr(ci_wait, "sha_is_known_locally", lambda sha, **kw: True)
         monkeypatch.setattr(ci_wait, "gh_runs", lambda sha, **kw: [queued_row("release", 777)])
+        monkeypatch.setattr(ci_wait, "gh_run_started", lambda rid, **kw: False)
         monkeypatch.setattr(ci_wait.time, "sleep", lambda _s: None)
         clock = iter(range(0, 100000, 30))
         monkeypatch.setattr(ci_wait.time, "monotonic", lambda: next(clock))
@@ -1483,6 +1484,143 @@ class TestARunNoRunnerPicksUpIsReportedNotWaitedOut:
         assert rc == 2 and payload["ok"] is False
         assert payload["data"]["state"] == "stuck-queued"
         assert "777" in payload["error"]
+
+
+class TestARunWhoseJobsStartedIsNotStuck:
+    """Measured 2026-10-23, run 39932914131: the run's own status stayed `queued` for 15 minutes
+    while three of its five jobs had completed success and windows was in_progress - only the
+    macos-latest job was waiting for a hosted runner. The wait read the RUN status, reported
+    'queued ... with no runner starting it' and exited 2. A run with any job started is running."""
+
+    @staticmethod
+    def _queued_then_green(calls: list[int]):
+        polls = [[queued_row("ci", 1, event="push")]] * 40 \
+            + [[queued_row("ci", 1, status="completed", conclusion="success", event="push")]] * 2
+
+        def fetch():
+            calls.append(1)
+            return polls[min(len(calls) - 1, len(polls) - 1)]
+
+        return fetch
+
+    def test_a_queued_run_with_a_started_job_is_waited_out_to_its_verdict(self):
+        calls: list[int] = []
+        asked: list[object] = []
+
+        def started(run_id):
+            asked.append(run_id)
+            return True
+
+        result = ci_wait.wait_for(self._queued_then_green(calls), deadline_polls=200,
+                                  sleep=lambda _s: None, interval_s=30.0, queued_grace_s=60.0,
+                                  run_started=started)
+
+        assert result.state == "success"
+        assert asked and set(asked) == {1}
+
+    def test_a_queued_run_whose_jobs_are_all_queued_is_still_stuck(self):
+        """Control: the duplicate-trigger case the check exists for keeps its verdict."""
+        result = ci_wait.wait_for(lambda: [queued_row("release", 777)], deadline_polls=200,
+                                  sleep=lambda _s: None, interval_s=30.0, queued_grace_s=60.0,
+                                  run_started=lambda _rid: False)
+
+        assert result.state == "stuck-queued"
+        assert "777" in result.summary
+
+    def test_an_unreadable_job_list_never_proves_a_run_stuck(self):
+        """Unknown is not 'no job started': the wait goes on, and the deadline still bounds it."""
+        calls: list[int] = []
+
+        result = ci_wait.wait_for(self._queued_then_green(calls), deadline_polls=200,
+                                  sleep=lambda _s: None, interval_s=30.0, queued_grace_s=60.0,
+                                  run_started=lambda _rid: None)
+
+        assert result.state == "success"
+
+    def test_the_job_list_is_not_read_before_the_grace_runs_out(self):
+        asked: list[object] = []
+
+        def started(run_id):
+            asked.append(run_id)
+            return True
+
+        polls = [[queued_row("ci", 1, event="push")]] * 2 \
+            + [[queued_row("ci", 1, status="completed", conclusion="success", event="push")]] * 2
+        calls: list[int] = []
+
+        def fetch():
+            calls.append(1)
+            return polls[min(len(calls) - 1, len(polls) - 1)]
+
+        result = ci_wait.wait_for(fetch, deadline_polls=200, sleep=lambda _s: None,
+                                  interval_s=30.0, queued_grace_s=600.0, run_started=started)
+
+        assert result.state == "success"
+        assert asked == []
+
+
+def jobs_gh(jobs: object, calls: list[list[str]], rc: int = 0):
+    """`gh run view <id> --json jobs` answering ``{"jobs": jobs}`` (or failing with ``rc``)."""
+
+    def fake_run(argv, **kwargs):
+        calls.append(list(argv))
+        if rc:
+            return subprocess.CompletedProcess(argv, rc, stdout="", stderr="HTTP 502")
+        return subprocess.CompletedProcess(argv, 0, stdout=json.dumps({"jobs": jobs}), stderr="")
+
+    return fake_run
+
+
+class TestGhRunStarted:
+    """`gh_run_started` asks the run's own jobs, the only place a started job shows."""
+
+    def test_a_completed_or_running_job_means_started(self, monkeypatch):
+        calls: list[list[str]] = []
+        monkeypatch.setattr(ci_wait.subprocess, "run", jobs_gh(
+            [{"status": "completed"}, {"status": "queued"}], calls))
+
+        assert ci_wait.gh_run_started(39932914131, repo="o/r") is True
+        assert calls[0][:5] == ["gh", "run", "view", "39932914131", "--json"]
+        assert "jobs" in calls[0] and calls[0][-2:] == ["--repo", "o/r"]
+
+    def test_in_progress_alone_means_started(self, monkeypatch):
+        monkeypatch.setattr(ci_wait.subprocess, "run", jobs_gh([{"status": "in_progress"}], []))
+        assert ci_wait.gh_run_started(5) is True
+
+    def test_only_queued_or_waiting_jobs_mean_not_started(self, monkeypatch):
+        monkeypatch.setattr(ci_wait.subprocess, "run", jobs_gh(
+            [{"status": "queued"}, {"status": "waiting"}], []))
+        assert ci_wait.gh_run_started(5) is False
+
+    def test_no_jobs_yet_means_not_started(self, monkeypatch):
+        monkeypatch.setattr(ci_wait.subprocess, "run", jobs_gh([], []))
+        assert ci_wait.gh_run_started(5) is False
+
+    def test_a_failed_read_answers_unknown(self, monkeypatch):
+        monkeypatch.setattr(ci_wait.subprocess, "run", jobs_gh(None, [], rc=1))
+        assert ci_wait.gh_run_started(5) is None
+
+    def test_a_malformed_answer_is_unknown(self, monkeypatch):
+        monkeypatch.setattr(ci_wait.subprocess, "run", jobs_gh("not a list", []))
+        assert ci_wait.gh_run_started(5) is None
+
+    def test_the_incident_through_the_command_line_is_not_stuck(self, monkeypatch, capsys):
+        """Run 39932914131's shape end to end: the listing says queued, the jobs say running."""
+        monkeypatch.setattr(ci_wait, "sha_is_known_locally", lambda sha, **kw: True)
+        listing = [queued_row("ci", 39932914131, event="push")]
+        monkeypatch.setattr(ci_wait, "gh_runs", lambda sha, **kw: listing)
+        monkeypatch.setattr(ci_wait, "gh_run", lambda rid, **kw: listing[0])
+        monkeypatch.setattr(ci_wait, "gh_run_started", lambda rid, **kw: True)
+        monkeypatch.setattr(ci_wait.time, "sleep", lambda _s: None)
+        clock = iter(range(0, 100000, 30))
+        monkeypatch.setattr(ci_wait.time, "monotonic", lambda: next(clock))
+
+        rc = ci_wait.main(["--sha", SHA, "--repo", "o/r", "--json", "--queued-grace", "300",
+                           "--timeout", "1200"])
+
+        payload = json.loads(capsys.readouterr().out)
+        assert rc == 2
+        assert payload["data"]["state"] == "timeout"
 
 
 def vanishing_gh(listings: list[list[dict[str, object]]], by_id: dict[int, dict[str, object]],

@@ -59,7 +59,10 @@ sha is still going is reported as `stuck-queued`, exit 2, naming the run id - no
 deadline. Measured: a duplicate `workflow_run` trigger of a release workflow sat queued with no
 runner for 35 minutes after its twin on the same sha had already published, and the wait polled it
 73 times. When a run of the same workflow on that sha already succeeded, the summary says the stuck
-one is likely a duplicate trigger; it never cancels anything itself.
+one is likely a duplicate trigger; it never cancels anything itself. Before that verdict the run's
+own jobs are read (`gh run view <id> --json jobs`), because a run stays `queued` while ONE job
+waits for a runner: measured, a run read `queued` for 15 minutes with three of five jobs done and
+one running. A run with a started job, or jobs that could not be read, is waited for instead.
 
 The repository is resolved ONCE, before the first poll (`--repo`, else `gh repo view` from the
 cwd), and named on every poll: a cwd removed mid-wait - a worktree deleted while CI runs - would
@@ -127,9 +130,14 @@ ANY_EVENT = "any"
 #: verdict wait for (or fail on) a nightly job. Excluded client-side, because gh's `--event` takes
 #: one event to KEEP and has no way to drop one.
 _EXCLUDED_BY_DEFAULT = frozenset({"schedule"})
-#: The run-level status of a run no runner has started. One job starting moves the RUN to
-#: `in_progress`, so this alone says nothing has picked it up - no per-job API call needed.
+#: The run-level status of a run that MAY not have started. It is not proof: measured 2026-10-23,
+#: run 39932914131 stayed `queued` for 15 minutes while three of its five jobs had completed and
+#: one was in_progress, because one job was still waiting for a hosted runner. Only the run's own
+#: jobs (:func:`gh_run_started`) say whether anything picked it up.
 _QUEUED = "queued"
+#: Job statuses that mean a runner took the job. `queued`, `waiting`, `pending` and `requested`
+#: all mean it has not run yet.
+_JOB_STARTED = frozenset({"in_progress", "completed"})
 _EXIT_CODES = {"success": 0, "failed": 1, "timeout": 2, "no-runs": 2, "error": 2,
                "pending-approval": 2, "stuck-queued": 2}
 
@@ -354,6 +362,7 @@ def wait_for(
     report: Callable[[str], None] = lambda _m: None,
     deadline_s: float | None = None,
     clock: Callable[[], float] | None = None,
+    run_started: Callable[[object], bool | None] | None = None,
 ) -> Verdict:
     """Poll ``fetch`` until every run is terminal, or a budget runs out.
 
@@ -404,7 +413,10 @@ def wait_for(
     wait as ``stuck-queued`` (:func:`_stuck_queued`): no deadline helps a run no runner will take,
     and waiting it out reads as "CI is slow" for the whole timeout. Each run's queued time is its
     current streak, restarted whenever it leaves ``queued``, and the check waits while any run is
-    still working, so a failure beside the stuck run is still reported in its summary.
+    still working, so a failure beside the stuck run is still reported in its summary. A run's
+    ``queued`` status alone is not that verdict: once the grace is spent, ``run_started`` is asked
+    about each queued run, and a run with a started job - or one whose jobs could not be read -
+    is waited for like any running one.
 
     Only :class:`GhFailed` is retried. :class:`GhUnavailable` - the OS refusing to spawn `gh` -
     propagates at once, because it is a local fact that will not change during this process, and
@@ -433,6 +445,9 @@ def wait_for(
             cut to the time left, so the last poll lands on the deadline instead of an interval
             past it. ``None`` leaves only ``deadline_polls``.
         clock: Returns the current time in seconds; see above for the default.
+        run_started: Given a run id, whether any of its jobs has started (``True``), none has
+            (``False``), or it could not be told (``None``). Asked only for a run already queued
+            past the grace. ``None`` here keeps the run-status-only check.
 
     Returns:
         The terminal verdict: ``success``, ``failed``, ``pending-approval``, ``stuck-queued``,
@@ -516,7 +531,7 @@ def wait_for(
             empty_since = None
             settled = None
             last_success = None
-            stuck = _stuck_queued(rows, queued_since, timer.now(), queued_grace_s)
+            stuck = _stuck_queued(rows, queued_since, timer.now(), queued_grace_s, run_started)
             if stuck is not None:
                 return stuck
             report(f"{label(poll)}: {current.summary}")
@@ -554,7 +569,8 @@ def _track_queued(since: dict[tuple[object, object], float], rows: Sequence[dict
 
 
 def _stuck_queued(rows: Sequence[dict[str, object]], since: dict[tuple[object, object], float],
-                  now: float, grace_s: float) -> Verdict | None:
+                  now: float, grace_s: float,
+                  run_started: Callable[[object], bool | None] | None = None) -> Verdict | None:
     """``stuck-queued`` when every unfinished run has been queued for ``grace_s``, else None.
 
     Only when NOTHING else is still going: a run in progress beside the stuck one is an outcome
@@ -562,6 +578,11 @@ def _stuck_queued(rows: Sequence[dict[str, object]], since: dict[tuple[object, o
     run by id, so the caller can look at it or cancel it, and the terminal runs by conclusion; a
     run of the same workflow on the sha that already SUCCEEDED is named as the likely original,
     because a duplicate trigger is the measured cause. Without one, no cause is claimed.
+
+    ``run_started`` is asked last, and only once the grace is spent, because the run status lies:
+    a run stays ``queued`` while any ONE job waits for a runner, even with its other jobs done.
+    Anything but a definite ``False`` keeps the wait open - a run whose jobs could not be read
+    is not proven stuck, and the deadline still bounds it.
     """
     if grace_s <= 0:
         return None
@@ -569,6 +590,9 @@ def _stuck_queued(rows: Sequence[dict[str, object]], since: dict[tuple[object, o
     if not unfinished or any(r.get("status") != _QUEUED for r in unfinished):
         return None
     if any(now - since.get(_run_key(r), now) < grace_s for r in unfinished):
+        return None
+    if run_started is not None and any(run_started(r.get("databaseId")) is not False
+                                       for r in unfinished):
         return None
     parts = []
     for row in unfinished:
@@ -699,6 +723,28 @@ def gh_run(run_id: object, *, repo: str | None = None,
     if not isinstance(row, dict):
         raise GhFailed(f"gh run view {run_id} returned {type(row).__name__}, not one run")
     return row
+
+
+def gh_run_started(run_id: object, *, repo: str | None = None,
+                   timeout_s: float = GH_CALL_TIMEOUT_S) -> bool | None:
+    """Whether any job of run ``run_id`` has started, read from the run's own jobs.
+
+    The run-level status cannot answer this: a run stays ``queued`` while one job waits for a
+    runner, however many of its other jobs already ran. ``None`` when gh could not be asked or
+    answered something that is not a job list - an unknown, which the stuck check reads as
+    "keep waiting", never as "nothing started".
+    """
+    argv = ["gh", "run", "view", str(run_id), "--json", "jobs"]
+    if repo:
+        argv += ["--repo", repo]
+    try:
+        answer = _gh_json(argv, timeout_s)
+    except (GhFailed, GhUnavailable):
+        return None
+    jobs = answer.get("jobs") if isinstance(answer, dict) else None
+    if not isinstance(jobs, list):
+        return None
+    return any(isinstance(j, dict) and j.get("status") in _JOB_STARTED for j in jobs)
 
 
 def keep_seen_runs(
@@ -873,9 +919,11 @@ def _parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     )
     parser.add_argument(
         "--queued-grace", type=non_negative, default=900.0,
-        help="seconds a run may stay queued, with nothing else on the sha still going, before the "
-             "wait reports stuck-queued (exit 2) naming it (default 900; 0 disables). No deadline "
-             "helps a run no runner will take, such as a duplicate workflow_run trigger",
+        help="seconds a run may stay queued, with none of its jobs started and nothing else on the "
+             "sha still going, before the wait reports stuck-queued (exit 2) naming it (default "
+             "900; 0 disables). Counted from the first poll that saw the run queued, restarting "
+             "when it leaves queued. No deadline helps a run no runner will take, such as a "
+             "duplicate workflow_run trigger",
     )
     parser.add_argument(
         "--event", default=None,
@@ -984,6 +1032,7 @@ def _run(args: argparse.Namespace) -> int:
             deadline_s=args.timeout,
             clock=time.monotonic,
             event=args.event,
+            run_started=lambda run_id: gh_run_started(run_id, repo=repo, timeout_s=call_timeout()),
         )
     except (GhFailed, GhUnavailable) as exc:
         return _emit(Verdict("error", str(exc)), as_json=args.json, sha=sha)

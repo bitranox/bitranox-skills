@@ -29,6 +29,19 @@ than the change, so entries reconstructed from them would read like coverage wit
 a hole nobody has drawn a line under is one that gets rediscovered and half-filled - which is how
 two "versions with no entry" notes came to sit in this file disagreeing with it.
 
+## [9.13.1]
+
+### Fixed
+
+- `compuse-toolbox` `ci_wait.py`: a run whose run-level status reads `queued` is no longer
+  reported `stuck-queued` while any of its jobs has started. GitHub keeps a run `queued` while ONE
+  job waits for a runner, however many of its other jobs already ran: a run read `queued` for 15
+  minutes with three of five jobs passed and one running, and the wait exited 2 "with no runner
+  starting it". Once the grace is spent the run's own jobs are read (`gh run view <id> --json
+  jobs`); a run with a started job, or jobs that could not be read, is waited for. A run with every
+  job still queued keeps the verdict. The `ci_wait` row and `--queued-grace` help say so, and the
+  help now states where the grace is counted from.
+
 ## [9.13.0]
 
 ### Fixed
