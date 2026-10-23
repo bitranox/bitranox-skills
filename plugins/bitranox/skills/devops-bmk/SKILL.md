@@ -31,7 +31,8 @@ skill is about *using* bmk as a task runner in any project.
 ## 1. Install
 
 uv is the only prerequisite. You never install bmk yourself: run `bmk install` once, ephemerally,
-to drop the Makefile in - from then on the Makefile installs and manages bmk per project.
+to drop the Makefile in - from then on the Makefile installs and updates bmk for you, in one env
+shared by every project on the machine (see below).
 
 ```bash
 # Install uv first if needed (https://astral.sh/uv)
@@ -39,12 +40,15 @@ curl -LsSf https://astral.sh/uv/install.sh | sh          # macOS/Linux
 # Windows (PowerShell): powershell -ExecutionPolicy ByPass -c "irm https://astral.sh/uv/install.ps1 | iex"
 
 cd your-project
-uvx bmk install            # writes the Makefile; installs nothing permanently
+uvx bmk install            # writes the Makefile and .bmk-cooldown.mk; installs nothing permanently
 make test                  # from here on, everything goes through make
 ```
 
 You do not need `uv tool install bmk` yourself: once the Makefile is in place it keeps bmk
-installed for you (see below). `uvx bmk install` is only the bootstrap that writes the Makefile.
+installed for you (see below). `uvx bmk install` is only the bootstrap that writes the Makefile
+and its companion `.bmk-cooldown.mk`. **Commit both**: they are versioned as a pair (the Makefile's
+first line carries the version), and `bmk install`, or a `make` that finds the Makefile outdated,
+rewrites them together.
 
 ### bmk's env holds bmk alone, and is shared
 
@@ -99,6 +103,13 @@ environments.
   v<version>`, the release workflow, PyPI).
 - Right after a release there is a brief window where uv's index still reports only the previous
   version; the next `make` picks the new one up.
+- **bmk's env resolves under bmk's own supply-chain cooldown**, read from `.bmk-cooldown.mk` beside
+  the Makefile (from bmk 3.23.0). The file holds uv flags - bmk's cooldown window plus `false`
+  exemptions for bmk and its own libraries - so a dependency release does not reach the env that
+  runs every repo's ruff, pyright and pip-audit a minute after its upload. Do not hand-edit it;
+  `bmk install` rewrites it. When the window cannot be met (a fresh install whose bmk floor is
+  younger than the window), the `make` installs without it and says so on stderr, and the next
+  `make` has the window again. A repo without the file installs bmk with no cooldown, as before.
 
 ### The project venv `.venv`
 
@@ -151,8 +162,9 @@ If uv cannot say what it would provide, your venv is left alone; bmk never rebui
 Declare no `:: Python :: X.Y` classifier and bmk picks no version at all - uv's default stands.
 
 The same classifiers drive `make test-all`: it provisions one `.venv-<minor>` per declared version
-and runs pytest + pyright in each, in parallel by default, so you can reproduce CI's matrix locally
-before you push. A project whose suite binds fixed ports or shares a test database sets
+and runs pytest + pyright in each, in parallel by default, so you can reproduce CI's Python-version
+matrix locally before you push. It covers the version axis only: each cell type-checks the HOST
+platform. The OS axis is checked by `make test`'s pyright stage (section "Proving a gate"). A project whose suite binds fixed ports or shares a test database sets
 `[tool.scripts.test-all] workers = 1` in its `pyproject.toml` (or `BMK_TEST_ALL_WORKERS=1` for one
 run) to run the version cells serially instead. Plain `make test` stays on the newest version only;
 with no `:: Python :: X.Y` classifier, `test-all` tests the default interpreter once and prints a
@@ -307,11 +319,24 @@ forwarded (e.g. `make push fix login bug`). Most have short aliases.
   commit is already pushed leaves `release` tagging that empty commit. That is expected, not a
   broken release.
 - `push` starts with a `deps` stage that FAILS when any dependency floor in `pyproject.toml` is
-  behind the latest PyPI release, which can be minutes old. In the default JSON mode it prints only
+  behind the latest PyPI release (an exact pin excepted, see the next point), which can be minutes
+  old. In the default JSON mode it prints only
   `[deps] (exit code: 1)` / `(no output captured)`. Do not bisect your edits: the cause is a new
   upstream release. `BMK_OUTPUT_FORMAT=text` prints the report above that line; `bmk deps --update`
   (or a `make test`, whose first stage raises floors) fixes it. In a multi-repo sweep, one release
   of a shared dependency breaks every pending repo, so update them all before resuming.
+- **An exact pin is never moved.** The floor update reads every requirement list in
+  `pyproject.toml` (`[project]` dependencies and optional extras, `[dependency-groups]`,
+  `[build-system].requires`, `[tool.pdm.dev-dependencies]`) and raises `>=`, `>`, `~=` and
+  wildcard (`==1.*`) requirements, a third-party one only to a release older than the project's
+  `[tool.uv]` cooldown. An exact pin (`pkg==1.5.0`, `pkg===1.5.0`) is left as written and reported
+  pinned (`[==]` in the `bmk deps` report), so it never fails the `deps` stage either (from bmk
+  3.23.0; before that, `==X` was moved to the newest release like a floor). Use one for a release
+  you hold on purpose, such as a test that compares the bytes one release produces.
+- **Which bmk you are running** decides behaviour marked "from bmk X.Y.Z" here: `bmk --version`
+  (run `$(uv tool dir --bin)/bmk --version` when `bmk` is not on your PATH). The Makefile's first
+  line, `# BMK MAKEFILE X.Y.Z`, names the bmk that wrote the Makefile, not necessarily the one the
+  next `make` runs, since every `make` upgrades bmk first.
 
 ### What version `bump` and `release` accept, and what they produce
 
@@ -482,6 +507,15 @@ on the theory that it was skipped.
 The pinning differs per tool, which decides which environment a stage actually used: `pytest` runs
 on `ctx.python_cmd`, `pyright` is pinned via `--pythonpath`, and `lint-imports` is pinned to
 nothing.
+
+**`pyright` checks every OS your CI runs on** (from bmk 3.23.0). pyright type-checks one platform
+per run, so a check on Linux passes code whose types break under Windows' stubs (`os.geteuid()`,
+`signal.SIGHUP`). The stage runs `pyright --pythonplatform` once per OS family listed in
+`[tool.ci].os`, the key CI builds its OS matrix from (`ubuntu-*` -> Linux, `windows-*` -> Windows,
+`macos-*` -> Darwin), and fails if any run does; each run's output is headed by its command line.
+With no `[tool.ci].os` it checks the host only. So in a project that declares Windows, a
+Windows-only type error now turns `make test` red on Linux: fix the code (a `sys.platform` guard,
+which pyright narrows), not the stage.
 
 **Prove it rather than reasoning about it:** run the arm where the check must FAIL, and require the
 gate to go red. A gate that has only ever passed has not been shown to gate. See

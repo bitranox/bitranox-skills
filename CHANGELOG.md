@@ -29,6 +29,17 @@ than the change, so entries reconstructed from them would read like coverage wit
 a hole nobody has drawn a line under is one that gets rediscovered and half-filled - which is how
 two "versions with no entry" notes came to sit in this file disagreeing with it.
 
+## [9.15.1]
+
+### Changed
+
+- `devops-bmk`: covers bmk 3.23.0. The `pyright` stage type-checks every OS family in
+  `[tool.ci].os` (and `test-all` covers only the Python-version axis); `bmk install` writes
+  `.bmk-cooldown.mk` beside the Makefile, which holds bmk's own tool-env cooldown and is committed
+  with it; an exact pin (`==X`, `===X`) is never moved by the floor update and never fails the
+  `deps` stage; and how to read which bmk a repo runs. Section 1 no longer says bmk is managed per
+  project: its env is shared machine-wide. Mirror of bmk's `skills/devops-bmk/SKILL.md`.
+
 ## [9.15.0]
 
 ### Added
