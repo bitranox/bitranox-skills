@@ -88,6 +88,10 @@ after the first wave's eval shows value.
 
 The jig-repetition advisory is built as the shadow site `jig_repetition` (knob `classifier_jig_repetition`, shadow only): one `noul` per FIRED nudge over `{new_script, ledger}`, the names and stated purposes the nudge itself shows the model, so its verdict can be compared with the nudge's lexical group.
 
+The missed-learning candidates of `self-improve-audit.py` are built as the shadow site `audit_candidate` (knob `classifier_audit_candidate`, shadow only): one `noul` per candidate the audit note shows, over `{role, matched, excerpt}`. The excerpt is up to 3000 characters of the candidate's own message around its signal rather than the `{command, tool_output_tail, next_assistant_message}` triple above, because the audit scans one message at a time and a tool candidate is one message carrying the command and its output together; the next assistant message is not paired with it.
+
+Recall's resume-the-backlog early return (`prompt_text.asks_for_own_backlog`, a whole-prompt English pattern) is built as the shadow site `backlog_ask` (knob `classifier_backlog_ask`, shadow only): one `noul` per typed prompt over `{user_prompt, previous_assistant_message}`, asked whether or not the pattern matched, so its misses on a paraphrase and its matches on a bare reply are both counted.
+
 **Stays deterministic:**
 - tell-char sweeps and secret scanning;
 - command-shape guards (a structural parse is exact, and they run on every tool call);

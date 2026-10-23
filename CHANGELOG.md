@@ -29,6 +29,36 @@ than the change, so entries reconstructed from them would read like coverage wit
 a hole nobody has drawn a line under is one that gets rediscovered and half-filled - which is how
 two "versions with no entry" notes came to sit in this file disagreeing with it.
 
+## [9.16.0]
+
+### Added
+
+- Jev shadow site `backlog_ask` (knob `classifier_backlog_ask`, `off` [default] or `shadow`; no
+  `decide`). On every typed prompt, recall hands the prompt and the reply it answers to a detached
+  child that asks Jev whether the prompt asks to resume this project's own backlog, and logs the
+  answer beside the verdict of `prompt_text.asks_for_own_backlog`, the whole-prompt English pattern
+  that makes recall skip such a prompt. Asked whether or not the pattern matches, so its misses on
+  a paraphrase and its matches on a bare reply can both be counted; a turn nobody typed is not
+  sent. Recall is unchanged.
+- Jev shadow site `audit_candidate` (knob `classifier_audit_candidate`, `off` [default] or
+  `shadow`; no `decide`). Once `self-improve-audit.py` has written its `<SELF-IMPROVE-AUDIT>` note,
+  the candidates it shows (12 at most) go to a detached child that asks Jev, per candidate, whether
+  it is a real learning signal, over whose message it is, the words that matched and up to 3000
+  characters around them - wider than the 160-character snippet the note quotes, and cut from the
+  message only after its secrets are redacted, so a key whose header falls outside the window is
+  still recognised. The note is unchanged.
+- `classifier_eval.py report` covers both sites: `backlog_ask` as both / regex only / Jev only /
+  neither per prompt, `audit_candidate` as Jev real / Jev noise per candidate and role, counting a
+  candidate audited twice (a compaction, then the session's end) once by its transcript record's
+  uuid, which each row now carries, keeping the first answered score; two messages with identical
+  text stay two candidates. Both knobs are documented in
+  `meta-memory-settings` and `docs/reference.md`.
+
+### Changed
+
+- `classifier.py` exports the question ids `JIG_SAME_JOB`, `BACKLOG_ASK_ID` and `AUDIT_REAL_ID` in
+  `__all__`; `JIG_SAME_JOB` was used by `classifier_eval.py` without being listed.
+
 ## [9.15.1]
 
 ### Changed

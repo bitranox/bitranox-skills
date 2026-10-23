@@ -1,4 +1,4 @@
-# Handover 2026-10-23: [500] guard shipped (9.14.0), [28] site B shipped (9.15.0); [23] batch 4 next
+# STALE - read 2026-10-23, work continued
 
 ## In flight
 

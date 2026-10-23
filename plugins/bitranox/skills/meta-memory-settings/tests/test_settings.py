@@ -73,6 +73,9 @@ def test_a_site_whose_hook_implements_decide_accepts_it(capsys, key):
     # jig-repetition-nudge.py implements shadow only: its nudge is advice the model judges, and
     # nothing has been measured that would let Jev replace that judgement.
     ("classifier_jig_repetition", "decide"),
+    # recall-memory.py's backlog-ask match and self-improve-audit.py implement shadow only.
+    ("classifier_backlog_ask", "decide"),
+    ("classifier_audit_candidate", "decide"),
 ])
 def test_classifier_site_refuses_a_mode_it_does_not_have(capsys, key, value):
     assert ST.main(["set", key, value]) == 2
@@ -95,6 +98,20 @@ def test_classifier_jig_repetition_defaults_to_off_and_accepts_shadow(capsys):
     assert sig.load_config()["classifier_jig_repetition"] == "off"
     assert ST.main(["set", "classifier_jig_repetition", "shadow"]) == 0
     assert sig.load_config()["classifier_jig_repetition"] == "shadow"
+
+
+@pytest.mark.parametrize("key", ["classifier_backlog_ask", "classifier_audit_candidate"])
+def test_a_shadow_only_site_defaults_to_off_and_accepts_shadow(capsys, key):
+    assert sig.load_config()[key] == "off"
+    assert ST.main(["set", key, "shadow"]) == 0
+    assert sig.load_config()[key] == "shadow"
+
+
+@pytest.mark.parametrize("key", ["classifier_backlog_ask", "classifier_audit_candidate"])
+def test_a_shadow_only_site_has_a_settings_row_naming_its_values(key):
+    text = (Path(ST.__file__).resolve().parent / "SKILL.md").read_text(encoding="utf-8")
+    (row,) = [line for line in text.splitlines() if line.startswith("| `%s`" % key)]
+    assert row.split("|")[2].strip() == "`off` [default], `shadow`"
 
 
 def test_the_jig_repetition_knob_has_a_settings_row():

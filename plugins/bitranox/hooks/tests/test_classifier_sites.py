@@ -19,6 +19,8 @@ import pytest
 import classifier as cl
 import jig_repetition_nudge as JR
 import recall_memory as RM
+import prompt_text as PT
+import self_improve_audit as SA
 import self_improve_gate as G
 import self_improve_signals as sig
 import skill_router as SR
@@ -744,3 +746,151 @@ def test_jig_repetition_asks_one_same_job_question_over_the_fields_it_sends():
     assert question.type == "noul"
     assert "`new_script`" in question.instructions and "`ledger`" in question.instructions
     assert "jig_repetition" in cl.SITES and "jig_repetition" in cl.SITE_THRESHOLDS
+
+
+# ---- backlog-ask matcher (recall's early return) -------------------------------------------
+
+@pytest.mark.parametrize("prompt", ["read handover and continue",
+                                    "what next for the frobnicator deploy, token %s" % GHP])
+def test_backlog_ask_shadow_logs_every_typed_prompt_and_recalls_exactly_as_before(
+        env, monkeypatch, capsys, prompt):
+    _mem("/p/other", "frob.md", "The frobnicator deploy needs make test before every release")
+    ev = {"prompt": prompt, "cwd": "/p/cur", "session_id": "s-backlog"}
+    _config(env["home"])
+    off = _run(RM, monkeypatch, capsys, ev)
+    # The pattern's hit skips recall (no output); its miss must recall something, or "recalls
+    # exactly as before" compares two empty strings.
+    assert bool(off.strip()) is not PT.asks_for_own_backlog(prompt)
+    for f in (env["home"] / ".claude" / "self-improve-audit").glob("*.recall-*"):
+        f.unlink()
+    _config(env["home"], classifier_backend="jev", classifier_backlog_ask="shadow")
+    on = _run(RM, monkeypatch, capsys, dict(ev))
+    assert on == off
+    line = _wait_for_log(env["home"])[-1]
+    assert line["site"] == "backlog_ask" and line["session_id"] == "s-backlog"
+    assert line["regex"]["fires"] is PT.asks_for_own_backlog(prompt)
+    assert set(line["results"][0]["answers"]) == {q.id for q in cl.backlog_ask_questions()}
+    assert set(line["states"][0]) == {"user_prompt"}
+    assert len(env["fake"].requests) == 1
+    assert GHP not in _log(env["home"]).read_text(encoding="utf-8")
+    assert GHP not in json.dumps(env["fake"].requests)
+
+
+def test_backlog_ask_shadow_sends_the_reply_the_prompt_answers(env, tmp_path, monkeypatch,
+                                                                capsys):
+    t = _transcript(tmp_path, _typed("status?"), _said("Shall I go on with the parser fix?"))
+    _config(env["home"], classifier_backend="jev", classifier_backlog_ask="shadow")
+    _run(RM, monkeypatch, capsys, {"prompt": "continue", "cwd": "/p/cur", "session_id": "s-b2",
+                                   "transcript_path": t})
+    line = _wait_for_log(env["home"])[-1]
+    assert line["states"][0] == {"previous_assistant_message": "Shall I go on with the parser fix?",
+                                 "user_prompt": "continue"}
+    assert line["regex"]["context_view"] == cl.CONTEXT_VIEW
+    _assert_located(line, t)
+
+
+def test_backlog_ask_sends_nothing_for_a_turn_nobody_typed(env, monkeypatch, capsys):
+    _config(env["home"], classifier_backend="jev", classifier_backlog_ask="shadow")
+    note = ("<task-notification>\n<task-id>b1</task-id>\n<status>completed</status>\n"
+            "<summary>what next</summary>\n</task-notification>")
+    assert not PT.typed_by_a_person(note)
+    _run(RM, monkeypatch, capsys, {"prompt": note, "cwd": "/p/cur", "session_id": "s-b3"})
+    time.sleep(1.0)
+    assert not _log(env["home"]).exists() and env["fake"].requests == []
+
+
+def test_backlog_ask_spawns_nothing_while_the_site_is_off(env, monkeypatch, capsys):
+    _config(env["home"], classifier_backend="jev")
+    _run(RM, monkeypatch, capsys, {"prompt": "what next", "cwd": "/p/cur", "session_id": "s-b4"})
+    time.sleep(1.0)
+    assert not _log(env["home"]).exists() and env["fake"].requests == []
+
+
+def test_backlog_ask_asks_one_question_over_the_fields_it_sends():
+    (question,) = cl.backlog_ask_questions()
+    assert question.type == "noul"
+    assert "`user_prompt`" in question.instructions
+    assert "`previous_assistant_message`" in question.instructions
+    assert "backlog_ask" in cl.SITES and "backlog_ask" in cl.SITE_THRESHOLDS
+
+
+# ---- self-improve audit (SessionEnd / PreCompact candidate misses) -------------------------
+
+def _audit_transcript(tmp_path):
+    t = tmp_path / "audit.jsonl"
+    rows = [
+        # Context past the 160-character note snippet, which is what Jev is shown and the note is not.
+        {"type": "user", "uuid": "u-said",
+         "message": {"content": "the deploy path is wrong, it is under /srv. "
+                                + "It moved with the rebuild. " * 20 + "TAILMARK"}},
+        {"type": "user", "uuid": "u-tool", "message": {"content": [{"type": "tool_result", "content":
+            "usage: x [-h]\nx: error: unrecognized arguments: --rehome-to token %s" % GHP}]}},
+        {"type": "assistant", "message": {"content": "Listed the files."}},
+    ]
+    t.write_text("".join(json.dumps(r) + "\n" for r in rows), encoding="utf-8")
+    return str(t)
+
+
+def _audit_event(t, cwd, event="SessionEnd"):
+    return {"transcript_path": t, "cwd": cwd, "session_id": "s-audit", "hook_event_name": event}
+
+
+def test_audit_shadow_asks_about_each_reported_candidate_and_reports_exactly_as_before(
+        env, tmp_path, monkeypatch, capsys):
+    t = _audit_transcript(tmp_path)
+    candidates = SA.find_candidates(t)
+    assert [c["role"] for c in candidates] == ["user", "tool"]
+    _config(env["home"])
+    _run(SA, monkeypatch, capsys, _audit_event(t, "/p/off"))
+    off = sig.audit_file("/p/off").read_text(encoding="utf-8")
+    _config(env["home"], classifier_backend="jev", classifier_audit_candidate="shadow")
+    _run(SA, monkeypatch, capsys, _audit_event(t, "/p/on"))
+    assert sig.audit_file("/p/on").read_text(encoding="utf-8") == off
+    line = _wait_for_log(env["home"])[-1]
+    assert line["site"] == "audit_candidate" and line["session_id"] == "s-audit"
+    assert line["regex"]["event"] == "SessionEnd"
+    assert [c["role"] for c in line["regex"]["candidates"]] == ["user", "tool"]
+    assert [c["uuid"] for c in line["regex"]["candidates"]] == ["u-said", "u-tool"]
+    assert len(line["results"]) == len(line["states"]) == 2
+    assert all(set(s) == {"role", "matched", "excerpt"} for s in line["states"])
+    assert "unrecognized arguments" in line["states"][1]["excerpt"]
+    assert "TAILMARK" in line["states"][0]["excerpt"] and "TAILMARK" not in off
+    assert all(set(r["answers"]) == {q.id for q in cl.audit_candidate_questions()}
+               for r in line["results"])
+    assert len(env["fake"].requests) == 2
+    assert GHP not in _log(env["home"]).read_text(encoding="utf-8")
+    assert GHP not in json.dumps(env["fake"].requests)
+
+
+def test_audit_shadow_asks_only_about_the_candidates_the_report_shows(env, tmp_path,
+                                                                       monkeypatch, capsys):
+    t = tmp_path / "many.jsonl"
+    t.write_text("".join(json.dumps({"type": "user", "message": {
+        "content": "the deploy path %d is wrong, it is under /srv" % n}}) + "\n"
+        for n in range(SA._MAX_CANDIDATES + 3)), encoding="utf-8")
+    _config(env["home"], classifier_backend="jev", classifier_audit_candidate="shadow")
+    _run(SA, monkeypatch, capsys, _audit_event(str(t), "/p/many"))
+    line = _wait_for_log(env["home"])[-1]
+    assert len(line["states"]) == SA._MAX_CANDIDATES
+    assert "path %d " % (SA._MAX_CANDIDATES + 2) in line["states"][-1]["excerpt"]
+
+
+def test_audit_shadow_spawns_nothing_without_candidates_or_while_off(env, tmp_path, monkeypatch,
+                                                                      capsys):
+    clean = tmp_path / "clean.jsonl"
+    clean.write_text(json.dumps({"type": "assistant", "message": {"content": "Done."}}) + "\n",
+                          encoding="utf-8")
+    _config(env["home"], classifier_backend="jev", classifier_audit_candidate="shadow")
+    _run(SA, monkeypatch, capsys, _audit_event(str(clean), "/p/clean"))
+    _config(env["home"], classifier_backend="jev")
+    _run(SA, monkeypatch, capsys, _audit_event(_audit_transcript(tmp_path), "/p/quiet"))
+    time.sleep(1.0)
+    assert not _log(env["home"]).exists() and env["fake"].requests == []
+
+
+def test_audit_candidate_asks_one_question_over_the_fields_it_sends():
+    (question,) = cl.audit_candidate_questions()
+    assert question.type == "noul"
+    for field in ("`role`", "`matched`", "`excerpt`"):
+        assert field in question.instructions
+    assert "audit_candidate" in cl.SITES and "audit_candidate" in cl.SITE_THRESHOLDS
