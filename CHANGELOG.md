@@ -29,6 +29,20 @@ than the change, so entries reconstructed from them would read like coverage wit
 a hole nobody has drawn a line under is one that gets rediscovered and half-filled - which is how
 two "versions with no entry" notes came to sit in this file disagreeing with it.
 
+## [9.15.0]
+
+### Added
+
+- Jev shadow site `jig_repetition` (knob `classifier_jig_repetition`, `off` [default] or
+  `shadow`; no `decide`). When the jig-repetition nudge fires, a detached child asks Jev the
+  nudge's own question - is the new script the same job as at least two scripts written before it
+  in the session - over their names and stated purposes, and logs the answer beside the nudge's
+  lexical group in the classifier shadow log. The nudge is unchanged and is written before Jev is
+  asked; nothing is sent on a script write that does not nudge. `classifier_eval.py report` counts
+  per site how often Jev agrees the nudge named one job, per track, and writes each nudge Jev would
+  have withheld as a disagreement for adjudication. The nudge fired 546 times in the last 30 days
+  of transcripts, across 244 sessions. Documented in `meta-memory-settings` and `docs/reference.md`.
+
 ## [9.14.0]
 
 ### Added

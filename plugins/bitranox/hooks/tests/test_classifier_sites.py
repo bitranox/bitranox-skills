@@ -17,6 +17,7 @@ import time
 import pytest
 
 import classifier as cl
+import jig_repetition_nudge as JR
 import recall_memory as RM
 import self_improve_gate as G
 import self_improve_signals as sig
@@ -676,3 +677,70 @@ def test_the_router_hook_asks_only_about_the_state_it_sends(env, tmp_path, monke
         for field in OPTIONAL_FIELDS:
             if not state.get(field):
                 assert "`%s`" % field not in question["instructions"], qid
+
+
+# ---- jig-repetition nudge ------------------------------------------------------------------
+
+# Three rewrites of one destructive job: the shape the nudge was built for, so the third write
+# nudges. The token rides in the first script's opening comment, which is its stated purpose and
+# therefore reaches the ledger Jev is shown.
+_JIG_SCRIPTS = [
+    "# remove C:\\Windows.old for good, token %s\n"
+    "$root = 'C:\\Windows.old'\n$links = Get-ChildItem $root -Recurse -Directory -Force"
+    " -Attributes ReparsePoint\nforeach ($l in $links) { cmd /c rd /q $l.FullName }\n"
+    "$empty = Join-Path $env:TEMP ([guid]::NewGuid())\nrobocopy $empty $root /MIR /XJ /R:0 /W:0"
+    " /MT:16\ncmd /c rd /s /q $root\n" % GHP,
+    "$root = 'C:\\Windows.old'\n$links = Get-ChildItem $root -Recurse -Directory -Force"
+    " -Attributes ReparsePoint\nforeach ($l in $links) { cmd /c rd /q $l.FullName }\n"
+    "$empty = Join-Path $env:TEMP ([guid]::NewGuid())\nrobocopy $empty $root /MIR /XJ /R:0 /W:0"
+    " /MT:16 /NFL /NDL\ncmd /c rd /s /q $root\n",
+    "$root = 'C:\\Windows.old'\n$links = Get-ChildItem $root -Recurse -Directory -Force"
+    " -Attributes ReparsePoint\nforeach ($l in $links) { cmd /c rd /q $l.FullName }\n"
+    "if (Test-Path $root) { Write-Host 'gate' }\n$empty = Join-Path $env:TEMP ([guid]::NewGuid())\n"
+    "robocopy $empty $root /MIR /XJ /R:0 /W:0 /MT:16\ncmd /c rd /s /q $root\n",
+]
+
+
+def _jig_events(session):
+    return [{"tool_name": "Write", "session_id": session,
+             "tool_input": {"file_path": "/tmp/del_v%d.ps1" % (n + 1), "content": body}}
+            for n, body in enumerate(_JIG_SCRIPTS)]
+
+
+def test_jig_repetition_shadow_logs_the_nudge_and_nudges_exactly_as_before(
+        env, monkeypatch, capsys):
+    _config(env["home"])
+    off = [_run(JR, monkeypatch, capsys, e) for e in _jig_events("s-jig-off")]
+    assert not off[0] and not off[1] and "REPEATED JOB" in off[2]
+    _config(env["home"], classifier_backend="jev", classifier_jig_repetition="shadow")
+    on = [_run(JR, monkeypatch, capsys, e) for e in _jig_events("s-jig-on")]
+    assert on == off
+    line = _wait_for_log(env["home"])[-1]
+    assert line["site"] == "jig_repetition" and line["session_id"] == "s-jig-on"
+    assert line["regex"]["fires"] is True
+    assert line["regex"]["group"] == ["del_v1.ps1", "del_v2.ps1", "del_v3.ps1"]
+    assert line["regex"]["track"] in ("change", "observe")
+    assert set(line["results"][0]["answers"]) == {q.id for q in cl.jig_repetition_questions()}
+    state = line["states"][0]
+    assert set(state) == {"new_script", "ledger"}
+    assert state["new_script"].startswith("del_v3.ps1")
+    assert "del_v1.ps1" in state["ledger"] and "del_v2.ps1" in state["ledger"]
+    assert "del_v3.ps1" not in state["ledger"]
+    assert len(env["fake"].requests) == 1, "only the write that nudged is asked about"
+    assert GHP not in _log(env["home"]).read_text(encoding="utf-8")
+    assert GHP not in json.dumps(env["fake"].requests)
+
+
+def test_jig_repetition_spawns_nothing_while_the_site_is_off(env, monkeypatch, capsys):
+    _config(env["home"], classifier_backend="jev", classifier_stop_signal="shadow")
+    for e in _jig_events("s-jig-quiet"):
+        _run(JR, monkeypatch, capsys, e)
+    time.sleep(1.0)
+    assert not _log(env["home"]).exists() and env["fake"].requests == []
+
+
+def test_jig_repetition_asks_one_same_job_question_over_the_fields_it_sends():
+    (question,) = cl.jig_repetition_questions()
+    assert question.type == "noul"
+    assert "`new_script`" in question.instructions and "`ledger`" in question.instructions
+    assert "jig_repetition" in cl.SITES and "jig_repetition" in cl.SITE_THRESHOLDS

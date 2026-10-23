@@ -66,7 +66,8 @@ __all__ = [
     "recall_questions", "shadow_enabled", "shadow_log_files", "shadow_log_path", "site_mode",
     "short_description", "skill_router_choice_questions",
     "shadow_guard", "skill_router_questions", "skill_router_rerank_questions", "spawn_shadow",
-    "stop_signal_questions", "subagent_signal_questions", "with_previous",
+    "jig_repetition_questions", "stop_signal_questions", "subagent_signal_questions",
+    "with_previous",
 ]
 
 DEFAULT_BASE_URL = "https://api.typesafe.ai"
@@ -93,10 +94,11 @@ FIELD_CAP = 4000
 ERROR_CAP = 200
 CAP_MARK = "\n[... truncated ...]\n"
 # The hook sites. Each has its own config knob `classifier_<site>`: off | shadow, plus decide
-# where the site's hook implements it (all four; meta-memory-settings validates which).
+# where the site's hook implements it (all but `jig_repetition`; meta-memory-settings validates
+# which).
 # `subagent_signal` gained decide only after its shadow passed the pre-registered decide rule:
 # SubagentStop's capture buffers on its BROAD patterns too, and the blind review found those noise.
-SITES = ("stop_signal", "skill_router", "recall_rerank", "subagent_signal")
+SITES = ("stop_signal", "skill_router", "recall_rerank", "subagent_signal", "jig_repetition")
 SITE_MODES = ("off", "shadow", "decide")
 # The threshold each site's gate or score is read at - by `classifier_eval.py report` when judging
 # a log, and by a site in decide mode when acting on an answer, so the two can never disagree.
@@ -132,8 +134,10 @@ SITE_MODES = ("off", "shadow", "decide")
 # every prompt it reaches, so precision is what the bar is set on.
 # `subagent_signal` asks two of the Stop gate's questions word for word, so it starts at the Stop
 # gate's bar. It has never been adjudicated on subagent text: that is what its shadow log is for.
+# `jig_repetition` is shadow only and has never been adjudicated; 0.5 is where its report splits
+# "same job" from "not", a reading point and not a decision, until its log has been judged blind.
 SITE_THRESHOLDS = {"stop_signal": 0.8, "skill_router": 0.5, "recall_rerank": 0.9,
-                   "subagent_signal": 0.8}
+                   "subagent_signal": 0.8, "jig_repetition": 0.5}
 # Stop-gate families whose score is LOGGED but never counted as a firing. `endorsement` was the
 # only reason to fire on 12 turns across two shadow windows, every one a plain approval ("yes",
 # "go", "lets try 1-4"): approving a proposal the assistant made is not a learning signal. The
@@ -488,6 +492,26 @@ def subagent_signal_questions():
     """The Stop gate's reply questions, verbatim, over {assistant_reply}: one subagent message."""
     stop = {q.id: q for q in stop_signal_questions()}
     return [stop[family] for family in _REPLY_FAMILIES]
+
+
+JIG_SAME_JOB = "same_job"
+
+
+def jig_repetition_questions():
+    """The jig-repetition nudge's own question to the model, over {new_script, ledger}.
+
+    The nudge's lexical filter over-triggers by design and hands the model this judgement; Jev is
+    asked the same thing so its answer can be compared with what the model did with the nudge.
+    """
+    return [Question(
+        id=JIG_SAME_JOB, type="noul",
+        instructions=(
+            "`new_script` is a script being written now, as `name - stated purpose`, and `ledger` "
+            "lists the scripts written earlier in the same session the same way, one per line "
+            "(`[changes state]` marks one that modifies files or a machine). Is `new_script` the "
+            "same job as at least two of the `ledger` scripts - the same task attempted again, a "
+            "rewrite or retry of one approach to one goal - rather than separate work that "
+            "happens to share a word, a file name or a tool?"))]
 
 
 def load_skill_descriptions(skills_dir=None):

@@ -1739,3 +1739,39 @@ def test_this_test_file_holds_only_ascii():
     offenders = [(n, hex(ord(c))) for n, line in enumerate(text.split("\n"), 1)
                  for c in line if ord(c) > 127]
     assert offenders == []
+
+
+# ---- jig_repetition --------------------------------------------------------------------------
+
+def jig_row(score, session="s1", group=("a.ps1", "b.ps1", "c.ps1")):
+    """One fired jig-repetition nudge; `score` is Jev's same-job score, or None when unanswered."""
+    return {"ts": "2026-10-23T12:00:00+00:00", "site": "jig_repetition", "session_id": session,
+            "lang": "en", "reason": None, "redactions": 0, "input_tokens": 300,
+            "latency_ms": 700,
+            "regex": {"fires": True, "group": list(group), "track": "change"},
+            "results": [_result({"same_job": score}) if score is not None else None],
+            "states": [{"new_script": "c.ps1 - remove the old dir",
+                        "ledger": "a.ps1 - remove the old dir\nb.ps1 - remove it again"}]}
+
+
+def test_jig_repetition_counts_how_often_jev_agrees_the_nudge_named_one_job():
+    rows = [jig_row(0.9), jig_row(0.2), jig_row(0.6), jig_row(None)]
+    s = ce.summarize_jig_repetition(rows, threshold=0.5)
+    assert s["nudges"] == 4 and s["unanswered"] == 1
+    assert s["jev_same_job"] == 2 and s["jev_not_same_job"] == 1
+    assert s["by_track"] == {"change": {"nudges": 3, "jev_same_job": 2}}
+
+
+def test_jig_repetition_disagreements_carry_what_jev_was_shown():
+    s = ce.summarize_jig_repetition([jig_row(0.9), jig_row(0.1, session="s2")], threshold=0.5)
+    (d,) = s["disagreements"]
+    assert d["kind"] == "jev_not_same_job" and d["session_id"] == "s2"
+    assert d["group"] == ["a.ps1", "b.ps1", "c.ps1"] and d["score"] == 0.1
+    assert d["state"]["new_script"].startswith("c.ps1")
+
+
+def test_summarize_reports_the_jig_site_at_its_own_threshold():
+    rep = ce.summarize([jig_row(0.45)], threshold=None, top=2)
+    site = rep["sites"]["jig_repetition"]
+    assert site["threshold"] == 0.5 and site["jev_not_same_job"] == 1
+    assert "jev same job" in ce.render_text(rep)

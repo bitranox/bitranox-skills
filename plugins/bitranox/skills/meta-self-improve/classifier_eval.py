@@ -14,6 +14,9 @@ at most 200 MB). `report` reads every one of those logs, oldest first, and answe
   subagent_signal  per subagent message: how often Jev fires on each verdict the capture's
                  patterns reached (strict, broad_only, none), since a broad-only hit still
                  buffers and blocks the main Stop
+  jig_repetition per fired jig-repetition nudge: how often Jev agrees the scripts the lexical
+                 filter grouped are one job, per track (change, observe); the filter fires on
+                 every row, so a disagreement is a nudge Jev would not have shown
 
 plus latency and token percentiles, the error reasons, and how many rows each plugin release
 wrote. Every disagreement can be written to a JSONL file, carrying the text it was judged on, for
@@ -91,7 +94,7 @@ NON_FIRING_FAMILIES = cl.NON_FIRING_FAMILIES
 DEFAULT_TOP = 2
 # Rows written by a hand-run probe of a hook, not by a real session.
 DEFAULT_EXCLUDE = ("probe-",)
-SITES = ("stop_signal", "skill_router", "recall_rerank", "subagent_signal")
+SITES = ("stop_signal", "skill_router", "recall_rerank", "subagent_signal", "jig_repetition")
 
 
 # ---- loading -------------------------------------------------------------------------------
@@ -567,6 +570,40 @@ def summarize_subagent_signal(rows, threshold):
     return s
 
 
+# ---- jig_repetition ------------------------------------------------------------------------
+
+def summarize_jig_repetition(rows, threshold):
+    """Per fired nudge: whether Jev scores the new script the same job as the earlier ones.
+
+    Every row is a nudge the lexical filter already showed, so there is no "regex said no" side:
+    a score below the threshold is a nudge Jev would have withheld, and that is the disagreement
+    worth adjudicating. An unanswered nudge is counted apart and never as a no.
+    """
+    s = {"nudges": 0, "jev_same_job": 0, "jev_not_same_job": 0, "unanswered": 0,
+         "by_track": {}, "disagreements": []}
+    for row in rows:
+        s["nudges"] += 1
+        regex = row.get("regex") or {}
+        scores = (_answered(row) or [None])[0]
+        score = (scores or {}).get(cl.JIG_SAME_JOB)
+        if not isinstance(score, (int, float)):
+            s["unanswered"] += 1
+            continue
+        same = score >= threshold
+        track = s["by_track"].setdefault(str(regex.get("track") or "unknown"),
+                                         {"nudges": 0, "jev_same_job": 0})
+        track["nudges"] += 1
+        track["jev_same_job"] += same
+        if same:
+            s["jev_same_job"] += 1
+            continue
+        s["jev_not_same_job"] += 1
+        s["disagreements"].append({**_base(row), "kind": "jev_not_same_job",
+                                   "group": regex.get("group") or [], "score": score,
+                                   "state": _first_state(row)})
+    return s
+
+
 # ---- cost, latency, errors -----------------------------------------------------------------
 
 def percentiles(values):
@@ -630,6 +667,8 @@ def summarize(rows, threshold, top):
             detail = summarize_skill_router(site_rows, at, top)
         elif site == "subagent_signal":
             detail = summarize_subagent_signal(site_rows, at)
+        elif site == "jig_repetition":
+            detail = summarize_jig_repetition(site_rows, at)
         else:
             detail = summarize_recall(site_rows, at)
         sites[key] = {**_cost(site_rows), **detail, "threshold": at}
@@ -666,6 +705,12 @@ def render_text(rep):
             for kind, c in sorted(s["by_kind"].items()):
                 lines.append("   %-11s messages %d, jev fires %d"
                              % (kind, c["messages"], c["jev_fires"]))
+        elif _base_site(site) == "jig_repetition":
+            lines.append("   nudges %d; jev same job %d, jev not same job %d"
+                         % (s["nudges"], s["jev_same_job"], s["jev_not_same_job"]))
+            for track, c in sorted(s["by_track"].items()):
+                lines.append("   %-11s nudges %d, jev same job %d"
+                             % (track, c["nudges"], c["jev_same_job"]))
         else:
             lines.append("   prompts %d; injected %d, jev relevant %d, agreed %d"
                          % (s["prompts"], s["regex_injected"], s["jev_relevant"], s["agreed"]))
