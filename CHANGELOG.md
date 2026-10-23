@@ -29,6 +29,16 @@ than the change, so entries reconstructed from them would read like coverage wit
 a hole nobody has drawn a line under is one that gets rediscovered and half-filled - which is how
 two "versions with no entry" notes came to sit in this file disagreeing with it.
 
+## [10.0.2]
+
+### Added
+
+- `coding-python-network-probe`: synced with ipscout 1.7.0. The skill now covers writing a static
+  (permanent) IPv4 neighbour entry with `set_neighbour(ip, mac, interface=...)` and taking it out
+  again with `remove_neighbour(...)`, the `set-neighbour` / `remove-neighbour` CLI commands, and
+  the privilege each platform needs (root or `CAP_NET_ADMIN` on Linux, root on macOS,
+  Administrator on Windows). The description now names writing a static entry as a trigger.
+
 ## [10.0.1]
 
 ### Fixed
