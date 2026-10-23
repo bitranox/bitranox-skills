@@ -1,46 +1,49 @@
-# STALE - read 2026-10-23, work continued
+# Handover 2026-10-23: [570] corrected, [96] waits for runs, ci_wait job fix shipped (9.13.1)
 
 ## In flight
 
-- Nothing part-done. No subagent, workflow or background job is running. The worktree
-  `bitranox-skills-wt-subagent-decide` is merged and removed. `bitranox-skills-wt-pwshpy16`
-  (feat/pwshpy-1.6-skill-mirror) belongs to another session; leave it alone.
-- 9.12.0 is installed here (`/plugin marketplace update` + `/reload-plugins` done 2026-10-23).
-  Other open sessions on an older plugin read `classifier_subagent_signal = decide` but have no
-  decide path: they keep buffering on all patterns and log no row until they reload.
+- Nothing part-done. No subagent, workflow or background job of this session is running; the
+  worktree `bitranox-skills-wt-ciwait` is merged (b231f04e) and removed. The worktree
+  `bitranox-skills-wt-pwshpy16` (feat/pwshpy-1.6-skill-mirror) belongs to another session; leave it.
+- The bmk-b3 session shipped 9.13.0 (afec058c, sibling-ledger.py) and handed over. Two memory-fact
+  rewrites from that work wait on the user there, not here: the sibling-calls fact's hook
+  (reference-hooks-read-same-message-sibling-calls-from-the-transcript-by-message-id) and one line
+  in the wrong-repo fact naming the guard's live-miss cause (siblings not yet in the transcript).
 
 ## Committed, or not
 
-- Pushed this session: 6344b89d (9.12.0, subagent-capture decide mode); its ci and release runs
-  passed; tag v9.12.0, GitHub release and PyPI 9.12.0 all present.
-- This commit: this file and `OPEN-WORK.md` ([28] line).
-- Not in any repo: `~/.claude/commands/tfbpr.md` Step 10 gained a stuck-runner branch
-  (force-cancel endpoint, `rerun --failed`) and Step 12 a note that ci_wait has no `--workflow`
-  flag; the file is untracked and live. The lsdsk queue entry for it is shipped.
-- Gitignored evidence: `.plan/jev-28/clause5-2026-10-22/` (stats.py, score.py, key.json, the
-  three judges' labels, the blind packets).
+- Pushed this session: fabd3b2b and 3916e8fc (backlog), b231f04e (9.13.1, ci_wait). CI on
+  b231f04e passed (ci and both release workflows).
+- The tree-top memory store (pushed): 5d5b04f rewrote the wrong-repo
+  fact. About 44 other uncommitted fact files there belong to other sessions; leave them.
+- This commit: this file and `OPEN-WORK.md` ([680] added).
 
 ## Decided, and why - do not reopen
 
-- [96]'s rule was applied to the subagent_signal site (written for the skill sites; the user said
-  go ahead). All five clauses pass; clause 5 by a blind three-judge review of all 30
-  disagreements: patterns wrong 24, Jev wrong 6.
-- Decide design, user's choice "Build Jev decide (Recommended)" (EXECUTION-USER-REVIEW.md): Jev
-  decides every answered message at 0.8 on either question; unanswered or capped messages fall
-  back to the STRICT patterns only, never broad. A strict match Jev scores low is not buffered.
-- Shadow rows are re-logged per transcript rescan: deduplicate by (transcript, text) before any
-  count (992 of 7,698 rows were repeats).
+- [570], user chose "Apply all (Recommended)": hits 12 and 16 failed in a call with NO cd of its
+  own (transcripts 86506c66, e3f9c303); 4 parallel probe rounds with a leading absolute cd per call
+  never crossed. A leading `cd /abs &&` is a valid target. A sibling project's contrib entry (never
+  accept a leading cd) was dropped as disproven.
+- [96], user chose "Wait for 3 runs": the >= 3 runs floor gates the rewrite-once branch too, so
+  dream-placement (140 paired, 1 run) is not rewritten yet. Only meta-dream-tree step 5 adds runs.
+- ci_wait: a run reading `queued` is not stuck while any of its jobs started or its jobs cannot be
+  read; the job list is read only after the grace.
 
 ## Still open, untouched
 
-- [23] batch 4, [500] corpus replay, [570] hit-16 adjudication, the rest: `OPEN-WORK.md`.
-- [28]: the next site (B, C or D) is a question for the user.
+- [23] batch 4, [28] question (B, C or D), [500] replay, [680] replay-priced guard docstrings, the
+  rest: `OPEN-WORK.md`.
 
 ## Lessons for the next nap
 
 - When a script filters a backlog's template row, match the template's exact line, not a
   substring such as `YYYY`: a real item quoting `jev-skill-shadow-YYYY-MM.jsonl` vanished from a
-  summary; compare the count against the SessionStart count.
+  summary twice (2026-10-22, 2026-10-23); compare the count against the SessionStart count.
+  Queued against meta-context-watcher.
+- tooling: when replaying a transcript-reading PreToolUse hook (transcript_siblings), cut the
+  transcript at the call first (`head -n <line of the tool_use id>`): the guard reads only the last
+  4 MB, so a grown transcript passes falsely; even a cut one shows siblings the live hook could
+  not see before 9.13.0.
 - When counting classifier shadow rows for a verdict, deduplicate by (transcript, message text)
   first: a rescanned subagent transcript is logged again.
 - When dispatching blind judges or any review-shaped agent, pass `effort: medium` with
@@ -86,25 +89,24 @@
 [23] is the top-ranked open item; its next step is Phase 3 batch 4: open
 `~/.claude/plans/curried-mapping-dolphin.md`, pick the next lower level group after the
 bitranox-skills/KI levels, classify its FOLD rows read-only (reach + skeptic lens, as batch 3 did
-in `.plan/fold-23/batch3/`), and put the batch to the user before folding anything. [28]'s
-question (B, C or D next) can be asked in the same turn, one decision at a time.
+in `.plan/fold-23/batch3/`), and put the batch to the user before folding anything. Ask [28]'s
+question (B, C or D next) in a separate turn. A tree dream (due per the SessionStart nudge) would
+also add a dream-placement run for [96].
 
 ## Files that matter
 
-- `plugins/bitranox/hooks/subagent-capture.py` - `_decide`, `_ask`, `_jev_families`, `_hit`.
-- `plugins/bitranox/hooks/tests/test_subagent_capture_decide.py` - the decide contract.
-- `plugins/bitranox/skills/meta-memory-settings/SKILL.md` - the `classifier_subagent_signal` row;
-  review artifact `.skillwriter/checklist-20261022-subagent-signal-decide.md`.
-- `OPEN-WORK.md` lines [23], [28], [500], [570].
+- `plugins/bitranox/skills/compuse-toolbox/scripts/ci_wait.py` - `_stuck_queued`, `gh_run_started`.
+- `plugins/bitranox/hooks/block-write-after-sibling-cd.py`,
+  `plugins/bitranox/hooks/block-commit-beside-sibling-gate.py` - the docstring figures in [680].
+- `OPEN-WORK.md` lines [23], [28], [96], [500], [680].
 
 ## How to verify
 
 - `git status --porcelain` in the repo: empty after this commit except gitignored files.
-- The feature on origin: `git merge-base --is-ancestor 6344b89d origin/master`.
-- Decide live: the newest `subagent_signal` rows in
-  `~/.claude/self-improve-audit/classifier-shadow-<date>.jsonl` carry `"mode": "decide"`.
+- 9.13.1 on origin: `git merge-base --is-ancestor b231f04e origin/master`.
 - CI for the commit carrying this file: `ci_wait.py --ref HEAD --timeout 2400`
   (bitranox:compuse-toolbox).
+- [96] data: `python3 plugins/bitranox/skills/meta-self-improve/jev_shadow.py report`.
 
 Read this, then replace the first line with `# STALE - read <date>, work continued`. Do not
 delete it - if this session ends badly it is the only record of where things stood.
