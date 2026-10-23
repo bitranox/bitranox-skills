@@ -29,6 +29,18 @@ than the change, so entries reconstructed from them would read like coverage wit
 a hole nobody has drawn a line under is one that gets rediscovered and half-filled - which is how
 two "versions with no entry" notes came to sit in this file disagreeing with it.
 
+## [10.0.1]
+
+### Fixed
+
+- `meta-context-watcher`: a handover or backlog line saying a PR still waits for a push go, or has
+  not been opened yet, is now treated as a snapshot. Before a push question or a "still wanted?"
+  question goes to the user, the reader looks for the PR itself (`gh pr list --head <branch>
+  --state all`, or a widened author search) and for the same change landing on the target's
+  default branch. An open PR becomes a maintainer wait, a merged PR or an upstream fix closes the
+  item, a PR closed unmerged goes back to the user with its close reason, and the item's line is
+  rewritten to what was found.
+
 ## [10.0.0]
 
 ### Changed

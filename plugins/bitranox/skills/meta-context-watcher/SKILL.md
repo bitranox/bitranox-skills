@@ -285,6 +285,19 @@ list shows a review thread. Read references/stale-pr-verdict.md before acting on
 gives the commands that list later reviews, unresolved threads and comments, and says what to do
 with a public promise the user made on the PR.
 
+**A line saying a PR still waits for a push go, or has not been opened yet, is a snapshot too.** A
+long item keeps sub-steps written before the PR existed, and a later session may have pushed it on
+the user's go since. Before you put a push question or a "still wanted?" question to the user,
+look for the PR itself: `gh pr list --repo <owner>/<repo> --head <branch> --state all`, or
+`--author <the account that opens our PRs> --state all --search '<words from the item>'` when the
+branch is unknown; a search miss proves nothing until the words are widened. Also check the
+target's default branch for the same change landing another way: grep it for a symbol unique to
+the change, and judge a hit by its diff fixing the same defect, never by its title alone. An open
+PR turns the item into a maintainer wait (the blocked-on-the-maintainer paragraph above applies),
+a merged PR or an upstream fix of its own closes it, a PR closed unmerged goes back to the user
+with its close reason, and only when none of these exists is the question the user's. Either way,
+rewrite the item's line to what you found before you report it.
+
 **A background agent the handover names as running is LIVE.** It survived the `/clear`, may have
 committed or pushed since, and will report into this conversation. Check its branch
 (`git log origin/<default>..<its branch>`) and origin for new commits, and wait for or message it
