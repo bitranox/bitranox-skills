@@ -134,7 +134,9 @@ goes for `size`: `size: unknown` is a usable line, an invented count is not.
 - **In flight** - what is part-done, how far it got, and what state it is in right now. A
   background subagent still running is in flight too: `/clear` resets the conversation, not the
   session process, so it keeps working, can commit and push, and reports into the NEXT
-  conversation. Name it, its branch, and what to do with its report.
+  conversation. Name it, its branch, and what to do with its report. A `run_in_background` shell
+  (a deadline timer, a CI wait, a long gate) survives the same way and notifies into the next
+  conversation when it ends: name it too, and say whether it is still needed.
 - **Committed, or not** - uncommitted work can vanish; the reader cannot guess which they got.
 - **Decided, and why** - choices a reader would otherwise reopen, with the reason that settled them.
 - **Decided against, and why** - so it is not mistaken for an oversight and redone.
@@ -315,7 +317,31 @@ rewrite the item's line to what you found before you report it.
 **A background agent the handover names as running is LIVE.** It survived the `/clear`, may have
 committed or pushed since, and will report into this conversation. Check its branch
 (`git log origin/<default>..<its branch>`) and origin for new commits, and wait for or message it
-instead of starting the same fix in parallel.
+(`SendMessage` to its name or id) instead of starting the same fix in parallel.
+
+**After a `/clear`, look for survivors yourself; the handover may not name them.** Two kinds
+outlive the clear: background subagents and `run_in_background` shells. `ListAgents` does not
+show this session's shells, nor a subagent that has already finished (measured on Claude Code
+2.1.309), so a list with nothing of yours does not mean nothing of yours ran or is running.
+
+- **Shells:** every Bash call's shell is a child of this session's `claude` process (measured on
+  Claude Code 2.1.309), so `$PPID` names it, and `ps --ppid $PPID -o pid,etime,args` lists this
+  session's shells (beside its MCP servers and the `ps` call's own shell). Other sessions' timers
+  on the same host run under their own `claude` process: filter by parent, never by command text.
+- **Subagents:** each one's transcript is
+  `~/.claude/projects/<project key>/<session id>/subagents/agent-<id>.jsonl`, where the project
+  key is the project path with every non-alphanumeric character replaced by `-`. List them all,
+  newest first (`ls -t ~/.claude/projects/<project key>/*/subagents/*.jsonl`): the ones written
+  just before the clear head the list, whatever the session id. Read each one's prompt and last
+  messages before saying what it did; one whose file is still growing is still running. Several of
+  them: say which one you report on. Check a branch or worktree its prompt names the way the
+  paragraph above checks a handover-named agent.
+- **An obsolete shell** (a deadline timer for a subagent that has reported) does no work, but its
+  completion notice lands here, so stop it. Its argv holds the text you wrote for it, which names
+  what it guards; when that text matches no subagent you can find, ask the user before killing it.
+  Kill the shell and its child (`ps --ppid <shell pid>` names the child), then
+  `ps -o pid= -p <shell pid>,<child pid>` must print nothing. If auto mode refuses the `kill`, give the user the
+  `! kill <shell pid> <child pid>` line. Either way treat its notice as stale when it arrives.
 
 **Before working an item, check which repo its fix lands in.** If that is not the repo you are in,
 the item is misfiled: move it to the owning repo's `OPEN-WORK.md`, close it here as moved, and take

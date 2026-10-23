@@ -29,6 +29,16 @@ than the change, so entries reconstructed from them would read like coverage wit
 a hole nobody has drawn a line under is one that gets rediscovered and half-filled - which is how
 two "versions with no entry" notes came to sit in this file disagreeing with it.
 
+## [10.0.4]
+
+### Changed
+
+- `meta-context-watcher`: after a `/clear`, look for surviving work yourself, since `ListAgents`
+  shows neither this session's background subagents nor its `run_in_background` shells. List the
+  shells by parent (`ps --ppid $PPID`), the subagent transcripts newest first, and stop an
+  obsolete deadline timer (or hand the user the `! kill` line when auto mode refuses it). A
+  handover's in-flight section names surviving shells as well as subagents.
+
 ## [10.0.3]
 
 ### Changed
