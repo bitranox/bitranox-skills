@@ -1,11 +1,15 @@
 #!/usr/bin/env python3
 """The shell calls sent EARLIER in the same assistant message as the call a PreToolUse hook judges.
 
-Several tool calls in one assistant message are siblings. Probed on Claude Code 2.1.296: sibling
-Bash calls run one after another, not side by side; each tool_use is its own transcript record
-carrying the message's `message.id`; and all of them are on disk before the second call's
-PreToolUse hook runs. The FIRST call's hook sees none of them, so a guard reading siblings can only
-ever judge a call against the ones sent BEFORE it.
+Several tool calls in one assistant message are siblings. They run one after another, not side by
+side, so a guard can only ever judge a call against the ones sent BEFORE it. Two sources answer:
+
+- `sibling_ledger`, the record `sibling-ledger.py` keeps from the hook events themselves. It is
+  asked first, because on Claude Code 2.1.309 it is the only one that works live (probed): a later
+  sibling's PreToolUse hook runs before the earlier siblings are written to the transcript.
+- the transcript, where each tool_use is its own record carrying the message's `message.id`. On
+  2.1.296 every sibling was on disk before the second call's hook ran (probed then), so it is kept
+  as the fallback for a CLI that writes them in time, or a session the ledger did not cover.
 
 Guards that need this: `block-write-after-sibling-cd` (an earlier sibling moved the shell) and
 `block-commit-beside-sibling-gate` (an earlier sibling ran a gate whose verdict nobody has read).
@@ -26,6 +30,7 @@ import os
 import re
 from pathlib import Path
 
+import sibling_ledger
 from shell_text import is_shell_tool
 
 #: How far the transcript tail is read before giving up: the current message sits at the very end.
@@ -122,7 +127,23 @@ def transcript_of(event):
 
 
 def siblings_for_event(event):
-    """The earlier shell siblings of the call a PreToolUse `event` describes; None when unknown."""
+    """The earlier shell siblings of the call a PreToolUse `event` describes; None when unknown.
+
+    The ledger's answer when it names any; otherwise the transcript's, which on an older CLI may
+    know siblings the ledger never saw (a session that started before the recorder was installed).
+    """
+    try:
+        recorded = sibling_ledger.earlier(event)
+    except OSError:
+        recorded = None
+    if recorded:
+        return recorded
+    from_transcript = _siblings_from_transcript_of(event)
+    return from_transcript if from_transcript is not None else recorded
+
+
+def _siblings_from_transcript_of(event):
+    """`siblings_from_transcript` for the transcript `event` belongs to; None when unknown."""
     path, tool_use_id = transcript_of(event), event.get("tool_use_id")
     if not path or not tool_use_id or not os.path.isfile(path):
         return None

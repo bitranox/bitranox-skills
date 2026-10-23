@@ -33,6 +33,10 @@
           {
             "type": "command",
             "command": "bash \"${CLAUDE_PLUGIN_ROOT}/hooks/run-python.sh\" --hook \"${CLAUDE_PLUGIN_ROOT}/hooks/skill-router.py\""
+          },
+          {
+            "type": "command",
+            "command": "bash \"${CLAUDE_PLUGIN_ROOT}/hooks/run-python.sh\" --hook \"${CLAUDE_PLUGIN_ROOT}/hooks/sibling-ledger.py\""
           }
         ]
       }
@@ -76,6 +80,10 @@
           {
             "type": "command",
             "command": "bash \"${CLAUDE_PLUGIN_ROOT}/hooks/run-python.sh\" --hook \"${CLAUDE_PLUGIN_ROOT}/hooks/block-masked-gate-exit.py\""
+          },
+          {
+            "type": "command",
+            "command": "bash \"${CLAUDE_PLUGIN_ROOT}/hooks/run-python.sh\" --hook \"${CLAUDE_PLUGIN_ROOT}/hooks/sibling-ledger.py\""
           },
           {
             "type": "command",
@@ -335,6 +343,10 @@
           {
             "type": "command",
             "command": "bash \"${CLAUDE_PLUGIN_ROOT}/hooks/run-python.sh\" --hook \"${CLAUDE_PLUGIN_ROOT}/hooks/tmp-prune-hook.py\""
+          },
+          {
+            "type": "command",
+            "command": "bash \"${CLAUDE_PLUGIN_ROOT}/hooks/run-python.sh\" --hook \"${CLAUDE_PLUGIN_ROOT}/hooks/sibling-ledger.py\""
           }
         ]
       }
@@ -385,6 +397,20 @@
           {
             "type": "command",
             "command": "bash \"${CLAUDE_PLUGIN_ROOT}/hooks/run-python.sh\" --hook \"${CLAUDE_PLUGIN_ROOT}/hooks/post-compact-nudge.py\""
+          }
+        ]
+      }
+    ],
+    "PostToolBatch": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash \"${CLAUDE_PLUGIN_ROOT}/hooks/run-python.sh\" --hook \"${CLAUDE_PLUGIN_ROOT}/hooks/sibling-ledger.py\""
+          },
+          {
+            "type": "command",
+            "command": "bash \"${CLAUDE_PLUGIN_ROOT}/hooks/run-python.sh\" --hook \"${CLAUDE_PLUGIN_ROOT}/hooks/publish-after-failed-edit-note.py\""
           }
         ]
       }

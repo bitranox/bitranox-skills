@@ -33,10 +33,11 @@ directory their author happened to want - mostly workflow agents running `cd $W`
 bare `git add` in the next. Those 25 pay one retry with an explicit target; the shape they relied
 on is the one that failed the other 5, and nothing in the command tells the two apart.
 
-The siblings come from `transcript_siblings` (shared with block-commit-beside-sibling-gate): the
-records for one message carry one `message.id`, one tool_use per record, written before the call
-they belong to runs, and a call made inside a subagent is looked up in that subagent's own
-transcript. When this call cannot be found, nothing is known about its siblings and the hook passes.
+The siblings come from `transcript_siblings` (shared with block-commit-beside-sibling-gate), which
+asks `sibling_ledger` first - the record `sibling-ledger.py` keeps from the hook events, per session
+and per subagent - and the transcript only as a fallback: on Claude Code 2.1.309 a later sibling's
+hook runs before the earlier siblings reach the transcript, which left this guard blind live
+(bitranox-skills OPEN-WORK [670]). When neither knows this call's siblings, the hook passes.
 
 The PowerShell tool is read the same way: `Set-Location`/`sl`/`cd`, `git -C` and `make -C` mean
 the same there, and its calls count as siblings of each other. Siblings are parsed with the calling

@@ -26,13 +26,17 @@ were found by reading the siblings back, since a heredoc edit and a commit-messa
 same calls. Each costs one retry in the next message. Whether those 19 gates were red was not
 measured: the shape is refused because nothing in it can tell.
 
-A commit sent BEFORE its gate in the same message is not caught: the first call's hook finds
-nothing of its message in the transcript yet (probed on 2.1.296). Data regions are masked first, so
-a gate or a commit named inside a heredoc body or a quoted string is text, not a command.
+A commit sent BEFORE its gate in the same message is not caught: nothing of the gate has run or
+been recorded yet. Data regions are masked first, so a gate or a commit named inside a heredoc body
+or a quoted string is text, not a command.
 
-The siblings come from `transcript_siblings` (shared with block-write-after-sibling-cd), which reads
-a subagent's own transcript when the event carries an `agent_id`. BLOCKING: exit 2 with the reason
-on stderr. Fail-open on any error. ASCII only.
+The siblings come from `transcript_siblings` (shared with block-write-after-sibling-cd), which asks
+`sibling_ledger` first and the transcript only as a fallback. Live on Claude Code 2.1.309 the
+transcript does not yet hold the earlier siblings when this hook runs, so a probe commit beside
+`ruff --version` went through on 9.12.0 and is refused once the ledger is read (probed 2026-10-23,
+both arms in a throwaway session). A file EDIT that fails is invisible to every PreToolUse hook; the
+PostToolBatch hook publish-after-failed-edit-note covers that case after the fact. BLOCKING: exit 2
+with the reason on stderr. Fail-open on any error. ASCII only.
 """
 
 import json

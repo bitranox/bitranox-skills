@@ -74,6 +74,8 @@ _HOOK_MODULES = {
     "warn-inline-powershell": "warn_inline_powershell",
     "tmp-prune-hook": "tmp_prune_hook",
     "unbuffered-python-nudge": "unbuffered_python_nudge",
+    "sibling-ledger": "sibling_ledger_hook",
+    "publish-after-failed-edit-note": "publish_after_failed_edit_note",
 }
 
 for _stem, _alias in _HOOK_MODULES.items():

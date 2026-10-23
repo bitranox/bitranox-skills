@@ -29,6 +29,32 @@ than the change, so entries reconstructed from them would read like coverage wit
 a hole nobody has drawn a line under is one that gets rediscovered and half-filled - which is how
 two "versions with no entry" notes came to sit in this file disagreeing with it.
 
+## [9.13.0]
+
+### Fixed
+
+- `block-commit-beside-sibling-gate` and `block-write-after-sibling-cd` fire live again. On Claude
+  Code 2.1.309 a later sibling's PreToolUse hook runs before the earlier siblings of its message
+  are written to the transcript, so both guards, which read siblings from there, saw none: a probe
+  commit sent beside `ruff --version` went through on 9.12.0 and is refused on 9.13.0 (both arms
+  in one throwaway session). This is the cause OPEN-WORK [670] left open. Siblings now come from
+  a record the hooks keep themselves (`sibling_ledger.py`, written by the new `sibling-ledger.py`
+  at PreToolUse and emptied at PostToolBatch, per session and per subagent), with the transcript
+  kept as the fallback for a CLI that writes siblings in time. The ledger sits in a per-user
+  directory used only while it is owner-only (0700, files 0600, links never followed), so on a
+  shared host another user can neither redirect its appends nor plant entries that refuse commits.
+
+### Added
+
+- `publish-after-failed-edit-note.py` (PostToolBatch): when a commit, push or PR ran after a file
+  edit of the same message had failed, it tells the model so beside the tool results, naming the
+  file, the edit's error and the publishing command, while an unpushed commit can still be
+  amended. A failed edit fires no PreToolUse hook at all (probed on 2.1.309), so it cannot be
+  refused before the commit runs. Priced on 6,381 recorded publishing calls: 851 had an earlier
+  edit sibling, 6 an edit that failed, and in 4 of those the commit or push then ran.
+- `meta-claude-hooks` `references/io-contract.md`: the same-message sibling section now describes
+  2.1.309, where the transcript lags the hooks, and the hook-event record that replaces it.
+
 ## [9.12.0]
 
 ### Added

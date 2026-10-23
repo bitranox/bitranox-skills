@@ -90,21 +90,33 @@ pattern still matches, measures the input rather than the code path you changed.
 
 ### Same-message sibling calls
 
-The hook's stdin describes only the current call. Several tool calls in one assistant message are siblings:
-each `tool_use` is its own transcript record carrying the message's `message.id`, and sibling shell calls run
-one after another, not side by side (observed on CLI 2.1.296). From the second call on, the siblings are on disk
-when the call's `PreToolUse` hook runs; the FIRST call's hook sees none of them. A guard that judges a call
-against its siblings (an earlier `cd`, an earlier gate run nobody has read):
+The hook's stdin describes only the current call. Several tool calls in one assistant message are siblings,
+and sibling calls run one after another, not side by side. **Do not read them from the transcript.** On CLI
+2.1.296 the siblings were on disk when a later call's `PreToolUse` hook ran; on 2.1.309 they are NOT (probed
+2026-10-23: a guard reading the transcript let a commit beside a gate through live, and refused the same event
+replayed once the records had landed). The hook events are in step instead (probed on 2.1.309):
 
-- reads the transcript tail, finds the `tool_use` with its own `tool_use_id`, and takes the `tool_use` blocks
-  with the same `message.id` that come BEFORE it - only those have run;
-- inside a subagent, reads the agent's own transcript (above), not `transcript_path`;
-- reads "own call not found" or an unreadable transcript as nothing known, and allows;
-- is tested on the first-call case on its own (no sibling visible), beside an earlier sibling that matters, one
-  that does not, and a sibling in a subagent's transcript.
+- sibling calls fire `PreToolUse` and `PostToolUse` strictly one call after the other;
+- `PostToolBatch` fires once per message, after all its calls, listing them in order with the result the model
+  saw; a subagent's events, its `PostToolBatch` included, carry its `agent_id`;
+- a call that fails VALIDATION (an `Edit` of a file not Read, or of a missing file) fires no `PreToolUse` and no
+  `PostToolUseFailure` hook at all; only `PostToolBatch` shows it, with a result beginning `<tool_use_error>`;
+- `PostToolBatch`'s `hookSpecificOutput.additionalContext` reaches the model beside the tool results.
 
-This plugin's shared reader is `hooks/transcript_siblings.py`, so every sibling-aware guard agrees on which
-calls are siblings.
+So a guard that judges a call against its siblings keeps its own record: append each call at `PreToolUse`, keyed by
+`session_id` and `agent_id`, leave the call's own entry out when reading, and empty the record at `PostToolBatch`
+(with `UserPromptSubmit` and `Stop` as backstops). It reads "no record" as nothing known, and allows, and it is
+tested on the first-call case, an earlier sibling that matters, one that does not, and a subagent's own record.
+A failed edit can only be reported after the batch, never refused before a sibling acts on it.
+
+**A replay against the recorded transcript cannot reproduce a live miss.** Afterwards the transcript holds every
+sibling, so a guard replayed against it fires where the live hook saw nothing (this is how a live miss read as
+"cause unknown"). Cut the transcript at the call before replaying, and even then it shows siblings the live hook
+did not have; replay a ledger-based guard by feeding it the ledger as the earlier events left it. A reader that
+takes only the transcript's tail (4 MB in `transcript_siblings`) also passes falsely on a grown transcript.
+
+This plugin's shared reader is `hooks/transcript_siblings.py` over `hooks/sibling_ledger.py` (kept by
+`hooks/sibling-ledger.py`), with the transcript as a fallback for a CLI that writes siblings in time.
 
 ## What `tool_input` holds, per tool
 
