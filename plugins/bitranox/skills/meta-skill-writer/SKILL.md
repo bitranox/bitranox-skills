@@ -636,6 +636,35 @@ subagent on the old text wrote the call the library refuses" is the test result.
 ```
 </Good>
 
+**Describe the latest release only.** A skill for a tool or library its readers install at the
+latest release (`uvx`, a fresh install) states current behaviour in the present tense. Do not write
+version-history lines: "From / Before / Since / Until / Starting with / As of / New in X.Y.Z ...",
+"Available from ...", "previously", "no longer", "as before" or "used to". When a release adds
+behaviour, write the new rule as plain current behaviour, and rewrite every history line you meet
+while editing (the finder below lists candidates; the review after it decides which are history), in
+both copies of a mirrored skill. Version history belongs in the tool's CHANGELOG. The reader runs
+the latest release, so history makes them reason about versions they do not run, and a
+version-scoped opener ("From 3.0.0 the client ...") silently back-dates every rule later added
+inside it. This overrides the "Old patterns" example in anthropic-best-practices.md. Before
+shipping, run the finder over the whole skill directory. It makes two passes with one shared
+pattern: line by line, then over each file's text with every run of whitespace joined, because a
+phrase broken across a line end ("no" ending one line, "longer" starting the next) escapes a line
+grep:
+
+```bash
+P='(from|before|since|until|starting with|as of|new in) ([A-Za-z_-]+ )?v?[0-9]+\.[0-9]|available from|previously|no longer|used to|as before'
+grep -rniE "$P" <skill-dir> --include='*.md' | grep -v '/.skillwriter/'
+find <skill-dir> -name '*.md' -not -path '*/.skillwriter/*' -exec sh -c '
+  tr -s "[:space:]" " " < "$2" | grep -oiE ".{0,40}($1).{0,40}" |
+    while IFS= read -r hit; do printf "%s: %s\n" "$2" "$hit"; done
+' _ "$P" {} \;
+```
+
+Review each hit, never rewrite blindly: a version floor in an install line (`pkg>=0.3.2`), a
+sentence about the tool's behaviour rather than the skill's history ("the skill documents
+behaviour the tool no longer has"), and a skill deliberately pinned to one version (see
+"Referencing external DOCS") are not history.
+
 ## File Organization
 
 ### Self-Contained Skill
@@ -1286,13 +1315,23 @@ its count.
 
 **Where the loop stops:** every gap on the list is either CLOSED in the text or DECLINED in the
 review artifact with a reason (out of scope, owned by another skill, judgement the skill should
-leave open). A surviving gap is fine; a surviving gap nobody decided about is not, so the exit
+leave open, or covered elsewhere in the skill - see the next paragraph).
+A surviving gap is fine; a surviving gap nobody decided about is not, so the exit
 condition is an empty undecided list, never an empty list. Re-test only the questions your fix
 touched, not the whole skill - a full re-run costs a cycle and answers nothing you changed.
 A gap RED and GREEN both report - a question answered NOT STATED in both arms - predates your
 edit. It is still a gap a reader hits, so it goes on the list like any other, and "not caused by
 this change" is not a decline reason: close it in this change and re-probe that question, or
 decline it for one of the reasons above.
+
+**A probe shown only an excerpt reports gaps whose answer lives outside it.** Before adding text
+for any gap from such a probe, grep the whole skill (SKILL.md and its supporting files) for the
+answer. If the covering text exists, decline the gap in the review artifact with its file, line
+and the quoted wording instead of restating it in the excerpt: duplicated guidance drifts, and the
+copy the next edit misses becomes a contradiction. Only a gap absent from the whole skill is a
+finding, with one exception: an excerpt a reader really meets on its own (a reference file loaded
+on demand, the description, a section a hook injects). Text elsewhere never reaches that reader,
+so the gap stands; close it with a pointer to the covering text rather than a copy.
 
 **A probe stops at the first gap it trips on,** so nothing past that point was exercised, and
 closing the gap can expose the next one. A gap marked closed in the review artifact is a claim
@@ -1416,6 +1455,7 @@ Deploying untested skills = deploying untested code. It's a violation of quality
 - [ ] Common mistakes section
 - [ ] No narrative storytelling
 - [ ] No session narrative or private provenance in the skill OR its review artifact (operator instructions, which tool you reached for and when, scratch/temp paths, how it looked before the edit) - see "Write the skill and its artifacts in the present tense"
+- [ ] Describes only the latest release: the finder in "Describe the latest release only" ran over the whole skill dir, and every hit is rewritten as current behaviour or judged not history
 - [ ] Every address, MAC, hostname and path YOU added is a reserved documentation value, not one from your machine - see "An example from a real scenario is not a real address". Verify: `grep -nE '([0-9]{1,3}\.){3}[0-9]{1,3}|([0-9a-f]{2}:){5}[0-9a-f]{2}|/home/|/Users/|/tmp/' SKILL.md`
 - [ ] Supporting files only for tools or heavy reference
 - [ ] Hub skills: routing table with topic descriptions for each supporting file

@@ -100,6 +100,22 @@ An SSH session is a flaky external resource: it can drop, hang, or time out mid-
   This is a conscious trade-off (you own the network). NEVER apply it to internet/untrusted hosts -
   there use `accept-new` (new ok, changed rejected) or verify the fingerprint.
 
+  **Verify a changed key out of band before you replace it, wherever no trusted-subnet block
+  covers the host.** A changed key is exactly the warning a man-in-the-middle produces, and
+  `ssh-keygen -R` plus a reconnect accepts whatever answers on the address. On a VM you can reach
+  through its hypervisor (typically a guest destroyed and recreated on a reused address), read the
+  key the guest really holds instead. On Proxmox VE, with the QEMU guest agent installed and
+  running in the guest and enabled in the VM's options, run on the node:
+  `qm guest exec <vmid> -- ssh-keygen -lf /etc/ssh/ssh_host_<type>_key.pub`, where `<type>` is the
+  key type ssh named in its warning (`ed25519`, `ecdsa`, `rsa`); reading another type's file
+  compares the wrong key. No agent: read the same file at the VM console. If its SHA256
+  fingerprint equals the one ssh printed, run the `ssh-keygen -f <file> -R <name>` line ssh printed
+  in its warning (for a non-22 port the entry is `[host]:port`, so a bare `-R <host>` removes
+  nothing) and reconnect; if it differs, stop, because
+  something other than that guest answers on the address. When you destroy such a VM, remove its
+  entry too, so its stale key does not outlive it: `ssh-keygen -f <file> -R '[host]:port'`, or the
+  bare host when it listens on port 22.
+
 ### Setting it up (ask the user's OS, then walk them through it)
 
 When a host needs auth, first ask which operating system the user is on, then guide them. Afterwards

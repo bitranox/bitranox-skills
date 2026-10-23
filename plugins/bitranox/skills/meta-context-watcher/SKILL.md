@@ -156,6 +156,13 @@ goes for `size`: `size: unknown` is a usable line, an invented count is not.
   stale on landing and each correction moves it again. State the property plus the command that
   checks it (for CI: `ci_wait.py --ref HEAD` from `bitranox:compuse-toolbox`), or quote a result for an earlier, final sha and
   say which commit it belongs to.
+  A local gate result describes the tree at the instant it ran, and any later write voids it -
+  including a gitignored file such as the `handover.prev.md` from step 3, which `git status` never
+  shows and a CI clone never has, so a test that enumerates files on disk goes red on the next
+  local run while CI stays green. A gate run before the wrap-up writes and then reported as "the
+  gate passed" is exactly that stale line. Write the gate COMMAND here, not its verdict. To quote a
+  result at all, run the gate after steps 2 and 3 have written their files and before step 4, and
+  say the handover itself was written after that run.
 
 ## What does NOT belong
 
@@ -209,14 +216,16 @@ goes for `size`: `size: unknown` is a usable line, an invented count is not.
    `.prev` copy is the one step of history, and an unneeded copy replaces the last rewrite's backup
    with a near-identical file. Before replacing an existing `handover.prev.md`, check what it holds
    and diff it first if it backs a rewrite nobody has checked yet.
-4. **Write `handover.md` at the repo root, OVERWRITING whatever is there.** A stale handover from an
-   earlier session is superseded the moment you write yours - replace it wholesale, never append to
-   it and never keep both. There is exactly one `handover.md`, and it describes one moment; two of
-   them, or one with two moments in it, leaves the reader deciding which half is true. Commit it
-   along with `OPEN-WORK.md`: tracking them costs one diff per session and buys a history for the
-   one file that is destroyed on purpose every time, so a dropped item can be recovered once
-   somebody notices. Check first that neither carries a secret, an internal hostname or a private
-   address, because a tracked file in a public repo publishes all three permanently.
+4. **Write `handover.md` at the repo root, OVERWRITING whatever is there.** If the handover will
+   quote a gate result, run that gate now, after steps 2 and 3 have written their files (see "How to
+   verify"), and say the handover was written after it. A stale handover from an earlier session is
+   superseded the moment you write yours - replace it wholesale, never append to it and never keep
+   both. There is exactly one `handover.md`, and it describes one moment; two of them, or one with
+   two moments in it, leaves the reader deciding which half is true. Commit it along with
+   `OPEN-WORK.md`: tracking them costs one diff per session and buys a history for the one file that
+   is destroyed on purpose every time, so a dropped item can be recovered once somebody notices.
+   Check first that neither carries a secret, an internal hostname or a private address, because a
+   tracked file in a public repo publishes all three permanently.
 5. **End the file with its own expiry instruction:**
 
    > Read this, then replace the first line with `# STALE - read <date>, work continued`. Do not
@@ -268,6 +277,11 @@ gate or session.
 
 Never amend a stale handover to update it - write a NEW one and replace the file. An edited handover
 holds two moments with no way to tell them apart.
+
+**A gate result in the handover is a claim about a past moment, not a property of the tree.** The
+session that wrote it usually ran the gate before its last writes, and those can be gitignored
+files nothing shows you. Re-run the gate before building on it; a red there belongs to the
+inherited tree, not to the change you are about to make.
 
 **Read `OPEN-WORK.md` too, and read it FIRST.** The handover tells you where the last session
 stopped; the backlog tells you what is actually worth doing, and the two answers are routinely

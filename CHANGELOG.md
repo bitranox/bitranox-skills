@@ -29,6 +29,29 @@ than the change, so entries reconstructed from them would read like coverage wit
 a hole nobody has drawn a line under is one that gets rediscovered and half-filled - which is how
 two "versions with no entry" notes came to sit in this file disagreeing with it.
 
+## [10.0.3]
+
+### Changed
+
+- `process-test-design` gains rules for: testing a check-then-open race by making `stat` answer
+  for another file; damaging an installed package by running a copy beside an intact control
+  copy; driving a real external prompt (`sudo`) through a stand-in executable on `PATH`;
+  `monkeypatch.delenv` on an absent variable, which records nothing to undo; a colour test's
+  child environment (`FORCE_COLOR` alone does not colour under `TERM=dumb`); a `sitecustomize.py`
+  marker that a distro's own sitecustomize shadows; a blocking stub that must `exec` its blocker;
+  and a test that enumerates repository files, which asks git rather than globbing.
+- `meta-skill-writer`: a skill describes only the latest release, with a two-pass history finder;
+  a probe shown only an excerpt reports gaps whose answer lives elsewhere in the skill.
+- `meta-context-watcher`: a gate result quoted in a handover is run after the session's last
+  wrap-up write, and the Procedure says when.
+- `devops-bmk`: an outdated (or newer) Makefile is handled by output mode, and a text-mode gate
+  with an unanswered terminal hangs; `release` from a topic-branch checkout pushes that branch;
+  the skill now states current behaviour only.
+- `compuse-ssh`: a changed host key on a recreated test VM is checked against the key the guest
+  holds, read through the hypervisor.
+- `coding-python-enforce-data-architecture-strict`: a model replacing a dict declares every field
+  the consumer decides on, such as the interpreter implementation.
+
 ## [10.0.2]
 
 ### Added

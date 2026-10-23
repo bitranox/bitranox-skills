@@ -48,7 +48,7 @@ You do not need `uv tool install bmk` yourself: once the Makefile is in place it
 installed for you (see below). `uvx bmk install` is only the bootstrap that writes the Makefile
 and its companion `.bmk-cooldown.mk`. **Commit both**: they are versioned as a pair (the Makefile's
 first line carries the version), and `bmk install`, or a `make` that finds the Makefile outdated,
-rewrites them together.
+rewrites them together (a `make` only in JSON mode or when answered; section 4).
 
 ### bmk's env holds bmk alone, and is shared
 
@@ -74,9 +74,9 @@ environments.
   remember and no version marker to go stale. Do not gate it behind a stamp file: make would skip
   it and the env would silently pin itself to whatever bmk it first saw.
 - It **upgrades**; it does not reinstall on the common path. `uv tool upgrade` revalidates the
-  index on every run and is a near no-op when bmk is already current. The unconditional
-  `--reinstall --force` it replaced tore the env down on every `make` - and because the env is
-  shared, that deleted the site-packages out from under a bmk still *running* in another repo.
+  index on every run and is a near no-op when bmk is already current. A
+  `--reinstall --force` on every `make` would tear the shared env down, deleting the site-packages
+  out from under a bmk still *running* in another repo.
   `--refresh` is not needed and uv rejects it (exit 2); offline it simply answers
   "Nothing to upgrade".
 - **The rebuild waits for the bmk processes using that env.** Every bmk holds a shared lock on
@@ -84,11 +84,12 @@ environments.
   exclude each other, so two repos still gate at the same time - only a *mutation* waits. The
   wait is bounded: an upgrade that cannot get the lock is skipped (the next `make` takes it),
   while a repair that cannot get it fails rather than continuing on a damaged env. Set
-  `BMK_TOOL_LOCK=0` to disable it. **You no longer need a caller-side lock** (a `flock` around
+  `BMK_TOOL_LOCK=0` to disable it. **You do not need a caller-side lock** (a `flock` around
   `make`, a coordinator mutex) to stop two repos colliding here - and a caller-side one is worse,
   because it serialises whole gates where bmk serialises only the provisioning.
 - Two writers stay out of reach by construction: a repo whose Makefile predates this is unguarded
-  until its next `make` regenerates it, and a hand-run `uv tool install bmk` always is. So when a
+  until a `make` regenerates it (section 4: a text-mode `make` without a terminal never does),
+  and a hand-run `uv tool install bmk` always is. So when a
   command fails and the env turns out to have been replaced mid-run, bmk says so on stderr rather
   than leaving an ImportError inside its own dependencies to look like a flake.
 - **A `ModuleNotFoundError` whose traceback runs through bmk's own entry point and names a module
@@ -104,12 +105,12 @@ environments.
 - Right after a release there is a brief window where uv's index still reports only the previous
   version; the next `make` picks the new one up.
 - **bmk's env resolves under bmk's own supply-chain cooldown**, read from `.bmk-cooldown.mk` beside
-  the Makefile (from bmk 3.23.0). The file holds uv flags - bmk's cooldown window plus `false`
+  the Makefile. The file holds uv flags - bmk's cooldown window plus `false`
   exemptions for bmk and its own libraries - so a dependency release does not reach the env that
   runs every repo's ruff, pyright and pip-audit a minute after its upload. Do not hand-edit it;
   `bmk install` rewrites it. When the window cannot be met (a fresh install whose bmk floor is
   younger than the window), the `make` installs without it and says so on stderr, and the next
-  `make` has the window again. A repo without the file installs bmk with no cooldown, as before.
+  `make` has the window again. A repo without the file installs bmk with no cooldown.
 
 ### The project venv `.venv`
 
@@ -122,9 +123,9 @@ environment you test in, type-check in and audit are one and the same, and no pr
 install its dependencies into an environment it does not own.
 
 **One bmk provisions a venv at a time.** The sync is serialised by an exclusive lock scoped to
-that one venv path, so a subagent's `make test` beside yours - or `test-all` beside `test` - can no
-longer reinstall packages under a running gate. Unguarded, the loser did not crash: provisioning
-degrades rather than raising, so it silently tested a different environment. `BMK_VENV_LOCK_TIMEOUT`
+that one venv path, so a subagent's `make test` beside yours - or `test-all` beside `test` - cannot
+reinstall packages under a running gate. Unguarded, the loser would not crash: provisioning
+degrades rather than raising, so it would silently test a different environment. `BMK_VENV_LOCK_TIMEOUT`
 (default 600s) bounds the wait and `BMK_VENV_LOCK_DIR` says where the lock files live (outside every
 repository). Because the scope is one venv path, `test-all` still provisions its versions in
 parallel.
@@ -302,9 +303,16 @@ forwarded (e.g. `make push fix login bug`). Most have short aliases.
 **`release` does not bump; `push` always commits.**
 
 - `release` tags `v` + the version already in `pyproject.toml`, on HEAD, and refuses a dirty tree;
-  it pushes the branch, then the tag, so a local release commit needs no separate push.
-  When that version is committed but not yet tagged (`git tag --list "v<version>"` is empty),
-  release it directly: running `bump` first moves past it and that version is never published.
+  it pushes the CHECKED-OUT branch (`[release] Pushing branch <branch> to <remote>`), then the
+  tag, so a local release commit needs no separate push.
+- **Release from a checkout on the default branch.** Run on a topic branch (a worktree is the usual
+  case), `release` creates or updates THAT branch on the remote, a public one included, where it
+  reads as real work; nothing in the output flags it. Fast-forwarding the default branch first does
+  not prevent it. Afterwards run `git ls-remote --heads origin <branch>`; if the branch is there at
+  the same commit as `origin/<default>`, delete it with `git push origin --delete <branch>`.
+- When the `pyproject.toml` version is committed but not yet tagged
+  (`git tag --list "v<version>"` is empty), release it directly: running `bump` first moves past
+  it and that version is never published.
 - `release` counts only TRACKED changes as dirty (`git diff`, `git diff --cached`); an untracked
   file does not stop it. On `[release] Working tree not clean. Commit or stash changes first.`, do
   not commit an edit that is not part of this release to get past it: the tag lands on HEAD, so it
@@ -330,13 +338,12 @@ forwarded (e.g. `make push fix login bug`). Most have short aliases.
   `[build-system].requires`, `[tool.pdm.dev-dependencies]`) and raises `>=`, `>`, `~=` and
   wildcard (`==1.*`) requirements, a third-party one only to a release older than the project's
   `[tool.uv]` cooldown. An exact pin (`pkg==1.5.0`, `pkg===1.5.0`) is left as written and reported
-  pinned (`[==]` in the `bmk deps` report), so it never fails the `deps` stage either (from bmk
-  3.23.0; before that, `==X` was moved to the newest release like a floor). Use one for a release
-  you hold on purpose, such as a test that compares the bytes one release produces.
-- **Which bmk you are running** decides behaviour marked "from bmk X.Y.Z" here: `bmk --version`
-  (run `$(uv tool dir --bin)/bmk --version` when `bmk` is not on your PATH). The Makefile's first
-  line, `# BMK MAKEFILE X.Y.Z`, names the bmk that wrote the Makefile, not necessarily the one the
-  next `make` runs, since every `make` upgrades bmk first.
+  pinned (`[==]` in the `bmk deps` report), so it never fails the `deps` stage either. Use one for
+  a release you hold on purpose, such as a test that compares the bytes one release produces.
+- **Which bmk you are running:** `bmk --version` (run `$(uv tool dir --bin)/bmk --version` when
+  `bmk` is not on your PATH). The Makefile's first line, `# BMK MAKEFILE X.Y.Z`, names the bmk
+  that wrote the Makefile, not necessarily the one the next `make` runs, since every `make`
+  upgrades bmk first.
 
 ### What version `bump` and `release` accept, and what they produce
 
@@ -413,6 +420,30 @@ is `update_deps`, which runs the `deps_update` pipeline, so the block is
 Precedence: `--human` (forces text) > `BMK_OUTPUT_FORMAT` > default (`json`). If a run "does nothing
 visible", that is JSON mode succeeding -- add `--human` to watch it work.
 
+**An outdated Makefile is handled by output mode, and an unanswered terminal hangs.** Before every
+command except `install`, bmk compares the Makefile's `# BMK MAKEFILE <ver>` with itself. When the
+versions differ, only `BMK_OUTPUT_FORMAT` decides (`--human` and `make test-human` do not count:
+the check runs before the subcommand's options are read). A Makefile NEWER than the running bmk,
+left by a skipped upgrade, is rewritten back to the older version the same way; there the remedy
+is to let the next `make` upgrade bmk, not the `bmk install` the stderr line suggests:
+
+- JSON mode (the default) replaces the Makefile without asking.
+- Text mode with any stdin that is not a terminal (a pipe, `</dev/null`, a CI step, `yes y |`)
+  keeps the OLD Makefile, prints `run 'bmk install' to update it` on stderr, and runs the command.
+- Text mode with a terminal on stdin asks `Makefile is outdated (<old> -> <new>). Update? [y/N]`
+  (the arrow prints as a Unicode character) and waits for an answer, with no timeout. A
+  pseudo-terminal nobody answers (a detached tmux pane, pexpect, `ssh -tt`) is a terminal, so the
+  gate blocks forever before its first stage. All that time it holds bmk's shared lock on the tool
+  env (section 1), so every other repo's `make` skips its bmk upgrade with the
+  `another bmk is using the shared tool environment` line until this one is answered or killed.
+
+A hung gate looks like a slow one. When a gate shows no new output long past the suite's usual
+runtime (and other repos keep skipping the bmk upgrade), read the pane's last line for the question
+and look for a bmk process whose working directory is that repo and whose age is far beyond the
+suite's runtime; answer or kill it rather than waiting longer. **Run unattended gates in JSON mode,
+or in text mode with stdin that is not a terminal** (`BMK_OUTPUT_FORMAT=text make test </dev/null`),
+and refresh an old Makefile with `bmk install`, which never asks.
+
 ## 5. Missing external tools: `bmk ensure`
 
 Some pipeline stages call external tools (git, pwsh, shellcheck, shfmt, bashate, PSScriptAnalyzer).
@@ -432,10 +463,6 @@ it warns and uses 120 and `E003`. Every flag matters: shfmt with the right inden
 yields a rejected diff. And `bashate` itself reads NO config file, so run by hand without those
 flags it falls back to its 79-char default and flags lines the gate accepts. Reformatting to your
 local defaults instead of these values is the usual cause of "passes locally, fails the gate".
-
-Before bmk 3.13.2 the gate's file discovery also descended into a NESTED git worktree and linted
-another branch's checkout as part of yours. The tell is a lint error naming a path you do not
-recognise; upgrade, or move the nested checkout outside the tree.
 
 ## 6. Configuration and custom pipelines
 
@@ -508,7 +535,7 @@ The pinning differs per tool, which decides which environment a stage actually u
 on `ctx.python_cmd`, `pyright` is pinned via `--pythonpath`, and `lint-imports` is pinned to
 nothing.
 
-**`pyright` checks every OS your CI runs on** (from bmk 3.23.0). pyright type-checks one platform
+**`pyright` checks every OS your CI runs on.** pyright type-checks one platform
 per run, so a check on Linux passes code whose types break under Windows' stubs (`os.geteuid()`,
 `signal.SIGHUP`). The stage runs `pyright --pythonplatform` once per OS family listed in
 `[tool.ci].os`, the key CI builds its OS matrix from (`ubuntu-*` -> Linux, `windows-*` -> Windows,
@@ -531,7 +558,7 @@ gate to go red. A gate that has only ever passed has not been shown to gate. See
 | `make release` runs green but no GitHub Release appears (Windows)                   | `make release` detects `gh` via `shutil.which` and SILENTLY skips the GitHub Release when `gh` is not on the INVOKING process's PATH (tag push + PyPI publish still succeed). Put gh's dir on PATH first, or run `gh release create v<version>` after.             |
 | `bmk: command not found`                                                            | uv's tool bin dir is not on your PATH. You do not need it there - inside a project use `make <target>` (the Makefile calls the absolute path); to bootstrap a new one use `uvx bmk install`. To put it on PATH anyway: `uv tool update-shell`.                     |
 | Tools resolve the wrong deps / import errors                                        | Re-run `make`: it re-syncs the PROJECT's venv (what the gates resolve) before every env-touching target. If it persists, check `BMK_NO_VENV_SYNC` (section 1); deleting `.venv` only forces a full re-resolve.                                                     |
-| `make` keeps using an old bmk right after a release                                 | uv's index has not caught up yet, or another bmk held the tool lock and the upgrade was skipped (section 1). Either way the next `make` upgrades; just re-run it.                                                                                                  |
+| `make` keeps using an old bmk right after a release                                 | uv's index has not caught up yet, or another bmk held the tool lock and the upgrade was skipped (section 1). Either way the next `make` upgrades; just re-run it. Skipped on every `make`? A bmk may hang on the Makefile prompt (section 4).                      |
 | `make test` runs host-mutating `local_only` tests you want only on a throwaway host | Tag those tests `mutating` and set `[tool.scripts.test].exclude-markers = "mutating"` (section 6). `make test` running `local_only` is by design - do NOT exclude `local_only` to "match CI".                                                                      |
 | `make test` fails on a `[dev]`-only import                                          | bmk runs pytest in this project's `.venv`, synced with the `[dev]` extra before every env-touching target. Re-run `make`; if it persists, check `BMK_NO_VENV_SYNC` (section 1).                                                                                    |
 | `make release` refuses: version is not canonical / carries a local segment          | Not a read failure - the version WAS read. bmk accepts any canonical PEP 440 version but refuses a spelling `packaging` would normalise (`v1.0.0`, `1.0.0-beta`) or a local segment (`1.2.3+local`); the message names the canonical form to write. See section 3. |

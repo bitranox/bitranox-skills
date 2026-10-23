@@ -65,6 +65,20 @@ it is the idiom that reaches into the code under test instead of injecting at a 
 | Rust            | generic param or `Box<dyn Trait>` | `#[cfg(test)]` branch inside production code                     | `wiremock`, a real DB behind a feature  | `cargo test -- -Z unstable-options --shuffle` (nightly only; `cargo nextest run` does NOT shuffle - it runs lexicographically, one process per test, and `RUST_TEST_SHUFFLE` is silently ignored) |
 | Bash            | a command name/path variable      | redefining the function under test in the test                   | a stub binary earlier on `PATH`         | `bats` (isolate per file)                                                                                                                                                                         |
 
+**A real external program with an interactive prompt (`sudo`, an askpass helper, an installer)
+is tested through a stand-in on `PATH`, in any language, not by patching `subprocess` or your own
+relaunch helper.** Put a small executable script (shebang, mode +x) in the test's temp dir that
+writes its argv to a file and exits with the code the test picks, and prepend its directory to
+`PATH` (pytest: `monkeypatch.setenv("PATH", f"{d}{os.pathsep}{os.environ['PATH']}")`). The real
+subprocess call then runs with nothing patched, and the argv contract - the flags and their order -
+stays under test: assert on the logged argv and on how each exit code is mapped. A patch of
+`subprocess.run` or of the helper skips exactly that: the argv really built and how the real
+call's result is read. A stand-in cannot model a terminal (pty allocation, a Ctrl+C delivered to
+the process group at the prompt), so keep one real-terminal run for signal behaviour. On Windows,
+`CreateProcess` searches the PARENT's `PATH` and appends only `.exe` to a bare name: when the code
+passes its own `env=` to the child, or the stand-in is a `.cmd`, resolve the program to an
+absolute path with `shutil.which(name, path=<that env's PATH>)`.
+
 **Mark the tiers so a bare test run stays offline.** Every ecosystem needs a way to keep the
 network/DB tests out of the default run; pick the project's and use it consistently: pytest markers
 (`-m "not integration"`), a filename or directory convention (`*.e2e.test.ts`, `test/e2e/`), a
@@ -190,7 +204,10 @@ enforced by the suite rather than remembered by a person.
 
 - **No dependence on test execution order.** No shared mutable module/global state between tests; each
   test sets up and tears down its own world (fixtures). A test must pass run alone and in any order
-  (green with random ordering on and off).
+  (green with random ordering on and off). An environment variable the code under test SETS is
+  such state: `monkeypatch.delenv(name, raising=False)` on an absent variable records nothing to
+  undo, so call `monkeypatch.setenv(name, "x")` first, then `delenv(name)` (detail in
+  `references/silent-test-defeaters.md`, "Pin the environment an output premise depends on").
 - **No timer in a test: no `sleep`, no poll-until-deadline loop, no `*_timeout` wait.** A fixed
   `sleep(n)` is flaky or slow, and a deadline loop or `wait(timeout=5)` is the same bet against the
   machine's load with a longer fuse. Block on an event the code under test signals - a channel/queue
@@ -307,6 +324,24 @@ name does not map to a SID:
   returns). The token is process-wide, so the wall must not span tests running in parallel threads.
 - Take it down in reverse: privileges first, then the parent's saved DACL, then the directory's.
 
+## Damaging the installed package: run a copy, with an intact copy as control
+
+When a defect exists only with a SHIPPED file missing, unreadable or corrupt (the code finds it by
+its own location, such as a default config inside the package), do not damage the checkout or the
+installed package (destructive, and racy across parallel runs), and do not monkeypatch the loader
+(that proves nothing about the real path). `shutil.copytree` the package directory into `tmp_path`
+with `ignore=shutil.ignore_patterns("__pycache__")`, damage the COPY, and run `python -m <pkg>` as
+a real child process with `PYTHONPATH` set to the copy's PARENT directory and `cwd` inside
+`tmp_path` (`-m` puts the cwd first on `sys.path`, so a run from the repo root can import the
+checkout). Probe each kind of damage in its own arm, assert the damage holds before running (an
+unreadable file is still readable to root), and assert each damaged arm's exit code AND message.
+
+In the same module, run an INTACT copy through the same harness and require exit 0: without it, a
+harness that fails for its own reasons reads exactly like the damage being refused. Exit 0 does
+not show which copy the child imported, so also have the intact arm report `<pkg>.__file__` and
+assert it lies under `tmp_path` - a child started with `-I` ignores `PYTHONPATH` and would import
+the installed package instead.
+
 ## Prune low-value tests
 
 Delete a test when it:
@@ -353,6 +388,16 @@ read, so an entry its pattern cannot parse fails the test instead of dropping ou
 comparison. Expect the first run to fail on code you did not write and treat that as the test
 working, not as scope creep: fix that defect in its own commit, so the new test and the old defect
 stay separable.
+
+**A test that enumerates the repository's files asks git which files the repo owns.** List them
+with `git ls-files -z --cached --others --exclude-standard` and split on NUL: tracked files plus
+untracked ones that are not ignored (plain `git ls-files` drops the new ones, and without `-z` a
+non-ASCII path comes back quoted and opens nothing). Skip a listed path that is gone from disk (a
+tracked file deleted but not yet staged), then apply the test's own path filter, such as
+root-level only. Never glob the working tree and subtract a hand-kept
+list of local-only files: that list is a second copy of `.gitignore`, so the next gitignored file
+something writes into the tree (a state file, a scratch log) turns the local run red while a
+fresh CI clone, which never has that file, stays green.
 
 Six mechanics worth stating because they silently defeat a test that looks right:
 
@@ -417,9 +462,11 @@ cannot see what it already swallowed.
 
 **Read `references/silent-test-defeaters.md` (Read tool)** when a test patches a name, parses tool
 output, asserts on an exception message or on rendered output, loops until a condition holds,
-carries a skip or an exclusion, judges an artifact, compares against a git ref, guards against
-cost, or tests environment isolation - or before you claim a code path is untested or accept a
-surviving mutation.
+pins or clears an environment variable (its own or a spawned child's), simulates a race between a
+check and an open, blocks a stub so it can be signalled mid-call, plants a marker to prove a
+process ran (or did not), carries a skip or an exclusion, judges an artifact, compares against a
+git ref, guards against cost, or tests environment isolation - or before you claim a code path is
+untested or accept a surviving mutation.
 
 ## Quick checklist
 

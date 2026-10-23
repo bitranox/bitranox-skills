@@ -1,9 +1,11 @@
 # Silent test defeaters: the detail
 
 Read this when a test patches a name, parses tool output, asserts on an exception message or on
-rendered output, loops until a condition holds, carries a skip or an exclusion, judges an
-artifact, compares against a git ref, guards against cost, or tests environment isolation - or
-when you are about to claim a code path is untested, or a mutation survives. Each entry names the
+rendered output, loops until a condition holds, pins or clears an environment variable, simulates
+a race between a check and an open, blocks a stub so it can be signalled, plants a marker to prove
+a process ran, carries a skip or an exclusion, judges an artifact, compares against a git ref,
+guards against cost, or tests environment isolation - or when you are about to claim a code path
+is untested, or a mutation survives. Each entry names the
 trigger, the mechanism that makes the test pass (or fail) for the wrong reason, and the fix.
 
 ## Determinism and environment
@@ -27,10 +29,71 @@ guard the loop depends on and require a fast, NAMED failure.
 
 When a test's premise is a property of its output (no escape bytes, no colour, no control
 characters, a width), set the variables that decide it - `FORCE_COLOR`, `NO_COLOR`, `TERM`,
-`COLUMNS`, the locale - in the suite's own fixture (`monkeypatch.setenv` / `delenv`) instead of
-inheriting them, and add a control asserting the premise holds (the output DOES contain colour
-when the test is about stripping it). Inherited, the same test is a guard on one machine and a
-wall of unrelated red on another.
+`COLORTERM`, `COLUMNS`, the locale - in the suite's own fixture (`monkeypatch.setenv` / `delenv`)
+instead of inheriting them, and add a control asserting the premise holds (the output DOES contain
+colour when the test is about stripping it). Inherited, the same test is a guard on one machine
+and a wall of unrelated red on another.
+
+A spawned child needs the same pinning. A child env built as `{**os.environ, "FORCE_COLOR": "1"}`
+inherits the parent's `TERM`, and rich draws no colour under `TERM=dumb` or `TERM=unknown` even
+with `FORCE_COLOR` set (any other `TERM`, or none, still gets colour), so a test asserting colour
+passes or fails by the terminal it was launched from. Build the child env by removing every colour
+variable (`NO_COLOR`, `FORCE_COLOR`, `COLORTERM`, `TERM`) and then setting the ones the test
+wants, including an explicit `TERM` such as `xterm-256color`. Prove the fix by running the test
+under a hostile parent environment (`TERM=dumb`, `NO_COLOR=1`) as well as a clean one.
+
+**`monkeypatch.delenv(name, raising=False)` on an ABSENT variable records nothing to undo.**
+pytest registers a restore only when the variable exists, so if the code under test then sets it
+(a `.env` loader, `os.environ.setdefault`), the value outlives the test and fails later tests in
+unrelated modules, depending on order. Write `monkeypatch.setenv(name, "x")` followed by
+`monkeypatch.delenv(name)`: the `setenv` records the original absent state, so teardown restores
+the variable to absent. Suspect this whenever an order-dependent failure involves environment
+variables.
+
+### A check-then-open race: make `stat` answer for another file
+
+Code that checks `path.stat()` (refusing anything but a regular file) and then opens the path is
+not proven by a test that hands it a FIFO directly: the check refuses that FIFO whether it looks at
+the path or at the open handle, so the test cannot tell the two apart. The race is the name
+changing between the check and the open, so simulate that swap. Subclass the concrete Path type so
+`stat()` answers for a real regular file while the name the code opens is a FIFO:
+
+```python
+class Swapped(type(fifo)):  # the concrete PosixPath: subclassing pathlib.Path fails before 3.12
+    def stat(self, *, follow_symlinks=True):
+        return real_file.stat(follow_symlinks=follow_symlinks)
+```
+
+On the unfixed code, opening the FIFO blocks waiting for a writer, so the RED arm is a hang. Run the
+load in a daemon thread and wait with a plain `join()`, letting the runner's per-test timeout catch
+the hang (a signal-based timeout such as pytest-timeout's default on POSIX interrupts the `join()`;
+a `join(timeout=...)` is the deadline the "No timer in a test" rule forbids). In a `finally`,
+release a reader still blocked by opening the FIFO's write end
+(`os.open(fifo, os.O_WRONLY | os.O_NONBLOCK)`, then close it), so the thread ends. Guard it with
+`if thread.is_alive()` and catch `ENXIO`: with no reader waiting (the fixed code never blocks, or
+the interrupted reader has not reached its open yet) that open raises `ENXIO`, which would error the
+arm. Keep the direct FIFO test as well; the swap test is the one that fails on a path-based check.
+The fix it forces: open non-blocking (`O_NONBLOCK`), `fstat` the HANDLE and refuse a non-regular
+file, so the check and the use are about the same object.
+
+### A blocking stub must `exec` its blocker
+
+When a stub (a fake external program written as shell) must block so the test can signal the
+process under test mid-call, end it with `exec sleep N`, not `sleep N`. Without `exec` the stub
+shell forks the `sleep`. When the stub shell is killed - by the signal, or by the code under
+test's own cleanup (`subprocess.run` kills its child on an exception) - the forked `sleep` survives
+as an orphan holding the stdout/stderr pipe it inherited, and the test's `communicate()` waits for
+EOF until the sleep ends: a RED that should fail at once takes the full N seconds on every case.
+With `exec` the process that gets killed is the blocker itself. Whether a shell execs its last
+command unasked varies (bash 5.3 does for a `-c` string, dash does not), so write `exec`.
+
+Signal only once the stub has started, never after a fixed `time.sleep()`. Make the start an event
+the test blocks on: a FIFO the test creates and the stub writes to before blocking
+(`printf x > "$STARTED"; exec sleep 30`, while the test does `open(started).read()`). Then call
+`communicate()` with no timeout and let the runner's per-test timeout catch a wedge. A
+`touch MARKER` the test polls for is the poll-until-deadline loop the "No timer in a test" rule
+forbids; the FIFO is the event planted in its place. This shape is POSIX: on Windows there is no
+FIFO or shell `exec`, and a parent's `terminate()` is `TerminateProcess`.
 
 ### Build a missing path under the test's temp dir
 
@@ -211,3 +274,18 @@ expect a plain untracked file: through a foreign `GIT_DIR` git still takes the w
 cwd, so `git ls-files --others` lists it and the arm passes with the scrub deleted. Expect
 something only the right index or config holds - a file force-added (`git add -f`) under an
 ignored path, a committed blob, a repo-local config value - then delete the scrub and require RED.
+
+### A "did it run" marker the platform can silence
+
+Python imports exactly one `sitecustomize`, the first on `sys.path`. Debian and Ubuntu system
+interpreters ship their own in the stdlib directory (`/usr/lib/python3.X/sitecustomize.py`), and a
+venv built from `/usr/bin/python3.X` searches that directory before its own site-packages. A
+`sitecustomize.py` planted in the venv to record "the planted interpreter ran" therefore never
+runs, and an arm asserting the marker is ABSENT (an elevated or isolated arm that must not start
+that interpreter) passes whether or not the defect exists. A uv-managed or other non-distro
+CPython has no such file, so the same test is green on a dev box. Signal execution with a `.pth`
+file in the venv's site-packages whose `import` line writes the marker (processed unless the
+interpreter runs with `-S`), or with a wrapper script in place of the interpreter that writes the
+marker before it `exec`s the real one. A `usercustomize.py` is no alternative: a venv disables the
+user site, so it never runs there. Keep a positive control arm that must see the marker, and run
+that arm once on a distro system Python.

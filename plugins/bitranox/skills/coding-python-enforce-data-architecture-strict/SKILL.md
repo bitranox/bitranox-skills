@@ -179,6 +179,11 @@ arm), read `references/validation-error-messages.md`.
    **Input/Output Boundaries:**
    - [ ] Parse all external inputs into Pydantic models at system boundaries
    - [ ] Produce all outputs through Pydantic export methods (`.model_dump()`, `.model_dump_json()`)
+   - [ ] Each boundary model that replaced a `.get()` walk declares every field the consumer must
+     distinguish, not only the fields the old code read (step 3), and a test feeds it an input
+     where that field decides the answer
+   - [ ] Your own new and rewritten code got the same adversarial read as the code you set out to
+     fix: a faithful port passes every existing test while keeping the old bug
 
    **Internal Data Handling:**
    - [ ] Eliminate all internal dict processing - no `data["key"]` access
@@ -233,6 +238,19 @@ arm), read `references/validation-error-messages.md`.
    - All functions must operate on dataclasses or Pydantic fields
    - **Minimize total conversions** - count them, ideal is ONE at input boundary, ONE at output boundary
    - Replace fixed string sets with `Enum` classes
+   - **Declare what the consumer must DISTINGUISH, not only what the old code read.** When a
+     Pydantic model replaces a hand-rolled `.get()` walk over external JSON, the old field list
+     records what the old code looked at, not what it needed. For each decision the consumer makes
+     on the parsed data, ask what it must tell apart and whether the source exposes a field for it
+     that the walk dropped; declare that field and filter on it. A faithful migration carries the
+     latent bug forward. Example: a model of `uv python list --output-format json` declaring only
+     `version` and `version_parts` keeps an implementation-blind "newest installed patch" pick.
+     Several implementations (CPython, PyPy, ...) can be installed for one minor while
+     `uv venv --python <minor>` provisions CPython, so a PyPy build with a higher patch is reported
+     as newest, never matches the venv's interpreter, and the venv is rebuilt on every run. The fix
+     is `implementation: str` plus an `entry.implementation == "cpython"` filter; a build variant
+     (free-threaded vs default) is the same kind of discriminator when the consumer must pick the
+     default build.
 
 4. **Mark Todo Items Complete** as each DoD criterion is satisfied.
 
