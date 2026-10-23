@@ -29,6 +29,19 @@ than the change, so entries reconstructed from them would read like coverage wit
 a hole nobody has drawn a line under is one that gets rediscovered and half-filled - which is how
 two "versions with no entry" notes came to sit in this file disagreeing with it.
 
+## [10.0.0]
+
+### Changed
+
+- BREAKING: closing a backlog item now DELETES its line. `open_work.close_item`, behind the
+  `mcp__bitranox__backlog_close` tool, removes the solved item's line from `OPEN-WORK.md` instead
+  of marking it `- [x]` plus `| closed: <reason>`, and returns `{rank, line, reason, deleted}` -
+  the deleted line and the reason, for the commit message that ships the change, since the file
+  keeps no trace of it. The header written into a new `OPEN-WORK.md` says a solved line is
+  deleted, and `meta-context-watcher` states deletion as the default (a file whose own header
+  keeps closed lines still governs itself, closed by hand). Legacy `- [x]` lines still parse,
+  still count as closed and still hold their rank.
+
 ## [9.16.0]
 
 ### Added

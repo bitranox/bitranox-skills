@@ -34,7 +34,7 @@ const TOOLS = [
   },
   {
     name: "backlog_close",
-    description: "Close one open OPEN-WORK.md item by rank with a reason. The line stays, marked [x].",
+    description: "Close one solved OPEN-WORK.md item by rank: its line is DELETED. Give the reason; put it in the commit message that ships the change, since the file keeps no trace of it.",
     inputSchema: {
       type: "object",
       required: ["rank", "reason"],

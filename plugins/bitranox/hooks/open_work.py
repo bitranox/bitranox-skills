@@ -1,9 +1,10 @@
 """OPEN-WORK.md as data: list, add and close backlog items without hand-editing the file.
 
-The backlog's own header states its rules: one item per line, a rank no other line holds, a closed
-item kept with its reason. This module enforces the mechanical ones, so a tool call cannot split a
-bullet, reuse a closed item's number or delete a line. Which item outranks which stays the
-caller's judgment - nothing here chooses a rank.
+The backlog's own header states its rules: one item per line, a rank no other line holds, a solved
+item's line deleted. This module enforces the mechanical ones, so a tool call cannot split a bullet,
+reuse a number another line holds, or delete any line but the one it closes. Which item outranks
+which stays the caller's judgment - nothing here chooses a rank. A `- [x]` line written by an older
+release still parses as closed and still holds its rank.
 """
 import datetime
 import os
@@ -24,14 +25,15 @@ LABELS = ("size", "open", "next", "closed")
 
 HEADER = (
     "# Open work\n\n"
-    "The standing backlog: everything that outlives a single session. Items leave it by being\n"
-    "CLOSED, never by being dropped.\n\n"
+    "The standing backlog: everything that outlives a single session. An item leaves it only when\n"
+    "it is SOLVED, and then its line is deleted; an unsolved item is never dropped.\n\n"
     "One item per line:\n\n"
     "```\n"
     "- [ ] (YYYY-MM-DD) [rank] ORIGIN: what it is | size: how much is left | open: why it is "
     "still open | next: the concrete next action\n"
     "```\n\n"
-    "Closing an item means `- [x]` plus `| closed: <reason>`. The line stays.\n\n"
+    "A solved item's line is deleted. Delete it in the commit that records the solving work and\n"
+    "put the reason in that commit message: git history keeps the old line.\n\n"
 )
 
 _ITEM_RX = re.compile(r"-\s*\[([ xX])\]\s*\(([^)]*)\)\s*\[(\d+)\]\s*(.*)$")
@@ -252,7 +254,12 @@ def add_item(path, rank, origin, what, size, open_, next_, raised=None, today=No
 
 
 def close_item(path, rank, reason):
-    """Mark one open item closed with its reason; the line stays. Returns {"rank", "line"}."""
+    """Delete one open item's line: the item is solved.
+
+    Returns {"rank", "line", "reason", "deleted"}: `line` is the deleted text and `reason` is for
+    the caller to record where it lasts (the commit message that ships the change), since the file
+    keeps no trace of it. Nothing else in the file changes.
+    """
     rank = _require_rank(rank)
     reason = require_line(reason, "reason")
     path = Path(path)
@@ -270,7 +277,9 @@ def close_item(path, rank, reason):
             raise AmbiguousRank("rank %d labels %d open lines; give one a free number before "
                                 "closing either" % (rank, len(open_hits)))
         i = open_hits[0][0]
-        # edit the raw line rather than re-rendering it, so an older line keeps its exact text
-        lines[i] = re.sub(r"^(\s*-\s*\[) \]", r"\1x]", lines[i], count=1) + " | closed: " + reason
-        _write(path, lines)
-    return {"rank": rank, "line": lines[i]}
+        removed = lines[i]
+        new = lines[:i] + lines[i + 1:]
+        if len(new) != len(lines) - 1:
+            raise BacklogError("internal: a close must shrink the file by exactly one line")
+        _write(path, new)
+    return {"rank": rank, "line": removed, "reason": reason, "deleted": True}

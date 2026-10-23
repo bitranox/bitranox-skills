@@ -58,7 +58,10 @@ def test_a_taken_rank_is_a_refusal_with_its_kind(repo, env):
 def test_backlog_close(repo, env):
     call(repo, env, "backlog_add", ITEM)
     rc, out = call(repo, env, "backlog_close", {"rank": 20, "reason": "done"})
-    assert rc == 0 and out["data"]["line"].endswith("| closed: done")
+    assert rc == 0 and out["data"]["deleted"] is True and out["data"]["reason"] == "done"
+    assert "[20]" in out["data"]["line"]
+    rc, out = call(repo, env, "backlog_list")
+    assert rc == 0 and [it["rank"] for it in out["data"]["items"]] == []
 
 
 def test_list_without_a_backlog_says_so(repo, env):

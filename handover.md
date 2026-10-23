@@ -1,62 +1,85 @@
-# STALE - read 2026-10-23, work continued
+# Handover 2026-10-23: [28] C+D shipped (9.16.0); solved backlog lines deleted (10.0.0); [23] batch 4 awaits the user
 
 ## In flight
 
-- Nothing part-done. No subagent, workflow or background job of this session is running, and both
-  worktrees of this session (`bitranox-skills-wt-500`, `bitranox-skills-wt-jigjev`) are merged and
-  removed.
-- `classifier_jig_repetition = shadow` is set in this machine's memory config. It collects only in
-  sessions running 9.15.0 or later: the user still has to run `/plugin marketplace update
-  bitranox-skills` and `/reload-plugins`.
+- Nothing running. The [23] batch 4 check (workflow wf_2307b67e-dbd, 10 agents, read-only) has
+  finished, and its merged result is on disk in `.plan/fold-23/batch4/merged.json` (gitignored).
+  It has NOT been put to the user yet: that is the next action.
+- No worktree of this session is left; `feat/jev-sites-c-d` is merged and deleted.
 
 ## Committed, or not
 
-- Pushed this session: babc091d (9.14.0, [500] second rule in block-git-semicolon-chain) and
-  7bce5e8b (9.15.0, Jev shadow site `jig_repetition`). CI and the release workflows passed on both.
-- This commit: this file and `OPEN-WORK.md` ([28] next step after the knob was set).
-- Gitignored, clone-local: `EXECUTION-USER-REVIEW.md` holds today's user decisions ([28] site B,
-  [500] narrow arm and its re-confirmation at 211 firings) and two autonomous ones (the [500] rule
-  lives inside the existing hook; site B's shape).
-- Measurement artifacts, gitignored: `.plan/500-guard-2026-10-23/`.
+- Pushed and CI-green this session: 48931d97 (9.16.0, Jev shadow sites `backlog_ask` and
+  `audit_candidate`). Both knobs read `shadow` on this machine (`settings.py view`), and 9.16.0 is
+  installed here; live `backlog_ask` rows are already in the shadow log.
+- This commit (10.0.0): `backlog_close` / `open_work.close_item` DELETE a solved line and return
+  `{rank, line, reason, deleted}`, the new-file header and meta-context-watcher say so (user:
+  "always delete solved lines in open-work.md", then "also fix open_work.close_item ... including
+  in the new backlog file's header template"); `OPEN-WORK.md` lost its 113 closed lines and its
+  header rule changed; [23] batch 4 result and new [700] recorded. Git history keeps every deleted
+  line. MAJOR because the tool now deletes a line it used to keep.
+- Memory: new tree-top fact `feedback-delete-solved-open-work-lines-everywhere` (the same rule for
+  every backlog); the older soundtouch-zonemaster-only fact it generalises can go in the next dream.
+- Gitignored, clone-local: `EXECUTION-USER-REVIEW.md` (the user's "C and D" answer, the
+  autonomous C/D shape decisions), `.plan/fold-23/batch4/` (inputs, roster, mirrors map,
+  merged.json).
 
 ## Decided, and why - do not reopen
 
-- [500]: the user chose "Block narrow arm (Recommended)", then re-confirmed "Block as built
-  (Recommended)" after the built rule replayed at 211 firings in 30 days, not the 95 first counted.
-  Widening to cd/cat/printf/sed steps (at least 1,172 firings) was rejected; limiting to scripts with
-  assert/raise/exit was measured (187 of 211) and is not worth it.
-- [500] is a second rule inside `block-git-semicolon-chain.py`, not a new hook: it reuses the walk
-  and exemptions that were priced, and avoids another process per Bash call.
-- [28] site B: shadow on fired nudges only, the nudge's own same-job question over
-  `{new_script, ledger}`, no decide mode, eval threshold 0.5 as a reading point. Every row is a
-  nudge the filter showed, so its [96] evidence must be a blind review of Jev's not-same-job rows.
+- [28] C and D are shadow only, no decide mode. C asks on EVERY typed prompt (the pattern both
+  misses paraphrases and fires on bare replies, so only asking every prompt measures both). D sends
+  a 3000-character excerpt REDACTED BEFORE IT IS CUT (a review found a key whose BEGIN line fell
+  outside the window would leak), and the eval keys a candidate by its transcript record `uuid`
+  (the audit window slides between a compaction and the session end). Detail in
+  EXECUTION-USER-REVIEW.md.
+- [23] batch 4 is the nine tool-repo levels that ship their own plugin skill (plan order: after the
+  bitranox-skills/KI levels come the tool repos). The 34 pointers added there after phase 1 were
+  classified first, then every fold candidate got the reach and skeptic lenses of batch 3.
+
+- Solved OPEN-WORK lines are deleted, never kept as `- [x]` (user, 2026-10-23), and the plugin's
+  close verb does the same for every user (10.0.0). A file whose own header keeps closed lines
+  still governs itself and is closed by hand.
+
+## Decided against, and why
+
+- No deterministic noise filter for the audit candidates was built: the user chose the Jev shadow;
+  whether a filter would do it cheaper is unverified and recorded in [28].
+- The site tests' "nothing sent" checks keep a fixed 1 s wait, as the existing jig_repetition
+  test does: absence cannot be awaited.
 
 ## Still open, untouched
 
-- [23] batch 4, [28] C or D (after B collects), [96], [680], [690] (hooks reference reads
-  STRUCTURAL upstream), the rest: `OPEN-WORK.md`.
-- From the bmk-b3 session's handover, waiting on the user there: two memory-fact rewrites (the
-  sibling-calls fact's hook, one line in the wrong-repo fact).
+- [23] the batch 4 decision (below); [28] waits for 100 rows per site from 3 sessions; [96] blocked
+  on data; [700] two memory-fact rewrites wait for the user; the FOUND items: `OPEN-WORK.md`.
+- A memory consolidation (tree dream) is due per the SessionStart nudge; it would also add a
+  dream-placement run for [96].
 
 ## Lessons for the next nap
 
-- When pricing a narrower guard variant, replay its own predicate: filtering another predicate's
-  labelled firings undercounts, because a label records one reason a command fired (95 vs 211 for
-  [500]). Queued against meta-claude-hooks.
-- When a negative test asserts a word is absent from a whole doc row, assert on the one cell
-  instead: the row may name the word to deny it ("There is no `decide` mode").
-- tooling: the meta-claude-hooks freshness check reports STRUCTURAL without naming which events
-  moved; filed as [690].
+- When a shadow or classifier site cuts a window out of untrusted text for an API, redact the WHOLE
+  text first and cut afterwards: a secret pattern needs its context (a key's BEGIN line), and a
+  window cut first keeps the body without it.
+- When de-duplicating records re-scanned by a later pass over a sliding window, key on the source
+  record's own id (transcript `uuid`), never on text plus occurrence index.
+- When a review fixes a shadow site, re-review the fix delta alone: the re-review found a defect the
+  first review and all green gates missed.
+- tooling: gate.py refuses `--gate-cwd` written before its `--gate` (exit 2, nothing run).
 - Carried from earlier handovers (not yet napped):
+  - When pricing a narrower guard variant, replay its own predicate: filtering another predicate's
+    labelled firings undercounts (95 vs 211 for [500]). Queued against meta-claude-hooks.
+  - When a negative test asserts a word is absent from a whole doc row, assert on the one cell.
+  - tooling: the meta-claude-hooks freshness check reports STRUCTURAL without naming which events
+    moved; filed as [690].
   - When a script filters a backlog's template row, match the template's exact line, not a
-    substring such as `YYYY`; compare the count against the SessionStart count.
+    substring such as `YYYY`; compare the count against the SessionStart count (recurred
+    2026-10-23: a `YYYY` substring filter dropped [96] from a listing).
   - tooling: when replaying a transcript-reading PreToolUse hook, cut the transcript at the call
     first; the guard reads only the last 4 MB.
   - When counting classifier shadow rows for a verdict, deduplicate by (transcript, message text)
     first: a rescanned subagent transcript is logged again.
   - When dispatching blind judges or any review-shaped agent, pass `effort: medium` with
     `model: opus`.
-  - tooling: ci_wait needs `--timeout 2400` or more here; this repo's CI ran about 35 minutes today.
+  - tooling: ci_wait needs `--timeout 2400` or more here; this repo's CI ran about 35 minutes.
   - tooling: switching a classifier knob to a mode a newer plugin adds leaves older sessions on the
     old behaviour with no log; queued against meta-memory-settings.
   - When you are working IN the repo that owns a bitranox tool and find it broken, fix it in its
@@ -76,7 +99,8 @@
     plan rests on, and record the weaker reading and the miss.
   - When a user answers an AskUserQuestion without reading it and asks again, the superseding
     answer governs; log both.
-  - tooling: `repo-gate.py --mirrors` counts a tool repo's linked worktrees as UNLISTED twins.
+  - tooling: `repo-gate.py --mirrors` counts a tool repo's linked worktrees as UNLISTED twins
+    (seen again 2026-10-23: `apps/utils/bmk-wt-backlog`).
   - tooling: the auto-mode classifier refused a subagent's Bash edit of plugin.json; keep version
     bumps in the controller.
   - When a rule depends on what an OMITTED subagent field inherits, read `~/.claude/settings.json`
@@ -91,28 +115,33 @@
 
 ## The exact next action
 
-[23] is the top-ranked open item; its next step is Phase 3 batch 4: open
-`~/.claude/plans/curried-mapping-dolphin.md`, pick the next lower level group after the
-bitranox-skills/KI levels, classify its FOLD rows read-only (reach + skeptic lens, as batch 3 did
-in `.plan/fold-23/batch3/`), and put the batch to the user before folding anything. A tree dream
-(due per the SessionStart nudge) would also add a dream-placement run for [96].
+[23] is the top-ranked open item. Put batch 4 to the user with one AskUserQuestion, built from
+`.plan/fold-23/batch4/merged.json` (recount first; recorded: 47 candidates - reach OK 18, PARTIAL
+27, FAILS 2; skeptic FOLD-AMENDED 34, AS-HINTED 7, ALREADY 6; 13 rows target mirrored skills, so
+folding them means pushing those tool repos too, and 2 target lsdsk's own plugin). Batches 2 and 3
+folded the REACH-OK rows first and the PARTIAL ones with a kept pointer later; offer that, and ask
+separately whether the six tool repos may be pushed this round (pushes to tool repos need this
+conversation's own approval). Read the 5 rows whose body has a CONTRADICTED claim before quoting
+any of them.
 
 ## Files that matter
 
-- `plugins/bitranox/hooks/block-git-semicolon-chain.py` - `git_after_script`, its docstring figures.
-- `plugins/bitranox/hooks/jig-repetition-nudge.py` - `shadow_request`, `_shadow`.
-- `plugins/bitranox/hooks/classifier.py` - `jig_repetition_questions`, `SITES`, `SITE_THRESHOLDS`.
-- `plugins/bitranox/skills/meta-self-improve/classifier_eval.py` - `summarize_jig_repetition`.
-- `OPEN-WORK.md` lines [23], [28], [96], [680], [690].
+- `.plan/fold-23/batch4/merged.json` - per slug: `input`, `classify` (new rows), `reach`, `skeptic`.
+- `.plan/fold-23/batch4/{o1,o2,n1,n2,roster,mirrors}.json` - the inputs the agents read.
+- `~/.claude/plans/curried-mapping-dolphin.md` - the [23] plan (Phase 2 steps are the fold loop).
+- `plugins/bitranox/hooks/recall-memory.py` (`_shadow_backlog_ask`),
+  `plugins/bitranox/hooks/self-improve-audit.py` (`shadow_excerpt`, `_shadow`),
+  `plugins/bitranox/skills/meta-self-improve/classifier_eval.py` (`_audit_entries`).
+- `OPEN-WORK.md` lines [23], [28], [96], [700].
 
 ## How to verify
 
 - `git status --porcelain` in the repo: empty after this commit except gitignored files.
-- Both releases on origin: `git merge-base --is-ancestor 7bce5e8b origin/master`.
+- 9.16.0 on origin: `git merge-base --is-ancestor 48931d97 origin/master`.
 - CI for the commit carrying this file: `ci_wait.py --ref HEAD --timeout 2700`
   (bitranox:compuse-toolbox).
-- Site B data, once 9.15.0 runs: `python3 plugins/bitranox/skills/meta-self-improve/classifier_eval.py report`
-  and read the `jig_repetition` block.
+- Shadow sites live: `python3 plugins/bitranox/skills/meta-memory-settings/settings.py view`
+  shows both new knobs at `shadow`; `classifier_eval.py report` shows `backlog_ask` rows.
 
 Read this, then replace the first line with `# STALE - read <date>, work continued`. Do not
 delete it - if this session ends badly it is the only record of where things stood.

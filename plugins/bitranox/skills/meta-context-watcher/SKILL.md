@@ -53,23 +53,28 @@ been closed.
 The date is when it was FIRST raised and never changes. `ORIGIN` is `USER:` (their own words where
 they gave any) or `FOUND:`. `size` is how much is left; it is the field that disappears first when
 a list is retyped, and it breaks ties within an origin, so it is not optional. It is NOT the first
-ranking key - see below, where reading it as one is a named failure. Closing an item is `- [x]` plus
-`| closed: <reason>`; the line stays. When you close several items in one pass, tag each reason
+ranking key - see below, where reading it as one is a named failure. A SOLVED item's line is
+DELETED, in the commit that records the solving work, and the reason goes in that commit message,
+where git history keeps the old line (the `backlog_close` tool deletes it the same way and returns
+the line and reason for that message; it neither commits nor checks whether the file is tracked). When you close several items in one pass, tag each reason
 `measured:` or `argued:`, because afterwards a closure settled by evidence and one settled by
 reasoning look identical, and only the second is open to reopening. A SessionStart hook prints the
 top ranks with their age.
 
 That closing rule is the default, not an override: when a backlog file's own header states a
-different one ("a solved item is DELETED"), the header governs that file. Before deleting a line,
-ask git whether the file is tracked (`git ls-files --error-unmatch OPEN-WORK.md` exits 0 when it
-is): in an untracked or gitignored backlog a deleted line is gone for good, with nothing to diff it
-back from, so name what you deleted in your reply.
+different one (an older file says closed lines stay as `- [x]` plus `| closed: <reason>`), the
+header governs that file - close its items by hand, since `backlog_close` always deletes. Before
+deleting a line, ask git whether the file is tracked
+(`git ls-files --error-unmatch OPEN-WORK.md` exits 0 when it is): in an untracked or gitignored
+backlog a deleted line is gone for good, with nothing to diff it back from, so first put any
+lasting reason somewhere durable - a CHANGELOG entry, a tracked decision log, a commit message
+of the change itself - and name what you deleted in your reply.
 
 **An item belongs in the `OPEN-WORK.md` of the repo whose code needs the change, not the repo you
 found it from.** A bug found in a sibling repo, a template, or a project that depends on this
 one goes into THAT repo's backlog, its line carried over unchanged with its first-raised date -
 create the file there if it has none, tracked or excluded the way that repo keeps its own working
-files - and this file keeps at most a closed line, `| closed: moved to <repo>/OPEN-WORK.md`.
+files - and this file's line is deleted, the commit message naming where it moved.
 Where a line sits reads as who owns the work: the next session picks the top item of its own
 backlog and starts editing another repo's code from here, so a general-purpose library ends up
 doing an application's work.
@@ -88,11 +93,14 @@ first-raised date before the source file goes: once it is deleted, nothing point
 **Rank in TENS** - 10, 20, 30. An insertion is then a new number instead of a renumbering of
 every line below it, which keeps a reorder out of the diff of an unrelated change.
 
-**A free rank is free over EVERY line of the file, closed `[x]` lines included.** A closed item
-keeps its number and the SessionStart listing shows open items only, so a number a closed line
-holds looks free; take it and "rank 40" names two items in every handover and commit after. Read
-the whole file before picking. The SessionStart block names any rank an open item shares with
-another line - give the open item a free number before citing it.
+**A free rank is free over EVERY line of the file, closed `[x]` lines included.** In a file that
+keeps closed lines, a closed item keeps its number and the SessionStart listing shows open items
+only, so a number a closed line holds looks free; take it and "rank 40" names two items in every
+handover and commit after. A deleted line holds no number, but prefer a fresh number to one just
+freed: old handovers and commit messages still name the deleted item by its rank. Read the
+whole file before picking.
+The SessionStart block names any rank an open item shares with another line - give the open item
+a free number before citing it.
 
 **How rank is decided, in this order:**
 
@@ -172,8 +180,9 @@ goes for `size`: `size: unknown` is a usable line, an invented count is not.
    you are about to destroy and take every item in it that is not finished. Each one either
    already has a line in `OPEN-WORK.md`, or you add it now with its first-raised date, its size
    and its next action - in the `OPEN-WORK.md` of the repo that owns the fix, which is not
-   always this one (see "Two files"); an item you believe is finished gets `- [x]` and a reason,
-   in the file, not in your head. What you do not carry across goes SILENTLY, because a missing
+   always this one (see "Two files"); an item you believe is finished has its line deleted, with
+   the reason in the commit message (or, for an untracked backlog, somewhere durable, as above),
+   not in your head. What you do not carry across goes SILENTLY, because a missing
    item looks exactly like an item that was closed - and nobody diffs a handover against its predecessor
    looking for absences. Being able to recover the old text from git is not the same as noticing
    there was something to recover. Do this reconcile FIRST, while the outgoing file is still in

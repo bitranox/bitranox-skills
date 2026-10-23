@@ -31,7 +31,9 @@ def test_every_item_line_of_the_live_backlog_parses():
     lines = LIVE.read_text(encoding="utf-8").split("\n")
     raw = [ln for ln in lines if _ANY_ITEM.match(ln.strip())]
     items = [it for _, it in ow.iter_items(lines)]
-    assert len(raw) > 50                      # the live file, not an empty stand-in
+    # The live file, not an empty stand-in. Solved lines are deleted, so the count shrinks as work
+    # closes; any open item at all proves the parser met real lines.
+    assert LIVE.is_file() and raw
     assert len(items) == len(raw)
     assert all(it["what"] for it in items)
     # an extraction that shares nothing with the parser's regexes: plain string positions
@@ -193,13 +195,26 @@ def test_a_rank_that_is_not_a_positive_integer_is_refused(tmp_path, rank):
         _add(_backlog(tmp_path), rank)
 
 
-def test_close_keeps_the_line_and_appends_the_reason(tmp_path):
-    p = _backlog(tmp_path, _item(10), _item(20))
-    before = len(_lines(p))
+def test_close_deletes_the_line_and_returns_it_with_the_reason(tmp_path):
+    p = _backlog(tmp_path, _item(10), _item(20, what="keep me"))
+    before = p.read_text(encoding="utf-8")
     out = ow.close_item(p, 10, "shipped in 8.6.0")
-    assert out["line"] == _item(10, "x") + " | closed: shipped in 8.6.0"
-    assert len(_lines(p)) == before
-    assert ow.list_items(p, state="closed")[0]["closed"] == "shipped in 8.6.0"
+    assert out == {"rank": 10, "line": _item(10), "reason": "shipped in 8.6.0", "deleted": True}
+    after = p.read_text(encoding="utf-8")
+    assert after == before.replace(_item(10) + "\n", "", 1)
+    assert [it["rank"] for it in ow.list_items(p, state="all")] == [20]
+    assert "closed:" not in after
+
+
+def test_close_keeps_a_rank_free_once_its_line_is_gone(tmp_path):
+    p = _backlog(tmp_path, _item(10), _item(20))
+    ow.close_item(p, 10, "done")
+    assert _add(p, 10)["rank"] == 10       # nothing holds 10 any more
+
+
+def test_the_new_file_header_says_a_solved_line_is_deleted():
+    assert "deleted" in ow.HEADER and "The line stays" not in ow.HEADER
+    assert "`- [x]`" not in ow.HEADER.split("```")[-1]
 
 
 def test_close_refuses_unknown_closed_and_ambiguous_ranks(tmp_path):
