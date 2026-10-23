@@ -9,8 +9,9 @@
 
 ## Committed, or not
 
-- Pushed and CI-green this session: 48931d97 (9.16.0, Jev shadow sites `backlog_ask` and
-  `audit_candidate`). Both knobs read `shadow` on this machine (`settings.py view`), and 9.16.0 is
+- Pushed this session: 48931d97 (9.16.0, Jev shadow sites `backlog_ask` and `audit_candidate`, CI
+  green) and 8efd0b24 (10.0.0, solved backlog lines deleted). Installed copies need
+  `/plugin marketplace update bitranox-skills` + `/reload-plugins` for 10.0.0. Both knobs read `shadow` on this machine (`settings.py view`), and 9.16.0 is
   installed here; live `backlog_ask` rows are already in the shadow log.
 - This commit (10.0.0): `backlog_close` / `open_work.close_item` DELETE a solved line and return
   `{rank, line, reason, deleted}`, the new-file header and meta-context-watcher say so (user:
@@ -49,7 +50,8 @@
 
 ## Still open, untouched
 
-- [23] the batch 4 decision (below); [28] waits for 100 rows per site from 3 sessions; [96] blocked
+- [23] the batch 4 decision (below); [710] a suspected false positive in
+  block-write-after-sibling-cd (unverified); [28] waits for 100 rows per site from 3 sessions; [96] blocked
   on data; [700] two memory-fact rewrites wait for the user; the FOUND items: `OPEN-WORK.md`.
 - A memory consolidation (tree dream) is due per the SessionStart nudge; it would also add a
   dream-placement run for [96].
@@ -64,6 +66,10 @@
 - When a review fixes a shadow site, re-review the fix delta alone: the re-review found a defect the
   first review and all green gates missed.
 - tooling: gate.py refuses `--gate-cwd` written before its `--gate` (exit 2, nothing run).
+- tooling: block-write-after-sibling-cd refused a call that began with an absolute `cd <repo> &&`
+  after a sibling cd'd into `<repo>-wt-30`; `git -C` passed. Filed as [710], unverified.
+- When the user asks mid-turn for a change to the backlog tooling's behaviour, the user's answer
+  also settles the "for everyone or per file" question: ask only if they did not say.
 - Carried from earlier handovers (not yet napped):
   - When pricing a narrower guard variant, replay its own predicate: filtering another predicate's
     labelled firings undercounts (95 vs 211 for [500]). Queued against meta-claude-hooks.
