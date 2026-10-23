@@ -22,7 +22,8 @@ plugin/marketplace: install anywhere with `/plugin marketplace add bitranox/pwsh
   clear message, not be silently swallowed. PowerShell's default is a *non-terminating* error you
   must remember `-ErrorAction Stop` (or `$?`/`$LASTEXITCODE`) to catch; pwshpy failures are real
   Python exceptions (`PwshPyError` and subtypes) in the library and a real non-zero exit with a
-  message on the CLI - nothing quietly skipped.
+  message on the CLI - nothing quietly skipped (a listing that skips an item it cannot read logs a
+  WARNING naming it, and `strict=True` makes it raise instead).
 - About to shell out to `pwsh` / `powershell` / `wevtutil` / `sc`, or hand-roll `pywin32` / `wmi` /
   `win32evtlog` with manual XML parsing.
 - Want typed objects instead of text you re-parse; a memory-bounded read of a huge event log; or one
@@ -52,8 +53,7 @@ AD/Exchange/Azure long tail and running any `.ps1`). Never spawns `pwsh.exe`; ne
 ## Library - `from pwshpy import ps`
 
 ```python
-from pwshpy import ps
-from pwshpy.domain.enums import ServiceState
+from pwshpy import ServiceState, ps
 
 # running services whose name contains "sql" -> one JSON line each
 for s in ps.get_service().where(lambda s: s.status is ServiceState.RUNNING and "sql" in s.name.lower()):
@@ -76,10 +76,11 @@ quirk), a real process exit code, UTF-8 with no BOM, memory-bounded streaming, a
 failure exits non-zero with a message, not a swallowed non-terminating error). See `pwshpy --help`
 and `pwshpy <command> --help`.
 
-Enum fields in the JSON are the **capitalized enum name**, not upper-cased - filter on the exact
-string: service status `"Running"` / `"Stopped"`, event level `"Error"` / `"Warning"` /
-`"Information"` / `"Verbose"`. So the jq above uses `.status == "Running"`, not `"RUNNING"`. In
-Python compare the enum member directly (`s.status is ServiceState.RUNNING`).
+An enum field in the JSON is the enum's **value**, never the upper-case member name - filter on the
+exact string: service status `"Running"` / `"Stopped"`, event level `"Error"` / `"Warning"` /
+`"Information"` / `"Verbose"`, but process status lowercase (`"running"`, psutil's values) and
+connection state upper-case (`"LISTEN"`). So the jq above uses `.status == "Running"`, not
+`"RUNNING"`. In Python compare the enum member directly (`s.status is ServiceState.RUNNING`).
 
 ## Translate a cmdlet / .ps1
 
@@ -89,31 +90,38 @@ traps for free: single-item collapse, `$null`-operand order, a forgotten `-Error
 failure raises), the `$x = Get-WinEvent` memory blow-up (reads stream, memory-bounded), `Out-File`
 UTF-16/BOM, and localized `Administrators` / SID (records key on SID / uid, not a translated name).
 
-| PowerShell                 | pwshpy (library)                                                     | CLI                              |
-|----------------------------|----------------------------------------------------------------------|----------------------------------|
-| `Get-Process`              | `ps.get_process()`                                                   | `pwshpy get_process`             |
-| `Get-Service`              | `ps.get_service()`                                                   | `pwshpy get_service`             |
-| `Start-Service N`          | `ps.start_service("N")`                                              | `pwshpy start_service N`         |
-| `Get-WinEvent -LogName L`  | `ps.get_win_event("L")` (streams)                                    | `pwshpy get_win_event L`         |
-| `Get-ChildItem P`          | `ps.get_child_item("P")`                                             | `pwshpy get_child_item P`        |
-| `Get-Content P`            | `ps.get_content("P")`                                                | `pwshpy get_content P`           |
-| `Get-ItemProperty K` (reg) | `ps.get_item_property("K")`                                          | `pwshpy get_item_property K`     |
-| `Get-Acl P`                | `ps.get_acl("P")`                                                    | `pwshpy get_acl P`               |
-| `Get-LocalUser`            | `ps.get_local_user()`                                                | `pwshpy get_local_user`          |
-| `Get-ScheduledTask`        | `ps.get_scheduled_task()`                                            | `pwshpy get_scheduled_task`      |
-| `Get-CimInstance C`        | `ps.get_cim_instance("C")`                                           | `pwshpy get_cim_instance C`      |
-| `Test-Connection H`        | `ps.test_connection("H")`                                            | `pwshpy test_connection H`       |
-| `Resolve-DnsName N`        | `ps.resolve_dns_name("N")`                                           | `pwshpy resolve_dns_name N`      |
-| `Invoke-WebRequest U`      | `ps.invoke_web_request("U")`                                         | `pwshpy invoke_web_request U`    |
-| `Get-ADUser` (module)      | `ps.get_ad_user(Filter="*")` / `ps.cmdlet("Get-ADUser", Filter="*")` | `pwshpy get_ad_user -p Filter=*` |
-| *anything else*            | `ps.cmdlet("Verb-Noun", **params)` (needs `[full]`)                  | `pwshpy cmdlet Verb-Noun -p K=V` |
+| PowerShell                                                            | pwshpy (library)                                                                                                   | CLI                                                                                                                         |
+|-----------------------------------------------------------------------|--------------------------------------------------------------------------------------------------------------------|-----------------------------------------------------------------------------------------------------------------------------|
+| `Get-Process`                                                         | `ps.get_process()`                                                                                                 | `pwshpy get_process`                                                                                                        |
+| `Get-Service`                                                         | `ps.get_service()`                                                                                                 | `pwshpy get_service`                                                                                                        |
+| `Start-Service N`                                                     | `ps.start_service("N")`                                                                                            | `pwshpy start_service N`                                                                                                    |
+| `Get-WinEvent -LogName L`                                             | `ps.get_win_event("L")` (streams)                                                                                  | `pwshpy get_win_event L`                                                                                                    |
+| `Get-ChildItem P`                                                     | `ps.get_child_item("P")`                                                                                           | `pwshpy get_child_item P`                                                                                                   |
+| `Get-Content P`                                                       | `ps.get_content("P")`                                                                                              | `pwshpy get_content P`                                                                                                      |
+| `Get-ItemProperty K` (reg)                                            | `ps.get_item_property("K")`                                                                                        | `pwshpy get_item_property K`                                                                                                |
+| `Get-Acl P`                                                           | `ps.get_acl("P")`                                                                                                  | `pwshpy get_acl P`                                                                                                          |
+| `Get-LocalUser`                                                       | `ps.get_local_user()`                                                                                              | `pwshpy get_local_user`                                                                                                     |
+| `Get-ScheduledTask`                                                   | `ps.get_scheduled_task()`                                                                                          | `pwshpy get_scheduled_task`                                                                                                 |
+| `Get-CimInstance C`                                                   | `ps.get_cim_instance("C")`                                                                                         | `pwshpy get_cim_instance C`                                                                                                 |
+| `Test-Connection H`                                                   | `ps.test_connection("H")`                                                                                          | `pwshpy test_connection H`                                                                                                  |
+| `Resolve-DnsName N`                                                   | `ps.resolve_dns_name("N")`                                                                                         | `pwshpy resolve_dns_name N`                                                                                                 |
+| `Invoke-WebRequest U`                                                 | `ps.invoke_web_request("U")`                                                                                       | `pwshpy invoke_web_request U`                                                                                               |
+| `Get-ADUser` (module)                                                 | `ps.get_ad_user(Filter="*")` / `ps.cmdlet("Get-ADUser", Filter="*")`                                               | `pwshpy get_ad_user -p Filter=*`                                                                                            |
+| `Stop-Service N -NoWait`                                              | `ps.stop_service("N", wait=False)` (returns at once, typically `StopPending`)                                      | `pwshpy stop_service --no-wait N`                                                                                           |
+| `& prog a b`                                                          | `ps.exec(["prog", "a", "b"], timeout=S).check()`                                                                   | `pwshpy exec --timeout S -- prog a b`                                                                                       |
+| `Start-Process P -Wait` (whole tree)                                  | `ps.exec(["P"], wait_tree=True, timeout=S)`                                                                        | `pwshpy exec --wait-tree --timeout S -- P`                                                                                  |
+| `Get-WindowsImage -ImagePath W -Index N`                              | `ps.get_windows_image("W")` (every image), `index=N` (one; any OS, no DISM)                                        | `pwshpy get_windows_image W [--index N]`                                                                                    |
+| Windows Update search (`Get-WindowsUpdate`, `IUpdateSearcher.Search`) | `ps.get_windows_update(criteria=C, timeout=S)` (read-only)                                                         | `pwshpy get_windows_update --timeout S`                                                                                     |
+| `whoami /user`                                                        | `ps.get_current_identity()` (from the token, never `USERNAME`)                                                     | `pwshpy get_current_identity`                                                                                               |
+| `Register-ScheduledTask` + `-Principal` / `-Trigger`                  | `ps.register_scheduled_task("\\T", program="P", principal=TaskPrincipal.system(), triggers=[DailyTrigger(at=dt)])` | `pwshpy register_scheduled_task \T --program P --run-as local_system --run-level highest --daily 2026-11-01T03:00:00+01:00` |
+| `#Requires -RunAsAdministrator` / `-Verb RunAs`                       | `ps.require_elevation()` / `ps.elevate()`                                                                          | `pwshpy --elevate <command>`                                                                                                |
+| *anything else*                                                       | `ps.cmdlet("Verb-Noun", **params)` (needs `[full]`)                                                                | `pwshpy cmdlet Verb-Noun -p K=V`                                                                                            |
 
 Example - porting `$svc = Get-Service Spooler; if ($svc.Status -ne 'Running') { Start-Service Spooler };
 Get-WinEvent -LogName System | ? { $_.Level -eq 2 } | Export-Csv report.csv`:
 
 ```python
-from pwshpy import ps
-from pwshpy.domain.enums import EventLevel
+from pwshpy import EventLevel, ps
 
 ps.start_service("Spooler")  # idempotent: a no-op if already running, so the status check is gone
 errors = ps.get_win_event("System").where(lambda e: e.level is EventLevel.ERROR)  # Level 2 -> ERROR enum
@@ -122,6 +130,56 @@ ps.write_records("report.jsonl", errors, jsonl=True)  # streams record-by-record
 
 (pwshpy writes JSON/JSONL, not CSV; if you specifically need CSV, use the stdlib `csv` module inside
 the `for e in errors:` loop - it still streams.)
+
+Scheduled-task inputs (`from pwshpy import ...`): `TaskPrincipal(user_id=..., logon_type=TaskLogonType.S4U,
+run_level=TaskRunLevel.HIGHEST)` with `user_id` a SID or a `WellKnownSid` member on Windows and a decimal
+uid on Linux (an account name is refused); `TaskPrincipal.system()` is SYSTEM, elevated. `triggers` is a
+sequence of `TaskTrigger`: `OnceTrigger(at=dt)`, `DailyTrigger(at=dt, every_days=1)`,
+`BootTrigger(delay=timedelta(...))`, `LogonTrigger(user_id=SID)`; every `dt` must carry a UTC offset.
+Logon triggers, `every_days > 1` and a logon type are Windows-only (`PlatformUnsupportedError` on Linux).
+
+`get_process` names a process as psutil does: on Windows `MemCompression` is `Get-Process`'s
+`Memory Compression` and PID 0 `System Idle Process` is `Idle`; match by `pid` where it matters.
+
+## Errors, timeouts and exit codes
+
+Every failure raises a `PwshPyError` subclass, except a bad argument (`ValueError`, CLI exit 22, 87 on Windows);
+catch a subclass before its parent:
+
+- `NativeCallError` - an OS call failed, `.check()` saw a nonzero exit, or a `strict=True` listing
+  hit an item it cannot read. Its subclasses: `OperationTimeoutError` (`.timeout` holds the limit:
+  `exec(timeout=)`, a service start/stop/restart that did not settle - the control WAS issued -,
+  `get_windows_update`, `wait_process(timeout=)`, `resolve_dns_name(timeout=)` and, on Linux, the
+  local-account verbs (`new_local_user`, `remove_local_user`, `enable_local_user`,
+  `disable_local_user`, `new_local_group`, `remove_local_group`, `add_local_group_member` and
+  `remove_local_group_member`, `timeout=` default 30 s)) and `ElevationDeclinedError` (the UAC
+  prompt or sudo's password refused).
+  A control the OS refuses (a service stop denied, a missing executable) is the plain
+  `NativeCallError`: `except OperationTimeoutError` first, then `except NativeCallError`.
+- `ElevationRequiredError` (`require_elevation()`), `PlatformUnsupportedError` (no analog on this OS),
+  `ConfigurationError`, `PowerShellError` / `FeatureUnavailableError` (.NET, `[full]`; `run`, `cmdlet`
+  and the module wrappers `get_ad_user`, `get_ad_group`, `get_ad_computer`, `get_mailbox`, `get_az_vm`
+  and `get_az_resource_group` raise `PowerShellError` past their `timeout`, default none), `PackError`.
+  `download_file`, `invoke_web_request` and `invoke_rest_method` raise the plain `NativeCallError`
+  ("timed out") when a connect or read outlasts `timeout`; `test_connection` returns `reachable=False`;
+  `elevate(wait=True)` has no limit.
+
+`get_service()` and `get_scheduled_task()` skip, with a logged WARNING, an item the caller cannot
+read; pass `strict=True` (CLI `--strict`) when "not listed" must mean "does not exist" (a raise
+then means this caller cannot tell; ask again elevated).
+`get_windows_update` runs the search in a `spawn` child that re-imports the calling script, so that
+script needs an `if __name__ == "__main__":` guard (without it: `NativeCallError`, "worker exited
+without a result"); the search returns its whole result on the first iteration, so `.take(n)` does
+not shorten it. `exec` drops the output written before a timeout.
+
+CLI and packed-runner exit codes (an error also writes one `ErrorName: message` line, or a `pwshpy: ...`
+line from a runner, to stderr): 0 ok, 1 any other `PwshPyError`, 2 usage error, 22 a refused value
+(`ValueError`; 87 on Windows), 64 a relative `-PwshPyUv` / `--pwshpy-uv`, 70 the runner failed before the script ran
+(the elevated `.ps1` child, or an elevated run that cannot return to the caller's directory), 77
+elevation declined (`pwshpy --elevate`, `-PwshPyElevate`, `--pwshpy-elevate`; stderr line `pwshpy:
+elevation declined`), 110 `OperationTimeoutError`, 127 a missing or untrusted `uv`, or no `sudo` for a
+runner's elevation. `pwshpy exec`, `pwshpy --elevate <command>` (a no-op when already elevated) and a
+runner otherwise return the program's, command's or script's own code, so check the stderr line too.
 
 ## Still writing a `.ps1`? Six traps
 
@@ -190,7 +248,53 @@ automatically. Two ways:
 
 The artefact forwards every argument to your script untouched (empty strings, quotes, unicode,
 `-v`/`-d`) and takes its own help/info/clean/no-install-uv/elevate switches - spelled
-`-PwshPyHelp` ... on the `.ps1`, `--pwshpy-help` ... on the `.sh`.
+`-PwshPyHelp` ... on the `.ps1`, `--pwshpy-help` ... on the `.sh` - plus `-PwshPyUv PATH` /
+`--pwshpy-uv PATH` to pin the `uv` it runs (absolute path; relative exits 64). Run elevated
+(administrator, SYSTEM or root) it only runs a `uv` no other account can modify (on POSIX: root
+alone), skipping others with a `pwshpy: skipping uv at` line and refusing an untrusted pin with exit
+127, and only a uv-managed Python from the running account's own data directory, found with
+`uv python find --system`, checked like the `uv` and named to `uv run --python` (the first elevated
+run downloads one, so it fails offline or with `UV_PYTHON_DOWNLOADS` `never` / `manual` and none
+installed); every uv call it makes reads no `uv.toml` (`--no-config`).
+
+## Every public name
+
+From `pwshpy`: the facade `ps` (an instance of `Ps`; `build_ps()` builds a fresh one), `get_config()`
+(the layered configuration the CLI reads) and `print_info()` (the package metadata `pwshpy info`
+prints). Inputs: `TaskPrincipal`, `TaskTrigger`, `OnceTrigger`, `DailyTrigger`, `BootTrigger`,
+`LogonTrigger`, `PackOptions`, `RunnerFormat`. Enums to compare against: `ProcessStatus`,
+`ConnectionState`, `TransportProtocol`, `AddressFamily`, `ServiceState`, `ServiceStartType`,
+`ServiceKind`, `EventLevel`, `TaskState`, `TaskRunLevel`, `TaskLogonType`, `RegistryHive`,
+`RegistryValueType`, `AceType`, `WellKnownSid` (SID strings), `IntegrityLevel`, `ImageArchitecture`.
+Errors: listed above. Records (`ProcessInfo`, `ServiceInfo`, `WindowsImage`, `WindowsUpdate`,
+`CurrentIdentity`, `ScheduledTaskInfo`, ...) are what the calls return; read their fields.
+
+CLI commands (`pwshpy <command> --help` for flags; most use underscores, `is-elevated`, `config-deploy`
+and `config-generate-examples` hyphens), by area:
+
+- processes and system: `get_process`, `stop_process`, `wait_process`, `get_uptime`, `env`,
+  `get_computer_info`, `get_current_identity`, `get_hotfix`, `get_windows_image`, `get_windows_update`,
+  `restart_computer --yes`, `stop_computer --yes` (Windows; nothing happens without `--yes`)
+- network: `get_net_tcp_connection`, `get_net_udp_endpoint`, `get_net_adapter`, `get_net_ip_address`,
+  `resolve_dns_name`, `test_connection`, `invoke_web_request`, `invoke_rest_method`, `download_file`
+- storage and files: `get_volume`, `get_child_item`, `get_item`, `get_content`, `test_path`, `new_item`,
+  `copy_item`, `move_item`, `remove_item`, `write_text`
+- services: `get_service`, `start_service`, `stop_service`, `restart_service`, `set_service`
+- event log: `get_win_event`, `clear_event_log`
+- scheduled tasks: `get_scheduled_task`, `register_scheduled_task`, `unregister_scheduled_task`,
+  `enable_scheduled_task`, `disable_scheduled_task`, `start_scheduled_task`, `stop_scheduled_task`
+- accounts: `get_local_user`, `get_local_group`, `new_local_user`, `remove_local_user`,
+  `enable_local_user`, `disable_local_user`, `new_local_group`, `remove_local_group`,
+  `add_local_group_member`, `remove_local_group_member`
+- ACLs: `get_acl`, `add_acl_ace`, `remove_acl_ace`, `set_owner`
+- registry and CIM (Windows): `get_item_property`, `registry_keys`, `set_item_property`,
+  `remove_item_property`, `new_registry_key`, `remove_registry_key`, `get_cim_instance`
+- credentials and elevation: `save_credential`, `load_credential`, `delete_credential`, `is-elevated`,
+  the global `--elevate`
+- running things: `exec`, `pack`, `unpack`; .NET (`[full]`): `run`, `cmdlet`, `get_command`,
+  `get_ad_user`, `get_ad_group`, `get_ad_computer`, `get_mailbox`, `get_az_vm`, `get_az_resource_group`
+- configuration and diagnostics: `info`, `config`, `config-deploy`, `config-generate-examples`,
+  `logdemo` (a logging demo)
 
 ## Install
 
@@ -222,12 +326,12 @@ The CLI and library API are discoverable from the INSTALL (always your version):
 each on the default branch (latest, matching your `uv`-installed version) at
 `https://github.com/bitranox/pwshpy/blob/master/<path>`:
 
-| Topic                                                                   | Path under `.../blob/master/`       |
-|-------------------------------------------------------------------------|-------------------------------------|
-| Full cmdlet -> pwshpy table (every command, API + CLI columns)          | `COMMANDS.md`                       |
-| Per-switch / per-parameter porting rationale                            | `docs/powershell-switch-mapping.md` |
-| Library + the lazy Pipeline (`where`/`select`/`take`/`first`/`to_list`) | `docs/library-usage.md`             |
-| CLI reference (`--json`/`--jsonl`, `--limit`, per-command flags)        | `docs/cli-reference.md`             |
-| Power tools (elevation, credentials, `exec`, web, `write_text`)         | `docs/power-tools.md`               |
-| Backends + platforms (native vs .NET, one-script cross-OS)              | `docs/backends-and-platforms.md`    |
-| Layered configuration (`--set`, profiles, env, `config-deploy`)         | `CONFIG.md`                         |
+| Topic                                                                                                | Path under `.../blob/master/`       |
+|------------------------------------------------------------------------------------------------------|-------------------------------------|
+| Full cmdlet -> pwshpy table (every command, API + CLI columns)                                       | `COMMANDS.md`                       |
+| Per-switch / per-parameter porting rationale                                                         | `docs/powershell-switch-mapping.md` |
+| Library + the lazy Pipeline (`where`/`select`/`take`/`first`/`to_list`)                              | `docs/library-usage.md`             |
+| CLI reference (`--json`/`--jsonl`, per-command flags, the exit-code table)                           | `docs/cli-reference.md`             |
+| Power tools (elevation, `exec` + `wait_tree`, Windows Update, credentials, `pack` runner trust rule) | `docs/power-tools.md`               |
+| Backends + platforms (native vs .NET, one-script cross-OS)                                           | `docs/backends-and-platforms.md`    |
+| Layered configuration (`--set`, profiles, env, `config-deploy`)                                      | `CONFIG.md`                         |

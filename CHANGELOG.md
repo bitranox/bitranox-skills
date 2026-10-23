@@ -29,6 +29,21 @@ than the change, so entries reconstructed from them would read like coverage wit
 a hole nobody has drawn a line under is one that gets rediscovered and half-filled - which is how
 two "versions with no entry" notes came to sit in this file disagreeing with it.
 
+## [9.13.2]
+
+### Changed
+
+- `coding-python-pwshpy`: covers the pwshpy 1.6.0 surface. New translation rows for
+  `Stop-Service -NoWait`, `& prog` with a timeout, `Start-Process -Wait` over the whole process
+  tree, `Get-WindowsImage`, a Windows Update search, `whoami /user`, `Register-ScheduledTask` with a
+  principal and triggers, and the elevation calls; the scheduled-task input types; a section on the
+  error tree, `strict=True` listings, the `__main__` guard the Windows Update search needs, what each
+  deadline raises and the CLI and packed-runner exit codes (64, 70, 77, 87, 110, 127); the packed
+  runner's `uv` pin and its elevated trust rule; and an index of every public name and CLI command.
+  Corrects the JSON enum note (values, not names; process status is lowercase) and names
+  `MemCompression`, psutil's name for `Get-Process`'s `Memory Compression`. Mirrors the pwshpy
+  repo's copy.
+
 ## [9.13.1]
 
 ### Fixed
