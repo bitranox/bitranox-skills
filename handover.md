@@ -1,4 +1,4 @@
-# Handover 2026-10-23: [570] corrected, [96] waits for runs, ci_wait job fix shipped (9.13.1)
+# STALE - read 2026-10-23, work continued
 
 ## In flight
 

@@ -29,6 +29,21 @@ than the change, so entries reconstructed from them would read like coverage wit
 a hole nobody has drawn a line under is one that gets rediscovered and half-filled - which is how
 two "versions with no entry" notes came to sit in this file disagreeing with it.
 
+## [9.14.0]
+
+### Added
+
+- `block-git-semicolon-chain` gains a second rule: a heredoc fed to a script runner (`python3 -
+  <<'EOF'`, also `python`, `bash`, `perl`, `node`, `uv`), then `;` or a line break, then a git verb
+  that records a result (`add`, `commit`, `push`, `merge`, `rebase`, `cherry-pick`, `apply`) is
+  refused with exit 2. The script is usually an edit with an assertion in it; joined by a line
+  break, a failed assertion still stages and commits the unedited files with exit 0. The fix the
+  refusal names is `&&` on the heredoc's opener line, or the git step in its own call. The pair
+  rule's exemptions apply (`set -e` before the script, a `||` handler on it, a `&&` continuation),
+  a `cd`, `cat >` or `printf >` before git stays out of scope, and when both rules apply the pair
+  rule's message is shown. Priced by replaying the rule over 30 days of recorded Bash commands: 211
+  firings in 171,854 commands; the figures are in `git_after_script`'s docstring.
+
 ## [9.13.2]
 
 ### Changed

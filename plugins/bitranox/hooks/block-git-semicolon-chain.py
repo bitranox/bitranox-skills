@@ -9,6 +9,12 @@ ship while the working tree never moved.
 
 `&&` stops the chain where it broke. That is the whole fix, and it costs one character.
 
+A SECOND RULE shares this walk and its exemptions: a heredoc fed to a script runner
+(`python3 - <<'EOF'`), then `;` or a line break, then a git verb that records a result. The script
+is usually an edit with an assertion in it, so a failed edit gets its unedited files staged and
+committed. See `git_after_script` for its scope and the replay that priced it. When both rules
+apply, the pair rule's message is the one shown.
+
 WHAT THIS GUARD REFUSES TO JUDGE
 --------------------------------
 A hook runs on a bare interpreter with no third-party packages, so there is no bash parser
@@ -184,6 +190,12 @@ NON_MOVING_TARGETS = frozenset({None, "", ".", "./", "-", "$PWD", "${PWD}", "$(p
 # message asks for.
 NEVER_THE_SECOND_HALF = frozenset({"fetch"})
 
+# The second rule's two ends (see `git_after_script`). Runners are the ones the replay that priced
+# the rule saw carrying a heredoc before git; the verbs are the ones that RECORD what the script
+# left behind. `add` belongs here although the pair rule leaves it out: after a failed edit, the
+# stage is exactly where the damage is recorded, and nothing after it fails loudly.
+SCRIPT_RUNNERS = frozenset({"python", "python3", "bash", "perl", "node", "uv"})
+RECORDING_VERBS = frozenset({"add", "commit", "push", "merge", "rebase", "cherry-pick", "apply"})
 # Only these continue past a failure. `&&` stops, `||` runs only ON failure, `|` is a pipeline.
 CONTINUES_AFTER_FAILURE = frozenset({";", "\n", "&"})
 JOINS_ON_SUCCESS = frozenset({"&&", "||", "|", "|&"})       # `|&` is a pipe, as `|` is
@@ -306,13 +318,8 @@ def _tree_may_have_changed(raw: list[str], parts: list[str], start: int, stop: i
     return _directory_moves_between(raw, parts, start, stop)
 
 
-def _git_verb(segment: str) -> str | None:
-    """The state-changing git subcommand this statement runs, or None.
-
-    None covers everything that is not one: another program, a read-only git verb, a
-    read-only FORM of a state-changing verb, and a `git` appearing only inside data (masking
-    has already removed those regions, so what reaches here is a real statement).
-    """
+def _git_subcommand(segment: str) -> tuple[str, list[str]] | None:
+    """The git subcommand this statement runs and its arguments, or None when it runs no git."""
     tokens = segment.split()
     index = _skip_wrappers(tokens, 0)
     if index >= len(tokens) or tokens[index].rsplit("/", 1)[-1] != "git":
@@ -324,8 +331,21 @@ def _git_verb(segment: str) -> str | None:
         index += 1
     if index >= len(tokens):
         return None
-    verb = tokens[index]
-    if verb not in STATE_CHANGING or _is_read_only_form(verb, tokens[index + 1 :]):
+    return tokens[index], tokens[index + 1 :]
+
+
+def _git_verb(segment: str) -> str | None:
+    """The state-changing git subcommand this statement runs, or None.
+
+    None covers everything that is not one: another program, a read-only git verb, a
+    read-only FORM of a state-changing verb, and a `git` appearing only inside data (masking
+    has already removed those regions, so what reaches here is a real statement).
+    """
+    found = _git_subcommand(segment)
+    if not found:
+        return None
+    verb, args = found
+    if verb not in STATE_CHANGING or _is_read_only_form(verb, args):
         return None
     return verb
 
@@ -499,15 +519,8 @@ def _gap_continues_after_failure(parts: list[str], start: int, stop: int) -> boo
     return False
 
 
-def chained_state_changes(command: str, tool_name: str = "Bash") -> list[str] | None:
-    """The first pair of state-changing git verbs joined across an unguarded `;`, or None.
-
-    EVERY pair is examined, not just consecutive ones. Consecutive-only looked equivalent and is
-    not: an exemption skips the PAIR, so an exempted middle verb hid the gap behind it.
-    `git merge --ff-only origin/main ; git merge topic && git push` reported nothing, because
-    (merge, merge) was exempt and (merge, push) is `&&`-joined - while the `;` that lets a failed
-    ff-merge run the second merge on a stale base and push it sat right there.
-    """
+def _walk(command: str, tool_name: str) -> tuple[list[str], list[str], dict[int, bool]] | None:
+    """Masked statements, raw statements and errexit-before-each, or None when unjudgeable."""
     stripped = strip_heredoc_bodies(command or "")
     masked = mask_data_regions(stripped, tool_name=tool_name)
     # The masking preserves LENGTH, so the same offsets index the pre-mask text exactly. The `-C`
@@ -517,16 +530,96 @@ def chained_state_changes(command: str, tool_name: str = "Bash") -> list[str] | 
     parts, raw_parts = _parts(masked, stripped, tool_name)
     if _unjudgeable(masked, parts):
         return None
-    statements = list(range(0, len(parts), 2))
-
     # errexit is a FLAG, so the last `set -e` / `set +e` wins: `set -e; set -e; set +e` leaves it
     # off and `set +e; set -e` leaves it on. A running sum got both of those wrong.
     errexit, active_before = False, {}
-    for index in statements:
+    for index in range(0, len(parts), 2):
         active_before[index] = errexit
         delta = _errexit_delta(parts[index])
         if delta:
             errexit = delta > 0
+    return parts, raw_parts, active_before
+
+
+def _script_runner(segment: str) -> str | None:
+    """The runner's name when this masked statement feeds a heredoc to a script runner, else None.
+
+    Read from the MASKED text, so a `<<` inside a quoted string is not a heredoc, and a runner
+    named through a quoted variable (`"$PY"`) is masked to filler and not recognised.
+    """
+    if "<<" not in segment:
+        return None
+    tokens = segment.split()
+    index = _skip_wrappers(tokens, 0)
+    if index >= len(tokens):
+        return None
+    name = tokens[index].rsplit("/", 1)[-1]
+    return name if name in SCRIPT_RUNNERS else None
+
+
+def _recording_verb(segment: str) -> str | None:
+    """The git verb this statement runs when it is one that RECORDS a result, else None."""
+    found = _git_subcommand(segment)
+    if not found:
+        return None
+    verb, args = found
+    if verb not in RECORDING_VERBS:
+        return None
+    if verb == "add":
+        return None if INERT_FLAGS.intersection(args) or "-n" in args else verb
+    return None if _is_read_only_form(verb, args) else verb
+
+
+def git_after_script(command: str, tool_name: str = "Bash") -> tuple[str, str] | None:
+    """(runner, git verb) when a heredoc script reaches a recording git verb across `;`, or None.
+
+    The second rule (OPEN-WORK [500]). The script is usually an EDIT with an assertion in it, and
+    the git step after it records whatever the edit left behind. Joined by a line break, a failed
+    assertion still stages and commits the unedited files, exit 0: on 2026-10-08 that committed
+    conflict markers through `git add f && git rebase --continue`.
+
+    Deliberately narrow, and priced by replaying THIS function over 171,854 recorded Bash commands
+    (30 days, 2026-09-22 to 2026-10-22, minus what the pair rule above already refuses): 211
+    firings, about 7 a day. Any statement at all before the git step fired 2,020 times, and adding
+    `cd`, `cat >`, `printf >` and `sed` as earlier steps at least 1,172, with no further confirmed
+    catch. A scan of each firing's own output for failure text found 2 calls where the script
+    really failed and git ran anyway, both inside this rule; the scan's recall is unmeasured.
+    Requiring an `assert`/`raise`/exit in the script body was measured too and kept 187 of the
+    211, so it buys nothing. Every firing gets advice that is correct for it, so the cost is one
+    rewrite, not a wrong instruction.
+    """
+    walked = _walk(command, tool_name)
+    if walked is None:
+        return None
+    parts, _raw_parts, active_before = walked
+    statements = list(range(0, len(parts), 2))
+    for index_a in statements:
+        runner = _script_runner(parts[index_a])
+        if not runner or active_before[index_a] or _failure_handled_after(parts, index_a):
+            continue
+        for index_b in statements:
+            if index_b <= index_a:
+                continue
+            verb = _recording_verb(parts[index_b])
+            if verb and _gap_continues_after_failure(parts, index_a + 1, index_b):
+                return runner, verb
+    return None
+
+
+def chained_state_changes(command: str, tool_name: str = "Bash") -> list[str] | None:
+    """The first pair of state-changing git verbs joined across an unguarded `;`, or None.
+
+    EVERY pair is examined, not just consecutive ones. Consecutive-only looked equivalent and is
+    not: an exemption skips the PAIR, so an exempted middle verb hid the gap behind it.
+    `git merge --ff-only origin/main ; git merge topic && git push` reported nothing, because
+    (merge, merge) was exempt and (merge, push) is `&&`-joined - while the `;` that lets a failed
+    ff-merge run the second merge on a stale base and push it sat right there.
+    """
+    walked = _walk(command, tool_name)
+    if walked is None:
+        return None
+    parts, raw_parts, active_before = walked
+    statements = list(range(0, len(parts), 2))
 
     found = [(index, _git_verb(parts[index])) for index in statements]
     found = [(index, verb) for index, verb in found if verb]
@@ -555,9 +648,24 @@ def main() -> int:
     except Exception:
         return 0
     command = (event.get("tool_input") or {}).get("command") or ""
-    verbs = chained_state_changes(command, event.get("tool_name") or "Bash")
+    tool_name = event.get("tool_name") or "Bash"
+    verbs = chained_state_changes(command, tool_name)
     if not verbs:
-        return 0
+        after_script = git_after_script(command, tool_name)
+        if not after_script:
+            return 0
+        runner, verb = after_script
+        sys.stderr.write(
+            f"A `{runner}` heredoc script reaches `git {verb}` across a line break or `;`, so the "
+            f"git step runs even when the script FAILED.\n"
+            "A failed edit or assertion then gets its unedited files staged and committed, exit 0 "
+            "- the transcript shows the traceback, then a clean git line.\n"
+            "Fix: put `&&` on the heredoc's opener line (`python3 - <<'EOF' && git add ...`, "
+            "body and terminator below it), or move the git step into its own call after you "
+            "have read the script's result. If the script is allowed to fail, give it a failure "
+            "path (`<<'EOF' || exit 1`); `set -e` first also works.\n"
+        )
+        return 2
     sys.stderr.write(
         f"`git {verbs[0]}` and `git {verbs[1]}` are joined by `;`, so the second runs even when "
         f"the first FAILED.\n"
