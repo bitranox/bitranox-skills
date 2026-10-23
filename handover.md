@@ -1,4 +1,4 @@
-# Handover 2026-10-23: [28] site A passed [96] and shipped as decide mode (9.12.0)
+# STALE - read 2026-10-23, work continued
 
 ## In flight
 
