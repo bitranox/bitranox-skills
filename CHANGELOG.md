@@ -29,6 +29,16 @@ than the change, so entries reconstructed from them would read like coverage wit
 a hole nobody has drawn a line under is one that gets rediscovered and half-filled - which is how
 two "versions with no entry" notes came to sit in this file disagreeing with it.
 
+## [10.0.10]
+
+### Changed
+
+- `coding-python-network-probe` teaches the banner grab: `grab_banners` / `agrab_banners` read a
+  server's first line over one connection per host, optionally send a farewell line, and report one
+  of four `BannerState` values; plus the `ipscout banners` CLI. Example filters match a specific
+  greeting, never a bare protocol code. Synced with the `python-network-probe` twin in
+  ipscout 2.1.0.
+
 ## [10.0.9]
 
 ### Changed

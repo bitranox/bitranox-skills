@@ -176,7 +176,8 @@
   "fe80",
   "wake-on-lan",
   "cap_net_raw",
-  "python-nmap"
+  "python-nmap",
+  "hand-rolled"
  ],
  "coding-python-new-public-library": [
   "creating",
