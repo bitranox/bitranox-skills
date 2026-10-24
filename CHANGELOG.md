@@ -29,6 +29,16 @@ than the change, so entries reconstructed from them would read like coverage wit
 a hole nobody has drawn a line under is one that gets rediscovered and half-filled - which is how
 two "versions with no entry" notes came to sit in this file disagreeing with it.
 
+## [10.0.7]
+
+### Changed
+
+- `coding-python-send-mail` documents `SmtpCredentials` (btx_lib_mail 4.6.0): a `DeliveryOptions`
+  field table with types and defaults, credentials read by name (`.username`, `.password`), a
+  `DeliveryOptions` built with `SmtpCredentials` for a test that calls `deliver` directly, and the
+  tuple forms (indexing, unpacking, `%`-formatting, `_asdict()`) that still expose the password.
+  Synced with the `python-send-mail` twin in btx_lib_mail 4.6.0.
+
 ## [10.0.6]
 
 ### Changed
