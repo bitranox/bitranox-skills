@@ -1,76 +1,88 @@
-# Handover 2026-10-23: [28] C+D shipped (9.16.0); solved backlog lines deleted (10.0.0); [23] batch 4 awaits the user
+# Handover 2026-10-24: [23] batch 4 pass 1 committed (10.0.3 unpushed); bmk shipped; lsdsk to push
 
 ## In flight
 
-- Nothing running. The [23] batch 4 check (workflow wf_2307b67e-dbd, 10 agents, read-only) has
-  finished, and its merged result is on disk in `.plan/fold-23/batch4/merged.json` (gitignored).
-  It has NOT been put to the user yet: that is the next action.
-- No worktree of this session is left; `feat/jev-sites-c-d` is merged and deleted.
+- Nothing running in this session. Every peer that gated a push has released it:
+  - marketplace: the network-probe peer session pushed `c90231c4` (10.0.2) at 00:43, and the main
+    checkout's `master` is `488e08cd` (10.0.3, this batch) on top of it, so the push is a
+    fast-forward. NOT pushed yet.
+  - lsdsk: the `lsdsk` session pushed 1.15.2 (origin/main `93522cc`, which also brings a
+    filelock floor and bmk 3.24.0's Makefile). My commit `996f50e` sits in the worktree
+    `apps/utils/lsdsk-wt-fold23` (branch `fold-23-batch4`) on the OLD base `6f82492`. NOT pushed.
+- A peer branch sits on top of the unpushed `488e08cd`: `ctxwatch-clear-shells` (`ef0d6b4b`,
+  worktree `../bitranox-skills-wt-ctxwatch`, from the pwshpy session, bumps to 10.0.4, edits
+  meta-context-watcher). That session waits for this push and then rebases or drops its branch;
+  message it after pushing (it signed as "Subagent contents" from the pwshpy session).
 
 ## Committed, or not
 
-- Pushed this session: 48931d97 (9.16.0, Jev shadow sites `backlog_ask` and `audit_candidate`, CI
-  green) and 8efd0b24 (10.0.0, solved backlog lines deleted). Installed copies need
-  `/plugin marketplace update bitranox-skills` + `/reload-plugins` for 10.0.0. Both knobs read `shadow` on this machine (`settings.py view`), and 9.16.0 is
-  installed here; live `backlog_ask` rows are already in the shadow log.
-- This commit (10.0.0): `backlog_close` / `open_work.close_item` DELETE a solved line and return
-  `{rank, line, reason, deleted}`, the new-file header and meta-context-watcher say so (user:
-  "always delete solved lines in open-work.md", then "also fix open_work.close_item ... including
-  in the new backlog file's header template"); `OPEN-WORK.md` lost its 113 closed lines and its
-  header rule changed; [23] batch 4 result and new [700] recorded. Git history keeps every deleted
-  line. MAJOR because the tool now deletes a line it used to keep.
-- Memory: new tree-top fact `feedback-delete-solved-open-work-lines-everywhere` (the same rule for
-  every backlog); the older soundtouch-zonemaster-only fact it generalises can go in the next dream.
-- Gitignored, clone-local: `EXECUTION-USER-REVIEW.md` (the user's "C and D" answer, the
-  autonomous C/D shape decisions), `.plan/fold-23/batch4/` (inputs, roster, mirrors map,
-  merged.json).
+- bmk: DONE. `a7fd330` (devops-bmk twin plus 3.23.4 bump, untagged) is on origin, folded into
+  the bmk session's 3.24.0 release (`15b033d`, CI green on every cell, on PyPI). Its
+  devops-bmk pyright paragraph ([121] in bmk's backlog) stays with the next bmk session.
+- marketplace `488e08cd`, committed on `master` in the main checkout and on `fold-23-batch4`
+  in `.claude/worktrees/fold-23-batch4`: 15 folds across 6 skills, a checklist per skill,
+  CHANGELOG 10.0.3, the [23] progress segment and the new [720].
+- lsdsk `996f50e`, committed in its worktree only (skill paragraph plus checklist; no
+  CHANGELOG line and no bump yet).
+- Uncommitted: this `handover.md`. Gitignored and local: `EXECUTION-USER-REVIEW.md` (the two
+  batch 4 user decisions, verbatim) and `.plan/fold-23/batch4/fold/` (inputs, journals per
+  round, diffs, `slugs18.txt`, `refmap18.json`).
 
 ## Decided, and why - do not reopen
 
-- [28] C and D are shadow only, no decide mode. C asks on EVERY typed prompt (the pattern both
-  misses paraphrases and fires on bare replies, so only asking every prompt measures both). D sends
-  a 3000-character excerpt REDACTED BEFORE IT IS CUT (a review found a key whose BEGIN line fell
-  outside the window would leak), and the eval keys a candidate by its transcript record `uuid`
-  (the audit window slides between a compaction and the session end). Detail in
-  EXECUTION-USER-REVIEW.md.
-- [23] batch 4 is the nine tool-repo levels that ship their own plugin skill (plan order: after the
-  bitranox-skills/KI levels come the tool repos). The 34 pointers added there after phase 1 were
-  classified first, then every fold candidate got the reach and skeptic lenses of batch 3.
-
-- Solved OPEN-WORK lines are deleted, never kept as `- [x]` (user, 2026-10-23), and the plugin's
-  close verb does the same for every user (10.0.0). A file whose own header keeps closed lines
-  still governs itself and is closed by hand.
+- User: batch 4 folds REACH-OK rows first ("REACH-OK first"); tool-repo pushes approved for bmk
+  and lsdsk only ("Push bmk + lsdsk"). Verbatim in EXECUTION-USER-REVIEW.md.
+- devops-bmk was rewritten to present tense (no "from bmk X.Y.Z", "Before", "no longer", "as
+  before"): the user's rule that a skill describes only the latest release; bmk upgrades itself
+  on every `make`, so its readers run the latest.
+- The 3 REACH-OK rows the skeptic marked ALREADY (pwshpy-overview, second-config-path,
+  windows-two-interface-namespaces) get no edit, only the pointer archive. The namespace text
+  survives the ipscout 1.7.0 resync (checked at `c90231c4`).
+- bmk tracks no `.skillwriter` checklists, so its twin got none; lsdsk tracks them, so it did.
 
 ## Decided against, and why
 
-- No deterministic noise filter for the audit candidates was built: the user chose the Jev shadow;
-  whether a filter would do it cheaper is unverified and recorded in [28].
-- The site tests' "nothing sent" checks keep a fixed 1 s wait, as the existing jig_repetition
-  test does: absence cannot be awaited.
+- No bare `X.Y.Z` alternative in the history finder: it matches every version floor and example;
+  the review step judges the candidates.
+- The one history line in `coding-python-send-mail` stays until a btx_lib_mail push is approved:
+  filed as [720].
 
 ## Still open, untouched
 
-- [23] the batch 4 decision (below); [710] a suspected false positive in
-  block-write-after-sibling-cd (unverified); [28] waits for 100 rows per site from 3 sessions; [96] blocked
-  on data; [700] two memory-fact rewrites wait for the user; the FOUND items: `OPEN-WORK.md`.
-- A memory consolidation (tree dream) is due per the SessionStart nudge; it would also add a
-  dream-placement run for [96].
+- [23] pass 2 (27 REACH-PARTIAL rows with a kept pointer, 2 REACH-FAILS); [720]; [710] a
+  suspected false positive in block-write-after-sibling-cd (unverified); [28] and [96] wait for
+  shadow data; [700] waits for the user; the FOUND items: `OPEN-WORK.md`.
+- A memory consolidation (tree dream) is still due per the SessionStart nudge; run it AFTER the
+  18-pointer archive, so it sees the store without them.
 
 ## Lessons for the next nap
 
-- When a shadow or classifier site cuts a window out of untrusted text for an API, redact the WHOLE
+- When a script applies several anchored edits, validate EVERY anchor in every file before
+  writing any: a mid-list miss left a half-applied state twice in this session.
+- When reflowing prose with textwrap, protect code spans first (swap their spaces for a
+  sentinel): a wrap inside a span splits it.
+- When telling a peer session a release is on PyPI, check PyPI in the same call first: a false
+  "3.24.0 is on PyPI" went out and needed a correction.
+- tooling: Workflow `args` must be the value itself; a file path passed there arrives as a
+  string and the script's `Object.keys` iterates it.
+- tooling: repo-gate judged a scratch-dir `git commit` probe as a commit in the session
+  worktree and blocked it; give such probes a literal `cd /abs &&`.
+- When a review fixes skill text, re-run the review on the fix DELTA: three rounds each found
+  real defects in the previous round's fixes (the joined-text finder drifted from the line
+  finder twice).
+- Carried from earlier handovers (not yet napped):
+  - When a shadow or classifier site cuts a window out of untrusted text for an API, redact the WHOLE
   text first and cut afterwards: a secret pattern needs its context (a key's BEGIN line), and a
   window cut first keeps the body without it.
-- When de-duplicating records re-scanned by a later pass over a sliding window, key on the source
+  - When de-duplicating records re-scanned by a later pass over a sliding window, key on the source
   record's own id (transcript `uuid`), never on text plus occurrence index.
-- When a review fixes a shadow site, re-review the fix delta alone: the re-review found a defect the
+  - When a review fixes a shadow site, re-review the fix delta alone: the re-review found a defect the
   first review and all green gates missed.
-- tooling: gate.py refuses `--gate-cwd` written before its `--gate` (exit 2, nothing run).
-- tooling: block-write-after-sibling-cd refused a call that began with an absolute `cd <repo> &&`
+  - tooling: gate.py refuses `--gate-cwd` written before its `--gate` (exit 2, nothing run).
+  - tooling: block-write-after-sibling-cd refused a call that began with an absolute `cd <repo> &&`
   after a sibling cd'd into `<repo>-wt-30`; `git -C` passed. Filed as [710], unverified.
-- When the user asks mid-turn for a change to the backlog tooling's behaviour, the user's answer
+  - When the user asks mid-turn for a change to the backlog tooling's behaviour, the user's answer
   also settles the "for everyone or per file" question: ask only if they did not say.
-- Carried from earlier handovers (not yet napped):
   - When pricing a narrower guard variant, replay its own predicate: filtering another predicate's
     labelled firings undercounts (95 vs 211 for [500]). Queued against meta-claude-hooks.
   - When a negative test asserts a word is absent from a whole doc row, assert on the one cell.
@@ -121,33 +133,37 @@
 
 ## The exact next action
 
-[23] is the top-ranked open item. Put batch 4 to the user with one AskUserQuestion, built from
-`.plan/fold-23/batch4/merged.json` (recount first; recorded: 47 candidates - reach OK 18, PARTIAL
-27, FAILS 2; skeptic FOLD-AMENDED 34, AS-HINTED 7, ALREADY 6; 13 rows target mirrored skills, so
-folding them means pushing those tool repos too, and 2 target lsdsk's own plugin). Batches 2 and 3
-folded the REACH-OK rows first and the PARTIAL ones with a kept pointer later; offer that, and ask
-separately whether the six tool repos may be pushed this round (pushes to tool repos need this
-conversation's own approval). Read the 5 rows whose body has a CONTRADICTED claim before quoting
-any of them.
+[23] is the top-ranked open item, and both of these finish its pass 1. Do them in order:
+
+1. Marketplace: `git fetch origin`,
+   check that `origin/master` is an ancestor of `master` (`488e08cd`), then
+   `git push origin master`
+   (its pre-push gate runs about 5 min). Watch CI with `ci_wait.py --ref HEAD --timeout 2700`
+   from bitranox:compuse-toolbox, then tell the pwshpy session (see In flight) that master moved.
+2. lsdsk, in `apps/utils/lsdsk-wt-fold23`: fetch, `git rebase origin/main`, add one CHANGELOG
+   line under Unreleased, `make bump-patch` (expect 1.15.3), `make test`, commit the churn, push
+   `HEAD:main`, watch CI, then `git worktree remove` it and delete the branch.
+3. Ask the user to run `/plugin marketplace update bitranox-skills` and `/reload-plugins`.
+   Only after that, archive the 18 pointers listed in `.plan/fold-23/batch4/fold/slugs18.txt`:
+   re-point the 4 facts that cite three of them (`refmap18.json`), snapshot the store,
+   `reconcile_memory_index.py --archive`, `--check-tree` TOTAL 0, and a manifest diff showing only
+   those slugs. Then remove `.claude/worktrees/fold-23-batch4`.
 
 ## Files that matter
 
-- `.plan/fold-23/batch4/merged.json` - per slug: `input`, `classify` (new rows), `reach`, `skeptic`.
-- `.plan/fold-23/batch4/{o1,o2,n1,n2,roster,mirrors}.json` - the inputs the agents read.
-- `~/.claude/plans/curried-mapping-dolphin.md` - the [23] plan (Phase 2 steps are the fold loop).
-- `plugins/bitranox/hooks/recall-memory.py` (`_shadow_backlog_ask`),
-  `plugins/bitranox/hooks/self-improve-audit.py` (`shadow_excerpt`, `_shadow`),
-  `plugins/bitranox/skills/meta-self-improve/classifier_eval.py` (`_audit_entries`).
-- `OPEN-WORK.md` lines [23], [28], [96], [700].
+- `.plan/fold-23/batch4/merged.json`: the batch 4 check (reach, skeptic) per slug.
+- `.plan/fold-23/batch4/fold/`: `g1..g6.json` (inputs), `journal-*.json` (RED, GREEN, reviews per
+  round), `slugs18.txt`, `refmap18.json`, `final-r4.patch`.
+- `plugins/bitranox/skills/*/.skillwriter/checklist-20261023-fold23-batch4.md`.
+- `OPEN-WORK.md` lines [23], [720].
 
 ## How to verify
 
-- `git status --porcelain` in the repo: empty after this commit except gitignored files.
-- 9.16.0 on origin: `git merge-base --is-ancestor 48931d97 origin/master`.
-- CI for the commit carrying this file: `ci_wait.py --ref HEAD --timeout 2700`
-  (bitranox:compuse-toolbox).
-- Shadow sites live: `python3 plugins/bitranox/skills/meta-memory-settings/settings.py view`
-  shows both new knobs at `shadow`; `classifier_eval.py report` shows `backlog_ask` rows.
+- marketplace pushed: `git -C <repo> log -1 origin/master` names the 10.0.3 commit; CI via
+  `ci_wait.py --ref HEAD`.
+- bmk: `git -C ../../apps/utils/bmk merge-base --is-ancestor a7fd330 origin/master`.
+- lsdsk: `grep '"version"' .claude-plugin/plugin.json` on origin/main reads 1.15.3.
+- archive: `reconcile_memory_index.py --check-tree <tree anchor>` reports TOTAL 0.
 
 Read this, then replace the first line with `# STALE - read <date>, work continued`. Do not
 delete it - if this session ends badly it is the only record of where things stood.
