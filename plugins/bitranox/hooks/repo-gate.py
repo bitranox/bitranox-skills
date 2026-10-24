@@ -38,7 +38,9 @@ Checks:
   6. skill-mirrors - HOOK MODE ONLY: a skill that also ships from its own tool repo must
                     match that twin apart from the documented divergences. Local only,
                     because the twins are sibling repos that a CI clone does not have.
-                    The side being committed is read at its index (commit) or HEAD (push);
+                    The side being committed is read at its index (commit) or HEAD (push),
+                    except that a commit taking files from disk itself (`-a`, `-i <paths>`,
+                    `<paths>`) is read as git will build it (`CommitSelection`);
                     the other side at its published ref plus what it committed since, so
                     another session's half-done edit never blocks a commit. A commit that
                     matches the other side's uncommitted text EXACTLY passes with a notice to
@@ -64,6 +66,7 @@ import importlib.util
 import json
 import os
 import re
+import shutil
 import subprocess
 import tempfile
 import time
@@ -88,16 +91,16 @@ import secret_patterns  # noqa: E402
 is_gated_command = shell_text.is_gated_command
 
 
-def _git(root, *args):
+def _git(root, *args, env=None):
     try:
         out = subprocess.run(["git", *args], cwd=str(root), capture_output=True, text=True,
-                             encoding="utf-8", errors="replace")
+                             encoding="utf-8", errors="replace", env=env)
         return out.returncode, out.stdout, out.stderr
     except Exception:  # noqa: BLE001
         return 1, "", ""
 
 
-def _git_paths(root, subcommand, *args):
+def _git_paths(root, subcommand, *args, env=None):
     """Enumerate paths from git NUL-separated, so no path is ever C-quoted.
 
     Without `-z`, git renders any non-ASCII path through `core.quotePath`: the caller receives the
@@ -110,7 +113,7 @@ def _git_paths(root, subcommand, *args):
     exactly as before - being unable to enumerate is not evidence of a violation.
     """
     try:
-        out = subprocess.run(["git", subcommand, "-z", *args], cwd=str(root), capture_output=True)
+        out = subprocess.run(["git", subcommand, "-z", *args], cwd=str(root), capture_output=True, env=env)
     except Exception:  # noqa: BLE001
         return 1, []
     if out.returncode != 0:
@@ -1264,21 +1267,127 @@ def _published_commit(directory):
     return None
 
 
-def _checked_out_bytes(directory, commit, rel):
+def _checked_out_bytes(directory, commit, rel, env=None):
     """A file of ``commit`` exactly as a checkout here would write it (eol and filters applied).
 
-    ``commit`` "" names the INDEX (``:./rel``), which is what the next commit will carry."""
+    ``commit`` "" names the INDEX (``:./rel``), which is what the next commit will carry; with
+    ``env`` naming a ``GIT_INDEX_FILE``, that index."""
     try:
         out = subprocess.run(["git", "cat-file", "--filters", "%s:./%s" % (commit, rel)],
-                             cwd=str(directory), capture_output=True)
+                             cwd=str(directory), capture_output=True, env=env)
     except Exception:  # noqa: BLE001
         return None
     return out.stdout if out.returncode == 0 else None
 
 
 #: What the commit and push gates read of the side being committed: the index on a commit, HEAD
-#: on a push (or `gh pr create`, which publishes HEAD).
+#: on a push (or `gh pr create`, which publishes HEAD). A commit that takes files from disk itself
+#: is a `CommitSelection` instead.
 STAGE_INDEX, STAGE_HEAD = "index", "HEAD"
+
+
+class CommitSelection:
+    """A `git commit` that takes files from the WORKING TREE itself: `-a`, `-i <paths>` or `<paths>`.
+
+    Such a commit stages what it names only when it runs, so the index a PreToolUse gate reads
+    beforehand is not what it ships. Measured 2026-10-24: `git commit -F msg -- <paths>` with no
+    `git add` was refused as DRIFT quoting the old SKILL.md while the files on disk were in sync.
+    Git defines the selection, and `_selected_files` has git build it:
+
+    * ``all`` (`-a`): the index, with every tracked file re-staged from disk.
+    * ``only`` (`<paths>`, `-o`): HEAD, with the named paths staged from disk, so a change staged
+      elsewhere is NOT in this commit.
+    * ``include`` (`-i <paths>`): the index, with the named files re-staged from disk.
+
+    ``where`` is the directory the commit runs in, which the pathspecs are relative to.
+
+    Not seen by any PreToolUse reading, this one or the index: a `pre-commit` hook that edits and
+    stages files, and environment the command's git gets but this hook does not (a `GIT_*`
+    variable or `GIT_CONFIG_*` injected into the shell from outside the command text).
+    """
+
+    __slots__ = ("mode", "pathspecs", "where")
+
+    def __init__(self, mode, pathspecs=(), where=None):
+        self.mode, self.pathspecs, self.where = mode, tuple(pathspecs), where
+
+    def __repr__(self):
+        return "CommitSelection(%r, %r, %r)" % (self.mode, self.pathspecs, self.where)
+
+
+def _is_commit(stage):
+    """True for any stage a COMMIT ships (the index, or a `CommitSelection`), False for a push."""
+    return stage == STAGE_INDEX or isinstance(stage, CommitSelection)
+
+
+def _selection_top(skill_dir, selection):
+    """The repository top both the skill and the commit live in, or None if they differ or git fails."""
+    rc_top, here_top, _ = _git(skill_dir, "rev-parse", "--show-toplevel")
+    rc_where, where_top, _ = _git(selection.where, "rev-parse", "--show-toplevel")
+    if rc_top or rc_where or os.path.normcase(here_top.strip()) != os.path.normcase(where_top.strip()):
+        return None
+    return here_top.strip()
+
+
+def _stage_selection(selection, top, real_index, temp_index, env):
+    """Build in ``temp_index`` what ``selection`` commits, with git's own staging; False if git fails.
+
+    The same plumbing the commit runs: `add -u` re-stages tracked files for `-a` and `-i`, and a
+    `<paths>` commit starts from HEAD and updates every path the pathspecs match in the index or
+    HEAD (so a path `git rm` removed is removed here too). A partial commit keeps HEAD's blob for a
+    skip-worktree entry (sparse checkout), which a HEAD-built index cannot know, so any such match
+    gives False and the index reading."""
+    if selection.mode == "only":
+        rc_m, named = _git_paths(selection.where, "ls-files", "--full-name", "--with-tree=HEAD", "--",
+                                 *selection.pathspecs)
+        rc_t, tagged = _git_paths(selection.where, "ls-files", "-t", "--full-name", "--", *selection.pathspecs)
+        if rc_m or rc_t or any(row.startswith("S ") for row in tagged):
+            return False
+        if _git(top, "read-tree", "HEAD", env=env)[0]:
+            return False
+        return not named or _git(top, "update-index", "--add", "--remove", "--", *named, env=env)[0] == 0
+    if not os.path.isfile(real_index):
+        return False
+    shutil.copyfile(real_index, temp_index)
+    specs = ("--", ":/") if selection.mode == "all" else ("--", *selection.pathspecs)
+    return _git(selection.where, "add", "-u", *specs, env=env)[0] == 0
+
+
+def _selected_files(skill_dir, selection):
+    """`shipped_files` for a `CommitSelection`, or None when git cannot say what it takes.
+
+    Git builds the selection itself, in a throwaway index (`GIT_INDEX_FILE`), and the files are read
+    back from it. Reproducing git's add logic by hand was tried first and, over three adversarial
+    review rounds on 2026-10-24, kept missing rules git applies: the stat cache (a stat-clean entry
+    keeps its STAGED blob under `-a`), the safer-CRLF rule (a CRLF blob already in the index is not
+    converted), symlinks and paths behind a symlinked directory, clean filters, and assume-unchanged
+    entries. Staging writes the same blobs the commit itself will write; it runs with an empty
+    `core.hooksPath`, so no user hook fires during the check, and with `core.splitIndex=false`, so
+    no shared-index file is left in the real git dir."""
+    top = _selection_top(skill_dir, selection)
+    rc, real_index, _ = _git(skill_dir, "rev-parse", "--path-format=absolute", "--git-path", "index")
+    if top is None or rc:
+        return None
+    with tempfile.TemporaryDirectory(prefix="repo-gate-index-") as scratch:
+        temp_index, no_hooks = os.path.join(scratch, "index"), os.path.join(scratch, "no-hooks")
+        os.mkdir(no_hooks)
+        env = {**os.environ, "GIT_INDEX_FILE": temp_index, "GIT_CONFIG_COUNT": "2",
+               "GIT_CONFIG_KEY_0": "core.hooksPath", "GIT_CONFIG_VALUE_0": no_hooks,
+               "GIT_CONFIG_KEY_1": "core.splitIndex", "GIT_CONFIG_VALUE_1": "false"}
+        if not _stage_selection(selection, top, real_index.strip(), temp_index, env):
+            return None
+        rc_l, listed = _git_paths(skill_dir, "ls-files", "--", ".", env=env)
+        if rc_l:
+            return None
+        found = {}
+        for rel in dict.fromkeys(listed):
+            if _mirror_ignored(rel):
+                continue
+            data = _checked_out_bytes(skill_dir, "", rel, env=env)
+            if data is None:
+                return None
+            found[rel] = data
+        return dict(sorted(found.items()))
 
 
 def shipped_files(skill_dir, stage):
@@ -1286,10 +1395,17 @@ def shipped_files(skill_dir, stage):
 
     The side being committed is judged by what its commit carries, never by its working tree: an
     unstaged edit is not part of a commit, and a staged one is not part of a push until it is
-    committed (#111). ``stage`` is ``STAGE_INDEX`` or ``STAGE_HEAD``. Without git, or with nothing
-    to list (no commit yet), the working tree is all there is, and that is what is compared.
+    committed (#111). ``stage`` is ``STAGE_INDEX``, ``STAGE_HEAD`` or a `CommitSelection`, the one
+    kind of commit that DOES take files from the working tree; when git cannot say what that
+    selection takes, the index is read, as for a plain commit. Without git, or with nothing to list
+    (no commit yet), the working tree is all there is, and that is what is compared.
     """
     skill_dir = Path(skill_dir)
+    if isinstance(stage, CommitSelection):
+        selected = _selected_files(skill_dir, stage)
+        if selected is not None:
+            return selected
+        stage = STAGE_INDEX
     if stage == STAGE_INDEX:
         commit, (rc, listed) = "", _git_paths(skill_dir, "ls-files", "--", ".")
     else:
@@ -1541,7 +1657,7 @@ def mirror_failures(root, names, committing=None, stage=STAGE_INDEX, notices=Non
         return []
     read_here, read_twin, from_published = _mirror_readers(committing, stage)
     # An audit (committing None) already reads both sides at their newest text, so it never matches here.
-    lenient = stage == STAGE_INDEX and notices is not None
+    lenient = _is_commit(stage) and notices is not None
     fails = []
     for name in sorted(names):
         relative = MIRRORED_SKILLS.get(name)
@@ -1598,18 +1714,175 @@ def check_skill_mirrors(root, stage=STAGE_INDEX, notices=None):
                            notices=notices)
 
 
-def mirror_stage(command, tool_name=None):
+def mirror_stage(command, tool_name=None, cwd=None):
     """What a gated command ships of the repo it runs in: the index for a commit, else HEAD.
 
     A command that commits anywhere commits the index first, and any push after it in the same
     command pushes that commit, so one `git commit` statement decides. A push or `gh pr create`
     alone publishes HEAD. Segmented exactly like `shell_text.is_gated_command`, heredoc bodies
-    dropped, so a commit named as DATA does not count."""
+    dropped, so a commit named as DATA does not count.
+
+    A commit that takes files from the working tree itself (`-a`, a pathspec, `-i`) gives a
+    `CommitSelection` instead; its pathspecs resolve from the directory the commit runs in, which
+    `cwd` (where the session sits) leads to. Anything the text cannot settle gives the index."""
     for _at, seg in shell_text.iter_segments(shell_text.strip_heredoc_bodies(command or ""), tool_name):
         seg = seg.strip().lstrip("(").strip()
         if shell_text.is_git_verb(seg, {"commit"}, tool_name or "Bash"):
-            return STAGE_INDEX
+            return _commit_selection(seg, command, tool_name or "Bash", cwd) or STAGE_INDEX
     return STAGE_HEAD
+
+
+#: `git commit` options whose VALUE is the next token when it is not attached.
+_COMMIT_VALUE_OPTS = frozenset({
+    "-m", "--message", "-F", "--file", "-C", "--reuse-message", "-c", "--reedit-message",
+    "-t", "--template", "--author", "--date", "--trailer", "--cleanup", "--fixup", "--squash"})
+#: `git commit` options that take no value, or only an ATTACHED one (`-uno`, `--gpg-sign=<key>`).
+_COMMIT_FLAG_OPTS = frozenset({
+    "-a", "--all", "-o", "--only", "-i", "--include", "-q", "--quiet", "-v", "--verbose",
+    "-s", "--signoff", "--no-signoff", "-n", "--no-verify", "--verify", "-e", "--edit",
+    "--no-edit", "--amend", "--no-post-rewrite", "--allow-empty", "--allow-empty-message",
+    "--reset-author", "--dry-run", "--short", "--branch", "--porcelain", "--long", "-z", "--null",
+    "--status", "--no-status", "-u", "--untracked-files", "-S", "--gpg-sign", "--no-gpg-sign"})
+_COMMIT_SHORT_VALUE = frozenset("mFCct")
+_COMMIT_SHORT_ATTACHED = frozenset("uS")               # optional value, attached only
+_COMMIT_SHORT_FLAGS = frozenset("aoiqvsnez")
+
+
+#: Characters that let the shell rewrite or cut a word (globs, braces, comments, redirects, pipes,
+#: expansions, history, escapes). A statement holding any of them anywhere - even inside a quoted
+#: message - is read on the index: after tokenizing, a quoted `'*.md'` (git's own glob) and an
+#: unquoted `*.md` (expanded by the shell first) look the same.
+_SHELL_REWRITES = frozenset("*?[]{}#<>|&;$`\\~!@")
+
+
+def _commit_selection(segment, command, tool, cwd):
+    """The `CommitSelection` of one `git commit` statement, or None for the plain index commit.
+
+    Only the plainest shape is read, because every other one was shown to make the reading differ
+    from what git commits (adversarial review, 2026-10-24): a Bash statement `git [-C <dir>] commit
+    <options> [--] <paths>` with no leading assignment or launcher, no other global option (`git
+    --icase-pathspecs` and `GIT_*_PATHSPECS=` change pathspec matching), no character the shell
+    rewrites (`_SHELL_REWRITES`), and the only `git commit` in the command (a second one commits
+    the index), with nothing before it but `cd <absolute dir>` (`_commit_is_plainly_placed`). Also
+    None for `-p`/`--interactive`, `--pathspec-from-file`, an option this reader does not know, `-a`
+    with paths (git refuses it), a `..` in a `-C` or `cd` path, or no readable directory. None is
+    the old reading, so not knowing is never laxer."""
+    if tool != "Bash" or any(c in _SHELL_REWRITES for c in segment) or not _commit_is_plainly_placed(command, tool):
+        return None
+    try:
+        tokens = shell_text.split_for_tool(segment, tool)
+    except ValueError:
+        return None
+    operands = _plain_commit_operands(tokens)
+    parsed = None if operands is None else _parse_commit_operands(operands)
+    if parsed is None:
+        return None
+    flags, pathspecs = parsed
+    where = _commit_dir(command, cwd, tool)
+    if where is None or ("a" in flags and pathspecs) or not ("a" in flags or pathspecs):
+        return None
+    if "a" in flags:
+        return CommitSelection("all", (), where)
+    return CommitSelection("include" if "i" in flags else "only", pathspecs, where)
+
+
+def _commit_is_plainly_placed(command, tool):
+    """True when the command holds exactly one `git commit` and only `cd <absolute dir>` runs before it.
+
+    The hook reads the disk BEFORE any statement runs, so a statement ahead of the commit that
+    writes a file (`git restore`, `cp`, `sed -i`, a formatter) or changes how git matches a pathspec
+    (`export GIT_ICASE_PATHSPECS=1`) makes the reading differ from what git commits. Measured by
+    adversarial review, 2026-10-24. Statements after the commit run after it and do not matter."""
+    commits = 0
+    for _at, seg in shell_text.iter_segments(shell_text.strip_heredoc_bodies(command or ""), tool):
+        seg = seg.strip()
+        if not seg:
+            continue
+        if shell_text.is_git_verb(seg.lstrip("(").strip(), {"commit"}, tool):
+            commits += 1
+        elif commits == 0 and not _is_plain_cd(seg):
+            return False
+    return commits == 1
+
+
+def _is_plain_cd(segment):
+    """`cd <absolute path>` with no shell rewriting and no `..`, so the text names where it lands."""
+    if any(c in _SHELL_REWRITES for c in segment):
+        return False
+    try:
+        tokens = shell_text.split_for_tool(segment, "Bash")
+    except ValueError:
+        return False
+    return (len(tokens) == 2 and tokens[0] == "cd" and (tokens[1].startswith("/") or os.path.isabs(tokens[1]))
+            and not _climbs(tokens[1]))
+
+
+def _climbs(path):
+    """True for a path with a `..` component: git chdir()s physically, so `-C link/..` lands in the
+    parent of the link's TARGET while the text names the link's parent."""
+    return ".." in path.replace("\\", "/").split("/")
+
+
+def _plain_commit_operands(tokens):
+    """The operands of `git [-C <dir>]... commit ...`, or None for any other prefix."""
+    if not tokens or shell_text.basename_for_tool(tokens[0], "Bash") != "git":
+        return None
+    at = 1
+    while at + 1 < len(tokens) and tokens[at] == "-C":
+        if _climbs(tokens[at + 1]):
+            return None
+        at += 2
+    if at >= len(tokens) or tokens[at] != "commit":
+        return None
+    return tokens[at + 1:]
+
+
+def _commit_dir(command, cwd, tool):
+    if cwd is None:
+        return None
+    return shell_text.git_verb_dir(command, cwd, {"commit"}, tool)
+
+
+def _parse_commit_operands(operands):
+    """({'a', 'i', ...} selection flags seen, pathspecs) of `git commit`'s operands, or None if unknowable."""
+    flags, pathspecs, at = set(), [], 0
+    while at < len(operands):
+        token = operands[at]
+        at += 1
+        if token == "--":
+            pathspecs.extend(operands[at:])
+            break
+        if not token.startswith("-") or token == "-":
+            pathspecs.append(token)
+            continue
+        if token.startswith("--"):
+            name, attached = token.partition("=")[0], "=" in token
+            if name in ("--all", "--include", "--only"):
+                flags.add(name[2])
+            elif name in _COMMIT_VALUE_OPTS:
+                at += 0 if attached else 1
+            elif name not in _COMMIT_FLAG_OPTS:
+                return None                          # -p's long forms, --pathspec-from-file, unknown
+            continue
+        skip = _parse_short_cluster(token[1:], flags)
+        if skip is None:
+            return None
+        at += skip
+    return flags, pathspecs
+
+
+def _parse_short_cluster(cluster, flags):
+    """Read one `-abc` cluster into ``flags``; the count of following tokens it consumes, or None."""
+    for index, letter in enumerate(cluster):
+        rest = cluster[index + 1:]
+        if letter in _COMMIT_SHORT_VALUE:
+            return 0 if rest else 1
+        if letter in _COMMIT_SHORT_ATTACHED:
+            return 0
+        if letter not in _COMMIT_SHORT_FLAGS:
+            return None                              # -p, or a letter this reader does not know
+        flags.add(letter)
+    return 0
 
 
 #: `git push` options that take their VALUE as the next token.
@@ -1973,7 +2246,7 @@ def gate_tool_repo_mirror(root, stage=STAGE_INDEX, guessed=False):
     # included (`_other_marketplace_checkouts`); each is read as the main checkout is. A push stays
     # on `marketplace` alone: it publishes, so the other side must have published or committed there.
     candidates = [marketplace]
-    if stage == STAGE_INDEX:
+    if _is_commit(stage):
         candidates += _other_marketplace_checkouts(marketplace)
     notices, fails = [], []
     for name in mine:
@@ -2104,7 +2377,7 @@ def main():
         if not is_gated_command(command, event.get("tool_name")):
             return 0
         root, guessed = hook_landing(event)
-        stage = mirror_stage(command, event.get("tool_name"))
+        stage = mirror_stage(command, event.get("tool_name"), os.path.normpath(event.get("cwd") or os.getcwd()))
     else:
         root, guessed = repo_root(), False
     if root is None or not is_bitranox_skills(root):

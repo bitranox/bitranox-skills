@@ -1995,6 +1995,368 @@ def test_the_hook_reads_index_for_a_commit_and_head_for_a_push(command, stage):
     assert RG.mirror_stage(command, "Bash") == stage
 
 
+# --- a commit that names its own files (`-a`, a pathspec, `-i`) ships them from disk -------------
+# Measured 2026-10-24: `git commit -F msg -- <paths>` with no `git add` was refused as DRIFT quoting
+# the OLD SKILL.md, although the files on disk were in sync. Such a commit stages the files it names
+# from the working tree only when it runs, so the index the gate read was not what it ships. Git
+# defines that selection, so reading it needs no trust in what the command claims it will do.
+
+def _tool_ahead(tool):
+    """The tool repo commits the new text; the marketplace has not caught up yet."""
+    _drift(tool / TW_SKILL, TWIN_BODY)
+    _g(tool, "commit", "-qam", "tool side first")
+
+
+def test_a_pathspec_commit_is_judged_on_the_named_files_as_they_are_on_disk(tmp_path, monkeypatch):
+    _public, root, tool = _published_pair(tmp_path, monkeypatch)
+    _tool_ahead(tool)
+    _drift(root / MP_SKILL, MIRROR_BODY)                    # in sync on disk, NOT staged
+    stage = RG.mirror_stage(f"git commit -m x -- {MP_SKILL}", "Bash", str(root))
+
+    assert RG.check_skill_mirrors(root, stage=stage, notices=[]) == []
+
+
+def test_a_plain_commit_still_judges_the_stale_index(tmp_path, monkeypatch):
+    _public, root, tool = _published_pair(tmp_path, monkeypatch)
+    _tool_ahead(tool)
+    _drift(root / MP_SKILL, MIRROR_BODY)
+    stage = RG.mirror_stage("git commit -m x", "Bash", str(root))
+
+    assert len(RG.check_skill_mirrors(root, stage=stage, notices=[])) == 1
+
+
+def test_a_commit_all_is_judged_on_every_tracked_file_as_it_is_on_disk(tmp_path, monkeypatch):
+    _public, root, tool = _published_pair(tmp_path, monkeypatch)
+    _tool_ahead(tool)
+    _drift(root / MP_SKILL, MIRROR_BODY)
+    stage = RG.mirror_stage("git commit -am x", "Bash", str(root))
+
+    assert RG.check_skill_mirrors(root, stage=stage, notices=[]) == []
+
+
+def test_an_include_commit_takes_the_named_files_from_disk(tmp_path, monkeypatch):
+    _public, root, tool = _published_pair(tmp_path, monkeypatch)
+    _tool_ahead(tool)
+    _drift(root / MP_SKILL, MIRROR_BODY)
+    stage = RG.mirror_stage(f"git commit -i -m x {MP_SKILL}", "Bash", str(root))
+
+    assert RG.check_skill_mirrors(root, stage=stage, notices=[]) == []
+
+
+def test_a_staged_drift_a_pathspec_commit_does_not_name_is_not_shipped(tmp_path, monkeypatch):
+    # `git commit -- <other>` takes every path it does not name from HEAD, so a drift staged in the
+    # skill is not part of it - and a plain commit of the same index still is.
+    _public, root, _tool = _published_pair(tmp_path, monkeypatch)
+    _drift(root / MP_SKILL, MIRROR_BODY)
+    write(root / "README.md", "readme\n")
+    _g(root, "add", "-A")
+
+    named = RG.mirror_stage("git commit -m x -- README.md", "Bash", str(root))
+    plain = RG.mirror_stage("git commit -m x", "Bash", str(root))
+
+    assert RG.check_skill_mirrors(root, stage=named, notices=[]) == []
+    assert len(RG.check_skill_mirrors(root, stage=plain, notices=[])) == 1
+
+
+def test_a_tool_repo_pathspec_commit_is_judged_on_disk_through_the_hook(tmp_path, monkeypatch):
+    public, root, tool = _published_pair(tmp_path, monkeypatch)
+    _drift(root / MP_SKILL, MIRROR_BODY)
+    _g(root, "commit", "-qam", "marketplace first")
+    _drift(tool / TW_SKILL, TWIN_BODY)                      # in sync on disk, NOT staged
+    monkeypatch.setattr(RG, "_public_tree", lambda _start: public)
+
+    _hook_event(monkeypatch, tool, f"git commit -m x -- {TW_SKILL}")
+    assert RG.main() == 0
+    _hook_event(monkeypatch, tool, "git commit -m x")
+    assert RG.main() == 2
+
+
+@pytest.mark.parametrize("command, mode, pathspecs", [
+    ("git commit -am x", "all", ()),
+    ("git commit --all -m x", "all", ()),
+    ("git commit -m x -- a b", "only", ("a", "b")),
+    ("git commit -F msg.txt a", "only", ("a",)),
+    ("git commit -m 'a b' c", "only", ("c",)),
+    ("git commit -qsm x c", "only", ("c",)),
+    ("git commit --only c", "only", ("c",)),
+    ("git commit --message=x --author='A B' c", "only", ("c",)),
+    ("git commit -i -m x a", "include", ("a",)),
+    ("git commit -m x -- a && git push", "only", ("a",)),
+])
+def test_mirror_stage_reads_the_files_a_commit_names(tmp_path, command, mode, pathspecs):
+    stage = RG.mirror_stage(command, "Bash", str(tmp_path))
+
+    assert (stage.mode, stage.pathspecs) == (mode, pathspecs)
+    assert stage.where == str(tmp_path)
+
+
+@pytest.mark.parametrize("command", [
+    "git commit -p -m x",                                   # interactive: the text cannot say
+    "git commit --interactive",
+    "git commit --pathspec-from-file=list -m x",
+    'git commit -m x -- "$F"',                              # the shell expands it, the text does not
+    "git commit -m x -- `ls`",
+    "git commit --some-future-option -m x -- f",            # an option this reader does not know
+    "git commit -a -m x -- f",                              # git refuses paths with -a
+    "git commit -m 'unbalanced -- f",                       # does not tokenize
+    # The shapes below were each shown to make the reading differ from what git commits.
+    "git commit -qm x *.md",                                # the shell expands the glob first
+    "git commit -qm x -- d/{SKILL.md,other.md}",            # brace expansion
+    "git commit -qm x -- README.md # and the skill: d/SKILL.md",
+    "git commit -qm x -- README.md > /tmp/log 2>&1",        # redirect words are not pathspecs
+    "git commit -qm a -- README.md && git commit -qm b",    # the second commit takes the index
+    "git --icase-pathspecs commit -qm x -- d/skill.md",     # changes how git matches the pathspec
+    "GIT_ICASE_PATHSPECS=1 git commit -qm x -- d/skill.md",
+    "git --work-tree=/x commit -qam x",
+    "sudo git commit -qm x -- f",
+    "git commit -m 'fix [x]' -- f",                         # a rewrite character anywhere is enough
+    "git add f && git commit -m x -- a",                    # an earlier statement may write a file
+    "git restore . && git commit -qam x",
+    "export GIT_ICASE_PATHSPECS=1 && git commit -qm x -- d/skill.md",
+    "cd sub && git commit -qm x -- a",                      # relative: an inherited CDPATH may move it
+    "cd /r/lnk/.. && git commit -qm x -- a",
+    "git -C lnk/.. commit -qm x -- SKILL.md",               # git chdir()s physically, past the link
+])
+def test_a_commit_whose_selection_the_text_cannot_tell_is_judged_on_the_index(tmp_path, command):
+    assert RG.mirror_stage(command, "Bash", str(tmp_path)) == "index"
+
+
+def test_a_commit_after_a_cd_to_an_absolute_directory_is_read(tmp_path):
+    stage = RG.mirror_stage(f"cd {_sh(tmp_path)} && git commit -m x -- a", "Bash", "/")
+
+    assert (stage.mode, stage.pathspecs) == ("only", ("a",))
+
+
+def test_a_pathspec_commit_with_no_readable_directory_is_judged_on_the_index():
+    assert RG.mirror_stage("git commit -m x -- a", "Bash") == "index"
+    assert RG.mirror_stage("git commit -qam x", "Bash") == "index"
+
+
+def test_a_powershell_commit_is_judged_on_the_index(tmp_path):
+    # `@f` splats an array the text never shows; PowerShell's grammar is not modelled here.
+    assert RG.mirror_stage("$f = @('d/SKILL.md'); git commit -q -m x @f", "PowerShell", str(tmp_path)) == "index"
+    assert RG.mirror_stage("git commit -q -m x -- d/SKILL.md", "PowerShell", str(tmp_path)) == "index"
+
+
+# The repository states below each made the reading differ from what git commits. Every test runs
+# the command for real and checks the property that matters: the gate never PASSES a commit whose
+# real HEAD differs from the twin.
+
+SKILL_DIR = "plugins/bitranox/skills/coding-python-thing"
+#: These tests run the command through bash; on a Windows runner a bare `bash` can be WSL's, which
+#: does not see the test's temporary repository. The decision logic they guard is not OS-specific.
+_POSIX_SHELL = pytest.mark.skipif(sys.platform == "win32", reason="bash on Windows may be WSL's")
+
+
+def _gate_then_commit(root, command):
+    """(the gate's verdict on `command`, whether the commit it really made differs from the twin)."""
+    stage = RG.mirror_stage(command, "Bash", str(root))
+    blocked = bool(RG.check_skill_mirrors(root, stage=stage, notices=[]))
+    env = {**os.environ, "GIT_AUTHOR_NAME": "t", "GIT_AUTHOR_EMAIL": "t@example.invalid",
+           "GIT_COMMITTER_NAME": "t", "GIT_COMMITTER_EMAIL": "t@example.invalid"}
+    out = subprocess.run(["bash", "-c", command], cwd=str(root), env=env, capture_output=True, text=True)
+    assert out.returncode == 0, out.stdout + out.stderr
+    return blocked, bool(RG.check_skill_mirrors(root, stage=RG.STAGE_HEAD, notices=None))
+
+
+def _with_extra(tmp_path, monkeypatch):
+    """The published pair with a second, in-sync file `references/extra.md` on both sides."""
+    _public, root, tool = _published_pair(tmp_path, monkeypatch)
+    for top, skill in ((root, SKILL_DIR), (tool, "skills/python-thing")):
+        write(top / skill / "references" / "extra.md", "same\n")
+        _g(top, "add", "-A")
+        _g(top, "commit", "-qm", "extra")
+        _g(top, "update-ref", "refs/remotes/origin/master", "HEAD")
+    write(root / MP_SKILL, MIRROR_BODY.replace("(coding-python-thing)", "(renamed)"))   # in scope, no drift
+    return root
+
+
+@_POSIX_SHELL
+def test_a_pathspec_commit_of_a_file_git_rm_removed_deletes_it(tmp_path, monkeypatch):
+    root = _with_extra(tmp_path, monkeypatch)
+    _g(root, "rm", "-q", SKILL_DIR + "/references/extra.md")
+
+    blocked, shipped_drift = _gate_then_commit(root, f"git commit -qm x -- {MP_SKILL} {SKILL_DIR}/references/extra.md")
+    assert shipped_drift and blocked
+
+
+@_POSIX_SHELL
+def test_a_pathspec_commit_of_a_file_rm_cached_then_edited_ships_the_edit(tmp_path, monkeypatch):
+    root = _with_extra(tmp_path, monkeypatch)
+    _g(root, "rm", "-q", "--cached", SKILL_DIR + "/references/extra.md")
+    write(root / SKILL_DIR / "references" / "extra.md", "changed\n")
+
+    blocked, shipped_drift = _gate_then_commit(root, f"git commit -qm x -- {MP_SKILL} {SKILL_DIR}/references/extra.md")
+    assert shipped_drift and blocked
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="creating a symlink needs a privilege on Windows")
+@_POSIX_SHELL
+def test_a_commit_all_over_a_symlinked_skill_file_reads_the_link_git_stores(tmp_path, monkeypatch):
+    _public, root, _tool = _published_pair(tmp_path, monkeypatch)
+    target = tmp_path / "elsewhere" / "SKILL.md"
+    write(target, MIRROR_BODY)
+    (root / MP_SKILL).unlink()
+    os.symlink(str(target), str(root / MP_SKILL))
+    _g(root, "add", MP_SKILL)
+
+    blocked, shipped_drift = _gate_then_commit(root, "git commit -qam x")
+    assert shipped_drift and blocked
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="creating a symlink needs a privilege on Windows")
+@_POSIX_SHELL
+def test_a_commit_all_behind_a_symlinked_directory_reads_the_files_as_deleted(tmp_path, monkeypatch):
+    root = _with_extra(tmp_path, monkeypatch)
+    other = tmp_path / "elsewhere" / "refs"
+    write(other / "extra.md", "same\n")
+    shutil.rmtree(root / SKILL_DIR / "references")
+    os.symlink(str(other), str(root / SKILL_DIR / "references"))
+
+    blocked, shipped_drift = _gate_then_commit(root, "git commit -qam x")
+    assert shipped_drift and blocked
+
+
+@_POSIX_SHELL
+def test_a_commit_all_keeps_an_assume_unchanged_entry_from_the_index(tmp_path, monkeypatch):
+    _public, root, _tool = _published_pair(tmp_path, monkeypatch)
+    _drift(root / MP_SKILL, MIRROR_BODY)
+    _g(root, "add", MP_SKILL)
+    _g(root, "update-index", "--assume-unchanged", MP_SKILL)
+    write(root / MP_SKILL, MIRROR_BODY)                     # in sync on disk, drift in the index
+
+    blocked, shipped_drift = _gate_then_commit(root, "git commit -qam x")
+    assert shipped_drift and blocked
+
+
+@_POSIX_SHELL
+def test_a_commit_all_through_a_clean_filter_reads_the_cleaned_text(tmp_path, monkeypatch):
+    _public, root, _tool = _published_pair(tmp_path, monkeypatch)
+    _g(root, "config", "filter.x.clean", "sed s/One/Changed/")
+    _g(root, "config", "filter.x.smudge", "cat")
+    (root / ".git" / "info").mkdir(exist_ok=True)
+    (root / ".git" / "info" / "attributes").write_text("SKILL.md filter=x\n", encoding="utf-8")
+    write(root / MP_SKILL, MIRROR_BODY + "\n")              # touched, so -a re-cleans it
+
+    blocked, shipped_drift = _gate_then_commit(root, "git commit -qam x")
+    assert shipped_drift and blocked
+
+
+@_POSIX_SHELL
+def test_a_restore_before_the_commit_is_judged_on_the_index(tmp_path, monkeypatch):
+    # The hook reads the disk before `git restore` runs, so reading it would see the pre-restore
+    # copy; the commit ships the staged drift either way and must be blocked.
+    _public, root, _tool = _published_pair(tmp_path, monkeypatch)
+    _drift(root / MP_SKILL, MIRROR_BODY)
+    _g(root, "add", MP_SKILL)
+    write(root / MP_SKILL, MIRROR_BODY)
+
+    blocked, shipped_drift = _gate_then_commit(root, f"git restore {MP_SKILL} && git commit -qm x -- {MP_SKILL}")
+    assert shipped_drift and blocked
+
+
+EXTRA = SKILL_DIR + "/references/extra.md"
+_RESTAGING = ["git commit -qam x", f"git commit -qm x -i -- {EXTRA}"]
+
+
+def _stat_clean_drift(tmp_path, monkeypatch, config):
+    """A drift staged in `extra.md`, then the disk copy put back in sync with the SAME size and mtime."""
+    root = _with_extra(tmp_path, monkeypatch)
+    for key, value in config:
+        _g(root, "config", key, value)
+    path = root / EXTRA
+    path.write_bytes(b"XXXX\n")                            # the drift: same size as "same\n"
+    before = os.stat(path)
+    time.sleep(1.1)                                         # out of git's racy-timestamp window
+    _g(root, "add", EXTRA)
+    with open(path, "r+b") as handle:                       # same inode, same size
+        handle.write(b"same\n")
+    os.utime(path, ns=(before.st_atime_ns, before.st_mtime_ns))
+    return root
+
+
+@_POSIX_SHELL
+@pytest.mark.parametrize("config", [[("core.trustctime", "false")], [("core.checkStat", "minimal")]])
+@pytest.mark.parametrize("command", _RESTAGING)
+def test_a_stat_clean_entry_keeps_its_staged_blob(tmp_path, monkeypatch, config, command):
+    # `-a` and `-i` re-stage through the stat cache: an entry whose stat matches keeps the STAGED
+    # drift although the disk copy is in sync. Reading the disk passed it.
+    root = _stat_clean_drift(tmp_path, monkeypatch, config)
+
+    blocked, shipped_drift = _gate_then_commit(root, command)
+    assert shipped_drift and blocked
+
+
+@_POSIX_SHELL
+@pytest.mark.parametrize("command", _RESTAGING)
+def test_a_crlf_blob_already_in_the_index_is_not_converted(tmp_path, monkeypatch, command):
+    # Git's safer-CRLF rule: with `text=auto` added after a CRLF blob was staged, re-staging keeps
+    # the CRLF. `hash-object --path` never reads the index and converts, which passed it.
+    root = _with_extra(tmp_path, monkeypatch)
+    (root / EXTRA).write_bytes(b"same\r\n")
+    _g(root, "add", EXTRA)
+    (root / ".git" / "info").mkdir(exist_ok=True)
+    (root / ".git" / "info" / "attributes").write_text("* text=auto\n", encoding="utf-8")
+    later = time.time() + 5
+    os.utime(root / EXTRA, (later, later))                  # changed stat, so `-a` re-reads it
+
+    blocked, shipped_drift = _gate_then_commit(root, command)
+    assert shipped_drift and blocked
+
+
+@_POSIX_SHELL
+def test_a_pathspec_commit_keeps_a_skip_worktree_entry_at_head(tmp_path, monkeypatch):
+    # A partial commit keeps HEAD's blob for a skip-worktree entry whatever is on disk; a HEAD-built
+    # throwaway index has no such bit, so the reading must fall back to the index.
+    _public, root, _tool = _published_pair(tmp_path, monkeypatch)
+    _drift(root / MP_SKILL, MIRROR_BODY)
+    _g(root, "commit", "-qam", "drift reaches HEAD")
+    _g(root, "update-index", "--skip-worktree", MP_SKILL)
+    write(root / MP_SKILL, MIRROR_BODY)                     # in sync on disk, hidden from git
+
+    blocked, shipped_drift = _gate_then_commit(root, f"git commit -qm x --allow-empty -- {SKILL_DIR}")
+    assert shipped_drift and blocked
+
+
+@_POSIX_SHELL
+def test_a_pathspec_commit_keeps_a_skip_worktree_file_missing_from_disk(tmp_path, monkeypatch):
+    _public, root, _tool = _published_pair(tmp_path, monkeypatch)
+    write(root / EXTRA, "marketplace only\n")
+    _g(root, "add", EXTRA)
+    _g(root, "commit", "-qm", "extra")
+    _g(root, "update-index", "--skip-worktree", EXTRA)
+    (root / EXTRA).unlink()
+    write(root / MP_SKILL, MIRROR_BODY.replace("(coding-python-thing)", "(renamed)"))
+
+    blocked, shipped_drift = _gate_then_commit(root, f"git commit -qm x -- {SKILL_DIR}")
+    assert shipped_drift and blocked
+
+
+@_POSIX_SHELL
+def test_the_check_runs_no_user_git_hook(tmp_path, monkeypatch):
+    _public, root, _tool = _published_pair(tmp_path, monkeypatch)
+    marker = tmp_path / "hook-ran"
+    hook = root / ".git" / "hooks" / "post-index-change"
+    hook.write_text("#!/bin/sh\ntouch '%s'\n" % marker.as_posix(), encoding="utf-8")
+    hook.chmod(0o755)
+    write(root / MP_SKILL, MIRROR_BODY.replace("(coding-python-thing)", "(renamed)"))
+
+    for command in ("git commit -qam x", f"git commit -qm x -- {MP_SKILL}"):
+        RG.check_skill_mirrors(root, stage=RG.mirror_stage(command, "Bash", str(root)), notices=[])
+    assert not marker.exists()
+
+
+@_POSIX_SHELL
+def test_a_relative_pathspec_after_an_absolute_cd_is_judged_on_disk(tmp_path, monkeypatch):
+    # The control the review ran: the selection must also BLOCK an unstaged drift the old index
+    # reading passed, or the change only ever loosens the gate.
+    _public, root, _tool = _published_pair(tmp_path, monkeypatch)
+    _drift(root / MP_SKILL, MIRROR_BODY)
+
+    blocked, shipped_drift = _gate_then_commit(root, f"cd {_sh(root / SKILL_DIR)} && git commit -qm x -- SKILL.md")
+    assert shipped_drift and blocked
+
+
 # --- the audits name a published ref that has not been fetched for over a week -------------------
 
 def _fetched(repo, days, gitdir=None):

@@ -29,6 +29,28 @@ than the change, so entries reconstructed from them would read like coverage wit
 a hole nobody has drawn a line under is one that gets rediscovered and half-filled - which is how
 two "versions with no entry" notes came to sit in this file disagreeing with it.
 
+## [10.0.13]
+
+### Fixed
+
+- `repo-gate`'s skill-mirror check reads a commit that takes files from disk itself the way git
+  builds it, instead of judging the index as it stood before the command ran. That index reading
+  refused `git commit -F msg -- <paths>` with no prior `git add` as DRIFT, quoting the old text,
+  while both copies were in sync on disk. Now `git commit -a`, `git commit -i <paths>` and
+  `git commit [--] <paths>` are judged on what git itself stages: the gate has git build the
+  selection in a throwaway copy of the index (`GIT_INDEX_FILE`; `add -u`, or for `<paths>` a fresh
+  index from HEAD with the named paths updated) and reads the files back from it. So the stat
+  cache, the safer-CRLF rule, symlinks, clean filters and assume-unchanged entries apply exactly as
+  in the real commit. Environment injected into the shell from outside the command text (a
+  `GIT_*` variable or `GIT_CONFIG_*`) is not visible to the hook, here as for the index reading.
+- Only the plainest Bash shape is read this way: one `git [-C <dir>] commit` in the command with
+  nothing before it but `cd <absolute dir>`, no other global option or leading assignment, no `..`
+  in a `-C` or `cd` path, and no character the shell rewrites (a glob, brace, comment, redirect,
+  `$`, backtick and the like, anywhere in the statement). Everything else,
+  `-p`, `--pathspec-from-file`, an unknown option and PowerShell included, is judged on the index
+  as before. An adversarial review proved each of those shapes could make the reading differ from
+  what git commits.
+
 ## [10.0.12]
 
 ### Changed
