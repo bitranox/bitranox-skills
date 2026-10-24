@@ -29,6 +29,14 @@ than the change, so entries reconstructed from them would read like coverage wit
 a hole nobody has drawn a line under is one that gets rediscovered and half-filled - which is how
 two "versions with no entry" notes came to sit in this file disagreeing with it.
 
+## [10.0.5]
+
+### Changed
+
+- `coding-python-send-mail` states the `inline_images` keyword as current behaviour instead of
+  opening the section with a version-history line. Synced with the `python-send-mail` twin in
+  btx_lib_mail 4.5.2.
+
 ## [10.0.4]
 
 ### Changed

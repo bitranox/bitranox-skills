@@ -1,4 +1,4 @@
-# Handover 2026-10-24: [23] batch 4 pass 1 committed (10.0.3 unpushed); bmk shipped; lsdsk to push
+# STALE - read 2026-10-24, work continued
 
 ## In flight
 
