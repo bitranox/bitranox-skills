@@ -29,6 +29,15 @@ than the change, so entries reconstructed from them would read like coverage wit
 a hole nobody has drawn a line under is one that gets rediscovered and half-filled - which is how
 two "versions with no entry" notes came to sit in this file disagreeing with it.
 
+## [10.0.6]
+
+### Changed
+
+- `coding-python-network-probe` names `NeighbourState`: filtering the neighbour cache by state,
+  every member, that macOS reports every entry as `OTHER`, and that a cache state is not a
+  liveness test (probe with `is_reachable(entry.scoped)`). Synced with the `python-network-probe`
+  twin in ipscout 2.0.0.
+
 ## [10.0.5]
 
 ### Changed

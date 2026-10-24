@@ -42,6 +42,7 @@ Python 3.10+.
 | MAC of an address                  | `lookup_mac(ip)`, `get_mac_address(ip)`                              |
 | Which host holds a MAC             | `find_ip_by_mac(mac, scan=True, family=AddressFamily.IPV4)`          |
 | Neighbour / ARP cache              | `neighbours()`, `arp_scan(network)`; both take `family=`             |
+| ... only the REACHABLE entries     | `[e for e in neighbours() if e.state is NeighbourState.REACHABLE]`   |
 | Static ARP entry, IPv4 (privilege) | `set_neighbour(ip, mac, interface="eth0")` -> the entry read back    |
 | ... and out again                  | `remove_neighbour(ip, interface="eth0")` -> whether there was one    |
 | What a sweep will cover            | `sweep_scope()` -> `SweepScope(limit, networks, skipped, complete)`  |
@@ -60,6 +61,14 @@ Python 3.10+.
 | Parse a port specification         | `parse_ports("22,80,8000-8100")`                                     |
 | Trace over your own transport      | `trace_path(transport, ...)`, `atrace_path(...)`                     |
 | async equivalents                  | `aping`, `aping_many`, `ais_reachable`, `atraceroute`, `ascan_ports` |
+
+`neighbours()` returns both families unless `family=` narrows it. An entry's `state` is a
+`NeighbourState`: `REACHABLE`, `STALE`, `PERMANENT` (a static entry, as `set_neighbour` writes),
+`INCOMPLETE`, `FAILED` or `OTHER` - a state the OS does not report or that maps to none of the
+others. A REACHABLE-only filter therefore drops static entries too, and on macOS it returns
+nothing: the macOS routing dump carries no per-entry state, so every entry there is `OTHER`.
+A cache state says what the kernel last saw, never whether a host is up now: to decide that on
+every platform, probe the entry with `is_reachable(entry.scoped)`, never `entry.ip` (see below).
 
 ```python
 import ipscout
