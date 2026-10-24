@@ -101,7 +101,8 @@ Three traps no `--help` covers live in `references/` (load them with the Read to
 
 - `references/anchored-edits.md` - before an `anchor_edit` run or a hand-scripted edit: a
   replacement whose new text is a substring of the old, a span computed between two markers, an
-  indented end marker, a batch that applies nothing when a later assertion fires.
+  indented end marker, and a script editing several files that must measure every count and
+  check every file before it writes any.
 - `references/mutation-arms.md` - before trusting a `mutation_arm` verdict: the inert control,
   which interpreter runs the arm, `--mutate` file paths, whole-suite doctests, and the `.pyc`
   cache when you must mutate by hand.
@@ -356,6 +357,23 @@ Three traps no `--help` covers live in `references/` (load them with the Read to
   command whole until the shape pass has re-matched it (a truncated command loses the matched
   span), and keep test fixtures that contain a pattern another guard blocks (a `pgrep -f` line,
   for instance) in a file, since inline in a Bash call they get the whole call refused.
+
+- **`ci_wait` on a release: name the TAG and the event it fired on, and read an exit 2 before
+  reporting.** A release workflow triggered by pushing a `v*` tag (`on: push: tags`) records its
+  run as event `push` on the tagged commit, so wait with `--ref v2.3.0 --event push` (or with no
+  `--event`, which counts every event but `schedule`). `--event release` is accepted, and on a
+  workflow with no `release:` trigger it matches nothing: the wait ends `no-runs`, exit 2, while
+  the release is running or already published. The tag resolves to the commit the branch push
+  already tested, so those CI runs count too and may be green before the release run exists:
+  confirm the summary names the release workflow (`Release=success`) before calling it
+  published, and set `--timeout` (default 1500 s) to cover a full OS matrix plus the publish.
+  Exit 2 means "could not tell", never "the release failed": it covers `timeout`, `no-runs`,
+  `error` (gh failing for longer than `--error-grace`, 300 s), `pending-approval`,
+  `stuck-queued`, and a ref or flag it refused. Read the last line first (`<state>: <summary>` on
+  stderr, `data.state` under `--json`), then the jobs (`gh run view <id> --json jobs`, the ids are
+  in `data.runs`), and only then report: a `timeout` naming `Release=in_progress` is a release
+  still running, and misreading it costs a re-tag of a published version or a debug session on
+  green code.
 
 - **The others encode the trap.** `ci_triage` strips ANSI, isolates a step (exit 2 if the step is absent, never a silent whole-log fallback) and fails a `--cmd` that exits non-zero even when it printed no keyword; `ci_wait` refuses
   a short sha before it polls, so the loop cannot spin on a filter that matches nothing; `jsonl_grep` parses

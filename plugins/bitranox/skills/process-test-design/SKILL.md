@@ -184,6 +184,21 @@ promised. But do not just drop it: a missing branch where the axis clearly appli
 size or length reaching a real sink) is a CODE finding - report the absent validation rather than
 writing a test that documents its absence.
 
+**A file a library reads before your code is several inputs, not one.** For a shipped default
+config or a bundled data file, missing, unreadable and corrupt (and empty, a directory or a FIFO
+where the code can meet one) each take their own path through a library you do not own, so they
+surface at different places with different exceptions and exit codes. Measured on one release of
+a config library: a missing default was skipped and the run failed later with a bare not-found
+error under the wrong-command-line exit code, an unreadable one escaped as a bare
+`PermissionError`, and only a corrupt one was refused as a configuration error. An `except` written
+around the first exception you reproduced therefore fixes one kind and leaves the rest. Before
+writing the handler, probe each kind on its own through the real entry point, and require the same
+refusal for all of them: one exit code and one message shape, the message naming which kind it
+met. Each kind that surfaced differently is its own
+branch under the stopping rule, so it keeps its own test arm, and a later fix for one cannot
+silently leave another. Damage the shipped file with the technique in "Damaging the installed
+package" below.
+
 ## Scrub a captured artifact fully before it becomes a fixture
 
 A captured artifact (a packet capture, a protocol exchange, a log or config dump) committed as a
@@ -208,6 +223,19 @@ enforced by the suite rather than remembered by a person.
   such state: `monkeypatch.delenv(name, raising=False)` on an absent variable records nothing to
   undo, so call `monkeypatch.setenv(name, "x")` first, then `delenv(name)` (detail in
   `references/silent-test-defeaters.md`, "Pin the environment an output premise depends on").
+- **Code the tests call in-process must not leave process-global state behind.** A script's
+  `main()` that installs signal handlers, or changes `os.environ`, the cwd or `sys.stdout`, runs
+  inside the test runner when a test calls it directly. Left installed by a bare
+  `signal.signal(...)`, a SIGTERM, SIGHUP or SIGINT handler changes how the runner itself reacts
+  for the rest of the session, and the leak surfaces far from its cause (an unrelated later test,
+  a Ctrl-C behaving oddly). In the production code, install such state through a context manager
+  that saves the previous value and restores it in `finally`, including a nested hold-off such as
+  `SIG_IGN` for SIGINT while an undo runs. For signals, skip installing off the main thread, where
+  `signal.signal` raises `ValueError`, and let the exception a handler raises propagate out of the
+  context, so an entry point that maps it to exit 128 + the signal number still does. Pin the
+  restore with a before/after test: compare `signal.getsignal()` for every signal involved (or the
+  variable, the cwd) around an in-process call, on the success path AND the error or undo path; a
+  mutation that drops the restore must turn it RED.
 - **No timer in a test: no `sleep`, no poll-until-deadline loop, no `*_timeout` wait.** A fixed
   `sleep(n)` is flaky or slow, and a deadline loop or `wait(timeout=5)` is the same bet against the
   machine's load with a longer fuse. Block on an event the code under test signals - a channel/queue
@@ -295,6 +323,33 @@ exists wherever the suite runs: `[sys.executable, "-c", "raise SystemExit(1)"]` 
 exits 1. When triaging Windows failures, run the suite on a real Windows machine rather than
 iterating against the CI log; where the two disagree, believe the real machine.
 
+**A huge parametrize value breaks every Windows cell at setup.** Before each phase pytest writes
+`<node id> (<phase>)` into the `PYTEST_CURRENT_TEST` environment variable, and an id it builds
+from a str or bytes parameter is the whole value, escaped. Windows caps an environment entry
+(`NAME=value`, counted in UTF-16 units) at 32767, so such a case errors at SETUP inside pytest's
+own runner frames while Linux, macOS and the local gate pass; it reads like infrastructure, not
+like a test defect. Search the (often huge) job log for this line rather than reading it:
+
+```text
+ValueError: the environment variable is longer than 32767 characters
+```
+
+Fix the case with a short explicit id (`pytest.param(value, id="too-many-pairs")`), then close the
+shape once per suite in `conftest.py`, so it fails at collection on whichever machine runs first:
+
+```python
+def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
+    # Windows counts "PYTEST_CURRENT_TEST=<node id> (teardown)" (the longest phase) in UTF-16 units
+    room = 32767 - len("PYTEST_CURRENT_TEST=") - len(" (teardown)")
+    too_long = [i.nodeid for i in items if len(i.nodeid.encode("utf-16-le")) // 2 > room]
+    if too_long:
+        named = [f"{nodeid[:120]}... ({len(nodeid)} chars)" for nodeid in too_long]
+        raise pytest.UsageError(f"node ids too long for Windows, give them an id: {named}")
+```
+
+`pytest.UsageError` ends the run with exit 4 before any test runs. To list the longest ids:
+`pytest --collect-only -q | awk '{print length($0)}' | sort -n | tail`.
+
 ## A permission-wall test on Windows: build the wall stat cannot see past
 
 A test that needs a path the user cannot check (so `stat` raises `PermissionError`) is built with
@@ -351,6 +406,15 @@ Delete a test when it:
 - duplicates another test's coverage with no new branch.
 
 Fewer, behavior-focused tests beat many brittle ones. Coverage percent is a smell detector, not a goal.
+
+**A replacement test is unproven until it fails on what the deleted one covered.** This holds
+whether you are pruning or swapping tests as a side effect of a rewrite or refactor: a green suite
+after the swap says only that the new test passes, never that it reaches the old test's branch.
+Before treating the behaviour as still covered, break the branch the deleted test guarded (say,
+the `except` path an option turns on to print full error details) and require the new test to go
+RED naming that case, then restore the code and require GREEN. If it stays green, the coverage was
+lost silently and the replacement must be made to drive that path. Copy the file aside before
+mutating and restore from the copy (see "Single-layer mutation" under Common mistakes).
 
 **Never commit a test that asserts behavior the code does not have.** When docs promise something the
 code never wired up (a documented cache nothing calls, a flag with no effect), the honest output is a
@@ -475,7 +539,7 @@ untested or accept a surviving mutation.
 - [ ] Test tiers marked so the default run stays offline, by the project's stated convention
 - [ ] Boundary inputs covered (UTF/emoji/CJK/binary/wrong-type/oversized/edge numbers), asserting specific behavior
 - [ ] Every error branch the code can raise has a test asserting the declared error type
-- [ ] Order-independent (passes alone and shuffled); no shared mutable state
+- [ ] Order-independent (passes alone and shuffled); no shared mutable state; code called in-process restores the signal handlers, env, cwd or stdout it changes
 - [ ] No timer in a test (`sleep`, deadline poll loop, `*_timeout` wait): block on an event the code signals, plant one if it has none, let the runner's per-test timeout catch a wedge
 - [ ] Time/randomness injected, never by patching the process-global clock function; unit suite offline
 - [ ] Runs against the project's own locked toolchain, not an ambient/global one; an environment-shaped failure is a wrong-env smell, not a code bug (Python: `env -u VIRTUAL_ENV uv run ...`)

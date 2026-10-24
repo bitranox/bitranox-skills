@@ -214,6 +214,30 @@ Or package sources with [Git LFS](https://git-lfs.com):
 $ uv tool install --lfs git+https://github.com/astral-sh/lfs-cowsay
 ```
 
+**With `--from`, the positional argument is the PACKAGE name, unlike `uvx` (measured on uv
+0.13.0).** `uv tool install --from <source> <name>` requires `<name>` to be the package that
+`<source>` builds, normalised (dashes and underscores both match, so `my-tool-lib` and
+`my_tool_lib` name the same package), never a console-command name. A package `my-tool-lib` that
+provides the command `mytool` fails the command-name form with exit 2:
+
+```console
+$ uv tool install --from "$PWD" mytool
+error: Package name (`my-tool-lib`) provided with `--from` does not match install request (`mytool`)
+```
+
+`uvx --from <pkg> <command>` takes the COMMAND in that position, which is where the wrong habit
+comes from: a `uv tool install` line modelled on a `uvx` line above it breaks. The same holds for a
+git source (`--from "git+https://github.com/example/my_tool_lib" my-tool-lib`). No test runs a
+README's install line, so run it yourself before shipping it, into a scratch tool dir that leaves
+your installed tools alone:
+
+```console
+$ T=$(mktemp -d); UV_TOOL_DIR=$T/tools UV_TOOL_BIN_DIR=$T/bin uv tool install --from "$PWD" my-tool-lib
+```
+
+Exit 0 plus an `Installed 1 executable: mytool` line (count and names vary) proves it works.
+Read that result first, then remove the scratch dir with `rm -rf "$T"`.
+
 ### Installing Executables from Additional Packages
 
 When installing a tool, you may want to include executables from additional packages in the same tool environment. This is useful when you have related tools that work together or when you want to install multiple executables that share dependencies.

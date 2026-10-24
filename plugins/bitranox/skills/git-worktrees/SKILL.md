@@ -56,9 +56,39 @@ Honor any existing declared preference without asking. If the user declines cons
 
 ### 1a. Native Worktree Tools (preferred)
 
-The user has asked for an isolated workspace (Step 0 consent). Do you already have a way to create a worktree? It might be a tool with a name like `EnterWorktree`, `WorktreeCreate`, a `/worktree` command, or a `--worktree` flag. If you do, use it and skip to Step 2.
+The user has asked for an isolated workspace (Step 0 consent). Do you already have a way to create a worktree? It might be a tool with a name like `EnterWorktree`, `WorktreeCreate`, a `/worktree` command, or a `--worktree` flag. If you do, use it and skip to Step 2 (but read the base-branch exception below first when the work needs unpushed commits).
 
 Native tools handle directory placement, branch creation, and cleanup automatically. Using `git worktree add` when you have a native tool creates phantom state your harness can't see or manage.
+
+**Native tools branch from origin's default branch, not from local HEAD.** `EnterWorktree` with
+`name`, and a subagent dispatched with `isolation: "worktree"`, both take their base from the
+`worktree.baseRef` setting, and its default `fresh` means origin/<default-branch> (local HEAD
+only when there is no remote or `origin/HEAD` cannot be resolved). Commits that exist only
+locally (not pushed yet, say behind a slow push gate) are missing from that base, and nothing
+says so. Before either one, when the work builds on unpushed commits:
+
+- Prefer setting `baseRef` to `"head"`. It is a NESTED key, `{"worktree": {"baseRef": "head"}}`;
+  a flat `"worktree.baseRef"` key sets nothing and worktrees keep branching from origin. Put it in
+  the repository's `.claude/settings.local.json` rather than the user settings, so it does not
+  switch every repository on the machine. It applies to `--worktree`, `EnterWorktree` and agent
+  isolation alike, and new worktrees then branch from your current local HEAD.
+- Or create the worktree from HEAD yourself,
+  `git worktree add .claude/worktrees/<name> -b <name> HEAD` (check `.claude/worktrees` is
+  gitignored first), and enter it with `EnterWorktree` and `path`. Keep it under
+  `.claude/worktrees/` of the same repository: that is where `path` expects a worktree, and
+  outside it the switch asks for permission or is refused (observed in Claude Code 2.1.310). For
+  a subagent, pass that directory as an ABSOLUTE path in the Agent `cwd` where the tool offers
+  that parameter (not every build does; `cwd` and `isolation: "worktree"` are mutually
+  exclusive); where it does not, set `baseRef` as above or brief the subagent with absolute paths
+  into the worktree. This is the one case where `git worktree add` beside a native tool is right.
+- Either way, confirm the expected local commit is in the new worktree: inside it,
+  `git merge-base --is-ancestor <sha> HEAD` exits 0.
+
+**Bringing an isolated subagent's work back:** its commits were written and tested on its base,
+not on yours, so its green says nothing about the combination. Cherry-pick its commits onto your
+branch and re-run the full suite there before treating the work as landed. For several branches
+at once (pick the tip, union additive conflicts, keep red commits off main) see
+bitranox:process-agents-dispatching-parallel, "Review and Integrate".
 
 Only proceed to Step 1b if you have no native worktree tool available.
 
@@ -212,6 +242,29 @@ Step 2 lives OUTSIDE the checkout on purpose (that is what stops several worktre
 one `CARGO_TARGET_DIR`), so it survives the removal and piles up invisibly - usually noticed only
 when the disk fills.
 
+**First check nothing still runs from the worktree.** A process launched from it - a background
+CI waiter, a gate, a dev server - keeps the deleted directory as its working directory, and its
+next git call fails, exit 128:
+`fatal: Unable to read current working directory: No such file or directory` (in the C locale;
+Python's `os.getcwd()` raises `FileNotFoundError`). A CI waiter that runs git, or resolves the
+repository, on every poll then exits non-zero on a run that was green, and the failure reads as
+red CI. (compuse-toolbox's `ci_wait.py` resolves the repository once at start and survives the
+removal; only when that first lookup failed does it warn on stderr that removing the directory
+will break its polls.) Neither `git worktree remove` nor `wtclean.py` checks
+for this: on Linux and macOS the removal succeeds under the running process (Windows locks a
+process's current directory, so there it fails instead). A merged branch does not make it safe.
+Wait for your own background job to finish and read its recorded exit code, then, from OUTSIDE
+the worktree (run inside it, the check lists your own shell and session), check that no other
+process has its cwd there:
+
+```bash
+cd /path/to/main-checkout                       # not the worktree
+ls -l /proc/[0-9]*/cwd 2>/dev/null | grep -E ' -> /path/to/worktree(/|$)'   # Linux; none = clear
+lsof +D /path/to/worktree                                                   # macOS, or with lsof
+```
+
+The anchored pattern keeps a sibling such as `/path/to/worktree-2` from matching.
+
 `scripts/wtclean.py` removes the worktree AND those caches together, and shows what it will take
 before it takes anything:
 
@@ -354,7 +407,8 @@ warnings go to stderr.
 
 **Never:**
 - Create a worktree when Step 0 detects existing isolation
-- Use `git worktree add` when you have a native worktree tool (e.g., `EnterWorktree`). This is the #1 mistake - if you have it, use it.
+- Use `git worktree add` when you have a native worktree tool (e.g., `EnterWorktree`). This is the #1 mistake - if you have it, use it. The one exception: the work needs unpushed local commits and `worktree.baseRef` is not `head` (Step 1a).
+- Remove a worktree while a process launched from it is still running (Step 5)
 - Skip Step 1a by jumping straight to Step 1b's git commands
 - Create worktree without verifying it's ignored (project-local)
 - Skip baseline test verification

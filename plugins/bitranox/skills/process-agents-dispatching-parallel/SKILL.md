@@ -178,6 +178,57 @@ for two separate reasons:
   because the enum members compared equal to the strings the old call sites still passed. Name the
   exact command they must run, including the type checker, and check it yourself afterwards.
 
+**Landing fixer branches by cherry-pick.** Immediately before any step meant to change only
+history (a squash, a rebase), take a backup branch (`git branch -f backup-<topic>`); after it,
+`git diff --quiet backup-<topic> HEAD` must exit 0: the tree is unchanged. A backup taken before
+the picks would differ by the picks themselves, so keep a separate rollback point for the picks:
+`git branch -f backup-<topic>-pre` before the first one (`git reset --hard backup-<topic>-pre`
+undoes the picks). Then, per branch:
+
+1. **Pick the branch TIP, not the sha its report names.** A fixer can amend or add a commit after
+   it reports. Compare `git rev-parse <branch>` with the reported sha and read
+   `git log <reported>..<branch>` before picking.
+2. **Expect conflicts where both sides only ADDED to one line** - two fixers each appending a name
+   to the same import list or `__all__` - even where the plan predicted no overlap. Keep both
+   names, then re-run the linter (import order, unused imports) before continuing.
+3. **Keep red commits off main, so it stays bisectable.** When a fixer reports a commit that is
+   not green on its own because a later commit repairs it, squash the pair as you pick:
+   `git cherry-pick -n A B`, then one commit. For a red commit already made, add the repair as a
+   fix commit and fold it in with a scripted rebase, `GIT_SEQUENCE_EDITOR` writing the todo (pick,
+   fixup, `exec git commit --amend -F <msg-file>`), with the backup taken just before it and its
+   diff run just after.
+4. **A range cherry-pick stopped on a conflict resumes the WHOLE range** with
+   `git cherry-pick --continue` once you resolve it. Re-running the range instead re-applies the
+   commits already picked and stops on one that is now empty.
+5. **If the branch's base was itself rebased,** use
+   `git rebase --onto <new base> <old base> <branch>`, with a backup of the old tip: a plain
+   rebase replays the old base commits too.
+
+Branches green alone can be red together: one branch's test relies on something another branch
+changed, or a new keyword argument breaks a test double another branch added. Run the whole suite
+on the merged tree before the release gate, and fold each fix into the commit that caused it
+before you push. Before calling a fixer's commit "not landed", note that `git cherry` misses work
+that landed with changed context or squashed; bitranox:git-worktrees Step 4 (`landed.py`) checks
+by content.
+
+**An agent that stopped mid-task left no report, so its worktree is the record.** When dispatched
+agents die on an account usage or rate limit, their final reports never arrive, and a resumed
+agent (SendMessage) continues only after the limit resets, which can be days away. Do not
+re-dispatch the item from scratch either: a fresh agent redoes the committed work and races the
+uncommitted diff the dead one left. Keep each such item unticked on the checklist (stopped, not
+finished) and finish it yourself from git:
+
+```bash
+git worktree list                              # find each stopped agent's worktree
+git -C <worktree> log --oneline <base>..HEAD   # what it committed
+git -C <worktree> status --porcelain           # what it left uncommitted
+git -C <worktree> diff                         # the change in progress
+```
+
+Compare that state with the item's brief to see what remains, finish it test-first, and run the
+branch's FULL gate before integrating: a branch that looks finished can still be red. Then land
+it by cherry-pick as above.
+
 **Structured output must be harvested from the TRANSCRIPT, not from the delivered message.** When
 what you need back is text you will PARSE and apply - blocks, patches, rewritten file bodies - the
 agent-to-parent channel is the wrong source: it HTML-escapes `<`, `>` and `&`. A dependency floor

@@ -10,9 +10,10 @@ apply to `anchor_edit` and to any edit you script by hand.
 
 - **When the new text is a substring of the old, a count==1 replace deletes content and reports
   success.** Replacing `NEW + tail` with `tail` (rewriting part of a region you just wrote) removes
-  `NEW` while the tool says "replaced 1 occurrence". After every write, assert the INTENDED text is
-  present and print the line or byte delta; never chain two replacements where the second's anchor
-  contains the first's output - do one replacement per region.
+  `NEW` while the tool says "replaced 1 occurrence". Assert the INTENDED text is present in each
+  computed content (before the write phase, see below) and print the line or byte delta; never
+  chain two replacements where the second's anchor contains the first's output - do one
+  replacement per region.
 - **Check the size of the change.** The line-count delta must roughly equal the text you swapped,
   and a pure insertion must show zero removed lines (`batch --spec` takes `expect_line_delta` per
   file; `replace-span` takes `--expect-removed-lines` and `--must-keep`). A contiguous over-delete
@@ -44,10 +45,22 @@ apply to `anchor_edit` and to any edit you script by hand.
 
 ## Multi-edit hygiene
 
-- **A batch script that collects edits and writes once at the end applies NOTHING when a later
-  assertion fires**, which looks identical to "the script did not run". Write after each edit, or
-  report which edits were applied on failure. (`anchor_edit batch` checks every anchor before ANY
-  write, so it is all-or-nothing by design and says so.)
+- **A hand-written multi-file edit validates EVERY file before it writes ANY.** Make the script
+  two-phase: read every file, compute every new content and run every assertion, and only when all
+  of them passed write all the files. Writing as you go leaves the tree half-edited at the first
+  wrong count, and a plain re-run then fails or double-applies on the files already done.
+- **Measure each expected count; never read it off an earlier listing.** A count guessed from a
+  grep listing is routinely off by one. Get it from the same `text.count(old)` the assertion uses,
+  in a dry pass that prints the count per file, or, for a single-line anchor only, from
+  `grep -o -F -e 'old' FILE | wc -l` - not `grep -c`, which counts LINES, so two hits on one line
+  read as one. grep treats each line of a multi-line pattern as its own pattern, so count a
+  multi-line anchor with the `text.count` dry pass. Count every anchor in every
+  file: an anchor that also sits in a docstring or comment of another file is the usual surprise.
+- **On refusal, say which assertion failed and that nothing was written**, or a run that applied
+  nothing looks identical to "the script did not run". `anchor_edit batch --spec` is this shape
+  already (every count checked before ANY write, so a refusal writes nothing and says so; an IO
+  failure mid-write stops at that file and names the files already written): prefer it to a new
+  script for a repeat of the chore.
 - **A formatter run between capturing an anchor and using it invalidates the anchor** (a gate that
   runs `ruff format` can collapse a multi-line signature). Re-read the file and re-derive anchors
   after any gate run.

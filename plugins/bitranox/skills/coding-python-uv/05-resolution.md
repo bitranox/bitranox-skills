@@ -454,6 +454,11 @@ uv supports an `--exclude-newer` option to limit resolution to distributions pub
 
 To ensure reproducibility, messages for unsatisfiable resolutions will not mention that distributions were excluded due to the `--exclude-newer` flag -- newer distributions will be treated as if they do not exist.
 
+**Measured on uv 0.13.0, the error does name the filter:** below the `cause:` line it prints a
+`hint:` line, `` `<pkg>` was filtered by `exclude-newer` `` (or by `exclude-newer-package`), with
+the cutoff and the publish time of the newest matching release. See "A raised floor that
+`uv lock` refuses" under Dependency Cooldowns.
+
 **Note:** The `--exclude-newer` option is only applied to packages that are read from a registry (as opposed to, e.g., Git dependencies). Further, when using the `uv pip` interface, uv will not downgrade previously installed packages unless the `--reinstall` flag is provided, in which case uv will perform a new resolution.
 
 This option is also supported in the `pyproject.toml`, e.g.:
@@ -495,6 +500,16 @@ This option is also supported in the `pyproject.toml`, e.g.:
 exclude-newer = "1 week"
 ```
 
+**A project's cooldown belongs in `pyproject.toml`, never on `uv add` (measured on uv 0.13.0).**
+`uv add --exclude-newer "7 days" <pkg>` writes no `exclude-newer` line to `pyproject.toml`. It
+records the span only in `uv.lock`, under `[options]` as `exclude-newer-span = "P7D"`, and the next
+plain `uv add <other-pkg>` rewrites `uv.lock` without it, exit 0: the cooldown vanishes silently. So
+a README that tells contributors to add dependencies with that flag gives the project no standing
+cooldown. Set `[tool.uv]` `exclude-newer = "7 days"` in `pyproject.toml` first, then run a plain
+`uv add <pkg>`, and verify with `grep exclude-newer pyproject.toml`, never by the exit code. Keep
+the flag for one-off `uvx` and `uv tool install`: a tool install stores it in the tool's
+`uv-receipt.toml` under `[tool.options]`, and `uv tool upgrade` keeps honouring it.
+
 Values may also be specified for specific packages, e.g., `--exclude-newer-package "setuptools=30 days"`, or:
 
 ```toml
@@ -502,6 +517,36 @@ Values may also be specified for specific packages, e.g., `--exclude-newer-packa
 exclude-newer = "1 week"
 exclude-newer-package = { setuptools = "30 days" }
 ```
+
+**A raised floor that `uv lock` refuses under a cooldown has two causes; tell them apart before
+changing anything.** After you raise a dependency's floor past the version in `uv.lock`, `uv lock`,
+and `uv lock --no-cache` as well, can fail although the new release is on PyPI:
+
+```text
+error: No solution found when resolving dependencies
+  cause: Because only <pkg><=<N> is available and your project depends on <pkg>>=<new floor>, we can conclude that your project's requirements are unsatisfiable.
+```
+
+It reads like a cache fault, and it is not one: clearing the cache changes nothing. `<N>` is the
+newest release the resolver may use, which is not necessarily the locked one, so do not read the
+number as proof of either cause below.
+
+- **The cooldown hides the release.** On uv 0.13.0 the error then ends with a `hint:` naming the
+  filter (`` `<pkg>` was filtered by `exclude-newer` ``, or by `exclude-newer-package` when the
+  package's own exemption timestamp predates the release) and the release's publish time. Add or
+  fix an exemption for that one package: prefer a timestamp just after the upload, which keeps the
+  cooldown for later releases; `exclude-newer-package = { <pkg> = false }` exempts the package
+  for good.
+- **The lock state, with the exemption already working (no `hint:` names a filter).** The
+  control: copy `pyproject.toml` into a scratch directory with no `uv.lock` and run `uv lock`
+  there. If it resolves, the exemption works and the lock is the cause: run
+  `uv lock --upgrade-package <pkg>`, which re-resolves that one package and keeps the other locked
+  versions where it can. This case has been seen in a real project; a minimal project on uv 0.13.0
+  re-resolves a raised floor without it, so reach for it once the control has ruled the cooldown
+  out.
+
+When no `hint:` names a filter, run the control and `--upgrade-package` before you loosen the
+cooldown, clear the cache or lower the floor.
 
 ## Source Distribution Formats
 

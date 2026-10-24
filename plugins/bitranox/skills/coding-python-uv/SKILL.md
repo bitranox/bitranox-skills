@@ -106,6 +106,11 @@ All documentation files are flat, numbered markdown files. Use the Read tool to 
 | **"Build failures / missing C libs"**                            | `17-troubleshooting.md`, `10-configuration.md`                                                    |
 | **"Cache problems / disk space"**                                | `10-configuration.md` (Cache and Storage sections)                                                |
 | **"Lock reproducibility / --exclude-newer"**                     | `05-resolution.md`, `02-projects.md`                                                              |
+| **"Project dependency cooldown (exclude-newer)"**                | `05-resolution.md` (Dependency Cooldowns: `pyproject.toml`, not `uv add`)                         |
+| **"uv lock refuses a raised floor (only X<=N available)"**       | `05-resolution.md` (Dependency Cooldowns), `02-projects.md`                                       |
+| **"README install line with uv tool install --from"**            | `07-tools-and-scripts.md` (Installing Tools: package name)                                        |
+| **"Recreated venv / failed to canonicalize path"**               | `06-python-versions.md` (Gotcha: a recreate deletes the interpreter you named)                    |
+| **"Windows SSH: os error 448 untrusted mount point"**            | `06-python-versions.md` (Minor version directories)                                               |
 | **"pre-commit hooks"**                                           | `15-integrations.md` (pre-commit section)                                                         |
 | **"Dependency update bots"**                                     | `15-integrations.md` (Dependency Bots section)                                                    |
 | **"Export lockfile (requirements.txt, pylock.toml, CycloneDX)"** | `04-dependencies.md` (Export section), `09-pip-interface.md`                                      |
@@ -298,3 +303,24 @@ if "dev" in data.get("project", {}).get("optional-dependencies", {}):
 elif "dev" in data.get("dependency-groups", {}):
     selector = ["--group", "dev"]
 ```
+
+## Gotcha: a green uv install is no evidence a pip user can install it
+
+uv ignores a dependency's `Requires-Python` UPPER bound by design (`05-resolution.md`, Universal
+Resolution): `>=3.8,<3.13` is treated as `>=3.8`. So `uv lock`, `uv sync --locked --python 3.14`
+and every uv-based gate (a local test run, the whole CI matrix) stay green on a release capped
+below a Python you support, while pip refuses that release for your users. Measured on uv 0.13.0
+with a release whose metadata reads `Requires-Python: >=3.8, <3.13`: uv locked it and installed it
+on CPython 3.14.8, exit 0, and pip on the same interpreter refused it:
+
+```text
+ERROR: Package '<pkg>' requires a different Python: 3.14.8 not in '<3.13,>=3.8'
+```
+
+Before you raise a floor to a release, or release on top of one, check that release's per-file
+`requires_python` in the PyPI JSON (`https://pypi.org/pypi/<pkg>/<version>/json`, field
+`urls[].requires_python`), or install it with pip on each supported Python. When probing with local
+wheels (`--no-index --find-links <dir>`), pass `--no-install-project` to `uv sync`: otherwise uv
+also builds the project itself, and that fails for an unrelated reason when its build backend is
+in neither the find-links dir nor the cache:
+`hatchling was not found in the provided package locations`.

@@ -137,6 +137,28 @@ duplicate alive next to the enum - `Literal["widget"]` beside `Kind.WIDGET` - an
 two spellings of one tag, nothing makes them move together. Probe it rather than carrying the
 fear: construct the union, call `validate_json` with the value string, and read the result back.
 
+### Converting a `str` parameter to an Enum changes its contract: scope it with its tests
+
+A proper conversion of `release(part: str)` to `release(part: ReleasePart)` moves validation to
+the boundary (`ReleasePart(raw)` where the CLI parses), so the value is checked there and not
+inside the function. That changes what its existing tests can do, so before you put the item in a
+"code-only, no test changes" tier of a review or plan, run `grep -rn <func_name> tests/` and read
+each hit:
+
+- **A test asserting that an invalid value raises `ValueError` from the function breaks**: the
+  raise now happens at the boundary, in `ReleasePart("bogus")`. Keeping a validating raise inside
+  the function to save that test re-adds the shim this skill forbids (Core Principle 7).
+- **A test passing a RAW STRING breaks where the function dispatches by identity**
+  (`part is ReleasePart.MAJOR`). It keeps passing where the code compares with `==`, matches on
+  the members (`case ReleasePart.MAJOR:`), or looks the value up in a dict or set keyed by them,
+  because a `str, Enum` member equals and hashes as its value; there only the type checker flags
+  the call site (see STEP B). Switching `is` to `==` saves the raw-string tests but never the
+  raises-on-invalid one.
+
+If either kind of test exists, the item belongs in the tier that touches tests. `str, Enum`
+wire-compatibility saves construction and lookup tests, never identity-dispatch or
+raises-on-invalid tests.
+
 ### Anti-Patterns to Eliminate
 
 ```python
@@ -336,8 +358,10 @@ INITIALIZATION:
            decrement: parallel subagents sharing one counter race and lose updates)
        * **Instruction to run the TYPE CHECKER as well as the tests, and to report the error
          count.** Tests alone cannot verify this refactor: a `StrEnum` member compares and
-         hashes equal to its string value, so every existing string-literal call site and
-         assertion stays green while the type checker errors on the changed signature.
+         hashes equal to its string value, so every call site still passing a raw string, and
+         every assertion on it, stays green wherever the code compares by value (`==`, `match`
+         on the members, a dict or set lookup) rather than by identity (`is`), while the type
+         checker errors on the changed signature.
          Measured: three agents each reported "731 passed" while pyright had 24 errors, all
          of them call sites still passing raw literals into newly-Enum-typed parameters.
        * Instruction to return: {"file": "path", "fixed": ["violation1", ...], "remaining": [...]}
@@ -693,6 +717,7 @@ exactly these excuses - two baseline subjects shipped incomplete conversions usi
 | "Shipping verified-green beats an unverified conversion"                            | The conversion is mechanical and re-verified by the same suite in minutes. This excuse converts a 15-minute completion into a permanent gap.                                                                                                                                                                                   |
 | "Converting under deadline pressure is riskier - ship the gap, finish next release" | Maybe - but that trade is the HUMAN's to make, not yours. Surface the DoD-vs-deadline conflict explicitly and ASK ("ship 18/23 now, or slip the window?"); a unilateral "ship partial, track the rest" is silent downscoping of the mandate you were invoked under.                                                            |
 | "A StrEnum on the wire is risky - keep a shim accepting both"                       | StrEnum members ARE str: the wire bytes are identical. The shim adds no safety, silently swallows stray raw strings, and becomes permanent. Pin the wire value with a test instead. (True for `enum.StrEnum`. The `class X(str, Enum)` fallback formats as `C.A` on 3.11+ when interpolated - use `.value` there, not a shim.) |
+| "The enum conversion is code-only - no test churn"                                  | It changes the function's contract: validation moves to the boundary. `grep -rn <func_name> tests/` first - a raises-`ValueError` test, or a raw-string call into an identity (`is`) dispatch, breaks. See "Converting a `str` parameter to an Enum changes its contract".                                                     |
 | "Enum internally, but DB/API stay raw strings - feels safer"                        | That leaves the write path and response body - where a status typo causes the incident - unprotected. Backwards.                                                                                                                                                                                                               |
 | "Tests pass, so the conversion chain does not matter"                               | The defect is architectural, not behavioral - "tests pass" was never in question. Green tests do not make Model->dict->Model round-trips acceptable.                                                                                                                                                                           |
 | "0 violations and the gate is green, so behaviour is unchanged"                     | The suite tests the NEW path. Moving validation into a model changes who raises: exception type, exit code, message wording and redaction - and no existing test pins those for the old entry point. Run the STEP C item 5 diff.                                                                                               |

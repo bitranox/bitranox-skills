@@ -26,6 +26,7 @@ description: Use when running commands over SSH or driving a remote host - check
 | Key auth refused on a FRESH Alpine account                                       | `adduser -D <user>` leaves the shadow password field `!`, which sshd treats as a LOCKED account and rejects pubkey auth despite a valid `authorized_keys`; the guest's `/var/log/messages` says `User <u> not allowed because account is locked`. Unlock with `sed -i -E 's#^(<u>:)[^:]*:#\1*:#' /etc/shadow`. An interrupted adduser/addgroup leaves busybox edit-locks that fail the next one with `can't create '/etc/group+': File exists`: `rm -f /etc/group+ /etc/passwd+ /etc/shadow+` first. Alpine ships no sudo: `apk add sudo` plus `/etc/sudoers.d/<u>` with `<u> ALL=(ALL) NOPASSWD: ALL`, mode 440. Verify the real gate, `ssh <u>@<host> 'sudo id'` printing uid=0, and never mask the setup with `2>/dev/null \|\| true`. The symptom points at keys; the cause is the account state.  |
 | Picking a SHARED key path that exists on several boxes                           | Select by READABILITY, not existence: `os.access(p, os.R_OK)` / `test -r`. A shared credentials path can be mounted but root-only on THIS box, so an existence test returns a key you cannot load - ssh then fails `Load key: Permission denied` -> `Permission denied (publickey)` with EMPTY stdout, and the cause surfaces far downstream as "the command returned nothing".                                                                                                                                                                                                                                                                                                                                                                                                                        |
 | `scp` to a DIFFERENT remote user                                                 | scp carries the user INSIDE the path (`root@host:/p`), not as a flag, so a `--user`-style option never reaches it. Parse the user from the path when resolving which key to use, or a `root@` destination silently resolves the wrong user's key and every copy fails `Permission denied (publickey)`.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                 |
+| `scp` FROM a Windows OpenSSH host                                                | Write the remote SOURCE path with forward slashes: `scp user@host:C:/Users/name/result.json ./`. A backslash path, accepted as an upload destination, fails as a download source with `scp: C:\\Users\\name\\result.json: No such file or directory` although the file exists, so it reads as a missing file, not as path syntax (observed against Windows OpenSSH). In a run-fetch-tidy script, gate the tidy on the fetch: test the local copy (`test -s ./result.json`) before any step deletes remote files. The fetch fails AFTER the remote job succeeded, so an ungated tidy deletes the only copy of the output and anything the job downloaded; the whole run must be repeated.                                                                                                               |
 
 ## Why inline remote commands break
 
@@ -163,7 +164,7 @@ The default ssh shell on Windows is `cmd.exe`; to make it PowerShell set the `De
 
 `block-pgrep-self-match` (PreToolUse on Bash and PowerShell) catches the echo-label pgrep self-match, including `ssh ... 'pgrep ...'`. `warn-inline-powershell` (PreToolUse on Bash and PowerShell) is the one that fires on an inline remote `-Command`, and it points back here.
 
-For remote PowerShell, use a small wrapper doing these two steps. None ships with this skill, so first check whether your environment already provides one (a local script on PATH) before writing your own:
+For remote PowerShell, use a small wrapper doing these steps. None ships with this skill, so first check whether your environment already provides one (a local script on PATH) before writing your own:
 
 ```bash
 # 1. syntax-check locally, so a typo fails here rather than half-running on the target
@@ -171,6 +172,9 @@ pwsh -NoProfile -Command '$null = [ScriptBlock]::Create((Get-Content -Raw ./job.
 # 2. ship it and run the FILE - a path has nothing for cmd.exe to eat
 scp ./job.ps1 user@host:C:/Windows/Temp/job.ps1
 ssh user@host 'powershell -ExecutionPolicy Bypass -File C:/Windows/Temp/job.ps1'
+# 3. fetch the result with a forward-slash SOURCE path, and tidy only once the copy is here
+scp user@host:C:/Windows/Temp/result.json ./ && test -s ./result.json &&
+    ssh user@host 'cmd /c del C:\Windows\Temp\job.ps1 C:\Windows\Temp\result.json'
 ```
 
 That sequence is what avoids the cmd-quoting trap.

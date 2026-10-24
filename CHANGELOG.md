@@ -29,6 +29,29 @@ than the change, so entries reconstructed from them would read like coverage wit
 a hole nobody has drawn a line under is one that gets rediscovered and half-filled - which is how
 two "versions with no entry" notes came to sit in this file disagreeing with it.
 
+## [10.0.9]
+
+### Changed
+
+- Memory rules folded into the skills they belong to: `process-test-design` (each kind of damage
+  to a library-read file is its own input; a huge parametrize id overflows `PYTEST_CURRENT_TEST`
+  on Windows, with a collection guard; prove a replacement test by mutating what the deleted one
+  covered; restore signal handlers and other process state a test reaches in-process),
+  `coding-python-uv` (the two causes of a raised floor refused under `exclude-newer`; `uv add
+  --exclude-newer` keeps the cooldown only in `uv.lock`; `uv tool install --from` takes the package
+  name; os error 448 over Windows SSH; never request a venv's own interpreter for a recreate; uv
+  ignores a `requires-python` upper bound),
+  `coding-python-layered-config` (probing and testing an app built on it), `coding-python-send-mail`
+  (`ConfMail` subclasses and the EHLO lookup in timing tests), `git-worktrees` (native worktrees
+  branch from origin, `worktree.baseRef`; nothing may run from a worktree being removed),
+  `process-agents-dispatching-parallel` (landing fixer branches by cherry-pick; finishing work an
+  agent stopped mid-task), `compuse-ssh` (scp FROM a Windows host), `compuse-toolbox` (a multi-file
+  edit validates every file first; `ci_wait` on a tag-push release), `meta-context-watcher` (check a
+  named peer session still exists), `coding-python-textual` (generated key bindings share one
+  namespace), `coding-python-enforce-data-architecture-strict` (a str-to-Enum conversion changes the
+  contract its tests see), `coding-bash-reference` (a command stored in a string keeps its inner
+  quotes). Synced with the twins in lib_layered_config and btx_lib_mail.
+
 ## [10.0.8]
 
 ### Changed

@@ -35,6 +35,40 @@ once the four above have burned you: `overflow-x: auto` resolves to `virtual_siz
 so a fixed-width scroll strip gates its own scrollbar correctly with no length comparison in user
 code.
 
+### Generated key bindings share one namespace with `BINDINGS`
+
+When keys are generated per item (page N gets the digit `N` and `fN`), they and the hand-written
+`BINDINGS` are two sources for ONE key namespace, and each looks complete on its own. Adding an
+item grows the generated range into the hand range - a ninth page takes `f9`, which may already
+be a hand-bound action - and nothing refuses it. Textual keeps a LIST of bindings per key
+(`BindingsMap.key_to_bindings`), so a key bound twice in one `BINDINGS` is accepted without a
+word, and a subclass's binding for a key silently replaces its base class's. The base `App`
+already holds `ctrl+q` (priority) and `ctrl+c`, and the command palette takes `ctrl+p`
+(`COMMAND_PALETTE_BINDING`). So when you add an item, list every key the app holds, generated
+and hand-written, and check the new ones are free; and keep a test that fails on any key bound
+twice, built from the app's OWN generator (a copy of its formula drifts), so the next item cannot
+collide unseen. `Binding.make_bindings` splits a compound key like `"r,f10"` into two:
+
+```python
+from collections import Counter
+from textual.binding import Binding
+
+def test_no_key_bound_twice():
+    # page_bindings is the app's own generator; MyApp and PAGES are yours
+    hand = [b for cls in MyApp.__mro__ for b in vars(cls).get("BINDINGS", [])]  # App included
+    bindings = [*hand, *page_bindings(PAGES)]
+    keys = [b.key for b in Binding.make_bindings(bindings)] + [MyApp.COMMAND_PALETTE_BINDING]
+    overrides = set()  # keys a subclass rebinds ON PURPOSE, e.g. {"ctrl+c"}
+    twice = sorted(k for k, n in Counter(keys).items() if n > 1 and k not in overrides)
+    assert not twice, f"bound twice: {twice}"
+```
+
+Walking `__mro__` catches a key held by an intermediate base class, which `App.BINDINGS` plus
+`MyApp.BINDINGS` misses. A screen or widget that is focused while the generated keys are live
+adds its own `BINDINGS` to the same namespace: add those classes' bindings the same way. Measured
+on textual 8.2.8: with a hand binding `"r,f9"` and nine generated pages the test fails
+`bound twice: ['f9']`, and with eight pages it passes.
+
 ### The vendored docs carry one local fix
 
 `widgets/progress_bar.md` diverges from upstream by two lines, deliberately. Its reactive-attributes

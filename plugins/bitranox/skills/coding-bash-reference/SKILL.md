@@ -446,6 +446,41 @@ for f in $files; do rm $f; done
 for f in "${files[@]}"; do rm "$f"; done
 ```
 
+### A command stored in a string keeps its inner quotes
+
+```bash
+# BAD: the double quotes reach the program as literal characters
+MT='uvx --from "mytool>=1.4.0" mytool'
+$MT scan ./data
+# error: Failed to parse: `"mytool>=1.4.0"`   (uvx, exit 2)
+#   cause: Expected package name starting with an alphanumeric character, found `"`
+
+# ALSO BAD: unquoted, >= is a redirection - runs an UNPINNED mytool, stdout to a file "=1.4.0"
+uvx --from mytool>=1.4.0 mytool scan ./data
+
+# GOOD (docs, README, skill): the full double-quoted prefix on every line
+uvx --from "mytool>=1.4.0" mytool scan ./data
+uvx --from "mytool>=1.4.0" mytool report --json
+
+# GOOD (scripts): a function or an array, never a string (either one)
+mt() { uvx --from 'mytool>=1.4.0' mytool "$@"; }
+mt_cmd=(uvx --from 'mytool>=1.4.0' mytool); "${mt_cmd[@]}" scan ./data
+```
+
+Quote removal strips only quotes typed in the original word, never quotes that came out of a
+parameter expansion, so `$MT` is word-split into `uvx`, `--from`, `"mytool>=1.4.0"`, `mytool`.
+The error names the package spec, not the quoting, so it reads like a bad package name.
+
+Use double quotes in docs a reader may paste into cmd.exe (anything a Windows user installs from):
+bash, zsh and PowerShell accept either kind, but cmd.exe does not treat single quotes as quoting,
+so `'mytool>=1.4.0'` there redirects to a file and passes `'mytool` as the spec. Single quotes
+stay correct in docs that only a POSIX shell or PowerShell runs.
+
+In docs, write the full prefix on every example: a reader copies one line, and a variable or
+function defined at the top of the snippet is not in their shell (nor in the next call of a tool
+that starts a fresh shell per command). Before publishing, run every documented line verbatim
+once; reading it does not catch this.
+
 ### `[ ]` vs `[[ ]]`
 
 ```bash

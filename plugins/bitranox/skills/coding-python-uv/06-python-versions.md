@@ -217,6 +217,39 @@ $ .venv/bin/python -c 'import sys; print(sys.version_info[:3])'
 
 Ask the interpreter. Trusting the text makes a tool "fix" a venv that is already correct.
 
+### Gotcha: a recreate deletes the interpreter you named by path
+
+When `uv sync` or `uv venv` may recreate an existing venv, request the interpreter as an
+implementation-aware MINOR, never as the venv's own `bin/python`:
+
+| Venv interpreter                                                           | Request    |
+|----------------------------------------------------------------------------|------------|
+| CPython                                                                    | `X.Y`      |
+| PyPy (`sys.implementation.name == "pypy"`)                                 | `pypy@X.Y` |
+| Free-threaded CPython (`sysconfig.get_config_var("Py_GIL_DISABLED") == 1`) | `X.Yt`     |
+
+uv recreates a venv it judges stale, for example one whose `pyvenv.cfg` records a full patch
+(`version_info = 3.10.20`) after the minor alias has moved to a newer patch. A venv made by an
+older uv or by `python -m venv` records the full patch; uv 0.13.0 itself writes the minor
+(`version_info = 3.10`), so a venv it just made does not reproduce this. It removes the venv
+BEFORE it builds the new one. On CPython 3.10 and older the venv's `sys._base_executable` is the
+venv's own `bin/python`, so a `--python <venv>/bin/python` request names the file uv just deleted:
+
+```console
+$ uv sync --locked --python "$PWD/.venv/bin/python"
+Using CPython 3.10.22 interpreter at: .venv/bin/python
+Removed virtual environment at: .venv
+Creating virtual environment at: .venv
+error: failed to canonicalize path `/path/to/project/.venv/bin/python`: No such file or directory (os error 2)
+```
+
+Exit 2, and `.venv` is left an empty directory. On 3.11 and newer `sys._base_executable` points at
+the store interpreter, so the same path request survives the recreate. A bare `X.Y` has the opposite
+trap: it is answered with uv's default implementation, so `--python 3.11` rebuilds a PyPy venv as
+CPython and `--python 3.14` rebuilds a free-threaded venv on the GIL build, both silently, exit 0.
+All measured on uv 0.13.0. Derive the request from the venv's interpreter, as in the table, never
+from its path.
+
 ### Gotcha: `uv python find` answers for your CONTEXT, not for uv's store
 
 `uv python find 3.14` looks like "which interpreter would uv use for 3.14". It is not: it resolves
@@ -258,6 +291,23 @@ $ readlink ~/.local/share/uv/python/cpython-3.12-macos-aarch64-none
 ```
 
 If this link is resolved by another tool, e.g., by canonicalizing the Python interpreter path, and used to create a virtual environment, it will not be automatically upgraded.
+
+**Over SSH on Windows the junction can be refused with os error 448 (observed behaviour).** In an
+OpenSSH session on a Windows host, which is a network logon, traversing the minor-version junction
+to create a venv can fail with:
+
+```text
+The path cannot be traversed because it contains an untrusted mount point. (os error 448)
+```
+
+The message points at shares or drive mappings, so it sends you checking those, but the mount
+point is uv's own minor-version junction. Bypass it by calling the interpreter in the
+PATCH-version directory directly. Use `uv python list --only-installed` only to learn the full
+patch number: its path column for the newest patch runs THROUGH the junction (measured on Linux,
+uv 0.13.0: `cpython-3.14.8-...` listed at `.../cpython-3.14-.../bin/python3.14`). Build the path
+yourself from `uv python dir`: `<uv python dir>\cpython-3.14.8-windows-x86_64-none\python.exe`.
+Run that `python.exe -m venv <dir>`, then install into the new venv with its own `pip` or with
+`uv pip install --python <dir>\Scripts\python.exe ...`.
 
 ## Automatic Python Downloads
 
