@@ -3,10 +3,11 @@
 Read this when a test patches a name, parses tool output, asserts on an exception message or on
 rendered output, loops until a condition holds, pins or clears an environment variable, simulates
 a race between a check and an open, blocks a stub so it can be signalled, plants a marker to prove
-a process ran, carries a skip or an exclusion, judges an artifact, compares against a git ref,
-guards against cost, or tests environment isolation - or when you are about to claim a code path
-is untested, or a mutation survives. Each entry names the
-trigger, the mechanism that makes the test pass (or fail) for the wrong reason, and the fix.
+a process ran, asserts a descriptor was closed or a file is held only through a memory map, binds
+a unix socket under `tmp_path`, carries a skip or an exclusion, judges an artifact, compares
+against a git ref, guards against cost, or tests environment isolation - or when you are about to
+claim a code path is untested, or a mutation survives. Each entry names the trigger, the mechanism
+that makes the test pass (or fail) for the wrong reason, and the fix.
 
 ## Determinism and environment
 
@@ -211,6 +212,14 @@ header line, a JSON field, a line prefix) rather than a bare substring. When a p
 misbehaves, print the raw output and look for your own identifiers in it before suspecting the
 code.
 
+The same long path breaks a unix socket. An `AF_UNIX` path is capped at `sizeof(sun_path)`, 108
+bytes on Linux and 104 on macOS, and `tmp_path` plus a long test name passes that easily, so
+`sock.bind(str(tmp_path / "daemon.sock"))` raises `OSError: AF_UNIX path too long` on one machine
+and works on another, appearing and vanishing with renames and temp roots. Never catch that error
+as a skip: the test then silently stops testing what it was written for. Change into the directory
+and bind a short RELATIVE name (`monkeypatch.chdir(tmp_path); sock.bind("s")`): the kernel
+resolves it against the cwd and only the relative string counts toward the limit.
+
 ### Harvest a `pytest.raises(match=...)` pattern per parametrized arm
 
 Two inputs can be refused by two different layers (a grammar error, and a runtime limit below
@@ -237,6 +246,31 @@ module: a file loaded under an alias (a hyphenated script that a conftest regist
 `sys.modules`) prints `Module ... was never imported` and `No data was collected`, yet the run
 still exits 0. Check the report has a `Stmts` count before quoting any range. `--cov=` also writes
 `.coverage` into the tree.
+
+## Leaked and held resources
+
+### A lowest-free-descriptor check cannot see a leak behind a closed lower one
+
+"Open a probe descriptor before and after, close it, compare the numbers" relies on the kernel
+handing out the lowest free number. It misses the leak whenever the code under test also opens and
+closes a LOWER descriptor on the way, which path-walking and socket code usually does: the code
+opens the parent directory at N, the file at N+1, closes N, and the leaked N+1 sits above a probe
+that still reads N before and after. Assert on the SPECIFIC descriptor instead: record the number
+the open returned (wrap the real `os.open` in the test so it records and passes through) and assert
+`os.fstat(fd)` raises `OSError` with `errno.EBADF` after the call; or compare the full set of
+`/proc/self/fd` entries (Linux) or the open-handle count. Then delete the `close` in the source and
+require the test RED before trusting it - a leak test whose only RED came from an unrelated assert
+is coverage it is not.
+
+### A plain `mmap` keeps a descriptor, so it cannot prove a maps-only holder
+
+`mmap.mmap(f.fileno(), ...)` duplicates the descriptor and keeps the duplicate open for the life
+of the map, so the file stays in `/proc/<pid>/fd` after `f` is closed. A test meant to show that a
+holder check finds a file held ONLY through a memory map (the `/proc/<pid>/maps` branch) then
+passes even with the maps scan broken, because the fd scan finds the duplicate. Open the map with
+`mmap.mmap(..., trackfd=False)`, which keeps no descriptor, close the file, assert the fd table no
+longer lists it, and only then assert the holder check still finds it. `trackfd` needs Python 3.13
+or later; an older interpreter rejects it as an invalid keyword, so skip there with that reason.
 
 ## Gates and guards
 

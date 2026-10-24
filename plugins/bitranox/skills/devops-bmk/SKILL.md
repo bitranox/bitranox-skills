@@ -359,13 +359,40 @@ forwarded (e.g. `make push fix login bug`). Most have short aliases.
   heading and syncs `__init__conf__.py` and `plugin.json`, so of these pins only the SKILL.md
   floors can fail (the other pins fail after a hand or script bump): nothing in bmk edits a
   SKILL.md, so raise its `uvx` floors yourself, in the same release commit.
-- `push` starts with a `deps` stage that FAILS when any dependency floor in `pyproject.toml` is
-  behind the latest PyPI release (an exact pin excepted, see the next point), which can be minutes
-  old. In the default JSON mode it prints only
-  `[deps] (exit code: 1)` / `(no output captured)`. Do not bisect your edits: the cause is a new
+- `push` starts with a `deps` check (its first stage, `update_deps`, runs it) that FAILS when any
+  dependency floor in `pyproject.toml` is behind the latest PyPI release (an exact pin excepted,
+  see the next point), which can be minutes old. In the default JSON mode that is an
+  `[update_deps] (exit code: 1)` block whose nested `[deps] (exit code: 1)` block holds only
+  `(no output captured)`. Do not bisect your edits: the cause is a new
   upstream release. `BMK_OUTPUT_FORMAT=text` prints the report above that line; `bmk deps --update`
   (or a `make test`, whose first stage raises floors) fixes it. In a multi-repo sweep, one release
-  of a shared dependency breaks every pending repo, so update them all before resuming.
+  of a shared dependency breaks every pending repo, so update them all before resuming. If you
+  just released one of your own libraries that this project depends on, suspect the release
+  cascade (next point) before a stale floor.
+- **In a release cascade, wait until PyPI serves a library before pushing anything that depends
+  on it.** The floor update raises a requirement on one of your OWN packages (exempt from the
+  `[tool.uv]` cooldown, like every package when the project sets no cooldown) to its newest
+  release as PyPI's JSON API lists it. A dependent pushed minutes after the library's publish can
+  raise its floor to that version before the index serves it to uv, and the failure reads as a
+  stale floor when the floor is in fact too fresh. Under `make push` the `deps` check fails first,
+  with the same `[update_deps]` / nested `[deps]` / `(no output captured)` output as the
+  stale-floor case above; the `bmk deps --update` (or `make test`) that fixes a stale floor then
+  fails in its `[deps_update]` block
+  (`<project>: uv lock --upgrade failed after the floor update`, or a failed re-sync). CI fails
+  with uv's reason,
+  `Because only <pkg><=<old> is available ... your requirements are unsatisfiable`. Before moving
+  to the dependent, confirm both endpoints list the new version, since either can lag the other
+  by minutes: `info.version` in `https://pypi.org/pypi/<pkg>/json`, and the files in
+  `https://pypi.org/simple/<pkg>/`. If a run already failed this way, leave the raised floor
+  alone, because it is correct: re-run once the version resolves, and release the dependent only
+  after CI is green on that commit.
+- **Tests that break right after a floor was raised are a dependency change, not your edit.**
+  `make test`'s first stage can move a floor to a release the project never opted into. Before
+  changing code, run `git diff pyproject.toml` to see which floor moved and from where, read that
+  dependency's CHANGELOG entries between the old and the new floor, and adapt the caller to the
+  documented change rather than patching the symptom. Example: a library that starts wrapping a
+  `PermissionError` in its own error type breaks an `except PermissionError`; catch the new type
+  and walk `__cause__` where the original error matters.
 - **An exact pin is never moved.** The floor update reads every requirement list in
   `pyproject.toml` (`[project]` dependencies and optional extras, `[dependency-groups]`,
   `[build-system].requires`, `[tool.pdm.dev-dependencies]`) and raises `>=`, `>`, `~=` and
@@ -419,12 +446,21 @@ skill - no error, nothing to notice, and the skill then documents behaviour the 
   never lower it. The plugin version can legitimately be AHEAD, because a skill ships more often
   than the package it documents; writing the package version there unconditionally would move an
   install backward to a version it already had.
+- So after `make bump-*`, do not hand-edit `plugin.json`: the bump already wrote it whenever it
+  lagged. The one hand edit is the `release` refusal at the end of this list. The bump writes
+  several files at once: `pyproject.toml`, `CHANGELOG.md`, `__init__conf__.py`, `plugin.json`
+  when it lags, and a committed `uv.lock`, which it re-locks because the lock records the project's
+  own version (left stale it fails `uv sync --locked`). Read `git status --porcelain`, check that
+  the versions agree, and commit every one of those files with the bump. Where a repo's own test
+  pins `plugin.json` to the `pyproject.toml` version, a plugin-only bump cannot pass it: a
+  skill-only change ships there as a package patch bump.
 - A **non-final** package version (`1.2.0rc1`) is NOT written into `plugin.json`. Ordering it is
   not the problem; that manifest is read by Claude Code's marketplace machinery and is only ever
   seen carrying a plain `X.Y.Z`. The final release that follows carries the skill.
 - `release` refuses outright when `skills/` changed since the last tag and the plugin version did
-  not move. That is the one case the sync cannot fix: the two versions were already equal, so there
-  was nothing to raise. Bump `plugin.json` yourself and release again.
+  not move. That is the one case the sync cannot fix: no bump ran, or `plugin.json` was already
+  ahead of the new package version, so there was nothing to raise. Bump `plugin.json` yourself,
+  above its current version, and release again.
 
 Run `bmk --help` or `bmk <command> --help` for the complete, current list (there are also `config`,
 `config-deploy`, `config-generate-examples` (writes example TOML files with every option and its
@@ -442,10 +478,11 @@ tool output is captured and shown **only when a stage fails**. To get the full v
 - `make test-human` / any command with `--human`, **or**
 - set `BMK_OUTPUT_FORMAT=text`.
 
-The dependency check `deps` (the first stage of `make push`) runs in-process rather than as a tool
-and prints nothing in JSON mode, so its `[deps] (exit code: 1)` block holds only
-`(no output captured)`; `BMK_OUTPUT_FORMAT=text` shows its report. `deps_update` puts its failure
-lines into its captured output, so its `[deps_update] (exit code: 1)` block names the failure in
+The dependency check `deps` (run by `make push`'s first stage, `update_deps`) runs in-process
+rather than as a tool and prints nothing in JSON mode, so its `[deps] (exit code: 1)` block, nested
+inside `[update_deps] (exit code: 1)`, holds only `(no output captured)`;
+`BMK_OUTPUT_FORMAT=text` shows its report. `deps_update` puts its failure lines into its captured
+output, so its `[deps_update] (exit code: 1)` block names the failure in
 JSON mode too: a failed re-sync shows the `[venv]` report with uv's reason, a `[tool.uv]` cooldown
 uv refuses shows uv's refusal, and a failed lock upgrade is named by its step only
 (`<project>: uv lock --upgrade failed after the floor update`), without uv's reason - run
@@ -549,6 +586,18 @@ bmk runs pytest in **this project's own `.venv`** (section 1), which it syncs wi
 helpers) are present. That is the same venv pyright and pip-audit resolve, so the suite, the type
 check and the audit all describe one environment.
 
+**`make test`'s `pytest` stage also uploads coverage to Codecov**, so a failed upload is reported
+as `[pytest]` failing even when every test passed. The upload runs only when a `CODECOV_TOKEN` is
+found (the environment first, else a `.env` in the project or any parent directory) and
+`codecovcli` is on `PATH`; if either is missing the upload is skipped and the stage passes (text
+mode prints a `[codecov] warning: ... skipping upload` line). bmk takes the Codecov slug
+from the `origin` remote, so in a repo with no `origin` the uploader gets none and refuses
+(observed: `ValueError: The provided slug is invalid`), and the stage exits 1 with
+`[codecov] upload failed (exit <N>)`. Before debugging code, read the stage's last lines: a
+`[codecov] upload failed` line after a passing test run means the code is fine. For a clean local
+run, add an `origin` remote, or drop the token for local runs, from the `.env` and from an
+exported `CODECOV_TOKEN` alike (ask first: the `.env` holds a secret).
+
 ## Proving a gate actually ENFORCES (two wrong readings of a green `make test`)
 
 Two independent readings of a green `make test` are wrong, and both come from bmk's stage table
@@ -615,6 +664,9 @@ gate to go red. A gate that has only ever passed has not been shown to gate. See
 | `make release` refuses: version is not canonical / carries a local segment          | Not a read failure - the version WAS read. bmk accepts any canonical PEP 440 version but refuses a spelling `packaging` would normalise (`v1.0.0`, `1.0.0-beta`) or a local segment (`1.2.3+local`); the message names the canonical form to write. See section 3. |
 | `make release` refuses: `Working tree not clean. Commit or stash changes first.`    | A tracked edit is pending. Never commit an unrelated one to get past it: set it aside, release, restore it (section 3).                                                                                                                                            |
 | `make push` fails at `[deps] (exit code: 1)` with `(no output captured)`            | A dependency floor is behind a new PyPI release, not your edit. `bmk deps --update`, then push again (section 3).                                                                                                                                                  |
+| `make test` fails at `[pytest]` though every test passed, in a repo with no remote  | The pytest stage also uploads coverage when a `CODECOV_TOKEN` and `codecovcli` are found; with no `origin` there is no slug and the upload fails. Look for `[codecov] upload failed` before debugging code (section 6).                                            |
+| CI fails with `Because only <pkg><=<old> is available` after releasing the library  | The dependent's floor was raised to a release the index does not serve yet. The pin is correct: confirm PyPI lists the version, then re-run (section 3).                                                                                                           |
+| Tests break right after `make test` raised a dependency floor                       | A dependency change, not your edit: `git diff pyproject.toml`, read that dependency's CHANGELOG, adapt the caller to the documented change (section 3).                                                                                                            |
 | `ModuleNotFoundError` inside bmk's own dependencies                                 | bmk's shared env, not your code; the next `make` repairs it (section 1).                                                                                                                                                                                           |
 | `make testintegration` fails: `[pytest_integration] (exit code: 5)`                 | pytest collected no test: an empty lane, or a filter hiding the tests (section 6).                                                                                                                                                                                 |
 | Private GitHub deps fail to resolve                                                 | `git config --global url."https://<TOKEN>@github.com/<ORG>/".insteadOf "https://github.com/<ORG>/"` before install.                                                                                                                                                |

@@ -50,7 +50,7 @@ All documentation files are flat, numbered markdown files. Use the Read tool to 
 | `uv tool uninstall`                              | Remove an installed tool                                   | `07-tools-and-scripts.md`       |                                 |
 | `uv tool update-shell`                           | Update shell PATH for tools                                | `07-tools-and-scripts.md`       |                                 |
 | `uv cache dir` / `uv tool dir` / `uv python dir` | Show storage directories                                   | `01-getting-started.md`         | `10-configuration.md`           |
-| `uv self update`                                 | Update uv itself                                           | `01-getting-started.md`         |                                 |
+| `uv self update`                                 | Update uv itself (also: a released Python uv cannot find)  | `01-getting-started.md`         | `06-python-versions.md`         |
 | `uv self version`                                | Show uv's own version                                      | `01-getting-started.md`         |                                 |
 
 ---

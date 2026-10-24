@@ -510,6 +510,23 @@ cooldown. Set `[tool.uv]` `exclude-newer = "7 days"` in `pyproject.toml` first, 
 the flag for one-off `uvx` and `uv tool install`: a tool install stores it in the tool's
 `uv-receipt.toml` under `[tool.options]`, and `uv tool upgrade` keeps honouring it.
 
+**A bad `[tool.uv]` value does not fail the lock: uv ignores the whole table (measured on uv
+0.13.0).** One value uv cannot parse, in any key, makes `uv lock` print one warning on stderr,
+``warning: Failed to parse `pyproject.toml` during settings discovery``, followed by the TOML error,
+then drop EVERY `[tool.uv]` setting, the valid ones too, rewrite `uv.lock` and exit 0. A typo such
+as `exclude-newer = "7 dayz"`, or an unknown `resolution` variant beside a correct cooldown, leaves
+the project with no cooldown and no per-package exceptions. The exit code says nothing, and
+`grep exclude-newer pyproject.toml` only proves the line is there, not that uv read it. After any
+`[tool.uv]` edit, read stderr for that warning, then check the produced `uv.lock`: it must have an
+`[options]` table carrying what you set. A duration cooldown appears as
+`exclude-newer-span = "P7D"` beside an `exclude-newer` of `0001-01-01T00:00:00Z`, a placeholder
+with no effect (on uv 0.13.0 the lock keeps the span, not the computed timestamp the upstream
+paragraph above describes), an absolute one as
+`exclude-newer`, and per-package values under `[options.exclude-newer-package]`. No `[options]`
+table after setting a cooldown means the table was ignored. `[options]` records only resolution
+settings (a `resolution` value shows as `resolution-mode`; `managed`, for example, never appears),
+so verify any other `[tool.uv]` key by its own effect; the stderr warning covers every key.
+
 Values may also be specified for specific packages, e.g., `--exclude-newer-package "setuptools=30 days"`, or:
 
 ```toml

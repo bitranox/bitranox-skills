@@ -29,6 +29,28 @@ than the change, so entries reconstructed from them would read like coverage wit
 a hole nobody has drawn a line under is one that gets rediscovered and half-filled - which is how
 two "versions with no entry" notes came to sit in this file disagreeing with it.
 
+## [10.0.15]
+
+### Changed
+
+- `process-test-design` covers seven more test traps: a lowest-free-descriptor leak check that
+  cannot see a leak behind a closed lower descriptor, a plain `mmap` that duplicates the fd (use
+  `trackfd=False`), an AF_UNIX socket path under `tmp_path` that exceeds the `sun_path` limit, a
+  `skipif` condition evaluated at import time, an input-bound test that must fail fast when run
+  RED, a non-UTF-8 file name refused with `EILSEQ` on macOS, and driving the interaction rather
+  than calling its handler.
+- `coding-python-uv` says a bad `[tool.uv]` value makes uv ignore the whole table and exit 0 (and
+  how to check the lock), and that a newly released Python missing from uv needs `uv self update`.
+- `devops-bmk` covers the release-cascade window (a dependent pushed before PyPI serves the
+  library fails like a stale floor), a no-remote repo whose pytest stage fails only at the codecov
+  upload, tests that break right after a floor was raised, and that `make bump-*` also writes
+  `plugin.json` (and the one case where you bump it by hand).
+- `coding-python-layered-config` says how to label a `with_overrides` key as the CLI's in
+  provenance; `coding-python-textual` says the Footer redraws on a binding refresh, not when
+  `check_action`'s state changes, and how to read `active_bindings`; `compuse-ssh` covers running a Windows command in the interactive console
+  session when a network logon fails (1312, DPAPI, drive maps) and ruling out your own command
+  construction before calling a remote Windows error impossible.
+
 ## [10.0.14]
 
 ### Changed

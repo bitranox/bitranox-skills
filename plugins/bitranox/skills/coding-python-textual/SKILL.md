@@ -30,10 +30,22 @@ somewhere else. Check them before debugging outward.
 | `DataTable.add_column(width=N)` | a column that wraps or ellipsizes at N | A HARD CLIP at N with no ellipsis. `text-overflow` never reaches the cell either, because cells render through Rich rather than through the CSS box - so the usual fix is inert and the text simply disappears at the boundary. Truncate in your own cell text if you want a marker. |
 | `DataTable.RowHighlighted`      | "my table's row changed"               | Fires for EVERY `DataTable` on screen, in composition order at mount, so a screen with two tables gets both handlers on startup before the user touches anything. Gate on `event.data_table` (or `event.control`) being the table you mean; an `if` on the row index will not do it. |
 
+A green suite sees none of the four, so assert on rendered state, never on a handler having been
+called. Read a binding back from `app.screen.active_bindings`, the map the Footer draws from: key ->
+`ActiveBinding` with the fields `node`, `binding`, `enabled`, `tooltip`. A `check_action` that
+returns `False` leaves the key out of that map, `None` keeps it with `enabled` false. The map
+consults `check_action` each time it is read, but the Footer redraws when bindings are refreshed,
+for example on a focus change, a screen push or pop, a `reactive(..., bindings=True)` change, or an
+explicit `refresh_bindings()`. When the state `check_action` reads is a plain attribute, call
+`refresh_bindings()` after changing it, or the footer keeps the old answer. With fixed `add_column`
+widths that fit, the table's own horizontal scrollbar stays away too, because its `virtual_size` is
+the sum of the column widths, so a clipped value has no scrollbar to hint at it.
+
 And the one that works exactly as documented, recorded because it is the natural thing to distrust
 once the four above have burned you: `overflow-x: auto` resolves to `virtual_size.width > width`,
 so a fixed-width scroll strip gates its own scrollbar correctly with no length comparison in user
-code.
+code. The bar costs one row while shown and none while hidden, so pin the strip's height to
+reserve that row; assert on `show_horizontal_scrollbar`.
 
 ### Generated key bindings share one namespace with `BINDINGS`
 

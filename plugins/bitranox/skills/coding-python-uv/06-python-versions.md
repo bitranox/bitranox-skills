@@ -347,6 +347,18 @@ To list installed and available Python versions:
 $ uv python list
 ```
 
+**A released Python that uv does not offer means your uv is too old: update uv first.** The
+versions uv can download (the `<download available>` rows, and what `uv python install` can find)
+come from a list built into the uv binary, which is why `uv python list --offline` still shows
+them. A uv built before a release cannot see it: it lists at most an earlier pre-release of that
+minor, and `uv python install` of the final release finds no matching download (observed: uv
+0.11.15 listed only 3.15.0b1 three days after 3.15.0 was released). Clearing the cache,
+`--refresh`, `--no-cache` and `--mirror` change none of this, since a mirror replaces only the host
+the files come from, not the list of versions. Run `uv self update` (or the package manager's
+upgrade when uv was installed another way, see `01-getting-started.md`), then retry
+`uv python list` / `uv python install`; suspect the network, the cache or the machine only after
+that.
+
 To filter the Python versions, provide a request, e.g., to show all Python 3.13 interpreters:
 
 ```console

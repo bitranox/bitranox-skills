@@ -49,6 +49,15 @@ rule does not apply.
   CONSUMER's own name for it - a module-level `_now = time.monotonic` it calls (patch `pkg.mod._now`),
   or the module's `time` name replaced with a stub that keeps the rest of `time` - never the function
   on the time module.
+- **Drive the interaction, not the handler.** For anything a user reaches through an interaction (a
+  key binding, a route, a CLI argument, a permission check), the test presses the key, clicks the
+  row or runs the command, and asserts on what renders or what the command prints. A direct call to
+  the handler proves the handler works, never that a user can reach it: a binding that claims the
+  framework's own focus key (in Textual, `tab` is `focus_next`; rebinding it with `priority=True`
+  stops focus ever reaching a table) leaves a row-selection handler unreachable while a test that
+  calls the handler directly stays green. Reserve direct calls for pure functions. When a test does
+  bypass the interaction, say why in the test body; if the reason is "the interaction is awkward to
+  drive", that awkwardness is usually the bug.
 - See `bitranox:process-test-driven-development` -> `testing-anti-patterns.md` (testing the mock,
   test-only methods in production, incomplete mocks, integration-as-afterthought).
 
@@ -94,6 +103,18 @@ capability, an available service) is the dangerous case, because a registered-bu
 exactly like a guard and runs everywhere. Before you trust one, grep `conftest.py` for the marker
 name; if only the config mentions it, it is documentation. Then prove the skip fires by forcing the
 condition rather than assuming.
+
+**A `skipif` condition runs at import, before any skip.** pytest evaluates the condition when the
+module is imported, at collection, so `skipif(os.geteuid() != 0)` raises `AttributeError` on
+Windows and the whole module fails collection, taking every test in it; the error names the module,
+not the test, so it reads as a broken import. Build the condition from something that exists on
+every platform (`sys.platform`, `shutil.which(tool) is None`), and short-circuit the platform-only
+call behind it (`sys.platform == "win32" or os.geteuid() == 0`) or move the call into the test
+body. Do not guard with `hasattr(os, "geteuid")`: it is import-safe, but pyright does not narrow on
+it, so a `--pythonplatform Windows` check still reports `geteuid` as not a known attribute of
+`os`, while the right side of a `sys.platform` test is unreachable there and passes. A
+condition that touches an optional dependency is the same trap: import-guard it rather than call
+into it.
 
 Watch for two families that mean the same thing - one wired, one not. A repo that carries both
 (`posix_only`/`windows_only` wired to a real skip, and `os_posix`/`os_windows` registered and inert)
@@ -169,6 +190,26 @@ enumerate every variant/caller a path serves and cover each branch.)
 
 Assert the SPECIFIC behavior (rejected with a typed error, normalized, or escaped) - not just "does
 not crash".
+
+**A file NAME that is invalid UTF-8 is refused by macOS.** Creating one (`b"bad\xff\xfe.txt"`)
+works on Linux, but APFS rejects it with `EILSEQ`, so the macOS CI cell goes red. Windows never
+reaches the filesystem: Python decodes a bytes path there as UTF-8 and raises `UnicodeDecodeError`,
+so such a test is POSIX-only and needs its own Windows skip.
+Create every such name through ONE shared helper that catches `OSError`, skips when
+`err.errno == errno.EILSEQ` and re-raises anything else, and route every non-UTF-8-name test in the
+suite through it; never skip on a broad `OSError`, which hides real failures on every platform.
+
+**A test for an input bound must fail fast when run RED, not exhaust memory.** It runs at least
+once against code without the bound (RED), and again whenever the bound regresses, and that code
+reads its input whole: an endless generator drove one RED arm to 36 GB RSS in five minutes, and in
+CI it would take the runner down rather than fail. Feed a generator that yields items for a while
+and then raises a test-local error (`_ReadTooFarError("read more than 50 entries")`): the fixed
+code stops before it, the unfixed code hits it in milliseconds and the failure names why. When the
+point is the TYPE (an iterator where a list is expected), use a small `range(3)`, not
+`range(10**9)`. Run any RED arm that may still allocate without limit under a memory cap and a
+timeout (`ulimit -v 4000000` in KiB, plus `timeout`). For a LARGE cap (a walk capped at 1,000,000
+records), make the cap an injectable keyword and test at a small cap such as 3, plus one test that
+the default equals the shipped constant; feeding cap+1 real records takes minutes.
 
 **How much is enough (the stopping rule).** Cover one case per BRANCH the code actually takes, not
 one per input you can imagine. For each failure the code distinguishes - a different error type, a
@@ -528,9 +569,10 @@ cannot see what it already swallowed.
 output, asserts on an exception message or on rendered output, loops until a condition holds,
 pins or clears an environment variable (its own or a spawned child's), simulates a race between a
 check and an open, blocks a stub so it can be signalled mid-call, plants a marker to prove a
-process ran (or did not), carries a skip or an exclusion, judges an artifact, compares against a
-git ref, guards against cost, or tests environment isolation - or before you claim a code path is
-untested or accept a surviving mutation.
+process ran (or did not), asserts that no file descriptor leaked or that a file is held only
+through a memory map, binds a unix socket under `tmp_path`, carries a skip or an exclusion,
+judges an artifact, compares against a git ref, guards against cost, or tests environment
+isolation - or before you claim a code path is untested or accept a surviving mutation.
 
 ## Quick checklist
 
