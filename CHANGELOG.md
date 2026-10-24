@@ -29,6 +29,16 @@ than the change, so entries reconstructed from them would read like coverage wit
 a hole nobody has drawn a line under is one that gets rediscovered and half-filled - which is how
 two "versions with no entry" notes came to sit in this file disagreeing with it.
 
+## [10.0.14]
+
+### Changed
+
+- `coding-python-pwshpy` mirrors pwshpy 1.7: `get_known_folder` (any OS; what pwsh's
+  `[Environment]::GetFolderPath` returns, `None` where pwsh returns `""`), and the Windows-only
+  `new_shortcut` / `get_shortcut` for `.lnk` files, with their input limits and errors. It also
+  says to select Windows Updates by `category_details[].category_id` (the category GUID) rather
+  than by the localized `categories` or `title`.
+
 ## [10.0.13]
 
 ### Fixed

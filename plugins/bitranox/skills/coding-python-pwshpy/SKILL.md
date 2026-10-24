@@ -17,7 +17,8 @@ plugin/marketplace: install anywhere with `/plugin marketplace add bitranox/pwsh
 
 - About to **issue or run any PowerShell command** - a `Get-*` / `Set-*` cmdlet, a `pwsh` one-liner,
   or a `.ps1` - for OS/admin work (processes, services, event log, registry, scheduled tasks, ACLs,
-  local accounts, files, network, credentials). Prefer pwshpy **even for a single one-off command.**
+  local accounts, files, network, credentials, known folders, desktop shortcuts). Prefer pwshpy
+  **even for a single one-off command.**
 - Want **better error handling and reporting**: a failed command should raise / exit non-zero with a
   clear message, not be silently swallowed. PowerShell's default is a *non-terminating* error you
   must remember `-ErrorAction Stop` (or `$?`/`$LASTEXITCODE`) to catch; pwshpy failures are real
@@ -115,6 +116,9 @@ UTF-16/BOM, and localized `Administrators` / SID (records key on SID / uid, not 
 | `whoami /user`                                                        | `ps.get_current_identity()` (from the token, never `USERNAME`)                                                     | `pwshpy get_current_identity`                                                                                               |
 | `Register-ScheduledTask` + `-Principal` / `-Trigger`                  | `ps.register_scheduled_task("\\T", program="P", principal=TaskPrincipal.system(), triggers=[DailyTrigger(at=dt)])` | `pwshpy register_scheduled_task \T --program P --run-as local_system --run-level highest --daily 2026-11-01T03:00:00+01:00` |
 | `#Requires -RunAsAdministrator` / `-Verb RunAs`                       | `ps.require_elevation()` / `ps.elevate()`                                                                          | `pwshpy --elevate <command>`                                                                                                |
+| `[Environment]::GetFolderPath('Desktop')`                             | `ps.get_known_folder(KnownFolder.DESKTOP)` (a `Path`, `None` when missing; any OS)                                 | `pwshpy get_known_folder Desktop`                                                                                           |
+| WScript.Shell `CreateShortcut(P)` + `.Save()`                         | `ps.new_shortcut("P", target=T, arguments=["a", "b"], force=False)` (Windows; returns the stored `ShortcutInfo`)   | `pwshpy new_shortcut P --target T [-f] -- a b`                                                                              |
+| WScript.Shell `CreateShortcut(P)` (read)                              | `ps.get_shortcut("P")` (Windows)                                                                                   | `pwshpy get_shortcut P`                                                                                                     |
 | *anything else*                                                       | `ps.cmdlet("Verb-Noun", **params)` (needs `[full]`)                                                                | `pwshpy cmdlet Verb-Noun -p K=V`                                                                                            |
 
 Example - porting `$svc = Get-Service Spooler; if ($svc.Status -ne 'Running') { Start-Service Spooler };
@@ -140,6 +144,19 @@ Logon triggers, `every_days > 1` and a logon type are Windows-only (`PlatformUns
 
 `get_process` names a process as psutil does: on Windows `MemCompression` is `Get-Process`'s
 `Memory Compression` and PID 0 `System Idle Process` is `Idle`; match by `pid` where it matters.
+
+Known folders and shortcuts: `get_known_folder` takes a `KnownFolder` member or its .NET
+`SpecialFolder` name (`Desktop`, `MyDocuments`, `LocalApplicationData`, `ApplicationData`,
+`CommonApplicationData`, `Programs`; exact case in the library, any case on the CLI) and returns what
+pwsh's `GetFolderPath` returns on that OS (a redirected Windows Desktop included), `None` where pwsh
+returns `""`; `Programs` off Windows raises `PlatformUnsupportedError`. Never guess
+`Path.home() / "Desktop"`. `new_shortcut`'s `target` must be an absolute Windows path or start with
+`%NAME%\` (a bare `notepad.exe` is a `ConfigurationError`), and `arguments` is an argv list (a str
+is refused, never split), stored joined by `subprocess.list2cmdline`. Values Windows would silently
+truncate are refused up front (`ConfigurationError`: target and `.lnk` path 259 characters, joined
+arguments 32767, description / working directory / icon 260); an env-prefixed target whose
+*expansion* passes 259 is refused by Windows itself (`NativeCallError` 0x80004005, nothing written).
+An existing file needs `force=True`; no directory is created.
 
 ## Errors, timeouts and exit codes
 
@@ -170,7 +187,11 @@ then means this caller cannot tell; ask again elevated).
 `get_windows_update` runs the search in a `spawn` child that re-imports the calling script, so that
 script needs an `if __name__ == "__main__":` guard (without it: `NativeCallError`, "worker exited
 without a result"); the search returns its whole result on the first iteration, so `.take(n)` does
-not shorten it. `exec` drops the output written before a timeout.
+not shorten it. Select updates by category through `category_details[].category_id` (the
+category GUID, lower case, e.g. `0fa1201d-4330-4fa8-8ae9-b877473b6441` for Security Updates),
+never through `categories` or `title`, which the Windows Update agent localizes:
+`.where(lambda u: any(c.category_id == GUID for c in u.category_details))`. `exec` drops the output
+written before a timeout.
 
 CLI and packed-runner exit codes (an error also writes one `ErrorName: message` line, or a `pwshpy: ...`
 line from a runner, to stderr): 0 ok, 1 any other `PwshPyError`, 2 usage error, 22 a refused value
@@ -265,9 +286,10 @@ prints). Inputs: `TaskPrincipal`, `TaskTrigger`, `OnceTrigger`, `DailyTrigger`, 
 `LogonTrigger`, `PackOptions`, `RunnerFormat`. Enums to compare against: `ProcessStatus`,
 `ConnectionState`, `TransportProtocol`, `AddressFamily`, `ServiceState`, `ServiceStartType`,
 `ServiceKind`, `EventLevel`, `TaskState`, `TaskRunLevel`, `TaskLogonType`, `RegistryHive`,
-`RegistryValueType`, `AceType`, `WellKnownSid` (SID strings), `IntegrityLevel`, `ImageArchitecture`.
-Errors: listed above. Records (`ProcessInfo`, `ServiceInfo`, `WindowsImage`, `WindowsUpdate`,
-`CurrentIdentity`, `ScheduledTaskInfo`, ...) are what the calls return; read their fields.
+`RegistryValueType`, `AceType`, `WellKnownSid` (SID strings), `IntegrityLevel`, `ImageArchitecture`,
+`KnownFolder` (also the input of `get_known_folder`). Errors: listed above. Records (`ProcessInfo`,
+`ServiceInfo`, `WindowsImage`, `WindowsUpdate`, `CurrentIdentity`, `ScheduledTaskInfo`,
+`ShortcutInfo`, ...) are what the calls return; read their fields.
 
 CLI commands (`pwshpy <command> --help` for flags; most use underscores, `is-elevated`, `config-deploy`
 and `config-generate-examples` hyphens), by area:
@@ -287,6 +309,7 @@ and `config-generate-examples` hyphens), by area:
   `enable_local_user`, `disable_local_user`, `new_local_group`, `remove_local_group`,
   `add_local_group_member`, `remove_local_group_member`
 - ACLs: `get_acl`, `add_acl_ace`, `remove_acl_ace`, `set_owner`
+- known folders and shortcuts: `get_known_folder` (any OS), `get_shortcut`, `new_shortcut` (Windows)
 - registry and CIM (Windows): `get_item_property`, `registry_keys`, `set_item_property`,
   `remove_item_property`, `new_registry_key`, `remove_registry_key`, `get_cim_instance`
 - credentials and elevation: `save_credential`, `load_credential`, `delete_credential`, `is-elevated`,
