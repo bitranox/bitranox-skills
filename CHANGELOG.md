@@ -29,6 +29,16 @@ than the change, so entries reconstructed from them would read like coverage wit
 a hole nobody has drawn a line under is one that gets rediscovered and half-filled - which is how
 two "versions with no entry" notes came to sit in this file disagreeing with it.
 
+## [10.0.12]
+
+### Changed
+
+- `devops-bmk` says every `make test-all` cell runs pyright once per OS in `[tool.ci].os`, as
+  `make test` does (pytest runs on the host OS only), and how a pinned `pythonPlatform` and a
+  `pyrightconfig.<platform>.json` change those runs. It also names `make codecov`,
+  `config-generate-examples`, `send-notification`, the short aliases and `bmk.print_info()`.
+  Synced with bmk 3.25.3's `devops-bmk`.
+
 ## [10.0.11]
 
 ### Changed

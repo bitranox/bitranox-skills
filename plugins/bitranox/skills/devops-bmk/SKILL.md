@@ -178,8 +178,9 @@ Declare no `:: Python :: X.Y` classifier and bmk picks no version at all - uv's 
 
 The same classifiers drive `make test-all`: it provisions one `.venv-<minor>` per declared version
 and runs pytest + pyright in each, in parallel by default, so you can reproduce CI's Python-version
-matrix locally before you push. It covers the version axis only: each cell type-checks the HOST
-platform. The OS axis is checked by `make test`'s pyright stage (section "Proving a gate"). A project whose suite binds fixed ports or shares a test database sets
+matrix locally before you push. Each cell's pyright makes the same per-OS runs as `make test`'s
+pyright stage (section "Proving a gate"), so a type error on any OS in `[tool.ci].os` fails the cell
+for that Python version; pytest runs on the host OS only. A project whose suite binds fixed ports or shares a test database sets
 `[tool.scripts.test-all] workers = 1` in its `pyproject.toml` (or `BMK_TEST_ALL_WORKERS=1` for one
 run) to run the version cells serially instead. Plain `make test` stays on the newest version only;
 with no `:: Python :: X.Y` classifier, `test-all` tests the default interpreter once and prints a
@@ -301,6 +302,7 @@ forwarded (e.g. `make push fix login bug`). Most have short aliases.
 | `make test-human` \| `th`               | Same, forced human-readable (verbose) output                                                  |
 | `make test-all`                         | Run pytest + pyright on EVERY declared Python version (the matrix), in parallel unless capped |
 | `make testintegration` \| `ti`          | Integration tests only (`pytest -m integration`)                                              |
+| `make codecov` \| `cov`                 | Upload the coverage report to Codecov                                                         |
 | `make bump-patch` / `-minor` / `-major` | Bump version in `pyproject.toml` and update the changelog (rules below)                       |
 | `make commit` \| `c` `[MESSAGE...]`     | Git commit with a timestamped message                                                         |
 | `make push` \| `p` `[MESSAGE...]`       | Run tests, commit, then push to the remote                                                    |
@@ -425,7 +427,12 @@ skill - no error, nothing to notice, and the skill then documents behaviour the 
   was nothing to raise. Bump `plugin.json` yourself and release again.
 
 Run `bmk --help` or `bmk <command> --help` for the complete, current list (there are also `config`,
-`config-deploy`, `send-email`, `run`, `info`, `logdemo`, ...).
+`config-deploy`, `config-generate-examples` (writes example TOML files with every option and its
+default into `--destination`), `send-email`, `send-notification` (a plain-text notification
+email), `run`, `info`, `logdemo`, ...). Most commands have more than one alias, and the table shows
+one: `bump` is also `b` and `bmp`, `clean` also `cl` and `cln`, `push` also `p` and `psh`,
+`codecov` also `coverage` and `cov`. From Python, `bmk.print_info()` prints the same metadata
+block as `bmk info`.
 
 ## 4. Output format: JSON by default
 
@@ -572,8 +579,21 @@ per run, so a check on Linux passes code whose types break under Windows' stubs 
 `[tool.ci].os`, the key CI builds its OS matrix from (`ubuntu-*` -> Linux, `windows-*` -> Windows,
 `macos-*` -> Darwin), and fails if any run does; each run's output is headed by its command line.
 With no `[tool.ci].os` it checks the host only. So in a project that declares Windows, a
-Windows-only type error now turns `make test` red on Linux: fix the code (a `sys.platform` guard,
-which pyright narrows), not the stage.
+Windows-only type error turns `make test` red on Linux: fix the code (a `sys.platform` guard,
+which pyright narrows), not the stage. Every `make test-all` cell makes the same runs.
+
+Two project files change those runs:
+
+- **A `pythonPlatform` pinned in the pyright config** (`[tool.pyright]` or `pyrightconfig.json`):
+  the main config runs ONCE, under its pin, the way CI's bare `pyright` runs it, never once per OS
+  with `--pythonplatform` forced over the pin.
+- **A `pyrightconfig.<platform>.json` in the project root** (`linux`, `windows` or `darwin`, for an
+  OS in `[tool.ci].os`): runs as one more arm, `pyright --project pyrightconfig.<platform>.json`,
+  beside the main config. Use it for modules that only type-check on that OS. A file for an OS not
+  in `[tool.ci].os` is ignored.
+
+The two combine: with a pin, the gate makes the one pinned run plus one run per platform file, so
+a pinned project type-checks another OS only through that OS's `pyrightconfig.<platform>.json`.
 
 **Prove it rather than reasoning about it:** run the arm where the check must FAIL, and require the
 gate to go red. A gate that has only ever passed has not been shown to gate. See
