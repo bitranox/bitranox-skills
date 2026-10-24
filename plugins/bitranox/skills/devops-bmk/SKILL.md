@@ -82,11 +82,12 @@ environments.
 - **The rebuild waits for the bmk processes using that env.** Every bmk holds a shared lock on
   the tools root for its lifetime; the upgrade takes the same lock exclusively. Readers do not
   exclude each other, so two repos still gate at the same time - only a *mutation* waits. The
-  wait is bounded: an upgrade that cannot get the lock is skipped (the next `make` takes it),
-  while a repair that cannot get it fails rather than continuing on a damaged env. Set
-  `BMK_TOOL_LOCK=0` to disable it. **You do not need a caller-side lock** (a `flock` around
-  `make`, a coordinator mutex) to stop two repos colliding here - and a caller-side one is worse,
-  because it serialises whole gates where bmk serialises only the provisioning.
+  wait is bounded: an upgrade that cannot get the lock is skipped (the first `make` after the
+  running bmk processes exit takes it), while a repair that cannot get it fails rather than
+  continuing on a damaged env. Set `BMK_TOOL_LOCK=0` to disable it. **You do not need a
+  caller-side lock** (a `flock` around `make`, a coordinator mutex) to stop two repos colliding
+  here - and a caller-side one is worse, because it serialises whole gates where bmk serialises
+  only the provisioning.
 - Two writers stay out of reach by construction: a repo whose Makefile predates this is unguarded
   until a `make` regenerates it (section 4: a text-mode `make` without a terminal never does),
   and a hand-run `uv tool install bmk` always is. So when a
@@ -102,6 +103,15 @@ environments.
   and its result is its own. Do not re-run a `release` or bump past a version on that line: check
   the outcome where it lands (`git ls-remote --tags origin v<version>`, `gh release view
   v<version>`, the release workflow, PyPI).
+- **A repo still running the old bmk after a release is usually that skip, not uv's cache.**
+  Every running bmk holds the shared lock for its whole run, a hung one included (one waiting on
+  the Makefile prompt, section 4), so every `make` elsewhere skips the upgrade until those
+  processes exit, and re-running alone does not help. Grep the `make` output for
+  `another bmk is using the shared tool environment`, then look for live bmk processes (a working
+  directory in another repo, an age far beyond a gate's runtime): let them finish, or answer or
+  kill a hung one, and the next `make` upgrades. Do not reach for uv cache flags: `uv tool upgrade`
+  already revalidates the index on every run, so a `--no-cache` upgrade that works right after
+  those processes exited gets credit it did not earn, and a hand-run upgrade takes no bmk lock.
 - Right after a release there is a brief window where uv's index still reports only the previous
   version; the next `make` picks the new one up.
 - **bmk's env resolves under bmk's own supply-chain cooldown**, read from `.bmk-cooldown.mk` beside
@@ -330,6 +340,23 @@ forwarded (e.g. `make push fix login bug`). Most have short aliases.
   `git status` first. With nothing staged it makes an empty commit, so a `push` after the release
   commit is already pushed leaves `release` tagging that empty commit. That is expected, not a
   broken release.
+- **On an already-committed tree, the `push` commit's subject is the only record of what the push
+  carried.** That empty commit is titled `<timestamp> - <message>`, where the message is the
+  trailing words (`make push fix login bug`), else `MSG="..."` (the safe channel for punctuation,
+  exported as `BMK_COMMIT_MESSAGE`), else a prompt on a terminal, else the literal `chores`. Pass a
+  message that names what the push carries, or skip `push`: run `make test`, commit what it
+  changed (Makefile, dependency floors), then a plain `git push` only if it passed, so the history
+  keeps only the commits that carry work.
+- **Gate the bumped tree, not the tree before the bump.** A bump is a code change, and a test that
+  pins the version (a skill's `uvx --from 'pkg>=X'` floors equal to `[project].version`, an
+  `__init__conf__` constant, a CHANGELOG heading for the current version) passes before it and
+  fails in every CI cell after it. `make push` runs its tests after the bump, so `make bump-*`
+  then `make push` is gated; a `git push` after the bump is not. In a script or by hand, run
+  `make test` again on the bump commit and refuse to push when it fails or leaves the tree dirty
+  (commit what it changed, then gate again). `make bump-*` renames the CHANGELOG's `[Unreleased]`
+  heading and syncs `__init__conf__.py` and `plugin.json`, so of these pins only the SKILL.md
+  floors can fail (the other pins fail after a hand or script bump): nothing in bmk edits a
+  SKILL.md, so raise its `uvx` floors yourself, in the same release commit.
 - `push` starts with a `deps` stage that FAILS when any dependency floor in `pyproject.toml` is
   behind the latest PyPI release (an exact pin excepted, see the next point), which can be minutes
   old. In the default JSON mode it prints only
@@ -562,7 +589,7 @@ gate to go red. A gate that has only ever passed has not been shown to gate. See
 | `make release` runs green but no GitHub Release appears (Windows)                   | `make release` detects `gh` via `shutil.which` and SILENTLY skips the GitHub Release when `gh` is not on the INVOKING process's PATH (tag push + PyPI publish still succeed). Put gh's dir on PATH first, or run `gh release create v<version>` after.             |
 | `bmk: command not found`                                                            | uv's tool bin dir is not on your PATH. You do not need it there - inside a project use `make <target>` (the Makefile calls the absolute path); to bootstrap a new one use `uvx bmk install`. To put it on PATH anyway: `uv tool update-shell`.                     |
 | Tools resolve the wrong deps / import errors                                        | Re-run `make`: it re-syncs the PROJECT's venv (what the gates resolve) before every env-touching target. If it persists, check `BMK_NO_VENV_SYNC` (section 1); deleting `.venv` only forces a full re-resolve.                                                     |
-| `make` keeps using an old bmk right after a release                                 | uv's index has not caught up yet, or another bmk held the tool lock and the upgrade was skipped (section 1). Either way the next `make` upgrades; just re-run it. Skipped on every `make`? A bmk may hang on the Makefile prompt (section 4).                      |
+| `make` keeps using an old bmk right after a release                                 | Usually another bmk holds the tool lock (the output says `another bmk is using the shared tool environment`), so the upgrade is skipped on every `make` until no bmk is running, a hung one included; else uv's index lags briefly. Not uv's cache (section 1).    |
 | `make test` runs host-mutating `local_only` tests you want only on a throwaway host | Tag those tests `mutating` and set `[tool.scripts.test].exclude-markers = "mutating"` (section 6). `make test` running `local_only` is by design - do NOT exclude `local_only` to "match CI".                                                                      |
 | `make test` fails on a `[dev]`-only import                                          | bmk runs pytest in this project's `.venv`, synced with the `[dev]` extra before every env-touching target. Re-run `make`; if it persists, check `BMK_NO_VENV_SYNC` (section 1).                                                                                    |
 | `make release` refuses: version is not canonical / carries a local segment          | Not a read failure - the version WAS read. bmk accepts any canonical PEP 440 version but refuses a spelling `packaging` would normalise (`v1.0.0`, `1.0.0-beta`) or a local segment (`1.2.3+local`); the message names the canonical form to write. See section 3. |

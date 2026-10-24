@@ -29,6 +29,16 @@ than the change, so entries reconstructed from them would read like coverage wit
 a hole nobody has drawn a line under is one that gets rediscovered and half-filled - which is how
 two "versions with no entry" notes came to sit in this file disagreeing with it.
 
+## [10.0.11]
+
+### Changed
+
+- `devops-bmk` folds three memory rules: the `make push` commit subject on an already-committed
+  tree and where its message comes from (trailing words, `MSG=`, a prompt, else `chores`); an old
+  bmk right after a release is usually the tool-lock skip, so the Troubleshooting row leads with
+  the `another bmk is using the shared tool environment` line; gate the bumped commit, since
+  nothing in bmk raises a SKILL.md's `uvx` floors. Synced with bmk 3.25.2's `devops-bmk`.
+
 ## [10.0.10]
 
 ### Changed
