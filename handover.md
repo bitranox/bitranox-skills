@@ -1,67 +1,85 @@
-# Handover 2026-10-24: [700], [720] and [23] batch 4 pass 1 shipped; pass 2 next
+# Handover 2026-10-24: [23] batch 4 pass 2 shipped (29 rows, 5 repos); pointer cut next
 
 ## In flight
 
-- Nothing running. No subagent, workflow or background shell of this session is live; every CI
-  wait it started has finished green.
-- Worktrees: the fold worktrees (`.claude/worktrees/fold-23-batch4`, `../bitranox-skills-wt-ow23`,
-  `apps/utils/lsdsk-wt-fold23`) are removed with their branches.
+- Nothing of this session is running: every gate and CI wait ended, no subagent or workflow is live.
+- The bmk session releases bmk 3.25.2 (tag, PyPI) on its own; it carries this session's 65a09cc.
+  Nothing for this repo depends on that release.
+- Worktree `.claude/worktrees/fold23-b4p2` (branch fold23-b4p2, equal to origin/master once this
+  handover is pushed) is removed with its branch right after the push; the lsdsk worktree is
+  already removed.
 
 ## Committed, or not
 
-- Everything of this session is committed AND pushed:
-  - marketplace 10.0.5 (send-mail `inline_images` present tense; [700], [720] closed) and the
-    [23] backlog line;
-  - btx_lib_mail 4.5.2 (twin edit plus a filelock pin), lsdsk 1.15.3 (the batch 4 skill note);
-  - memory store: the two [700] rewrites (`d4f4423`) and the 18-pointer archive plus 4 re-pointed
-    facts (`1fdd0a5`).
-- Not released to PyPI, by design: btx_lib_mail 4.5.1/4.5.2 and lsdsk 1.15.3 are skill-text and
-  dev-pin changes only. The btx_lib_mail session has since pushed its own 4.6.0 work on top.
-- Uncommitted: this file (it goes into the commit that carries it). Gitignored and local:
-  `EXECUTION-USER-REVIEW.md`, `.plan/fold-23/batch4/` (merged.json, fold inputs, journals).
+- Everything is committed and pushed: bitranox-skills 10.0.9 (25 rows) and 10.0.11 (devops-bmk),
+  lsdsk 1.15.5, lib_layered_config plugin 7.3.2 (plus a filelock CVE dev floor), btx_lib_mail
+  4.6.1, bmk 3.25.2 (pushed by the bmk session). No tag, no PyPI release of my own (user choice).
+- Not mine, left alone: the main checkout's untracked `o`; the lsdsk main checkout sits one commit
+  behind its origin (the lsdsk session's checkout).
+- Gitignored and local: `EXECUTION-USER-REVIEW.md` (two new entries), `.plan/fold-23/batch4/pass2/`
+  (group inputs, pre-edit snapshots, round results, review texts, dispositions).
 
 ## Decided, and why - do not reopen
 
-- [700]: the user chose "Keep and commit (Recommended)" for the two fact rewrites a bmk session
-  had applied on an ambiguous "yes" (verbatim in USER-DECISIONS.jsonl).
-- btx_lib_mail's filelock floor is `filelock>=4.2.1; python_version >= '3.11'`: 4.2.1 needs 3.11,
-  and an unmarked floor makes bmk lower it to 4.1.0 to keep 3.10 installable (bmk and datamax-dpl
-  use the same marker form). 3.10 keeps 4.1.x with the CVEs, no fix exists for it.
-- `--check-tree` TOTAL 4 was accepted for the archive: all four are pre-existing sideways refs in
-  other facts, filed as [730] for the tree dream.
+- Owner choice per row (EXECUTION-USER-REVIEW.md, 2026-10-24): each row folds into its recorded
+  owner only, never a reach lens's second site; the quoted-version REACH-FAILS row went to
+  coding-bash-reference, where it fires.
+- User: "All four (Recommended)" - push bmk, lib_layered_config, btx_lib_mail and lsdsk, no tag,
+  no PyPI; and "Finish shipping first (Recommended)" before this handover.
+- Version order was negotiated with peers: 10.0.8 bmk, 10.0.9 mine, 10.0.10 ipscout, 10.0.11 mine.
+- btx_lib_mail is PUBLIC: the peer handover commit that rode on my push named three private repos;
+  rewrote only that unpushed commit (7d573f9, same message and author, backup branch
+  backup-handover-8a4ff7a in btx_lib_mail) before pushing (EXECUTION-USER-REVIEW.md).
 
 ## Decided against, and why
 
-- No behavioural subagent arm for [720]'s one-line edit: it removes a version qualifier and adds
-  no instruction; the latest-release finder (RED one hit per twin, GREEN zero) is the evidence,
-  recorded in the skill's `.skillwriter/checklist-20261024-latest-release-inline-images.md`.
+- coding-python-uv's description ("measured on 0.11.x") was not touched in the fold: frontmatter
+  is router text; filed as [750].
+- The warm-cache rescue from a uv fact was not carried: it did not reproduce on uv 0.13.0.
 
 ## Still open, untouched
 
-- [23] pass 2 (top rank), [730], [740], and every other line: `OPEN-WORK.md`.
-- A tree dream (memory consolidation) is due per the SessionStart nudge; [730] is its input.
+- [23] next step (top rank), [730], [740] (mechanism now measured), [750]: `OPEN-WORK.md`.
+- lib_layered_config `OPEN-WORK.md` [60] (a docstring defect found while folding), untracked there.
+- A tree dream is due per the SessionStart nudge; [730] is its input.
 
 ## Lessons for the next nap
 
-- When a user's "yes" answers one of several open questions, never read it as approving the
-  others: a peer session applied two memory-fact rewrites on a "yes, release now" meant for a
-  release.
-- When a pending item says a peer drafted an edit awaiting approval, check the target's working
-  tree first: the edit may already be on disk, uncommitted.
-- When a dependency's fixed release needs a newer Python than the project's floor, declare the
-  floor with a `python_version` marker: bmk lowers an unmarked floor to the newest release the
-  oldest supported Python can install, silently.
-- When a mirrored skill changes on both sides, commit the tool repo while the marketplace twin
-  sits uncommitted with matching text, commit the marketplace, then push the marketplace first:
-  the tool repo's push gate needs the twin committed.
-- tooling: repo-gate's commit gate judges the INDEX, so a pathspec commit of unstaged edits
-  reads as drift; stage in an earlier call (recurred, see feedback-repo-gate-pre-evaluates).
-- tooling: gate.py refuses `--gate-cwd` before `--gate` (recurred 2026-10-24).
-- tooling: a backgrounded `ci_wait ...; echo RC=$?` is refused by block-masked-gate-exit; wrap the
-  wait in gate.py, whose report carries the gate's own exit code.
-- tooling: repo-gate blocked an OPEN-WORK-only commit over a twin drift it did not touch; filed
-  as [740].
+- When a mirror gate refuses a commit over a mirrored skill the commit does not stage, look for an
+  UNSTAGED edit in that skill: it marks the skill touched; copy it aside, commit, restore it.
+- When a peer's commit will ride on your push to a public repo, scan it for private names first
+  and rewrite only the unpushed range (same message and author, keep a backup branch).
+- When fix rounds touch prose, run a column and fence-closure check over the ADDED lines each round:
+  three fix rounds each left new over-100 lines and one an unclosed fence (queued for
+  meta-skill-writer in the contrib queue).
+- When probing cmd.exe behaviour over ssh, ship a .cmd file: the nested quoting of an inline probe
+  mangled it into a misleading error.
+- When a script globs a skill's reference files, glob every .md in the skill dir: some skills keep
+  them beside SKILL.md, not under references/.
+- When several sessions bump one marketplace, take the next number from origin at push time and
+  tell the peers which number you took; a local bump is a reservation nobody else can see.
+- tooling: reformat_tables.py sits at skills/docs-md-table-formatting/ root, not under scripts/.
+- tooling: the AskUserQuestion premise gate refused each first ask again; mark unmeasured premises
+  "unverified" before the first send.
 - Carried from earlier handovers (not yet napped):
+  - When a user's "yes" answers one of several open questions, never read it as approving the
+    others: a peer session applied two memory-fact rewrites on a "yes, release now" meant for a
+    release.
+  - When a pending item says a peer drafted an edit awaiting approval, check the target's working
+    tree first: the edit may already be on disk, uncommitted.
+  - When a dependency's fixed release needs a newer Python than the project's floor, declare the
+    floor with a `python_version` marker: bmk lowers an unmarked floor to the newest release the
+    oldest supported Python can install, silently.
+  - When a mirrored skill changes on both sides, commit the tool repo while the marketplace twin
+    sits uncommitted with matching text, commit the marketplace, then push the marketplace first:
+    the tool repo's push gate needs the twin committed.
+  - tooling: repo-gate's commit gate judges the INDEX, so a pathspec commit of unstaged edits
+    reads as drift; stage in an earlier call (recurred, see feedback-repo-gate-pre-evaluates).
+  - tooling: gate.py refuses `--gate-cwd` before `--gate` (recurred 2026-10-24).
+  - tooling: a backgrounded `ci_wait ...; echo RC=$?` is refused by block-masked-gate-exit; wrap the
+    wait in gate.py, whose report carries the gate's own exit code.
+  - tooling: repo-gate blocked an OPEN-WORK-only commit over a twin drift it did not touch; filed
+    as [740].
   - When a script applies several anchored edits, validate EVERY anchor in every file before
     writing any.
   - When reflowing prose with textwrap, protect code spans first.
@@ -123,30 +141,23 @@
 
 ## The exact next action
 
-[23] is the top-ranked open item. Start pass 2:
-
-1. Recount from `.plan/fold-23/batch4/merged.json`: the REACH-PARTIAL rows (27 recorded) and the
-   REACH-FAILS rows (2 recorded), with their owner skills, excluding the 18 slugs in
-   `.plan/fold-23/batch4/fold/slugs18.txt` (archived).
-2. Invoke `bitranox:meta-skill-writer` and run the pass 1 method on them: RED quote-back on the
-   pre-edit skill, fold, GREEN quote-back on haiku and opus, fix-delta reviews; a REACH-PARTIAL
-   row keeps a shortened pointer. Ask the user for each tool repo's push before pushing it.
+[23] is the top-ranked open item. Ask the user to run `/plugin marketplace update bitranox-skills`
+then `/reload-plugins` (installed must be >= 10.0.11), then quote-check the 29 pass-2 rows against
+the installed text and cut each pointer as the [23] line's next field says.
 
 ## Files that matter
 
-- `OPEN-WORK.md` lines [23], [730], [740].
-- `.plan/fold-23/batch4/merged.json` (reach and skeptic verdict per slug), `.plan/fold-23/batch4/fold/`
-  (g1..g6 inputs, journals, `slugs18.txt`, `refmap18.json`).
-- `plugins/bitranox/skills/*/.skillwriter/checklist-20261023-fold23-batch4.md` (pass 1 evidence).
+- `OPEN-WORK.md` lines [23], [730], [740], [750].
+- `.plan/fold-23/batch4/pass2/p1.json` .. `p7.json` (rows, owners, live skill dirs),
+  `r1/` `r2/` `r3/` (round results, reviews, dispositions), `qs-r2.json` (the GREEN questions).
+- `plugins/bitranox/skills/*/.skillwriter/checklist-20261024-fold23-batch4-pass2.md` (evidence).
 
 ## How to verify
 
-- marketplace: `git -C <repo> fetch && git -C <repo> log -1 origin/master` contains the handover
-  commit; CI via `ci_wait.py --ref HEAD --timeout 2700` (bitranox:compuse-toolbox).
-- memory store: `reconcile_memory_index.py --check-tree <tree anchor>` reports TOTAL 4,
-  exactly the [730] refs.
-- none of the 18 archived slugs has a pointer: `grep -rl -F -f .plan/fold-23/batch4/fold/slugs18.txt`
-  over the tree's `CLAUDE.local.md` files (found with find, they are gitignored) prints nothing.
+- Marketplace: `git fetch && git log -1 origin/master` contains this handover's commit; CI with
+  `ci_wait.py --ref HEAD --timeout 3000` (bitranox:compuse-toolbox).
+- Mirrors: `python3 plugins/bitranox/hooks/repo-gate.py --mirrors` shows devops-bmk,
+  coding-python-layered-config and coding-python-send-mail in sync.
 
 Read this, then replace the first line with `# STALE - read <date>, work continued`. Do not
 delete it - if this session ends badly it is the only record of where things stood.
