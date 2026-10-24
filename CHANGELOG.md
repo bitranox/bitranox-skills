@@ -29,6 +29,16 @@ than the change, so entries reconstructed from them would read like coverage wit
 a hole nobody has drawn a line under is one that gets rediscovered and half-filled - which is how
 two "versions with no entry" notes came to sit in this file disagreeing with it.
 
+## [10.0.8]
+
+### Changed
+
+- `devops-bmk` says which interpreter the project venv is kept on: the patch uv builds it on
+  (its latest only under uv's default `python-preference`). bmk rebuilds the venv only when it
+  differs from what `uv venv --python X.Y` would use (`uv python find --system --show-version
+  X.Y`), so under `UV_PYTHON_PREFERENCE=system` the venv stays on the distro Python instead of
+  rebuilding on every run. Synced with bmk 3.25.1's `devops-bmk`.
+
 ## [10.0.7]
 
 ### Changed

@@ -130,7 +130,7 @@ degrades rather than raising, so it would silently test a different environment.
 repository). Because the scope is one venv path, `test-all` still provisions its versions in
 parallel.
 
-**Which Python it is built on: the newest your classifiers declare, at its latest patch.**
+**Which Python it is built on: the newest your classifiers declare, on the patch uv builds it on.**
 
 ```toml
 [project]
@@ -138,7 +138,7 @@ requires-python = ">=3.10"                     # a FLOOR - says nothing about th
 classifiers = [
   "Programming Language :: Python :: 3",       # ignored: no minor
   "Programming Language :: Python :: 3.10",
-  "Programming Language :: Python :: 3.14",    # <- .venv is built on 3.14, latest patch
+  "Programming Language :: Python :: 3.14",    # <- .venv is built on 3.14 (latest patch under uv's default python-preference)
 ]
 ```
 
@@ -160,6 +160,10 @@ rebuild a venv uv has already migrated.)
 A **minor** change is the one that cannot be done in place: move `3.14` to `3.15` in your
 classifiers and the venv is **rebuilt**. The path never changes, so nothing pointing at it breaks.
 If uv cannot say what it would provide, your venv is left alone; bmk never rebuilds on a guess.
+Which interpreter counts is uv's choice, so "latest patch" holds only under uv's default
+`python-preference`: bmk rebuilds only when the venv differs from what `uv venv --python X.Y`
+would use, which `uv python find --system --show-version X.Y` reports. Under
+`UV_PYTHON_PREFERENCE=system` the venv stays on the distro Python instead of rebuilding every run.
 Declare no `:: Python :: X.Y` classifier and bmk picks no version at all - uv's default stands.
 
 The same classifiers drive `make test-all`: it provisions one `.venv-<minor>` per declared version
