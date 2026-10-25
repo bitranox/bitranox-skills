@@ -1,4 +1,4 @@
-# Handover 2026-10-24: [23] batch 5 pass 1 shipped (17 folds, 3 repos); archive 22 pointers next
+# STALE - read 2026-10-25, work continued
 
 ## In flight
 
