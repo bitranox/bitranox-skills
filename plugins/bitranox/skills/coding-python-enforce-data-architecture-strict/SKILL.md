@@ -63,6 +63,28 @@ on 3.11+, which orphans every previously-written state entry and re-fires every 
 Pin the wire form with a test that asserts the exact string, and run the whole declared version
 range - a single-interpreter green cannot see this.
 
+### A datetime's wire form flips at the same 3.10 / 3.11 line
+
+`datetime.fromisoformat("2026-01-01T00:00:00Z")` raises `ValueError: Invalid isoformat string` on
+3.10 and parses on 3.11+. Pydantic's `model_dump_json()` writes a UTC datetime with a trailing
+`Z`, while a hand-built dict using `value.isoformat()` writes `+00:00`. So moving an output from a
+hand-built dict onto a Pydantic model changes the wire format, and a 3.10 reader that parses it
+back with `fromisoformat` breaks with no reader code changed. Wherever a datetime reaches a key, a
+filename, a log line or a payload another component reads back, pin its form:
+
+```python
+class Report(BaseModel):
+    checked_at: datetime
+
+    @field_serializer("checked_at")
+    def _wire_checked_at(self, value: datetime) -> str:
+        return value.isoformat()  # "+00:00" on every version; 3.10 fromisoformat reads it
+```
+
+Then assert the exact string in a test and run the whole declared version range, as for the enum
+above. Measured (pydantic 2.14.1, Python 3.10 and 3.11): without the serializer
+`model_dump_json()` gives `"2026-01-01T00:00:00Z"`, with it `"2026-01-01T00:00:00+00:00"`.
+
 ### A bare `BaseModel` field serializes as `{}`
 
 Pydantic serializes a field by its DECLARED type, not the runtime value it holds. A field annotated
@@ -106,6 +128,13 @@ the field for the concrete subclasses you actually expect, and diff the emitted 
 pre-change baseline whichever fix you take - the wire format is the only thing that shows an empty
 payload.
 
+That union breaks only on a RAW DICT input; a model instance builds and dumps fine, so a test that
+feeds only models stays green. The `MockValSer` failure is a plain `TypeError`, not
+`PydanticSerializationError`, so a handler catching Pydantic's error class misses it. If a payload
+field must be renamed because its natural name shadows a `BaseModel` attribute (`schema` emits a
+`UserWarning`: *Field name "schema" ... shadows an attribute in parent "BaseModel"*), keep the
+wire key with `schema_: str = Field(serialization_alias="schema")` and dump with `by_alias=True`.
+
 ### A discriminated union tags on the Enum MEMBER, not a copy of its value
 
 When a Pydantic 2 discriminated union switches on a StrEnum field, write the tag as
@@ -136,6 +165,39 @@ The belief that an enum literal cannot validate from JSON is what keeps a string
 duplicate alive next to the enum - `Literal["widget"]` beside `Kind.WIDGET` - and once there are
 two spellings of one tag, nothing makes them move together. Probe it rather than carrying the
 fear: construct the union, call `validate_json` with the value string, and read the result back.
+
+### A union without a discriminator is decided by validation mode, not by fit
+
+Smart mode takes the arm that validates STRICTLY, and only falls back to lax coercion when none
+does. Two traps follow, and in both the dump looks right while the parse was wrong:
+
+- **A bare `dict`/`Mapping` arm swallows its model siblings.** A dict arm accepts any mapping
+  strictly, so it wins whenever it comes first, and even LAST it wins for every input the model
+  arm would only accept after lax coercion (`"3"` for an `int`, from Python and from JSON alike).
+  The dict keeps every key, so `model_dump_json()` emits the input document unchanged and a
+  round-trip test comparing documents passes, while the model's field types, refusals and
+  defaults never ran. Give the union a discriminator (or drop the dict arm) rather than
+  reordering it.
+- **A union of single-kind mappings mangles a mixed-key input.** For
+  `Mapping[str, V] | Mapping[MyIntEnum, V]`, an input holding both kinds matches no arm
+  strictly, so the lax `str` arm turns the enum keys into value strings (`'20'`) and the refusal
+  surfaces far downstream; pure-name and pure-member inputs pass, so single-kind tests stay green.
+  Narrowing to `Mapping[str | MyIntEnum, V]` fixes the parse but breaks callers under pyright
+  strict, because `Mapping`'s KEY type is invariant (*Type parameter "_KT@Mapping" is invariant*)
+  and a caller's `dict[str, V]` or `dict[MyIntEnum, V]` is not assignable to it. Keep both
+  single-kind arms and add the mixed one, named once as an alias:
+  `Mapping[str, V] | Mapping[MyIntEnum, V] | Mapping[str | MyIntEnum, V]`.
+
+Test what was BUILT, not what was dumped: assert `type(parsed) is Specific` (the arm you meant)
+for each event shape, and for a mapping field feed a MIXED-key input and assert the stored key
+types. Check a narrowed annotation with typed `dict` VARIABLES, never inline literals: a literal is
+inferred against the parameter and hides the invariance. Measured (pydantic 2.14.1, pyright
+1.1.414 strict): `dict | Specific` returned `dict` for every input, `Specific | dict` returned
+`dict` for `{"count": "3"}`; the two-arm mapping union stored the key `'20'` as `str`, the
+three-arm one kept `LogLevel.INFO`; the narrowed annotation rejected both typed variables and
+accepted the literal. A model arm with `extra="allow"` did NOT swallow a stricter sibling on that
+version (the specific arm won for exact and lax input, in either order) - the `type(parsed)`
+assertion is what proves it on the version you run.
 
 ### Converting a `str` parameter to an Enum changes its contract: scope it with its tests
 
@@ -558,7 +620,8 @@ Order of preference:
 
 1. Add the real annotation or generic argument.
 2. Wrap a partially-typed third-party symbol in a typed facade you define - a `Protocol` plus a
-   `cast`, or a local `.pyi` stub on `stubPath` - so call sites see complete types.
+   `cast`, a factory whose return type is the `Protocol` (no cast; see the filelock example), or
+   a local `.pyi` stub on `stubPath` - so call sites see complete types.
 3. Only if neither is feasible, a NARROW, rule-specific `# pyright: ignore[theRule]` with a comment
    naming WHY and the remove-when condition. Never reach first for `reportX = false`, a per-file
    rule-off, an `exclude` entry, or a bare `# type: ignore` - those blind the same scope to real
@@ -672,23 +735,90 @@ JsonValue: TypeAlias = (
 1. **Quote the SELF-references, not the alias.** `from __future__ import annotations` does not
    help: a `TypeAlias` VALUE is evaluated at runtime, so the name must already exist - it does not
    yet, on the line defining it. Quoting only the recursive uses is what makes the definition
-   evaluate. `type JsonValue = ...` (PEP 695) is the 3.12+ spelling and is not available below it.
+   evaluate to a real union. Quoting the whole value (`JsonValue: TypeAlias = "str | ..."`) also
+   type-checks (0 errors on pyright 1.1.380 to 1.1.414), but the alias is then a plain `str` at
+   runtime, so anything that inspects it there (`typing.get_args`, a validator built from the
+   alias) gets a string, not the union. `type JsonValue = ...` (PEP 695) is the 3.12+ spelling
+   and is not available below it.
 2. **Import every other name at RUNTIME, never under `TYPE_CHECKING`.** Same reason: the union is
    built when the module loads, so `Mapping` and `Sequence` must really be there. This one fails
    only when the module is imported, so a type-check-only run stays green.
 3. **`Mapping`/`Sequence`, never `dict`/`list`.** `dict` is INVARIANT in its value type, so
-   `dict[str, dict[str, str]]` is not a `dict[str, JsonValue]` and an ordinary nested literal is
-   rejected at a call site that looks plainly correct. `Mapping` is covariant in the value type
-   and `Sequence` in its element type, so the same literal is accepted.
+   `dict[str, dict[str, str]]` is not a `dict[str, JsonValue]` and an ordinary nested value that a
+   caller holds in a variable is rejected at a call site that looks plainly correct. `Mapping` is
+   covariant in the value type and `Sequence` in its element type, so the same value is accepted.
 
-Measured (pyright strict, `pythonVersion` 3.10): the form above reports 0 errors and the
-`dict`/`list` variant reports `reportArgumentType` on `{"a": {"b": "c"}}`, with pyright naming the
-mechanism itself - *Type parameter "_VT@dict" is invariant ... Consider switching from "dict" to
-"Mapping" which is covariant in the value type*. Both forms import fine on 3.10, so the runtime is
-not what separates them.
+Measured (pyright 1.1.414 strict, `pythonVersion` 3.10): the form above reports 0 errors. The
+`dict`/`list` variant reports `reportArgumentType` when `{"a": {"b": "c"}}` is first bound to a
+variable (inferred `dict[str, dict[str, str]]`) and then passed, with pyright naming the mechanism
+itself - *Type parameter "_VT@dict" is invariant ... Consider switching from "dict" to "Mapping"
+which is covariant in the value type*. The same literal written INLINE in the call is
+inferred against the parameter and accepted, so a quick probe with an inline literal hides the
+invariance: probe with a typed or inferred variable. Both forms import fine on 3.10, so the
+runtime is not what separates them.
 
 Ruff's `RUF036` requires `None` LAST in the union (`None` not at the end of the type union), which
 is why the alias ends rather than begins with it.
+
+### Worked example - a stub gap only the oldest-floor pyright cell sees
+
+When only the pyright run with `--pythonversion 3.10` (the floor cell) reports
+`reportUnknownMemberType` - *Type of "acquire" is partially unknown ... ->
+AcquireReturnProxy[Unknown]* - on a filelock `FileLock`, while the default-version run is clean:
+filelock imports `typing.Self` only under `TYPE_CHECKING`, and `typing.Self` does not exist on
+3.10, so the return type degrades to `Unknown` on the floor only. A local default-version
+run is a false green; reproduce with the floor's `--pythonversion`. Fix it with a `Protocol` for
+exactly the part of the lock the code uses, returned from a factory:
+
+```python
+from pathlib import Path
+from typing import Protocol
+
+from filelock import FileLock
+
+
+class _ExclusiveLock(Protocol):
+    def acquire(self) -> object: ...
+    def release(self) -> None: ...
+
+
+def _exclusive_lock(path: Path) -> _ExclusiveLock:
+    return FileLock(str(path), timeout=600)  # assignability is still checked: no cast needed
+
+
+def rebuild(lock_path: Path) -> None:
+    lock = _exclusive_lock(lock_path)
+    lock.acquire()
+    try:
+        ...
+    finally:
+        lock.release()
+```
+
+Annotating the local instead (`lock: _ExclusiveLock = FileLock(...)`) does NOT help: pyright
+narrows a declared local to the type of the value assigned, so `lock.acquire()` still resolves on
+`FileLock` and stays flagged. The factory's return boundary is what hides the concrete type. A
+bare `with FileLock(...):` (no `as`) is not flagged and needs no change. Before calling it done,
+re-run pyright at the floor's `--pythonversion` AND at the default version, then the project's
+full gate (`make test`): all three clean. Measured (filelock 4.2.4, pyright 1.1.414 strict): on
+3.10 the annotated local and a plain `lock = FileLock(...)` are flagged, the factory and the bare
+`with` are clean; at the default version all four are clean.
+
+### A burst of strict errors in files you did not touch: look upstream first
+
+When a small change makes pyright strict report many `reportArgumentType` errors - *Argument of
+type "object" cannot be assigned to parameter "host" of type "str"* - at call sites in files you
+never edited, each one spreading an options mapping into a typed callee (`Client(**opts)`), do
+NOT add a cast or a conversion at each call site. Look upstream for a narrowing on the path they
+share. The usual cause is a passthrough helper that takes `**kwargs` and re-types them as
+`dict[str, object]`: it looks like the careful choice and the annotation itself type-checks, but
+every forwarded value becomes `object`, and pyright reports each one where it is SPREAD, naming
+the callee's parameter, so the errors read as a call-site problem. Casting at each site multiplies
+the damage and buries the cause. Fix the one annotation: type the passthrough as the mapping the
+producer actually returns, `Mapping[str, Any]` where the values genuinely vary (a pass-through,
+not a value type the code defines), so each spread keeps whatever the callee declares. Measured
+(pyright 1.1.414 strict): `Client(**opts)` with `opts: dict[str, object]` reports one
+`reportArgumentType` per parameter, with `opts: Mapping[str, Any]` it reports none.
 
 ### Worked example - a mutable-state dataclass with `field(default_factory=...)`
 

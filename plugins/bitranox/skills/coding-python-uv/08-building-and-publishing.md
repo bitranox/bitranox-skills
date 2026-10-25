@@ -376,6 +376,10 @@ The `--no-project` flag is used to avoid installing the package from your local 
 
 **Tip:** If you have recently installed the package, you may need to include the `--refresh-package <PACKAGE>` option to avoid using a cached version of the package.
 
+If uv still says a version you just published does not exist, do not yank or re-cut it yet: check
+the Simple API and retry with `--no-cache` as described in `10-configuration.md` (Dependency
+caching, "A version you just published").
+
 ## See Also
 
 - `03-project-config.md` - pyproject.toml configuration and build systems

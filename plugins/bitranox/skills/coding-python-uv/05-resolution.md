@@ -193,6 +193,18 @@ Pre-releases are [notoriously difficult](https://pubgrub-rs-guide.netlify.app/li
 
 During universal resolution, a package may be listed multiple times with different versions or URLs within the same lockfile, since different versions may be needed for different platforms or Python versions.
 
+**A script that diffs two `uv.lock` files must not key packages by name alone.** A lock with a
+`resolution-markers` list at the top (one resolution per Python-version or platform fork) has one
+`[[package]]` entry per fork whose version differs, so the same name appears twice or more. A
+`{pkg["name"]: pkg["version"] for pkg in lock["package"]}` dict keeps whichever entry it saw last
+and raises no error, so the diff silently compares one fork against another and undercounts or
+misreports what an upgrade or a cooldown moved. Key the entries by (name, version) and compare the
+per-name version SETS before and after; count moves, downgrades included, from those sets.
+Comparing only each name's newest version is enough for a "what is the highest version now"
+report, but it misses a move in a fork that does not hold the newest version.
+Check the count once: the number of `[[package]]` entries exceeds the number of distinct names on
+a forked lock, and the diff must report a package you know the change moved.
+
 The `--fork-strategy` setting can be used to control how uv trades off between (1) minimizing the number of selected versions and (2) selecting the latest-possible version for each platform. The former leads to greater consistency across platforms, while the latter leads to use of newer package versions where possible.
 
 By default (`--fork-strategy requires-python`), uv will optimize for selecting the latest version of each package for each supported Python version, while minimizing the number of selected versions across platforms.

@@ -311,6 +311,16 @@ $ uv pip compile pyproject.toml -o requirements.txt
 
 Note by default the `uv pip compile` output is just displayed and `--output-file` / `-o` argument is needed to write to a file.
 
+**`-o -` does not mean stdout: it writes a file named `-`.** uv treats `-` as a file name, writes
+the compiled requirements to `./-` in the current directory and prints nothing, with exit code 0
+(measured on uv 0.13.0). A pipeline such as `uv pip compile req.in -o - | diff - old.txt` then
+reads an empty stream, so the empty diff, or a count of zero packages, reads as "nothing changed"
+or "nothing resolved", and the stray `./-` file can be swept into a later `git add -A`. To pipe
+the output, omit `-o` (`uv pip compile req.in | diff - old.txt`); otherwise name a real file and
+read that. When a diff or count over `uv pip compile` output comes back empty, look for a `./-`
+file before believing it, and remove a stray one by its exact path, `rm -- ./-`, never a glob.
+(`-` as the INPUT, `uv pip compile -`, does read stdin.)
+
 To lock dependencies declared in a `requirements.in`:
 
 ```console

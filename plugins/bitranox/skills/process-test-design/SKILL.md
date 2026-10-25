@@ -504,7 +504,7 @@ list of local-only files: that list is a second copy of `.gitignore`, so the nex
 something writes into the tree (a state file, a scratch log) turns the local run red while a
 fresh CI clone, which never has that file, stays green.
 
-Six mechanics worth stating because they silently defeat a test that looks right:
+Eight mechanics worth stating because they silently defeat a test that looks right:
 
 - **`from m import X` binds a COPY at import time.** `monkeypatch.setattr(m, "X", v)` mutates `m`'s
   namespace and never reaches the consumer's already-bound name, so the test runs against the
@@ -538,6 +538,26 @@ Six mechanics worth stating because they silently defeat a test that looks right
   every test collected after it, and under `--doctest-modules` the doctest executes in the collected
   module's namespace, so the leak is global. The resulting failures land far away and look unrelated
   to the doctest. Prefer a real injectable seam over patching inside a doctest at all.
+- **`--doctest-modules` never collects a doctest in a Click command's docstring.** The decorator
+  replaces the function with a `click.Command`, which doctest's finder does not walk, so a false
+  example rots while the suite reports every doctest passing; naming the file on the command line
+  changes nothing. A passing count is no evidence, so run the examples in a test of your own: walk
+  the root group and `cli.commands` by introspection, recursing into subgroups (an AST scan for
+  `>>>` misses a command that has no example at all), run each `command.callback.__doc__` through
+  `doctest.DocTestParser().get_doctest(doc, dict(vars(module)), name, module.__file__, 0)` and a
+  `doctest.DocTestRunner`, and fail on any failed example. Also fail a command with no example, or
+  one whose examples carry no expected output: an import-only example passes while proving nothing.
+  Write each example against the root group with the context object it expects
+  (`CliRunner().invoke(cli, ["hello"], obj=...)`); invoking the bare command skips the root's setup.
+- **Testing discovery does not prove the scan uses it.** A helper that filters paths (skipping
+  `.venv`, suffixed venvs, `node_modules`, `.git`) can be covered exclusion by exclusion while the
+  command run afterwards re-walks the tree (`-Recurse`, `rglob`, a bare directory argument) and
+  undoes every exclusion, so the discovered list only decides WHETHER the scan runs. The thorough
+  discovery tests are what make the whole path look covered. Assert at the seam that actually runs:
+  plant a file under `.venv` in the fixture and assert the argv or command string handed to the
+  subprocess names exactly the filtered files, with no re-walk flag. A green CI stage is no
+  evidence either: a job that builds its venv outside the checkout never has a vendored tree in
+  range, so only a developer machine exercises the exclusion.
 - **A fixture built to make code FAIL can run the success path instead.** Tolerant APIs absorb the
   "broken" input: `Path.rglob()` and `glob()` over a regular file or a missing path yield nothing
   rather than raising (Python 3.10 through 3.14), and a `dict.get` default, an `except OSError` two
@@ -567,7 +587,8 @@ cannot see what it already swallowed.
 
 **Read `references/silent-test-defeaters.md` (Read tool)** when a test patches a name, parses tool
 output, asserts on an exception message or on rendered output, loops until a condition holds,
-pins or clears an environment variable (its own or a spawned child's), simulates a race between a
+pins or clears an environment variable (its own or a spawned child's, or one a library reads at
+import), redirects or deletes coverage data from a conftest, simulates a race between a
 check and an open, blocks a stub so it can be signalled mid-call, plants a marker to prove a
 process ran (or did not), asserts that no file descriptor leaked or that a file is held only
 through a memory map, binds a unix socket under `tmp_path`, carries a skip or an exclusion,

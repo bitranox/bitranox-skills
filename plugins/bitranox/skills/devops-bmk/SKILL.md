@@ -349,6 +349,24 @@ forwarded (e.g. `make push fix login bug`). Most have short aliases.
   message that names what the push carries, or skip `push`: run `make test`, commit what it
   changed (Makefile, dependency floors), then a plain `git push` only if it passed, so the history
   keeps only the commits that carry work.
+- **A message with punctuation goes in `MSG="..."`, never `ARGS=` or trailing words.** `ARGS=`
+  and trailing words are pasted into the recipe text and parsed by bash; `MSG=` is exported to bmk
+  through the environment and never touches a command line. How far `ARGS` breaks depends on the
+  recipe, and the remedy is the same either way:
+  - Quoted recipe (`$(BMK) push "$(ARGS)"`, the current `push` and `commit`): `(` and `;`
+    survive, but make eats a `$` (`$HOME` becomes `OME`), a backtick executes, a nested `"`
+    vanishes, quotes nested as `ARGS="'...'"` land literally in the subject, and a newline is
+    refused.
+  - Unquoted recipe (`$(BMK) ship $(ARGS)`, and any older Makefile; check with
+    `grep -A1 '^push:' Makefile`): bash re-parses the words bare, so `(` is a syntax error with
+    nothing committed, and `;` runs the rest as a command while `push` still commits and pushes
+    the truncated subject.
+
+  Pass anything beyond plain words, hyphens and commas (a conventional-commit subject included)
+  as `MSG="..."`, with no `ARGS=` and no trailing words beside it (those win over `MSG`), and read
+  `git log -1 --format=%s` back. A Makefile that lacks the `MSG` block
+  (`grep -n BMK_COMMIT_MESSAGE Makefile` finds nothing) ignores `MSG` and commits a default
+  subject: refresh it first with `uvx bmk install` (section 2).
 - **Gate the bumped tree, not the tree before the bump.** A bump is a code change, and a test that
   pins the version (a skill's `uvx --from 'pkg>=X'` floors equal to `[project].version`, an
   `__init__conf__` constant, a CHANGELOG heading for the current version) passes before it and

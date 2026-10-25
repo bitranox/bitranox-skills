@@ -29,6 +29,32 @@ than the change, so entries reconstructed from them would read like coverage wit
 a hole nobody has drawn a line under is one that gets rediscovered and half-filled - which is how
 two "versions with no entry" notes came to sit in this file disagreeing with it.
 
+## [10.0.16]
+
+### Changed
+
+- `coding-python-enforce-data-architecture-strict` covers seven more typing traps: a filelock lock
+  typed through a Protocol-returning factory under pyright at a 3.10 floor, enum and datetime
+  string forms that flip between Python 3.10 and 3.11, a narrowed pass-through kwargs dict whose
+  errors land at the call sites, a permissive union arm, a bare `BaseModel` field that serialises
+  as `{}`, a union of single-kind mapping types that coerces mixed keys, and what a fully quoted
+  recursive alias costs at runtime.
+- `process-test-design` says green CI cannot prove a tree-walking tool excludes the venv, that a
+  per-test `delenv` cannot reach rich-click's import-time globals, that a conftest cannot choose
+  where pytest-cov writes its data, and that a doctest in a Click-decorated docstring is never
+  collected.
+- `coding-python-uv` covers `uv pip compile -o -` writing a file named `-`, diffing a forked
+  `uv.lock` by version sets, a just-published version uv answers from a stale index response, and
+  proving which build loaded after a same-version wheel rebuild.
+- `coding-python-pwshpy` adds two `.ps1` traps (culture-formatted numbers and `icacls` with a
+  localized group name); `devops-bmk` says a punctuated commit message goes in `MSG=`, for quoted
+  and unquoted recipes alike; `coding-python-layered-config` says which roots isolate a test from
+  every deployed layer; `coding-python-use-modern-libraries` covers `click.Path` for outputs,
+  `except A, B` on Python 3.14 and per-OS `subprocess` exceptions for a missing cwd;
+  `compuse-git` covers line-ending churn after a Windows save; `coding-input-sanitization` covers
+  `re` `$` before a trailing newline, non-ASCII `\d` and `isdigit()`; `coding-resilience` covers
+  the Windows socket-timeout ceiling.
+
 ## [10.0.15]
 
 ### Changed

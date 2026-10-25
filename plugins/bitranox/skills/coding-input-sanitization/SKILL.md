@@ -68,6 +68,7 @@ once at the edge.
 - [ ] Every external input parsed into a typed model at the edge; raw dict/JSON never flows inward
 - [ ] Length / size / range bounded; large data streamed, not fully materialized
 - [ ] Allowed charset decided explicitly; arbitrary bytes/chars rejected, normalized (NFC), or escaped
+- [ ] Whole-value regex uses `fullmatch` with `[0-9]` or `re.ASCII`; no `isdigit()` before `int()`
 - [ ] SQL via bound parameters only; no string-built queries
 - [ ] HTML autoescape ON; only trusted rich-text opts out, never a global disable
 - [ ] Shell via argv, never `shell=True` on untrusted input
@@ -93,6 +94,23 @@ once at the edge.
   no shell anywhere. Likewise a name beginning with `-` is parsed as an OPTION by `useradd`/`gpasswd`
   rather than as a name. Reject `\n` in a password at the boundary and allowlist account names to a
   POSIX pattern. The sink here is a line-oriented parser; treat it like any other sink.
+- **A regex or `isdigit()` that reads as a complete check.** `re.match(r"...$", s)` accepts
+  `"<valid>\n"`: `match` anchors only the start and `$` also matches just before a final newline,
+  so `re.compile(r"(\d{4})-(\d{2})-(\d{2})$").match("2024-01-31\n")` passes and the caller then
+  uses the original string, newline included - a "one entry per line" writer writes two lines.
+  `\d` without `re.ASCII` also accepts non-ASCII digits such as U+0662, which `int()` converts.
+  Validate a whole value with `pattern.fullmatch(s)` (no `$` needed) and `[0-9]` or `re.ASCII`.
+  `str.isdigit()` is no `int()` guard either: `chr(0xB2).isdigit()` (superscript two) is `True`
+  and `int(chr(0xB2))` raises `ValueError`, and so does an all-ASCII digit string past 4300
+  characters (the `sys.set_int_max_str_digits` default); `isdecimal()` still accepts U+0662. An
+  escaping `ValueError` can end a whole batch (a thread-pool map, a multi-host pass) with an exit
+  code that reads as a normal result. Parse an untrusted integer with
+  `re.fullmatch(r"[0-9]{1,N}", s)` (N sized to the field) and route a non-match to the
+  malformed-input path. Test with `"<valid>\n"`, `chr(0x0662)`, `chr(0xB2)` and a 5000-digit
+  string, and require each refused. To send a hostile header through an httpx mock transport, pass
+  it as raw bytes (`headers=[(b"content-length", b"\xb2")]`): a `str` header with a non-ASCII
+  character already fails while building the response (`UnicodeEncodeError`), which tests the
+  fixture, not the parser.
 
 ## Language notes
 

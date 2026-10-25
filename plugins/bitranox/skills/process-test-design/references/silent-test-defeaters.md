@@ -1,7 +1,8 @@
 # Silent test defeaters: the detail
 
 Read this when a test patches a name, parses tool output, asserts on an exception message or on
-rendered output, loops until a condition holds, pins or clears an environment variable, simulates
+rendered output, loops until a condition holds, pins or clears an environment variable (one a
+library reads at import included), redirects or deletes coverage data from a conftest, simulates
 a race between a check and an open, blocks a stub so it can be signalled, plants a marker to prove
 a process ran, asserts a descriptor was closed or a file is held only through a memory map, binds
 a unix socket under `tmp_path`, carries a skip or an exclusion, judges an artifact, compares
@@ -50,6 +51,32 @@ unrelated modules, depending on order. Write `monkeypatch.setenv(name, "x")` fol
 `monkeypatch.delenv(name)`: the `setenv` records the original absent state, so teardown restores
 the variable to absent. Suspect this whenever an order-dependent failure involves environment
 variables.
+
+**A library that reads the environment at IMPORT ignores a per-test `delenv`.** pytest imports
+the code under test at collection, under the launching environment, so a module-level value
+computed from a variable is fixed before any fixture runs. The delenv list looks complete and
+passes locally, where the variable is unset at process start, and fails only where it is set -
+every GitHub runner exports `GITHUB_ACTIONS=true`. rich-click is such a library:
+`rich_click.rich_click` computes `FORCE_TERMINAL` (from `FORCE_COLOR`, `PY_COLORS`,
+`GITHUB_ACTIONS`) and `WIDTH` and `MAX_WIDTH` (from `TERMINAL_WIDTH`) as module globals, and every
+help and usage-error render copies them, so on a runner that output comes out styled for a
+terminal (coloured and wrapped) and tests reading its text fail in CI only. In the autouse
+fixture, after the delenv loop, re-derive the globals through rich-click's own default functions:
+
+```python
+import rich_click.rich_click
+from rich_click.rich_help_configuration import force_terminal_default, terminal_width_default
+
+monkeypatch.setattr(rich_click.rich_click, "FORCE_TERMINAL", force_terminal_default())
+monkeypatch.setattr(rich_click.rich_click, "WIDTH", terminal_width_default())
+monkeypatch.setattr(rich_click.rich_click, "MAX_WIDTH", terminal_width_default())
+```
+
+Verify before pushing by exporting the variables BEFORE pytest starts
+(`GITHUB_ACTIONS=true FORCE_COLOR=1 TERMINAL_WIDTH=60 pytest`); setting them inside a test reaches
+nothing and proves nothing. After a rich-click upgrade, re-list the globals it computes at import
+with `grep -n '_default()' rich_click/rich_click.py`. For any other library, grep its module
+level for `os.environ` and `os.getenv` before trusting a per-test `delenv`.
 
 ### A check-then-open race: make `stat` answer for another file
 
@@ -246,6 +273,25 @@ module: a file loaded under an alias (a hyphenated script that a conftest regist
 `sys.modules`) prints `Module ... was never imported` and `No data was collected`, yet the run
 still exits 0. Check the report has a `Stmts` count before quoting any range. `--cov=` also writes
 `.coverage` into the tree.
+
+### A conftest cannot choose where pytest-cov writes its data
+
+pytest-cov builds its Coverage object, and resolves the data file, in its own `tryfirst`
+`pytest_load_initial_conftests` hook, before any conftest is imported. A conftest that sets
+`COVERAGE_FILE` (at import or in `pytest_configure`) therefore redirects nothing: the run writes
+to the configured `data_file` (`.coverage` by default), and a docstring claiming the hook "runs
+before pytest-cov sets up" is wrong. To isolate a run's coverage, set `COVERAGE_FILE` in the
+environment of the process that starts pytest or `coverage run`. To see where a run really
+writes, point the variable the hook uses (a `TMPDIR`, a session path) at an empty scratch
+directory and look for the file there.
+
+Never delete or rename a coverage data file (or its SQLite journal files) from a conftest. A
+conftest runs in every session, including the ones that measure nothing, and pytest-cov already
+erases the data file when a run starts and combines the parallel files beside it when a run ends,
+so a purge whose redirect never took effect deletes another run's data: a `coverage run` followed
+by a plain `pytest` of one file leaves `coverage report` saying "No data to report". Two runs
+sharing one data file interfere this way even with no conftest at all, so give each concurrent
+run its own `COVERAGE_FILE` from the launching environment.
 
 ## Leaked and held resources
 

@@ -32,6 +32,23 @@ For the modern Python pick behind each, see `bitranox:coding-python-use-modern-l
   wait and on the whole operation - an unbounded retry with no timeout is a hang, not resilience.
   Python: `tenacity` (`@retry(stop=stop_after_attempt(n), wait=wait_exponential_jitter())`); set an
   explicit client timeout (`httpx2.Client(timeout=...)`) and `asyncio.wait_for(coro, timeout=)`.
+- **Validate a user-supplied socket timeout or deadline against a cap of 2147483 s, not
+  `threading.TIMEOUT_MAX`.** Windows holds a socket timeout as `2**31 - 1` ms, which is
+  2147483.647 s; use the whole-second 2147483 as the cap, so the allowed range is one integer a
+  message can name. On Windows (observed on CPython 3.14) `TIMEOUT_MAX` is 4294967 s, yet a socket
+  timeout above the `2**31 - 1` ms limit is ACCEPTED by `settimeout()` and fails only when the
+  socket is used, with `OverflowError: timeout doesn't fit into C timeval` - mid-delivery, far from
+  the bad value. On Linux both limits are about 9.2e9 s, so Linux CI never sees it. One fixed
+  portable constant also keeps the refusal message identical on every platform, where a message
+  built from `TIMEOUT_MAX` prints a platform-specific number. Shape the check so it cannot crash
+  itself: refuse an int over the cap BEFORE calling `float()` (`isinstance(v, int) and v > CAP`;
+  `float(10**400)` raises `OverflowError`), and after converting any other value (a config
+  string) reject a non-finite result with `math.isfinite()` before the range check, since
+  `float("1e400")` returns `inf` and `float("nan")` returns `nan` without raising. Never
+  interpolate the refused value into the error (`str()` of an int over 4300 digits raises
+  `ValueError`); name the field and the allowed range instead. Test the cap on Windows with a real
+  socket read (a `socketpair` recv), not with `settimeout()` alone, and add a `10**400` int, the
+  strings `"1e400"` and `"nan"`, and a value just over the cap.
 - **Health-check, evict, replace.** Probe a member before/while using it; drop a faulty, flaky, or
   slow one and pull in a fresh one. Track per-member success/failure and evict on a failure ratio,
   not just on a hard-dead connection.

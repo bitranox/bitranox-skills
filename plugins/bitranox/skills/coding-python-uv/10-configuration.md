@@ -343,6 +343,40 @@ If you're running into caching issues, uv includes a few escape hatches:
 
 As a special case, uv will always rebuild and reinstall any local directory dependencies passed explicitly on the command-line (e.g., `uv pip install .`).
 
+**A version you just published "does not exist": rule out a stale index answer before touching the
+release.** When `uv pip install "<pkg>==<new>"` reports
+`Because there is no version of <pkg>==<new> ... your requirements are unsatisfiable` although the
+publish job was green and the PyPI JSON page already lists the version, do not yank or re-cut the
+release yet. Check the Simple API first, the index resolvers read: request
+`https://pypi.org/simple/<pkg>/` with the header `Accept: application/vnd.pypi.simple.v1+json` and
+confirm it lists the new files with `yanked: false` and a `requires-python` the target interpreter
+satisfies. If it does, the release is fine and uv answered from an index response it cached before
+the upload. Re-run with `--no-cache`. This is the one case where the `--refresh` advice above and
+below does not hold: `--refresh` has been observed not to clear this stale answer while
+`--no-cache` resolved the version at once (uv version not recorded). If even `--no-cache` cannot
+find it, the index has not propagated yet: wait about a minute and retry. Investigate the release
+itself only when the Simple API disagrees with the JSON API (files missing, yanked, or a
+`requires-python` the target fails).
+
+**A rebuilt wheel at an unchanged version: prove which code loaded before judging the change.**
+When you rebuild a local wheel without bumping its version and re-run it, for example
+`uv run --no-project --reinstall --with /path/to/pkg-1.2.3-py3-none-any.whl python probe.py`, the
+mtime rule above predicts a fresh read, and on uv 0.13.0 a rebuilt same-version wheel was re-read
+every time (measured with a new mtime and with the old whole-second mtime restored). uv has also
+been observed serving the FIRST build from the cache's unpacked-archive bucket (`archive-v0`)
+instead, although the wheel passed was byte-identical to the new build and contained the change;
+`--reinstall` and `uv cache clean <pkg>` did not clear it and `--no-cache` did (uv version not
+recorded). A stale run misreports in both directions, a working fix as broken and an unshipped one
+as working, so neither keep nor revert a change on its verdict. Checking the wheel (its md5, the
+file inside the zip) proves nothing about what ran; print from the LOADED module instead:
+`python -c "import pkg; print(pkg.__file__, pkg.NEW_ATTRIBUTE)"`. A `--with` run imports from
+`archive-v0/<hash>/.../site-packages`: an unchanged source reuses the same `<hash>`, a rebuild gets
+a new one, so the previous run's `<hash>`, or a missing new attribute, after a rebuild means the
+old build ran. Then re-run with `--no-cache` (it uses a temporary cache), or bump the version. A
+test harness that re-runs a rebuilt same-version wheel cannot bump the version on every run, so it
+passes `--no-cache` on every such run and does not rely on the `--reinstall` or
+`uv cache clean <package-name>` escape hatches listed above.
+
 ### Dynamic metadata
 
 By default, uv will _only_ rebuild and reinstall local directory dependencies (e.g., editables) if the `pyproject.toml`, `setup.py`, or `setup.cfg` file in the directory root has changed, or if a `src` directory is added or removed. This is a heuristic and, in some cases, may lead to fewer re-installs than desired.

@@ -105,6 +105,10 @@ All documentation files are flat, numbered markdown files. Use the Read tool to 
 | **"SSL/TLS certificate issues"**                                 | `11-authentication.md`, `17-troubleshooting.md`                                                   |
 | **"Build failures / missing C libs"**                            | `17-troubleshooting.md`, `10-configuration.md`                                                    |
 | **"Cache problems / disk space"**                                | `10-configuration.md` (Cache and Storage sections)                                                |
+| **"Just-published version not found by uv"**                     | `10-configuration.md` (Dependency caching), `08-building-and-publishing.md`                       |
+| **"Rebuilt wheel, same version, old code runs"**                 | `10-configuration.md` (Dependency caching: prove which code loaded)                               |
+| **"Pipe `uv pip compile` output / `-o -`"**                      | `09-pip-interface.md` (Locking requirements: `-o -` writes a file named `-`)                      |
+| **"Diff two uv.lock files / count what moved"**                  | `05-resolution.md` (Multi-Version Resolution: one entry per fork)                                 |
 | **"Lock reproducibility / --exclude-newer"**                     | `05-resolution.md`, `02-projects.md`                                                              |
 | **"Project dependency cooldown (exclude-newer)"**                | `05-resolution.md` (Dependency Cooldowns: `pyproject.toml`, not `uv add`)                         |
 | **"uv lock refuses a raised floor (only X<=N available)"**       | `05-resolution.md` (Dependency Cooldowns), `02-projects.md`                                       |

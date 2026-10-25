@@ -202,12 +202,12 @@ elevation declined`), 110 `OperationTimeoutError`, 127 a missing or untrusted `u
 runner's elevation. `pwshpy exec`, `pwshpy --elevate <command>` (a no-op when already elevated) and a
 runner otherwise return the program's, command's or script's own code, so check the stderr line too.
 
-## Still writing a `.ps1`? Six traps
+## Still writing a `.ps1`? Eight traps
 
 When a `.ps1` is still the deliverable (pwshpy is not wanted on the target, or the script only
 forwards to a native tool), each of these passes a quick test and fails in use. `5.1` is Windows
-PowerShell, `7` is pwsh 7 (checked on 5.1.26100 and 7.6.6); a trap listed for one shell does not
-occur on the other.
+PowerShell, `7` is pwsh 7 (checked on 5.1.26100 and 7.6.6 unless the notes below the table say
+otherwise); a trap listed for one shell does not occur on the other.
 
 | Trap                                                                                                                                                                                             | Shells                                    | Do instead                                                                                                                                 |
 |--------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|-------------------------------------------|--------------------------------------------------------------------------------------------------------------------------------------------|
@@ -217,8 +217,39 @@ occur on the other.
 | Native stderr becomes error records: under `$ErrorActionPreference = 'Stop'`, `& tool 2>&1 \| ForEach-Object { ... }` dies with `NativeCommandError` even when the tool succeeded                | 5.1                                       | `& tool > out.txt 2>&1`, then read the file; check `$LASTEXITCODE` and the tool's result before believing it failed                        |
 | `pwsh -File s.ps1 --out=C:\data` is split at the colon before the script runs: it arrives as `--out=C` and `\data`                                                                               | 7 (`powershell.exe -File` keeps it whole) | document the space form `--out C:\data`; nothing inside the script can repair it                                                           |
 | A probe reading a file another process may be writing (`Get-FileHash` or `Get-Content` in an "is the cache valid?" check before taking a lock) throws under `Stop` and ends the script           | 5.1 and 7                                 | wrap the probe in `try/catch` returning `$false`, so a race means "re-extract under the lock"; the lock never covers a read made before it |
+| A number printed as text by `-f`, `.ToString()`, `Write-Host` args or bare output takes the culture: a German host prints `444,2`, the caller's `float()` raises, `[0-9.]+` keeps `444`          | 5.1 and 7                                 | emit `$v.ToString([cultureinfo]::InvariantCulture)` or an integer; or parse `[0-9.,]+`, swap `,` for `.`; test on the host's real bytes    |
+| `icacls p /grant:r SYSTEM:F Administrators:F` on a non-English host: the name does not resolve, icacls exits 1332 and applies NONE of the grants; `& echo ok` or `>nul` hides it                 | 5.1 and 7                                 | grant by SID: `*S-1-5-18:(OI)(CI)F`, `*S-1-5-32-544:(OI)(CI)F`; fail on `$LASTEXITCODE -ne 0`; read `icacls p` back                        |
 
 Test a forwarding wrapper with an empty string, an embedded double quote, `-v` and a `C:\` path.
+
+**The number trap breaks the consumer, not the script.** It bites in the Python (or shell) code
+that parses text a Windows host printed, typically over ssh, and nothing on that side hints that a
+locale is involved. It breaks only on a value with a fraction, so a probe passes for months on
+whole numbers and then meets its first `444,2`; a `[0-9.]+` (or `[\d.]+`) regex is worse than the
+`float()` crash, because it silently keeps `444` and the gate compares against the wrong number.
+String interpolation and concatenation (`"FREEGB=$v"`, `"FREEGB=" + $v`) use the invariant
+culture and print `444.2`; `-f`, `.ToString()`, `Write-Host "FREEGB=" $v` and a bare `$v` print
+`444,2` (measured on pwsh 7 under `de-DE`). Where you choose the format, emit an integer or an ISO
+string rather than a culture-formatted float. Test the parser on bytes the host really returned: a
+retyped `444.2` passes every time and proves nothing. pwshpy records carry numbers typed, so the
+trap applies only to text a script prints.
+
+**The icacls trap holds for every native tool given a well-known group name**, from cmd as much as
+from a `.ps1`: the names are localized (German `Administratoren`), the SIDs are not. One name that
+does not resolve refuses the whole command, so the valid grants and `/inheritance:r` are dropped
+too and the path keeps its inherited, wider ACL. The exit code 1332 (observed on a German host;
+icacls is native, so the shell does not matter) is `ERROR_NONE_MAPPED` ("No mapping between
+account names and security IDs was done"; German "Zuordnungen von Kontennamen und
+Sicherheitskennungen wurden nicht ..."). cmd's `&` runs the next command whatever the first
+returned, so `& echo locked` reports success after a failure: chain with `&&` or check the exit
+code. A local user account's own name (`svcuser`) is not localized and can stay a name; only the
+built-in and well-known groups and accounts need the SID. Read `icacls p` back and confirm every
+grant is listed and, after `/inheritance:r`, that no inherited `(I)` entry remains.
+`net localgroup Administrators` takes no SID; add members with
+`Add-LocalGroupMember -SID S-1-5-32-544 -Member <user>`. pwshpy's `add_acl_ace` accepts a SID
+string (`S-1-5-32-544`) as the trustee on Windows; pass one, because a name is looked up on the
+target machine and the English name of a built-in group fails there the same way (pwshpy raises
+instead of failing silently).
 
 ## Ship a script to a machine without Python - `pwshpy pack`
 

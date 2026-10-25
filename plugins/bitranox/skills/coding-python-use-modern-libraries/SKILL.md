@@ -103,17 +103,32 @@ swap it out.
   point is "best tool", not "most dependencies".
 - Logging and CLI framework are deliberately left to each project's own conventions rather
   than prescribed here.
+- **When a project uses click, declare an OUTPUT path as
+  `click.Path(..., writable=True, readable=False)`** (the same under `rich-click`). `readable`
+  defaults to `True`, and for a target that already exists click runs `os.access(path, os.R_OK)`
+  and exits 2 with `Path '...' is not readable.` (`File '...'` when `dir_okay=False`), so a target
+  the user may write but not read is refused. macOS answers that check for `/dev/stdout` from the
+  descriptor's open mode, so `-o /dev/stdout` with stdout on a pipe is refused there (observed in
+  macOS CI) while Linux passes, and a Linux-only test never sees it. Pin it with a test that runs
+  on every POSIX cell: create the target, `chmod` it to `0o200`, invoke the command with `-o` on it
+  and assert exit 0; skip as root (root passes the check) and on Windows (`chmod` cannot make a file
+  write-only there). Before a release note says a command works on a platform, confirm the command
+  runs there at all.
 - **`subprocess` raises a DIFFERENT exception type per OS for the same condition, so never branch
   on which one you got.** A missing `cwd` raises `FileNotFoundError` on POSIX but
   `OSError [WinError 267] "The directory name is invalid"` on Windows, so a
   `FileNotFoundError -> 127 / OSError -> 126` mapping returns two different exit codes for one
   condition - and the POSIX run stays green because POSIX happens to raise the type the code
   expected. Pre-check the path yourself (`Path(cwd).exists()` / `.is_dir()`) and decide the result
-  explicitly, then run the missing-path test on Windows before trusting its exit code.
-- **On 3.14+, `except A, B:` without parentheses is VALID (PEP 758) and catches both.** On 3.13 and
-  earlier the same line is a `SyntaxError` under the old Python-2 `except E, name:` grammar, so it
-  reads like an obvious bug. Check `requires-python` or the interpreter and probe with `python -c`
-  before "fixing" it; on 3.14+ adding parentheses is a style choice, not a correction.
+  explicitly, then run the missing-path test on Windows before trusting its exit code. Pick the
+  pre-check by the code you want for a `cwd` that exists but is a FILE: after `exists()` it still
+  reaches `subprocess` and raises `NotADirectoryError` (the 126 path), while `is_dir()` sends it to
+  the missing-directory result.
+- **On 3.14+, `except A, B:` without parentheses is VALID (PEP 758) and catches both** (so does
+  `except* A, B:`). On 3.13 and earlier the same line is a `SyntaxError` under the old Python-2
+  `except E, name:` grammar, so it reads like an obvious bug. Check `requires-python` or the
+  interpreter and probe with `python -c` before "fixing" it; on 3.14+ adding parentheses is a style
+  choice, not a correction.
 - **Before importing a stdlib name added after the project's floor, read its own `requires-python`
   in `pyproject.toml`.** `tomllib`, `enum.StrEnum` and `ExceptionGroup` (with `except*`) arrived
   in 3.11 and `typing.override` in 3.12. Such an import passes every local gate on a newer
