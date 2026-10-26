@@ -30,6 +30,34 @@ a hole nobody has drawn a line under is one that gets rediscovered and half-fill
 two "versions with no entry" notes came to sit in this file disagreeing with it.
 
 
+## [10.3.0]
+
+### Changed
+
+- `repo-gate`: the mirror gate counts only the skills a commit ships - the index for a plain commit, the selection
+  index for `-a`, `-i` and pathspec commits, the commits since `origin/master` for a push. An unstaged edit or a
+  peer's unpushed commit no longer blocks an unrelated commit, and a change anywhere under a mirrored skill's
+  directory now counts, not only its `SKILL.md`.
+- `repo-gate`: the LF check reads the blobs a commit or push ships instead of the checkout, so an LF blob checked
+  out with CRLF under `core.autocrlf=true` passes, and a staged CRLF blob is caught.
+- `net-firewall-pfsense`: `dns add` and `dns rm` with `--apply` restart unbound and resolve through `127.0.0.1`
+  afterwards; a failed restart, no answer or a wrong address exits 2 and says the change was written.
+- `meta-dream-tree`: `statusrot`, `store_manifest` and `dedup_scan` print a `--json` envelope on an argparse usage
+  error too.
+
+### Fixed
+
+- `shell_text`: a quoted `)` inside `$(...)`, and a `$(...)` inside a double-quoted string, no longer end the
+  substitution early and hide the rest of the command from every Bash guard.
+- `shell_text.git_verb_dir`: a `cd` in a `case` arm or in the body of a function the command calls makes the git
+  verb's directory unknown, and a function that is only defined no longer moves the walk.
+- `subagent-capture`, `self-improve-audit`: read assistant text with quoted spans blanked, as the Stop gate does.
+- `self_improve_signals.ensure_gitignored`: writes the exclude-file header once per level.
+- `context-watcher`: `claude-haiku-5` models get their 1M context window.
+- `redcheck`: an inherited-coverage hit is called a term overlap, not proof the lesson is in context.
+- `coding-python-uv`: the description no longer pins a stale uv version.
+- Two sibling-cd guards mark their pricing figures as replay-derived.
+
 ## [10.2.6]
 
 ### Fixed
