@@ -29,6 +29,15 @@ than the change, so entries reconstructed from them would read like coverage wit
 a hole nobody has drawn a line under is one that gets rediscovered and half-filled - which is how
 two "versions with no entry" notes came to sit in this file disagreeing with it.
 
+## [10.0.24]
+
+### Changed
+
+- `coding-python-logging`: mirrors lib_log_rich's next release. `ring_buffer_checkpoint` /
+  `LOG_RING_BUFFER_CHECKPOINT` give the runtime's ring buffer a JSONL file that `flush(flush_ring_buffer=True)`,
+  `shutdown()` and the post-dump flush append to and `init()` reloads; `dump(theme=X)` replaces the runtime palette
+  while configured styles keep their levels; a console-only `short_loc_icon` dump preset is refused by `init()`.
+
 ## [10.0.23]
 
 ### Changed

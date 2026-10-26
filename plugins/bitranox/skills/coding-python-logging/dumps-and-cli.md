@@ -42,16 +42,16 @@ dump(*, dump_format: str | DumpFormat = "text", path=None, level=None,
      color=False) -> str
 ```
 
-| Parameter                 | Behaviour                                                                                                                                                                             |
-|---------------------------|---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
-| `dump_format`             | A `DumpFormat` (`TEXT`, `JSON`, `HTML_TABLE`, `HTML_TXT`) or its value string. Anything else, `"html"` included: `ValueError: Unsupported dump format: 'html'`                        |
-| `path`                    | Writes the result to this file AND returns it. Missing parent directories are created. The file content equals the return value.                                                      |
-| `level`                   | Minimum severity, case-insensitive name or `LogLevel`: `level="ERROR"` keeps ERROR and CRITICAL.                                                                                      |
-| `console_format_preset`   | Text/`html_txt` layout preset, a `FormatPreset`: `FULL`, `SHORT`, `FULL_LOC`, `SHORT_LOC`. `SHORT_LOC_ICON` is console-only: `ValueError: Unknown text dump preset: 'short_loc_icon'` |
-| `console_format_template` | Custom `str.format` layout; wins over the preset.                                                                                                                                     |
-| `theme`, `console_styles` | Colouring for text/`html_txt` (`theme` is a `ConsoleTheme`); default to the runtime's theme/styles. Only visible with `color=True` (or in `html_txt`).                                |
-| `color`                   | `False` (default): text has no ANSI codes. `True`: text carries ANSI escapes.                                                                                                         |
-| filters                   | See below. All must match (AND).                                                                                                                                                      |
+| Parameter                 | Behaviour                                                                                                                                                                                                                                                                              |
+|---------------------------|----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
+| `dump_format`             | A `DumpFormat` (`TEXT`, `JSON`, `HTML_TABLE`, `HTML_TXT`) or its value string. Anything else, `"html"` included: `ValueError: Unsupported dump format: 'html'`                                                                                                                         |
+| `path`                    | Writes the result to this file AND returns it. Missing parent directories are created. The file content equals the return value.                                                                                                                                                       |
+| `level`                   | Minimum severity, case-insensitive name or `LogLevel`: `level="ERROR"` keeps ERROR and CRITICAL.                                                                                                                                                                                       |
+| `console_format_preset`   | Text/`html_txt` layout preset, a `FormatPreset`: `FULL`, `SHORT`, `FULL_LOC`, `SHORT_LOC`. `SHORT_LOC_ICON` is console-only: `ValueError: Unknown text dump preset: 'short_loc_icon'`                                                                                                  |
+| `console_format_template` | Custom `str.format` layout; wins over the preset.                                                                                                                                                                                                                                      |
+| `theme`, `console_styles` | Colouring for text/`html_txt` (`theme` is a `ConsoleTheme`). `theme` replaces the runtime's palette, but levels the user styled (`console_styles` / `LOG_CONSOLE_STYLES`) keep their style; a per-call `console_styles` beats both. Only visible with `color=True` (or in `html_txt`). |
+| `color`                   | `False` (default): text has no ANSI codes. `True`: text carries ANSI escapes.                                                                                                                                                                                                          |
+| filters                   | See below. All must match (AND).                                                                                                                                                                                                                                                       |
 
 Format notes:
 
@@ -68,8 +68,8 @@ For `dump()` with no `console_format_*` argument, the layout comes from the runt
 1. `LOG_DUMP_FORMAT_TEMPLATE` env, else `RuntimeConfig.dump_format_template`
 2. `LOG_DUMP_FORMAT_PRESET` env, else `RuntimeConfig.dump_format_preset`, else `FULL`
 
-The env vars beat the config fields. An unknown `LOG_DUMP_FORMAT_PRESET` is refused by `init()`; `short_loc_icon` (a
-console-only preset) passes `init()`, and every text dump then raises `Unknown text dump preset`. A configured dump template beats a preset passed to
+The env vars beat the config fields. An unknown `LOG_DUMP_FORMAT_PRESET` is refused by `init()`, and so is `short_loc_icon`
+(a console-only preset, which a text dump cannot render) in the variable or in `dump_format_preset`. A configured dump template beats a preset passed to
 `dump(console_format_preset=...)`; pass `console_format_template=` to override it per call.
 With `--use-dotenv` the CLI reads these from `.env`.
 
