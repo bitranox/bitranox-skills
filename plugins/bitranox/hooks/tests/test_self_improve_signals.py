@@ -1288,6 +1288,20 @@ def test_ensure_gitignored_keeps_a_crlf_exclude_crlf(home, tmp_path):
     assert b"\n" not in data.replace(b"\r\n", b"")
 
 
+def test_ensure_gitignored_writes_its_header_once_across_calls(home, tmp_path):
+    """Each call that had something to add wrote the section header again, so a level whose two
+    private files were ignored by separate calls carried the same header line twice."""
+    import subprocess
+    repo = tmp_path / "repo"
+    subprocess.run(["git", "init", "-q", str(repo)], check=True)
+    assert S.ensure_gitignored(str(repo), "CLAUDE.local.md") is True
+    assert S.ensure_gitignored(str(repo), S.CURATED_DIRNAME + "/") is True
+    lines = _git_exclude(repo).read_text(encoding="utf-8").splitlines()
+    headers = [ln for ln in lines if ln.startswith("# bitranox curated memory")]
+    assert len(headers) == 1, lines
+    assert "CLAUDE.local.md" in lines and S.CURATED_DIRNAME + "/" in lines
+
+
 def test_ensure_gitignored_reads_a_non_ascii_repo_path_under_an_ascii_locale(home, tmp_path):
     """git prints the repo path in UTF-8; decoded with an ASCII locale's codec it raised
     UnicodeDecodeError, which is not an OSError, out of a function documented never to raise."""

@@ -286,6 +286,9 @@ def _git_in(proj, *args):
     return r.returncode, os.fsdecode(r.stdout).strip()
 
 
+_EXCLUDE_HEADER = "# bitranox curated memory (local; CLAUDE.local.md @imports it)"
+
+
 def ensure_gitignored(proj, *patterns):
     """Best-effort: on a git repo, make sure git ignores each `pattern`. Honors `track_private`
     (skip if set - the user wants memory committed). Used by per-turn capture so a fresh untracked
@@ -333,8 +336,11 @@ def ensure_gitignored(proj, *patterns):
         exclude = Path(where[1]) if os.path.isabs(where[1]) else Path(proj) / where[1]
         cur = exclude.read_bytes().decode("utf-8", "surrogateescape") if os.path.lexists(exclude) else ""
         nl = "\r\n" if "\r\n" in cur else "\n"
+        # The header names the section once; a later call that adds the other private file would
+        # otherwise stack a second identical header above its single line.
+        has_header = _EXCLUDE_HEADER in (ln.strip() for ln in cur.splitlines())
         text = ((cur.rstrip("\r\n") + nl if cur.strip() else "")
-                + "# bitranox curated memory (local; CLAUDE.local.md @imports it)" + nl
+                + ("" if has_header else _EXCLUDE_HEADER + nl)
                 + nl.join(add) + nl)
         exclude.parent.mkdir(parents=True, exist_ok=True)
         exclude.write_bytes(text.encode("utf-8", "surrogateescape"))
