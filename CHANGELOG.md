@@ -30,6 +30,14 @@ a hole nobody has drawn a line under is one that gets rediscovered and half-fill
 two "versions with no entry" notes came to sit in this file disagreeing with it.
 
 
+## [10.3.3]
+
+### Fixed
+
+- The repo-gate test for a linked worktree with a relative gitdir replaces the worktree's `.git` file
+  instead of overwriting it: git for Windows marks that file hidden, and Windows refuses a truncating
+  write to a hidden file, which failed the windows-latest CI cell.
+
 ## [10.3.2]
 
 ### Fixed

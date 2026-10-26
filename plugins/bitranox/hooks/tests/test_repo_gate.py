@@ -1485,6 +1485,9 @@ def test_a_linked_worktree_with_a_relative_gitdir_is_not_reported(tmp_path, monk
     # git writes a relative gitdir under worktree.useRelativePaths; it resolves against the worktree.
     public = _mirror_tree(tmp_path)
     wt = _linked_worktree(public, "thing-wt150")
+    # git for Windows marks this file hidden, and Windows refuses a truncating write to a
+    # hidden file (PermissionError), so replace it rather than overwrite it.
+    (wt / ".git").unlink()
     (wt / ".git").write_text("gitdir: ../thing/.git/worktrees/thing-wt150\n", encoding="utf-8")
     monkeypatch.setattr(RG, "MIRRORED_SKILLS", {"coding-python-thing": "libs/thing/skills/python-thing"})
 
