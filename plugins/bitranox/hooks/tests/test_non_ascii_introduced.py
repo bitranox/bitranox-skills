@@ -12,6 +12,8 @@ import subprocess
 import sys
 from pathlib import Path
 
+import pytest
+
 import non_ascii_introduced as N
 import tell_chars
 
@@ -229,6 +231,8 @@ def test_findings_counts_columns_in_characters_not_bytes():
     assert [(f.line, f.col, f.char) for f in found] == [(1, 2, AR3)]
 
 
+@pytest.mark.skipif(sys.platform == "win32",
+                    reason='bare "bash" on a Windows runner resolves to the WSL stub in System32, not Git Bash; this drives the bash shim directly')
 def test_smoke_through_the_shim(tmp_path):
     fp = tmp_path / "s.py"
     content = "v = '%s'\n" % AR3
