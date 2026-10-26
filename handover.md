@@ -1,4 +1,4 @@
-# Handover 2026-10-26: [23] batch 5 pass 2 shipped (25 folds, 4 repos); cut the 25 hooks next
+# STALE - read 2026-10-26, work continued
 
 ## In flight
 
