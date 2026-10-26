@@ -29,6 +29,17 @@ than the change, so entries reconstructed from them would read like coverage wit
 a hole nobody has drawn a line under is one that gets rediscovered and half-filled - which is how
 two "versions with no entry" notes came to sit in this file disagreeing with it.
 
+## [10.0.19]
+
+### Changed
+
+- `write-humanize-en` and `write-humanize-de` ask "Should I humanize this text?" only before
+  changing text the user wrote and showed for an opinion or review; text the user only asks to
+  have sent goes out as written. Outgoing prose the agent wrote at the user's request (a PR or
+  issue comment, a reply, an email) is humanized without asking, and a standing
+  humanize-before-sending rule counts as that request for the agent's own text only. PR
+  descriptions, PR comments and issue replies are named in the in-scope list.
+
 ## [10.0.18]
 
 ### Changed

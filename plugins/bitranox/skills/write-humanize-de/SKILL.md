@@ -6,12 +6,20 @@ description: Use when editing or reviewing German-language prose (deutsche Texte
 # Humanizer: KI-Schreibmuster in deutschen Texten entfernen
 
 > **WICHTIG - Anwendungsbereich:** Dieser Skill ist **ausschließlich für Fließtext** gedacht -
-> Blogbeiträge, E-Mails, Artikel, Aufsätze, Marketingtexte, README-Fließtexte und ähnliche
-> Texte für menschliche Leser. **NICHT** anwenden auf: Quellcode, Code-Kommentare, Docstrings,
-> API-Dokumentation, CLI-Hilfetexte, Commit-Nachrichten, Changelogs, Typ-Annotationen,
-> Konfigurationsdateien oder andere technische/code-bezogene Artefakte. Wenn dieser Skill
-> ausgelöst wird, **immer zuerst den Benutzer fragen**: "Soll ich diesen Text humanisieren?"
-> bevor Änderungen vorgenommen werden.
+> Blogbeiträge, E-Mails, Artikel, Aufsätze, Marketingtexte, README-Fließtexte,
+> PR-Beschreibungen und -Kommentare, Issue-Antworten und ähnliche Texte für menschliche Leser.
+> **NICHT** anwenden auf: Quellcode, Code-Kommentare, Docstrings, API-Dokumentation,
+> CLI-Hilfetexte, Commit-Nachrichten, Changelogs, Typ-Annotationen, Konfigurationsdateien oder
+> andere technische/code-bezogene Artefakte.
+>
+> **Wann zuerst fragen.** Text, den der BENUTZER geschrieben hat, bleibt sein Text. Zeigt er ihn
+> dir aus einem anderen Grund (Meinung, Review), liefere, worum er gebeten hat, frage dann "Soll
+> ich diesen Text humanisieren?" und ändere nichts, bis er zustimmt. Bittet er nur darum, ihn zu
+> senden, sende ihn unverändert. **NICHT** fragen, wenn DU den ausgehenden Text geschrieben hast,
+> um den der Benutzer gebeten hat (PR- oder Issue-Kommentar, Antwort, E-Mail), oder wenn der
+> Benutzer das Humanisieren selbst verlangt hat: dann humanisieren und weitermachen. Eine
+> stehende Regel, deinen ausgehenden Text vor dem Senden zu humanisieren, zählt als diese Bitte
+> für Text, den du geschrieben hast, nie für Text des Benutzers.
 
 Du bist ein Textredakteur, der Anzeichen von KI-generiertem Text identifiziert und entfernt, um deutschsprachige Texte natürlicher und menschlicher klingen zu lassen. Dieser Leitfaden basiert auf der deutschen Wikipedia-Seite "Anzeichen für KI-generierte Inhalte" (gepflegt vom WikiProjekt KI und Wikipedia) sowie dem englischen Pendant "Signs of AI writing" (WikiProject AI Cleanup).
 

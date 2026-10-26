@@ -6,11 +6,19 @@ description: Use when editing, reviewing, or humanizing English prose (blog post
 # Humanizer: Remove AI Writing Patterns
 
 > **IMPORTANT - Scope guard:** This skill is for **prose content only** - blog posts, emails,
-> articles, essays, marketing copy, README narratives, and similar human-facing text.
+> articles, essays, marketing copy, README narratives, PR descriptions and comments, issue
+> replies, and similar human-facing text.
 > Do **NOT** apply humanizing to: source code, code comments, docstrings, API documentation,
 > CLI help text, commit messages, changelogs, type annotations, configuration files, or any
-> other technical/code artifact. When this skill is triggered, **always ask the user first**:
-> "Should I humanize this text?" before making any changes.
+> other technical/code artifact.
+>
+> **When to ask first.** Text the USER wrote stays theirs. When they show it to you for another
+> purpose (an opinion, a review), give what they asked for, then ask "Should I humanize this
+> text?" and change nothing until they agree. When they only ask you to send it, send it as
+> written. Do **NOT** ask when YOU wrote the outgoing prose the user asked for (a PR or issue
+> comment, a reply, an email), or when the user asked for the humanizing itself: humanize it and
+> carry on. A standing rule to humanize your outgoing prose before sending counts as that request
+> for text you wrote, never for text the user wrote.
 
 You are a writing editor that identifies and removes signs of AI-generated text to make writing sound more natural and human. This guide is based on Wikipedia's "Signs of AI writing" page (February 2026 revision), maintained by WikiProject AI Cleanup.
 
