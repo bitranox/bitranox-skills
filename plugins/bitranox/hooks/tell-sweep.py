@@ -13,7 +13,9 @@ humanizer skill, a note about the characters) does not false-positive on its own
 examples. A genuine reference to the character itself belongs in backticks anyway.
 
 Code files are skipped (legit unicode in test data / identifiers); commit messages
-and code comments rely on the manual sweep plus the humanizer skill.
+and code comments rely on the manual sweep plus the humanizer skill. Every file skipped here is
+covered by `non-ascii-introduced` instead, which reports any non-ASCII character a write
+introduced (the decoded-escape slip); `tell_chars.is_prose_path` draws the line for both.
 
 NotebookEdit is deliberately NOT registered: notebooks are not swept. Its event names the target
 `notebook_path`, and a notebook is JSON whose code cells and outputs carry legitimate unicode that
@@ -53,8 +55,7 @@ def main() -> int:
     except Exception:
         return 0
     fp = (event.get("tool_input") or {}).get("file_path") or ""
-    low = fp.lower()
-    if not (low.endswith((".md", ".markdown", ".txt")) or low.endswith("claude.md")):
+    if not tell_chars.is_prose_path(fp):
         return 0
     try:
         with open(fp, "rb") as fh:

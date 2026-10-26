@@ -30,6 +30,19 @@ a hole nobody has drawn a line under is one that gets rediscovered and half-fill
 two "versions with no entry" notes came to sit in this file disagreeing with it.
 
 
+## [10.2.0]
+
+### Added
+
+- `non-ascii-introduced` hook (PostToolUse on Write, Edit and MultiEdit): in every file `tell-sweep` skips (code,
+  config, data), it lists each non-ASCII character the call introduced, by line, column and codepoint name, never
+  by quoting the line. It catches a backslash-u escape typed into a tool parameter, which JSON decodes into the
+  literal character before the tool runs. An Edit counts characters in `new_string` that are neither in
+  `old_string` nor elsewhere in the file; a Write counts characters absent from the previous text (the tool
+  response's `originalFile`, else the git HEAD blob). It reports with exit 2 and blocks nothing. Replayed over the
+  local transcript corpus it fires on 1.7% of non-prose writes; the hook's docstring has the figures.
+- `tell_chars.is_prose_path`: the one decision of which files `tell-sweep` sweeps, shared by both hooks.
+
 ## [10.1.4]
 
 ### Changed

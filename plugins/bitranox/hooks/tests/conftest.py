@@ -35,6 +35,7 @@ _HOOK_MODULES = {
     "compact-resume": "compact_resume",
     "repo-gate": "repo_gate",
     "tell-sweep": "tell_sweep",
+    "non-ascii-introduced": "non_ascii_introduced",
     "commit-tell-sweep": "commit_tell_sweep",
     "git-footgun-guard": "git_footgun_guard",
     "git-wrong-repo-nudge": "git_wrong_repo_nudge",

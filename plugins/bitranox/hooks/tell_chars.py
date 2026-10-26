@@ -255,6 +255,19 @@ def split_inline(line):
     return parts
 
 
+_PROSE_SUFFIXES = (".md", ".markdown", ".txt")
+
+
+def is_prose_path(path):
+    """True when `tell-sweep` sweeps this file: *.md, *.markdown, *.txt or a CLAUDE.md, any case.
+
+    The one place that decides it, so `non-ascii-introduced` covers exactly the files tell-sweep
+    skips and the two hooks can neither overlap nor leave a gap between them.
+    """
+    low = (path or "").lower()
+    return low.endswith(_PROSE_SUFFIXES) or low.endswith("claude.md")
+
+
 def decode_utf8(raw, truncated=False):
     """(text, bad_byte): `raw` decoded, and the offset of the first byte that is not valid UTF-8,
     or None when all of it decoded.
