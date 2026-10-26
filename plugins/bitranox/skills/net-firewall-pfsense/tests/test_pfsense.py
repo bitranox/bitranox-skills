@@ -530,7 +530,7 @@ def test_a_matched_removal_that_removed_nothing_is_exit_2_with_ok_false(argv, tm
 ])
 def test_control_a_removal_that_removed_its_entry_is_exit_0(argv, tmp_path):
     fake = _fake_for_mutation()
-    fake.responses.append(('config_get_path("unbound/hosts"', (0, BARE_OVERRIDES, BANNER)))
+    fake.responses += [*_unbound_up(), ('config_get_path("unbound/hosts"', (0, BARE_OVERRIDES, BANNER))]
     assert P.main(["--host", "192.0.2.1", "--apply", "--snapshot-dir", str(tmp_path / "s"), *argv],
                   run=fake) == 0
 
@@ -898,8 +898,19 @@ BARE_OVERRIDES = json.dumps([
 ])
 
 
+def _unbound_up():
+    """A restart that works and an unbound that answers every name these tests write or keep."""
+    return [
+        ("pfSsh.php playback svc restart unbound", (0, "", "")),
+        ("host new.example.com 127.0.0.1", (0, "new.example.com has address 192.0.2.41\n", "")),
+        ("host nas.example.com 127.0.0.1", (0, "nas.example.com has address 192.0.2.31\n", "")),
+        ("host bare.example.com 127.0.0.1", (0, "bare.example.com has address 192.0.2.40\n", "")),
+    ]
+
+
 def _dns_fake():
     return FakeRun([
+        *_unbound_up(),
         ("$removed", (0, '{"removed":[{"host":"","domain":"bare.example.com","ip":"192.0.2.40"}]}', "")),
         ("$hosts[] =", (0, '{"added":{"host":"x","domain":"example.com","ip":"192.0.2.9"}}', "")),
         ('config_get_path("unbound/hosts"', (0, BARE_OVERRIDES, BANNER)),
@@ -952,6 +963,125 @@ def test_dns_add_without_apply_sends_nothing():
     assert P.main(["--host", "192.0.2.1", "dns", "add", "--name", "new.example.com",
                    "--ip", "192.0.2.41"], run=fake) == 0
     assert fake.calls == []
+
+
+# ---- after services_unbound_configure(): restart unbound and check it answers -------------------
+# A reconfigure has been observed to leave unbound stopped with every lookup timing out, so both
+# writing verbs restart it the pfSense way and resolve a name through 127.0.0.1 before reporting
+# success. The commands are the ones SKILL.md tells a reader to run, so the two cannot drift.
+RESTART = "pfSsh.php playback svc restart unbound"
+
+
+def _answer(name, ip):
+    """What `host <name> 127.0.0.1` prints on a pfSense box when unbound answers."""
+    header = "Using domain server:\nName: 127.0.0.1\nAddress: 127.0.0.1#53\nAliases: \n\n"
+    return (0, f"{header}{name} has address {ip}\n", "")
+
+
+TIMED_OUT = (1, ";; connection timed out; no servers could be reached\n", "")
+
+
+def _unbound_fake(probe_name, probe_answer, restart=(0, "", ""), overrides=BARE_OVERRIDES):
+    fake = _dns_fake()
+    fake.responses = [
+        (RESTART, restart),
+        (f"host {probe_name} 127.0.0.1", probe_answer),
+        *[(n, r) for n, r in fake.responses if n != 'config_get_path("unbound/hosts"'],
+        ('config_get_path("unbound/hosts"', (0, overrides, BANNER)),
+    ]
+    return fake
+
+
+def _remote_after_write(fake):
+    write_at = next(i for i, c in enumerate(fake.calls) if c["stdin"] and "write_config" in c["stdin"])
+    return [c["remote"] for c in fake.calls[write_at + 1:]]
+
+
+def _apply(tmp_path, *argv):
+    return ["--host", "192.0.2.1", "--apply", "--snapshot-dir", str(tmp_path / "s"), *argv]
+
+
+def test_dns_add_restarts_unbound_and_resolves_the_added_name_after_the_write(tmp_path):
+    fake = _unbound_fake("new.example.com", _answer("new.example.com", "192.0.2.41"))
+    rc = P.main(_apply(tmp_path, "dns", "add", "--name", "new.example.com", "--ip", "192.0.2.41"), run=fake)
+    assert rc == 0
+    assert _remote_after_write(fake) == [RESTART, "host new.example.com 127.0.0.1"]
+
+
+def test_dns_add_whose_name_gets_no_answer_after_the_restart_is_exit_2(tmp_path, capsys):
+    fake = _unbound_fake("new.example.com", TIMED_OUT)
+    rc = P.main(_apply(tmp_path, "--json", "dns", "add", "--name", "new.example.com", "--ip", "192.0.2.41"),
+                run=fake)
+    out = capsys.readouterr()
+    assert rc == 2
+    assert json.loads(out.out)["ok"] is False
+    assert "was written" in out.err and "not answering" in out.err and RESTART in out.err
+
+
+def test_dns_add_answered_with_another_address_is_exit_2(tmp_path, capsys):
+    fake = _unbound_fake("new.example.com", _answer("new.example.com", "192.0.2.99"))
+    rc = P.main(_apply(tmp_path, "dns", "add", "--name", "new.example.com", "--ip", "192.0.2.41"), run=fake)
+    assert rc == 2
+    assert "192.0.2.41" in capsys.readouterr().err
+
+
+def test_a_failed_unbound_restart_is_exit_2_and_skips_the_lookup(tmp_path, capsys):
+    fake = _unbound_fake("new.example.com", _answer("new.example.com", "192.0.2.41"),
+                         restart=(1, "", "unbound failed to start\n"))
+    rc = P.main(_apply(tmp_path, "dns", "add", "--name", "new.example.com", "--ip", "192.0.2.41"), run=fake)
+    err = capsys.readouterr().err
+    assert rc == 2
+    assert "was written" in err and "unbound failed to start" in err
+    assert _remote_after_write(fake) == [RESTART]
+
+
+def test_a_lookup_that_hits_the_process_timeout_still_says_the_change_was_written(tmp_path, capsys):
+    fake = _unbound_fake("new.example.com", (0, "", ""))
+    plain = fake
+
+    def run(argv, *, stdin_text=None, timeout=30):
+        if argv[-1].startswith("host "):
+            raise subprocess.TimeoutExpired(cmd="ssh", timeout=timeout)
+        return plain(argv, stdin_text=stdin_text, timeout=timeout)
+
+    rc = P.main(_apply(tmp_path, "dns", "add", "--name", "new.example.com", "--ip", "192.0.2.41"), run=run)
+    assert rc == 2
+    assert "was written" in capsys.readouterr().err
+
+
+def test_dns_rm_restarts_unbound_and_resolves_an_override_that_remains(tmp_path):
+    """bare.example.com goes; nas.example.com stays and has a known local answer."""
+    fake = _unbound_fake("nas.example.com", _answer("nas.example.com", "192.0.2.31"))
+    rc = P.main(_apply(tmp_path, "dns", "rm", "--name", "bare.example.com"), run=fake)
+    assert rc == 0
+    assert _remote_after_write(fake) == [RESTART, "host nas.example.com 127.0.0.1"]
+
+
+def test_dns_rm_of_the_last_override_resolves_localhost(tmp_path):
+    only = json.dumps([{"host": "", "domain": "bare.example.com", "ip": "192.0.2.40", "descr": ""}])
+    fake = _unbound_fake("localhost.", _answer("localhost", "127.0.0.1"), overrides=only)
+    rc = P.main(_apply(tmp_path, "dns", "rm", "--name", "bare.example.com"), run=fake)
+    assert rc == 0
+    assert _remote_after_write(fake) == [RESTART, "host localhost. 127.0.0.1"]
+
+
+def test_dns_rm_whose_check_gets_no_answer_is_exit_2(tmp_path, capsys):
+    fake = _unbound_fake("nas.example.com", TIMED_OUT)
+    rc = P.main(_apply(tmp_path, "dns", "rm", "--name", "bare.example.com"), run=fake)
+    err = capsys.readouterr().err
+    assert rc == 2
+    assert "was written" in err and "not answering" in err
+
+
+def test_the_probe_name_is_quoted_for_the_remote_shell():
+    assert P.unbound_probe_command("a.example.com;reboot") == "host 'a.example.com;reboot' 127.0.0.1"
+
+
+def test_skill_md_tells_the_reader_the_same_commands_the_verbs_run():
+    skill = (pathlib.Path(P.__file__).resolve().parent.parent / "SKILL.md").read_text(encoding="utf-8")
+    assert P.UNBOUND_RESTART == RESTART
+    assert f"`{P.UNBOUND_RESTART}`" in skill
+    assert f"`{P.unbound_probe_command('NAME').replace('NAME', '<name>')}`" in skill
 
 
 # ---- dhcp add / rename: the two edits that otherwise need the GUI ---------------------------------

@@ -49,6 +49,8 @@ A removal that removed nothing is a failed action, exit 2: `dhcp rm`, `dhcp rm-s
 `dns rm` whose entry matched but whose write changed nothing, and a `table del` or
 `snort unblock` that leaves every requested address present (one address asked for included).
 Only some of several addresses left present is a partial outcome, exit 1, naming them.
+`dns add` and `dns rm` with --apply restart unbound after the write and resolve a name through
+127.0.0.1; when it does not answer they exit 2 saying the change was written.
 """
 
 import argparse
@@ -75,6 +77,16 @@ MAGICDNS = "100.100.100.100"          # Tailscale's fixed MagicDNS address, the 
 # box, there is no pfSense source here to say which path the current release uses, and testing
 # only one reports "no lock" while the GUI shows "Another instance".
 UPGRADE_LOCKS = ("/var/run/pfSense-upgrade.lock", "/tmp/pfSense-upgrade.lock")
+
+# The pfSense way to restart unbound: a playback script exits normally, while interactive pfSsh.php
+# fed on stdin does not exit on EOF and hangs. SKILL.md tells the reader to run this exact command,
+# and a test holds the two together.
+UNBOUND_RESTART = "pfSsh.php playback svc restart unbound"
+
+# `host <name> 127.0.0.1` prints one line per record: "<name> has address <ip>" or
+# "<name> has IPv6 address <ip>". Only those lines count as an answer; the "Name: 127.0.0.1"
+# header it prints for an explicit server would otherwise read as one.
+_HOST_ANSWER_RX = re.compile(r"\bhas (?:IPv6 )?address (\S+)")
 
 # `snort -c <path>/snort.conf -i <if>`: the conf path is the only reliable pointer to the
 # instance dir, because a previous interface assignment leaves a same-uuid dir behind.
@@ -1214,8 +1226,69 @@ def cmd_dns_add(args) -> int:
     result = run_php(target, php_add_override(host, domain, args.ip, args.descr), run=args.run)
     if result.get("error"):
         raise PfsenseError(str(result["error"]))
-    _emit(envelope(command="dns add", data=result, ok=True), args.json, f"  added {host}.{domain} -> {args.ip}")
+    result["unbound"] = restart_and_verify_unbound(
+        target, name=f"{host}.{domain}", ip=args.ip, run=args.run,
+        change=f"the override {host}.{domain} -> {args.ip}")
+    _emit(envelope(command="dns add", data=result, ok=True), args.json,
+          f"  added {host}.{domain} -> {args.ip}; unbound restarted and answers it")
     return 0
+
+
+def unbound_probe_command(name: str) -> str:
+    """The lookup that proves unbound answers: the same form SKILL.md gives the reader."""
+    return f"host {shlex.quote(name)} 127.0.0.1"
+
+
+def answered_addresses(host_output: str) -> set:
+    """The addresses a `host` run printed as answers, normalised so 2001:DB8::1 equals 2001:db8::1."""
+    found = set()
+    for token in _HOST_ANSWER_RX.findall(host_output):
+        try:
+            found.add(ipaddress.ip_address(token))
+        except ValueError:
+            continue
+    return found
+
+
+def restart_and_verify_unbound(target: Target, *, name: str, ip: str, run, change: str) -> dict:
+    """Restart unbound and resolve `name` through 127.0.0.1, expecting `ip` among the answers.
+
+    services_unbound_configure() has been observed to leave unbound stopped, with
+    unbound-checkconf clean and every lookup timing out, so a write that ends at the reconfigure
+    can report success over a dead resolver. Raises with a message that says the change IS in
+    config.xml, so the reader repairs the resolver instead of retrying the edit.
+    """
+    def down(detail: str) -> PfsenseError:
+        return PfsenseError(
+            f"{change} was written to config.xml, but unbound is not answering: {detail}. "
+            f"On the firewall run `{UNBOUND_RESTART}`, then `{unbound_probe_command(name)}`; "
+            "reach it by IP, since its own name does not resolve while unbound is down")
+
+    try:
+        rc, out, err = run_remote(target, UNBOUND_RESTART, run=run)
+        if rc != 0:
+            raise down(f"the restart exited {rc}: {(err or out).strip()[:200]}")
+        rc, out, err = run_remote(target, unbound_probe_command(name), run=run)
+    except subprocess.TimeoutExpired as exc:
+        raise down(f"no reply within {exc.timeout}s") from exc
+    if ipaddress.ip_address(ip) not in answered_addresses(out):
+        reply = " ".join((out or err).split())[:200] or "no output"
+        raise down(f"{name} did not resolve to {ip} through 127.0.0.1 (exit {rc}: {reply})")
+    return {"restarted": True, "resolved": name, "ip": ip}
+
+
+def _probe_after_removal(overrides: list[dict], removed_fqdn: str) -> tuple[str, str]:
+    """A name unbound must still answer locally after `removed_fqdn` is gone, and its address.
+
+    An override that remains has a known answer that needs no upstream server, so a dead link to
+    the internet cannot fail the check. With none left, `localhost.` is unbound's own built-in
+    local zone; the trailing dot keeps a search domain from being tried first.
+    """
+    for entry in overrides:
+        fqdn = override_name(entry)
+        if fqdn.lower() != removed_fqdn.lower() and entry.get("ip"):
+            return fqdn, entry["ip"]
+    return "localhost.", "127.0.0.1"
 
 
 def cmd_dns_rm(args) -> int:
@@ -1237,8 +1310,13 @@ def cmd_dns_rm(args) -> int:
     removed = result.get("removed") or []
     _require_effect(removed, f"the override {host}.{domain} matched, but removing it removed nothing "
                              "(it changed since it was listed); config.xml was not written")
+    probe_name, probe_ip = _probe_after_removal(overrides, entry["fqdn"])
+    result["unbound"] = restart_and_verify_unbound(
+        target, name=probe_name, ip=probe_ip, run=args.run,
+        change=f"the removal of the override {entry['fqdn']}")
     _emit(envelope(command="dns rm", data=result, ok=True), args.json,
-          f"  removed {len(removed)} override(s) for {host}.{domain}")
+          f"  removed {len(removed)} override(s) for {host}.{domain}; "
+          f"unbound restarted and answers {probe_name}")
     return 0
 
 
