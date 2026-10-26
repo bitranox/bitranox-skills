@@ -182,7 +182,12 @@ matrix locally before you push. Each cell's pyright makes the same per-OS runs a
 pyright stage (section "Proving a gate"), so a type error on any OS in `[tool.ci].os` fails the cell
 for that Python version; pytest runs on the host OS only. A project whose suite binds fixed ports or
 shares a test database sets `[tool.scripts.test-all] workers = 1` in its `pyproject.toml` (or
-`BMK_TEST_ALL_WORKERS=1` for one run) to run the version cells serially instead. Plain `make test`
+`BMK_TEST_ALL_WORKERS=1` for one run) to run the version cells serially instead. Inside a cell,
+pytest runs across processes when that cell's pytest loads pytest-xdist; pytest-cov is not needed,
+since a cell measures no coverage and checks no floor, and a cell without xdist runs serially
+without a hint. `[tool.scripts.test] workers = "auto"` (the default) is divided between the cells
+running at once (CPU count // cells, at least 1); an explicit count goes to EVERY cell unchanged, so
+six cells with `workers = 8` start 48 workers. Plain `make test`
 stays on the newest version only; with no `:: Python :: X.Y` classifier, `test-all` tests the
 default interpreter once and prints a WARNING naming the version it used.
 
@@ -624,6 +629,26 @@ bmk runs pytest in **this project's own `.venv`** (section 1), which it syncs wi
 helpers) are present. That is the same venv pyright and pip-audit resolve, so the suite, the type
 check and the audit all describe one environment.
 
+**pytest runs in parallel once the project's pytest loads pytest-xdist and pytest-cov.** bmk runs the project's own
+pytest configuration in its venv and directory and asks which plugins it LOADS, not which are
+installed. When both `xdist` and `pytest_cov` load, the stage runs
+`pytest -n <workers> --dist loadgroup --cov=<source>`; otherwise it runs serially. bmk never
+installs xdist itself. The one-line hint names the package that is NOT INSTALLED (`pytest-xdist`,
+else `pytest-cov`; shown in JSON mode only when the stage fails); a plugin that is installed but
+not loaded (plugin autoload off, `-p no:xdist` in `addopts`) gives a serial run and no hint, and
+with autoload off, `-p xdist -p pytest_cov` in `addopts` loads them again and the run is parallel.
+Coverage, `fail_under` and `coverage.xml` come out the same either way. The parallel run passes
+`--cov-fail-under=0`, so the floor is checked once, by the `coverage report` step that follows:
+`fail_under` defaults to 80, `[tool.coverage.report] fail_under` overrides it, and in JSON mode a
+floor failure shows only its exit line (the report table is printed in text mode, `--human`). A
+`-n` (or `--dist`) the project already passes in `addopts` is left to it. `[tool.scripts.test] workers` takes `"auto"` (the default) or a
+count, `1` meaning bmk adds no `-n`; `BMK_TEST_WORKERS` overrides it for one run, and a bad value
+in either is refused with one line and exit 2. Tests that
+share a database, a fixed port or a file must carry the same `@pytest.mark.xdist_group("<name>")`
+so they run one at a time on one worker. Before adding pytest-xdist to an existing project, find
+those tests (or set `workers = 1`) and run `-n auto` several times. A test that fails only in
+parallel is order- or resource-dependent, not flaky: group it or fix it.
+
 **`make test`'s `pytest` stage also uploads coverage to Codecov**, so a failed upload is reported
 as `[pytest]` failing even when every test passed. The upload runs only when a `CODECOV_TOKEN` is
 found (the environment first, else a `.env` in the project or any parent directory) and
@@ -642,8 +667,8 @@ Two independent readings of a green `make test` are wrong, and both come from bm
 rather than from your code.
 
 **1. `ruff --fix` rewrites the tree before any checker runs.** In the stage registry
-`ruff_fix_apply` is order **30**, while `bandit`, `lint_imports`, `pip_audit`, `pyright`, `pytest`
-and `ruff_lint` are ALL order **40**. So a probe you plant to prove a checker fires can be DELETED
+`ruff_fix_apply` is order **30**, while `bandit`, `lint_imports`, `pip_audit`, `pyright`, `pytest`,
+`ruff_format_check`, `ruff_lint`, `psscriptanalyzer` and `shellcheck` are ALL order **40**. So a probe you plant to prove a checker fires can be DELETED
 before that checker ever sees it: a bare unused `import` is removed at stage 30 and the gate greens
 having never examined it. To plant a probe that survives, BIND the imported name so `--fix` cannot
 remove it, and keep the binding after the last import or `E402` fires instead.
@@ -662,9 +687,15 @@ nothing.
 
 **`pyright` checks every OS your CI runs on.** pyright type-checks one platform
 per run, so a check on Linux passes code whose types break under Windows' stubs (`os.geteuid()`,
-`signal.SIGHUP`). The stage runs `pyright --pythonplatform` once per OS family listed in
-`[tool.ci].os`, the key CI builds its OS matrix from (`ubuntu-*` -> Linux, `windows-*` -> Windows,
-`macos-*` -> Darwin), and fails if any run does; each run's output is headed by its command line.
+`signal.SIGHUP`). Unless one of the two project files below changes the runs, the stage runs
+`pyright --pythonplatform` once per OS family listed in `[tool.ci].os`, the key CI builds its OS
+matrix from (`ubuntu-*` -> Linux, `windows-*` -> Windows, `macos-*` -> Darwin), at the same time,
+and fails if any run does. The runs are listed in a fixed order: each OS in the order
+`[tool.ci].os` first names it (or the one pinned run), then the `pyrightconfig.<platform>.json`
+arms. The stage takes the exit code of the first failing run in that order, not the first to
+finish, and prints each run's output whole, in that order, headed by its command line. With `PYRIGHT_PYTHON_FORCE_VERSION` or
+`PYRIGHT_PYTHON_USE_BUNDLED_PYRIGHT` set, pyright may install itself from npm into one unlocked
+cache, so the first run goes alone and the others start together after it.
 With no `[tool.ci].os` it checks the host only. So in a project that declares Windows, a
 Windows-only type error turns `make test` red on Linux: fix the code (a `sys.platform` guard,
 which pyright narrows), not the stage. Every `make test-all` cell makes the same runs.

@@ -30,6 +30,17 @@ a hole nobody has drawn a line under is one that gets rediscovered and half-fill
 two "versions with no entry" notes came to sit in this file disagreeing with it.
 
 
+## [10.3.1]
+
+### Changed
+
+- `devops-bmk`: synced with bmk 3.29.0. The `make test` pytest stage runs in parallel when the project's pytest
+  loads both `pytest-xdist` and `pytest-cov` (the `workers` setting, `BMK_TEST_WORKERS`, `xdist_group` for tests
+  sharing a resource), and the coverage floor is checked once afterwards by `coverage report`. A `test-all` cell
+  needs only xdist, measures no coverage, and gets an explicit worker count unchanged. `shellcheck` is an order-40
+  stage. pyright's platform runs start together (the first alone when `PYRIGHT_PYTHON_FORCE_VERSION` or
+  `PYRIGHT_PYTHON_USE_BUNDLED_PYRIGHT` is set) and the stage reports the first failing run in platform order.
+
 ## [10.3.0]
 
 ### Changed
