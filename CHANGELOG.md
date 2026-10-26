@@ -29,6 +29,15 @@ than the change, so entries reconstructed from them would read like coverage wit
 a hole nobody has drawn a line under is one that gets rediscovered and half-filled - which is how
 two "versions with no entry" notes came to sit in this file disagreeing with it.
 
+## [10.0.18]
+
+### Changed
+
+- `coding-python-network-probe` covers ipscout's SNMP system read: `read_snmp_system` /
+  `aread_snmp_system` and the `snmp-system` command (uptime, sysName, sysDescr, sysObjectID of many
+  hosts, SNMPv1 or v2c), its five states, why there is no automatic version fallback, and the
+  falling uptime as a restart detector. Mirrored from the ipscout repo's twin.
+
 ## [10.0.17]
 
 ### Changed

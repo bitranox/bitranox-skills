@@ -1,13 +1,13 @@
 ---
 name: coding-python-network-probe
-description: Use when Python code needs to ping a host, sweep hosts for reachability, measure round-trip time or packet loss, run a traceroute, scan ports, read the banner or greeting a service sends (FTP 220, SMTP, SSH version) to identify devices, find a MAC address or the host holding one, read the neighbour/ARP cache or write a static (permanent) entry to it, look up the default gateway or a route, inspect local interfaces and subnets, reach an IPv6 link-local (fe80::) address that needs its zone, send wake-on-LAN, find the path MTU, or watch a DHCP handshake to learn the address of a machine just started - especially as an ordinary user with no root, sudo, Administrator or CAP_NET_RAW, and without shelling out to ping, tracert, arp, ip, ifconfig or netstat. Also use when reaching for icmplib, scapy, python-nmap, netifaces, hand-rolled sockets for a banner grab, or subprocess around a system network command, or for tcpdump/tshark to watch a VM or container boot and find its address.
+description: Use when Python code needs to ping a host, sweep hosts for reachability, measure round-trip time or packet loss, run a traceroute, scan ports, identify devices by their banner/greeting (FTP 220, SMTP, SSH version) or SNMP system group (uptime, sysName, sysDescr), find a MAC address or the host holding one, read the neighbour/ARP cache or write a static (permanent) entry to it, look up the default gateway or a route, inspect local interfaces and subnets, reach an IPv6 link-local (fe80::) address that needs its zone, send wake-on-LAN, find the path MTU, or watch a DHCP handshake to learn the address of a machine just started - especially as an ordinary user with no root, sudo, Administrator or CAP_NET_RAW, and without shelling out to ping, tracert, arp, ip, ifconfig or netstat. Also use when reaching for icmplib, scapy, python-nmap, netifaces, hand-rolled sockets for a banner grab, or subprocess around a system network command, or for tcpdump/tshark to watch a VM or container boot and find its address.
 ---
 
 # Network probing from Python, unprivileged on the default paths
 
 ## Overview
 
-Use `ipscout`. It does ICMP echo, traceroute, port scanning, banner grabs,
+Use `ipscout`. It does ICMP echo, traceroute, port scanning, banner grabs, SNMP system reads,
 neighbour and route lookup, interface and subnet enumeration entirely in-process: no
 subprocess, and no elevated rights on the default paths.
 
@@ -32,36 +32,37 @@ Python 3.10+.
 
 ## Quick reference
 
-| Task                                | Call                                                                                  |
-|-------------------------------------|---------------------------------------------------------------------------------------|
-| Ping one host                       | `ping("1.1.1.1", 4)`                                                                  |
-| Sweep many, concurrently            | `ping_many(hosts, concurrency=64)`                                                    |
-| Is it up, by any means              | `is_reachable(host)`                                                                  |
-| Path to a host                      | `traceroute(host)`                                                                    |
-| Scan ports                          | `scan_ports(host, "22,80,8000-8100")`                                                 |
-| What each host says first on a port | `grab_banners(hosts, 21, farewell=b"QUIT\r\n")` -> host: `Banner`                     |
-| MAC of an address                   | `lookup_mac(ip)`, `get_mac_address(ip)`                                               |
-| Which host holds a MAC              | `find_ip_by_mac(mac, scan=True, family=AddressFamily.IPV4)`                           |
-| Neighbour / ARP cache               | `neighbours()`, `arp_scan(network)`; both take `family=`                              |
-| ... only the REACHABLE entries      | `[e for e in neighbours() if e.state is NeighbourState.REACHABLE]`                    |
-| Static ARP entry, IPv4 (privilege)  | `set_neighbour(ip, mac, interface="eth0")` -> the entry read back                     |
-| ... and out again                   | `remove_neighbour(ip, interface="eth0")` -> whether there was one                     |
-| What a sweep will cover             | `sweep_scope()` -> `SweepScope(limit, networks, skipped, complete)`                   |
-| Sweep exactly that plan             | `arp_scan(scope=scope)`, `find_ip_by_mac(mac, scan=True, scope=...)`                  |
-| Default route, any route            | `default_gateway()`, `query_route(ip)`                                                |
-| Interfaces and subnets              | `local_interfaces()`, `subnet_info()`, `local_networks()`                             |
-| Wake a sleeping host                | `wake_on_lan(mac)`                                                                    |
-| Address of a machine just started   | `observe_dhcp(mac, interface="br0")` -> every offer, in order                         |
-| ... startable before you start it   | `with observe_dhcp_session(mac, interface="br0") as s:`                               |
-| ... and just the one that answers   | `observe_dhcp_first_reachable(mac, interface="br0")`                                  |
-| Largest unfragmented packet         | `path_mtu(host)`                                                                      |
-| What can this host do               | `icmp_available()`, `dhcp_capture_available()`                                        |
-| Package metadata                    | `print_info()`                                                                        |
-| Name to address, and back           | `resolve(name)`, `reverse_dns(ip)`                                                    |
-| Compare two hardware addresses      | `normalise_mac(written)`                                                              |
-| Parse a port specification          | `parse_ports("22,80,8000-8100")`                                                      |
-| Trace over your own transport       | `trace_path(transport, ...)`, `atrace_path(...)`                                      |
-| async equivalents                   | `aping`, `aping_many`, `ais_reachable`, `atraceroute`, `ascan_ports`, `agrab_banners` |
+| Task                                | Call                                                                                                       |
+|-------------------------------------|------------------------------------------------------------------------------------------------------------|
+| Ping one host                       | `ping("1.1.1.1", 4)`                                                                                       |
+| Sweep many, concurrently            | `ping_many(hosts, concurrency=64)`                                                                         |
+| Is it up, by any means              | `is_reachable(host)`                                                                                       |
+| Path to a host                      | `traceroute(host)`                                                                                         |
+| Scan ports                          | `scan_ports(host, "22,80,8000-8100")`                                                                      |
+| What each host says first on a port | `grab_banners(hosts, 21, farewell=b"QUIT\r\n")` -> host: `Banner`                                          |
+| Uptime, name, model over SNMP       | `read_snmp_system(hosts)` -> host: `SnmpSystem`                                                            |
+| MAC of an address                   | `lookup_mac(ip)`, `get_mac_address(ip)`                                                                    |
+| Which host holds a MAC              | `find_ip_by_mac(mac, scan=True, family=AddressFamily.IPV4)`                                                |
+| Neighbour / ARP cache               | `neighbours()`, `arp_scan(network)`; both take `family=`                                                   |
+| ... only the REACHABLE entries      | `[e for e in neighbours() if e.state is NeighbourState.REACHABLE]`                                         |
+| Static ARP entry, IPv4 (privilege)  | `set_neighbour(ip, mac, interface="eth0")` -> the entry read back                                          |
+| ... and out again                   | `remove_neighbour(ip, interface="eth0")` -> whether there was one                                          |
+| What a sweep will cover             | `sweep_scope()` -> `SweepScope(limit, networks, skipped, complete)`                                        |
+| Sweep exactly that plan             | `arp_scan(scope=scope)`, `find_ip_by_mac(mac, scan=True, scope=...)`                                       |
+| Default route, any route            | `default_gateway()`, `query_route(ip)`                                                                     |
+| Interfaces and subnets              | `local_interfaces()`, `subnet_info()`, `local_networks()`                                                  |
+| Wake a sleeping host                | `wake_on_lan(mac)`                                                                                         |
+| Address of a machine just started   | `observe_dhcp(mac, interface="br0")` -> every offer, in order                                              |
+| ... startable before you start it   | `with observe_dhcp_session(mac, interface="br0") as s:`                                                    |
+| ... and just the one that answers   | `observe_dhcp_first_reachable(mac, interface="br0")`                                                       |
+| Largest unfragmented packet         | `path_mtu(host)`                                                                                           |
+| What can this host do               | `icmp_available()`, `dhcp_capture_available()`                                                             |
+| Package metadata                    | `print_info()`                                                                                             |
+| Name to address, and back           | `resolve(name)`, `reverse_dns(ip)`                                                                         |
+| Compare two hardware addresses      | `normalise_mac(written)`                                                                                   |
+| Parse a port specification          | `parse_ports("22,80,8000-8100")`                                                                           |
+| Trace over your own transport       | `trace_path(transport, ...)`, `atrace_path(...)`                                                           |
+| async equivalents                   | `aping`, `aping_many`, `ais_reachable`, `atraceroute`, `ascan_ports`, `agrab_banners`, `aread_snmp_system` |
 
 `neighbours()` returns both families unless `family=` narrows it. An entry's `state` is a
 `NeighbourState`: `REACHABLE`, `STALE`, `PERMANENT` (a static entry, as `set_neighbour` writes),
@@ -87,20 +88,21 @@ function exists.
 
 ## From the shell
 
-Twenty-two subcommands, one per capability above:
+Twenty-three subcommands, one per capability above:
 
 ```
 ping            ping-many         reachable     traceroute    scan-ports
 banners         mac               find-ip       arp-scan      neighbours
 gateway         set-neighbour     remove-neighbour  subnet    interfaces
 resolve         reverse-dns       mtu           wake          observe-dhcp
-capabilities    info
+snmp-system     capabilities      info
 ```
 
 ```bash
 ipscout ping 1.1.1.1 -c 4
 ipscout scan-ports 192.168.1.10 --ports 22,80,443,8000-8100
 ipscout banners 192.0.2.0/24 --port 21 --farewell 'QUIT\r\n'   # networks expand to hosts
+ipscout snmp-system 192.0.2.0/28         # community from IPSCOUT_SNMP_COMMUNITY, else public
 ipscout mac 8.8.8.8                       # the gateway's, labelled next_hop
 ipscout find-ip 00:00:5e:00:53:af --scan -4   # -4/-6 on find-ip, arp-scan, neighbours too
 ipscout arp-scan --network 192.168.1.0/24
@@ -150,6 +152,56 @@ together; `max_line_bytes` (512) caps the line, and a longer one is cut there an
 right after it without waiting for a reply. A port outside 1-65535, or a `timeout`, `max_line_bytes` or `concurrency`
 that is not positive, raises `ValueError` before anything connects.
 
+## Reading a device's SNMP system group
+
+Most printers, switches and print servers run an SNMP agent. `read_snmp_system` asks each host
+for sysUpTime, sysName, sysDescr and sysObjectID in ONE GET over a connected UDP socket. Plain UDP
+to port 161, so it needs no privilege. Like `grab_banners` it takes host strings, not a network:
+a string such as `"192.0.2.0/28"` is read as a name that does not resolve and comes back
+`UNREACHABLE`, so expand it with `ipaddress` as shown above (the `snmp-system` command expands
+networks for you). The defaults are `community="public"`,
+`port=161`, `timeout=3.0` seconds per host, `concurrency=64` and `version=SnmpVersion.V1`:
+
+```python
+results = ipscout.read_snmp_system(["192.0.2.10", "192.0.2.11"], community="public", timeout=3.0)
+for host, s in results.items():
+    if s.state is ipscout.SnmpState.ANSWERED:
+        print(host, s.name, s.uptime_seconds, s.object_id)
+```
+
+The uptime is the restart detector: read it before an action that restarts the device and again
+after, and a SMALLER value means it restarted, which a reachability check cannot tell you. Three
+holes in that test: the counter wraps to 0 after about 497 days (TimeTicks is 32 bits of
+hundredths), so a smaller value can also be a wrap; `uptime_seconds` is `None` when the agent does
+not report sysUpTime; and a read that is not `ANSWERED` before the action gives you no baseline to
+compare against, so check the first read's state before acting.
+
+Each value is an `SnmpSystem`; its `state` is an `SnmpState`:
+
+- `ANSWERED` - the agent replied; `uptime_seconds`, `name`, `description`, `object_id` are each
+  `None` when the agent lacks that value.
+- `SILENT` - nothing arrived before the deadline. A host that is down, a WRONG COMMUNITY (SNMP
+  answers a bad community with silence), the other SNMP version, a firewall dropping UDP 161, a
+  `timeout` too short for a slow agent, and no agent on a host whose port-unreachable reply is
+  dropped all look like this. `is_reachable(host)` separates a down host from the rest; nothing
+  separates the others from each other.
+- `REFUSED` - ICMP port unreachable came back: the host is up and nothing listens on that port.
+  No agent shows as `REFUSED` only when that ICMP reply reaches you; filtered, it is `SILENT`.
+- `ERROR` - the agent sent an error status or a reply that is not a valid answer; `error` says which.
+- `UNREACHABLE` - the name did not resolve or the network reported no route; `error` says why.
+
+`version=SnmpVersion.V1` (the default) or `SnmpVersion.V2C`, never both: an agent that speaks only
+the other version stays SILENT, which cannot be told from a dead host, so there is no automatic
+fallback - pick the one the device speaks. Under v1 a GET fails as a whole when one value is
+unknown, so the read asks again without it and reports it as `None`. Every distinct host STRING
+gets one entry, keyed exactly as given (case included, nothing resolved or folded), at the position
+of its first occurrence; a repeat is read once. A bare string as `hosts` raises `ValueError`, as
+does a `port` outside 1-65535, a non-positive `timeout` or `concurrency`, or an empty `community`,
+all before anything is sent. The community never appears in an error; from the shell pass it as
+`IPSCOUT_SNMP_COMMUNITY`, not `--community`, which every user sees in the process list. The
+command takes `--version v1|v2c` and `--port`, and exits `0` when any host ANSWERED, `1` when
+none did, `2` on a bad argument.
+
 ## The error contract
 
 Setup problems raise; network conditions do not. `except IPScoutError` catches every one of
@@ -166,8 +218,9 @@ here", and "that MAC holds no IPv6" is an ordinary finding.
 - An unresolvable name, missing permission, or nonsensical argument raises
   `IPScoutResolutionError`, `IPScoutPermissionError`, `IPScoutUnsupportedError`
   or `ValueError`. The many-host calls are the exception for a bad NAME: `ping_many` puts it
-  on that target's `.error`, and `grab_banners` reports it as an `UNREACHABLE` result, so one
-  typo cannot cost the other results. A nonsensical argument still raises before anything is sent.
+  on that target's `.error`, and `grab_banners` and `read_snmp_system` report it as an
+  `UNREACHABLE` result, so one typo cannot cost the other results. A nonsensical argument still
+  raises before anything is sent.
 - A sweep that cannot cover the ground it was asked about raises
   `IPScoutSweepTooWideError` or `IPScoutSweepIncompleteError`. Catch
   `IPScoutSweepError` for either; both are also `ValueError`.
@@ -381,7 +434,7 @@ partial answer is told from a complete one; the same note goes to stderr, never
 to the stream you parse. Exit codes are `0` reached, `1` not reached, `2` error
 - a bad name, a missing capability, or a malformed command line - independent of
 output format. `remove-neighbour` exits `1` when there was no entry to remove, and `banners`
-when no host greeted.
+when no host greeted, `snmp-system` when no host ANSWERED.
 
 ## What it will not do, and why
 
@@ -432,9 +485,9 @@ ICMP round trip and a filtered port is not a dead host.
 - Reading `scan_ports` as a boolean map. It returns each port mapped to a `PortState`: `OPEN`
   means the handshake completed, `CLOSED` means something refused, `FILTERED` means nothing
   answered, and conflating the last two hides the firewall you were looking for.
-- Calling `ping_many`, `scan_ports` or `grab_banners` from inside a running event loop. They
-  raise `RuntimeError` rather than deadlocking - await `aping_many`, `ascan_ports` or
-  `agrab_banners` there.
+- Calling `ping_many`, `scan_ports`, `grab_banners` or `read_snmp_system` from inside a running
+  event loop. They raise `RuntimeError` rather than deadlocking - await `aping_many`,
+  `ascan_ports`, `agrab_banners` or `aread_snmp_system` there.
 - Finding open ports with `scan_ports` and then connecting again to read a banner. That is two
   sessions, and a device that refuses a reconnect right after one is missed; `grab_banners`
   reads on the connection it opens.
