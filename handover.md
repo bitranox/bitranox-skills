@@ -55,9 +55,13 @@
 
 ## Lessons for the next nap
 
-- When a mirrored skill's twin repo's main checkout is on another session's branch, repo-gate reads
-  the twin from that checkout: put the twin text there only for the marketplace commit (and again
-  for an amend), then `git restore` it.
+- When a mirrored skill's twin repo is another live session's checkout, NEVER write into it, not
+  even temporarily: a two-time SKILL.md overwrite there ran during that session's own gate, and it
+  objected. Ask that session first.
+- tooling: repo-gate cannot pair a twin committed in a linked worktree while that repo's main
+  checkout is on another branch (the marketplace commit reads the twin from the main checkout; the
+  twin's push needs the marketplace committed), so the only route that passed wrote into the
+  peer's tree - a gap to queue against hook:repo-gate.
 - When a twin is committed in a linked worktree, fast-forward that repo's main checkout (or push
   it) before the marketplace commit and push: the gate reads the main checkout.
 - When bmk raises a floor across a major during make test, a twin commit's gate can go red for an
