@@ -30,6 +30,19 @@ a hole nobody has drawn a line under is one that gets rediscovered and half-fill
 two "versions with no entry" notes came to sit in this file disagreeing with it.
 
 
+## [10.2.3]
+
+### Changed
+
+- `coding-python-network-probe`: the macOS DHCP capture (`/dev/bpf`) and the macOS static-neighbour write
+  (routing socket) are described as measured as root on a macOS runner VM, no longer as untested; the capture
+  is not yet run on physical hardware or against a real guest boot on a bridge.
+
+### Fixed
+
+- `coding-python-network-probe`: a macOS capture on `lo0` is refused by its link type with
+  `IPScoutUnsupportedError`; the skill said it was refused by name, which no code does.
+
 ## [10.2.2]
 
 ### Added
