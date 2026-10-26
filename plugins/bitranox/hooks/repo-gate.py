@@ -207,19 +207,73 @@ def check_json_valid(root):
     return ["Invalid JSON:"] + bad if bad else []
 
 
-def check_lf_endings(root):
-    rc, paths = _git_paths(root, "ls-files", "*.py", "*.sh", "*.json")
-    if rc != 0:
-        return []  # cannot enumerate -> do not block
-    crlf = []
-    for rel in paths:
-        fp = root / rel
-        try:
-            if b"\r\n" in fp.read_bytes():
-                crlf.append(f"  {rel}")
-        except OSError:
-            continue
-    return ["Files contain CRLF (must be LF):"] + crlf if crlf else []
+#: The file kinds `.gitattributes` pins to `eol=lf`, and so the ones the LF check reads.
+_LF_SUFFIXES = (".py", ".sh", ".json")
+#: Index and tree modes of a regular file; a symlink's blob is its target and a gitlink has none.
+_REGULAR_MODES = frozenset({"100644", "100755"})
+
+
+def _listed_blobs(root, args, env=None):
+    """(rc, [(sha, path)]) of the LF-checked regular files `ls-files -s` or `ls-tree -r` lists."""
+    rc, rows = _git_paths(root, *args, env=env)
+    found = []
+    for row in rows:
+        meta, _, rel = row.partition("\t")
+        fields = meta.split()
+        if len(fields) == 3 and fields[0] in _REGULAR_MODES and rel.endswith(_LF_SUFFIXES):
+            found.append((fields[2] if args[0] == "ls-tree" else fields[1], rel))
+    return rc, list(dict.fromkeys(found))     # an unmerged path is listed once per stage
+
+
+def _shipped_blobs(root, stage):
+    """(rc, [(sha, path)]) of the blobs a commit or push at ``stage`` ships: HEAD's on a push, the
+    index's on a commit, and the selection's on a commit that takes files from disk itself
+    (`CommitSelection`; the index when git cannot build it, as `shipped_files` does)."""
+    if not _is_commit(stage):
+        return _listed_blobs(root, ("ls-tree", "-r", "HEAD"))
+    if isinstance(stage, CommitSelection):
+        with _selection_index(root, stage) as env:
+            if env is not None:
+                return _listed_blobs(root, ("ls-files", "-s"), env=env)
+    return _listed_blobs(root, ("ls-files", "-s"))
+
+
+def _blobs_with_crlf(root, blobs):
+    """The paths among ``blobs`` whose blob holds a CRLF, read in ONE `git cat-file --batch`; None
+    when git cannot read them."""
+    if not blobs:
+        return []
+    try:
+        out = subprocess.run(["git", "cat-file", "--batch"], cwd=str(root), capture_output=True,
+                             input="".join(sha + "\n" for sha, _ in blobs).encode("ascii"))
+    except OSError:                          # no git to run
+        return None
+    if out.returncode != 0:
+        return None
+    data, at, crlf = out.stdout, 0, []
+    for _sha, rel in blobs:
+        end = data.find(b"\n", at)
+        header = data[at:end].split()
+        if end < 0 or len(header) != 3:
+            return None                      # `<sha> missing`, or output this reader cannot follow
+        size = int(header[2])
+        if b"\r\n" in data[end + 1:end + 1 + size]:
+            crlf.append(rel)
+        at = end + 1 + size + 1
+    return crlf
+
+
+def check_lf_endings(root, stage=None):
+    """Refuse CRLF in a .py/.sh/.json BLOB the commit or push ships (``stage``, default the index).
+
+    The blob, never the checkout ([620]): under Git for Windows' default core.autocrlf=true an LF
+    blob is checked out with CRLF, so reading the working tree blocked every correct commit there,
+    and it passed a staged CRLF blob whose checkout had been put back to LF."""
+    rc, blobs = _shipped_blobs(root, STAGE_INDEX if stage is None else stage)
+    crlf = _blobs_with_crlf(root, blobs) if rc == 0 else None
+    if not crlf:
+        return []  # clean, or cannot enumerate or read -> do not block
+    return ["Files contain CRLF (must be LF):"] + [f"  {rel}" for rel in crlf]
 
 
 # pytest handles a per-directory conftest.py specially, so every test dir legitimately has one.
@@ -2225,14 +2279,15 @@ def run_checks(root, ci, full_pytest=None, run_pytest=True, baseline=0, mirror_a
     SCOPE and defaults to `ci`. They are separate axes because a pre-push is BOTH: the maintainer
     (so version-bump, skill-review and mirrors apply) and the last gate before CI (so it runs the
     whole suite CI runs, not just hooks/tests). `mirror_at` is what the commit or push ships of the
-    marketplace (`mirror_stage`): the index on a commit, HEAD on a push. `publishes` says the same command also pushes (`command_publishes`). `notices`, when
+    marketplace (`mirror_stage`): the index on a commit, HEAD on a push; the LF and mirror checks
+    read it. `publishes` says the same command also pushes (`command_publishes`). `notices`, when
     given, collects what passed but must still reach the model (`check_skill_mirrors`)."""
     if full_pytest is None:
         full_pytest = ci
     failures = []
     failures += check_tests_exist(root)
     failures += check_json_valid(root)
-    failures += check_lf_endings(root)
+    failures += check_lf_endings(root, stage=mirror_at)
     failures += check_duplicate_basenames(root)
     failures += check_skills_index(root)
     failures += check_attribution(root)

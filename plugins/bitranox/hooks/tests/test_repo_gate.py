@@ -2856,6 +2856,56 @@ def test_lf_endings_flags_crlf_whatever_the_name_encodes(tmp_path, name):
     assert any(name in f for f in RG.check_lf_endings(tmp_path))
 
 
+# The LF check reads the BLOB a commit or push ships, never the checkout ([620]). Under Git for
+# Windows' default core.autocrlf=true an LF blob is checked out with CRLF, so a check reading the
+# working tree blocked every correct commit there, and passed a CRLF blob whose checkout was LF.
+# The CRLF checkout is written byte for byte, so the case runs on any OS.
+
+def _committed_py(tmp_path, data):
+    """A repo whose HEAD and index hold `a.py` with ``data``."""
+    (tmp_path / "a.py").write_bytes(data)
+    _g(tmp_path, "init", "-q", ".")
+    _g(tmp_path, "add", "-A")
+    _g(tmp_path, "commit", "-qm", "base")
+    return tmp_path
+
+
+def test_lf_endings_passes_an_lf_blob_with_a_crlf_checkout(tmp_path):
+    root = _committed_py(tmp_path, b"x = 1\ny = 2\n")
+    (root / "a.py").write_bytes(b"x = 1\r\ny = 2\r\n")      # what autocrlf=true checks out
+
+    assert RG.check_lf_endings(root) == []
+    assert RG.check_lf_endings(root, stage=RG.STAGE_HEAD) == []
+
+
+def test_lf_endings_flags_a_staged_crlf_blob_whatever_the_checkout_holds(tmp_path):
+    root = _committed_py(tmp_path, b"x = 1\n")
+    (root / "a.py").write_bytes(b"x = 1\r\n")
+    _g(root, "add", "a.py")
+    (root / "a.py").write_bytes(b"x = 1\n")                 # the checkout no longer shows it
+
+    assert any("a.py" in f for f in RG.check_lf_endings(root))
+    assert RG.check_lf_endings(root, stage=RG.STAGE_HEAD) == []   # staged is not pushed
+
+
+def test_lf_endings_flags_a_committed_crlf_blob_on_a_push(tmp_path):
+    root = _committed_py(tmp_path, b"x = 1\r\n")
+    (root / "a.py").write_bytes(b"x = 1\n")
+
+    assert any("a.py" in f for f in RG.check_lf_endings(root, stage=RG.STAGE_HEAD))
+
+
+def test_lf_endings_reads_a_commit_all_from_disk(tmp_path):
+    # `git commit -a` stages the checkout when it runs, so its CRLF is what it ships; a plain
+    # commit of the same index ships the LF blob.
+    root = _committed_py(tmp_path, b"x = 1\n")
+    (root / "a.py").write_bytes(b"x = 1\r\n")
+
+    every = RG.mirror_stage("git commit -qam x", "Bash", str(root))
+    assert any("a.py" in f for f in RG.check_lf_endings(root, stage=every))
+    assert RG.check_lf_endings(root, stage=RG.STAGE_INDEX) == []
+
+
 def git_repo_with_origin(tmp_path, files):
     """A repo carrying an origin/master ref, so the origin-comparing checks actually run.
 
