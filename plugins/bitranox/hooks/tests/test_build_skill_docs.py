@@ -2,6 +2,7 @@
 docs fact-freshness guards (README skill count, reference.md knob table). ASCII."""
 import json
 import re
+import tomllib
 from pathlib import Path
 
 import pytest
@@ -175,6 +176,16 @@ def test_every_skill_count_claim_in_the_docs_is_current():
                                   page.read_text(encoding="utf-8"), re.IGNORECASE)]
     assert claims, "no skill-count claim found; the scan is not reading the docs"
     assert [c for c in claims if c[1] != count] == []
+
+
+def test_package_description_states_no_skill_or_hook_count():
+    # The PyPI description is outside the docs scan above, so a count there rots unchecked: it
+    # said "82 skills and 64 hooks" while 83 skills shipped, and its 64 was the number of .py
+    # files in hooks/ (helper modules included), not of registered hooks.
+    pyproject = tomllib.loads((REPO_ROOT / "pyproject.toml").read_text(encoding="utf-8"))
+    description = pyproject["project"]["description"]
+    assert description, "pyproject.toml has no [project].description to check"
+    assert re.findall(r"\d+\s+(?:skills?|hooks?)\b", description, re.IGNORECASE) == []
 
 
 def test_reference_doc_documents_every_config_knob():
