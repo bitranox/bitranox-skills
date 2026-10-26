@@ -1,70 +1,85 @@
-# STALE - read 2026-10-26, work continued
+# Handover 2026-10-26: [23] batch 6 pass 1 shipped (10.0.20); install, then archive the 14 rows
 
 ## In flight
 
-- Nothing of this session is running: every CI wait ended green, no subagent, workflow or
-  background shell is live (`ps --ppid` clean).
-- Peer worktrees in this repo, NOT mine: `.claude/worktrees/ipscout-snmp-twin` (the ipscout
-  session syncing its drifted `coding-python-network-probe` twin) and `.claude/worktrees/pwshpy45-twin`
-  (the pwshpy session, its [45] item). Leave them alone.
+- A `run_in_background` shell of the old session waits for CI on the pass-1 commit `ed942844`
+  (`ci_wait.py --ref HEAD`, output in the old session's scratchpad `ci-b6p1.out`). It survives the
+  clear and reports into the next conversation; its verdict is the CI result for 10.0.20. If it is
+  gone, re-run `ci_wait.py --sha ed9428447556caa467b9dc3517c12ad75bc07a4d` (bitranox:compuse-toolbox).
+- No subagent or workflow is running.
+- Worktree `.claude/worktrees/fold-23-b6p1` (branch `fold-23-b6p1`) holds the pass-1 commit and
+  this handover commit, both pushed to master. Remove it with wtclean once nothing needs it.
+- Peer worktree `.claude/worktrees/ipscout-mac-twin` is the ipscout session's; leave it alone.
 
 ## Committed, or not
 
-- Pushed and CI green: bitranox-skills 10.0.16 (`3933259e`); twins lib_layered_config `328c63c`
-  (plugin 7.3.4), pwshpy `d41caba` and bmk `0aadc91` (skill-only, no bump; each session ships it in
-  its next release), all with CI and CodeQL green. Memory store `5a40fef` (pass-1 archive of 22)
-  and `3839877` (two fact updates) pushed.
-- NOT done: the 25 pass-2 pointers still carry their long hooks; 4 of their bodies state claims the
-  fold measured false. 10.0.16 is not installed here yet.
-- Gitignored and local: `.plan/fold-23/batch5/pass2/` (h1..h6.json inputs, journal-fold.jsonl,
-  by-label.json, r1.json, r2/r3 inputs and results, review-r1.json, analyze.py, make_checklists.py
-  plus disp_pass2.py, newhooks.json, bodies/ with the 4 corrected bodies).
-- `EXECUTION-USER-REVIEW.md` (gitignored) has the pass-2 owner decision entry.
-- Not mine, left alone: the main checkout's untracked `o`.
+- Pushed: bitranox-skills 10.0.20 `ed942844` (pre-push gate green); memory store `cb6e4cb` (batch 5
+  pass 2: 25 hooks cut, 4 bodies corrected); backlog commits for both.
+- NOT done: the 14 batch-6 archive facts are still live in the store (archive only after 10.0.20
+  is installed); the 37 cut rows (pass 2) are untouched.
+- Gitignored and local (main checkout): `.plan/fold-23/batch6/` (census.json, r1/p1/rn/pn.json,
+  roster.json, journal-check.jsonl, merged.json, dispositions.json, fold/ with g1-g3.json, pre/
+  snapshots, journal-fold.jsonl, journal-r2.jsonl, qs-r2-questions.json, pass1.diff,
+  make_checklists.py), `.plan/fold-23/batch5/pass2/qcheck_installed.py` and `apply_cut.py`,
+  `EXECUTION-USER-REVIEW.md` (batch 6 adjudication and the user's pass-1 choice).
+- Not mine, left alone: the main checkout's untracked `o` (19 bytes, "Nothing to upgrade").
 
 ## Decided, and why - do not reopen
 
-- User: "start [23] pass 2"; "Push all three myself" (twins); "Push it along" for the fleet-wide
-  `ci: setup-uv v10.3.2` commit sitting in the twin repos (it was already on origin by push time).
-- Rows stay with their recorded owner even where the reach lens named a better one (the two
-  German-Windows rows in coding-python-pwshpy, the socket-timeout row in coding-resilience): same
-  rule as batch 4 pass 2, logged in `EXECUTION-USER-REVIEW.md`; the kept short pointer covers the
-  moment the owner is not loaded.
-- The four refuted claims are corrected in the skills, NOT carried: pydantic 2.14.1 `extra="allow"`
-  arm does not swallow its sibling (a bare dict arm does); a rebuilt same-version wheel was re-read
-  on uv 0.13.0; bmk quotes ARGS in push/commit (ship stays unquoted); pyright 1.1.380-1.1.414
-  accept a fully quoted recursive alias (it is a plain str at runtime).
-- Declined review/GREEN gaps are recorded in each skill's
-  `.skillwriter/checklist-20261025-fold23-batch5-pass2.md`.
+- User: "start batch 6"; "Pass 1 now, both groups (Recommended)" - fold the 14 archive rows in one
+  release, archive them after the install.
+- Archive vs cut is my adjudication (logged in `EXECUTION-USER-REVIEW.md`): archive only where the
+  skeptic found nothing host-relevant lost and reach found the owner loaded; these are host and
+  company levels, so most bodies keep host data that a public skill cannot hold.
+- compuse-ssh's trusted-subnet rule is `accept-new` plus a separate known_hosts file plus
+  `ssh-keygen -R ... -f` that file and one retry, matching `fleet_ssh.py`; the archived fact
+  `ssh-internal-accept-host-keys` still says `no` and goes away in the archive step.
+- `store_manifest verify` cannot show a hook or body change (it keys on level, slug, title, pin);
+  the batch 5 pass 2 cut was verified line by line instead (queued against script:store_manifest).
 
 ## Decided against, and why
 
-- No compuse-ssh cross-reference for the decimal-comma rule: its pointer stays and fires there.
-- The vendored upstream uv escape-hatch list (`uv cache clean`, `--reinstall`) stays unedited; the
-  new paragraph names the exception instead.
+- No on-disk-version check for a running unbound in net-firewall-pfsense: no verified way to read
+  the running daemon's version.
+- GREEN gaps declined (in each `.skillwriter/checklist-20261026-fold23-batch6-pass1.md`): keeping a
+  busy-port skip, other OSes beyond the Windows skip, AttributeError wording on older Pythons, an
+  openvpn restart form.
 
 ## Still open, untouched
 
-- [23] steps (1)-(3) above plus batch 6: `OPEN-WORK.md` [23] line.
-- [760] quotecheck jig proposal, awaiting the user's OK: `OPEN-WORK.md`.
-- [730], [740], [750] and the rest: `OPEN-WORK.md`. A tree dream is due; [730] is its input.
+- [23] steps (1)-(4) and batch 6 pass 2: `OPEN-WORK.md` [23] line.
+- [770] guard for the bmk push-message fact (engine advisory): `OPEN-WORK.md`.
 - Queued tooling contributions (contrib_queue, this repo's queue): ref_map misses bare-prose slug
-  mentions; store-edit-guard misses Bash writes to the store.
+  mentions; store-edit-guard misses Bash writes to the store; store_manifest verify cannot see a
+  hook or body change.
+- [760] quotecheck jig proposal, awaiting the user's OK; [730], [740], [750] and the rest:
+  `OPEN-WORK.md`. A tree dream is due; [730] is its input.
 
 ## Lessons for the next nap
 
-- tooling: when archiving facts, grep the slugs as plain text over `facts/` too: ref_map counts
-  only `[[links]]` and missed a deliberate prose mention (queued against meta-self-improve).
-- tooling: store-edit-guard blocks Edit/Write on a fact but not a python `write_text` from Bash;
-  use factedit for re-points (queued against hook:store-edit-guard).
-- When mirroring a skill edit into a twin repo another session works in, tell that session
-  first: the uncommitted twin text makes its repo-gate refuse every commit until both sides land.
-- When a twin repo holds an unpushed commit you did not make, check whether it is a fleet-wide
-  template commit before pushing over it, and ask; it can be pushed by its owner meanwhile.
-- When quote-checking subagent quote-backs, split each quote at ' ... ', ' / ', '|' and newlines
-  and strip `**`, backticks and wrapping quotes before the substring check: agents join lines and
-  annotate (see [760]).
+- When folding facts from host or company levels into public skills, default to cut (keep the fact
+  with a short hook): their bodies carry host data the sessions on that host still use.
+- When a skeptic or RED agent reports that the owner skill contradicts itself on the rule being
+  folded, reconcile the skill in the same pass before archiving the fact.
+- When a workflow round's result is not saved by its script, copy it into the plan dir at once: a
+  round-3 answer had to be recovered from subagent transcripts.
+- When a Workflow needs per-group inputs, write them to a file the agents read (scoring fields
+  removed); a placeholder `args` launch had to be stopped.
+- When substring-checking subagent quote-backs, split each quote at ' ... ', ' / ', '|', newlines,
+  `" and "`, `" (...) "` and `[...]`, strip `**`, backticks and wrapping quotes, expect run-together
+  list items, and treat a punctuation-only miss after a reorder as a match (see [760]).
+- tooling: `store_manifest verify` reports identical after a hook-only or body-only edit (queued).
+- tooling: the AskUserQuestion premise gate refuses each first ask; mark recorded-but-unmeasured
+  premises "unverified" before the first send.
 - Carried from earlier handovers (not yet napped):
+  - tooling: when archiving facts, grep the slugs as plain text over `facts/` too: ref_map counts
+    only `[[links]]` and missed a deliberate prose mention (queued against meta-self-improve).
+  - tooling: store-edit-guard blocks Edit/Write on a fact but not a python `write_text` from Bash;
+    use factedit for re-points (queued against hook:store-edit-guard).
+  - When mirroring a skill edit into a twin repo another session works in, tell that session first:
+    the uncommitted twin text makes its repo-gate refuse every commit until both sides land.
+  - When a twin repo holds an unpushed commit you did not make, check whether it is a fleet-wide
+    template commit before pushing over it, and ask; it can be pushed by its owner meanwhile.
   - When `store_manifest.py backup --out` points inside the softdev tree, `--check-tree` counts the
     copied `CLAUDE.local.md` files as levels: put the backup in the scratchpad.
   - When quote-checking a fold against installed text after fix rounds, use each row's LATEST
@@ -74,8 +89,8 @@
     gate reads it.
   - When a CHANGELOG line summarises a fix that removed an overstatement, re-read it against the
     fix: the first draft reintroduced the removed "only".
-  - When a mirror gate refuses a commit over a mirrored skill the commit does not stage, look for
-    an UNSTAGED edit in that skill: copy it aside, commit, restore it.
+  - When a mirror gate refuses a commit over a mirrored skill the commit does not stage, look for an
+    UNSTAGED edit in that skill: copy it aside, commit, restore it.
   - When a peer's commit will ride on your push to a public repo, scan it for private names first
     and rewrite only the unpushed range (keep a backup branch).
   - When fix rounds touch prose, run a column and fence-closure check over the ADDED lines each
@@ -85,8 +100,6 @@
   - When several sessions bump one marketplace, take the next number from origin at push time and
     tell the peers which number you took.
   - tooling: reformat_tables.py sits at skills/docs-md-table-formatting/ root, not under scripts/.
-  - tooling: the AskUserQuestion premise gate refuses each first ask; mark unmeasured premises
-    "unverified" before the first send.
   - tooling: repo-gate's commit gate judges the INDEX; stage in an earlier call.
   - When a user's "yes" answers one of several open questions, never read it as approving the
     others.
@@ -100,30 +113,28 @@
 
 ## The exact next action
 
-[23], the top-ranked item. Ask the user to run `/plugin marketplace update bitranox-skills` and
-`/reload-plugins`; then quote-check the 25 rows against the installed
-`~/.claude/plugins/cache/bitranox-skills/bitranox/10.0.16/skills/` (adapt
-`.plan/fold-23/batch4/pass2/qcheck_installed.py`, quotes from the latest round per row:
-`.plan/fold-23/batch5/pass2/journal-fold.jsonl` GREEN opus, overridden by `r2-result.json` and the
-r3 bmk answer). Then `store_manifest.py backup --from <tree top> --scope tree --out
-<scratchpad>/b5p2-cut`, and per slug in `newhooks.json`:
-`factedit.py apply --slug <slug> --from <tree top>/projects --hook "<newhook>"`, adding
-`--body-file .plan/fold-23/batch5/pass2/bodies/<slug>.md` for the 4 slugs that have one. Verify:
-manifest shows 25 changed, 0 removed; commit only those 25 fact files plus the projects/ index
-change (the store has ~84 peer-dirty files: stage by explicit path).
+[23], the top-ranked item. Confirm CI green on `ed942844`; then ask the user to run
+`/plugin marketplace update bitranox-skills` and `/reload-plugins`. Then quote-check the 14 archive
+rows against the installed `~/.claude/plugins/cache/bitranox-skills/bitranox/10.0.20/skills/`:
+adapt `.plan/fold-23/batch5/pass2/qcheck_installed.py` to `.plan/fold-23/batch6/fold/` (rows from
+g1-g3.json; GREEN quotes from journal-fold.jsonl overridden by journal-r2.jsonl; RED g3 quotes for
+the 7 ALREADY rows whose skills did not change; soundtouch-decloud rows against its own repo),
+with a control run on 10.0.17. Then archive per the [23] line's step (3).
 
 ## Files that matter
 
-- `OPEN-WORK.md` ([23], [760]), `.plan/fold-23/batch5/pass2/newhooks.json`,
-  `.plan/fold-23/batch5/pass2/bodies/`, `.plan/fold-23/batch5/pass2/analyze.py`
-- `.plan/fold-23/batch4/pass2/qcheck_installed.py` (the installed-text checker to adapt)
+- `OPEN-WORK.md` ([23], [770]); `.plan/fold-23/batch6/dispositions.json` (the 14 archive slugs),
+  `.plan/fold-23/batch6/fold/g1.json`, `g2.json`, `g3.json`, `journal-fold.jsonl`, `journal-r2.jsonl`
+- `.plan/fold-23/batch5/pass2/qcheck_installed.py` (the installed-text checker to adapt)
+- `plugins/bitranox/skills/{process-test-design,coding-input-sanitization,net-firewall-pfsense,compuse-ssh,infra-proxmox}/`
 
 ## How to verify
 
-- `python3 plugins/bitranox/hooks/repo-gate.py --mirrors` (devops-bmk, coding-python-pwshpy,
-  coding-python-layered-config in sync).
-- CI: `ci_wait.py --ref HEAD` from bitranox:compuse-toolbox in bitranox-skills, bmk, pwshpy and
-  lib_layered_config.
+- CI: `ci_wait.py --ref HEAD` from bitranox:compuse-toolbox.
+- Local gate: `env -u VIRTUAL_ENV uv run --with pytest --with PyYAML --with lxml --with defusedxml
+  --with ruamel.yaml --with httpx2 python plugins/bitranox/hooks/repo-gate.py --ci`.
+- Memory store: `python3 <plugin>/skills/meta-self-improve/reconcile_memory_index.py --check-tree
+  <tree top>` (TOTAL 5 before the archive).
 
 Read this, then replace the first line with `# STALE - read <date>, work continued`. Do not
 delete it - if this session ends badly it is the only record of where things stood.
