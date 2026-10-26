@@ -826,6 +826,43 @@ def test_a_case_pattern_inside_or_around_a_subshell_gives_up(command):
     assert S.git_verb_dir(command, "/s", S.GATED_GIT_VERBS) is None
 
 
+@pytest.mark.parametrize("command", [
+    "case a in a) cd /r;; esac; git commit -m x",
+    "case a in a) cd /r ;; esac\ngit commit -m x",
+    "case a in\n  a)\n    cd /r\n    ;;\nesac\ngit commit -m x",
+    "case $x in a) echo;; b) pushd /r;; esac && git push",
+    "f() { cd /r; }; f; git commit -m x",
+    "f() { cd /r; }\nf\ngit commit -m x",
+    "f () {\n  cd /r\n}\nf && git push",
+    "function f { cd /r; }; f && git commit -m x",
+    "f() { cd /r; git commit -m x; }; f",
+    "f() { if true; then { cd /r; }; fi; }; f; git commit -m x",
+])
+def test_a_case_arm_or_a_called_function_holding_a_cd_is_unknown(command):
+    """Which case arm runs, and what a function body does when called, is not in the walk: None,
+    never the directory the command started in."""
+    assert S.git_verb_dir(command, "/s", S.GATED_GIT_VERBS) is None
+
+
+@pytest.mark.parametrize("command, lands", [
+    # a function body runs only when called, so its cd does not move a statement after the definition
+    ("f() {\n  cd /r\n}\ngit commit -m x", "/s"),
+    ("f() { cd /r; }; git commit -m x", "/s"),
+    ("f() { cd /r; }; git commit -m x; f", "/s"),
+    # a case or function without a cd changes nothing
+    ("case a in a) echo x;; esac; git commit -m x", "/s"),
+    ("f() { echo hi; }; f; git commit -m x", "/s"),
+    ("cd /r; case a in a) echo;; esac; git commit -m x", _AT_R),
+    ("f() { echo hi; }; cd /r; f; git commit -m x", _AT_R),
+    ("f() ( cd /a ); f; cd /r; git commit -m x", _AT_R),
+    # `case` and a function name count only as the PROGRAM, never as an argument
+    ("echo case; cd /r; git commit -m x", _AT_R),
+    ("f() { cd /a; }; echo f; git commit -m x", "/s"),
+])
+def test_control_a_case_or_function_without_a_reachable_cd_keeps_the_walk(command, lands):
+    assert S.git_verb_dir(command, "/s", S.GATED_GIT_VERBS) == lands
+
+
 @pytest.mark.parametrize("command, lands", [
     ("(echo ${x:-(a)}; cd /r; true); git commit -m x", "/s"),
     ("(ls @(x|y) >/dev/null; cd /r; true); git commit -m x", "/s"),

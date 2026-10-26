@@ -730,6 +730,96 @@ class _SubshellTracker:
         return here
 
 
+_FUNCTION_NAME = re.compile(r"^[A-Za-z_][A-Za-z0-9_.:-]*$")
+_EMPTY_PARENS = re.compile(r"[ \t]*\([ \t]*\)")
+
+
+def _moves_the_shell(tokens, tool):
+    """True when any word of the statement is a cd-like program, wherever it stands."""
+    return any(basename_for_tool(token, tool).lower() in _CD_PROGRAMS | {"popd"} for token in tokens)
+
+
+def _defined_function(tokens, parens_follow=False):
+    """(name, the tokens after the name) when the statement opens `name() ...`, `name () ...` or
+    `function name ...`, else None.
+
+    `parens_follow` says the text right after the statement is `()`: the segmenter cuts `f () {`
+    at its parentheses, so the statement arrives as the bare name."""
+    if parens_follow and len(tokens) == 1 and _FUNCTION_NAME.match(tokens[0]):
+        return tokens[0], []
+    if tokens[:1] == ["function"] and len(tokens) > 1:
+        name, rest = tokens[1], tokens[2:]
+        name = name[:-2] if name.endswith("()") else name
+        rest = rest[1:] if rest[:1] == ["()"] else rest
+        return (name, rest) if _FUNCTION_NAME.match(name) else None
+    if tokens and tokens[0].endswith("()") and _FUNCTION_NAME.match(tokens[0][:-2]):
+        return tokens[0][:-2], tokens[1:]
+    if len(tokens) > 1 and tokens[1] == "()" and _FUNCTION_NAME.match(tokens[0]):
+        return tokens[0], tokens[2:]
+    return None
+
+
+class _BodyTracker:
+    """Statements the walk reads but cannot place: case arms and function bodies.
+
+    Which `case` arm runs depends on a value, and a function body runs only where the function is
+    CALLED, so a cd in either is not a cd at that point of the text. A case block holding a cd, or a
+    call of a function this command defined with a cd in its `{ }` body, makes every later
+    directory unknown (`unknown`); a statement inside a body is not applied where it is written
+    (`statement` returns True). A `( )` body runs in a subshell, so its cd never escapes and it is
+    read like any other subshell.
+    """
+
+    def __init__(self, tool):
+        self.tool = tool
+        self.cases = 0          # `case ... esac` blocks open
+        self.body = None        # [name, open braces, holds a cd] of the `{ }` body being read
+        self.pending = None     # a function named without its body: `f()` then `{` on the next line
+        self.moving = set()     # functions this command defined whose body holds a cd
+        self.unknown = False
+
+    def statement(self, tokens, parens_follow=False):
+        """Read one statement; True when it sits inside a function body and must not be applied."""
+        if self.body is not None:
+            return self._in_body(tokens)
+        definition = _defined_function(tokens, parens_follow)
+        pending, self.pending = self.pending, None
+        if definition is None and pending and tokens[:1] == ["{"]:
+            definition = pending, tokens
+        if definition is not None:
+            return self._open(*definition)
+        program = next((t for t in tokens if t not in _STATEMENT_KEYWORDS and "=" not in t), None)
+        self._case(program, tokens)
+        self.unknown = self.unknown or program in self.moving
+        return False
+
+    def _open(self, name, rest):
+        if rest[:1] != ["{"]:
+            self.pending = None if rest else name
+            return False
+        self.body = [name, 0, False]
+        return self._in_body(rest)
+
+    def _in_body(self, tokens):
+        body = self.body
+        body[1] += tokens.count("{") - tokens.count("}")
+        body[2] = body[2] or _moves_the_shell(tokens, self.tool)
+        if body[1] <= 0:
+            if body[2]:
+                self.moving.add(body[0])
+            self.body = None
+        return True
+
+    def _case(self, program, tokens):
+        """Track `case ... esac` by the program word, so an `echo case` opens nothing."""
+        if program == "case":
+            self.cases += 1
+        in_case = self.cases > 0
+        if program == "esac" and self.cases:
+            self.cases -= 1
+        self.unknown = self.unknown or (in_case and _moves_the_shell(tokens, self.tool))
+
+
 def git_verb_dir(command, cwd, verbs, tool_name=None):
     """The directory the first `git <verb>` in `command` runs in, or None when it is unreadable.
 
@@ -757,6 +847,12 @@ def git_verb_dir(command, cwd, verbs, tool_name=None):
     subshell closes (`_SubshellTracker`), so the git after it runs where the command started.
     Bash only again: PowerShell's `( )` and `$( )` run in the same runspace, so its location sticks.
 
+    A cd inside a `case` block, or inside the `{ }` body of a function this command defines and
+    then calls, makes the verb's directory None (`_BodyTracker`): which arm runs is decided by a
+    value, and a body runs where it is called, not where it is written. `case a in a) cd /r;; esac;
+    git commit` and `f() { cd /r; }; f; git commit` both commit in /r while the text reads /s. A body
+    that is only defined moves nothing, and a verb inside one gives None.
+
     Once the command assigns `CDPATH` (`CDPATH=/a; cd sub`, `export CDPATH=...`, or as a prefix),
     a RELATIVE cd is unknown: bash tries each CDPATH entry first, and whether `/a/sub` exists is not
     in the text. A CDPATH inherited from the environment is invisible here and not modelled.
@@ -766,6 +862,7 @@ def git_verb_dir(command, cwd, verbs, tool_name=None):
     segments = list(iter_segments(text, tool))
     known, leading, previous_end = {}, tool == "Bash", 0
     subshells, gap_start, cdpath_set = _SubshellTracker(), 0, False
+    bodies = _BodyTracker(tool)
     for index, (at, segment) in enumerate(segments):
         if tool == "Bash":
             here = subshells.gap(text[gap_start:at], here)
@@ -788,10 +885,15 @@ def git_verb_dir(command, cwd, verbs, tool_name=None):
             continue
         tokens = [_expand_known(token, usable) for token in tokens]
         closers = subshells.statement(segment, tokens) if tool == "Bash" else 0
+        in_body = bodies.statement(tokens, _EMPTY_PARENS.match(text, at + len(segment)) is not None)
         # With CDPATH set, a relative target is unknown: reading it from no directory (None) makes
         # `_readable_dir` refuse exactly the relative ones and keep the rooted ones.
         changed, landing = _directory_change_tokens(tokens, None if cdpath_set else here, tool)
-        if changed:
+        if in_body:
+            # Defined here, run only where it is called: a verb in it has no readable directory.
+            if git_segment_dir(tokens, verbs, here, tool)[0]:
+                return None
+        elif changed:
             # `cd x & ...` and `cd x | ...` run the cd in a subshell: the next statement starts
             # where this one did.
             if gap_after.strip(" \t") not in ("&", "|"):
@@ -799,7 +901,7 @@ def git_verb_dir(command, cwd, verbs, tool_name=None):
         else:
             is_verb, where = git_segment_dir(tokens, verbs, here, tool)
             if is_verb:
-                return None if subshells.lost else where
+                return None if subshells.lost or bodies.unknown else where
         if closers:
             here = subshells.gap(")" * closers, here)
     return None
