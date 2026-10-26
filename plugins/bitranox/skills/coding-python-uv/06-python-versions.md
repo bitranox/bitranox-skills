@@ -178,8 +178,9 @@ If a virtual environment was created with an explicitly requested patch version,
 
 ### Gotcha: `install` does not upgrade, and a venv can be stranded off the alias
 
-Three behaviours here bite together. All measured on uv 0.11.x; patch-upgrades are a *preview*
-feature, so re-check after a uv upgrade rather than trusting this.
+Three behaviours here bite together. All measured on uv 0.13.0, offline, against an interpreter
+store holding one concrete patch; patch-upgrades are a *preview* feature, so re-check after a uv
+upgrade rather than trusting this.
 
 **1. `uv python install <minor>` does NOT move an installed minor to a newer patch.** With 3.14.0
 installed and 3.14.5 available, it reports `Installed Python 3.14.0` and keeps the old one. Only
@@ -192,7 +193,7 @@ $ uv python install 3.14    # present? (no-op if so - it will NOT upgrade)
 $ uv python upgrade 3.14    # current? (installs if absent, fetches the newer patch if behind)
 ```
 
-Both cost about 0.1s when already current, and `upgrade` works offline
+Both cost under 0.1s when already current, and `upgrade` works offline
 (`Python 3.14 is already on the latest supported patch release`).
 
 **2. A bare `uv venv` can strand the venv off the upgrade path.** Transparent patch upgrades work
@@ -203,16 +204,18 @@ concrete patch install, the minor dir never exists, a bare `uv venv` binds strai
 `uv python list` advertises 3.14.5. Seen on a whole fleet at once. Requesting the MINOR
 (`uv venv --python 3.14`) binds to the alias and keeps the venv on the upgrade path.
 
-**3. `pyvenv.cfg` goes stale, so never read it to decide "is this venv current".** The upgrade
-repoints the alias; `version_info` is written once, at creation:
+**3. `pyvenv.cfg` cannot say which patch runs, so never read it to decide "is this venv
+current".** For a venv bound to the minor alias, uv writes only the minor into `version_info`. A
+venv on the alias made by `python -m venv` or an older uv records the full patch it was created
+with, written once, which goes stale when the alias moves:
 
 ```console
-$ uv venv --python 3.12 .venv     # pyvenv.cfg 3.12.12, interpreter 3.12.12
-$ uv python upgrade 3.12          # installs 3.12.13, repoints the alias
+$ uv venv --python 3.12 .venv     # interpreter 3.12.12, through the minor alias
 $ grep version_info .venv/pyvenv.cfg
-version_info = 3.12.12            # <- stale text
+version_info = 3.12               # <- the minor only, no patch
+$ uv python upgrade 3.12          # installs 3.12.15, repoints the alias
 $ .venv/bin/python -c 'import sys; print(sys.version_info[:3])'
-(3, 12, 13)                       # <- reality: uv already upgraded it
+(3, 12, 15)                       # <- reality: uv already upgraded it
 ```
 
 Ask the interpreter. Trusting the text makes a tool "fix" a venv that is already correct.

@@ -325,12 +325,8 @@
   "replacement",
   "covers",
   "project",
-  "pip-tools",
-  "0.10.2",
-  "2026-02-12",
   "python-version",
-  "06-python-versions.md",
-  "0.11.x"
+  "pip-tools"
  ],
  "coding-resilience": [
   "code",

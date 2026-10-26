@@ -1,11 +1,15 @@
 ---
 name: coding-python-uv
-description: Use when writing, configuring, debugging, or deploying Python projects that use uv as the package manager, virtual environment manager, Python version manager, or pip replacement. Covers project setup, dependency management, lockfiles, scripts, tools, building, publishing, Docker, CI/CD, authentication, caching, and migration from pip/pip-tools. Baseline is uv 0.10.2 (2026-02-12); the Python-version behaviours in 06-python-versions.md are measured on 0.11.x.
+description: Use when writing, configuring, debugging, or deploying Python projects that use uv as the package manager, virtual environment manager, Python version manager, or pip replacement. Covers project setup, dependency management, lockfiles, Python-version installs and .python-version pins, scripts, tools, building, publishing, Docker, CI/CD, authentication, caching, and migration from pip/pip-tools.
 ---
 
 # uv - Python Package & Project Manager
 
 All documentation files are flat, numbered markdown files. Use the Read tool to load referenced files identified as relevant for full details.
+
+Versions: the command reference follows uv 0.10.2 (2026-02-12), the release its install URLs,
+Docker tags and `uv_build` pins name. Each gotcha names the uv it was measured on in its own text
+(most on 0.13.0, a few on 0.11.x); compare that with `uv --version` before relying on it.
 
 ---
 
