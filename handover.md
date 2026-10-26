@@ -1,4 +1,4 @@
-# Handover 2026-10-26: [23] batch 6 pass 1 shipped (10.0.20); install, then archive the 14 rows
+# STALE - read 2026-10-26, work continued
 
 ## In flight
 
