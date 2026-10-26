@@ -30,6 +30,14 @@ a hole nobody has drawn a line under is one that gets rediscovered and half-fill
 two "versions with no entry" notes came to sit in this file disagreeing with it.
 
 
+## [10.1.4]
+
+### Changed
+
+- `coding-python-logging`: lib_log_rich 7.3.0 supports free-threaded 3.14t, so the Install block moves the
+  `[orjson]` extra's cut to 3.14 (a core dependency below it), lists the supported free-threaded builds (3.14t,
+  3.15t), says never to add `[orjson]` on them, and that lib_log_rich does not install on 3.13t.
+
 ## [10.1.3]
 
 ### Changed
