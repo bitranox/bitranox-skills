@@ -101,12 +101,12 @@ snmp-system     capabilities      info
 
 ```bash
 ipscout ping 1.1.1.1 -c 4
-ipscout scan-ports 192.168.1.10 --ports 22,80,443,8000-8100
+ipscout scan-ports 192.0.2.10 --ports 22,80,443,8000-8100
 ipscout banners 192.0.2.0/24 --port 21 --farewell 'QUIT\r\n'   # networks expand to hosts
 ipscout snmp-system 192.0.2.0/28         # community from IPSCOUT_SNMP_COMMUNITY, else public
 ipscout mac 8.8.8.8                       # the gateway's, labelled next_hop
 ipscout find-ip 00:00:5e:00:53:af --scan -4   # -4/-6 on find-ip, arp-scan, neighbours too
-ipscout arp-scan --network 192.168.1.0/24
+ipscout arp-scan --network 192.0.2.0/24
 ipscout observe-dhcp 02:00:5e:10:00:00 --interface br0   # needs root
 ipscout capabilities                      # what this host can actually do
 ipscout --json subnet                     # every command takes --json
@@ -242,7 +242,7 @@ answer:
 
 ```python
 ipscout.lookup_mac("8.8.8.8")
-# MacLookup(mac='...', scope=MacScope.NEXT_HOP, via_ip='192.168.1.1')
+# MacLookup(mac='...', scope=MacScope.NEXT_HOP, via_ip='192.0.2.1')
 ipscout.get_mac_address("8.8.8.8")  # None: refuses to pass off the gateway's
 ```
 

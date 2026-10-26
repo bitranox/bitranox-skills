@@ -29,6 +29,14 @@ than the change, so entries reconstructed from them would read like coverage wit
 a hole nobody has drawn a line under is one that gets rediscovered and half-filled - which is how
 two "versions with no entry" notes came to sit in this file disagreeing with it.
 
+
+## [10.0.25]
+
+### Changed
+
+- `coding-python-network-probe`: the examples use documentation addresses (RFC 5737, RFC 7042) in place of
+  values taken from a real network, mirroring ipscout's README and usage guide.
+
 ## [10.0.24]
 
 ### Changed
