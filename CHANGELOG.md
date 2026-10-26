@@ -29,6 +29,16 @@ than the change, so entries reconstructed from them would read like coverage wit
 a hole nobody has drawn a line under is one that gets rediscovered and half-filled - which is how
 two "versions with no entry" notes came to sit in this file disagreeing with it.
 
+## [10.0.21]
+
+### Changed
+
+- `coding-python-network-probe` covers ipscout 2.3.0's MAC lookup fallback:
+  `lookup_mac(ip, active=True, fallback_to_cache=True)`, `MacMethod` / `MacLookup.method`, which
+  errors fall back to the cache and which still raise, why an unanswered active ask is never
+  replaced by a cache entry, Windows' `SendARP` answering from its own ARP table, and the zone
+  spellings accepted. Mirrored from the ipscout repo's twin.
+
 ## [10.0.20]
 
 ### Changed

@@ -42,6 +42,7 @@ Python 3.10+.
 | What each host says first on a port | `grab_banners(hosts, 21, farewell=b"QUIT\r\n")` -> host: `Banner`                                          |
 | Uptime, name, model over SNMP       | `read_snmp_system(hosts)` -> host: `SnmpSystem`                                                            |
 | MAC of an address                   | `lookup_mac(ip)`, `get_mac_address(ip)`                                                                    |
+| MAC, asked if possible, else cache  | `lookup_mac(ip, active=True, fallback_to_cache=True)` -> `.method` says which                              |
 | Which host holds a MAC              | `find_ip_by_mac(mac, scan=True, family=AddressFamily.IPV4)`                                                |
 | Neighbour / ARP cache               | `neighbours()`, `arp_scan(network)`; both take `family=`                                                   |
 | ... only the REACHABLE entries      | `[e for e in neighbours() if e.state is NeighbourState.REACHABLE]`                                         |
@@ -383,9 +384,29 @@ degrading:
 
 The rules these follow, worth relying on:
 
-- **They never silently degrade.** `active=True` without the rights raises; it
-  does not hand back a stale cache entry dressed up as a fresh one. A SYN scan
-  does not quietly become a connect scan.
+- **They never silently degrade.** `active=True` without the rights raises; it does not hand
+  back a stale cache entry dressed up as a fresh one. A SYN scan does not quietly become a
+  connect scan. To get an answer either way, ask for the fallback out loud:
+  `lookup_mac(ip, active=True, fallback_to_cache=True)` reads the cache only when this host
+  cannot ask: no privilege (`IPScoutPermissionError`), or an interface that cannot carry the
+  request (no hardware address, as on loopback), no route, or a send that failed (all
+  `IPScoutUnsupportedError`). Every `MacLookup` says in `method` which one answered:
+  `MacMethod.ACTIVE` (asked through the active path; on Windows IPv4 that is `SendARP`,
+  which answers from Windows' own ARP table when it holds the address and sends a request
+  only when it does not) or `MacMethod.CACHE`. An active ask nobody answered stays `ACTIVE`
+  with `mac=None` and is never replaced by a cache entry: no reply before the timeout (on
+  Windows, `ERROR_BAD_NET_NAME`, the only status read as no reply) is that miss, while any
+  other error the OS reports while sending or reading is the failed send above. A host name
+  (`ValueError`) and a zone naming no interface at all (`IPScoutResolutionError`, a typo
+  such as `%eht0`; an index is accepted, and on Windows both the friendly adapter name
+  `local_interfaces()` reports and the `if_nametoindex` name) raise whatever
+  `fallback_to_cache` says, and `fallback_to_cache=True` without `active=True` is a
+  `ValueError`. `get_mac_address` takes the same flag but returns only the address, and its
+  `None` then cannot tell an active miss from a cache miss, so use `lookup_mac` when the
+  method matters. CLI: `ipscout mac IP --active --fallback-to-cache`. Never wrap
+  `active=True` in `except IPScoutError` and retry passively yourself: that also swallows
+  the typo'd zone, and the cache record you get back cannot tell an active ask that was
+  refused from one never tried.
 - **Writing the neighbour cache has no unprivileged route.** `set_neighbour` maps an IPv4
   address to one device's MAC (the ARP trick embedded devices are first addressed with), returns
   the entry read back from the cache (a `Neighbour`; state `PERMANENT` on Linux and Windows,
@@ -399,7 +420,10 @@ The rules these follow, worth relying on:
   `IPScoutPermissionError` even when nothing is there, privileged it answers `False` when there
   was no entry. It deletes rather than restores, so a replaced entry is gone: borrow an address
   that has no entry, checked first with `get_mac_address(ip, active=True)` (`None` = nothing
-  answers). A neighbour entry is not a route - traffic to an address outside every local subnet
+  answers). With the fallback, use `lookup_mac` and read `method` first: a `CACHE` answer
+  with no MAC only says this host has not talked to that address, not that it is free, so do
+  not borrow on it: get the privilege for an active ask, or pick an address you know. A
+  neighbour entry is not a route - traffic to an address outside every local subnet
   still goes to the gateway and never uses it - so borrow an address inside a local subnet; ipscout
   adds no routes. `interface=` takes the index as digits (portable) or a name - unlike a zone,
   where Windows resolves only the index: on Windows either
