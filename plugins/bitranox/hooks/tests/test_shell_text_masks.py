@@ -215,3 +215,54 @@ def test_an_arithmetic_shift_no_longer_reads_as_a_bare_heredoc_to_the_selfref_gu
 def test_the_jig_nudge_finds_the_script_heredoc_after_an_arithmetic_shift():
     command = "x=$((1 << n)); cat > run.sh <<'EOS'\necho hi\nEOS"
     assert jig_repetition_nudge.heredoc_writes(command) == [("run.sh", "echo hi")]
+
+
+# ---- mask_data_regions: a `)` quoted inside `$(...)` does not close it ------------------------
+#
+# The substitution's depth count ignored quoting, so a quoted `)` closed it early and the quote
+# that followed ran on to the end of the command: every later statement vanished from the guards.
+
+
+def _sub_then_push(substitution):
+    """`x=<substitution>; git push` and the mask that hides exactly the substitution."""
+    command = "x=" + substitution + "; git push"
+    return command, "x=" + "Q" * len(substitution) + "; git push"
+
+
+@pytest.mark.parametrize("substitution", [
+    '$(grep -l "mem:$s)" f.md | wc -l)',            # the shape the backlog item recorded
+    "$(echo ')')",                                  # single quotes
+    '$(echo "a' + _B + '")")',                      # an escaped quote does not close the string
+    '$(echo "$(echo ")")")',                        # a substitution nested in double quotes
+    "$(echo $'a" + _B + "')')",                     # ANSI-C: its escaped quote does not close
+    "$(echo a # it's\n)",                           # an apostrophe in a comment is not a quote
+])
+def test_a_quoted_paren_inside_a_substitution_does_not_close_it(substitution):
+    command, expected = _sub_then_push(substitution)
+    assert S.mask_data_regions(command) == expected
+
+
+def test_a_substitution_inside_a_top_level_double_quote_keeps_its_quoted_paren():
+    command = 'echo "$(echo ")")"; git push'
+    assert S.mask_data_regions(command) == "echo " + "Q" * 13 + "; git push"
+
+
+@pytest.mark.parametrize("substitution", [
+    "$(echo a)",
+    "$(( 1 + (2) ))",                               # arithmetic keeps its nested parens
+    "$(echo $(date) b)",
+    '$(echo "a b")',
+])
+def test_control_an_unquoted_substitution_masks_as_before(substitution):
+    command, expected = _sub_then_push(substitution)
+    assert S.mask_data_regions(command) == expected
+
+
+def test_an_unterminated_substitution_still_runs_to_the_end():
+    command = 'x=$(echo ")"; git push'
+    assert S.mask_data_regions(command) == "x=" + "Q" * (len(command) - 2)
+
+
+def test_the_chain_guard_sees_the_push_after_a_quoted_paren_substitution():
+    command = 'git commit -m x; n=$(grep -l "mem:$s)" f.md | wc -l); git push'
+    assert block_git_semicolon_chain.chained_state_changes(command) == ["commit", "push"]

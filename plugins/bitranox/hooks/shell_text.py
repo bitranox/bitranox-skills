@@ -1594,6 +1594,81 @@ def _hash_starts_a_word(out, word_at, cont_at, cont_prev):
     return out[-1].isspace()
 
 
+# The two quoting contexts `_quoting_end` walks. A frame is `[kind, open_parens]`; the paren count
+# is only used by a substitution, where `$(( ))` arithmetic and subshells nest plain parentheses.
+_DOUBLE_QUOTE, _SUBSTITUTION = "double-quote", "substitution"
+
+
+def _quoting_end(text, start, context, escape, bash_quoting):
+    """Index just past the character that closes a `"..."` string or a `$(...)` substitution
+    whose body starts at `start`; an unterminated one runs to the end, as bash keeps reading.
+
+    Each context has its own quoting, and they nest: a `$(...)` inside a double-quoted string
+    opens a fresh one, so `"$(echo ")")"` is ONE string, and a `)` written inside quotes within a
+    substitution does not close it. A depth count that ignored quoting closed
+    `$(grep -l "mem:$s)" f | wc -l)` at the quoted `)`, and the quote after it then ran to the end
+    of the command, hiding every later statement. The walk keeps an explicit stack rather than
+    recursing, so a pathologically nested command cannot exhaust Python's recursion limit.
+    """
+    stack = [[context, 0]]
+    index, size = start, len(text)
+    while stack and index < size:
+        if escape and text[index] == escape and index + 1 < size:
+            index += 2
+            continue
+        if stack[-1][0] == _DOUBLE_QUOTE:
+            index = _double_quote_step(text, index, stack)
+        else:
+            index = _substitution_step(text, index, stack, bash_quoting)
+    return size if stack else index
+
+
+def _double_quote_step(text, index, stack):
+    """One step inside a double-quoted string: only its closing quote and a `$(` mean anything."""
+    if text[index] == '"':
+        stack.pop()
+        return index + 1
+    if text.startswith("$(", index):
+        stack.append([_SUBSTITUTION, 0])
+        return index + 2
+    return index + 1
+
+
+def _substitution_step(text, index, stack, bash_quoting):
+    """One step inside `$(...)`: quotes and comments are skipped whole, parentheses are counted."""
+    char = text[index]
+    if text.startswith("$(", index):
+        stack.append([_SUBSTITUTION, 0])
+        return index + 2
+    if bash_quoting and text.startswith("$$", index):
+        return index + 2                       # the PID: its second `$` does not open `$'...'`
+    if bash_quoting and text.startswith("$'", index):
+        return _ansi_c_end(text, index + 2)
+    if char == "'":
+        closing = text.find("'", index + 1)
+        return len(text) if closing == -1 else closing + 1
+    if char == '"':
+        stack.append([_DOUBLE_QUOTE, 0])
+        return index + 1
+    if char == "#" and (index == 0 or text[index - 1].isspace() or text[index - 1] in ";&|("):
+        newline = text.find("\n", index)     # a comment's apostrophe is not a quote
+        return len(text) if newline == -1 else newline
+    return _paren_step(text, index, stack)
+
+
+def _paren_step(text, index, stack):
+    """Count a plain parenthesis inside a substitution; the unmatched `)` closes it."""
+    frame = stack[-1]
+    if text[index] == "(":
+        frame[1] += 1
+    elif text[index] == ")":
+        if frame[1]:
+            frame[1] -= 1
+        else:
+            stack.pop()
+    return index + 1
+
+
 def mask_data_regions(command: str, fill: str = "Q", tool_name="Bash") -> str:
     """Replace every region that cannot affect STATEMENT STRUCTURE with a filler character.
 
@@ -1605,7 +1680,8 @@ def mask_data_regions(command: str, fill: str = "Q", tool_name="Bash") -> str:
     Four regions are masked, each including its own delimiters:
 
     - single- and double-quoted strings, and ANSI-C `$'...'` strings (where `\\'` does not close);
-    - `$(...)` command substitution and `$((...))` arithmetic, depth-counted so nesting survives;
+    - `$(...)` command substitution and `$((...))` arithmetic, depth-counted so nesting survives,
+      with the quotes inside them honoured (see `_quoting_end`);
     - `${...}` parameter expansion and `@{...}` revspecs, whose braces are a word, not a
       brace GROUP - `git rev-list @{u}...HEAD` must not read as shell structure;
     - backtick substitution;
@@ -1658,21 +1734,17 @@ def mask_data_regions(command: str, fill: str = "Q", tool_name="Bash") -> str:
             stop = _ansi_c_end(command, index + 2)
             out.append(fill * (stop - index))
             index = stop
-        elif char in "'\"":
-            # Scan for the CLOSING quote rather than the next one: inside a double-quoted region
-            # `\"` is an escaped quote, and `find` would stop there, leaving the rest of a commit
-            # message to be scanned as shell. Single quotes have no escape, so only `"` looks.
-            cursor = index + 1
-            while cursor < size:
-                if char == '"' and escape and command[cursor] == escape and cursor + 1 < size:
-                    cursor += 2
-                    continue
-                if command[cursor] == char:
-                    cursor += 1
-                    break
-                cursor += 1
-            out.append(fill * (cursor - index))       # unterminated quote runs to the end
-            index = cursor
+        elif char == "'":
+            closing = command.find("'", index + 1)   # single quotes have no escape
+            stop = size if closing == -1 else closing + 1
+            out.append(fill * (stop - index))
+            index = stop
+        elif char == '"':
+            # Scan for the CLOSING quote rather than the next one: `\"` is an escaped quote, and a
+            # `$(...)` inside the string opens its own quoting, so `"$(echo ")")"` is ONE string.
+            stop = _quoting_end(command, index + 1, _DOUBLE_QUOTE, escape, bash_quoting)
+            out.append(fill * (stop - index))       # unterminated quote runs to the end
+            index = stop
         elif char == "`" and bash_quoting:
             closing = command.find("`", index + 1)
             stop = size if closing == -1 else closing + 1
@@ -1684,25 +1756,9 @@ def mask_data_regions(command: str, fill: str = "Q", tool_name="Bash") -> str:
             out.append(fill * (stop - index))
             index = stop
         elif command.startswith("$(", index):
-            depth, cursor = 0, index
-            while cursor < size:
-                if command.startswith("$(", cursor):
-                    depth += 1
-                    cursor += 2
-                    continue
-                if command[cursor] == "(":
-                    depth += 1                    # arithmetic `$(( ))` and nested subshells
-                    cursor += 1
-                    continue
-                if command[cursor] == ")":
-                    depth -= 1
-                    cursor += 1
-                    if depth == 0:
-                        break
-                    continue
-                cursor += 1
-            out.append(fill * (cursor - index))
-            index = cursor
+            stop = _quoting_end(command, index + 2, _SUBSTITUTION, escape, bash_quoting)
+            out.append(fill * (stop - index))
+            index = stop
         elif char == "#" and _hash_starts_a_word(out, -1, cont_at, cont_prev):
             while index < size and command[index] != "\n":
                 out.append(" ")
