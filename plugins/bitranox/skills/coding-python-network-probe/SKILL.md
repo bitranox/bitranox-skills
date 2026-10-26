@@ -352,19 +352,27 @@ Linux, root on macOS, Administrator on Windows. Ask `dhcp_capture_available()`
 first.
 
 **They do not all promise the same thing, and the difference decides whether
-this works for you.** On Linux and macOS the capture binds to a bridge and sees
-the traffic the bridge forwards, including frames addressed to a guest - which
-is the VM case this exists for. On Windows it uses `SIO_RCVALL`, which sees
-what reaches *this host's* interface; on a Hyper-V virtual switch that excludes
-other guests unless the port is set to mirror. So Windows is right for DHCP on
-this host's own segment, and the POSIX pair for watching a guest boot.
+this works for you.** On Linux the capture binds to a bridge and sees the
+traffic the bridge forwards, including frames addressed to a guest - which is
+the VM case this exists for. **On macOS name the guest's member port, never the
+bridge:** a capture on a macOS bridge sees only frames delivered to this host,
+never the replies it forwards to a guest, so it would report a machine that did
+ask for an address as one that never did. ipscout therefore refuses a `bridgeN`
+interface with `IPScoutUnsupportedError`; `ifconfig bridgeN` lists the members.
+On Windows it uses `SIO_RCVALL`, which sees what reaches *this host's*
+interface; on a Hyper-V virtual switch that excludes other guests unless the
+port is set to mirror. So Windows is right for DHCP on this host's own segment,
+and Linux (bridge) or macOS (member port) for watching a guest boot.
 
 **The macOS capture (`/dev/bpf`) is measured on a macOS runner VM, not on physical
-hardware** (ipscout 2.5.0, checked 2026-10-26 - `ipscout --version`). As root it
-captured frames on a `feth` pair end to end; it has not yet watched a real guest
-boot on a bridge. Linux is the one with the longest record; on macOS, confirm the
-first capture you depend on returns the address you expect before relying on it. On macOS
-name a bridge or physical interface, not `lo0` - loopback is not Ethernet-framed,
+hardware** (ipscout 2.5.1, checked 2026-10-26 - `ipscout --version`). As root it
+watched the VM's own macOS DHCP client, running on a `feth` interface, get and bind
+an address through a bridge, capturing on that interface's `feth` peer, which is the
+bridge member; a capture on the bridge itself saw none of the replies the bridge
+forwarded to that member (`tcpdump` agreed). A separate guest VM booting behind a
+macOS bridge is not yet measured. Linux is the one with the longest record; on macOS,
+confirm the first capture you depend on returns the address you expect before
+relying on it. On macOS also do not name `lo0` - loopback is not Ethernet-framed,
 so its link type is refused with `IPScoutUnsupportedError` rather than silently
 returning nothing.
 

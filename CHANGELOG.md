@@ -30,6 +30,16 @@ a hole nobody has drawn a line under is one that gets rediscovered and half-fill
 two "versions with no entry" notes came to sit in this file disagreeing with it.
 
 
+## [10.2.6]
+
+### Fixed
+
+- `coding-python-network-probe`: on macOS the DHCP capture is pointed at the guest's member port, never the
+  bridge. A capture on a macOS bridge sees only frames delivered to this host, never the replies the bridge
+  forwards to a guest, and ipscout 2.5.1 refuses a `bridgeN` interface with `IPScoutUnsupportedError`; the
+  skill said Linux and macOS both see what a bridge forwards. The measurement line says what ran on the
+  runner VM and that a separate guest VM behind a macOS bridge is not yet measured.
+
 ## [10.2.5]
 
 ### Changed
