@@ -30,6 +30,14 @@ a hole nobody has drawn a line under is one that gets rediscovered and half-fill
 two "versions with no entry" notes came to sit in this file disagreeing with it.
 
 
+## [10.1.2]
+
+### Changed
+
+- `coding-python-logging`: the install block names the `lib_log_rich[orjson]` extra (lib_log_rich 7.2.0): from
+  Python 3.15 orjson is optional, below 3.15 it stays a core dependency, and a free-threaded build encodes with
+  stdlib `json`.
+
 ## [10.1.1]
 
 ### Changed
