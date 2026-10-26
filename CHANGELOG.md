@@ -29,6 +29,21 @@ than the change, so entries reconstructed from them would read like coverage wit
 a hole nobody has drawn a line under is one that gets rediscovered and half-filled - which is how
 two "versions with no entry" notes came to sit in this file disagreeing with it.
 
+## [10.0.22]
+
+### Changed
+
+- `coding-python-logging`: describes lib_log_rich 7.0. Examples pass enum members (`ConsoleStream`,
+  `ConsoleTheme`, `FormatPreset`, `GraylogProtocol`, `QueuePolicy`, `DumpFormat`, `ExportStyle`,
+  `DropReason`) from `lib_log_rich.domain`; `RuntimeConfig(...)` refuses an unknown enum value with a
+  `ValidationError`; `bind()` takes only the context fields plus `extra={...}`; `ContextSnapshot`
+  and `dump_context_snapshot` / `load_context_snapshot` carry context to a child process;
+  `enable_dotenv(..., dotenv_override=True)` replaces `load_dotenv`; ring-buffer persistence is only
+  for code that builds `RingBuffer(checkpoint=JsonlCheckpoint(path))` itself. The stdlib-bridge
+  bullet says `lib_log_rich.*` warnings reach `logging.lastResort` when only bridges would see them.
+  Version-scoped lines ("from 6.5.1", ">= 6.4.0", "earlier versions ...") are rewritten as current
+  behaviour.
+
 ## [10.0.21]
 
 ### Changed
