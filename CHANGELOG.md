@@ -29,6 +29,38 @@ than the change, so entries reconstructed from them would read like coverage wit
 a hole nobody has drawn a line under is one that gets rediscovered and half-filled - which is how
 two "versions with no entry" notes came to sit in this file disagreeing with it.
 
+## [10.0.23]
+
+### Changed
+
+- `infra-proxmox`: a Windows guest on `cpu: host` runs about 25% slower because VBS starts; pick a
+  named model of the oldest node's generation and confirm the VBS status in the guest. Docker in a
+  privileged CT, and the AppArmor divert an unprivileged one also needs. New references for host
+  networking (the ifupdown2 dry run, a bond `primary` set in `post-up`, a bridge over a bond with a
+  WLAN slave, a supplicant that survives `ifreload`), for de-cloning a restored guest, and for a
+  pool member whose GPT is corrupt. Rows for a bare PVE 9 node, the enterprise repository, and an
+  LXC memory limit sized from `memory.peak`.
+- `net-firewall-pfsense`: dummynet limiters (`references/limiters.md`), Tailscale Accept DNS on
+  the box, restarting unbound after a resolver change, retiring a host across its config paths,
+  and `pfSsh.php` run as `playback`. `scripts/pfsense.py doctor` now tells you to fix box DNS
+  before touching an upgrade lock, checks both lock paths, and no longer suggests a quad-100
+  forward zone.
+- `compuse-ssh`: `ConnectTimeout` bounds the connect and key exchange, not the session; a pushed
+  file on a Windows OpenSSH target reads 0 bytes until the write handle closes.
+- `infra-modulejail`: the module set Docker needs, and a blocked `nfsd`. `infra-swap-tuning`:
+  resizing a live zram device. `infra-windows-servicing`: triaging a fleet by the failing
+  operation and the first boot after an in-place upgrade. `net-tailscale`: the tailnet forward
+  zone on FreeBSD and Accept DNS backup files. `infra-chrome-remote-desktop`: what "PIN is not
+  valid" usually means.
+- `coding-python-pwshpy` (a one-shot SYSTEM scheduled task; a parse check before shipping a
+  `.ps1`), `coding-python-layered-config` (digit-only values arrive as `int`),
+  `coding-python-send-mail` (vary a repeated test mail's subject; what `True` means),
+  `infra-storage-check-zpools` (a deliberately skipped alert logs as a failure; installing the
+  service): mirrored to their tool repos.
+- `coding-python-uv` (`--exclude-newer` goes before the package spec; `uv cache clean` and the
+  cache lock), `docs-convert-markitdown` (YouTube transcripts), `web-frontend-responsive-ux`
+  (`word-break` in a table cell).
+
 ## [10.0.22]
 
 ### Changed

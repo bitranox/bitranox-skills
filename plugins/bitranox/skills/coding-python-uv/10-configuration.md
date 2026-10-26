@@ -343,6 +343,26 @@ If you're running into caching issues, uv includes a few escape hatches:
 
 As a special case, uv will always rebuild and reinstall any local directory dependencies passed explicitly on the command-line (e.g., `uv pip install .`).
 
+**`uv cache clean` sits silent for minutes: a running uvx process holds the cache lock.** A
+long-running process started through `uvx` (a daemon, a monitor) holds uv's cache lock for its
+whole lifetime, so on that host `uv cache clean <pkg>` waits on that lock. The wait is bounded by
+`UV_LOCK_TIMEOUT` (300 seconds by default, see Clearing the cache below); after it the clean exits
+2 with `error: Timeout (300s) when waiting for lock on ...` and removes nothing. uv 0.13.0 prints
+``Cache is currently in-use, waiting for other uv processes to finish (use `--force` to override)``
+when the wait starts, and it is easy to miss in a scripted or remote run, where the wait can look
+like a hang with no output. It is not a hung uv, and killing uv, restarting the daemon or deleting
+cache directories by hand are unnecessary or harmful. Before a clean, check for a running `uvx`
+process (`ps -eo pid,args`; over SSH use the bracket trick, never a bare `pgrep -f`); if one runs,
+use `uv cache clean --force <pkg>`, which ignores the lock while the daemon keeps running. This is
+a narrow exception to the rule under Clearing the cache that `--force` is only for a cache no
+other uv process is using: beside a running uvx process, which only reads its already-built
+environment, it has been observed harmless (the process kept running), and it is NOT safe while
+another uv command is installing or syncing.
+`uvx --from <wheel>` has been observed to run alongside it unblocked. A per-package clean has also
+been observed to leave that package's uvx environment behind (its `archive-v0/<hash>` and
+`environments-v2/<hash>` directories); remove those specific directories only when no process uses
+them, and list the cache afterwards to see what a clean actually removed.
+
 **A version you just published "does not exist": rule out a stale index answer before touching the
 release.** When `uv pip install "<pkg>==<new>"` reports
 `Because there is no version of <pkg>==<new> ... your requirements are unsatisfiable` although the

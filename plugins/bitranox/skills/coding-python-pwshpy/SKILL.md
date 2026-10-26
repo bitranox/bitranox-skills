@@ -158,6 +158,25 @@ has a flag pair per bool field (`--allow-start-if-on-batteries`/`--disallow-star
 `--allow-demand-start`/`--disallow-demand-start`), `--execution-time-limit` (seconds or `HH:MM:SS`, hours may exceed 23) and
 `--multiple-instances`; `pwshpy register_scheduled_task --help` lists them.
 
+**One-shot privileged work as a SYSTEM task.** Register it with `principal=TaskPrincipal.system()`
+and NO trigger, then run it with `ps.start_scheduled_task`: a `OnceTrigger` (or `schtasks /SC ONCE`)
+stays armed when the launcher dies before its cleanup (an exception, Ctrl-C, a dropped ssh session)
+and fires unattended later. Deleting the definition (`unregister_scheduled_task`, COM `DeleteTask`)
+or disabling it does NOT stop an instance that is already running, nor its child processes;
+`stop_scheduled_task` (COM `Stop`) ends the instance with its whole process tree (observed on a
+Windows 25H2 guest within about 5 s, a powershell -> uv -> python chain included). So on success
+unregister the definition once the job has started (the run carries on): poll
+`ps.get_scheduled_task(folder, task_name=name).first()` until its `last_run_time` is set or its
+`state is TaskState.RUNNING`, then unregister. On every failure or interrupt path
+(`try`/`except BaseException`, since Ctrl-C raises `KeyboardInterrupt`; never `finally`, which also
+runs on success and would stop the job) stop it and unregister it, each in its own
+`try`/`except NativeCallError` (the definition may not exist yet), then re-raise. Set
+`execution_time_limit`, `multiple_instances=TaskMultipleInstances.IGNORE_NEW` and both battery
+fields (`allow_start_if_on_batteries=True`, `stop_if_going_on_batteries=False`) explicitly rather
+than inheriting the OS defaults. Under SYSTEM, `USERNAME` and `USERDOMAIN` name the computer account
+(`DOMAIN\HOST$`), not SYSTEM, so log the run's identity from the token with
+`ps.get_current_identity()`.
+
 `get_process` names a process as psutil does: on Windows `MemCompression` is `Get-Process`'s
 `Memory Compression` and PID 0 `System Idle Process` is `Idle`; match by `pid` where it matters.
 
@@ -218,7 +237,7 @@ elevation declined`), 110 `OperationTimeoutError`, 127 a missing or untrusted `u
 runner's elevation. `pwshpy exec`, `pwshpy --elevate <command>` (a no-op when already elevated) and a
 runner otherwise return the program's, command's or script's own code, so check the stderr line too.
 
-## Still writing a `.ps1`? Eight traps
+## Still writing a `.ps1`? Nine traps
 
 When a `.ps1` is still the deliverable (pwshpy is not wanted on the target, or the script only
 forwards to a native tool), each of these passes a quick test and fails in use. `5.1` is Windows
@@ -235,8 +254,20 @@ otherwise); a trap listed for one shell does not occur on the other.
 | A probe reading a file another process may be writing (`Get-FileHash` or `Get-Content` in an "is the cache valid?" check before taking a lock) throws under `Stop` and ends the script           | 5.1 and 7                                 | wrap the probe in `try/catch` returning `$false`, so a race means "re-extract under the lock"; the lock never covers a read made before it |
 | A number printed as text by `-f`, `.ToString()`, `Write-Host` args or bare output takes the culture: a German host prints `444,2`, the caller's `float()` raises, `[0-9.]+` keeps `444`          | 5.1 and 7                                 | emit `$v.ToString([cultureinfo]::InvariantCulture)` or an integer; or parse `[0-9.,]+`, swap `,` for `.`; test on the host's real bytes    |
 | `icacls p /grant:r SYSTEM:F Administrators:F` on a non-English host: the name does not resolve, icacls exits 1332 and applies NONE of the grants; `& echo ok` or `>nul` hides it                 | 5.1 and 7                                 | grant by SID: `*S-1-5-18:(OI)(CI)F`, `*S-1-5-32-544:(OI)(CI)F`; fail on `$LASTEXITCODE -ne 0`; read `icacls p` back                        |
+| A `"$t: done"` in a double-quoted string reads `$t:` as a scope/drive-qualified variable: a PARSE error, so the WHOLE script never starts, and a task running it exits non-zero with no output   | 5.1 and 7                                 | write `"${t}: done"` or `"$($t): done"`; parse-check every `.ps1` before shipping it (below)                                               |
 
 Test a forwarding wrapper with an empty string, an embedded double quote, `-v` and a `C:\` path.
+
+**Parse-check a `.ps1` before it ships.** A parse error rejects the whole script before its first
+line runs, so not even the first log line appears, and a scheduled task, a remote `-File` run or a
+CI step reports only a non-zero exit, which reads as "the task never ran". Run the parser first and
+require zero errors, with a local `pwsh`, or where none is installed as the first step on the
+target itself, before the real run (the target's own parser, often Windows PowerShell 5.1, is the
+one that runs the script there). Ship that check as its own small `.ps1` run with
+`-File <check.ps1> <script.ps1>` (an inline `-Command` over ssh loses its `$` variables to the
+quoting layers):
+`param($path); $e = $null; $null = [System.Management.Automation.Language.Parser]::ParseFile($path, [ref]$null, [ref]$e); $e.Count`
+(the `$t:` row is checked on pwsh 7.6.3 only; 5.1 is not re-run).
 
 **The number trap breaks the consumer, not the script.** It bites in the Python (or shell) code
 that parses text a Windows host printed, typically over ssh, and nothing on that side hints that a

@@ -404,9 +404,37 @@ def test_doctor_warns_when_the_box_does_not_ask_itself_first():
     assert [f.check for f in findings] == ["resolver_not_first"]
 
 
-def test_doctor_reports_a_stale_upgrade_lock():
-    findings = P.doctor_findings(reservations=[], overrides=[], arp=[], upgrade_lock=True)
+def test_doctor_reports_an_upgrade_lock_and_names_its_path():
+    findings = P.doctor_findings(reservations=[], overrides=[], arp=[],
+                                 upgrade_locks=["/tmp/pfSense-upgrade.lock"])
     assert [f.check for f in findings] == ["upgrade_lock_present"]
+    assert findings[0].subject == "/tmp/pfSense-upgrade.lock"
+
+
+def test_doctor_reports_no_lock_finding_when_no_lock_was_found():
+    assert P.doctor_findings(reservations=[], overrides=[], arp=[], upgrade_locks=[]) == []
+
+
+def test_the_upgrade_lock_finding_sends_the_reader_to_dns_before_the_lock():
+    """The lock is usually held by a pfSense-upgrade hung on a repository the box cannot resolve.
+
+    Advising removal on its own is the dirty patch: the next metadata run hangs again and the
+    message comes back.
+    """
+    [finding] = P.doctor_findings(reservations=[], overrides=[], arp=[],
+                                  upgrade_locks=["/var/run/pfSense-upgrade.lock"])
+    assert "fix the box's dns first" in finding.detail.lower()
+    assert "the lock is stale and the file can be removed" not in finding.detail
+
+
+def test_the_magicdns_finding_does_not_advise_forwarding_to_quad_100():
+    """quad-100 does not answer on FreeBSD/pfSense, so a forward to it SERVFAILs there."""
+    [finding] = P.doctor_findings(reservations=[], overrides=[], arp=[],
+                                  resolv_conf=RESOLV_HIJACKED)
+    assert "domain override" not in finding.detail
+    assert "forward the tailnet's domain to MagicDNS" not in finding.detail
+    assert "Linux tailnet node" in finding.detail
+    assert "--accept-dns=false" in finding.detail
 
 
 # ---- mutations are dry runs until --apply -------------------------------------------------------
@@ -1271,6 +1299,33 @@ def test_live_doctor_is_an_error_when_a_read_fails_not_a_clean_bill(which):
 
 def test_live_doctor_reads_a_present_lock_as_a_finding():
     assert P.main(["--host", "192.0.2.1", "doctor"], run=_doctor_fake(lock=(0, "", ""))) == 1
+
+
+LOCK_PATHS = ("/tmp/pfSense-upgrade.lock", "/var/run/pfSense-upgrade.lock")
+
+
+@pytest.mark.parametrize("present", LOCK_PATHS)
+def test_live_doctor_finds_the_lock_at_either_path_and_names_it(present, capsys):
+    """The lock has been observed at /tmp, and which of the two paths is current is unverified."""
+    absent = next(p for p in LOCK_PATHS if p != present)
+    fake = FakeRun([
+        ('config_get_path("dhcpd"', (0, "[]", "")),
+        ('config_get_path("unbound/hosts"', (0, "[]", "")),
+        ("arp -an", (0, "", "")),
+        ("cat /etc/resolv.conf", (0, "nameserver 127.0.0.1\n", "")),
+        (f"test -f {present}", (0, "", "")),
+        (f"test -f {absent}", (1, "", "")),
+    ])
+    assert P.main(["--host", "192.0.2.1", "--json", "doctor"], run=fake) == 1
+    data = json.loads(capsys.readouterr().out)["data"]
+    assert [(f["check"], f["subject"]) for f in data] == [("upgrade_lock_present", present)]
+
+
+def test_live_doctor_tests_both_lock_paths():
+    fake = _doctor_fake()
+    assert P.main(["--host", "192.0.2.1", "doctor"], run=fake) == 0
+    tested = [c["remote"] for c in fake.calls if c["remote"].startswith("test -f")]
+    assert sorted(tested) == sorted(f"test -f {p}" for p in LOCK_PATHS)
 
 
 # ---- arp --permanent really filters -------------------------------------------------------------

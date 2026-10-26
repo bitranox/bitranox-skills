@@ -71,7 +71,10 @@ from urllib.parse import urlparse
 
 SNORT_TABLE = "snort2c"
 MAGICDNS = "100.100.100.100"          # Tailscale's fixed MagicDNS address, the same on every tailnet
-UPGRADE_LOCK = "/var/run/pfSense-upgrade.lock"
+# Both paths are tested and the one found is named: the lock has been observed at /tmp on a real
+# box, there is no pfSense source here to say which path the current release uses, and testing
+# only one reports "no lock" while the GUI shows "Another instance".
+UPGRADE_LOCKS = ("/var/run/pfSense-upgrade.lock", "/tmp/pfSense-upgrade.lock")
 
 # `snort -c <path>/snort.conf -i <if>`: the conf path is the only reliable pointer to the
 # instance dir, because a previous interface assignment leaves a same-uuid dir behind.
@@ -521,7 +524,7 @@ def overrides_from_config_xml(text: str) -> list[dict]:
 # ---- doctor: pure checks over plain data --------------------------------------------------------
 def doctor_findings(*, reservations: list[dict], overrides: list[dict],
                     arp: list[dict] | None = None, resolv_conf: str | None = None,
-                    upgrade_lock: bool | None = None) -> list[Finding]:
+                    upgrade_locks: list[str] | None = None) -> list[Finding]:
     """Every audit check, as pure logic over plain data.
 
     Each one is a fault that raises no error of its own and so goes unnoticed: they were all found
@@ -596,9 +599,12 @@ def doctor_findings(*, reservations: list[dict], overrides: list[dict],
                        "the tailnet has no global nameservers the box then resolves no public name "
                        "at all, so pkg and system upgrades fail while LAN clients stay fine because "
                        "they query the resolver directly - which is why this hides for months. Turn "
-                       "Accept DNS off, and forward the tailnet's domain to MagicDNS with an unbound "
-                       "domain override instead: that keeps tailnet names resolving without handing "
-                       "over the system resolver.",
+                       "Accept DNS off in the package config AND with `tailscale set "
+                       "--accept-dns=false`. Do not forward the tailnet's domain to "
+                       "100.100.100.100 instead: quad-100 is reported not to answer on "
+                       "FreeBSD/pfSense, so that forward SERVFAILs. To resolve tailnet names, "
+                       "forward the tailnet's domain to a resolver on a Linux tailnet node, where "
+                       "quad-100 does answer (see bitranox:net-tailscale).",
             ))
         elif servers and not _is_loopback(servers[0]):
             findings.append(Finding(
@@ -608,12 +614,14 @@ def doctor_findings(*, reservations: list[dict], overrides: list[dict],
                        "loopback are normal fallbacks and are not a fault.",
             ))
 
-    if upgrade_lock:
+    if upgrade_locks:
         findings.append(Finding(
-            check="upgrade_lock_present", severity="warn", subject=UPGRADE_LOCK,
+            check="upgrade_lock_present", severity="warn", subject=", ".join(upgrade_locks),
             detail="a pfSense-upgrade lock is present, so every package operation reports "
-                   "'Another instance of pfSense-upgrade is running'. If no upgrade is actually "
-                   "running, the lock is stale and the file can be removed.",
+                   "'Another instance of pfSense-upgrade is running'. Usually a background "
+                   "pfSense-upgrade is hung on a repository the box cannot resolve: fix the box's "
+                   "DNS first (see the resolv.conf findings). Remove the lock only once public "
+                   "names resolve on the box and no pfSense-upgrade process is running.",
         ))
 
     return findings
@@ -1516,6 +1524,23 @@ def _read_or_raise(target: Target, command: str, *, run) -> str:
     return out
 
 
+def _present_upgrade_locks(target: Target, *, run) -> list[str]:
+    """The UPGRADE_LOCKS paths that exist on the box, or a typed error.
+
+    One `test -f` per path, the same command shape for each: exit 0 is present, 1 is absent, and
+    anything else (255 for a dropped ssh) is a failed read, never "no lock".
+    """
+    present = []
+    for path in UPGRADE_LOCKS:
+        rc, _, err = run_remote(target, f"test -f {path}", run=run)
+        if rc not in (0, 1):
+            raise PfsenseError(f"could not test for {path} on {target.host} "
+                               f"(exit {rc}): {err.strip()[:200]}")
+        if rc == 0:
+            present.append(path)
+    return present
+
+
 def cmd_doctor(args) -> int:
     if args.config:
         text = Path(args.config).read_text(encoding="utf-8")
@@ -1528,13 +1553,9 @@ def cmd_doctor(args) -> int:
         overrides = run_php(target, php_list_overrides(), run=args.run)
         arp_out = _read_or_raise(target, "arp -an", run=args.run)
         resolv = _read_or_raise(target, "cat /etc/resolv.conf", run=args.run)
-        rc_lock, _, lock_err = run_remote(target, f"test -f {UPGRADE_LOCK}", run=args.run)
-        if rc_lock not in (0, 1):
-            raise PfsenseError(f"could not test for {UPGRADE_LOCK} on {target.host} "
-                               f"(exit {rc_lock}): {lock_err.strip()[:200]}")
         findings = doctor_findings(reservations=reservations, overrides=overrides,
                                    arp=parse_arp(arp_out), resolv_conf=resolv,
-                                   upgrade_lock=(rc_lock == 0))
+                                   upgrade_locks=_present_upgrade_locks(target, run=args.run))
         source = target.host
 
     warns = [f for f in findings if f.severity == "warn"]

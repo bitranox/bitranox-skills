@@ -135,7 +135,8 @@ survives* translation:
 
 - **Text expansion:** translated strings run ~30-40% longer (German, Finnish) and can be
   much longer for single words. Containers must wrap and grow, not clip or push width.
-  Avoid fixed widths/heights on text; allow `overflow-wrap: anywhere`; test with
+  Avoid fixed widths/heights on text; allow `overflow-wrap: anywhere` (in a table cell use
+  `overflow-wrap: break-word` instead, see responsive-layout.md); test with
   pseudo-localization (the audit's `--i18n` pass expands text and re-checks overflow).
 - **RTL mirroring:** under `dir="rtl"` the layout must mirror. Use logical properties
   (`margin-inline-start`, `inset-inline`, `padding-block`) instead of physical

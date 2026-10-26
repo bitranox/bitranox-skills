@@ -17,8 +17,9 @@ into deciding what to change.
 | An address answers, but for hardware no reservation names                 | a reservation that outlived its device - `doctor`   |
 | A download or CDN times out after DNS resolves and the redirect is served | `snort check <host>`, then `snort why <ip>`         |
 | `pkg` and system upgrades fail to resolve                                 | Tailscale Accept DNS rewrote resolv.conf - `doctor` |
-| "Another instance of pfSense-upgrade is running"                          | a stale lock - `doctor`                             |
+| "Another instance of pfSense-upgrade is running"                          | broken box DNS, the lock is a symptom - `doctor`    |
 | A name resolves to the wrong address                                      | `dns list`                                          |
+| A dummynet limiter is on a rule but shapes nothing                        | `references/limiters.md`                            |
 
 **The first row is the one that gets missed.** Every instinct points at firewall rules, aliases,
 policy routing and gateways, and none of them is it.
@@ -72,7 +73,9 @@ included. Only some of several addresses left present is a partial outcome: exit
 
 A snapshot is a whole `config.xml`, with password hashes, private keys and certificates in it, so
 it is written to a private per-user state directory (`--snapshot-dir` to choose another). Writing
-one into a git work tree is refused unless you pass `--allow-repo-snapshot`.
+one into a git work tree is refused unless you pass `--allow-repo-snapshot`. On a firewall that
+runs as a VM, also take a hypervisor snapshot before a change: `snapshot` saves the config, not
+the disk.
 
 ```bash
 pfsense.py --host 192.0.2.1 --user admin --ssh "ssh -i /path/to/key" doctor
@@ -119,14 +122,75 @@ stdin, which can hang), then confirm the daemon started after the upgrade
 resolves. The unbound restart interrupts DNS for every LAN
 client for a moment. A daemon with no running process picks up the new binary at its next start.
 
+**Run `pfSsh.php` as `playback <script>`, never with PHP piped to its stdin.** It does not exit on
+EOF: the call hangs until the command timeout and leaves `pfSsh.php` processes behind. By then
+`write_config()` and the reconfigure may already have run, so the timeout says nothing about
+whether the change applied; read the state back. Feeding a script to the `php` CLI on stdin, as
+`pfsense.py` does, exits normally.
+
+**After `services_unbound_configure()`, restart unbound and check that it answers.** It has left
+unbound stopped (observed: `unbound-checkconf` clean, every lookup timing out, and running the
+reconfigure again did not bring it back), and `dns add` and `dns rm` with `--apply` call it too.
+Run `pfSsh.php playback svc restart unbound`, then resolve a name on the box
+(`host <name> 127.0.0.1`) and from another host, with a timeout. Reach the firewall by IP for
+this: once unbound is down, its own name does not resolve either.
+
+**Tailscale's Accept DNS has to be turned off twice.** With it on, `tailscaled` points
+`/etc/resolv.conf` at `100.100.100.100`, so the box stops resolving public names while LAN clients,
+which query unbound directly, notice nothing. Set `installedpackages/tailscale/config/0/acceptdns`
+to an empty value rather than deleting the element (observed: the package reads a missing one as
+on), and save the package settings so it resyncs. The resync does not re-apply the flag to a node
+that is already connected, so also run `tailscale set --accept-dns=false`. Verify:
+`/etc/resolv.conf` lists `127.0.0.1` first, `tailscale debug prefs` shows `CorpDNS` false, a public
+name resolves on the box, and `pfSense-upgrade -c` reports up to date. An unbound domain override
+that forwards the tailnet's domain to `100.100.100.100` is no substitute: on FreeBSD/pfSense
+quad-100 is reported not to answer, so verify that on the node first (see `bitranox:net-tailscale`).
+
+**"Another instance of pfSense-upgrade is running" is usually a DNS symptom.** The background
+package-metadata job runs `pfSense-upgrade`, hangs on a repository it cannot resolve while holding
+the upgrade lock, and every later check then reports another instance. Fix the box's DNS first
+(`doctor`). Remove a lock only once the box resolves public names and no `pfSense-upgrade` process
+is still running (`ps -ax | grep '[p]fSense-upgrade'`).
+
+## Retiring a host
+
+A host reachable from outside leaves objects on up to five GUI pages, so build the list from
+`config.xml` before asking to retire it, and put the whole list in the question. Take a
+`snapshot` and parse it with an XML parser for the host's IP AND its names, grouped by parent path;
+a plain grep also hits harmless `<username>admin@<ip></username>` audit strings. Expect:
+
+- `unbound/hosts`: Resolver overrides, often with aliases for public names. An alias that another
+  override also claims can be missing from `/var/unbound/host_entries.conf`, so read that file for
+  the names an override really answers.
+- `dnsmasq/hosts`: DNS Forwarder copies, inert while the Forwarder is off but still there.
+- `dhcpd/<interface>/staticmap`: a DHCP reservation for the host's MAC and IP, removed with
+  `dhcp rm`.
+- `nat/rule`: port forwards, disabled ones included.
+- `filter/rule`: pass rules. A forward whose `associated-rule-id` is empty has no linked rule, so
+  any pass rule for it is a separate rule that deleting the forward leaves active. Find those by
+  destination.
+
+Remove by content (host and IP, target, destination), never by position. `dns rm` and `dhcp rm`
+cover Resolver overrides and a DHCP reservation for the host; no verb removes Forwarder entries,
+port forwards or rules, so do those in the GUI or in a `pfSsh.php playback` script that rebuilds
+each list by content. Then reload with `/etc/rc.filter_configure_sync` and
+`pfSsh.php playback svc restart unbound`. Read `/var/unbound/host_entries.conf` over ssh. Verify
+that `rules`, `rules --nat` and `host_entries.conf` name the IP nowhere and that the remaining
+sites still answer. Public DNS records at the registrar sit outside the firewall.
+
 ## Not covered here
 
-pfBlockerNG, certificate and acme renewal, and traffic shaping are inspection-shaped and change
-between releases. Drive them from the GUI or `pfSsh.php playback`, and take a `snapshot` first.
+pfBlockerNG, certificate and acme renewal, and traffic shaping in general are inspection-shaped
+and change between releases. Drive them from the GUI or `pfSsh.php playback`, and take a
+`snapshot` first. The one shaping case this skill does cover is a dummynet limiter: read
+`references/limiters.md` before attaching one, or when one is on a rule but shapes nothing.
 
 If you edited `config.xml` out of band rather than through the config API, the running config is
-stale until `rm -f /tmp/config.cache && /etc/rc.filter_configure_sync`. Going through the API
-instead avoids this.
+stale until `rm -f /tmp/config.cache && /etc/rc.filter_configure_sync`. That reloads the filter
+only, not the DNS Resolver or DHCP: also run `services_unbound_configure()` (then restart unbound
+and check it answers, see Traps) and the DHCP backend's own call (`services_dhcpd_configure()`
+for ISC, `services_kea_configure()` for Kea). Edit the raw file with an XML parser, never sed (see
+`bitranox:files-edit-xml`). Going through the API instead avoids all of this.
 
 ## Common mistakes
 
@@ -135,5 +199,8 @@ instead avoids this.
 - Reading ARP absence as "the device is gone". ARP is a cache that expires after minutes of
   silence, and a fixed-address reservation leaves no DHCP lease either, so neither source can
   prove absence. ARP is good for positive evidence only.
-- Clearing `snort2c` and calling it fixed. The rule re-adds the address on the next packet;
-  `snort fixsteps` prints the three parts that make it stick.
+- Clearing `snort2c` and calling it fixed. The rule re-adds the address on the next packet. The
+  fix that sticks has three parts, which `snort fixsteps` prints for the case at hand: suppress the
+  SID that fired, add the range as a LITERAL entry in the Snort pass list (a firewall alias there
+  is a no-op), and `snort unblock --apply` what is already blocked; then resync Snort and run
+  `snort verify`.

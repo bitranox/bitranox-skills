@@ -84,6 +84,32 @@ $ uvx --from 'ruff>0.2.0,<0.3.0' ruff check
 
 Note the `@` syntax cannot be used for anything other than an exact version.
 
+### A Supply-Chain Cooldown for `uvx` and `uv tool`
+
+Put `--exclude-newer` BEFORE the package spec. Everything after the spec belongs to the tool, so
+`uvx pkg@latest --exclude-newer "14 days"` hands the option to the tool: one that rejects it fails
+loudly, but one that tolerates unknown arguments runs unprotected and looks as if it worked.
+
+```console
+$ uvx --exclude-newer "14 days" ruff@latest check
+$ uv tool install --exclude-newer "14 days" ruff@latest
+```
+
+- `@latest` then means the newest release the cutoff admits, not the newest overall, and the
+  cutoff covers transitive dependencies too (`--from boto3@latest` holds `botocore` back as well).
+  Pinning a version younger than the cutoff fails with a hint naming the cutoff and
+  `exclude-newer-package`.
+- `UV_EXCLUDE_NEWER="14 days"` and `exclude-newer = "14 days"` in the user `uv.toml` apply to
+  `uvx` as well, so a cooldown can be set once instead of on every line.
+- `uv tool install` stores the cooldown in the tool receipt as `exclude-newer-span` (`"P14D"` for
+  14 days), and `uv tool upgrade` keeps it. A reinstall with `uv tool install --force pkg@latest`
+  WITHOUT the flag installs the newest release and drops the stored cutoff, so repeat the flag on
+  every reinstall.
+- Verify that the cooldown took effect: print the tool's version, for example
+  `uvx --exclude-newer "14 days" ruff@latest --version`, and compare it with the newest release on
+  PyPI and with the newest one older than the cutoff; for an installed tool, also read
+  `exclude-newer-span` in `<uv tool dir>/<tool>/uv-receipt.toml`. Measured on uv 0.13.0.
+
 ### Requesting Extras
 
 The `--from` option can be used to run a tool with extras:
@@ -382,7 +408,7 @@ $ uv tool upgrade black --reinstall-package click
 
 ### Tool Environments
 
-When running a tool with `uvx`, a virtual environment is stored in the uv cache directory and is treated as disposable, i.e., if you run `uv cache clean` the environment will be deleted. The environment is only cached to reduce the overhead of repeated invocations. If the environment is removed, a new one will be created automatically.
+When running a tool with `uvx`, a virtual environment is stored in the uv cache directory and is treated as disposable, i.e., if you run `uv cache clean` the environment will be deleted. (That is the whole-cache clean; a per-package `uv cache clean <pkg>` has been observed to leave the environment in place, and a clean waits while a `uvx`-launched process runs; see `10-configuration.md`, Dependency caching.) The environment is only cached to reduce the overhead of repeated invocations. If the environment is removed, a new one will be created automatically.
 
 When installing a tool with `uv tool install`, a virtual environment is created in the uv tools directory. The environment will not be removed unless the tool is uninstalled. If the environment is manually deleted, the tool will fail to run.
 

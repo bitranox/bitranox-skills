@@ -402,6 +402,36 @@ carries a built-in zstd backend - the only evidence was dozens of refusals in th
 without that built-in path fails outright on the identical configuration. Treat a non-empty
 refusal list as unfinished work even when the feature looks healthy.
 
+Worked example - Docker networking inside a container on a jailed host. A container shares the host
+kernel, so the modules must be loadable on the HOST. The iptables extensions are requested when a
+rule is added, so no closure of the KEEP set predicts them, and they fail one at a time: bridge
+setup first (`Extension addrtype revision 0 not supported, missing kernel module`), then port
+publishing (`CHAIN_ADD failed ... chain PREROUTING`,
+`Unable to enable DNAT rule ... iptables: No chain/target/match by that name`). Whitelisting one
+module per failure costs a regenerate-and-retry round each. Whitelist the set together -
+`xt_addrtype xt_nat xt_comment xt_set ipt_REJECT nf_reject_ipv4` for networking, `overlay` for
+storage, and `br_netfilter` - plus the modules docker usually has loaded already, which a list
+built while it ran keeps only by accident (the table in step 1):
+`ip_tables iptable_nat iptable_filter xt_conntrack` and `xt_MASQUERADE nf_nat veth`. Add a
+`modules-load.d` entry for the networking, `overlay` and `br_netfilter` modules so they load at
+boot, regenerate from a cold boot, then read `journalctl -t modulejail` while dockerd starts and
+publishes a port. The container-side half
+(CT features, AppArmor, the iptables legacy backend) is in `bitranox:infra-proxmox`.
+
+Worked example - serving NFS, which shows both rows of the failure table. `nfs-server.service` fails
+on its `proc-fs-nfsd.mount` dependency with `mount: /proc/fs/nfsd: unknown filesystem type 'nfsd'`
+(`showmount`: `RPC: Program not registered`), while `modprobe nfsd` exits 0 and loads nothing - the
+first row. `modprobe --ignore-install nfsd` skips only `nfsd`'s own `install` line, not its
+dependencies', and reports `Unknown symbol` - the second row: a dependency is blocked too. On one
+kernel the NFS client stack had loaded every other `nfsd` dependency at boot, so `nfs_acl` was the
+only one missing; read `modinfo -F depends nfsd` on yours and `grep -w` each name in
+`/etc/modprobe.d/modulejail-blacklist.conf` to see which are blocked. Whitelist `nfsd` AND every
+blocked dependency (a generator that does not expand the closure keeps only what you list), add a
+`modules-load.d` entry that loads `nfs_acl` before `nfsd`, regenerate, clear the latched units
+(`systemctl reset-failed proc-fs-nfsd.mount nfs-server.service`), then
+`systemctl enable --now nfs-server`. The whitelist plus that boot entry is what keeps it working
+after a reboot or the next regeneration; a live `modprobe` does not.
+
 ## Verify (differential, not by inspection)
 
 ```bash

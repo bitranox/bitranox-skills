@@ -131,9 +131,10 @@ backoff, a stderr note on failure).
 
 MagicDNS answers on `100.100.100.100` (quad-100), but WHO answers it depends on the node's OS.
 On Linux, quad-100 is served by the LOCAL `tailscaled`, so it answers even with
-`accept-dns=false` (that flag only keeps `tailscaled` out of `/etc/resolv.conf`; it does not
-disable MagicDNS). On FreeBSD, including pfSense, `tailscaled` is reported NOT to serve quad-100: the tailnet
-route to `100.100.100.100` still exists, but a query against it times out. Verify that on the
+`accept-dns=false` (that flag only keeps `tailscaled` out of `/etc/resolv.conf`, though switching
+it off writes that file once more, see below; it does not disable MagicDNS). On FreeBSD,
+including pfSense, `tailscaled` is reported NOT to serve quad-100: the tailnet route to
+`100.100.100.100` still exists, but a query against it times out. Verify that on the
 node itself before designing around it - `dig +time=3 +tries=1 @100.100.100.100
 <host>.<tailnet>.ts.net` answers on Linux, and a timeout there is the real tell.
 Do NOT use `tailscale dns status` as the tell: its `Tailscale DNS: disabled.` line reports the
@@ -156,6 +157,41 @@ that file - once Tailscale owns it there, `pkg` and system upgrades stop resolvi
 pfSense-side detection and fix (`doctor` catches a `resolv.conf` already rewritten this way),
 see `bitranox:net-firewall-pfsense`.
 
+**To make tailnet names resolve for the LAN anyway**, with Accept DNS still off on the
+FreeBSD/pfSense node: point its forward zone at a LINUX tailnet node that runs a small forwarder
+for the tailnet domain (with dnsmasq, `server=/<tailnet>.ts.net/100.100.100.100`), since quad-100
+answers on that node. Check four things in that fix:
+
+- Target an address of that node the firewall reaches, and prove it from the firewall before
+  editing the zone: `host -W 3 <host>.<tailnet>.ts.net <node-address>` must answer.
+- The coordination server's published split route for `ts.net` is no substitute target: its
+  resolver answered REFUSED to direct queries (observed once).
+- The answers are `100.x` tailnet addresses, so a LAN client with no route into `100.64.0.0/10`
+  resolves the name and then fails to connect. A resolving name is not a reachable host.
+- Tailnet-wide DNS settings in the admin console reach EVERY node but take effect only where
+  Accept DNS is on. An entry there pointing at a LAN-only resolver is a trap for any node off that
+  LAN that later turns Accept DNS on, so keep the forward on the LAN resolver.
+
+### Switching accept-dns off on Linux writes resolv.conf one more time
+
+While `accept-dns` is on and `tailscaled` writes `/etc/resolv.conf` itself, it keeps the previous
+file as `/etc/resolv.pre-tailscale-backup.conf`. `tailscale set --accept-dns=false` writes that
+backup back over `/etc/resolv.conf` within seconds and deletes the backup, while the daemon stays
+connected (`BackendState` remains `Running`). That is a single measurement. So when you also
+deploy a managed `/etc/resolv.conf`:
+
+1. Before switching, check what relies on the node's current DNS: confirm nothing on the node
+   itself needs tailnet names. On a Proxmox host, every container without its own nameserver is
+   handed the host's resolver (`nameserver 100.100.100.100`) when it starts, and it gets the
+   managed file only at its next start. A container whose `pct config <id> | grep nameserver`
+   prints nothing is one of those: give it its own nameserver (`pct set <id> --nameserver <ip>`),
+   or plan its restart after the switch.
+2. Switch `accept-dns` off FIRST, then deploy the managed file. A file deployed before the switch
+   is expected to be replaced by the backup's content (inferred from the observed write, not
+   tested in that order).
+3. Verify: `grep -v '^#' /etc/resolv.conf` shows the managed resolvers, `getent hosts <name>`
+   resolves on the node and inside a guest, and `/etc/resolv.pre-tailscale-backup.conf` is gone.
+
 ## Common mistakes
 
 | Mistake                                                              | Consequence                                                             |
@@ -169,3 +205,4 @@ see `bitranox:net-firewall-pfsense`.
 | Restarting only on process death, not a dead poll                    | A wedged daemon looks alive while the tailnet is down                   |
 | Forwarding a resolver's zone to `100.100.100.100` on FreeBSD/pfSense | `tailscaled` does not serve quad-100 there; SERVFAIL, not a broken zone |
 | Setting `accept-dns=true` on FreeBSD/pfSense to "fix" DNS            | Rewrites `resolv.conf`; breaks `pkg` and system upgrades there          |
+| Deploying a managed `resolv.conf` before `accept-dns=false`          | The switch writes Tailscale's backup over it                            |

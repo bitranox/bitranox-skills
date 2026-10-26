@@ -78,11 +78,39 @@ Common causes and fixes:
 | Fixed pixel widths wider than small viewports           | `max-width: 100%`; `width: min(100%, 40rem)`                        |
 | Flex/grid child refusing to shrink                      | `min-width: 0` on the child (and `overflow-wrap: anywhere` on text) |
 | `100vw` (includes scrollbar) on a page with a scrollbar | use `100%` or `100dvw`; avoid `100vw` for full-bleed                |
-| Long unbroken strings / URLs                            | `overflow-wrap: anywhere; word-break: break-word`                   |
+| Long unbroken strings / URLs (outside table cells)      | `overflow-wrap: anywhere`                                           |
+| Text columns of a table collapse letter by letter       | `overflow-wrap: break-word`, never `word-break`; see below          |
 | Negative margins / absolute elements off-canvas         | constrain with a positioned, `overflow: clip` container             |
 | Images without a max                                    | `img { max-width: 100%; height: auto; }`                            |
 
 `* { box-sizing: border-box; }` everywhere prevents padding/border from adding width.
+
+### Wrapping inside a table (HTML e-mail included)
+
+In an auto-layout table, `word-break: break-word` or `overflow-wrap: anywhere` on a cell does more
+than wrap long words: it drops that column's min-content width to about one character. Next to
+`white-space: nowrap` columns the table then shrinks the text columns until names and addresses
+break letter by letter, and a `width` on the header cell does not stop it, because column widths
+are only hints in auto layout. Give each kind of column its own rule:
+
+- **Identifiers** (order and invoice numbers, dates, tracking ids): `white-space: nowrap`.
+- **Free text** (names, addresses): `overflow-wrap: break-word`. It breaks a word only when the word
+  cannot fit at all, so the column's min-content width stays at its longest word.
+- **A value with no break points that can be very long** (an e-mail address, a URL): put it in a
+  block of real width so only that block breaks and the column cannot collapse,
+  `<div style="width:150px;max-width:100%;overflow-wrap:anywhere;word-break:break-all">`, and give
+  it a phone media-query rule (`width: auto !important`) or it stays narrow in a full-width card.
+- **A block outside the table** (a legend, a footer note) inherits none of the table's styling: set
+  `font-family` on every inline element, or a pill falls back to the mail client's serif default.
+  Lay it out as flowing blocks (one `div` per entry, pill then text), never as a two-column
+  pill-plus-text table, which squeezes the text column to a sliver on a phone.
+
+Confirm the layout by rendering it with REAL data and screenshotting it at a desktop and a phone
+width (for example 1200 and 390 px) before the page or mail goes out. For a mail, save the
+rendered HTML, serve its directory with `python3 -m http.server`, and point `audit_responsive.py`
+at that URL; Chromium only approximates a mail client, so also send one test mail. Each fix here
+looks right in the code and in tests, and the next long value can break what the previous fix
+repaired.
 
 ## Fluid sizing: clamp(), not breakpoint steps
 

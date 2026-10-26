@@ -274,6 +274,40 @@ result = md.convert("https://www.youtube.com/watch?v=VIDEO_ID")
 print(result.text_content)
 ```
 
+**An empty transcript is not proof the video has no captions.** YouTube rate-limits its caption
+endpoint per IP after a short burst (observed: a few dozen quick pulls), and the penalty lasts tens
+of minutes or more. When the transcript fetch fails, the result simply has no `### Transcript`
+section, and a video without captions looks the same. markitdown's YouTube converter looks up the
+caption list outside its own error handling, so a throttled request and a video with captions
+disabled both make it raise; markitdown then falls back to its generic HTML converter, whose result
+is the watch page converted as plain HTML, without the `### Video Metadata` and `### Description`
+sections either, and no exception reaches the caller. Only when the caption list comes back empty
+does the YouTube converter itself return title, metadata and description, printing
+`Error fetching transcript: ...` to stdout. So check each result for the `### Transcript` heading
+rather than trusting a clean return, and for more than a handful of videos use yt-dlp instead,
+which reports the throttle as `HTTP Error 429` on stderr:
+
+```bash
+# One video: auto-captions as .vtt, no media download
+uvx yt-dlp --skip-download --write-auto-subs --sub-langs "en.*,en" --sub-format vtt \
+    -o "out/%(id)s.%(ext)s" "https://www.youtube.com/watch?v=VIDEO_ID"
+
+# Enumerate ids from a playlist URL or a search
+uvx yt-dlp --flat-playlist --print "%(id)s|%(title)s" "ytsearch200:<query>"
+```
+
+- **Pace from the start**, a few seconds between requests: a fast first burst is what earns the
+  penalty.
+- **Make the job resumable:** skip ids whose file is already written, and record an id as having no
+  captions (in the requested languages) only after a yt-dlp run that printed no 429 on stderr and
+  still wrote no .vtt; an id that failed under throttling must be retried, not recorded. Back off
+  on 429 with an escalating pause, and wait longer (about ten minutes) after a pass that made no
+  progress. Re-running the job then continues where it stopped.
+- **Clean the .vtt yourself:** drop the `-->` timing lines and the `<...>` tags, and collapse
+  consecutive repeated caption lines.
+- **Client flags do not lift the quota** (user agent, impersonation, a JS runtime): it is per IP.
+  Once 429 sets in, let the IP rest or route the fetches through `bitranox:net-rotating-proxies`.
+
 ## Docker Usage
 
 MarkItDown's `Dockerfile` lives in its own repository and does not ship with this skill, so the

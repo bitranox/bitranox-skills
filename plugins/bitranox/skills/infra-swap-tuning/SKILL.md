@@ -161,7 +161,7 @@ systemctl is-active dev-zram0.swap
 
 ## Automating it idempotently
 
-Two traps, both of which produce a green run and a broken host:
+Three traps, each of which produces a green run and a broken host:
 
 - **Never restart `systemd-zram-setup@zram0` when the device is already swapping.** The restart
   tears the swap down, then the re-setup hits `EBUSY` because the device is still initialised,
@@ -211,6 +211,36 @@ Two traps, both of which produce a green run and a broken host:
   drop-in directory, and a drop-in overrides its own location's main file. The loop above
   collects every location that actually exists, in ascending precedence, and `tail -1` keeps
   the winner.
+- **To RESIZE a live device, replace it; do not reset it.** `zramctl --reset /dev/zram0` can
+  remove the device outright (`/sys/block/zram0` and `/dev/zram0` gone, the module still loaded),
+  and the setup unit then fails on a missing device. A setup that stops halfway cannot be retried
+  either: the generator writes `comp_algorithm` before `disksize`, writing `disksize` initialises
+  the device, and an initialised zram answers `EBUSY` to every later `comp_algorithm` write
+  (`Failed to configure compression algorithm ... Device or resource busy` on every attempt).
+
+  After a successful `swapoff /dev/zram0`, swap in a fresh uninitialised device (the state boot
+  sees) and start the swap unit, not the setup service, which is bound to the swap unit and is
+  started by it in the right order. Let every step fail loudly: a resize hook that hides errors with
+  `2>/dev/null || true` reports success while the host has no zram at all.
+
+  ```bash
+  swapoff /dev/zram0 || exit 1
+  systemctl stop dev-zram0.swap
+  systemctl reset-failed systemd-zram-setup@zram0.service dev-zram0.swap
+  echo 0 > /sys/class/zram-control/hot_remove || exit 1   # 0 = the zram0 device id
+  cat /sys/class/zram-control/hot_add || exit 1           # prints the new device id; expect 0
+  udevadm settle                                          # let systemd see the new device
+  systemctl daemon-reload && systemctl start dev-zram0.swap || exit 1
+  ```
+
+  **Stuck state** (the device already has the new size, `blkid /dev/zram0` prints nothing):
+  `systemctl reset-failed systemd-zram-setup@zram0.service dev-zram0.swap`, then `mkswap /dev/zram0`
+  and `swapon --priority <prio> --discard /dev/zram0`, where `<prio>` is the `swap-priority` in
+  `zram-generator.conf`. Confirm the end state on the host, never by the deploy's own summary:
+  `/sys/block/zram0/disksize` equals `zram-size` x 1048576 bytes (the units differ, see above),
+  and `swapon --show` lists the zram line with PRIO equal to `swap-priority`. Boot is unaffected:
+  it creates a fresh uninitialised device and runs the generator once, so only reconfiguring a
+  LIVE device hits this.
 
 If the host runs a module allowlist, `zram` and its compression backends must be whitelisted, and
 that block is silent - see `bitranox:infra-modulejail`.

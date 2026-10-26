@@ -110,11 +110,12 @@ from_address = "zfs@example.com"
 use_starttls = true
 ```
 
-**Malformed input degrades rather than crashing.** A value that cannot become
-its declared type, or a section written as a scalar, falls back to the default
-and is logged. A monitoring daemon must not die on a typo in a file a human
-edits. It is logged, so the typo is still findable - check the daemon's output
-if a setting seems to be ignored.
+**Some malformed input degrades, the rest stops the load.** A section written as a
+scalar falls back to its defaults, and an `[email]` value that cannot become its
+declared type falls back to that field's default; both are logged, so check the
+daemon's output if a setting seems to be ignored. An unusable value in any other
+section (`[zfs]`, `[daemon]`, `[scrub]`, `[alerts]`) fails the config load with a
+pydantic error naming the field, e.g. `alerts.alert_on_severities`.
 
 ## Use
 
@@ -137,6 +138,28 @@ new issue, suppresses repeats until `alert_resend_interval_hours` has passed
 (unless the severity changed), and emails a recovery notice when an issue
 clears. It persists that state across restarts, so a restart does not re-alert
 everything.
+
+**Only the daemon sends alerts.** `check_zpools check` reports through its exit code
+and output and mails nothing, so a cron job running `check` alerts nobody unless the
+job mails the result itself, and the `[daemon]` interval and resend settings apply
+only to `daemon`, which the unit from `service-install` runs. For alerting, run the
+daemon, not a cron `check`: on systemd install the service; on a host without systemd
+(FreeBSD, macOS, WSL) keep `check_zpools daemon --foreground` running under that host's
+own supervisor (rc.d, launchd), and keep cron or launchd for `check` exit codes and
+`scrub`.
+
+**`WARNING ... Failed to send alert` does not mean mail failed.** The daemon also logs
+it when no mail was attempted: the issue's severity is not in
+`[alerts] alert_on_severities` (default `CRITICAL` and `WARNING`, so an `INFO` issue
+is skipped by design), or `alert_recipients` is empty (then
+`No alert recipients configured` precedes it). Check the severity list before
+debugging SMTP: with `LOG_CONSOLE_LEVEL=DEBUG` a skip shows
+`Skipping alert - severity not in alert_on_severities` just before the warning, and
+the mail server logs no connection at that moment. To prove a real alert
+delivers, widen the list for a run and look for the message in the mail server's
+log. A list override through the environment takes JSON, not a comma list:
+`CHECK_ZPOOLS___ALERTS__ALERT_ON_SEVERITIES='["CRITICAL","WARNING","INFO"]'`; a
+comma-separated value fails the config load with `Input should be a valid list`.
 
 ### Scrubbing
 

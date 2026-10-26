@@ -34,6 +34,8 @@ do not tell you.
 | KB "cannot install" via WU, WU logs clean       | the update service is broken      | **not offered** - a preview CU is never applied automatically, so nothing was attempted                     |
 | DISM `0x80070228` blames an Unattend.xml ACL    | a permission fault                | **a second .msu beside the target** - `dism.log` holds the real error, a ModelCompDB.xml parse failure      |
 | Live `/Capture-Image` fails `0x80070020`        | exclude that file and retry       | **a live volume** - each exclusion surfaces the next locked file; capture from a VSS shadow                 |
+| Inventory after an upgrade finds tasks gone     | the upgrade lost them             | **the box has not settled** - minutes after the apply reboot the task API can return 0; require a control   |
+| CU sweep on one error code calls a guest fine   | that guest is healthy             | **one defect, several codes** - an orphaned language pack fails `0x800736B3` or `0x80071A2D` by phase       |
 
 ## A clean health check does not mean an update will install
 
@@ -144,6 +146,45 @@ disconnect. Log it with ONE writer and an explicit encoding (`Add-Content -Encod
 PowerShell 5.1's `Tee-Object` appends UTF-16, and the mixed file defeats a completion-marker match
 on a run that succeeded (the `winlog` jig in `bitranox:compuse-toolbox` reads such a file). Done
 means the `UBR` reached the target build.
+
+### One defect, several codes: an orphaned language pack blocks every cumulative update
+
+A machine whose install language differs from a language pack it inherited (a clone of a German
+install that carries an en-US pack, for example) can fail EVERY cumulative update at the same
+step. Each update must move the inherited pack from `Resolved` to `Absent`, and it cannot once that
+pack's servicing track has stopped at an older revision than the install language's, because no
+update carries it forward. The `Setup` event log (step 2 of the order above) names the operation,
+and that pair of lines is the identifier:
+
+```
+Initiating changes for package Language Pack. Current state is Resolved. Target state is Absent.
+Package Language Pack failed to be changed to the Absent state. Status: <code>
+```
+
+**Triage a fleet on that operation, never on the status code.** The same defect fails at different
+phases with different codes: at `Execute` with `0x800736B3` (`ERROR_SXS_ASSEMBLY_NOT_FOUND`, a
+payload genuinely missing) and at `Resolve` with `0x80071A2D` (`ERROR_TRANSACTION_NOT_ACTIVE`, a
+stuck servicing transaction, nothing missing). A sweep filtered on one code calls every machine
+showing the other one healthy. Match a language-pack event that names `Absent`, whatever its code.
+Per machine, as an elevated admin:
+
+```powershell
+$ev = @(Get-WinEvent -FilterHashtable @{LogName='Setup'} -MaxEvents 600 -ErrorAction SilentlyContinue)
+$hits = $ev | Where-Object { $_.Message -match 'Language Pack' -and $_.Message -match 'Absent' }
+$unrendered = @($ev | Where-Object { [string]::IsNullOrWhiteSpace($_.Message) }).Count
+"read=$($ev.Count) unrendered=$unrendered hits=$(@($hits).Count)"
+```
+
+A read of 0 is an empty log, not a clean machine, and an unrendered event hides whether it was a
+hit.
+
+The remedy is the in-place repair upgrade, for both variants: it replaces the store and resolves
+nothing, so the phase that failed does not matter to it (see "Choosing the remedy").
+`RestoreHealth` cannot fix the `Execute` variant even with `/Source:`, because the superseded
+revisions it must resolve are published nowhere. Whether `RestoreHealth` or a lighter fix clears
+the `Resolve` variant (a stuck transaction, nothing missing) is not measured. Right after the
+upgrade the `Setup` log starts fresh and empty, so a missing line proves nothing either way: the
+proof of the repair is the next cumulative update installing.
 
 ## "Access is denied" is usually the read-only attribute
 
@@ -631,6 +672,31 @@ inventory step reports a machine with no disks. Capture `2>&1` and check the exi
 parsing; better, do not call it at all - use `fsutil fsinfo drives` (cmd-native), or
 `Get-Volume` / `Get-Partition` / `Get-Disk`.
 
+### After the apply reboot: inventory only a settled box
+
+The first boot after an in-place upgrade is not a settled system, and an inventory run against it
+reports present things as GONE. Measured once, minutes after the apply reboot: `Get-ScheduledTask`
+returned 0 tasks at 5.1 minutes uptime and 264 at 5.9 minutes, with the `Schedule` service
+`Running` in both samples, so the service state is not the gate. Both kinds of misreading below
+point at destructive remedies (reinstall, re-register the tasks, roll the machine back) on a
+machine where nothing is wrong. Before believing any absence:
+
+- **Wait until servicing is idle:**
+  `Get-Process TiWorker,TrustedInstaller -ErrorAction SilentlyContinue` returns nothing. There is
+  no measured wait time, so re-sample rather than sleep a fixed time. While the on-disk task count
+  below is in the dozens, an API total of 0 is the instrument, not the machine.
+- **Require a plausibility control.** A healthy Windows install has dozens of built-in scheduled
+  tasks, so a TOTAL of 0 indicts the instrument, not the machine: ask for the total, not only for
+  your own task. Cross-check on disk with `Get-ChildItem C:\Windows\System32\Tasks -Recurse -File`,
+  an independent instrument that counted the task files while the API returned none.
+- **Read a program's location from its registration, never from a guessed install directory:**
+  `(Get-CimInstance Win32_Service -Filter "Name='<svc>'").PathName`, or `Get-Command <exe>`. A
+  `Test-Path` on the usual `Program Files` directory returned False for a service binary that was
+  registered, and running, from `System32`.
+- **Read a boot task's own state before intervening.** `LastResult` 267009 is `0x41301`
+  (`SCHED_S_TASK_RUNNING`): the task is still running, not failed, and re-running its action on
+  top of it collides with a sequence that is working.
+
 ## Durations: measure, do not quote
 
 Servicing is storage-bound and varies enormously. The same in-place upgrade measured **1 hour on
@@ -680,6 +746,10 @@ unmeasured.
   an install with `Get-HotFix` instead of the `UBR`
 - You are putting a checkpoint CU in the target's folder on a build already past the checkpoint
 - You are adding an exclusion for a file a live `/Capture-Image` could not open
+- You are reading a task or program as lost on the first boot after an upgrade, without servicing
+  idle and a total-count control
+- You are sorting a fleet's failed cumulative updates by status code instead of by the failing
+  operation in the `Setup` log
 
 ## Common mistakes
 
