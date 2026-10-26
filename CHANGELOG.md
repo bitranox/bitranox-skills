@@ -30,6 +30,16 @@ a hole nobody has drawn a line under is one that gets rediscovered and half-fill
 two "versions with no entry" notes came to sit in this file disagreeing with it.
 
 
+## [10.1.1]
+
+### Changed
+
+- `meta-context-watcher`: a backlog line recorded as "no X available" is re-tested against a
+  disposable stand-in (a container, a throwaway VM, a network namespace or router container, a
+  size-capped tmpfs, a CI runner of the platform) before it is classified blocked. A stand-in that
+  needs a user-only thing leaves the line blocked on that named thing, and only hardware no
+  reachable machine has stays blocked as recorded.
+
 ## [10.1.0]
 
 ### Changed

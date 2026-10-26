@@ -349,6 +349,25 @@ Run `grep -n '^- \[ \]' OPEN-WORK.md`, put each line in blocked, deferred, other
 and state that classification with your answer. Reasoning down from the top ranks stops at the
 first run of blocked items and declares the backlog exhausted while workable items sit below it.
 
+**A recorded "no X available" is a claim about the session that wrote it, not a class.** Before
+you put a line in blocked because a host, server, OS release, network link or disk state is
+missing, ask whether a disposable stand-in can play that part: a container for another server or
+database version, a throwaway VM for another OS release, a network namespace or a container
+acting as a router for a reduced MTU or `tc netem` packet loss, a size-capped tmpfs or loop file
+for a disk that fills, or real hardware someone else runs, such as a CI runner of that platform.
+A stand-in built from what this machine or cluster already has, a guest kept for throwaway tests
+and a public image or download included, makes the line workable: building it is part of the
+work, not a reason to ask. A stand-in that still needs one thing only the user can give (an ISO,
+a licence, a go-ahead to create a guest on shared infrastructure) leaves the line blocked on THAT
+thing: look first for whether it already exists (an ISO in the cluster's ISO store, a free
+evaluation build), then name what is still missing in `open:` in place of "no X", and ask for it.
+Only physical hardware under test that no reachable machine has (a CPU architecture, a specific
+device; emulating it is not a stand-in) stays blocked as recorded. In the
+classification, name each line's stand-in and what it does NOT reproduce. A stand-in run closes
+only what it reproduces: keep a narrower line for the part it did not. When a stand-in fails (a
+kernel module refused, an image missing), write what was tried into `open:`, so the next session
+does not retry it.
+
 **A line saying a PR is blocked on the maintainer, with nothing open, is a snapshot.** Reviewers,
 the maintainer and the user can all post after it was written, and neither PR state nor the check
 list shows a review thread. Read references/stale-pr-verdict.md before acting on such a line: it
