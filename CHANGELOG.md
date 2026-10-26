@@ -30,6 +30,15 @@ a hole nobody has drawn a line under is one that gets rediscovered and half-fill
 two "versions with no entry" notes came to sit in this file disagreeing with it.
 
 
+## [10.2.2]
+
+### Added
+
+- `tail-obsolete-count-nudge.py` (PreToolUse, Bash|PowerShell): a warn-only nudge when `tail` gets the obsolete
+  count form (`-N`, `+N`, `-5f`) with two or more files. uutils tail (the coreutils of Ubuntu 26.04) exits 1
+  "unexpected argument" there, and in a read-back line that exit makes finished work read as failed. Replayed
+  over the transcript corpus: 42 firings in 192,418 commands, every one the real shape.
+
 ## [10.2.1]
 
 ### Changed

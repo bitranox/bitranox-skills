@@ -47,6 +47,7 @@ _HOOK_MODULES = {
     "block-git-semicolon-chain": "block_git_semicolon_chain",
     "gated-prep-nudge": "gated_prep_nudge",
     "sed-line1-range-nudge": "sed_line1_range_nudge",
+    "tail-obsolete-count-nudge": "tail_obsolete_count_nudge",
     "pct-path-nudge": "pct_path_nudge",
     "shell-prefix-selfref-guard": "shell_prefix_selfref_guard",
     "git-commit-branch-guard": "git_commit_branch_guard",
