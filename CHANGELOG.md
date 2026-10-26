@@ -29,6 +29,16 @@ than the change, so entries reconstructed from them would read like coverage wit
 a hole nobody has drawn a line under is one that gets rediscovered and half-filled - which is how
 two "versions with no entry" notes came to sit in this file disagreeing with it.
 
+## [10.0.17]
+
+### Changed
+
+- `coding-python-pwshpy` covers pwshpy 1.8.0's task settings: `register_scheduled_task(...,
+  settings=TaskSettings(...))` and its CLI flags, with a translation row for
+  `New-ScheduledTaskSettingsSet`, the six fields and their flag pairs, `TaskSettings` and
+  `TaskMultipleInstances` in the public-name lists, and that a task with no trigger runs only on
+  demand.
+
 ## [10.0.16]
 
 ### Changed
