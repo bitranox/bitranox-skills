@@ -31,8 +31,9 @@ and every gitignore-aware search drops them silently, leaving a small, falsely c
 
 HOW MUCH A VERDICT IS WORTH. The two directions are not symmetric, and the tool says which one it
 is giving you:
-  * INHERITED is STRONG. The lesson is demonstrably sitting in reachable context, and the report
-    names the file it is in.
+  * INHERITED is labelled STRONG: the report names the file and the terms it shares with the
+    scenario. A hit is a term overlap, not a reading, so open the named document and check it
+    states the claim before treating the RED as contaminated.
   * CLEAN is WEAK. This compares distinctive terms, so it cannot see a paraphrase. "No hit" means
     NOT CAUGHT, never "absent from the agent's context" - a clean run is not a sealed fixture.
 A corpus of zero documents makes every scenario look clean, so asking for one and getting nothing
@@ -97,8 +98,10 @@ MEMORY_FACTS_SUBDIR = "facts"
 # Said on every run, both directions, because the asymmetry is the whole point: the hit proves
 # something and the miss does not, and a reader who is told only "clean" will take it for proof.
 INHERITED_STRONG_NOTE = (
-    "STRONG - the named document already contains this lesson, so an agent that can reach it "
-    "answers from there, not from your scenario. Move the RED to a domain the corpus does not "
+    "STRONG - a term overlap, not a reading: the named document shares this scenario's "
+    "distinctive terms. Open the named document and check it states the claim; ordinary words in "
+    "the shared terms mean a false positive. If it does state it, an agent that can reach it "
+    "answers from there, not from your scenario: move the RED to a domain the corpus does not "
     "teach, or replace the behavioural arm with a text check of the artifact."
 )
 INHERITED_WEAK_NOTE = (
@@ -235,7 +238,7 @@ class Audit:
 
     @property
     def evidence_strength(self) -> str:
-        """How much the INHERITED result is worth: a hit proves something, a miss does not."""
+        """How much the INHERITED result is worth: a hit names a file to check, a miss is weak."""
         return "strong" if self.inherited else "weak"
 
     @property

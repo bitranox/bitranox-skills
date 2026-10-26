@@ -528,6 +528,19 @@ def test_an_inherited_result_declares_itself_strong_evidence() -> None:
     assert result.as_dict()["inherited_evidence"]["strength"] == "strong"
 
 
+def test_an_inherited_note_calls_a_hit_a_term_overlap_and_sends_the_reader_to_the_file() -> None:
+    """A hit counts shared rare terms; it has not read the document, so the note must not say the
+    document contains the lesson. It must send the reader to open it and check the claim."""
+    result = R.audit(CONTAMINATED_SCENARIO, corpus=[SKILL_ALREADY_TEACHING, UNRELATED_DOC])
+    assert result.inherited, "the fixture must produce a hit, or this checks the weak note"
+    note = result.as_dict()["inherited_evidence"]["note"].lower()
+
+    assert "term overlap" in note
+    assert "open the named document and check it states the claim" in note
+    assert "already contains this lesson" not in note
+    assert "demonstrably" not in note
+
+
 # --- the cascade mode end to end through the CLI -----------------------------------------------
 
 
