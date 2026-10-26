@@ -179,7 +179,11 @@ def test_an_unknown_reading_is_quiet():
     ("claude-sonnet-4-6", 1_000_000),
     ("claude-opus-5[1m]", 1_000_000),         # the suffixed spelling agrees with the bare one
     ("claude-haiku-4-5-20251001", 200_000),
-    ("claude-haiku-4-5[1m]", 200_000),        # haiku has no 1M variant, suffix or not
+    ("claude-haiku-4-5[1m]", 200_000),        # haiku 4.5 has no 1M variant, suffix or not
+    # haiku 5.5 runs 1M: its modelUsage reports contextWindow 1000000, and 73 local transcripts
+    # carry a haiku-5-5 request above 200K (peak 301,763) that a 200K window could not hold.
+    ("claude-haiku-5-5", 1_000_000),
+    ("claude-haiku-5-5[1m]", 1_000_000),
     ("oss-128k-claude", 128_000),
     ("something-unreleased", 200_000),        # unknown errs SMALL - see the test below
     ("", 200_000),

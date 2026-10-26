@@ -38,7 +38,9 @@ That id never includes Claude Code's `[1m]` suffix, and it does not need to: mea
 local transcripts, every non-haiku family has actually carried far more than a 200K window can hold
 (opus-5 999,946; opus-4-8 999,911; fable-5 997,450; sonnet-5 665,313), while haiku peaked at
 119,393. The peaks stopping just under 1,000,000 is the window boundary showing itself in the data.
-So the family settles it: opus, fable, sonnet and mythos are 1M; haiku is 200K.
+So the family settles it: opus, fable, sonnet and mythos are 1M; haiku 4.5 is 200K. Haiku 5 is 1M:
+its `claude -p` modelUsage reports contextWindow 1000000, and its transcripts carry requests above
+200K.
 
 A family the TABLE has not met - a gateway model like glm-5.3 behind ANTHROPIC_BASE_URL - must not
 land on the 200K default, because that errs LARGE for a model actually running 1M: the ask fires at
@@ -111,9 +113,13 @@ _RE_ASK_FRACTION = 10           # re-ask each time context grows another 1/10th 
 # appears in `~/.claude.json` but never in `message.model`, and it turns out to be redundant - the
 # current families run 1M regardless. Source for the roster: the bundled `claude-api` skill's model
 # table (cached 2026-06-24).
+# Haiku splits by generation: haiku 5 reports contextWindow 1000000 in a `claude -p` modelUsage
+# record and has carried requests above 200K, while haiku 4.5 never has. The first matching prefix
+# wins, so the haiku-5 row must sit ahead of the generic haiku one.
 _FAMILY_WINDOWS = (("claude-fable", 1_000_000), ("claude-mythos", 1_000_000),
                    ("claude-opus", 1_000_000), ("claude-sonnet", 1_000_000),
-                   ("claude-haiku", 200_000), ("oss-128k", 128_000))
+                   ("claude-haiku-5", 1_000_000), ("claude-haiku", 200_000),
+                   ("oss-128k", 128_000))
 
 # What the launcher declared for a model the family table has not met. Read only in that case -
 # see the module docstring for why a known family ignores it.
