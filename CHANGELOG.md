@@ -30,6 +30,22 @@ a hole nobody has drawn a line under is one that gets rediscovered and half-fill
 two "versions with no entry" notes came to sit in this file disagreeing with it.
 
 
+## [10.1.0]
+
+### Changed
+
+- Context watcher: the default `context_mode` is now `compact`. At the context limit the session is asked
+  to save a checkpoint (`OPEN-WORK.md` plus `handover.md`) and then keeps working; the harness compacts
+  on its own and the new `compact-resume.py` SessionStart hook hands the checkpoint back right after the
+  compaction. The request also goes out on `PostToolUse`, so a long turn cannot pass the save point
+  unasked. The harness compacts about 33k tokens below `CLAUDE_CODE_AUTO_COMPACT_WINDOW` (measured on
+  Claude Code 2.1.310), so that variable must hold the context limit; the request says so when it does
+  not. `context_mode = handover` keeps the handover plus `/clear` offer.
+- `meta-context-watcher`: a compact-mode checkpoint runs steps 1-6 and returns to the task in flight
+  (step 7c); a checkpoint handed back after a compaction is resumed at once, without the backlog
+  re-ranking a fresh session does. A handover the user asks for still stops and sends them to `/clear`.
+- `meta-memory-settings`: `context_mode` (`compact`, `handover`), validated like the other enum knobs.
+
 ## [10.0.25]
 
 ### Changed

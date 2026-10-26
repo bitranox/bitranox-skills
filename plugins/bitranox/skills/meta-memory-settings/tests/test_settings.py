@@ -166,6 +166,7 @@ def test_set_track_private_bool(capsys):
     ("privacy", "public"),
     ("promotion", "always"),
     ("mcp_search", "on"),
+    ("context_mode", "compaction"),     # the watcher would read it as compact, silently
 ])
 def test_set_refuses_an_unknown_enum_value(capsys, key, bad):
     rc = ST.main(["set", key, bad])

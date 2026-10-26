@@ -456,14 +456,17 @@ def session(request):
     """
     name = f"ctxwatch-{request.node.name}-{uuid.uuid4().hex[:8]}"
     yield name
-    for flag in (W._asked_flag(name), W._misconfigured_flag(name)):
+    for flag in (W._asked_flag(name), W._misconfigured_flag(name),
+                 W.sig.checkpoint_asked_file(name)):
         try:
             flag.unlink()
         except OSError:
             pass
 
 
-CFG = {"nudges": True, "context_window": 200_000,
+# The tests in this block pin HANDOVER mode, which compact mode replaced as the default; compact
+# mode has its own block below.
+CFG = {"nudges": True, "context_window": 200_000, "context_mode": "handover",
        "context_handover_pct": 70, "context_handover_cap": 400_000}
 
 
@@ -605,3 +608,118 @@ def test_end_to_end_is_silent_under_threshold(tmp_path, session):
 def test_malformed_input_fails_open(payload):
     rc, out, _err = _run(payload)
     assert (rc, out) == (0, "")
+
+
+# ---------------------------------------------------------------- compact mode (the default)
+#
+# In compact mode the limit is where the HARNESS compacts, so the watcher asks for a checkpoint
+# early enough that the session can write it before the compaction arrives, then lets it continue.
+# Measured on CLI 2.1.310 (scripted probes, CLAUDE_CODE_AUTO_COMPACT_WINDOW 100k and 200k): the
+# harness compacts about 33k tokens BELOW that window, not at it and not at a fixed percentage.
+
+CCFG = {"nudges": True, "context_window": 1_000_000, "context_mode": "compact",
+        "context_handover_pct": 70, "context_handover_cap": 500_000}
+
+
+def _compact_event(session, transcript, cwd, name="PostToolUse"):
+    return {"session_id": session, "transcript_path": transcript, "cwd": str(cwd),
+            "hook_event_name": name}
+
+
+def test_compact_mode_is_the_shipped_default():
+    assert W.sig.DEFAULT_CONFIG["context_mode"] == "compact"
+    assert W.context_mode({}) == "compact"
+    assert W.context_mode({"context_mode": "handover"}) == "handover"
+    assert W.context_mode({"context_mode": "nonsense"}) == "compact"
+
+
+def test_the_compaction_point_sits_the_measured_reserve_below_the_window():
+    assert W.compaction_point(500_000, 500_000) == 467_000
+    # an unknown or larger harness window: the configured limit is what it should be set to
+    assert W.compaction_point(500_000, 0) == 467_000
+    assert W.compaction_point(500_000, 967_000) == 467_000
+    # a SMALLER harness window compacts earlier, and that is where the save must come first
+    assert W.compaction_point(500_000, 300_000) == 267_000
+
+
+def test_the_save_point_leaves_room_before_the_compaction():
+    assert W.save_point(467_000) == 420_300
+    assert W.save_point(100_000) == 60_000
+    assert W.save_point(10) == 1
+
+
+def test_compact_mode_asks_for_a_checkpoint_mid_turn_and_says_continue(tmp_path, session,
+                                                                        monkeypatch):
+    monkeypatch.setenv("CLAUDE_CODE_AUTO_COMPACT_WINDOW", "500000")
+    t = _transcript(tmp_path, _usage_line(cache_read=430_000))
+    text = W.decide(_compact_event(session, t, tmp_path), CCFG)
+    assert text is not None
+    assert "OPEN-WORK.md" in text and "handover.md" in text
+    assert "CONTINUE" in text
+    assert "/clear" not in text.replace("do not tell them to /clear", "")
+    assert "start a fresh session" not in text
+    assert "update-config" not in text, "an aligned harness needs no settings advice"
+    assert W.sig.checkpoint_asked_at(session) > 0
+
+
+def test_compact_mode_is_quiet_below_the_save_point(tmp_path, session, monkeypatch):
+    monkeypatch.setenv("CLAUDE_CODE_AUTO_COMPACT_WINDOW", "500000")
+    t = _transcript(tmp_path, _usage_line(cache_read=420_299))
+    assert W.decide(_compact_event(session, t, tmp_path), CCFG) is None
+    assert W.sig.checkpoint_asked_at(session) == 0
+
+
+def test_compact_mode_asks_once_then_rearms_after_the_compaction(tmp_path, session, monkeypatch):
+    monkeypatch.setenv("CLAUDE_CODE_AUTO_COMPACT_WINDOW", "500000")
+    high = _transcript(tmp_path, _usage_line(cache_read=430_000))
+    higher = _transcript(tmp_path, _usage_line(cache_read=460_000))
+    after = _transcript(tmp_path, _usage_line(cache_read=40_000))
+    assert W.decide(_compact_event(session, high, tmp_path), CCFG) is not None
+    assert W.decide(_compact_event(session, higher, tmp_path), CCFG) is None
+    assert W.decide(_compact_event(session, after, tmp_path), CCFG) is None   # compacted: re-arm
+    assert W.decide(_compact_event(session, high, tmp_path), CCFG) is not None
+
+
+def test_compact_mode_tells_how_to_align_an_unset_harness_window(tmp_path, session, monkeypatch):
+    monkeypatch.delenv("CLAUDE_CODE_AUTO_COMPACT_WINDOW", raising=False)
+    t = _transcript(tmp_path, _usage_line(cache_read=430_000))
+    text = W.decide(_compact_event(session, t, tmp_path), CCFG)
+    assert "CLAUDE_CODE_AUTO_COMPACT_WINDOW" in text and "500000" in text
+    assert "update-config" in text
+
+
+def test_compact_mode_blocks_on_stop_with_the_same_request(tmp_path, session, monkeypatch):
+    monkeypatch.setenv("CLAUDE_CODE_AUTO_COMPACT_WINDOW", "500000")
+    t = _transcript(tmp_path, _usage_line(cache_read=430_000))
+    text = W.decide(_compact_event(session, t, tmp_path, name="Stop"), CCFG)
+    assert text is not None and "OPEN-WORK.md" in text
+
+
+def test_handover_mode_never_speaks_on_posttooluse(tmp_path, session):
+    t = _transcript(tmp_path, _usage_line(cache_read=150_000))
+    assert W.decide(_compact_event(session, t, tmp_path), CFG) is None
+    assert W.decide(_event(session, t, tmp_path), CFG) is not None
+
+
+def test_a_posttooluse_nudge_is_not_silenced_by_an_owed_nap(tmp_path, session, monkeypatch):
+    """The nap blocks only at Stop; a mid-turn context note cannot fight it over a turn."""
+    monkeypatch.setenv("CLAUDE_CODE_AUTO_COMPACT_WINDOW", "500000")
+    monkeypatch.setattr(W.sig, "is_nap_owed", lambda proj: True)
+    t = _transcript(tmp_path, _usage_line(cache_read=430_000))
+    assert W.decide(_compact_event(session, t, tmp_path), CCFG) is not None
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="drives the bash shim directly")
+def test_end_to_end_posttooluse_emits_additional_context(tmp_path, session):
+    t = _transcript(tmp_path, _usage_line(cache_read=900_000, model="claude-opus-5"))
+    home = tmp_path / "home"
+    (home / ".claude").mkdir(parents=True)
+    env = dict(os.environ, HOME=str(home), USERPROFILE=str(home))
+    env.pop("CLAUDE_CODE_AUTO_COMPACT_WINDOW", None)
+    proc = subprocess.run(["bash", str(SHIM), str(SCRIPT)],
+                          input=json.dumps(_compact_event(session, t, tmp_path)),
+                          capture_output=True, text=True, encoding="utf-8", errors="replace",
+                          env=env)
+    assert proc.returncode == 0
+    hso = json.loads(proc.stdout)["hookSpecificOutput"]
+    assert hso["hookEventName"] == "PostToolUse" and "OPEN-WORK.md" in hso["additionalContext"]

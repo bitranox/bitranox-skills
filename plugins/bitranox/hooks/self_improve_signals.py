@@ -1164,11 +1164,14 @@ DEFAULT_CONFIG = {
                                    # ship hardcoded maintainer absolute paths in this tracked default)
     # context-watcher. The window is DETECTED from the model this project has used (~/.claude.json
     # keeps the full id including the `[1m]` suffix, which the transcript drops), so 0 means auto.
-    # The threshold is min(pct of window, cap): the pct leg keeps a cushion below the ~83%
-    # auto-compact point, and the cap catches a big-window session past the measured rot onset
-    # while still only 40% full.
+    # The context limit is min(pct of window, cap): the pct leg keeps a cushion on a small window,
+    # and the cap catches a big-window session past the measured rot onset while still only 40%
+    # full. In compact mode that limit is the value CLAUDE_CODE_AUTO_COMPACT_WINDOW should hold:
+    # the watcher asks for a checkpoint before the harness compacts there, and the session goes
+    # on. In handover mode it is where a handover plus /clear is offered instead.
     "context_window": 0,           # 0 = detect; set a token count only to override the detection
-    "context_handover_pct": 70,    # percentage leg of the handover threshold
+    "context_mode": "compact",     # compact (checkpoint, auto-compact, continue) | handover
+    "context_handover_pct": 70,    # percentage leg of the context limit
     "context_handover_cap": 400000,  # absolute leg, in tokens (measured context-rot onset)
     # Opt-in text classifier (hooks/classifier.py). The backend is the master switch; each site
     # has its own knob, so one site can be compared in shadow while the others stay off. Shadow
@@ -1785,6 +1788,33 @@ def drain_subagent_learnings(session):
         subagent_learnings_file(session).unlink()
     except OSError:
         pass
+
+
+# ---- checkpoint-asked: when the context watcher last told this session to save its state --------
+# Written by context-watcher.py each time it asks for a pre-compaction checkpoint, read by
+# compact-resume.py after the compaction: a handover.md written AFTER this moment is the session's
+# own checkpoint, while an older one describes an earlier moment and must not be re-fed as current.
+
+def checkpoint_asked_file(session):
+    return session_state_path(session, ".checkpoint-asked")
+
+
+def mark_checkpoint_asked(session, now=None):
+    """Record the moment of a checkpoint request (epoch seconds). Best-effort: never raises."""
+    try:
+        flag = checkpoint_asked_file(session)
+        flag.parent.mkdir(parents=True, exist_ok=True)
+        flag.write_text("%.3f\n" % (time.time() if now is None else float(now)), encoding="utf-8")
+    except (OSError, TypeError, ValueError):
+        pass
+
+
+def checkpoint_asked_at(session):
+    """Epoch seconds of this session's latest checkpoint request, or 0.0 when it has none."""
+    try:
+        return float(checkpoint_asked_file(session).read_text(encoding="utf-8").strip() or 0)
+    except (OSError, ValueError):
+        return 0.0
 
 
 # ---- touched-paths: the per-session evidence of WHICH repos this session actually edited -------

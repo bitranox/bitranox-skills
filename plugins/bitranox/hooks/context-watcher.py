@@ -1,13 +1,23 @@
 #!/usr/bin/env python3
-"""Stop hook: offer a handover before the session's context degrades or the harness compacts it.
+"""Stop + PostToolUse hook: act at the context limit before the harness compacts the session.
+
+Two modes (`context_mode`). COMPACT, the default: shortly before the harness auto-compacts, ask the
+session to save a checkpoint (OPEN-WORK.md plus handover.md) and keep working; compact-resume.py
+hands the checkpoint back after the compaction. The harness compacts about 33k tokens below
+CLAUDE_CODE_AUTO_COMPACT_WINDOW (measured, see _HARNESS_RESERVE), so that variable must hold the
+context limit, and the request says so when it does not. The request goes out on PostToolUse as
+well as on Stop, because a long autonomous turn can pass both the save point and the compaction
+without stopping once - probe-verified on 2.1.310, where five compactions ran inside one turn and
+the turn carried on after each. HANDOVER: offer a handover plus /clear at the limit instead (Stop
+only), as before compact mode existed; everything below about rot and thresholds applies to both.
 
 A long session gets worse before it gets full, and nothing says so. Chroma's 2025 study measured
 accuracy falling from roughly 300-400k tokens on a 1M window and from about 50k on a 200k one, with
-the lost-in-the-middle effect costing 30% or more on retrieval. Claude Code's own auto-compact does
-not act until roughly 83% of the window, and that ceiling is a hard cap - CLAUDE_AUTOCOMPACT_PCT_
-OVERRIDE only lowers it. So there is a long stretch where the session is measurably worse than it
-reads, and when the harness finally does act it COMPACTS, which discards working detail rather than
-preserving it.
+the lost-in-the-middle effect costing 30% or more on retrieval. Left alone, Claude Code's own
+auto-compact does not act until close to the full window (the model-config docs put its default
+auto-compact window on a 1M model at about 967k); CLAUDE_CODE_AUTO_COMPACT_WINDOW moves it. So there is a long stretch where the
+session is measurably worse than it reads, and when the harness finally does act it COMPACTS, which
+keeps a summary and drops the working detail - unless that detail was saved first.
 
 This repo already handles compaction, but only in retrospect: `PreCompact` salvages learning signals
 and `PostCompact` nudges `meta-dream-nap` to tidy MEMORY. Neither watches context approaching the
@@ -108,6 +118,17 @@ _FAMILY_WINDOWS = (("claude-fable", 1_000_000), ("claude-mythos", 1_000_000),
 # What the launcher declared for a model the family table has not met. Read only in that case -
 # see the module docstring for why a known family ignores it.
 _ENV_MAX_CONTEXT = "CLAUDE_CODE_MAX_CONTEXT_TOKENS"
+
+# The harness's own auto-compact window. Probe-verified on 2.1.310: an `env` block in settings.json
+# sets it for the session AND reaches a hook's environment, so the hook can check it is aligned.
+_ENV_COMPACT_WINDOW = "CLAUDE_CODE_AUTO_COMPACT_WINDOW"
+# How far BELOW that window the harness actually compacts. Measured with scripted probes on 2.1.310
+# at windows of 100k and 200k: compaction fired at estimated contexts of 69-99k and 166-178k, while
+# requests of 84k and 171k still went through - a fixed reserve of roughly 33k, not a percentage.
+_HARNESS_RESERVE = 33_000
+# The least room left between the checkpoint request and that compaction point. One tool result
+# added up to 42k in the same probes, so a smaller gap can let the compaction overtake the save.
+_SAVE_MARGIN_MIN = 40_000
 
 
 def window_for_model(model_id, environ=None) -> int:
@@ -269,6 +290,54 @@ def verdict(tokens, window, pct, cap):
     return "quiet", detail
 
 
+def context_mode(cfg) -> str:
+    """'handover' only when configured so; anything else, missing or misspelt, is 'compact'. PURE."""
+    return "handover" if str(cfg.get("context_mode") or "").strip().lower() == "handover" else "compact"
+
+
+def harness_window(environ) -> int:
+    """The auto-compact window the harness was given, or 0 when none is visible. PURE."""
+    if not isinstance(environ, dict):
+        return 0
+    try:
+        value = int(environ.get(_ENV_COMPACT_WINDOW) or 0)
+    except (TypeError, ValueError):
+        return 0
+    return value if value > 0 else 0
+
+
+def compaction_point(limit, harness) -> int:
+    """Where the harness will compact, in tokens. PURE.
+
+    A harness window SMALLER than the limit compacts earlier, so it wins. An unset or larger one
+    is a misalignment the save request reports; the limit is then the value it should be set to,
+    and the save is timed against it.
+    """
+    window = harness if 0 < harness < limit else limit
+    return max(1, int(window) - _HARNESS_RESERVE)
+
+
+def save_point(compact_at) -> int:
+    """The context at which the checkpoint is requested: room for the save before the compaction."""
+    return max(1, int(compact_at) - max(_SAVE_MARGIN_MIN, int(compact_at) // 10))
+
+
+def compact_verdict(tokens, window, pct, cap, harness):
+    """('quiet'|'save'|'misconfigured', detail) for compact mode. PURE."""
+    limit = threshold(window, pct, cap)
+    if tokens is None or limit is None:
+        return "quiet", {}
+    compact_at = compaction_point(limit, harness)
+    detail = {"tokens": tokens, "window": int(window), "limit": limit, "pct": int(pct),
+              "cap": int(cap), "harness": harness, "compact_at": compact_at,
+              "save_at": save_point(compact_at)}
+    if tokens > int(window):
+        return "misconfigured", detail
+    if tokens >= detail["save_at"]:
+        return "save", detail
+    return "quiet", detail
+
+
 def _asked_flag(session):
     """Session-keyed state, so one left by an older session can never suppress this one."""
     return sig.touched_file(session).with_suffix(".handover-asked")
@@ -404,6 +473,32 @@ def _offer(detail, tracking="unknown") -> str:
     return text + "\n\n" + warning if warning else text
 
 
+def _save(detail, tracking="unknown") -> str:
+    fill = {k: format(v, ",") if isinstance(v, int) and k != "pct" else v for k, v in detail.items()}
+    text = (
+        "This session is carrying %(tokens)s tokens of context. The harness auto-compacts at about "
+        "%(compact_at)s, and a compaction keeps only a summary of the working detail. Save a "
+        "checkpoint NOW, then keep working:\n\n"
+        "1. Invoke bitranox:meta-context-watcher and follow its checkpoint procedure (compact "
+        "mode): carry every unfinished item and every unmet user request into `OPEN-WORK.md`, and "
+        "write `handover.md` - in flight, decisions, the exact next action, and `## Lessons for the "
+        "next nap`. Commit nothing just for this.\n"
+        "2. Then CONTINUE the task you were on. Do not stop, do not ask the user, and do not tell "
+        "them to /clear: the compaction follows automatically, and the checkpoint is handed back "
+        "to you right after it."
+    ) % fill
+    if not detail.get("harness") or detail["harness"] > detail["limit"]:
+        text += (
+            "\n\nThe harness is not set to compact at the %(limit)s limit (%(env)s is %(now)s), so "
+            "nothing will compact until its own default, far later, and this checkpoint goes stale "
+            "meanwhile. Tell the user once and offer to set %(env)s=%(raw)d in the env block of "
+            "~/.claude/settings.json through the update-config skill; it takes effect in the next "
+            "session." % {"limit": fill["limit"], "env": _ENV_COMPACT_WINDOW, "raw": detail["limit"],
+                          "now": fill["harness"] if detail.get("harness") else "unset"})
+    warning = _OVERWRITE_WARNING.get(tracking)
+    return text + "\n\n" + warning if warning else text
+
+
 def _misconfigured(detail) -> str:
     return (
         "The context watcher measured %(tokens)s tokens, which is MORE than the %(window)s window "
@@ -449,13 +544,22 @@ def _family_known(model_id) -> bool:
 
 
 def decide(event, cfg):
-    """The block reason for this Stop event, or None to stay quiet. IMPURE (reads the transcript).
+    """The text for this Stop or PostToolUse event, or None to stay quiet. IMPURE (reads).
+
+    On Stop the caller turns it into a block reason, on PostToolUse into additionalContext.
+    PostToolUse speaks only in compact mode: a long autonomous turn can pass both the save point
+    and the compaction without ever stopping, so a Stop-only request would arrive after the
+    compaction it was meant to precede.
 
     `stop_hook_active` means a Stop hook already kept this turn going. Blocking that continuation
     again would stack a second interruption on one turn and spend the consecutive-block budget, so
     it stays quiet and marks nothing; the next ordinary Stop asks instead.
     """
-    if event.get("stop_hook_active"):
+    on_stop = (event.get("hook_event_name") or "Stop") == "Stop"
+    mode = context_mode(cfg)
+    if not on_stop and mode != "compact":
+        return None
+    if on_stop and event.get("stop_hook_active"):
         return None
     session = str(event.get("session_id") or "")
     transcript = event.get("transcript_path") or ""
@@ -464,18 +568,21 @@ def decide(event, cfg):
     if not cfg.get("nudges", True):
         return None
     # A post-compaction nap is already an obligation the Stop gate refuses to stop on. Two blocks
-    # on one turn would fight over it and burn the consecutive-block budget, so this one yields.
+    # on one turn would fight over it and burn the consecutive-block budget, so a Stop yields. A
+    # mid-turn note blocks nothing, so it has nothing to fight over and does not yield.
     proj = event.get("cwd") or os.environ.get("CLAUDE_PROJECT_DIR") or os.getcwd()
-    try:
-        if sig.is_nap_owed(proj):
-            return None
-    except Exception:                         # noqa: BLE001 - a missing helper must not wedge a turn
-        pass
+    if on_stop:
+        try:
+            if sig.is_nap_owed(proj):
+                return None
+        except Exception:                     # noqa: BLE001 - a missing helper must not wedge a turn
+            pass
     tokens, model = read_session(transcript)
     window, source = resolve_window(cfg, model, os.environ)
-    state, detail = verdict(tokens, window,
-                            cfg.get("context_handover_pct", 70),
-                            cfg.get("context_handover_cap", 400000))
+    pct, cap = cfg.get("context_handover_pct", 70), cfg.get("context_handover_cap", 400000)
+    if mode == "compact":
+        return _decide_compact(session, proj, tokens, window, source, pct, cap)
+    state, detail = verdict(tokens, window, pct, cap)
     if not detail:
         return None
     detail["source"] = source
@@ -491,6 +598,34 @@ def decide(event, cfg):
     return None
 
 
+def _decide_compact(session, proj, tokens, window, source, pct, cap):
+    """Compact mode: request a checkpoint once per crossing of the save point. IMPURE.
+
+    A reading back BELOW the save point after a request means the harness compacted, so the request
+    re-arms and the next crossing asks for a fresh checkpoint. Above it, `due` spaces repeats by a
+    tenth of the window, which refreshes a checkpoint only when the harness is not compacting.
+    """
+    state, detail = compact_verdict(tokens, window, pct, cap, harness_window(dict(os.environ)))
+    if not detail:
+        return None
+    detail["source"] = source
+    if state == "misconfigured":
+        if already_reported(session):
+            return None
+        mark_reported(session)
+        return _misconfigured(detail)
+    last = asked_at(session)
+    if state != "save":
+        if last:
+            mark_asked(session, 0)
+        return None
+    if not due(tokens, detail["save_at"], window, last):
+        return None
+    mark_asked(session, tokens)
+    sig.mark_checkpoint_asked(session)
+    return _save(detail, handover_tracking(proj))
+
+
 def main() -> int:
     try:
         event = json.load(sys.stdin)
@@ -502,7 +637,12 @@ def main() -> int:
         reason = decide(event, sig.load_config())
     except Exception:                         # noqa: BLE001 - a broken watcher must never wedge a turn
         return 0
-    if reason:
+    if not reason:
+        return 0
+    if event.get("hook_event_name") == "PostToolUse":
+        sys.stdout.write(json.dumps({"hookSpecificOutput": {
+            "hookEventName": "PostToolUse", "additionalContext": reason}}))
+    else:
         sys.stdout.write(json.dumps({"decision": "block", "reason": reason}))
     return 0
 

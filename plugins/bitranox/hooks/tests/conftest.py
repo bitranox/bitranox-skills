@@ -32,6 +32,7 @@ _HOOK_MODULES = {
     "self-improve-audit": "self_improve_audit",
     "decision-review-nudge": "decision_review_nudge",
     "post-compact-nudge": "post_compact_nudge",
+    "compact-resume": "compact_resume",
     "repo-gate": "repo_gate",
     "tell-sweep": "tell_sweep",
     "commit-tell-sweep": "commit_tell_sweep",

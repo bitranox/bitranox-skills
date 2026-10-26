@@ -36,6 +36,7 @@ ENUM_CHOICES = {
     "skill_placement": ("lowest", "user", "project"),
     "mcp_search": ("off", "auto"),
     "classifier_backend": ("off", "jev"),
+    "context_mode": ("compact", "handover"),
     # decide only where the site's hook implements it: skill-router.py, self-improve-gate.py,
     # recall-memory.py and subagent-capture.py do; jig-repetition-nudge.py, recall-memory.py's
     # backlog-ask match, self-improve-audit.py and the skill-step pipeline do not.

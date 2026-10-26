@@ -1,20 +1,34 @@
 ---
 name: meta-context-watcher
-description: Use when a session's context is large enough that quality is degrading or compaction is close, when a Stop nudge reports the handover threshold was crossed, or on "write a handover", "hand this over", "context is getting full", or "let's start a fresh session". Also use when a session picks up from an existing handover.md or OPEN-WORK.md, or is asked what to do next - "read the handover", "what next", "what's next for <project>", "what is still open", "list the open points" - when unfinished work or an unmet user request must outlive the session and belongs in the standing backlog, when open items keep sinking under whatever was worked on last, or on "add this to the backlog", "clean up the backlog"
+description: Use when a session's context is large enough that quality is degrading or compaction is close, when the context watcher asks for a checkpoint before auto-compaction or a compaction hands a saved checkpoint back, when a Stop nudge reports the handover threshold was crossed, or on "write a handover", "hand this over", "context is getting full", or "let's start a fresh session". Also use when a session picks up from an existing handover.md or OPEN-WORK.md, or is asked what to do next - "read the handover", "what next", "what's next for <project>", "what is still open", "list the open points" - when unfinished work or an unmet user request must outlive the session and belongs in the standing backlog, when open items keep sinking under whatever was worked on last, or on "add this to the backlog", "clean up the backlog"
 ---
 
-# Write the handover, then start clean
+# Save the task state before the context wall
 
 A long session gets worse before it gets full. Accuracy falls from roughly 300-400k tokens on a 1M
-window and from about 50k on a 200k one, while Claude Code does not auto-compact until around 83% -
-and compaction DISCARDS working detail rather than preserving it.
+window and from about 50k on a 200k one, while Claude Code does not auto-compact until its
+auto-compact window (`CLAUDE_CODE_AUTO_COMPACT_WINDOW`) is nearly reached - and a compaction keeps
+a summary while the working detail goes.
 
-Both numbers are dated, and neither is measured here. The accuracy figures are Chroma's 2025
-context-rot study, read second-hand from a summary rather than from the paper; the 83% is Claude
-Code product behaviour that can move in any release. Treat them as the order of magnitude that
-justifies handing over early, never as thresholds to tune against - and re-check both before
-quoting either as current. Between those two points is where
-a session should be handed over deliberately instead of truncated.
+The accuracy figures are Chroma's 2025 context-rot study, read second-hand from a summary rather
+than from the paper; where the harness compacts is product behaviour that can move in any release.
+Treat both as the order of magnitude that justifies acting early, never as thresholds to tune
+against.
+
+## Two modes
+
+What happens at the context limit is the `context_mode` setting (bitranox:meta-memory-settings):
+
+- **compact** (the default): before the harness compacts, save a CHECKPOINT - steps 1-6 of the
+  procedure below - and then go back to the task you were on (step 7c). The compaction follows on
+  its own, and the checkpoint is handed back to you right after it. Nothing ends: no `/clear`, no
+  stop.
+- **handover**: write the handover, stop, and send the user to `/clear` (steps 1-8).
+
+A handover the USER asks for ("write a handover", "let's start a fresh session") runs steps 1-8
+in either mode. "Compact-mode checkpoint" below means only the file written because the context
+watcher asked for one in compact mode; a handover the user asked for is never one, so the
+checkpoint exceptions (no commit, next action = the task in flight) do not apply to it.
 
 ## The one rule
 
@@ -116,6 +130,7 @@ a free number before citing it.
    fits into a spare moment, so it is the one that starves. An item whose size is unknown sorts
    after the sized ones of its origin, and sizing it is then its own next action.
 4. Blocked keeps its rank. Being blocked on the user is a reason to go and ask, not a demotion.
+   While a blocked item waits for its answer, work the highest-ranked item that is not blocked.
    Blocked is a value for `open:`, never a third `ORIGIN` - there are two origins and inventing a
    third puts the item in a category nothing sorts. When you park several items behind ONE
    resource (a test window, a node, a device due back), check once that the resource is durable
@@ -150,7 +165,9 @@ goes for `size`: `size: unknown` is a usable line, an invented count is not.
   must be the top-ranked open item in `OPEN-WORK.md`, or the file must say plainly why a
   lower-ranked one goes first.** Recency is not a reason. "It is what I was working on", "it is
   nearly done", "the user mentioned it most recently" and "it is small" are the four that get
-  written, and none of them outranks a bigger item the user is still waiting on.
+  written, and none of them outranks a bigger item the user is still waiting on. A compact-mode
+  checkpoint is the one exception: its next action is the next step of the task in flight,
+  because the same session goes straight back to that task; the ranking decides what follows it.
 - **Files that matter** - repo-relative PATHS, not bare filenames; inferring them is the work
   this file exists to save.
 - **How to verify** - the commands that prove the work still stands. Never write HEAD's sha, "tree
@@ -178,10 +195,14 @@ goes for `size`: `size: unknown` is a usable line, an invented count is not.
 
 ## Procedure
 
+Steps 1-6 write the checkpoint and run in both modes. Then compact mode takes step 7c and nothing
+after it; handover mode, and any handover the user asked for, take steps 7 and 8 instead.
+
 1. **Record the lessons, do not capture them.** Each durable thing this session learned goes into
    the handover as ONE line under `## Lessons for the next nap`, worded trigger-first, with no slug
    and no engine call. Do NOT invoke `bitranox:meta-self-improve` here and do not run
-   `memory_engine.py`: the file is committed, so the line has reached the store's front door, and
+   `memory_engine.py`: the file sits in the repo, committed or not, so the line has reached the
+   store's front door, and
    `bitranox:meta-dream-nap` / `bitranox:meta-dream-tree` walk it in from there. A lesson about
    the TOOLING (a hook, a skill, the engine) is the same one line, prefixed `tooling:`, and it is
    NOT a reason to open the tool now.
@@ -226,14 +247,28 @@ goes for `size`: `size: unknown` is a usable line, an invented count is not.
    two moments in it, leaves the reader deciding which half is true. Commit it along with
    `OPEN-WORK.md`: tracking them costs one diff per session and buys a history for the one file that
    is destroyed on purpose every time, so a dropped item can be recovered once somebody notices.
-   Check first that neither carries a secret, an internal hostname or a private address, because a
-   tracked file in a public repo publishes all three permanently.
+   A compact-mode checkpoint commits nothing just for itself: both files ride along with the next
+   commit the work makes. Committed now or later, check that neither carries a secret, an
+   internal hostname or a private address, because a tracked file in a public repo publishes all
+   three permanently.
 5. **End the file with its own expiry instruction:**
 
    > Read this, then replace the first line with `# STALE - read <date>, work continued`. Do not
    > delete it - if this session ends badly it is the only record of where things stood.
 
 6. **Re-read it as the next session.** Any line the repo could have told them is a line to cut.
+
+**Compact mode ends here:**
+
+7c. **Go back to the task you were on.** Tell the user in one line that a checkpoint was saved,
+    naming its path, then take the exact next action you just wrote. Do not stop, do not ask
+    whether to continue, and do not mention `/clear`. The harness compacts on its own once context
+    reaches its window, and the checkpoint is only as current as the moment you wrote it. Do not
+    keep it in step with every edit: it is read only when the compaction arrives, which is at most
+    the save margin away. If the context watcher asks again before a compaction, write it again.
+
+**Handover mode, or a handover the user asked for:**
+
 7. **STOP. The handover is the LAST thing you do in this session.** Writing it ends the session's
    work. Do NOT start a new task, resume the one you were part-way through, or "just finish" the
    small thing first - not even the next action you have just written into the file. Every edit made
@@ -277,6 +312,23 @@ handover; where it is gitignored there is nothing to commit. Say in your reply t
 now carries an uncommitted STALE line, so the dirty tree has an owner instead of tripping the next
 gate or session.
 
+**A checkpoint handed back after a compaction is your own work in progress.** After an automatic
+compaction in compact mode, a `<BITRANOX-COMPACT-RESUME>` block carries the checkpoint THIS session
+wrote shortly before, mid-task. Take its exact next action at once and mark it STALE as the block
+says. The paragraphs after this one, from "A gate result in the handover" on, are for a handover
+from an EARLIER session and do not apply to it: nothing was cleared, and the task in flight was
+already chosen against the backlog when the checkpoint was written. So do not read `OPEN-WORK.md`
+first, do not classify its lines, do not swap the task for a higher-ranked item, and do not hunt
+for survivors of a `/clear`. The task in flight is the whole piece of work the checkpoint's "In
+flight" names, every remaining step of it, not only the next action. A question you have not yet
+put to the user about a blocked item goes in your reply without stopping the work. All of those
+rules apply again when the task in flight is finished and you choose what comes next. A block
+saying NO checkpoint was saved means the compaction summary is all that carried over: when the next
+step needs detail it lacks, read the transcript the block names before continuing. The checkpoint's
+lessons need
+nothing from you: after a compaction the Stop gate asks for `bitranox:meta-dream-nap`, which
+captures them.
+
 Never amend a stale handover to update it - write a NEW one and replace the file. An edited handover
 holds two moments with no way to tell them apart.
 
@@ -285,9 +337,11 @@ session that wrote it usually ran the gate before its last writes, and those can
 files nothing shows you. Re-run the gate before building on it; a red there belongs to the
 inherited tree, not to the change you are about to make.
 
-**Read `OPEN-WORK.md` too, and read it FIRST.** The handover tells you where the last session
-stopped; the backlog tells you what is actually worth doing, and the two answers are routinely
-different. A handover's next action is one session's view of one moment, and the item that has
+**Read `OPEN-WORK.md` too, and read it FIRST** (for a handover from an earlier session; a
+checkpoint handed back after a compaction is resumed first, as above). The handover tells you
+where the last session stopped; the backlog tells you what is actually worth doing, and the two
+answers are routinely different. A handover's next action is one session's view of one moment, and
+the item that has
 been waiting longest is the one least likely to be in it.
 
 **Before naming the next item, or saying nothing here can be worked, classify EVERY open line.**
@@ -375,9 +429,20 @@ the work stands, never restate the skill's rules.
 
 ## When it fires on its own
 
-A `Stop` hook measures context from the transcript's last recorded usage - the real per-request
-figure, not an estimate - and blocks when it crosses `min(context_handover_pct of the window,
+A hook measures context from the transcript's last recorded usage - the real per-request figure,
+not an estimate. The context limit is `min(context_handover_pct of the window,
 context_handover_cap)`.
+
+In compact mode the limit is the value `CLAUDE_CODE_AUTO_COMPACT_WINDOW` should hold, set in the
+`env` block of `~/.claude/settings.json`. The harness compacts about 33k tokens below that value
+(measured on Claude Code 2.1.310), and the hook asks for the checkpoint about a tenth (at least
+40k) before that point. It asks on `PostToolUse` as well as on `Stop`, because a long autonomous
+turn can pass the whole stretch without stopping once. When the variable is unset or larger than
+the limit, the request says so: tell the user once and offer to set it through the update-config
+skill. After a compaction the reading falls below the save point, and the next crossing asks for a
+fresh checkpoint.
+
+In handover mode the hook blocks on `Stop` once context crosses the limit.
 
 The window comes from the model family on the transcript's most recent assistant record, so nothing
 needs configuring for a known family. A model id no family table knows - a gateway model such as
@@ -391,8 +456,8 @@ from another model cannot override a measured family window.
 Its warning about the overwrite asks git whether `handover.md` is tracked in the repo it fires in
 and says which case applies, because some repos commit the file and others ignore it.
 
-Declining is not permanent: the next ask waits until context has grown another tenth of the window,
-because a decline at 40% is "not yet" while 90% is a different question.
+In handover mode, declining is not permanent: the next ask waits until context has grown another
+tenth of the window, because a decline at 40% is "not yet" while 90% is a different question.
 
 If it ever reports measuring MORE context than the window, the detection failed - set
 `context_window` explicitly via `bitranox:meta-memory-settings`. That is reported rather than
@@ -400,9 +465,11 @@ ignored because a threshold nothing can reach looks exactly like a watcher that 
 
 ## Not the same as its neighbours
 
-- `bitranox:meta-dream-nap` - consolidates MEMORY after a compaction; it prunes task state as noise.
+- `bitranox:meta-dream-nap` - consolidates MEMORY after a compaction (the Stop gate asks for it
+  once one has happened, and it captures the checkpoint's `## Lessons for the next nap`); it prunes
+  task state as noise.
 - `bitranox:meta-dream-tree` - the periodic store consolidation, which also ends by nudging `/clear`.
 - `bitranox:meta-self-improve` - durable facts. The NAP runs it on the handover's lessons; this
-  session records them and stops.
+  session only records them.
 
 This skill is the only one that preserves TASK state, and it runs BEFORE the wall, not after.
