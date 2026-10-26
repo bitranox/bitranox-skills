@@ -31,7 +31,10 @@ PRICED before shipping, by replaying 131,293 recorded Bash calls with their real
 the wrong repository (pathspec errors, a test gate run in the main checkout) and 25 inherited the
 directory their author happened to want - mostly workflow agents running `cd $W` in one call and a
 bare `git add` in the next. Those 25 pay one retry with an explicit target; the shape they relied
-on is the one that failed the other 5, and nothing in the command tells the two apart.
+on is the one that failed the other 5, and nothing in the command tells the two apart. These
+counts are REPLAY-derived: a replay shows each call every earlier sibling already on disk, which the
+live hook did not see before the sibling ledger of 9.13.0 (below). They are an upper bound on what
+the live hook could refuse, not a measured live rate.
 
 The siblings come from `transcript_siblings` (shared with block-commit-beside-sibling-gate), which
 asks `sibling_ledger` first - the record `sibling-ledger.py` keeps from the hook events, per session

@@ -24,7 +24,10 @@ and every one had an earlier sibling that really ran a gate (`make test`, `pytes
 `pyright`, the gate.py jig) followed by a commit nobody had checked against it; four of the 19
 were found by reading the siblings back, since a heredoc edit and a commit-message write sat in the
 same calls. Each costs one retry in the next message. Whether those 19 gates were red was not
-measured: the shape is refused because nothing in it can tell.
+measured: the shape is refused because nothing in it can tell. These counts are REPLAY-derived: a
+replay shows each call every earlier sibling already on disk, which the live hook did not see
+before the sibling ledger of 9.13.0 (below). They are an upper bound on what the live hook could
+refuse, not a measured live rate.
 
 A commit sent BEFORE its gate in the same message is not caught: nothing of the gate has run or
 been recorded yet. Data regions are masked first, so a gate or a commit named inside a heredoc body
