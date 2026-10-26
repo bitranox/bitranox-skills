@@ -6,6 +6,7 @@ a second source of truth.
 """
 
 import io
+import json
 import subprocess
 import sys
 from pathlib import Path
@@ -101,3 +102,32 @@ def test_a_script_loaded_by_path_from_elsewhere_finds_tree_support(stem, tmp_pat
     )
     assert done.returncode == 0, done.stderr
     assert done.stdout.strip() == "loaded"
+
+
+# ---- EnvelopeArgumentParser -------------------------------------------------------------------
+
+def _envelope_parser():
+    ap = TS.EnvelopeArgumentParser(prog="tool", envelope_command="tool")
+    sub = ap.add_subparsers(dest="cmd", required=True)
+    run = sub.add_parser("run")
+    run.add_argument("--json", action="store_true")
+    run.add_argument("--n", type=int)
+    return ap
+
+
+def test_an_envelope_parser_names_the_sub_command_a_root_level_error_happened_under(capsys):
+    """argparse reports an unrecognized argument from the ROOT after the sub-command parsed."""
+    with pytest.raises(SystemExit) as exc:
+        _envelope_parser().parse_args(["run", "--json", "--bogus"])
+    assert exc.value.code == 2
+    env = json.loads(capsys.readouterr().out)
+    assert env == {"ok": False, "command": "run", "data": {}, "skipped": [],
+                   "error": "unrecognized arguments: --bogus"}
+
+
+def test_an_envelope_parser_ignores_a_json_flag_after_a_bare_double_dash(capsys):
+    with pytest.raises(SystemExit) as exc:
+        _envelope_parser().parse_args(["run", "--n", "x", "--", "--json"])
+    assert exc.value.code == 2
+    captured = capsys.readouterr()
+    assert captured.out == "" and "usage:" in captured.err

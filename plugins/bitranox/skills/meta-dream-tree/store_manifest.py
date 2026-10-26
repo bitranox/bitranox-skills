@@ -61,7 +61,7 @@ import uuid_store
 # tree_support is this script's sibling; a caller loading the script by path does not put this
 # dir on sys.path the way running it directly does.
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from tree_support import STORE_DIR, store_anchor, utf8_stdio
+from tree_support import STORE_DIR, EnvelopeArgumentParser, store_anchor, utf8_stdio
 
 __all__ = ["Entry", "Diff", "NoAnchor", "Unreadable", "derive", "diff", "manifest_key", "main"]
 
@@ -461,7 +461,8 @@ def _render_diff(d: Diff) -> str:
 
 
 def build_parser() -> argparse.ArgumentParser:
-    p = argparse.ArgumentParser(description=__doc__.splitlines()[0])
+    p = EnvelopeArgumentParser(description=__doc__.splitlines()[0],
+                               envelope_command="store_manifest")
     sub = p.add_subparsers(dest="cmd", required=True)
 
     bk = sub.add_parser("backup", help="copy the in-scope stores and record the manifest")

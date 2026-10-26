@@ -55,7 +55,7 @@ import uuid_store
 # tree_support is this script's sibling; a caller loading the script by path does not put this
 # dir on sys.path the way running it directly does.
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from tree_support import STORE_DIR, store_anchor, utf8_stdio
+from tree_support import STORE_DIR, EnvelopeArgumentParser, store_anchor, utf8_stdio
 
 __all__ = ["Fact", "Candidate", "Control", "Result", "similarity", "run", "load_facts", "main"]
 
@@ -455,7 +455,7 @@ def _positive_int(raw: str) -> int:
 
 
 def build_parser() -> argparse.ArgumentParser:
-    p = argparse.ArgumentParser(description=__doc__.splitlines()[0])
+    p = EnvelopeArgumentParser(description=__doc__.splitlines()[0], envelope_command="dedup_scan")
     p.add_argument("--from", dest="start", default=".", help="a dir inside the tree")
     p.add_argument("--threshold", type=float, default=0.5,
                    help="report pairs scoring at or above this (default 0.5)")

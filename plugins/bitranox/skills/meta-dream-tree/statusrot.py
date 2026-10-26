@@ -60,7 +60,7 @@ import uuid_store
 # tree_support is this script's sibling; a caller loading the script by path does not put this
 # dir on sys.path the way running it directly does.
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from tree_support import store_anchor, utf8_stdio
+from tree_support import EnvelopeArgumentParser, store_anchor, utf8_stdio
 
 PATTERNS: dict[str, re.Pattern[str]] = {
     "SHIPPED": re.compile(
@@ -568,7 +568,7 @@ def _add_level_args(p: argparse.ArgumentParser) -> None:
 
 
 def main(argv: list[str] | None = None) -> int:
-    ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
+    ap = EnvelopeArgumentParser(description=__doc__.splitlines()[0], envelope_command="statusrot")
     sub = ap.add_subparsers(dest="cmd", required=True)
     sc = sub.add_parser("scan", help="scan memory levels for status claims")
     _add_level_args(sc)

@@ -392,3 +392,32 @@ def test_a_cp1252_stdout_does_not_crash_on_a_non_ascii_level(tmp_path):
     # Exit 1 is ALSO what an uncaught exception gives, so the stream is the real assertion.
     assert b"Traceback" not in r.stderr, r.stderr.decode("utf-8", "replace")
     assert r.returncode == 1 and b"CANDIDATE" in r.stdout
+
+
+# ---- argparse usage errors keep the --json contract ------------------------------------------
+
+def _usage_run(*args):
+    return subprocess.run([sys.executable, str(TOOL), *args], capture_output=True, text=True,
+                          encoding="utf-8", errors="replace")
+
+
+@pytest.mark.parametrize("argv", [
+    ["--json", "--top", "0"],                              # a type check refusing the value
+    ["--json", "--threshold", "high"],
+    ["--json", "--no-such-flag"],
+])
+def test_a_usage_error_under_json_prints_the_envelope(argv):
+    """argparse's own exit 2 printed usage text only, so a --json caller parsing stdout got
+    nothing; the envelope now comes first, the usage text still goes to stderr."""
+    proc = _usage_run(*argv)
+    assert proc.returncode == 2, proc.stdout + proc.stderr
+    env = json.loads(proc.stdout)
+    assert env["ok"] is False and env["command"] == "dedup_scan" and env["error"]
+    assert env["data"] == {} and env["skipped"] == []
+    assert "usage:" in proc.stderr
+
+
+def test_a_usage_error_without_json_prints_no_envelope():
+    proc = _usage_run("--top", "0")
+    assert proc.returncode == 2
+    assert proc.stdout == "" and "usage:" in proc.stderr

@@ -447,3 +447,33 @@ def test_a_cp1252_stdout_does_not_crash_on_a_non_ascii_path(tmp_path):
                         "--out", str(root / "bk")], capture_output=True, check=False, env=env,
                        cwd=str(tmp_path))
     assert r.returncode == 0, r.stderr.decode("utf-8", "replace")
+
+
+# ---- argparse usage errors keep the --json contract ------------------------------------------
+
+def _usage_run(*args):
+    return subprocess.run([sys.executable, str(TOOL), *args], capture_output=True, text=True,
+                          encoding="utf-8", errors="replace")
+
+
+@pytest.mark.parametrize("argv,command", [
+    (["backup", "--json"], "backup"),                      # --out is required
+    (["verify", "--json", "--out", "x", "--bogus"], "verify"),
+    (["backup", "--json", "--out", "x", "--scope", "nope"], "backup"),
+    (["--json"], "store_manifest"),
+])
+def test_a_usage_error_under_json_prints_the_envelope(argv, command):
+    """argparse's own exit 2 printed usage text only, so a --json caller parsing stdout got
+    nothing; the envelope now comes first, the usage text still goes to stderr."""
+    proc = _usage_run(*argv)
+    assert proc.returncode == 2, proc.stdout + proc.stderr
+    env = json.loads(proc.stdout)
+    assert env["ok"] is False and env["command"] == command and env["error"]
+    assert env["data"] == {} and env["skipped"] == []
+    assert "usage:" in proc.stderr
+
+
+def test_a_usage_error_without_json_prints_no_envelope():
+    proc = _usage_run("backup")
+    assert proc.returncode == 2
+    assert proc.stdout == "" and "usage:" in proc.stderr

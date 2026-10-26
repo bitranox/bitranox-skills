@@ -385,3 +385,32 @@ class TestTreeMode:
         assert proc.returncode == 0, proc.stderr
         after = json.loads(_cli("scan", "--tree", str(anchor), "--json").stdout)["data"]
         assert "a-fact" not in after["new_or_changed"] and "top-fact" in after["new_or_changed"]
+
+
+# ---- argparse usage errors keep the --json contract ------------------------------------------
+
+def _usage_run(*args):
+    return subprocess.run([sys.executable, str(TOOL), *args], capture_output=True, text=True,
+                          encoding="utf-8", errors="replace")
+
+
+@pytest.mark.parametrize("argv,command", [
+    (["scan", "--json", "--no-such-flag"], "scan"),
+    (["clear", "--json", "--level"], "clear"),
+    (["--json"], "statusrot"),
+])
+def test_a_usage_error_under_json_prints_the_envelope(argv, command):
+    """argparse's own exit 2 printed usage text only, so a --json caller parsing stdout got
+    nothing; the envelope now comes first, the usage text still goes to stderr."""
+    proc = _usage_run(*argv)
+    assert proc.returncode == 2, proc.stdout + proc.stderr
+    env = json.loads(proc.stdout)
+    assert env["ok"] is False and env["command"] == command and env["error"]
+    assert env["data"] == {} and env["skipped"] == []
+    assert "usage:" in proc.stderr
+
+
+def test_a_usage_error_without_json_prints_no_envelope():
+    proc = _usage_run("scan", "--no-such-flag")
+    assert proc.returncode == 2
+    assert proc.stdout == "" and "usage:" in proc.stderr
