@@ -1760,6 +1760,95 @@ def test_pre_push_reads_the_marketplace_at_head(tmp_path, monkeypatch, capsys):
     assert "drifted from its twin" in capsys.readouterr().err
 
 
+# --- the commit gate checks the skills a commit SHIPS, not every skill that differs anywhere ------
+#
+# Measured 2026-10-24 ([740]): an OPEN-WORK.md-only commit was refused as DRIFT because a mirrored
+# skill had an UNSTAGED edit, and before that because a peer's UNPUSHED commit had drifted one.
+# Neither is in that commit, and pre-existing drift elsewhere must not block an unrelated commit.
+# A commit counts the skills its own selection changes against HEAD; a push the skills its commits
+# change since origin/master. A skill counts as changed when any file under it does.
+
+def _unstaged_skill_edit(root):
+    """An unstaged edit of the marketplace skill that is not itself drift (the H1 parenthetical)."""
+    write(root / MP_SKILL, MIRROR_BODY.replace("(coding-python-thing)", "(renamed)"))
+
+
+@pytest.mark.parametrize("command", ["git commit -m x", "git commit -m x -- README.md",
+                                     "git commit -m x -i README.md"])
+def test_an_unstaged_skill_edit_does_not_put_pre_existing_drift_into_an_unrelated_commit(
+        tmp_path, monkeypatch, command):
+    _public, root, tool = _published_pair(tmp_path, monkeypatch)
+    _tool_ahead(tool)                                       # drift this commit did not make
+    _unstaged_skill_edit(root)
+    write(root / "README.md", "readme\n")
+    _g(root, "add", "README.md")
+
+    stage = RG.mirror_stage(command, "Bash", str(root))
+    assert RG.check_skill_mirrors(root, stage=stage, notices=[]) == []
+
+
+@pytest.mark.parametrize("command", ["git commit -m x", f"git commit -m x -- README.md {MP_SKILL}",
+                                     "git commit -qam x"])
+def test_a_commit_that_ships_the_drifted_skill_is_still_refused(tmp_path, monkeypatch, command):
+    # The negative of the arm above: the same tree, with the skill's edit in what the commit takes.
+    _public, root, tool = _published_pair(tmp_path, monkeypatch)
+    _tool_ahead(tool)
+    _unstaged_skill_edit(root)
+    write(root / "README.md", "readme\n")
+    _g(root, "add", "README.md")
+    if command == "git commit -m x":                        # the others take the edit from disk
+        _g(root, "add", MP_SKILL)
+
+    stage = RG.mirror_stage(command, "Bash", str(root))
+    fails = RG.check_skill_mirrors(root, stage=stage, notices=[])
+    assert len(fails) == 1 and "coding-python-thing" in fails[0]
+
+
+def test_an_unpushed_drift_does_not_block_an_unrelated_commit_but_blocks_the_push(tmp_path, monkeypatch):
+    _public, root, _tool = _published_pair(tmp_path, monkeypatch)
+    _drift(root / MP_SKILL, MIRROR_BODY)
+    _g(root, "commit", "-qam", "a peer's commit, not pushed yet")
+    write(root / "OPEN-WORK.md", "- an item\n")
+    _g(root, "add", "OPEN-WORK.md")
+
+    assert RG.check_skill_mirrors(root, stage=RG.STAGE_INDEX, notices=[]) == []
+    assert len(RG.check_skill_mirrors(root, stage=RG.STAGE_HEAD, notices=[])) == 1
+
+
+def test_a_commit_that_is_pushed_in_the_same_command_counts_the_unpushed_commits(tmp_path, monkeypatch):
+    _public, root, _tool = _published_pair(tmp_path, monkeypatch)
+    _drift(root / MP_SKILL, MIRROR_BODY)
+    _g(root, "commit", "-qam", "unpushed")
+    write(root / "OPEN-WORK.md", "- an item\n")
+    _g(root, "add", "OPEN-WORK.md")
+
+    fails = RG.check_skill_mirrors(root, stage=RG.STAGE_INDEX, notices=[], publishes=True)
+    assert len(fails) == 1 and IN_PROGRESS in fails[0]
+
+
+@pytest.mark.parametrize("command, publishes", [
+    ("git commit -m x", False),
+    ("git commit -m x && git push", True),
+    ("git commit -m x && gh pr create --fill", True),
+    ("git push", True),
+    ("git commit -m x <<'EOF'\ngit push\nEOF", False),
+])
+def test_command_publishes_names_a_push_or_a_pr(command, publishes):
+    assert RG.command_publishes(command, "Bash") is publishes
+
+
+def test_a_commit_that_drifts_only_a_reference_file_is_refused(tmp_path, monkeypatch):
+    # A mirrored skill is a directory: a commit changing only `references/` ships drift as surely
+    # as one changing SKILL.md.
+    root = _with_extra(tmp_path, monkeypatch)
+    _g(root, "checkout", "--", MP_SKILL)                    # no SKILL.md change at all
+    write(root / EXTRA, "drifted\n")
+    _g(root, "add", EXTRA)
+
+    fails = RG.check_skill_mirrors(root, stage=RG.STAGE_INDEX, notices=[])
+    assert len(fails) == 1 and "references/extra.md" in fails[0]
+
+
 # --- a coordinated two-repo change: the commit gate accepts a MATCHING uncommitted twin ----------
 #
 # User decision 2026-10-12 ([200], btx_lib_mail queue): with each side read at what it ships and the
@@ -2019,7 +2108,8 @@ def test_a_pathspec_commit_is_judged_on_the_named_files_as_they_are_on_disk(tmp_
 def test_a_plain_commit_still_judges_the_stale_index(tmp_path, monkeypatch):
     _public, root, tool = _published_pair(tmp_path, monkeypatch)
     _tool_ahead(tool)
-    _drift(root / MP_SKILL, MIRROR_BODY)
+    _touch_marketplace_skill(root)                          # the index changes the skill ([740])
+    _drift(root / MP_SKILL, MIRROR_BODY)                    # in sync on disk, NOT staged
     stage = RG.mirror_stage("git commit -m x", "Bash", str(root))
 
     assert len(RG.check_skill_mirrors(root, stage=stage, notices=[])) == 1
@@ -2307,12 +2397,18 @@ def test_a_crlf_blob_already_in_the_index_is_not_converted(tmp_path, monkeypatch
 @_POSIX_SHELL
 def test_a_pathspec_commit_keeps_a_skip_worktree_entry_at_head(tmp_path, monkeypatch):
     # A partial commit keeps HEAD's blob for a skip-worktree entry whatever is on disk; a HEAD-built
-    # throwaway index has no such bit, so the reading must fall back to the index.
-    _public, root, _tool = _published_pair(tmp_path, monkeypatch)
+    # throwaway index has no such bit, so the reading must fall back to the index. The commit
+    # also adds a file both sides share, so it changes the skill and is checked at all ([740]).
+    _public, root, tool = _published_pair(tmp_path, monkeypatch)
+    write(tool / "skills" / "python-thing" / "references" / "new.md", "shared\n")
+    _g(tool, "add", "-A")
+    _g(tool, "commit", "-qm", "new reference")
     _drift(root / MP_SKILL, MIRROR_BODY)
     _g(root, "commit", "-qam", "drift reaches HEAD")
     _g(root, "update-index", "--skip-worktree", MP_SKILL)
     write(root / MP_SKILL, MIRROR_BODY)                     # in sync on disk, hidden from git
+    write(root / SKILL_DIR / "references" / "new.md", "shared\n")
+    _g(root, "add", SKILL_DIR + "/references/new.md")
 
     blocked, shipped_drift = _gate_then_commit(root, f"git commit -qm x --allow-empty -- {SKILL_DIR}")
     assert shipped_drift and blocked

@@ -61,6 +61,7 @@ Checks:
 Pure standard library; shells out to git and pytest via subprocess.
 """
 
+import contextlib
 import difflib
 import importlib.util
 import json
@@ -1353,28 +1354,36 @@ def _stage_selection(selection, top, real_index, temp_index, env):
     return _git(selection.where, "add", "-u", *specs, env=env)[0] == 0
 
 
-def _selected_files(skill_dir, selection):
-    """`shipped_files` for a `CommitSelection`, or None when git cannot say what it takes.
+@contextlib.contextmanager
+def _selection_index(directory, selection):
+    """Yield the git environment whose index holds what ``selection`` commits, or None.
 
-    Git builds the selection itself, in a throwaway index (`GIT_INDEX_FILE`), and the files are read
-    back from it. Reproducing git's add logic by hand was tried first and, over three adversarial
+    Git builds the selection itself, in a throwaway index (`GIT_INDEX_FILE`), and callers read it
+    back from there. Reproducing git's add logic by hand was tried first and, over three adversarial
     review rounds on 2026-10-24, kept missing rules git applies: the stat cache (a stat-clean entry
     keeps its STAGED blob under `-a`), the safer-CRLF rule (a CRLF blob already in the index is not
     converted), symlinks and paths behind a symlinked directory, clean filters, and assume-unchanged
     entries. Staging writes the same blobs the commit itself will write; it runs with an empty
     `core.hooksPath`, so no user hook fires during the check, and with `core.splitIndex=false`, so
-    no shared-index file is left in the real git dir."""
-    top = _selection_top(skill_dir, selection)
-    rc, real_index, _ = _git(skill_dir, "rev-parse", "--path-format=absolute", "--git-path", "index")
+    no shared-index file is left in the real git dir. None when git cannot say what it takes."""
+    top = _selection_top(directory, selection)
+    rc, real_index, _ = _git(directory, "rev-parse", "--path-format=absolute", "--git-path", "index")
     if top is None or rc:
-        return None
+        yield None
+        return
     with tempfile.TemporaryDirectory(prefix="repo-gate-index-") as scratch:
         temp_index, no_hooks = os.path.join(scratch, "index"), os.path.join(scratch, "no-hooks")
         os.mkdir(no_hooks)
         env = {**os.environ, "GIT_INDEX_FILE": temp_index, "GIT_CONFIG_COUNT": "2",
                "GIT_CONFIG_KEY_0": "core.hooksPath", "GIT_CONFIG_VALUE_0": no_hooks,
                "GIT_CONFIG_KEY_1": "core.splitIndex", "GIT_CONFIG_VALUE_1": "false"}
-        if not _stage_selection(selection, top, real_index.strip(), temp_index, env):
+        yield env if _stage_selection(selection, top, real_index.strip(), temp_index, env) else None
+
+
+def _selected_files(skill_dir, selection):
+    """`shipped_files` for a `CommitSelection`, or None when git cannot say what it takes."""
+    with _selection_index(skill_dir, selection) as env:
+        if env is None:
             return None
         rc_l, listed = _git_paths(skill_dir, "ls-files", "--", ".", env=env)
         if rc_l:
@@ -1696,22 +1705,82 @@ def mirror_failures(root, names, committing=None, stage=STAGE_INDEX, notices=Non
     return fails
 
 
-def check_skill_mirrors(root, stage=STAGE_INDEX, notices=None):
-    """Gate the mirrored twin of every skill this change touches.
+#: Any file of a skill: a mirrored skill is a directory, so a change to its `references/` or
+#: `scripts/` touches it as surely as one to its SKILL.md.
+_SKILL_FILE_RX = re.compile(r"^%s/([^/]+)/" % re.escape(_SKILLS_DIR))
 
-    Scoped to what changed, like the review and description checks: pre-existing drift in
-    a skill nobody is editing must not block an unrelated commit, and the maintainer has
-    ``--mirrors`` for the full sweep. The marketplace is the side being committed, read at
-    ``stage`` (the index on a commit, HEAD on a push); the twin at what its repo committed,
-    or on a commit with ``notices`` given, at a matching uncommitted text (`mirror_failures`).
+
+def _index_changes(root, env=None):
+    """Paths the index (``env``'s, else the real one) changes against HEAD; all of it before a first commit."""
+    if _git(root, "rev-parse", "--verify", "-q", "HEAD")[0]:
+        return _git_paths(root, "ls-files", env=env)
+    return _git_paths(root, "diff", "--cached", "--name-only", "--no-renames", "HEAD", env=env)
+
+
+def _pushed_changes(root):
+    """(rc, paths) the commits since origin/master change; rc non-zero when there is no origin/master."""
+    if _git(root, "rev-parse", "--verify", "-q", "origin/master")[0]:
+        return 1, []
+    return _git_paths(root, "diff", "--name-only", "--no-renames", "origin/master...HEAD")
+
+
+def _commit_changes(root, stage):
+    """(rc, paths) a COMMIT at ``stage`` changes against HEAD: its staged index, or its selection.
+
+    When git cannot build a `CommitSelection`, the working tree's changes count too: the commit
+    may take any of them, and a path counted that it does not take only means a check that was
+    not needed, never a drift let through."""
+    if not isinstance(stage, CommitSelection):
+        return _index_changes(root)
+    with _selection_index(root, stage) as env:
+        if env is not None:
+            return _index_changes(root, env)
+    rc_i, staged = _index_changes(root)
+    rc_w, unstaged = _git_paths(root, "diff", "--name-only", "--no-renames", "HEAD")
+    return rc_i or rc_w, staged + unstaged
+
+
+def check_skill_mirrors(root, stage=STAGE_INDEX, notices=None, publishes=False):
+    """Gate the mirrored twin of every skill this change ships a change to.
+
+    Scoped to what the change SHIPS, like the review and description checks are to what changed:
+    pre-existing drift in a skill this commit does not change must not block it ([740]: an
+    unrelated commit was refused over an unstaged skill edit, and over a peer's unpushed commit),
+    and the maintainer has ``--mirrors`` for the full sweep. A commit counts the files its own
+    selection changes against HEAD (`_commit_changes`); a push the files its commits change since
+    origin/master. A commit whose command also ``publishes`` (`command_publishes`) counts both,
+    since the push sends the unpushed commits under it as well.
+
+    The marketplace is the side being committed, read at ``stage`` (the index on a commit, HEAD
+    on a push); the twin at what its repo committed, or on a commit with ``notices`` given, at a
+    matching uncommitted text (`mirror_failures`).
     """
 
-    changed = _changed_vs_origin(root)
-    if changed is None:
-        return []
-    touched = {m.group(1) for m in (_SKILL_MD_RX.match(p) for p in changed) if m}
+    changed = []
+    if _is_commit(stage):
+        rc, changed = _commit_changes(root, stage)
+        if rc:
+            return []
+    if publishes or not _is_commit(stage):
+        rc, pushed = _pushed_changes(root)
+        if rc:
+            return []
+        changed += pushed
+    touched = {m.group(1) for m in (_SKILL_FILE_RX.match(p) for p in changed) if m}
     return mirror_failures(root, touched & set(MIRRORED_SKILLS), committing="marketplace", stage=stage,
                            notices=notices)
+
+
+def command_publishes(command, tool_name=None):
+    """True when a statement in ``command`` is a `git push` or a `gh pr create`.
+
+    Segmented and anchored like `shell_text.is_gated_command`, heredoc bodies dropped, so a push
+    named as DATA does not count."""
+    for _at, seg in shell_text.iter_segments(shell_text.strip_heredoc_bodies(command or ""), tool_name):
+        seg = seg.strip().lstrip("(").strip()
+        if shell_text.is_git_verb(seg, {"push"}, tool_name or "Bash") or shell_text.PR_RE.match(seg):
+            return True
+    return False
 
 
 def mirror_stage(command, tool_name=None, cwd=None):
@@ -2151,13 +2220,13 @@ def unlisted_mirrors(root, public):
 
 
 def run_checks(root, ci, full_pytest=None, run_pytest=True, baseline=0, mirror_at=STAGE_INDEX,
-               notices=None):
+               notices=None, publishes=False):
     """`ci` picks the CHECK SET (CI omits the maintainer-only ones); `full_pytest` picks the pytest
     SCOPE and defaults to `ci`. They are separate axes because a pre-push is BOTH: the maintainer
     (so version-bump, skill-review and mirrors apply) and the last gate before CI (so it runs the
     whole suite CI runs, not just hooks/tests). `mirror_at` is what the commit or push ships of the
-    marketplace (`mirror_stage`): the index on a commit, HEAD on a push. `notices`, when given,
-    collects what passed but must still reach the model (`check_skill_mirrors`)."""
+    marketplace (`mirror_stage`): the index on a commit, HEAD on a push. `publishes` says the same command also pushes (`command_publishes`). `notices`, when
+    given, collects what passed but must still reach the model (`check_skill_mirrors`)."""
     if full_pytest is None:
         full_pytest = ci
     failures = []
@@ -2186,7 +2255,7 @@ def run_checks(root, ci, full_pytest=None, run_pytest=True, baseline=0, mirror_a
         failures += check_version_bumped(root)
         failures += check_ragged_tables(root)
         failures += check_skill_review(root)
-        failures += check_skill_mirrors(root, stage=mirror_at, notices=notices)
+        failures += check_skill_mirrors(root, stage=mirror_at, notices=notices, publishes=publishes)
     # Preflight the dependencies, and run pytest only when they are all there. Running it anyway
     # would report the SAME problem a second time as a failed assertion in an unrelated test,
     # and that second message is the one a reader acts on.
@@ -2363,7 +2432,7 @@ def main():
 
     hook_mode = not (ci or pre_push or mirrors)
     # A git pre-push hook pushes commits, so it reads HEAD; hook mode reads what its command ships.
-    stage = STAGE_HEAD
+    stage, publishes = STAGE_HEAD, False
     if hook_mode:
         # A real git pre-push hook receives REF LINES on stdin, never a Claude Code event, so only
         # hook mode parses it - read that way, a pre-push would fail the parse and pass by accident
@@ -2378,6 +2447,7 @@ def main():
             return 0
         root, guessed = hook_landing(event)
         stage = mirror_stage(command, event.get("tool_name"), os.path.normpath(event.get("cwd") or os.getcwd()))
+        publishes = command_publishes(command, event.get("tool_name"))
     else:
         root, guessed = repo_root(), False
     if root is None or not is_bitranox_skills(root):
@@ -2409,7 +2479,7 @@ def main():
     notices = [] if hook_mode else None
     failures = run_checks(root, ci, full_pytest=ci or pre_push,
                           run_pytest=run_pytest, baseline=expected_collected(root), mirror_at=stage,
-                          notices=notices)
+                          notices=notices, publishes=publishes)
 
     if not failures:
         if ci or pre_push:
