@@ -22,7 +22,7 @@ description: Use when running commands over SSH or driving a remote host - check
 | A Windows/SMB op fails the same way every time (error 67, 1312, RPC 1702)        | A repeatable low-level error is not proof the operation is impossible, and "it works from my other machines" means keep digging. Rule out YOUR command construction first: build a UNC path from string parts inside the `.ps1` (`'\\' + $server + '\' + $share`), because a literal `\\` passed through bash -> base64 -> PowerShell -> `cmd.exe` collapses to `\`; run a scp'd `.ps1` FILE, not a nested-quoted inline command; call the operation through a native cmdlet or .NET API that raises a specific error message, not a bare code; and validate the credentials on their own before suspecting the share. Then check that VM's own config (1312 over SSH is usually the network-logon limit in the row above). Report it impossible only after that, naming what you ruled out.           |
 | Host wants a password                                                            | NEVER ask for, type, or accept an SSH password - it leaks into the transcript, shell history, and logs. Use key auth - and `-i <keypath>` ALONE is not enough: on key rejection ssh falls back and PROMPTS, hanging an unattended run. Always `ssh -i <keypath> -o BatchMode=yes -o PreferredAuthentications=publickey` so it fails fast instead. If there is no key, STOP and propose the user set one up (see below).                                                                                                                                                                                                                                                                                                                                                                                |
 | Remote interactive `sudo`, or `ssh -t`                                           | `-t` allocates a pty only when the CLIENT's own stdin is a terminal. From a pipe, an editor's run-shell or an unattended job runner ssh runs the command WITHOUT one, so remote interactive `sudo` has no tty to prompt on and fails as repeated `Permission denied` - which reads as a wrong password. ssh's OWN password prompt is unaffected there (it reads `/dev/tty`, which a redirected stdin does not take away), so "the login works but `sudo` does not" is how you IDENTIFY this - it is a diagnostic, never a licence to feed a password in; the no-password rule below still binds. Reach the step a way that needs no tty: `sudo -n`, a NOPASSWD rule, or a key for the account you need.                                                                                                |
-| Connecting on your OWN/trusted subnet                                            | Hosts get reimaged, so keys change. Turn the CHECK off but keep the FILE: `ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=~/.ssh/known_hosts_fleet ...`, scoped in `~/.ssh/config` to the subnet ranges ONLY. NOT `/dev/null` - that is what re-prints `Warning: Permanently added ...` on every call and corrupts merged-output reads (next rows). Untrusted hosts: `accept-new`.                                                                                                                                                                                                                                                                                                                                                                                                              |
+| Connecting on your OWN/trusted subnet                                            | Hosts get reimaged, so keys change. Keep a separate FILE and record new hosts: `StrictHostKeyChecking accept-new` with `UserKnownHostsFile ~/.ssh/known_hosts_fleet`, scoped in `~/.ssh/config` to the subnet ranges ONLY; a CHANGED key is refused: `ssh-keygen -R <host> -f ~/.ssh/known_hosts_fleet`, retry once. NOT `/dev/null` - that re-prints `Warning: Permanently added ...` on every call and corrupts merged-output reads (next rows). Untrusted hosts: `accept-new` and verify a changed key out of band.                                                                                                                                                                                                                                                                                 |
 | A no-op probe to test REACHABILITY                                               | Use `ssh host 'echo ok'` or `ssh host 'exit 0'`, NEVER `ssh host true`. The default Windows ssh shell is `cmd.exe`, which has NO `true` builtin - it exits non-zero, so every HEALTHY Windows host reports unreachable. Pick a verb valid on BOTH shells and judge by the ssh EXIT CODE, not by matching output text.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                  |
 | Reading a remote FILE into a variable                                            | Keep stdout and stderr SEPARATE (`capture_output` / `2>/dev/null`). A helper that MERGES them splices the ssh client's own `Warning: Permanently added '<host>' to the list of known hosts.` into the file CONTENT - and only on the FIRST connect, so the corruption is intermittent and reads as bad data: `json.loads` fails `Expecting value: line 1 column 1` for a file that is really ABSENT, a byte-for-byte compare fails for a file that is fine. A helper you cannot un-merge: wrap the read in sentinels and keep only what lies between them, `echo __BEGIN__; cat <f> 2>/dev/null; echo __END__` (cmd.exe: `echo __BEGIN__& type <f> 2>NUL & echo __END__`). Read the merged bytes (`od -c`) before blaming the file.                                                                    |
 | Key auth refused on a FRESH Alpine account                                       | `adduser -D <user>` leaves the shadow password field `!`, which sshd treats as a LOCKED account and rejects pubkey auth despite a valid `authorized_keys`; the guest's `/var/log/messages` says `User <u> not allowed because account is locked`. Unlock with `sed -i -E 's#^(<u>:)[^:]*:#\1*:#' /etc/shadow`. An interrupted adduser/addgroup leaves busybox edit-locks that fail the next one with `can't create '/etc/group+': File exists`: `rm -f /etc/group+ /etc/passwd+ /etc/shadow+` first. Alpine ships no sudo: `apk add sudo` plus `/etc/sudoers.d/<u>` with `<u> ALL=(ALL) NOPASSWD: ALL`, mode 440. Verify the real gate, `ssh <u>@<host> 'sudo id'` printing uid=0, and never mask the setup with `2>/dev/null \|\| true`. The symptom points at keys; the cause is the account state.  |
@@ -65,12 +65,13 @@ An SSH session is a flaky external resource: it can drop, hang, or time out mid-
   node the write needs quorum (`pvecm status`). sshd also reads `~/.ssh/authorized_keys2`, so while
   one exists a successful login proves nothing about the canonical file: rename it aside, log in
   again, and only then delete it.
-- **Host keys on the user's OWN/trusted subnet: accept new AND changed, into a SEPARATE known_hosts
-  file - not `/dev/null`.** Hosts there get reimaged, so a key legitimately changes and the
-  "HOST IDENTIFICATION HAS CHANGED" error is just noise. Turn the CHECK off, but keep the FILE:
+- **Host keys on the user's OWN/trusted subnet: accept new keys and self-heal changed ones, in a
+  SEPARATE known_hosts file - not `/dev/null`.** Hosts there get reimaged, so a key legitimately
+  changes and the "HOST IDENTIFICATION HAS CHANGED" error is expected there. Keep the FILE and let
+  ssh record each new host:
   ```
   Host 192.0.2.* 198.51.100.*
-      StrictHostKeyChecking no
+      StrictHostKeyChecking accept-new
       UserKnownHostsFile ~/.ssh/known_hosts_fleet
   ```
   SCOPE it to those ranges in `~/.ssh/config`, never globally. A separate file keeps the churn out
@@ -82,11 +83,11 @@ An SSH session is a flaky external resource: it can drop, hang, or time out mid-
   a stdout/stderr-merging helper (see the table above) - so `/dev/null` CAUSES that corruption, and
   a persistent file ends it after the first connect instead of forcing you to discard stderr.
 
-  Use `StrictHostKeyChecking accept-new`, not `no`: accept-new records a NEW host but REFUSES a
-  changed or revoked key before anything runs (OpenSSH 10.2: the REMOTE HOST IDENTIFICATION HAS
-  CHANGED banner, `Host key verification failed.`, exit 255, command not run), whereas `no` logs
-  in and RUNS the command under the warning and never replaces the stale entry. Self-heal rather
-  than reverting to `/dev/null`: drop the stale entry with
+  Why `accept-new` and not `no`: accept-new records a NEW host but REFUSES a changed or revoked
+  key before anything runs (OpenSSH 10.2: the REMOTE HOST IDENTIFICATION HAS CHANGED banner,
+  `Host key verification failed.`, exit 255, command not run), whereas `no` logs in and RUNS the
+  command under the warning and never replaces the stale entry. Self-heal rather than reverting
+  to `/dev/null`: drop the stale entry with
   `ssh-keygen -R <name ssh printed> -f ~/.ssh/known_hosts_fleet` and retry ONCE - safe, because
   the refused command never ran. Key that on ssh's OWN messages (`ssh -E <logfile>` sends them to
   a file of yours), never on stderr: a remote command that itself runs ssh or rsync relays its
@@ -100,8 +101,9 @@ An SSH session is a flaky external resource: it can drop, hang, or time out mid-
   let the script call plain `ssh`; if the flags must be inline, have the script refuse a target
   outside the intended ranges before it connects.
 
-  This is a conscious trade-off (you own the network). NEVER apply it to internet/untrusted hosts -
-  there use `accept-new` (new ok, changed rejected) or verify the fingerprint.
+  The self-heal is a conscious trade-off (you own the network): it replaces a changed key without
+  checking it. NEVER apply it to internet/untrusted hosts - there keep `accept-new` (new ok, changed
+  rejected) and verify the fingerprint before replacing a key.
 
   **Verify a changed key out of band before you replace it, wherever no trusted-subnet block
   covers the host.** A changed key is exactly the warning a man-in-the-middle produces, and

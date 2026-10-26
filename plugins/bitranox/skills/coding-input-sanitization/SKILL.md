@@ -63,6 +63,16 @@ once at the edge.
 | Outbound URL (SSRF)   | allowlist host + scheme; block internal/link-local ranges and redirects to them                                                                 | fetch a user-supplied URL unrestricted                                                                                 |
 | Log / response header | strip CR/LF + control chars before writing                                                                                                      | write user data into a header/log line raw (injection/forging)                                                         |
 
+**HTML built by hand: pick the escape mode per location.** Python's `html.escape(s)` defaults to
+`quote=True`, which also turns `"` and `'` into `&quot;` and `&#x27;`. Inside a quoted attribute
+value (`title="..."`, `alt="..."`) that is required, so keep the default there (an `href` from
+input also needs a scheme allowlist: escaping does not stop `javascript:`); in element text (a
+paragraph, a table cell) use `html.escape(s, quote=False)`, which still escapes `<`, `>` and `&`.
+A test that looks for a sentence with quotes or apostrophes in the rendered HTML fails on the
+default mode although the browser shows the text correctly: fix the escape mode, not the test.
+Compare element text against `html.escape(s, quote=False)` (the raw text itself when it holds no
+`<`, `>` or `&`) and an attribute value against `html.escape(s)`.
+
 ## Quick checklist
 
 - [ ] Every external input parsed into a typed model at the edge; raw dict/JSON never flows inward
@@ -71,6 +81,7 @@ once at the edge.
 - [ ] Whole-value regex uses `fullmatch` with `[0-9]` or `re.ASCII`; no `isdigit()` before `int()`
 - [ ] SQL via bound parameters only; no string-built queries
 - [ ] HTML autoescape ON; only trusted rich-text opts out, never a global disable
+- [ ] Hand-built HTML: `html.escape(s, quote=False)` in element text, `html.escape(s)` in attributes
 - [ ] Shell via argv, never `shell=True` on untrusted input
 - [ ] File paths confined to a base dir; `..` / absolute rejected
 - [ ] No `pickle` / `yaml.load` / `eval` on untrusted data

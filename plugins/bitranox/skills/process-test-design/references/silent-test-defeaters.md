@@ -5,10 +5,11 @@ rendered output, loops until a condition holds, pins or clears an environment va
 library reads at import included), redirects or deletes coverage data from a conftest, simulates
 a race between a check and an open, blocks a stub so it can be signalled, plants a marker to prove
 a process ran, asserts a descriptor was closed or a file is held only through a memory map, binds
-a unix socket under `tmp_path`, carries a skip or an exclusion, judges an artifact, compares
-against a git ref, guards against cost, or tests environment isolation - or when you are about to
-claim a code path is untested, or a mutation survives. Each entry names the trigger, the mechanism
-that makes the test pass (or fail) for the wrong reason, and the fix.
+a unix socket under `tmp_path`, builds a test double by subclassing a `@dataclass`, carries a
+skip or an exclusion, judges an artifact, compares against a git ref, guards against cost, or
+tests environment isolation - or when you are about to claim a code path is untested, or a
+mutation survives. Each entry names the trigger, the mechanism that makes the test pass (or fail)
+for the wrong reason, and the fix.
 
 ## Determinism and environment
 
@@ -219,6 +220,38 @@ through the fake, and the test then measures the fake's call log. Prefer injecti
 you must patch, patch a name the module owns (`from subprocess import run` in the module, then
 patch `pkg.mod.run`), or make the fake dispatch on `argv[0]` and raise on any command it was not
 written for.
+
+### A dataclass double that redefines a field as a property fails at construction
+
+Subclassing a `@dataclass` and redefining one of its fields as a `@property` (to return a value
+computed from the test's setup) breaks the generated `__init__`: it assigns every field, the
+assignment hits the read-only property, and construction raises `AttributeError` (on Python 3.14:
+`property 'x' of 'Double' object has no setter`), whether or not the subclass is itself decorated.
+The test goes red in its setup, before the code under test runs, so it passes the "did it go RED"
+check while proving nothing about the behaviour. When the value is fixed at setup, use
+`dataclasses.replace(real, total=value)`: a real instance, so `isinstance` and static typing at an
+`Order`-typed parameter still hold; a proxy fails `isinstance(x, Order)` and a strict type check
+where the code under test is typed `Order`. Only when the value must be computed on access, build
+the double as a proxy: hold a real instance and forward everything else through `__getattr__`,
+overriding only the attribute you need (`__getattr__` runs only for names the proxy does not
+define, so the property wins):
+
+```python
+class OrderDouble:
+    def __init__(self, real: Order, total: int) -> None:
+        self._real = real
+        self._total = total
+
+    def __getattr__(self, name: str) -> object:
+        return getattr(self._real, name)
+
+    @property
+    def total(self) -> int:
+        return self._total
+```
+
+For every new RED, read the failing line and require it to be the assertion the test was written
+for: a RED raised in construction or setup is a RED for the wrong reason.
 
 ### Import sibling test helpers by bare module name
 

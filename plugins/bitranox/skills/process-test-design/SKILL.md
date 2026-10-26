@@ -277,6 +277,27 @@ enforced by the suite rather than remembered by a person.
   restore with a before/after test: compare `signal.getsignal()` for every signal involved (or the
   variable, the cwd) around an in-process call, on the success path AND the error or undo path; a
   mutation that drops the restore must turn it RED.
+- **A test that sends a fatal signal to its own process installs a raising handler first.** To
+  prove the code under test catches SIGTERM, SIGINT or SIGHUP (any signal whose default action
+  ends the process), a test that calls `os.kill(os.getpid(), signal.SIGTERM)` first installs an
+  outer handler that RAISES a test-local exception (`signal.signal(sig, raising_handler)`) and
+  restores the previous handler in `finally`. The code under test saves and replaces that handler
+  while it is active, so a correct run never reaches it. Without it, a regression that drops the
+  handler under test lets the signal's default action kill the test runner itself: the suite dies
+  mid-run with no report naming the broken test, it reads as an infrastructure crash, and every
+  test after it goes unreported. RED-check by deleting the handler under test: the expected result
+  is one failed test, not a dead runner. Such a test is POSIX-only: on Windows
+  `os.kill(pid, signal.SIGTERM)` is TerminateProcess and no handler runs, so give it a Windows skip.
+- **A fixture serving from a listening socket calls `shutdown()` before `close()`.** For a server
+  thread on a fixed address and port, teardown is
+  `with suppress(OSError): listener.shutdown(socket.SHUT_RDWR)`, then `listener.close()`, then a
+  plain `join()` of the server thread (the runner's per-test timeout catches a wedge). On Linux,
+  `close()` alone does not wake a thread blocked in `accept()`: the thread stays parked, the port
+  stays bound, and the next fixture's `bind()` fails with `EADDRINUSE`. If that fixture answers a
+  busy port with `pytest.skip(...)`, the next test SKIPS instead of failing. A skip looks benign in
+  a summary line, so a RED that reads "1 failed, 1 skipped" passes for a RED, and later a GREEN
+  that is half skips passes for a GREEN. Run every RED with `-rs` and require 0 skipped for the
+  tests you just wrote: a skipped test has not gone RED.
 - **No timer in a test: no `sleep`, no poll-until-deadline loop, no `*_timeout` wait.** A fixed
   `sleep(n)` is flaky or slow, and a deadline loop or `wait(timeout=5)` is the same bet against the
   machine's load with a longer fuse. Block on an event the code under test signals - a channel/queue
@@ -591,9 +612,10 @@ pins or clears an environment variable (its own or a spawned child's, or one a l
 import), redirects or deletes coverage data from a conftest, simulates a race between a
 check and an open, blocks a stub so it can be signalled mid-call, plants a marker to prove a
 process ran (or did not), asserts that no file descriptor leaked or that a file is held only
-through a memory map, binds a unix socket under `tmp_path`, carries a skip or an exclusion,
-judges an artifact, compares against a git ref, guards against cost, or tests environment
-isolation - or before you claim a code path is untested or accept a surviving mutation.
+through a memory map, binds a unix socket under `tmp_path`, builds a test double by subclassing
+a `@dataclass`, carries a skip or an exclusion, judges an artifact, compares against a git ref,
+guards against cost, or tests environment isolation - or before you claim a code path is untested
+or accept a surviving mutation.
 
 ## Quick checklist
 
@@ -609,6 +631,7 @@ isolation - or before you claim a code path is untested or accept a surviving mu
 - [ ] One behavior per test; name states the behavior
 - [ ] A test that builds a precondition (a permission wall, a missing file, a dead port) asserts it holds before relying on it
 - [ ] No test that cannot fail for a real reason
+- [ ] Every new RED read before trusting it: the failing line is the assertion, and `-rs` shows 0 skipped
 
 ## Common mistakes
 

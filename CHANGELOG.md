@@ -29,6 +29,23 @@ than the change, so entries reconstructed from them would read like coverage wit
 a hole nobody has drawn a line under is one that gets rediscovered and half-filled - which is how
 two "versions with no entry" notes came to sit in this file disagreeing with it.
 
+## [10.0.20]
+
+### Changed
+
+- `process-test-design`: a test that sends a fatal signal to its own process installs a raising
+  handler first (POSIX-only); a socket-serving fixture calls `shutdown()` before `close()`, and a
+  RED with skipped tests is not a RED (`-rs`, 0 skipped); a `@dataclass` test double that redefines
+  a field as a property fails at construction, so use `dataclasses.replace` or a forwarding proxy
+  and read the failing line of every RED.
+- `coding-input-sanitization`: choose the `html.escape` mode per location (`quote=False` for
+  element text, the default in a quoted attribute, a scheme allowlist for an `href` from input).
+- `net-firewall-pfsense`: a `pkg` upgrade of a base component such as unbound does not restart
+  it; restart it with a playback script and confirm the start time.
+- `compuse-ssh`: the trusted-subnet host-key rule is consistent throughout: `accept-new` with a
+  separate known_hosts file, and `ssh-keygen -R ... -f` that file plus one retry for a changed key.
+- `infra-proxmox`: the native snapshot tools include `delsnapshot`.
+
 ## [10.0.19]
 
 ### Changed

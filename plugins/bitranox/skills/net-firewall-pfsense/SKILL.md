@@ -109,6 +109,16 @@ different service calls. `info` reports which.
 **`snort2c` exists even with no Snort installed**, so an empty table means nothing is blocked, not
 that Snort is watching. `info` lists the packages.
 
+**A `pkg` upgrade of a base component does not restart it.** `pkg-static upgrade` of unbound or
+openvpn replaces the binary on disk while the running daemon keeps executing the old one: pkg runs
+no pfSense service hook for base components (observed: only `pfSense-pkg-*` packages resync), so
+"upgraded" in its output does not mean the fix is active. Restart the service the pfSense way,
+`pfSsh.php playback svc restart unbound` (a playback script, never interactive `pfSsh.php` on
+stdin, which can hang), then confirm the daemon started after the upgrade
+(`ps -axo lstart,command | grep '[u]nbound'`) and that `drill @127.0.0.1 example.com` still
+resolves. The unbound restart interrupts DNS for every LAN
+client for a moment. A daemon with no running process picks up the new binary at its next start.
+
 ## Not covered here
 
 pfBlockerNG, certificate and acme renewal, and traffic shaping are inspection-shaped and change
