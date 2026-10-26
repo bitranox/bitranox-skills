@@ -1,4 +1,4 @@
-# Handover 2026-10-26: [23] batch 6 pass 2 shipped (10.0.23 + 5 twins); install, then cut the 37 hooks
+# STALE - read 2026-10-26, work continued. Was: Handover 2026-10-26: [23] batch 6 pass 2 shipped (10.0.23 + 5 twins); install, then cut the 37 hooks
 
 ## In flight
 
