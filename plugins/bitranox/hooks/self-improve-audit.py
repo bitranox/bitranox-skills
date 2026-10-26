@@ -31,10 +31,10 @@ import os
 import sys
 from pathlib import Path
 
-from self_improve_signals import (asst_signal_offset, audit_file, broad_matches, inert_snippet,
+from self_improve_signals import (asst_said_offset, audit_file, broad_matches, inert_snippet,
                                   is_injected_skill_body, quoted_snippet, skills_invoked,
                                   snippet_was_escaped, strict_asst_hit, strict_user_hit,
-                                  tool_matches_outside_fixtures, tool_signal_offset,
+                                  tool_matches_outside_fixtures, tool_signal_offset, unquoted,
                                   user_signal_offset)
 
 # Bound how much transcript we read (sessions can be many MB); the tail covers a long
@@ -161,8 +161,16 @@ def _signal_offset(role, text):
     quoted only what came before it."""
     if role == "tool":
         return tool_signal_offset(text)
-    collapsed = " ".join(str(text or "").split())
-    return user_signal_offset(collapsed) if role == "user" else asst_signal_offset(collapsed)
+    if role != "user":
+        return asst_said_offset(str(text or ""))
+    return user_signal_offset(" ".join(str(text or "").split()))
+
+
+def _strict_hit(role, text):
+    """Whether the Stop gate's strict patterns fire on this message, read the way the gate reads
+    it: the user's words whole, the assistant's with QUOTED spans blanked (`unquoted`). A quoted
+    admission did not fire the gate, so counting it as caught hid the turn from this audit."""
+    return strict_user_hit(text) if role == "user" else strict_asst_hit(unquoted(text))
 
 
 def find_candidates(transcript_path):
@@ -179,8 +187,7 @@ def find_candidates(transcript_path):
             # discount: the text is DATA, not something anyone said.
             if not text.strip() or is_injected_skill_body(text):
                 continue
-            strict = strict_user_hit(text) if role == "user" else strict_asst_hit(text)
-            if strict:
+            if _strict_hit(role, text):
                 continue
             matched = broad_matches(role, text)
         if matched:

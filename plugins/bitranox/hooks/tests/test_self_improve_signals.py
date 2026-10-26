@@ -187,6 +187,28 @@ def test_unquoted_leaves_an_unclosed_quote_alone():
     assert S.unquoted(text) == text
 
 
+@pytest.mark.parametrize("text", ["a  \n b", "  lead", "x\t\ty z", "", "one"])
+def test_collapsed_offset_lands_on_the_same_character(text):
+    collapsed = " ".join(text.split())
+    for i, ch in enumerate(text):
+        if not ch.isspace():
+            assert collapsed[S.collapsed_offset(text, i)] == ch
+
+
+def test_asst_said_offset_skips_a_quoted_admission_inside_a_fenced_block():
+    """A fenced block is only recognisable before whitespace is collapsed, so the quoted spans are
+    blanked on the raw text and the offset carried over to the collapsed form."""
+    text = "Log:\n```\nI was wrong\n```\n" + "padding " * 30 + "\nMy mistake: the venv."
+    collapsed = " ".join(text.split())
+    assert collapsed[S.asst_said_offset(text):].startswith("My mistake")
+
+
+def test_asst_said_offset_falls_back_to_a_quoted_match_when_nothing_else_matches():
+    text = 'The note says "my mistake" and nothing more.'
+    assert text[S.asst_said_offset(text):].startswith("my mistake")
+    assert S.asst_said_offset("nothing to see") is None
+
+
 @pytest.mark.parametrize("text", [
     "check the logs please",
     "the correct value is 3",

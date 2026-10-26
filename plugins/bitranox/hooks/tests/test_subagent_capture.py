@@ -279,3 +279,27 @@ def test_shadow_request_sends_the_final_message_once(tmp_path):
 def test_a_subagent_with_no_assistant_text_asks_nothing(tmp_path):
     regex, requests = C.shadow_request(_event(tmp_path, agent_msgs=[("user", "go")]))
     assert requests == [] and regex["fires"] is False
+
+
+# ---- a QUOTED admission is data, as the Stop gate reads it -------------------------------------
+
+_QUOTED_ONLY = 'The ticket quotes "I was wrong about the cache" from last week; nothing else changed.'
+
+
+def test_an_admission_that_sits_only_inside_quotes_is_not_buffered(tmp_path, monkeypatch):
+    """The Stop gate blanks quoted spans before matching (sig.unquoted); the capture matched the
+    raw text, so a report CITING an admission was buffered as the subagent's own learning."""
+    ev = _event(tmp_path, agent_msgs=[("assistant", _QUOTED_ONLY)], final=_QUOTED_ONLY)
+    _run(monkeypatch, ev)
+    assert S.read_subagent_learnings("s1") == []
+    regex, _requests = C.shadow_request(ev)
+    assert [m["kind"] for m in regex["messages"]] == ["none"]
+
+
+def test_an_unquoted_admission_beside_a_quoted_one_is_still_buffered(tmp_path, monkeypatch):
+    text = 'The ticket quotes "my mistake" from last week. I was wrong - the cache is per user.'
+    ev = _event(tmp_path, agent_msgs=[("assistant", text)], final=text)
+    _run(monkeypatch, ev)
+    got = S.read_subagent_learnings("s1")
+    assert len(got) == 1 and "strict" in got[0]["matched"]
+    assert "I was wrong" in got[0]["snippet"]

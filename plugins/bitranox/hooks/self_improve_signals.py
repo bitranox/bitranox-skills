@@ -2570,6 +2570,50 @@ def asst_signal_offset(text):
     return min(starts) if starts else None
 
 
+def collapsed_offset(text, offset):
+    """`offset` into `text`, carried over to `" ".join(text.split())`; None stays None.
+
+    Quoted spans are blanked on the RAW text, because a fenced block is only recognisable while
+    its newlines are still there, but `inert_snippet` windows the whitespace-collapsed form. This
+    maps a signal found in the first onto the second.
+
+    Examples:
+        >>> collapsed_offset("a  \\n b", 5)
+        2
+        >>> collapsed_offset("  b", 2)
+        0
+        >>> collapsed_offset("x", None) is None
+        True
+    """
+    if offset is None:
+        return None
+    prefix = (text or "")[:offset]
+    kept = len(" ".join(prefix.split()))
+    return kept + 1 if kept and prefix[-1].isspace() else kept
+
+
+def asst_said_offset(text):
+    """Offset in `" ".join(text.split())` of the earliest assistant signal OUTSIDE quoted spans,
+    else of the earliest one anywhere; None if there is none.
+
+    The windowing counterpart of matching strict patterns on `unquoted(text)`: a quoted admission
+    ahead of the reply's own learning must not take the snippet window from it. The fallback keeps
+    a message whose only match sits in a quote (a broad `the "X" rule`) windowed on that match
+    rather than on its head.
+
+    Examples:
+        >>> t = 'He wrote "my mistake". ' + 'x ' * 5 + 'I was wrong.'
+        >>> t[asst_said_offset(t):]
+        'I was wrong.'
+        >>> asst_said_offset('see "my mistake" here')
+        5
+    """
+    found = asst_signal_offset(unquoted(text))
+    if found is None:
+        found = asst_signal_offset(text or "")
+    return collapsed_offset(text, found)
+
+
 def user_signal_offset(text):
     """Offset in `text` of the EARLIEST user learning signal, strict or broad; None if none.
 

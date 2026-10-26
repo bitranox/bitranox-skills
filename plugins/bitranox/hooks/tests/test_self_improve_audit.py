@@ -446,3 +446,20 @@ def test_the_shadow_excerpt_redacts_a_key_whose_header_falls_outside_the_window(
     excerpt = A.shadow_excerpt(c["role"], c["text"])
     assert "unrecognized arguments" in excerpt
     assert "MIIEowIBAAKCAQEA" not in excerpt and "[REDACTED]" in excerpt
+
+
+# ---- a QUOTED admission is data, as the Stop gate reads it -------------------------------------
+
+def test_a_quoted_admission_does_not_hide_a_broad_signal_the_gate_missed(tmp_path):
+    """The Stop gate blanks quoted spans before its strict match, so this reply did not fire it.
+    The audit matched the raw text, counted the quoted "my mistake" as a strict hit and dropped
+    the turn, hiding a miss the gate really had."""
+    text = 'The old note said "my mistake" there. Let me double-check the venv path.'
+    cands = A.find_candidates(make_transcript(tmp_path, [("assistant", text)]))
+    assert [c["matched"] for c in cands] == [["let me double-check"]]
+    assert "double-check" in cands[0]["snippet"]
+
+
+def test_an_unquoted_admission_still_counts_as_caught(tmp_path):
+    text = 'The old note said "fine". My mistake - let me double-check the venv path.'
+    assert A.find_candidates(make_transcript(tmp_path, [("assistant", text)])) == []

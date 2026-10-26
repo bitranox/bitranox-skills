@@ -116,7 +116,7 @@ def find_signals(event):
         if not text.strip():
             continue
         matched = sig.broad_matches("assistant", text)   # broad: a subagent narrates loosely
-        strict = sig.strict_asst_hit(text)
+        strict = _strict_hit(text)
         if strict:
             matched = sorted(set(matched) | {"strict"})
         if not matched:
@@ -133,13 +133,21 @@ def find_signals(event):
     return hits
 
 
+def _strict_hit(text):
+    """The strict assistant patterns over `text` with its QUOTED spans blanked, as the Stop gate
+    reads a reply: a subagent report citing another turn's "I was wrong" is data, not its own
+    admission. Every strict check in this hook goes through here, so none can read the raw text."""
+    return sig.strict_asst_hit(sig.unquoted(text))
+
+
 def _hit(event, text, matched):
     """The buffer record for one assistant message and the signals it was buffered for."""
     normalised = " ".join(text.split())
     # Window the snippet on the learning itself. A head cap kept the first 200 characters, so a
     # learning stated after a long preamble was buffered with the learning cut away. A message
-    # only Jev fired on has no pattern offset, and keeps the head.
-    snippet = sig.inert_snippet(normalised, _SNIPPET, around=sig.asst_signal_offset(normalised))
+    # only Jev fired on has no pattern offset, and keeps the head. A quoted admission ahead of the
+    # real one does not take the window (asst_said_offset).
+    snippet = sig.inert_snippet(normalised, _SNIPPET, around=sig.asst_said_offset(text))
     return {"agent_id": event.get("agent_id") or "",
             "agent_type": event.get("agent_type") or "",
             "role": "assistant", "matched": matched, "snippet": snippet,
@@ -172,7 +180,7 @@ def _assistant_texts(event):
 def _verdict(text):
     """What the capture's patterns say about one message, as `find_signals` judges it."""
     broad = sig.broad_matches("assistant", text)
-    if sig.strict_asst_hit(text):
+    if _strict_hit(text):
         kind = "strict"
     elif broad:
         kind = "broad_only"
@@ -247,7 +255,7 @@ def _decide(event, session, cfg):
     for i, text in enumerate(texts):
         result = results[i - first_asked] if i >= first_asked else None
         if result is None:
-            matched = ["strict"] if sig.strict_asst_hit(text) else []
+            matched = ["strict"] if _strict_hit(text) else []
             how = "fallback-strict" if matched else "fallback-none"
         else:
             matched = ["jev:" + f for f in _jev_families(result)]
