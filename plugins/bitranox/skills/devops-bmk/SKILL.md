@@ -180,11 +180,31 @@ The same classifiers drive `make test-all`: it provisions one `.venv-<minor>` pe
 and runs pytest + pyright in each, in parallel by default, so you can reproduce CI's Python-version
 matrix locally before you push. Each cell's pyright makes the same per-OS runs as `make test`'s
 pyright stage (section "Proving a gate"), so a type error on any OS in `[tool.ci].os` fails the cell
-for that Python version; pytest runs on the host OS only. A project whose suite binds fixed ports or shares a test database sets
-`[tool.scripts.test-all] workers = 1` in its `pyproject.toml` (or `BMK_TEST_ALL_WORKERS=1` for one
-run) to run the version cells serially instead. Plain `make test` stays on the newest version only;
-with no `:: Python :: X.Y` classifier, `test-all` tests the default interpreter once and prints a
-WARNING naming the version it used.
+for that Python version; pytest runs on the host OS only. A project whose suite binds fixed ports or
+shares a test database sets `[tool.scripts.test-all] workers = 1` in its `pyproject.toml` (or
+`BMK_TEST_ALL_WORKERS=1` for one run) to run the version cells serially instead. Plain `make test`
+stays on the newest version only; with no `:: Python :: X.Y` classifier, `test-all` tests the
+default interpreter once and prints a WARNING naming the version it used.
+
+Free-threaded cells come from `[tool.ci] free-threaded`, the same key CI's `X.Yt` jobs come from:
+each `"X.Y"` it lists adds a second `test-all` cell (pytest + pyright, like every cell) on that
+version's free-threaded build (`3.15t`, venv `.venv-3.15t`), next after the regular cell in the cell
+order. `make test` is unaffected. An entry CI would refuse is refused before anything installs
+(exit 2): a value that is not an array, an entry that is not an `"X.Y"` string (so `"3.15t"` is
+refused), and a version no `Programming Language :: Python :: X.Y` classifier declares. A missing
+`Programming Language :: Python :: Free Threading :: <level>` classifier only prints a WARNING; the
+run goes on.
+
+```toml
+[project]
+classifiers = [
+  "Programming Language :: Python :: 3.15",
+  "Programming Language :: Python :: Free Threading :: 2 - Beta",
+]
+
+[tool.ci]
+free-threaded = ["3.15"]
+```
 
 The venv is synced FROM THE LOCK, not from `pyproject.toml`: `uv lock` brings `uv.lock` in line
 with the manifest, then `uv sync --locked` makes the venv exactly what the lock pins. Installing
@@ -296,25 +316,25 @@ shell.
 Drive these with `make <target>` (or call `bmk <command>` directly). Arguments after the target are
 forwarded (e.g. `make push fix login bug`). Most have short aliases.
 
-| Target / command                        | What it does                                                                                  |
-|-----------------------------------------|-----------------------------------------------------------------------------------------------|
-| `make test` \| `t`                      | Full test pipeline: lint, format-check, type-check, security, tests + coverage                |
-| `make test-human` \| `th`               | Same, forced human-readable (verbose) output                                                  |
-| `make test-all`                         | Run pytest + pyright on EVERY declared Python version (the matrix), in parallel unless capped |
-| `make testintegration` \| `ti`          | Integration tests only (`pytest -m integration`)                                              |
-| `make codecov` \| `cov`                 | Upload the coverage report to Codecov                                                         |
-| `make bump-patch` / `-minor` / `-major` | Bump version in `pyproject.toml` and update the changelog (rules below)                       |
-| `make commit` \| `c` `[MESSAGE...]`     | Git commit with a timestamped message                                                         |
-| `make push` \| `p` `[MESSAGE...]`       | Run tests, commit, then push to the remote                                                    |
-| `make release` \| `r`                   | Tag `v` + the current version, push, create the GitHub release via `gh`                       |
-| `make ship` \| `sh`                     | push -> wait for CI -> release -> wait for the release workflow                               |
-| `make build` \| `bld`                   | Build wheel + sdist                                                                           |
-| `make clean` \| `cl`                    | Remove build artifacts and caches                                                             |
-| `make clean-all`                        | Remove build artifacts, caches AND every virtualenv (`.venv*`)                                |
-| `make dependencies` \| `deps` `[-u]`    | Check (or `--update`) project dependencies                                                    |
-| `make ensure`                           | Install missing external tools for this OS (see section 5)                                    |
-| `make custom <name> [args...]`          | Run a user-defined pipeline (section 6)                                                       |
-| `make help`                             | List available targets                                                                        |
+| Target / command                        | What it does                                                                               |
+|-----------------------------------------|--------------------------------------------------------------------------------------------|
+| `make test` \| `t`                      | Full test pipeline: lint, format-check, type-check, security, tests + coverage             |
+| `make test-human` \| `th`               | Same, forced human-readable (verbose) output                                               |
+| `make test-all`                         | Run pytest + pyright on EVERY declared Python version, plus each free-threaded `X.Yt` cell |
+| `make testintegration` \| `ti`          | Integration tests only (`pytest -m integration`)                                           |
+| `make codecov` \| `cov`                 | Upload the coverage report to Codecov                                                      |
+| `make bump-patch` / `-minor` / `-major` | Bump version in `pyproject.toml` and update the changelog (rules below)                    |
+| `make commit` \| `c` `[MESSAGE...]`     | Git commit with a timestamped message                                                      |
+| `make push` \| `p` `[MESSAGE...]`       | Run tests, commit, then push to the remote                                                 |
+| `make release` \| `r`                   | Tag `v` + the current version, push, create the GitHub release via `gh`                    |
+| `make ship` \| `sh`                     | push -> wait for CI -> release -> wait for the release workflow                            |
+| `make build` \| `bld`                   | Build wheel + sdist                                                                        |
+| `make clean` \| `cl`                    | Remove build artifacts and caches                                                          |
+| `make clean-all`                        | Remove build artifacts, caches AND every virtualenv (`.venv*`)                             |
+| `make dependencies` \| `deps` `[-u]`    | Check (or `--update`) project dependencies                                                 |
+| `make ensure`                           | Install missing external tools for this OS (see section 5)                                 |
+| `make custom <name> [args...]`          | Run a user-defined pipeline (section 6)                                                    |
+| `make help`                             | List available targets                                                                     |
 
 **`release` does not bump; `push` always commits.**
 

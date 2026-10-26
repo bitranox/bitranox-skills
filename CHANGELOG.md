@@ -30,6 +30,14 @@ a hole nobody has drawn a line under is one that gets rediscovered and half-fill
 two "versions with no entry" notes came to sit in this file disagreeing with it.
 
 
+## [10.1.3]
+
+### Changed
+
+- `devops-bmk`: `make test-all` runs a free-threaded `X.Yt` cell for each `[tool.ci] free-threaded` entry (bmk
+  3.28.0), next after the regular cell; the refused entries (exit 2) and the warning-only missing Free Threading
+  classifier are stated, with a TOML example. The targets-table row names the extra cell.
+
 ## [10.1.2]
 
 ### Changed
