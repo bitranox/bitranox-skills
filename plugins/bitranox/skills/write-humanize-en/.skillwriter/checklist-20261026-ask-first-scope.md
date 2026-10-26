@@ -46,3 +46,7 @@
 - [x] Frontmatter description unchanged (497 chars); trigger map needs no rebuild
 - [x] Latest-release finder over the added lines: no hits. No typographic tells in the added lines.
 - [x] No addresses, hostnames or paths added. Security scan: prose edit only, no secrets or PII.
+
+- [x] Partly superseded the same day by checklist-20261026-user-text-standing-rule.md: a
+      standing humanize rule now covers user-written text sent at their request, so the GREEN
+      cell "user-written email ... (user's words not rewritten)" describes the earlier rule.

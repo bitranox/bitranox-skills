@@ -30,6 +30,18 @@ a hole nobody has drawn a line under is one that gets rediscovered and half-fill
 two "versions with no entry" notes came to sit in this file disagreeing with it.
 
 
+## [10.2.1]
+
+### Changed
+
+- `write-humanize-en`, `write-humanize-de`: a standing rule to humanize outgoing prose before
+  sending now covers text the user wrote and asks you to send (post, comment, email), not only
+  your own, because it also catches their typos and slips. Their meaning, facts and voice stay.
+  Only an explicit opt-out for that message sends it as written: a request not to change the
+  wording ("unchanged", "as is", "verbatim", "don't touch it") or a "no" to the review question;
+  "post this" or "send exactly this" only names the text. Without such a rule their text is
+  still sent as written, and text shown for an opinion still gets the question first.
+
 ## [10.2.0]
 
 ### Added

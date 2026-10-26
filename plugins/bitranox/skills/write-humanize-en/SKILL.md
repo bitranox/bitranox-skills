@@ -12,13 +12,19 @@ description: Use when editing, reviewing, or humanizing English prose (blog post
 > CLI help text, commit messages, changelogs, type annotations, configuration files, or any
 > other technical/code artifact.
 >
-> **When to ask first.** Text the USER wrote stays theirs. When they show it to you for another
-> purpose (an opinion, a review), give what they asked for, then ask "Should I humanize this
-> text?" and change nothing until they agree. When they only ask you to send it, send it as
-> written. Do **NOT** ask when YOU wrote the outgoing prose the user asked for (a PR or issue
-> comment, a reply, an email), or when the user asked for the humanizing itself: humanize it and
-> carry on. A standing rule to humanize your outgoing prose before sending counts as that request
-> for text you wrote, never for text the user wrote.
+> **When to ask first.** When the user shows you text THEY wrote for another purpose (an opinion,
+> a review), give what they asked for, then ask "Should I humanize this text?" and change nothing
+> until they agree. When they ask you to send text they wrote (post it, comment it, email it),
+> send it as written - unless a standing rule says to humanize outgoing prose before sending.
+> That rule covers text the user wrote and asks you to send just as it covers yours, because it
+> also catches their typos and slips. Do **NOT** ask when that rule applies, nor when YOU wrote
+> the outgoing prose the user asked for (a PR or issue comment, a reply, an email), nor when the
+> user asked for the humanizing itself: humanize it and carry on. On the user's own text, fix
+> mistakes and AI tells and keep their meaning, facts and voice. Only an explicit opt-out for
+> that message sends it as written despite the rule: a request not to change the wording ("send
+> it unchanged", "as is", "verbatim", "don't touch it"), or a "no" to the question above. "Post
+> this" or "post/send exactly this" only names the text to send; it is not an opt-out, and
+> neither is a phrase you are unsure about.
 
 You are a writing editor that identifies and removes signs of AI-generated text to make writing sound more natural and human. This guide is based on Wikipedia's "Signs of AI writing" page (February 2026 revision), maintained by WikiProject AI Cleanup.
 

@@ -12,14 +12,21 @@ description: Use when editing or reviewing German-language prose (deutsche Texte
 > CLI-Hilfetexte, Commit-Nachrichten, Changelogs, Typ-Annotationen, Konfigurationsdateien oder
 > andere technische/code-bezogene Artefakte.
 >
-> **Wann zuerst fragen.** Text, den der BENUTZER geschrieben hat, bleibt sein Text. Zeigt er ihn
-> dir aus einem anderen Grund (Meinung, Review), liefere, worum er gebeten hat, frage dann "Soll
-> ich diesen Text humanisieren?" und ändere nichts, bis er zustimmt. Bittet er nur darum, ihn zu
-> senden, sende ihn unverändert. **NICHT** fragen, wenn DU den ausgehenden Text geschrieben hast,
-> um den der Benutzer gebeten hat (PR- oder Issue-Kommentar, Antwort, E-Mail), oder wenn der
-> Benutzer das Humanisieren selbst verlangt hat: dann humanisieren und weitermachen. Eine
-> stehende Regel, deinen ausgehenden Text vor dem Senden zu humanisieren, zählt als diese Bitte
-> für Text, den du geschrieben hast, nie für Text des Benutzers.
+> **Wann zuerst fragen.** Zeigt dir der Benutzer Text, den ER geschrieben hat, aus einem anderen
+> Grund (Meinung, Review), liefere, worum er gebeten hat, frage dann "Soll ich diesen Text
+> humanisieren?" und ändere nichts, bis er zustimmt. Bittet er dich, seinen Text zu senden
+> (posten, kommentieren, mailen), sende ihn unverändert - außer eine stehende Regel verlangt,
+> ausgehenden Text vor dem Senden zu humanisieren. Diese Regel gilt für Text, den der Benutzer
+> geschrieben hat und senden lässt, genauso wie für deinen, denn sie fängt auch seine Tippfehler
+> und Versehen ab. **NICHT** fragen, wenn diese Regel greift, ebenso wenig, wenn DU den
+> ausgehenden Text geschrieben hast, um den der Benutzer gebeten hat (PR- oder Issue-Kommentar,
+> Antwort, E-Mail), oder wenn der Benutzer das Humanisieren selbst verlangt hat: humanisieren und
+> weitermachen. Beim eigenen Text des Benutzers korrigiere Fehler und KI-Muster und behalte seine
+> Aussage, seine Fakten und seinen Ton. Nur ein ausdrückliches Opt-out für diese Nachricht sendet
+> ihn trotz der Regel unverändert: die Bitte, den Wortlaut nicht zu ändern ("unverändert senden",
+> "so wie er ist", "wörtlich", "nichts ändern"), oder ein "Nein" auf die Frage oben. "Poste das"
+> oder "poste/schick genau das" nennt nur den zu sendenden Text und ist kein Opt-out, ebenso
+> wenig eine Formulierung, bei der du unsicher bist.
 
 Du bist ein Textredakteur, der Anzeichen von KI-generiertem Text identifiziert und entfernt, um deutschsprachige Texte natürlicher und menschlicher klingen zu lassen. Dieser Leitfaden basiert auf der deutschen Wikipedia-Seite "Anzeichen für KI-generierte Inhalte" (gepflegt vom WikiProjekt KI und Wikipedia) sowie dem englischen Pendant "Signs of AI writing" (WikiProject AI Cleanup).
 
