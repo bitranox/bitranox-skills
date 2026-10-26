@@ -2057,6 +2057,42 @@ def test_a_tool_repo_push_does_not_read_a_marketplace_worktree(tmp_path, monkeyp
     assert RG.main() == 2
 
 
+def test_a_tool_repo_push_names_the_marketplace_worktree_that_already_committed_the_text(
+        tmp_path, monkeypatch, capsys):
+    # Measured 2026-10-26 (ipscout 2.4.0): the push was refused DRIFT with "Regenerate the stale
+    # side", while the marketplace text it needed was already committed in a linked worktree, just
+    # not on master. Nothing was stale; the remedy was to push that branch first.
+    public, root, tool = _published_pair(tmp_path, monkeypatch)
+    mwt = _marketplace_worktree(root, public / "KI" / "bitranox-skills-wt-edit")
+    _drift(mwt / MP_SKILL, MIRROR_BODY)
+    _g(mwt, "commit", "-qam", "edit in the marketplace worktree")
+    _drift(tool / TW_SKILL, TWIN_BODY)
+    _g(tool, "commit", "-qam", "edit")
+    _tool_repo_commit(monkeypatch, public, tool, command="git push")
+
+    assert RG.main() == 2                                   # still refused: master lacks the text
+    err = capsys.readouterr().err
+    assert str(mwt) in err and "mwt" in err, "names the worktree and its branch"
+    assert "push that branch" in err
+    assert "Regenerate" not in err, "nothing is stale, so regenerating is the wrong advice"
+
+
+def test_a_tool_repo_push_with_no_worktree_holding_the_text_keeps_the_regenerate_advice(
+        tmp_path, monkeypatch, capsys):
+    # Control: a worktree exists but committed a DIFFERENT edit, so the drift is real.
+    public, root, tool = _published_pair(tmp_path, monkeypatch)
+    mwt = _marketplace_worktree(root, public / "KI" / "bitranox-skills-wt-edit")
+    write(mwt / MP_SKILL, MIRROR_BODY.replace("One paragraph of content.", "A DIFFERENT edit."))
+    _g(mwt, "commit", "-qam", "a different edit")
+    _drift(tool / TW_SKILL, TWIN_BODY)
+    _g(tool, "commit", "-qam", "edit")
+    _tool_repo_commit(monkeypatch, public, tool, command="git push")
+
+    assert RG.main() == 2
+    err = capsys.readouterr().err
+    assert "Regenerate" in err and "push that branch" not in err
+
+
 # --- a tool repo committed from a LINKED WORKTREE is still that tool repo -------------------------
 #
 # Measured 2026-10-12 (lib_layered_config 7.1.4): commits changing a mirrored SKILL.md were made in
@@ -2720,6 +2756,7 @@ def test_a_missing_dependency_does_not_also_report_a_pytest_failure(tmp_path, mo
     """One cause, one message: running pytest anyway files the dep problem as a test defect."""
     root = _workflow(tmp_path, "pip install lxml")
     monkeypatch.setattr(RG, "module_installed", lambda mod: False)
+    monkeypatch.setenv("PATH", "")                          # and no uv to provide them either
     monkeypatch.setattr(RG, "check_pytest", lambda *a, **k: pytest.fail("pytest must not run"))
     joined = "\n".join(RG.run_checks(root, ci=True))
     assert "missing: lxml" in joined
@@ -2729,6 +2766,101 @@ def test_the_real_workflow_names_the_dependencies_this_gate_relies_on():
     root = Path(__file__).resolve().parents[3].parent
     names = RG.ci_test_dependencies(root)
     assert "pytest" in names and "lxml" in names
+
+
+# --- the suite runs under an interpreter that HAS the CI set, not whatever python3 the session found
+# Measured 2026-10-24 and twice on 2026-10-26: a bitranox-skills commit made from a session launched
+# inside another project's venv (libs/ipscout/.venv) was refused "Test dependencies missing from
+# <that venv>" although the change was fine and the uv-run --ci gate had just passed. The python3
+# the hook starts on is the SESSION's choice; the test set is this repo's. When the hook's own
+# interpreter lacks the set, uv provides it, and only with no way to get it is the gate refused.
+
+class _FakeRun:
+    """Stands in for subprocess.run at the uv edge: records the call, answers with `stdout`."""
+
+    def __init__(self, stdout="", returncode=0, stderr=""):
+        self.stdout, self.returncode, self.stderr, self.calls = stdout, returncode, stderr, []
+
+    def __call__(self, cmd, **kwargs):
+        self.calls.append((cmd, kwargs))
+        return subprocess.CompletedProcess(cmd, self.returncode, self.stdout, self.stderr)
+
+
+def test_an_interpreter_with_the_ci_set_runs_the_suite_itself(tmp_path):
+    root = _workflow(tmp_path, "pip install pytest lxml")
+    run = _FakeRun()
+    launcher, problems = RG.pytest_interpreter(root, is_installed=lambda m: True, which=lambda n: "/x/uv",
+                                               run=run)
+    assert (launcher.argv, launcher.env, problems) == ([sys.executable], None, [])
+    assert run.calls == [], "uv is not consulted when the hook's own interpreter has the set"
+
+
+def test_without_the_ci_set_uv_provides_an_interpreter_that_has_it(tmp_path, monkeypatch):
+    root = _workflow(tmp_path, "pip install pytest lxml ruamel.yaml")
+    monkeypatch.setenv("VIRTUAL_ENV", str(tmp_path / "other-project" / ".venv"))
+    run = _FakeRun(stdout="OK\n")
+
+    launcher, problems = RG.pytest_interpreter(root, is_installed=lambda m: False, which=lambda n: "/x/uv",
+                                               run=run)
+
+    assert problems == []
+    assert launcher.argv[:3] == ["/x/uv", "run", "--no-project"] and launcher.argv[-1] == "python"
+    argv = launcher.argv
+    assert [argv[i + 1] for i, tok in enumerate(argv) if tok == "--with"] == ["pytest", "lxml", "ruamel.yaml"]
+    assert "VIRTUAL_ENV" not in launcher.env, "the caller's venv must not become uv's base environment"
+    (cmd, kwargs), = run.calls                               # the probe ran in that same launcher
+    assert cmd[:len(argv)] == argv and cmd[-3:] == ["pytest", "lxml", "ruamel.yaml"]
+    assert kwargs["env"] is launcher.env and kwargs["cwd"] == str(root)
+
+
+def test_without_the_ci_set_and_without_uv_the_gate_could_not_run(tmp_path):
+    root = _workflow(tmp_path, "pip install pytest lxml")
+    _launcher, problems = RG.pytest_interpreter(root, is_installed=lambda m: m != "lxml", which=lambda n: None,
+                                                run=_FakeRun())
+    joined = "\n".join(problems)
+    assert RG.is_could_not_run(problems)
+    assert "missing: lxml" in joined and "uv" in joined and "not found" in joined
+
+
+def test_a_uv_that_fails_is_named_in_the_refusal(tmp_path):
+    root = _workflow(tmp_path, "pip install pytest lxml")
+    run = _FakeRun(returncode=2, stderr="error: Failed to fetch: `https://pypi.org/simple/lxml/`\n")
+    _python, problems = RG.pytest_interpreter(root, is_installed=lambda m: False, which=lambda n: "/x/uv",
+                                              run=run)
+    joined = "\n".join(problems)
+    assert RG.is_could_not_run(problems)
+    assert "missing: pytest lxml" in joined and "Failed to fetch" in joined
+
+
+def test_a_uv_interpreter_still_lacking_a_module_is_not_used(tmp_path):
+    # The probe runs INSIDE the interpreter uv provides, so a set it could not complete is refused
+    # with that interpreter's own answer rather than trusted because uv exited 0.
+    root = _workflow(tmp_path, "pip install pytest lxml")
+    run = _FakeRun(stdout="MISSING lxml\n")
+    _python, problems = RG.pytest_interpreter(root, is_installed=lambda m: False, which=lambda n: "/x/uv",
+                                              run=run)
+    assert RG.is_could_not_run(problems) and "lxml" in "\n".join(problems)
+
+
+def test_the_suite_runs_on_the_launcher_it_was_given(tmp_path):
+    uv = RG.SuiteLauncher(["/x/uv", "run", "python"])
+    assert RG.pytest_argv(tmp_path, [tmp_path], uv)[:5] == ["/x/uv", "run", "python", "-m", "pytest"]
+    assert RG.pytest_argv(tmp_path, [tmp_path])[:3] == [sys.executable, "-m", "pytest"]
+
+
+@pytest.mark.skipif(shutil.which("uv") is None, reason="needs uv on PATH, the edge this test exercises")
+def test_a_session_interpreter_without_the_ci_set_still_runs_the_suite_through_uv(tmp_path):
+    """End to end through run_checks and the real uv: the incident, with the ambient interpreter
+    reporting the CI set absent, must run the suite rather than refuse for missing packages."""
+    root = _workflow(tmp_path, "pip install pytest")
+    write(root / "tests" / "test_ok.py", "import pytest\n\n\ndef test_ok():\n    assert pytest\n")
+
+    # The hook's own interpreter lacks the set, so uv must supply it.
+    joined = "\n".join(RG.run_checks(root, ci=True, is_installed=lambda mod: False))
+
+    assert "Test dependencies missing" not in joined
+    assert "pytest failed" not in joined and "pytest did not complete" not in joined
+    assert "pytest collected no tests" not in joined
 
 
 # --------------------------------------------------------------------------

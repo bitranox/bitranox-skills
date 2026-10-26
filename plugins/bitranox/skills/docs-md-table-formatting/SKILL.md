@@ -151,3 +151,14 @@ the bytes it would have written. Exit
 codes: 0 = done, 1 = no table at that index, 2 = refused or error (invalid JSON, unreadable
 file). Stdlib only; a literal `|` in a cell round-trips (escaped as `\|` in the markdown,
 unescaped in the JSON).
+
+**A script that rewrites part of one cell replaces only the matched text.** Never replace from
+the match up to the next `|`: that takes the rest of the cell with it. The column count does not
+change, so the reformat pass re-pads the row and `--strict` reports nothing; the table looks
+well-formed with half a cell gone. Replace the exact old string (check it occurs exactly once in
+the file, and narrow it until it does), or edit the cell through `tablekit.py`, then read the row
+back with `git diff --word-diff`: a plain diff marks every re-padded row as changed, which hides
+the one that lost text. In the word diff, every `[-...-]` in that row must be text you meant to
+replace; any other is text the edit cut, so restore the file and redo the edit. Measured: a
+scripted edit to a privilege-table cell dropped the cell's second half, and the re-padded table
+passed until someone re-read the row.

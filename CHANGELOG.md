@@ -30,6 +30,38 @@ a hole nobody has drawn a line under is one that gets rediscovered and half-fill
 two "versions with no entry" notes came to sit in this file disagreeing with it.
 
 
+## [10.3.4]
+
+### Fixed
+
+- `repo-gate.py` (commit gate, `--ci`, `--pre-push`) no longer refuses a commit for missing
+  `lxml` / `ruamel.yaml` / `httpx2` when the session runs another project's interpreter: it runs
+  the suite on its own interpreter when that has CI's test set, else through
+  `uv run --no-project --with <the CI set>` with `VIRTUAL_ENV` removed, and only then refuses,
+  naming the missing packages and why uv could not supply them.
+- `repo-gate.py`: a tool-repo push whose mirrored skill already matches a committed but unpushed
+  branch in a linked marketplace worktree is refused as `UNPUSHED`, naming that worktree and
+  branch and saying to push it first, instead of `DRIFT` with advice to regenerate.
+- `block-git-semicolon-chain`: the refusal for a `python3` heredoc followed by `git add` names
+  both shapes that pass (split into separate calls, or `&&` on the heredoc's opener line).
+
+### Changed
+
+- `coding-python-enforce-data-architecture-strict`: fixed-shape tuple records and `NamedTuple`
+  as their fix; a call-site sweep for `str` parameters; a candidate grep beside the analysers;
+  a SCOPE rule (`base`, `out_of_scope`, attributed with `git blame`) so the loop converges;
+  reproduce a claimed runtime failure before briefing a fixer; the error-surface diff runs
+  against HEAD and the last release, with wrong-type inputs and never `python -I`; where an
+  Enum's import-linter layer lets its helper live.
+- `meta-skill-writer`: an executed example proves one platform only, so check each backend's
+  mapping or run it on each platform, and state the limit; a quote-back proves a passage
+  readable, not true, so check its mechanism claims against the code first.
+- `process-plan-writing-plans`: an absence check must not match the new name.
+- `process-agents-dispatching-parallel`: a grep of fixer diffs misses untracked new files.
+- `meta-context-watcher`: select an OPEN-WORK line by an anchored prefix or `backlog_close`.
+- `docs-md-table-formatting`: rewrite only the matched text in a cell, and diff it with
+  `git diff --word-diff`.
+
 ## [10.3.3]
 
 ### Fixed

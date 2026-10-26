@@ -112,3 +112,19 @@ def test_main_reports_the_pair_rule_when_both_apply(monkeypatch, capsys):
     rc, err = _run_main(_heredoc() + "git commit -m x ; git push", monkeypatch, capsys)
     assert rc == 2
     assert "`git commit` and `git push`" in err
+
+
+def test_the_refusal_names_the_split_shape_the_retry_can_take(monkeypatch, capsys):
+    # Measured 2026-10-26: a twin sync refused for `python3 - <<'EOF'` then `git add` cost a retry
+    # cycle, because the refusal did not name the shape that passes: the edit as its own step (the
+    # Edit tool, or the script alone), its result read, and git in a SEPARATE Bash call.
+    rc, err = _run_main(_heredoc() + "git add f", monkeypatch, capsys)
+    assert rc == 2
+    assert "Edit tool" in err
+    assert "separate Bash call" in err
+
+
+def test_the_split_shape_the_refusal_names_passes(monkeypatch, capsys):
+    # Control for the message above: each of the two calls it names is allowed on its own.
+    assert _run_main(_heredoc(), monkeypatch, capsys) == (0, "")
+    assert _run_main("git add f", monkeypatch, capsys) == (0, "")

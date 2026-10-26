@@ -660,9 +660,10 @@ def main() -> int:
             f"git step runs even when the script FAILED.\n"
             "A failed edit or assertion then gets its unedited files staged and committed, exit 0 "
             "- the transcript shows the traceback, then a clean git line.\n"
-            "Fix: put `&&` on the heredoc's opener line (`python3 - <<'EOF' && git add ...`, "
-            "body and terminator below it), or move the git step into its own call after you "
-            "have read the script's result. If the script is allowed to fail, give it a failure "
+            "Fix, either shape passes: (1) split it - make the edit with the Edit tool (or run the "
+            "script alone), read its result, then run the git step in a separate Bash call; or "
+            "(2) put `&&` on the heredoc's opener line (`python3 - <<'EOF' && git add ...`, "
+            "body and terminator below it). If the script is allowed to fail, give it a failure "
             "path (`<<'EOF' || exit 1`); `set -e` first also works.\n"
         )
         return 2

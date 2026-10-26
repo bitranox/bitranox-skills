@@ -84,6 +84,18 @@ backlog a deleted line is gone for good, with nothing to diff it back from, so f
 lasting reason somewhere durable - a CHANGELOG entry, a tracked decision log, a commit message
 of the change itself - and name what you deleted in your reply.
 
+**Select a line by the rank in its own prefix, never by a bare `[N]` anywhere in the line.** Items
+cite each other by rank in their text ("same blocker as [60]"), so a script that deletes or
+rewrites every line containing ` [60] ` hits the citing lines too. `backlog_close` matches the
+rank only in an open line's `- [ ] (date) [N]` prefix, outside code fences, and refuses a rank
+two open lines share. A script of your own anchors its match on that prefix with an extended
+regex (`grep -E`, `sed -E`, Python `re`; plain `sed` reads `\(` as a group and deletes nothing):
+`^- \[[ xX]\] \([^)]*\) \[60\] `, where `[ xX]` also reaches a closed line in a file that keeps
+them. The script counts its hits and writes nothing unless there is exactly one; on zero or
+several, read the lines it hit and fix the rank or the pattern first. Measured: a delete
+matching ` [60] ` removed two items whose text cited `[60]`, in an untracked backlog where nothing
+could diff them back.
+
 **An item belongs in the `OPEN-WORK.md` of the repo whose code needs the change, not the repo you
 found it from.** A bug found in a sibling repo, a template, or a project that depends on this
 one goes into THAT repo's backlog, its line carried over unchanged with its first-raised date -

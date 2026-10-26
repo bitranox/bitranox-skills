@@ -585,6 +585,16 @@ Choose most relevant language:
 
 You're good at porting - one great example is enough.
 
+**Executing an example proves it on one platform only.** Running every code block against the
+real library checks the platform it ran on. An example that filters or branches on a value a
+per-platform backend produces (a state, an address family, an interface name) can return the right
+answer there and nothing on another platform. Before shipping such an example, read each
+backend's mapping for that value or run the example on each platform the library supports, and
+state the platform limit in the skill next to the example; where you can do neither for a
+platform, say there that the example is unverified on it. Measured: a filter on the REACHABLE
+neighbour state returned the reachable entries on Linux, while the macOS backend reports every
+entry as OTHER, so the same line returns nothing there.
+
 ### An example from a real scenario is not a real address
 
 "From a real scenario" means the SHAPE is real, never that the values are. A skill ships to every
@@ -1349,6 +1359,13 @@ rule yet, however clear it felt while editing. Dispatch the quote-back as an `op
 effort `medium` (review dispatch, see bitranox:process-agents-subagent-driven-development "Review
 dispatches"); the `haiku` re-run under "A pass gets the same re-run as a failure" is a probe arm
 and passes no `effort` field.
+
+**A quote-back proves the text is readable, never that it is true.** A probe quotes a false
+sentence back as faithfully as a true one. Before probing a touched paragraph, check each
+mechanism claim in it against the code it describes: grep the symbol, read the branch that raises
+or returns. Measured: a skill said a capture call refuses a loopback interface by name; no code
+checks the name (it refuses by the link type the device reports), and two tiers quoted the false
+sentence back correctly.
 
 **REQUIRED REFERENCE:** See testing-skills-with-subagents.md for the complete testing methodology:
 - How to write pressure scenarios

@@ -117,6 +117,9 @@ published until both sides are committed. Nothing fetches; the audits, and every
   twins through its main checkout the same way, so a commit there is still compared.
 - To fix drift, regenerate the stale side from the other, re-apply the three divergences, and bump
   THAT repo's `plugin.json` - both copies ship, so both need a version the installer can see.
+  A tool-repo push refused only because the matching marketplace text sits COMMITTED on a linked
+  worktree's unpushed branch is not drift: the table says `UNPUSHED`, and the refusal names that
+  worktree and branch and says to push it to the marketplace's master first.
 
 ## Every shipped Python script needs sibling tests
 
@@ -136,8 +139,12 @@ produces failures that read exactly like real defects but are artifacts of the e
   document instead of rejecting it, failing `test_validate_xml_entities_not_expanded`; without
   `defusedxml` as well it skips every XML file, failing 5 tests in `test_validate_structured_files.py`;
 - without `httpx2`, `test_proxy_pool.py` fails at COLLECTION, which aborts the whole run;
-- `repo-gate.py --ci` shells out to pytest itself, so it needs the same set or it exits 2 (could
-  not run) naming the missing packages, never reporting the repo itself as failing.
+- `repo-gate.py --ci`, `--pre-push` and the commit gate shell out to pytest themselves, on an
+  interpreter that has the same set: the gate's own when it has the set, else the one
+  `uv run --no-project --with <the CI set>` provides (with `VIRTUAL_ENV` removed), so a session
+  started from another project's venv still runs the real suite. With neither, the gate exits 2
+  (could not run) naming the missing packages and why uv could not help, never reporting the repo
+  itself as failing.
 
 ```bash
 env -u VIRTUAL_ENV uv run --with pytest --with PyYAML --with lxml --with defusedxml \

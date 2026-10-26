@@ -174,6 +174,8 @@ After writing the complete plan, look at the spec with fresh eyes and check the 
 
 **3. Type consistency:** Do the types, method signatures, and property names you used in later tasks match what you defined in earlier tasks? A function called `clearLayers()` in Task 3 but `clearFullLayers()` in Task 7 is a bug.
 
+**4. Absence checks:** A step that verifies a rename or removal with "`grep X` must print nothing" must not match what the plan itself leaves behind. A substring pattern still matches the NEW name (`grep '_reason'` hits `failure_reason`), so the step can never pass as written, and an executor following it literally stops or "fixes" correct code. Match whole identifiers (`grep -nw '_within\|_reason'`, or `\b` with `grep -E`), then dry-run each such check against the intended after-state, a scratch file holding the code the plan's own steps write: it must print nothing there, and print the line when each old name in turn is planted back. Measured: a plan checked `grep '_within\|_reason'` after renaming `_reason` to `failure_reason`, and the check matched the new name.
+
 If you find issues, fix them inline. No need to re-review, just fix and move on. If you find a spec requirement with no task, add the task - except for a milestone past the next decision checkpoint of a three-altitude plan: there the file's note that its tasks come once that checkpoint is decided is the intended state, not a gap or a placeholder.
 
 ## Execution Handoff

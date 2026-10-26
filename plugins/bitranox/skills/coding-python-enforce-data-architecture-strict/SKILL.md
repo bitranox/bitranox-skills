@@ -221,6 +221,17 @@ If either kind of test exists, the item belongs in the tier that touches tests. 
 wire-compatibility saves construction and lookup tests, never identity-dispatch or
 raises-on-invalid tests.
 
+**Where the Enum lives decides where the helper can live.** Read `[tool.importlinter]` (or
+`.importlinter`) before choosing the parameter type: when the Enum sits in a HIGHER layer than the
+module holding the `str`-taking helper, the helper cannot import it, and an import under
+`if TYPE_CHECKING:` breaks the layers contract too (import-linter counts it unless the project sets
+`exclude_type_checking_imports`, which hides the break rather than fixing it). Either move the
+Enum down to a layer the helper may import, or move the helper onto the Enum as a method - the
+second only when no caller of the helper sits below the Enum's layer, since those callers would
+then import upward. Re-run `lint-imports` after the move. Measured: a low-layer
+`errors.refused(verb: str)` could not take the `models` layer's enum, and every caller sat above
+`models`, so it became a method on that enum.
+
 ### Anti-Patterns to Eliminate
 
 ```python
@@ -245,7 +256,24 @@ class Internal:
     ...
 internal = Internal(**pydantic_model.model_dump())
 output = OutputModel(**asdict(internal))
+
+# BAD: Fixed-shape record returned as a bare tuple across a function boundary
+def split_target(text: str) -> tuple[str, str | None]:  # which slot is which?
+    ...
+
+# BAD: str parameter whose every caller passes one of a few literals
+def refused(verb: str) -> str: ...
+refused("add"); refused("delete")
 ```
+
+A fixed-shape tuple record becomes a `NamedTuple` (`class Target(NamedTuple): host: str;
+zone: str | None`). It is still a tuple - unpacking, indexing, `==` against a plain tuple and
+hashing all work unchanged - so the change breaks no caller. Not this pattern: an OS sockaddr tuple
+(what `socket` and `getaddrinfo` take and return), a tuple that never leaves one function (a
+local gather closure), and a variable-length `tuple[X, ...]`. A `str` parameter is found by its
+CALLERS, not its signature: grep the call sites, and when every one passes a literal from a small
+fixed set, the parameter is an Enum (see "Converting a `str` parameter to an Enum changes its
+contract").
 
 A refusal is a boundary output too: never interpolate `str(ValidationError)` into one, because it
 hands the caller pydantic's union-arm tags, a versioned docs URL and a slice of their own input.
@@ -297,6 +325,10 @@ arm), read `references/validation-error-messages.md`.
    - Functions accepting `dict` parameters instead of typed models
    - Raw dict key access (`data["key"]`) instead of field access (`data.key`)
    - String literals used as identifiers, modes, or status values
+   - `str` parameters of a function called from another function or module whose call sites all
+     pass literals from a small fixed set (grep the callers; the signature alone looks fine)
+   - Fixed-shape records returned as bare tuples across a function boundary
+     (`-> tuple[str, str | None]`), with the exclusions under "Anti-Patterns to Eliminate"
    - Unnecessary conversions between dicts and dataclasses
    - Missing Pydantic validation at input boundaries
    - Missing Pydantic export methods at output boundaries
@@ -350,13 +382,18 @@ INITIALIZATION:
   2. Read pyproject.toml (if exists) to identify configured tools
   3. Use TodoWrite to add one item per target file to the DoD checklist from Instructions
      step 1 (one list, extended - not a second, competing list)
-  4. Create state file `.data_arch_violations.json`:
+  4. Create state file `.data_arch_violations.json` (the `//` notes explain fields; leave them
+     out of the file). `base` is the commit the request starts from: the tag or commit it names
+     when it asks about a change set ("since v2.0.0", a branch), otherwise HEAD at
+     INITIALIZATION:
      {
        "pass": 0,
+       "base": "<commit or tag the request starts from>",
        "total_violations": 0,
        "files": {
          "path/to/file.py": {
            "violations": [],
+           "out_of_scope": [],  // findings on lines not changed since "base" (STEP A, SCOPE)
            "status": "pending"  // pending | in_progress | clean
          }
        }
@@ -378,23 +415,54 @@ INITIALIZATION:
        * The violation patterns to search for (from Architecture Rules above)
        * The patterns that are NOT violations, spelled out - a small single-function local
          dict, a free-form external JSON envelope, and DYNAMICALLY-keyed maps (queue index to
-         count, metric name to value, MAC to address). Without this an analyser reports every
-         `dict[str, X]` it sees, and you spend the loop re-judging its false positives.
-       * Instruction to return JSON: {"file": "path", "violations": [{"line": N, "type": "...", "description": "..."}]}
+         count, metric name to value, MAC to address); for tuples, an OS sockaddr, a local
+         gather closure and a variable-length `tuple[X, ...]`. Without this an analyser reports
+         every `dict[str, X]` it sees, and you spend the loop re-judging its false positives.
+       * The CALL-SITE SWEEP, named as a required step: for every `str` parameter of a function
+         called from another function or module, grep its call sites and report it when every
+         caller passes a literal from a small fixed set. A per-file read never sees this, because
+         the signature looks fine and the evidence is in other files.
+       * Instruction to return JSON: {"file": "path", "sweep": {"tuple_returns": N, "str_params":
+         N, "literal_only": N}, "violations": [{"line": N, "type": "...", "description": "..."}]}
+         - the `sweep` counts are what the agent grepped, so a zero shows it looked
        * **"Reply with the JSON object and NOTHING else - no preamble, no summary, no markdown
          fence."** Say it explicitly. An analyser that answers in prose ("Findings reported
          above: 8 items across 4 files") loses every finding, because the detail it refers to
          was never in what you received - and the count it cites makes the loss look like a
          result. Re-run that agent; do not reconstruct its numbers.
      - Collect all subagent results
+     - Run your own CANDIDATE SWEEP beside the agents: `grep -rnE -- '-> tuple\[|: dict|-> dict'`
+       over the target files, and hold each hit against the agents' verdicts. A file reported
+       clean that holds an unjudged hit goes back to an analyser with the hit named. An
+       all-clean verdict returned in seconds cannot be told from a blind one; the sweep tells
+       them apart. Measured: 9 analysers called 46 of 49 modules clean, and a grep for
+       `-> tuple[` found 13 fixed-shape tuple records none of them had flagged.
+     - SCOPE: on pass 1 of a request over whole files or a package, every finding counts. From
+       pass 2 on, and on every pass of a change-set request, a finding counts only on a line
+       changed since `base`. Rules such as "defined once" and "refuse impossible values" apply
+       to a whole file, so later analysers widen into code no fix touched and the count stops
+       converging. Attribute every finding before you count: `git blame <base>..HEAD -- <file>`
+       prefixes each line NOT changed since `base` with `^`. Move findings on such lines to
+       `out_of_scope`; they do not count toward total_violations. Put the collected list to the
+       user ONCE, when the in-scope count reaches zero, instead of looping on it; a finding the
+       user rules in scope moves back into `violations`. Measured: pass 4 found 73 and pass 5
+       found 86 findings; 59 of the 86 sat on lines older than the base.
      - Update `.data_arch_violations.json` with violations from each subagent
-     - Calculate total_violations = sum of all violations across files
+     - Calculate total_violations = sum of all in-scope violations across files
 
-     >>> If total_violations == 0: EXIT LOOP, GOTO STEP C
+     >>> If total_violations == 0: put any `out_of_scope` list to the user (SCOPE); when
+         nothing comes back in scope, EXIT LOOP, GOTO STEP C
      >>> If total_violations > 0: CONTINUE TO STEP B
 
   STEP B - PARALLEL REFACTORING (use subagents):
      - Read `.data_arch_violations.json`
+     - REPRODUCE every claimed runtime failure before it goes into a brief. When a finding says
+       what happens at runtime (an uncaught exception, a crash, a wrong result), make one real
+       call through the public entry point that should trigger it, and brief the fixer on the
+       MEASURED behaviour, not the analyser's wording. Measured: an analyser said an oversized
+       payload surfaced as an uncaught `OSError`; the call raised nothing and instead reported a
+       live host as unreachable, so a fixer briefed from the claim would have added `OSError`
+       handling and left the misreport.
      - PARTITION the work into NON-OVERLAPPING file sets, one per subagent, BEFORE launching
        anything. This refactor is not per-file independent: an Enum lives in `enums.py` and a
        model in `models.py`, so several agents will reach for the SAME shared file. Give each
@@ -483,11 +551,22 @@ STEP C - RUN TESTS:
      Check it two ways:
      a. Read every doc that promises an error contract and hold the new code to it:
         `grep -rniE 'exit code|raises|refused' docs/ README*`
-     b. Run ONE malformed value at a time through the real entry point of HEAD's code and of the
-        working tree, and diff exception type / exit code / last error line per input. Get HEAD's
-        source without touching the checkout: `git archive HEAD src | tar -x -C <tmpdir>`, then
-        run with `PYTHONPATH=<tmpdir>/src`. Include one input whose result you changed on
-        purpose: if it does not show up as different, the harness is broken, not the code.
+     b. Run ONE malformed value at a time through the real entry point of a baseline and of the
+        working tree, and diff exception type / exit code / last error line per input. Use TWO
+        baselines, HEAD and the LAST RELEASE tag: a change committed earlier in the same refactor
+        is invisible against HEAD. Get each baseline's source without touching the checkout:
+        `git archive <HEAD or tag> src | tar -x -C <tmpdir>`, then run with
+        `PYTHONPATH=<tmpdir>/src`, never with `python -I` - isolated mode ignores PYTHONPATH, so
+        both arms import the installed (editable) working tree and every case reads "same". Print
+        each arm's `<package>.__file__` first and require it to sit under that arm's tree.
+        Feed wrong-TYPE values beside out-of-range ones: `True` for a count, `"1"` for a
+        timeout, `3.0` for an int. A lax-mode model accepts all three silently (`True` becomes
+        `1`); only `strict=True` or a strict field type refuses them. Mark one input whose result
+        you changed on purpose as the LIVENESS CONTROL: if it does not show up as different, the
+        harness is broken, not the code. Measured: a run under `python -I` reported 20 of 20
+        inputs "same", and only the control exposed it; the harness against the last release
+        found a request model still accepting `times=True` and `timeout="1"` after five analysis
+        passes, and four behaviour changes the CHANGELOG did not list.
      Every single-fault input the old code refused keeps its type, exit code and message, or the
      change is listed in the CHANGELOG with the input, the old result and the new one. To keep
      it, re-raise the model's refusal as the old exception type carrying the validator's own
@@ -502,10 +581,11 @@ STEP C - RUN TESTS:
 
 STEP D - FINAL VERIFICATION:
   - Read `.data_arch_violations.json` and confirm total_violations == 0
-  - Grep only to surface candidates: `-> dict`, `: dict` in signatures. A hit is a lead, not
-    proof - `: dict` also matches the permitted small local dicts and annotations that are not
-    signatures at all. Judge each hit against the Exceptions rule; do NOT auto-loop on raw match
-    count.
+  - Grep only to surface candidates: `-> dict`, `: dict`, `-> tuple[` in signatures. A hit is a
+    lead, not proof - `: dict` also matches the permitted small local dicts and annotations that
+    are not signatures at all, and `-> tuple[` matches the tuple exclusions under "Anti-Patterns
+    to Eliminate". Judge each hit against the Exceptions rule and those exclusions; do NOT
+    auto-loop on raw match count.
   - **Jev shadow on that judgment** (only when `jev_shadow.py status` exits 0; home
     `<plugin>/skills/meta-self-improve/`, launch via `hooks/run-python.sh`; procedure in its
     `references/jev-shadow.md`; both files in a fresh `D=$(mktemp -d)` outside the repo, since they
@@ -549,10 +629,17 @@ Analyze {file_path} for data architecture violations:
 - dict parameters (`: dict`, `-> dict`)
 - dict key access (`["key"]`, `['key']`)
 - string literals for statuses/modes (`== "..."`, `!= "..."`)
+- fixed-shape records returned as bare tuples (`-> tuple[str, str | None]`); NOT an OS
+  sockaddr, a local gather closure, or a variable-length `tuple[X, ...]`
 - missing Pydantic at boundaries
 - unnecessary Model->dict->Model conversions
 
-Return JSON only: {"file": "{file_path}", "violations": [{"line": N, "type": "...", "description": "..."}]}
+Call-site sweep (required): for every `str` parameter of a function called from another function
+or module, grep its call sites across the repo; report it when every caller passes a literal from
+a small fixed set.
+
+Return JSON only: {"file": "{file_path}", "sweep": {"tuple_returns": N, "str_params": N,
+"literal_only": N}, "violations": [{"line": N, "type": "...", "description": "..."}]}
 ```
 
 Refactoring subagent:
@@ -864,13 +951,14 @@ of stopping.
 1. INIT: Read files, read pyproject.toml, create todos, create .data_arch_violations.json
 2. LOOP: Parallel analyze (subagents) -> Update state -> Parallel fix (subagents) -> Re-analyze
 3. TEST: Run make test OR pyproject.toml tools (loop until all pass); diff the error surface
-   against HEAD when validation moved (STEP C item 5)
+   against HEAD and the last release when validation moved (STEP C item 5)
 4. VERIFY: Final grep check, confirm state file shows 0 violations
 5. DONE: Delete state file, report "[OK] Complete after N passes"
 ```
 
 **DO NOT STOP** until:
 - `.data_arch_violations.json` shows total_violations == 0
+- Every `out_of_scope` finding was put to the user once and ruled on (STEP A, SCOPE)
 - All tests/linters pass
 - The error-surface diff (STEP C item 5) shows no change that is not listed in the CHANGELOG,
   whenever the refactor moved where input is validated

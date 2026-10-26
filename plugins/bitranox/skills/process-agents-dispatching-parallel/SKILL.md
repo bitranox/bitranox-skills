@@ -351,6 +351,13 @@ After agents return:
    Before merging, grep the ADDED lines, e.g.
    `git diff <base> | grep -E '^\+.*(monkeypatch|patch\(|type: ignore|pyright: ignore|noqa)'`,
    plus any forbidden test marker, and check the other way for a REQUIRED marker that is missing.
+   `git diff` does not show UNTRACKED files, and the new test files a fixer creates are where
+   suppressions land, so grep its untracked files too (a staged new file already shows in
+   `git diff <base>`), with the same alternatives and no `^\+` prefix:
+   `git ls-files -z --others --exclude-standard | xargs -0 -r grep -nHE 'monkeypatch|patch\(|type: ignore|pyright: ignore|noqa'`.
+   That leaves the index alone; `git add -N <path>` also makes `git diff` list a file, but writes
+   the index until `git reset -- <path>` undoes it. Measured: a suppression grep over
+   `git diff -U0` missed four pyright ignores, all in new test files.
    Grep `git log --format=%B <base>..HEAD` for trailers the brief forbade (such as an attribution
    line). To strip a forbidden marker, remove only the ADDED lines, never a file-wide substitution
    that also hits pre-existing ones. Send each hit back with the seam to use instead; never merge

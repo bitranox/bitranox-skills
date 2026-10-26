@@ -799,6 +799,101 @@ def check_test_dependencies(root, is_installed=None):
     ])
 
 
+#: How long uv may take to provide the CI test set. A warm cache answers in about a second; a cold
+#: one downloads a handful of wheels. Past this the gate refuses with the remedy rather than hold
+#: the turn on a network that is not answering.
+UV_RESOLVE_TIMEOUT = 120
+
+# Runs INSIDE the interpreter that will run the suite, so the answer is that interpreter's own, not
+# uv's exit code: prints OK when every module is importable, else MISSING and the names.
+_PROBE_SCRIPT = (
+    "import importlib.util, sys\n"
+    "def ok(m):\n"
+    "    try:\n"
+    "        return importlib.util.find_spec(m) is not None\n"
+    "    except (ImportError, ValueError):\n"
+    "        return False\n"
+    "miss = [m for m in sys.argv[1:] if not ok(m)]\n"
+    "print('MISSING ' + ' '.join(miss) if miss else 'OK')\n"
+)
+
+
+class SuiteLauncher:
+    """How the gate starts the interpreter that runs the suite: an argv prefix and its environment.
+
+    ``env`` None inherits the gate's own. A uv launcher is a whole `uv run ... python` prefix, never
+    the path of the interpreter uv built: uv deletes that ephemeral environment when it exits
+    (measured on uv 0.13.0: the printed `builds-v0/.tmp*/bin/python` was gone a moment later)."""
+
+    __slots__ = ("argv", "env")
+
+    def __init__(self, argv, env=None):
+        self.argv, self.env = list(argv), env
+
+    def __repr__(self):
+        return "SuiteLauncher(%r)" % (self.argv,)
+
+
+def pytest_interpreter(root, is_installed=None, which=shutil.which, run=subprocess.run):
+    """(`SuiteLauncher` for the suite, could-not-run lines) for the marketplace at ``root``.
+
+    The python3 this gate starts on is the SESSION's choice: launched from inside another project's
+    venv, it is that venv, which has none of this repo's test set. Measured 2026-10-24 and twice on
+    2026-10-26: a sound bitranox-skills commit was refused "Test dependencies missing from
+    <ipscout's venv>" right after the full uv-run gate had passed. So the set decides, not the
+    session: the gate's own interpreter when it has the set, else `uv run --no-project --with <the
+    CI set>` (the pre-push hook's route), else a refusal naming the missing packages and why uv
+    could not help. ``which`` and ``run`` are the uv edge.
+    """
+    missing = check_test_dependencies(root, is_installed) if is_installed else check_test_dependencies(root)
+    declared = ci_test_dependencies(root)
+    own = SuiteLauncher([sys.executable])
+    if not missing or not declared:
+        return own, missing  # nothing declared means nothing uv could add
+    uv = which("uv")
+    if not uv:
+        return own, missing + ["  uv: not found on PATH, so the gate could not provide the set itself"]
+    launcher = _uv_launcher(uv, declared)
+    why = _launcher_lacks(launcher, root, [_PIP_TO_IMPORT.get(n.lower(), n) for n in declared], run)
+    if why:
+        return own, missing + ["  uv could not provide the set: " + why]
+    return launcher, []
+
+
+def _uv_launcher(uv, declared):
+    """`uv run` with the CI set, as a `SuiteLauncher` whose environment has no VIRTUAL_ENV.
+
+    --no-project: the marketplace's pyproject is not the test set, and syncing it would rewrite its
+    .venv. VIRTUAL_ENV goes because uv takes an active venv as the base of the environment it
+    builds, which would hand the suite the very project venv this route exists to avoid. The minor
+    version is the gate's own, which run-python.sh has already held to the plugin's floor."""
+    withs = [arg for name in declared for arg in ("--with", name)]
+    argv = [uv, "run", "--no-project", "--quiet", "--python", "%d.%d" % sys.version_info[:2], *withs, "python"]
+    return SuiteLauncher(argv, {k: v for k, v in os.environ.items() if k != "VIRTUAL_ENV"})
+
+
+def _launcher_lacks(launcher, root, modules, run):
+    """Why ``launcher`` cannot run the suite (a could-not line), or "" when it has every module."""
+    try:
+        out = run([*launcher.argv, "-c", _PROBE_SCRIPT, *modules], cwd=str(root), env=launcher.env,
+                  capture_output=True, text=True, encoding="utf-8", errors="replace",
+                  timeout=UV_RESOLVE_TIMEOUT)
+    except subprocess.TimeoutExpired:
+        return "no answer within %d s" % UV_RESOLVE_TIMEOUT
+    except (OSError, subprocess.SubprocessError) as exc:
+        return str(exc)
+    if out.returncode != 0:
+        tail = (out.stderr or "").strip().splitlines()
+        return "exit %d%s" % (out.returncode, ": " + tail[-1].strip() if tail else "")
+    lines = (out.stdout or "").strip().splitlines()
+    answer = lines[-1].strip() if lines else ""
+    if answer == "OK":
+        return ""
+    if answer.startswith("MISSING"):
+        return "its interpreter still lacks " + answer[len("MISSING"):].strip()
+    return "the probe gave no answer"
+
+
 # A run that collects nothing exits 5 and used to be treated as success, so a broken glob, a
 # renamed directory or a conftest import error reported "all checks passed" having run no tests
 # at all. The count floor catches the partial version of the same failure, which never reaches
@@ -822,17 +917,18 @@ def expected_collected(root):
         return 0
 
 
-def pytest_argv(root, paths):
+def pytest_argv(root, paths, launcher=None):
     """The exact pytest command the gate runs, so CI can invoke it without duplicating flags.
 
     import-mode=importlib keys modules by full path rather than basename. check_duplicate_basenames
     is what actually FORBIDS a collision; this flag only stops a stray one from silently
     substituting a module during the run, and it also covers the benign per-directory conftest.py.
     examples/ and demos/ are documentation, not convention tests - exempt from tests-exist, so
-    exempt from the run too.
+    exempt from the run too. ``launcher`` is the `SuiteLauncher` that starts it (default: this
+    interpreter).
     """
     return [
-        sys.executable, "-m", "pytest", "-q",
+        *(launcher.argv if launcher else [sys.executable]), "-m", "pytest", "-q",
         "--import-mode=importlib", "-p", "no:cacheprovider",
         "--ignore-glob=*/examples/*", "--ignore-glob=*/demos/*",
         *[str(p) for p in paths],
@@ -879,22 +975,22 @@ def floor_problems(report, baseline):
     return []
 
 
-def check_pytest(root, paths, baseline=0):
+def check_pytest(root, paths, baseline=0, launcher=None):
     target = [p for p in paths if p.exists()]
     if not target:
         return []  # hook mode pointed at a tests dir that is absent: the one legitimate empty case
     with tempfile.TemporaryDirectory() as tmp:
         report = Path(tmp) / "junit.xml"
-        return _check_pytest_run(root, target, report, baseline)
+        return _check_pytest_run(root, target, report, baseline, launcher)
 
 
-def _check_pytest_run(root, target, report, baseline):
-    cmd = pytest_argv(root, target) + ["--junitxml=" + str(report)]
+def _check_pytest_run(root, target, report, baseline, launcher=None):
+    cmd = pytest_argv(root, target, launcher) + ["--junitxml=" + str(report)]
     try:
         # encoding is explicit because text=True alone decodes with the machine locale codec,
         # which is cp1252 on a German Windows and corrupts any non-ASCII test output.
         out = subprocess.run(cmd, cwd=str(root), capture_output=True, text=True,
-                             encoding="utf-8", errors="replace")
+                             encoding="utf-8", errors="replace", env=launcher.env if launcher else None)
     except Exception as exc:  # noqa: BLE001
         return could_not_run([f"Could not run pytest: {exc}"])
     text = out.stdout or out.stderr or ""
@@ -2305,14 +2401,16 @@ def unlisted_mirrors(root, public):
 
 
 def run_checks(root, ci, full_pytest=None, run_pytest=True, baseline=0, mirror_at=STAGE_INDEX,
-               notices=None, publishes=False):
+               notices=None, publishes=False, is_installed=None):
     """`ci` picks the CHECK SET (CI omits the maintainer-only ones); `full_pytest` picks the pytest
     SCOPE and defaults to `ci`. They are separate axes because a pre-push is BOTH: the maintainer
     (so version-bump, skill-review and mirrors apply) and the last gate before CI (so it runs the
     whole suite CI runs, not just hooks/tests). `mirror_at` is what the commit or push ships of the
     marketplace (`mirror_stage`): the index on a commit, HEAD on a push; the LF and mirror checks
     read it. `publishes` says the same command also pushes (`command_publishes`). `notices`, when
-    given, collects what passed but must still reach the model (`check_skill_mirrors`)."""
+    given, collects what passed but must still reach the model (`check_skill_mirrors`).
+    `is_installed` answers whether THIS interpreter has a module (`pytest_interpreter`); a test
+    passes one to stand in for a session interpreter that lacks the CI set."""
     if full_pytest is None:
         full_pytest = ci
     failures = []
@@ -2342,16 +2440,18 @@ def run_checks(root, ci, full_pytest=None, run_pytest=True, baseline=0, mirror_a
         failures += check_ragged_tables(root)
         failures += check_skill_review(root)
         failures += check_skill_mirrors(root, stage=mirror_at, notices=notices, publishes=publishes)
-    # Preflight the dependencies, and run pytest only when they are all there. Running it anyway
-    # would report the SAME problem a second time as a failed assertion in an unrelated test,
-    # and that second message is the one a reader acts on.
+    # Preflight the dependencies in the interpreter that will run the suite (`pytest_interpreter`:
+    # this one, or uv's when this one lacks them), and run pytest only when they are all there.
+    # Running it anyway would report the SAME problem a second time as a failed assertion in an
+    # unrelated test, and that second message is the one a reader acts on.
     if not run_pytest:
         return failures  # CI runs the suite as its own step so GitHub renders the results
-    missing_deps = check_test_dependencies(root)
+    launcher, missing_deps = pytest_interpreter(root, is_installed=is_installed)
     failures += missing_deps
     if not missing_deps:
         pytest_paths = [root] if full_pytest else [root / "plugins" / "bitranox" / "hooks" / "tests"]
-        failures += check_pytest(root, pytest_paths, baseline=baseline if full_pytest else 0)
+        failures += check_pytest(root, pytest_paths, baseline=baseline if full_pytest else 0,
+                                 launcher=launcher)
     return failures
 
 
@@ -2403,7 +2503,7 @@ def gate_tool_repo_mirror(root, stage=STAGE_INDEX, guessed=False):
     candidates = [marketplace]
     if _is_commit(stage):
         candidates += _other_marketplace_checkouts(marketplace)
-    notices, fails = [], []
+    notices, fails, unpushed = [], [], set()
     for name in mine:
         refusals = []
         for candidate in candidates:
@@ -2415,22 +2515,56 @@ def gate_tool_repo_mirror(root, stage=STAGE_INDEX, guessed=False):
                 break
             refusals.append(failed)
         else:
-            fails += refusals[0]  # the checkout a push would read is the one to report
+            held = None if _is_commit(stage) else _unpushed_holder(marketplace, name, stage, twins)
+            if held:
+                unpushed.add(name)
+                fails.append(_unpushed_message(name, *held))
+            else:
+                fails += refusals[0]  # the checkout a push would read is the one to report
     if not fails:
         _say_context(notices)
         return 0
     # All of it on STDERR: on a PreToolUse exit 2 that is what the model is shown, and stdout is
     # not. The table and the diff are the actionable part, so they cannot go anywhere else.
     for name in mine:
-        print("%-8s%-34s %s" % ("DRIFT" if any(name in f for f in fails) else "in sync", name, MIRRORED_SKILLS[name]),
-              file=sys.stderr)
+        verdict = ("UNPUSHED" if name in unpushed else
+                   "DRIFT" if any(name in f for f in fails) else "in sync")
+        print("%-9s%-34s %s" % (verdict, name, MIRRORED_SKILLS[name]), file=sys.stderr)
     for failure in fails:
         print("\n" + failure, file=sys.stderr)
-    print("repo-gate: blocked - %s ships a skill that has drifted from its marketplace twin." % root,
-          file=sys.stderr)
+    if unpushed == {name for name in mine if any(name in f for f in fails)}:
+        print("repo-gate: blocked - %s ships a skill whose marketplace twin is committed but not yet "
+              "published." % root, file=sys.stderr)
+    else:
+        print("repo-gate: blocked - %s ships a skill that has drifted from its marketplace twin." % root,
+              file=sys.stderr)
     if guessed:
         print(_FALLBACK_NOTE % root, file=sys.stderr)
     return 2
+
+
+def _unpushed_holder(marketplace, name, stage, twins):
+    """(checkout, branch) of a marketplace linked worktree whose COMMITTED text matches this push, or None.
+
+    A push reads the marketplace at what its main checkout published or committed, so it is refused
+    while the matching text sits committed on a worktree branch nobody pushed yet. The refusal used
+    to say "regenerate the stale side" there, though both texts were identical and the only remedy
+    was to publish that branch first (measured 2026-10-26, ipscout 2.4.0). Uncommitted text in a
+    worktree does not count: it is not something a push of that branch would carry."""
+    for candidate in _other_marketplace_checkouts(marketplace):
+        if mirror_failures(candidate, {name}, committing="twin", stage=stage, twins=twins):
+            continue
+        rc, branch, _ = _git(candidate, "rev-parse", "--abbrev-ref", "HEAD")
+        return candidate, (branch.strip() if rc == 0 and branch.strip() else "its HEAD")
+    return None
+
+
+def _unpushed_message(name, checkout, branch):
+    """The refusal for a twin committed in a marketplace worktree but not published: push, do not regenerate."""
+    return ("skills/%s matches its twin as committed in the marketplace worktree %s (branch %s), but "
+            "that commit is not on the marketplace's published master, which a push is judged "
+            "against. Nothing needs regenerating: push that branch to the marketplace's master "
+            "first, then retry this push." % (name, checkout, branch))
 
 
 #: Said under any block whose repository came from `hook_landing`'s fallback.
