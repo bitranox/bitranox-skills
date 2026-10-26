@@ -1456,6 +1456,64 @@ def test_a_repo_skill_with_its_own_description_is_not_a_mirror(tmp_path, monkeyp
     assert RG.unlisted_mirrors(public / "KI" / "bitranox-skills", public) == []
 
 
+def _git(*args, cwd):
+    subprocess.run(["git", "-c", "user.name=t", "-c", "user.email=t@example.com", "-c", "commit.gpgsign=false",
+                    *args], cwd=cwd, check=True, capture_output=True)
+
+
+def _linked_worktree(public, name):
+    """Make libs/thing a real repo and add a linked worktree of it at libs/<name>, as a peer does."""
+    repo = public / "libs" / "thing"
+    _git("init", "-q", cwd=repo)
+    _git("add", "-A", cwd=repo)
+    _git("commit", "-q", "-m", "init", cwd=repo)
+    _git("worktree", "add", "-q", "-b", name, str(public / "libs" / name), cwd=repo)
+    return public / "libs" / name
+
+
+def test_a_linked_worktree_of_a_listed_twin_repo_is_not_reported(tmp_path, monkeypatch):
+    # A peer's `git worktree add` beside a listed tool repo carries the same skill. It is the
+    # same twin checked out twice, not an unlisted one, and reporting it made --mirrors exit 1.
+    public = _mirror_tree(tmp_path)
+    _linked_worktree(public, "thing-wt150")
+    monkeypatch.setattr(RG, "MIRRORED_SKILLS", {"coding-python-thing": "libs/thing/skills/python-thing"})
+
+    assert RG.unlisted_mirrors(public / "KI" / "bitranox-skills", public) == []
+
+
+def test_a_linked_worktree_with_a_relative_gitdir_is_not_reported(tmp_path, monkeypatch):
+    # git writes a relative gitdir under worktree.useRelativePaths; it resolves against the worktree.
+    public = _mirror_tree(tmp_path)
+    wt = _linked_worktree(public, "thing-wt150")
+    (wt / ".git").write_text("gitdir: ../thing/.git/worktrees/thing-wt150\n", encoding="utf-8")
+    monkeypatch.setattr(RG, "MIRRORED_SKILLS", {"coding-python-thing": "libs/thing/skills/python-thing"})
+
+    assert RG.unlisted_mirrors(public / "KI" / "bitranox-skills", public) == []
+
+
+def test_a_linked_worktree_of_an_unlisted_twin_repo_is_still_reported(tmp_path, monkeypatch):
+    public = _mirror_tree(tmp_path)
+    _linked_worktree(public, "thing-wt150")
+    monkeypatch.setattr(RG, "MIRRORED_SKILLS", {})
+
+    found = RG.unlisted_mirrors(public / "KI" / "bitranox-skills", public)
+
+    assert found == [("coding-python-thing", "libs/thing/skills/python-thing"),
+                     ("coding-python-thing", "libs/thing-wt150/skills/python-thing")]
+
+
+def test_a_separate_clone_of_a_listed_twin_repo_is_still_reported(tmp_path, monkeypatch):
+    # A clone has its own .git directory: nothing ties it to the listed repo, so it stays visible.
+    public = _mirror_tree(tmp_path)
+    _linked_worktree(public, "thing-wt150")
+    _git("clone", "-q", str(public / "libs" / "thing"), str(public / "libs" / "thing-copy"), cwd=public)
+    monkeypatch.setattr(RG, "MIRRORED_SKILLS", {"coding-python-thing": "libs/thing/skills/python-thing"})
+
+    found = RG.unlisted_mirrors(public / "KI" / "bitranox-skills", public)
+
+    assert found == [("coding-python-thing", "libs/thing-copy/skills/python-thing")]
+
+
 def test_every_manifest_entry_points_at_a_real_twin_on_this_machine():
     # Guards the other direction: an entry whose path no longer exists silently degrades
     # to "skipped forever". Only meaningful where the fleet is checked out.

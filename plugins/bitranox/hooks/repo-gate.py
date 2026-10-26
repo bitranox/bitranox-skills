@@ -2247,6 +2247,35 @@ def _description(path):
     return hc.frontmatter_description(path) or ""
 
 
+def _in_main_checkout(path, public):
+    """`path` mapped into the main checkout when it lies in a linked worktree, else None.
+
+    A peer's `git worktree add` beside a listed tool repo carries the same skill, and is the
+    same twin checked out a second time, not an unlisted one. A linked worktree's root holds a
+    `.git` FILE reading `gitdir: <main>/.git/worktrees/<name>` (relative to that root under
+    worktree.useRelativePaths); a clone holds a `.git` directory and stays its own repo.
+    """
+    for root in [path, *path.parents]:
+        if root == public or public not in root.parents:
+            return None
+        marker = root / ".git"
+        if marker.is_dir():
+            return None
+        if not marker.is_file():
+            continue
+        try:
+            text = marker.read_text(encoding="utf-8").strip()
+        except OSError:
+            return None
+        if not text.startswith("gitdir:"):
+            return None
+        gitdir = (root / text[len("gitdir:"):].strip()).resolve()
+        if gitdir.parent.name != "worktrees" or gitdir.parent.parent.name != ".git":
+            return None
+        return (gitdir.parent.parent.parent / path.relative_to(root)).resolve()
+    return None
+
+
 def unlisted_mirrors(root, public):
     """Return (marketplace skill, repo path) pairs that look mirrored but are not listed.
 
@@ -2265,7 +2294,9 @@ def unlisted_mirrors(root, public):
     found = []
     for pattern in ("*/*/skills/*/SKILL.md", "*/*/*/skills/*/SKILL.md"):
         for twin in sorted(public.glob(pattern)):
-            if twin.parent.resolve() in listed or "bitranox-skills" in twin.parts:
+            if "bitranox-skills" in twin.parts:
+                continue
+            if twin.parent.resolve() in listed or _in_main_checkout(twin.parent, public) in listed:
                 continue
             name = catalog.get(_description(twin))
             if name:
