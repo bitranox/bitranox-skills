@@ -30,6 +30,16 @@ a hole nobody has drawn a line under is one that gets rediscovered and half-fill
 two "versions with no entry" notes came to sit in this file disagreeing with it.
 
 
+## [10.2.5]
+
+### Changed
+
+- `coding-python-logging`: describes lib_log_rich 8.0.0. `ConsoleTheme`, `DumpFormat`, `FormatPreset` and
+  `GraylogProtocol` import from `lib_log_rich` too; `dump()` and `logdemo()` refuse a plain string for `theme` and
+  the presets (`TypeError`); `RuntimeConfig` and `payload_limits` refuse an unknown key; the CLI root options table
+  is complete; `AsyncQueueConsoleAdapter` binds to its loop (`loop=`) and hands cross-thread emits over; `flush()`'s
+  timeout raises and keeps the events, `shutdown()`'s drops them.
+
 ## [10.2.4]
 
 ### Fixed
