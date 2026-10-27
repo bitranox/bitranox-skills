@@ -30,6 +30,15 @@ a hole nobody has drawn a line under is one that gets rediscovered and half-fill
 two "versions with no entry" notes came to sit in this file disagreeing with it.
 
 
+## [10.3.5]
+
+### Changed
+
+- `ai-llm-jev-judge`: the `uvx` floors name btx-skill-jev-judge 0.3.3, which ends a refused `LOG_*` or
+  `[lib_log_rich]` value with exit 78 in `config`, `run`, `summarize` and `logdemo` and keeps the other
+  commands working, instead of every command exiting 22. `meta-self-improve`'s `jev_shadow.py` runs the same
+  floor (`JEV_JUDGE_FLOOR`).
+
 ## [10.3.4]
 
 ### Fixed
