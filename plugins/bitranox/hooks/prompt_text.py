@@ -134,11 +134,21 @@ def scorable_prose(prompt):
 _LEAD_IN = re.compile(
     r"^\s*(?:[-*+\u2022]\s+|\d+[.)]\s+)?(?:[A-Za-z][A-Za-z ]*:\s+)?(?:(?:please|kindly)\b,?\s*)?",
     re.IGNORECASE)
+# The "show open" tail, the dropped or swapped letters (wht, whast) and the German forms are the
+# whole-prompt misses a Jev shadow question measured; anything longer is left to recall. That
+# question was then dropped: judged blind on its disagreements with this pattern it was wrong
+# more often, swaying with the reply before the prompt. Re-propose a model here only with new
+# evidence, not to catch a paraphrase - add the paraphrase below instead.
+_SHOW_OPEN = r"show (?:the )?open(?: points| items)?"
 _OWN_BACKLOG = re.compile(
     r"read (?:the )?handover(?:\.md)?(?:,? (?:and|then) continue)?"
-    r"|continue"
-    r"|what(?:'?s| is)? next"
-    r"|what(?:'s| is) (?:still )?open",
+    r"|(?:ok,? )?continue"
+    r"|wh(?:at|t|ast)(?:'?s| is)? next(?:[,.]? " + _SHOW_OPEN + r")?"
+    r"|what(?:'?s| is) (?:still |else |now )?open(?: now)?"
+    r"|what else is open"
+    r"|" + _SHOW_OPEN +
+    r"|mach weiter(?:,? wo (?:(?:du|wir) )?aufgeh(?:\u00f6|oe)rt(?: hast| haben)?)?"
+    r"|was ist (?:noch )?offen",
     re.IGNORECASE)
 # `what's` typed in a word processor or on a phone arrives with U+2019, which the bare form misses.
 _APOSTROPHES = {ord(c): "'" for c in (chr(0x2019), chr(0x02BC), chr(0xFF07))}

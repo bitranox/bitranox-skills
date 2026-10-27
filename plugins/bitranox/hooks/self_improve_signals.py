@@ -1190,7 +1190,6 @@ DEFAULT_CONFIG = {
     "classifier_recall_rerank": "off",  # off | shadow | decide - UserPromptSubmit memory recall ranking
     "classifier_subagent_signal": "off",  # off | shadow | decide - SubagentStop learning-signal capture
     "classifier_jig_repetition": "off",  # off | shadow - jig-repetition nudge same-job judgement
-    "classifier_backlog_ask": "off",  # off | shadow - recall's resume-the-backlog prompt match
     "classifier_audit_candidate": "off",  # off | shadow - self-improve audit candidate misses
     "classifier_skills": "off",        # off | shadow - skill-step Jev shadow (needs classifier_backend=jev too)
     # tmp-prune-hook.py: at most once an hour, delete dead Claude Code session scratch and old

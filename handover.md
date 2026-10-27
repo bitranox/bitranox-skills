@@ -1,58 +1,55 @@
-# Handover 2026-10-27 08:30: nothing in flight; the small-points plan, the devops-bmk twin and [840] are all shipped
+# Checkpoint 2026-10-27 15:00: [28] backlog_ask dropped and regex widened (10.3.10); audit_candidate next
 
 ## In flight
 
-Nothing. No background subagent or shell of this session is running, and no worktree of it is
-left (`git worktree list` shows only peers' `ipscout-contribs` and a detached template-sweep checkout).
+[28] second wave of Jev sites. The backlog_ask part is finished in the commit that carries this
+file (10.3.10, from worktree `.claude/worktrees/ow28`, branch `jev28/backlog-ask`). The next part
+is audit_candidate.
 
 ## Committed, or not
 
-- Everything this session wrote is on origin/master: 10.3.0 (small points plus [760]), 10.3.1
-  (devops-bmk twin of bmk b787f4e), 10.3.2 and 10.3.3 (the [840] `--mirrors` fix and its Windows
-  test fix). ipscout pushed 10.3.4 on top.
-- Local toolbox `~/.claude/skills/toolbox` (no remote): all committed, tree clean (quotecheck
-  repeated `--quote` fix; libstate, conflictres and the backlogcheck pushed-state extension,
-  committed as-is on the user's choice).
-- Untracked `o` in the repo root (19 bytes, dated 2026-10-24) is NOT this session's: left alone.
+- 10.3.10 carries: widened `prompt_text.asks_for_own_backlog`, the backlog_ask site removed
+  (classifier, recall hook, defaults, settings and its skill row, classifier_eval, docs), new
+  OPEN-WORK items [860] and [870], the [28] line's 2026-10-27 result.
+- `classifier_backlog_ask` was switched to `off` on this machine before the removal.
+- Measurement scripts and data, gitignored: `.plan/jev-28/review-2026-10-27/` (stats.py,
+  replay_backlog.py, score_backlog.py, PREREG-backlog_ask-v2.md, judge files, key).
 
 ## Decided, and why
 
-- `_in_main_checkout()` in `plugins/bitranox/hooks/repo-gate.py` maps a twin inside a linked
-  worktree onto its main checkout; a separate clone and a worktree of an UNLISTED repo are still
-  reported on purpose, so a real duplicate never hides.
-- The relative-gitdir test unlinks the worktree's `.git` before rewriting it (comment in
-  `plugins/bitranox/hooks/tests/test_repo_gate.py`), instead of skipping Windows: that branch keeps
-  a Windows run.
+- User chose "Regex fix + one rewrite (Recommended)" for backlog_ask (2026-10-27).
+- v2 passed [96] clauses 1-3 and failed the blind review (Jev wrong 35, regex wrong 11 of 46),
+  so the pre-registered branch dropped the site. Details in the [28] line.
+
+## Decided against, and why
+
+- No second rewrite of backlog_ask: [96] allows one.
+- Not keeping the site's code with the knob off: dead code nobody can promote.
 
 ## Still open, untouched
 
-- OPEN-WORK.md is the backlog; top open items are [23] (USER, memory-line fold into skills), [28]
-  (USER, second wave of Jev sites), [30] (USER, purge handover mode - waits on compact mode).
+- OPEN-WORK.md holds the backlog; [23] stays the top USER item.
 
 ## Exact next action
 
-[23] is the top-ranked open item. Its line's `next:` text still names batch 4, while
-`git log -- OPEN-WORK.md` shows a later "[23] batch 6 pass 2" commit, so first run
-`uv run ~/.claude/skills/toolbox/tools/backlogcheck.py --file OPEN-WORK.md` and read line [23] to
-its end, rewrite its `next:` to the real state, then classify the next batch read-only and put it
-to the user as that line says (each batch needs its own approval).
+Put the audit_candidate choice to the user (one question): it failed [96] clause 2 (band 49.5%);
+the agreement clause cannot apply because the regex flags every candidate; [870] (harness
+envelopes offered as role=user) inflates its user-role band. Options: one rewrite plus replay
+(as for backlog_ask), drop the site, or fix [870] first and re-measure.
 
 ## Lessons for the next nap
 
-- When a subagent prompt is built from a template, check it holds no unfilled placeholder before dispatching (queued as a contribution to process-agents-subagent-driven-development).
-- When an older installed repo-gate refuses a mirrored-twin commit as DRIFT with the "+" side holding the OLD text, it is reading the index: git add the files first (10.3.0 reads the commit's selection instead).
-- When a CLI option may be passed more than once, check its parser uses action="append": argparse's default store silently keeps only the LAST value, so a check fed several values verifies one (quotecheck --quote did this; fixed in toolbox, RED test added).
-- When a quote-back probe reads a bold lead sentence against its body, check the two agree: a lead that names one condition while the body needs two is the sentence a skimming reader acts on.
-- When a test rewrites a file git created inside a worktree or repo (`.git` file, index), expect Windows to refuse a truncate-write on it because git marks it hidden: unlink it first, or open r+ and truncate.
-- When a commit command reaches the repo through a variable (`cd $T`), the repo-gate cannot read the target and judges the session repo instead: name the repo path literally in the command.
-- When a Windows-only CI cell fails, reproduce it on the Windows dev VM with a `git archive` of HEAD (the hooks conftest needs the full tree) plus an OLD-test control arm, before pushing a fix: the control proves the VM reproduces CI's failure.
-- When a peer session will push the same repo, tell it exactly which functions and test anchors you changed and when you push; ipscout rebased onto 10.3.3 cleanly that way.
+- When an option in a user question claims a tool can do something (replay a site), run its --help first: classifier_eval replay covers only the skill router.
+- When a measurement's figure goes into a durable record, compute it in the same command that writes it: a recalled 167 had to be corrected to the measured 137.
+- When typing a non-ASCII character into Edit/Write, it lands literal: build it with chr() in a script.
+- When a pre-registered rewrite passes the statistical clauses, still run the blind review before shipping: v2 passed band and agreement and then lost 35 to 11.
+- tooling: ci_wait exits 2 when one gh call exceeds its 1 s limit (queued as a contribution).
 
 ## How to verify
 
-- `git -C /media/srv-main-softdev/projects/public/KI/bitranox-skills log --oneline -5 origin/master`
-- `python3 plugins/bitranox/hooks/repo-gate.py --mirrors` (all pairs in sync, exit 0)
-- `python3 ~/.claude/plugins/cache/bitranox-skills/bitranox/10.3.4/skills/compuse-toolbox/scripts/ci_wait.py --ref HEAD`
+- `env -u VIRTUAL_ENV uv run --no-project --with pytest --with PyYAML --with lxml --with defusedxml --with ruamel.yaml --with httpx2 python -m pytest plugins/bitranox/ -q`
+- `git grep -n backlog_ask -- plugins docs ':!*/.skillwriter/*'` shows only the tests pinning the removal
+- `python3 ~/.claude/plugins/cache/bitranox-skills/bitranox/<installed>/skills/compuse-toolbox/scripts/ci_wait.py --ref HEAD`
 
 > Read this, then replace the first line with `# STALE - read <date>, work continued`. Do not
 > delete it - if this session ends badly it is the only record of where things stood.

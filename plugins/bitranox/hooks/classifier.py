@@ -56,7 +56,7 @@ import skill_frontmatter  # noqa: E402
 import transcript_turns  # noqa: E402
 
 __all__ = [
-    "AUDIT_REAL_ID", "Answer", "BACKLOG_ASK_ID", "CAP_MARK", "CONTEXT_VIEW", "DEFAULT_BASE_URL",
+    "AUDIT_REAL_ID", "Answer", "CAP_MARK", "CONTEXT_VIEW", "DEFAULT_BASE_URL",
     "JIG_SAME_JOB", "JevClassifier", "NOTIFY_VIEW",
     "NO_SKILL_KEY", "NullClassifier", "PICK_ID", "PREVIOUS_FIELD", "Question", "Result",
     "SHADOW_DAY_PREFIX", "SHADOW_KEEP_DAYS", "SHADOW_LOG", "SHADOW_MAX_BYTES", "SHORT_DESC_CAP",
@@ -67,7 +67,7 @@ __all__ = [
     "recall_questions", "shadow_enabled", "shadow_log_files", "shadow_log_path", "site_mode",
     "short_description", "skill_router_choice_questions",
     "shadow_guard", "skill_router_questions", "skill_router_rerank_questions", "spawn_shadow",
-    "audit_candidate_questions", "backlog_ask_questions", "jig_repetition_questions",
+    "audit_candidate_questions", "jig_repetition_questions",
     "stop_signal_questions", "subagent_signal_questions", "with_previous",
 ]
 
@@ -95,12 +95,12 @@ FIELD_CAP = 4000
 ERROR_CAP = 200
 CAP_MARK = "\n[... truncated ...]\n"
 # The hook sites. Each has its own config knob `classifier_<site>`: off | shadow, plus decide
-# where the site's hook implements it (all but `jig_repetition`, `backlog_ask` and
-# `audit_candidate`; meta-memory-settings validates which).
+# where the site's hook implements it (all but `jig_repetition` and `audit_candidate`;
+# meta-memory-settings validates which).
 # `subagent_signal` gained decide only after its shadow passed the pre-registered decide rule:
 # SubagentStop's capture buffers on its BROAD patterns too, and the blind review found those noise.
 SITES = ("stop_signal", "skill_router", "recall_rerank", "subagent_signal", "jig_repetition",
-         "backlog_ask", "audit_candidate")
+         "audit_candidate")
 SITE_MODES = ("off", "shadow", "decide")
 # The threshold each site's gate or score is read at - by `classifier_eval.py report` when judging
 # a log, and by a site in decide mode when acting on an answer, so the two can never disagree.
@@ -138,11 +138,10 @@ SITE_MODES = ("off", "shadow", "decide")
 # gate's bar. It has never been adjudicated on subagent text: that is what its shadow log is for.
 # `jig_repetition` is shadow only and has never been adjudicated; 0.5 is where its report splits
 # "same job" from "not", a reading point and not a decision, until its log has been judged blind.
-# `backlog_ask` and `audit_candidate` are shadow only and unadjudicated in the same way: 0.5 is
-# where their reports split yes from no.
+# `audit_candidate` is shadow only and unadjudicated in the same way: 0.5 is where its report
+# splits real from noise.
 SITE_THRESHOLDS = {"stop_signal": 0.8, "skill_router": 0.5, "recall_rerank": 0.9,
-                   "subagent_signal": 0.8, "jig_repetition": 0.5, "backlog_ask": 0.5,
-                   "audit_candidate": 0.5}
+                   "subagent_signal": 0.8, "jig_repetition": 0.5, "audit_candidate": 0.5}
 # Stop-gate families whose score is LOGGED but never counted as a firing. `endorsement` was the
 # only reason to fire on 12 turns across two shadow windows, every one a plain approval ("yes",
 # "go", "lets try 1-4"): approving a proposal the assistant made is not a learning signal. The
@@ -517,28 +516,6 @@ def jig_repetition_questions():
             "same job as at least two of the `ledger` scripts - the same task attempted again, a "
             "rewrite or retry of one approach to one goal - rather than separate work that "
             "happens to share a word, a file name or a tool?"))]
-
-
-BACKLOG_ASK_ID = "own_backlog"
-
-
-def backlog_ask_questions():
-    """Whether a typed prompt asks to resume this project's own backlog, over {user_prompt,
-    previous_assistant_message}.
-
-    `prompt_text.asks_for_own_backlog` answers the same thing with a whole-prompt English pattern,
-    and recall skips a prompt it matches; Jev is asked so the pattern's misses on a paraphrase and
-    its hits on a bare reply can both be counted.
-    """
-    return [Question(
-        id=BACKLOG_ASK_ID, type="noul",
-        instructions=(
-            "`user_prompt` is a message a person just typed to a coding assistant, read as a reply "
-            "to `previous_assistant_message` when that is given. Taken as a whole, does it ask the "
-            "assistant to pick up this project's own pending work from its handover notes or "
-            "backlog - what to do next, continue where the last session stopped, show what is "
-            "still open - rather than naming a specific task, asking about something else, or "
-            "answering a question the assistant just asked?"))]
 
 
 AUDIT_REAL_ID = "real_signal"

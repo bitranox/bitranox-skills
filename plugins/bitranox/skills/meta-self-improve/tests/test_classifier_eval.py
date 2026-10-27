@@ -1777,40 +1777,18 @@ def test_summarize_reports_the_jig_site_at_its_own_threshold():
     assert "jev same job" in ce.render_text(rep)
 
 
-# ---- backlog_ask -----------------------------------------------------------------------------
+# ---- a retired site ----------------------------------------------------------------------------
 
-def backlog_row(regex_fires, score, session="s1", prompt="what next"):
-    """One typed prompt; `score` is Jev's own-backlog score, or None when unanswered."""
-    return {"ts": "2026-10-23T12:00:00+00:00", "site": "backlog_ask", "session_id": session,
-            "lang": "en", "reason": None, "redactions": 0, "input_tokens": 120,
-            "latency_ms": 600, "regex": {"fires": regex_fires, "context_view": "prev-reply-v1"},
-            "results": [_result({"own_backlog": score}) if score is not None else None],
-            "states": [{"user_prompt": prompt}]}
-
-
-def test_backlog_ask_splits_prompts_by_which_side_says_resume_the_backlog():
-    rows = [backlog_row(True, 0.9), backlog_row(True, 0.1), backlog_row(False, 0.8),
-            backlog_row(False, 0.2), backlog_row(False, None)]
-    s = ce.summarize_backlog_ask(rows, threshold=0.5)
-    assert s["prompts"] == 5 and s["unanswered"] == 1
-    assert s["kinds"] == {"both": 1, "regex_only": 1, "jev_only": 1, "neither": 1}
-
-
-def test_backlog_ask_disagreements_carry_the_prompt_both_ways():
-    rows = [backlog_row(True, 0.1, prompt="continue"),
-            backlog_row(False, 0.8, session="s2", prompt="what next show open")]
-    s = ce.summarize_backlog_ask(rows, threshold=0.5)
-    kinds = {d["kind"]: d for d in s["disagreements"]}
-    assert set(kinds) == {"regex_only", "jev_only"}
-    assert kinds["jev_only"]["state"]["user_prompt"] == "what next show open"
-    assert kinds["regex_only"]["score"] == 0.1
-
-
-def test_summarize_reports_the_backlog_site_at_its_own_threshold():
-    rep = ce.summarize([backlog_row(False, 0.55)], threshold=None, top=2)
-    site = rep["sites"]["backlog_ask@prev-reply-v1"]  # rows carry the input view they were shown
-    assert site["threshold"] == 0.5 and site["kinds"]["jev_only"] == 1
-    assert "jev only 1" in ce.render_text(rep)
+def test_rows_of_a_retired_site_are_left_out_of_the_report():
+    # backlog_ask was dropped after its shadow log was judged; its rows stay in the log until
+    # pruned and must neither crash the report nor be summarised as some other site.
+    row = {"ts": "2026-10-23T12:00:00+00:00", "site": "backlog_ask", "session_id": "s1",
+           "lang": "en", "reason": None, "redactions": 0, "input_tokens": 120,
+           "latency_ms": 600, "regex": {"fires": False, "context_view": "prev-reply-v1"},
+           "results": [_result({"own_backlog": 0.55})], "states": [{"user_prompt": "what next"}]}
+    rep = ce.summarize([row], threshold=None, top=2)
+    assert rep["sites"] == {} and rep["rows"] == 1
+    ce.render_text(rep)
 
 
 # ---- audit_candidate -------------------------------------------------------------------------

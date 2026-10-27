@@ -17,8 +17,6 @@ at most 200 MB). `report` reads every one of those logs, oldest first, and answe
   jig_repetition per fired jig-repetition nudge: how often Jev agrees the scripts the lexical
                  filter grouped are one job, per track (change, observe); the filter fires on
                  every row, so a disagreement is a nudge Jev would not have shown
-  backlog_ask    per typed prompt: both / regex only / Jev only / neither on "does it ask to
-                 resume this project's backlog", the question on which recall skips a prompt
   audit_candidate  per self-improve audit candidate, counted once however often it was audited:
                  how many Jev calls a real learning signal, per role (user, assistant, tool);
                  every candidate is a pattern hit, so a disagreement is one Jev calls noise
@@ -100,7 +98,7 @@ DEFAULT_TOP = 2
 # Rows written by a hand-run probe of a hook, not by a real session.
 DEFAULT_EXCLUDE = ("probe-",)
 SITES = ("stop_signal", "skill_router", "recall_rerank", "subagent_signal", "jig_repetition",
-         "backlog_ask", "audit_candidate")
+         "audit_candidate")
 
 
 # ---- loading -------------------------------------------------------------------------------
@@ -610,32 +608,6 @@ def summarize_jig_repetition(rows, threshold):
     return s
 
 
-# ---- backlog_ask ---------------------------------------------------------------------------
-
-def summarize_backlog_ask(rows, threshold):
-    """Per typed prompt: does the pattern, does Jev, say it asks to resume this project's backlog?
-
-    Both directions are worth adjudicating: `jev_only` is a paraphrase the pattern missed (recall
-    ran on it), `regex_only` a prompt the pattern skipped that Jev reads as something else. An
-    unanswered prompt is counted apart and never as a no.
-    """
-    s = {"prompts": 0, "unanswered": 0,
-         "kinds": {"both": 0, "regex_only": 0, "jev_only": 0, "neither": 0}, "disagreements": []}
-    for row in rows:
-        s["prompts"] += 1
-        regex = bool((row.get("regex") or {}).get("fires"))
-        score = ((_answered(row) or [None])[0] or {}).get(cl.BACKLOG_ASK_ID)
-        if not isinstance(score, (int, float)):
-            s["unanswered"] += 1
-            continue
-        kind = _kind(regex, score >= threshold)
-        s["kinds"][kind] += 1
-        if kind in ("regex_only", "jev_only"):
-            s["disagreements"].append({**_base(row), "kind": kind, "score": score,
-                                       "state": _first_state(row)})
-    return s
-
-
 # ---- audit_candidate -----------------------------------------------------------------------
 
 def _audit_entries(rows):
@@ -768,8 +740,6 @@ def summarize(rows, threshold, top):
             detail = summarize_subagent_signal(site_rows, at)
         elif site == "jig_repetition":
             detail = summarize_jig_repetition(site_rows, at)
-        elif site == "backlog_ask":
-            detail = summarize_backlog_ask(site_rows, at)
         elif site == "audit_candidate":
             detail = summarize_audit_candidate(site_rows, at)
         else:
@@ -814,10 +784,6 @@ def render_text(rep):
             for track, c in sorted(s["by_track"].items()):
                 lines.append("   %-11s nudges %d, jev same job %d"
                              % (track, c["nudges"], c["jev_same_job"]))
-        elif _base_site(site) == "backlog_ask":
-            k = s["kinds"]
-            lines.append("   prompts %d; both %d, regex only %d, jev only %d, neither %d"
-                         % (s["prompts"], k["both"], k["regex_only"], k["jev_only"], k["neither"]))
         elif _base_site(site) == "audit_candidate":
             lines.append("   candidates %d (repeats skipped %d, failed audits %d); jev real %d, "
                          "jev noise %d" % (s["candidates"], s["repeats"], s["failed_rows"],

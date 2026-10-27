@@ -30,6 +30,25 @@ a hole nobody has drawn a line under is one that gets rediscovered and half-fill
 two "versions with no entry" notes came to sit in this file disagreeing with it.
 
 
+## [10.3.10]
+
+### Changed
+
+- `prompt_text.asks_for_own_backlog` (recall's skip of a prompt asking to resume this project's
+  backlog) also matches "what next show open" and its "show open points" forms, "whats open",
+  "what else is open", "show open", "ok, continue", the typed slips "wht"/"whast" and the German
+  "mach weiter (wo aufgehoert)" and "was ist (noch) offen". Measured over the 557 typed prompts of
+  the shadow log, it now skips 150 instead of 47, every added one a backlog ask.
+
+### Removed
+
+- The `backlog_ask` Jev shadow site and its knob `classifier_backlog_ask`. Judged against the
+  pre-registered decide rule, its question failed: the first version was undecided on 40% of
+  prompts, and the one allowed rewrite, judged blind on its disagreements with the widened
+  pattern, was wrong more often than the pattern. `settings.py` now refuses the key as unknown,
+  and an existing config value is ignored. `classifier_eval.py report` leaves old rows of the site
+  out.
+
 ## [10.3.9]
 
 ### Changed

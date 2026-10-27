@@ -270,25 +270,6 @@ def _shadow_recall(prompt, sid, by_score, ranked, hits, keywords, transcript="")
         classifier.spawn_shadow("recall_rerank", sid, regex, requests, transcript=transcript)
 
 
-def _shadow_backlog_ask(prompt, sid, transcript=""):
-    """Hand one typed prompt to the classifier shadow child for site `backlog_ask`: does it ask to
-    resume this project's backlog? Asked of EVERY typed prompt, whatever the pattern answers, so
-    both its misses on a paraphrase and its hits on a bare reply show up. Never changes what is
-    recalled and never raises; a failure is logged as an error row."""
-    with classifier.shadow_guard("backlog_ask", sid):
-        if not classifier.shadow_enabled(sig.load_config(), "backlog_ask"):
-            return
-        if not prompt_text.typed_by_a_person(prompt):
-            return
-        regex = {"fires": prompt_text.asks_for_own_backlog(prompt),
-                 "context_view": classifier.CONTEXT_VIEW}
-        fields = classifier.with_previous({"user_prompt": prompt},
-                                          transcript_turns.last_reply(transcript))
-        classifier.spawn_shadow("backlog_ask", sid, regex,
-                                [{"fields": fields, "questions": classifier.backlog_ask_questions()}],
-                                transcript=transcript)
-
-
 def _relevance(result):
     """The `relevant` score of one logged result, or None when it carries none."""
     value = (((result or {}).get("answers") or {}).get("relevant") or {}).get("value")
@@ -345,7 +326,6 @@ def main():
         # "read handover and continue" / "what's next" is about THIS project's own backlog, which
         # recall never reads; other projects' handover notes injected there were taken for the
         # handover skill reading other projects' handovers.
-        _shadow_backlog_ask(prompt, sid, ev.get("transcript_path") or "")
         if prompt_text.asks_for_own_backlog(prompt):
             return 0
         # Only the prose of a typed prompt: a path carries project and tool names, and a machine

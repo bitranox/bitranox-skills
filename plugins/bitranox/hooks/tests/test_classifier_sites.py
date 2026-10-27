@@ -749,69 +749,27 @@ def test_jig_repetition_asks_one_same_job_question_over_the_fields_it_sends():
 
 
 # ---- backlog-ask matcher (recall's early return) -------------------------------------------
+# Its Jev shadow site was dropped under the pre-registered decide rule; the whole-prompt pattern
+# decides alone, and a prompt it matches sends nothing to Jev even with the backend on.
 
-@pytest.mark.parametrize("prompt", ["read handover and continue",
+@pytest.mark.parametrize("prompt", ["what next show open",
                                     "what next for the frobnicator deploy, token %s" % GHP])
-def test_backlog_ask_shadow_logs_every_typed_prompt_and_recalls_exactly_as_before(
+def test_recall_skips_exactly_the_backlog_asks_and_asks_jev_nothing_about_them(
         env, monkeypatch, capsys, prompt):
     _mem("/p/other", "frob.md", "The frobnicator deploy needs make test before every release")
-    ev = {"prompt": prompt, "cwd": "/p/cur", "session_id": "s-backlog"}
-    _config(env["home"])
-    off = _run(RM, monkeypatch, capsys, ev)
-    # The pattern's hit skips recall (no output); its miss must recall something, or "recalls
-    # exactly as before" compares two empty strings.
-    assert bool(off.strip()) is not PT.asks_for_own_backlog(prompt)
-    for f in (env["home"] / ".claude" / "self-improve-audit").glob("*.recall-*"):
-        f.unlink()
-    _config(env["home"], classifier_backend="jev", classifier_backlog_ask="shadow")
-    on = _run(RM, monkeypatch, capsys, dict(ev))
-    assert on == off
-    line = _wait_for_log(env["home"])[-1]
-    assert line["site"] == "backlog_ask" and line["session_id"] == "s-backlog"
-    assert line["regex"]["fires"] is PT.asks_for_own_backlog(prompt)
-    assert set(line["results"][0]["answers"]) == {q.id for q in cl.backlog_ask_questions()}
-    assert set(line["states"][0]) == {"user_prompt"}
-    assert len(env["fake"].requests) == 1
-    assert GHP not in _log(env["home"]).read_text(encoding="utf-8")
-    assert GHP not in json.dumps(env["fake"].requests)
-
-
-def test_backlog_ask_shadow_sends_the_reply_the_prompt_answers(env, tmp_path, monkeypatch,
-                                                                capsys):
-    t = _transcript(tmp_path, _typed("status?"), _said("Shall I go on with the parser fix?"))
-    _config(env["home"], classifier_backend="jev", classifier_backlog_ask="shadow")
-    _run(RM, monkeypatch, capsys, {"prompt": "continue", "cwd": "/p/cur", "session_id": "s-b2",
-                                   "transcript_path": t})
-    line = _wait_for_log(env["home"])[-1]
-    assert line["states"][0] == {"previous_assistant_message": "Shall I go on with the parser fix?",
-                                 "user_prompt": "continue"}
-    assert line["regex"]["context_view"] == cl.CONTEXT_VIEW
-    _assert_located(line, t)
-
-
-def test_backlog_ask_sends_nothing_for_a_turn_nobody_typed(env, monkeypatch, capsys):
-    _config(env["home"], classifier_backend="jev", classifier_backlog_ask="shadow")
-    note = ("<task-notification>\n<task-id>b1</task-id>\n<status>completed</status>\n"
-            "<summary>what next</summary>\n</task-notification>")
-    assert not PT.typed_by_a_person(note)
-    _run(RM, monkeypatch, capsys, {"prompt": note, "cwd": "/p/cur", "session_id": "s-b3"})
-    time.sleep(1.0)
-    assert not _log(env["home"]).exists() and env["fake"].requests == []
-
-
-def test_backlog_ask_spawns_nothing_while_the_site_is_off(env, monkeypatch, capsys):
     _config(env["home"], classifier_backend="jev")
-    _run(RM, monkeypatch, capsys, {"prompt": "what next", "cwd": "/p/cur", "session_id": "s-b4"})
+    out = _run(RM, monkeypatch, capsys, {"prompt": prompt, "cwd": "/p/cur", "session_id": "s-backlog"})
+    # The pattern's hit skips recall (no output); its miss must recall something, or the test
+    # would pass on a hook that recalls nothing at all.
+    assert bool(out.strip()) is not PT.asks_for_own_backlog(prompt)
     time.sleep(1.0)
-    assert not _log(env["home"]).exists() and env["fake"].requests == []
+    logged = _log(env["home"]).read_text(encoding="utf-8") if _log(env["home"]).exists() else ""
+    assert '"backlog_ask"' not in logged
 
 
-def test_backlog_ask_asks_one_question_over_the_fields_it_sends():
-    (question,) = cl.backlog_ask_questions()
-    assert question.type == "noul"
-    assert "`user_prompt`" in question.instructions
-    assert "`previous_assistant_message`" in question.instructions
-    assert "backlog_ask" in cl.SITES and "backlog_ask" in cl.SITE_THRESHOLDS
+def test_the_backlog_ask_site_is_gone():
+    assert "backlog_ask" not in cl.SITES and "backlog_ask" not in cl.SITE_THRESHOLDS
+    assert not hasattr(cl, "backlog_ask_questions")
 
 
 # ---- self-improve audit (SessionEnd / PreCompact candidate misses) -------------------------

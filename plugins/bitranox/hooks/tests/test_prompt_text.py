@@ -316,6 +316,12 @@ OWN_BACKLOG_PROMPTS = [
     "read handover and continue", "read the handover", "read handover.md and continue",
     "continue", "what next", "what's next", "whats next", "what is next", "what is open",
     "what's still open", "What next?", "Read handover, then continue.",
+    # Measured misses from the backlog_ask shadow log, each typed by a person asking for exactly
+    # this: a "show open" tail, a dropped or swapped letter, and the short forms.
+    "what next show open", "whats next show open", "what next. show open", "wht next show open",
+    "whast next show open", "whats next, show open points", "whats open", "whats open now",
+    "what else is open", "show open", "show open points", "ok, continue",
+    "mach weiter", "mach weiter wo aufgeh\u00f6rt", "was ist noch offen",
 ]
 
 
@@ -340,7 +346,11 @@ def test_handover_in_another_sense_is_not_a_backlog_request():
                  "continue the refactor of the parser module",
                  "what next steps does the rust borrow checker take here",
                  "what is open in the socket after close",
-                 "the handover failed, read the logs"):
+                 "the handover failed, read the logs",
+                 "show open ports on the firewall",
+                 "whats open in that file handle",
+                 "mach weiter mit dem parser",
+                 "what next show open - and can we delete the old repo"):
         for spelled in _spellings(text):
             assert not P.asks_for_own_backlog(spelled), spelled
 
