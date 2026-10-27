@@ -30,6 +30,17 @@ a hole nobody has drawn a line under is one that gets rediscovered and half-fill
 two "versions with no entry" notes came to sit in this file disagreeing with it.
 
 
+## [10.3.8]
+
+### Changed
+
+- `coding-python-logging`: mirrors the lib_log_rich 8.0.3 skill, checked against the code with its examples run.
+  `exc_info` is described as formatted traceback text (`extra["exc_info"]` for ready-made text), compacted by
+  frames and cut keeping its end; `shutdown()` raises and leaves the runtime initialised when the queue does not
+  drain in time; `ProcessResult.reason` lists all five `DropReason` members; the GELF field list gains
+  `_request_id` and says context `extra` is not sent; a checkpointed `dump()` moves the whole buffer; signal
+  handlers set a flag or raise `SystemExit` and let a `finally` call `shutdown()`.
+
 ## [10.3.7]
 
 ### Changed
