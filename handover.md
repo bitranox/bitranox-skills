@@ -1,69 +1,58 @@
-# STALE - read 2026-10-26, work continued and shipped as 10.2.2. Was: Checkpoint 2026-10-26 (compact mode): building the `tail -N` multi-file nudge, OPEN-WORK [40]
+# Handover 2026-10-27 08:30: nothing in flight; the small-points plan, the devops-bmk twin and [840] are all shipped
 
 ## In flight
 
-Building `plugins/bitranox/hooks/tail-obsolete-count-nudge.py`, a warn-only PreToolUse(Bash|PowerShell)
-nudge: `tail` with an obsolete count (`-1`, `-5f`, `+2`) and two or more file operands exits 1 on
-uutils tail ("unexpected argument"). All of it is UNCOMMITTED in this worktree
-(`.claude/worktrees/tail-guard`, branch `tail-guard`, based on origin/master 6bd10408).
+Nothing. No background subagent or shell of this session is running, and no worktree of it is
+left (`git worktree list` shows only peers' `ipscout-contribs` and a detached template-sweep checkout).
 
-Done:
-- the hook (token walk over `iter_segments` + `argv_for_match` + `program_word_at`; skips option
-  values, redirects, everything after `--` counts as a file; heredoc bodies stripped);
-- `plugins/bitranox/hooks/tests/test_tail_obsolete_count_nudge.py`, 23 tests, green; registered
-  in `hooks/tests/conftest.py` `_HOOK_MODULES`;
-- mutation check: all 7 guard clauses go RED when removed (two needed added tests: the `--` case
-  and a file name with `-<digits>` inside);
-- corpus replay (`guard_replay.py`, whole `~/.claude/projects`): 42 firings in 192,418 commands
-  (0.022%); every firing is the true shape, 21 recorded the real "unexpected argument" error, the
-  other 21 ran on GNU tail or mid-chain with the exit masked. The tool's "precision" column counts
-  gate blocks and is meaningless for a nudge;
-- registered in `plugins/bitranox/hooks/hooks.json` right after `sed-line1-range-nudge.py`,
-  matcher `Bash|PowerShell`.
+## Committed, or not
 
-Left, in order:
-1. `docs/architecture.md`: a hook-table row (`PreToolUse` Bash, `tail-obsolete-count-nudge.py`,
-   "Nudge `tail -N` / `+N` with two or more files: uutils tail exits 1; use `tail -n N`"), then
-   `reformat_tables.py --check --strict docs/architecture.md`.
-2. Version: re-read plugin.json on origin/master after a fetch and take origin + 1; bump
-   plugin.json AND pyproject.toml, add a `## [x.y.z]` CHANGELOG entry (Added).
-3. Run the full hooks suite with CI's set and `python3 plugins/bitranox/hooks/repo-gate.py --ci`.
-4. Before pushing, SendMessage `lib_log_rich` (holds 10.1.4 locally until lib_log_rich 7.3.0 is on
-   PyPI) and `bmk` (building a \u-escape PostToolUse hook in its own worktree) with the version you
-   take. Stage named paths only, commit with `-F`, push `HEAD:master`, watch CI with
-   `ci_wait.py --sha <full sha>`.
-5. After CI is green, delete OPEN-WORK [40] in a follow-up commit (or in the release commit, with
-   the reason in its message), then remove this worktree and its branch.
+- Everything this session wrote is on origin/master: 10.3.0 (small points plus [760]), 10.3.1
+  (devops-bmk twin of bmk b787f4e), 10.3.2 and 10.3.3 (the [840] `--mirrors` fix and its Windows
+  test fix). ipscout pushed 10.3.4 on top.
+- Local toolbox `~/.claude/skills/toolbox` (no remote): all committed, tree clean (quotecheck
+  repeated `--quote` fix; libstate, conflictres and the backlogcheck pushed-state extension,
+  committed as-is on the user's choice).
+- Untracked `o` in the repo root (19 bytes, dated 2026-10-24) is NOT this session's: left alone.
 
 ## Decided, and why
 
-- Nudge, not block: the obsolete form is correct on GNU tail; a block on a working command teaches
-  the reader to ignore the channel. Same reasoning as the sed-line1 sibling.
-- Token walk, not a whole-command regex: a nested quantifier in a hook can backtrack exponentially
-  and hang the session.
-- `head -N` with several files is left alone: uutils head accepts it (measured).
-
-## Decided against
-
-- Probing `tail --version` inside the hook to stay quiet on GNU hosts: a subprocess per Bash call
-  for a 0.022% event, and `tail -n N` is the POSIX spelling anyway.
+- `_in_main_checkout()` in `plugins/bitranox/hooks/repo-gate.py` maps a twin inside a linked
+  worktree onto its main checkout; a separate clone and a worktree of an UNLISTED repo are still
+  reported on purpose, so a real duplicate never hides.
+- The relative-gitdir test unlinks the worktree's `.git` before rewriting it (comment in
+  `plugins/bitranox/hooks/tests/test_repo_gate.py`), instead of skipping Windows: that branch keeps
+  a Windows run.
 
 ## Still open, untouched
 
-See `OPEN-WORK.md` (top: [23] fold top-level memory lines into skills, batch 7; a tree dream is
-due, [730] is its input).
+- OPEN-WORK.md is the backlog; top open items are [23] (USER, memory-line fold into skills), [28]
+  (USER, second wave of Jev sites), [30] (USER, purge handover mode - waits on compact mode).
+
+## Exact next action
+
+[23] is the top-ranked open item. Its line's `next:` text still names batch 4, while
+`git log -- OPEN-WORK.md` shows a later "[23] batch 6 pass 2" commit, so first run
+`uv run ~/.claude/skills/toolbox/tools/backlogcheck.py --file OPEN-WORK.md` and read line [23] to
+its end, rewrite its `next:` to the real state, then classify the next batch read-only and put it
+to the user as that line says (each batch needs its own approval).
 
 ## Lessons for the next nap
 
-- tooling: the first live compact-mode checkpoint request fired at 423,897 tokens with a 500k limit (predicted save point about 420,300), so the save-point arithmetic holds on CLI 2.1.310.
-- When pricing a warn-only nudge with guard_replay, ignore its precision column (it counts gate blocks); classify every firing by its recorded tool_result error instead.
-- When a commit in a marketplace worktree is refused as DRIFT on a skill the commit does not touch, the worktree is behind an origin commit that mirrored that twin: `git merge --ff-only origin/master` (no stash needed when your files do not overlap), then commit.
-- When a peer session asks you to edit a file in ITS checkout, prepare the change in your own worktree and send it a patch (`git diff --relative=<prefix>` so its paths match the peer repo, proven with `git -C <peer> apply --check`); the peer applies it itself.
+- When a subagent prompt is built from a template, check it holds no unfilled placeholder before dispatching (queued as a contribution to process-agents-subagent-driven-development).
+- When an older installed repo-gate refuses a mirrored-twin commit as DRIFT with the "+" side holding the OLD text, it is reading the index: git add the files first (10.3.0 reads the commit's selection instead).
+- When a CLI option may be passed more than once, check its parser uses action="append": argparse's default store silently keeps only the LAST value, so a check fed several values verifies one (quotecheck --quote did this; fixed in toolbox, RED test added).
+- When a quote-back probe reads a bold lead sentence against its body, check the two agree: a lead that names one condition while the body needs two is the sentence a skimming reader acts on.
+- When a test rewrites a file git created inside a worktree or repo (`.git` file, index), expect Windows to refuse a truncate-write on it because git marks it hidden: unlink it first, or open r+ and truncate.
+- When a commit command reaches the repo through a variable (`cd $T`), the repo-gate cannot read the target and judges the session repo instead: name the repo path literally in the command.
+- When a Windows-only CI cell fails, reproduce it on the Windows dev VM with a `git archive` of HEAD (the hooks conftest needs the full tree) plus an OLD-test control arm, before pushing a fix: the control proves the VM reproduces CI's failure.
+- When a peer session will push the same repo, tell it exactly which functions and test anchors you changed and when you push; ipscout rebased onto 10.3.3 cleanly that way.
 
 ## How to verify
 
-- `env -u VIRTUAL_ENV uv run --with pytest --with PyYAML --with lxml --with defusedxml --with ruamel.yaml --with httpx2 python -m pytest plugins/bitranox/hooks/tests/ -q`
-- `python3 plugins/bitranox/hooks/repo-gate.py --ci`
+- `git -C /media/srv-main-softdev/projects/public/KI/bitranox-skills log --oneline -5 origin/master`
+- `python3 plugins/bitranox/hooks/repo-gate.py --mirrors` (all pairs in sync, exit 0)
+- `python3 ~/.claude/plugins/cache/bitranox-skills/bitranox/10.3.4/skills/compuse-toolbox/scripts/ci_wait.py --ref HEAD`
 
 > Read this, then replace the first line with `# STALE - read <date>, work continued`. Do not
 > delete it - if this session ends badly it is the only record of where things stood.
