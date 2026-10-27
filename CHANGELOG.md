@@ -30,6 +30,17 @@ a hole nobody has drawn a line under is one that gets rediscovered and half-fill
 two "versions with no entry" notes came to sit in this file disagreeing with it.
 
 
+## [10.3.6]
+
+### Changed
+
+- `devops-bmk` (synced from bmk 3.30.0): a coverage-floor failure prints the report table in JSON
+  mode too, followed by `[coverage] Coverage is below fail_under = <N>`; `workers = 1` means one
+  process also against a `-n` in the project's `addopts` (bmk adds `-n 0`), and a venv without
+  pytest-cov is kept to one process the same way; when someone else's uncommitted edit blocks
+  `release`, release from a clean worktree on the branch (a detached HEAD is refused, and
+  `release` never rewrites the Makefile).
+
 ## [10.3.5]
 
 ### Changed

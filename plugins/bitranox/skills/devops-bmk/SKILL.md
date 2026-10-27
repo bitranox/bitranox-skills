@@ -351,6 +351,13 @@ forwarded (e.g. `make push fix login bug`). Most have short aliases.
   reads as real work; nothing in the output flags it. Fast-forwarding the default branch first does
   not prevent it. Afterwards run `git ls-remote --heads origin <branch>`; if the branch is there at
   the same commit as `origin/<default>`, delete it with `git push origin --delete <branch>`.
+- **When someone else's uncommitted edit blocks `release`, release from a clean worktree ON the
+  branch**: `git worktree add -f <path> <default-branch>` (`-f` allows a branch checked out in
+  another worktree), `make release` there, then remove the worktree. `release` pushes the branch
+  by name, so a DETACHED worktree is refused before anything is tagged
+  (`[release] HEAD is detached`). `release` never rewrites the Makefile (every other target updates
+  it to the running bmk), so a bmk version published since the last `make` does not dirty the tree
+  in the middle of a release.
 - When the `pyproject.toml` version is committed but not yet tagged
   (`git tag --list "v<version>"` is empty), release it directly: running `bump` first moves past
   it and that version is never published.
@@ -639,11 +646,15 @@ not loaded (plugin autoload off, `-p no:xdist` in `addopts`) gives a serial run 
 with autoload off, `-p xdist -p pytest_cov` in `addopts` loads them again and the run is parallel.
 Coverage, `fail_under` and `coverage.xml` come out the same either way. The parallel run passes
 `--cov-fail-under=0`, so the floor is checked once, by the `coverage report` step that follows:
-`fail_under` defaults to 80, `[tool.coverage.report] fail_under` overrides it, and in JSON mode a
-floor failure shows only its exit line (the report table is printed in text mode, `--human`). A
-`-n` (or `--dist`) the project already passes in `addopts` is left to it. `[tool.scripts.test] workers` takes `"auto"` (the default) or a
-count, `1` meaning bmk adds no `-n`; `BMK_TEST_WORKERS` overrides it for one run, and a bad value
-in either is refused with one line and exit 2. Tests that
+`fail_under` defaults to 80, `[tool.coverage.report] fail_under` overrides it, and a floor
+failure prints the report table naming the missing lines (in JSON mode too) followed by
+`[coverage] Coverage is below fail_under = <N>`; `[coverage] Tests failed` means a test failed. In
+a parallel run, a `-n` (or `--dist`) the project already passes in `addopts` is left to it.
+`[tool.scripts.test] workers` takes `"auto"` (the default) or a count; `1` means one process, also
+against a `-n` in the project's `addopts` (bmk then adds `-n 0`), and a venv without pytest-cov is
+kept to one process the same way, because `coverage run` measures only that process.
+`BMK_TEST_WORKERS` overrides the setting for one run, and a bad value in either is refused with one
+line and exit 2. Tests that
 share a database, a fixed port or a file must carry the same `@pytest.mark.xdist_group("<name>")`
 so they run one at a time on one worker. Before adding pytest-xdist to an existing project, find
 those tests (or set `workers = 1`) and run `-n auto` several times. A test that fails only in
