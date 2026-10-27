@@ -30,6 +30,19 @@ a hole nobody has drawn a line under is one that gets rediscovered and half-fill
 two "versions with no entry" notes came to sit in this file disagreeing with it.
 
 
+## [10.3.7]
+
+### Changed
+
+- `coding-python-network-probe`: mirrors the ipscout 2.5.2 skill, checked against the code. It now gives
+  what exit code 1 means per command, the full JSON envelope and where `--json` must go, which operations
+  need privilege per platform (traceroute on macOS and a SYN scan on Windows raise
+  `IPScoutUnsupportedError`), the `ValueError` and `RuntimeError` cases `except IPScoutError` does not
+  catch, the per-call behaviour for a zone-less link-local address, that `subnet_info()` DHCP fields are
+  Linux only, that default sweeps never return IPv6, that `scan_ports` connect results are in completion
+  order, and `raise_on_error`, `settle=`, `family=`, `resolve_names` and `mac --strict`. Example addresses
+  are documentation ranges.
+
 ## [10.3.6]
 
 ### Changed
