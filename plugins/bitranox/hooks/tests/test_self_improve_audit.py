@@ -57,6 +57,33 @@ def test_writes_audit_for_candidate_misses(tmp_path, monkeypatch):
     assert "that's wrong" not in body.lower()  # the strict hit is not listed as a miss
 
 
+_ASK = "why did you skip the tests again?"
+
+
+@pytest.mark.parametrize("envelope", [
+    "Another Claude session sent a message while you were working: " + _ASK,
+    f"<task-notification> <summary>{_ASK}</summary> </task-notification>",
+    f"<command-name>/goal</command-name> <command-args>{_ASK}</command-args>",
+])
+def test_a_user_role_message_the_person_did_not_type_is_tagged_harness(tmp_path, monkeypatch,
+                                                                        envelope):
+    """Another session's message, a task notification or a command echo arrives as a user record,
+    and listed as [user] the next session reads machine text as the person's words. It stays a
+    candidate - its text can still hold a hint - but under its own tag, which the note explains."""
+    tp = make_transcript(tmp_path, [("user", envelope), ("user", _ASK)])
+    assert [c["role"] for c in A.find_candidates(tp)] == ["harness", "user"]
+    run_audit(monkeypatch, tp, "/proj/env")
+    body = S.audit_file("/proj/env").read_text(encoding="utf-8")
+    assert "2 message(s)" in body
+    assert "- [harness] matched" in body and "- [user] matched" in body
+    assert "[harness] marks" in body
+
+
+def test_the_harness_legend_appears_only_when_the_note_shows_one(tmp_path, monkeypatch):
+    run_audit(monkeypatch, make_transcript(tmp_path, [("user", _ASK)]), "/proj/typed")
+    assert "[harness]" not in S.audit_file("/proj/typed").read_text(encoding="utf-8")
+
+
 def test_no_file_when_no_candidates(tmp_path, monkeypatch):
     tp = make_transcript(tmp_path, [
         ("user", "no, that's wrong"),            # strict

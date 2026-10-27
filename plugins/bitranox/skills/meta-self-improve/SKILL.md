@@ -72,7 +72,10 @@ and audit share that module, so they never drift).
 
 The audit scans THREE sources, because a learning does not always reach prose:
 
-- **Prose** (user + assistant text) via the broad patterns.
+- **Prose** (user + assistant text) via the broad patterns. A user-role message the person did
+  not type - another session's message, a task notification, a command echo - is listed as
+  `[harness]`: machine text, never the person's words. A hint in it is a claim to verify before
+  capturing anything, and is recorded as coming from its source, never as a user rule.
 - **Tool blocks** (`tool_use` commands, `tool_result` output) via the TOOL signal set. A tooling
   gap often announces itself only here - `error: unrecognized arguments: --rehome-to` is the whole
   discovery, with no sentence anywhere. The gate never reads tool blocks, so every tool signal is

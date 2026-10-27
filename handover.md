@@ -1,4 +1,4 @@
-# Checkpoint 2026-10-27 15:30: [28] audit_candidate dropped (10.3.11); two user questions open
+# Checkpoint 2026-10-27 16:00: audit_candidate dropped (10.3.11), [870] harness tag (10.3.12)
 
 ## In flight
 
@@ -7,7 +7,10 @@ Nothing part-done in code. [28]'s second wave now has one shadow site left, `jig
 ## Committed, or not
 
 - 10.3.11 carries: the `audit_candidate` site removed (classifier, self-improve-audit, defaults,
-  settings and its skill row, classifier_eval, docs), the [28] and [870] lines' 2026-10-27 state.
+  settings and its skill row, classifier_eval, docs), the [28] line's 2026-10-27 state.
+- 10.3.12 carries [870]: the audit note tags a user-role message `looks_typed` rejects as
+  `[harness]` (user chose "Relabel as machine (Recommended)" 2026-10-27), the meta-self-improve
+  audit section says so, [870] deleted, [860] holds the shapes the registry still misses.
 - `classifier_audit_candidate` was switched to `off` on this machine before the removal.
 - Measurement scripts and data, gitignored: `.plan/jev-28/review-2026-10-27/`
   (PREREG-audit_candidate-v2.md, replay_audit.py, replay_audit.json, make_blind_audit.py - unused,
@@ -26,19 +29,20 @@ Nothing part-done in code. [28]'s second wave now has one shadow site left, `jig
 
 ## Still open, untouched
 
-- Two questions the user raised on 2026-10-27, both answered with measurements, neither decided:
-  [870] drop or relabel harness envelopes in the audit note; whether to re-test backlog_ask as
-  "regex first, then Jev at >= 0.8" (8 right, 1 wrong on the judged set, but that threshold was
-  fitted on it). Detail in the [870] and [28] lines of OPEN-WORK.md.
+- One question the user raised on 2026-10-27, answered with measurements, not decided: whether to
+  re-test backlog_ask as "regex first, then Jev at >= 0.8" (8 right, 1 wrong on the judged set,
+  but that threshold was fitted on it). I recommended leaving it regex-only.
 - OPEN-WORK.md holds the backlog; [23] stays the top USER item.
 
 ## Exact next action
 
-Ask the user the [870] question (drop or relabel the harness envelopes the audit offers as
-role=user), one AskUserQuestion with the measured 34-of-159 lower bound.
+[860]: extend `transcript_turns` NOT_TYPED registry with the measured shapes in its line, after a
+replay of the Stop gate and the router over real history (guard_replay) shows what changes.
 
 ## Lessons for the next nap
 
+- When a backlog line sizes a defect from a sampled log, re-measure on the source before fixing:
+  [870] said at least 34 of 159, the transcripts said 630 of 679 shown user-role candidates.
 - When an [96] site fails clause 1, check whether one role or one shape carries the band before
   proposing a fix upstream of it: tool-role alone was 40.2% in band, so fixing [870] could never
   have rescued audit_candidate.

@@ -24,6 +24,7 @@ import os
 import sys
 from pathlib import Path
 
+import transcript_turns
 from self_improve_signals import (asst_said_offset, audit_file, broad_matches, inert_snippet,
                                   is_injected_skill_body, quoted_snippet, skills_invoked,
                                   snippet_was_escaped, strict_asst_hit, strict_user_hit,
@@ -34,6 +35,10 @@ from self_improve_signals import (asst_said_offset, audit_file, broad_matches, i
 # session while keeping memory bounded.
 _MAX_BYTES = 10 * 1024 * 1024
 _MAX_CANDIDATES = 12       # cap surfaced candidates so the next-session note stays scannable
+# The tag for a user record the person did not type: another session's message, a task
+# notification, a command echo. It stays a candidate, since machine text can still carry a
+# hint, but listed as [user] the next session reads it as the person's own words.
+HARNESS = "harness"
 _SNIPPET = 160
 
 # What the report calls the stretch it audited, keyed by the event that wrote it. SessionStart
@@ -179,7 +184,10 @@ def find_candidates(transcript_path):
         if matched:
             offset = _signal_offset(role, text)
             snippet = inert_snippet(text, _SNIPPET, around=offset)
-            candidates.append({"role": role, "matched": matched, "snippet": snippet,
+            # Detection above stays on the record's own role; only the tag changes, so the
+            # candidate set is the same with or without it.
+            shown = HARNESS if role == "user" and not transcript_turns.looks_typed(text) else role
+            candidates.append({"role": shown, "matched": matched, "snippet": snippet,
                                "escaped": snippet_was_escaped(text)})
     return candidates
 
@@ -219,6 +227,11 @@ def render_report(candidates, skills=None, event="SessionEnd"):
         "",
         "Candidates (most recent first):",
     ]
+    if any(c["role"] == HARNESS for c in recent):
+        lines.insert(-1, "[harness] marks a user-role message the person did not type (another "
+                         "session's message, a task notification, a command echo): machine text, "
+                         "never the person's words.")
+        lines.insert(-1, "")
     for c in reversed(recent):
         lines.append("- [%s] matched %s :: %s"
                      % (c["role"], "/".join(c["matched"]), quoted_snippet(c)))

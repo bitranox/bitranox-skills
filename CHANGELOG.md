@@ -30,6 +30,18 @@ a hole nobody has drawn a line under is one that gets rediscovered and half-fill
 two "versions with no entry" notes came to sit in this file disagreeing with it.
 
 
+## [10.3.12]
+
+### Changed
+
+- The self-improve audit note lists a user-role message the person did not type (another session's
+  message, a task notification, a command echo) as `[harness]` instead of `[user]`, and says what
+  the tag means whenever the note shows one. The message stays a candidate - machine text can
+  still hold a hint - but the next session no longer reads it as the person's words. Measured over
+  30 days of transcripts, 630 of the 679 user-role candidates the notes showed were such messages.
+  Which messages count as typed is decided by the same registry the Stop gate and the skill router
+  ask.
+
 ## [10.3.11]
 
 ### Removed
