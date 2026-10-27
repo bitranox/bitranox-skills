@@ -421,33 +421,6 @@ def test_under_cap_transcript_keeps_both_head_and_tail(tmp_path, monkeypatch):
     assert skills.get("bitranox:tail-skill") == 1
 
 
-def test_a_candidate_carries_a_wider_excerpt_around_its_signal_for_the_jev_shadow(tmp_path):
-    """The note quotes 160 characters; the Jev shadow is shown up to _EXCERPT around the same
-    signal, so a code line or a quoted log can be told from somebody saying something."""
-    lead = "context line. " * 300
-    t = make_transcript(tmp_path, [("user", lead + "the deploy path is wrong, it is under /srv. "
-                                    + "more detail. " * 30 + "TAILMARK")])
-    (c,) = A.find_candidates(t)
-    excerpt = A.shadow_excerpt(c["role"], c["text"])
-    assert "deploy path is wrong" in c["snippet"] and "TAILMARK" not in c["snippet"]
-    assert "deploy path is wrong" in excerpt and "TAILMARK" in excerpt
-    assert len(excerpt) <= A._EXCERPT
-
-
-def test_the_shadow_excerpt_redacts_a_key_whose_header_falls_outside_the_window(tmp_path):
-    """A window cut from the raw text keeps a long key's body and drops its BEGIN line, and no
-    secret pattern matches a bare body; the excerpt must be cut from the redacted text."""
-    body = "\n".join("MIIEowIBAAKCAQEA" + "x" * 48 + "%04d" % n for n in range(60))
-    output = ("-----BEGIN RSA PRIVATE KEY-----\n" + body + "\n-----END RSA PRIVATE KEY-----\n"
-              + "ssh-add: error: unrecognized arguments: --rehome-to\n")
-    t = _tool_results(tmp_path, output)
-    (c,) = A.find_candidates(t)
-    assert c["role"] == "tool"
-    excerpt = A.shadow_excerpt(c["role"], c["text"])
-    assert "unrecognized arguments" in excerpt
-    assert "MIIEowIBAAKCAQEA" not in excerpt and "[REDACTED]" in excerpt
-
-
 # ---- a QUOTED admission is data, as the Stop gate reads it -------------------------------------
 
 def test_a_quoted_admission_does_not_hide_a_broad_signal_the_gate_missed(tmp_path):

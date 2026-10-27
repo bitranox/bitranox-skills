@@ -38,14 +38,13 @@ ENUM_CHOICES = {
     "classifier_backend": ("off", "jev"),
     "context_mode": ("compact", "handover"),
     # decide only where the site's hook implements it: skill-router.py, self-improve-gate.py,
-    # recall-memory.py and subagent-capture.py do; jig-repetition-nudge.py, self-improve-audit.py
-    # and the skill-step pipeline do not.
+    # recall-memory.py and subagent-capture.py do; jig-repetition-nudge.py and the skill-step
+    # pipeline do not.
     "classifier_stop_signal": ("off", "shadow", "decide"),
     "classifier_skill_router": ("off", "shadow", "decide"),
     "classifier_recall_rerank": ("off", "shadow", "decide"),
     "classifier_subagent_signal": ("off", "shadow", "decide"),
     "classifier_jig_repetition": ("off", "shadow"),
-    "classifier_audit_candidate": ("off", "shadow"),
     "classifier_skills": ("off", "shadow"),
     "tmp_prune": ("on", "dry-run", "off"),
 }

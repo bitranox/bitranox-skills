@@ -1779,95 +1779,20 @@ def test_summarize_reports_the_jig_site_at_its_own_threshold():
 
 # ---- a retired site ----------------------------------------------------------------------------
 
-def test_rows_of_a_retired_site_are_left_out_of_the_report():
-    # backlog_ask was dropped after its shadow log was judged; its rows stay in the log until
-    # pruned and must neither crash the report nor be summarised as some other site.
-    row = {"ts": "2026-10-23T12:00:00+00:00", "site": "backlog_ask", "session_id": "s1",
+@pytest.mark.parametrize("site, regex, answer, state", [
+    ("backlog_ask", {"fires": False, "context_view": "prev-reply-v1"}, {"own_backlog": 0.55},
+     {"user_prompt": "what next"}),
+    ("audit_candidate", {"fires": True, "event": "SessionEnd",
+                         "candidates": [{"role": "tool", "matched": ["error:"], "uuid": "u1"}]},
+     {"real_signal": 0.55}, {"role": "tool", "matched": "error:", "excerpt": "x: error: y"}),
+])
+def test_rows_of_a_retired_site_are_left_out_of_the_report(site, regex, answer, state):
+    # backlog_ask and audit_candidate were dropped after their shadow logs were judged; their rows
+    # stay in the log until pruned and must neither crash the report nor be summarised as some
+    # other site.
+    row = {"ts": "2026-10-23T12:00:00+00:00", "site": site, "session_id": "s1",
            "lang": "en", "reason": None, "redactions": 0, "input_tokens": 120,
-           "latency_ms": 600, "regex": {"fires": False, "context_view": "prev-reply-v1"},
-           "results": [_result({"own_backlog": 0.55})], "states": [{"user_prompt": "what next"}]}
+           "latency_ms": 600, "regex": regex, "results": [_result(answer)], "states": [state]}
     rep = ce.summarize([row], threshold=None, top=2)
     assert rep["sites"] == {} and rep["rows"] == 1
     ce.render_text(rep)
-
-
-# ---- audit_candidate -------------------------------------------------------------------------
-
-def audit_row(scores, session="s1", event="SessionEnd", texts=None):
-    """One audit run; `scores` holds Jev's real-signal score per candidate (None: unanswered)."""
-    texts = texts or ["candidate %d" % n for n in range(len(scores))]
-    roles = ["user" if n % 2 == 0 else "tool" for n in range(len(scores))]
-    return {"ts": "2026-10-23T12:00:00+00:00", "site": "audit_candidate", "session_id": session,
-            "lang": "en", "reason": None, "redactions": 0, "input_tokens": 400,
-            "latency_ms": 900,
-            "regex": {"fires": True, "event": event,
-                      "candidates": [{"role": r, "matched": ["error:"]} for r in roles]},
-            "results": [_result({"real_signal": s}) if s is not None else None for s in scores],
-            "states": [{"role": r, "matched": "error:", "excerpt": x}
-                       for r, x in zip(roles, texts)]}
-
-
-def test_audit_candidate_counts_how_many_candidates_jev_calls_real_per_role():
-    s = ce.summarize_audit_candidate([audit_row([0.9, 0.1, 0.7, None])], threshold=0.5)
-    assert s["candidates"] == 4 and s["unanswered"] == 1
-    assert s["jev_real"] == 2 and s["jev_noise"] == 1
-    assert s["by_role"] == {"user": {"candidates": 2, "jev_real": 2},
-                            "tool": {"candidates": 1, "jev_real": 0}}
-
-
-def test_audit_candidate_counts_a_candidate_audited_twice_once():
-    """A compaction then the session's end audit the same transcript: the same text twice."""
-    rows = [audit_row([0.9, 0.1], event="PreCompact"), audit_row([0.9, 0.1, 0.2])]
-    s = ce.summarize_audit_candidate(rows, threshold=0.5)
-    assert s["candidates"] == 3 and s["repeats"] == 2
-
-
-def test_audit_candidate_disagreements_are_the_candidates_jev_calls_noise():
-    s = ce.summarize_audit_candidate([audit_row([0.9, 0.2], texts=["a", "x: error: y"])],
-                                     threshold=0.5)
-    (d,) = s["disagreements"]
-    assert d["kind"] == "jev_noise" and d["role"] == "tool" and d["score"] == 0.2
-    assert d["state"]["excerpt"] == "x: error: y"
-
-
-def test_summarize_reports_the_audit_site_at_its_own_threshold():
-    rep = ce.summarize([audit_row([0.45])], threshold=None, top=2)
-    site = rep["sites"]["audit_candidate"]
-    assert site["threshold"] == 0.5 and site["jev_noise"] == 1
-    assert "jev noise 1" in ce.render_text(rep)
-
-
-def test_audit_candidate_keeps_two_identical_candidates_of_one_audit_apart():
-    """The same bad command run twice gives two identical messages in ONE audit: two candidates."""
-    rows = [audit_row([0.9, 0.2, 0.3], texts=["x: error: y", "a", "x: error: y"])]
-    s = ce.summarize_audit_candidate(rows, threshold=0.5)
-    assert s["candidates"] == 3 and s["repeats"] == 0
-
-
-def test_audit_candidate_takes_a_later_answer_over_an_earlier_unanswered_one():
-    rows = [audit_row([None, 0.1], event="PreCompact"), audit_row([0.9, 0.1])]
-    s = ce.summarize_audit_candidate(rows, threshold=0.5)
-    assert s["candidates"] == 2 and s["unanswered"] == 0
-    assert s["jev_real"] == 1 and s["jev_noise"] == 1
-
-
-def test_audit_candidate_counts_an_error_row_as_a_failed_audit():
-    error = {"ts": "2026-10-23T12:00:00+00:00", "site": "audit_candidate", "session_id": "s1",
-             "regex": None, "reason": "error: OSError: x", "results": []}
-    s = ce.summarize_audit_candidate([error, audit_row([0.9])], threshold=0.5)
-    assert s["failed_rows"] == 1 and s["candidates"] == 1
-
-
-def test_audit_candidate_tells_a_retry_from_a_repeat_by_its_uuid():
-    """The audit window slides: after a compaction the first copy of a retried command can be out
-    of the later audit's 12 while a byte-identical retry is in it. Same text, different record."""
-    first = audit_row([0.9], event="PreCompact", texts=["x: error: y"])
-    first["regex"]["candidates"][0]["uuid"] = "u-first"
-    later = audit_row([0.2], texts=["x: error: y"])          # the first copy slid out of the 12
-    later["regex"]["candidates"][0]["uuid"] = "u-retry"
-    s = ce.summarize_audit_candidate([first, later], threshold=0.5)
-    assert s["candidates"] == 2 and s["repeats"] == 0
-    assert s["jev_real"] == 1 and s["jev_noise"] == 1
-    again = audit_row([0.9], texts=["x: error: y"])
-    again["regex"]["candidates"][0]["uuid"] = "u-first"     # the same record audited again
-    assert ce.summarize_audit_candidate([first, again], threshold=0.5)["repeats"] == 1

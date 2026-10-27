@@ -30,6 +30,18 @@ a hole nobody has drawn a line under is one that gets rediscovered and half-fill
 two "versions with no entry" notes came to sit in this file disagreeing with it.
 
 
+## [10.3.11]
+
+### Removed
+
+- The `audit_candidate` Jev shadow site and its knob `classifier_audit_candidate`. Judged against
+  the pre-registered decide rule, its question left about half its answers between 0.2 and 0.8
+  (49.5% of 929 logged candidates), and the one allowed rewrite, replayed beside it over the same
+  candidates, still left 47.5% there. The self-improve audit note is unchanged; the audit no
+  longer carries each candidate's full message text and transcript id, which only the shadow
+  read. `settings.py` now refuses the key as unknown, an existing config value is ignored, and
+  `classifier_eval.py report` leaves old rows of the site out.
+
 ## [10.3.10]
 
 ### Changed

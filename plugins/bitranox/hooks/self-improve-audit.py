@@ -17,13 +17,6 @@ the report names which of the two moments it describes.
 
 This never blocks anything and writes only a review note. Pure standard library; every
 failure path exits 0 so a broken hook never disrupts session shutdown or a compaction.
-
-JEV SHADOW (site `audit_candidate`, knob `classifier_audit_candidate = shadow`). Once the note is
-written, the candidates it shows are handed to a detached child that asks Jev, per candidate,
-whether it is a real learning signal, and logs the answers beside the patterns that matched. The
-note is unchanged; shadow only, no decide mode. A compaction followed by the session's end audits
-the same transcript twice, so the log can hold a candidate twice: each carries its transcript
-record's uuid, which is what to count it by (two messages can share their text).
 """
 
 import json
@@ -42,11 +35,6 @@ from self_improve_signals import (asst_said_offset, audit_file, broad_matches, i
 _MAX_BYTES = 10 * 1024 * 1024
 _MAX_CANDIDATES = 12       # cap surfaced candidates so the next-session note stays scannable
 _SNIPPET = 160
-# What the Jev shadow is shown of each candidate: a window around the signal, wide enough to tell
-# a quoted log or a code line from somebody saying something, narrow enough to keep the request
-# small. The 160-character snippet the note quotes is too short for that.
-_EXCERPT = 3000
-SITE = "audit_candidate"          # the classifier shadow site (hooks/classifier.py)
 
 # What the report calls the stretch it audited, keyed by the event that wrote it. SessionStart
 # surfaces the file after a new session, a resume, /clear AND a compaction, and after a compaction
@@ -101,9 +89,8 @@ def _tool_blocks(content):
 
 
 def _iter_messages(transcript_path):
-    """Yield (role, text, uuid) per message for the prose roles, then ("tool", [block, ...], uuid)
-    if it has any. `uuid` is the transcript record's own id (None when the record has none), the
-    one identity of a message that survives being audited again.
+    """Yield (role, text) per message for the prose roles, then ("tool", [block, ...]) if it has
+    any.
 
     "tool" carries the message's tool_use/tool_result blocks and is matched against the TOOL signal
     set, not the prose sets - a command line is not a sentence and the prose patterns do not apply.
@@ -128,11 +115,10 @@ def _iter_messages(transcript_path):
         kind = obj.get("type")
         if kind in ("user", "assistant"):
             content = obj.get("message", {}).get("content")
-            uuid = obj.get("uuid") if isinstance(obj.get("uuid"), str) else None
-            yield kind, _text(content), uuid
+            yield kind, _text(content)
             blocks = _tool_blocks(content)
             if blocks:
-                yield "tool", blocks, uuid
+                yield "tool", blocks
 
 
 def _tool_signal(blocks):
@@ -176,7 +162,7 @@ def _strict_hit(role, text):
 def find_candidates(transcript_path):
     """Return candidate-miss dicts: a broad/tool match the strict gate did NOT catch."""
     candidates = []
-    for role, payload, uuid in _iter_messages(transcript_path):
+    for role, payload in _iter_messages(transcript_path):
         if role == "tool":
             matched, text = _tool_signal(payload)
         else:
@@ -193,11 +179,8 @@ def find_candidates(transcript_path):
         if matched:
             offset = _signal_offset(role, text)
             snippet = inert_snippet(text, _SNIPPET, around=offset)
-            # `text` rides along for the Jev shadow, which cuts its own wider excerpt from it - and
-            # only for the candidates the note shows, only when the site is on.
             candidates.append({"role": role, "matched": matched, "snippet": snippet,
-                               "escaped": snippet_was_escaped(text), "text": text,
-                               "uuid": uuid})
+                               "escaped": snippet_was_escaped(text)})
     return candidates
 
 
@@ -251,46 +234,6 @@ def render_report(candidates, skills=None, event="SessionEnd"):
     return "\n".join(lines) + "\n"
 
 
-def shadow_excerpt(role, text):
-    """Up to _EXCERPT characters of `text` around its signal, REDACTED BEFORE IT IS CUT.
-
-    The order is the point: a secret pattern needs its own context to match - a private key
-    needs its BEGIN line, a password its label - and a window cut first can keep the key body
-    while dropping the header, so nothing downstream would recognise it as a secret. The signal
-    offset is taken on the redacted text, which is the text being cut.
-    """
-    import secret_patterns  # noqa: PLC0415 - deferred with the rest of the shadow's imports
-
-    redacted, _count = secret_patterns.redact(str(text or ""))
-    return inert_snippet(redacted, _EXCERPT, around=_signal_offset(role, redacted))
-
-
-def _shadow(event, candidates):
-    """Hand the candidates the note shows to the Jev shadow child. Never raises, never changes the
-    note: it runs after the note is written."""
-    try:
-        # Imported here, not at the top: the audit must still write its note when the classifier
-        # module is broken or missing, and a session with the site off never pays for it.
-        import classifier  # noqa: PLC0415 - deferred: the note must not depend on the classifier
-        import self_improve_signals as sig  # noqa: PLC0415 - deferred with classifier
-    except Exception:                                     # noqa: BLE001 - shadow costs nothing
-        return
-    session = event.get("session_id") or "default"
-    with classifier.shadow_guard(SITE, session):
-        if not classifier.shadow_enabled(sig.load_config(), SITE):
-            return
-        shown = candidates[-_MAX_CANDIDATES:]
-        regex = {"fires": True, "event": event.get("hook_event_name") or "SessionEnd",
-                 "candidates": [{"role": c["role"], "matched": c["matched"], "uuid": c["uuid"]}
-                                for c in shown]}
-        questions = classifier.audit_candidate_questions()
-        requests = [{"fields": {"role": c["role"], "matched": "/".join(c["matched"]),
-                                "excerpt": shadow_excerpt(c["role"], c["text"])},
-                     "questions": questions} for c in shown]
-        classifier.spawn_shadow(SITE, session, regex, requests,
-                                transcript=event.get("transcript_path") or "")
-
-
 def main():
     try:
         event = json.load(sys.stdin)
@@ -316,7 +259,6 @@ def main():
                        encoding="utf-8")
     except OSError:
         pass
-    _shadow(event, candidates)
     return 0
 
 

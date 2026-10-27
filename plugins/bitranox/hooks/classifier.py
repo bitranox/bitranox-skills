@@ -56,7 +56,7 @@ import skill_frontmatter  # noqa: E402
 import transcript_turns  # noqa: E402
 
 __all__ = [
-    "AUDIT_REAL_ID", "Answer", "CAP_MARK", "CONTEXT_VIEW", "DEFAULT_BASE_URL",
+    "Answer", "CAP_MARK", "CONTEXT_VIEW", "DEFAULT_BASE_URL",
     "JIG_SAME_JOB", "JevClassifier", "NOTIFY_VIEW",
     "NO_SKILL_KEY", "NullClassifier", "PICK_ID", "PREVIOUS_FIELD", "Question", "Result",
     "SHADOW_DAY_PREFIX", "SHADOW_KEEP_DAYS", "SHADOW_LOG", "SHADOW_MAX_BYTES", "SHORT_DESC_CAP",
@@ -67,7 +67,7 @@ __all__ = [
     "recall_questions", "shadow_enabled", "shadow_log_files", "shadow_log_path", "site_mode",
     "short_description", "skill_router_choice_questions",
     "shadow_guard", "skill_router_questions", "skill_router_rerank_questions", "spawn_shadow",
-    "audit_candidate_questions", "jig_repetition_questions",
+    "jig_repetition_questions",
     "stop_signal_questions", "subagent_signal_questions", "with_previous",
 ]
 
@@ -95,12 +95,11 @@ FIELD_CAP = 4000
 ERROR_CAP = 200
 CAP_MARK = "\n[... truncated ...]\n"
 # The hook sites. Each has its own config knob `classifier_<site>`: off | shadow, plus decide
-# where the site's hook implements it (all but `jig_repetition` and `audit_candidate`;
-# meta-memory-settings validates which).
+# where the site's hook implements it (all but `jig_repetition`; meta-memory-settings validates
+# which).
 # `subagent_signal` gained decide only after its shadow passed the pre-registered decide rule:
 # SubagentStop's capture buffers on its BROAD patterns too, and the blind review found those noise.
-SITES = ("stop_signal", "skill_router", "recall_rerank", "subagent_signal", "jig_repetition",
-         "audit_candidate")
+SITES = ("stop_signal", "skill_router", "recall_rerank", "subagent_signal", "jig_repetition")
 SITE_MODES = ("off", "shadow", "decide")
 # The threshold each site's gate or score is read at - by `classifier_eval.py report` when judging
 # a log, and by a site in decide mode when acting on an answer, so the two can never disagree.
@@ -138,10 +137,8 @@ SITE_MODES = ("off", "shadow", "decide")
 # gate's bar. It has never been adjudicated on subagent text: that is what its shadow log is for.
 # `jig_repetition` is shadow only and has never been adjudicated; 0.5 is where its report splits
 # "same job" from "not", a reading point and not a decision, until its log has been judged blind.
-# `audit_candidate` is shadow only and unadjudicated in the same way: 0.5 is where its report
-# splits real from noise.
 SITE_THRESHOLDS = {"stop_signal": 0.8, "skill_router": 0.5, "recall_rerank": 0.9,
-                   "subagent_signal": 0.8, "jig_repetition": 0.5, "audit_candidate": 0.5}
+                   "subagent_signal": 0.8, "jig_repetition": 0.5}
 # Stop-gate families whose score is LOGGED but never counted as a firing. `endorsement` was the
 # only reason to fire on 12 turns across two shadow windows, every one a plain approval ("yes",
 # "go", "lets try 1-4"): approving a proposal the assistant made is not a learning signal. The
@@ -516,30 +513,6 @@ def jig_repetition_questions():
             "same job as at least two of the `ledger` scripts - the same task attempted again, a "
             "rewrite or retry of one approach to one goal - rather than separate work that "
             "happens to share a word, a file name or a tool?"))]
-
-
-AUDIT_REAL_ID = "real_signal"
-
-
-def audit_candidate_questions():
-    """Whether one self-improve audit candidate is a real learning signal, over {role, matched,
-    excerpt}.
-
-    The audit's broad patterns flag a message the Stop gate's strict ones passed over, and the next
-    session is asked to review each one; Jev is asked the same review question per candidate so
-    the share of candidates that are noise can be measured.
-    """
-    return [Question(
-        id=AUDIT_REAL_ID, type="noul",
-        instructions=(
-            "`excerpt` is part of one message from a coding-assistant session, around the words "
-            "listed in `matched`; `role` says whose it is: `user` (the person), `assistant`, or "
-            "`tool` (a command the assistant ran, or that command's output). Does it carry a "
-            "learning worth recording - the person correcting the assistant or stating a lasting "
-            "rule, the assistant admitting a mistake or stating a newly understood root cause, or "
-            "a tool failing because of a wrong command, flag, path or assumption - rather than "
-            "ordinary text that only contains those words, such as code, documentation, a quoted "
-            "log, test output or a routine status line?"))]
 
 
 def load_skill_descriptions(skills_dir=None):

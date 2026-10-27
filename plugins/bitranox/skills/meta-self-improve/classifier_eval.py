@@ -17,9 +17,6 @@ at most 200 MB). `report` reads every one of those logs, oldest first, and answe
   jig_repetition per fired jig-repetition nudge: how often Jev agrees the scripts the lexical
                  filter grouped are one job, per track (change, observe); the filter fires on
                  every row, so a disagreement is a nudge Jev would not have shown
-  audit_candidate  per self-improve audit candidate, counted once however often it was audited:
-                 how many Jev calls a real learning signal, per role (user, assistant, tool);
-                 every candidate is a pattern hit, so a disagreement is one Jev calls noise
 
 plus latency and token percentiles, the error reasons, and how many rows each plugin release
 wrote. Every disagreement can be written to a JSONL file, carrying the text it was judged on, for
@@ -97,8 +94,7 @@ NON_FIRING_FAMILIES = cl.NON_FIRING_FAMILIES
 DEFAULT_TOP = 2
 # Rows written by a hand-run probe of a hook, not by a real session.
 DEFAULT_EXCLUDE = ("probe-",)
-SITES = ("stop_signal", "skill_router", "recall_rerank", "subagent_signal", "jig_repetition",
-         "audit_candidate")
+SITES = ("stop_signal", "skill_router", "recall_rerank", "subagent_signal", "jig_repetition")
 
 
 # ---- loading -------------------------------------------------------------------------------
@@ -608,73 +604,6 @@ def summarize_jig_repetition(rows, threshold):
     return s
 
 
-# ---- audit_candidate -----------------------------------------------------------------------
-
-def _audit_entries(rows):
-    """{key: entry} for every candidate the audit rows asked about, in first-seen order.
-
-    A compaction followed by the session's end audits one transcript twice, so a candidate is
-    keyed by (session, role, the transcript record's uuid) - the same message seen again by a
-    later audit is a repeat, two messages are two candidates however alike their text. A row
-    written before the uuid was recorded falls back to (session, role, excerpt, occurrence within
-    the row), which can merge a byte-identical retry once the audit window has slid past the
-    first copy. The entry keeps the first ANSWERED score, so a repeat answered later replaces an
-    unanswered one.
-    Rows with no states (an error before any request) are counted in `failed_rows`.
-    """
-    entries, repeats, failed = {}, 0, 0
-    for row in rows:
-        states = row.get("states") or []
-        if not states:
-            failed += 1
-            continue
-        answered, occurrence = _answered(row), {}
-        shown = (row.get("regex") or {}).get("candidates") or []
-        for n, state in enumerate(states):
-            uuid = (shown[n] if n < len(shown) and isinstance(shown[n], dict) else {}).get("uuid")
-            base = (row.get("session_id"), state.get("role"), state.get("excerpt"))
-            occurrence[base] = occurrence.get(base, 0) + 1
-            key = ((row.get("session_id"), state.get("role"), "uuid", uuid) if uuid
-                   else base + (occurrence[base],))
-            score = ((answered[n] if n < len(answered) else None) or {}).get(cl.AUDIT_REAL_ID)
-            score = score if isinstance(score, (int, float)) else None
-            if key in entries:
-                repeats += 1
-                if entries[key]["score"] is None and score is not None:
-                    entries[key].update(score=score, row=row)
-                continue
-            entries[key] = {"state": state, "row": row, "score": score}
-    return entries, repeats, failed
-
-
-def summarize_audit_candidate(rows, threshold):
-    """Per audit candidate, counted once however often it was audited (see `_audit_entries`):
-    does Jev call it a real learning signal? Every candidate is a pattern hit, so a score below
-    the threshold is the disagreement - a candidate Jev calls noise."""
-    entries, repeats, failed = _audit_entries(rows)
-    s = {"candidates": len(entries), "repeats": repeats, "failed_rows": failed, "unanswered": 0,
-         "jev_real": 0, "jev_noise": 0, "by_role": {}, "disagreements": []}
-    for entry in entries.values():
-        state, score = entry["state"], entry["score"]
-        if score is None:
-            s["unanswered"] += 1
-            continue
-        real = score >= threshold
-        role = s["by_role"].setdefault(str(state.get("role") or "unknown"),
-                                       {"candidates": 0, "jev_real": 0})
-        role["candidates"] += 1
-        role["jev_real"] += real
-        if real:
-            s["jev_real"] += 1
-            continue
-        s["jev_noise"] += 1
-        s["disagreements"].append({**_base(entry["row"]), "kind": "jev_noise",
-                                   "role": state.get("role"), "matched": state.get("matched"),
-                                   "event": (entry["row"].get("regex") or {}).get("event"),
-                                   "score": score, "state": state})
-    return s
-
-
 # ---- cost, latency, errors -----------------------------------------------------------------
 
 def percentiles(values):
@@ -740,8 +669,6 @@ def summarize(rows, threshold, top):
             detail = summarize_subagent_signal(site_rows, at)
         elif site == "jig_repetition":
             detail = summarize_jig_repetition(site_rows, at)
-        elif site == "audit_candidate":
-            detail = summarize_audit_candidate(site_rows, at)
         else:
             detail = summarize_recall(site_rows, at)
         sites[key] = {**_cost(site_rows), **detail, "threshold": at}
@@ -784,13 +711,6 @@ def render_text(rep):
             for track, c in sorted(s["by_track"].items()):
                 lines.append("   %-11s nudges %d, jev same job %d"
                              % (track, c["nudges"], c["jev_same_job"]))
-        elif _base_site(site) == "audit_candidate":
-            lines.append("   candidates %d (repeats skipped %d, failed audits %d); jev real %d, "
-                         "jev noise %d" % (s["candidates"], s["repeats"], s["failed_rows"],
-                                           s["jev_real"], s["jev_noise"]))
-            for role, c in sorted(s["by_role"].items()):
-                lines.append("   %-11s candidates %d, jev real %d"
-                             % (role, c["candidates"], c["jev_real"]))
         else:
             lines.append("   prompts %d; injected %d, jev relevant %d, agreed %d"
                          % (s["prompts"], s["regex_injected"], s["jev_relevant"], s["agreed"]))

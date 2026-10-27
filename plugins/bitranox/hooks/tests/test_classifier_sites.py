@@ -793,62 +793,22 @@ def _audit_event(t, cwd, event="SessionEnd"):
     return {"transcript_path": t, "cwd": cwd, "session_id": "s-audit", "hook_event_name": event}
 
 
-def test_audit_shadow_asks_about_each_reported_candidate_and_reports_exactly_as_before(
-        env, tmp_path, monkeypatch, capsys):
+def test_the_audit_asks_jev_nothing_even_with_a_stale_shadow_knob(env, tmp_path, monkeypatch,
+                                                                    capsys):
+    """A config written while the site existed still holds `classifier_audit_candidate = shadow`;
+    the audit writes the same note as with the knob absent and sends nothing."""
     t = _audit_transcript(tmp_path)
-    candidates = SA.find_candidates(t)
-    assert [c["role"] for c in candidates] == ["user", "tool"]
+    assert [c["role"] for c in SA.find_candidates(t)] == ["user", "tool"]
     _config(env["home"])
     _run(SA, monkeypatch, capsys, _audit_event(t, "/p/off"))
-    off = sig.audit_file("/p/off").read_text(encoding="utf-8")
     _config(env["home"], classifier_backend="jev", classifier_audit_candidate="shadow")
-    _run(SA, monkeypatch, capsys, _audit_event(t, "/p/on"))
-    assert sig.audit_file("/p/on").read_text(encoding="utf-8") == off
-    line = _wait_for_log(env["home"])[-1]
-    assert line["site"] == "audit_candidate" and line["session_id"] == "s-audit"
-    assert line["regex"]["event"] == "SessionEnd"
-    assert [c["role"] for c in line["regex"]["candidates"]] == ["user", "tool"]
-    assert [c["uuid"] for c in line["regex"]["candidates"]] == ["u-said", "u-tool"]
-    assert len(line["results"]) == len(line["states"]) == 2
-    assert all(set(s) == {"role", "matched", "excerpt"} for s in line["states"])
-    assert "unrecognized arguments" in line["states"][1]["excerpt"]
-    assert "TAILMARK" in line["states"][0]["excerpt"] and "TAILMARK" not in off
-    assert all(set(r["answers"]) == {q.id for q in cl.audit_candidate_questions()}
-               for r in line["results"])
-    assert len(env["fake"].requests) == 2
-    assert GHP not in _log(env["home"]).read_text(encoding="utf-8")
-    assert GHP not in json.dumps(env["fake"].requests)
-
-
-def test_audit_shadow_asks_only_about_the_candidates_the_report_shows(env, tmp_path,
-                                                                       monkeypatch, capsys):
-    t = tmp_path / "many.jsonl"
-    t.write_text("".join(json.dumps({"type": "user", "message": {
-        "content": "the deploy path %d is wrong, it is under /srv" % n}}) + "\n"
-        for n in range(SA._MAX_CANDIDATES + 3)), encoding="utf-8")
-    _config(env["home"], classifier_backend="jev", classifier_audit_candidate="shadow")
-    _run(SA, monkeypatch, capsys, _audit_event(str(t), "/p/many"))
-    line = _wait_for_log(env["home"])[-1]
-    assert len(line["states"]) == SA._MAX_CANDIDATES
-    assert "path %d " % (SA._MAX_CANDIDATES + 2) in line["states"][-1]["excerpt"]
-
-
-def test_audit_shadow_spawns_nothing_without_candidates_or_while_off(env, tmp_path, monkeypatch,
-                                                                      capsys):
-    clean = tmp_path / "clean.jsonl"
-    clean.write_text(json.dumps({"type": "assistant", "message": {"content": "Done."}}) + "\n",
-                          encoding="utf-8")
-    _config(env["home"], classifier_backend="jev", classifier_audit_candidate="shadow")
-    _run(SA, monkeypatch, capsys, _audit_event(str(clean), "/p/clean"))
-    _config(env["home"], classifier_backend="jev")
-    _run(SA, monkeypatch, capsys, _audit_event(_audit_transcript(tmp_path), "/p/quiet"))
+    _run(SA, monkeypatch, capsys, _audit_event(t, "/p/stale"))
+    assert sig.audit_file("/p/stale").read_text(encoding="utf-8") == \
+        sig.audit_file("/p/off").read_text(encoding="utf-8")
     time.sleep(1.0)
     assert not _log(env["home"]).exists() and env["fake"].requests == []
 
 
-def test_audit_candidate_asks_one_question_over_the_fields_it_sends():
-    (question,) = cl.audit_candidate_questions()
-    assert question.type == "noul"
-    for field in ("`role`", "`matched`", "`excerpt`"):
-        assert field in question.instructions
-    assert "audit_candidate" in cl.SITES and "audit_candidate" in cl.SITE_THRESHOLDS
+def test_the_audit_candidate_site_is_gone():
+    assert "audit_candidate" not in cl.SITES and "audit_candidate" not in cl.SITE_THRESHOLDS
+    assert not hasattr(cl, "audit_candidate_questions") and not hasattr(SA, "shadow_excerpt")
