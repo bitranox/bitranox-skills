@@ -30,6 +30,17 @@ a hole nobody has drawn a line under is one that gets rediscovered and half-fill
 two "versions with no entry" notes came to sit in this file disagreeing with it.
 
 
+## [10.3.9]
+
+### Changed
+
+- `ai-llm-jev-judge`: mirrors btx-skill-jev-judge 0.3.4. `run` without a key exits 2 (only `check-key`
+  exits 1 for it); a refused `LOG_*` variable is fixed where it is set, since `config` exits 78 too;
+  the skill states that ids come back as strings, what a `score` value and its `probabilities` mean,
+  the `score` and `noul` limits, that `check-key` does not test the key, how to retry failed rows
+  without reusing `--out`, the 60,000-character cut, a pilot cost estimate, and pinning `--model`.
+  `meta-self-improve`'s `jev_shadow.py` follows the 0.3.4 floor.
+
 ## [10.3.8]
 
 ### Changed
