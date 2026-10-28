@@ -30,6 +30,15 @@ a hole nobody has drawn a line under is one that gets rediscovered and half-fill
 two "versions with no entry" notes came to sit in this file disagreeing with it.
 
 
+## [10.3.16]
+
+### Changed
+
+- `ai-llm-jev-judge`: mirrors btx-skill-jev-judge 0.3.5. `config --section judge` (or `summary`)
+  still shows the layer each value came from, and then exits 78 naming a problem in `[judge]` or
+  `[summary]`, so the skill says so; the five `uvx --from` floors and
+  `meta-self-improve/jev_shadow.py` `JEV_JUDGE_FLOOR` are `0.3.5`.
+
 ## [10.3.15]
 
 ### Changed
