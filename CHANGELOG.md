@@ -30,6 +30,14 @@ a hole nobody has drawn a line under is one that gets rediscovered and half-fill
 two "versions with no entry" notes came to sit in this file disagreeing with it.
 
 
+## [10.3.25]
+
+### Fixed
+
+- `devops-bmk` (twin of bmk 3.32.0): a project's own pytest `-m` (addopts or `PYTEST_ADDOPTS`) is
+  kept by `make test` and every `make test-all` cell, which pass
+  `-m "(<project expr>) and not (<exclude-markers>)"`; `make testintegration` still replaces it.
+
 ## [10.3.24]
 
 ### Changed

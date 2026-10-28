@@ -603,12 +603,20 @@ bmk --set email.from_address=me@example.com test   # one-off override (repeatabl
 project's `pyproject.toml` (or `bmk_makescripts/stages.toml`). Each stage is a declarative argv list.
 Run one with `bmk custom <name>` / `make custom <name>`. This is the only override mechanism.
 
-**Test markers: what `make test` runs.** `make test` runs `pytest -m "not <exclude-markers>"`,
-where `exclude-markers` comes from `[tool.scripts.test].exclude-markers` and **defaults to
-`"integration"`**. So out of the box `make test` runs your unit tests AND `local_only` tests and
-skips `integration`; `make testintegration` runs `-m integration`; a CI job typically runs
-`pytest -m "not local_only"`. The local-vs-CI difference is intentional - `make test` is not meant
-to be identical to CI.
+**Test markers: what `make test` runs.** `make test` runs `pytest -m "not <exclude-markers>"`
+(combined with the project's own `-m`, see below), where `exclude-markers` comes from
+`[tool.scripts.test].exclude-markers` and **defaults to `"integration"`**. So out of the box
+`make test` runs your unit tests AND `local_only` tests and skips `integration`;
+`make testintegration` runs `-m integration`; a CI job typically runs `pytest -m "not local_only"`.
+pytest takes ONE `-m` and the last wins (addopts, then `PYTEST_ADDOPTS`, then the command line,
+where bmk's goes); pytest ANDs nothing, so bmk combines them itself. It asks the project's pytest
+which `-m` its configuration ends up with (a `PYTEST_ADDOPTS` `-m` drops the addopts one, so the
+addopts exclusions do not apply), and `make test` and `test-all` pass
+`-m "(<project expr>) and not (<exclude-markers>)"`. So
+`addopts = "-m 'not slow'"` becomes `-m "(not slow) and not (integration)"`, and the slow tests stay
+out. `make testintegration` alone replaces it on purpose (its `-m integration` comes last and wins),
+since that lane runs exactly the integration tests. The local-vs-CI difference is intentional -
+`make test` is not meant to be identical to CI.
 
 | Marker                                                              | Meaning                                                                    | Where it runs                                                    |
 |---------------------------------------------------------------------|----------------------------------------------------------------------------|------------------------------------------------------------------|
