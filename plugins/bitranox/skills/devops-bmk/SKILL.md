@@ -656,9 +656,16 @@ kept to one process the same way, because `coverage run` measures only that proc
 `BMK_TEST_WORKERS` overrides the setting for one run, and a bad value in either is refused with one
 line and exit 2. Tests that
 share a database, a fixed port or a file must carry the same `@pytest.mark.xdist_group("<name>")`
-so they run one at a time on one worker. Before adding pytest-xdist to an existing project, find
-those tests (or set `workers = 1`) and run `-n auto` several times. A test that fails only in
-parallel is order- or resource-dependent, not flaky: group it or fix it.
+so they run one at a time on one worker. A conftest that adds that mark in
+`pytest_collection_modifyitems` must decorate the hook `@pytest.hookimpl(tryfirst=True)`: xdist
+reads the marks in its own hook of that name, so without `tryfirst` the mark arrives too late and
+the tests spread over every worker while the run stays green (measured: 8 fixture-grouped tests
+ran on gw0..gw3 without it, all on gw0 with it). A module-level `pytestmark` needs no hook. Check a
+group by its node ids in a `pytest -n 4 --dist loadgroup -v` run (each grouped id ends in
+`@<name>`, all on one worker), never by a green run. Before adding pytest-xdist to an existing
+project, find those tests (or set `workers = 1`) and run `-n auto` several times; those runs hunt
+for order dependence, they never prove a group. A test that fails only in parallel is order- or
+resource-dependent, not flaky: group it or fix it.
 
 **`make test`'s `pytest` stage also uploads coverage to Codecov**, so a failed upload is reported
 as `[pytest]` failing even when every test passed. The upload runs only when a `CODECOV_TOKEN` is

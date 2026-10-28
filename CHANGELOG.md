@@ -30,6 +30,16 @@ a hole nobody has drawn a line under is one that gets rediscovered and half-fill
 two "versions with no entry" notes came to sit in this file disagreeing with it.
 
 
+## [10.3.13]
+
+### Changed
+
+- `devops-bmk` (twin of bmk 3.30.1): a conftest `pytest_collection_modifyitems` that adds
+  `xdist_group` must be `@pytest.hookimpl(tryfirst=True)`, or the mark arrives after xdist read the
+  marks and the tests spread over every worker while the run stays green; a module-level
+  `pytestmark` needs no hook; a group is checked by the `@<name>` node-id suffix on one worker in a
+  `pytest -n 4 --dist loadgroup -v` run, never by a green run.
+
 ## [10.3.12]
 
 ### Changed
