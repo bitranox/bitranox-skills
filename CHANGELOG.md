@@ -30,6 +30,18 @@ a hole nobody has drawn a line under is one that gets rediscovered and half-fill
 two "versions with no entry" notes came to sit in this file disagreeing with it.
 
 
+## [10.3.17]
+
+### Fixed
+
+- `coding-python-gitignore` follows igittigitt 2.4.0: `check -v` prints what `git check-ignore -v`
+  prints (a negation-re-included path listed with exit 0, rule file relative to `-C`, four
+  NUL-terminated fields with `-z`);
+  the CLI's `--default-patterns` is off while the library loads git's user ignore file by default;
+  `filter` takes paths as arguments, exits 141 on a closed pipe, and in include mode uses only the
+  `-r`/`-f` rules; `match_with_rule`'s rule fields, `load_default_patterns`, `conf_igittigitt` and
+  the `dir_cache_max` constructor argument are documented; the mirror name is corrected.
+
 ## [10.3.16]
 
 ### Changed
