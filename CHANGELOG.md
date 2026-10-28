@@ -30,6 +30,15 @@ a hole nobody has drawn a line under is one that gets rediscovered and half-fill
 two "versions with no entry" notes came to sit in this file disagreeing with it.
 
 
+## [10.3.15]
+
+### Changed
+
+- `devops-bmk` (twin of bmk 3.31.0): pytest 9.2.0 with pytest-xdist 3.8.0 drops every
+  `xdist_group`, `pytestmark` included; bmk detects the pair from the installed code and runs the
+  tests in one process with a `[coverage]` line saying why. Keep the marks; a pytest-xdist release
+  with the fix, or `pytest<9.2` in the dev extra, restores the parallel run.
+
 ## [10.3.14]
 
 ### Added

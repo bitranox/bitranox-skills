@@ -665,7 +665,14 @@ group by its node ids in a `pytest -n 4 --dist loadgroup -v` run (each grouped i
 `@<name>`, all on one worker), never by a green run. Before adding pytest-xdist to an existing
 project, find those tests (or set `workers = 1`) and run `-n auto` several times; those runs hunt
 for order dependence, they never prove a group. A test that fails only in parallel is order- or
-resource-dependent, not flaky: group it or fix it.
+resource-dependent, not flaky: group it or fix it. pytest 9.2.0 with pytest-xdist 3.8.0 drops EVERY
+group, `pytestmark` included (xdist renames the node id, pytest 9.2.0 no longer reads it;
+pytest-xdist issue #1386): bmk detects that pair and runs serially, adding `-n 0` over a `-n` in the
+project's own addopts, with the line `[coverage] tests run in one process: this pytest drops
+pytest-xdist's xdist_group marks` (shown in JSON mode only when the stage fails). Keep the marks;
+forcing `-n` would race the groups. The check reads the installed code, not version numbers, so a
+pytest-xdist release newer than 3.8.0 with the fix, or `pytest<9.2` in the dev extra (relock),
+restores the parallel run.
 
 **`make test`'s `pytest` stage also uploads coverage to Codecov**, so a failed upload is reported
 as `[pytest]` failing even when every test passed. The upload runs only when a `CODECOV_TOKEN` is
