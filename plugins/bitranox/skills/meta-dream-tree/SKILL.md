@@ -358,6 +358,13 @@ the success line, abort-and-show on a miss).
    `store_manifest.py verify --out <the same backup dir>`: exit 0 is identical, exit 1 NAMES what
    was added, removed, changed or moved. Only `level` may differ (reported as `moved`), plus
    explicitly-decided merges/prunes/rewords; anything else is a loss to explain before finishing.
+   A clean verify says nothing about a fact's KIND: the manifest holds no type, and no other
+   shipped check compares a body's `metadata: type:` before and after a write (the engine prints
+   its normal success line either way). For every fact whose body or hook this dream rewrote,
+   read the kind back with `factedit.py show --slug <slug> --level <its level>` (its `type` line)
+   and compare it with the `type:` line of `<backup dir>/store/facts/<slug>.md` (or `git diff` the
+   store since the step-2 commit); a prefix-less slug matters most, since its body's
+   frontmatter is the only record of its kind.
    Then run
    `reconcile_memory_index.py --check <altitude chain, narrow->broad>` (home:
    `<plugin>/skills/meta-self-improve/reconcile_memory_index.py`) and require `TOTAL problems: 0`,

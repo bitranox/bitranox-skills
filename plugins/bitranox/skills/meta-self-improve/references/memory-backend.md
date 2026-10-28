@@ -223,7 +223,7 @@ instead (the file wins if both forms are given, matching `--body-file`); either 
 scaffolds the level, so a rejected call leaves nothing behind.
 
 `add` semantics: upserts by slug (title-derived unless `--slug` targets an existing identity),
-keeps the pin, keeps the existing body when `--body` is empty, frames a bare
+leaves an unpinned entry unpinned, keeps the existing body when `--body` is empty, frames a bare
 body, enforces tree-unique slugs, refuses a pinned target (`PinnedEntry` - `amend-pinned` is the
 deliberate way through). A slug names the body FILE, so `add`, `amend-pinned`, `rename --to-slug`
 and `relocate` refuse one that is not a plain filename (lowercase letters, digits, hyphens and

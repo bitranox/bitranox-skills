@@ -503,6 +503,18 @@ should. Then keep the case the guard was built to catch as a permanent test, re-
 exemption added later: two narrow-looking exemptions added in the same change can each pass alone
 and still add up to silencing the guard on its own motivating case.
 
+Write those negative tests FIRST, then the positive ones. An exemption is where the safe direction
+inverts: a wrong block is loud, because someone's correct input is refused and they complain, while
+a wrong exemption is silent, because the guard just says nothing and that reads as the input being
+fine. Test what the trigger is a PROXY for, not that it is present. For an exemption meant to let
+two commits in different repositories through, keyed on a `cd` between them, ask "did the working
+directory change", not "is there a `cd`" (both `cd`s in this command enter the same repository:
+`cd /repo && git commit -F m.txt ; cd /repo && git commit --amend --no-edit`), and "are these
+different repositories", not "are the path strings different" (`/repo` and `/repo/` are one).
+Then prove each exemption test reaches the code it names: mutate that code in a scratch copy and
+require the test to FAIL. A test input that an earlier guard clause already decides never reaches
+the exemption, and stays green whatever the exemption does.
+
 **A consistency test pays on the code it did not grow up with, so it enumerates every entry.** A
 test that pins declarations to implementations (a hook registry against its handlers' docstrings,
 a plugin manifest, a CLI command table) must iterate EVERY declared entry, never only the ones your

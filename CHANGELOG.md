@@ -30,6 +30,27 @@ a hole nobody has drawn a line under is one that gets rediscovered and half-fill
 two "versions with no entry" notes came to sit in this file disagreeing with it.
 
 
+## [10.3.19]
+
+### Changed
+
+- `meta-claude-hooks`: pricing a nudge now covers a NEW warn-only nudge too: a firing budget set
+  before the replay (about 1% of commands needs a stated justification, several percent is a dead
+  nudge), splitting the firings by trigger arm, quoting two rates, replaying a prompt-keyed rule
+  over the prompt corpus with `corpus_prompts.py`, and why a hook firing on its motivating
+  incident is no evidence a detectable signal exists (a decision-log guard is the common case; a
+  comment at the code site replaces it).
+- `meta-skill-writer`: a passing review-artifact gate is not evidence the procedure ran for THIS
+  change; read each arm's reasons when RED and GREEN tie on the action; a description or routing
+  rewrite cannot be A/B-tested live where the skill is installed.
+- `process-test-design`: exemption tests come first, test what the trigger is a proxy for, and
+  prove each one reaches its code by mutation.
+- `meta-self-improve`: an update through `add` re-sends `--slug`, `--title` and the hook; a
+  pinned fact is refused and goes to human review. The dedup step and `references/memory-backend.md` no
+  longer say an upsert keeps the pin.
+- `meta-dream-tree`: a clean manifest verify says nothing about a fact's kind; read it back with
+  `factedit.py show` against the backup.
+
 ## [10.3.18]
 
 ### Changed

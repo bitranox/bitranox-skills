@@ -156,7 +156,7 @@ uv run <plugin>/skills/compuse-toolbox/scripts/guard_replay.py \
   --module path/to/your-hook.py --func notice --root ~/.claude/projects
 ```
 
-Four things make the number trustworthy:
+Five things make the number trustworthy:
 
 - **Run a control arm first.** Replay the guard UNCHANGED and require it to reproduce whatever
   figures are already recorded for it. If it does not, the harness is wired wrong and no number
@@ -171,6 +171,15 @@ Four things make the number trustworthy:
   `id`; or `diffbehave` from the same skill), list what the old set fired on and the new one does
   not, and read every row: each is either data you meant to drop or a real command you went blind
   to, typically one behind a launcher or after a shell keyword (see `references/authoring.md`).
+- **Split the firings by trigger arm.** One fire rate hides which arm makes the noise, and an arm
+  that sounds as justified as the others can carry nearly all of it. Write the fired commands out
+  (`guard_replay.py --firings OUT.jsonl`), re-run the predicate over them with each arm disabled in
+  turn (patch the trigger set on the loaded module), count each arm's share, then read a random
+  sample of what survives. Called by hand, the predicate needs the same second argument (`cwd` or
+  `tool_name`) the replay passes, or path handling differs and some rows land in no arm. Record
+  the per-arm figures in the hook's docstring and its CHANGELOG entry. Measured once: one
+  launcher arm carried nearly all of a first draft's firings, routine test gates, and dropping
+  it cut the rate more than tenfold.
 - **Say what your rule cannot classify, before quoting a number.** A predicate declared
   `(command, cwd)` receives the recorded cwd, so a rule about paths can be measured rather than
   guessed; but any shape it cannot decide (an interpreter write exposes no filename) is silently
@@ -179,7 +188,42 @@ Four things make the number trustworthy:
 Unit tests prove a guard fires on the shapes you listed. Only a replay tells you whether it is
 QUIET on everything else - and a block that is not quiet gets routed around, which leaves you worse
 off than the nudge you started with. Record the measurement next to the guard so the next author
-inherits the answer instead of re-running the argument.
+inherits the answer instead of re-running the argument. Quote two rates, firings over all calls
+and firings over the calls carrying the trigger's precondition, and re-run both after any widening.
+
+Replay real history before a NEW warn-only nudge ships too, not only before an escalation, and
+set its budget before you look. A nudge firing on much more than about 1% of commands needs a
+stated justification; at several percent it is a dead nudge and drags its working trigger down
+with it, because a channel that speaks on ordinary work teaches the reader to skip it. The failure
+is invisible from inside the design: every firing matches the pattern you wrote, so each one looks
+correct on its own and only the rate shows it.
+
+A rule keyed on what the person TYPED (a router trigger, a prompt-matching nudge) gets the same
+firing-set replay over the prompt corpus with `corpus_prompts.py` (home:
+`skills/compuse-toolbox/scripts/`), with no precision figure: a prompt has no gate and no exit code.
+By default it dedupes by record `uuid` (a resumed or forked session copies the earlier transcript)
+and skips tool results, `isMeta` records and subagent briefs, but returns the prompts RAW: also drop
+any prompt repeating verbatim more than a handful of times (a person rarely does, a scheduled job
+always does) and apply the person tests in `references/io-contract.md`, or you tune against text the
+hook never sees. Pick a rule's distinctive tokens by SHAPE (carries a digit or punctuation), not by
+LENGTH: measured, a 9-character floor admitted `description`, `condition` and `interface` as
+distinctive, while each of the shape rule's 126 tokens reached fewer than 20 prompts.
+
+**A hook that fires on the incident that motivated it is not evidence a detectable signal exists.**
+The incident can sit inside a large benign class with the same structure, its hazard carried by a
+label or an intent rather than by anything in the command, and then no structural rule separates it
+from thousands of harmless calls. When the replay shows that, say so in the hook's docstring and pin
+it with a test, rather than shipping the noisy version.
+
+A project's decision log is the common case. A commit-time guard that matches changed files or
+identifiers against the log, to stop agents re-attempting a rejected approach, fires on most
+commits however it is tightened, because a decision log and its code share their vocabulary: a
+filename near a decision word carries almost no information. Measured over 480 real commits, four
+successive tightenings fired on 83%, 62%, 34% and 23% of them, flattening rather than converging,
+and the motivating incident fired in every variant, in most of them matching the right entry for
+the wrong reason. When the decision has an identifiable site in code, put a comment at that site
+saying what is deliberately absent and why: it reaches the one reader who can act on it, at the
+moment they would re-make the decision.
 
 **The worked example is this plugin's own `hooks/gated-prep-nudge.py`.** Its docstring carries the
 figures for both escalations proposed against it - a blanket deny and a target-aware one - and this

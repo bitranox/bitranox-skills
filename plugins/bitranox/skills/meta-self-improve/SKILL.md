@@ -172,7 +172,8 @@ beside a queued skill fix is otherwise a duplicate that outlives the fix.
 Grep the pointer blocks (`CLAUDE.local.md`), the anchor's `facts/` bodies, the native memory dir,
 and the CLAUDE.md chain for each candidate's keywords. If a related entry exists, UPDATE it: rerun
 the engine `add` against the level that OWNS its pointer, passing `--slug <the stored slug>` - it
-then upserts (keeps the pin). New entry only when nothing covers it.
+then upserts an unpinned fact (a pinned one is refused, see below). New entry only when nothing
+covers it.
 
 **Both halves of that sentence are load-bearing, and each fails silently in its own direction.**
 
@@ -189,6 +190,18 @@ then upserts (keeps the pin). New entry only when nothing covers it.
   NOT the stored one whenever the fact has been retitled since capture. There is no collision to
   refuse - the derived slug is free - so `add` mints a SECOND fact, pointer and body, and says
   nothing. Read the slug off the pointer line and pass it.
+
+**An update re-sends what `add` requires, and stores every value it is given.** `--title` and
+`--hook` (or `--hook-file`) are required on every `add`, an update included - with no hook it
+refuses with `pass --hook or --hook-file`. A new title retitles the pointer, and a different hook
+rewrites the pointer line AND the body's `description:` line. To change only the body, pass
+`--slug` with the stored title and hook unchanged (copy them off the pointer line) and
+`--body-file`, and omit `--type`: an update without it keeps the kind the stored body records.
+For an unpinned fact, `factedit.py apply --slug <slug> --level <its level> --body-file <f>`
+(home: `<plugin>/skills/meta-dream-tree/`, launch via `hooks/run-python.sh`) re-sends the stored
+title and hook for you. A pinned fact refuses an ordinary `add`: report it for human review instead.
+`amend-pinned` is a human's deliberate step, and `factedit.py apply` switches to it on its own
+for a pinned fact, so never run either on one during capture.
 
 **An empty search of the ancestor chain is not proof a fact is missing.** The loaded index and a
 grep of the `CLAUDE.local.md` files on the ancestor chain answer "does this load HERE", not "does

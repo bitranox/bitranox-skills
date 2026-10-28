@@ -1088,6 +1088,14 @@ is applied in the agent that ran this procedure. A marketplace repo may addition
 committed review artifact (a `.skillwriter/checklist-<date>.md` next to the SKILL.md, all boxes
 checked) co-changed with any SKILL.md change - its commit gate enforces that; see the repo's CONTRIBUTING.
 
+**A passing gate is not evidence the procedure ran for THIS change.** Such a gate proves only that
+some checklist file was co-changed and holds no open box (or that the change was a pure table
+re-pad, which needs none), never what it covers: a checklist written
+for an earlier, still-unpushed edit of the same skill satisfies it, and a commit made where the gate
+does not run can ship with no artifact at all. When you audit a recent skill edit, yours or another
+session's, open the co-changed checklist and confirm it has a section documenting that change. If
+none does, RED/GREEN-test the shipped change now and append its section in the next commit.
+
 **Last step - close the receipt when the procedure is finished** (the change and its review
 artifact committed; for a coordinator, also every subagent it dispatched to edit a SKILL.md has
 reported or been stopped): run
@@ -1230,6 +1238,26 @@ instead of reusing one prompt, and record a void arm as void in the review artif
 contaminated arm manufactures a pass, an inverted one a failure, and both look like data. A GREEN
 arm with the edited text pasted in can load the installed OLD version the same way, so tell it the
 pasted text is the skill under test and check every quote it returns against the pasted text.
+
+**When the arms tie on the ACTION, read their REASONS.** A RED and a GREEN that choose the same
+action read as "no gap", the cheapest conclusion there is, and nothing in either transcript flags
+it. Check each arm's stated justification against the system as it was for THAT arm: the pre-edit
+text, and the pre-change code when the change touched code too. A RED that reaches the right action
+through a belief the old text or code does not support got lucky, and the next question in the
+same area inverts it. That false belief is the finding: it names exactly what the old text failed
+to tell the reader, and it can show that a code change, not the doc edit, is what made the reader's
+natural assumption true. Record the tie and both reasons as they are; do not escalate the scenario
+until an arm fails.
+
+**A description or routing rewrite cannot be A/B-tested live where the skill is installed.** A
+probe asked "given only this description, should the skill load?" answers from the installed
+description and the machine's own context beside your candidate, and silently prefers them;
+telling it to judge from the prompt alone does not bind, and an inert agent type bounds tools, not
+context. Take the evidence from a text check of the candidate instead (it fits the cap, keeps every
+distinctive keyword, covers every listed tool) and record routing as unverified in the review
+artifact. A live routing answer can come only from a machine that does not have the skill
+installed. The discoverability check under Deployment is a different question: it tests the text
+that shipped, not a candidate against it.
 
 ### GREEN: Write Minimal Skill
 

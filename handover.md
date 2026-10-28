@@ -1,59 +1,67 @@
-# Checkpoint 2026-10-27 16:00: audit_candidate dropped (10.3.11), [870] harness tag (10.3.12)
+# Checkpoint 2026-10-28 22:40: [23] batch 7 pass 1 folded, under independent review, NOT committed
 
 ## In flight
 
-Nothing part-done in code. [28]'s second wave now has one shadow site left, `jig_repetition`.
+- [23] batch 7 pass 1 (user chose "Pass 1 now, all 35 (Recommended)"), worktree
+  `.claude/worktrees/fold-23-b7p1` (branch fold-23-b7p1, from origin/master 10.3.16):
+  - 7 FOLD+archive rows edited into meta-claude-hooks, meta-skill-writer, process-test-design,
+    meta-self-improve, meta-dream-tree (uncommitted; `.plan/fold-23/batch7/fold/pass1.diff`).
+    RED 2 PARTIAL + 5 adjacent quotes, GREEN 7/7 on haiku and opus, all quotes substring-checked
+    (`.plan/fold-23/batch7/fold/qcheck.py`, `results.json`).
+  - 27 ALREADY+archive rows quote-checked present. The 28th
+    (feedback-document-that-an-unlabelled-item-is-still-sent-to-a-paid-service) moved to pass 2:
+    its skeptic quote came from an old .skillwriter checklist; owner ai-llm-jev-judge is mirrored.
+  - A background opus reviewer is reading pass1.diff against the code and the bodies; fix or
+    decline each finding, then `python3 .plan/fold-23/batch7/fold/make_checklists.py` (main
+    checkout path), bump 10.3.16 -> 10.3.17 (plugin.json + pyproject, assert the old value first:
+    origin moves under us), CHANGELOG `## [10.3.17]`, commit, push `fold-23-b7p1:master`, ci_wait.
+  - Then archive the 34 pointers (7 FOLD + 27 ALREADY; list = dispositions.json disp
+    FOLD+archive / ALREADY+archive) the way batch 6 did (find its archive step in
+    `.plan/fold-23/batch6/` or the [23] line); store_manifest verify; commit + push the store.
+- The skill-writer receipt is armed for this session; close it with `skill_receipt.py end
+  meta-skill-writer` after the commit.
+- OPEN-WORK.md here carries the [28] backlog_ask question (staged by apply --3way) and the [23]
+  batch 7 progress; both ride with the pass 1 commit. Worktree bmk3301 still holds the same [28]
+  edit uncommitted plus a stale handover: discard both and remove that worktree after this push.
 
 ## Committed, or not
 
-- 10.3.11 carries: the `audit_candidate` site removed (classifier, self-improve-audit, defaults,
-  settings and its skill row, classifier_eval, docs), the [28] line's 2026-10-27 state.
-- 10.3.12 carries [870]: the audit note tags a user-role message `looks_typed` rejects as
-  `[harness]` (user chose "Relabel as machine (Recommended)" 2026-10-27), the meta-self-improve
-  audit section says so, [870] deleted, [860] holds the shapes the registry still misses.
-- `classifier_audit_candidate` was switched to `off` on this machine before the removal.
-- Measurement scripts and data, gitignored: `.plan/jev-28/review-2026-10-27/`
-  (PREREG-audit_candidate-v2.md, replay_audit.py, replay_audit.json, make_blind_audit.py - unused,
-  clause 4 never ran).
+- Pushed today: 10.3.13 and 10.3.15 devops-bmk twins for bmk (CI green on eaaad3a0).
+- Memory store b6186f4 (local commit, not pushed): the pytest 9.2.0 xdist fact, sideways ref
+  turned into prose at bmk's request.
 
 ## Decided, and why
 
-- User replied "audit_candidate" to "one rewrite plus replay (my recommendation), or drop it";
-  read as the recommended branch (EXECUTION-USER-REVIEW.md). v2 left 47.5% in band against a
-  25% limit, so the pre-registered branch dropped the site.
+- Batch 7 adjudication: keep_pointer decides cut vs archive; these bodies carry no host data
+  (EXECUTION-USER-REVIEW.md 2026-10-28).
 
 ## Decided against, and why
 
-- No second rewrite: [96] allows one.
-- The audit's candidate dicts no longer carry `text` and `uuid`: only the shadow read them.
+- No mirror edit in pass 1: the one row whose owner is mirrored moved to pass 2.
 
 ## Still open, untouched
 
-- One question the user raised on 2026-10-27, answered with measurements, not decided: whether to
-  re-test backlog_ask as "regex first, then Jev at >= 0.8" (8 right, 1 wrong on the judged set,
-  but that threshold was fitted on it). I recommended leaving it regex-only.
-- OPEN-WORK.md holds the backlog; [23] stays the top USER item.
+- Batch 7 pass 2: 11 ALREADY+cut, 9 FOLD+cut, plus the moved jev row (both twins).
+- backlog_ask regex-first plus Jev: the user has not decided ([28] line).
+- OPEN-WORK.md holds the rest; [23] stays the top USER item.
 
 ## Exact next action
 
-[860]: extend `transcript_turns` NOT_TYPED registry with the measured shapes in its line, after a
-replay of the Stop gate and the router over real history (guard_replay) shows what changes.
+Read the reviewer's findings for pass1.diff, fix or decline each in the worktree, then run
+make_checklists.py and the bump/commit/push sequence above.
 
 ## Lessons for the next nap
 
-- When a backlog line sizes a defect from a sampled log, re-measure on the source before fixing:
-  [870] said at least 34 of 159, the transcripts said 630 of 679 shown user-role candidates.
-- When an [96] site fails clause 1, check whether one role or one shape carries the band before
-  proposing a fix upstream of it: tool-role alone was 40.2% in band, so fixing [870] could never
-  have rescued audit_candidate.
-- When a removed shadow site was the only reader of a field a hook builds, remove the field too:
-  the audit kept carrying full message text and transcript ids for nobody.
+- When a skeptic says ALREADY-IN-SKILL, quote-check it against shipped files only: one quote came
+  from a `.skillwriter/` checklist, which ships no rule.
+- When `git apply --3way` applies a patch, expect it to STAGE the result: `git diff` then hides it,
+  and only `git diff HEAD` shows the full change.
 
 ## How to verify
 
-- `env -u VIRTUAL_ENV uv run --no-project --with pytest --with PyYAML --with lxml --with defusedxml --with ruamel.yaml --with httpx2 python -m pytest plugins/bitranox/ -q`
-- `git grep -n audit_candidate -- plugins docs ':!*/.skillwriter/*'` shows only the tests pinning the removal
-- `python3 ~/.claude/plugins/cache/bitranox-skills/bitranox/<installed>/skills/compuse-toolbox/scripts/ci_wait.py --ref HEAD`
+- `git -C .claude/worktrees/fold-23-b7p1 diff HEAD --stat`
+- `python3 .plan/fold-23/batch7/fold/qcheck.py` (0 missing segments on GREEN)
+- `python3 plugins/bitranox/hooks/repo-gate.py --ci` in the worktree before pushing
 
 > Read this, then replace the first line with `# STALE - read <date>, work continued`. Do not
 > delete it - if this session ends badly it is the only record of where things stood.
