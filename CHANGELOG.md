@@ -30,6 +30,14 @@ a hole nobody has drawn a line under is one that gets rediscovered and half-fill
 two "versions with no entry" notes came to sit in this file disagreeing with it.
 
 
+## [10.3.21]
+
+### Fixed
+
+- `coding-python-logging` (twin of lib_log_rich 8.1.1): journald maps each `extra` key to a field name it
+  accepts (`A-Z`, `0-9`, `_`, at most 64, no leading digit or `_`; `order-id` -> `ORDER_ID`, `_x` ->
+  `EXTRA__X`), and a clash adds `EXTRA_` while the name is taken, so no value is overwritten.
+
 ## [10.3.20]
 
 ### Fixed
