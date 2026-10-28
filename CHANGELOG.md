@@ -30,6 +30,15 @@ a hole nobody has drawn a line under is one that gets rediscovered and half-fill
 two "versions with no entry" notes came to sit in this file disagreeing with it.
 
 
+## [10.3.20]
+
+### Fixed
+
+- `coding-python-network-probe` mirrors the ipscout 2.5.4 skill: the macOS capture is measured
+  against a separate QEMU guest booting behind macOS's own `vmnet-shared` bridge, watched on the
+  guest's member port on Intel and Apple Silicon runner VMs; only a physical network card is
+  still unmeasured.
+
 ## [10.3.19]
 
 ### Changed

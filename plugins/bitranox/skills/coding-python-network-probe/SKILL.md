@@ -410,11 +410,14 @@ watched the VM's own macOS DHCP client, running on a `feth` interface, get and b
 an address through a bridge, capturing on that interface's `feth` peer, which is the
 bridge member; a capture on the bridge itself saw none of the replies the bridge
 forwarded to that member (`tcpdump` agreed). A separate guest VM booting behind a
-macOS bridge is not yet measured. Linux is the one with the longest record; on macOS,
-confirm the first capture you depend on returns the address you expect before
-relying on it. On macOS also do not name `lo0` - loopback is not Ethernet-framed,
-so its link type is refused with `IPScoutUnsupportedError` rather than silently
-returning nothing.
+macOS bridge is measured too (ipscout 2.5.4, checked 2026-10-28): a QEMU guest on
+`vmnet-shared`, whose `vmenetN` port macOS adds to `bridge100`, was watched on that
+member port getting the address macOS's own DHCP server leased it, on both Intel and
+Apple Silicon runner VMs. A physical network card is not yet measured. Linux is the one
+with the longest record; on macOS, confirm the first capture you depend on returns the
+address you expect before relying on it. On macOS also do not name `lo0` - loopback
+is not Ethernet-framed, so its link type is refused with `IPScoutUnsupportedError`
+rather than silently returning nothing.
 
 ## What needs privilege, and what it does about it
 
