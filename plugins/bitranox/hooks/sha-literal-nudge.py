@@ -67,8 +67,12 @@ exit 0 on nothing, anything after `--` is a pathspec, and `git branch <sha>`, `g
 `git checkout -b <sha>` create a ref of that NAME. Those fire, as do the other silent consumers -
 `gh`, `ci_wait`, `grep`, a `test` comparison, a poll loop - that this exists for.
 
-NON-BLOCKING: emits additionalContext and exits 0, because a sha legitimately arriving from outside
-(a CI URL, a pasted commit) must stay usable. Fail-open on any error. ASCII only.
+REFUSES when the transcript was read: a `permissionDecision: deny` whose reason says how to use the
+sha anyway (assert it in the same command). The nudge alone failed twelve times - it fired, the call
+still ran, and `gh` answered `[]` with exit 0. A sha legitimately arriving from outside (a CI URL, a
+pasted commit) is in the transcript and so is never refused. When no transcript could be read,
+"not shown" cannot be claimed and it only nudges (additionalContext). Exits 0 either way; fail-open
+on any error. ASCII only.
 """
 
 import json
@@ -184,8 +188,13 @@ _NOTICE = (
     "it exists. A 40-character sha completed from a short one (or recalled) is invented: it "
     "passes every shape check, `gh run list --commit` answers [] with exit 0, and a wait armed on "
     "it polls to its deadline. Derive it in the same command (`--sha $(git rev-parse --verify -q "
-    "HEAD)`), or prove it resolves first (`git cat-file -e <sha>^{{commit}}`). If you copied it "
-    "from output you actually saw, ignore this."
+    "HEAD)`), or prove it resolves first (`git cat-file -e <sha>^{{commit}}`)."
+)
+_NUDGE_TAIL = " If you copied it from output you actually saw, ignore this."
+_DENY_TAIL = (
+    " REFUSED: this session's transcript was read and never showed that full sha. If it came from "
+    "somewhere the transcript cannot show, assert it in the same command: "
+    "`git cat-file -e <sha>^{commit} && <your command>`."
 )
 _NOT_SHOWN = "does not appear in anything this session was shown (only a prefix, at most)"
 _UNKNOWN = "could not be checked against the session transcript"
@@ -614,6 +623,17 @@ def shown_shas(paths, shas, relayed=()):
     return seen if readable else None
 
 
+def _readable(paths):
+    """True when at least one of `paths` can be opened for reading."""
+    for path in paths:
+        try:
+            with open(path, encoding="utf-8", errors="ignore"):
+                return True
+        except OSError:
+            continue
+    return False
+
+
 def notice(command, tool_name=None, shown=None):
     """The nudge text for unverified full-sha literals, else None.
 
@@ -670,11 +690,16 @@ def main() -> int:
     paths, relayed = _transcripts(event)
     shown = shown_shas(paths, candidates, relayed)
     message = notice(command, tool_name, shown)
-    if message:
-        sys.stdout.write(json.dumps({"hookSpecificOutput": {
-            "hookEventName": "PreToolUse",
-            "additionalContext": message,
-        }}) + "\n")
+    if not message:
+        return 0
+    # Refuse only when the transcript that can vouch for the sha was read. Inside a subagent that
+    # is the parent's: the subagent's own file (`relayed`) carries the brief the parent wrote, so
+    # with the parent unreadable a sha shown to the parent cannot be told from an invented one.
+    if shown is None or not _readable(paths):
+        output = {"additionalContext": message + _NUDGE_TAIL}
+    else:
+        output = {"permissionDecision": "deny", "permissionDecisionReason": message + _DENY_TAIL}
+    sys.stdout.write(json.dumps({"hookSpecificOutput": {"hookEventName": "PreToolUse", **output}}) + "\n")
     return 0
 
 

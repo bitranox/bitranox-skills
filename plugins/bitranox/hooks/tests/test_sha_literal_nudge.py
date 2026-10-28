@@ -109,8 +109,8 @@ def test_the_measured_padding_case_is_nudged():
     assert N.notice(f"uv run ci_wait.py --sha {PADDED}") is not None
 
 
-def test_the_notice_never_asks_to_block():
-    """Non-blocking by design: a sha pasted from a CI URL or by the user must stay usable."""
+def test_the_notice_text_carries_no_decision():
+    """notice() is only the text; main() decides between a nudge and a refusal."""
     message = N.notice(f"gh run list --commit {S}")
     assert "permissionDecision" not in message
 
@@ -483,15 +483,19 @@ def _run_main(monkeypatch, capsys, event):
     return capsys.readouterr().out
 
 
-def test_main_emits_additional_context_and_no_decision(monkeypatch, capsys, tmp_path):
+def test_main_denies_a_sha_the_read_transcript_never_showed(monkeypatch, capsys, tmp_path):
+    """The nudge alone failed 12 times (the call still ran and read `[]` as no run), so a sha the
+    session was never shown is refused; the reason says how to make it usable."""
     path = _transcript(tmp_path, "s.jsonl", [_tool_result("[master fb3330b] x")])
     out = _run_main(monkeypatch, capsys, {
         "tool_name": "Bash", "transcript_path": str(path),
         "tool_input": {"command": f"uv run ci_wait.py --sha {PADDED}"}})
     payload = json.loads(out)["hookSpecificOutput"]
     assert payload["hookEventName"] == "PreToolUse"
-    assert PADDED[:12] in payload["additionalContext"]
-    assert "permissionDecision" not in payload
+    assert payload["permissionDecision"] == "deny"
+    assert PADDED[:12] in payload["permissionDecisionReason"]
+    assert "git cat-file -e" in payload["permissionDecisionReason"]
+    assert "additionalContext" not in payload
 
 
 def test_main_is_silent_when_the_transcript_showed_the_sha(monkeypatch, capsys, tmp_path):
@@ -527,12 +531,14 @@ def _run_in_subagent(monkeypatch, capsys, transcript_path):
         "tool_input": {"command": f"gh run list --commit {S}"}})
 
 
-def test_a_sha_only_the_brief_carries_is_nudged(monkeypatch, capsys, tmp_path):
+def test_a_sha_only_the_brief_carries_is_refused(monkeypatch, capsys, tmp_path):
     """The parent ASSISTANT wrote the brief, so a sha it invented reaches the subagent there."""
     main_path, _agent = _subagent(tmp_path, [_tool_result("unrelated")],
                                   [_brief(f"watch CI for {S}")])
     out = _run_in_subagent(monkeypatch, capsys, main_path)
-    assert "not appear" in json.loads(out)["hookSpecificOutput"]["additionalContext"]
+    payload = json.loads(out)["hookSpecificOutput"]
+    assert payload["permissionDecision"] == "deny"
+    assert "not appear" in payload["permissionDecisionReason"]
 
 
 def test_a_brief_sha_the_parent_was_shown_is_not_nudged(monkeypatch, capsys, tmp_path):
@@ -551,7 +557,10 @@ def test_a_brief_sha_is_nudged_when_the_parent_cannot_be_read(monkeypatch, capsy
     """Fail open: an unreadable parent cannot vouch for the brief."""
     main_path, _agent = _subagent(tmp_path, [], [_brief(f"watch CI for {S}")],
                                   write_parent=False)
-    assert _run_in_subagent(monkeypatch, capsys, main_path) != ""
+    out = _run_in_subagent(monkeypatch, capsys, main_path)
+    payload = json.loads(out)["hookSpecificOutput"]
+    assert "additionalContext" in payload
+    assert "permissionDecision" not in payload  # the subagent's own file alone proves nothing
 
 
 @pytest.mark.parametrize("shown_in_parent", [True, False])
@@ -580,25 +589,32 @@ def test_a_transcript_path_naming_a_workflow_agent_file_finds_the_parent(
     assert (out == "") is shown_in_parent
 
 
-def test_main_nudges_under_the_powershell_tool(monkeypatch, capsys, tmp_path):
+def test_main_denies_under_the_powershell_tool(monkeypatch, capsys, tmp_path):
     path = _transcript(tmp_path, "s.jsonl", [_tool_result("[master fb3330b] x")])
     out = _run_main(monkeypatch, capsys, {
         "tool_name": "PowerShell", "transcript_path": str(path),
         "tool_input": {"command": f'$x = "a`tb"; gh run list --commit {PADDED}'}})
-    assert PADDED[:12] in json.loads(out)["hookSpecificOutput"]["additionalContext"]
+    payload = json.loads(out)["hookSpecificOutput"]
+    assert payload["permissionDecision"] == "deny"
+    assert PADDED[:12] in payload["permissionDecisionReason"]
 
 
-def test_main_without_a_transcript_still_nudges(monkeypatch, capsys):
+def test_main_without_a_transcript_only_nudges(monkeypatch, capsys):
+    """"Not shown" is a claim about a transcript that was read; with none, nothing is refused."""
     out = _run_main(monkeypatch, capsys, {
         "tool_name": "Bash", "tool_input": {"command": f"gh run list --commit {S}"}})
-    assert "could not be checked" in json.loads(out)["hookSpecificOutput"]["additionalContext"]
+    payload = json.loads(out)["hookSpecificOutput"]
+    assert "could not be checked" in payload["additionalContext"]
+    assert "permissionDecision" not in payload
 
 
-def test_main_with_an_unreadable_transcript_says_unknown(monkeypatch, capsys, tmp_path):
+def test_main_with_an_unreadable_transcript_only_nudges(monkeypatch, capsys, tmp_path):
     out = _run_main(monkeypatch, capsys, {
         "tool_name": "Bash", "transcript_path": str(tmp_path / "gone.jsonl"),
         "tool_input": {"command": f"gh run list --commit {S}"}})
-    assert "could not be checked" in json.loads(out)["hookSpecificOutput"]["additionalContext"]
+    payload = json.loads(out)["hookSpecificOutput"]
+    assert "could not be checked" in payload["additionalContext"]
+    assert "permissionDecision" not in payload
 
 
 def test_main_ignores_other_tools_and_bad_stdin(monkeypatch, capsys):

@@ -30,6 +30,22 @@ a hole nobody has drawn a line under is one that gets rediscovered and half-fill
 two "versions with no entry" notes came to sit in this file disagreeing with it.
 
 
+## [10.3.24]
+
+### Changed
+
+- `commit-tell-sweep` refuses an AI attribution line: a `Co-Authored-By:` trailer naming Claude or Anthropic, or a
+  `Generated with Claude Code` footer, in a `git commit`/`merge`/`tag` message (`-m`, `-F` file, stdin heredoc) and
+  in a `gh pr` body (`--body`/`-b`, `--body-file`/`-F`, a stdin heredoc). The no-attribution rule kept losing to the
+  harness's per-session attribution reminder (16 of 30 commits in one repo carried the trailer). A kernel
+  `Assisted-by: Claude:<model>` trailer, a human co-author and a plain mention of Claude pass; a PR body gets only
+  this check, not the tell check.
+- `sha-literal-nudge` now refuses (`permissionDecision: deny`) a full sha literal the session transcript was read
+  and never showed, for every use it flagged before; the reason says to assert it in the same command
+  (`git cat-file -e <sha>^{commit} && ...`). The nudge alone had been ignored twelve times. When no transcript can
+  be read (inside a subagent: the parent's), it still only nudges. The tests that asserted the old non-blocking
+  design are replaced.
+
 ## [10.3.23]
 
 ### Changed

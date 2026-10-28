@@ -336,3 +336,88 @@ def test_a_stdin_message_is_quoted_back_like_an_inline_one(monkeypatch, capsys):
     cmd = "git commit -F - <<'EOF'\nSubject %s here\nEOF" % EM_DASH
     assert _run(monkeypatch, cmd) == 2
     assert "Subject" in capsys.readouterr().err
+
+
+# --- AI attribution lines (iron rule: no Claude/AI attribution in a commit or a PR) ----------------
+
+TRAILER = "Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
+FOOTER = "Generated with [Claude Code](https://claude.com/claude-code)"
+
+
+@pytest.mark.parametrize("line", [
+    TRAILER,
+    "co-authored-by: claude <noreply@anthropic.com>",
+    "Co-authored-by: Someone <bot@anthropic.com>",
+    FOOTER,
+    "Generated with Claude Code",
+])
+def test_an_attribution_line_in_a_commit_message_blocks(monkeypatch, tmp_path, line):
+    msg = tmp_path / "msg.txt"
+    msg.write_text("Fix the bug\n\nBody text.\n\n%s\n" % line, encoding="utf-8")
+    assert _run(monkeypatch, "git commit -F %s" % msg) == 2
+
+
+def test_an_attribution_trailer_in_an_inline_message_blocks(monkeypatch):
+    assert _run(monkeypatch, 'git commit -m "Fix the bug" -m "%s"' % TRAILER) == 2
+
+
+def test_an_attribution_trailer_in_a_stdin_heredoc_blocks(monkeypatch):
+    command = "git commit -F - <<'EOF'\nFix the bug\n\n%s\nEOF" % TRAILER
+    assert _run(monkeypatch, command) == 2
+
+
+def test_the_attribution_refusal_names_the_rule_and_not_the_file_lines(monkeypatch, tmp_path, capsys):
+    msg = tmp_path / "msg.txt"
+    msg.write_text("Fix\n\n%s\n" % TRAILER, encoding="utf-8")
+    assert _run(monkeypatch, "git commit -F %s" % msg) == 2
+    err = capsys.readouterr().err
+    assert "attribution" in err.lower()
+    assert "noreply@anthropic.com" not in err
+
+
+@pytest.mark.parametrize("message", [
+    "Fix the Claude Code hook that misread a heredoc",
+    "commit-tell-sweep refuses the `Generated with Claude Code` footer and the trailer",
+    "  `Generated with Claude Code` footer, wrapped onto its own line in prose",
+    "Assisted-by: Claude:claude-opus-5-5",
+    "Co-Authored-By: Jane Doe <jane@example.com>",
+])
+def test_a_message_that_only_mentions_claude_or_a_human_co_author_passes(monkeypatch, message):
+    assert _run(monkeypatch, 'git commit -m "Subject" -m "%s"' % message) == 0
+
+
+def test_an_attribution_footer_in_a_gh_pr_body_blocks(monkeypatch):
+    assert _run(monkeypatch, 'gh pr create --title "Fix" --body "Body.\n\n%s"' % FOOTER) == 2
+
+
+def test_an_attribution_footer_in_a_gh_pr_short_body_flag_blocks(monkeypatch):
+    assert _run(monkeypatch, 'gh pr create -t "Fix" -b "%s"' % FOOTER) == 2
+
+
+def test_an_attribution_footer_in_a_gh_pr_body_file_blocks(monkeypatch, tmp_path):
+    body = tmp_path / "body.md"
+    body.write_text("Body.\n\n%s\n" % FOOTER, encoding="utf-8")
+    assert _run(monkeypatch, "gh pr create --title Fix --body-file %s" % body) == 2
+
+
+def test_an_attribution_trailer_in_a_gh_pr_comment_blocks(monkeypatch):
+    assert _run(monkeypatch, 'gh pr comment 12 --body "%s"' % TRAILER) == 2
+
+
+def test_a_gh_pr_body_is_not_held_to_the_commit_tell_check(monkeypatch):
+    assert _run(monkeypatch, 'gh pr create --title Fix --body "range 1%s2"' % EM_DASH) == 0
+
+
+def test_an_attribution_footer_in_a_gh_pr_stdin_body_blocks(monkeypatch):
+    command = "gh pr create --title Fix --body-file - <<'EOF'\nBody.\n\n%s\nEOF" % FOOTER
+    assert _run(monkeypatch, command) == 2
+
+
+@pytest.mark.parametrize("footer", [
+    "\U0001F916 Generated with [Claude Code](https://claude.com/claude-code)",
+    "Generated with Claude Code.",
+])
+def test_a_footer_line_with_an_emoji_or_trailing_punctuation_blocks(monkeypatch, tmp_path, footer):
+    msg = tmp_path / "msg.txt"
+    msg.write_text("Fix\n\n%s\n" % footer, encoding="utf-8")
+    assert _run(monkeypatch, "git commit -F %s" % msg) == 2

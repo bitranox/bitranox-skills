@@ -14,12 +14,20 @@ It cannot see an editor-composed message (a bare `git commit` opens $EDITOR afte
 returns) - that path relies on the humanizer skill; the inline `-m`/`-F` form is the common
 Claude Code case and the one this closes.
 
+It also BLOCKS an AI attribution line - a `Co-Authored-By:` trailer naming Claude or Anthropic, or
+a `Generated with Claude Code` footer - in the same git messages and in the body of a `gh pr`
+command (`--body`/`-b`, `--body-file`/`-F`, including a stdin heredoc). Commits and PRs carry human
+authorship only; the harness asks for that trailer in every session, and a written rule kept losing
+to it (16 of 30 commits in one repo carried it). A Linux-kernel `Assisted-by: Claude:<model>`
+trailer is a different line and passes. A PR body gets only this check, not the tell check.
+
 Pure standard library. Reads the PreToolUse event JSON on stdin. Exit 2 blocks the call and
 shows stderr to the model; every other path (including any error) exits 0, so a broken guard
 never wedges a turn.
 """
 import collections
 import json
+import re
 import sys
 
 import shell_text
@@ -43,6 +51,16 @@ _VALUE_SHORT = "cCFmStu"
 # carry the text without them and silently pick the unsafe form. `path` is None for an inline -m
 # value; echoing a -F path is safe, the caller typed it in the command.
 Message = collections.namedtuple("Message", "text from_file bad_byte path")
+
+# A co-author trailer naming Claude or an anthropic.com address, or the Claude Code footer. A plain
+# mention ("fix the Claude Code hook", "drop the `Generated with Claude Code` footer") and a human
+# co-author are not attribution, so both are matched as WHOLE lines: the trailer only with
+# Claude/Anthropic in it, the footer only with nothing but punctuation or an emoji around it.
+_ATTRIBUTION = re.compile(
+    r"^[ \t]*co-authored-by:[^\n]*\b(?:claude|anthropic)\b"
+    r"|^[^\w\n]*generated with \[?claude code\]?(?:\(https?://[^)\s]*\))?[^\w\n]*$",
+    re.IGNORECASE | re.MULTILINE,
+)
 
 
 def _cluster(tok, toks, i):
@@ -170,12 +188,13 @@ def _logical_line(lines, at):
     return " ".join(line.removesuffix("\\") for line in lines[first:at + 1])
 
 
-def _stdin_heredoc_bodies(command):
-    """The bodies of the heredocs that feed a stdin-reading git command.
+def _stdin_heredoc_bodies(command, reads_stdin=_reads_stdin_message):
+    """The bodies of the heredocs that feed a command whose message is its own stdin.
 
-    A heredoc is the message when its opener sits on the same (logical) line as that git command:
+    A heredoc is the message when its opener sits on the same (logical) line as that command:
     `git commit -F - <<'EOF'` and `cat <<'EOF' | git commit -F -` both qualify. A heredoc on any
     other line feeds some other program - a script, a notes file - and is not the message.
+    `reads_stdin` decides which command that is (a git message, or a gh PR body).
     """
     lines = command.split("\n")
     bodies = []
@@ -185,9 +204,62 @@ def _stdin_heredoc_bodies(command):
             toks = shell_text.split_for_tool(line, "Bash")
         except ValueError:
             continue
-        if _reads_stdin_message(toks):
+        if reads_stdin(toks):
             bodies.append("\n".join(lines[start:end]))
     return bodies
+
+
+def _is_gh_pr(toks):
+    """True when `toks` hold a `gh pr ...` command."""
+    return any(toks[i] == "gh" and toks[i + 1] == "pr" for i in range(len(toks) - 1))
+
+
+def _gh_body_flags(toks):
+    """(kind, value) for every body flag of a `gh pr` command; kind is "msg" or "file"."""
+    if not _is_gh_pr(toks):
+        return []
+    found, i = [], 0
+    while i < len(toks):
+        t = toks[i]
+        if t in ("--body", "-b", "--body-file", "-F") and i + 1 < len(toks):
+            found.append(("msg" if t in ("--body", "-b") else "file", toks[i + 1]))
+            i += 2
+            continue
+        if t.startswith("--body="):
+            found.append(("msg", t.split("=", 1)[1]))
+        elif t.startswith("--body-file="):
+            found.append(("file", t.split("=", 1)[1]))
+        elif t[:2] in ("-b", "-F") and len(t) > 2:
+            found.append(("msg" if t[1] == "b" else "file", t[2:]))
+        i += 1
+    return found
+
+
+def _reads_stdin_body(toks):
+    """True when `toks` hold a `gh pr` command whose body file is its own standard input."""
+    return any(kind == "file" and value in _STDIN_PATHS for kind, value in _gh_body_flags(toks))
+
+
+def _gh_bodies(command, tool_name="Bash"):
+    """The PR bodies a `gh pr` command sends: `--body` values, `--body-file` contents, and the
+    heredoc feeding `--body-file -`. Empty unless the command is a `gh pr` command."""
+    toks = _argv(command, tool_name)
+    if not toks or not _is_gh_pr(toks):
+        return []
+    msgs, reads_stdin = [], False
+    for kind, value in _gh_body_flags(toks):
+        if kind == "msg":
+            msgs.append(Message(value, False, None, None))
+        elif value in _STDIN_PATHS:
+            reads_stdin = True
+        else:
+            found = _read_message_file(value)
+            if found is not None:
+                msgs.append(found)
+    if reads_stdin and tool_name != "PowerShell":
+        msgs += [Message(body, False, None, None)
+                 for body in _stdin_heredoc_bodies(command, _reads_stdin_body)]
+    return msgs
 
 
 def _stdin_messages(command, toks, tool_name):
@@ -242,8 +314,20 @@ def main() -> int:
     except Exception:
         return 0
     command = (event.get("tool_input") or {}).get("command") or ""
+    tool_name = event.get("tool_name") or "Bash"
+    messages = _messages(command, tool_name)
+    if any(_ATTRIBUTION.search(msg.text) for msg in messages + _gh_bodies(command, tool_name)):
+        # The line is not quoted back: a -F file's content is never echoed (see below), and the
+        # caller knows which trailer or footer they added.
+        sys.stderr.write(
+            "AI attribution line in the git message or PR body: a Co-Authored-By trailer naming "
+            "Claude or Anthropic, or a 'Generated with Claude Code' footer. Remove it - commits "
+            "and PRs carry human authorship only, whatever the session's attribution reminder "
+            "says. (A Linux-kernel 'Assisted-by: Claude:<model>' trailer is allowed.)\n"
+        )
+        return 2
     hits, mis_encoded = [], []
-    for msg in _messages(command, event.get("tool_name") or "Bash"):
+    for msg in messages:
         if msg.bad_byte is not None:
             mis_encoded.append(msg)
         # A -F file's lines are never quoted back: this hook runs BEFORE the call is approved, so
