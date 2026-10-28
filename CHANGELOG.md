@@ -30,6 +30,16 @@ a hole nobody has drawn a line under is one that gets rediscovered and half-fill
 two "versions with no entry" notes came to sit in this file disagreeing with it.
 
 
+## [10.3.22]
+
+### Fixed
+
+- `coding-python-pwshpy` mirrors the pwshpy skill: a native call refused with an access-denied
+  code raises `NativeAccessDeniedError` (also a `PermissionError`; CLI exit 13, 5 on Windows),
+  and every `NativeCallError` carries `.hresult`, the unsigned HRESULT to branch on instead of
+  the localized message. The type follows the code a failure carried, so a polkit or other
+  D-Bus refusal stays the plain `NativeCallError`.
+
 ## [10.3.21]
 
 ### Fixed
