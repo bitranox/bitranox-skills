@@ -30,6 +30,15 @@ a hole nobody has drawn a line under is one that gets rediscovered and half-fill
 two "versions with no entry" notes came to sit in this file disagreeing with it.
 
 
+## [10.3.18]
+
+### Changed
+
+- `coding-python-logging` (twin of lib_log_rich 8.1.0): every sink shows an event's `exc_info` /
+  `stack_info` text - indented under the line on the console and in the text dumps, the HTML table's
+  message cell, GELF `full_message`, journald `MESSAGE` plus `EXCEPTION_TEXT` / `STACK_TEXT`, Windows
+  Event Log strings. The queue console keeps a multi-line event in one segment.
+
 ## [10.3.17]
 
 ### Fixed
