@@ -445,8 +445,8 @@ honest: hours per machine (see "Durations"), a `Windows.old` holding 7-20 GB of 
 (measured under "Deleting a Windows.old"), the loss of other languages' components with a
 single-language image, and Setup must READ the damaged install to plan the migration, so a bad
 enough store fails the upgrade outright - the risk to test on ONE machine first. The image must be a
-build >= the target's, which for a fully patched machine means slipstreaming the current CU into the
-media.
+build >= the target's, UBR included, which for a target with recent updates usually means
+slipstreaming the current CU into the media (see "Finding the right installation media" below).
 
 A real installed peer beats an ISO as a repair source - it carries the actual language variants
 and revisions, which a single-language ISO cannot - provided its WinSxS still holds the
@@ -455,12 +455,80 @@ at a mounted image or a peer's live store, and add `/LimitAccess` only if you wa
 fallback to Windows Update (usually leave it off - WU covers post-RTM payloads no local source has):
 
 ```
-DISM /Online /Cleanup-Image /RestoreHealth /Source:wim:D:\sources\install.wim:1
+DISM /Online /Cleanup-Image /RestoreHealth /Source:wim:D:\sources\install.wim:<index>
 DISM /Online /Cleanup-Image /RestoreHealth /Source:\\PEER\C$\Windows\WinSxS
 ```
 
-Pick the image INDEX by matching the edition, never by position - index 1 is Home on a retail
-ISO and will not repair a Pro install.
+`<index>` is the image INDEX of the target's edition: pick it by matching the edition in
+`dism /Get-WimInfo`, never by position - index 1 is Home on a retail ISO and will not repair a Pro
+install.
+
+### Finding the right installation media for a repair upgrade
+
+An in-place upgrade keeps applications only when the media match the install, so read the target
+first. These are registry values, identical on every display language, and `reg query` works over
+an ssh session whose shell is `cmd.exe`:
+
+```bat
+reg query "HKLM\SOFTWARE\Microsoft\Windows NT\CurrentVersion" /v EditionID
+reg query "HKLM\SOFTWARE\Microsoft\Windows NT\CurrentVersion" /v CurrentBuild
+reg query "HKLM\SOFTWARE\Microsoft\Windows NT\CurrentVersion" /v UBR
+reg query HKLM\SYSTEM\CurrentControlSet\Control\Nls\Language /v InstallLanguage
+echo %PROCESSOR_ARCHITECTURE%
+```
+
+| Must match   | Read from                                                                                         | Trap                                                                                                                                                                     |
+|--------------|---------------------------------------------------------------------------------------------------|--------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
+| Edition      | `EditionID` (`Core` Home, `Professional` Pro; an `N` suffix is the N edition, without media apps) | `CoreSingleLanguage` and Enterprise are not in the consumer ISO                                                                                                          |
+| Language     | `InstallLanguage` (hex LCID: `0407` de-DE)                                                        | a display language added later does not count; "English International" is en-GB                                                                                          |
+| Architecture | `PROCESSOR_ARCHITECTURE` (`AMD64` is x64)                                                         | x64 and Arm64 ISOs are separate downloads                                                                                                                                |
+| Build        | `CurrentBuild`.`UBR` (`reg` prints UBR in hex: `0x25ef` is 9711)                                  | the pair (image build, `ServicePack Build`) >= (`CurrentBuild`, `UBR`): build first, then `ServicePack Build` against `UBR`; `Version` `10.0.26200` reads as build 26200 |
+
+Where Microsoft publishes each:
+
+- Windows 11 Home/Pro/Education/Pro Education/Pro for Workstations (+N):
+  `https://www.microsoft.com/software-download/windows11`, section "Download Windows 11 Disk Image
+  (ISO) for x64 devices" (Arm64 has its own). One multi-edition ISO per language: pick the language
+  whose LCID matches `InstallLanguage`. Measured on a 25H2 ISO: `sources\install.wim`, ten images,
+  all of one build, index 1 `Core`.
+- Windows 10 22H2 Home/Pro (+N): `https://www.microsoft.com/software-download/windows10ISO`. A
+  browser running on Windows is steered to the Media Creation Tool; open the page from Linux or
+  macOS to get the ISO.
+- Enterprise, LTSC, IoT Enterprise: only the licensing portal (Microsoft 365 admin center volume
+  licensing downloads, Visual Studio subscriptions). Evaluation Center media install evaluation
+  editions (the Server 2025 evaluation WIM lists `ServerStandardEval`/`ServerDatacenterEval`), which
+  never match a licensed install.
+
+Take the direct ISO, not the Media Creation Tool: its ISO carries `install.esd`, which
+`/Mount-Image` and anything expecting `install.wim` cannot use. The download link lives 24 hours,
+and the page lists a SHA-256 per language - check it. On Linux, unpack with
+`mount -o loop,ro X.iso /mnt/x && cp -a /mnt/x/. DEST/` (no 7-Zip needed; `chmod -R u+w DEST`
+afterwards, the files arrive read-only) and inspect with `wiminfo` from wimtools; on Windows with
+`dism /Get-WimInfo /WimFile:...\install.wim /Index:<index>`.
+
+The public ISO is refreshed only now and then, so a target with recent updates is often NEWER than
+it. Then slipstream the newest cumulative update for the target's version, on any healthy Windows
+machine with DISM in an elevated prompt (not the damaged target), and export first so the target's
+edition becomes a WIM of its own: a tool that reads index 1 (pve-winrepair's WIM gate does) would
+otherwise still see the unserviced Home image.
+
+```bat
+dism /Export-Image /SourceImageFile:D:\sources\install.wim /SourceIndex:5 /DestinationImageFile:C:\work\install.wim
+dism /Mount-Image /ImageFile:C:\work\install.wim /Index:1 /MountDir:C:\work\mount
+dism /Image:C:\work\mount /Add-Package /PackagePath:C:\work\cu\<lcu>.msu
+dism /Unmount-Image /MountDir:C:\work\mount /Commit
+dism /Get-WimInfo /WimFile:C:\work\install.wim /Index:1
+```
+
+`/SourceIndex` is the target's edition as `dism /Get-WimInfo /WimFile:D:\sources\install.wim` lists
+it (5 is `Professional` on the measured ISO; never assume it). Fetch the `.msu` as in "A cumulative
+update Windows Update will not offer"; for 24H2 (build 26100) and later (25H2 is 26200) put the
+checkpoint CU the catalog lists beside it in the same folder. Believe the result only when the last
+command shows the target's build in `Version` and a `ServicePack Build` (decimal, unlike `reg`'s
+UBR) >= the target's UBR, then replace `sources\install.wim` in the unpacked media with
+`C:\work\install.wim`. For Proxmox guests, pve-winrepair's [installation media
+guide](https://github.com/bitranox/pve-winrepair/blob/HEAD/docs/installation-media.md)
+walks the same steps onto the node.
 
 ### Capturing a live install as a repair source: snapshot it first
 

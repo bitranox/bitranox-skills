@@ -30,6 +30,23 @@ a hole nobody has drawn a line under is one that gets rediscovered and half-fill
 two "versions with no entry" notes came to sit in this file disagreeing with it.
 
 
+## [10.3.14]
+
+### Added
+
+- `infra-windows-servicing` explains where to get installation media for an in-place repair
+  upgrade: the target values the media must match (edition, install language, architecture, build
+  and UBR) and how to read them over ssh, which Microsoft page or licensing portal offers which
+  edition, why the Media Creation Tool ISO (`install.esd`) does not serve, and how to slipstream
+  the current cumulative update into an exported single-edition WIM when the public ISO is older
+  than the target.
+
+### Fixed
+
+- `infra-windows-servicing`: the RestoreHealth `/Source:wim:...` example named index 1, which the
+  rule after it forbids (index by edition, never by position); it now takes `<index>`. The
+  upgrade's build rule says the UBR counts.
+
 ## [10.3.13]
 
 ### Changed
