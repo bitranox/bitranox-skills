@@ -401,7 +401,7 @@ the success line, abort-and-show on a miss).
     references/dream-core.md "Toolbox pass" over the inventory step 0c already read - this half is
     judgement about the tools, so it belongs at the end; the READ that the earlier passes depend on
     does not, which is why it is not repeated here. PROPOSE merging near-duplicate tools and flagging
-    any stale/superseded one (no usage-based prune - `forgetting-is-usage-based-only`). Detect +
+    any stale/superseded one (no usage-based prune: references/dream-passes.md "Removal"). Detect +
     propose ONLY; the actual merge is a TDD change through `bitranox:meta-self-improve`'s tool
     endpoint, never edited here. Skip if the toolbox path does not exist.
 

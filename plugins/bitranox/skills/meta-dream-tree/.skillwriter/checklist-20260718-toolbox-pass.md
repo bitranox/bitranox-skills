@@ -11,8 +11,8 @@ ones - detect + propose only, never editing tool code.
       the tool analogue of the dedup the dream already does for memory was missing.
 - [x] GREEN: step 10b runs the CONSOLIDATE delta from dream-core "Toolbox pass" (list the toolbox,
       propose merges/flags), PROPOSE-ONLY (the actual merge is a TDD change via meta-self-improve),
-      no usage-based prune (forgetting-is-usage-based-only), skip when no toolbox exists. Report line
-      added.
+      no usage-based prune (the dream-passes.md "Removal" policy), skip when no toolbox exists.
+      Report line added.
 - [x] Single-sourced: the mechanics live once in dream-core.md; the SKILL.md states only its delta.
 - [x] Security scan: prose only; no secrets/hosts/paths (the ~/.claude/skills/toolbox path is a
       generic local location).

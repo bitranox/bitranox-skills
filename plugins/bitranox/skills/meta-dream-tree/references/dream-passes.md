@@ -22,8 +22,11 @@ a version-bound claim the re-check finds still true is REWORDED, not archived), 
 `<plugin>/skills/meta-self-improve/`, launch through `hooks/run-python.sh`; it archives the body only
 when NO level still points at the slug). Launch it as a real script file, never a heredoc piped into
 `run-python.sh` (a `-` stdin arg fails with `run-python.sh: script not found: -` and exit 2). (3) a manual "forget this".
-Never archive a still-valid but quiet note.
-(See `forgetting-is-usage-based-only`.)
+Never archive a still-valid but quiet note. Size pressure is met by representation, never by
+deletion: a fact's always-present cost is one short index line, kept lean by dedup, and its body
+costs nothing until read. The same policy binds outside a dream: a "prune memory" request removes
+only by the three routes above, and a change to the memory engine adds no decay, idle counter or
+usage metric.
 
 ## Contradiction / override
 
@@ -114,6 +117,36 @@ trigger and make the BODY a concise pointer (`Detail: bitranox:<skill>` / `enfor
 hook`) instead of restating content. The dream does not delete such a rule - the always-on trigger
 is its value.
 
+**When a fold MOVES a fact's content into a skill** (a fold campaign, often run outside any dream,
+that writes the content into SKILL.md or a reference file and then cuts the fact's hook or archives
+the fact - distinct from this pass's keep-the-trigger default), treat every behaviour claim, flag or
+API name and number in the body as unverified: far more sessions trust the skill than the fact.
+
+- Diff each body against the version the classification read: bodies change between planning and
+  folding. Measured: about one body in four held a claim that was false by fold time when the batch
+  had been classified days earlier. Hand the fold editor the adversarial reviewer's amended text
+  plus a re-verify step, never the first classifier's hint.
+- Re-check each claim against the current source or by running it (`--help`, a probe, the live
+  config), and give verifiers MEASURE items, not only quote-back. Re-check the names a rule cites,
+  not only the rule: a rule can still hold while the flags it names have moved. Read the target
+  skill's own measurements before carrying a duration or size, and never carry a value that varies
+  per machine or config: name the axis and how to read the live value.
+- Search the local `~/.claude/commands` and `~/.claude/skills` for related detail (a local command
+  file can hold what the fact got wrong), and list the shipped compuse-toolbox scripts before calling
+  any tool machine-local.
+- After the fold, quote-check each quoted sentence as a substring of the INSTALLED plugin text, read
+  after the user has run `/plugin marketplace update` and `/reload-plugins`; a verify record from an
+  earlier round is not evidence for the final text.
+- If the pointer is kept, correct in the same pass any claim the fold refuted in its body, and in
+  its hook if the hook states it.
+- Before archiving a fact, run `ref_map.py --root <anchor> <slug>` (home:
+  `<plugin>/skills/meta-self-improve/`, launch via `hooks/run-python.sh`) for inbound refs, then
+  grep every CLAUDE.md, doc, skill file and fact hook for the bare slug and for any heading the rule
+  sat under before the fold: `ref_map` and `--check-tree` see only `[[wikilinks]]` inside the store.
+  Re-point each hit to the skill. For many slugs, sweep in ONE `grep -F -f <patterns-file>` pass
+  that excludes vendored trees (`.venv`, build `target/`, large source checkouts). Measured: a
+  per-slug walk of a large tree ran past 5 minutes.
+
 ## Filler-word classification (keeps recall precise) - PER PROJECT
 
 The per-prompt recall hook is model-free: it queues any not-yet-classified keyword for THIS
@@ -122,10 +155,13 @@ to classify each word as **filler** (no topical signal: "again", "previous") or 
 real term: "bindsnap"). Apply per-project: `add_filler_words(filler, proj)`,
 `add_topical_words(topical, proj)`, `clear_pending_keywords(proj)`, in that order: the two adds
 raise `StateWriteError` when a list cannot be read or written, and clearing the queue after a
-failed add would lose the classification, so stop and report instead. Learned lists are PER-PROJECT
-(a word can be noise here, a topic there; see `recall-filler-per-project`); only universal
-generic-English filler belongs in the shipped baseline, via PR. Be conservative: unsure ->
-topical. Empty queue -> no-op.
+failed add would lose the classification, so stop and report instead. The learned filler list, the
+topical list and the pending queue are all PER-PROJECT, keyed by `proj_key(proj)`, because a word
+can be noise in one project and the subject of another: `compression` classed as filler in a docs
+project would otherwise drop out of every prompt in a codec project. Only universal generic-English
+filler belongs in the shipped, global baseline (`hooks/filler_words.json`), via PR, and a change to
+where these lists are stored keeps that split. Be conservative: unsure -> topical. Empty queue ->
+no-op.
 
 ## Model-hierarchy review (time-gated)
 

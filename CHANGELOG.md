@@ -30,6 +30,35 @@ a hole nobody has drawn a line under is one that gets rediscovered and half-fill
 two "versions with no entry" notes came to sit in this file disagreeing with it.
 
 
+## [10.3.23]
+
+### Changed
+
+- `meta-claude-hooks` (`references/authoring.md`): split a shell command by the event's
+  `tool_name`, not the OS; probe a guard whose live copy is installed by piping the event in (with
+  no stdin a hook usually fails open with exit 0, which reads as an allow); a nested quantifier in a
+  matcher regex stalls the hook on a long non-matching command until it times out and the call
+  proceeds unguarded.
+- `docs-md-table-formatting`: adding one row keeps the existing column widths and asserts the
+  cell count; through `tablekit.py` a short row is padded silently, so assert the count in the JSON
+  before `render`/`replace`.
+- `compuse-git`: `for-each-ref` and `tag` treat the LAST `--sort` key as primary; a push from a
+  linked worktree exports `GIT_DIR` to hooks, how that leaks fixture writes into the launching
+  repo and how to repair it; committing only your change to a file that holds someone else's
+  uncommitted edits with `hash-object` and `update-index --cacheinfo`.
+- `compuse-toolbox`: a sample shows shapes, never a ratio; `guard_replay` precision keys on the
+  exit code, so a zero-exit failure is unscoreable and its firings are adjudicated by hand.
+- `meta-dream-tree`: folding a fact into a skill re-verifies its claims and quote-checks the
+  installed text; a persisted tool output is a view, not the result.
+- `meta-skill-writer`: reading the `skill_listing` attachment from a hook (no listing on a
+  session's first prompt; key entries by the full name).
+- `process-test-design`: a validator that reads its subject with the production loader's tolerant
+  helper can only confirm what that helper accepted.
+- `ai-llm-jev-judge` mirrors btx-skill-jev-judge 0.3.6: `run` sends and bills every non-blank item
+  line, an extra top-level key refuses the run with exit 2 before anything is sent, and an
+  annotation inside `state` is sent with the item. The floors move to 0.3.6, and
+  `meta-self-improve`'s `JEV_JUDGE_FLOOR` with them.
+
 ## [10.3.22]
 
 ### Fixed

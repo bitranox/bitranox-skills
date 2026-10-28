@@ -2092,8 +2092,9 @@ def store_changed(memory_dir_path, since_mtime):
 
 # NOTE: there is deliberately NO usage/age/size "forgetting" mechanism. Usage cannot be measured (the
 # note sits in context; the model reasons over it silently), and age/size are not valid forget metrics
-# (see the `forgetting-is-usage-based-only` memory). Removal happens only via dedup, obsolete/superseded
-# pruning (model-judged, propose-first), or a manual request - the dream does that; no helper here.
+# (see the "Removal" policy in skills/meta-dream-tree/references/dream-passes.md). Removal happens
+# only via dedup, obsolete/superseded pruning (model-judged, propose-first), or a manual request - the
+# dream does that; no helper here.
 
 
 def _model_review_file():
@@ -2161,7 +2162,8 @@ def mark_backup_reminded(now=None):
 # --- Recall filler words (memory-recall keyword precision) ---------------------------------------
 # Generic/conversational words must not become recall search keywords (they match half the store).
 # THREE lists, split by who is universal vs a project-specific judgment (so one project's learned
-# classification never suppresses another project's recall - see the `recall-filler-per-project` memory):
+# classification never suppresses another project's recall - see "Filler-word classification" in
+# skills/meta-dream-tree/references/dream-passes.md):
 #   - GLOBAL baseline blacklist: filler_words.json next to this module (generic English; grows via PRs).
 #   - PER-PROJECT learned blacklist: filler the dream classified for THAT project.
 #   - PER-PROJECT learned whitelist: topical/known-good words (so they are not re-queued).

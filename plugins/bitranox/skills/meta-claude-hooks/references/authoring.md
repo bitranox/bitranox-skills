@@ -98,6 +98,31 @@ Assert on **both** the exit code and the parsed stdout. Then check the pieces th
 > hook's first run, look for `Failed with non-blocking status code: ... No such file or directory` - a mistyped
 > path in `settings.json` leaves the gate silently disabled while reading as clean.
 
+**If the guard is also installed, its shipped copy judges your probes.** Auditing a command-scanning hook from
+a session where the same plugin is active means the live copy scans every probe command first: a probe that
+spells out the pattern under test is refused before the copy you are testing runs, the tool call is lost, and
+the easy reaction - to stop probing the shapes the live guard objects to - drops exactly the shapes worth
+probing. Build the fixture inside a QUOTED heredoc, `python3 - <<'PY'`: guards commonly skip a quoted heredoc
+body, where the shell runs no substitution, but still scan an unquoted `<<PY` body. Assemble the
+metacharacters with `chr()` (`chr(36)` for `$`, `chr(96)` for a backtick) so the literal appears neither on
+the command line nor in any file a content-scanning hook reads, and pass the hook its JSON event on stdin:
+
+```bash
+python3 - <<'PY'
+import json, subprocess
+D, S = chr(34), chr(36)
+cmd = "git commit -m " + D + "fix " + S + "(whoami)" + D
+ev = json.dumps({"hook_event_name": "PreToolUse", "tool_name": "Bash",
+                 "tool_input": {"command": cmd}})
+p = subprocess.run(["python3", "path/to/the-hook.py"], input=ev, capture_output=True, text=True)
+print(p.returncode, p.stdout, p.stderr)
+PY
+```
+
+Always pipe the event in. With no stdin a hook blocks at a terminal, and in an agent's shell (stdin is
+`/dev/null`) it reads EOF and usually fails open with exit 0, which looks exactly like an allow. When the
+live guard does fire on a probe, record it as data - it is a verified observation of the shipped behaviour.
+
 **An interactive-only tool needs an interactive probe.** Headless `claude -p` does not offer `AskUserQuestion`
 (observed on CLI 2.1.296; check `ExitPlanMode` the same way), so the model reports no matching tool and the hook
 never fires - a non-answer that looks like a hook that found nothing. Probe in a real interactive session under
@@ -132,6 +157,21 @@ the directory still exists afterwards.
 call continues through the normal permission flow. Only `deny` denies.
 
 **A timed-out `PreToolUse` hook does not block.** Do not use a hook that might hang as a gate.
+
+**A nested quantifier over alternatives backtracks exponentially on input that does NOT match.** A matcher
+such as `\bgit(?:\s+-C\s+\S+|\s+--?\S+)*\s+commit\b` is instant on the short strings a test uses and on any
+command that matches. When the repeated group can match the same text in more than one way (here `--?\S+`
+reads `--opt` as `-` then `-opt`, or as `--` then `opt`) and the required tail is absent, the engine retries
+every combination before it gives up. Measured with CPython `re` on `git` plus N options plus `status`:
+under 1 ms at 10 options, about 2 to 3 s at 22, roughly doubling per option. Non-matching input is the
+common case for a per-call matcher, so in a `PreToolUse` hook, or in a helper module every hook imports, a
+long non-matching command stalls the hook (seconds at 22 options, doubling with each one more), and once it
+passes the hook's timeout the call proceeds unguarded (the line above). For "is this command X with
+options?", split into tokens and walk them: linear, and it handles two-token options such as `-C <path>`. If
+a regex is unavoidable, make the repeated group unable to match the same text two ways (`--?[^\s-]\S*` takes
+the same 22 options in microseconds), or use an atomic group or possessive quantifier (`re` on Python 3.11+,
+or the third-party `regex` module). Time the matcher on long NON-matching input, and suspect this shape when
+a suite's runtime jumps for no structural reason.
 
 **Stdout must be only the JSON object.** A shell profile that prints a banner breaks parsing.
 
@@ -177,6 +217,26 @@ compares two extracted tokens, check which string it read them from. Do not mask
 subject is a command inside a quoted argument that something else executes (`ssh host '...'`, `bash -c '...'`).
 Test both directions: text mentioning the pattern passes, and a genuine invocation, with quoted operands or after
 a heredoc, still blocks.
+
+**Split a shell command by the TOOL that will run it, never by the host OS.** A `Bash|PowerShell` matcher
+receives two languages, and they are mirror images. The Bash tool is a POSIX command line even on Windows,
+where Claude Code runs it through Git Bash: `\` escapes, a backtick opens a substitution, `<(` is process
+substitution, and `shlex.split` reads the line as the tool does. The PowerShell tool is a Windows command
+line: `\` is a path separator, a backtick escapes, and `shlex` eats the separators, turning
+`git commit -F C:\Users\me\msg.txt` into the path `C:Usersmemsg.txt`. A guard that then opens that path
+fails to read it, fails open, and approves the commit it exists to inspect. Key every split, escape and
+separator decision on the event's `tool_name`. Do not reuse a splitter keyed on `os.name` or
+`sys.platform`: that key is right only for a command line the machine itself will run (a hook registration
+read from a settings file), and on a Windows host it hands the Bash tool's POSIX string to the Windows
+parser. Pass the event's raw `tool_name` through rather than defaulting a missing one, and for a tool you do
+not recognise pick the reading whose mistake is visible: in a separator or escape walk, escape nothing,
+because treating `\` as an escape swallows the `;` after a Windows path and hides the command behind it
+(`cd C:\; git commit -m x`), while an extra separator only costs a false block. A mangled token matters
+only where the guard RESOLVES it (opens, stats or executes it); tokens merely compared or name-matched
+survive. Run the scanner's whole test matrix once per shell tool, not only with `tool_name="Bash"`. The
+mirror trap sits in the tests: a fixture that interpolates `str(tmp_path)` into a Bash-tool command fails
+only on the Windows cell, because the Bash split correctly eats the backslashes and the hook resolves
+nothing. Pass `path.as_posix()` (`C:/Users/...`, what a Git Bash user types) and leave the hook alone.
 
 **A guard about FILE WRITES must match the shell too.** `cat > f <<'EOF'`, `tee f`, a `>` redirect, or
 `python - <<'EOF'` opening a file all write without touching `Write` or `Edit`, and in one measured transcript

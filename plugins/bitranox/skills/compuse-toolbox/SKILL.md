@@ -321,7 +321,12 @@ Three traps no `--help` covers live in `references/` (load them with the Read to
   and all 557 put it at ~2, and the unread remainder held four firings that were a live regression
   in the guard being measured. Read the sample to learn what the firings look like, then classify
   the whole set when the answer is a ratio or a residual. YOU classify every firing; the figure
-  you report comes from your verdicts.
+  you report comes from your verdicts. The same holds for a skimmed sample of ANY judged set
+  (re-sent questions, review findings, labelled items), and the error runs in either direction:
+  measured, 10 of 61 items read by eye gave "1-2 real catches of 10", while all 61 labelled against
+  a fixed rubric gave 20 of 61, which flipped the recommendation built on it. Whenever you quote
+  such a figure, say how it was produced (sample or full set, which corpus): one machine's habits
+  are not a population.
   - **Jev shadow on that classification** (only when `jev_shadow.py status` exits 0; home
     `<plugin>/skills/meta-self-improve/`, launch via `hooks/run-python.sh`; procedure in its
     `references/jev-shadow.md`; all three files in a fresh `D=$(mktemp -d)` outside any repo, since
@@ -342,7 +347,9 @@ Three traps no `--help` covers live in `references/` (load them with the Read to
   precision figure for what it asks - "did a GATE refuse this call" is the right question for a
   guard about commands that cannot succeed as written, and the wrong one for a guard whose hazard
   is a plausible-but-wrong RESULT, which is never followed by a block and scores 0% while being
-  useful.
+  useful. For such a guard, say in the report that the precision is unscoreable and adjudicate
+  the firings by hand against their source. Fix the fire rate before re-pricing it: an excusing
+  condition (an escaped form the author plainly meant) removes more false firings than any tuning.
 - **`guard_replay` counts where a guard FIRES; it cannot count where it should have fired and
   stayed silent**, because the only predicate it runs is the guard itself. Before claiming a guard
   misses a lot, or proposing a smarter classifier for it, measure its misses (its recall) in three

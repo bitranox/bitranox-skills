@@ -261,6 +261,16 @@ Fixed topic: Core API - Client, Session, request(), Streaming, Connection, Retry
       set; a dispatched subagent's listing is in its own `subagents/agent-<id>.jsonl`, not in the
       parent transcript. The listing is built from the INSTALLED plugin, so a repo commit alone
       does not change it: check a session started after the new version was installed.
+    - **Reading it from a hook or script:** a hook that reads its own session's transcript (a
+      `UserPromptSubmit` router, for one) finds NO listing on the session's first prompt, because
+      the first full record is normally written after that prompt (measured: 52 of 53 sessions
+      that had one). Cache the last listing seen, per project since project skills differ, and
+      fall back to it. Key entries by the full name in `names`: plugin skills are namespaced
+      (`plugin:skill`), built-in, user and project skills are bare, and bare names collide across
+      sources (`code-review` and `code-review:code-review` can both be listed). Other injected
+      context sits in the same `attachment` channel under its own `attachment.type`
+      (`deferred_tools_delta`, `nested_memory`, `hook_additional_context`, and more) and is read
+      the same way.
 - `name`: Use letters, numbers, and hyphens only (no parentheses, special chars)
 - `description`: Third-person, describes ONLY when to use (NOT what it does)
   - Start with "Use when..." to focus on triggering conditions

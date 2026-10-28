@@ -154,6 +154,13 @@ it inline and the numbers differ, read the source `.jsonl` yourself over that by
 skip to the offset, extract the record types you need) before running `session-reviewed`. Advancing
 the watermark is a one-way discard: it destroys the only pointer to what you skipped.
 
+The same holds for ANY tool output the harness persists because it was too large to show: the file
+is a view, possibly truncated, and still well-formed. Before concluding anything from it, compare
+the size or count the tool CLAIMED with what the file holds. Advancing a watermark, marking
+something reviewed, clearing a queue and pruning a backlog are one class of action: never
+discharge one against a persisted view - redirect the command to your own file, or read the source
+over the claimed range, first.
+
 **The owed transcript is usually NOT this session's.** The obligation is recorded per PROJECT and
 outlives the session that compacted, so it is routinely inherited by a later session that never
 compacted at all. `session-review` therefore targets the transcript that ACTUALLY compacted while it
@@ -361,8 +368,9 @@ knob (propose: list; auto: queue via `contrib_queue`; off: skip).
 - **CONSOLIDATE** (the `tree` delta): from the inventory, flag NEAR-DUPLICATE tools (two tools with
   overlapping purpose) -> propose merging into one parameterized tool; flag a STALE/superseded tool
   (its docstring/paths name something deleted, or a newer tool covers it) -> propose flagging. NO
-  usage-based pruning - `forgetting-is-usage-based-only` applies to tools too; remove only on proven
-  redundancy, never because a tool looks unused.
+  usage-based pruning - the "Removal" policy in dream-passes.md applies to tools too (use cannot be
+  measured, so a quiet tool is not an unused one); remove only on proven redundancy, never
+  because a tool looks unused.
 - **CONTRIBUTE** (the `crosstree`/`-deep` delta): judge which LOCAL tools are broadly useful to OTHER
   users -> propose contributing upstream via `contrib_queue` + the upstream loop (references/
   upstream-propagation.md), landing in a shared `meta-toolbox` skill or a relevant existing skill -

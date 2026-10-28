@@ -616,7 +616,9 @@ while never looking at what the parser silently dropped. Before trusting such a 
 concretely what its own parser forgives (a duplicated block, a glued-on closing delimiter, a
 duplicate key a dict-based loader overwrites), then verify each one STRUCTURALLY against the raw
 text - a delimiter count, a line scan - rather than through the same parser, which by construction
-cannot see what it already swallowed.
+cannot see what it already swallowed. The tell: the validator reads its subject with the same
+tolerant helper the production loader uses, so its clean verdict can only confirm what that helper
+already accepted.
 
 **Read `references/silent-test-defeaters.md` (Read tool)** when a test patches a name, parses tool
 output, asserts on an exception message or on rendered output, loops until a condition holds,

@@ -27,7 +27,7 @@ description: Use when running git - commit, push, tag, rev-parse, marking a hook
 | Local build artifacts (`.venv`, caches)               | NEVER track per-machine artifacts: `.venv/`, `__pycache__/`, `*.pyc`, `*.egg-info/`, `node_modules/`, `dist/`, `build/`, `.pytest_cache/`. Tool-agnostic (a `.venv` from `python -m venv`/`virtualenv`/`poetry`/`uv` is equally off-limits). Gitignore them; if already tracked, `git rm -r --cached <path>`. See below.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                           |
 | Private repo with private git deps in CI              | The runner cannot read the OTHER private repos -> install fails `could not read Username for 'https://github.com'`. Give CI a read-only PAT secret + a `url.insteadOf` rewrite; load the token from a password file via stdin, never echo it. See below.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                           |
 | Multiple agents/sessions share one checkout           | Branch/HEAD/index can change UNDER you between reads, so a commit lands on the wrong branch or a stale base. Before committing: verify `git branch --show-current`, check `git rev-list --left-right --count HEAD...@{upstream}` (behind/diverged = origin advanced), and stage only YOUR files (never `git add -A`). Durable fix: a `git worktree` per session. See below.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                        |
-| `for-each-ref`/`tag` with 2+ `--sort` keys            | The LAST `--sort` key is PRIMARY, so left-to-right reads backwards: `--sort=-creatordate --sort=-v:refname` sorts by VERSION first and date only breaks a tie. For newest-by-date with a version tiebreak, put `-creatordate` LAST: `--sort=-v:refname --sort=-creatordate`. `-creatordate` alone ties on same-second tags and falls back to ASCENDING refname order regardless of its own `-` prefix. The two orders disagree ONLY when an old tag carries a high version and a new tag a low one (`v10.0.0` tagged before `v2.0.0`) - test that shape, not a monotonically increasing history, where every ordering looks correct.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                               |
+| `for-each-ref`/`tag` with 2+ `--sort` keys            | The LAST `--sort` key is PRIMARY, so left-to-right reads backwards: `--sort=-creatordate --sort=-v:refname` sorts by VERSION first and date only breaks a tie. For newest-by-date with a version tiebreak, put `-creatordate` LAST: `--sort=-v:refname --sort=-creatordate`. `-creatordate` alone ties on same-second tags and falls back to ASCENDING refname order regardless of its own `-` prefix. The two orders disagree ONLY when an old tag carries a high version and a new tag a low one (`v10.0.0` tagged before `v2.0.0`) - test that shape, not a monotonically increasing history, where every ordering looks correct. Build that fixture with annotated tags dated by `GIT_COMMITTER_DATE`, which sets their `creatordate`, and comment the two-key line to say the last key is primary, since it otherwise reads as a mistake.                                                                                                                                                                                                                                                                                                                                                                                     |
 | Asserting a clean tree with `&& echo CLEAN`           | `git status --porcelain && echo CLEAN` asserts NOTHING: `&&` only means `git status --porcelain` exited 0, which it does whether the tree is dirty or clean - `status` does not use its exit code to report dirtiness. Capture the OUTPUT and test it is empty (`[ -z "$(git status --porcelain)" ]`), and give the check a CONTROL once: deliberately dirty the tree and confirm the same command then reports non-empty, or a passing check could be structurally unable to fail.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                |
 | `git reset --keep` with another session's staged file | `reset --keep` resets the INDEX to the target commit while trying to preserve worktree differences, but it has no concept of "another session's stage": a file ANOTHER session staged (`git status --porcelain` shows `A`) becomes UNTRACKED (`??`) after the reset, while its on-disk CONTENT survives untouched. Recovery - even if the working copy is later lost too - the blob is already in the object database from the earlier `git add`: find it with `LC_ALL=C git fsck --unreachable` (it prints as a dangling blob) and restore the index entry with `git update-index --add --cacheinfo 100644,<blob-sha>,<path>`.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                    |
 
@@ -216,6 +216,27 @@ git commit -m "msg" -- path/to/your/file ...          # commit ONLY your paths (
   or git reads it as a pathspec). Never `git add -A` / `-u`. Glance at `git status --short` first for any
   first-column `A`/`M` (already-staged) entries you did not create - those are the sweep risk, and the
   branch-guard below does NOT catch them (HEAD is not behind).
+- **Exception: your change sits in a file that ALSO holds someone else's uncommitted edits.** A
+  pathspec commit takes the WORKTREE copy of each named path, so it ships their edits under your
+  message; `git add -p` fails too once the hunks cannot be separated (a table reformat re-padded
+  every row). Build the blob yourself and commit WITHOUT a pathspec:
+
+  ```bash
+  cd "$(git rev-parse --show-toplevel)"           # FILE is the path from the repo root
+  git show HEAD:FILE > /path/to/scratch/FILE      # HEAD's text: their edits are not in it
+  # apply ONLY your change to the scratch copy (and reformat it, if the file needs that)
+  H=$(git hash-object -w /path/to/scratch/FILE)
+  M=$(git ls-files -s FILE | cut -d' ' -f1)       # keep the mode: 100755 for an executable
+  git update-index --cacheinfo "$M,$H,FILE"
+  git diff --cached --stat                        # the WHOLE index: only FILE may be listed
+  git diff --cached FILE                          # only your change
+  git commit -F msg                               # no pathspec
+  ```
+
+  Dropping the pathspec gives up the protection the rule above relies on, so check the whole index
+  (`--stat` over every path), not only `FILE`: anything a sibling staged rides along otherwise.
+  Never hard-code `100644`, which clears an executable's exec bit. Afterwards the worktree still
+  holds their edits and `git status` still shows `FILE` modified, which is expected.
 - A commit that succeeds but whose `git push` then says "Everything up-to-date" means you are NOT on the
   branch you think (detached, or a sibling's branch) - diagnose before re-pushing.
 - **Durable fix: give each session its own `git worktree`** (`git worktree add ../wt-<name> <branch>`), so
@@ -247,11 +268,30 @@ a fixture commit.
 **A hook must clear the repo-scoping variables before running anything that shells out to git:**
 
 ```bash
-unset GIT_DIR GIT_WORK_TREE GIT_INDEX_FILE GIT_OBJECT_DIRECTORY GIT_ALTERNATE_OBJECT_DIRECTORIES
+unset GIT_DIR GIT_WORK_TREE GIT_INDEX_FILE GIT_OBJECT_DIRECTORY GIT_ALTERNATE_OBJECT_DIRECTORIES \
+      GIT_COMMON_DIR GIT_NAMESPACE GIT_PREFIX GIT_QUARANTINE_PATH
 ```
 
 In Python, DELETE those keys from a copy of `os.environ` for the child rather than passing a fresh
 `env=` dict - a fresh dict replaces the whole environment and breaks the child in other ways.
+
+**Clear them where the TESTS start too, not only in the hook.** A hook covers one launcher; any
+other git-spawned runner hands over the same variables. In a repo whose tests shell out to git,
+pop the list in a ROOT `conftest.py` (`pytest_configure`, before collection), so the suite is
+hermetic whoever starts it, and prove it with a test that runs a fixture-building probe under a
+sentinel repo as `GIT_DIR` and asserts the sentinel's config is untouched.
+
+**After a suspected leak, look past the refs.** A fixture's `git config user.name` / `user.email`
+lands in the SHARED config and then authors every later commit, and it looks like a configured
+value. Diff the shared config against a clean clone's
+(`git config --file <common-dir>/config --list`: `user.*`, `core.bare`, `core.hooksPath`,
+remotes) and check `git log --format='%an <%ae>'` for an author nobody configured. Repair: remove
+the leaked `user.name`/`user.email` (and any other entry the fixture wrote, never one you set
+yourself, such as a deliberate `core.hooksPath`) from the shared config, set `core.bare` back to
+`false`, restore `refs/remotes/origin/*` from the remote (read the real tip from the remote, never
+the local ref), and re-point the hijacked branch at its real tip, which is
+still in the object store. When a suite fails only under a hook, or a repo grows commits nobody
+wrote, check this before debugging the tests.
 
 ## Tools
 

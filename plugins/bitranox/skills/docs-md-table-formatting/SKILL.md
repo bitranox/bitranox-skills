@@ -162,3 +162,17 @@ the one that lost text. In the word diff, every `[-...-]` in that row must be te
 replace; any other is text the edit cut, so restore the file and redo the edit. Measured: a
 scripted edit to a privilege-table cell dropped the cell's second half, and the re-padded table
 passed until someone re-read the row.
+
+**Adding one row to an aligned table: fit it to the existing widths and check its cell count.** The
+formatter pads each column to its widest cell (rule 1), so a new cell wider than its column re-pads
+EVERY row: a one-line change becomes a whole-table whitespace diff that buries the real change in
+review and conflicts with any parallel edit to the table (measured: one added row, a 27-line diff).
+Take the widths and the cell count from an existing row (split it on the unescaped `|`), and write
+each cell to fit, shortening the text if needed; widen the table only when the content cannot fit,
+and then in its own commit. When you build the row in code, join with
+`zip(cells, widths, strict=True)` (Python 3.10+) or assert `len(cells) == len(widths)` first: a
+plain `zip` stops at the shorter list, so a row with a missing cell passes every per-cell assertion,
+and GFM renders the gap as an empty cell. Afterwards run `reformat_tables.py --check --strict` on
+the file (a ragged row is reported and exits 1) and require `git diff --stat` to show exactly one
+inserted line. Through `tablekit.py` a short row is padded silently on render, so assert
+`len(row) == len(headers)` in the JSON before `render`/`replace`: `--strict` cannot see it afterwards.
