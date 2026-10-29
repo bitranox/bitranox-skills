@@ -100,11 +100,11 @@ Read the mode first (`dream_state.py mode`; knobs in `~/.claude/.bitranox-memory
   does not check `pin`) - treat it as un-archivable by the dream's own policy anyway: report it,
   never drop its pointer.
 - **Structural moves** (relocating a directory, migrating a memory slug, creating a rung - a new
-  curated level, i.e. a pointer block in a dir that has none - or removing a scaffold-noise level,
-  i.e. the marker `CLAUDE.md` and empty pointer block heal minted): always PROPOSED with
-  consequences,
+  curated level, i.e. a pointer block in a dir that has none): always PROPOSED with consequences,
   never applied by the dream. A fact waiting on such a level stays where it is until the level
-  exists.
+  exists. Removing a scaffold-noise level (the marker `CLAUDE.md` and empty pointer block heal
+  minted) is NOT one of them: the SessionStart self-heal recreates it on the next start in that
+  chain, so the dream sets it aside and proposes nothing (meta-dream-tree step 0b).
 
 ## Capture-first (unconditional on a manual run)
 

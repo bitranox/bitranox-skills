@@ -30,6 +30,17 @@ a hole nobody has drawn a line under is one that gets rediscovered and half-fill
 two "versions with no entry" notes came to sit in this file disagreeing with it.
 
 
+## [10.3.29]
+
+### Fixed
+
+- `meta-dream-tree`: step 0b no longer proposes removing a scaffold-noise level (an empty
+  descriptor block and no pointer lines). The SessionStart self-heal recreates every level of a
+  session's chain on each start, so a removal did not last and the same dirs came back as a
+  decision every dream. The dream now lists such a level as set aside with nothing to decide, and
+  a level minted in a throwaway dir becomes a contribution against the minting hook. The
+  deliverable line and the Boundaries list in `references/dream-core.md` say the same.
+
 ## [10.3.28]
 
 ### Changed

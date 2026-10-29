@@ -99,8 +99,15 @@ the success line, abort-and-show on a miss).
     EVERY directory from D up to the anchor, so a session or a capture run from a source
     subdirectory mints one, and heal, `lint --tree` and `--check-tree` all report it clean. Do NOT
     dispatch a descriptor subagent for it (a descriptor turns the noise into a permanent level), do
-    not count it as a level, and PROPOSE its removal as a structural move (Boundaries in
-    references/dream-core.md), never apply it. Judge on BOTH signals together: pointers but no
+    not count it as a level, and do NOT propose its removal either: the SessionStart self-heal
+    (`session-start.py` `_self_heal`, which runs `memory_engine.heal` on the session's cwd)
+    recreates the marker and pointer block for every directory of that chain on EVERY start, so a
+    removal lasts only until the next session opens there or below. A session or capture already
+    ran there once, or the level would not exist, and the dream cannot tell whether another will,
+    so a proposal would ask the user about the same dirs dream after dream. List it in the report as set aside, with nothing for
+    the user to decide. If the noise itself does harm (a level minted in a throwaway dir such as
+    a run workspace), the fix belongs in the hook that mints it: queue a contribution against it
+    rather than proposing a dream move. Judge on BOTH signals together: pointers but no
     descriptor is a real level that needs one; a descriptor but no pointers is usually a real level
     not used yet. Of the rest, only synthesize levels whose descriptor is EMPTY,
     INCOMPLETE (missing template keys), or whose CHILDREN list is stale vs the actual
@@ -462,7 +469,8 @@ tests/README-acceptance.md); the bar is all-hard + >= 5/6 judgment on two consec
 
 - [ ] heal success line ("healed N file(s) across M level(s)").
 - [ ] Scope descriptors fresh: every chain level carries the template keys (or was verified fresh);
-      a scaffold-noise level set aside in step 0b is excepted and listed as a proposed removal.
+      a scaffold-noise level set aside in step 0b is excepted and listed as set aside, never as a
+      proposed removal (the next session start recreates it).
 - [ ] Capture ran BEFORE consolidation (or a verified "nothing durable" statement).
 - [ ] Backup taken + the (level, slug, title, pin) manifest recorded pre-dream.
 - [ ] Placement report: applied moves (with direction; pinned entries re-level like any other),
