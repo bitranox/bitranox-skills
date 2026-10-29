@@ -1,21 +1,14 @@
-# Handover - 2026-10-29 03:00, [23] batch 8 pass 1 shipped
+# Handover - 2026-10-29, [23] batch 8 pass 1 archived, pass 2 waits on one user decision
 
 ## In flight
 
-- [23] batch 8 (KI levels) pass 1 SHIPPED as 10.3.28 (d4b4077e on origin/master): the 25 archive
-  rows (20 folded, 5 already covered) into 12 skills. The bmk twin landed as 527f82f on bmk
-  origin/master (plugin.json 3.32.1, rebased by the bmk session over a peer's 5e6b9c2). Pass-1
-  data is in the main checkout's gitignored `.plan/fold-23/batch8/pass1/`: all.json, e1-e3.json,
-  pre/ (snapshots), results.json + results-r2.json (RED/GREEN), pass1.diff + pass1-r2.diff,
-  fix_r1.py, make_checklists.py.
-- The 25 facts are NOT archived yet: the user must install 10.3.28 first.
-- CI for d4b4077e (10.3.28) passed (workflow and ci both success); verify with
-  `ci_wait.py --sha $(git rev-parse --verify -q d4b4077e)`.
-- The owed nap ran: this session's transcript is marked reviewed, 5 lessons went to the
-  contrib queue. Deferred to the next full dream: 40 chain facts with superseded version claims
-  (`versionrot.py scan --chain`), and 61 older unreviewed transcripts of this project.
+- [23] batch 8 (KI levels) pass 1 is COMPLETE: shipped as 10.3.28 (d4b4077e), bmk twin 527f82f
+  (plugin.json 3.32.1), and the 24 folded facts archived in the memory store (22ba62e, pushed).
+  The 25th (never-capture-a-negative-tool-claim) was already archived by a peer dream.
+- Pass 2 (the 8 FOLD+cut rows) has not started. Its data: the main checkout's gitignored
+  `.plan/fold-23/batch8/dispositions.json` (rows with disposition FOLD+cut).
 - This worktree (`.claude/worktrees/fold-23-b7p2`): handover.md and the [23] line in
-  OPEN-WORK.md are uncommitted.
+  OPEN-WORK.md are committed in the same change as this file.
 
 ## Decided
 
@@ -31,12 +24,18 @@
 
 ## Next action
 
-After the user installs 10.3.28 (`/plugin marketplace update bitranox-skills`, `/reload-plugins`):
-quote-check the installed copy against the worktree (the 12 changed skills), run ref_map and a
-citer grep over the 25 slugs, take a store_manifest backup, `reconcile_memory_index.py --archive`
-each of the 25 at its level, verify the manifest diff, commit and push the store (own paths only).
-Then put the pass-2 policy question above to the user.
+Put the open decision above to the user as one AskUserQuestion. Then run pass 2 with the
+skill-writer flow used for pass 1 (skill_receipt start, snapshots, RED, editors, GREEN, qcheck,
+review, checklists, CHANGELOG + bump, repo-gate --ci, push, CI; after install: quote-check,
+ref_map + citer grep, store_manifest backup, archive, verify, store commit).
+
+## How to verify
+
+- Store: `reconcile_memory_index.py --check-tree /media/srv-main-softdev` reports
+  `TOTAL tree problems: 0`; no pointer `(mem:<slug>)` for the 24 slugs in
+  `.plan/fold-23/batch8/pass1/` remains in any CLAUDE.local.md.
+- CI for 10.3.28: `ci_wait.py --sha` with the full sha of d4b4077e.
 
 ## Lessons for the next nap
 
-- (none open: the 03:00 nap captured this session's lessons as five contrib_queue entries)
+- (none open)
