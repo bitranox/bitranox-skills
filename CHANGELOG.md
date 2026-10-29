@@ -30,6 +30,16 @@ a hole nobody has drawn a line under is one that gets rediscovered and half-fill
 two "versions with no entry" notes came to sit in this file disagreeing with it.
 
 
+## [10.4.2]
+
+### Changed
+
+- `coding-python-layered-config` follows lib_layered_config 7.4.0: rtoml and orjson are used below
+  Python 3.14 or from the `rtoml`/`orjson` extras on a GIL build, never installed on a free-threaded
+  one; tomli (3.14) or tomllib (3.15+) parse TOML there, with the TOML depth gaps stated;
+  `dotenv_path=` / `--env-file` read a FIFO or device under the 10 MiB cap, a FIFO read waits for its
+  writer, and a missing path is an empty layer in Python but a usage error on the CLI.
+
 ## [10.4.1]
 
 ### Changed
