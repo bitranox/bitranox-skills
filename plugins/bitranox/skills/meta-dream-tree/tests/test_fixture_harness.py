@@ -1,5 +1,4 @@
 """Tests for fixture_builder.py + fixture_asserter.py (the dream acceptance harness). ASCII."""
-import json
 from pathlib import Path
 
 import pytest

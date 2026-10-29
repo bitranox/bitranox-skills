@@ -62,7 +62,7 @@ from collections import Counter
 from collections.abc import Generator, Iterator, Mapping
 from contextlib import contextmanager
 from dataclasses import dataclass
-from datetime import date, datetime, timezone, UTC
+from datetime import date, datetime, UTC
 from pathlib import Path
 from typing import Any
 

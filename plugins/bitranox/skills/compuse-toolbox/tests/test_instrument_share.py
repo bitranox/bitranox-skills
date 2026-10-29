@@ -7,7 +7,7 @@ record, and a tool call is a `tool_use` block inside an `assistant` record.
 import json
 import subprocess
 import sys
-from datetime import date, datetime, timedelta, timezone, UTC
+from datetime import date, datetime, timedelta, UTC
 from pathlib import Path
 
 import pytest

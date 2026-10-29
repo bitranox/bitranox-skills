@@ -18,7 +18,6 @@ from pathlib import Path
 import pytest
 
 import block_git_semicolon_chain
-import block_masked_gate_exit
 import ci_watch_nudge
 import gated_prep_nudge
 import git_commit_branch_guard

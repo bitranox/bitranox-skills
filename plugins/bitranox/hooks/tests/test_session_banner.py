@@ -3,7 +3,6 @@
 All content is ASCII.
 """
 
-from pathlib import Path
 
 import session_banner as B
 

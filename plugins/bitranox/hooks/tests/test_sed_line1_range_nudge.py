@@ -7,7 +7,6 @@ parsing and still rendering, so the loss was invisible until the sizes were comp
 """
 import json
 
-import pytest
 
 import sed_line1_range_nudge as N
 

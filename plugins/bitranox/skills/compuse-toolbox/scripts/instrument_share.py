@@ -53,7 +53,7 @@ import sys
 from collections import defaultdict
 from collections.abc import Iterable, Sequence
 from dataclasses import dataclass, field
-from datetime import date, datetime, timezone, UTC
+from datetime import date, datetime, UTC
 from pathlib import Path
 from typing import Any
 

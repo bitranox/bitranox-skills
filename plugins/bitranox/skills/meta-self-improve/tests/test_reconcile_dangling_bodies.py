@@ -1,7 +1,6 @@
 """Tests for dangling-body detection + re-home in reconcile (surfacing and fixing invisible stuck
 entries: a central body no level points at). All content ASCII."""
 
-from pathlib import Path
 
 import reconcile_memory_index as R
 import memory_engine as E

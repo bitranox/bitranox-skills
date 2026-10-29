@@ -31,7 +31,6 @@ error, so it is false only on exit 2.
 import argparse
 import hashlib
 import json
-import os
 import re
 import sys
 import threading
