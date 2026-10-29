@@ -30,6 +30,21 @@ a hole nobody has drawn a line under is one that gets rediscovered and half-fill
 two "versions with no entry" notes came to sit in this file disagreeing with it.
 
 
+## [10.4.4]
+
+### Fixed
+
+- `compuse-vnc` no longer claims a plain VNC server types any US-layout text: QEMU's own VNC (the
+  console of a plain Proxmox VM) presses no Shift for a keysym, so `@` landed as `2` and `|` as `\`.
+  It documents `type --us-shift` (vnc-remote-control 1.2.0), the QEMU console as a unix socket to
+  tunnel to, and VNC password auth via `set_password` plus `expire_password vnc never`, which the
+  Proxmox web console replaces when opened. Mirrored from the vnc-remote-control repo.
+- `infra-proxmox` gains a "Cloned VM has no network" row: a PVE 9 install pins its NIC names with
+  `.link` files matching the MAC, so a clone of a nested-PVE template boots with `ens18`/`ens19`;
+  match `Path=` before templating.
+- `compuse-bash` gains a row for waiting on a reboot: port 22 and ssh still answer from the OLD boot,
+  so wait for `/proc/sys/kernel/random/boot_id` to change.
+
 ## [10.4.3]
 
 ### Changed
