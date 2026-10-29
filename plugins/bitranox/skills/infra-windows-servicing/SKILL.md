@@ -21,6 +21,7 @@ do not tell you.
 | "Access is denied" on a delete                  | ACL or ownership                  | the **read-only attribute** - not a permission, so `takeown`/`icacls` cannot fix it                         |
 | Permission command says success, op still fails | need a bigger permission pass     | the **diagnosis is wrong** - inspect the object                                                             |
 | Access denied under a SYSTEM task               | not privileged enough             | **SYSTEM is a different principal** and often has less access than an admin                                 |
+| `Install-WindowsUpdate` over ssh: `0x80070005`  | elevate the ssh session further   | **the update agent refuses the ssh session** - run the same script from a one-shot SYSTEM task              |
 | Log silent for 40 minutes                       | hung, kill it                     | a **phase handover** - the next step writes to a different log                                              |
 | Delete stopped with N dirs left                 | N separate failures               | **one blocker** - the walk abandoned at the first                                                           |
 | Windows.old is 25 GB, deleting frees 11         | the delete was incomplete         | **hard links counted once each** - the byte total was never the reclaimable size                            |
@@ -427,6 +428,31 @@ administrator session** (Windows OpenSSH hands an admin an unfiltered token, so
 Administrators or TrustedInstaller hold rights SYSTEM does not, that is your answer. Test it on
 one file; it takes seconds and settles the question.
 
+### The exception: Windows Update refuses the ssh session, so run it as SYSTEM
+
+The rule above is about FILE access. Installing updates is the case that goes the other way. Run
+inline over ssh, `Install-WindowsUpdate` (PSWindowsUpdate, which drives the Windows Update Agent
+COM API) has failed with `E_ACCESSDENIED (0x80070005)` for a local administrator, while
+`winget upgrade --all` and `docker pull` ran inline in the same session. Why the agent refuses
+that session is not established here, so do not answer it with more elevation in the same
+session. The same script in a one-shot SYSTEM task was accepted: it reported running as
+`nt authority\system` and listed the pending updates with no access-denied. Copy the `.ps1` to
+the guest, then over ssh:
+
+```
+schtasks /Create /TN wu-once /TR "powershell -NoProfile -ExecutionPolicy Bypass -File C:\path\to\wu.ps1" /SC ONCE /ST 23:59 /RU SYSTEM /RL HIGHEST /F
+schtasks /Run /TN wu-once
+rem poll the script's result file until its last line is DONE, then:
+schtasks /Delete /TN wu-once /F
+```
+
+A task's output never comes back over ssh, and `schtasks /Run` returns once the task has started,
+so the script writes its own result file (one writer, explicit encoding, as for the DISM install
+above) ending in a `DONE` sentinel line; poll that file and read the outcome from it. Repeat
+install plus reboot until a scan reports nothing pending. Choose by what refused: a FILE operation
+denied to SYSTEM goes to an admin session, the update agent refusing the ssh session goes to
+SYSTEM.
+
 ## Choosing the remedy
 
 `RestoreHealth` PATCHES individual payloads and must resolve each at its exact revision, so it
@@ -789,7 +815,8 @@ unmeasured.
 - You are treating `/XJ` as the thing that makes that mirror safe - it is measured not to be
 - You deleted a `Windows.old` and did not count `C:\ProgramData` before and after
 - SSH stopped accepting the key right after a `Windows.old` delete - you emptied `C:\ProgramData`
-- You are about to escalate to SYSTEM because admin was denied
+- You are about to escalate to SYSTEM because admin was denied a FILE operation (Windows Update
+  refusing an ssh session is the one case that does go to a SYSTEM task)
 - You concluded "hung" from a quiet log or flat disk without checking worker CPU
 - You are quoting a duration you did not measure on this machine
 - You are treating a clean `ScanHealth` as proof an update should install

@@ -301,6 +301,12 @@ creates), and if git is *tracking* a venv it drops it from the index (`git rm --
 leaving the files on disk, announcing that it did. A tracked venv would otherwise show thousands
 of modified files after every sync.
 
+**After `make clean-all`, rebuild the venv before a fan-out.** The project has no `.venv` until
+the next env-touching `make` recreates it. Before dispatching subagents that run the tests or call
+the venv's tools, run `make test` once in the main session: a direct call such as
+`.venv/bin/python -m pytest` fails outright on the missing venv, and parallel `make` calls do not
+race but queue on the venv lock above while the first one rebuilds from scratch.
+
 ## 2. Bootstrap the Makefile
 
 ```bash
@@ -370,17 +376,44 @@ forwarded (e.g. `make push fix login bug`). Most have short aliases.
   release, bmk's own Makefile or floor churn from a `make test` included, is committed (with git
   and those paths, since `push` would sweep in untracked files too) and pushed first; `release`
   never checks CI, so you wait until CI is green on that commit before running it.
-- `push` stages with `git add -A`, so every untracked, non-ignored file rides along; check
-  `git status` first. With nothing staged it makes an empty commit, so a `push` after the release
-  commit is already pushed leaves `release` tagging that empty commit. That is expected, not a
-  broken release.
+- **`make test` mutates the tree, and bmk's own churn ships with your change.** Its first stages
+  raise dependency floors in `pyproject.toml` and re-lock (`update_deps`, order 10; an exact pin
+  excepted, below) and rewrite sources with `ruff format` and `ruff --fix` (orders 20 and 30), and
+  a `make` may rewrite an outdated Makefile and `.bmk-cooldown.mk` (section 4). `make push` does
+  all of this through its nested `test`; `make bump-*` raises no floor and reformats nothing. A
+  modified Makefile, raised floors, a changed `uv.lock` and ruff's rewrites are the gate's own
+  output, not someone else's edit: commit them with your change, a docs-only change included, and
+  name a floor bump in the commit message. Never carve them out as "not part of this change" or
+  `git checkout` them away: the next `make` writes them again and leaves them for the next commit.
+  Files your TEST SUITE rewrites are different: restore those (next point).
+- `push` commits AFTER its gate: `update_deps` (order 10), `build` and `test` (20), `clean` (30),
+  then `commit` (40), which stages with `git add -A`. So the commit takes the tree as the gate LEFT
+  it: every untracked, non-ignored file, a tracked fixture or snapshot a test rewrote, and another
+  session's edits made while the gate ran. Staging beforehand cannot scope it, and a clean
+  `git status` covers only the moment it was read, so check in the SAME command
+  (`test -z "$(git status --porcelain)" && make push ...`) and read `git show --name-only HEAD`
+  afterwards. In a repo whose tests rewrite tracked files, or a checkout another session edits,
+  skip `push`: run `make test`, read the diff of each file the tests rewrote and
+  `git checkout -- <file>` it (or make the test write to `tmp_path`), then commit the intended
+  paths and bmk's own churn with git and `git push`. Restore after EVERY gate there, not only
+  around a push, and write that restore step into every brief and ship script that gates such a
+  repo before a commit. A test-time secrets or privacy scan must walk
+  `git ls-files -co --exclude-standard`, not only the tracked files, because `git add -A` commits
+  the untracked ones too.
+- With nothing staged, `push` makes an empty commit, so a `push` after the release commit is
+  already pushed leaves `release` tagging that empty commit. That is expected, not a broken
+  release.
+- **For a quick signal mid-task, skip the gate and its churn:** run the project venv's own tools
+  (`.venv/bin/python -m ruff check`, `-m ruff format --check`, `-m pyright`, `-m pytest -q`, as far
+  as the `dev` extra installs them). `make test` stays the gate before a push: it runs bmk's own
+  toolchain, raises the floors and checks the coverage floor.
 - **On an already-committed tree, the `push` commit's subject is the only record of what the push
   carried.** That empty commit is titled `<timestamp> - <message>`, where the message is the
   trailing words (`make push fix login bug`), else `MSG="..."` (the safe channel for punctuation,
   exported as `BMK_COMMIT_MESSAGE`), else a prompt on a terminal, else the literal `chores`. Pass a
-  message that names what the push carries, or skip `push`: run `make test`, commit what it
-  changed (Makefile, dependency floors), then a plain `git push` only if it passed, so the history
-  keeps only the commits that carry work.
+  message that names what the push carries, or skip `push`: run `make test`, commit what bmk
+  changed (Makefile, dependency floors, formatting), then a plain `git push` only if it passed, so
+  the history keeps only the commits that carry work.
 - **A message with punctuation goes in `MSG="..."`, never `ARGS=` or trailing words.** `ARGS=`
   and trailing words are pasted into the recipe text and parsed by bash; `MSG=` is exported to bmk
   through the environment and never touches a command line. How far `ARGS` breaks depends on the
@@ -443,6 +476,12 @@ forwarded (e.g. `make push fix login bug`). Most have short aliases.
   documented change rather than patching the symptom. Example: a library that starts wrapping a
   `PermissionError` in its own error type breaks an `except PermissionError`; catch the new type
   and walk `__cause__` where the original error matters.
+- **Before rolling one change out over many bmk repos, dry-run one `make test` per repo** and read
+  `git diff pyproject.toml` in each: every gate tests your change PLUS the floors it just raised,
+  and one new major release of a shared dependency can block most of the fleet on its own. Land
+  the fix for a breaking major first (ported from the template the repos share, where they share
+  one) and commit that churn, then roll out, so a blocked repo means your change failed, not the
+  bump.
 - **An exact pin is never moved.** The floor update reads every requirement list in
   `pyproject.toml` (`[project]` dependencies and optional extras, `[dependency-groups]`,
   `[build-system].requires`, `[tool.pdm.dev-dependencies]`) and raises `>=`, `>`, `~=` and
@@ -450,6 +489,20 @@ forwarded (e.g. `make push fix login bug`). Most have short aliases.
   `[tool.uv]` cooldown. An exact pin (`pkg==1.5.0`, `pkg===1.5.0`) is left as written and reported
   pinned (`[==]` in the `bmk deps` report), so it never fails the `deps` stage either. Use one for
   a release you hold on purpose, such as a test that compares the bytes one release produces.
+- **The floor update also writes the project's `[tool.uv]` cooldown block.** Before it locks, it
+  adds `exclude-newer` when the project has none, and an `exclude-newer-package` entry set to
+  `false` for every package named in `[bmk.supply_chain] own_packages` that the project reaches,
+  directly or only through another own package: an own library whose newest release needs a newer
+  release of another own library resolves to an OLDER release unless both are exempt. That list
+  defaults to the bitranox libraries, so if you publish packages of your own, set it (it REPLACES
+  the default, so list the bitranox libraries the project uses as well) or they get no exemption. A
+  third-party floor younger than the cooldown gets a per-package pin, a timestamp one second after
+  that release's upload, so the lock can take it; in a bmk project declare the floor and let bmk
+  write the pin. A pin of bmk's that no declared floor needs any more is removed once the cooldown
+  admits the release it served. bmk recognises its pins by VALUE, so a hand pin at upload time plus
+  one second counts as bmk's; any other entry is left alone, and so is the whole block when PyPI
+  does not answer (bmk says so on stderr). Never lower a floor to get under the cooldown: the
+  release the floor names is the one the project needs, and the pin is what admits it.
 - **Which bmk you are running:** `bmk --version` (run `$(uv tool dir --bin)/bmk --version` when
   `bmk` is not on your PATH). The Makefile's first line, `# BMK MAKEFILE X.Y.Z`, names the bmk
   that wrote the Makefile, not necessarily the one the next `make` runs, since every `make`
@@ -545,6 +598,22 @@ is `update_deps`, which runs the `deps_update` pipeline, so the block is
 Precedence: `--human` (forces text) > `BMK_OUTPUT_FORMAT` > default (`json`). If a run "does nothing
 visible", that is JSON mode succeeding -- add `--human` to watch it work.
 
+**A passing JSON-mode log looks truncated; prove the pass, do not re-run it.** It shows the
+dependency install and then almost nothing: no ruff summary, no pyright count, no pytest `passed`
+line. The verdict is one line, `{"result":"pass","stages":N,"scripts":M}`, written only in JSON mode
+and only on success. Read it as the verdict only when it is the LAST line of the log: with `2>&1`
+into one file, stdout is block-buffered while stderr is not, so the two streams' lines can land out
+of order. The independent control is the coverage report: bmk deletes `coverage.xml` (the
+`[tool.scripts.test] coverage-report-file` setting, which defaults to it) before pytest runs and
+writes it again only after the tests AND the `fail_under` floor passed, so an mtime inside the run's
+window (`ls -la --time-style=full-iso coverage.xml` against `date`) proves both. Re-run only if
+either check fails, and then in the FOREGROUND, whose exit status is the gate's own (a backgrounded
+compound's completion notice is not). A failed run prints a `[<stage>] (exit code: N)` block per
+failing stage (next paragraph): read those blocks before re-running anything. A failing `pytest`
+stage (`[coverage] Tests failed`) ends the run before the floor is checked, so a red run says
+nothing about coverage: while a planned failing test sits on the branch, report coverage as
+UNMEASURED, never as fine.
+
 **A stage missing from a failed run is not a stage that passed.** Order groups run one after
 another and the first group with a failure ends the run, so no stage of a LATER group ran at all.
 Inside the failing group every stage ran, and each failing one prints its own
@@ -604,6 +673,23 @@ it warns and uses 120 and `E003`. Every flag matters: shfmt with the right inden
 yields a rejected diff. And `bashate` itself reads NO config file, so run by hand without those
 flags it falls back to its 79-char default and flags lines the gate accepts. Reformatting to your
 local defaults instead of these values is the usual cause of "passes locally, fails the gate".
+To reproduce the stage, run `shfmt -i 4 -bn -ci -w <file>`, confirm `shfmt -d -i 4 -bn -ci <file>`
+prints nothing, then run `shellcheck -S warning -x <file>` (the gate's severity and its
+`source` following) and
+`bashate --max-line-length=<N> --ignore=<codes> <file>` with those values.
+
+**Which `.sh` files it lints.** Inside a git work tree: every `.sh` git tracks (even one under an
+ignore pattern) plus every untracked one no `.gitignore` excludes. Outside a work tree, or where
+the enclosing repository ignores the project directory, it walks every `.sh` below the project.
+Either way it skips virtualenvs (`.venv*`), `node_modules`, `.git` and nested checkouts (a
+directory holding a `.git` directory or a `gitdir:` file: a nested clone, a submodule, a linked
+worktree). The PSScriptAnalyzer stage picks its `.ps1` files the same way. So keep scratch and
+debug scripts outside the project (a session scratch directory), and say so in every subagent
+brief that may run the gate. When the stage is red on a `.sh` you never edited, ask git what it
+is before touching it: `git ls-files --error-unmatch <path>` exits 0 for a tracked file (the
+project's own script: fix it, or raise it with its owner), while `git status --porcelain <path>`
+showing `??` marks an untracked stray (a leftover of yours or a peer's: move it out or delete it
+if it is yours, never reformat it to pass).
 
 ## 6. Configuration and custom pipelines
 
@@ -781,8 +867,7 @@ The two combine: with a pin, the gate makes the one pinned run plus one run per 
 a pinned project type-checks another OS only through that OS's `pyrightconfig.<platform>.json`.
 
 **Prove it rather than reasoning about it:** run the arm where the check must FAIL, and require the
-gate to go red. A gate that has only ever passed has not been shown to gate. See
-`bitranox:process-test-design`.
+gate to go red. A gate that has only ever passed has not been shown to gate.
 
 ## Troubleshooting
 

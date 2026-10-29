@@ -118,6 +118,8 @@ Docker tags and `uv_build` pins name. Each gotcha names the uv it was measured o
 | **"Project dependency cooldown (exclude-newer)"**                | `05-resolution.md` (Dependency Cooldowns: `pyproject.toml`, not `uv add`)                         |
 | **"Cooldown for uvx / uv tool install (exclude-newer order)"**   | `07-tools-and-scripts.md` (A Supply-Chain Cooldown: flag before the package spec)                 |
 | **"uv lock refuses a raised floor (only X<=N available)"**       | `05-resolution.md` (Dependency Cooldowns), `02-projects.md`                                       |
+| **"Cooldown locks an older release of your own package"**        | `05-resolution.md` (Exempting your own packages from a cooldown)                                  |
+| **"Analyser via `uvx --with .` reports a removed defect"**       | `07-tools-and-scripts.md` (Including Additional Dependencies)                                     |
 | **"README install line with uv tool install --from"**            | `07-tools-and-scripts.md` (Installing Tools: package name)                                        |
 | **"Recreated venv / failed to canonicalize path"**               | `06-python-versions.md` (Gotcha: a recreate deletes the interpreter you named)                    |
 | **"Windows SSH: os error 448 untrusted mount point"**            | `06-python-versions.md` (Minor version directories)                                               |

@@ -51,6 +51,12 @@ the user had asked for, a reviewer pass, 206 unframed bodies, 57 flagged candida
 contributions - went from named bullets with counts to absent, with no line saying any of them had
 been closed.
 
+The same erosion hits any record rewritten wholesale each cycle (a status summary, a rolling
+report), and it is invisible from inside the rewrite: everything the writer remembers IS in the
+new copy, and nobody diffs a rewritten record against its predecessor looking for absences. So a
+list that must survive lives in a file edited line by line, and the rewritten record points at it
+instead of restating it.
+
 | Goes in `handover.md`                        | Goes in `OPEN-WORK.md`                          |
 |----------------------------------------------|-------------------------------------------------|
 | what is part-done RIGHT NOW, and its state   | anything not finished that outlives the session |

@@ -188,6 +188,23 @@ $ uvx -w <extra-package> <tool-package>
 
 If the requested version conflicts with the requirements of the tool package, package resolution will fail and the command will error.
 
+**`uvx --with . --from <tool>` checks a BUILT copy of your package, not your working tree.** uv
+builds the local directory into the tool's environment and rebuilds it only when its
+`pyproject.toml`, `setup.py` or `setup.cfg` changes, or a `src` directory appears or disappears
+(`10-configuration.md`, Dynamic metadata). An edit under `src/` after the first build stays
+invisible, so an analyser run this way (an import linter, a type or architecture checker) keeps
+reporting a defect you already removed, at a line that may now hold something else. Clearing the
+analyser's own cache does not help, and `--refresh` has been observed not to rebuild the copy
+either (uv version not recorded). Run an analyser of your own code from the project venv instead
+(`.venv/bin/lint-imports`, or `uv run <tool>` with the tool in a dev group), where the package is
+installed editable and the tool reads `src/` directly.
+
+When a checker insists on a violation the source provably lacks (grep the file, read the cited
+line), suspect what the tool is reading before you suspect the code, since nothing in its output
+says which copy it read. Prove the loop both ways before believing either verdict: plant the
+defect and require RED, remove it and require GREEN, clearing the tool's caches in between. A
+violation still reported after the removal means the tool reads something other than your tree.
+
 ### Installing Tools
 
 If a tool is used often, it is useful to install it to a persistent environment and add it to the `PATH` instead of invoking `uvx` repeatedly.

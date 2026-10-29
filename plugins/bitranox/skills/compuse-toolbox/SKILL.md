@@ -382,6 +382,27 @@ Three traps no `--help` covers live in `references/` (load them with the Read to
   still running, and misreading it costs a re-tag of a published version or a debug session on
   green code.
 
+- **`ci_wait` ends `no-runs` on a sha you pushed: ask whether anything could build that sha
+  before suspecting CI.** Waiting longer or polling again rarely changes a `no-runs` (exit 2)
+  after the grace period: usually no run exists and none ever will, and a retry loop on it is
+  chasing an infrastructure fault that is not there. Check, in order: (1) run from the repo you
+  pushed, since `--ref` resolves in the current directory's repo; (2) does that repo have a
+  `.github/workflows` at all? If not, it has no CI: say so and stop, never report it green;
+  (3) is the sha on a remote branch? `git branch -r --contains <sha>` empty means it was never
+  pushed (`git rev-list --count @{u}..HEAD` non-zero shows unpushed commits), or a rebase (yours,
+  or a peer session's `git pull --rebase` in a shared checkout) republished the change under a
+  new sha: find it by content, its subject in `git log origin/<default> -- <path>`, and watch
+  THAT sha; (4) read each workflow's `on:` block. `on: push: branches: [main, master]` plus a
+  `pull_request` trigger against them matches nothing on a feature-branch push, though the sha is
+  pushed and the repo has CI. Settle it by reading the runs themselves, never by the remote
+  branch alone: `gh run list --repo <owner>/<repo> --json headSha,workflowName,event --limit 20`
+  with no row carrying the full sha means no run exists. Then report that no workflow triggers on
+  that branch, that the work has been validated by nothing beyond the local gate (none of CI's OS
+  cells ran), and what would
+  get a verdict: a merge to the default branch, or a pull request against it. A post-push notice
+  that CI "is now running" checks that the repo has workflow files and a forge that runs them, not
+  that they trigger on the branch, so it is no evidence a run exists.
+
 - **`ci_wait` beside a long dispatched run on the same sha: wait for push CI with
   `--event push`.** With no `--event` the wait counts every run on the sha except a scheduled one,
   so a `workflow_dispatch` run started on the pushed commit (an integration or benchmark workflow

@@ -30,6 +30,40 @@ a hole nobody has drawn a line under is one that gets rediscovered and half-fill
 two "versions with no entry" notes came to sit in this file disagreeing with it.
 
 
+## [10.4.1]
+
+### Changed
+
+- `devops-bmk`: commit bmk's own churn (a regenerated Makefile, raised floors) with your change and
+  name a floor bump in the message, but restore files the TEST SUITE rewrote; `make push` commits
+  with `git add -A`, so gate a shared checkout with a porcelain check in the same command and verify
+  with `git show --name-only HEAD`. Before a fleet-wide gated push, dry-run one `make test` per repo
+  to see which floors move. A passing JSON-mode log is proved by its last line and a fresh coverage
+  report, not re-run. The shell-lint stage's file set (tracked plus non-ignored untracked `.sh`,
+  nested checkouts skipped) and its exact `shellcheck -S warning -x` reproduction. After `make
+  clean-all`, rebuild the venv before dispatching test-running agents. The floor update writes the
+  `[tool.uv]` cooldown block: own-package exemptions from `[bmk.supply_chain] own_packages` (which
+  replaces the bitranox default, so list those too), and per-package pins for young third-party
+  floors, which bmk recognises by value.
+- `coding-python-uv`: `uvx --with .` analyses a built copy of the package, not the working tree, so
+  a deleted defect keeps being reported; run the analyser from the project venv. The cooldown rules:
+  exempt every own package reachable transitively, keep own libraries' third-party floors older than
+  the cooldown, never lower a blocked floor (pin that release one second after its upload and remove
+  the pin once the default admits it; in a bmk project bmk writes and removes it), and verify
+  resolved versions against PyPI rather than trusting a green `uv lock`.
+- `compuse-toolbox`: when `ci_wait` ends `no-runs` on a sha you pushed, check which repo you ran
+  it from, whether the repo has workflows, whether the sha is on a remote branch (or was
+  republished by a rebase), and whether the workflows' `on:` triggers include the branch; settle
+  it by listing the runs.
+- `infra-windows-servicing`: installing updates over ssh can fail with `E_ACCESSDENIED`
+  (`0x80070005`) where other admin work succeeds; run the install as a one-shot SYSTEM task and
+  poll a result file. The "SYSTEM can have less access" advice is scoped to file operations.
+- `coding-python-send-mail`: mail the machine's owner through the local postfix
+  (`localhost:25`, no STARTTLS) as `root@<myhostname>`; a bare `root` or `root@localhost` is
+  refused as an invalid recipient.
+- `meta-context-watcher`: the erosion of a wholesale-rewritten record applies to any rolling
+  record, not only a handover.
+
 ## [10.4.0]
 
 ### Changed

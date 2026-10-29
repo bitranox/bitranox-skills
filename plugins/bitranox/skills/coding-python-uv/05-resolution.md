@@ -563,9 +563,9 @@ number as proof of either cause below.
 - **The cooldown hides the release.** On uv 0.13.0 the error then ends with a `hint:` naming the
   filter (`` `<pkg>` was filtered by `exclude-newer` ``, or by `exclude-newer-package` when the
   package's own exemption timestamp predates the release) and the release's publish time. Add or
-  fix an exemption for that one package: prefer a timestamp just after the upload, which keeps the
-  cooldown for later releases; `exclude-newer-package = { <pkg> = false }` exempts the package
-  for good.
+  fix an exemption for that one package: prefer a timestamp just after the upload, which admits
+  only that release (later ones stay excluded until you remove the entry, see below);
+  `exclude-newer-package = { <pkg> = false }` exempts the package for good.
 - **The lock state, with the exemption already working (no `hint:` names a filter).** The
   control: copy `pyproject.toml` into a scratch directory with no `uv.lock` and run `uv lock`
   there. If it resolves, the exemption works and the lock is the cause: run
@@ -575,7 +575,55 @@ number as proof of either cause below.
   out.
 
 When no `hint:` names a filter, run the control and `--upgrade-package` before you loosen the
-cooldown, clear the cache or lower the floor.
+cooldown or clear the cache. Do not lower the floor to get past either cause (see "A floor younger
+than the cooldown" below).
+
+### Exempting your own packages from a cooldown
+
+These traps were measured on uv 0.13.0 with `[tool.uv] exclude-newer = "14 days"` in a project
+depending on several of your own libraries that depend on each other. Two of them are SILENT:
+`uv lock` succeeds with an older release of your own package and prints nothing, which reads as
+fine while consumers never get the release you just shipped.
+
+- **Exempt the transitive closure of your own packages, not only the direct dependencies.** If
+  own package A's newest release requires own package B at a version still inside the cooldown,
+  and B is not exempt, `uv lock` locks an OLDER A and exits 0. uv names the filter only when you
+  force A with `==` (the `hint:` above). Walk your own packages' requirements from the index,
+  following your own names only, and exempt every one reached
+  (`exclude-newer-package = { <own-pkg> = false }`).
+- **An exempt own library is still held back by its THIRD-PARTY floors.** If its newest release
+  raised a third-party floor to a release younger than the cooldown, every cooldown consumer
+  silently locks the previous release of your library. Keep the third-party floors of your own
+  libraries older than the cooldown, and release your own packages deepest first: the leaf
+  libraries, then the libraries depending on them, then the apps, with the index serving each
+  layer before you touch the next. In any other order the upper layers resolve to OLDER own
+  releases and the lock still succeeds.
+- **A floor younger than the cooldown: pin that one release, never lower the floor.** Such a floor
+  makes `uv lock` unresolvable. Lowering it drops the fixes the floor was raised for and can go
+  below a floor an already-published release of yours declares. Instead admit exactly that release
+  with a per-package timestamp one second after its newest file upload, `exclude-newer-package = {
+  <pkg> = "<upload time + 1 s>" }`, which admits it and nothing uploaded later. Then check that
+  release's own requirements: a dependency it pins with `==` and that was uploaded the same day
+  needs a pin of its own. A per-package value REPLACES the default cooldown for that package, so
+  remove the entry once the default admits the release, or it holds the package at that release for
+  good. In a bmk project bmk writes this pin and removes it once the default admits the release
+  (`bitranox:devops-bmk`): declare the floor and leave the pin to it.
+- **A failed lock names only ONE blocker per run.** To list them all, run `uv lock` in a scratch
+  copy, read the `hint:`, exempt or pin that package, and lock again until it resolves.
+- **Verify by the resolved versions, never by a green `uv lock`.** Compare the versions of your own
+  packages in `uv.lock` (or `uv tree`) with the newest each has on the index. A run that must use
+  an unreleased wheel of your own (`uv tool run --from <local wheel>`) under a cooldown needs the
+  same own-package exemptions on its command line (`--exclude-newer-package <own-pkg>=false` for
+  each), or it fails to resolve. To prove a wrapper's cooldown is in effect at all, run its exact
+  argv once WITHOUT the exemptions: the refusal is the evidence.
+
+Keep `>=` floors, commit `uv.lock` and let the cooldown do the waiting rather than pinning `==`
+in `pyproject.toml`: an `==` pin reaches only direct dependencies (the transitive tree still
+floats), makes two libraries pinning different versions impossible to install together, and
+freezes security fixes until someone bumps it by hand. A relative cooldown is stored in `uv.lock`
+as `exclude-newer-span`, so the lock does not go stale day by day and `uv lock --check` stays
+clean. `uv pip install` honours `[tool.uv]` only when run inside the project directory; from
+another working directory it does not, so set the working directory when a script calls it.
 
 ## Source Distribution Formats
 
