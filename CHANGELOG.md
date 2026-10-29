@@ -123,7 +123,10 @@ two "versions with no entry" notes came to sit in this file disagreeing with it.
 - `shell_text.blank_unexpanded_text`: a `$(...)` inside a double-quoted string is read as its own
   shell, so `"$(echo "it's")"` no longer opens a single-quoted string that hid a later `$?`.
 - `block-partial-typecheck`: a word the shell has yet to expand (`$v` in a flag loop) is no longer
-  read as a path, and a variable the command assigned one literal value is judged by that value.
+  read as a path, and a variable the command assigned one literal value is judged by that value;
+  an assignment inside an `if`/loop/`case` body, or one later `unset`, leaves it unknown.
+- `block-sed-structured-files`: the refusal no longer repeats the whole-call sentence the shared
+  footer already prints.
 - `repo-gate`: a tag push with a redirection (`2>&1`, `> log`) is recognised as tags-only again.
 
 ## [10.4.4]

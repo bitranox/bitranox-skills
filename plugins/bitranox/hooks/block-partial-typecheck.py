@@ -181,6 +181,7 @@ def _pyright_runs(cmd: str, cwd: str | None, tool_name: str = "Bash") -> list[tu
     here: str | None = cwd
     saved: list[str | None] = []
     values: dict[str, str | None] = {}
+    depth = 0   # open if/loop/case blocks: an assignment inside one may not run
     segments = list(shell_text.iter_segments(text, tool_name))
     for number, (offset, segment) in enumerate(segments):
         end = offset + len(segment)
@@ -190,7 +191,8 @@ def _pyright_runs(cmd: str, cwd: str | None, tool_name: str = "Bash") -> list[tu
             run = _pyright_run(segment, tool_name, values)
             if run is not None:
                 runs.append((run, here))
-            _record_values(segment, separator, tool_name, values, in_subshell=bool(saved))
+            _record_values(segment, separator, tool_name, values, in_subshell=bool(saved) or depth > 0)
+        depth = max(0, depth + _block_step(segment))
         # A cd inside a subshell ends with it: `(cd sub && pyright x); pyright y` runs y here.
         if "(" in separator:
             saved.append(here)
@@ -239,6 +241,23 @@ def _expanded(arg: str, values: dict[str, str | None]) -> list[str]:
     return result.split()
 
 
+_BLOCK_OPENERS = frozenset({"if", "while", "until", "for", "select", "case"})
+_BLOCK_CLOSERS = frozenset({"fi", "done", "esac"})
+
+
+def _block_step(segment: str) -> int:
+    """+1 when a statement opens an if/loop/case block, -1 when it closes one, else 0.
+
+    Only the statement's first word counts, the way the shell reads a reserved word, so `echo done`
+    closes nothing. An assignment on a line of its own inside the body would otherwise read as
+    settled, though the body may never run.
+    """
+    words = segment.split()
+    if not words:
+        return 0
+    return 1 if words[0] in _BLOCK_OPENERS else -1 if words[0] in _BLOCK_CLOSERS else 0
+
+
 def _record_values(segment: str, separator: str, tool_name: str, values: dict[str, str | None], *,
                    in_subshell: bool) -> None:
     """Note in `values` what a statement that only assigns sets each name to.
@@ -246,7 +265,7 @@ def _record_values(segment: str, separator: str, tool_name: str, values: dict[st
     A value counts only when the text settles it: assigned ONCE in the command, as a statement of
     its own (`F="a b"`, `export F=x`, not a `F=x cmd` prefix, which the shell expands `$F` in front
     of), outside a subshell and a branch or loop body, and holding nothing still to expand. Any
-    other assignment, a loop variable or a `read` makes the name unknown (None), so its reference
+    other assignment, a loop variable, a `read` or an `unset` makes the name unknown (None), so its reference
     is skipped rather than guessed.
     """
     try:
@@ -256,7 +275,7 @@ def _record_values(segment: str, separator: str, tool_name: str, values: dict[st
     if tokens[:1] in (["for"], ["select"]) and len(tokens) > 1:
         values[tokens[1]] = None
         return
-    if tokens[:1] == ["read"]:
+    if tokens[:1] in (["read"], ["unset"]):
         values.update((word, None) for word in tokens[1:] if not word.startswith("-"))
         return
     words = tokens[1:] if tokens[:1] in (["export"], ["readonly"]) else tokens

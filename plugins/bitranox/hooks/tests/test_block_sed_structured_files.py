@@ -92,13 +92,16 @@ def test_a_refused_compound_command_says_nothing_in_it_ran(monkeypatch, capsys):
     """
     assert _run(monkeypatch, "sed -i 's/a/b/' config.json && python3 edit.py") == 2
     err = capsys.readouterr().err
-    assert "NOTHING in this command ran" in err
-    assert "not just the sed -i part" in err
+    # The shared footer says it, exactly once: the guard's own copy of the sentence would repeat it.
+    assert err.lower().count("nothing in this call ran") == 1
+    assert "NOTHING in this command ran" not in err
 
 
-def test_a_refused_perl_names_perl_in_the_nothing_ran_sentence(monkeypatch, capsys):
+def test_a_refused_perl_names_perl_as_the_editor(monkeypatch, capsys):
     assert _run(monkeypatch, "perl -pi -e 's/a/b/' pyproject.toml && python3 edit.py") == 2
-    assert "not just the perl -i part" in capsys.readouterr().err
+    err = capsys.readouterr().err
+    assert "with perl -i" in err
+    assert err.lower().count("nothing in this call ran") == 1
 
 
 def test_main_warn_exits_0(monkeypatch):

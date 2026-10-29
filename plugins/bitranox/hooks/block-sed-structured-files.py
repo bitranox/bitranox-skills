@@ -121,9 +121,7 @@ def assess(command, tool_name="Bash"):
                         f"no-hand-edit-config footgun (silent corruption / wrong match / format churn). Use the "
                         f"bitranox edit skill for that format ({EDIT_SKILLS}) - load -> edit the object -> dump "
                         f"-> re-validate. For a one-off, a small Python `json`/`rtoml`/`ruamel.yaml` script does "
-                        f"the same. NOTHING in this command ran: the whole call was refused, not just the "
-                        f"{cmd} -i part. Any other step chained into it (a Python edit, a write) did not "
-                        f"happen - re-run it on its own.")
+                        f"the same.")
     m = REDIRECT.search(command)
     if m:
         return ("warn", m.group("f"),

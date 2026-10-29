@@ -481,6 +481,11 @@ def test_an_assigned_value_holding_flags_is_read_as_flags(monkeypatch, project):
     "F=$(ls src); pyright $F",                      # a substitution's output
     "for F in src; do pyright $F; done",            # a loop variable
     "if a; then F=src; fi; pyright $F",             # a branch that may not run
+    'if [ -n "$CI" ]; then\n  F=src\nfi\npyright $F',  # the same, the assignment on its own line
+    "for x in 1; do\n F=src\ndone\npyright $F",     # a loop body that may not run
+    "while read l; do\nF=src\ndone < x; pyright $F",
+    "case $x in\n a)\n  F=src\n  ;;\nesac\npyright $F",  # a case arm
+    "F=src; unset F; pyright $F",                   # unset: the run has no paths
     "pyright $UNSET_IN_THIS_COMMAND",               # from the environment
 ])
 def test_a_variable_whose_value_the_text_does_not_settle_is_unknown(monkeypatch, project, command):
