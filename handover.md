@@ -1,33 +1,42 @@
-# Handover - 2026-10-29 00:40, [23] batch 7 done
+# Handover - 2026-10-29 03:00, [23] batch 8 pass 1 shipped
 
 ## In flight
 
-- Nothing part-done. [23] batch 7 is complete: pass 1 in 10.3.19, pass 2 in 10.3.23, installed
-  text quote-checked (22 of 22 files identical), 34 pass-1 facts archived and 13 pass-2 hooks cut
-  (memory store commit bb7b45e, pushed). btx-skill-jev-judge 0.3.6 is on PyPI, its main is pushed
-  with CI green, and the GitHub release v0.3.6 exists.
-- Check: `ci_wait.py --ref HEAD` for this repo's latest push.
+- [23] batch 8 (KI levels) pass 1 SHIPPED as 10.3.28 (d4b4077e on origin/master): the 25 archive
+  rows (20 folded, 5 already covered) into 12 skills. The bmk twin landed as 527f82f on bmk
+  origin/master (plugin.json 3.32.1, rebased by the bmk session over a peer's 5e6b9c2). Pass-1
+  data is in the main checkout's gitignored `.plan/fold-23/batch8/pass1/`: all.json, e1-e3.json,
+  pre/ (snapshots), results.json + results-r2.json (RED/GREEN), pass1.diff + pass1-r2.diff,
+  fix_r1.py, make_checklists.py.
+- The 25 facts are NOT archived yet: the user must install 10.3.28 first.
+- CI for d4b4077e (10.3.28) passed (workflow and ci both success); verify with
+  `ci_wait.py --sha $(git rev-parse --verify -q d4b4077e)`.
+- The owed nap ran: this session's transcript is marked reviewed, 5 lessons went to the
+  contrib queue. Deferred to the next full dream: 40 chain facts with superseded version claims
+  (`versionrot.py scan --chain`), and 61 older unreviewed transcripts of this project.
+- This worktree (`.claude/worktrees/fold-23-b7p2`): handover.md and the [23] line in
+  OPEN-WORK.md are uncommitted.
 
 ## Decided
 
-- Mine (logged in EXECUTION-USER-REVIEW.md): the jev paid-service fact is CUT, not archived (its
-  rule is general beyond jev-judge). The 8 already-cut rows keep their hooks (KEEP).
+- bmk's own marketplace bumps plugin.json on every pushed skill change, even ahead of its
+  pyproject version (bmk's sync only raises it): 3.32.1 at pyproject 3.32.0 is correct.
 
-## Noticed, not mine
+## Open decision (ask the user, one question, before pass 2)
 
-- `reconcile_memory_index.py --check-tree` reports 2 sideways refs, both in rotek levels and both
-  other sessions' work: `reference-a-one-shot-system-task-on-windows-...` (projects/rotek) and the
-  untracked `reference-a-stuck-unresizable-window-...` (lxc-pydev level).
+- `feedback-tests-written-from-a-plan-cannot-catch-a-defect-in-the-plan` (tree top) says a
+  plan-mandated fix that only makes code obey a rule the plan states, or only adds tests, is fixed
+  and logged; process-agents-subagent-driven-development SKILL.md says every plan-mandated
+  finding is the human's decision. The fold would change the skill's policy.
 
 ## Next action
 
-[23] batch 8: list which levels' phase-1 FOLD/ALREADY rows (`.plan/fold-23/rows.json`) no batch
-recorded on the [23] line has handled yet, and propose the next group to the user.
+After the user installs 10.3.28 (`/plugin marketplace update bitranox-skills`, `/reload-plugins`):
+quote-check the installed copy against the worktree (the 12 changed skills), run ref_map and a
+citer grep over the 25 slugs, take a store_manifest backup, `reconcile_memory_index.py --archive`
+each of the 25 at its level, verify the manifest diff, commit and push the store (own paths only).
+Then put the pass-2 policy question above to the user.
 
 ## Lessons for the next nap
 
-- tooling: When a tag-only push is refused by repo-gate's mirror check, drop any redirection
-  (`2>&1`, `> f`) from the push command: pushes_only_tags reads it as a refspec ([880]).
-- tooling: When a `memory_engine`/`heal` call runs with its cwd under a gitignored scratch dir
-  such as `.plan/`, check afterwards for scaffolded empty CLAUDE.local.md/CLAUDE.md pairs there
-  (eight appeared at once on 2026-10-28) and delete them by exact path.
+- (none open: the 03:00 nap captured this session's lessons as five contrib_queue entries)
