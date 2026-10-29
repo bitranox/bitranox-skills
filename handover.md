@@ -1,41 +1,56 @@
-# Handover - 2026-10-29 18:00, [23] closed
+# Handover - 2026-10-29 21:40, backlog sweep wave 1 shipped (10.5.0, 10.5.1)
 
 ## In flight
 
-- Nothing part-done. [23] (fold memory lines into skills) is finished and its OPEN-WORK line
-  deleted; batch 10 data stays in the main checkout's `.plan/fold-23/batch10/fold/`.
-- Still owed by the USER: install 10.4.3 (`/plugin marketplace update bitranox-skills`, then
-  `/reload-plugins`). The store step was quote-checked against the published origin/master text
-  instead of the installed cache (decision logged in the main checkout's EXECUTION-USER-REVIEW.md,
-  "2026-10-29 [23] batch 10 store step without the install").
+- The user's scope decision (main checkout EXECUTION-USER-REVIEW.md, "2026-10-29 Backlog sweep
+  scope"): work every open OPEN-WORK item, skip only items waiting on something outside the
+  session. Wave 1 is done: 34 items closed in 10.5.0, a Windows fix in 10.5.1, CI green on both.
+- Wave 2 is next: [200], the contribution-queue triage (302 entries in 28 queues, measured).
+- Three user decisions are owed, to be asked one at a time: [28] backlog_ask regex-first-then-Jev
+  (recommended: stay regex-only); [510] (4) bridge OSError exit 1 vs 2 (agent recommends 2);
+  [510] (5) memory_add body optional on an update (agent recommends optional).
+- Still owed by the USER: install the current plugin (`/plugin marketplace update
+  bitranox-skills`, then `/reload-plugins`); the cache here is behind origin.
 
 ## Committed, or not
 
-- All pushed: marketplace 10.4.3, twins bmk 3.32.4, lib_layered_config 7.4.1,
-  bitranox_template_py_lib 2.0.5, umbrella provmm skills, provmm-E2E-tests, memory store.
+- All pushed to master. The integration worktree `.claude/worktrees/bl-integrate` and the old
+  `fold-23-b7p2` checkpoint worktree are expendable once this handover lands.
 
 ## Decided
 
-- [23] closed on measurement: `.plan/fold-23/census_next.py` (now aware of batches 9 and 10)
-  reports 0 live unhandled phase-1 FOLD/ALREADY rows.
-- [730] closed on measurement: `--check-tree` reports TOTAL tree problems 0 and no sideways refs.
+- Agents left uncommitted diffs; one integration worktree applied them with `git apply --3way`,
+  byte-compared every single-owner file against its owner, and resolved the one real conflict
+  (repo-gate's tool-repo verdict block) by hand. An opus review confirmed the resolution.
+- The peer bmk session's devops-bmk twin line rode in 10.5.0 instead of a separate 10.4.5, so two
+  sessions did not race for the version number.
+- The compuse-vnc twin drift seen mid-sweep was a peer's in-flight change; it landed as 10.4.4.
 
 ## Still open, untouched
 
-- Everything else: `OPEN-WORK.md`.
+- [30] (blocked on compact mode proving itself), [96] (waits for dream runs), [1040]-[1080]
+  (found by the sweep): `OPEN-WORK.md`.
 
 ## Next action
 
-Top-ranked open item [28] in `OPEN-WORK.md` (second wave of Jev sites): read its line and start at
-its `next:` field.
+Ask the [28] question, then start [200]: `contrib_queue.py queues`, fan the 28 queues out to
+triage (already shipped / stale / actionable / needs user).
 
 ## How to verify
 
-- `python3 plugins/bitranox/hooks/repo-gate.py --mirrors` reports 0 drifted.
-- `reconcile_memory_index.py --check-tree /media/srv-main-softdev` reports TOTAL tree problems 0.
-- `python3 .plan/fold-23/census_next.py` (main checkout) reports live: 0.
+- `uv run <toolbox>/scripts/ci_wait.py --ref HEAD --repo bitranox/bitranox-skills --event push`
+  on master.
+- `python3 plugins/bitranox/hooks/repo-gate.py --ci` and `--mirrors`.
 
 ## Lessons for the next nap
 
 - When a census script decides "handled" from a hard-coded list of batch dirs, add each new batch
   to that list in the same step that ships it, or the census reports finished work as open.
+- When a Jev shadow site's AGENT label is constant across hundreds of rows, treat the agreement
+  clause as measured against a possibly broken instrument before applying the drop rule.
+- When code compares st_dev from os.DirEntry.stat() on Windows, use os.lstat instead: DirEntry
+  leaves st_dev at 0 there, so every subdir reads as another filesystem.
+- When several agents edit separate copies of one base, integrate with `git apply --3way` into one
+  worktree and byte-compare each single-owner file against its owner before trusting the merge.
+- When packing a git file list into a tar, use `git archive`, not `git ls-files | xargs tar cf -`:
+  xargs splits the list and the concatenated archives die with SIGPIPE.
