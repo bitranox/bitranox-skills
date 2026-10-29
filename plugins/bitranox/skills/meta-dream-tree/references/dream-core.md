@@ -137,10 +137,24 @@ content, the whole stretch, in one pass.
 **A stretch over 2 MB comes in PARTS, oldest first.** The banner then carries a `TRUNCATED` line
 naming the byte range shown and the range still to come. Capture from that part, run
 `session-reviewed` (it advances only to the end of the part shown and prints how many bytes
-remain), then run `session-review` again, until it prints `NOTHING NEW`. Stopping after the first
-part leaves the rest unreviewed, and the owed-nap gate keeps asking for it. `session-reviewed` and
-the other write verbs (`done`, `saw-promotable`, `promoted`) exit 2 with an error on stderr when
-their write did not land, so a success line means the state really changed.
+remain), then run `session-review` again. Its EXIT STATUS says when to stop:
+
+```bash
+dream_state.py session-review "<cwd>" > review.txt 2>&1; rc=$?
+# rc 0: a transcript part was shown - read review.txt, capture, run session-reviewed, repeat
+# rc 1: NOTHING NEW is left of this transcript - the done answer, not a failure; the subagent,
+#       routing and skills blocks may still print beside it, so read review.txt once, then stop
+# rc 2: an error (no transcript discovered, an unreadable one, a bad argument) - read it, stop
+```
+
+Decide by that status, never by searching the output for a marker. Past its banner the output IS
+raw transcript, and a transcript quotes whatever its session said, `NOTHING NEW` and `TRUNCATED`
+included - a review loop's own earlier commands put them there. A grep over the whole file and a
+banner-only `head -N` window both match that text (the window reaches into the transcript whenever
+the banner is shorter than N lines), and both have ended a loop after its first part. Stopping
+after the first part leaves the rest unreviewed, and the owed-nap gate keeps asking for it.
+`session-reviewed` and the other write verbs (`done`, `saw-promotable`, `promoted`) exit 2 with an
+error on stderr when their write did not land, so a success line means the state really changed.
 
 Rendered inline the same call is silently cut: the harness PERSISTS the result to its own file and
 shows a short preview, and that file is a VIEW of the stretch, not the stretch. Measured twice -

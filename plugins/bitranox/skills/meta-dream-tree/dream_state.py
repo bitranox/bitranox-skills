@@ -64,11 +64,13 @@ Every write verb reads its state back and exits 2 with an error on stderr when t
 land (an unwritable ~/.claude/self-improve-audit, a full disk) - a success line over a failed
 write is the one output a caller cannot recover from.
 
-Exit codes: 0 = done, or the answer yes (`due`, `should-promote` -> promote); 1 = the answer no
-(`not-due`, `hold` - the word is printed either way, and it is an answer, not a failure); 2 = bad
-arguments, a write that did not land, a `--transcript` that does not exist, or a transcript that
-exists but cannot be read (session-review / session-reviewed: nothing is shown or marked, because
-an unreadable stretch is never "nothing new"). `-h`/`--help` prints this and exits 0. Launch via `hooks/run-python.sh`, which forces UTF-8; a bare launch on
+Exit codes: 0 = done, or the answer yes (`due`, `should-promote` -> promote, `session-review`
+showed a transcript part); 1 = the answer no (`not-due`, `hold`, `session-review` with NOTHING NEW
+left of its transcript - the word is printed either way, and it is an answer, not a failure); 2 =
+bad arguments, a write that did not land, a `--transcript` that does not exist, a session-review
+that discovered no transcript at all, or a transcript that exists but cannot be read
+(session-review / session-reviewed: nothing is shown or marked, because an unreadable stretch is
+never "nothing new"). A loop over the parts runs `session-review` again while it exits 0. `-h`/`--help` prints this and exits 0. Launch via `hooks/run-python.sh`, which forces UTF-8; a bare launch on
 a cp1252 console is made safe too.
 
 Pure standard library.
@@ -165,7 +167,7 @@ def _render_review(subs, touched, skills, text, offset, proj, structured_only=Fa
         lines.append("  (raw transcript suppressed by --structured-only; read it from disk if needed)"
                      if structured_only else text)
     else:
-        lines.append("== UNREVIEWED TRANSCRIPT == (none - already consumed)")
+        lines.append("== UNREVIEWED TRANSCRIPT == NOTHING NEW (already consumed)")
     lines += _render_offer(proj, others)
     lines.append("\n-- when done, run: dream_state.py session-reviewed %s%s --"
                  % (proj, " --transcript %s" % path if named else ""))
@@ -286,14 +288,16 @@ def _session_review(proj, structured_only=False, named=None):
         if not path:
             # DISTINCT from "nothing new": discovery failed, so the empty result is untrustworthy
             # (a keying/timing miss would otherwise report a confident zero-byte review as success).
+            # Exit 2, not the "nothing left" 1: a part loop must not read it as a finished review.
             print("NO TRANSCRIPT DISCOVERED for %s (no session meta recorded and no *.jsonl under "
-                  "~/.claude/projects/<cwd>; session-review is hook-driven - check the cwd key)" % proj)
+                  "~/.claude/projects/<cwd>; session-review is hook-driven - check the cwd key)"
+                  % proj, file=sys.stderr)
         else:
             print("NOTHING NEW since the last review (transcript: %s)" % path)
         offer = _render_offer(proj, others)
         if offer:
             print("\n".join(offer))
-        return 0
+        return 1 if path else 2
 
     live = sig.resolve_transcript(proj)
     owed_path = (sig.nap_owed_info(proj) or {}).get("transcript_path") or ""
@@ -301,7 +305,10 @@ def _session_review(proj, structured_only=False, named=None):
                          path=path, owed=path != live and (not named or path == owed_path),
                          start=start, total=size, named=bool(named) and path != live,
                          others=others))
-    return 0
+    # 0 while a transcript part was shown, 1 once none is left (the structured blocks can outlive
+    # the stretch). A part loop tests this status: the output's body is raw transcript, which can
+    # quote any end marker, so a grep over it ends the loop early.
+    return 0 if text else 1
 
 
 def _write_failed(what):

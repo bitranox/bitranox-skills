@@ -30,6 +30,17 @@ a hole nobody has drawn a line under is one that gets rediscovered and half-fill
 two "versions with no entry" notes came to sit in this file disagreeing with it.
 
 
+## [10.4.0]
+
+### Changed
+
+- `meta-dream-tree`: `dream_state.py session-review` now answers by exit status, like `due`: 0
+  while it shows a transcript part, 1 once NOTHING NEW is left of that transcript (also when only
+  the subagent, routing or skills blocks remain, which used to print `(none - already consumed)`
+  and exit 0), 2 on an error, including a run that discovered no transcript (its message moves to
+  stderr). `references/dream-core.md` and `meta-dream-crosstree` loop on that status and say why a
+  marker grep cannot: past its banner the output is raw transcript, which quotes `NOTHING NEW`.
+
 ## [10.3.30]
 
 ### Changed

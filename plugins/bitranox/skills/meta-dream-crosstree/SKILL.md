@@ -47,9 +47,11 @@ Create one todo per step.
    FILE (rendered inline it is silently truncated): your context is not the session (a
    compaction clears the context, never the transcript file), and it also surfaces the SUBAGENT
    learnings and the touched-path routing evidence you would otherwise never see. Finish with
-   `dream_state.py session-reviewed "<cwd>"`; a stretch over 2 MB comes in parts, so while the
-   review prints a `TRUNCATED` line, repeat `session-review` and `session-reviewed` until it prints
-   `NOTHING NEW`. It is incremental and the watermark is shared with the
+   `dream_state.py session-reviewed "<cwd>"`; a stretch over 2 MB comes in parts, so repeat
+   `session-review` and `session-reviewed` while `session-review` EXITS 0. Exit 1 means nothing is
+   left of that transcript and exit 2 is an error; decide by the status, never by grepping the
+   output, whose body is raw transcript (dream-core "Capture-first"). It is incremental and the
+   watermark is shared with the
    other dream modes, so if a nap already reviewed this session this costs nothing. Earlier
    sessions it lists under `OTHER UNREVIEWED TRANSCRIPTS` are read and marked with the same
    `--transcript <path>` on both verbs (dream-core "Capture-first").

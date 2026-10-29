@@ -168,17 +168,68 @@ def test_session_review_is_quiet_when_nothing_new(home, tmp_path, capsys):
     capsys.readouterr()
     D.main(["session-reviewed", proj])
     capsys.readouterr()
-    assert D.main(["session-review", proj]) == 0
+    # Exit 1 is the answer "nothing left", the same 0/1 split `due` uses: a part loop tests the
+    # exit status instead of grepping a file whose body is raw transcript and can quote the marker.
+    assert D.main(["session-review", proj]) == 1
     assert "NOTHING NEW" in capsys.readouterr().out.upper()
+
+
+def test_session_review_exits_0_while_transcript_bytes_are_shown(home, tmp_path, capsys):
+    # The body quoting the end marker must not change the verdict: only the exit status decides.
+    proj = "/p/x"
+    _session(home, proj, tmp_path, '{"type":"user","message":{"content":"grep NOTHING NEW"}}\n')
+    assert D.main(["session-review", proj]) == 0
+    assert "grep NOTHING NEW" in capsys.readouterr().out
+
+
+def test_session_review_exits_1_when_only_routing_evidence_is_left(home, tmp_path, capsys):
+    # The structured blocks (routing evidence, subagent learnings) outlive the transcript stretch,
+    # so the consumed case renders the full review: it must still exit 1 and say NOTHING NEW,
+    # or a part loop never ends there (measured: it printed "(none - already consumed)" and 0).
+    tree = tmp_path / "tree"
+    (tree / ".claude-memory").mkdir(parents=True)
+    (tree / "CLAUDE.md").write_text("top\n", encoding="utf-8")
+    for p in ("cwdproj", "otherproj"):
+        (tree / p).mkdir()
+        (tree / p / "CLAUDE.md").write_text("proj\n", encoding="utf-8")
+    proj = str(tree / "cwdproj")
+    _session(home, proj, tmp_path, '{"type":"user","message":{"content":"hi"}}\n')
+    D.sig.record_session_meta(proj, "sidZ", str(tmp_path / "sess.jsonl"))
+    D.sig.record_touched_path("sidZ", str(tree / "otherproj" / "x.py"))
+    assert D.main(["session-review", proj]) == 0
+    capsys.readouterr()
+    assert D.main(["session-reviewed", proj]) == 0
+    capsys.readouterr()
+    assert D.main(["session-review", proj]) == 1
+    out = capsys.readouterr().out
+    assert str(tree / "otherproj") in out              # the routing evidence is still shown
+    assert "NOTHING NEW" in out
+
+
+def test_session_review_part_loop_ends_on_the_exit_status(home, tmp_path, capsys, monkeypatch):
+    # The loop the docs prescribe: review, mark, repeat while session-review exits 0. Three parts,
+    # each line quoting the marker, so a grep-based loop would stop after the first.
+    proj = "/p/x"
+    line = '{"type":"user","message":{"content":"NOTHING NEW %s"}}\n' % ("x" * 60)
+    _session(home, proj, tmp_path, line * 3)
+    monkeypatch.setattr(D, "REVIEW_CHUNK_BYTES", len(line))
+    rounds = 0
+    while D.main(["session-review", proj]) == 0:
+        rounds += 1
+        assert D.main(["session-reviewed", proj]) == 0
+        assert rounds < 10
+    assert rounds == 3
+    assert "NOTHING NEW" in capsys.readouterr().out
 
 
 def test_session_review_without_a_known_transcript_reports_discovery_failure(home, capsys):
     # "couldn't find a transcript" must be DISTINCT from "nothing new" - collapsing them silently
-    # reviews zero bytes on a keying/timing miss while reporting success.
-    assert D.main(["session-review", "/unknown/proj"]) == 0
-    out = capsys.readouterr().out
-    assert "NO TRANSCRIPT DISCOVERED" in out
-    assert "NOTHING NEW" not in out.upper()
+    # reviews zero bytes on a keying/timing miss while reporting success. Exit 2, not the
+    # "nothing left" 1, so a part loop never reads a failed discovery as a finished review.
+    assert D.main(["session-review", "/unknown/proj"]) == 2
+    cap = capsys.readouterr()
+    assert "NO TRANSCRIPT DISCOVERED" in cap.err          # an exit-2 error goes to stderr
+    assert "NOTHING NEW" not in (cap.out + cap.err).upper()
 
 
 def _place_native_transcript(proj, text):
@@ -578,7 +629,8 @@ def test_the_offer_survives_a_consumed_live_session(home, capsys):
     D.main(["session-review", proj])
     D.main(["session-reviewed", proj])
     capsys.readouterr()
-    assert D.main(["session-review", proj]) == 0
+    # Exit 1 answers for the transcript reviewed; the offer of the others still prints.
+    assert D.main(["session-review", proj]) == 1
     out = capsys.readouterr().out
     assert "NOTHING NEW" in out and str(pred) in out
 
