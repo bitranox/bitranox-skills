@@ -30,6 +30,14 @@ a hole nobody has drawn a line under is one that gets rediscovered and half-fill
 two "versions with no entry" notes came to sit in this file disagreeing with it.
 
 
+## [10.3.27]
+
+### Fixed
+
+- `commit-tell-sweep` tests: the attribution tests added in 10.3.24 passed a raw backslashed
+  `tmp_path` into a Bash command on Windows, so the hook never found the message file; they now
+  quote the POSIX form like the other `-F` tests. The hooks themselves are unchanged.
+
 ## [10.3.26]
 
 ### Fixed

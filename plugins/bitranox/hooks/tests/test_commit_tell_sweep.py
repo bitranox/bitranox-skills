@@ -354,7 +354,7 @@ FOOTER = "Generated with [Claude Code](https://claude.com/claude-code)"
 def test_an_attribution_line_in_a_commit_message_blocks(monkeypatch, tmp_path, line):
     msg = tmp_path / "msg.txt"
     msg.write_text("Fix the bug\n\nBody text.\n\n%s\n" % line, encoding="utf-8")
-    assert _run(monkeypatch, "git commit -F %s" % msg) == 2
+    assert _run(monkeypatch, 'git commit -F "%s"' % msg.as_posix()) == 2
 
 
 def test_an_attribution_trailer_in_an_inline_message_blocks(monkeypatch):
@@ -369,7 +369,7 @@ def test_an_attribution_trailer_in_a_stdin_heredoc_blocks(monkeypatch):
 def test_the_attribution_refusal_names_the_rule_and_not_the_file_lines(monkeypatch, tmp_path, capsys):
     msg = tmp_path / "msg.txt"
     msg.write_text("Fix\n\n%s\n" % TRAILER, encoding="utf-8")
-    assert _run(monkeypatch, "git commit -F %s" % msg) == 2
+    assert _run(monkeypatch, 'git commit -F "%s"' % msg.as_posix()) == 2
     err = capsys.readouterr().err
     assert "attribution" in err.lower()
     assert "noreply@anthropic.com" not in err
@@ -397,7 +397,7 @@ def test_an_attribution_footer_in_a_gh_pr_short_body_flag_blocks(monkeypatch):
 def test_an_attribution_footer_in_a_gh_pr_body_file_blocks(monkeypatch, tmp_path):
     body = tmp_path / "body.md"
     body.write_text("Body.\n\n%s\n" % FOOTER, encoding="utf-8")
-    assert _run(monkeypatch, "gh pr create --title Fix --body-file %s" % body) == 2
+    assert _run(monkeypatch, 'gh pr create --title Fix --body-file "%s"' % body.as_posix()) == 2
 
 
 def test_an_attribution_trailer_in_a_gh_pr_comment_blocks(monkeypatch):
@@ -420,4 +420,4 @@ def test_an_attribution_footer_in_a_gh_pr_stdin_body_blocks(monkeypatch):
 def test_a_footer_line_with_an_emoji_or_trailing_punctuation_blocks(monkeypatch, tmp_path, footer):
     msg = tmp_path / "msg.txt"
     msg.write_text("Fix\n\n%s\n" % footer, encoding="utf-8")
-    assert _run(monkeypatch, "git commit -F %s" % msg) == 2
+    assert _run(monkeypatch, 'git commit -F "%s"' % msg.as_posix()) == 2
