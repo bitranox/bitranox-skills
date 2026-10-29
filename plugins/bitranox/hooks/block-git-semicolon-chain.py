@@ -75,6 +75,8 @@ import json
 import re
 import sys
 
+import shell_text
+
 # Shared with the other command-scanning guards. `mask_data_regions` replaces quoted strings,
 # command substitutions and comments INCLUDING their delimiters, so each becomes a single token -
 # without that, `git -C "$MAIN" commit` splits into two bare `"` tokens and the verb is lost.
@@ -655,7 +657,7 @@ def main() -> int:
         if not after_script:
             return 0
         runner, verb = after_script
-        sys.stderr.write(
+        return shell_text.refuse(
             f"A `{runner}` heredoc script reaches `git {verb}` across a line break or `;`, so the "
             f"git step runs even when the script FAILED.\n"
             "A failed edit or assertion then gets its unedited files staged and committed, exit 0 "
@@ -666,8 +668,7 @@ def main() -> int:
             "body and terminator below it). If the script is allowed to fail, give it a failure "
             "path (`<<'EOF' || exit 1`); `set -e` first also works.\n"
         )
-        return 2
-    sys.stderr.write(
+    return shell_text.refuse(
         f"`git {verbs[0]}` and `git {verbs[1]}` are joined by `;`, so the second runs even when "
         f"the first FAILED.\n"
         "The steps after it then report their no-op as success - `Already up to date`, "
@@ -679,7 +680,6 @@ def main() -> int:
         "Then confirm the END STATE (`git rev-parse --verify -q origin/master`, "
         "`git show --name-only`), not the messages.\n"
     )
-    return 2
 
 
 if __name__ == "__main__":

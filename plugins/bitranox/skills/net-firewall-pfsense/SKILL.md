@@ -130,8 +130,12 @@ whether the change applied; read the state back. Feeding a script to the `php` C
 
 **After `services_unbound_configure()`, restart unbound and check that it answers.** It has left
 unbound stopped (observed: `unbound-checkconf` clean, every lookup timing out, and running the
-reconfigure again did not bring it back), and `dns add` and `dns rm` with `--apply` call it too.
-Run `pfSsh.php playback svc restart unbound`, then resolve a name on the box
+reconfigure again did not bring it back). `dns add` and `dns rm` with `--apply` do this
+themselves: after the write they restart unbound and resolve a name through `127.0.0.1` (the added
+name; after a removal, an override that remains, else `localhost.`), and when unbound does not
+answer they exit 2 saying the change is already in `config.xml`, so repair the resolver rather than
+retry the edit. After a hand edit or any other call of the reconfigure, do it yourself: run
+`pfSsh.php playback svc restart unbound`, then resolve a name on the box
 (`host <name> 127.0.0.1`) and from another host, with a timeout. Reach the firewall by IP for
 this: once unbound is down, its own name does not resolve either.
 

@@ -170,9 +170,12 @@ def _nap_owed_hint(proj, session_id=""):
     The obligation is per PROJECT and OUTLIVES its session, so it is routinely inherited by a session
     that never compacted. Telling that session "compaction cleared your context" is false and sends
     the reader hunting for a compaction in the wrong transcript, so when the owed session is not this
-    one the block names the file that actually compacted and says whose it is."""
+    one the block names the file that actually compacted and says whose it is.
+
+    A decline the user gave (`dream_state.py nap-decline`) stands until the next compaction
+    rewrites the obligation, so the block does not return on every new message after a no."""
     try:
-        if not _sig.is_nap_owed(proj):
+        if not _sig.nap_owed_blocks(proj):
             return ""
         info = _sig.nap_owed_info(proj)
         owed_session = info.get("session_id") or ""
@@ -191,7 +194,10 @@ def _nap_owed_hint(proj, session_id=""):
                     'Before you stop: run the nap (Skill tool, name "meta-dream-nap"). ')
         return head + ("Read the session from DISK (dream_state.py session-review), not from what "
                        "you still remember - what you remember is the compacted summary. It is "
-                       "incremental: only the part no reviewer has consumed yet comes back. ")
+                       "incremental: only the part no reviewer has consumed yet comes back. If the "
+                       "user has said not to run this nap, record that instead with `dream_state.py "
+                       "nap-decline --by user` (meta-dream-nap, When to run) - on the user's own "
+                       "word only, never because this block is in the way. ")
     except Exception:                                     # noqa: BLE001 - never wedge a turn
         return ""
 

@@ -181,8 +181,7 @@ def test_refusal_says_nothing_in_the_command_ran(monkeypatch, project, capsys):
     # The block refuses the WHOLE Bash call, so an edit bundled with the pyright run is lost too.
     run_main(monkeypatch, "echo edit > f.txt && pyright src", project)
     err = capsys.readouterr().err
-    assert "NOTHING in this command ran" in err
-    assert "re-run" in err
+    assert B.shell_text.WHOLE_CALL_REFUSED in err
 
 
 def test_test_dir_named_test_is_honoured(monkeypatch, tmp_path):
@@ -429,3 +428,66 @@ def test_an_outside_path_does_not_excuse_an_inside_narrowed_path(monkeypatch, pr
 def test_an_absolute_path_into_the_project_is_still_inside(monkeypatch, project):
     """Control: an ABSOLUTE path into the project is inside it, whatever its spelling."""
     assert run_main(monkeypatch, f"pyright {_sh(project / 'src')}", project) == 2
+
+
+# --- an unexpanded variable is not a path ----------------------------------------------------------
+# OPEN-WORK [930]: the loop below runs the whole-project check twice, once per Python version, and
+# was refused with 'paths given: $v'. What `$v` expands to (flags, paths, nothing) is not in the
+# text, so it is no path this guard can judge; a literal path beside it still is.
+
+_VERSION_LOOP = 'for v in "" "--pythonversion 3.10"; do pyright --pythonpath .venv/bin/python {args}; done'
+
+
+@pytest.mark.parametrize("args", ["$v", '"$v"', "${v}", "$v ${EXTRA:-}"])
+def test_an_unexpanded_variable_after_pyright_is_not_a_path(monkeypatch, project, args):
+    assert run_main(monkeypatch, _VERSION_LOOP.format(args=args), project) == 0
+
+
+def test_a_literal_path_beside_an_unexpanded_variable_is_still_refused(monkeypatch, project, capsys):
+    assert run_main(monkeypatch, _VERSION_LOOP.format(args="$v src"), project) == 2
+    assert "paths given: src\n" in capsys.readouterr().err
+
+
+def test_control_a_literal_narrowed_run_with_the_same_flags_is_refused(monkeypatch, project):
+    assert run_main(monkeypatch, "pyright --pythonpath .venv/bin/python --pythonversion 3.10 src", project) == 2
+
+
+# A variable the command itself assigned ONE literal value is not unknown: the text holds it.
+# Replayed over the corpus, dropping every `$F` passed `F="src/a.py src/b.py"; pyright $F`, a narrowed
+# run the guard had refused, while `S=/tmp/scratch; pyright $S/t.py` had been refused as inside.
+
+def test_a_file_list_the_command_assigned_is_judged_as_its_paths(monkeypatch, project, capsys):
+    assert run_main(monkeypatch, 'F="src/pkg/__init__.py src/pkg"; pyright $F', project) == 2
+    assert "paths given: src/pkg/__init__.py src/pkg\n" in capsys.readouterr().err
+    assert run_main(monkeypatch, 'export F=src; .venv/bin/pyright --pythonpath x "${F}"', project) == 2
+
+
+def test_a_file_list_the_command_assigned_with_its_tests_passes(monkeypatch, project):
+    assert run_main(monkeypatch, 'F="src/pkg tests"; pyright $F', project) == 0
+
+
+def test_an_assigned_scratch_dir_outside_the_project_passes(monkeypatch, project, scratch_file):
+    command = f"S={_sh(scratch_file.parent)}; pyright $S/{scratch_file.name}"
+    assert run_main(monkeypatch, command, project) == 0
+
+
+def test_an_assigned_value_holding_flags_is_read_as_flags(monkeypatch, project):
+    assert run_main(monkeypatch, 'A="--pythonversion 3.10"; pyright $A', project) == 0
+    assert run_main(monkeypatch, 'A="--pythonversion 3.10"; pyright $A src', project) == 2
+
+
+@pytest.mark.parametrize("command", [
+    "F=src; F=tests; pyright $F",                   # assigned twice: which one holds is not read
+    "F=$(ls src); pyright $F",                      # a substitution's output
+    "for F in src; do pyright $F; done",            # a loop variable
+    "if a; then F=src; fi; pyright $F",             # a branch that may not run
+    "pyright $UNSET_IN_THIS_COMMAND",               # from the environment
+])
+def test_a_variable_whose_value_the_text_does_not_settle_is_unknown(monkeypatch, project, command):
+    assert run_main(monkeypatch, command, project) == 0
+
+
+def test_an_unknown_value_after_a_value_flag_is_that_flags_value(monkeypatch, project, capsys):
+    """Dropping `$V` before reading flags would make `src` the value of --pythonversion."""
+    assert run_main(monkeypatch, "pyright --pythonversion $V src", project) == 2
+    assert "paths given: src\n" in capsys.readouterr().err

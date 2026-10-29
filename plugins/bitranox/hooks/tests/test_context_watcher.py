@@ -518,6 +518,20 @@ def test_it_yields_while_a_nap_is_owed(tmp_path, session, monkeypatch):
     assert W.decide(_event(session, t, tmp_path), CFG) is None
 
 
+def test_it_does_not_yield_to_a_nap_the_user_declined(tmp_path, session, monkeypatch):
+    """A declined nap no longer blocks at Stop, so yielding to it would silence this note for
+    nothing. The owed-but-undeclined arm is the control: same state, no decline, it yields."""
+    home = tmp_path / "home"
+    (home / ".claude").mkdir(parents=True)
+    monkeypatch.setenv("HOME", str(home))
+    monkeypatch.setenv("USERPROFILE", str(home))
+    t = _transcript(tmp_path, _usage_line(cache_read=150_000))
+    W.sig.mark_nap_owed(str(tmp_path), session_id="sid-old")
+    assert W.decide(_event(session, t, tmp_path), CFG) is None
+    W.sig.decline_nap_owed(str(tmp_path), by="user")
+    assert W.decide(_event(session, t, tmp_path), CFG) is not None
+
+
 def test_the_nap_check_failing_does_not_wedge_the_turn(tmp_path, session, monkeypatch):
     def boom(proj):
         raise RuntimeError("helper gone")

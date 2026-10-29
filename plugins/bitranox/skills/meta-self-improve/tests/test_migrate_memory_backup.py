@@ -26,8 +26,8 @@ HAVE_GIT = shutil.which("git") is not None
 def env(short_root, monkeypatch):
     """(root for project dirs, fake home); project dirs go under the conftest's `short_root` so a
     long TMPDIR cannot push their slug past the 200-character cap. The home goes there too: the
-    backup nests a project-derived receipt name five levels under it, and under tmp_path that
-    passed Windows' 260-char MAX_PATH."""
+    backup nests a copy of the whole store five levels under it, and under tmp_path that can pass
+    Windows' 260-char MAX_PATH."""
     home = short_root / "home"
     (home / ".claude").mkdir(parents=True)
     monkeypatch.setenv("HOME", str(home))
@@ -172,6 +172,38 @@ def test_restore_cannot_be_combined_with_apply(env, capsys):
     with pytest.raises(SystemExit) as exc:
         M.main(["--apply", "--restore", str(tmp_path)])
     assert exc.value.code == 2
+
+
+def test_a_failed_backup_names_the_length_of_the_path_it_failed_on(env):
+    # Windows without LongPathsEnabled fails a deep backup with a bare [WinError 3] that never says
+    # the path was too long. A 300-char component is refused on every platform, so this is a real
+    # path-length failure, not a stub.
+    tmp_path, home = env
+    _top, proj = _tree(tmp_path, git=False)
+    slug = _slug(proj)
+    _native(home, slug, {"project-alpha": "Alpha body."})
+    too_long = tmp_path / ("b" * 300)
+    rep = M.migrate_store(slug, dry_run=False, backup_run=M.BackupRun(root=too_long))
+    assert rep["error"].startswith("backup failed, nothing written: ")
+    assert "longest path involved: %d chars" % len(str(too_long)) in rep["error"]
+    assert "LongPathsEnabled" in rep["error"]
+    assert rep["placed"] == 0
+
+
+def test_a_copytree_failure_names_its_longest_path():
+    # copytree gathers every failed copy into one shutil.Error whose paths sit in its args, not in
+    # filename, so the length must be read from there too.
+    src, dst = "/s/" + "x" * 20, "/d/" + "y" * 290
+    exc = shutil.Error([(src, dst, "[WinError 3] The system cannot find the path specified")])
+    message = M.backup_failure_message(exc)
+    assert "longest path involved: %d chars" % len(dst) in message
+
+
+def test_a_short_failing_path_gets_no_long_path_hint():
+    exc = FileNotFoundError(2, "No such file or directory", "/tmp/short")
+    message = M.backup_failure_message(exc)
+    assert "longest path involved: 10 chars" in message
+    assert "LongPathsEnabled" not in message
 
 
 def test_a_dry_run_writes_no_backup(env):

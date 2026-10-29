@@ -1,6 +1,6 @@
 ---
 name: process-plan-brainstorming
-description: Use when starting non-trivial feature, component, or behaviour-change work whose design or requirements are not yet settled. Not for trivial, mechanical, or fully-specified changes.
+description: Use when starting non-trivial feature, component, or behaviour-change work whose design or requirements are not yet settled, or when a request adds a setting, option or feature that reverses or undoes a decision the user made earlier. Not for trivial, mechanical, or fully-specified changes.
 ---
 
 # Brainstorming Ideas Into Designs
@@ -19,6 +19,13 @@ Start by understanding the current project context, then ask questions one at a 
 
 **Understanding the idea:**
 - Check out the current project state first (files, docs, recent commits)
+- **Ask WHETHER before any HOW question.** State whether the requested feature is worth having at
+  all, with a recommendation: what already covers the need (a call site, an existing option, the
+  default), what it costs to keep, and YAGNI. Every option of a scope or design question
+  presupposes the feature, so once you ask one the user has no way left to say no to it. This
+  matters most when the request reverses a decision the user made earlier (a setting to turn off
+  something they just chose to have no setting for): name that decision and its reason, and
+  recommend for or against reversing it before asking anything else.
 - Ask questions one at a time to refine the idea
 - Prefer multiple choice questions when possible, but open-ended is fine too
 - Only one question per message - if a topic needs more exploration, break it into multiple questions

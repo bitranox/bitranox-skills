@@ -238,7 +238,38 @@ Not a block, for most events. What happens depends on stdout:
 
 A hook that cannot start lands in the same bucket: a missing or non-executable script exits 127 and you get
 `Failed with non-blocking status code: /bin/sh: /path/to/hook.sh: No such file or directory`. **Watch for that
-notice on a policy hook's first run - a mistyped path leaves the gate silently disabled.**
+notice on a policy hook's first run - a mistyped path leaves the gate silently disabled.** To make that path
+block instead, set `onFailure` (next section).
+
+### Blocking when the hook fails (`onFailure`)
+
+By default a hook that fails lets the action go ahead, so a policy hook with a wrong path or a crashing script
+lets everything through. `"onFailure": "block"` on a `command` or `http` hook (Claude Code 2.1.295+) turns a
+failure into a block. Each of these counts as a failure:
+
+- **cannot start** - the script or executable does not exist
+- **exit code other than 0 or 2** - even when it printed JSON that allows the action; to return a JSON decision,
+  exit 0
+- **HTTP error** - the connection fails or the status is not 2xx
+- **timeout** - the hook reached its `timeout`
+- **invalid output** - JSON that does not parse or fails schema validation (for HTTP, a 2xx body that is neither
+  empty nor a JSON object). Plain-text stdout from a command hook is **not** a failure
+
+A blocked failure does what exit 2 does on that event, except on `PermissionRequest`, where it denies the request:
+a `PreToolUse` failure blocks the tool call, a `UserPromptSubmit` failure blocks the prompt. The error names the
+cause, for example `failed; blocking because onFailure is "block"` followed by the program's own error output, or
+`timed out` in place of `failed`. `"continue"` keeps the default behaviour explicitly.
+
+`onFailure` has **no effect** on `Stop`, `SubagentStop`, `TaskCompleted` and `TeammateIdle` (exit 2 there sends
+Claude back to work, and Claude cannot repair a hook that will not run), nor on a background command hook
+(`async` or `asyncRewake`).
+
+**Windows without Git Bash** blocks by default: a shell-form `PreToolUse` or `PermissionRequest` command hook with
+`onFailure` unset counts any exit code other than 0 or 2 as a failure and blocks the call, with an error containing
+`blocking because Git Bash wasn't found, so only exit code 0 or 2 counts as this hook's verdict.` A hook that
+exits 1 to warn must then exit 0 where it warns (print the warning as `systemMessage`) and set
+`"onFailure": "block"`, or set `"onFailure": "continue"` if a failure should let the call through. See
+`authoring.md`, "Windows", for making the hook find Git Bash.
 
 ### Timeouts
 
@@ -247,7 +278,8 @@ A command hook running with `async: true` is exempt: its `timeout` is not enforc
 background (`asyncRewake` hooks still have theirs enforced).
 
 On `PreToolUse` this means a stalled hook **does not block** the call, which continues through the normal
-permission flow. Do not rely on a hook that might hang as a gate. An Agent SDK callback hook is the exception:
+permission flow, unless the hook sets `"onFailure": "block"` (`command` and `http` hooks; see above). Do not rely on
+a hook that might hang as a gate without it. An Agent SDK callback hook is the exception:
 exceeding its timeout does block the tool call, and on `UserPromptSubmit` it blocks the prompt (before v2.1.208 it
 ended the turn with an execution error).
 

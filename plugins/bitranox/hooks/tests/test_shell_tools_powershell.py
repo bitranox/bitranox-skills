@@ -46,6 +46,8 @@ TRIGGERS = {
     "sed-line1-range-nudge.py": "sed '1,/^---$/d' f.md",
     "pct-path-nudge.py": "pct exec 101 -- env PATH=/usr/bin:/bin uv sync",
     "git-revparse-nudge.py": "git rev-parse master",
+    "git-ls-files-tracking-nudge.py": "git ls-files a.md && echo TRACKED",
+    "make-push-args-nudge.py": 'make push ARGS="fix (x)"',
     "gated-prep-nudge.py": "cat > /tmp/m <<'EOF'\nx\nEOF\ngit commit -F /tmp/m",
     "warn-inline-powershell.py": "ssh host 'powershell -Command Get-ChildItem | Select-Object'",
     # Single-quoted on purpose: the PowerShell arm reads the hook text through the shared

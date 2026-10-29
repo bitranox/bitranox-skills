@@ -26,6 +26,7 @@ import sys
 import time
 from pathlib import Path
 
+import open_work
 from self_improve_signals import (
     MEMORY_DIRNAME,
     audit_file,
@@ -240,15 +241,9 @@ def _fit_listing(head, lines, allowed, more):
     return head + "\n".join(shown)
 
 
-#: One open backlog line: "- [ ] (YYYY-MM-DD) [rank] ORIGIN: text | field: value | ..."
-#: The date field is taken loosely and parsed after, because every honest form for "nobody
-#: recorded this" must survive - a trailing "?" and the bare word "unknown" both. A parser that
-#: drops them makes the admitted guess invisible and leaves only the invented date showing.
-_OPEN_WORK_RX = re.compile(r"-\s*\[ \]\s*\(([^)]*)\)\s*\[(\d+)\]\s*(\S.*)")
-#: Any backlog line, open or closed, as (state, rank). A closed line keeps its number, and this
-#: block lists open items only, so a number held by a closed line looks free to whoever picks the
-#: next rank - measured over 22 real backlogs, 7 had an open item sharing its rank with another line.
-_ANY_ITEM_RX = re.compile(r"-\s*\[([ xX])\]\s*\([^)]*\)\s*\[(\d+)\]")
+#: A closed line keeps its number, and this block lists open items only, so a number held by a
+#: closed line looks free to whoever picks the next rank - measured over 22 real backlogs, 7 had an
+#: open item sharing its rank with another line.
 _SHARED_RANK = ("%s %s label%s more than one line of OPEN-WORK.md (closed lines included): give "
                 "the open item a free number before citing it as 'rank N'.\n")
 _ISO_DATE_RX = re.compile(r"(\d{4})-(\d{2})-(\d{2})\??$")
@@ -273,20 +268,24 @@ _OPEN_WORK_MORE = "- ... and %d more in OPEN-WORK.md"
 _OPEN_WORK_HEAD_CHARS = 96
 
 
+def _backlog_items(text):
+    """(line, item) for every item `open_work` reads in `text`, so this listing and the backlog
+    tools agree on what is an item: a fenced example line is none to either."""
+    lines = text.split("\n")   # not splitlines(): it also breaks on U+2028 and form feed
+    return [(lines[i], item) for i, item in open_work.iter_items(lines)]
+
+
 def _parse_open_work(text, today=None):
     """Open items from OPEN-WORK.md as (rank, raised_date, text), ordered by RANK then age.
 
     Ordering by rank rather than by file order is the whole point: the failure this file exists
-    to stop is a fresh micro-task outranking a standing one purely by being recent.
+    to stop is a fresh micro-task outranking a standing one purely by being recent. The date is
+    taken as written and parsed after, because every honest form for "nobody recorded this" must
+    survive - a trailing "?" and the bare word "unknown" both.
     """
     today = today or datetime.date.today()
-    items = []
-    for raw in text.split("\n"):   # not splitlines(): it also breaks on U+2028 and form feed
-        m = _OPEN_WORK_RX.match(raw.strip())
-        if not m:
-            continue                                  # closed "[x]" items and prose both land here
-        raised = _parse_raised(m.group(1))
-        items.append((int(m.group(2)), raised, m.group(3).strip()))
+    items = [(item["rank"], _parse_raised(item["raised"]), open_work.item_text(line))
+             for line, item in _backlog_items(text) if item["state"] == "open"]
     # An undated item sorts last within its rank: it makes no age claim, so it cannot displace one
     # that does. datetime.date.max is the sentinel because None will not compare against a date.
     items.sort(key=lambda it: (it[0], it[1] or datetime.date.max))
@@ -299,10 +298,8 @@ def _shared_rank_warning(text):
     Two closed lines on one number are history and are not named: nothing new can be cited by it.
     """
     states = {}
-    for raw in text.split("\n"):   # not splitlines(): it also breaks on U+2028 and form feed
-        m = _ANY_ITEM_RX.match(raw.strip())
-        if m:
-            states.setdefault(int(m.group(2)), []).append(m.group(1) == " ")
+    for _line, item in _backlog_items(text):
+        states.setdefault(item["rank"], []).append(item["state"] == "open")
     shared = sorted(rank for rank, opened in states.items() if len(opened) > 1 and any(opened))
     if not shared:
         return ""

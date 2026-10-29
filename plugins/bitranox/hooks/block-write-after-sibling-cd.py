@@ -53,6 +53,7 @@ statement. BLOCKING: exit 2 with the reason on stderr. Fail-open on any error. A
 import json
 import sys
 
+import shell_text
 from shell_text import (
     argv_for_match,
     basename_for_tool,
@@ -175,15 +176,17 @@ def verdict(command, siblings, tool_name="Bash"):
 def refusal(statement, moved):
     return "\n".join([
         "BLOCKED: this call writes to a repository without naming one, after an earlier call in",
-        "the same message changed directory. Nothing in this call ran.",
+        "the same message changed directory.",
         "",
         "  writes here:       " + statement,
         "  earlier sibling:   " + moved,
         "",
         "A writing call starts where the PREVIOUS call of the message left the shell, not where the",
         "session was when the message was written, so this would run in the sibling's directory.",
-        "Name the repository in this call: a leading absolute `cd /abs/repo &&`, `git -C /abs/repo`,",
-        "`make -C /abs/repo`, or `gate.py --gate-cwd /abs/repo` - or put both steps in one call.",
+        "Name the repository in this call with `git -C /abs/repo`, `make -C /abs/repo` or",
+        "`gate.py --gate-cwd /abs/repo`, or put both steps in one call. A leading `cd /abs/repo &&`",
+        "is not enough when /abs/repo is the session's own directory: Claude Code strips that cd",
+        "before this hook sees the command, so the call reads exactly like one with no target.",
     ])
 
 
@@ -201,8 +204,7 @@ def main() -> int:
     found = verdict(command, siblings_for_event(event) or [], tool_name)
     if found is None:
         return 0
-    print(refusal(*found), file=sys.stderr)
-    return 2
+    return shell_text.refuse(refusal(*found))
 
 
 if __name__ == "__main__":

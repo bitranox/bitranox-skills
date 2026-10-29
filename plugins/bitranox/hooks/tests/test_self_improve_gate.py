@@ -269,6 +269,9 @@ def test_owed_nap_reason_directs_to_the_nap_and_says_read_from_disk(tmp_path, mo
     reason = _reason_of(capsys)
     assert "meta-dream-nap" in reason
     assert "compact" in reason.lower()
+    # The block names the way out for a user who said no, so the model records it rather than
+    # stopping again and again; it is the user's call, so the text says so.
+    assert "nap-decline" in reason and "user's own word" in reason
 
 
 def test_owed_nap_from_another_session_names_that_transcript_and_does_not_claim_this_one(
@@ -376,6 +379,52 @@ def test_owed_nap_whose_earlier_transcript_is_partly_consumed_still_blocks(
                                      "session_id": "sid-current"})
     assert _gate_output(capsys).get("decision") == "block"
     assert S.is_nap_owed(str(tmp_path))
+
+
+def _declined_old_session(tmp_path):
+    """An owed nap for an earlier session's transcript, which the user then declined."""
+    import self_improve_signals as S
+    old = tmp_path / "older-session.jsonl"
+    old.write_text('{"type": "user"}\n', encoding="utf-8")
+    S.mark_nap_owed(str(tmp_path), session_id="sid-old", transcript_path=str(old))
+    assert S.decline_nap_owed(str(tmp_path), by="user") is True
+    return S
+
+
+def test_a_nap_the_user_declined_no_longer_blocks(tmp_path, monkeypatch, capsys):
+    # Measured 2026-10-25: the gate re-blocked a read-only what-next turn on a nap the user had
+    # said not to run, and it does so on every new user message until the nap runs.
+    _iso_home(tmp_path, monkeypatch)
+    S = _declined_old_session(tmp_path)
+    tp = make_transcript(tmp_path, user="ok thanks", asst="Done.")      # no signal at all
+    run_gate(monkeypatch, tmp_path, {"transcript_path": tp, "cwd": str(tmp_path),
+                                     "session_id": "sid-current"})
+    assert _gate_output(capsys).get("decision") is None
+    assert S.is_nap_owed(str(tmp_path))      # declined, not discharged: the record stays readable
+
+
+def test_a_declined_nap_leaves_an_ordinary_learning_block_alone(tmp_path, monkeypatch, capsys):
+    # The decline answers the nap only; a correction this turn is still a capture block.
+    _iso_home(tmp_path, monkeypatch)
+    _declined_old_session(tmp_path)
+    tp = make_transcript(tmp_path, user="No, that's wrong")
+    run_gate(monkeypatch, tmp_path, {"transcript_path": tp, "cwd": str(tmp_path),
+                                     "session_id": "sid-current"})
+    out = _gate_output(capsys)
+    assert out.get("decision") == "block"
+    assert "meta-dream-nap" not in out.get("reason", "")
+
+
+def test_a_later_compaction_owes_a_new_nap_the_decline_does_not_cover(tmp_path, monkeypatch, capsys):
+    # New material is a new compaction: it records a fresh obligation, and the decline was given
+    # for the earlier stretch only.
+    _iso_home(tmp_path, monkeypatch)
+    S = _declined_old_session(tmp_path)
+    tp = make_transcript(tmp_path, user="ok thanks", asst="Done.")
+    S.mark_nap_owed(str(tmp_path), session_id="sid-current", transcript_path=tp)
+    run_gate(monkeypatch, tmp_path, {"transcript_path": tp, "cwd": str(tmp_path),
+                                     "session_id": "sid-current"})
+    assert _gate_output(capsys).get("decision") == "block"
 
 
 def test_no_owed_nap_no_block_on_a_quiet_turn(tmp_path, monkeypatch, capsys):

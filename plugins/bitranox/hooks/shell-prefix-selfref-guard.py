@@ -26,6 +26,8 @@ import json
 import re
 import sys
 
+import shell_text
+
 # Shared with the other command-scanning guards: a heredoc body is DATA, and scanning it makes a
 # guard fire on prose that merely mentions the footgun it guards. Re-exported so callers and tests
 # can keep reaching it as `shell_prefix_selfref_guard.strip_heredoc_bodies`.
@@ -225,7 +227,7 @@ def main() -> int:
     command = (event.get("tool_input") or {}).get("command") or ""
     tool_name = event.get("tool_name") or "Bash"
     if substitutes_inside_unquoted_heredoc(command):
-        sys.stderr.write(
+        return shell_text.refuse(
             "An UNQUOTED heredoc body carries a command substitution, so the shell will RUN it.\n"
             "Bash expands backticks and $(...) inside <<EOF and expands NOTHING inside <<'EOF'.\n"
             "Self-authored prose written through a bare heredoc is executed before the program\n"
@@ -235,9 +237,8 @@ def main() -> int:
             "through sys.argv instead of interpolating it into the text. Then READ THE RESULT\n"
             "BACK: a byte count or a tail of the composed file catches this in one line.\n"
         )
-        return 2
     if substitutes_inside_text_arg(command, tool_name=tool_name):
-        sys.stderr.write(
+        return shell_text.refuse(
             "Self-authored PROSE carries a command substitution, so the shell will RUN it.\n"
             "Backticks and $(...) inside a double-quoted argument are evaluated BEFORE the\n"
             "program sees the string, so the words are not stored - they execute. A memory hook\n"
@@ -247,10 +248,9 @@ def main() -> int:
             "--body-file), or single-quote it - the outer shell does not expand single quotes.\n"
             "Then READ THE RESULT BACK before pushing.\n"
         )
-        return 2
     if not self_referencing_prefix(command, tool_name):
         return 0
-    sys.stderr.write(
+    return shell_text.refuse(
         "A prefix assignment is referenced on the same command line, so it expands EMPTY.\n"
         'VAR=value cmd "$VAR" binds VAR in the command\'s environment, but the CURRENT shell\n'
         "expands $VAR first and has no such variable - the program gets an empty argument and\n"
@@ -258,7 +258,6 @@ def main() -> int:
         'Fix: assign first, then use it - export VAR="$(cat f)"; cmd "$VAR" - or substitute\n'
         'directly at the use site: cmd MSG="$(cat f)". Then READ THE RESULT BACK.\n'
     )
-    return 2
 
 
 if __name__ == "__main__":

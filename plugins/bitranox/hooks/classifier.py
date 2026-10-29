@@ -43,7 +43,7 @@ import time
 import urllib.error
 import urllib.request
 from dataclasses import dataclass, field
-from datetime import datetime, timedelta, timezone, UTC
+from datetime import datetime, timedelta, UTC
 from pathlib import Path
 from urllib.parse import urlparse
 
@@ -57,7 +57,7 @@ import transcript_turns  # noqa: E402
 
 __all__ = [
     "Answer", "CAP_MARK", "CONTEXT_VIEW", "DEFAULT_BASE_URL",
-    "JIG_SAME_JOB", "JevClassifier", "NOTIFY_VIEW",
+    "JevClassifier", "NOTIFY_VIEW",
     "NO_SKILL_KEY", "NullClassifier", "PICK_ID", "PREVIOUS_FIELD", "Question", "Result",
     "SHADOW_DAY_PREFIX", "SHADOW_KEEP_DAYS", "SHADOW_LOG", "SHADOW_MAX_BYTES", "SHORT_DESC_CAP",
     "SITES", "SITE_MODES", "SITE_THRESHOLDS", "TURN_NOTIFICATION", "TURN_PROMPT",
@@ -67,7 +67,6 @@ __all__ = [
     "recall_questions", "shadow_enabled", "shadow_log_files", "shadow_log_path", "site_mode",
     "short_description", "skill_router_choice_questions",
     "shadow_guard", "skill_router_questions", "skill_router_rerank_questions", "spawn_shadow",
-    "jig_repetition_questions",
     "stop_signal_questions", "subagent_signal_questions", "with_previous",
 ]
 
@@ -94,12 +93,11 @@ FIELD_CAP = 4000
 # An error row carries the message, not a traceback: enough to group failures by cause.
 ERROR_CAP = 200
 CAP_MARK = "\n[... truncated ...]\n"
-# The hook sites. Each has its own config knob `classifier_<site>`: off | shadow, plus decide
-# where the site's hook implements it (all but `jig_repetition`; meta-memory-settings validates
-# which).
+# The hook sites. Each has its own config knob `classifier_<site>`: off | shadow | decide, and
+# every site's hook implements all three (meta-memory-settings validates the values).
 # `subagent_signal` gained decide only after its shadow passed the pre-registered decide rule:
 # SubagentStop's capture buffers on its BROAD patterns too, and the blind review found those noise.
-SITES = ("stop_signal", "skill_router", "recall_rerank", "subagent_signal", "jig_repetition")
+SITES = ("stop_signal", "skill_router", "recall_rerank", "subagent_signal")
 SITE_MODES = ("off", "shadow", "decide")
 # The threshold each site's gate or score is read at - by `classifier_eval.py report` when judging
 # a log, and by a site in decide mode when acting on an answer, so the two can never disagree.
@@ -135,10 +133,8 @@ SITE_MODES = ("off", "shadow", "decide")
 # every prompt it reaches, so precision is what the bar is set on.
 # `subagent_signal` asks two of the Stop gate's questions word for word, so it starts at the Stop
 # gate's bar. It has never been adjudicated on subagent text: that is what its shadow log is for.
-# `jig_repetition` is shadow only and has never been adjudicated; 0.5 is where its report splits
-# "same job" from "not", a reading point and not a decision, until its log has been judged blind.
 SITE_THRESHOLDS = {"stop_signal": 0.8, "skill_router": 0.5, "recall_rerank": 0.9,
-                   "subagent_signal": 0.8, "jig_repetition": 0.5}
+                   "subagent_signal": 0.8}
 # Stop-gate families whose score is LOGGED but never counted as a firing. `endorsement` was the
 # only reason to fire on 12 turns across two shadow windows, every one a plain approval ("yes",
 # "go", "lets try 1-4"): approving a proposal the assistant made is not a learning signal. The
@@ -493,26 +489,6 @@ def subagent_signal_questions():
     """The Stop gate's reply questions, verbatim, over {assistant_reply}: one subagent message."""
     stop = {q.id: q for q in stop_signal_questions()}
     return [stop[family] for family in _REPLY_FAMILIES]
-
-
-JIG_SAME_JOB = "same_job"
-
-
-def jig_repetition_questions():
-    """The jig-repetition nudge's own question to the model, over {new_script, ledger}.
-
-    The nudge's lexical filter over-triggers by design and hands the model this judgement; Jev is
-    asked the same thing so its answer can be compared with what the model did with the nudge.
-    """
-    return [Question(
-        id=JIG_SAME_JOB, type="noul",
-        instructions=(
-            "`new_script` is a script being written now, as `name - stated purpose`, and `ledger` "
-            "lists the scripts written earlier in the same session the same way, one per line "
-            "(`[changes state]` marks one that modifies files or a machine). Is `new_script` the "
-            "same job as at least two of the `ledger` scripts - the same task attempted again, a "
-            "rewrite or retry of one approach to one goal - rather than separate work that "
-            "happens to share a word, a file name or a tool?"))]
 
 
 def load_skill_descriptions(skills_dir=None):

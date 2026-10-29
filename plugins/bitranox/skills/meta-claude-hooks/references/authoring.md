@@ -156,7 +156,21 @@ the directory still exists afterwards.
 **Silence is not approval.** A `PreToolUse` hook that exits 0 with no output has expressed no opinion, and the
 call continues through the normal permission flow. Only `deny` denies.
 
-**A timed-out `PreToolUse` hook does not block.** Do not use a hook that might hang as a gate.
+**A timed-out `PreToolUse` hook does not block.** Do not use a hook that might hang as a gate, unless it sets
+`"onFailure": "block"` (`io-contract.md`, "Blocking when the hook fails").
+
+**A decision printed by a background process arrives too late.** Claude Code stops reading a hook's output
+shortly after the hook's own process exits, so a `deny` a backgrounded child prints afterwards blocks nothing.
+Print the decision first, then start the background work with its stdout and stderr redirected; a hook that
+prints an allow and leaves a background child holding the output is blocked, with `refusing to honor the
+suspect capture` in the error.
+
+**Skill frontmatter hooks have per-source limits.** The skills from one source (the project, the personal
+skills folder, each plugin) can register at most 1,024 hooks per session, with matchers totalling at most
+16,384 characters; a skill past the limit runs with none of its frontmatter hooks, and the debug log names it
+with `registers none of its hooks`. Under the `strictPluginOnlyCustomization` managed setting only plugin,
+bundled and managed skills keep theirs. When a skill's hooks do not fire, `/hooks` in that session shows
+whether they registered at all.
 
 **A nested quantifier over alternatives backtracks exponentially on input that does NOT match.** A matcher
 such as `\bgit(?:\s+-C\s+\S+|\s+--?\S+)*\s+commit\b` is instant on the short strings a test uses and on any
@@ -369,6 +383,16 @@ The `$env:` form works on every version:
 { "type": "command", "shell": "powershell",
   "command": "& \"$env:CLAUDE_PROJECT_DIR\\.claude\\hooks\\check.ps1\"" }
 ```
+
+To run a `.ps1`, `.cmd` or `.bat` file, or an `.exe` whose path holds a variable, set `"shell": "powershell"` and
+put `&` before the quoted path, as the `check.ps1` example above does.
+
+**Without Git Bash** a shell-form hook with no `shell` set runs in PowerShell, where a hook written for Bash can
+fail, and a failing `PreToolUse` or `PermissionRequest` hook then blocks the call (`io-contract.md`, "Blocking when
+the hook fails"). Install Git for Windows, or set `CLAUDE_CODE_GIT_BASH_PATH` to the `bash.exe` Claude Code did
+not find, then start a new session. A PowerShell guard hook that must block on failure needs both
+`"onFailure": "block"` (so it still blocks once Git Bash is found) and `"shell": "powershell"` (so it keeps running
+in PowerShell).
 
 For cross-platform packaging of a shipped hook script - LF endings, UTF-8, the interpreter probe, the exec bit,
 fail-open discipline - see `bitranox:meta-skill-writer`, section "Bundled scripts and hooks". For auditing hooks

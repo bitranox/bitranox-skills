@@ -30,6 +30,100 @@ a hole nobody has drawn a line under is one that gets rediscovered and half-fill
 two "versions with no entry" notes came to sit in this file disagreeing with it.
 
 
+## [10.5.0]
+
+### Added
+
+- New `git-ls-files-tracking-nudge`: a bare `git ls-files <path>` used as a tracking test (an `if`
+  condition, `||`, or `&&` into a verdict) gets a note that it exits 0 for untracked and ignored
+  paths, pointing at `--error-unmatch` and `check-ignore -q`.
+- New `make-push-args-nudge`: a `make push`/`ship`/`commit` whose `ARGS=` or trailing words carry
+  shell metacharacters gets a note to pass the message as `MSG="..."` and read
+  `git log -1 --format=%s` back.
+- New maintainer jig `hooks/bump_version.py`: bumps plugin.json, pyproject.toml and a new CHANGELOG
+  section together from origin/master's version after a fetch, and refuses when the working copy is
+  not at origin's version (another session bumped).
+- A user can decline an owed post-compaction nap with `dream_state.py nap-decline --by user`. The
+  Stop gate and the context watcher then stop blocking on it until the next compaction owes a new
+  nap. The obligation stays recorded (who and when) until a dream runs.
+- `repo-gate`: `--ci` and the pre-push hook run `claude plugin validate` and the mod tests
+  (`register.test.ts`) where `claude` is installed, and say they skipped it where it is not.
+
+### Changed
+
+- Every hook that refuses a Bash call outright ends its refusal with the same line from
+  `shell_text.refuse`, saying nothing in the call ran and any step bundled into it must be re-run;
+  a test rebuilds the guard list from hooks.json and fails on any guard that blocks without it.
+- `block-write-after-sibling-cd`: the advice leads with `git -C /abs/repo` / `make -C` and says a
+  leading `cd /abs/repo &&` is not enough when it names the session's own directory, because Claude
+  Code strips that cd before the hook sees the command.
+- `repo-gate`: a tool-repo commit or push is checked only against the mirrored skills it actually
+  changes, so an unrelated commit next to a drifted twin is no longer refused.
+- `repo-gate`: a commit refused only because the mirror fix sits unstaged says to `git add` it (or
+  name it in the commit's paths) instead of advising to regenerate the stale side; the tool-repo
+  table shows `UNSTAGED`.
+- `repo-gate`: its collaborators (mirror table, pytest run, claude check, PATH lookup) arrive as a
+  `GateParts` bundle and `mirrors=` parameters, and its tests pass them in instead of patching the
+  module.
+- `transcript_turns.looks_typed` no longer treats Claude Code's plain-prose harness turns as typed
+  by the person: the usage-limit auto-continuation, the compacted-session summary, the /goal
+  Stop-hook notice and its check-in, and Stop hook feedback. The skill router, recall and the
+  backlog_ask site stop scoring them; no typed prompt changed over the recorded corpus.
+- The SessionStart backlog listing reads OPEN-WORK.md through `open_work`, the parser the backlog
+  tools use, so a fenced example line is no longer listed as an item. The output is otherwise
+  byte-identical.
+- `backlog_add` and `backlog_close` keep a CRLF OPEN-WORK.md as CRLF and fsync before replacing it.
+  The reference says a tab is refused in backlog fields.
+- `migrate_memory`: the migration receipt is named by a fixed-length hash of the project path, so
+  the backup no longer overruns Windows' MAX_PATH for project paths past about 125 characters.
+  Receipts under the old name are still read. A failed backup names the length of the longest path
+  involved.
+- `tmp_prune`: the filesystem comparison in `scan_tree` goes through an injectable
+  `PruneConfig.device_of`, and the foreign-mount guard has a test.
+- `meta-claude-hooks`: follow the upstream hooks docs (`onFailure` and blocking when a hook fails,
+  Windows without Git Bash and `CLAUDE_CODE_GIT_BASH_PATH`, `CLAUDE_CODE_DISABLE_FILE_MENTIONS`,
+  Elicitation decline rules, decisions from background processes, per-source limits on skill
+  hooks); stamp and baseline refreshed.
+- `docs/architecture.md`'s hook table lists every registered hook script, pinned by
+  `test_architecture_hook_table.py` in both directions and by event.
+- `meta-context-watcher` and `meta-self-improve`: name the in-session MCP tools
+  (`backlog_list`/`backlog_add`/`backlog_close`, `memory_add`) and their limits; a capture from a
+  temporary worktree passes the main checkout's path as the level.
+- `net-firewall-pfsense`: after `services_unbound_configure()`, restart unbound and check it
+  resolves, since a reconfigure alone can leave it not answering.
+- `process-plan-brainstorming`: ask WHETHER a feature is worth having, with a recommendation,
+  before any HOW.
+- `process-test-design`: new silent-defeater entries for pytest capture handlers on a
+  non-propagating logger and for cross-thread tests that must wait on what the call itself does.
+- `coding-python-enforce-data-architecture-strict`: STEP B re-opens every file a pass changed, the
+  coordinator is the only writer of the violations file, and two boundary-model traps: an
+  `AwareDatetime` near the range edge (the AfterValidator must catch `OverflowError` and re-raise
+  `ValueError`, because pydantic lets it escape unchanged) and a strict `IntEnum` read from JSON.
+- `coding-python-textual`: type an App mixin against `App[None]` under `TYPE_CHECKING` instead of
+  silencing pyright, and never reuse `App`'s own names in it.
+
+### Removed
+
+- The `jig_repetition` Jev shadow site, under the pre-registered decide rule: 72.9% of 118 logged
+  answers fell between 0.2 and 0.8, and the one allowed rewrite, replayed over the same states,
+  left 70.3% there. The nudge itself is unchanged. The `classifier_jig_repetition` knob is gone; a
+  stale value is ignored and `settings.py` refuses the key.
+- The `data-arch-dict` Jev shadow site in `enforce-data-architecture-strict` STEP D, under the same
+  rule: the one allowed rewrite left 27.5% of answers between 0.2 and 0.8 and agreed with the agent
+  on 77.2% of the rest. STEP D keeps its own grep-and-judge step; `jev_shadow.py run --site
+  data-arch-dict` now exits 2.
+
+### Fixed
+
+- `shell_text.git_verb_dir`: a cd inside an `if` branch or a `while`/`until`/`for`/`select` loop is
+  unknown, like a case arm, and a git verb inside a loop is answered only once the loop closes
+  without a cd.
+- `shell_text.blank_unexpanded_text`: a `$(...)` inside a double-quoted string is read as its own
+  shell, so `"$(echo "it's")"` no longer opens a single-quoted string that hid a later `$?`.
+- `block-partial-typecheck`: a word the shell has yet to expand (`$v` in a flag loop) is no longer
+  read as a path, and a variable the command assigned one literal value is judged by that value.
+- `repo-gate`: a tag push with a redirection (`2>&1`, `> log`) is recognised as tags-only again.
+
 ## [10.4.4]
 
 ### Fixed

@@ -2,16 +2,17 @@
 
 Read this when a test patches a name, parses tool output, asserts on an exception message (a
 reworded one included) or on rendered output, loops until a condition holds or times how long that
-takes, pins or clears an environment variable (one a library reads at import included), redirects
-or deletes coverage data from a conftest, simulates a race between a check and an open, blocks a
-stub so it can be signalled, plants a marker to prove a process ran, starts a fixture process that
-must carry a given `/proc/<pid>/comm` name, asserts a descriptor was closed or a file is held only
+takes, pins or clears an environment variable (one a library reads at import included), redirects or
+deletes coverage data from a conftest, simulates a race between a check and an open, blocks a stub
+so it can be signalled, plants a marker to prove a process ran, starts a fixture process that must
+carry a given `/proc/<pid>/comm` name, asserts a descriptor was closed or a file is held only
 through a memory map, binds a unix socket under `tmp_path`, builds a test double by subclassing a
-`@dataclass`, mints synthetic identifiers (ids that something later truncates included), carries a
-skip or an exclusion, judges an artifact, compares against a git ref, guards against cost, or
-tests environment isolation - or when you are about to claim a code path is untested, or a
-mutation survives. Each entry names the trigger, the mechanism that makes the test pass (or fail)
-for the wrong reason, and the fix.
+`@dataclass`, configures a logger in a fixture, checks that an event from another thread wakes an
+asyncio consumer, races a call on a helper thread, mints synthetic identifiers (ids that something
+later truncates included), carries a skip or an exclusion, judges an artifact, compares against a
+git ref, guards against cost, or tests environment isolation - or when you are about to claim a code
+path is untested, or a mutation survives. Each entry names the trigger, the mechanism that makes the
+test pass (or fail) for the wrong reason, and the fix.
 
 ## Determinism and environment
 
@@ -388,6 +389,74 @@ so a purge whose redirect never took effect deletes another run's data: a `cover
 by a plain `pytest` of one file leaves `coverage report` saying "No data to report". Two runs
 sharing one data file interfere this way even with no conftest at all, so give each concurrent
 run its own `COVERAGE_FILE` from the launching environment.
+
+### pytest adds capture handlers to a logger a fixture made non-propagating
+
+When a test's call phase starts, pytest's logging plugin adds its `LogCaptureHandler`s to every
+logger whose `propagate` is False at that moment (measured on pytest 9.1.0, 9.1.1 and 9.2.0; 9.0.3
+and 8.4.2 add none). A fixture runs in the setup phase, so a fixture that sets
+`logger.propagate = False` hands the test a logger already carrying two capture handlers that
+production never has. Code that asks which handlers would see a record then answers differently
+than in production: a bridge that skips a logger with handlers, a fallback that fires only when
+there are none (`logging.lastResort` writing to stderr), a handler-count assertion. Measured: a
+warning on such a logger reached stderr when the test body set `propagate = False`, and did not
+when a fixture set it. Configure the isolated logger inside the test body (a context manager that
+restores `propagate` and the handlers in `finally`), or assert on `logger.handlers` explicitly so
+the extras show in the failure. For "does this reach stderr at all", run the code in a subprocess
+and read its stderr: in-process, pytest's root handlers catch every propagating record before
+`lastResort` is consulted, so a warning production prints never reaches `capfd` (measured on 9.0.3
+and 9.1.1 alike).
+
+## Cross-thread tests: wait on what the call itself does
+
+### A cross-thread wake-up test awaits only the thing being woken
+
+A test that checks an event emitted on another thread wakes an asyncio consumer (a task parked in
+`queue.get()`, a future the thread resolves) exists to catch an emit that queues the work without
+waking the loop: `queue.put_nowait(item)` called from a foreign thread instead of
+`loop.call_soon_threadsafe(queue.put_nowait, item)`. That work runs as soon as anything ELSE wakes
+the loop, so the test may await nothing but the woken thing. Awaiting the emitting thread through
+`await asyncio.to_thread(thread.join)` completes a future on the loop when the thread exits; the
+wake that delivers it also runs the stranded callback, and the test passes on the broken code.
+Fire the emit from a `threading.Timer`, so it lands while the loop is asleep, await only the
+consumer, and assert the elapsed time. The item alone proves nothing: the `wait_for` timeout's own
+timer wakes the loop in the end, and the item arrives late but intact, with no `TimeoutError`.
+
+```python
+async def test_emit_from_another_thread_wakes_the_consumer():
+    queue = asyncio.Queue()
+    adapter = Adapter(queue, loop=asyncio.get_running_loop())
+    threading.Timer(0.05, adapter.emit, args=("x",)).start()
+    started = time.monotonic()
+    item = await asyncio.wait_for(queue.get(), timeout=1.0)
+    assert item == "x"
+    assert time.monotonic() - started < 0.5  # a missed wake-up arrives at ~1.0 s or the next poll
+```
+
+Measured with the non-thread-safe emit: this form took 1.001 s, the `to_thread(join)` form 0.001 s;
+with `call_soon_threadsafe` both took the timer's 0.050 s. This is the one place the "No timer in a
+test" rule in SKILL.md gives way, because the latency IS the property and nothing the code signals
+tells "woken" from "woken later". The delay only gets the loop to sleep before the emit: starting a
+plain thread right after the consumer parks passed on the broken code too, because the emit landed
+before the loop went to sleep and its next pass delivered it. A slow runner can make the delay too
+short and the test miss the defect, never fail correct code. Keep the bound far below the
+consumer's fallback poll interval and far above the timer delay, and RED the test against the
+non-thread-safe emit.
+
+### A flag set before a call proves the thread started, not that the call ran
+
+A test that races a call on a helper thread against a blocked worker (`stop()` while the worker
+waits on a gate) often signals readiness from the helper before the call:
+`started.set(); worker.stop()`. The main thread waits on `started`, releases the worker and asserts
+on what `stop()` should have prevented, but the helper can be descheduled between the flag and the
+call, and the worker then runs as if no stop came. The test passes wherever the helper wins that
+race and fails on the scheduler that does not, such as a free-threaded build on a loaded CI runner.
+Wait on an observable the CALL itself sets: an event set inside it, the state it changes
+(`worker.stop_requested.wait()`), or a test hook the code exposes for that moment. RED the test by
+inserting a `time.sleep()` between the flag and the call in a scratch copy: the flag form must
+fail and the fixed form must not. Measured on a small worker: the flag form let it process both
+items even without the inserted sleep; waiting on the stop request processed none, with and without
+a 0.2 s sleep.
 
 ## Leaked and held resources
 

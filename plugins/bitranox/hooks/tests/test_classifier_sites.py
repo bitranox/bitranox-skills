@@ -709,43 +709,27 @@ def _jig_events(session):
             for n, body in enumerate(_JIG_SCRIPTS)]
 
 
-def test_jig_repetition_shadow_logs_the_nudge_and_nudges_exactly_as_before(
+def test_the_jig_nudge_fires_unchanged_and_asks_jev_nothing_even_with_a_stale_shadow_knob(
         env, monkeypatch, capsys):
+    """Its Jev shadow site was dropped under the pre-registered decide rule; the nudge itself
+    stays. A config written while the site existed still holds `classifier_jig_repetition =
+    shadow`: the nudge is the same as with the knob absent, and nothing is sent or logged."""
     _config(env["home"])
     off = [_run(JR, monkeypatch, capsys, e) for e in _jig_events("s-jig-off")]
     assert not off[0] and not off[1] and "REPEATED JOB" in off[2]
+    context = json.loads(off[2])["hookSpecificOutput"]["additionalContext"]
+    assert "These look related: del_v1.ps1, del_v2.ps1, del_v3.ps1." in context
     _config(env["home"], classifier_backend="jev", classifier_jig_repetition="shadow")
-    on = [_run(JR, monkeypatch, capsys, e) for e in _jig_events("s-jig-on")]
-    assert on == off
-    line = _wait_for_log(env["home"])[-1]
-    assert line["site"] == "jig_repetition" and line["session_id"] == "s-jig-on"
-    assert line["regex"]["fires"] is True
-    assert line["regex"]["group"] == ["del_v1.ps1", "del_v2.ps1", "del_v3.ps1"]
-    assert line["regex"]["track"] in ("change", "observe")
-    assert set(line["results"][0]["answers"]) == {q.id for q in cl.jig_repetition_questions()}
-    state = line["states"][0]
-    assert set(state) == {"new_script", "ledger"}
-    assert state["new_script"].startswith("del_v3.ps1")
-    assert "del_v1.ps1" in state["ledger"] and "del_v2.ps1" in state["ledger"]
-    assert "del_v3.ps1" not in state["ledger"]
-    assert len(env["fake"].requests) == 1, "only the write that nudged is asked about"
-    assert GHP not in _log(env["home"]).read_text(encoding="utf-8")
-    assert GHP not in json.dumps(env["fake"].requests)
-
-
-def test_jig_repetition_spawns_nothing_while_the_site_is_off(env, monkeypatch, capsys):
-    _config(env["home"], classifier_backend="jev", classifier_stop_signal="shadow")
-    for e in _jig_events("s-jig-quiet"):
-        _run(JR, monkeypatch, capsys, e)
+    stale = [_run(JR, monkeypatch, capsys, e) for e in _jig_events("s-jig-stale")]
+    assert stale == off
     time.sleep(1.0)
     assert not _log(env["home"]).exists() and env["fake"].requests == []
 
 
-def test_jig_repetition_asks_one_same_job_question_over_the_fields_it_sends():
-    (question,) = cl.jig_repetition_questions()
-    assert question.type == "noul"
-    assert "`new_script`" in question.instructions and "`ledger`" in question.instructions
-    assert "jig_repetition" in cl.SITES and "jig_repetition" in cl.SITE_THRESHOLDS
+def test_the_jig_repetition_site_is_gone():
+    assert "jig_repetition" not in cl.SITES and "jig_repetition" not in cl.SITE_THRESHOLDS
+    assert not hasattr(cl, "jig_repetition_questions") and not hasattr(cl, "JIG_SAME_JOB")
+    assert not hasattr(JR, "shadow_request") and not hasattr(JR, "SITE")
 
 
 # ---- backlog-ask matcher (recall's early return) -------------------------------------------

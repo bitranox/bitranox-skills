@@ -26,9 +26,9 @@ def _encode_slug(path):
 def env(short_root, monkeypatch):
     """(root for project dirs, fake home). Project dirs go under `short_root` (conftest): their
     path becomes a slug capped at 200 characters, which a long TMPDIR under tmp_path overran. The
-    home goes there too: the migration backup nests a project-derived receipt name five levels
-    under it, and under tmp_path (temp dir plus the test's own name) that passed Windows' 260-char
-    MAX_PATH, so the backup failed for a reason that has nothing to do with the code."""
+    home goes there too: the migration backup nests a copy of the whole store (fact bodies named
+    by their slugs) five levels under it, and under tmp_path (temp dir plus the test's own name)
+    that can pass Windows' 260-char MAX_PATH, failing the backup for a reason unrelated to the code."""
     home = short_root / "home"
     (home / ".claude").mkdir(parents=True)
     monkeypatch.setenv("HOME", str(home))
@@ -131,6 +131,34 @@ def test_migrate_apply_idempotent(env):
     M.migrate_store(slug, dry_run=False)
     rep2 = M.migrate_store(slug, dry_run=False)              # re-run: source already in receipt
     assert rep2["placed"] == 0 and rep2["skipped"] == 1
+
+
+def test_the_receipt_name_does_not_grow_with_the_project_path(tmp_path):
+    # The backup nests the receipt dir deep under ~/.claude, so a name that re-encodes the whole
+    # project path overran Windows' 260-char MAX_PATH for a project path past about 105 chars.
+    short = tmp_path / "p"
+    deep = tmp_path / ("d" * 60) / ("e" * 60) / ("f" * 60) / "proj"
+    names = {M._receipt_path(str(short)).name, M._receipt_path(str(deep)).name}
+    assert len(names) == 2, "two projects must not share one receipt"
+    assert {len(n) for n in names} == {len(sig.proj_key(str(short)) + ".json")}
+    assert M._receipt_path(str(deep)) == M._receipt_path(str(deep)), "the name must be stable"
+
+
+def test_a_receipt_under_the_path_encoded_name_is_still_honoured(env):
+    # Receipts written before the name became a hash carry the re-encoded path; a re-run must
+    # still find them, or it re-places every fact a finished migration already placed.
+    tmp_path, home = env
+    proj = tmp_path / "repoOld"
+    proj.mkdir()
+    slug = _encode_slug(proj)
+    _native_store(home, slug, [("a.md", "project-a", "fact a", "Body A.")])
+    M.migrate_store(slug, dry_run=False)
+    new = M._receipt_path(str(proj.resolve()))
+    old = new.with_name(M._path_encoded_receipt_name(str(proj.resolve())))
+    assert old != new
+    new.rename(old)
+    rep = M.migrate_store(slug, dry_run=True)
+    assert rep["placed"] == 0 and rep["skipped"] == 1
 
 
 def test_migrate_parked_when_unresolved(env):

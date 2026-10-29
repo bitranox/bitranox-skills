@@ -234,6 +234,64 @@ accepted the literal. A model arm with `extra="allow"` did NOT swallow a stricte
 version (the specific arm won for exact and lax input, in either order) - the `type(parsed)`
 assertion is what proves it on the version you run.
 
+### `AwareDatetime` accepts values that have no UTC equivalent
+
+`AwareDatetime` checks only that an offset is present. A value at the edge of the `datetime` range
+whose offset carries it past that range - `0001-01-01T00:00:00+01:00`, `9999-12-31T23:59:59-01:00`
+- parses cleanly, and the first `astimezone(timezone.utc)` downstream (a domain constructor that
+normalises to UTC, a comparison against a UTC value) raises `OverflowError: date value out of
+range`. That is neither `ValueError` nor `ValidationError`, so a loader that catches the boundary's
+refusal lets it escape as a bare traceback. Normalise to UTC INSIDE the boundary model, and turn the
+overflow into a `ValueError` there yourself: pydantic turns a `ValueError`, an `AssertionError` or
+its own `PydanticCustomError` raised in a validator into a `ValidationError`, and passes an
+`OverflowError` through unchanged.
+
+```python
+def _to_utc(value: datetime) -> datetime:
+    try:
+        return value.astimezone(timezone.utc)
+    except OverflowError as exc:
+        raise ValueError("timestamp has no UTC equivalent inside the datetime range") from exc
+
+UtcDatetime = Annotated[AwareDatetime, AfterValidator(_to_utc)]
+```
+
+Build the domain object from the parsed model inside the same `try` that turns `ValidationError`
+into your refusal, so anything the constructor still raises is reported there rather than past it.
+Test with both range edges. Measured (pydantic 2.14.2, Python 3.15): plain `AwareDatetime` accepted
+both edge values and `astimezone` raised `OverflowError`; an `AfterValidator` calling `astimezone`
+without the `try` let the `OverflowError` out of `model_validate_json`; with it, both edges came
+back as a `ValidationError` of type `value_error` and in-range values were normalised to UTC.
+
+### A strict `IntEnum` field accepts the bare integer from JSON
+
+`strict=True` refuses a raw `20` for an `IntEnum` field from Python, but from JSON it accepts the
+VALUE (`{"level": 20}` gives `Level.INFO`), refuses the member NAME (`"INFO"`), and words every
+refusal in the internal integers (`Input should be 10 or 20`). When the wire format is the NAME,
+parse it yourself in a `BeforeValidator` and dump it with a `field_serializer` returning
+`value.name`. The validator must let enum MEMBERS through before refusing non-strings: an
+`IntEnum` member IS an `int`, so a validator that refuses every non-`str` also refuses the model's
+own construction from domain values (`Record(level=Level.INFO)`), and the write path breaks while
+every JSON-parsing test stays green:
+
+```python
+def _level_by_name(value: object) -> object:
+    if isinstance(value, Level):     # the write path passes members; IntEnum members are ints
+        return value
+    if not isinstance(value, str):
+        raise ValueError("level must be a level name such as 'INFO'")
+    try:
+        return Level[value]
+    except KeyError:
+        raise ValueError(f"unknown level name {value!r}") from None
+```
+
+Test the round trip from a domain object, not only the parse from JSON. Measured (pydantic
+2.14.2): the strict model accepted `{"level":20}` and refused `"INFO"` with *Input should be 10 or
+20*; a validator refusing every non-`str` refused `{"level":20}` correctly but also
+`Record(level=Level.INFO)`; with the member pass-through both directions held and the dump read
+`{"level":"INFO"}`.
+
 ### Converting a `str` parameter to an Enum changes its contract: scope it with its tests
 
 A proper conversion of `release(part: str)` to `release(part: ReleasePart)` moves validation to
@@ -436,12 +494,14 @@ INITIALIZATION:
      {
        "pass": 0,
        "base": "<commit or tag the request starts from>",
+       "pass_start_rev": null,  // HEAD when the current STEP B began (STEP B sets it)
        "total_violations": 0,
        "files": {
          "path/to/file.py": {
            "violations": [],
            "out_of_scope": [],  // findings on lines not changed since "base" (STEP A, SCOPE)
-           "status": "pending"  // pending | in_progress | clean
+           "status": "pending"  // pending (never analysed) | in_progress (open findings, or
+                                // changed since its last analysis) | clean
          }
        }
      }
@@ -454,9 +514,10 @@ INITIALIZATION:
      - Read `.data_arch_violations.json`
      - Increment "pass" counter
      - Launch subagents (Task tool, subagent_type="Explore", model="opus", effort="medium") in
-       PARALLEL for each file (pin both; per-file analysis judges code already written, a review
-       dispatch - see "Concrete tiers" and "Review dispatches" in
-       bitranox:process-agents-subagent-driven-development)
+       PARALLEL for each file whose status is `pending` or `in_progress` (pin both; per-file
+       analysis judges code already written, a review dispatch - see "Concrete tiers" and
+       "Review dispatches" in bitranox:process-agents-subagent-driven-development). A `clean`
+       file is skipped, which is safe only because STEP B re-opens every file a fixer changed.
      - Each subagent prompt MUST include:
        * The file path to analyze
        * The violation patterns to search for (from Architecture Rules above)
@@ -494,7 +555,8 @@ INITIALIZATION:
        user ONCE, when the in-scope count reaches zero, instead of looping on it; a finding the
        user rules in scope moves back into `violations`. Measured: pass 4 found 73 and pass 5
        found 86 findings; 59 of the 86 sat on lines older than the base.
-     - Update `.data_arch_violations.json` with violations from each subagent
+     - Update `.data_arch_violations.json` with violations from each subagent; a file with no
+       in-scope violation becomes `clean`, any other `in_progress`
      - Calculate total_violations = sum of all in-scope violations across files
 
      >>> If total_violations == 0: put any `out_of_scope` list to the user (SCOPE); when
@@ -502,7 +564,8 @@ INITIALIZATION:
      >>> If total_violations > 0: CONTINUE TO STEP B
 
   STEP B - PARALLEL REFACTORING (use subagents):
-     - Read `.data_arch_violations.json`
+     - Read `.data_arch_violations.json`, set `pass_start_rev` to `git rev-parse HEAD` and write
+       it back BEFORE launching any fixer (the re-open step at the end of STEP B diffs against it)
      - REPRODUCE every claimed runtime failure before it goes into a brief. When a finding says
        what happens at runtime (an uncaught exception, a crash, a wrong result), make one real
        call through the public entry point that should trigger it, and brief the fixer on the
@@ -526,13 +589,9 @@ INITIALIZATION:
          editing the rest of the repo concurrently so it must not edit anything outside that
          list. An agent that finds a needed fix in someone else's file REPORTS it instead of
          making it - that hand-off is how the last error gets found, not a failure.
-       * The state file path: `.data_arch_violations.json`
        * Instruction to fix ALL violations
-       * Instruction to UPDATE the state file after fixing:
-         - Set file status to "in_progress"
-         - Clear the violations array for that file
-         - Recalculate total_violations as the sum of all violations arrays (never
-           decrement: parallel subagents sharing one counter race and lose updates)
+       * Instruction NOT to read or write `.data_arch_violations.json`: the coordinator owns it
+         and writes it from the returned JSON (below)
        * **Instruction to run the TYPE CHECKER as well as the tests, and to report the error
          count.** Tests alone cannot verify this refactor: a `StrEnum` member compares and
          hashes equal to its string value, so every call site still passing a raw string, and
@@ -541,8 +600,29 @@ INITIALIZATION:
          checker errors on the changed signature.
          Measured: three agents each reported "731 passed" while pyright had 24 errors, all
          of them call sites still passing raw literals into newly-Enum-typed parameters.
-       * Instruction to return: {"file": "path", "fixed": ["violation1", ...], "remaining": [...]}
-     - After all subagents complete: Read state file and verify updates
+       * Instruction to return JSON and nothing else, one entry per file in its set:
+         {"files": {"path": {"fixed": ["violation1", ...], "remaining": [...]}},
+         "hand_offs": [{"file": "path", "line": N, "description": "..."}], "type_errors": N}
+     - After all subagents complete, WRITE THE STATE FILE YOURSELF, once, from their returned
+       JSON: each file's `violations` becomes its `remaining` list, each `hand_offs` file is set
+       to `in_progress` with the hand-off named in that file's next analyser brief, and
+       `total_violations` is recomputed as the sum. Never let parallel fixers update the shared
+       file themselves: two agents that both read it before either writes each write back a
+       copy missing the other's change, and recomputing the total instead of decrementing it
+       does not help, because the arrays it sums were already clobbered. One writer after all
+       fixers return has no race to lose.
+     - RE-OPEN EVERY FILE THE PASS CHANGED, not only the briefed ones. A pass edits files
+       outside the violation list - a shared enum or model, the call sites of a signature a
+       fixer changed, a hand-off you applied yourself - and a file left `clean` is one the next
+       STEP A skips. List `git diff --name-only <pass_start_rev>` plus
+       `git ls-files --others --exclude-standard` (a new module is untracked, so the diff alone
+       misses it) and set every listed target-language file to `in_progress`, adding it to
+       `files` when absent. While the work stays uncommitted the diff also lists files earlier
+       passes changed; re-analysing those once more is the safe direction. Example: a fixer
+       that turns a `str` parameter into an Enum edits the enums module and every caller; with
+       only its own file re-opened, all of those keep their `clean` status and the next pass
+       never reads them. Measured: after one pass, 8 files the fixers had changed still read
+       `clean`, found only by diffing the changed-file list against the state file by hand.
      - **Re-run the gate YOURSELF.** A subagent's green is not the gate's green: it may have
        sampled mid-flight while a sibling was still writing, and agents' reported counts will
        disagree with each other for exactly that reason. Yours is the only authoritative one.
@@ -633,17 +713,6 @@ STEP D - FINAL VERIFICATION:
     are not signatures at all, and `-> tuple[` matches the tuple exclusions under "Anti-Patterns
     to Eliminate". Judge each hit against the Exceptions rule and those exclusions; do NOT
     auto-loop on raw match count.
-  - **Jev shadow on that judgment** (only when `jev_shadow.py status` exits 0; home
-    `<plugin>/skills/meta-self-improve/`, launch via `hooks/run-python.sh`; procedure in its
-    `references/jev-shadow.md`; both files in a fresh `D=$(mktemp -d)` outside the repo, since they
-    hold the code lines unredacted): write `$D/items.jsonl`, one `{"id": "<file:line>", "state":
-    {"hit": "<the grep line>", "context": "<the code around it>"}}` per hit, and YOUR verdict for
-    every hit to `$D/verdicts.jsonl` FIRST (`{"id": "<file:line>", "verdict": {"real_violation":
-    true}}` for a real violation crossing a function or module boundary, `false` for a permitted
-    exception; none left out, since every hit is judged), then `jev_shadow.py run --site
-    data-arch-dict --items "$D/items.jsonl" --verdicts "$D/verdicts.jsonl"`, then `rm -rf "$D"`.
-    `run` prints counts only. Decide which hits are real violations from your own verdicts, whatever
-    `run` printed or exited with.
   - If a real violation is found: GOTO STEP A
   - If clean:
     * Update state file: all files status = "clean"
@@ -654,7 +723,7 @@ STEP D - FINAL VERIFICATION:
 
 **IMPORTANT RULES:**
 1. ALWAYS read state file before each step
-2. ALWAYS write state file after each step
+2. ALWAYS write state file after each step - the coordinator writes it; subagents never do
 3. ALWAYS loop back to STEP A after STEP B - never skip re-analysis
 4. Do NOT proceed to STEP C until total_violations == 0
 5. **ALWAYS run STEP C** - execute `make test` or pyproject.toml tools
@@ -691,20 +760,19 @@ Return JSON only: {"file": "{file_path}", "sweep": {"tuple_returns": N, "str_par
 
 Refactoring subagent:
 ```
-Fix these violations in {file_path}:
+Fix these violations in your file set ({file_set}):
 {violations_list}
 
 Rules: [paste Architecture Rules section]
 
-After fixing:
-1. Read `.data_arch_violations.json`
-2. Update the entry for {file_path}:
-   - Set "status": "in_progress"
-   - Set "violations": [] (or list remaining if any)
-3. Recalculate "total_violations" as sum of all violations arrays
-4. Write updated state back to `.data_arch_violations.json`
+You may edit only: {file_set}. Other agents are editing the rest of the repo; report a needed
+fix elsewhere as a hand-off instead of making it. Do not read or write
+`.data_arch_violations.json` - the coordinator writes it from your reply.
 
-Fix ALL violations. Return JSON: {"file": "{file_path}", "fixed": [...], "remaining": [...]}
+Fix ALL violations, then run the type checker as well as the tests and report its error count.
+Return JSON and nothing else, one "files" entry per file in your set:
+{"files": {"<path>": {"fixed": [...], "remaining": [...]}},
+ "hand_offs": [{"file": "...", "line": N, "description": "..."}], "type_errors": N}
 ```
 
 ## Example Transformations

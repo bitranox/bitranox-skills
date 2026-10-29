@@ -807,6 +807,36 @@ def test_unsatisfiable_nap_owed_reports_a_deleted_transcript(home, tmp_path):
     assert S.unsatisfiable_nap_owed("/p/x", "sid-current") == (str(gone), S.NAP_OWED_TRANSCRIPT_GONE)
 
 
+def test_declining_an_owed_nap_records_who_and_when(home, tmp_path):
+    tp = tmp_path / "compacted.jsonl"
+    tp.write_text("{}\n", encoding="utf-8")
+    S.mark_nap_owed("/p/x", session_id="sid-old", transcript_path=str(tp))
+    assert S.nap_owed_declined("/p/x") == {}
+    assert S.decline_nap_owed("/p/x", by="user", now=1234.5) is True
+    assert S.nap_owed_declined("/p/x") == {"by": "user", "ts": 1234.5}
+    info = S.nap_owed_info("/p/x")
+    assert info.get("transcript_path") == str(tp)     # the obligation it answers is kept
+    assert S.is_nap_owed("/p/x") is True               # declined is not discharged
+
+
+def test_declining_when_nothing_is_owed_records_nothing(home):
+    assert S.decline_nap_owed("/p/x", by="user") is False
+    assert S.is_nap_owed("/p/x") is False              # no marker invented to hold the decline
+
+
+def test_a_new_compaction_replaces_a_declined_obligation(home):
+    S.mark_nap_owed("/p/x", session_id="sid-old")
+    S.decline_nap_owed("/p/x", by="user")
+    S.mark_nap_owed("/p/x", session_id="sid-new")
+    assert S.nap_owed_declined("/p/x") == {}
+
+
+def test_a_decline_needs_a_who(home):
+    S.mark_nap_owed("/p/x")
+    with pytest.raises(ValueError):
+        S.decline_nap_owed("/p/x", by="  ")
+
+
 def test_mark_dream_done_clears_a_owed_nap(home):
     # running the nap is what discharges the obligation - the marker must not outlive it
     _mem(home, "/p/x")
@@ -2114,3 +2144,36 @@ def test_why_not_queued_names_the_outcome_that_closed_it(tmp_path, monkeypatch):
     assert S.why_not_queued(proj, "fix x", "hook") == "already queued"
     S.drain_contributions(proj, note="shipped", strict=True)
     assert S.why_not_queued(proj, "fix x", "hook") == "shipped earlier"
+
+
+def _contrib_home(tmp_path, monkeypatch):
+    home = tmp_path / "home"
+    (home / ".claude").mkdir(parents=True)
+    monkeypatch.setenv("HOME", str(home))
+    monkeypatch.setenv("USERPROFILE", str(home))
+    return str(tmp_path / "proj")
+
+
+def test_why_not_queued_names_a_rejected_intent(tmp_path, monkeypatch):
+    proj = _contrib_home(tmp_path, monkeypatch)
+    assert S.add_contribution(proj, {"what": "fix x", "target": "hook"}, strict=True)
+    S.drop_contribution(proj, match="fix x", reason="disproven")
+    assert S.why_not_queued(proj, "fix x", "hook") == "rejected earlier"
+    assert S.why_not_queued(proj, "fix x", "skill:other") == "already queued"   # control
+
+
+def test_why_not_queued_matches_an_intent_closed_without_a_target(tmp_path, monkeypatch):
+    # A record with no target is keyed as "", so asking with "" or None finds it either way.
+    proj = _contrib_home(tmp_path, monkeypatch)
+    assert S.add_contribution(proj, {"what": "fix y"}, strict=True)
+    S.drop_contribution(proj, match="fix y", reason="x")
+    assert S.why_not_queued(proj, "fix y", "") == "rejected earlier"
+    assert S.why_not_queued(proj, "fix y", None) == "rejected earlier"
+
+
+def test_why_not_queued_says_when_the_closed_set_cannot_be_read(tmp_path, monkeypatch):
+    # A directory where the closed file should be is unreadable on every platform.
+    proj = _contrib_home(tmp_path, monkeypatch)
+    S.rejected_file(proj).mkdir(parents=True)
+    why = S.why_not_queued(proj, "fix x", "hook")
+    assert why.startswith("already queued or closed - the closed set could not be read: ")

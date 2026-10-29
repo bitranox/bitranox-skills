@@ -161,8 +161,10 @@ git config core.hooksPath githooks
 ```
 
 `githooks/pre-push` runs `repo-gate.py --pre-push`: the maintainer check set plus the whole-repo
-pytest CI runs. Enable it in every clone you push from, because the check that catches a stale
-generated artifact is only as good as the moment it fires.
+pytest CI runs, and, where `claude` is on PATH, `claude plugin validate` and `claude plugin test` for
+the TypeScript mod (CI has no `claude`, so this is the only place `register.test.ts` runs; without
+it the check is skipped with a printed reason). Enable it in every clone you push from, because the
+check that catches a stale generated artifact is only as good as the moment it fires.
 
 The PreToolUse `repo-gate` already gates `git commit` and `git push`, but it is a Claude Code hook,
 so it cannot fire when git runs from a terminal, an IDE, or a script. That blind spot is exactly

@@ -1741,42 +1741,6 @@ def test_this_test_file_holds_only_ascii():
     assert offenders == []
 
 
-# ---- jig_repetition --------------------------------------------------------------------------
-
-def jig_row(score, session="s1", group=("a.ps1", "b.ps1", "c.ps1")):
-    """One fired jig-repetition nudge; `score` is Jev's same-job score, or None when unanswered."""
-    return {"ts": "2026-10-23T12:00:00+00:00", "site": "jig_repetition", "session_id": session,
-            "lang": "en", "reason": None, "redactions": 0, "input_tokens": 300,
-            "latency_ms": 700,
-            "regex": {"fires": True, "group": list(group), "track": "change"},
-            "results": [_result({"same_job": score}) if score is not None else None],
-            "states": [{"new_script": "c.ps1 - remove the old dir",
-                        "ledger": "a.ps1 - remove the old dir\nb.ps1 - remove it again"}]}
-
-
-def test_jig_repetition_counts_how_often_jev_agrees_the_nudge_named_one_job():
-    rows = [jig_row(0.9), jig_row(0.2), jig_row(0.6), jig_row(None)]
-    s = ce.summarize_jig_repetition(rows, threshold=0.5)
-    assert s["nudges"] == 4 and s["unanswered"] == 1
-    assert s["jev_same_job"] == 2 and s["jev_not_same_job"] == 1
-    assert s["by_track"] == {"change": {"nudges": 3, "jev_same_job": 2}}
-
-
-def test_jig_repetition_disagreements_carry_what_jev_was_shown():
-    s = ce.summarize_jig_repetition([jig_row(0.9), jig_row(0.1, session="s2")], threshold=0.5)
-    (d,) = s["disagreements"]
-    assert d["kind"] == "jev_not_same_job" and d["session_id"] == "s2"
-    assert d["group"] == ["a.ps1", "b.ps1", "c.ps1"] and d["score"] == 0.1
-    assert d["state"]["new_script"].startswith("c.ps1")
-
-
-def test_summarize_reports_the_jig_site_at_its_own_threshold():
-    rep = ce.summarize([jig_row(0.45)], threshold=None, top=2)
-    site = rep["sites"]["jig_repetition"]
-    assert site["threshold"] == 0.5 and site["jev_not_same_job"] == 1
-    assert "jev same job" in ce.render_text(rep)
-
-
 # ---- a retired site ----------------------------------------------------------------------------
 
 @pytest.mark.parametrize("site, regex, answer, state", [
@@ -1785,14 +1749,18 @@ def test_summarize_reports_the_jig_site_at_its_own_threshold():
     ("audit_candidate", {"fires": True, "event": "SessionEnd",
                          "candidates": [{"role": "tool", "matched": ["error:"], "uuid": "u1"}]},
      {"real_signal": 0.55}, {"role": "tool", "matched": "error:", "excerpt": "x: error: y"}),
+    ("jig_repetition", {"fires": True, "group": ["a.ps1", "b.ps1", "c.ps1"], "track": "change"},
+     {"same_job": 0.55}, {"new_script": "c.ps1 - remove the old dir",
+                          "ledger": "a.ps1 - remove the old dir\nb.ps1 - remove it again"}),
 ])
 def test_rows_of_a_retired_site_are_left_out_of_the_report(site, regex, answer, state):
-    # backlog_ask and audit_candidate were dropped after their shadow logs were judged; their rows
-    # stay in the log until pruned and must neither crash the report nor be summarised as some
-    # other site.
+    # backlog_ask, audit_candidate and jig_repetition were dropped after their shadow logs were
+    # judged; their rows stay in the log until pruned and must neither crash the report nor be
+    # summarised as some other site.
     row = {"ts": "2026-10-23T12:00:00+00:00", "site": site, "session_id": "s1",
            "lang": "en", "reason": None, "redactions": 0, "input_tokens": 120,
            "latency_ms": 600, "regex": regex, "results": [_result(answer)], "states": [state]}
     rep = ce.summarize([row], threshold=None, top=2)
     assert rep["sites"] == {} and rep["rows"] == 1
     ce.render_text(rep)
+    assert site not in ce.SITES and not hasattr(ce, "summarize_" + site)

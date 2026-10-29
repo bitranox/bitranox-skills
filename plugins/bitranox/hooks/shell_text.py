@@ -20,6 +20,7 @@ import bisect
 import os
 import re
 import shlex
+import sys
 from pathlib import PurePosixPath, PureWindowsPath
 
 # The delimiter of a heredoc is a whole shell WORD, not an identifier: bash accepts `<<\EOF`,
@@ -467,6 +468,35 @@ def is_git_verb(segment, verbs, tool_name="Bash"):
     return git_verb_operands(argv_for_match(segment, tool_name), verbs, tool_name) is not None
 
 
+# A redirection operator at the START of a word, after an optional fd number, `&` or PowerShell's
+# `*`: `2>&1`, `>f`, `&>f`, `>>f`, `<f`, `>|f`, `<>f`, `<<<w`, `*>f`. Anchored, so a word that merely
+# CONTAINS `>` is not taken for one.
+_REDIRECTION_WORD = re.compile(r"^(?:\d+|&|\*)?(?:>>|>&|>\||<>|<&|<<<|<<-?|>|<)(.*)$", re.DOTALL)
+
+
+def drop_redirections(tokens):
+    """`tokens` without the shell's redirections, each operator with its target.
+
+    A split argv keeps a redirection as words - `2>&1` as one, `>` then `f` as two - so a reader of a
+    program's operands takes them for arguments: `git push origin v1.0 2>&1` read `2>&1` as a second
+    refspec ([880]). A word with the target attached (`>f`, `2>&1`) is dropped alone; a bare operator
+    (`>`, `2>`) takes the next word with it.
+
+    Deliberately NOT done inside `git_verb_operands`: several callers locate the verb as
+    `tokens[len(tokens) - len(operands) - 1]`, which holds only while the operands are an unbroken
+    suffix of the tokens. Apply this to the operands a caller is about to READ.
+    """
+    kept, at = [], 0
+    while at < len(tokens):
+        match = _REDIRECTION_WORD.match(tokens[at])
+        at += 1
+        if match is None:
+            kept.append(tokens[at - 1])
+        elif not match.group(1):
+            at += 1                               # the target is the next word
+    return kept
+
+
 # Programs that move the shell's directory. `popd` returns somewhere no static read tracks.
 _CD_PROGRAMS = frozenset({"cd", "pushd", "chdir", "set-location", "sl"})
 _UNKNOWABLE_DIR = re.compile(r"[$`*?<>|]")        # a destination no static read can resolve
@@ -730,6 +760,13 @@ class _SubshellTracker:
         return here
 
 
+#: `git_verb_dir`'s "no verb answer held yet": None is itself an answer (unreadable).
+_NOT_HELD = object()
+
+#: Keywords that open a block whose body may not run, or may run again: kind each one closes with.
+_BLOCK_OPENERS = {"if": "if", "while": "loop", "until": "loop", "for": "loop", "select": "loop"}
+_BLOCK_CLOSERS = {"fi": "if", "done": "loop"}
+
 _FUNCTION_NAME = re.compile(r"^[A-Za-z_][A-Za-z0-9_.:-]*$")
 _EMPTY_PARENS = re.compile(r"[ \t]*\([ \t]*\)")
 
@@ -760,23 +797,33 @@ def _defined_function(tokens, parens_follow=False):
 
 
 class _BodyTracker:
-    """Statements the walk reads but cannot place: case arms and function bodies.
+    """Statements the walk reads but cannot place: case arms, branches, loop bodies, function bodies.
 
-    Which `case` arm runs depends on a value, and a function body runs only where the function is
-    CALLED, so a cd in either is not a cd at that point of the text. A case block holding a cd, or a
-    call of a function this command defined with a cd in its `{ }` body, makes every later
-    directory unknown (`unknown`); a statement inside a body is not applied where it is written
-    (`statement` returns True). A `( )` body runs in a subshell, so its cd never escapes and it is
-    read like any other subshell.
+    Which `case` arm or `if` branch runs depends on a value, a `while`/`until`/`for`/`select` body
+    runs zero or many times, and a function body runs only where the function is CALLED, so a cd in
+    any of them is not a cd at that point of the text. Such a block holding a cd (a loop or `elif`
+    condition included, an `if`'s first condition not: it always runs), or a call of a function this command defined with a cd in its `{ }` body, makes every
+    later directory unknown (`unknown`); a statement inside a body is not applied where it is
+    written (`statement` returns True). A `( )` body runs in a subshell, so its cd never escapes and
+    it is read like any other subshell.
+
+    A loop runs its body again from the top, so a cd written AFTER a verb in the same loop still
+    reaches that verb on the next pass: `in_loop` lets the caller hold its answer until the loop
+    closes.
     """
 
     def __init__(self, tool):
         self.tool = tool
         self.cases = 0          # `case ... esac` blocks open
+        self.blocks = []        # open `if`/loop blocks, innermost last: "if" or "loop"
         self.body = None        # [name, open braces, holds a cd] of the `{ }` body being read
         self.pending = None     # a function named without its body: `f()` then `{` on the next line
         self.moving = set()     # functions this command defined whose body holds a cd
         self.unknown = False
+
+    @property
+    def in_loop(self):
+        return "loop" in self.blocks
 
     def statement(self, tokens, parens_follow=False):
         """Read one statement; True when it sits inside a function body and must not be applied."""
@@ -790,8 +837,29 @@ class _BodyTracker:
             return self._open(*definition)
         program = next((t for t in tokens if t not in _STATEMENT_KEYWORDS and "=" not in t), None)
         self._case(program, tokens)
+        self._block(tokens)
         self.unknown = self.unknown or program in self.moving
         return False
+
+    def _block(self, tokens):
+        """Track `if ... fi` and the `... done` loops by their LEADING keywords, so `echo done`
+        closes nothing; a statement can carry several (`then if b`, `done; done` arrive apart).
+
+        The condition an `if` opens with runs whenever the `if` is reached, so `if cd /r; then`
+        is judged by the blocks around it, as the walk's cd-succeeds reading of `cd /r; git push`
+        is. A `while`/`until` condition runs again on every pass, and an `elif` may never run."""
+        opened = []
+        for token in tokens:
+            if token in _BLOCK_OPENERS:
+                opened.append(_BLOCK_OPENERS[token])
+                self.blocks.append(opened[-1])
+            elif token in _BLOCK_CLOSERS:
+                if self.blocks and self.blocks[-1] == _BLOCK_CLOSERS[token]:
+                    self.blocks.pop()
+            elif token not in _STATEMENT_KEYWORDS:
+                break
+        guarded = len(self.blocks) > len(opened) or "loop" in opened
+        self.unknown = self.unknown or (guarded and _moves_the_shell(tokens, self.tool))
 
     def _open(self, name, rest):
         if rest[:1] != ["{"]:
@@ -851,7 +919,10 @@ def git_verb_dir(command, cwd, verbs, tool_name=None):
     then calls, makes the verb's directory None (`_BodyTracker`): which arm runs is decided by a
     value, and a body runs where it is called, not where it is written. `case a in a) cd /r;; esac;
     git commit` and `f() { cd /r; }; f; git commit` both commit in /r while the text reads /s. A body
-    that is only defined moves nothing, and a verb inside one gives None.
+    that is only defined moves nothing, and a verb inside one gives None. A cd inside an `if` branch
+    or a `while`/`until`/`for`/`select` loop is unknown the same way (`if false; then cd /r; fi; git
+    commit` commits in /s), and a verb inside a loop is answered only once the loop closes without a
+    cd, since the next pass would start where the last one ended.
 
     Once the command assigns `CDPATH` (`CDPATH=/a; cd sub`, `export CDPATH=...`, or as a prefix),
     a RELATIVE cd is unknown: bash tries each CDPATH entry first, and whether `/a/sub` exists is not
@@ -863,6 +934,7 @@ def git_verb_dir(command, cwd, verbs, tool_name=None):
     known, leading, previous_end = {}, tool == "Bash", 0
     subshells, gap_start, cdpath_set = _SubshellTracker(), 0, False
     bodies = _BodyTracker(tool)
+    held = _NOT_HELD    # a verb's answer found inside a loop, kept until the loop closes
     for index, (at, segment) in enumerate(segments):
         if tool == "Bash":
             here = subshells.gap(text[gap_start:at], here)
@@ -891,19 +963,23 @@ def git_verb_dir(command, cwd, verbs, tool_name=None):
         changed, landing = _directory_change_tokens(tokens, None if cdpath_set else here, tool)
         if in_body:
             # Defined here, run only where it is called: a verb in it has no readable directory.
-            if git_segment_dir(tokens, verbs, here, tool)[0]:
+            if held is _NOT_HELD and git_segment_dir(tokens, verbs, here, tool)[0]:
                 return None
         elif changed:
             # `cd x & ...` and `cd x | ...` run the cd in a subshell: the next statement starts
             # where this one did.
             if gap_after.strip(" \t") not in ("&", "|"):
                 here = landing
-        else:
+        elif held is _NOT_HELD:
             is_verb, where = git_segment_dir(tokens, verbs, here, tool)
-            if is_verb:
-                return None if subshells.lost or bodies.unknown else where
+            answer = None if subshells.lost or bodies.unknown else where
+            if is_verb and (answer is None or not bodies.in_loop):
+                return answer
+            held = answer if is_verb else held
         if closers:
             here = subshells.gap(")" * closers, here)
+        if held is not _NOT_HELD and (bodies.unknown or not bodies.in_loop):
+            return None if bodies.unknown else held
     return None
 
 
@@ -1614,8 +1690,23 @@ def blank_unexpanded_text(command: str, *, tool_name="Bash") -> str:
     after it stayed visible, and the escaped quotes of `` `'$?`' `` were read as a single-quoted
     string, blanking a status read that really expands. Any other value, None included, is the
     Bash reading - what every caller got before the keyword existed.
+
+    A `$(...)` inside a double-quoted string is a shell of its own: `"$(echo "it's")"` is ONE string
+    whose substitution holds a double-quoted `it's`, and a `'...'` or `#` comment in there is as
+    inert as at the top. Its end comes from `_quoting_end`, and its body is blanked by the same
+    rules; toggling on every `"` instead read the inner quote as closing the string, and the
+    apostrophe after it then blanked a real `$?` further on.
     """
-    powershell = tool_name == "PowerShell"
+    return _blank_unexpanded(command, tool_name == "PowerShell", 0)
+
+
+#: How many `"$(` levels `blank_unexpanded_text` reads as nested shells before copying the rest of a
+#: substitution as it stands; no real command nests this deep, and each level re-walks its body.
+_MAX_BLANK_NESTING = 32
+
+
+def _blank_unexpanded(command, powershell, depth):
+    """`blank_unexpanded_text` at substitution nesting `depth`."""
     escape = "`" if powershell else "\\"
     out: list[str] = []
     index, size = 0, len(command)
@@ -1658,6 +1749,11 @@ def blank_unexpanded_text(command: str, *, tool_name="Bash") -> str:
                 out.append("  " if command[index + 1] != "\n" else " \n")
                 index += 2
                 continue
+            if command.startswith("$(", index):
+                stop = _quoting_end(command, index + 2, _SUBSTITUTION, escape, not powershell)
+                out.append(_blank_substitution(command[index:stop], powershell, depth))
+                index = stop
+                continue
             in_double = char != '"'
             out.append(char)
             index += 1
@@ -1681,6 +1777,16 @@ def blank_unexpanded_text(command: str, *, tool_name="Bash") -> str:
             out.append(char)
             index += 1
     return "".join(out)
+
+
+def _blank_substitution(text, powershell, depth):
+    """`text` - a `$(` through its closing `)`, or to the end when unterminated - with its body
+    blanked as the command it is."""
+    if depth >= _MAX_BLANK_NESTING:
+        return text
+    closed = len(text) > 2 and text.endswith(")")
+    body = text[2:-1] if closed else text[2:]
+    return "$(" + _blank_unexpanded(body, powershell, depth + 1) + (")" if closed else "")
 
 
 def _hash_starts_a_word(out, word_at, cont_at, cont_prev):
@@ -2061,3 +2167,39 @@ def strip_data_sink_statements(command: str, tool_name=None) -> str:
             if out[index] != "\n":
                 out[index] = " "
     return "".join(out)
+
+
+# A PreToolUse exit 2 refuses the WHOLE tool call, while every guard's own message names only the
+# statement it objected to. Read alone, that message suggests the rest of the command went through,
+# so an edit or a version bump chained into the refused call is lost without anyone noticing. The
+# sentence lives here, once, so no guard can block without saying it
+# (tests/test_refusal_footer.py enumerates the guards and pins that each goes through `refuse`).
+WHOLE_CALL_REFUSED = (
+    "NOTHING in this call ran: the whole tool call was refused, not only the part named above. "
+    "Any edit, write or other step bundled into it did not happen - re-run those on their own."
+)
+
+
+def refuse(message: str, stream=None) -> int:
+    """Write a guard's refusal plus the whole-call footer, and return the PreToolUse block code.
+
+    Args:
+        message: the guard's own explanation; a trailing newline is optional.
+        stream: where to write; the process stderr (looked up at call time) when omitted, which is
+            the stream Claude Code shows the model on an exit 2.
+
+    Returns:
+        2, so a guard ends with `return shell_text.refuse(message)`.
+
+    Examples:
+        >>> import io
+        >>> out = io.StringIO()
+        >>> refuse("BLOCKED: x", stream=out)
+        2
+        >>> out.getvalue().splitlines()[0]
+        'BLOCKED: x'
+    """
+    target = sys.stderr if stream is None else stream
+    body = message.rstrip("\n")
+    target.write((body + "\n" if body else "") + WHOLE_CALL_REFUSED + "\n")
+    return 2

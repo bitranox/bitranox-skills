@@ -37,6 +37,15 @@ installed tool misreport its own version. `repo-gate` refuses the pair (`version
 pyproject.toml says X, plugin.json says Y`) on commit, on push and in CI, so a change that bumps
 only the manifest cannot be pushed.
 
+`plugins/bitranox/hooks/bump_version.py` does all three at once - plugin.json, pyproject.toml and
+a new `## [X.Y.Z]` CHANGELOG section whose body it reads from a file - starting from the version
+`origin/master` holds after a fetch, and refuses when the working copy is not at that version
+(another session bumped first):
+
+```bash
+uv run plugins/bitranox/hooks/bump_version.py --part patch --changelog notes.md
+```
+
 Note the bump in the commit subject (`...; bump to X.Y.Z`), matching the existing history.
 Repo-meta changes outside the plugin tree (this file, the root `README`, CI) do not ship to
 installed copies and do not need a plugin bump.

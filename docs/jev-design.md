@@ -86,8 +86,6 @@ after the first wave's eval shows value.
 | Advisory nudges: `missing-mechanism-nudge.py:30`, `capture_constraints.py:26`, `jig-repetition-nudge.py` (32% false by its own measurement; its state is the redacted `{script_text, prior_script_text}`)               | regex / shingles | one `noul` per advisory, on the regex hits only, as a precision filter                                                                                                 |
 | Tool-failure and missed-learning candidates: `self-improve-audit.py:138` `find_candidates` (`BROAD_*` minus strict, `TOOL_SIGNAL_PATTERN`), also `subagent-capture.py:67`. Now possible because tool output may be sent | regex            | one `noul` "is this a real failure or a mistake worth a lesson?" over the redacted `{command, tool_output_tail, next_assistant_message}`, on the regex candidates only |
 
-The jig-repetition advisory is built as the shadow site `jig_repetition` (knob `classifier_jig_repetition`, shadow only): one `noul` per FIRED nudge over `{new_script, ledger}`, the names and stated purposes the nudge itself shows the model, so its verdict can be compared with the nudge's lexical group.
-
 **Stays deterministic:**
 - tell-char sweeps and secret scanning;
 - command-shape guards (a structural parse is exact, and they run on every tool call);
@@ -101,6 +99,10 @@ The jig-repetition advisory is built as the shadow site `jig_repetition` (knob `
   question shadowed on each candidate the note shows left about half its answers between 0.2
   and 0.8, and the one rewrite the decide rule allows did not narrow that, so nothing could act
   on it.
+- the jig-repetition nudge's same-job judgement (`jig-repetition-nudge.py`): a Jev question
+  shadowed on each fired nudge, over the script names and stated purposes the nudge shows, left
+  about seven in ten answers between 0.2 and 0.8, and the one rewrite the decide rule allows did
+  not narrow that; the model reading the nudge keeps that judgement.
 
 ## Design
 

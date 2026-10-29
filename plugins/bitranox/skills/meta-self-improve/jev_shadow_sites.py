@@ -6,7 +6,7 @@ jev-judge question objects, and the exact named fields every item's state carrie
 refers to a field only as a backticked name, and every backticked name is a state field.
 
 Five sites build their items here from a source the skill step already has: the curated memory
-store under an anchor, or a `guard_replay.py --firings` file. The other five are agent-built: the
+store under an anchor, or a `guard_replay.py --firings` file. The other four are agent-built: the
 step's agent writes the items itself, and `jev_shadow.py run` checks their fields against the site
 file. It also holds the small JSON helpers the log writer and the report reader share, so neither
 of those two imports the other. Standard library only; the store readers come from hooks/ and
@@ -46,7 +46,6 @@ AGENT_BUILT = frozenset(
     {
         "quality-polarity",
         "quality-param-hit",
-        "data-arch-dict",
         "consolidate-cause",
         "collect-relevance",
     }

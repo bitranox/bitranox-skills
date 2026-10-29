@@ -40,6 +40,7 @@ import os
 import re
 import sys
 
+import shell_text
 from shell_text import (
     BACKGROUND_GATE_RE,
     GATE_JIG_NAME,
@@ -644,7 +645,7 @@ def main() -> int:
         cmd, background=(data.get("tool_input") or {}).get("run_in_background")
     )
     if backgrounded is not None:
-        print("\n".join([
+        return shell_text.refuse("\n".join([
             "BLOCKED: a backgrounded gate whose verdict you will be told wrongly.",
             "",
             f"  gate: {backgrounded}",
@@ -670,8 +671,7 @@ def main() -> int:
             "the gate with DOUBLE quotes: a Windows command line has no single-quoting.",
             "",
             "Or run it in the FOREGROUND, where the exit status you see is the gate's own.",
-        ]), file=sys.stderr)
-        return 2
+        ]))
 
     # A heredoc BODY is stdin data, so a doc that WRITES an example of the footgun is not one.
     # Measured live: that shape blocked a real command while this guard was under investigation.
@@ -712,8 +712,7 @@ def main() -> int:
                 "  - make the pipe propagate:                       set -o pipefail",
                 "  - redirect to a file, then grep it separately:   <gate> > out.log 2>&1 || { grep ... out.log; exit 1; }",
             ]
-            print("\n".join(msg), file=sys.stderr)
-            return 2
+            return shell_text.refuse("\n".join(msg))
 
     return 0
 

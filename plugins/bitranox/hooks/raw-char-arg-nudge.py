@@ -180,8 +180,7 @@ def main() -> int:
         return 0
     refusal = block_reason(event["tool_name"], event.get("tool_input"))
     if refusal:
-        sys.stderr.write(refusal + "\n")
-        return 2
+        return shell_text.refuse(refusal)
     message = notice(event["tool_name"], event.get("tool_input"))
     if message:
         sys.stdout.write(json.dumps({"hookSpecificOutput": {

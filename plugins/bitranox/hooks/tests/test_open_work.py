@@ -55,6 +55,14 @@ def test_a_full_line_parses_into_its_fields():
                   "what": "build it", "size": "3", "open": "why", "next": "do", "closed": None}
 
 
+def test_item_text_is_the_line_after_its_rank_as_written():
+    # Field order and wording stay the author's: a listing quotes the line, it does not rebuild it.
+    line = "  - [ ]  (2026-10-05) [17]  USER: build it | next: do | size: 3   "
+    assert ow.item_text(line) == "USER: build it | next: do | size: 3"
+    assert ow.item_text("prose - [ ] (2026-10-05) [17] USER: x") == ""
+    assert ow.item_text("- [ ] (2026-10-05) [17]") == ""
+
+
 def test_a_closed_line_carries_its_reason():
     it = ow.parse_line(_item(10, "x") + " | closed: done in 8.5.0")
     assert it["state"] == "closed" and it["closed"] == "done in 8.5.0"
@@ -121,6 +129,55 @@ def test_a_rank_held_by_a_closed_line_is_refused_with_free_tens(tmp_path):
     p = _backlog(tmp_path, _item(10, "x"))
     with pytest.raises(ow.RankTaken, match="20"):
         _add(p, 10)
+
+
+def test_a_taken_rank_below_ten_suggests_only_the_free_tens_above(tmp_path):
+    # Below ten there is no lower ten to offer, so the suggestion is the first free one above.
+    p = _backlog(tmp_path, _item(5), _item(10))
+    with pytest.raises(ow.RankTaken, match=r"free tens nearby: 20$"):
+        _add(p, 5)
+
+
+def _crlf_backlog(tmp_path, *lines):
+    p = tmp_path / "OPEN-WORK.md"
+    p.write_bytes((ow.HEADER + "\n".join(lines) + "\n").replace("\n", "\r\n").encode("utf-8"))
+    return p
+
+
+def test_an_add_keeps_a_crlf_backlog_crlf_on_every_line(tmp_path):
+    # A Windows checkout (core.autocrlf) holds the file as CRLF; rewriting it as LF turns the
+    # whole file into a diff on that machine.
+    p = _crlf_backlog(tmp_path, _item(10), _item(30))
+    _add(p, 20)
+    raw = p.read_bytes()
+    assert raw.count(b"\n") == raw.count(b"\r\n") > 0
+    assert [it["rank"] for _, it in ow.iter_items(_lines(p))] == [10, 20, 30]
+
+
+def test_a_close_keeps_a_crlf_backlog_crlf_and_deletes_only_its_line(tmp_path):
+    p = _crlf_backlog(tmp_path, _item(10), _item(20))
+    before = p.read_bytes()
+    ow.close_item(p, 10, "done")
+    raw = p.read_bytes()
+    assert raw.count(b"\n") == raw.count(b"\r\n")
+    assert raw == before.replace((_item(10) + "\r\n").encode("utf-8"), b"")
+
+
+def test_an_lf_backlog_stays_lf(tmp_path):
+    p = _backlog(tmp_path, _item(10))
+    _add(p, 20)
+    assert b"\r" not in p.read_bytes()
+
+
+def test_a_rewrite_is_flushed_to_disk_before_it_replaces_the_backlog(tmp_path, monkeypatch):
+    # os.fsync is the OS edge this cannot observe otherwise: without it a crash after the
+    # rename can leave an empty OPEN-WORK.md on filesystems that reorder metadata and data.
+    synced = []
+    real = ow.os.fsync
+    monkeypatch.setattr(ow.os, "fsync", lambda fd: (synced.append(fd), real(fd)))
+    p = _backlog(tmp_path, _item(10))
+    _add(p, 20)
+    assert synced
 
 
 def test_a_new_line_goes_after_the_largest_smaller_rank(tmp_path):

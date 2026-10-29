@@ -29,6 +29,8 @@ import re
 import subprocess
 import sys
 
+import shell_text
+
 # Shared with the other command-scanning guards: a heredoc body is DATA, and scanning it makes a
 # guard fire on prose that merely mentions the footgun it guards. Re-exported so callers and tests
 # can keep reaching it as `git_footgun_guard.strip_heredoc_bodies`.
@@ -270,13 +272,12 @@ def main() -> int:
         if losses:
             _advise(losses)
         return 0
-    sys.stderr.write(
+    return shell_text.refuse(
         "git rev-parse --short takes a SINGLE revision; with 2+ revs it fails "
         "`fatal: Needed a single revision` (exit 128; the text is LOCALIZED - match the code).\n"
         "Fix: drop --short to print full hashes for multiple revs, or run "
         "rev-parse once per rev. Deterministic, not a transient quirk.\n"
     )
-    return 2
 
 
 if __name__ == "__main__":

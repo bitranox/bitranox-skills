@@ -1155,10 +1155,11 @@
   "design",
   "requirements",
   "settled",
-  "trivial",
-  "mechanical",
-  "fully-specified",
-  "changes"
+  "request",
+  "adds",
+  "setting",
+  "option",
+  "fully-specified"
  ],
  "process-plan-executor": [
   "written",

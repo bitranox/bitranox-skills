@@ -46,7 +46,7 @@ import subprocess
 import sys
 import tempfile
 import time
-from collections.abc import Iterator, Mapping, Sequence
+from collections.abc import Callable, Iterator, Mapping, Sequence
 from dataclasses import dataclass, field, replace
 from pathlib import Path
 
@@ -64,6 +64,7 @@ __all__ = [
     "PruneConfig",
     "apply",
     "claim_slot",
+    "device_of_stat",
     "main",
     "plan",
     "release_slot",
@@ -89,6 +90,11 @@ _ONEOFF_EXCLUDED_PREFIXES = ("pytest-of-", "claude-", "cc-socks", "cc-daemon-")
 
 
 # ---- configuration --------------------------------------------------------------------------
+
+
+def device_of_stat(_path: str, info: os.stat_result) -> int:
+    """The filesystem an entry lives on, as `scan_tree` compares it: its own `st_dev`."""
+    return info.st_dev
 
 
 def scratch_dir_names(uid: int | None) -> tuple[str, ...]:
@@ -120,6 +126,8 @@ class PruneConfig:
     keep_sessions: frozenset[str] = frozenset()
     scratch_max_age: float = DAY
     oneoff_max_age: float = 7 * DAY
+    # The only seam into the foreign-mount guard: a real mount needs privileges a test suite lacks.
+    device_of: Callable[[str, os.stat_result], int] = device_of_stat
 
     @classmethod
     def for_this_machine(cls, *, keep_sessions: frozenset[str] = frozenset()) -> PruneConfig:
@@ -153,9 +161,14 @@ class TreeScan:
     foreign_mount: bool
 
 
-def scan_tree(path: Path) -> TreeScan:
-    """Walk `path` without following symlinks or crossing into another filesystem."""
+def scan_tree(path: Path, device_of: Callable[[str, os.stat_result], int] = device_of_stat) -> TreeScan:
+    """Walk `path` without following symlinks or crossing into another filesystem.
+
+    `device_of(path, stat)` names the filesystem an entry is on; a subdir on another one is a mount,
+    so the walk stops there and reports `foreign_mount`.
+    """
     top = os.lstat(path)
+    top_device = device_of(str(path), top)
     newest, inodes = top.st_mtime, 1
     has_ipc = unreadable = foreign_mount = False
     stack = [str(path)]
@@ -176,7 +189,7 @@ def scan_tree(path: Path) -> TreeScan:
             has_ipc = has_ipc or stat.S_ISSOCK(info.st_mode) or stat.S_ISFIFO(info.st_mode)
             if not stat.S_ISDIR(info.st_mode):
                 continue
-            if info.st_dev != top.st_dev:
+            if device_of(entry.path, info) != top_device:
                 foreign_mount = True
                 continue
             stack.append(entry.path)
@@ -332,7 +345,7 @@ def _decide(
     cfg: PruneConfig, path: Path, kind: str, transcript: Path | None, live: LiveSessions, holders: HolderIndex
 ) -> Decision:
     try:
-        scan = scan_tree(path)
+        scan = scan_tree(path, cfg.device_of)
     except OSError as exc:
         return Decision(path, kind, False, f"vanished or unreadable ({exc.strerror or exc})", 0, transcript)
     reason = _keep_reason(cfg, path, kind, scan, transcript, live, holders)

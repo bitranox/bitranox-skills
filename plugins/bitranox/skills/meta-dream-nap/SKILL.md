@@ -48,6 +48,13 @@ than deleting it.
   watermark, so a block that remains points at unread material. A completed nap does NOT clear the
   flag; only `dream_state.py done` (step 6) or that auto-drop does, so a flag still set after a nap
   that was not allowed to call `done` is expected, not a failure. Never delete the flag by hand.
+- The user declines the owed nap (says not to run it, or not to read that old session): record
+  it with `python3 <plugin>/skills/meta-dream-tree/dream_state.py nap-decline [cwd] --by user`,
+  then stop. Without that record the gate blocks again on the next message. The gate stops
+  blocking until the next compaction owes a new nap, and the flag stays set (declined is not
+  consolidated), so a later dream still offers that transcript. Run it only on the user's own
+  word in this conversation: the gate's block is not a reason to decline, and neither is a
+  transcript that looks uninteresting.
 - Owed while plan mode is active: plan mode blocks the engine writes a nap needs, so it cannot run
   there. Write "run the owed nap" as step 0 of the plan, naming the specific learnings, and run it
   right after ExitPlanMode.

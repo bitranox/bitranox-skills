@@ -35,10 +35,28 @@ MAX_TAIL_BYTES = 16 * 1024 * 1024
 # the file was covered while every prompt-time hook scored the envelope as a typed request.
 # `<cross-session-message` is the same gap for a message from another session: the hook receives
 # the bare envelope, the transcript the "Another Claude session" form.
+#
+# The plain-prose harness turns: the auto-continuation after a usage-limit reset, the summary
+# that opens a compacted session, a /goal Stop-hook notice and its check-in. The transcript marks
+# each (origin auto-continuation, isCompactSummary, isMeta), but a prompt-time hook receives only
+# the text, so the text is the one test every reader shares. Each is matched as the turn's
+# OPENING, which no person's question about it starts with.
+HARNESS_PROSE_PREFIXES = ("Your claude.ai usage limit has reset",
+                          "This session is being continued from a previous conversation",
+                          "A session-scoped Stop hook is ", "Goal check-in:")
+
+# A blocking Stop hook's message is written as an `isMeta` user record with this prefix, and the
+# assistant then answers the HOOK, often in one line. That answer is not what the person reads and
+# replies to, so it must not displace the reply before it. Skill bodies are `isMeta` too, and the
+# text after one IS the reply, so this matches the prefix, never `isMeta` alone. It is also not
+# typed, so it joins the registry below; `is_hook_feedback` keeps its own, narrower meaning.
+HOOK_FEEDBACK_PREFIXES = ("Stop hook feedback:",)
+
 NOT_TYPED_PREFIXES = ("<command-", "<local-command", "<task-notification",
                       "Another Claude session sent a message", "<agent-message",
                       "<cross-session-message",
-                      "<teammate-message", "[Request interrupted", "<bash-input", "<bash-stdout")
+                      "<teammate-message", "[Request interrupted", "<bash-input", "<bash-stdout",
+                      ) + HARNESS_PROSE_PREFIXES + HOOK_FEEDBACK_PREFIXES
 
 # The shapes a prefix structurally cannot reach. This one opens with a COUNT, so there is no
 # literal to list. Measured over the corpus: 112 of 1,409 turns these readers called typed were
@@ -60,12 +78,6 @@ def looks_typed(text):
     return not any(pattern.match(head) for pattern in NOT_TYPED_PATTERNS)
 
 EXCERPT_MARK = " [...] "
-
-# A blocking Stop hook's message is written as an `isMeta` user record with this prefix, and the
-# assistant then answers the HOOK, often in one line. That answer is not what the person reads and
-# replies to, so it must not displace the reply before it. Skill bodies are `isMeta` too, and the
-# text after one IS the reply, so this matches the prefix, never `isMeta` alone.
-HOOK_FEEDBACK_PREFIXES = ("Stop hook feedback:",)
 
 
 class Turn(NamedTuple):

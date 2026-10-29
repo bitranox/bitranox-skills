@@ -81,6 +81,80 @@ adds its own `BINDINGS` to the same namespace: add those classes' bindings the s
 on textual 8.2.8: with a hand binding `"r,f9"` and nine generated pages the test fails
 `bound twice: ['f9']`, and with eight pages it passes.
 
+### A mixin that supplies App behaviour: type it against `App`, never reuse `App`'s names
+
+A mixin that adds methods to an `App` (often because the `App` subclass is built in a factory that
+imports Textual lazily) calls `self.notify`, `self.query_one`, `self.exit` - and with `object` as
+its base, pyright strict reports every one as an unknown attribute, so the usual reaction is a
+per-file rule-off or an `exclude` that hides real errors too. Give it `App[None]` as its base under
+`TYPE_CHECKING` only, so the module still imports without Textual at run time:
+
+```python
+from __future__ import annotations
+
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from textual.app import App
+
+    _AppMixinBase = App[None]
+else:
+    _AppMixinBase = object
+
+
+class StatusMixin(_AppMixinBase):
+    def show_status(self, text: str) -> None:
+        self.notify(text)  # checked against App.notify's real signature
+```
+
+Never name a mixin attribute after an `App` internal. `App` has private attributes that Textual
+itself calls, and a mixin earlier in the MRO silently replaces them. Example: `App._log` is the
+method Textual's logger writes through, and the logger returns before calling it unless devtools
+is connected. A mixin's own `_log` helper therefore costs nothing until someone runs the app under
+`textual console`, and then every `self.log(...)` raises. The typed base catches this too, which
+is a second reason to use it. Measured (textual 8.2.8, pyright 1.1.414 strict): with an `object`
+base, `self.notify(text)` reports *Cannot access attribute "notify"*; with the `TYPE_CHECKING` base
+it type-checks and `self.notify(42, severity="loud")` reports both wrong arguments; assigning
+`self._log: list[str] = []` reports *"_log" overrides method of same name in class "App" with
+incompatible type "list[str]"*; at run time the mixin's base is `object` and `textual.app` is not
+imported. A mixin defining `def _log(self, line)` became the app logger's write target
+(`app._logger._log` was the mixin's method), and the call the logger makes once devtools is
+connected raised `TypeError: ... takes 2 positional arguments but 5 were given`.
+
+### `call_from_thread` refuses the app's own thread
+
+`App.call_from_thread` raises `RuntimeError` (*The `call_from_thread` method must run in a
+different thread from the app*) when it is called ON the app thread. So a callback that can fire
+on either thread - a library hook fired inline from a handler and also from a worker thread, a
+logging handler, a progress callback - cannot route everything through it. Record the app thread's id when
+the app starts and branch on it:
+
+```python
+import threading
+
+from textual.app import App
+
+
+class Monitor(App[None]):
+    def on_mount(self) -> None:
+        self._app_thread_id = threading.get_ident()
+
+    def on_library_event(self, event: str) -> None:  # the library calls this from any thread
+        if threading.get_ident() == self._app_thread_id:
+            self._show(event)
+        else:
+            self.call_from_thread(self._show, event)
+
+    def _show(self, event: str) -> None:
+        self.notify(event)
+```
+
+When the calling library swallows exceptions from its callbacks, the `RuntimeError` produces no
+traceback at all: the events raised on the app thread are simply missing, and a test asserting the
+history it observed pins the loss as expected behaviour. Test the callback from BOTH threads.
+Measured (textual 8.2.8): `call_from_thread` from `on_mount` raised the error above; from a
+`threading.Thread` it returned the callable's result.
+
 ### The vendored docs carry one local fix
 
 `widgets/progress_bar.md` diverges from upstream by two lines, deliberately. Its reactive-attributes

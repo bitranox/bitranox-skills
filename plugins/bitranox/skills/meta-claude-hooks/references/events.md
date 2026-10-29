@@ -174,7 +174,9 @@ server was defined (`plugin`, `sdk`, a scope such as `user` or `project`); v2.1.
 
 > **`@` references never reach this hook.** Files the user references with `@` in a prompt are inserted while the
 > prompt is built, with no tool call, so no `PreToolUse` hook fires for them - not even one matching `Read`. Protect
-> a path from `@` with a `Read` deny rule.
+> a path from `@` with a `Read` deny rule, or turn the insertion off with `CLAUDE_CODE_DISABLE_FILE_MENTIONS=1` in
+> the shell, user or managed settings (Claude Code 2.1.299+; ignored in project and local settings): Claude then
+> gets only the paths and reads them with its file tools, so matching `PreToolUse` hooks run.
 
 Decision control via `hookSpecificOutput`:
 
@@ -667,7 +669,10 @@ Matcher: MCP server name. Input adds `mcp_server_name`, `message`, and optional 
 `elicitation_id`, `requested_schema`.
 
 `hookSpecificOutput.action` is `accept`, `decline` or `cancel`; `content` supplies form field values on accept.
-**On exit 2 the `hookSpecificOutput` is ignored**, and the stderr is shown nowhere.
+**On exit 2 the `hookSpecificOutput` is ignored**, and the stderr is shown nowhere. A top-level
+`"decision": "block"` also declines, overriding an `action` in the same output. When several hooks match one
+request, a decline from any of them overrides an `accept` or `cancel` from another. Printing nothing leaves the
+request to the dialog.
 
 ### ElicitationResult
 

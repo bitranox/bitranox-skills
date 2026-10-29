@@ -57,6 +57,13 @@ Checks:
                     diff against origin/master is inert in CI on a push (by then the bump IS
                     origin/master). Pairs with version-bump: that one makes a shipped change
                     carry a version, this one makes a version carry its entry.
+  8. claude-plugin - --ci AND PRE-PUSH ONLY (the whole-suite moments): `claude plugin validate`
+                    on the marketplace and the plugin, and `claude plugin test` for the mod's
+                    TypeScript tests. Local in practice: where `claude` is not on PATH (a CI
+                    runner) it is skipped with a printed reason (`check_claude_plugin`).
+
+The collaborators the gate reaches beyond its arguments - the mirror pair table, the pytest run,
+the claude check, the PATH lookup - arrive as one `GateParts` bundle, so a caller can replace them.
 
 Pure standard library; shells out to git and pytest via subprocess.
 """
@@ -762,6 +769,12 @@ def module_installed(module):
         return False  # a missing PARENT raises here rather than returning None (ruamel.yaml)
 
 
+#: The exit code of a CLI mode that could not run (see the module docstring). Named, not written
+#: as a bare 2, because hook mode's 2 means something else - a refused call - and goes through
+#: `shell_text.refuse`, which also tells the model that nothing in the refused call ran.
+COULD_NOT_RUN = 2
+
+
 class _CouldNotRun(str):
     """A failure line that means the check could not run, not that it found something.
 
@@ -1232,7 +1245,7 @@ def _toolbox_nudge_module(root):
     return module
 
 
-def toolbox_rule_coverage_failures(root):
+def toolbox_rule_coverage_failures(root, nudge=None):
     """Every shipped toolbox tool must have a nudge rule, or a RECORDED reason it has none.
 
     Like `frontmatter_failures` this sweeps the WHOLE scripts dir rather than the changed paths,
@@ -1243,8 +1256,12 @@ def toolbox_rule_coverage_failures(root):
 
     A STALE exemption fails too: it names a tool nobody ships any more, so it quietly stops meaning
     anything, which is the same silent rot one level up.
+
+    ``nudge`` is the loaded `toolbox-nudge.py` to read the rules from; by default the one shipped
+    under ``root`` (`_toolbox_nudge_module`).
     """
-    nudge = _toolbox_nudge_module(root)
+    if nudge is None:
+        nudge = _toolbox_nudge_module(root)
     if nudge is None:
         return []
     scripts_dir = root / _SKILLS_DIR / "compuse-toolbox" / "scripts"
@@ -1778,7 +1795,35 @@ def _matches_uncommitted_other_side(committing, here_dir, twin_dir, mine_files, 
     return bool(mine_files and their_files) and not _mirror_differences(mine_files, their_files)[0]
 
 
-def mirror_failures(root, names, committing=None, stage=STAGE_INDEX, notices=None, twins=None):
+def _fixed_on_disk(committing, here_dir, twin_dir, mine_files, their_files):
+    """True when the committing side's WORKING TREE already matches the other side's reading.
+
+    A commit is judged on what it takes (the index, or its `CommitSelection`), so a fix that sits
+    unstaged still drifts there - but the remedy is to stage it, not to regenerate text that is
+    already right ([920])."""
+    if committing == "marketplace":
+        disk, other = _working_tree_files(here_dir), their_files
+        return bool(disk) and not _mirror_differences(disk, other)[0]
+    disk = _working_tree_files(twin_dir)
+    return bool(disk) and not _mirror_differences(mine_files, disk)[0]
+
+
+#: The phrase every `_unstaged_message` carries, so the tool-repo gate can label that refusal.
+_UNSTAGED_MARK = "is modified but not staged"
+
+
+def _unstaged_message(name, skill_dir, differing, stage):
+    """The refusal for a commit whose mirror fix is on disk but not in what the commit takes."""
+    named = isinstance(stage, CommitSelection) and stage.mode in ("only", "include")
+    remedy = ("name it among the commit's paths too - this commit takes only the paths it names"
+              if named else "git add it and commit again")
+    return ("skills/%s: %s %s in %s - the file on disk already matches its twin, but what this "
+            "commit takes does not. Nothing needs regenerating: %s."
+            % (name, ", ".join(differing[:6]), _UNSTAGED_MARK, skill_dir, remedy))
+
+
+def mirror_failures(root, names, committing=None, stage=STAGE_INDEX, notices=None, twins=None,
+                    mirrors=None):
     """Return a failure per mirrored skill in ``names`` whose twin has drifted.
 
     A mirrored skill is a DIRECTORY. Several pairs ship `references/` and `scripts/` beside their
@@ -1808,18 +1853,20 @@ def mirror_failures(root, names, committing=None, stage=STAGE_INDEX, notices=Non
     until both sides are.
 
     ``twins`` maps a skill name to the twin directory to read instead of its main-checkout path, for
-    a tool repo worked in from a linked worktree (`_tool_repo_twins`).
+    a tool repo worked in from a linked worktree (`_tool_repo_twins`). ``mirrors`` is the pair table,
+    `MIRRORED_SKILLS` unless a caller passes another.
     """
 
     public = _marketplace_public(root)
     if public is None:
         return []
+    mirrors = MIRRORED_SKILLS if mirrors is None else mirrors
     read_here, read_twin, from_published = _mirror_readers(committing, stage)
     # An audit (committing None) already reads both sides at their newest text, so it never matches here.
     lenient = _is_commit(stage) and notices is not None
     fails = []
     for name in sorted(names):
-        relative = MIRRORED_SKILLS.get(name)
+        relative = mirrors.get(name)
         if relative is None:
             continue
         here_dir = Path(root) / "plugins" / "bitranox" / "skills" / name
@@ -1842,6 +1889,11 @@ def mirror_failures(root, names, committing=None, stage=STAGE_INDEX, notices=Non
                 "sides are committed." % (name, other))
             continue
         detail = "\n      ".join(sample[:6]) if sample else "\n      ".join(differing[:6])
+        if _is_commit(stage) and committing is not None and _fixed_on_disk(
+                committing, here_dir, twin_dir, mine_files, their_files):
+            fails.append(_unstaged_message(name, here_dir if committing == "marketplace" else twin_dir,
+                                           differing, stage) + " First lines:\n      " + detail)
+            continue
         dirs = {"marketplace": here_dir, "twin": twin_dir}
         notes = stale_ref_notes([dirs[side] for side in from_published])
         between = "\n    %s\n    " % "\n    ".join(notes) if notes else " "
@@ -1867,11 +1919,11 @@ def _index_changes(root, env=None):
     return _git_paths(root, "diff", "--cached", "--name-only", "--no-renames", "HEAD", env=env)
 
 
-def _pushed_changes(root):
-    """(rc, paths) the commits since origin/master change; rc non-zero when there is no origin/master."""
-    if _git(root, "rev-parse", "--verify", "-q", "origin/master")[0]:
+def _pushed_changes(root, published="origin/master"):
+    """(rc, paths) the commits since ``published`` change; rc non-zero when there is no such ref."""
+    if not published or _git(root, "rev-parse", "--verify", "-q", published)[0]:
         return 1, []
-    return _git_paths(root, "diff", "--name-only", "--no-renames", "origin/master...HEAD")
+    return _git_paths(root, "diff", "--name-only", "--no-renames", published + "...HEAD")
 
 
 def _commit_changes(root, stage):
@@ -1890,7 +1942,7 @@ def _commit_changes(root, stage):
     return rc_i or rc_w, staged + unstaged
 
 
-def check_skill_mirrors(root, stage=STAGE_INDEX, notices=None, publishes=False):
+def check_skill_mirrors(root, stage=STAGE_INDEX, notices=None, publishes=False, mirrors=None):
     """Gate the mirrored twin of every skill this change ships a change to.
 
     Scoped to what the change SHIPS, like the review and description checks are to what changed:
@@ -1906,19 +1958,32 @@ def check_skill_mirrors(root, stage=STAGE_INDEX, notices=None, publishes=False):
     matching uncommitted text (`mirror_failures`).
     """
 
+    rc, changed = _shipped_changes(root, stage, publishes)
+    if rc:
+        return []
+    mirrors = MIRRORED_SKILLS if mirrors is None else mirrors
+    touched = {m.group(1) for m in (_SKILL_FILE_RX.match(p) for p in changed) if m}
+    return mirror_failures(root, touched & set(mirrors), committing="marketplace", stage=stage,
+                           notices=notices, mirrors=mirrors)
+
+
+def _shipped_changes(root, stage, publishes, published="origin/master"):
+    """(rc, repo-relative paths) a gated command at ``stage`` ships; rc non-zero when git cannot say.
+
+    A commit counts the files its own selection changes against HEAD (`_commit_changes`); a push
+    the files its commits change since ``published``; a commit whose command also ``publishes``
+    both, since the push sends the unpushed commits under it as well."""
     changed = []
     if _is_commit(stage):
         rc, changed = _commit_changes(root, stage)
         if rc:
-            return []
+            return rc, []
     if publishes or not _is_commit(stage):
-        rc, pushed = _pushed_changes(root)
+        rc, pushed = _pushed_changes(root, published)
         if rc:
-            return []
+            return rc, []
         changed += pushed
-    touched = {m.group(1) for m in (_SKILL_FILE_RX.match(p) for p in changed) if m}
-    return mirror_failures(root, touched & set(MIRRORED_SKILLS), committing="marketplace", stage=stage,
-                           notices=notices)
+    return 0, changed
 
 
 def command_publishes(command, tool_name=None):
@@ -2124,7 +2189,10 @@ def _is_tag_ref(repo, name):
 
 
 def _push_sends_only_tags(operands, repo):
-    """True when one `git push` statement's operands can send nothing but tags."""
+    """True when one `git push` statement's operands can send nothing but tags.
+
+    The shell's redirections are dropped first: `2>&1` or `> push.log` is not a refspec ([880])."""
+    operands = shell_text.drop_redirections(operands)
     positional, tags_flag, i = [], False, 0
     while i < len(operands):
         tok = operands[i]
@@ -2238,7 +2306,7 @@ def _checkouts(directory):
     return top, (common.parent if common.name == ".git" else top)
 
 
-def _tool_repo_twins(tool_repo):
+def _tool_repo_twins(tool_repo, mirrors=None):
     """(public tree, {skill name: twin dir as checked out here}) for the tool repo at `tool_repo`.
 
     MIRRORED_SKILLS names a twin by its path in the MAIN checkout, so ownership is decided there, and
@@ -2247,7 +2315,8 @@ def _tool_repo_twins(tool_repo):
     path, a commit in `.claude/worktrees/<name>` owned no mirrored skill, so the commit gate was
     silent and `--mirror-of` passed while the pair had drifted. `tool_repo` below its top level
     keeps only the twins beneath it, as before. The tree is found from the main checkout, so a
-    worktree placed outside `public/` still finds it. (None, {}) when there is no tree.
+    worktree placed outside `public/` still finds it. (None, {}) when there is no tree. ``mirrors``
+    is the pair table, `MIRRORED_SKILLS` unless a caller passes another.
     """
     here = Path(tool_repo).resolve()
     top, main = _checkouts(here)
@@ -2256,14 +2325,14 @@ def _tool_repo_twins(tool_repo):
         return None, {}
     scope = main / here.relative_to(top) if here.is_relative_to(top) else main
     twins = {}
-    for name, rel in MIRRORED_SKILLS.items():
+    for name, rel in (MIRRORED_SKILLS if mirrors is None else mirrors).items():
         twin = (public / rel).resolve()
         if twin.is_relative_to(scope):
             twins[name] = top / twin.relative_to(main)
     return public, twins
 
 
-def audit_mirror_of(tool_repo):
+def audit_mirror_of(tool_repo, mirrors=None):
     """Print the state of the mirrored pair belonging to one tool repo.
 
     The counterpart to ``--mirrors`` for the other side of the mirror: a release pipeline
@@ -2273,8 +2342,9 @@ def audit_mirror_of(tool_repo):
     skill, or this machine has no marketplace checkout - so it is safe to run everywhere.
     """
 
+    mirrors = MIRRORED_SKILLS if mirrors is None else mirrors
     tool = Path(tool_repo).resolve()
-    public, twins = _tool_repo_twins(tool)
+    public, twins = _tool_repo_twins(tool, mirrors)
     if public is None:
         print("mirror check: no public/ tree above %s - nothing to compare" % tool)
         return 0
@@ -2286,9 +2356,9 @@ def audit_mirror_of(tool_repo):
     if not mine:
         print("mirror check: %s ships no skill mirrored in bitranox-skills" % tool.name)
         return 0
-    fails = mirror_failures(marketplace, set(mine), twins=twins)
+    fails = mirror_failures(marketplace, set(mine), twins=twins, mirrors=mirrors)
     for name in mine:
-        print("%-8s%-34s %s" % ("DRIFT" if any(name in f for f in fails) else "in sync", name, MIRRORED_SKILLS[name]))
+        print("%-8s%-34s %s" % ("DRIFT" if any(name in f for f in fails) else "in sync", name, mirrors[name]))
     for note in stale_ref_notes([marketplace, tool]):
         print(note)
     for failure in fails:
@@ -2296,12 +2366,13 @@ def audit_mirror_of(tool_repo):
     return 1 if fails else 0
 
 
-def audit_mirrors(root):
+def audit_mirrors(root, mirrors=None):
     """Print the state of every mirrored pair. Returns the number of findings.
 
     A finding is a drifted pair or a twin MIRRORED_SKILLS does not list: unlisted, that pair is
     never compared by any gate, so it is as much a defect as drift and counts toward the exit."""
 
+    mirrors = MIRRORED_SKILLS if mirrors is None else mirrors
     public = _marketplace_public(root)
     if public is None:
         print("no public/ tree above %s - nothing to compare" % root)
@@ -2309,13 +2380,13 @@ def audit_mirrors(root):
     drifted = 0
     for note in stale_ref_notes([root]):
         print(note)
-    for name in sorted(MIRRORED_SKILLS):
-        relative = MIRRORED_SKILLS[name]
+    for name in sorted(mirrors):
+        relative = mirrors[name]
         twin = public / relative / "SKILL.md"
         if not twin.exists():
             print("SKIP    %-34s twin not checked out: %s" % (name, relative))
             continue
-        fails = mirror_failures(root, {name})
+        fails = mirror_failures(root, {name}, mirrors=mirrors)
         if fails:
             drifted += 1
             print("DRIFT   %-34s %s" % (name, relative))
@@ -2324,10 +2395,10 @@ def audit_mirrors(root):
             print("in sync %-34s %s" % (name, relative))
         for note in stale_ref_notes([twin.parent]):
             print("        " + note)
-    unlisted = unlisted_mirrors(root, public)
+    unlisted = unlisted_mirrors(root, public, mirrors)
     for pair in unlisted:
         print("UNLISTED %-33s %s" % pair)
-    print("\n%d of %d mirrored pairs have drifted." % (drifted, len(MIRRORED_SKILLS)))
+    print("\n%d of %d mirrored pairs have drifted." % (drifted, len(mirrors)))
     if unlisted:
         print("%d twin%s not listed in MIRRORED_SKILLS - add %s so the gates compare %s."
               % (len(unlisted), " is" if len(unlisted) == 1 else "s are",
@@ -2372,7 +2443,7 @@ def _in_main_checkout(path, public):
     return None
 
 
-def unlisted_mirrors(root, public):
+def unlisted_mirrors(root, public, mirrors=None):
     """Return (marketplace skill, repo path) pairs that look mirrored but are not listed.
 
     A skill and its twin keep the same description by convention, so an exact match on
@@ -2380,7 +2451,7 @@ def unlisted_mirrors(root, public):
     invisible - it simply stops checking that pair - which is how
     coding-python-layered-config went unchecked until a scan found it.
     """
-    listed = {(public / rel).resolve() for rel in MIRRORED_SKILLS.values()}
+    listed = {(public / rel).resolve() for rel in (MIRRORED_SKILLS if mirrors is None else mirrors).values()}
     catalog = {}
     for skill in sorted((Path(root) / "plugins" / "bitranox" / "skills").glob("*/SKILL.md")):
         description = _description(skill)
@@ -2400,8 +2471,71 @@ def unlisted_mirrors(root, public):
     return found
 
 
+#: How long one `claude plugin` step may take. Each measured under a second on 2026-10-29; past this
+#: the step is reported as could-not-run rather than holding the push.
+CLAUDE_PLUGIN_TIMEOUT = 180
+
+#: The `claude plugin` steps the TypeScript side needs, in order: CI has no `claude` binary, so
+#: nothing else runs the mod's own tests (`hooks/mods/register.test.ts`) or the manifest validator.
+_CLAUDE_PLUGIN_STEPS = (
+    ("validate the marketplace manifest", ("plugin", "validate", ".")),
+    ("validate the plugin", ("plugin", "validate", "plugins/bitranox")),
+    ("run the mod tests (claude plugin test)", ("plugin", "test", "plugins/bitranox")),
+)
+
+
+def check_claude_plugin(root, which=shutil.which, run=subprocess.run):
+    """Run `claude plugin validate` and the mod's `claude plugin test`, where `claude` is installed.
+
+    Local only in practice: a CI runner has no `claude`, so there the check is skipped and SAYS so
+    on stdout - a quiet pass would read as validated. ``which`` and ``run`` are the PATH and process
+    edges. Exit 1 of a step is a finding (a validation error, a failed test); any other failure to
+    get an answer is could-not-run (`could_not_run`), because it found nothing either way.
+    """
+    claude = which("claude")
+    if not claude:
+        print("  claude plugin: skipped - no `claude` on PATH, so neither the manifests were validated "
+              "nor register.test.ts run")
+        return []
+    failures = []
+    for label, args in _CLAUDE_PLUGIN_STEPS:
+        try:
+            out = run([claude, *args], cwd=str(root), capture_output=True, text=True, encoding="utf-8",
+                      errors="replace", timeout=CLAUDE_PLUGIN_TIMEOUT)
+        except subprocess.TimeoutExpired:
+            failures += could_not_run(["claude plugin: could not %s - no answer within %d s"
+                                       % (label, CLAUDE_PLUGIN_TIMEOUT)])
+            continue
+        except (OSError, subprocess.SubprocessError) as exc:
+            failures += could_not_run(["claude plugin: could not %s: %s" % (label, exc)])
+            continue
+        if out.returncode == 0:
+            continue
+        tail = ["  " + line for line in ((out.stdout or "") + (out.stderr or "")).strip().splitlines()[-15:]]
+        head = "claude plugin: %s failed (exit %d):" % (label, out.returncode)
+        failures += [head, *tail] if out.returncode == 1 else could_not_run([head, *tail])
+    return failures
+
+
+class GateParts:
+    """The collaborators the gate reaches beyond its arguments, as one bundle a caller can replace.
+
+    Claude Code, the git hook and CI always run on the defaults; a test passes fakes here instead of
+    patching this module. ``mirrors`` is the pair table (`MIRRORED_SKILLS`), ``pytest_check`` runs
+    the suite (`check_pytest`), ``plugin_check`` the TypeScript side (`check_claude_plugin`), and
+    ``which`` finds a program on PATH (uv, for `pytest_interpreter`)."""
+
+    __slots__ = ("mirrors", "pytest_check", "plugin_check", "which")
+
+    def __init__(self, mirrors=None, pytest_check=None, plugin_check=None, which=None):
+        self.mirrors = MIRRORED_SKILLS if mirrors is None else mirrors
+        self.pytest_check = pytest_check or check_pytest
+        self.plugin_check = plugin_check or check_claude_plugin
+        self.which = which or shutil.which
+
+
 def run_checks(root, ci, full_pytest=None, run_pytest=True, baseline=0, mirror_at=STAGE_INDEX,
-               notices=None, publishes=False, is_installed=None):
+               notices=None, publishes=False, is_installed=None, parts=None):
     """`ci` picks the CHECK SET (CI omits the maintainer-only ones); `full_pytest` picks the pytest
     SCOPE and defaults to `ci`. They are separate axes because a pre-push is BOTH: the maintainer
     (so version-bump, skill-review and mirrors apply) and the last gate before CI (so it runs the
@@ -2410,7 +2544,9 @@ def run_checks(root, ci, full_pytest=None, run_pytest=True, baseline=0, mirror_a
     read it. `publishes` says the same command also pushes (`command_publishes`). `notices`, when
     given, collects what passed but must still reach the model (`check_skill_mirrors`).
     `is_installed` answers whether THIS interpreter has a module (`pytest_interpreter`); a test
-    passes one to stand in for a session interpreter that lacks the CI set."""
+    passes one to stand in for a session interpreter that lacks the CI set. `parts` carries the
+    other collaborators (`GateParts`)."""
+    parts = parts or GateParts()
     if full_pytest is None:
         full_pytest = ci
     failures = []
@@ -2439,23 +2575,46 @@ def run_checks(root, ci, full_pytest=None, run_pytest=True, baseline=0, mirror_a
         failures += check_version_bumped(root)
         failures += check_ragged_tables(root)
         failures += check_skill_review(root)
-        failures += check_skill_mirrors(root, stage=mirror_at, notices=notices, publishes=publishes)
+        failures += check_skill_mirrors(root, stage=mirror_at, notices=notices, publishes=publishes,
+                                        mirrors=parts.mirrors)
+    # The whole-suite moments (--ci, the pre-push hook) also run the TypeScript side; a commit's
+    # hook-mode check stays on the fast set. Skipped, and said so, where `claude` is not installed.
+    if full_pytest:
+        failures += parts.plugin_check(root)
     # Preflight the dependencies in the interpreter that will run the suite (`pytest_interpreter`:
     # this one, or uv's when this one lacks them), and run pytest only when they are all there.
     # Running it anyway would report the SAME problem a second time as a failed assertion in an
     # unrelated test, and that second message is the one a reader acts on.
     if not run_pytest:
         return failures  # CI runs the suite as its own step so GitHub renders the results
-    launcher, missing_deps = pytest_interpreter(root, is_installed=is_installed)
+    launcher, missing_deps = pytest_interpreter(root, is_installed=is_installed, which=parts.which)
     failures += missing_deps
     if not missing_deps:
         pytest_paths = [root] if full_pytest else [root / "plugins" / "bitranox" / "hooks" / "tests"]
-        failures += check_pytest(root, pytest_paths, baseline=baseline if full_pytest else 0,
-                                 launcher=launcher)
+        failures += parts.pytest_check(root, pytest_paths, baseline=baseline if full_pytest else 0,
+                                       launcher=launcher)
     return failures
 
 
-def gate_tool_repo_mirror(root, stage=STAGE_INDEX, guessed=False):
+def _tool_repo_touched(root, stage, publishes, twins):
+    """The names in ``twins`` whose skill directory a tool-repo commit or push SHIPS a change to.
+
+    The tool-repo side of `check_skill_mirrors`' scoping ([800]): pre-existing drift in a skill this
+    change does not touch must not block it. The push side reads the tool repo's own published ref
+    (`_published_commit`), whose default branch may be `main`. When git cannot say what the change
+    ships (no repository, no published ref to push against), every owned skill counts - the reading
+    before this scoping existed - so not knowing is never laxer."""
+    top = _checkouts(root)[0]
+    rc, changed = _shipped_changes(top, stage, publishes, _published_commit(top))
+    if rc:
+        return set(twins)
+    # Not resolved: a symlink in the skill would resolve outside it. `twins` is built from the same
+    # resolved top level (`_tool_repo_twins`), so a plain prefix test compares like with like.
+    shipped = [top / rel for rel in changed]
+    return {name for name, twin in twins.items() if any(path.is_relative_to(twin) for path in shipped)}
+
+
+def gate_tool_repo_mirror(root, stage=STAGE_INDEX, guessed=False, publishes=False, mirrors=None):
     """Check the mirror of a skill edited in its OWN repo, before it is committed or pushed.
 
     `main` has already read the event and confirmed it is a gated command, and `root` is the
@@ -2469,7 +2628,8 @@ def gate_tool_repo_mirror(root, stage=STAGE_INDEX, guessed=False):
 
     The tool repo is the side being committed, read at ``stage`` (its index on a commit, HEAD on
     a push); the marketplace at what it published or committed, never another session's
-    uncommitted edit there (#84).
+    uncommitted edit there (#84). Only the mirrored skills the change SHIPS a file of are checked
+    (`_tool_repo_touched`); ``publishes`` says the same command also pushes (`command_publishes`).
 
     Returns 2 to block a drifted pair, 0 otherwise. Silent when this repo owns no
     mirrored skill, so it does not narrate in every unrelated repo. A block names the repository
@@ -2482,15 +2642,20 @@ def gate_tool_repo_mirror(root, stage=STAGE_INDEX, guessed=False):
     worthless. It still passes, because blocking would break anyone without the
     checkout, but it says so through ``additionalContext``, the one exit-0 channel the
     model actually reads (plain stdout/stderr on exit 0 does not reach it).
+
+    ``mirrors`` is the pair table, `MIRRORED_SKILLS` unless a caller passes another.
     """
 
     if root is None:
         return 0
 
-    public, twins = _tool_repo_twins(root)
-    mine = sorted(twins)
-    if public is None or not mine:
+    mirrors = MIRRORED_SKILLS if mirrors is None else mirrors
+    public, twins = _tool_repo_twins(root, mirrors)
+    if public is None or not twins:
         return 0
+    mine = sorted(_tool_repo_touched(root, stage, publishes, twins))
+    if not mine:
+        return 0                     # this change ships no file of a mirrored skill: nothing to compare
 
     marketplace = _marketplace_checkout(public)
     if not (marketplace / "plugins" / "bitranox" / "skills").is_dir():
@@ -2509,13 +2674,13 @@ def gate_tool_repo_mirror(root, stage=STAGE_INDEX, guessed=False):
         for candidate in candidates:
             found = []
             failed = mirror_failures(candidate, {name}, committing="twin", stage=stage, notices=found,
-                                     twins=twins)
+                                     twins=twins, mirrors=mirrors)
             if not failed:
                 notices += found
                 break
             refusals.append(failed)
         else:
-            held = None if _is_commit(stage) else _unpushed_holder(marketplace, name, stage, twins)
+            held = None if _is_commit(stage) else _unpushed_holder(marketplace, name, stage, twins, mirrors)
             if held:
                 unpushed.add(name)
                 fails.append(_unpushed_message(name, *held))
@@ -2526,24 +2691,29 @@ def gate_tool_repo_mirror(root, stage=STAGE_INDEX, guessed=False):
         return 0
     # All of it on STDERR: on a PreToolUse exit 2 that is what the model is shown, and stdout is
     # not. The table and the diff are the actionable part, so they cannot go anywhere else.
+    blocked = {name for name in mine if any(name in f for f in fails)}
+    unstaged = {name for name in blocked if any(name in f and _UNSTAGED_MARK in f for f in fails)}
+    lines = []
     for name in mine:
-        verdict = ("UNPUSHED" if name in unpushed else
-                   "DRIFT" if any(name in f for f in fails) else "in sync")
-        print("%-9s%-34s %s" % (verdict, name, MIRRORED_SKILLS[name]), file=sys.stderr)
-    for failure in fails:
-        print("\n" + failure, file=sys.stderr)
-    if unpushed == {name for name in mine if any(name in f for f in fails)}:
-        print("repo-gate: blocked - %s ships a skill whose marketplace twin is committed but not yet "
-              "published." % root, file=sys.stderr)
+        verdict = ("UNPUSHED" if name in unpushed else "UNSTAGED" if name in unstaged else
+                   "DRIFT" if name in blocked else "in sync")
+        lines.append("%-9s%-34s %s" % (verdict, name, mirrors[name]))
+    lines += ["\n" + failure for failure in fails]
+    if blocked <= unpushed:
+        lines.append("repo-gate: blocked - %s ships a skill whose marketplace twin is committed but "
+                     "not yet published." % root)
+    elif blocked <= unstaged:
+        lines.append("repo-gate: blocked - %s holds the mirror fix on disk, but the commit does not "
+                     "take it." % root)
     else:
-        print("repo-gate: blocked - %s ships a skill that has drifted from its marketplace twin." % root,
-              file=sys.stderr)
+        lines.append("repo-gate: blocked - %s ships a skill that has drifted from its marketplace "
+                     "twin." % root)
     if guessed:
-        print(_FALLBACK_NOTE % root, file=sys.stderr)
-    return 2
+        lines.append(_FALLBACK_NOTE % root)
+    return shell_text.refuse("\n".join(lines))
 
 
-def _unpushed_holder(marketplace, name, stage, twins):
+def _unpushed_holder(marketplace, name, stage, twins, mirrors):
     """(checkout, branch) of a marketplace linked worktree whose COMMITTED text matches this push, or None.
 
     A push reads the marketplace at what its main checkout published or committed, so it is refused
@@ -2552,7 +2722,7 @@ def _unpushed_holder(marketplace, name, stage, twins):
     was to publish that branch first (measured 2026-10-26, ipscout 2.4.0). Uncommitted text in a
     worktree does not count: it is not something a push of that branch would carry."""
     for candidate in _other_marketplace_checkouts(marketplace):
-        if mirror_failures(candidate, {name}, committing="twin", stage=stage, twins=twins):
+        if mirror_failures(candidate, {name}, committing="twin", stage=stage, twins=twins, mirrors=mirrors):
             continue
         rc, branch, _ = _git(candidate, "rev-parse", "--abbrev-ref", "HEAD")
         return candidate, (branch.strip() if rc == 0 and branch.strip() else "its HEAD")
@@ -2593,7 +2763,9 @@ def _say_context(notes):
 
 
 
-def main():
+def main(parts=None):
+    """The gate's entry point for every mode; ``parts`` replaces its collaborators (`GateParts`)."""
+    parts = parts or GateParts()
     args = sys.argv[1:]
     ci = "--ci" in args
     mirrors = "--mirrors" in args
@@ -2607,7 +2779,7 @@ def main():
         root = repo_root()
         if root is None:
             print("repo-gate: not inside a git repository - no CI workflow to read", file=sys.stderr)
-            return 2
+            return COULD_NOT_RUN
         print("\n".join(ci_test_dependencies(root)))
         return 0
 
@@ -2618,7 +2790,7 @@ def main():
         root = repo_root()
         if root is None:
             print("repo-gate: not inside a git repository - no suite to run", file=sys.stderr)
-            return 2
+            return COULD_NOT_RUN
         # The report goes to a temp dir, never the repo root: a stray junit.xml there would
         # dirty the working tree and could be committed by a pathspec-less `git add`.
         with tempfile.TemporaryDirectory() as tmp:
@@ -2628,7 +2800,7 @@ def main():
             problems = floor_problems(report, expected_collected(root)) if rc == 0 else []
         if rc == 5:
             print("repo-gate: pytest collected no tests - the suite did not run.", file=sys.stderr)
-            return 2
+            return COULD_NOT_RUN
         if rc == 1:
             return 1  # tests ran and some failed
         if rc != 0:
@@ -2636,11 +2808,11 @@ def main():
             # none of them is a test result, so none may read as a finding or a pass.
             print("repo-gate: pytest did not complete (exit %d) - the suite did not run." % rc,
                   file=sys.stderr)
-            return 2
+            return COULD_NOT_RUN
         if problems:
             for line in problems:
                 print(line, file=sys.stderr)
-            return 2 if is_could_not_run(problems) else 1
+            return COULD_NOT_RUN if is_could_not_run(problems) else 1
         return 0
 
     if "--mirror-of" in args:
@@ -2648,7 +2820,7 @@ def main():
         # it locates the marketplace from the shared public/ tree itself.
         index = args.index("--mirror-of")
         target = args[index + 1] if len(args) > index + 1 else "."
-        return audit_mirror_of(target)
+        return audit_mirror_of(target, parts.mirrors)
 
     hook_mode = not (ci or pre_push or mirrors)
     # A git pre-push hook pushes commits, so it reads HEAD; hook mode reads what its command ships.
@@ -2679,27 +2851,27 @@ def main():
             return 0
         if ci or mirrors:
             print("repo-gate: not inside the bitranox-skills repo - nothing to check", file=sys.stderr)
-            return 2
+            return COULD_NOT_RUN
         # Hook mode outside the marketplace. Not "never interfere" any more: if THIS repo
         # ships a skill mirrored into the marketplace, the pair is checked from this side
         # too. Everything else still passes untouched.
         if root is not None and pushes_only_tags(command, root, event.get("tool_name")):
-            if _tool_repo_twins(root)[1]:
+            if _tool_repo_twins(root, parts.mirrors)[1]:
                 _say_context(["repo-gate: this push sends only tags, so the marketplace mirror was "
                               "not checked - a tag ships no SKILL.md to installers. Sync the twin "
                               "before pushing the branch."])
             return 0
-        return gate_tool_repo_mirror(root, stage, guessed)
+        return gate_tool_repo_mirror(root, stage, guessed, publishes, parts.mirrors)
 
     if mirrors:
         # The full sweep the commit gate deliberately does not do: it reports every pair,
         # including the ones no current change touches.
-        return 1 if audit_mirrors(root) else 0
+        return 1 if audit_mirrors(root, parts.mirrors) else 0
 
     notices = [] if hook_mode else None
     failures = run_checks(root, ci, full_pytest=ci or pre_push,
                           run_pytest=run_pytest, baseline=expected_collected(root), mirror_at=stage,
-                          notices=notices, publishes=publishes)
+                          notices=notices, publishes=publishes, parts=parts)
 
     if not failures:
         if ci or pre_push:
@@ -2711,30 +2883,31 @@ def main():
               "repo-gate: push blocked - fix these first:" if pre_push else
               "repo-gate: commit/push blocked in %s - fix these first:" % root)
     fallback = [_FALLBACK_NOTE % root] if guessed else []
-    print("\n".join([header, *failures, *(notices or []), *fallback]), file=sys.stderr)
+    report = "\n".join([header, *failures, *(notices or []), *fallback])
     if not (ci or pre_push):
-        return 2  # the PreToolUse block code, whatever kind the failure was
-    return 2 if is_could_not_run(failures) else 1
+        return shell_text.refuse(report)  # the PreToolUse block code, whatever kind the failure was
+    print(report, file=sys.stderr)
+    return COULD_NOT_RUN if is_could_not_run(failures) else 1
 
 
 #: Flags that start a CLI mode. Anything else is hook mode, the one mode a crash may not fail.
 _CLI_FLAGS = ("--ci", "--pre-push", "--mirrors", "--mirror-of", "--pytest-only", "--print-test-deps")
 
 
-def entry():
-    """Run `main` under the exit contract of the mode it was started in.
+def entry(run=None):
+    """Run `main` (or ``run``) under the exit contract of the mode it was started in.
 
     Hook mode must never wedge a turn, so a crash there passes (0). A CLI mode is read by CI and
     by the git pre-push hook, where the same 0 reads as "all checks passed" for a run that checked
     nothing - so a crash there is 2, could not run, with the traceback on stderr."""
     try:
-        return main()
+        return (run or main)()
     except Exception:  # noqa: BLE001 - the mode decides what a crash means, not the exception
         if not any(flag in sys.argv[1:] for flag in _CLI_FLAGS):
             return 0
         traceback.print_exc()
         print("repo-gate: crashed - the checks did not complete; this is not a pass.", file=sys.stderr)
-        return 2
+        return COULD_NOT_RUN
 
 
 if __name__ == "__main__":

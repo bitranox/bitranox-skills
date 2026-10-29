@@ -827,6 +827,75 @@ def test_the_rank_warning_never_costs_a_listed_item(tmp_path):
     assert warned_seen and dropped_seen, "control: both outcomes must occur across the budgets"
 
 
+# ---- the listing reads the backlog through open_work, the module the backlog tools use ------------
+# Pinned byte for byte BEFORE the parser was folded onto open_work.iter_items: ranks out of file
+# order, a rank shared with a closed line, three items on one rank (dated, earlier, undated), an
+# uncertain date, a capital-X closed line, an indented item, loose spacing, a fenced template
+# line and prose quoting an item mid-line.
+
+PINNED_BACKLOG = (
+    "# Open work\n\nOne item per line:\n\n```\n"
+    "- [ ] (YYYY-MM-DD) [rank] ORIGIN: what it is | size: how much is left | open: why | next: "
+    "action\n```\n\n## Items\n\n"
+    "- [ ] (2026-10-20) [40] FOUND: forty, the later of two dated items on one rank | size: 1 | "
+    "open: x | next: y\n"
+    "- [x] (2026-09-01) [10] USER: an old closed line holding rank ten | closed: shipped in 1.0\n"
+    "- [ ] (2026-10-28) [10] USER: ten, sharing its rank with the closed line above\n"
+    "- [ ] (2026-10-01) [40] FOUND: forty, the earlier one\n"
+    "- [ ] (unknown) [40] USER: forty, undated, so it sorts last in its rank\n"
+    "- [ ] (2026-10-29?) [5] USER: five, an uncertain date | next: a very long next action that "
+    "runs past the ninety-six character cut of the listing line\n"
+    "- [X] (2026-08-01) [7] FOUND: a closed line with a capital X\n"
+    "  - [ ] (2026-10-10) [20] USER: twenty, indented under a bullet\n"
+    "- [ ]   (2026-10-02)   [30]   USER: thirty, with loose spacing   \n"
+    "prose that mentions - [ ] (2026-10-02) [99] mid-line is not an item\n")
+
+PINNED_LISTING = (
+    "Ranks 10, 40 label more than one line of OPEN-WORK.md (closed lines included): give the open "
+    "item a free number before citing it as 'rank N'.\n"
+    "7 OPEN-WORK ITEM(S) - the standing backlog at OPEN-WORK.md, ordered by RANK and NOT by what "
+    "was touched last. It persists until an item is closed there, so reading it does not clear it. "
+    "Whatever you do next should be the top-ranked item, or you should say plainly why a "
+    "lower-ranked one goes first:\n"
+    "- [5] (raised today) USER: five, an uncertain date | next: a very long next action that runs "
+    "past the ninety-six char\n"
+    "- [10] (raised 1 day ago) USER: ten, sharing its rank with the closed line above\n"
+    "- [20] (raised 19 days ago) USER: twenty, indented under a bullet\n"
+    "- [30] (raised 27 days ago) USER: thirty, with loose spacing\n"
+    "- [40] (raised 28 days ago) FOUND: forty, the earlier one\n"
+    "- [40] (raised 9 days ago) FOUND: forty, the later of two dated items on one rank | size: 1 | "
+    "open: x | next: y\n"
+    "- [40] (date unknown) USER: forty, undated, so it sorts last in its rank")
+
+
+def test_the_backlog_listing_is_pinned_byte_for_byte(tmp_path):
+    import datetime
+    proj = tmp_path / "pin"
+    _write_open_work(proj, PINNED_BACKLOG)
+    assert S.open_work_context(str(proj), today=datetime.date(2026, 10, 29)) == PINNED_LISTING
+
+
+def test_an_item_line_inside_a_code_fence_is_not_listed(tmp_path):
+    # open_work.iter_items skips a fenced line, so backlog_list and backlog_close never see it as
+    # an item; the session-start listing must not show one the tools cannot close.
+    import open_work
+    proj = tmp_path / "fence"
+    text = ("```\n- [ ] (2026-10-01) [3] USER: an example inside a fence\n```\n"
+            "- [ ] (2026-10-01) [9] USER: the real item\n")
+    _write_open_work(proj, text)
+    block = S.open_work_context(str(proj))
+    assert "the real item" in block
+    assert "inside a fence" not in block
+    assert [it["rank"] for it in open_work.list_items(proj / "OPEN-WORK.md")] == [9]
+
+
+def test_a_rank_shared_only_with_a_fenced_line_raises_no_warning(tmp_path):
+    proj = tmp_path / "fence2"
+    _write_open_work(proj, "~~~\n- [x] (2026-10-01) [9] USER: example | closed: x\n~~~\n"
+                           "- [ ] (2026-10-01) [9] USER: the real item\n")
+    assert "labels more than one line" not in S.open_work_context(str(proj))
+
+
 def test_essentials_stay_under_budget_with_every_block_present(tmp_path, monkeypatch, capsys):
     # The earlier budget test used a fixture carrying only retrieval + audit, so a backlog sized
     # against it passed while the REAL repo - which also has contributions - overran by 429 bytes.

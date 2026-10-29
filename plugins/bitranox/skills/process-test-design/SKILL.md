@@ -393,13 +393,15 @@ check the fixture's pairing before suspecting it.
   of a deadline written into the test. Treat a sleep, deadline loop or timeout-bounded wait inside a
   test as a review defect. The one exception, a COUNT-bounded spin (a zero-duration yield such as
   `await asyncio.sleep(0)`, which yields rather than waits) or a fake-driven production loop where
-  no event exists or can be planted, is in `references/silent-test-defeaters.md`. Code that has its own timeout is driven by injecting its clock, not by
-  waiting it out. A PRECONDITION state the test needs at a moment (a task still in flight, a file
-  not yet written) comes from an event the run emits too, never from making one delay outlast
-  another: a slower runner loses that race and the arm goes red for a non-defect. When such an arm
-  fails, check first that its precondition HELD (print the event order) before reading anything
-  the system did as a defect, in a commit message or anywhere else: what a system does under an
-  unmet precondition is not evidence about the property the arm tests.
+  no event exists or can be planted, is in `references/silent-test-defeaters.md`, with the one test
+  where the latency IS the property (a wake-up from another thread, "A cross-thread wake-up test
+  awaits only the thing being woken"). Code that has its own timeout is driven by injecting its
+  clock, not by waiting it out. A PRECONDITION state the test needs at a moment (a task still in
+  flight, a file not yet written) comes from an event the run emits too, never from making one delay
+  outlast another: a slower runner loses that race and the arm goes red for a non-defect. When such
+  an arm fails, check first that its precondition HELD (print the event order) before reading
+  anything the system did as a defect, in a commit message or anywhere else: what a system does
+  under an unmet precondition is not evidence about the property the arm tests.
 - **Never a zero or near-zero deadline, timeout or age.** `deadline=0.0` checked with
   `monotonic() - started > 0.0` races the clock tick instead of testing the code. On Windows with
   Python 3.12 or older, `time.monotonic()` advances in steps of about 15.6 ms (3.13 and later use a
@@ -765,17 +767,18 @@ tolerant helper the production loader uses, so its clean verdict can only confir
 already accepted.
 
 **Read `references/silent-test-defeaters.md` (Read tool)** when a test patches a name, parses tool
-output, asserts on an exception message (a reworded one included) or on rendered output, loops
-until a condition holds or times how long that takes, pins or clears an environment variable (its
-own or a spawned child's, or one a library reads at import), redirects or deletes coverage data
-from a conftest, simulates a race between a check and an open, blocks a stub so it can be
-signalled mid-call, plants a marker to prove a process ran (or did not), starts a fixture process
-that must carry a given `/proc/<pid>/comm` name, asserts that no file descriptor leaked or that a
-file is held only through a memory map, binds a unix socket under `tmp_path`, builds a test double
-by subclassing a `@dataclass`, mints synthetic identifiers (an address, a serial, ids that
-something later truncates), carries a skip or an exclusion, judges an artifact, compares against a
-git ref, guards against cost, or tests environment isolation - or before you claim a code path is
-untested or accept a surviving mutation.
+output, asserts on an exception message (a reworded one included) or on rendered output, loops until
+a condition holds or times how long that takes, pins or clears an environment variable (its own or a
+spawned child's, or one a library reads at import), redirects or deletes coverage data from a
+conftest, simulates a race between a check and an open, blocks a stub so it can be signalled
+mid-call, plants a marker to prove a process ran (or did not), starts a fixture process that must
+carry a given `/proc/<pid>/comm` name, asserts that no file descriptor leaked or that a file is held
+only through a memory map, binds a unix socket under `tmp_path`, builds a test double by subclassing
+a `@dataclass`, configures a logger in a fixture, checks that an event from another thread wakes an
+asyncio consumer, races a call on a helper thread, mints synthetic identifiers (an address, a
+serial, ids that something later truncates), carries a skip or an exclusion, judges an artifact,
+compares against a git ref, guards against cost, or tests environment isolation - or before you
+claim a code path is untested or accept a surviving mutation.
 
 ## Quick checklist
 

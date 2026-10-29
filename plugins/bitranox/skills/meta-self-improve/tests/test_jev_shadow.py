@@ -13,7 +13,7 @@ import os
 import re
 import stat
 import sys
-from datetime import datetime, timedelta, timezone, UTC
+from datetime import datetime, timedelta, UTC
 from pathlib import Path
 
 import pytest
@@ -737,7 +737,6 @@ EXPECTED_SITES = {
     "dream-prune",
     "dream-firing",
     "crosstree-misplaced",
-    "data-arch-dict",
     "dream-placement",
     "consolidate-cause",
     "collect-relevance",
@@ -746,6 +745,52 @@ EXPECTED_SITES = {
 
 def test_there_is_one_site_file_per_site():
     assert {p.stem for p in SITE_FILES} == EXPECTED_SITES
+
+
+# Dropped under the pre-registered decide rule: its question left too many answers undecided and
+# agreed too rarely with the agent's verdict outside the band, even after the one allowed rewrite.
+RETIRED_SITES = ("data-arch-dict",)
+
+
+@pytest.mark.parametrize("site", RETIRED_SITES)
+def test_a_retired_site_is_an_unknown_site(site, tmp_path, home, capsys):
+    assert site not in sites.site_names() and site not in sites.AGENT_BUILT
+    items, verdicts = tmp_path / "i.jsonl", tmp_path / "v.jsonl"
+    items.write_text("", encoding="utf-8")
+    verdicts.write_text("", encoding="utf-8")
+    argv = ["run", "--site", site, "--items", str(items), "--verdicts", str(verdicts)]
+    assert js.main(argv) == 2
+    assert site in capsys.readouterr().err
+
+
+# A skill step names its site as `jev_shadow.py run --site <site>`; a name with no site file is a
+# step whose command can only fail.
+_SITE_ARG = re.compile(r"--site[ \t]*\n?[ \t]*[\"'`]?([a-z][a-z0-9-]*)")
+
+
+def test_every_site_a_shipped_doc_runs_has_a_site_file():
+    named = {}
+    for doc in sorted(SKILL_DIR.parent.rglob("*.md")):
+        if ".skillwriter" in doc.parts:
+            continue
+        for m in _SITE_ARG.finditer(doc.read_text(encoding="utf-8")):
+            named.setdefault(m.group(1), []).append(doc.parent.name)
+    assert len(named) >= 9, "the scan found too few --site uses to mean anything"
+    unknown = {name: docs for name, docs in named.items() if name not in sites.site_names()}
+    assert unknown == {}
+
+
+def test_report_still_reads_the_logged_rows_of_a_retired_site(home, capsys):
+    """The shadow log keeps a retired site's rows until they age out; `report` types them from
+    their own logged answers, as it does an older wording of a live site."""
+    _write_log(home, [_record(f"d{i}", "real_violation", 0.6 if i else 0.1, True, bool(i),
+                              site="data-arch-dict", type="noul") for i in range(4)])
+    rc, env = _report_json(capsys, "--site", "data-arch-dict")
+    assert rc == 0
+    (sha,) = env["data"]["sites"]["data-arch-dict"]["shas"].values()
+    assert sha["current"] is False
+    assert sha["questions"]["real_violation"]["type"] == "noul"
+    assert sha["questions"]["real_violation"]["n"] == 4
 
 
 def test_every_site_is_either_built_here_or_agent_built_never_both():
@@ -973,7 +1018,6 @@ def test_each_builder_emits_exactly_its_site_state_fields(site, store, tmp_path,
     [
         "quality-polarity",
         "quality-param-hit",
-        "data-arch-dict",
         "consolidate-cause",
         "collect-relevance",
     ],

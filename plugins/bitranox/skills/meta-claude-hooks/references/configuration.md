@@ -187,13 +187,14 @@ Because `if` is best-effort, use the permission system, not a hook, to enforce a
 
 ### Command handler fields
 
-| Field         | Required | Description                                                                                                                                              |
-|---------------|----------|----------------------------------------------------------------------------------------------------------------------------------------------------------|
-| `command`     | yes      | shell command, or with `args` the executable to spawn                                                                                                    |
-| `args`        | no       | argument list. Its presence switches to exec form: `command` is resolved on `PATH` and spawned with no shell                                             |
-| `async`       | no       | run in the background without blocking                                                                                                                   |
-| `asyncRewake` | no       | run in the background and wake Claude on exit code 2. Implies `async`. Its stderr, or stdout if stderr is empty, is shown to Claude as a system reminder |
-| `shell`       | no       | `"bash"` or `"powershell"`. Defaults to `bash`, or `powershell` on Windows when Git Bash is absent. Ignored when `args` is set                           |
+| Field         | Required | Description                                                                                                                                                                                                                                 |
+|---------------|----------|---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
+| `command`     | yes      | shell command, or with `args` the executable to spawn                                                                                                                                                                                       |
+| `args`        | no       | argument list. Its presence switches to exec form: `command` is resolved on `PATH` and spawned with no shell                                                                                                                                |
+| `async`       | no       | run in the background without blocking                                                                                                                                                                                                      |
+| `asyncRewake` | no       | run in the background and wake Claude on exit code 2. Implies `async`. Its stderr, or stdout if stderr is empty, is shown to Claude as a system reminder                                                                                    |
+| `shell`       | no       | `"bash"` or `"powershell"`. Defaults to `bash`, or `powershell` on Windows when Git Bash is absent. Ignored when `args` is set                                                                                                              |
+| `onFailure`   | no       | `"continue"` or `"block"`: whether the triggering action goes ahead when the hook FAILS (cannot start, exits other than 0 or 2, times out, prints invalid JSON). Claude Code 2.1.295+; see `io-contract.md`, "Blocking when the hook fails" |
 
 #### Exec form vs shell form
 
@@ -214,11 +215,12 @@ In exec form, `command` is the executable name or path **only**. A bare name con
 
 ### HTTP handler fields
 
-| Field            | Required | Description                                                                                                            |
-|------------------|----------|------------------------------------------------------------------------------------------------------------------------|
-| `url`            | yes      | URL to POST to                                                                                                         |
-| `headers`        | no       | extra headers. Values interpolate `$VAR_NAME` or `${VAR_NAME}`                                                         |
-| `allowedEnvVars` | no       | env var names permitted in header values. **Required for any interpolation**; unlisted references become empty strings |
+| Field            | Required | Description                                                                                                                        |
+|------------------|----------|------------------------------------------------------------------------------------------------------------------------------------|
+| `url`            | yes      | URL to POST to                                                                                                                     |
+| `headers`        | no       | extra headers. Values interpolate `$VAR_NAME` or `${VAR_NAME}`                                                                     |
+| `allowedEnvVars` | no       | env var names permitted in header values. **Required for any interpolation**; unlisted references become empty strings             |
+| `onFailure`      | no       | `"continue"` (the default) or `"block"`: block the action when the request fails or returns a non-2xx status. Claude Code 2.1.295+ |
 
 The event JSON is the POST body with `Content-Type: application/json`.
 

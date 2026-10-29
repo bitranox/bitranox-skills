@@ -70,6 +70,19 @@ instead of restating it.
 - [ ] (YYYY-MM-DD) [rank] ORIGIN: what it is | size: how much is left | open: why | next: the action
 ```
 
+**Read and edit it through the backlog tools when the session has them.** The plugin registers
+`mcp__bitranox__backlog_list` (`state`: `open`, `closed` or `all`, default open),
+`mcp__bitranox__backlog_add` (required `rank`, `origin` = `USER` or `FOUND`, `what`, `size`,
+`open`, `next`; optional `raised`, which you omit unless you know the first-raised date - the tool
+then writes today's with `?`) and `mcp__bitranox__backlog_close` (`rank`, `reason`). They act on
+the `OPEN-WORK.md` at the git top level of the session's cwd and write the line format above; they
+refuse a rank any line already holds, but the rank itself is still YOURS to choose by the rules
+below. They can sit in the deferred-tool list: load the schema first with ToolSearch
+(`select:mcp__bitranox__backlog_add`). They take no path, so an item that belongs in ANOTHER
+repo's backlog (see below) is a hand edit there. A session without them (the plugin's mod needs
+Claude Code 2.1.259 or newer) edits the file by hand under the same rules.
+Neither route commits.
+
 The date is when it was FIRST raised and never changes. `ORIGIN` is `USER:` (their own words where
 they gave any) or `FOUND:`. `size` is how much is left; it is the field that disappears first when
 a list is retyped, and it breaks ties within an origin, so it is not optional. It is NOT the first
@@ -218,9 +231,9 @@ after it; handover mode, and any handover the user asked for, take steps 7 and 8
 
 1. **Record the lessons, do not capture them.** Each durable thing this session learned goes into
    the handover as ONE line under `## Lessons for the next nap`, worded trigger-first, with no slug
-   and no engine call. Do NOT invoke `bitranox:meta-self-improve` here and do not run
-   `memory_engine.py`: the file sits in the repo, committed or not, so the line has reached the
-   store's front door, and
+   and no engine call. Do NOT invoke `bitranox:meta-self-improve` here, do not run
+   `memory_engine.py` and do not call `mcp__bitranox__memory_add` (the same engine): the file
+   sits in the repo, committed or not, so the line has reached the store's front door, and
    `bitranox:meta-dream-nap` / `bitranox:meta-dream-tree` walk it in from there. A lesson about
    the TOOLING (a hook, a skill, the engine) is the same one line, prefixed `tooling:`, and it is
    NOT a reason to open the tool now.

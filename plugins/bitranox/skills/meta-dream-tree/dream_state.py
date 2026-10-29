@@ -36,6 +36,12 @@ Usage (cwd defaults to the current directory):
   dream_state.py session-reviewed [cwd]   advance the review watermark past what session-review
                                           showed (to the current end, unless the stretch was
                                           shown in parts - see below)
+  dream_state.py nap-decline [cwd] --by WHO
+                                          record that WHO (normally "user") declined the owed
+                                          post-compaction nap: the Stop gate stops blocking on it
+                                          until the next compaction owes a new one. The obligation
+                                          itself stays (a decline is not a nap); `done` clears it.
+                                          Prints "no nap is owed" (exit 1) when there is none.
   --transcript PATH                       (session-review / session-reviewed only) read or mark
                                           THAT transcript instead of the owed or live one - the
                                           route to an earlier session the review lists under
@@ -96,7 +102,7 @@ _KINDS = ("nap", "tree")
 # The Jev shadow sites a tree dream feeds (meta-dream-tree steps 5-7). A nap has none.
 TREE_SITES = ("dream-placement", "dream-firing", "dream-prune")
 _DONE_FLAGS = ("--kind", "--dream", "--jev-skip")
-_PROJ_CMDS = ("due", "done", "mode", "session-review", "session-reviewed")
+_PROJ_CMDS = ("due", "done", "mode", "session-review", "session-reviewed", "nap-decline")
 _FLAGS = ("--structured-only",)
 _REVIEW_CMDS = ("session-review", "session-reviewed")
 _REVIEWER = sig.DREAM_REVIEWER   # the dream's own watermark; the regex audit marks separately.
@@ -115,6 +121,7 @@ OFFER_LIMIT = 10
 USAGE = ("usage: dream_state.py [due|done|mode|session-review|session-reviewed] [cwd] "
          "[--structured-only] [--transcript PATH]\n"
          "       dream_state.py done [cwd] --kind nap|tree [--dream ID] [--jev-skip SITE=REASON]\n"
+         "       dream_state.py nap-decline [cwd] --by WHO\n"
          "       dream_state.py [saw-promotable|should-promote|promoted] <slug> [proj]\n"
          "       dream_state.py -h | --help")
 
@@ -416,7 +423,25 @@ def _done(proj, opts):
     return 0
 
 
+def _nap_decline(proj, by):
+    """Record WHO declined the owed nap; the record is read back before it is reported."""
+    try:
+        declined = sig.decline_nap_owed(proj, by=by)
+    except OSError as exc:                                           # StateWriteError
+        return _write_failed(f"the nap decline for {proj} ({exc})")
+    if not declined:
+        print(f"no nap is owed for {proj} - nothing to decline")
+        return 1
+    if sig.nap_owed_declined(proj).get("by") != by:
+        return _write_failed(f"the nap decline for {proj}")
+    print(f"owed nap declined by {by} for {proj}; the Stop gate no longer blocks on it until the "
+          "next compaction")
+    return 0
+
+
 def _proj_cmd(cmd, proj, structured_only, named=None, done_opts=None):
+    if cmd == "nap-decline":
+        return _nap_decline(proj, done_opts["by"])
     if cmd == "session-review":
         return _session_review(proj, structured_only, named)
     if cmd == "session-reviewed":
@@ -480,6 +505,36 @@ def _take_done_flags(argv):
     return rest, opts
 
 
+def _take_by(argv):
+    """(argv without --by, its stripped value or None), or an error string."""
+    rest, by, i = [], None, 0
+    while i < len(argv):
+        flag, eq, inline = argv[i].partition("=")
+        if flag != "--by":
+            rest.append(argv[i])
+            i += 1
+            continue
+        if eq:
+            value, i = inline, i + 1
+        elif i + 1 < len(argv):
+            value, i = argv[i + 1], i + 2
+        else:
+            return "--by needs a value"
+        if by is not None:
+            return "--by given twice"
+        by = value.strip()
+        if not by:
+            return "--by needs a non-empty value"
+    return rest, by
+
+
+def _check_by(cmd, by):
+    """Why --by is refused here, or None."""
+    if cmd != "nap-decline":
+        return "--by applies to nap-decline only" if by is not None else None
+    return None if by else "nap-decline needs --by WHO (normally: user)"
+
+
 def _check_done_opts(cmd, opts):
     """Why these done flags are refused, or None."""
     given = opts["kind"] is not None or opts["dream"] is not None or opts["skips"]
@@ -510,6 +565,10 @@ def _parse(argv):
     if isinstance(taken, str):
         return taken
     argv, done_opts = taken
+    taken = _take_by(argv)
+    if isinstance(taken, str):
+        return taken
+    argv, done_opts["by"] = taken
     unknown = [a for a in argv if a.startswith("-") and a not in _FLAGS]
     if unknown:
         return "unknown option(s): %s" % " ".join(unknown)
@@ -525,7 +584,7 @@ def _parse(argv):
             return "%s takes at most one [cwd], got %d" % (cmd, len(pos))
     else:
         return "unknown command %r" % cmd
-    why = _check_done_opts(cmd, done_opts)
+    why = _check_done_opts(cmd, done_opts) or _check_by(cmd, done_opts["by"])
     if why:
         return why
     return cmd, pos, "--structured-only" in argv, named, done_opts

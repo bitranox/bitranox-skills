@@ -143,8 +143,7 @@ def main():
         return 0
     action, _file, message = assess(command, event.get("tool_name") or "Bash")
     if action == "block":
-        sys.stderr.write("STRUCTURED-FILE GUARD: " + message + "\n")
-        return 2  # PreToolUse: non-zero blocks the tool call and feeds stderr back to the model
+        return shell_text.refuse("STRUCTURED-FILE GUARD: " + message)
     if action == "warn":
         sys.stderr.write("STRUCTURED-FILE GUARD (warning): " + message + "\n")
         return 0

@@ -729,6 +729,51 @@ def _due(capsys, proj):
     return capsys.readouterr().out.strip()
 
 
+# ---- nap-decline: the user said not to run the owed nap ------------------------------------------
+
+def test_nap_decline_records_who_declined_and_keeps_the_obligation(home, capsys):
+    D.sig.mark_nap_owed("/p/x", session_id="sid-old")
+    assert D.main(["nap-decline", "/p/x", "--by", "user"]) == 0
+    assert "declined" in capsys.readouterr().out
+    rec = D.sig.nap_owed_declined("/p/x")
+    assert rec["by"] == "user" and rec["ts"] > 0
+    assert D.sig.is_nap_owed("/p/x")
+
+
+def test_nap_decline_with_nothing_owed_is_the_answer_no(home, capsys):
+    assert D.main(["nap-decline", "/p/x", "--by", "user"]) == 1
+    assert "no nap is owed" in capsys.readouterr().out
+    assert not D.sig.is_nap_owed("/p/x")
+
+
+def test_nap_decline_needs_by(home, capsys):
+    D.sig.mark_nap_owed("/p/x")
+    assert D.main(["nap-decline", "/p/x"]) == 2
+    assert "nap-decline needs --by" in capsys.readouterr().err
+    assert D.sig.nap_owed_declined("/p/x") == {}
+
+
+def test_by_applies_to_nap_decline_only(home, capsys):
+    assert D.main(["due", "/p/x", "--by", "user"]) == 2
+    assert "--by applies to nap-decline only" in capsys.readouterr().err
+
+
+@pytest.mark.skipif(NO_CHMOD, reason="needs a non-root POSIX user for a read-only dir")
+def test_nap_decline_reports_a_record_it_could_not_write(home, capsys):
+    D.sig.mark_nap_owed("/p/x")
+    owed = D.sig.nap_owed_file("/p/x")
+    owed.chmod(0o444)
+    audit = owed.parent
+    audit.chmod(0o555)
+    try:
+        assert D.main(["nap-decline", "/p/x", "--by", "user"]) == 2
+    finally:
+        audit.chmod(0o755)
+        owed.chmod(0o644)
+    captured = capsys.readouterr()
+    assert "declined" not in captured.out and "error" in captured.err
+
+
 def test_done_requires_a_kind(home, capsys):
     _mem()
     assert D.main(["done", "/p/x"]) == 2

@@ -36,12 +36,6 @@ invisible, because a short shared stem yields ONE name token where the topic cha
 See same_file, is_test_suite_file, numbered_retry.
 
 Non-blocking (additionalContext), capped per session, silent on any error.
-
-JEV SHADOW (site `jig_repetition`, knob `classifier_jig_repetition = shadow`). Each nudge that
-fires also hands its judgement - is the new script the same job as two or more ledger entries? -
-to a detached child that asks Jev and logs the answer beside the lexical group, so the precision
-the model supplies today can be measured against a classifier. It runs after the nudge is
-written and never changes it; shadow only, no decide mode.
 """
 import json
 import re
@@ -84,7 +78,6 @@ OBSERVE_COOLDOWN = 15            # scripts between observe-track nudges; repeate
 
 LEDGER_LIMIT = 200               # bound the state file on a marathon session
 LEDGER_WINDOW = 20               # ledger entries handed to the model; older work is rarely the job
-SITE = "jig_repetition"          # the classifier shadow site (hooks/classifier.py)
 PURPOSE_WIDTH = 100
 # Per-entry cap on the stored shingle sample, because the state file is read AND rewritten on every
 # script write and the shingles dominate its size. 120 is a LOSSY sample, not a free one: over the
@@ -566,39 +559,6 @@ def build_message(group, entries, nth):
     return head + ask
 
 
-# ----------------------------------------------------------------------------- Jev shadow
-
-def shadow_request(group, entries, path, said, mutates, track):
-    """(regex, requests) for the classifier shadow of one fired nudge. PURE.
-
-    `entries` is the ledger BEFORE the new script is recorded, so the new script is asked about
-    against what came before it and never against itself.
-    """
-    new_script = "%s%s - %s" % (basename(path), " [changes state]" if mutates else "",
-                                (said or "").strip()[:80] or "(no stated purpose)")
-    ledger = "\n".join(line.strip() for line in _ledger_lines(entries))
-    regex = {"fires": True, "group": [basename(p) for p in group], "track": track}
-    return regex, [{"fields": {"new_script": new_script, "ledger": ledger}}]
-
-
-def _shadow(event, session, regex, requests):
-    """Hand one fired nudge to the Jev shadow child. Never raises, never changes the nudge."""
-    try:
-        # Imported here, not at the top: this hook runs on every Write and shell call, and only a
-        # nudge that fires (a few a day) needs the classifier and its config reader.
-        import classifier  # noqa: PLC0415 - deferred: only a firing nudge pays for the import
-        import self_improve_signals as sig  # noqa: PLC0415 - deferred with classifier
-    except Exception:                                     # noqa: BLE001 - shadow costs nothing
-        return
-    with classifier.shadow_guard(SITE, session):
-        if not classifier.shadow_enabled(sig.load_config(), SITE):
-            return
-        questions = classifier.jig_repetition_questions()
-        classifier.spawn_shadow(SITE, session, regex,
-                                [dict(r, questions=questions) for r in requests],
-                                transcript=event.get("transcript_path") or "")
-
-
 # ----------------------------------------------------------------------------- entry point
 
 def _written_scripts(event):
@@ -649,7 +609,6 @@ def main():
     written = len(entries) + 1
 
     fire = should_nudge(group, covered, state, track, written)
-    shadow = shadow_request(group, entries, path, said, mutates, track) if fire else None
     if fire:
         state["covered"] = sorted(covered | set(group))
         key = "n_change" if track == "change" else "n_observe"
@@ -665,7 +624,6 @@ def main():
         sys.stdout.write(json.dumps({"hookSpecificOutput": {
             "hookEventName": "PreToolUse", "additionalContext": message}}) + "\n")
         sys.stdout.flush()
-        _shadow(event, session, *shadow)
     return 0
 
 

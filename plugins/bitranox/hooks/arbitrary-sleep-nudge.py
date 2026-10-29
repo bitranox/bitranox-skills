@@ -29,6 +29,7 @@ import json
 import re
 import sys
 
+import shell_text
 from shell_text import (
     BACKGROUND_GATE_RE,
     blank_heredoc_bodies,
@@ -261,8 +262,7 @@ def main() -> int:
     if waiter:
         # A refusal, not a nudge: the warning recurred while it existed (user decision 2026-10-12).
         # The sleep notice is not added here - the re-sent command gets it, if it still applies.
-        print(refusal(waiter, background=tool_input.get("run_in_background")), file=sys.stderr)
-        return 2
+        return shell_text.refuse(refusal(waiter, background=tool_input.get("run_in_background")))
     message = notice(tool_input.get("command"), tool_name)
     if message:
         # ONE document: Claude Code reads a single JSON object from a hook's stdout.

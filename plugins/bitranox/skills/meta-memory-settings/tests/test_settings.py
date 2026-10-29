@@ -4,6 +4,7 @@ The source is ASCII only; the non-ASCII test data (CJK, umlauts, undecodable byt
 as escapes.
 """
 
+import json
 import os
 import subprocess
 import sys
@@ -70,9 +71,6 @@ def test_a_site_whose_hook_implements_decide_accepts_it(capsys, key):
     # (per-site decide mode), not yet implemented here.
     ("classifier_skills", "decide"),
     ("classifier_subagent_signal", "decides"),
-    # jig-repetition-nudge.py implements shadow only: its nudge is advice the model judges, and
-    # nothing has been measured that would let Jev replace that judgement.
-    ("classifier_jig_repetition", "decide"),
 ])
 def test_classifier_site_refuses_a_mode_it_does_not_have(capsys, key, value):
     assert ST.main(["set", key, value]) == 2
@@ -91,27 +89,35 @@ def test_a_decide_row_states_the_threshold_the_site_acts_at(site):
     assert "at %s or more" % classifier.SITE_THRESHOLDS[site] in row
 
 
-def test_classifier_jig_repetition_defaults_to_off_and_accepts_shadow(capsys):
-    assert sig.load_config()["classifier_jig_repetition"] == "off"
-    assert ST.main(["set", "classifier_jig_repetition", "shadow"]) == 0
-    assert sig.load_config()["classifier_jig_repetition"] == "shadow"
-
-
-# Both dropped under the pre-registered decide rule: backlog_ask's question lost a blind review
-# to the whole-prompt pattern, and audit_candidate's left half its answers undecided even after
-# the one allowed rewrite.
-@pytest.mark.parametrize("key", ["classifier_backlog_ask", "classifier_audit_candidate"])
+# All three dropped under the pre-registered decide rule: backlog_ask's question lost a blind
+# review to the whole-prompt pattern, and audit_candidate's and jig_repetition's left most of
+# their answers undecided even after the one allowed rewrite.
+@pytest.mark.parametrize("key", ["classifier_backlog_ask", "classifier_audit_candidate",
+                                 "classifier_jig_repetition"])
 def test_a_retired_site_is_an_unknown_key(capsys, key):
     assert ST.main(["set", key, "shadow"]) == 2
     assert "unknown key" in capsys.readouterr().err
     assert key not in sig.load_config()
 
 
-def test_the_jig_repetition_knob_has_a_settings_row():
+def test_a_stale_retired_knob_in_the_config_file_is_ignored_and_dropped_on_the_next_save(
+        home, capsys):
+    """A config written while the jig_repetition site existed still holds its knob. It reads as
+    absent, and the next save rewrites the file without it."""
+    path = home / ".claude" / ".bitranox-memory.json"
+    path.write_text(json.dumps({"classifier_backend": "jev",
+                                "classifier_jig_repetition": "shadow"}), encoding="utf-8")
+    assert "classifier_jig_repetition" not in sig.load_config()
+    assert ST.main(["set", "classifier_skills", "shadow"]) == 0
+    stored = json.loads(path.read_text(encoding="utf-8"))
+    assert "classifier_jig_repetition" not in stored and stored["classifier_backend"] == "jev"
+
+
+def test_no_settings_row_offers_a_retired_site():
     text = (Path(ST.__file__).resolve().parent / "SKILL.md").read_text(encoding="utf-8")
-    (row,) = [line for line in text.splitlines() if line.startswith("| `classifier_jig_repetition`")]
-    values = row.split("|")[2].strip()
-    assert values == "`off` [default], `shadow`", "the row's Values cell must match settings.py"
+    for key in ("classifier_backlog_ask", "classifier_audit_candidate",
+                "classifier_jig_repetition"):
+        assert "`%s`" % key not in text
 
 
 def test_classifier_skills_defaults_to_off_and_accepts_shadow(capsys):

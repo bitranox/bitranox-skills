@@ -306,6 +306,38 @@ def test_a_person_writing_about_those_shapes_is_still_a_person():
         assert P.typed_by_a_person(text), text
 
 
+# Plain-prose harness turns, quoted verbatim from transcripts. Each reaches a prompt-time hook as
+# bare text (the transcript marks it isMeta / isCompactSummary / origin auto-continuation, which a
+# hook payload does not carry), so only the text can tell it from the person. Measured: the
+# usage-limit turn was 21 of 557 backlog_ask rows (2026-10-27).
+HARNESS_PROSE_TURNS = [
+    ("Your claude.ai usage limit has reset. Continue the task you were working on when the limit "
+     "was reached; do not repeat work that is already complete."),
+    ("This session is being continued from a previous conversation that ran out of context. The "
+     "summary below covers the earlier portion of the conversation.\n\nSummary:\n## Session"),
+    'A session-scoped Stop hook is now active with condition: "do docs/plans/x.md - then push"',
+    ("Goal check-in: " + chr(0xAB) + "do docs/plans/x.md, implement, test | clear" + chr(0xBB)
+     + " is still active, and evaluation has been deferred for 65 min because background work "
+     "is still running:"),
+    "Stop hook feedback:\nA learning signal was detected this turn",
+]
+
+
+def test_a_harness_turn_written_as_plain_prose_is_not_something_a_person_typed():
+    for text in HARNESS_PROSE_TURNS:
+        assert not P.typed_by_a_person(text), text
+        assert P.scorable_prose(text) == "", text
+
+
+def test_a_person_quoting_a_harness_turn_mid_sentence_is_still_a_person():
+    # Each template is matched as the OPENING of the turn only: asking about one is a prompt.
+    for text in ("why does it say your claude.ai usage limit has reset?",
+                 "the goal check-in fires too often",
+                 "is this session being continued from a previous conversation?",
+                 'what does "Stop hook feedback:" mean here'):
+        assert P.typed_by_a_person(text), text
+
+
 # ---- a prompt asking to resume THIS project's own handover / backlog -------------------------------
 # On such a prompt the cross-project recall block was read as the handover skill reading OTHER
 # projects' handovers, so recall must be able to recognise it. Four spellings of each sentence,

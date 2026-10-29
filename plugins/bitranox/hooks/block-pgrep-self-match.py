@@ -60,6 +60,7 @@ import json
 import re
 import sys
 
+import shell_text
 from shell_text import (
     argv_for_match,
     basename_for_tool,
@@ -443,8 +444,7 @@ def main() -> int:
         "  - if you must use -f: bracket the first char ([n]ginx) AND keep that keyword",
         '    out of every echo/printf label in the same command; or add | grep -vw "$$".',
     ]
-    print("\n".join(msg), file=sys.stderr)
-    return 2
+    return shell_text.refuse("\n".join(msg))
 
 
 if __name__ == "__main__":

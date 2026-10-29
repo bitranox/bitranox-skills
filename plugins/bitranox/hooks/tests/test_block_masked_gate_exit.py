@@ -135,6 +135,13 @@ def test_reads_masked_status_catches_the_verification_shape():
     assert B.reads_masked_status("uv run t.py check x | head -3; rc=$?") is True
 
 
+def test_a_quoted_substitution_holding_an_apostrophe_does_not_hide_the_status_read():
+    """OPEN-WORK [820]: the quotes inside `"$(echo "it's")"` belong to the substitution. A walk
+    toggling on every `"` read `it's` as opening a single-quoted string, blanked the `$?` after it
+    and let the masked status read through."""
+    assert B.reads_masked_status('mytool verify --sid 9 | tail -5; echo "$(echo "it\'s") rc=$?"') is True
+
+
 def test_reads_masked_status_ignores_a_pipe_with_no_status_read():
     """The negative must be reachable, or every pipeline is blocked."""
     assert B.reads_masked_status("ls -l | tail -5") is False

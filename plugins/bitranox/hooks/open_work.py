@@ -96,6 +96,14 @@ def parse_line(line):
     return item
 
 
+def item_text(line):
+    """Everything after an item line's `[rank]`, as written (origin and fields included), or ""
+    for a line that is not an item. A listing shows this rather than a rebuilt line, so it quotes
+    the backlog in the author's own field order and wording."""
+    m = _ITEM_RX.match(line.strip())
+    return m.group(4).strip() if m else ""
+
+
 def iter_items(lines):
     """(index, item) for every item line outside a fenced code block."""
     fence = None
@@ -201,11 +209,24 @@ def _free_tens_near(rank, taken):
     return [r for r in (below, above) if r is not None]
 
 
-def _write(path, lines):
+def _read(path):
+    """(text with LF line ends, the file's line end) of the backlog at `path`.
+
+    The line end is kept so a rewrite does not turn a CRLF checkout (Windows, core.autocrlf) into
+    a whole-file diff. read_text() would fold every CRLF to LF and hide which the file used."""
+    raw = path.read_bytes().decode("utf-8")
+    eol = "\r\n" if "\r\n" in raw else "\n"
+    return raw.replace("\r\n", "\n"), eol
+
+
+def _write(path, lines, eol="\n"):
     tmp = path.with_name("%s.tmp-%d" % (path.name, os.getpid()))
     try:
-        with open(tmp, "w", encoding="utf-8", newline="\n") as fh:
+        with open(tmp, "w", encoding="utf-8", newline=eol) as fh:
             fh.write("\n".join(lines))
+            # the rename below is durable only if the data it points at reached the disk first
+            fh.flush()
+            os.fsync(fh.fileno())
         os.replace(tmp, path)
     except BaseException:
         # a failed write must not leave OPEN-WORK.md.tmp-<pid> beside the backlog
@@ -227,7 +248,7 @@ def add_item(path, rank, origin, what, size, open_, next_, raised=None, today=No
         (_require_raised(raised, today), rank, origin) + tuple(fields))
     path = Path(path)
     with sig.memory_lock(path):
-        text = path.read_text(encoding="utf-8") if path.is_file() else ""
+        text, eol = _read(path) if path.is_file() else ("", "\n")
         if not text.strip():
             text = HEADER                       # a missing or empty file starts from the header
         lines = text.split("\n")
@@ -247,9 +268,7 @@ def add_item(path, rank, origin, what, size, open_, next_, raised=None, today=No
         new = lines[:at] + [line] + lines[at:]
         if new[-1] != "":
             new.append("")
-        if len(new) != len(lines) + 1 + (0 if lines[-1] == "" else 1):
-            raise BacklogError("internal: an add must grow the file by exactly one line")
-        _write(path, new)
+        _write(path, new, eol)
     return {"rank": rank, "line": line}
 
 
@@ -266,7 +285,8 @@ def close_item(path, rank, reason):
     with sig.memory_lock(path):
         if not path.is_file():
             raise UnknownRank("no %s here, so there is no rank %d" % (FILENAME, rank))
-        lines = path.read_text(encoding="utf-8").split("\n")
+        text, eol = _read(path)
+        lines = text.split("\n")
         hits = [(i, it) for i, it in iter_items(lines) if it["rank"] == rank]
         if not hits:
             raise UnknownRank("no line holds rank %d" % rank)
@@ -278,8 +298,5 @@ def close_item(path, rank, reason):
                                 "closing either" % (rank, len(open_hits)))
         i = open_hits[0][0]
         removed = lines[i]
-        new = lines[:i] + lines[i + 1:]
-        if len(new) != len(lines) - 1:
-            raise BacklogError("internal: a close must shrink the file by exactly one line")
-        _write(path, new)
+        _write(path, lines[:i] + lines[i + 1:], eol)
     return {"rank": rank, "line": removed, "reason": reason, "deleted": True}

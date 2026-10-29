@@ -575,11 +575,12 @@ def decide(event, cfg):
         return None
     # A post-compaction nap is already an obligation the Stop gate refuses to stop on. Two blocks
     # on one turn would fight over it and burn the consecutive-block budget, so a Stop yields. A
-    # mid-turn note blocks nothing, so it has nothing to fight over and does not yield.
+    # mid-turn note blocks nothing, so it has nothing to fight over and does not yield. A nap the
+    # user declined blocks nothing either.
     proj = event.get("cwd") or os.environ.get("CLAUDE_PROJECT_DIR") or os.getcwd()
     if on_stop:
         try:
-            if sig.is_nap_owed(proj):
+            if sig.nap_owed_blocks(proj):
                 return None
         except Exception:                     # noqa: BLE001 - a missing helper must not wedge a turn
             pass

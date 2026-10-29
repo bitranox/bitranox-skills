@@ -141,7 +141,8 @@ plus a generic git habit) is split, and each half routed on its own. Take the FI
 1. **It arose while following a loaded skill, inside that skill's domain** - a step of the skill
    led you into it, was wrong, or was silent where it should have spoken. The fix is to THAT
    skill: `contrib_queue.py add --target skill:<name> --what <the lesson> --why <what it cost>
-   "<cwd>"` (home `<plugin>/skills/meta-self-improve/`, launch via `hooks/run-python.sh`). Whether
+   "<cwd>"` (home `<plugin>/skills/meta-self-improve/`, launch via `hooks/run-python.sh`; in a
+   temporary worktree `"<cwd>"` is the MAIN checkout, see step 3b). Whether
    the skill already mentioned it does not change the route: silent means a missing line,
    mentioned-but-missed means a wording or placement fix.
 2. **A shipped skill covers the domain but was never loaded** - a trigger miss. Queue it against
@@ -239,6 +240,18 @@ PLACE-HERE line) before calling the placement wrong.
   `~ dangling body (no pointer at any level)` lines and its `TOTAL dangling bodies` line: both are
   ADVISORY and outside `TOTAL tree problems`, so a total of 0 is not a clean tree. Repair:
   references/memory-backend.md, "A stranded body does not fail `--check-tree`".
+- **In a temporary worktree (`.claude/worktrees/<name>`, or any linked worktree you will remove),
+  pass the MAIN checkout's path, never the worktree's** - as `--proj`, as `memory_add`'s `level`,
+  and as `contrib_queue.py`'s `"<cwd>"` argument. Neither tool knows about worktrees: the queue is
+  keyed on a hash of the literal absolute path, and the engine puts the pointer in
+  `<--proj>/CLAUDE.local.md`. Measured in a sandbox: `contrib_queue.py add ... <worktree>` filed a
+  second queue that `list <main checkout>` does not show (SessionStart lists only the queue of
+  the session's own cwd), and after `git worktree remove` `queues` marked it `(cwd gone)`;
+  `add --proj <worktree>` wrote the pointer into the worktree's gitignored `CLAUDE.local.md`, and
+  removing the worktree left the body with no pointer anywhere (`--check-tree`:
+  `~ dangling body`, while `TOTAL tree problems: 0`). `git worktree list` prints the main
+  checkout on its first line. `mcp__bitranox__contrib_add` takes no path and keys on the directory
+  its bridge runs in, so from a worktree queue through the CLI with the main checkout's path.
 - Decide the eventual home by **scope of applicability, not abstractness**: the narrowest level
   that still covers everywhere the lesson applies. Concrete knowledge useful tree-wide belongs at
   the tree's top KEPT CONCRETE. The per-level scope descriptors (the `bitranox:self-learning`
@@ -263,7 +276,11 @@ PLACE-HERE line) before calling the placement wrong.
   clearly-shippable rule stop silently at the private layer.
   **QUEUE IT THE MOMENT YOU JUDGE IT SHIPPABLE**, before doing the work - the intent is what gets
   lost, not the fact: `contrib_queue.py add --what ... --target skill:<name> --why ... "<cwd>"`
-  (home: `<plugin>/skills/meta-self-improve/`, launch via `hooks/run-python.sh`). The queue is
+  (home: `<plugin>/skills/meta-self-improve/`, launch via `hooks/run-python.sh`). Where the session
+  has `mcp__bitranox__contrib_add` (`what`, `target`, `why`, all required, one line each), it
+  queues the same entry without the CLI - outside a temporary worktree (bullet above); a result of
+  `queued: false` carries the reason (a duplicate, or already closed). Listing and closing stay
+  CLI-only. The queue is
   durable and SessionStart surfaces it every session WITHOUT consuming it, so the intent survives a
   session end. Close an entry only once it actually shipped, and by the right outcome: `ship --match
   <unique text> --note <where it landed>` for delivered, `drop --match ... --reason ...` for
@@ -295,6 +312,17 @@ Then ONE engine call per fact, and REQUIRE its success line (the printed slug):
     bash <plugin>/hooks/run-python.sh <plugin>/hooks/memory_engine.py add \
       --proj "<cwd>" --type feedback|project|reference|user \
       --title "..." --hook "When ..., ..." --body-file <tmpfile> [--pin] [--slug s] [--skill n]
+
+**Where the session has `mcp__bitranox__memory_add`, call it instead** (it may be in the
+deferred-tool list: load its schema with ToolSearch, `select:mcp__bitranox__memory_add`). Its
+parameters map onto the CLI: `title`, `hook` and `body` are required (`body` is the text itself,
+not a file), `level` is `--proj` (default: the session cwd - route it by SUBJECT exactly as step
+3b says), and `type`, `slug` and `skill` are the flags of those names. It writes through the same
+engine, so every rule above holds, an update included. Require `ok: true` in the result, whose
+`data` carries `slug`, `level`, `action` (created or updated) and `warnings`; `ok: false` names the
+refusal (`SlugCollision`, `HookTooLong`, `PinnedEntry`, ...) and nothing was written. There is no
+`--pin` parameter: a pinned capture goes through the CLI. A session without the tool (a Claude Code
+build that does not load the plugin's mod) uses the CLI for everything.
 
 Risk ladder: engine `add` at the project level is additive - auto-apply. Rewriting/deleting an
 existing entry, restructuring or editing any CLAUDE.md, pruning - propose-first

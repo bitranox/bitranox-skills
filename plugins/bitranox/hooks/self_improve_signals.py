@@ -1099,6 +1099,38 @@ def nap_owed_info(proj):
         return {}
 
 
+def decline_nap_owed(proj, by, now=None):
+    """Record that `by` (normally "user") declined the owed nap; False when none is owed.
+
+    The decline is stored INSIDE the obligation it answers, so the next compaction - the only
+    event that brings material this decline did not cover - rewrites the marker through
+    `mark_nap_owed` and the block returns by itself. A decline is not a discharge: the marker
+    stays, naming the transcript nobody consolidated, until a dream runs. Raises ValueError for an
+    empty `by` (a decline nobody gave is the record this exists to prevent) and StateWriteError
+    when the write does not land."""
+    who = str(by or "").strip()
+    if not who:
+        raise ValueError("a nap decline needs a who (by)")
+    info = nap_owed_info(proj) if is_nap_owed(proj) else None
+    if info is None:
+        return False
+    info["declined"] = {"by": who, "ts": time.time() if now is None else now}
+    _write_json_state(nap_owed_file(proj), info)
+    return True
+
+
+def nap_owed_declined(proj):
+    """{'by', 'ts'} of the decline standing on the owed nap, or {} when none (or nothing owed)."""
+    rec = nap_owed_info(proj).get("declined")
+    return rec if isinstance(rec, dict) and rec.get("by") else {}
+
+
+def nap_owed_blocks(proj):
+    """True while an owed nap still blocks a Stop: owed, and not declined. The Stop gate blocks on
+    this and the context watcher yields on it, so the two cannot disagree about a declined nap."""
+    return is_nap_owed(proj) and not nap_owed_declined(proj)
+
+
 def clear_nap_owed(proj):
     """Discharge the owed nap (best-effort)."""
     try:
@@ -1189,7 +1221,6 @@ DEFAULT_CONFIG = {
     "classifier_skill_router": "off",  # off | shadow | decide - UserPromptSubmit skill router
     "classifier_recall_rerank": "off",  # off | shadow | decide - UserPromptSubmit memory recall ranking
     "classifier_subagent_signal": "off",  # off | shadow | decide - SubagentStop learning-signal capture
-    "classifier_jig_repetition": "off",  # off | shadow - jig-repetition nudge same-job judgement
     "classifier_skills": "off",        # off | shadow - skill-step Jev shadow (needs classifier_backend=jev too)
     # tmp-prune-hook.py: at most once an hour, delete dead Claude Code session scratch and old
     # one-off dirs from the temp dir (tmp_prune.py says what counts as dead).
@@ -1520,8 +1551,8 @@ def read_session_meta(proj):
 class StateWriteError(OSError):
     """A state file whose write the caller reports as done could not be written; nothing changed.
 
-    Raised, never swallowed, by the writers of the review watermark, the promotion sightings and
-    the learned word lists.
+    Raised, never swallowed, by the writers of the review watermark, the promotion sightings,
+    the learned word lists and a nap decline.
     Those used to swallow every OSError, so a failed write returned exactly what a successful one
     did and only a caller that happened to read the value back could tell. An OSError subclass, so
     a hook's fail-open handler that already catches OSError still keeps the turn moving."""

@@ -47,6 +47,7 @@ import sys
 
 # `runs_a_gate` lives in shell_text beside the gate vocabulary, so block-masked-gate-exit reads the
 # program word the same way when it asks whether a piped element is a gate.
+import shell_text
 from shell_text import is_gated_command, is_shell_tool, runs_a_gate
 from transcript_siblings import siblings_for_event
 
@@ -62,7 +63,7 @@ def refusal(gate):
     first = (gate.strip().splitlines() or [""])[0][:120]
     return "\n".join([
         "BLOCKED: this call publishes (commit/push/PR) in the same message as a gate whose",
-        "verdict nobody has read yet. Nothing in this call ran.",
+        "verdict nobody has read yet.",
         "",
         "  earlier sibling (the gate): " + first,
         "",
@@ -91,8 +92,7 @@ def main() -> int:
     gate = verdict(command, siblings_for_event(event) or [], tool_name)
     if gate is None:
         return 0
-    print(refusal(gate), file=sys.stderr)
-    return 2
+    return shell_text.refuse(refusal(gate))
 
 
 if __name__ == "__main__":

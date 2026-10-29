@@ -245,6 +245,36 @@ def test_a_dir_holding_a_fifo_is_kept(machine: Machine) -> None:
     assert decisions(machine.config())[old].prune is False
 
 
+def test_a_dir_with_another_filesystem_mounted_inside_is_kept(machine: Machine) -> None:
+    # A real mount needs privileges the suite lacks, so the device number is supplied through the
+    # config's device seam: the subdir reports a device other than the dir it sits in.
+    old = machine.scratch(days=5)
+    mounted = old / "mnt"
+    mounted.mkdir()
+    (mounted / "inside.txt").write_text("x", encoding="utf-8")
+    age_tree(old, 5)
+
+    def device_of(path: str, info: os.stat_result) -> int:
+        return info.st_dev + 1 if Path(path) == mounted else info.st_dev
+
+    decision = decisions(machine.config(device_of=device_of))[old]
+    assert decision.prune is False
+    assert decision.reason == "another filesystem is mounted inside it"
+    # The walk stops at the mount, so nothing under it is counted (old, f0, f1, mnt).
+    assert decision.inodes == 4
+
+
+def test_the_same_tree_without_a_foreign_device_is_pruned(machine: Machine) -> None:
+    # The control for the mount test: identical tree, real devices, so the keep came from the seam.
+    old = machine.scratch(days=5)
+    (old / "mnt").mkdir()
+    (old / "mnt" / "inside.txt").write_text("x", encoding="utf-8")
+    age_tree(old, 5)
+    decision = decisions(machine.config())[old]
+    assert decision.prune is True
+    assert decision.inodes == 5
+
+
 # ---- one-offs -------------------------------------------------------------------------------
 
 

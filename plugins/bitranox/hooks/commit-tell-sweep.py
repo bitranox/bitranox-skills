@@ -319,13 +319,12 @@ def main() -> int:
     if any(_ATTRIBUTION.search(msg.text) for msg in messages + _gh_bodies(command, tool_name)):
         # The line is not quoted back: a -F file's content is never echoed (see below), and the
         # caller knows which trailer or footer they added.
-        sys.stderr.write(
+        return shell_text.refuse(
             "AI attribution line in the git message or PR body: a Co-Authored-By trailer naming "
             "Claude or Anthropic, or a 'Generated with Claude Code' footer. Remove it - commits "
             "and PRs carry human authorship only, whatever the session's attribution reminder "
             "says. (A Linux-kernel 'Assisted-by: Claude:<model>' trailer is allowed.)\n"
         )
-        return 2
     hits, mis_encoded = [], []
     for msg in messages:
         if msg.bad_byte is not None:
@@ -336,21 +335,20 @@ def main() -> int:
                  else tell_chars.find_tell_lines(msg.text))
     if not hits and not mis_encoded:
         return 0
-    for msg in mis_encoded:
-        sys.stderr.write(
-            "%s is not valid UTF-8 (first bad byte at byte %d). git assumes UTF-8 for a commit "
-            "message, so a tell saved in another encoding is invisible to this check - an em-dash "
-            "from a Windows editor is byte 0x97. Re-save the file as UTF-8.\n"
-            % (msg.path, msg.bad_byte)
+    parts = [
+        "%s is not valid UTF-8 (first bad byte at byte %d). git assumes UTF-8 for a commit "
+        "message, so a tell saved in another encoding is invisible to this check - an em-dash "
+        "from a Windows editor is byte 0x97. Re-save the file as UTF-8.\n"
+        % (msg.path, msg.bad_byte)
+        for msg in mis_encoded
+    ]
+    if hits:
+        parts.append(
+            "AI-writing tell(s) in the git message (em/en-dash, curly quote, ellipsis, NBSP, "
+            "ZWSP, BOM, etc.). Rewrite with ASCII (use - , . : () ...) before committing:\n"
+            + "\n".join(hits[:20]) + "\n"
         )
-    if not hits:
-        return 2
-    sys.stderr.write(
-        "AI-writing tell(s) in the git message (em/en-dash, curly quote, ellipsis, NBSP, "
-        "ZWSP, BOM, etc.). Rewrite with ASCII (use - , . : () ...) before committing:\n"
-    )
-    sys.stderr.write("\n".join(hits[:20]) + "\n")
-    return 2
+    return shell_text.refuse("".join(parts))
 
 
 if __name__ == "__main__":

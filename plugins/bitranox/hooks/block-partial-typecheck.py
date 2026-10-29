@@ -95,6 +95,13 @@ _NAME_VALUE_FLAGS = frozenset(
     }
 )
 
+# A word holding an expansion the shell performs before pyright sees it.
+_UNEXPANDED = re.compile(r"[$`]")
+# A plain reference, the only expansion `_expanded` replaces with a value the command assigned.
+_REFERENCE = re.compile(r"\$(?:\{([A-Za-z_][A-Za-z0-9_]*)\}|([A-Za-z_][A-Za-z0-9_]*))")
+# One `NAME=value` word, quotes already removed by the split.
+_ASSIGNMENT = re.compile(r"^([A-Za-z_][A-Za-z0-9_]*)=(.*)$", re.DOTALL)
+
 # Options that mean "not a type-check run".
 _NON_CHECK = frozenset({"--version", "--help", "-h", "--stats", "--verifytypes"})
 
@@ -173,16 +180,18 @@ def _pyright_runs(cmd: str, cwd: str | None, tool_name: str = "Bash") -> list[tu
     runs: list[tuple[list[str], str | None]] = []
     here: str | None = cwd
     saved: list[str | None] = []
+    values: dict[str, str | None] = {}
     segments = list(shell_text.iter_segments(text, tool_name))
     for number, (offset, segment) in enumerate(segments):
-        changed, here = shell_text.directory_change(segment, here, tool_name)
-        if not changed:
-            run = _pyright_run(segment, tool_name)
-            if run is not None:
-                runs.append((run, here))
-        # A cd inside a subshell ends with it: `(cd sub && pyright x); pyright y` runs y here.
         end = offset + len(segment)
         separator = text[end:segments[number + 1][0]] if number + 1 < len(segments) else ""
+        changed, here = shell_text.directory_change(segment, here, tool_name)
+        if not changed:
+            run = _pyright_run(segment, tool_name, values)
+            if run is not None:
+                runs.append((run, here))
+            _record_values(segment, separator, tool_name, values, in_subshell=bool(saved))
+        # A cd inside a subshell ends with it: `(cd sub && pyright x); pyright y` runs y here.
         if "(" in separator:
             saved.append(here)
         elif ")" in separator and saved:
@@ -190,8 +199,11 @@ def _pyright_runs(cmd: str, cwd: str | None, tool_name: str = "Bash") -> list[tu
     return runs
 
 
-def _pyright_run(segment: str, tool_name: str) -> list[str] | None:
-    """The positional paths of the pyright check ONE statement runs, or None when it runs none."""
+def _pyright_run(segment: str, tool_name: str, values: dict[str, str | None] | None = None) -> list[str] | None:
+    """The positional paths of the pyright check ONE statement runs, or None when it runs none.
+
+    `values` holds the variables the command assigned before this statement (`_record_values`); a
+    word referring only to those is replaced by what the shell would pass in its place."""
     try:
         tokens = shell_text.split_for_tool(segment, tool_name, comments=True)
     except ValueError:
@@ -199,7 +211,68 @@ def _pyright_run(segment: str, tool_name: str) -> list[str] | None:
     index = _pyright_index(tokens, tool_name)
     if index is None:
         return None
-    return _invocation_positionals(tokens[index + 1 :])
+    args = [word for arg in tokens[index + 1 :] for word in _expanded(arg, values or {})]
+    return _invocation_positionals(args)
+
+
+def _expanded(arg: str, values: dict[str, str | None]) -> list[str]:
+    """The words `arg` becomes once the shell expands it, or `[arg]` unchanged when that is unknown.
+
+    Only a plain `$NAME`/`${NAME}` reference to a value in `values` is replaced, then split on
+    whitespace as an unquoted reference is; any other expansion keeps its `$` and is skipped later
+    as unknown. The quotes are already gone, so a quoted `"$F"` splits too - a list in one quoted
+    word would hand pyright a path that does not exist, so both readings name the same files.
+    """
+    if not _UNEXPANDED.search(arg):
+        return [arg]
+    known = True
+
+    def substitute(match: re.Match[str]) -> str:
+        nonlocal known
+        value = values.get(match.group(1) or match.group(2))
+        known = known and value is not None
+        return value or ""
+
+    result = _REFERENCE.sub(substitute, arg)
+    if not known or _UNEXPANDED.search(result):
+        return [arg]
+    return result.split()
+
+
+def _record_values(segment: str, separator: str, tool_name: str, values: dict[str, str | None], *,
+                   in_subshell: bool) -> None:
+    """Note in `values` what a statement that only assigns sets each name to.
+
+    A value counts only when the text settles it: assigned ONCE in the command, as a statement of
+    its own (`F="a b"`, `export F=x`, not a `F=x cmd` prefix, which the shell expands `$F` in front
+    of), outside a subshell and a branch or loop body, and holding nothing still to expand. Any
+    other assignment, a loop variable or a `read` makes the name unknown (None), so its reference
+    is skipped rather than guessed.
+    """
+    try:
+        tokens = shell_text.split_for_tool(segment, tool_name, comments=True)
+    except ValueError:
+        return
+    if tokens[:1] in (["for"], ["select"]) and len(tokens) > 1:
+        values[tokens[1]] = None
+        return
+    if tokens[:1] == ["read"]:
+        values.update((word, None) for word in tokens[1:] if not word.startswith("-"))
+        return
+    words = tokens[1:] if tokens[:1] in (["export"], ["readonly"]) else tokens
+    pairs = [_ASSIGNMENT.match(word) for word in words]
+    if not words or not all(pairs):
+        for word in tokens:
+            name = _ASSIGNMENT.match(word)
+            if name and name.group(1) in values:
+                values[name.group(1)] = None   # a prefix or keyword-led assignment: no longer settled
+        return
+    # `F=$(ls)` and `F=(a b)` reach here as a bare `F=` cut before the substitution or array.
+    opaque = in_subshell or tool_name == "PowerShell" or separator.lstrip().startswith(("$(", "`", "("))
+    for match in filter(None, pairs):
+        name, value = match.group(1), match.group(2)
+        settled = not (opaque or name in values or _UNEXPANDED.search(value))
+        values[name] = value if settled else None
 
 
 def _is_pyright(token: str, tool_name: str) -> bool:
@@ -267,6 +340,11 @@ def _invocation_positionals(args: list[str]) -> list[str] | None:
     """The paths one pyright invocation is given, or None when it is not a check run.
 
     Reads `args` up to the first shell operator or redirection, which ends this invocation.
+
+    A word the shell has yet to expand (`$v`, `${v}`, a backtick) is no path: what it holds -
+    flags, paths, nothing - is not in the text. `for v in "" "--pythonversion 3.10"; do pyright
+    $v; done` checks the whole project twice, and was refused as narrowed to `$v`. A literal path
+    beside it is still judged.
     """
     positionals: list[str] = []
     skip_next = False
@@ -280,6 +358,8 @@ def _invocation_positionals(args: list[str]) -> list[str] | None:
             return None
         if arg.startswith("-"):
             skip_next = arg in _VALUE_FLAGS
+            continue
+        if _UNEXPANDED.search(arg):
             continue
         positionals.append(arg)
     return positionals
@@ -380,8 +460,6 @@ def main() -> int:
     msg = [
         f"BLOCKED: this pyright run excludes '{rel}/', so a clean result would not mean the project type-checks.",
         f"  paths given: {' '.join(positionals)}",
-        "NOTHING in this command ran: the whole call was refused, not just the pyright part.",
-        "Any edit, write or other step bundled into it did not happen - re-run those on their own.",
         "",
         "Passing paths REPLACES the include list from the config, so the test files are",
         "never looked at. A strict-mode error there (untyped lambda, untyped fixture)",
@@ -393,8 +471,7 @@ def main() -> int:
         "",
         f"To check the tests alone, name them: pyright {rel}",
     ]
-    print("\n".join(msg), file=sys.stderr)
-    return 2
+    return shell_text.refuse("\n".join(msg))
 
 
 if __name__ == "__main__":

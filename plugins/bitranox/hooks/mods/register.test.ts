@@ -90,11 +90,13 @@ test("a refusal envelope (exit 1) is passed through unchanged as a string", asyn
   expect(JSON.parse(r.result as string)).toEqual(refusal);
 });
 
-test("a call carrying agentId or consent sends input without them", async ($, on) => {
+test("a call carrying agentId, consent or tool_use_id sends input without them", async ($, on) => {
   mock.env(on, {});
   const s = stubs(on as never, JSON.stringify({ ok: true, tool: "backlog_add", data: {} }));
   await $.session.start({ source: "startup", cwd: "/tmp" } as never);
-  await $.tool.call({ tool: "mcp__bitranox__backlog_add", rank: 3, agentId: "a1", consent: "c" } as never);
+  await $.tool.call({
+    tool: "mcp__bitranox__backlog_add", rank: 3, agentId: "a1", consent: "c", tool_use_id: "toolu_1",
+  } as never);
   expect(JSON.parse(String(s.runs[0].init?.stdin))).toEqual({ tool: "backlog_add", input: { rank: 3 } });
 });
 

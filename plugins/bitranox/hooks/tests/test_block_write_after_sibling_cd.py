@@ -150,6 +150,16 @@ def test_the_hook_refuses_incident_one_and_says_how_to_fix_it(monkeypatch, capsy
     assert code == 2
     assert "git -C" in err and "/work/umbrella/planning" in err
     assert "nothing in this call ran" in err.lower()
+    assert err.lower().count("nothing in this call ran") == 1
+
+
+def test_the_advice_leads_with_git_c_and_warns_a_session_root_cd_is_stripped():
+    # Measured 2026-10-26 and 2026-10-29: Claude Code strips a leading `cd <session root> &&`
+    # before a hook sees the command, so advising that cd sends the reader into the same refusal.
+    text = guard.refusal("git commit x -F m", "cd /work/planning")
+    advice = text[text.index("Name the repository"):]
+    assert advice.index("git -C /abs/repo") < advice.index("cd /abs/repo")
+    assert "strips that cd" in advice
 
 
 def test_the_powershell_tool_is_read_the_same_way(monkeypatch, capsys, tmp_path):

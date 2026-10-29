@@ -159,6 +159,32 @@ def test_blank_unexpanded_text_still_leaves_double_quotes_alone():
     assert "$?" not in S.mask_data_regions('echo "rc=$?"')
 
 
+@pytest.mark.parametrize("command, status_read", [
+    # OPEN-WORK [820], the [530] shape: `"$(echo ")" ...)"` is ONE string, and the single quotes
+    # inside its substitution are real quotes, so this `$?` is a literal
+    ('echo "$(echo ")" \'$?\')"', False),
+    # a toggling walk closed the string at the inner quote and read `it's` as opening a single-quoted
+    # string that ran to the end, hiding the real status read after it
+    ('echo "$(echo "it\'s")"; echo $?', True),
+    ('x="$(echo ")" # it\'s\n)"; echo $?', True),
+    # controls: a double-quoted `$?` inside the substitution expands, as one outside does
+    ('echo "$(printf \'%s\' "$?")"', True),
+    ('echo "$(echo ")")"; echo \'rc=$?\'', False),
+])
+def test_blank_unexpanded_text_reads_a_substitution_inside_double_quotes_as_its_own_shell(
+        command, status_read):
+    out = S.blank_unexpanded_text(command)
+    assert len(out) == len(command)
+    assert ("$?" in out) is status_read
+
+
+def test_blank_unexpanded_text_survives_a_pathologically_nested_substitution():
+    """Each `"$(` level is read as its own shell; a nesting deeper than any real command must not
+    exhaust Python's recursion limit."""
+    command = 'echo ' + '"$(' * 5000 + "echo '$?'" + ')"' * 5000
+    assert len(S.blank_unexpanded_text(command)) == len(command)
+
+
 # blank_unexpanded_text under PowerShell: the escape character is the BACKTICK and a backslash is a
 # path separator, the same mirror image mask_data_regions and the separator walk already honour.
 _PS_PATH_THEN_LITERAL = 'Write-Host "C:' + chr(92) + 'temp' + chr(92) + '"; Write-Host ' + "'$?'"
@@ -844,6 +870,48 @@ def test_a_case_arm_or_a_called_function_holding_a_cd_is_unknown(command):
     assert S.git_verb_dir(command, "/s", S.GATED_GIT_VERBS) is None
 
 
+@pytest.mark.parametrize("command", [
+    "if false; then cd /r; fi; git commit -m x",
+    "if false\nthen\n  cd /r\nfi\ngit commit -m x",
+    "if test -d x; then echo; else cd /r; fi && git push",
+    "if a; then echo; elif b; then pushd /r; fi; git commit -m x",
+    "if a; then if b; then cd /r; fi; fi; git commit -m x",
+    "while false; do cd /r; done; git commit -m x",
+    "while read d\ndo\n  cd /r\ndone < list\ngit commit -m x",
+    "until true; do cd /r; done; git commit -m x",
+    "for d in $(ls none); do cd /r; done; git commit -m x",
+    "while true; do git commit -m x; cd /r; done",
+    "if c; then cd /r; else git commit -m x; fi",
+    "if a; then :; elif cd /r; then :; fi; git commit -m x",
+    "while cd /r; do :; done; git commit -m x",
+    "if a; then if cd /r; then :; fi; fi; git commit -m x",
+])
+def test_a_cd_inside_an_if_or_loop_block_is_unknown(command):
+    """OPEN-WORK [810]: a branch may never run and a loop body may run zero or many times, so a cd in
+    one is not a cd at that point of the text - read like a case arm, never as the directory."""
+    assert S.git_verb_dir(command, "/s", S.GATED_GIT_VERBS) is None
+
+
+@pytest.mark.parametrize("command, lands", [
+    # a block without a cd changes nothing, and neither does a cd before or after the block
+    ("if true; then echo x; fi; git commit -m x", "/s"),
+    ("cd /r; if a; then echo; fi; git commit -m x", _AT_R),
+    ("if a; then echo; fi; cd /r; git commit -m x", _AT_R),
+    ("while read l; do echo $l; done < f; cd /r && git push", _AT_R),
+    # `if` and `done` count only as keywords leading a statement, never as an argument
+    ("echo if; cd /r; git commit -m x", _AT_R),
+    ("echo done; cd /r; git commit -m x", _AT_R),
+    # an `if`'s own condition runs whenever the `if` is reached, like any unguarded cd
+    ("if cd /r; then :; fi; git commit -m x", _AT_R),
+    ("if ! cd /r; then exit 1; fi\ngit push", _AT_R),
+    # a verb in a loop holds its answer when no cd follows it inside the loop
+    ("cd /r; while read b; do git push origin $b; done < list", _AT_R),
+    ("for b in a c; do git push origin $b; done; cd /a", "/s"),
+])
+def test_control_an_if_or_loop_block_without_a_cd_keeps_the_walk(command, lands):
+    assert S.git_verb_dir(command, "/s", S.GATED_GIT_VERBS) == lands
+
+
 @pytest.mark.parametrize("command, lands", [
     # a function body runs only when called, so its cd does not move a statement after the definition
     ("f() {\n  cd /r\n}\ngit commit -m x", "/s"),
@@ -1022,3 +1090,37 @@ def test_command_and_exec_run_the_git_after_them(command):
 ])
 def test_command_and_exec_without_a_gated_git_are_not_gated(command):
     assert S.is_gated_command(command) is False
+
+
+# ---- drop_redirections: a redirection is the shell's, never an operand of the program ---------
+
+@pytest.mark.parametrize("tokens, kept", [
+    (["origin", "v1", "2>&1"], ["origin", "v1"]),
+    (["origin", "v1", ">", "push.log"], ["origin", "v1"]),
+    (["origin", "v1", ">/dev/null", "2>&1"], ["origin", "v1"]),
+    (["origin", "v1", "&>", "log"], ["origin", "v1"]),
+    (["origin", "v1", "&>>log"], ["origin", "v1"]),
+    (["origin", "v1", ">>", "log", "2>", "err"], ["origin", "v1"]),
+    (["<", "/dev/null", "origin", "v1"], ["origin", "v1"]),
+    (["origin", "v1", "*>", "log"], ["origin", "v1"]),           # PowerShell's all-streams form
+    (["origin", "v1", "<<<", "word"], ["origin", "v1"]),
+    (["origin", "a>b", "x<y"], ["origin", "a>b", "x<y"]),       # CONTAINS an operator: not one
+    (["origin", "v1"], ["origin", "v1"]),
+    ([], []),
+])
+def test_drop_redirections_removes_each_operator_with_its_target(tokens, kept):
+    assert S.drop_redirections(tokens) == kept
+
+
+def test_drop_redirections_on_a_trailing_bare_operator_drops_it_alone():
+    """A cut segment can end on `>`; there is no target word to consume, and nothing raises."""
+    assert S.drop_redirections(["origin", "v1", ">"]) == ["origin", "v1"]
+
+
+def test_git_verb_operands_keeps_redirections_so_callers_can_locate_the_verb():
+    """The suffix invariant callers rely on (`tokens[len(tokens) - len(operands) - 1]` is the verb)
+    is why redirections are dropped by the reader of the operands, not by the verb walk."""
+    tokens = ["git", "-C", "/r", "push", "origin", "v1", "2>&1"]
+    operands = S.git_verb_operands(tokens, {"push"})
+    assert tokens[len(tokens) - len(operands) - 1] == "push"
+    assert S.drop_redirections(operands) == ["origin", "v1"]

@@ -275,8 +275,16 @@ def _is_own_placement(stored, slug, entry):
 # ---- receipts (idempotency + resume) -----------------------------------------------------------
 
 def _receipt_path(proj):
-    stem = re.sub(r"[^A-Za-z0-9]+", "-", str(proj)).strip("-")
-    return sig.curated_state_dir(proj) / "migration-receipts" / (stem + ".json")
+    """Where a project's receipt is written: named by `proj_key`, a fixed 16-character hash. A name
+    re-encoding the whole path made the backup's copy of it overrun Windows' MAX_PATH for any
+    project path past about 105 characters."""
+    return sig.curated_state_dir(proj) / "migration-receipts" / (sig.proj_key(proj) + ".json")
+
+
+def _path_encoded_receipt_name(proj):
+    """The name receipts carried before they were hashed; still read, so a finished migration is
+    not re-run."""
+    return re.sub(r"[^A-Za-z0-9]+", "-", str(proj)).strip("-") + ".json"
 
 
 def _legacy_receipt_path(proj):
@@ -284,14 +292,21 @@ def _legacy_receipt_path(proj):
     return sig.claude_memory_dir(proj) / "state" / "migration-receipt.json"
 
 
+def _receipt_candidates(proj):
+    """Every place a receipt for `proj` may sit, newest scheme first."""
+    current = _receipt_path(proj)
+    return (current, current.with_name(_path_encoded_receipt_name(proj)), _legacy_receipt_path(proj))
+
+
 def _load_receipt(proj):
-    try:
+    for path in _receipt_candidates(proj):
         try:
-            return json.loads(_receipt_path(proj).read_text(encoding="utf-8"))
+            return json.loads(path.read_text(encoding="utf-8"))
         except OSError:
-            return json.loads(_legacy_receipt_path(proj).read_text(encoding="utf-8"))
-    except (OSError, ValueError):
-        return {"placed": [], "sources": [], "slugs": []}
+            continue
+        except ValueError:
+            break
+    return {"placed": [], "sources": [], "slugs": []}
 
 
 def _save_receipt(proj, rec):
@@ -398,7 +413,7 @@ def migrate_store(slug, dry_run=True, scope_default="", redirect=None, backup_ru
     try:
         rep["backup"] = str(_backup(proj, memdir, backup_run))
     except OSError as exc:
-        rep["error"] = "backup failed, nothing written: %s" % exc
+        rep["error"] = backup_failure_message(exc)
         return rep
 
     rec = _load_receipt(proj)
@@ -530,6 +545,36 @@ class BackupRun:
             json.dumps({"version": 1, "items": list(self._items.values())}, indent=2),
             encoding="utf-8")
         return self.dir
+
+
+# Windows without LongPathsEnabled refuses a directory path of 248 characters or more (260 for a
+# file), and reports it as a bare "[WinError 3] The system cannot find the path specified".
+_WINDOWS_DIR_PATH_LIMIT = 248
+
+
+def _paths_in(exc):
+    """Every path an OSError names: its filename(s), and for the shutil.Error copytree raises, the
+    source and destination of each copy it gathered (those sit in its args, not in filename)."""
+    paths = [p for p in (exc.filename, exc.filename2) if p]
+    if isinstance(exc, shutil.Error) and exc.args and isinstance(exc.args[0], list):
+        for failure in exc.args[0]:
+            if isinstance(failure, tuple):
+                paths.extend(p for p in failure[:2] if isinstance(p, (str, os.PathLike)))
+    return [os.fspath(p) for p in paths]
+
+
+def backup_failure_message(exc):
+    """The report line for a failed backup, naming how long the longest path involved was: a too
+    long path is the usual cause on Windows, and its own error never says so."""
+    message = "backup failed, nothing written: %s" % exc
+    paths = _paths_in(exc)
+    if not paths:
+        return message
+    longest = max(len(p) for p in paths)
+    message += " (longest path involved: %d chars" % longest
+    if longest >= _WINDOWS_DIR_PATH_LIMIT:
+        message += "; Windows without LongPathsEnabled refuses paths of %d or more" % _WINDOWS_DIR_PATH_LIMIT
+    return message + ")"
 
 
 def _backup(proj, memdir, run=None):

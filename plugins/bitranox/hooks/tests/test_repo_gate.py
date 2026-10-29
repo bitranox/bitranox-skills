@@ -4,7 +4,9 @@ The pure checks (tests-exist, json-valid, command detection, repo detection) are
 exercised against synthetic trees in tmp_path. git-dependent checks (lf-endings,
 version-bump) self-skip outside a git repo, which these synthetic trees rely on, so
 they never produce spurious failures here. main() is driven with repo_root /
-check_pytest patched so no real pytest run or real repo is needed.
+the gate's collaborators passed in (`RG.GateParts`, built by `_parts`) and the process sitting in
+a real git repository (`_in_repo`), so no real pytest run, no real `claude` and no patch of the
+gate's own internals is needed.
 
 All content is ASCII.
 """
@@ -77,6 +79,46 @@ def make_repo(root, *, version="1.6.0", good_skill=True, bad_skill=False,
         # A skill whose only .py live under demos/ -> exempt, must NOT be flagged.
         write(root / "plugins/bitranox/skills/demoskill/SKILL.md", "# doc\n")
         write(root / "plugins/bitranox/skills/demoskill/demos/client.py", "pass\n")
+    return root
+
+
+#: The one mirrored pair the synthetic trees below carry, passed to the gate as its pair table.
+THING = {"coding-python-thing": "libs/thing/skills/python-thing"}
+
+
+def _parts(**overrides):
+    """`RG.GateParts` for a test: the THING pair table, no real pytest run and no real `claude`,
+    unless the test passes its own collaborator."""
+    base = {"mirrors": THING, "pytest_check": lambda root, paths, **kw: [], "plugin_check": lambda root: []}
+    base.update(overrides)
+    return RG.GateParts(**base)
+
+
+def _in_repo(monkeypatch, path):
+    """Make `path` a git repository and the process's working directory, as a session sitting there."""
+    _init_git(path)
+    monkeypatch.chdir(path)
+    return path
+
+
+def _hook_stdin(monkeypatch, command):
+    """Hand hook mode a PreToolUse event for `command`, the way Claude Code does."""
+    monkeypatch.setattr(sys, "argv", ["repo-gate.py"])
+    monkeypatch.setattr(sys, "stdin", io.StringIO(json.dumps({"tool_input": {"command": command}})))
+
+
+def _cli(monkeypatch, *flags):
+    monkeypatch.setattr(sys, "argv", ["repo-gate.py", *flags])
+    monkeypatch.setattr(sys, "stdin", io.StringIO(""))
+
+
+def _unbumped_plugin_change(root):
+    """Commit `root` as origin/master, then change a plugin file without bumping the version."""
+    _init_git(root)
+    _g(root, "add", "-A")
+    _g(root, "commit", "-qm", "base")
+    _g(root, "update-ref", "refs/remotes/origin/master", "HEAD")
+    write(root / "plugins/bitranox/hooks/somehook.py", "x = 2\n")
     return root
 
 
@@ -208,13 +250,11 @@ def test_lf_and_version_skip_without_git(tmp_path):
     assert RG.check_version_bumped(tmp_path) == []
 
 
-def test_version_bump_enforced_in_hook_mode_only(tmp_path, monkeypatch):
+def test_version_bump_enforced_in_hook_mode_only(tmp_path):
     # version-bump is a maintainer pre-commit concern, never a CI/PR gate.
-    make_repo(tmp_path)
-    monkeypatch.setattr(RG, "check_version_bumped", lambda root: ["VERSION_SENTINEL"])
-    monkeypatch.setattr(RG, "check_pytest", lambda root, paths, **kw: [])
-    assert "VERSION_SENTINEL" in RG.run_checks(tmp_path, ci=False)
-    assert "VERSION_SENTINEL" not in RG.run_checks(tmp_path, ci=True)
+    _unbumped_plugin_change(make_repo(tmp_path))
+    assert any("still 1.6.0" in f for f in RG.run_checks(tmp_path, ci=False, parts=_parts()))
+    assert not any("still 1.6.0" in f for f in RG.run_checks(tmp_path, ci=True, parts=_parts()))
 
 
 # --------------------------------------------------------------------------
@@ -224,51 +264,47 @@ def test_version_bump_enforced_in_hook_mode_only(tmp_path, monkeypatch):
 
 def test_main_noop_in_other_repo(tmp_path, monkeypatch):
     # Hook mode in a repo that is NOT bitranox-skills must exit 0 and never block.
-    monkeypatch.setattr(RG, "repo_root", lambda: tmp_path)  # tmp_path has no plugin.json
-    monkeypatch.setattr(sys, "stdin", io.StringIO(json.dumps({"tool_input": {"command": "git commit -m x"}})))
-    assert RG.main() == 0
+    _in_repo(monkeypatch, tmp_path)                         # tmp_path has no plugin.json
+    _hook_stdin(monkeypatch, "git commit -m x")
+    assert RG.main(parts=_parts()) == 0
 
 
 def test_main_ci_errors_in_other_repo(tmp_path, monkeypatch):
     # Outside the marketplace there is nothing for --ci to check: it could not run (2), it did not
     # find a violation (1).
-    monkeypatch.setattr(RG, "repo_root", lambda: tmp_path)
-    monkeypatch.setattr(sys, "argv", ["repo-gate.py", "--ci"])
-    assert RG.main() == 2
+    _in_repo(monkeypatch, tmp_path)
+    _cli(monkeypatch, "--ci")
+    assert RG.main(parts=_parts()) == 2
 
 
 def test_main_hook_ignores_non_commit_command(tmp_path, monkeypatch):
     make_repo(tmp_path, bad_skill=True)  # would fail checks IF they ran
-    monkeypatch.setattr(RG, "repo_root", lambda: tmp_path)
-    monkeypatch.setattr(sys, "stdin", io.StringIO(json.dumps({"tool_input": {"command": "git status"}})))
-    assert RG.main() == 0  # not a commit -> checks never run
+    _in_repo(monkeypatch, tmp_path)
+    _hook_stdin(monkeypatch, "git status")
+    assert RG.main(parts=_parts()) == 0  # not a commit -> checks never run
 
 
 def test_main_hook_blocks_commit_on_violation(tmp_path, monkeypatch, capsys):
     make_repo(tmp_path, bad_skill=True)
-    monkeypatch.setattr(RG, "repo_root", lambda: tmp_path)
-    monkeypatch.setattr(RG, "check_pytest", lambda root, paths, **kw: [])  # don't run real pytest
-    monkeypatch.setattr(sys, "stdin", io.StringIO(json.dumps({"tool_input": {"command": "git commit -m x"}})))
-    assert RG.main() == 2
+    _in_repo(monkeypatch, tmp_path)
+    _hook_stdin(monkeypatch, "git commit -m x")
+    assert RG.main(parts=_parts()) == 2
     assert "blocked" in capsys.readouterr().err
 
 
 def test_main_hook_allows_clean_commit(tmp_path, monkeypatch):
     make_repo(tmp_path, good_skill=True)
-    monkeypatch.setattr(RG, "repo_root", lambda: tmp_path)
-    monkeypatch.setattr(RG, "check_pytest", lambda root, paths, **kw: [])
-    monkeypatch.setattr(sys, "stdin", io.StringIO(json.dumps({"tool_input": {"command": "git commit -m x"}})))
-    assert RG.main() == 0
+    _in_repo(monkeypatch, tmp_path)
+    _hook_stdin(monkeypatch, "git commit -m x")
+    assert RG.main(parts=_parts()) == 0
 
 
 def test_main_hook_blocks_push_on_violation(tmp_path, monkeypatch, capsys):
     # a push is gated too: it is the moment the change reaches CI, so a violation must block it
     make_repo(tmp_path, bad_skill=True)
-    monkeypatch.setattr(RG, "repo_root", lambda: tmp_path)
-    monkeypatch.setattr(RG, "check_pytest", lambda root, paths, **kw: [])
-    monkeypatch.setattr(sys, "stdin",
-                        io.StringIO(json.dumps({"tool_input": {"command": "git push origin master"}})))
-    assert RG.main() == 2
+    _in_repo(monkeypatch, tmp_path)
+    _hook_stdin(monkeypatch, "git push origin master")
+    assert RG.main(parts=_parts()) == 2
     assert "blocked" in capsys.readouterr().err
 
 
@@ -277,20 +313,17 @@ def test_pre_push_mode_needs_no_stdin_event(tmp_path, monkeypatch):
     # it as JSON fails and the old hook path returns 0, so the gate would pass by accident on the
     # one caller that fires outside Claude Code.
     make_repo(tmp_path, bad_skill=True)
-    monkeypatch.setattr(RG, "repo_root", lambda: tmp_path)
-    monkeypatch.setattr(RG, "check_pytest", lambda root, paths, **kw: [])
+    _in_repo(monkeypatch, tmp_path)
     monkeypatch.setattr(sys, "argv", ["repo-gate.py", "--pre-push"])
     monkeypatch.setattr(sys, "stdin", io.StringIO("refs/heads/master abc refs/heads/master def\n"))
-    assert RG.main() == 1                       # a hook exit code, not the PreToolUse 2
+    assert RG.main(parts=_parts()) == 1          # a hook exit code, not the PreToolUse 2
 
 
 def test_pre_push_mode_passes_a_clean_tree(tmp_path, monkeypatch):
     make_repo(tmp_path, good_skill=True)
-    monkeypatch.setattr(RG, "repo_root", lambda: tmp_path)
-    monkeypatch.setattr(RG, "check_pytest", lambda root, paths, **kw: [])
-    monkeypatch.setattr(sys, "argv", ["repo-gate.py", "--pre-push"])
-    monkeypatch.setattr(sys, "stdin", io.StringIO(""))
-    assert RG.main() == 0
+    _in_repo(monkeypatch, tmp_path)
+    _cli(monkeypatch, "--pre-push")
+    assert RG.main(parts=_parts()) == 0
 
 
 def test_pre_push_blocks_a_tree_whose_version_has_no_entry(tmp_path, monkeypatch, capsys):
@@ -301,11 +334,9 @@ def test_pre_push_blocks_a_tree_whose_version_has_no_entry(tmp_path, monkeypatch
     changelog=False a caller - an unused knob is a knob nobody has run.
     """
     make_repo(tmp_path, good_skill=True, changelog=False)
-    monkeypatch.setattr(RG, "repo_root", lambda: tmp_path)
-    monkeypatch.setattr(RG, "check_pytest", lambda root, paths, **kw: [])
-    monkeypatch.setattr(sys, "argv", ["repo-gate.py", "--pre-push"])
-    monkeypatch.setattr(sys, "stdin", io.StringIO(""))
-    assert RG.main() != 0
+    _in_repo(monkeypatch, tmp_path)
+    _cli(monkeypatch, "--pre-push")
+    assert RG.main(parts=_parts()) != 0
     assert "1.6.0" in capsys.readouterr().err
 
 
@@ -314,20 +345,19 @@ def test_pre_push_runs_pytest_over_the_whole_repo(tmp_path, monkeypatch):
     # runs what CI runs. Recording the paths proves the widened scope rather than assuming it.
     make_repo(tmp_path, good_skill=True)
     seen = []
-    monkeypatch.setattr(RG, "repo_root", lambda: tmp_path)
-    monkeypatch.setattr(RG, "check_pytest", lambda root, paths, **kw: seen.append(list(paths)) or [])
-    monkeypatch.setattr(sys, "argv", ["repo-gate.py", "--pre-push"])
-    monkeypatch.setattr(sys, "stdin", io.StringIO(""))
-    RG.main()
-    assert seen == [[tmp_path]]                 # whole repo, not just hooks/tests
+    _in_repo(monkeypatch, tmp_path)
+    _cli(monkeypatch, "--pre-push")
+    RG.main(parts=_parts(pytest_check=lambda root, paths, **kw: seen.append(
+        [Path(p).resolve() for p in paths]) or []))
+    assert seen == [[tmp_path.resolve()]]       # whole repo, not just hooks/tests
 
 
-def test_pre_push_keeps_the_maintainer_only_checks(tmp_path, monkeypatch):
+def test_pre_push_keeps_the_maintainer_only_checks(tmp_path):
     # version-bump is skipped in CI (a contributor must not be forced to bump) but a pre-push IS
     # the maintainer, and a missing bump is exactly what makes a shipped change reach nobody.
-    monkeypatch.setattr(RG, "check_version_bumped", lambda root: ["VERSION_SENTINEL"])
-    monkeypatch.setattr(RG, "check_pytest", lambda root, paths, **kw: [])
-    assert "VERSION_SENTINEL" in RG.run_checks(tmp_path, ci=False, full_pytest=True)
+    _unbumped_plugin_change(make_repo(tmp_path))
+    failures = RG.run_checks(tmp_path, ci=False, full_pytest=True, parts=_parts())
+    assert any("still 1.6.0" in f for f in failures)
 
 
 def test_the_tracked_pre_push_hook_is_executable_and_lf():
@@ -402,9 +432,10 @@ def test_the_pre_push_hook_hands_the_gate_no_git_environment(tmp_path):
 
 def test_main_malformed_stdin_passes(tmp_path, monkeypatch):
     make_repo(tmp_path)
-    monkeypatch.setattr(RG, "repo_root", lambda: tmp_path)
+    _in_repo(monkeypatch, tmp_path)
+    monkeypatch.setattr(sys, "argv", ["repo-gate.py"])
     monkeypatch.setattr(sys, "stdin", io.StringIO("not json"))
-    assert RG.main() == 0
+    assert RG.main(parts=_parts()) == 0
 
 
 # --------------------------------------------------------------------------
@@ -421,20 +452,15 @@ def _boom(*_args, **_kwargs):
 def test_a_crashed_cli_run_exits_2_never_0(monkeypatch, capsys, flags):
     """A crash used to fall into the hook-mode catch-all and exit 0, so CI and the git pre-push hook
     read a run that checked nothing as green - and it hid every finding the run had not reached."""
-    monkeypatch.setattr(RG, "repo_root", _boom)
-    monkeypatch.setattr(RG, "audit_mirror_of", _boom)
-    monkeypatch.setattr(sys, "argv", ["repo-gate.py", *flags])
-    monkeypatch.setattr(sys, "stdin", io.StringIO(""))
-    assert RG.entry() == 2
+    _cli(monkeypatch, *flags)
+    assert RG.entry(run=_boom) == 2
     assert "SENTINEL crash" in capsys.readouterr().err
 
 
 def test_a_crashed_hook_mode_run_still_never_wedges_a_turn(monkeypatch):
     # Control: the same crash under PreToolUse must keep passing, or a gate bug blocks every commit.
-    monkeypatch.setattr(RG, "repo_root", _boom)
-    monkeypatch.setattr(sys, "argv", ["repo-gate.py"])
-    monkeypatch.setattr(sys, "stdin", io.StringIO(json.dumps({"tool_input": {"command": "git commit -m x"}})))
-    assert RG.entry() == 0
+    _hook_stdin(monkeypatch, "git commit -m x")
+    assert RG.entry(run=_boom) == 0
 
 
 _CRASH_SITECUSTOMIZE = (
@@ -469,50 +495,47 @@ def test_the_script_entry_point_maps_a_crash_by_mode(tmp_path, flags, stdin, exp
 
 @pytest.mark.parametrize("flags", [["--ci"], ["--mirrors"], ["--pytest-only"], ["--print-test-deps"]],
                          ids=lambda f: f[0])
-def test_a_cli_run_outside_any_repo_could_not_run(monkeypatch, flags):
-    monkeypatch.setattr(RG, "repo_root", lambda *a: None)
-    monkeypatch.setattr(sys, "argv", ["repo-gate.py", *flags])
-    assert RG.main() == 2
+def test_a_cli_run_outside_any_repo_could_not_run(tmp_path, monkeypatch, flags):
+    # The ceiling keeps git from finding a repository above the test directory.
+    monkeypatch.setenv("GIT_CEILING_DIRECTORIES", str(tmp_path.parent))
+    monkeypatch.chdir(tmp_path)
+    _cli(monkeypatch, *flags)
+    assert RG.main(parts=_parts()) == 2
 
 
 def test_pre_push_outside_the_marketplace_keeps_its_documented_skip(tmp_path, monkeypatch):
     # core.hooksPath pointed here from another repo: not this gate's push, so it is skipped, not refused.
-    monkeypatch.setattr(RG, "repo_root", lambda: tmp_path)
-    monkeypatch.setattr(sys, "argv", ["repo-gate.py", "--pre-push"])
-    assert RG.main() == 0
+    _in_repo(monkeypatch, tmp_path)
+    _cli(monkeypatch, "--pre-push")
+    assert RG.main(parts=_parts()) == 0
 
 
 @pytest.mark.parametrize("mode", ["--ci", "--pre-push"])
 def test_missing_ci_dependencies_mean_the_gate_could_not_run(tmp_path, monkeypatch, mode):
     make_repo(tmp_path, good_skill=True)
-    monkeypatch.setattr(RG, "repo_root", lambda: tmp_path)
-    monkeypatch.setattr(RG, "check_test_dependencies", lambda root: RG.could_not_run(["deps missing"]))
-    monkeypatch.setattr(RG, "check_version_bumped", lambda root: [])
-    monkeypatch.setattr(sys, "argv", ["repo-gate.py", mode])
-    assert RG.main() == 2
+    write(tmp_path / ".github" / "workflows" / "ci.yml",
+          "        run: |\n          pip install no_such_ci_dependency_xyz\n")
+    _in_repo(monkeypatch, tmp_path)
+    _cli(monkeypatch, mode)
+    assert RG.main(parts=_parts(which=lambda name: None)) == 2   # and no uv to provide it either
 
 
 @pytest.mark.parametrize("mode", ["--ci", "--pre-push"])
 def test_a_finding_beside_a_could_not_run_still_exits_2(tmp_path, monkeypatch, mode):
     # 2 wins in a mixed run: the run is incomplete, so its findings are not the whole answer.
     make_repo(tmp_path, bad_skill=True)
-    monkeypatch.setattr(RG, "repo_root", lambda: tmp_path)
-    monkeypatch.setattr(RG, "check_test_dependencies", lambda root: [])
-    monkeypatch.setattr(RG, "check_pytest", lambda root, paths, **kw: RG.could_not_run(["no pytest"]))
-    monkeypatch.setattr(sys, "argv", ["repo-gate.py", mode])
-    assert RG.main() == 2
+    _in_repo(monkeypatch, tmp_path)
+    _cli(monkeypatch, mode)
+    assert RG.main(parts=_parts(pytest_check=lambda root, paths, **kw: RG.could_not_run(["no pytest"]))) == 2
 
 
 @pytest.mark.parametrize("mode", ["--ci", "--pre-push"])
 def test_a_finding_alone_still_exits_1(tmp_path, monkeypatch, mode):
     # Control for the two above: an ordinary violation with a complete run stays 1.
     make_repo(tmp_path, bad_skill=True)
-    monkeypatch.setattr(RG, "repo_root", lambda: tmp_path)
-    monkeypatch.setattr(RG, "check_test_dependencies", lambda root: [])
-    monkeypatch.setattr(RG, "check_pytest", lambda root, paths, **kw: [])
-    monkeypatch.setattr(RG, "check_version_bumped", lambda root: [])
-    monkeypatch.setattr(sys, "argv", ["repo-gate.py", mode])
-    assert RG.main() == 1
+    _in_repo(monkeypatch, tmp_path)
+    _cli(monkeypatch, mode)
+    assert RG.main(parts=_parts()) == 1
 
 
 def test_missing_dependencies_are_marked_could_not_run(tmp_path):
@@ -1110,9 +1133,8 @@ def test_the_drift_message_names_the_h1_divergence_as_the_code_applies_it(tmp_pa
     write(root / "plugins" / "bitranox" / "skills" / "coding-python-thing" / "SKILL.md", MIRROR_BODY)
     write(public / "libs" / "thing" / "skills" / "python-thing" / "SKILL.md",
           TWIN_BODY.replace("One paragraph", "A DIFFERENT paragraph"))
-    monkeypatch.setitem(RG.MIRRORED_SKILLS, "coding-python-thing", "libs/thing/skills/python-thing")
 
-    fails = RG.mirror_failures(root, {"coding-python-thing"})
+    fails = RG.mirror_failures(root, {"coding-python-thing"}, mirrors=THING)
 
     assert "a trailing `(<name>)` on the H1" in fails[0]
     assert "name/H1/self-install" not in fails[0]
@@ -1132,9 +1154,8 @@ def test_changed_content_is_reported_as_drift(tmp_path, monkeypatch):
     write(root / "plugins" / "bitranox" / "skills" / "coding-python-thing" / "SKILL.md", MIRROR_BODY)
     write(public / "libs" / "thing" / "skills" / "python-thing" / "SKILL.md",
           TWIN_BODY.replace("One paragraph", "A DIFFERENT paragraph"))
-    monkeypatch.setitem(RG.MIRRORED_SKILLS, "coding-python-thing", "libs/thing/skills/python-thing")
 
-    fails = RG.mirror_failures(root, {"coding-python-thing"})
+    fails = RG.mirror_failures(root, {"coding-python-thing"}, mirrors=THING)
 
     assert len(fails) == 1
     assert "libs/thing/skills/python-thing" in fails[0]
@@ -1146,9 +1167,8 @@ def test_an_identical_pair_reports_nothing(tmp_path, monkeypatch):
     root = public / "KI" / "bitranox-skills"
     write(root / "plugins" / "bitranox" / "skills" / "coding-python-thing" / "SKILL.md", MIRROR_BODY)
     write(public / "libs" / "thing" / "skills" / "python-thing" / "SKILL.md", TWIN_BODY)
-    monkeypatch.setitem(RG.MIRRORED_SKILLS, "coding-python-thing", "libs/thing/skills/python-thing")
 
-    assert RG.mirror_failures(root, {"coding-python-thing"}) == []
+    assert RG.mirror_failures(root, {"coding-python-thing"}, mirrors=THING) == []
 
 
 def test_a_drifted_reference_file_is_reported(tmp_path, monkeypatch):
@@ -1163,9 +1183,8 @@ def test_a_drifted_reference_file_is_reported(tmp_path, monkeypatch):
     write(root / "plugins" / "bitranox" / "skills" / "coding-python-thing" / "references" / "api.md", "one\n")
     write(public / "libs" / "thing" / "skills" / "python-thing" / "SKILL.md", TWIN_BODY)
     write(public / "libs" / "thing" / "skills" / "python-thing" / "references" / "api.md", "TWO\n")
-    monkeypatch.setitem(RG.MIRRORED_SKILLS, "coding-python-thing", "libs/thing/skills/python-thing")
 
-    fails = RG.mirror_failures(root, {"coding-python-thing"})
+    fails = RG.mirror_failures(root, {"coding-python-thing"}, mirrors=THING)
 
     assert len(fails) == 1
     assert "references/api.md" in fails[0]
@@ -1177,9 +1196,8 @@ def test_a_file_present_on_only_one_side_is_reported(tmp_path, monkeypatch):
     write(root / "plugins" / "bitranox" / "skills" / "coding-python-thing" / "SKILL.md", MIRROR_BODY)
     write(root / "plugins" / "bitranox" / "skills" / "coding-python-thing" / "scripts" / "tool.py", "print(1)\n")
     write(public / "libs" / "thing" / "skills" / "python-thing" / "SKILL.md", TWIN_BODY)
-    monkeypatch.setitem(RG.MIRRORED_SKILLS, "coding-python-thing", "libs/thing/skills/python-thing")
 
-    fails = RG.mirror_failures(root, {"coding-python-thing"})
+    fails = RG.mirror_failures(root, {"coding-python-thing"}, mirrors=THING)
 
     assert len(fails) == 1
     assert "scripts/tool.py" in fails[0]
@@ -1197,9 +1215,8 @@ def test_the_skillwriter_artifact_and_pycache_are_not_compared(tmp_path, monkeyp
     write(here / ".pytest_cache" / "v" / "cache" / "lastfailed", "{}\n")
     write(here / ".ruff_cache" / "0.14.0" / "blob", "bytes\n")
     write(public / "libs" / "thing" / "skills" / "python-thing" / "SKILL.md", TWIN_BODY)
-    monkeypatch.setitem(RG.MIRRORED_SKILLS, "coding-python-thing", "libs/thing/skills/python-thing")
 
-    assert RG.mirror_failures(root, {"coding-python-thing"}) == []
+    assert RG.mirror_failures(root, {"coding-python-thing"}, mirrors=THING) == []
 
 
 def test_an_identical_directory_pair_reports_nothing(tmp_path, monkeypatch):
@@ -1209,9 +1226,8 @@ def test_an_identical_directory_pair_reports_nothing(tmp_path, monkeypatch):
     write(root / "plugins" / "bitranox" / "skills" / "coding-python-thing" / "references" / "api.md", "same\n")
     write(public / "libs" / "thing" / "skills" / "python-thing" / "SKILL.md", TWIN_BODY)
     write(public / "libs" / "thing" / "skills" / "python-thing" / "references" / "api.md", "same\n")
-    monkeypatch.setitem(RG.MIRRORED_SKILLS, "coding-python-thing", "libs/thing/skills/python-thing")
 
-    assert RG.mirror_failures(root, {"coding-python-thing"}) == []
+    assert RG.mirror_failures(root, {"coding-python-thing"}, mirrors=THING) == []
 
 
 def test_a_twin_that_is_not_checked_out_is_skipped_not_failed(tmp_path, monkeypatch):
@@ -1220,16 +1236,16 @@ def test_a_twin_that_is_not_checked_out_is_skipped_not_failed(tmp_path, monkeypa
     public = tmp_path / "public"
     root = public / "KI" / "bitranox-skills"
     write(root / "plugins" / "bitranox" / "skills" / "coding-python-thing" / "SKILL.md", MIRROR_BODY)
-    monkeypatch.setitem(RG.MIRRORED_SKILLS, "coding-python-thing", "libs/absent/skills/python-thing")
 
-    assert RG.mirror_failures(root, {"coding-python-thing"}) == []
+    absent = {"coding-python-thing": "libs/absent/skills/python-thing"}
+    assert RG.mirror_failures(root, {"coding-python-thing"}, mirrors=absent) == []
 
 
 def test_no_public_tree_means_no_comparison(tmp_path):
     root = tmp_path / "elsewhere" / "bitranox-skills"
     write(root / "plugins" / "bitranox" / "skills" / "coding-python-thing" / "SKILL.md", MIRROR_BODY)
 
-    assert RG.mirror_failures(root, set(RG.MIRRORED_SKILLS)) == []
+    assert RG.mirror_failures(root, set(RG.MIRRORED_SKILLS), mirrors=RG.MIRRORED_SKILLS) == []
 
 
 
@@ -1264,25 +1280,24 @@ def _repo_behind_origin(top, rel, old, new):
     _g(top, "reset", "-q", "--hard", "HEAD~1")
 
 
-def _stale_pair(tmp_path, monkeypatch, twin_body):
+def _stale_pair(tmp_path, twin_body):
     public = tmp_path / "public"
     root = public / "KI" / "bitranox-skills"
     _repo_behind_origin(root, "plugins/bitranox/skills/coding-python-thing/SKILL.md", MIRROR_BODY, NEW_TEXT)
     write(public / "libs" / "thing" / "skills" / "python-thing" / "SKILL.md", twin_body)
-    monkeypatch.setitem(RG.MIRRORED_SKILLS, "coding-python-thing", "libs/thing/skills/python-thing")
     return public, root
 
 
 def test_a_marketplace_checkout_behind_origin_does_not_report_false_drift(tmp_path, monkeypatch):
-    _public, root = _stale_pair(tmp_path, monkeypatch, NEW_TWIN)
+    _public, root = _stale_pair(tmp_path, NEW_TWIN)
 
-    assert RG.mirror_failures(root, {"coding-python-thing"}) == []
+    assert RG.mirror_failures(root, {"coding-python-thing"}, mirrors=THING) == []
 
 
 def test_a_stale_checkout_cannot_hide_drift_from_the_published_text(tmp_path, monkeypatch):
-    _public, root = _stale_pair(tmp_path, monkeypatch, TWIN_BODY)
+    _public, root = _stale_pair(tmp_path, TWIN_BODY)
 
-    fails = RG.mirror_failures(root, {"coding-python-thing"})
+    fails = RG.mirror_failures(root, {"coding-python-thing"}, mirrors=THING)
 
     assert len(fails) == 1 and "NEWER" in fails[0]
 
@@ -1290,11 +1305,11 @@ def test_a_stale_checkout_cannot_hide_drift_from_the_published_text(tmp_path, mo
 def test_an_uncommitted_marketplace_edit_is_the_newest_text(tmp_path, monkeypatch):
     # The sync in progress: the twin was edited and the marketplace copy is being edited to match,
     # in a checkout that is behind. The local edit wins over origin for that file.
-    _public, root = _stale_pair(tmp_path, monkeypatch, TWIN_BODY.replace("One paragraph", "LOCAL paragraph"))
+    _public, root = _stale_pair(tmp_path, TWIN_BODY.replace("One paragraph", "LOCAL paragraph"))
     write(root / "plugins" / "bitranox" / "skills" / "coding-python-thing" / "SKILL.md",
           MIRROR_BODY.replace("One paragraph", "LOCAL paragraph"))
 
-    assert RG.mirror_failures(root, {"coding-python-thing"}) == []
+    assert RG.mirror_failures(root, {"coding-python-thing"}, mirrors=THING) == []
 
 
 def test_a_file_published_upstream_but_missing_from_a_stale_checkout_is_compared(tmp_path, monkeypatch):
@@ -1312,9 +1327,8 @@ def test_a_file_published_upstream_but_missing_from_a_stale_checkout_is_compared
     _g(root, "reset", "-q", "--hard", "HEAD~1")
     write(public / "libs" / "thing" / "skills" / "python-thing" / "SKILL.md", TWIN_BODY)
     write(public / "libs" / "thing" / "skills" / "python-thing" / "references" / "extra.md", "published later\n")
-    monkeypatch.setitem(RG.MIRRORED_SKILLS, "coding-python-thing", "libs/thing/skills/python-thing")
 
-    assert RG.mirror_failures(root, {"coding-python-thing"}) == []
+    assert RG.mirror_failures(root, {"coding-python-thing"}, mirrors=THING) == []
 
 
 def test_a_tool_repo_checkout_behind_its_origin_is_read_at_its_newest_text(tmp_path, monkeypatch):
@@ -1323,9 +1337,8 @@ def test_a_tool_repo_checkout_behind_its_origin_is_read_at_its_newest_text(tmp_p
     root = public / "KI" / "bitranox-skills"
     write(root / "plugins" / "bitranox" / "skills" / "coding-python-thing" / "SKILL.md", NEW_TEXT)
     _repo_behind_origin(public / "libs" / "thing", "skills/python-thing/SKILL.md", TWIN_BODY, NEW_TWIN)
-    monkeypatch.setitem(RG.MIRRORED_SKILLS, "coding-python-thing", "libs/thing/skills/python-thing")
 
-    assert RG.mirror_failures(root, {"coding-python-thing"}) == []
+    assert RG.mirror_failures(root, {"coding-python-thing"}, mirrors=THING) == []
 
 
 def test_a_file_moved_locally_is_not_read_back_under_its_old_name(tmp_path, monkeypatch):
@@ -1344,16 +1357,15 @@ def test_a_file_moved_locally_is_not_read_back_under_its_old_name(tmp_path, monk
        "plugins/bitranox/skills/coding-python-thing/references/new.md")
     write(public / "libs" / "thing" / "skills" / "python-thing" / "SKILL.md", TWIN_BODY)
     write(public / "libs" / "thing" / "skills" / "python-thing" / "references" / "new.md", "moved\n")
-    monkeypatch.setitem(RG.MIRRORED_SKILLS, "coding-python-thing", "libs/thing/skills/python-thing")
 
-    assert RG.mirror_failures(root, {"coding-python-thing"}) == []
+    assert RG.mirror_failures(root, {"coding-python-thing"}, mirrors=THING) == []
 
 
 def test_the_tool_repo_commit_gate_passes_a_pair_in_sync_on_origin(tmp_path, monkeypatch, capsys):
     # The measured incident, through the entry point that blocked it.
-    public, _root = _stale_pair(tmp_path, monkeypatch, NEW_TWIN)
+    public, _root = _stale_pair(tmp_path, NEW_TWIN)
 
-    assert RG.gate_tool_repo_mirror(public / "libs" / "thing") == 0
+    assert RG.gate_tool_repo_mirror(public / "libs" / "thing", mirrors=THING) == 0
     assert "DRIFT" not in capsys.readouterr().err
 
 
@@ -1377,9 +1389,8 @@ def _mirror_tree(tmp_path, twin_body=TWIN_BODY):
 
 def test_mirror_of_reports_in_sync_for_the_repo_it_is_run_in(tmp_path, monkeypatch, capsys):
     public = _mirror_tree(tmp_path)
-    monkeypatch.setitem(RG.MIRRORED_SKILLS, "coding-python-thing", "libs/thing/skills/python-thing")
 
-    rc = RG.audit_mirror_of(public / "libs" / "thing")
+    rc = RG.audit_mirror_of(public / "libs" / "thing", mirrors=THING)
 
     assert rc == 0
     assert "in sync" in capsys.readouterr().out
@@ -1387,9 +1398,8 @@ def test_mirror_of_reports_in_sync_for_the_repo_it_is_run_in(tmp_path, monkeypat
 
 def test_mirror_of_fails_on_drift_in_the_repo_it_is_run_in(tmp_path, monkeypatch, capsys):
     public = _mirror_tree(tmp_path, TWIN_BODY.replace("One paragraph", "A DIFFERENT paragraph"))
-    monkeypatch.setitem(RG.MIRRORED_SKILLS, "coding-python-thing", "libs/thing/skills/python-thing")
 
-    rc = RG.audit_mirror_of(public / "libs" / "thing")
+    rc = RG.audit_mirror_of(public / "libs" / "thing", mirrors=THING)
     out = capsys.readouterr().out
 
     assert rc == 1
@@ -1401,48 +1411,43 @@ def test_mirror_of_is_silent_and_green_where_there_is_nothing_to_compare(tmp_pat
     # must pass rather than block: no mirrored skill here, no marketplace checkout, no
     # public/ tree at all.
     public = _mirror_tree(tmp_path)
-    monkeypatch.setitem(RG.MIRRORED_SKILLS, "coding-python-thing", "libs/thing/skills/python-thing")
     (public / "libs" / "other").mkdir(parents=True)
 
-    assert RG.audit_mirror_of(public / "libs" / "other") == 0
+    assert RG.audit_mirror_of(public / "libs" / "other", mirrors=THING) == 0
     assert "ships no skill mirrored" in capsys.readouterr().out
 
     bare = tmp_path / "public" / "libs" / "thing"
-    monkeypatch.setitem(RG.MIRRORED_SKILLS, "coding-python-thing", "libs/thing/skills/python-thing")
     import shutil
 
     shutil.rmtree(public / "KI")
-    assert RG.audit_mirror_of(bare) == 0
+    assert RG.audit_mirror_of(bare, mirrors=THING) == 0
     assert "no bitranox-skills checkout" in capsys.readouterr().out
 
-    assert RG.audit_mirror_of(tmp_path / "nowhere") == 0
+    assert RG.audit_mirror_of(tmp_path / "nowhere", mirrors=THING) == 0
     assert "no public/ tree" in capsys.readouterr().out
 
 
 def test_mirror_of_dispatches_from_the_command_line(tmp_path, monkeypatch):
     public = _mirror_tree(tmp_path)
-    monkeypatch.setitem(RG.MIRRORED_SKILLS, "coding-python-thing", "libs/thing/skills/python-thing")
     monkeypatch.setattr(sys, "argv", ["repo-gate.py", "--mirror-of", str(public / "libs" / "thing")])
 
-    assert RG.main() == 0
+    assert RG.main(parts=_parts()) == 0
 
 
 def test_a_twin_that_the_manifest_does_not_list_is_reported(tmp_path, monkeypatch):
     # The manifest is hand-maintained, and a missing entry is invisible: it simply stops
     # checking that pair. coding-python-layered-config went unchecked exactly that way.
     public = _mirror_tree(tmp_path)
-    monkeypatch.setattr(RG, "MIRRORED_SKILLS", {})
 
-    found = RG.unlisted_mirrors(public / "KI" / "bitranox-skills", public)
+    found = RG.unlisted_mirrors(public / "KI" / "bitranox-skills", public, mirrors={})
 
     assert found == [("coding-python-thing", "libs/thing/skills/python-thing")]
 
 
 def test_a_listed_twin_is_not_reported_as_unlisted(tmp_path, monkeypatch):
     public = _mirror_tree(tmp_path)
-    monkeypatch.setattr(RG, "MIRRORED_SKILLS", {"coding-python-thing": "libs/thing/skills/python-thing"})
 
-    assert RG.unlisted_mirrors(public / "KI" / "bitranox-skills", public) == []
+    assert RG.unlisted_mirrors(public / "KI" / "bitranox-skills", public, mirrors=THING) == []
 
 
 def test_a_repo_skill_with_its_own_description_is_not_a_mirror(tmp_path, monkeypatch):
@@ -1451,9 +1456,8 @@ def test_a_repo_skill_with_its_own_description_is_not_a_mirror(tmp_path, monkeyp
     public = _mirror_tree(tmp_path)
     write(public / "libs" / "other" / "skills" / "unrelated" / "SKILL.md",
           "---\nname: unrelated\ndescription: Use when doing something else entirely.\n---\n")
-    monkeypatch.setattr(RG, "MIRRORED_SKILLS", {"coding-python-thing": "libs/thing/skills/python-thing"})
 
-    assert RG.unlisted_mirrors(public / "KI" / "bitranox-skills", public) == []
+    assert RG.unlisted_mirrors(public / "KI" / "bitranox-skills", public, mirrors=THING) == []
 
 
 def _git(*args, cwd):
@@ -1476,9 +1480,8 @@ def test_a_linked_worktree_of_a_listed_twin_repo_is_not_reported(tmp_path, monke
     # same twin checked out twice, not an unlisted one, and reporting it made --mirrors exit 1.
     public = _mirror_tree(tmp_path)
     _linked_worktree(public, "thing-wt150")
-    monkeypatch.setattr(RG, "MIRRORED_SKILLS", {"coding-python-thing": "libs/thing/skills/python-thing"})
 
-    assert RG.unlisted_mirrors(public / "KI" / "bitranox-skills", public) == []
+    assert RG.unlisted_mirrors(public / "KI" / "bitranox-skills", public, mirrors=THING) == []
 
 
 def test_a_linked_worktree_with_a_relative_gitdir_is_not_reported(tmp_path, monkeypatch):
@@ -1489,17 +1492,15 @@ def test_a_linked_worktree_with_a_relative_gitdir_is_not_reported(tmp_path, monk
     # hidden file (PermissionError), so replace it rather than overwrite it.
     (wt / ".git").unlink()
     (wt / ".git").write_text("gitdir: ../thing/.git/worktrees/thing-wt150\n", encoding="utf-8")
-    monkeypatch.setattr(RG, "MIRRORED_SKILLS", {"coding-python-thing": "libs/thing/skills/python-thing"})
 
-    assert RG.unlisted_mirrors(public / "KI" / "bitranox-skills", public) == []
+    assert RG.unlisted_mirrors(public / "KI" / "bitranox-skills", public, mirrors=THING) == []
 
 
 def test_a_linked_worktree_of_an_unlisted_twin_repo_is_still_reported(tmp_path, monkeypatch):
     public = _mirror_tree(tmp_path)
     _linked_worktree(public, "thing-wt150")
-    monkeypatch.setattr(RG, "MIRRORED_SKILLS", {})
 
-    found = RG.unlisted_mirrors(public / "KI" / "bitranox-skills", public)
+    found = RG.unlisted_mirrors(public / "KI" / "bitranox-skills", public, mirrors={})
 
     assert found == [("coding-python-thing", "libs/thing/skills/python-thing"),
                      ("coding-python-thing", "libs/thing-wt150/skills/python-thing")]
@@ -1510,9 +1511,8 @@ def test_a_separate_clone_of_a_listed_twin_repo_is_still_reported(tmp_path, monk
     public = _mirror_tree(tmp_path)
     _linked_worktree(public, "thing-wt150")
     _git("clone", "-q", str(public / "libs" / "thing"), str(public / "libs" / "thing-copy"), cwd=public)
-    monkeypatch.setattr(RG, "MIRRORED_SKILLS", {"coding-python-thing": "libs/thing/skills/python-thing"})
 
-    found = RG.unlisted_mirrors(public / "KI" / "bitranox-skills", public)
+    found = RG.unlisted_mirrors(public / "KI" / "bitranox-skills", public, mirrors=THING)
 
     assert found == [("coding-python-thing", "libs/thing-copy/skills/python-thing")]
 
@@ -1534,11 +1534,17 @@ def test_every_manifest_entry_points_at_a_real_twin_on_this_machine():
 
 
 def _tool_repo_commit(monkeypatch, public, repo, command="git commit -m x"):
-    """Drive hook mode as though the commit happened inside a tool repo."""
-    monkeypatch.setattr(RG, "repo_root", lambda: repo)
-    monkeypatch.setattr(RG, "_public_tree", lambda _start: public)
-    monkeypatch.setattr(sys, "stdin", io.StringIO(json.dumps({"tool_input": {"command": command}})))
-    monkeypatch.setattr(sys, "argv", ["repo-gate.py"])
+    """Drive hook mode as though the commit happened inside a tool repo, the session sitting there.
+
+    A tree that is not a repository yet becomes one with everything STAGED and nothing committed,
+    so the commit ships every file of its skill, the shape these fixtures stand for. ``public`` is
+    the tree the gate is expected to find above ``repo`` by itself."""
+    assert repo.resolve().is_relative_to(public.resolve())
+    if not (repo / ".git").exists():
+        _init_git(repo)
+        _g(repo, "add", "-A")
+    monkeypatch.chdir(repo)
+    _hook_stdin(monkeypatch, command)
 
 
 def test_a_commit_in_a_tool_repo_blocks_when_its_mirror_has_drifted(tmp_path, monkeypatch, capsys):
@@ -1548,10 +1554,9 @@ def test_a_commit_in_a_tool_repo_blocks_when_its_mirror_has_drifted(tmp_path, mo
     # described a subsystem as absent two releases after it shipped.
     public = _mirror_tree(tmp_path, twin_body=TWIN_BODY.replace(
         "One paragraph of content.", "DRIFTED: a capability the mirror never heard of."))
-    monkeypatch.setattr(RG, "MIRRORED_SKILLS", {"coding-python-thing": "libs/thing/skills/python-thing"})
     _tool_repo_commit(monkeypatch, public, public / "libs" / "thing")
 
-    assert RG.main() == 2
+    assert RG.main(parts=_parts()) == 2
     # Everything actionable goes to STDERR: on a PreToolUse exit 2 that is the channel the model
     # reads, and stdout is not shown. The table and the diff used to go to stdout, leaving the
     # model a generic "blocked" line and no way to see what drifted.
@@ -1563,10 +1568,9 @@ def test_a_commit_in_a_tool_repo_blocks_when_its_mirror_has_drifted(tmp_path, mo
 
 def test_a_commit_in_a_tool_repo_passes_when_the_mirror_is_in_sync(tmp_path, monkeypatch):
     public = _mirror_tree(tmp_path)
-    monkeypatch.setattr(RG, "MIRRORED_SKILLS", {"coding-python-thing": "libs/thing/skills/python-thing"})
     _tool_repo_commit(monkeypatch, public, public / "libs" / "thing")
 
-    assert RG.main() == 0
+    assert RG.main(parts=_parts()) == 0
 
 
 def _tagged_tool_repo(repo):
@@ -1598,6 +1602,18 @@ def _tagged_tool_repo(repo):
     "git push --delete origin v1.0",
     "git -c core.quotePath=false push origin v1.0",
     "git push -o ci.skip origin v1.0",
+    # A redirection is the shell's, not a refspec ([880]): read as one, `2>&1` named no tag, so a
+    # release's tag push was refused as a branch push. The four probe forms, then the other spellings.
+    "git push origin refs/tags/v1.0",
+    "git push origin refs/tags/v1.0 | tail -3",
+    "git push origin refs/tags/v1.0 2>&1",
+    "git push origin refs/tags/v1.0 > push.log",
+    "git push origin v1.0 >/dev/null 2>&1",
+    "git push origin v1.0 &> push.log",
+    "git push origin v1.0 >> push.log 2>&1",
+    "git push origin v1.0 2> err.log",
+    "git push origin v1.0 < /dev/null",
+    "git push origin v1.0 2>&1 | tail -3",
 ])
 def test_a_push_of_tags_only_is_recognised(tmp_path, command):
     # The tool repo's release order pushes the TAG first, so PyPI publishes the version the
@@ -1628,6 +1644,10 @@ def test_a_push_of_tags_only_is_recognised(tmp_path, command):
     "git push origin v1.0 && git push origin main",
     "git push origin v1.0:refs/heads/v1.0",       # a tag pushed INTO a branch
     "git status",                                 # no push at all
+    "git push origin main 2>&1",                  # a redirection does not hide the branch
+    "git push origin main > push.log",
+    "git push origin v1.0 main >/dev/null 2>&1",
+    "git push > push.log 2>&1",                   # the default push, redirected
 ])
 def test_a_push_that_can_carry_a_branch_is_not_tags_only(tmp_path, command):
     repo = _tagged_tool_repo(tmp_path / "repo")
@@ -1637,11 +1657,10 @@ def test_a_push_that_can_carry_a_branch_is_not_tags_only(tmp_path, command):
 def test_a_tag_push_in_a_tool_repo_passes_while_its_mirror_has_drifted(tmp_path, monkeypatch, capsys):
     public = _mirror_tree(tmp_path, twin_body=TWIN_BODY.replace(
         "One paragraph of content.", "DRIFTED: a capability the mirror never heard of."))
-    monkeypatch.setattr(RG, "MIRRORED_SKILLS", {"coding-python-thing": "libs/thing/skills/python-thing"})
     repo = _tagged_tool_repo(public / "libs" / "thing")
     _tool_repo_commit(monkeypatch, public, repo, command="git push origin v1.0")
 
-    assert RG.main() == 0
+    assert RG.main(parts=_parts()) == 0
     # Not a silent pass: the model is told the mirror was not checked, and why.
     assert "only tags" in capsys.readouterr().out
 
@@ -1649,30 +1668,27 @@ def test_a_tag_push_in_a_tool_repo_passes_while_its_mirror_has_drifted(tmp_path,
 def test_a_branch_push_in_a_tool_repo_still_blocks_on_a_drifted_mirror(tmp_path, monkeypatch):
     public = _mirror_tree(tmp_path, twin_body=TWIN_BODY.replace(
         "One paragraph of content.", "DRIFTED: a capability the mirror never heard of."))
-    monkeypatch.setattr(RG, "MIRRORED_SKILLS", {"coding-python-thing": "libs/thing/skills/python-thing"})
     repo = _tagged_tool_repo(public / "libs" / "thing")
     _tool_repo_commit(monkeypatch, public, repo, command="git push origin main")
 
-    assert RG.main() == 2
+    assert RG.main(parts=_parts()) == 2
 
 
 def test_a_repo_that_ships_no_mirrored_skill_is_still_silent(tmp_path, monkeypatch, capsys):
     # The gate must not start narrating in every unrelated repo on the machine.
     public = _mirror_tree(tmp_path)
-    monkeypatch.setattr(RG, "MIRRORED_SKILLS", {"coding-python-thing": "libs/thing/skills/python-thing"})
     _tool_repo_commit(monkeypatch, public, public / "libs" / "unrelated")
 
-    assert RG.main() == 0
+    assert RG.main(parts=_parts()) == 0
     assert capsys.readouterr().out == ""
 
 
 def test_a_non_commit_command_in_a_tool_repo_is_not_checked(tmp_path, monkeypatch):
     public = _mirror_tree(tmp_path, twin_body=TWIN_BODY.replace(
         "One paragraph of content.", "DRIFTED: a capability the mirror never heard of."))
-    monkeypatch.setattr(RG, "MIRRORED_SKILLS", {"coding-python-thing": "libs/thing/skills/python-thing"})
     _tool_repo_commit(monkeypatch, public, public / "libs" / "thing", command="git status")
 
-    assert RG.main() == 0
+    assert RG.main(parts=_parts()) == 0
 
 
 def test_a_missing_marketplace_checkout_says_so_instead_of_passing_silently(tmp_path, monkeypatch, capsys):
@@ -1682,10 +1698,9 @@ def test_a_missing_marketplace_checkout_says_so_instead_of_passing_silently(tmp_
     # but it has to SAY it could not check, on the channel the model actually reads.
     public = tmp_path / "public"
     write(public / "libs" / "thing" / "skills" / "python-thing" / "SKILL.md", TWIN_BODY)
-    monkeypatch.setattr(RG, "MIRRORED_SKILLS", {"coding-python-thing": "libs/thing/skills/python-thing"})
     _tool_repo_commit(monkeypatch, public, public / "libs" / "thing")
 
-    assert RG.main() == 0
+    assert RG.main(parts=_parts()) == 0
     printed = capsys.readouterr().out
     assert "additionalContext" in printed, "an unverifiable mirror must reach the model, not exit 0 in silence"
     assert "could not" in printed.lower() or "nothing to compare" in printed.lower()
@@ -1704,7 +1719,7 @@ TW_SKILL = "skills/python-thing/SKILL.md"
 IN_PROGRESS = "An IN-PROGRESS paragraph nobody committed."
 
 
-def _published_pair(tmp_path, monkeypatch):
+def _published_pair(tmp_path):
     """Marketplace and tool repo, both git, committed in sync and published (origin/master)."""
     public = tmp_path / "public"
     root, tool = public / "KI" / "bitranox-skills", public / "libs" / "thing"
@@ -1714,7 +1729,6 @@ def _published_pair(tmp_path, monkeypatch):
         _g(top, "add", "-A")
         _g(top, "commit", "-qm", "base")
         _g(top, "update-ref", "refs/remotes/origin/master", "HEAD")
-    monkeypatch.setitem(RG.MIRRORED_SKILLS, "coding-python-thing", "libs/thing/skills/python-thing")
     return public, root, tool
 
 
@@ -1730,94 +1744,95 @@ def _touch_marketplace_skill(root):
 
 def test_a_marketplace_commit_is_not_judged_against_an_uncommitted_tool_repo_edit(tmp_path, monkeypatch,
                                                                                    capsys):
-    _public, root, tool = _published_pair(tmp_path, monkeypatch)
+    _public, root, tool = _published_pair(tmp_path)
     _drift(tool / TW_SKILL, TWIN_BODY)                      # another session, mid-edit, uncommitted
     _touch_marketplace_skill(root)
 
-    assert RG.check_skill_mirrors(root) == []
+    assert RG.check_skill_mirrors(root, mirrors=THING) == []
     # The audit still reads newest text on both sides, so the edit in progress is reported there.
-    assert RG.audit_mirrors(root) == 1
+    assert RG.audit_mirrors(root, mirrors=THING) == 1
     assert IN_PROGRESS in capsys.readouterr().out
 
 
 def test_a_tool_repo_edit_committed_since_its_fork_does_count(tmp_path, monkeypatch):
     # Control for the arm above: COMMITTED work in the other repo is part of what it ships.
-    _public, root, tool = _published_pair(tmp_path, monkeypatch)
+    _public, root, tool = _published_pair(tmp_path)
     _drift(tool / TW_SKILL, TWIN_BODY)
     _g(tool, "commit", "-qam", "drift")
     _touch_marketplace_skill(root)
 
-    fails = RG.check_skill_mirrors(root)
+    fails = RG.check_skill_mirrors(root, mirrors=THING)
 
     assert len(fails) == 1 and IN_PROGRESS in fails[0]
 
 
 def test_a_tool_repo_commit_is_not_judged_against_an_uncommitted_marketplace_edit(tmp_path, monkeypatch,
                                                                                    capsys):
-    public, root, tool = _published_pair(tmp_path, monkeypatch)
+    public, root, tool = _published_pair(tmp_path)
     _drift(root / MP_SKILL, MIRROR_BODY)                    # the #84 incident: the marketplace mid-edit
+    _touch_tool_skill(tool)                                 # the commit ships the skill, so it is compared
     _tool_repo_commit(monkeypatch, public, tool)
 
-    assert RG.main() == 0
+    assert RG.main(parts=_parts()) == 0
     assert "DRIFT" not in capsys.readouterr().err
-    monkeypatch.setattr(RG, "repo_root", lambda: root)
+    monkeypatch.chdir(root)
     monkeypatch.setattr(sys, "argv", ["repo-gate.py", "--mirror-of", str(tool)])
-    assert RG.main() == 1                                   # the audit still sees it
+    assert RG.main(parts=_parts()) == 1                                   # the audit still sees it
 
 
 def test_the_tool_repo_commit_gate_reads_the_index_not_an_unstaged_edit(tmp_path, monkeypatch, capsys):
-    public, root, tool = _published_pair(tmp_path, monkeypatch)
+    public, root, tool = _published_pair(tmp_path)
+    _touch_tool_skill(tool)                                 # the commit ships the skill, so it is compared
     _drift(tool / TW_SKILL, TWIN_BODY)                      # unstaged: this commit does not carry it
     _tool_repo_commit(monkeypatch, public, tool)
-    assert RG.main() == 0
+    assert RG.main(parts=_parts()) == 0
 
     _g(tool, "add", "-A")                                   # staged: it does
     write(tool / TW_SKILL, TWIN_BODY)                       # and the working tree no longer shows it
     _tool_repo_commit(monkeypatch, public, tool)
-    assert RG.main() == 2
+    assert RG.main(parts=_parts()) == 2
     assert IN_PROGRESS in capsys.readouterr().err
 
 
 def test_the_marketplace_commit_gate_reads_the_index_not_an_unstaged_edit(tmp_path, monkeypatch):
-    _public, root, _tool = _published_pair(tmp_path, monkeypatch)
+    _public, root, _tool = _published_pair(tmp_path)
     _drift(root / MP_SKILL, MIRROR_BODY)
-    assert RG.check_skill_mirrors(root) == []
+    assert RG.check_skill_mirrors(root, mirrors=THING) == []
 
     _g(root, "add", "-A")
     write(root / MP_SKILL, MIRROR_BODY)
-    fails = RG.check_skill_mirrors(root)
+    fails = RG.check_skill_mirrors(root, mirrors=THING)
     assert len(fails) == 1 and IN_PROGRESS in fails[0]
 
 
 def test_the_push_gate_reads_head_not_the_index(tmp_path, monkeypatch, capsys):
-    public, _root, tool = _published_pair(tmp_path, monkeypatch)
+    public, _root, tool = _published_pair(tmp_path)
     _drift(tool / TW_SKILL, TWIN_BODY)
     _g(tool, "add", "-A")                                   # staged but not committed: not pushed
     _tool_repo_commit(monkeypatch, public, tool, command="git push")
-    assert RG.main() == 0
+    assert RG.main(parts=_parts()) == 0
 
     _g(tool, "commit", "-qm", "drift")
     _tool_repo_commit(monkeypatch, public, tool, command="git push")
-    assert RG.main() == 2
+    assert RG.main(parts=_parts()) == 2
     assert IN_PROGRESS in capsys.readouterr().err
 
 
 def test_pre_push_reads_the_marketplace_at_head(tmp_path, monkeypatch, capsys):
-    _public, root, _tool = _published_pair(tmp_path, monkeypatch)
+    _public, root, _tool = _published_pair(tmp_path)
     make_repo(root)
     _g(root, "add", "-A")
     _g(root, "commit", "-qm", "repo")
     _g(root, "update-ref", "refs/remotes/origin/master", "HEAD")
     _drift(root / MP_SKILL, MIRROR_BODY)
     _g(root, "add", "-A")                                   # staged, not committed: not pushed
-    monkeypatch.setattr(RG, "repo_root", lambda: root)
-    monkeypatch.setattr(sys, "argv", ["repo-gate.py", "--pre-push", "--no-pytest"])
-    monkeypatch.setattr(sys, "stdin", io.StringIO(""))
+    monkeypatch.chdir(root)
+    _cli(monkeypatch, "--pre-push", "--no-pytest")
 
-    RG.main()
+    RG.main(parts=_parts())
     assert "drifted from its twin" not in capsys.readouterr().err
     _g(root, "commit", "-qm", "drift")
-    RG.main()
+    RG.main(parts=_parts())
     assert "drifted from its twin" in capsys.readouterr().err
 
 
@@ -1838,21 +1853,21 @@ def _unstaged_skill_edit(root):
                                      "git commit -m x -i README.md"])
 def test_an_unstaged_skill_edit_does_not_put_pre_existing_drift_into_an_unrelated_commit(
         tmp_path, monkeypatch, command):
-    _public, root, tool = _published_pair(tmp_path, monkeypatch)
+    _public, root, tool = _published_pair(tmp_path)
     _tool_ahead(tool)                                       # drift this commit did not make
     _unstaged_skill_edit(root)
     write(root / "README.md", "readme\n")
     _g(root, "add", "README.md")
 
     stage = RG.mirror_stage(command, "Bash", str(root))
-    assert RG.check_skill_mirrors(root, stage=stage, notices=[]) == []
+    assert RG.check_skill_mirrors(root, stage=stage, notices=[], mirrors=THING) == []
 
 
 @pytest.mark.parametrize("command", ["git commit -m x", f"git commit -m x -- README.md {MP_SKILL}",
                                      "git commit -qam x"])
 def test_a_commit_that_ships_the_drifted_skill_is_still_refused(tmp_path, monkeypatch, command):
     # The negative of the arm above: the same tree, with the skill's edit in what the commit takes.
-    _public, root, tool = _published_pair(tmp_path, monkeypatch)
+    _public, root, tool = _published_pair(tmp_path)
     _tool_ahead(tool)
     _unstaged_skill_edit(root)
     write(root / "README.md", "readme\n")
@@ -1861,29 +1876,29 @@ def test_a_commit_that_ships_the_drifted_skill_is_still_refused(tmp_path, monkey
         _g(root, "add", MP_SKILL)
 
     stage = RG.mirror_stage(command, "Bash", str(root))
-    fails = RG.check_skill_mirrors(root, stage=stage, notices=[])
+    fails = RG.check_skill_mirrors(root, stage=stage, notices=[], mirrors=THING)
     assert len(fails) == 1 and "coding-python-thing" in fails[0]
 
 
 def test_an_unpushed_drift_does_not_block_an_unrelated_commit_but_blocks_the_push(tmp_path, monkeypatch):
-    _public, root, _tool = _published_pair(tmp_path, monkeypatch)
+    _public, root, _tool = _published_pair(tmp_path)
     _drift(root / MP_SKILL, MIRROR_BODY)
     _g(root, "commit", "-qam", "a peer's commit, not pushed yet")
     write(root / "OPEN-WORK.md", "- an item\n")
     _g(root, "add", "OPEN-WORK.md")
 
-    assert RG.check_skill_mirrors(root, stage=RG.STAGE_INDEX, notices=[]) == []
-    assert len(RG.check_skill_mirrors(root, stage=RG.STAGE_HEAD, notices=[])) == 1
+    assert RG.check_skill_mirrors(root, stage=RG.STAGE_INDEX, notices=[], mirrors=THING) == []
+    assert len(RG.check_skill_mirrors(root, stage=RG.STAGE_HEAD, notices=[], mirrors=THING)) == 1
 
 
 def test_a_commit_that_is_pushed_in_the_same_command_counts_the_unpushed_commits(tmp_path, monkeypatch):
-    _public, root, _tool = _published_pair(tmp_path, monkeypatch)
+    _public, root, _tool = _published_pair(tmp_path)
     _drift(root / MP_SKILL, MIRROR_BODY)
     _g(root, "commit", "-qam", "unpushed")
     write(root / "OPEN-WORK.md", "- an item\n")
     _g(root, "add", "OPEN-WORK.md")
 
-    fails = RG.check_skill_mirrors(root, stage=RG.STAGE_INDEX, notices=[], publishes=True)
+    fails = RG.check_skill_mirrors(root, stage=RG.STAGE_INDEX, notices=[], publishes=True, mirrors=THING)
     assert len(fails) == 1 and IN_PROGRESS in fails[0]
 
 
@@ -1898,15 +1913,143 @@ def test_command_publishes_names_a_push_or_a_pr(command, publishes):
     assert RG.command_publishes(command, "Bash") is publishes
 
 
+# The tool-repo side asks the same question ([800]): it used to check EVERY mirrored skill the tool
+# repo owns on every commit, so a commit touching only a README was refused over a twin it did not
+# change. A commit counts what its own selection changes against HEAD; a push what its commits
+# change since the published ref.
+
+def _touch_tool_skill(top):
+    """Stage a change to the tool repo's skill that is not itself drift (the H1 parenthetical)."""
+    path = top / TW_SKILL
+    write(path, path.read_text(encoding="utf-8").replace("(python-thing)", "(renamed)"))
+    _g(top, "add", TW_SKILL)
+
+
+def _marketplace_moved_ahead(root):
+    """The marketplace commits an edit the tool repo has not caught up with: drift this repo did not make."""
+    _drift(root / MP_SKILL, MIRROR_BODY)
+    _g(root, "commit", "-qam", "the marketplace moved ahead")
+
+
+def test_an_unrelated_tool_repo_commit_passes_beside_a_drifted_twin(tmp_path, monkeypatch, capsys):
+    public, root, tool = _published_pair(tmp_path)
+    _marketplace_moved_ahead(root)
+    write(tool / "README.md", "readme\n")
+    _g(tool, "add", "README.md")
+    _tool_repo_commit(monkeypatch, public, tool)
+
+    assert RG.main(parts=_parts()) == 0
+    assert "DRIFT" not in capsys.readouterr().err
+
+
+def test_a_tool_repo_commit_that_ships_the_drifted_skill_is_still_refused(tmp_path, monkeypatch, capsys):
+    # The negative of the arm above: the same tree, with a change to the skill in what the commit takes.
+    public, root, tool = _published_pair(tmp_path)
+    _marketplace_moved_ahead(root)
+    write(tool / "README.md", "readme\n")
+    _g(tool, "add", "README.md")
+    _touch_tool_skill(tool)
+    _tool_repo_commit(monkeypatch, public, tool)
+
+    assert RG.main(parts=_parts()) == 2
+    assert IN_PROGRESS in capsys.readouterr().err
+
+
+def test_an_unrelated_tool_repo_push_passes_beside_a_drifted_twin_but_a_skill_push_does_not(
+        tmp_path, monkeypatch):
+    public, root, tool = _published_pair(tmp_path)
+    _marketplace_moved_ahead(root)
+    write(tool / "README.md", "readme\n")
+    _g(tool, "add", "README.md")
+    _g(tool, "commit", "-qm", "readme only")
+    _tool_repo_commit(monkeypatch, public, tool, command="git push")
+    assert RG.main(parts=_parts()) == 0
+
+    _touch_tool_skill(tool)
+    _g(tool, "commit", "-qm", "the skill too")
+    _tool_repo_commit(monkeypatch, public, tool, command="git push")
+    assert RG.main(parts=_parts()) == 2
+
+
+def test_a_tool_repo_commit_that_also_pushes_counts_the_unpushed_commits(tmp_path, monkeypatch):
+    public, root, tool = _published_pair(tmp_path)
+    _marketplace_moved_ahead(root)
+    _touch_tool_skill(tool)
+    _g(tool, "commit", "-qm", "unpushed skill change")
+    write(tool / "README.md", "readme\n")
+    _g(tool, "add", "README.md")
+    _tool_repo_commit(monkeypatch, public, tool)
+    assert RG.main(parts=_parts()) == 0                                   # the commit alone ships no skill change
+
+    _tool_repo_commit(monkeypatch, public, tool, command="git commit -m x && git push")
+    assert RG.main(parts=_parts()) == 2                                   # the push sends the unpushed one too
+
+
+# A commit refused only because the fix sits UNSTAGED says so ([920]). Measured 2026-10-26 in a
+# lib_log_rich session: the commit was blocked as drift while `--mirror-of` reported the pair in
+# sync, because the edited SKILL.md was not staged and the gate reads the index. The
+# regenerate-the-stale-side advice sent the reader to fix text that was already right.
+
+def test_a_tool_repo_commit_whose_fix_is_unstaged_says_git_add_not_regenerate(tmp_path, monkeypatch, capsys):
+    public, root, tool = _published_pair(tmp_path)
+    _marketplace_moved_ahead(root)
+    _touch_tool_skill(tool)                                 # an earlier edit, staged
+    _drift(tool / TW_SKILL, TWIN_BODY)                      # the fix: in sync on disk, NOT staged
+    _tool_repo_commit(monkeypatch, public, tool)
+
+    assert RG.main(parts=_parts()) == 2                                   # the commit still ships the stale text
+    err = capsys.readouterr().err
+    assert "modified but not staged" in err and "git add" in err
+    assert "Regenerate" not in err, "the text on disk is right; regenerating is the wrong advice"
+    assert "UNSTAGED " in err and "does not take it" in err  # the table and the summary say so too
+
+
+def test_a_marketplace_commit_whose_fix_is_unstaged_says_git_add_not_regenerate(tmp_path, monkeypatch):
+    _public, root, tool = _published_pair(tmp_path)
+    _tool_ahead(tool)
+    _touch_marketplace_skill(root)
+    _drift(root / MP_SKILL, MIRROR_BODY)                    # in sync on disk, NOT staged
+
+    fails = RG.check_skill_mirrors(root, notices=[], mirrors=THING)
+
+    assert len(fails) == 1 and "modified but not staged" in fails[0] and "SKILL.md" in fails[0]
+    assert "Regenerate" not in fails[0]
+
+
+def test_a_commit_whose_working_tree_also_drifts_keeps_the_regenerate_advice(tmp_path, monkeypatch):
+    # Control: staging would not help, because the file on disk differs from the twin as well.
+    _public, root, tool = _published_pair(tmp_path)
+    _tool_ahead(tool)
+    _touch_marketplace_skill(root)
+    write(root / MP_SKILL, MIRROR_BODY.replace("One paragraph of content.", "A DIFFERENT edit."))
+
+    fails = RG.check_skill_mirrors(root, notices=[], mirrors=THING)
+
+    assert len(fails) == 1 and "Regenerate" in fails[0] and "not staged" not in fails[0]
+
+
+def test_a_push_never_gets_the_git_add_advice(tmp_path, monkeypatch):
+    # A push ships HEAD: staging changes nothing it sends, so the advice would be wrong there.
+    _public, root, tool = _published_pair(tmp_path)
+    _tool_ahead(tool)
+    _touch_marketplace_skill(root)
+    _g(root, "commit", "-qm", "stale")
+    _drift(root / MP_SKILL, MIRROR_BODY)                    # in sync on disk only
+
+    fails = RG.check_skill_mirrors(root, stage=RG.STAGE_HEAD, notices=[], mirrors=THING)
+
+    assert len(fails) == 1 and "not staged" not in fails[0]
+
+
 def test_a_commit_that_drifts_only_a_reference_file_is_refused(tmp_path, monkeypatch):
     # A mirrored skill is a directory: a commit changing only `references/` ships drift as surely
     # as one changing SKILL.md.
-    root = _with_extra(tmp_path, monkeypatch)
+    root = _with_extra(tmp_path)
     _g(root, "checkout", "--", MP_SKILL)                    # no SKILL.md change at all
     write(root / EXTRA, "drifted\n")
     _g(root, "add", EXTRA)
 
-    fails = RG.check_skill_mirrors(root, stage=RG.STAGE_INDEX, notices=[])
+    fails = RG.check_skill_mirrors(root, stage=RG.STAGE_INDEX, notices=[], mirrors=THING)
     assert len(fails) == 1 and "references/extra.md" in fails[0]
 
 
@@ -1923,12 +2066,12 @@ def _same_edit_on_both_sides(root, tool):
 
 
 def test_a_marketplace_commit_passes_when_the_twin_holds_the_same_edit_uncommitted(tmp_path, monkeypatch):
-    _public, root, tool = _published_pair(tmp_path, monkeypatch)
+    _public, root, tool = _published_pair(tmp_path)
     _same_edit_on_both_sides(root, tool)
     _g(root, "add", "-A")
     notices = []
 
-    assert RG.check_skill_mirrors(root, notices=notices) == []
+    assert RG.check_skill_mirrors(root, notices=notices, mirrors=THING) == []
     assert len(notices) == 1
     assert "coding-python-thing" in notices[0] and "uncommitted" in notices[0]
     assert str(tool) in notices[0]                          # names the repo to commit next
@@ -1937,21 +2080,21 @@ def test_a_marketplace_commit_passes_when_the_twin_holds_the_same_edit_uncommitt
 def test_a_caller_that_collects_no_notices_keeps_the_strict_reading(tmp_path, monkeypatch):
     # The acceptance must be impossible to take without its notice: a caller that cannot pass the
     # notice on gets the old refusal, never a silent pass.
-    _public, root, tool = _published_pair(tmp_path, monkeypatch)
+    _public, root, tool = _published_pair(tmp_path)
     _same_edit_on_both_sides(root, tool)
     _g(root, "add", "-A")
 
-    assert len(RG.check_skill_mirrors(root)) == 1
+    assert len(RG.check_skill_mirrors(root, mirrors=THING)) == 1
 
 
 def test_a_tool_repo_commit_passes_when_the_marketplace_holds_the_same_edit_uncommitted(tmp_path, monkeypatch,
                                                                                      capsys):
-    public, root, tool = _published_pair(tmp_path, monkeypatch)
+    public, root, tool = _published_pair(tmp_path)
     _same_edit_on_both_sides(root, tool)
     _g(tool, "add", "-A")
     _tool_repo_commit(monkeypatch, public, tool)
 
-    assert RG.main() == 0
+    assert RG.main(parts=_parts()) == 0
     printed = capsys.readouterr()
     assert "DRIFT" not in printed.err
     context = json.loads(printed.out)["hookSpecificOutput"]["additionalContext"]
@@ -1959,32 +2102,32 @@ def test_a_tool_repo_commit_passes_when_the_marketplace_holds_the_same_edit_unco
 
 
 def test_a_different_uncommitted_edit_on_the_other_side_still_blocks_the_commit(tmp_path, monkeypatch, capsys):
-    public, root, tool = _published_pair(tmp_path, monkeypatch)
+    public, root, tool = _published_pair(tmp_path)
     _drift(tool / TW_SKILL, TWIN_BODY)
     _g(tool, "add", "-A")
     write(root / MP_SKILL, MIRROR_BODY.replace("One paragraph of content.", "A DIFFERENT edit."))
     _tool_repo_commit(monkeypatch, public, tool)
 
-    assert RG.main() == 2
+    assert RG.main(parts=_parts()) == 2
     assert IN_PROGRESS in capsys.readouterr().err
     notices = []
     _g(root, "add", "-A")
     write(tool / TW_SKILL, TWIN_BODY.replace("One paragraph of content.", "A THIRD edit."))
-    assert len(RG.check_skill_mirrors(root, notices=notices)) == 1 and notices == []
+    assert len(RG.check_skill_mirrors(root, notices=notices, mirrors=THING)) == 1 and notices == []
 
 
 def test_a_push_never_accepts_an_uncommitted_twin(tmp_path, monkeypatch, capsys):
-    public, root, tool = _published_pair(tmp_path, monkeypatch)
+    public, root, tool = _published_pair(tmp_path)
     _same_edit_on_both_sides(root, tool)
     _g(tool, "commit", "-qam", "edit")                      # the tool side is committed...
     _tool_repo_commit(monkeypatch, public, tool, command="git push")
 
-    assert RG.main() == 2                                   # ...the marketplace side is not
+    assert RG.main(parts=_parts()) == 2                                   # ...the marketplace side is not
     assert IN_PROGRESS in capsys.readouterr().err
     notices = []
     _g(root, "commit", "-qam", "edit")                      # now the reverse: marketplace committed,
     _g(tool, "reset", "-q", "--soft", "HEAD~1")             # the tool's same edit uncommitted again
-    assert len(RG.check_skill_mirrors(root, stage=RG.STAGE_HEAD, notices=notices)) == 1
+    assert len(RG.check_skill_mirrors(root, stage=RG.STAGE_HEAD, notices=notices, mirrors=THING)) == 1
     assert notices == []
 
 
@@ -1998,7 +2141,7 @@ def test_a_push_never_accepts_an_uncommitted_twin(tmp_path, monkeypatch, capsys)
 
 def test_a_tool_repo_commit_passes_when_a_marketplace_worktree_committed_the_same_edit(tmp_path, monkeypatch,
                                                                                      capsys):
-    public, root, tool = _published_pair(tmp_path, monkeypatch)
+    public, root, tool = _published_pair(tmp_path)
     mwt = _marketplace_worktree(root, public / "KI" / "bitranox-skills-wt-edit")
     _drift(mwt / MP_SKILL, MIRROR_BODY)
     _g(mwt, "commit", "-qam", "edit in the marketplace worktree")
@@ -2006,20 +2149,20 @@ def test_a_tool_repo_commit_passes_when_a_marketplace_worktree_committed_the_sam
     _g(tool, "add", "-A")
     _tool_repo_commit(monkeypatch, public, tool)
 
-    assert RG.main() == 0
+    assert RG.main(parts=_parts()) == 0
     assert "DRIFT" not in capsys.readouterr().err
 
 
 def test_a_tool_repo_commit_passes_when_a_marketplace_worktree_holds_the_same_edit_uncommitted(
         tmp_path, monkeypatch, capsys):
-    public, root, tool = _published_pair(tmp_path, monkeypatch)
+    public, root, tool = _published_pair(tmp_path)
     mwt = _marketplace_worktree(root, public / "KI" / "bitranox-skills-wt-edit")
     _drift(mwt / MP_SKILL, MIRROR_BODY)                     # uncommitted in the worktree
     _drift(tool / TW_SKILL, TWIN_BODY)
     _g(tool, "add", "-A")
     _tool_repo_commit(monkeypatch, public, tool)
 
-    assert RG.main() == 0
+    assert RG.main(parts=_parts()) == 0
     printed = capsys.readouterr()
     assert "DRIFT" not in printed.err
     context = json.loads(printed.out)["hookSpecificOutput"]["additionalContext"]
@@ -2029,7 +2172,7 @@ def test_a_tool_repo_commit_passes_when_a_marketplace_worktree_holds_the_same_ed
 def test_a_tool_repo_commit_still_blocks_when_no_marketplace_worktree_holds_the_edit(tmp_path, monkeypatch,
                                                                                     capsys):
     # Control: worktrees exist, but neither they nor the main checkout carry the tool repo's edit.
-    public, root, tool = _published_pair(tmp_path, monkeypatch)
+    public, root, tool = _published_pair(tmp_path)
     mwt = _marketplace_worktree(root, public / "KI" / "bitranox-skills-wt-edit")
     write(mwt / MP_SKILL, MIRROR_BODY.replace("One paragraph of content.", "A DIFFERENT edit."))
     _g(mwt, "commit", "-qam", "a different edit")
@@ -2037,24 +2180,24 @@ def test_a_tool_repo_commit_still_blocks_when_no_marketplace_worktree_holds_the_
     _g(tool, "add", "-A")
     _tool_repo_commit(monkeypatch, public, tool)
 
-    assert RG.main() == 2
+    assert RG.main(parts=_parts()) == 2
     assert IN_PROGRESS in capsys.readouterr().err
 
 
 def test_a_tool_repo_push_does_not_read_a_marketplace_worktree(tmp_path, monkeypatch, capsys):
     # Control: a push publishes, so it reads the marketplace main checkout alone, as before.
-    public, root, tool = _published_pair(tmp_path, monkeypatch)
+    public, root, tool = _published_pair(tmp_path)
     mwt = _marketplace_worktree(root, public / "KI" / "bitranox-skills-wt-edit")
     _drift(mwt / MP_SKILL, MIRROR_BODY)                     # uncommitted in the worktree
     _drift(tool / TW_SKILL, TWIN_BODY)
     _g(tool, "commit", "-qam", "edit")
     _tool_repo_commit(monkeypatch, public, tool, command="git push")
 
-    assert RG.main() == 2
+    assert RG.main(parts=_parts()) == 2
     assert IN_PROGRESS in capsys.readouterr().err
     _g(mwt, "commit", "-qam", "edit")                       # committed in the worktree, still unpublished
     _tool_repo_commit(monkeypatch, public, tool, command="git push")
-    assert RG.main() == 2
+    assert RG.main(parts=_parts()) == 2
 
 
 def test_a_tool_repo_push_names_the_marketplace_worktree_that_already_committed_the_text(
@@ -2062,7 +2205,7 @@ def test_a_tool_repo_push_names_the_marketplace_worktree_that_already_committed_
     # Measured 2026-10-26 (ipscout 2.4.0): the push was refused DRIFT with "Regenerate the stale
     # side", while the marketplace text it needed was already committed in a linked worktree, just
     # not on master. Nothing was stale; the remedy was to push that branch first.
-    public, root, tool = _published_pair(tmp_path, monkeypatch)
+    public, root, tool = _published_pair(tmp_path)
     mwt = _marketplace_worktree(root, public / "KI" / "bitranox-skills-wt-edit")
     _drift(mwt / MP_SKILL, MIRROR_BODY)
     _g(mwt, "commit", "-qam", "edit in the marketplace worktree")
@@ -2070,7 +2213,7 @@ def test_a_tool_repo_push_names_the_marketplace_worktree_that_already_committed_
     _g(tool, "commit", "-qam", "edit")
     _tool_repo_commit(monkeypatch, public, tool, command="git push")
 
-    assert RG.main() == 2                                   # still refused: master lacks the text
+    assert RG.main(parts=_parts()) == 2                                   # still refused: master lacks the text
     err = capsys.readouterr().err
     assert str(mwt) in err and "mwt" in err, "names the worktree and its branch"
     assert "push that branch" in err
@@ -2080,7 +2223,7 @@ def test_a_tool_repo_push_names_the_marketplace_worktree_that_already_committed_
 def test_a_tool_repo_push_with_no_worktree_holding_the_text_keeps_the_regenerate_advice(
         tmp_path, monkeypatch, capsys):
     # Control: a worktree exists but committed a DIFFERENT edit, so the drift is real.
-    public, root, tool = _published_pair(tmp_path, monkeypatch)
+    public, root, tool = _published_pair(tmp_path)
     mwt = _marketplace_worktree(root, public / "KI" / "bitranox-skills-wt-edit")
     write(mwt / MP_SKILL, MIRROR_BODY.replace("One paragraph of content.", "A DIFFERENT edit."))
     _g(mwt, "commit", "-qam", "a different edit")
@@ -2088,7 +2231,7 @@ def test_a_tool_repo_push_with_no_worktree_holding_the_text_keeps_the_regenerate
     _g(tool, "commit", "-qam", "edit")
     _tool_repo_commit(monkeypatch, public, tool, command="git push")
 
-    assert RG.main() == 2
+    assert RG.main(parts=_parts()) == 2
     err = capsys.readouterr().err
     assert "Regenerate" in err and "push that branch" not in err
 
@@ -2108,13 +2251,13 @@ def _tool_worktree(tool, where):
 
 
 def test_a_tool_repo_commit_from_a_linked_worktree_blocks_on_drift(tmp_path, monkeypatch, capsys):
-    public, _root, tool = _published_pair(tmp_path, monkeypatch)
+    public, _root, tool = _published_pair(tmp_path)
     wt = _tool_worktree(tool, tool / ".claude" / "worktrees" / "wt")
     _drift(wt / TW_SKILL, TWIN_BODY)
     _g(wt, "add", "-A")
     _tool_repo_commit(monkeypatch, public, wt)
 
-    assert RG.main() == 2
+    assert RG.main(parts=_parts()) == 2
     err = capsys.readouterr().err
     assert "DRIFT" in err and IN_PROGRESS in err
 
@@ -2124,48 +2267,50 @@ def test_a_tool_repo_commit_from_a_linked_worktree_reads_the_worktree_not_the_ma
     # The worktree is in sync and the MAIN checkout committed drift after the worktree forked. The
     # commit ships the worktree's text, so a gate that recognised the worktree but still read the
     # twin at the main checkout's path would block an in-sync commit.
-    public, _root, tool = _published_pair(tmp_path, monkeypatch)
+    public, _root, tool = _published_pair(tmp_path)
     wt = _tool_worktree(tool, tool / ".claude" / "worktrees" / "wt")
     _drift(tool / TW_SKILL, TWIN_BODY)
     _g(tool, "commit", "-qam", "drift in the main checkout")
+    _touch_tool_skill(wt)                                   # each commit ships a change to the skill
+    _touch_tool_skill(tool)
     _tool_repo_commit(monkeypatch, public, wt)
 
-    assert RG.main() == 0
+    assert RG.main(parts=_parts()) == 0
     assert "DRIFT" not in capsys.readouterr().err
     _tool_repo_commit(monkeypatch, public, tool)             # control: the main checkout does block
-    assert RG.main() == 2
+    assert RG.main(parts=_parts()) == 2
 
 
 def test_mirror_of_run_in_a_linked_worktree_compares_that_worktree(tmp_path, monkeypatch, capsys):
-    _public, _root, tool = _published_pair(tmp_path, monkeypatch)
+    _public, _root, tool = _published_pair(tmp_path)
     wt = _tool_worktree(tool, tool / ".claude" / "worktrees" / "wt")
     _drift(wt / TW_SKILL, TWIN_BODY)
 
-    rc = RG.audit_mirror_of(wt)
+    rc = RG.audit_mirror_of(wt, mirrors=THING)
     out = capsys.readouterr().out
 
     assert "ships no skill mirrored" not in out
     assert rc == 1 and "DRIFT" in out and IN_PROGRESS in out
-    assert RG.audit_mirror_of(tool) == 0                     # the main checkout is still in sync
+    assert RG.audit_mirror_of(tool, mirrors=THING) == 0                     # the main checkout is still in sync
 
 
 def test_mirror_of_finds_the_tree_through_a_worktree_outside_it(tmp_path, monkeypatch, capsys):
     # A worktree may live anywhere; the public/ tree is found from the main checkout it belongs to.
-    _public, _root, tool = _published_pair(tmp_path, monkeypatch)
+    _public, _root, tool = _published_pair(tmp_path)
     wt = _tool_worktree(tool, tmp_path / "elsewhere" / "wt")
     _drift(wt / TW_SKILL, TWIN_BODY)
 
-    assert RG.audit_mirror_of(wt) == 1
+    assert RG.audit_mirror_of(wt, mirrors=THING) == 1
     assert IN_PROGRESS in capsys.readouterr().out
 
 
 def test_mirror_of_run_in_a_subdirectory_keeps_only_the_twins_beneath_it(tmp_path, monkeypatch, capsys):
-    _public, _root, tool = _published_pair(tmp_path, monkeypatch)
+    _public, _root, tool = _published_pair(tmp_path)
     (tool / "docs").mkdir()
 
-    assert RG.audit_mirror_of(tool / "docs") == 0
+    assert RG.audit_mirror_of(tool / "docs", mirrors=THING) == 0
     assert "ships no skill mirrored" in capsys.readouterr().out
-    assert RG.audit_mirror_of(tool / "skills") == 0
+    assert RG.audit_mirror_of(tool / "skills", mirrors=THING) == 0
     assert "in sync" in capsys.readouterr().out
 
 
@@ -2194,46 +2339,46 @@ def _tool_ahead(tool):
 
 
 def test_a_pathspec_commit_is_judged_on_the_named_files_as_they_are_on_disk(tmp_path, monkeypatch):
-    _public, root, tool = _published_pair(tmp_path, monkeypatch)
+    _public, root, tool = _published_pair(tmp_path)
     _tool_ahead(tool)
     _drift(root / MP_SKILL, MIRROR_BODY)                    # in sync on disk, NOT staged
     stage = RG.mirror_stage(f"git commit -m x -- {MP_SKILL}", "Bash", str(root))
 
-    assert RG.check_skill_mirrors(root, stage=stage, notices=[]) == []
+    assert RG.check_skill_mirrors(root, stage=stage, notices=[], mirrors=THING) == []
 
 
 def test_a_plain_commit_still_judges_the_stale_index(tmp_path, monkeypatch):
-    _public, root, tool = _published_pair(tmp_path, monkeypatch)
+    _public, root, tool = _published_pair(tmp_path)
     _tool_ahead(tool)
     _touch_marketplace_skill(root)                          # the index changes the skill ([740])
     _drift(root / MP_SKILL, MIRROR_BODY)                    # in sync on disk, NOT staged
     stage = RG.mirror_stage("git commit -m x", "Bash", str(root))
 
-    assert len(RG.check_skill_mirrors(root, stage=stage, notices=[])) == 1
+    assert len(RG.check_skill_mirrors(root, stage=stage, notices=[], mirrors=THING)) == 1
 
 
 def test_a_commit_all_is_judged_on_every_tracked_file_as_it_is_on_disk(tmp_path, monkeypatch):
-    _public, root, tool = _published_pair(tmp_path, monkeypatch)
+    _public, root, tool = _published_pair(tmp_path)
     _tool_ahead(tool)
     _drift(root / MP_SKILL, MIRROR_BODY)
     stage = RG.mirror_stage("git commit -am x", "Bash", str(root))
 
-    assert RG.check_skill_mirrors(root, stage=stage, notices=[]) == []
+    assert RG.check_skill_mirrors(root, stage=stage, notices=[], mirrors=THING) == []
 
 
 def test_an_include_commit_takes_the_named_files_from_disk(tmp_path, monkeypatch):
-    _public, root, tool = _published_pair(tmp_path, monkeypatch)
+    _public, root, tool = _published_pair(tmp_path)
     _tool_ahead(tool)
     _drift(root / MP_SKILL, MIRROR_BODY)
     stage = RG.mirror_stage(f"git commit -i -m x {MP_SKILL}", "Bash", str(root))
 
-    assert RG.check_skill_mirrors(root, stage=stage, notices=[]) == []
+    assert RG.check_skill_mirrors(root, stage=stage, notices=[], mirrors=THING) == []
 
 
 def test_a_staged_drift_a_pathspec_commit_does_not_name_is_not_shipped(tmp_path, monkeypatch):
     # `git commit -- <other>` takes every path it does not name from HEAD, so a drift staged in the
     # skill is not part of it - and a plain commit of the same index still is.
-    _public, root, _tool = _published_pair(tmp_path, monkeypatch)
+    _public, root, _tool = _published_pair(tmp_path)
     _drift(root / MP_SKILL, MIRROR_BODY)
     write(root / "README.md", "readme\n")
     _g(root, "add", "-A")
@@ -2241,21 +2386,20 @@ def test_a_staged_drift_a_pathspec_commit_does_not_name_is_not_shipped(tmp_path,
     named = RG.mirror_stage("git commit -m x -- README.md", "Bash", str(root))
     plain = RG.mirror_stage("git commit -m x", "Bash", str(root))
 
-    assert RG.check_skill_mirrors(root, stage=named, notices=[]) == []
-    assert len(RG.check_skill_mirrors(root, stage=plain, notices=[])) == 1
+    assert RG.check_skill_mirrors(root, stage=named, notices=[], mirrors=THING) == []
+    assert len(RG.check_skill_mirrors(root, stage=plain, notices=[], mirrors=THING)) == 1
 
 
 def test_a_tool_repo_pathspec_commit_is_judged_on_disk_through_the_hook(tmp_path, monkeypatch):
-    public, root, tool = _published_pair(tmp_path, monkeypatch)
+    public, root, tool = _published_pair(tmp_path)
     _drift(root / MP_SKILL, MIRROR_BODY)
     _g(root, "commit", "-qam", "marketplace first")
+    _touch_tool_skill(tool)                                 # the index changes the skill ([800])
     _drift(tool / TW_SKILL, TWIN_BODY)                      # in sync on disk, NOT staged
-    monkeypatch.setattr(RG, "_public_tree", lambda _start: public)
-
     _hook_event(monkeypatch, tool, f"git commit -m x -- {TW_SKILL}")
-    assert RG.main() == 0
+    assert RG.main(parts=_parts()) == 0
     _hook_event(monkeypatch, tool, "git commit -m x")
-    assert RG.main() == 2
+    assert RG.main(parts=_parts()) == 2
 
 
 @pytest.mark.parametrize("command, mode, pathspecs", [
@@ -2338,17 +2482,17 @@ _POSIX_SHELL = pytest.mark.skipif(sys.platform == "win32", reason="bash on Windo
 def _gate_then_commit(root, command):
     """(the gate's verdict on `command`, whether the commit it really made differs from the twin)."""
     stage = RG.mirror_stage(command, "Bash", str(root))
-    blocked = bool(RG.check_skill_mirrors(root, stage=stage, notices=[]))
+    blocked = bool(RG.check_skill_mirrors(root, stage=stage, notices=[], mirrors=THING))
     env = {**os.environ, "GIT_AUTHOR_NAME": "t", "GIT_AUTHOR_EMAIL": "t@example.invalid",
            "GIT_COMMITTER_NAME": "t", "GIT_COMMITTER_EMAIL": "t@example.invalid"}
     out = subprocess.run(["bash", "-c", command], cwd=str(root), env=env, capture_output=True, text=True)
     assert out.returncode == 0, out.stdout + out.stderr
-    return blocked, bool(RG.check_skill_mirrors(root, stage=RG.STAGE_HEAD, notices=None))
+    return blocked, bool(RG.check_skill_mirrors(root, stage=RG.STAGE_HEAD, notices=None, mirrors=THING))
 
 
-def _with_extra(tmp_path, monkeypatch):
+def _with_extra(tmp_path):
     """The published pair with a second, in-sync file `references/extra.md` on both sides."""
-    _public, root, tool = _published_pair(tmp_path, monkeypatch)
+    _public, root, tool = _published_pair(tmp_path)
     for top, skill in ((root, SKILL_DIR), (tool, "skills/python-thing")):
         write(top / skill / "references" / "extra.md", "same\n")
         _g(top, "add", "-A")
@@ -2358,9 +2502,26 @@ def _with_extra(tmp_path, monkeypatch):
     return root
 
 
+def test_a_pathspec_commit_that_leaves_the_fix_out_says_to_name_it_not_to_stage_it(tmp_path, monkeypatch):
+    # `git commit -- <paths>` takes every path it does not name from HEAD, so `git add` would not
+    # bring the unstaged SKILL.md fix into it; naming the file in the commit would ([920]).
+    root = _with_extra(tmp_path)
+    tool = tmp_path / "public" / "libs" / "thing"
+    _drift(tool / TW_SKILL, TWIN_BODY)
+    write(tool / "skills" / "python-thing" / "references" / "extra.md", "new\n")
+    _g(tool, "commit", "-qam", "tool side first")
+    _drift(root / MP_SKILL, MIRROR_BODY)                    # the fix, on disk only
+    write(root / EXTRA, "new\n")
+    stage = RG.mirror_stage(f"git commit -m x -- {EXTRA}", "Bash", str(root))
+
+    fails = RG.check_skill_mirrors(root, stage=stage, notices=[], mirrors=THING)
+
+    assert len(fails) == 1 and "SKILL.md is modified but not staged" in fails[0]
+    assert "name it among the commit's paths" in fails[0] and "git add" not in fails[0]
+
 @_POSIX_SHELL
 def test_a_pathspec_commit_of_a_file_git_rm_removed_deletes_it(tmp_path, monkeypatch):
-    root = _with_extra(tmp_path, monkeypatch)
+    root = _with_extra(tmp_path)
     _g(root, "rm", "-q", SKILL_DIR + "/references/extra.md")
 
     blocked, shipped_drift = _gate_then_commit(root, f"git commit -qm x -- {MP_SKILL} {SKILL_DIR}/references/extra.md")
@@ -2369,7 +2530,7 @@ def test_a_pathspec_commit_of_a_file_git_rm_removed_deletes_it(tmp_path, monkeyp
 
 @_POSIX_SHELL
 def test_a_pathspec_commit_of_a_file_rm_cached_then_edited_ships_the_edit(tmp_path, monkeypatch):
-    root = _with_extra(tmp_path, monkeypatch)
+    root = _with_extra(tmp_path)
     _g(root, "rm", "-q", "--cached", SKILL_DIR + "/references/extra.md")
     write(root / SKILL_DIR / "references" / "extra.md", "changed\n")
 
@@ -2380,7 +2541,7 @@ def test_a_pathspec_commit_of_a_file_rm_cached_then_edited_ships_the_edit(tmp_pa
 @pytest.mark.skipif(sys.platform == "win32", reason="creating a symlink needs a privilege on Windows")
 @_POSIX_SHELL
 def test_a_commit_all_over_a_symlinked_skill_file_reads_the_link_git_stores(tmp_path, monkeypatch):
-    _public, root, _tool = _published_pair(tmp_path, monkeypatch)
+    _public, root, _tool = _published_pair(tmp_path)
     target = tmp_path / "elsewhere" / "SKILL.md"
     write(target, MIRROR_BODY)
     (root / MP_SKILL).unlink()
@@ -2394,7 +2555,7 @@ def test_a_commit_all_over_a_symlinked_skill_file_reads_the_link_git_stores(tmp_
 @pytest.mark.skipif(sys.platform == "win32", reason="creating a symlink needs a privilege on Windows")
 @_POSIX_SHELL
 def test_a_commit_all_behind_a_symlinked_directory_reads_the_files_as_deleted(tmp_path, monkeypatch):
-    root = _with_extra(tmp_path, monkeypatch)
+    root = _with_extra(tmp_path)
     other = tmp_path / "elsewhere" / "refs"
     write(other / "extra.md", "same\n")
     shutil.rmtree(root / SKILL_DIR / "references")
@@ -2406,7 +2567,7 @@ def test_a_commit_all_behind_a_symlinked_directory_reads_the_files_as_deleted(tm
 
 @_POSIX_SHELL
 def test_a_commit_all_keeps_an_assume_unchanged_entry_from_the_index(tmp_path, monkeypatch):
-    _public, root, _tool = _published_pair(tmp_path, monkeypatch)
+    _public, root, _tool = _published_pair(tmp_path)
     _drift(root / MP_SKILL, MIRROR_BODY)
     _g(root, "add", MP_SKILL)
     _g(root, "update-index", "--assume-unchanged", MP_SKILL)
@@ -2418,7 +2579,7 @@ def test_a_commit_all_keeps_an_assume_unchanged_entry_from_the_index(tmp_path, m
 
 @_POSIX_SHELL
 def test_a_commit_all_through_a_clean_filter_reads_the_cleaned_text(tmp_path, monkeypatch):
-    _public, root, _tool = _published_pair(tmp_path, monkeypatch)
+    _public, root, _tool = _published_pair(tmp_path)
     _g(root, "config", "filter.x.clean", "sed s/One/Changed/")
     _g(root, "config", "filter.x.smudge", "cat")
     (root / ".git" / "info").mkdir(exist_ok=True)
@@ -2433,7 +2594,7 @@ def test_a_commit_all_through_a_clean_filter_reads_the_cleaned_text(tmp_path, mo
 def test_a_restore_before_the_commit_is_judged_on_the_index(tmp_path, monkeypatch):
     # The hook reads the disk before `git restore` runs, so reading it would see the pre-restore
     # copy; the commit ships the staged drift either way and must be blocked.
-    _public, root, _tool = _published_pair(tmp_path, monkeypatch)
+    _public, root, _tool = _published_pair(tmp_path)
     _drift(root / MP_SKILL, MIRROR_BODY)
     _g(root, "add", MP_SKILL)
     write(root / MP_SKILL, MIRROR_BODY)
@@ -2446,9 +2607,9 @@ EXTRA = SKILL_DIR + "/references/extra.md"
 _RESTAGING = ["git commit -qam x", f"git commit -qm x -i -- {EXTRA}"]
 
 
-def _stat_clean_drift(tmp_path, monkeypatch, config):
+def _stat_clean_drift(tmp_path, config):
     """A drift staged in `extra.md`, then the disk copy put back in sync with the SAME size and mtime."""
-    root = _with_extra(tmp_path, monkeypatch)
+    root = _with_extra(tmp_path)
     for key, value in config:
         _g(root, "config", key, value)
     path = root / EXTRA
@@ -2468,7 +2629,7 @@ def _stat_clean_drift(tmp_path, monkeypatch, config):
 def test_a_stat_clean_entry_keeps_its_staged_blob(tmp_path, monkeypatch, config, command):
     # `-a` and `-i` re-stage through the stat cache: an entry whose stat matches keeps the STAGED
     # drift although the disk copy is in sync. Reading the disk passed it.
-    root = _stat_clean_drift(tmp_path, monkeypatch, config)
+    root = _stat_clean_drift(tmp_path, config)
 
     blocked, shipped_drift = _gate_then_commit(root, command)
     assert shipped_drift and blocked
@@ -2479,7 +2640,7 @@ def test_a_stat_clean_entry_keeps_its_staged_blob(tmp_path, monkeypatch, config,
 def test_a_crlf_blob_already_in_the_index_is_not_converted(tmp_path, monkeypatch, command):
     # Git's safer-CRLF rule: with `text=auto` added after a CRLF blob was staged, re-staging keeps
     # the CRLF. `hash-object --path` never reads the index and converts, which passed it.
-    root = _with_extra(tmp_path, monkeypatch)
+    root = _with_extra(tmp_path)
     (root / EXTRA).write_bytes(b"same\r\n")
     _g(root, "add", EXTRA)
     (root / ".git" / "info").mkdir(exist_ok=True)
@@ -2496,7 +2657,7 @@ def test_a_pathspec_commit_keeps_a_skip_worktree_entry_at_head(tmp_path, monkeyp
     # A partial commit keeps HEAD's blob for a skip-worktree entry whatever is on disk; a HEAD-built
     # throwaway index has no such bit, so the reading must fall back to the index. The commit
     # also adds a file both sides share, so it changes the skill and is checked at all ([740]).
-    _public, root, tool = _published_pair(tmp_path, monkeypatch)
+    _public, root, tool = _published_pair(tmp_path)
     write(tool / "skills" / "python-thing" / "references" / "new.md", "shared\n")
     _g(tool, "add", "-A")
     _g(tool, "commit", "-qm", "new reference")
@@ -2513,7 +2674,7 @@ def test_a_pathspec_commit_keeps_a_skip_worktree_entry_at_head(tmp_path, monkeyp
 
 @_POSIX_SHELL
 def test_a_pathspec_commit_keeps_a_skip_worktree_file_missing_from_disk(tmp_path, monkeypatch):
-    _public, root, _tool = _published_pair(tmp_path, monkeypatch)
+    _public, root, _tool = _published_pair(tmp_path)
     write(root / EXTRA, "marketplace only\n")
     _g(root, "add", EXTRA)
     _g(root, "commit", "-qm", "extra")
@@ -2527,7 +2688,7 @@ def test_a_pathspec_commit_keeps_a_skip_worktree_file_missing_from_disk(tmp_path
 
 @_POSIX_SHELL
 def test_the_check_runs_no_user_git_hook(tmp_path, monkeypatch):
-    _public, root, _tool = _published_pair(tmp_path, monkeypatch)
+    _public, root, _tool = _published_pair(tmp_path)
     marker = tmp_path / "hook-ran"
     hook = root / ".git" / "hooks" / "post-index-change"
     hook.write_text("#!/bin/sh\ntouch '%s'\n" % marker.as_posix(), encoding="utf-8")
@@ -2535,7 +2696,7 @@ def test_the_check_runs_no_user_git_hook(tmp_path, monkeypatch):
     write(root / MP_SKILL, MIRROR_BODY.replace("(coding-python-thing)", "(renamed)"))
 
     for command in ("git commit -qam x", f"git commit -qm x -- {MP_SKILL}"):
-        RG.check_skill_mirrors(root, stage=RG.mirror_stage(command, "Bash", str(root)), notices=[])
+        RG.check_skill_mirrors(root, stage=RG.mirror_stage(command, "Bash", str(root)), notices=[], mirrors=THING)
     assert not marker.exists()
 
 
@@ -2543,7 +2704,7 @@ def test_the_check_runs_no_user_git_hook(tmp_path, monkeypatch):
 def test_a_relative_pathspec_after_an_absolute_cd_is_judged_on_disk(tmp_path, monkeypatch):
     # The control the review ran: the selection must also BLOCK an unstaged drift the old index
     # reading passed, or the change only ever loosens the gate.
-    _public, root, _tool = _published_pair(tmp_path, monkeypatch)
+    _public, root, _tool = _published_pair(tmp_path)
     _drift(root / MP_SKILL, MIRROR_BODY)
 
     blocked, shipped_drift = _gate_then_commit(root, f"cd {_sh(root / SKILL_DIR)} && git commit -qm x -- SKILL.md")
@@ -2592,31 +2753,31 @@ def test_a_fresh_clone_dates_its_ref_from_the_clone(tmp_path):
 
 
 def test_the_audits_name_a_ref_older_than_seven_days_and_not_a_younger_one(tmp_path, monkeypatch, capsys):
-    _public, root, tool = _published_pair(tmp_path, monkeypatch)
+    _public, root, tool = _published_pair(tmp_path)
     _fetched(tool, 6)
-    assert RG.audit_mirrors(root) == 0
+    assert RG.audit_mirrors(root, mirrors=THING) == 0
     assert "last fetched" not in capsys.readouterr().out
 
     _fetched(tool, 8)
-    assert RG.audit_mirrors(root) == 0
+    assert RG.audit_mirrors(root, mirrors=THING) == 0
     out = capsys.readouterr().out
     assert "last fetched 8.0 days ago" in out and str(tool) in out
 
     _drift(tool / TW_SKILL, TWIN_BODY)
     _g(tool, "commit", "-qam", "drift")
-    assert RG.audit_mirror_of(tool) == 1
+    assert RG.audit_mirror_of(tool, mirrors=THING) == 1
     drift_message = capsys.readouterr().out.split("has drifted from its twin")[-1]
     assert "last fetched 8.0 days ago" in drift_message
 
 
 def test_a_gate_drift_block_names_the_other_side_s_stale_ref(tmp_path, monkeypatch, capsys):
-    public, root, tool = _published_pair(tmp_path, monkeypatch)
+    public, root, tool = _published_pair(tmp_path)
     _fetched(root, 9)
     _drift(tool / TW_SKILL, TWIN_BODY)
     _g(tool, "add", "-A")
     _tool_repo_commit(monkeypatch, public, tool)
 
-    assert RG.main() == 2
+    assert RG.main(parts=_parts()) == 2
     err = capsys.readouterr().err
     assert "last fetched 9.0 days ago" in err and str(root) in err
 
@@ -2755,10 +2916,9 @@ def test_the_default_probe_finds_a_module_that_is_installed():
 def test_a_missing_dependency_does_not_also_report_a_pytest_failure(tmp_path, monkeypatch):
     """One cause, one message: running pytest anyway files the dep problem as a test defect."""
     root = _workflow(tmp_path, "pip install lxml")
-    monkeypatch.setattr(RG, "module_installed", lambda mod: False)
-    monkeypatch.setenv("PATH", "")                          # and no uv to provide them either
-    monkeypatch.setattr(RG, "check_pytest", lambda *a, **k: pytest.fail("pytest must not run"))
-    joined = "\n".join(RG.run_checks(root, ci=True))
+    parts = _parts(which=lambda name: None,                 # and no uv to provide them either
+                   pytest_check=lambda *a, **k: pytest.fail("pytest must not run"))
+    joined = "\n".join(RG.run_checks(root, ci=True, is_installed=lambda mod: False, parts=parts))
     assert "missing: lxml" in joined
 
 
@@ -2856,11 +3016,110 @@ def test_a_session_interpreter_without_the_ci_set_still_runs_the_suite_through_u
     write(root / "tests" / "test_ok.py", "import pytest\n\n\ndef test_ok():\n    assert pytest\n")
 
     # The hook's own interpreter lacks the set, so uv must supply it.
-    joined = "\n".join(RG.run_checks(root, ci=True, is_installed=lambda mod: False))
+    joined = "\n".join(RG.run_checks(root, ci=True, is_installed=lambda mod: False,
+                                     parts=RG.GateParts(plugin_check=lambda root: [])))
 
     assert "Test dependencies missing" not in joined
     assert "pytest failed" not in joined and "pytest did not complete" not in joined
     assert "pytest collected no tests" not in joined
+
+
+# --------------------------------------------------------------------------
+# The TypeScript side ([480]): `claude plugin validate` and the mod tests, where `claude` exists
+#
+# CI has no `claude` binary, so before this check nothing at all ran hooks/mods/register.test.ts or
+# the manifest validator. It runs at the whole-suite moments (--ci, the pre-push hook), and where
+# `claude` is missing it is skipped and says so, because a quiet pass would read as validated.
+# --------------------------------------------------------------------------
+
+
+class _ClaudeRun:
+    """Stands in for subprocess.run at the `claude` edge: one outcome per step, in order."""
+
+    def __init__(self, *outcomes):
+        self.outcomes, self.calls = list(outcomes), []
+
+    def __call__(self, cmd, **kwargs):
+        self.calls.append((cmd, kwargs))
+        outcome = self.outcomes.pop(0) if self.outcomes else 0
+        if isinstance(outcome, BaseException):
+            raise outcome
+        return subprocess.CompletedProcess(cmd, outcome, "out line\n", "err line\n")
+
+
+def test_the_plugin_check_runs_both_validations_and_the_mod_tests_where_claude_is(tmp_path):
+    run = _ClaudeRun(0, 0, 0)
+
+    assert RG.check_claude_plugin(tmp_path, which=lambda name: "/x/claude", run=run) == []
+    assert [cmd for cmd, _kw in run.calls] == [
+        ["/x/claude", "plugin", "validate", "."],
+        ["/x/claude", "plugin", "validate", "plugins/bitranox"],
+        ["/x/claude", "plugin", "test", "plugins/bitranox"],
+    ]
+    assert all(kw["cwd"] == str(tmp_path) and kw["timeout"] for _cmd, kw in run.calls)
+
+
+def test_without_claude_the_plugin_check_is_skipped_and_says_why(tmp_path, capsys):
+    run = _ClaudeRun()
+
+    assert RG.check_claude_plugin(tmp_path, which=lambda name: None, run=run) == []
+    assert run.calls == []
+    out = capsys.readouterr().out
+    assert "skipped" in out and "no `claude` on PATH" in out and "register.test.ts" in out
+
+
+@pytest.mark.parametrize("step", [0, 1, 2], ids=["marketplace", "plugin", "mod-tests"])
+def test_a_failed_validation_or_mod_test_is_a_finding(tmp_path, step):
+    outcomes = [0, 0, 0]
+    outcomes[step] = 1
+    lines = RG.check_claude_plugin(tmp_path, which=lambda name: "/x/claude", run=_ClaudeRun(*outcomes))
+
+    assert lines and "failed (exit 1)" in lines[0] and "err line" in "\n".join(lines)
+    assert not RG.is_could_not_run(lines)
+
+
+@pytest.mark.parametrize("outcome", [2, -9, OSError("no such file"),
+                                     subprocess.TimeoutExpired("claude", 1)],
+                         ids=["exit-2", "signal", "oserror", "timeout"])
+def test_a_plugin_step_that_gives_no_answer_could_not_run(tmp_path, outcome):
+    lines = RG.check_claude_plugin(tmp_path, which=lambda name: "/x/claude", run=_ClaudeRun(outcome, 0, 0))
+
+    assert RG.is_could_not_run(lines)
+
+
+@pytest.mark.parametrize("ci, full_pytest, runs", [
+    (True, None, True),                                     # --ci
+    (False, True, True),                                    # the pre-push hook
+    (False, False, False),                                  # a commit's hook-mode check
+], ids=["ci", "pre-push", "hook-mode"])
+def test_the_plugin_check_runs_at_the_whole_suite_moments_only(tmp_path, ci, full_pytest, runs):
+    make_repo(tmp_path)
+    seen = []
+    parts = _parts(plugin_check=lambda root: seen.append(root) or ["PLUGIN_SENTINEL"])
+
+    failures = RG.run_checks(tmp_path, ci=ci, full_pytest=full_pytest, parts=parts)
+
+    assert (seen == [tmp_path]) is runs
+    assert ("PLUGIN_SENTINEL" in failures) is runs
+
+
+def test_the_pre_push_hook_reports_a_plugin_finding(tmp_path, monkeypatch, capsys):
+    """End to end through main(): the check is reached by the pre-push path, not merely defined."""
+    make_repo(tmp_path, good_skill=True)
+    _in_repo(monkeypatch, tmp_path)
+    _cli(monkeypatch, "--pre-push")
+    parts = _parts(plugin_check=lambda root: RG.check_claude_plugin(
+        root, which=lambda name: "/x/claude", run=_ClaudeRun(0, 0, 1)))
+
+    assert RG.main(parts=parts) == 1
+    assert "run the mod tests" in capsys.readouterr().err
+
+
+@pytest.mark.skipif(shutil.which("claude") is None, reason="needs `claude` on PATH, the edge this test exercises")
+def test_the_real_plugin_passes_the_real_claude():
+    """The shipped plugin must satisfy the check, or every pre-push from here on is refused."""
+    root = Path(RG.__file__).resolve().parents[3]
+    assert RG.check_claude_plugin(root) == []
 
 
 # --------------------------------------------------------------------------
@@ -3436,8 +3695,7 @@ def test_toolbox_rule_coverage_fails_for_a_tool_with_neither_a_rule_nor_a_reason
     """
     _tmp_toolbox(tmp_path, "brand_new_tool")
     nudge = _real_nudge()
-    monkeypatch.setattr(RG, "_toolbox_nudge_module", lambda _root: nudge)
-    fails = RG.toolbox_rule_coverage_failures(tmp_path)
+    fails = RG.toolbox_rule_coverage_failures(tmp_path, nudge=nudge)
     assert len(fails) == 1 and "brand_new_tool" in fails[0]
 
 
@@ -3446,11 +3704,10 @@ def test_toolbox_rule_coverage_accepts_a_recorded_reason(tmp_path, monkeypatch):
     bad one. An explicit, committed reason is the escape hatch - and it must be explicit."""
     _tmp_toolbox(tmp_path, "unshaped_tool")
     nudge = _real_nudge()
-    monkeypatch.setattr(RG, "_toolbox_nudge_module", lambda _root: nudge)
     monkeypatch.setitem(nudge.NO_COMMAND_SHAPE, "unshaped_tool",
                         ("asked while reading, not typed",
                          "no candidate exists: the chore produces no command of its own"))
-    assert RG.toolbox_rule_coverage_failures(tmp_path) == []
+    assert RG.toolbox_rule_coverage_failures(tmp_path, nudge=nudge) == []
 
 
 def test_toolbox_rule_coverage_reports_an_exemption_for_a_tool_that_no_longer_ships(tmp_path,
@@ -3459,9 +3716,8 @@ def test_toolbox_rule_coverage_reports_an_exemption_for_a_tool_that_no_longer_sh
     gate exists to prevent, one level up."""
     _tmp_toolbox(tmp_path)
     nudge = _real_nudge()
-    monkeypatch.setattr(RG, "_toolbox_nudge_module", lambda _root: nudge)
     monkeypatch.setitem(nudge.NO_COMMAND_SHAPE, "retired_tool", "gone")
-    fails = RG.toolbox_rule_coverage_failures(tmp_path)
+    fails = RG.toolbox_rule_coverage_failures(tmp_path, nudge=nudge)
     assert any("retired_tool" in f for f in fails)
 
 
@@ -3474,9 +3730,8 @@ def test_an_exemption_without_evidence_fails_the_gate(tmp_path, monkeypatch):
     """
     _tmp_toolbox(tmp_path, "opinion_only")
     nudge = _real_nudge()
-    monkeypatch.setattr(RG, "_toolbox_nudge_module", lambda _root: nudge)
     monkeypatch.setitem(nudge.NO_COMMAND_SHAPE, "opinion_only", "no shape, trust me")
-    fails = RG.toolbox_rule_coverage_failures(tmp_path)
+    fails = RG.toolbox_rule_coverage_failures(tmp_path, nudge=nudge)
     assert any("opinion_only" in f and "evidence" in f for f in fails)
 
 
@@ -3484,9 +3739,8 @@ def test_an_exemption_with_an_empty_evidence_half_fails_too(tmp_path, monkeypatc
     """The pair shape alone is satisfiable with an empty string, which is the same non-answer."""
     _tmp_toolbox(tmp_path, "half_filled")
     nudge = _real_nudge()
-    monkeypatch.setattr(RG, "_toolbox_nudge_module", lambda _root: nudge)
     monkeypatch.setitem(nudge.NO_COMMAND_SHAPE, "half_filled", ("a real reason", "   "))
-    assert any("half_filled" in f for f in RG.toolbox_rule_coverage_failures(tmp_path))
+    assert any("half_filled" in f for f in RG.toolbox_rule_coverage_failures(tmp_path, nudge=nudge))
 
 
 def test_every_shipped_exemption_carries_both_halves():
@@ -3508,9 +3762,8 @@ def _marketplace_in(public):
 
 def test_audit_mirrors_counts_a_drifted_pair_and_names_it(tmp_path, monkeypatch, capsys):
     public = _mirror_tree(tmp_path, TWIN_BODY.replace("One paragraph", "A DIFFERENT paragraph"))
-    monkeypatch.setattr(RG, "MIRRORED_SKILLS", {"coding-python-thing": "libs/thing/skills/python-thing"})
 
-    assert RG.audit_mirrors(_marketplace_in(public)) == 1
+    assert RG.audit_mirrors(_marketplace_in(public), mirrors=THING) == 1
     out = capsys.readouterr().out
     assert "DRIFT   coding-python-thing" in out
     assert "1 of 1 mirrored pairs have drifted." in out
@@ -3525,11 +3778,10 @@ def test_audit_mirrors_reports_in_sync_skipped_and_unlisted_pairs(tmp_path, monk
           / "SKILL.md", MIRROR_BODY.replace("the thing", "the other thing"))
     write(public / "libs" / "other" / "skills" / "python-other" / "SKILL.md",
           TWIN_BODY.replace("the thing", "the other thing"))
-    monkeypatch.setattr(RG, "MIRRORED_SKILLS", {"coding-python-thing": "libs/thing/skills/python-thing",
-                                                "coding-python-absent": "libs/absent/skills/python-absent"})
+    table = {**THING, "coding-python-absent": "libs/absent/skills/python-absent"}
     root = _marketplace_in(public)
 
-    assert RG.audit_mirrors(root) == 1
+    assert RG.audit_mirrors(root, mirrors=table) == 1
     out = capsys.readouterr().out
     assert "in sync coding-python-thing" in out
     assert "SKIP    coding-python-absent" in out
@@ -3537,13 +3789,13 @@ def test_audit_mirrors_reports_in_sync_skipped_and_unlisted_pairs(tmp_path, monk
     assert "0 of 2 mirrored pairs have drifted." in out
     assert "1 twin is not listed in MIRRORED_SKILLS" in out
 
-    monkeypatch.setattr(RG, "repo_root", lambda: root)
-    monkeypatch.setattr(sys, "argv", ["repo-gate.py", "--mirrors"])
-    assert RG.main() == 1
+    _in_repo(monkeypatch, root)
+    _cli(monkeypatch, "--mirrors")
+    assert RG.main(parts=_parts(mirrors=table)) == 1
 
 
 def test_audit_mirrors_with_no_public_tree_compares_nothing(tmp_path, capsys):
-    assert RG.audit_mirrors(tmp_path / "elsewhere" / "bitranox-skills") == 0
+    assert RG.audit_mirrors(tmp_path / "elsewhere" / "bitranox-skills", mirrors=THING) == 0
     assert "no public/ tree" in capsys.readouterr().out
 
 
@@ -3553,12 +3805,11 @@ def test_audit_mirrors_with_no_public_tree_compares_nothing(tmp_path, capsys):
 ], ids=["drifted", "in-sync"])
 def test_the_mirrors_flag_exits_on_the_drift_count(tmp_path, monkeypatch, twin_body, expected):
     public = _mirror_tree(tmp_path, twin_body)
-    monkeypatch.setattr(RG, "MIRRORED_SKILLS", {"coding-python-thing": "libs/thing/skills/python-thing"})
     root = _marketplace_in(public)
-    monkeypatch.setattr(RG, "repo_root", lambda: root)
-    monkeypatch.setattr(sys, "argv", ["repo-gate.py", "--mirrors"])
+    _in_repo(monkeypatch, root)
+    _cli(monkeypatch, "--mirrors")
 
-    assert RG.main() == expected
+    assert RG.main(parts=_parts()) == expected
 
 
 # --------------------------------------------------------------------------
@@ -3647,7 +3898,6 @@ def _sh(path):
 def _hook_event(monkeypatch, cwd, command):
     """Drive hook mode the way Claude Code does: the session sits in `cwd`, the command may move."""
     monkeypatch.chdir(cwd)
-    monkeypatch.setattr(RG, "check_pytest", lambda root, paths, **kw: [])
     monkeypatch.setattr(sys, "argv", ["repo-gate.py"])
     event = {"cwd": str(cwd), "tool_name": "Bash", "tool_input": {"command": command}}
     monkeypatch.setattr(sys, "stdin", io.StringIO(json.dumps(event)))
@@ -3662,7 +3912,7 @@ def test_a_commit_that_cds_into_the_marketplace_is_judged_there(tmp_path, monkey
     target = _init_git(make_repo(tmp_path / "bitranox-skills", bad_skill=True))
     _hook_event(monkeypatch, session, f"cd {_sh(target)} && git commit -m x")
 
-    assert RG.main() == 2
+    assert RG.main(parts=_parts()) == 2
     assert "blocked" in capsys.readouterr().err
 
 
@@ -3671,7 +3921,7 @@ def test_a_commit_with_dash_c_into_the_marketplace_is_judged_there(tmp_path, mon
     target = _init_git(make_repo(tmp_path / "bitranox-skills", bad_skill=True))
     _hook_event(monkeypatch, session, f"git -C {_sh(target)} commit -m x")
 
-    assert RG.main() == 2
+    assert RG.main(parts=_parts()) == 2
 
 
 def test_a_commit_that_cds_out_of_the_marketplace_is_not_judged_by_it(tmp_path, monkeypatch):
@@ -3681,7 +3931,7 @@ def test_a_commit_that_cds_out_of_the_marketplace_is_not_judged_by_it(tmp_path, 
     target = _init_git(tmp_path / "elsewhere")
     _hook_event(monkeypatch, session, f"cd {_sh(target)} && git commit -m x")
 
-    assert RG.main() == 0
+    assert RG.main(parts=_parts()) == 0
 
 
 def test_a_push_that_cds_into_the_marketplace_is_judged_there(tmp_path, monkeypatch):
@@ -3689,7 +3939,7 @@ def test_a_push_that_cds_into_the_marketplace_is_judged_there(tmp_path, monkeypa
     target = _init_git(make_repo(tmp_path / "bitranox-skills", bad_skill=True))
     _hook_event(monkeypatch, session, f"cd {_sh(target)} && git push origin master")
 
-    assert RG.main() == 2
+    assert RG.main(parts=_parts()) == 2
 
 
 def test_a_commit_into_a_directory_outside_any_repo_is_not_judged(tmp_path, monkeypatch):
@@ -3699,14 +3949,14 @@ def test_a_commit_into_a_directory_outside_any_repo_is_not_judged(tmp_path, monk
     plain.mkdir()
     _hook_event(monkeypatch, session, f"cd {_sh(plain)} && git commit -m x")
 
-    assert RG.main() == 0
+    assert RG.main(parts=_parts()) == 0
 
 
 def test_a_target_that_does_not_exist_falls_back_to_the_session_repo(tmp_path, monkeypatch):
     session = _init_git(make_repo(tmp_path / "bitranox-skills", bad_skill=True))
     _hook_event(monkeypatch, session, f"cd {_sh(tmp_path / 'no-such-dir')} && git commit -m x")
 
-    assert RG.main() == 2
+    assert RG.main(parts=_parts()) == 2
 
 
 def test_an_unquoted_backslash_path_falls_back_to_the_session_repo(tmp_path, monkeypatch):
@@ -3715,7 +3965,7 @@ def test_an_unquoted_backslash_path_falls_back_to_the_session_repo(tmp_path, mon
     session = _init_git(make_repo(tmp_path / "bitranox-skills", bad_skill=True))
     _hook_event(monkeypatch, session, "cd C:\\no\\such\\repo && git commit -m x")
 
-    assert RG.main() == 2
+    assert RG.main(parts=_parts()) == 2
 
 
 def test_a_commit_that_does_not_move_is_judged_in_the_session_repo(tmp_path, monkeypatch):
@@ -3723,7 +3973,7 @@ def test_a_commit_that_does_not_move_is_judged_in_the_session_repo(tmp_path, mon
     session = _init_git(make_repo(tmp_path / "bitranox-skills", bad_skill=True))
     _hook_event(monkeypatch, session, "git commit -m x")
 
-    assert RG.main() == 2
+    assert RG.main(parts=_parts()) == 2
 
 
 def test_an_unreadable_target_falls_back_to_the_session_repo(tmp_path, monkeypatch):
@@ -3732,7 +3982,7 @@ def test_an_unreadable_target_falls_back_to_the_session_repo(tmp_path, monkeypat
     session = _init_git(make_repo(tmp_path / "bitranox-skills", bad_skill=True))
     _hook_event(monkeypatch, session, 'cd "$X" && git commit -m x')
 
-    assert RG.main() == 2
+    assert RG.main(parts=_parts()) == 2
 
 
 def test_mirror_of_compares_the_checkout_it_is_run_from(tmp_path, monkeypatch, capsys):
@@ -3746,10 +3996,9 @@ def test_mirror_of_compares_the_checkout_it_is_run_from(tmp_path, monkeypatch, c
     worktree = make_repo(public / "KI" / "bitranox-skills" / ".claude" / "worktrees" / "wt")
     write(worktree / "plugins" / "bitranox" / "skills" / "coding-python-thing" / "SKILL.md", MIRROR_BODY)
     _init_git(worktree)
-    monkeypatch.setitem(RG.MIRRORED_SKILLS, "coding-python-thing", "libs/thing/skills/python-thing")
     monkeypatch.chdir(worktree)
 
-    rc = RG.audit_mirror_of(public / "libs" / "thing")
+    rc = RG.audit_mirror_of(public / "libs" / "thing", mirrors=THING)
 
     assert "in sync" in capsys.readouterr().out
     assert rc == 0
@@ -3764,7 +4013,7 @@ def test_a_continued_line_push_with_a_quoted_dash_c_is_judged_where_it_lands(tmp
            " && git -c credential.helper='!gh auth git-credential' push origin main")
     _hook_event(monkeypatch, session, cmd)
 
-    assert RG.main() == 0
+    assert RG.main(parts=_parts()) == 0
 
 
 # --- a commit whose target sits in a variable, and a marketplace worktree outside public/ ---------
@@ -3790,13 +4039,12 @@ def test_hook_root_follows_a_cd_into_a_variable_the_command_assigned(tmp_path):
 
 
 def test_a_fallback_block_names_the_repo_it_judged_and_why(tmp_path, monkeypatch, capsys):
-    public, _root, tool = _published_pair(tmp_path, monkeypatch)
+    public, _root, tool = _published_pair(tmp_path)
     _drift(tool / TW_SKILL, TWIN_BODY)
     _g(tool, "add", "-A")
-    monkeypatch.setattr(RG, "_public_tree", lambda _start: public)
     _hook_event(monkeypatch, tool, 'cd "$SOMEWHERE" && git commit -m x')
 
-    assert RG.main() == 2
+    assert RG.main(parts=_parts()) == 2
     err = capsys.readouterr().err
     assert str(tool) in err, "the block must name the repository it judged"
     assert "could not be read" in err, "and say it judged the session's repo because the cd was unreadable"
@@ -3804,42 +4052,41 @@ def test_a_fallback_block_names_the_repo_it_judged_and_why(tmp_path, monkeypatch
 
 def test_a_block_after_a_readable_cd_names_the_repo_without_a_fallback_note(tmp_path, monkeypatch, capsys):
     # Control: the note is about the fallback, so a commit the gate followed must not carry it.
-    public, _root, tool = _published_pair(tmp_path, monkeypatch)
+    public, _root, tool = _published_pair(tmp_path)
     _drift(tool / TW_SKILL, TWIN_BODY)
     _g(tool, "add", "-A")
-    monkeypatch.setattr(RG, "_public_tree", lambda _start: public)
     _hook_event(monkeypatch, tool, f"cd {_sh(tool)} && git commit -m x")
 
-    assert RG.main() == 2
+    assert RG.main(parts=_parts()) == 2
     err = capsys.readouterr().err
     assert str(tool) in err and "could not be read" not in err
 
 
 def test_a_marketplace_worktree_outside_public_still_checks_its_mirror(tmp_path, monkeypatch):
-    _public, root, tool = _published_pair(tmp_path, monkeypatch)
+    _public, root, tool = _published_pair(tmp_path)
     mwt = _marketplace_worktree(root, tmp_path / "elsewhere" / "mwt")
     _drift(tool / TW_SKILL, TWIN_BODY)
     _g(tool, "commit", "-qam", "drift")
     _touch_marketplace_skill(mwt)
 
-    fails = RG.check_skill_mirrors(mwt)
+    fails = RG.check_skill_mirrors(mwt, mirrors=THING)
 
     assert len(fails) == 1 and IN_PROGRESS in fails[0]
 
 
 def test_a_marketplace_worktree_outside_public_passes_when_in_sync(tmp_path, monkeypatch):
     # Control for the arm above: the same worktree with the twin unchanged has nothing to report.
-    _public, root, _tool = _published_pair(tmp_path, monkeypatch)
+    _public, root, _tool = _published_pair(tmp_path)
     mwt = _marketplace_worktree(root, tmp_path / "elsewhere" / "mwt")
     _touch_marketplace_skill(mwt)
 
-    assert RG.check_skill_mirrors(mwt) == []
+    assert RG.check_skill_mirrors(mwt, mirrors=THING) == []
 
 
 def test_the_mirror_audit_runs_from_a_marketplace_worktree_outside_public(tmp_path, monkeypatch, capsys):
-    _public, root, tool = _published_pair(tmp_path, monkeypatch)
+    _public, root, tool = _published_pair(tmp_path)
     mwt = _marketplace_worktree(root, tmp_path / "elsewhere" / "mwt")
     _drift(tool / TW_SKILL, TWIN_BODY)
 
-    assert RG.audit_mirrors(mwt) == 1
+    assert RG.audit_mirrors(mwt, mirrors=THING) == 1
     assert IN_PROGRESS in capsys.readouterr().out
