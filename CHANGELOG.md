@@ -30,6 +30,22 @@ a hole nobody has drawn a line under is one that gets rediscovered and half-fill
 two "versions with no entry" notes came to sit in this file disagreeing with it.
 
 
+## [10.3.26]
+
+### Fixed
+
+- `test_secret_patterns`' linear-growth check no longer reads a linear scan as quadratic on macOS runners
+  (`flattened_pem_run` failed at 65.5x against the 64x bound). The instrument had two biases, each measured on
+  all four macOS runners. First, it timed one small scan against one large one and kept each arm's fastest pass:
+  a 20 ms pass can fall entirely in a fast moment of the runner, a pass 16x longer only averages it. The small arm
+  is now 16 back-to-back scans, so both arms span the same window. Second, `thread_time` counts kernel time, and
+  only the large arm faults in fresh pages on every scan. At load ~20 that was a third of the large arm and none of
+  the small one, and on macos-15-intel the kernel time of the large arm rose sevenfold for seconds at a time. The
+  clock is now user CPU time: `getrusage` on POSIX, `os.times()` on Windows. Over 360 trials on four macOS runners
+  a linear scan now reads 15.4-16.6x median and 20.4x at most. Each bias has a test that fails when its half of
+  the fix is reverted. The rising-load test now ties the load to the work done rather than to the number of scans.
+  The 11 shapes take about 15 s longer.
+
 ## [10.3.25]
 
 ### Fixed

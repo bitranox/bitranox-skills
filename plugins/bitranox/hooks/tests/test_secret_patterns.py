@@ -7,11 +7,30 @@ appeared somewhere.
 
 import inspect
 import math
+import mmap
+import os
+import sys
 import time
 
 import pytest
 
 import secret_patterns as sp
+
+if sys.platform == "win32":
+    # No resource module here; os.times() reads the user half of GetProcessTimes.
+    def _user_cpu_time():
+        return os.times().user
+
+else:
+    import resource
+
+    # Per thread where the OS offers it (Linux). macOS has no RUSAGE_THREAD, so it is the whole
+    # process there; the arms span equal windows, so another thread's work lands on both alike.
+    _RUSAGE_WHO = getattr(resource, "RUSAGE_THREAD", resource.RUSAGE_SELF)
+
+    def _user_cpu_time():
+        return resource.getrusage(_RUSAGE_WHO).ru_utime
+
 
 # Assembled at runtime so this file never holds a literal that a secret scanner flags.
 GHP = "ghp_" + "A1b2C3d4E5f6G7h8I9j0K1l2M3n4O5p6Q7r8"
@@ -616,20 +635,22 @@ def _scan(text):
     sp.holds_a_credential(text)
 
 
-def _timed(text, scan, clock):
+def _timed(text, scan, clock, count=1):
+    """The cost of one scan of `text`, averaged over `count` back-to-back scans."""
     start = clock()
-    scan(text)
-    return clock() - start
+    for _ in range(count):
+        scan(text)
+    return (clock() - start) / count
 
 
 # The large arm is this many times the small one. A linear scan then costs ~16x and a quadratic
 # one ~256x, and the bound sits at their geometric middle (exponent 1.5, i.e. 64x). The factor is
-# what buys the margin: a string outgrowing a cache steps its per-char cost up by a bounded
-# factor c, which lands in the ratio ONCE whatever the size factor, so a linear scan reads 16c.
-# At a factor of 4 the bound was 8 and a linear scan read 4c, failing from c = 2 - and on a host
-# at load ~25 the cache step measured 1.8x (flattened_pem_run, 128 ns/char at 400k chars against
-# 231 at 800k), sustained contention that neither the CPU clock nor the fastest pass can filter.
-# At 16 the bound tolerates c up to 4. An interleaved A/B at load ~25-28 (12 runs over the three
+# what buys the margin: a per-char cost that steps up between the two sizes by a bounded factor c
+# lands in the ratio ONCE whatever the size factor, so a linear scan reads 16c. At a factor of 4
+# the bound was 8 and a linear scan read 4c, failing from c = 2 - and flattened_pem_run read
+# c = 1.8 through thread_time at load ~25 (128 ns/char at 400k chars against 231 at 800k), most
+# of it the large arm's page faults, which the user-time clock below leaves out. At 16 the bound
+# tolerates c up to 4. An interleaved A/B at load ~25-28 (12 runs over the three
 # slowest shapes) read factor 4 at up to 86% of its bound and factor 16 at up to 45% of its own.
 _GROWTH_FACTOR = 16
 _MAX_GROWTH_EXPONENT = 1.5
@@ -647,9 +668,9 @@ _BACKSTOP_S = 10.0
 # the bound.
 _REPEATS = 3
 # A timing can be off by one tick either way, so a small arm N ticks long can read up to
-# N/(N-1) of its true ratio. Linux and macOS thread_time is fine-grained and the floor above is
-# thousands of ticks there, but Windows' thread_time advances in 15.625 ms steps
-# (GetThreadTimes; get_clock_info claims 1e-7 s). Five ticks caps that at 1.25x, which keeps
+# N/(N-1) of its true ratio. Linux and macOS user time moves in steps under a millisecond and the
+# floor above is tens of them, but Windows' CPU times advance in 15.625 ms steps
+# (GetProcessTimes and GetThreadTimes; get_clock_info claims 1e-7 s). Five ticks caps that at 1.25x, which keeps
 # the worst linear reading of the A/B (29x) under the bound (36x against 64x).
 _TICKS_PER_ARM = 5
 _TICK_PROBE_BUDGET_S = 0.2
@@ -677,16 +698,23 @@ def _clock_tick(clock, budget_s=_TICK_PROBE_BUDGET_S, min_reads=_TICK_PROBE_MIN_
     return moves[1] if len(moves) == 2 else 0.0
 
 
-def _growth_ratio(prefix, unit, suffix, scan=_scan, clock=time.thread_time):
+def _growth_ratio(prefix, unit, suffix, scan=_scan, clock=_user_cpu_time):
     """Time `scan` on the shape at a calibrated size n and at _GROWTH_FACTOR * n; return
     (t_n, t_large).
 
-    The clock is this thread's CPU time, not the wall: on a loaded host the wall also counts
-    every interval the scan sat preempted, and the longer arm absorbs more of that, so a linear
-    scan read 9-12x at load ~26 on 16 cores. The two arms then ALTERNATE, each keeping its fastest
-    pass: measured one after the other, a load that changes during the test lands on one arm only.
-    The minimum filters a transient stall without hiding real quadratic growth - a slow pass
-    recurs on every repeat, a stall does not.
+    The clock is USER CPU time, not the wall and not thread_time. The wall also counts every
+    interval the scan sat preempted, and the longer arm absorbs more of that, so a linear scan
+    read 9-12x at load ~26 on 16 cores. thread_time also counts the kernel's time, and the large
+    arm faults in fresh pages on every scan where the small one reuses its buffers, so a linear
+    scan read 24-27x at load ~20 and over the bound on macOS runners.
+
+    The small arm is _GROWTH_FACTOR back-to-back scans, so both arms span the same window: a
+    single short pass can run entirely in a fast moment of the runner, a long one only averages
+    it, and keeping each arm's fastest pass then favoured the small arm - a linear scan read
+    65.5x on macos-latest. The arms ALTERNATE, each keeping its fastest pass: measured one after
+    the other, a load that changes during the test lands on one arm only. The minimum filters a
+    transient stall without hiding real quadratic growth - a slow pass recurs on every repeat, a
+    stall does not.
 
     A large pass over the backstop returns at once: no stall turns linear work into that much
     CPU time, and repeating it would only make a regression slower to report."""
@@ -696,7 +724,8 @@ def _growth_ratio(prefix, unit, suffix, scan=_scan, clock=time.thread_time):
     large = _sized_case(prefix, unit, suffix, _GROWTH_FACTOR * length)
     t_n = t_large = None
     for _ in range(_REPEATS):
-        s, b = _timed(small, scan, clock), _timed(large, scan, clock)
+        s = _timed(small, scan, clock, count=_GROWTH_FACTOR)
+        b = _timed(large, scan, clock)
         t_n = s if t_n is None else min(t_n, s)
         t_large = b if t_large is None else min(t_large, b)
         if b > _BACKSTOP_S:
@@ -782,17 +811,82 @@ def test_the_default_clock_does_not_count_time_the_thread_is_not_running():
     assert clock() - start < 0.05, clock
 
 
+def test_the_default_clock_does_not_count_the_kernel_time_of_page_faults():
+    """thread_time counts the kernel's time as well, and only the large arm pays much of it: a
+    text that size makes the scan allocate buffers fresh from the OS and fault in every page,
+    while the small arm's buffers are reused. At load ~20 on 16 cores, flattened_pem_run's large
+    arm spent a third of its thread_time in the kernel and the small arm none, so a linear scan
+    read 24-27x through thread_time and 15-18x through user time; on macos-15-intel the large
+    arm's kernel time rose sevenfold for seconds at a time. What the bound guards - a regex or a
+    loop growing faster than the text - runs in user mode. Faulting in fresh pages stands in for
+    the kernel time here: a new anonymous mapping each round, because an allocator may hand a
+    freed buffer straight back (glibc does for 32 MB) and then nothing faults."""
+    clock = inspect.signature(_growth_ratio).parameters["clock"].default
+    size = 64 * 1024 * 1024
+    touch = b"\x01" * len(range(0, size, mmap.PAGESIZE))
+    user_start, thread_start = clock(), time.thread_time()
+    for _ in range(64):
+        with mmap.mmap(-1, size) as fresh:
+            fresh[:: mmap.PAGESIZE] = touch
+        if time.thread_time() - thread_start > 0.25:
+            break
+    spent = time.thread_time() - thread_start
+    assert clock() - user_start < 0.5 * spent, (clock() - user_start, spent)
+
+
+class _VaryingSpeedClock(_VirtualClock):
+    """A virtual clock on a runner whose speed wanders: work done inside the window
+    [fast_from, fast_from + fast_for) runs `speedup` times faster than anywhere else."""
+
+    def __init__(self, fast_from, fast_for, speedup):
+        super().__init__()
+        self.fast_from = fast_from
+        self.fast_until = fast_from + fast_for
+        self.speedup = speedup
+
+    def work(self, nominal_s):
+        while nominal_s > 0:
+            if self.fast_from <= self.now < self.fast_until:
+                done = min(nominal_s, (self.fast_until - self.now) * self.speedup)
+                self.now += done / self.speedup
+            else:
+                done = nominal_s if self.now >= self.fast_until else min(nominal_s, self.fast_from - self.now)
+                self.now += done
+            nominal_s -= done
+
+
+def test_a_fast_moment_inside_one_short_pass_does_not_inflate_a_linear_ratio():
+    """A 20 ms pass samples the runner's speed at one moment; a pass 16x longer averages it. On
+    macos-26, single small passes of flattened_pem_run ran at 160-520 ns/char, and CI read a
+    linear scan at 65.5x (t_n 10.1 ms, half the 20 ms floor) because the small arm kept a pass
+    that ran entirely in a fast moment while every large pass averaged it away. Here one 15 ms
+    stretch runs 3x fast, right where the first small pass starts. The small arm has to span as
+    long a window as the large one, so the stretch is a share of either arm's time, never all of
+    the small arm's."""
+    calibration_s = 0.025
+    clock = _VaryingSpeedClock(fast_from=calibration_s, fast_for=0.015, speedup=3.0)
+
+    def linear(text):
+        clock.work(calibration_s * len(text) / _START_LEN)
+
+    t_n, t_large = _growth_ratio("", "a", "", scan=linear, clock=clock)
+    assert t_large / t_n < 1.25 * _GROWTH_FACTOR, (t_n, t_large, t_large / t_n)
+
+
 def test_a_linear_scan_measured_while_load_rises_still_reads_linear():
     """Measuring every small pass before every large one confounds the arm with the moment it
-    ran: a load that climbs during the test inflates only the later, larger arm. Here each scan
-    costs 2x the one before it; interleaved arms read a true 16x as 32x, under the bound, while
-    sequential ones read it as 128x."""
+    ran: a load that climbs during the test inflates only the later, larger arm. Here the load
+    doubles with every 0.8 s of work the test gets through, once per repeat of the two arms;
+    interleaved arms read a true 16x as 23x, under the bound, while sequential ones read it as
+    91x. The load follows the work done, not the clock, because a cost that raises the load it
+    is charged at runs away."""
     clock = _VirtualClock()
-    load = [1.0]
+    work_done = [0.0]
 
     def linear_under_rising_load(text):
-        clock.spend(_PLANTED_BASE_S * (len(text) / _START_LEN) * load[0])
-        load[0] *= 2.0
+        nominal = _PLANTED_BASE_S * (len(text) / _START_LEN)
+        clock.spend(nominal * 2.0 ** (work_done[0] / 0.8))
+        work_done[0] += nominal
 
     t_n, t_large = _growth_ratio("", "a", "", scan=linear_under_rising_load, clock=clock)
     assert t_large / t_n < _MAX_LINEAR_RATIO, (t_n, t_large)
@@ -802,8 +896,8 @@ _WINDOWS_TICK_S = 0.015625
 
 
 class _TickingClock:
-    """A virtual clock read through a coarse tick, as Windows' thread_time is: GetThreadTimes
-    advances in 15.625 ms steps while get_clock_info claims 1e-7 s. Each read also moves time
+    """A virtual clock read through a coarse tick, as Windows' CPU clocks are: GetProcessTimes
+    and GetThreadTimes advance in 15.625 ms steps while get_clock_info claims 1e-7 s. Each read also moves time
     by a microsecond, so a spin over it sees the tick the way it would on the real clock."""
 
     def __init__(self, offset=0.0, tick=_WINDOWS_TICK_S):
@@ -862,11 +956,11 @@ def test_a_coarse_clock_does_not_inflate_a_linear_ratio(step):
 
 
 def test_a_linear_scan_across_a_loaded_cache_step_still_reads_linear():
-    """A string outgrowing a cache steps its per-char cost up, and on a loaded host the other
-    processes contend for that cache, so the step grows: flattened_pem_run measured 128 ns/char
-    at 400k chars and 231 ns/char at 800k at load ~25 on 16 cores, a 1.8x step where a quiet
-    host shows 1.4-1.5x. The contention is sustained, so neither the CPU clock nor the fastest
-    pass filters it. A step of 2x landing between the arms is linear work and must read as such."""
+    """A per-char cost that steps up between the two sizes is still linear work. flattened_pem_run
+    read 128 ns/char at 400k chars and 231 ns/char at 800k through thread_time at load ~25 on 16
+    cores, a 1.8x step, most of it page faults the user-time clock does not count. A step that
+    is sustained is filtered by neither the clock nor the fastest pass, whatever causes it, so a
+    step of 2x landing between the arms must read as linear."""
     clock = _VirtualClock()
 
     def linear_with_loaded_cache_step(text):
