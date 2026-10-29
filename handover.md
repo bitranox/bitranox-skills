@@ -1,14 +1,16 @@
-# Handover - 2026-10-29 21:40, backlog sweep wave 1 shipped (10.5.0, 10.5.1)
+# Handover - 2026-10-29 22:30, sweep wave 1 shipped, [200] triaged
 
 ## In flight
 
 - The user's scope decision (main checkout EXECUTION-USER-REVIEW.md, "2026-10-29 Backlog sweep
   scope"): work every open OPEN-WORK item, skip only items waiting on something outside the
   session. Wave 1 is done: 34 items closed in 10.5.0, a Windows fix in 10.5.1, CI green on both.
-- Wave 2 is next: [200], the contribution-queue triage (302 entries in 28 queues, measured).
-- Three user decisions are owed, to be asked one at a time: [28] backlog_ask regex-first-then-Jev
-  (recommended: stay regex-only); [510] (4) bridge OSError exit 1 vs 2 (agent recommends 2);
-  [510] (5) memory_add body optional on an update (agent recommends optional).
+- Wave 2 ([200] triage) is done: 310 entries classified, 72 SHIPPED/STALE closed; 229 ACTIONABLE
+  and 9 NEEDS-USER remain (notes: main checkout .plan/contrib-triage-2026-10-29/).
+- [28] closed: the user chose "Stay regex-only (Recommended)" (EXECUTION-USER-REVIEW.md).
+- User decisions still owed, one at a time: [510] (4) bridge OSError exit 1 vs 2 (agent
+  recommends 2); [510] (5) memory_add body optional on an update (agent recommends optional);
+  then the 9 NEEDS-USER triage entries.
 - Still owed by the USER: install the current plugin (`/plugin marketplace update
   bitranox-skills`, then `/reload-plugins`); the cache here is behind origin.
 
@@ -33,8 +35,9 @@
 
 ## Next action
 
-Ask the [28] question, then start [200]: `contrib_queue.py queues`, fan the 28 queues out to
-triage (already shipped / stale / actionable / needs user).
+Wave 3: group the 229 ACTIONABLE entries by target file or skill (awk over the notes' plan
+column), fan batches out to worktree agents, integrate, release, then ship each entry with
+`contrib_queue.py ship queue_key:<key> --match <text> --note <version>`.
 
 ## How to verify
 
