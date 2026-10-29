@@ -30,6 +30,14 @@ a hole nobody has drawn a line under is one that gets rediscovered and half-fill
 two "versions with no entry" notes came to sit in this file disagreeing with it.
 
 
+## [10.5.2]
+
+### Fixed
+
+- `coding-python-layered-config`: `DeployPermissions.for_layer` is shown with the `Layer` enum
+  (`Layer.APP`, `Layer.HOST`, `Layer.USER`) that a pyright-strict caller must pass, and the
+  paragraph says that a `DeployMode`'s `.value` is the int mode. Mirrored from lib_layered_config.
+
 ## [10.5.1]
 
 ### Fixed
