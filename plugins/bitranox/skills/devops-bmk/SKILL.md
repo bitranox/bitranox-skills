@@ -454,7 +454,7 @@ forwarded (e.g. `make push fix login bug`). Most have short aliases.
   then `make push` is gated; a `git push` after the bump is not. In a script or by hand, run
   `make test` again on the bump commit and refuse to push when it fails or leaves the tree dirty
   (commit what it changed, then gate again). `make bump-*` renames the CHANGELOG's `[Unreleased]`
-  heading and syncs `__init__conf__.py` and `plugin.json`, so of these pins only the SKILL.md
+  heading to `## [X.Y.Z] - YYYY-MM-DD` (Keep a Changelog, no time of day) and syncs `__init__conf__.py` and `plugin.json`, so of these pins only the SKILL.md
   floors can fail (the other pins fail after a hand or script bump): nothing in bmk edits a
   SKILL.md, so raise its `uvx` floors yourself, in the same release commit.
   In a release, and in a sweep over several repos, also gate BEFORE the bump: run `make test`,

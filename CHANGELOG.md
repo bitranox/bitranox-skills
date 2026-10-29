@@ -86,6 +86,8 @@ two "versions with no entry" notes came to sit in this file disagreeing with it.
   hooks); stamp and baseline refreshed.
 - `docs/architecture.md`'s hook table lists every registered hook script, pinned by
   `test_architecture_hook_table.py` in both directions and by event.
+- `devops-bmk`: `make bump-*` writes the CHANGELOG heading as `## [X.Y.Z] - YYYY-MM-DD` (Keep a
+  Changelog, no time of day).
 - `meta-context-watcher` and `meta-self-improve`: name the in-session MCP tools
   (`backlog_list`/`backlog_add`/`backlog_close`, `memory_add`) and their limits; a capture from a
   temporary worktree passes the main checkout's path as the level.
