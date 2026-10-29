@@ -133,7 +133,42 @@ feeds only models stays green. The `MockValSer` failure is a plain `TypeError`, 
 `PydanticSerializationError`, so a handler catching Pydantic's error class misses it. If a payload
 field must be renamed because its natural name shadows a `BaseModel` attribute (`schema` emits a
 `UserWarning`: *Field name "schema" ... shadows an attribute in parent "BaseModel"*), keep the
-wire key with `schema_: str = Field(serialization_alias="schema")` and dump with `by_alias=True`.
+wire key as an alias of `schema_` and configure it as the next section says, so the default dump
+emits `schema` too; passing `by_alias=True` at each call covers only the calls that remember it.
+
+### A wire name that differs from the field name needs three settings
+
+When a field's wire name differs from its Python name (a reserved word such as `not` becoming
+`not_`, or `schema` becoming `schema_`), the model needs all three: the first so the DEFAULT dump
+uses the wire name, the other two so the field name stays usable as the constructor keyword:
+
+```python
+from pydantic import BaseModel, ConfigDict, Field
+
+class Not(BaseModel):
+    model_config = ConfigDict(serialize_by_alias=True, validate_by_name=True)
+
+    not_: Condition = Field(validation_alias="not", serialization_alias="not")
+```
+
+- **`serialize_by_alias=True` in `model_config`** (pydantic 2.11 and later). Without it,
+  `model_dump()` / `model_dump_json()` with no arguments emit the FIELD name (`not_`); only a call
+  passing `by_alias=True` uses the alias. An explicit `by_alias=False` still overrides the config.
+  The setting resolves PER MODEL: a nested model that sets it emits its alias inside a parent that
+  does not, and a parent that sets it does not fix a nested model that lacks it.
+- **The split pair `validation_alias=` plus `serialization_alias=`, never a plain `alias=`.** Under
+  pyright strict a plain `alias="not"` makes the synthesized `__init__` accept only the alias, so
+  `Not(not_=x)` fails with `No parameter named "not_"`, even with `validate_by_name=True`. The split
+  pair keeps `not_` as the constructor keyword while the alias governs the wire both ways.
+- **`validate_by_name=True`**, so `Not(not_=x)` also validates at RUNTIME: with a
+  `validation_alias` and no such setting, construction by field name raises `Field required`. It
+  is the 2.11+ name for this; the older `populate_by_name=True` does the same, but pydantic marks it
+  not recommended and due for deprecation in v3.
+
+Prove it by dumping with NO arguments and validating that output against the wire contract the
+consumer reads (its JSON Schema or a recorded fixture). A round-trip test written with
+`by_alias=True` passes whether or not the config is set, and the no-argument dump is the path a
+persistence layer actually takes, so it is the one to test.
 
 ### A discriminated union tags on the Enum MEMBER, not a copy of its value
 

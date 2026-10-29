@@ -30,6 +30,32 @@ a hole nobody has drawn a line under is one that gets rediscovered and half-fill
 two "versions with no entry" notes came to sit in this file disagreeing with it.
 
 
+## [10.3.30]
+
+### Changed
+
+- `process-agents-subagent-driven-development`: a plan-mandated finding is decided by what its fix
+  changes. A fix that only makes the plan's code obey a rule the plan states, or only adds tests,
+  is applied and logged in `EXECUTION-USER-REVIEW.md` with a reopen-if line; a fix that changes
+  what the plan text requires still goes to the human. The pre-flight plan review and the BLOCKED
+  "plan is wrong" step route by the same test. Tests written from the plan cannot catch a defect
+  in it, so the reviewer gets the shipped code and may contradict the plan, and a regression test
+  must fail with the defect put back (`mutation_arm`).
+- `process-test-design`: gate on the capability the code needs, not the platform or the package
+  import; a sqlite extension load needs `enable_load_extension`, which some interpreter builds
+  lack. Size a red CI cell from the job log's `FAILED` lines.
+- `coding-python-enforce-data-architecture-strict`: a wire name that differs from the field name
+  needs `serialize_by_alias=True`, the `validation_alias` / `serialization_alias` pair and
+  `validate_by_name=True`; prove it with the no-argument dump.
+- `meta-claude-hooks`: replay real history before shipping ANY rule change in an always-running
+  hook, over the corpus that rule reads, and check what a widened region opener swallows.
+  `references/events.md`: `defer` suspends one pending tool call and cannot gate completed work;
+  what a resume does with it; who sees `permissionDecisionReason` for each decision.
+- `compuse-bash`: a total piped through `xargs` is one batch's; aggregate the data once.
+- `compuse-toolbox`: with a long dispatched run on the same sha, `ci_wait` needs `--event push`.
+- `devops-bmk`: a stage missing from a failed run never ran; list every `(exit code:` marker and
+  place each silent stage by its order.
+
 ## [10.3.29]
 
 ### Fixed

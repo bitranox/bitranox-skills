@@ -145,8 +145,11 @@ Subagent (general-purpose):
     If the plan or brief explicitly mandates something this rubric calls a
     defect (a test that asserts nothing, verbatim duplication of a logic
     block), that IS a finding  -  report it as Important, labeled
-    plan-mandated. The plan's authorship does not grade its own work; the
-    human decides.
+    plan-mandated. The plan's authorship does not grade its own work, and
+    tests written from the plan share its assumptions, so their passing is
+    no evidence the plan is right. Report it; the controller decides who
+    settles it (a fix that changes what the plan text requires goes to the
+    human).
     Acknowledge what was done well before listing issues  -  accurate praise
     helps the implementer trust the rest of the feedback.
 

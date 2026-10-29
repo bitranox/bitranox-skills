@@ -382,6 +382,15 @@ Three traps no `--help` covers live in `references/` (load them with the Read to
   still running, and misreading it costs a re-tag of a published version or a debug session on
   green code.
 
+- **`ci_wait` beside a long dispatched run on the same sha: wait for push CI with
+  `--event push`.** With no `--event` the wait counts every run on the sha except a scheduled one,
+  so a `workflow_dispatch` run started on the pushed commit (an integration or benchmark workflow
+  that takes an hour) is counted too: the default wait ends `timeout` (exit 2) while every push
+  job is already green, and the summary names only that run (`<workflow>=in_progress`). Wait for
+  push CI with `--ref HEAD --event push`, and watch the dispatched run separately with a deadline
+  sized to that workflow: a second `ci_wait --ref HEAD --event workflow_dispatch --timeout <s>`,
+  or `gh run watch <run-id> --exit-status` under `timeout`.
+
 - **The others encode the trap.** `ci_triage` strips ANSI, isolates a step (exit 2 if the step is absent, never a silent whole-log fallback) and fails a `--cmd` that exits non-zero even when it printed no keyword; `ci_wait` refuses
   a short sha before it polls, so the loop cannot spin on a filter that matches nothing; `jsonl_grep` parses
   JSONL by field, not by fragile text slicing.

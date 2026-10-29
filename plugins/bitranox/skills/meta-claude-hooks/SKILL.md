@@ -141,6 +141,9 @@ approved by typing it.
 
 ## Before you escalate a nudge to a block, price it
 
+The replay below is not only for escalations: it also gates a new nudge and any rule change in an
+always-running hook (both covered after the five checks below).
+
 A guard that only warns is easy to escalate on the argument that it demonstrably does not bind: the
 recurrence count sits right there and every new hit reads as more evidence. That count is not the
 number that decides it. What decides whether a block is an improvement is its PRECISION - of the
@@ -197,6 +200,20 @@ stated justification; at several percent it is a dead nudge and drags its workin
 with it, because a channel that speaks on ordinary work teaches the reader to skip it. The failure
 is invisible from inside the design: every firing matches the pattern you wrote, so each one looks
 correct on its own and only the rate shows it.
+
+The same kind of replay gates ANY rule change in a hook that runs every session, escalation or not:
+a guard predicate, a signal pattern a hook helper scans for, an exclusion or discount clause. Replay
+it over the corpus that rule reads: Bash calls through `guard_replay`, typed prompts through
+`corpus_prompts`, transcript text through `jsonl_grep`. The unit tests cover the cases you thought
+of; the hook runs over every session, and a green suite can sit beside a changed rule that reports
+many more candidates, most of them noise. Classify every firing the change ADDS or REMOVES (the
+firing-set diff above), not a sample, reading each against its source transcript. A widening is not
+safe by being a fix: a loosened exclusion over-reaches just as a narrowed matcher goes blind. For
+a rule that defines a REGION (a heredoc body, a fence, a quoted span), check what the widened
+OPENER swallows, not only what it now matches: the region runs to its delimiter, so an opener that
+matches too much silences every later line. Measured: dropping the "opener names a test file"
+clause let a bare `<<` match a C++ shift operator, and one `cout << x` in a source listing
+suppressed the rest of that file.
 
 A rule keyed on what the person TYPED (a router trigger, a prompt-matching nudge) gets the same
 firing-set replay over the prompt corpus with `corpus_prompts.py` (home:

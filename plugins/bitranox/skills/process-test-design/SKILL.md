@@ -127,6 +127,27 @@ it, so a `--pythonplatform Windows` check still reports `geteuid` as not a known
 condition that touches an optional dependency is the same trap: import-guard it rather than call
 into it.
 
+**Gate on the capability the code needs, not on the platform or the package import.** The rule
+above says what is safe to EVALUATE at import; this one says what to gate ON. Use `sys.platform`
+when the API really is per-OS (`os.geteuid`). When the feature depends on how the interpreter was
+BUILT, the OS is the wrong axis: `sqlite3.Connection.enable_load_extension` exists only in a
+CPython built with loadable sqlite extensions, so code loading sqlite-vec, spatialite or sqlean
+fails on any other build with
+`AttributeError: 'sqlite3.Connection' object has no attribute 'enable_load_extension'`.
+Observed example: the python.org macOS framework build (what
+`actions/setup-python` has installed on macOS runners) lacks it, while Homebrew and uv-managed
+interpreters have it, so the failure appears when a CI cell changes interpreter.
+`importorskip("sqlite_vec")` does not cover it (the package imports fine), and a
+`sys.platform == "darwin"` skip is wrong both ways: it skips a macOS interpreter that works and
+runs on any other build without the feature. In the production code, probe
+`hasattr(conn, "enable_load_extension")` before the call and raise an error that names the
+interpreter as the cause; in the tests, skip on the same capability asked of the class,
+`hasattr(sqlite3.Connection, "enable_load_extension")`, since a `skipif` is evaluated at import,
+before any connection exists (a `hasattr` is fine here: pyright knows the method either way, so
+there is no narrowing to lose). When such a cell turns red, size the damage from the job log
+itself, not from a summary someone wrote of it: count every `FAILED` line, since a summary usually
+names only the tests its author looked at.
+
 Watch for two families that mean the same thing - one wired, one not. A repo that carries both
 (`posix_only`/`windows_only` wired to a real skip, and `os_posix`/`os_windows` registered and inert)
 hands you a coin flip. Fix that at the root by wiring the unwired family, not by renaming the

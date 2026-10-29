@@ -545,6 +545,22 @@ is `update_deps`, which runs the `deps_update` pipeline, so the block is
 Precedence: `--human` (forces text) > `BMK_OUTPUT_FORMAT` > default (`json`). If a run "does nothing
 visible", that is JSON mode succeeding -- add `--human` to watch it work.
 
+**A stage missing from a failed run is not a stage that passed.** Order groups run one after
+another and the first group with a failure ends the run, so no stage of a LATER group ran at all.
+Inside the failing group every stage ran, and each failing one prints its own
+`[<stage>] (exit code: N)` block while a passing one prints nothing (in the default JSON mode; text
+mode streams every stage's output, but writes the same markers). So list every marker
+(`grep -n '(exit code: '` on the saved log) rather than reading the tail, then place each silent
+stage by its order: the same order as a marker means it ran and passed, a later order means it
+never ran and tells you nothing. In `make test` every read-only check (`bandit`, `lint_imports`,
+`pip_audit`, `pyright`, `pytest`, `ruff_format_check`, `ruff_lint`, `psscriptanalyzer`, and
+`shellcheck`, which also runs shfmt and bashate) shares order 40, so a failure in `update_deps`,
+`uv_lock` or a ruff apply stage leaves all of them unrun. In `make push` the `test` stage runs that
+whole pipeline inside itself, so the grep lists the outer `[test]` marker beside the inner ones
+(`[pytest]`, say); place each stage by the order numbers of its own pipeline, and read a failing
+`test` as nothing committed or pushed. After each fix, re-run the whole gate and expect the next
+group down to fail: on a repo no gate has passed for a while, failures are stacked.
+
 **An outdated Makefile is handled by output mode, and an unanswered terminal hangs.** Before every
 command except `install`, bmk compares the Makefile's `# BMK MAKEFILE <ver>` with itself. When the
 versions differ, only `BMK_OUTPUT_FORMAT` decides (`--human` and `make test-human` do not count:

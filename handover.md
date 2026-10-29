@@ -1,41 +1,48 @@
-# Handover - 2026-10-29, [23] batch 8 pass 1 archived, pass 2 waits on one user decision
+# Handover - 2026-10-29 11:35, [23] batch 8 pass 2 shipping as 10.3.30
 
 ## In flight
 
-- [23] batch 8 (KI levels) pass 1 is COMPLETE: shipped as 10.3.28 (d4b4077e), bmk twin 527f82f
-  (plugin.json 3.32.1), and the 24 folded facts archived in the memory store (22ba62e, pushed).
-  The 25th (never-capture-a-negative-tool-claim) was already archived by a peer dream.
-- Pass 2 (the 8 FOLD+cut rows) has not started. Its data: the main checkout's gitignored
-  `.plan/fold-23/batch8/dispositions.json` (rows with disposition FOLD+cut).
-- This worktree (`.claude/worktrees/fold-23-b7p2`): handover.md and the [23] line in
-  OPEN-WORK.md are committed in the same change as this file.
+- [23] batch 8 pass 2: the 8 FOLD+cut rows are folded into 7 skills and go out as 10.3.30 (this
+  commit), with the devops-bmk twin in the bmk repo at plugin.json 3.32.2. Data: the main
+  checkout's gitignored `.plan/fold-23/batch8/pass2/` (results.json = the fold run's rows incl.
+  each editor's short_hook; green2-*.json = round-2 quotes; pass2.diff / pass2-r1.diff = before
+  and after the review fixes).
+- Commit order for the mirrored pair: this worktree commits first, then bmk, then push this
+  worktree (`git push origin HEAD:master`), then bmk.
+- After the user installs 10.3.30: quote-check the installed copy of the 9 changed skill files,
+  then cut the 8 pointers (see Next action).
 
 ## Decided
 
-- bmk's own marketplace bumps plugin.json on every pushed skill change, even ahead of its
-  pyproject version (bmk's sync only raises it): 3.32.1 at pyproject 3.32.0 is correct.
+- USER 2026-10-29 ("Fix and log narrow cases (Recommended)", logged verbatim in the main
+  checkout's EXECUTION-USER-REVIEW.md): SDD fixes and logs a plan-mandated finding whose fix only
+  makes the plan's code obey a rule the plan states or only adds tests; a fix changing the plan
+  text still goes to the user. Pre-flight review and BLOCKED step 4 follow the same test.
+- Declined (delta review N4): changing task-reviewer-prompt.md's "plan-mandated rubric defect is
+  Important" grading. It is a severity rule the user's decision did not cover; the skill now says
+  it defers to that template.
+- bmk's plugin.json is bumped on every pushed skill change even ahead of pyproject.
 
-## Open decision (ask the user, one question, before pass 2)
+## Still open, untouched
 
-- `feedback-tests-written-from-a-plan-cannot-catch-a-defect-in-the-plan` (tree top) says a
-  plan-mandated fix that only makes code obey a rule the plan states, or only adds tests, is fixed
-  and logged; process-agents-subagent-driven-development SKILL.md says every plan-mandated
-  finding is the human's decision. The fold would change the skill's policy.
+- Everything else: `OPEN-WORK.md`.
 
 ## Next action
 
-Put the open decision above to the user as one AskUserQuestion. Then run pass 2 with the
-skill-writer flow used for pass 1 (skill_receipt start, snapshots, RED, editors, GREEN, qcheck,
-review, checklists, CHANGELOG + bump, repo-gate --ci, push, CI; after install: quote-check,
-ref_map + citer grep, store_manifest backup, archive, verify, store commit).
+After CI is green and the user installs 10.3.30: diff the installed skill files against this
+commit; take a `store_manifest.py backup --scope tree`; for each of the 8 slugs, find the owning
+level (`find /media/srv-main-softdev -name CLAUDE.local.md -not -path "*/.claude-memory/*" -exec
+grep -l "mem:<slug>" {} \;`) and apply its short hook with `factedit.py apply --slug S --level L
+--hook-file f`, trimming the gate-hook one (304 chars) to 300; `--check-tree`; commit and push
+the store with own paths only. Then update the [23] line and propose the next level group.
 
 ## How to verify
 
-- Store: `reconcile_memory_index.py --check-tree /media/srv-main-softdev` reports
-  `TOTAL tree problems: 0`; no pointer `(mem:<slug>)` for the 24 slugs in
-  `.plan/fold-23/batch8/pass1/` remains in any CLAUDE.local.md.
-- CI for 10.3.28: `ci_wait.py --sha` with the full sha of d4b4077e.
+- `python3 plugins/bitranox/hooks/repo-gate.py --mirror-of /media/srv-main-softdev/projects/public/apps/utils/bmk`
+- CI: `ci_wait.py --ref HEAD --event push` from compuse-toolbox.
 
 ## Lessons for the next nap
 
-- (none open)
+- When a delta review asks to change a rule beyond the scope of the user's decision (a severity
+  grading next to a routing rule), decline it with the reason and make the text defer explicitly,
+  rather than widening the change silently.

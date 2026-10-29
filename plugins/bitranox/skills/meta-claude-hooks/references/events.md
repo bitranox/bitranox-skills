@@ -181,7 +181,7 @@ Decision control via `hookSpecificOutput`:
 | Field                      | Values / effect                                                                                                                                  |
 |----------------------------|--------------------------------------------------------------------------------------------------------------------------------------------------|
 | `permissionDecision`       | **`allow`, `deny`, `ask`, `defer`**. Deny and ask **rules** are evaluated whatever the hook returns, so `allow` never loosens them               |
-| `permissionDecisionReason` | for `allow` and `ask`, shown to the **user**, not Claude; for `deny`, shown to **Claude**; ignored for `defer`                                   |
+| `permissionDecisionReason` | for `ask`, shown to the **user**, not Claude; for `deny`, shown to **Claude**; for `allow` and `defer`, written to the debug log only            |
 | `updatedInput`             | replaces the **whole** input object - include the unchanged fields. Permission rules are evaluated against what you return, not what Claude sent |
 | `additionalContext`        | extra context, delivered next to the tool result                                                                                                 |
 
@@ -196,6 +196,16 @@ deprecated on this event (`approve` and `block` map to `allow` and `deny`).
 - **`defer` works only under `-p` and only for a single tool call in the turn.** In an interactive session it is
   logged and ignored; with several tool calls in the turn it is ignored and the call proceeds through the normal
   permission flow. Either way it is not a deny.
+- **`defer` suspends one PENDING tool call, not a unit of work.** The tool does not run, the run stops with
+  stop_reason `tool_deferred`, a `hook_deferred_tool` record is written to the session transcript, and the
+  process exits. No event can suspend at turn END: `defer` exists only on PreToolUse, and a Stop `block`
+  continues the turn in the same process. So `defer` cannot gate work that is already complete (a report written,
+  the turn ended); that would need the model to emit a sentinel tool call: a gate that fires only if the agent
+  follows the prose telling it to. Observed on CLI 2.1.251 on resume in a fresh process: the SAME tool_use id
+  re-enters PreToolUse (a replay, not the model deciding again). Per the official hooks doc: a `-p` resume does
+  not restore the stored permission mode (pass it again; plan mode has its own route via
+  `--permission-prompt-tool`), and a tool that is gone by then ends the resume as `tool_deferred_unavailable`
+  while the call stays pending; it is dropped once a prompt is sent, with the resume or after it.
 
 Exit 2 blocks regardless of JSON. Staying silent (exit 0, no output) does **not** approve: the call continues
 through the normal permission flow. A hook can deny; it cannot rubber-stamp by silence.

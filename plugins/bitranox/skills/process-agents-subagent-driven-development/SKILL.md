@@ -96,10 +96,17 @@ Before dispatching Task 1, scan the plan once for conflicts:
 - anything the plan explicitly mandates that the review rubric treats as a
   defect (a test that asserts nothing, verbatim duplication of a logic block)
 
-Present everything you find to your human partner as one batched question  - 
-each finding beside the plan text that mandates it, asking which governs  - 
-before execution begins, not one interrupt per discovery mid-plan. If the
-scan is clean, proceed without comment. The review loop remains the net for
+Route each finding by what its fix would change, the same test the review
+loop applies to a plan-mandated finding. A fix that only makes a task obey a
+rule the plan itself states (a Global Constraint, say) or only adds tests is
+yours: log it in `EXECUTION-USER-REVIEW.md` with a reopen-if line and pass it
+to that task's implementer as an earlier finding. Choosing between two tasks
+that contradict each other always changes the plan text, so it is never
+yours. Present the rest, the findings whose fix changes what the plan TEXT
+requires, to your human partner as one batched question  -  each finding
+beside the plan text that mandates it, asking which governs  -  before
+execution begins, not one interrupt per discovery mid-plan. If the scan is
+clean, proceed without comment. The review loop remains the net for
 conflicts that only emerge from implementation.
 
 **Plan mode must have ended before the first dispatch.** A subagent dispatched
@@ -292,7 +299,7 @@ Implementer subagents report one of four statuses. Handle each appropriately:
 1. If it's a context problem, provide more context and re-dispatch with the same model
 2. If the task requires more reasoning, re-dispatch with a more capable model
 3. If the task is too large, break it into smaller pieces
-4. If the plan itself is wrong, escalate to the human
+4. If the plan itself is wrong, decide it as for a plan-mandated finding (see the review loop): escalate to the human when the fix changes what the plan text requires
 
 **Never** ignore an escalation or force the same model to retry without changes. If the implementer said it's stuck, something needs to change.
 
@@ -335,6 +342,16 @@ final whole-branch review. When you fill a reviewer template:
   the commit list, stat summary, and full diff with context in one Read
   call. Use the BASE you recorded before dispatching the implementer  - 
   never `HEAD~1`, which silently truncates multi-commit tasks.
+- Tests written FROM the plan encode its assumptions, so they cannot catch
+  a defect IN the plan: when the plan is wrong, the implementation and its
+  tests agree with each other and are wrong together, and the gate stays
+  green. Treat the plan as a hypothesis under review. Give the reviewer
+  the shipped code, not only the brief and the plan: the review package
+  (the diff with its HEAD context), plus an instruction to Read the
+  changed files at HEAD where a hunk is not enough. Say in the dispatch
+  that a finding contradicting the plan is still a finding: it reports it
+  labeled plan-mandated, at the severity the reviewer template's rubric
+  gives it (a rubric defect the plan mandates is Important there).
 - A dispatch prompt describes one task, not the session's history. Do not
   paste accumulated prior-task summaries ("state after Tasks 1-3") into
   later dispatches  -  a real session's dispatch hit 42k chars of which 99%
@@ -360,10 +377,22 @@ final whole-branch review. When you fill a reviewer template:
   that is how one task reached ten fix rounds. A Minor that contradicts a
   user decision goes to the final review flagged for the user.
 - A finding labeled plan-mandated  -  or any finding that conflicts with
-  what the plan's text requires  -  is the human's decision, like any plan
-  contradiction: present the finding and the plan text, ask which governs.
-  Do not dismiss the finding because the plan mandates it, and do not
-  dispatch a fix that contradicts the plan without asking.
+  what the plan's text requires  -  is decided by what its FIX changes.
+  If the fix only makes the plan's code obey a rule the plan itself states
+  elsewhere, or only adds tests, dispatch the fix yourself and log the
+  decision in the git-ignored `EXECUTION-USER-REVIEW.md` at the repo root,
+  with a reopen-if line naming what would make it the human's question
+  after all. Any other fix, one that changes what the plan TEXT requires
+  the task to do, is the human's decision: present the finding and the
+  plan text, ask which governs, and do not dispatch that fix without
+  asking. Never dismiss a finding because the plan mandates it.
+- A regression test that comes with a fix is only a restatement until it
+  FAILS against the defect. Require the fix report to show it failing with
+  the exact defect the fix removes put back: compuse-toolbox's
+  `mutation_arm --revert FILE <pre-fix commit>` runs it against the
+  pre-fix text, or `--mutate` reintroduces the defect, or a copy in a
+  fresh `mktemp -d` dir (see "Proving a Test Can Fail by Mutating Code" in
+  implementer-prompt.md). A test that passes there does not discriminate.
 - The final whole-branch review gets a package too: run
   `python3 "$CLAUDE_PLUGIN_ROOT/skills/process-agents-subagent-driven-development/scripts/review_package.py" MERGE_BASE HEAD` (from the repo under review; MERGE_BASE = the commit the
   branch started from, e.g. `git merge-base main HEAD`) and include the
@@ -398,7 +427,8 @@ and is re-read on every later turn. Hand artifacts over as files:
   names this task. Exit 1 means no such task; exit 2 with a list of
   `line N:` headings means two headings share the id (a plan whose phases
   restart numbering) - never dispatch the pair as one task: ask the human
-  which heading is meant, as for any plan contradiction, and re-run once
+  which heading is meant, as for a plan contradiction whose fix changes
+  the plan text, and re-run once
   the plan gives each its own id.
   Compose the dispatch so the
   brief stays the single source of requirements. Your dispatch should
