@@ -30,6 +30,16 @@ a hole nobody has drawn a line under is one that gets rediscovered and half-fill
 two "versions with no entry" notes came to sit in this file disagreeing with it.
 
 
+## [10.6.1]
+
+### Fixed
+
+- `coding-python-pwshpy`: `elevate()` on POSIX first runs the relaunch interpreter as
+  `<python> -c pass` under `sudo -n` and relaunches with no prompt when that passes; only
+  otherwise does it ask with `sudo -v`. The runner exit-code list now gives 127 for a failed or
+  impossible uv install and, run elevated, an untrusted temporary directory, git configuration
+  file or git. Mirrors pwshpy's `using-pwsh` skill.
+
 ## [10.6.0]
 
 ### Added
