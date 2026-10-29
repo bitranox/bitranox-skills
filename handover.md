@@ -1,20 +1,24 @@
-# Handover - 2026-10-29 15:40, [23] batch 9 (tree top) complete
+# Handover - 2026-10-29 18:00, [23] closed
 
 ## In flight
 
-- Nothing. [23] batch 9 shipped as 10.4.1 (marketplace 237b6aab, bmk 3.32.3 a2195a8, btx_lib_mail
-  4.6.3 143795c), CI green on all three, installed and quote-checked; store 1a03525 archived 9
-  facts, cut 4 hooks and re-pointed 6 citing facts.
-- The `lib_layered_config` peer rebased and pushed its change as 10.4.2 (33da9706).
+- Nothing part-done. [23] (fold memory lines into skills) is finished and its OPEN-WORK line
+  deleted; batch 10 data stays in the main checkout's `.plan/fold-23/batch10/fold/`.
+- Still owed by the USER: install 10.4.3 (`/plugin marketplace update bitranox-skills`, then
+  `/reload-plugins`). The store step was quote-checked against the published origin/master text
+  instead of the installed cache (decision logged in the main checkout's EXECUTION-USER-REVIEW.md,
+  "2026-10-29 [23] batch 10 store step without the install").
+
+## Committed, or not
+
+- All pushed: marketplace 10.4.3, twins bmk 3.32.4, lib_layered_config 7.4.1,
+  bitranox_template_py_lib 2.0.5, umbrella provmm skills, provmm-E2E-tests, memory store.
 
 ## Decided
 
-- USER 2026-10-29 chose "Tree top (Recommended)" for batch 9 (verbatim in the main checkout's
-  EXECUTION-USER-REVIEW.md); one fold round for archive and cut rows (autonomous, logged there).
-- feedback-public-push-review-and-humanize stays a fact (5 inbound refs).
-- Declined review items: the venv lock timeout (already stated in devops-bmk), a second envelope
-  from the Makefile regeneration (its pre-steps run no pipeline), restoring devops-bmk's
-  cross-plugin pointer (the bmk twin installs alone).
+- [23] closed on measurement: `.plan/fold-23/census_next.py` (now aware of batches 9 and 10)
+  reports 0 live unhandled phase-1 FOLD/ALREADY rows.
+- [730] closed on measurement: `--check-tree` reports TOTAL tree problems 0 and no sideways refs.
 
 ## Still open, untouched
 
@@ -22,23 +26,16 @@
 
 ## Next action
 
-[23]: propose the next group to the user (OPEN-WORK.md line for [23], "after batch 9": 20
-soundtouch, 15 provmm-umbrella, 10 projects/public and below), then run the batch 9 flow on it.
+Top-ranked open item [28] in `OPEN-WORK.md` (second wave of Jev sites): read its line and start at
+its `next:` field.
 
 ## How to verify
 
-- `python3 plugins/bitranox/hooks/repo-gate.py --mirrors` (devops-bmk and send-mail in sync).
-- `reconcile_memory_index.py --check-tree /media/srv-main-softdev` reports 0 problems.
+- `python3 plugins/bitranox/hooks/repo-gate.py --mirrors` reports 0 drifted.
+- `reconcile_memory_index.py --check-tree /media/srv-main-softdev` reports TOTAL tree problems 0.
+- `python3 .plan/fold-23/census_next.py` (main checkout) reports live: 0.
 
 ## Lessons for the next nap
 
-- When backing up the memory tree with store_manifest.py, write --out OUTSIDE the tree (the
-  session scratchpad): a backup under the tree adds its copied CLAUDE.local.md files as duplicate
-  levels, and --check-tree then reports one problem per pointer.
-- When a peer session pushes a plugin version while yours is staged, restore only the shared
-  files (CHANGELOG, plugin.json, pyproject) to HEAD, fast-forward, and re-insert your entry under
-  the next number with an assert on the old one.
-- When a peer COMMITS a version bump on the main checkout without pushing, it is invisible to a
-  fetch of origin: check `git log master` in the main checkout before picking a number.
-- tooling: the SessionStart hook after a compaction creates empty CLAUDE.md/CLAUDE.local.md in a
-  gitignored scratch dir under .plan (contrib queued).
+- When a census script decides "handled" from a hard-coded list of batch dirs, add each new batch
+  to that list in the same step that ships it, or the census reports finished work as open.
