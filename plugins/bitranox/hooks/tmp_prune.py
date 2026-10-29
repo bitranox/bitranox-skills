@@ -189,6 +189,14 @@ def scan_tree(path: Path, device_of: Callable[[str, os.stat_result], int] = devi
             has_ipc = has_ipc or stat.S_ISSOCK(info.st_mode) or stat.S_ISFIFO(info.st_mode)
             if not stat.S_ISDIR(info.st_mode):
                 continue
+            # On Windows DirEntry.stat() leaves st_dev at 0 while the top's os.lstat carries the
+            # real volume serial, so every subdir would read as a mount and nothing would prune.
+            if os.name == "nt":
+                try:
+                    info = os.lstat(entry.path)
+                except OSError:
+                    unreadable = True
+                    continue
             if device_of(entry.path, info) != top_device:
                 foreign_mount = True
                 continue

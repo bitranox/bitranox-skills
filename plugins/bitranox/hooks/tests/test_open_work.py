@@ -23,7 +23,8 @@ def _item(rank, state=" ", origin="USER", what="x"):
 
 def _backlog(tmp_path, *lines):
     p = tmp_path / "OPEN-WORK.md"
-    p.write_text(ow.HEADER + "\n".join(lines) + "\n", encoding="utf-8")
+    # Bytes, not write_text: text mode writes CRLF on Windows, and the backlog keeps a file's line end.
+    p.write_bytes((ow.HEADER + "\n".join(lines) + "\n").encode("utf-8"))
     return p
 
 

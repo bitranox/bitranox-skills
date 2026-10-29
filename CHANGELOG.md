@@ -30,6 +30,17 @@ a hole nobody has drawn a line under is one that gets rediscovered and half-fill
 two "versions with no entry" notes came to sit in this file disagreeing with it.
 
 
+## [10.5.1]
+
+### Fixed
+
+- `tmp_prune`: on Windows every subdirectory read as another filesystem mounted inside the
+  scratch dir, so no dir holding a subdirectory was ever pruned: `os.DirEntry.stat()` leaves
+  `st_dev` at 0 there while the top dir's `os.lstat` carries the real volume serial. A subdirectory
+  is now compared through a full `os.lstat` on Windows.
+- `open_work` tests: the LF fixture is written as bytes, so it stays LF on Windows, where text-mode
+  writes produce CRLF.
+
 ## [10.5.0]
 
 ### Added
