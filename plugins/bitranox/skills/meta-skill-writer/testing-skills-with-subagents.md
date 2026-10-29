@@ -278,6 +278,18 @@ Forces explicit choice.
 3. **Real file paths** - `/tmp/payment-system` not "a project"
 4. **Make agent act** - "What do you do?" not "What should you do?"
 5. **No easy outs** - Can't defer to "I'd ask your human partner" without choosing
+6. **A control arm that must DIFFER, plus a should-pass candidate** - when you pressure-test new
+   or changed skill TEXT, run a second arm identical except that the text under test is removed
+   (the RED baseline is that arm when it ran the same scenario), and require the two to behave
+   differently: one passing arm is equally consistent with the text having no effect. Put at
+   least one candidate the rule should ALLOW into the same scenario: an agent that refuses
+   everything passes every should-refuse candidate, and only the allowed one separates
+   discrimination from blanket refusal. When the control behaves like the test arm, the text is
+   NOT verified: check whether the cascade or memory store already teaches the rule (see "So
+   before trusting a RED" under the RED phase), then take one of the two honest routes listed
+   there - a coverage check against the skill file, or a de-telegraphed arm in a domain the
+   cascade does not teach - and name in the review artifact the route you took and the document
+   the control cited.
 
 ### Testing Setup
 

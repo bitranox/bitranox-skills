@@ -48,13 +48,25 @@ digraph when_to_use {
 
 **Size a fan-out by ITEM COUNT, not by prompt size.** A dispatch carries a large FIXED token cost
 independent of what you send it: each one re-pays the system prompt plus the whole CLAUDE.md and
-memory cascade the subagent inherits. Measured on the Agent tool 2026-08-12: 57.5k tokens for an
-inert text-only probe with ZERO tool uses, 73.4k for a general-purpose agent plus one Read. So
-budget a per-item fan-out as item count times about 60k. Sizing it from the prompt instead answers
-low by a factor large enough to make an unaffordable design read as deployable, and a short prompt
-never buys a cheap dispatch. Where the per-item work is small, batch many items into ONE dispatch
-(one agent, the whole list, one structured reply) rather than one agent per item, and keep a
+memory cascade the subagent inherits. Measured on the Agent tool: 57.5k tokens for an inert
+text-only probe with ZERO tool uses, 73.4k for a general-purpose agent plus one Read, against a
+classifier payload of about 1.8k. So budget a per-item fan-out as item count times about 60k.
+Sizing it from the prompt instead answers low by a factor large enough to make an unaffordable
+design read as deployable, and a short prompt never buys a cheap dispatch. A cheaper model tier
+does not shrink it either: the cost is the inherited context, not the reasoning, so "one cheap
+haiku agent per event" is the expensive shape. Where the per-item work is small, batch many items
+into ONE dispatch (one agent, the whole list, one structured reply) rather than one agent per
+item: batching 8 to 9 items into one dispatch measured about 2.9k marginal tokens per item. Keep a
 dispatch of its own for work whose own reasoning is worth more than that fixed overhead.
+
+Two shapes beat any agent per item when the per-item judgement is small: a deterministic
+pre-filter that finds the candidates and hands them, with their evidence, to the main model that
+is already loaded, so the judgement costs no dispatch; or one direct API call with a minimal
+system prompt, the shape for a genuinely cheap classifier. The 60k figure is the in-session Agent
+tool. An Agent SDK child started with no setting sources (`setting_sources=[]`) and a plain system
+prompt does not inherit the cascade and measured under 200 first-turn input tokens; loading the
+project settings or the whole user plugin set brings it back up. Size by the executor you
+actually dispatch.
 
 ## The Pattern
 
@@ -237,12 +249,25 @@ write from it is corrupted silently, because every structural check still passes
 match, the block count is right, and only the characters a version comparison or a shell cares
 about are wrong.
 
-Read the agent's transcript JSONL instead and unescape it. Two things bite while doing that:
+Read the agent's transcript JSONL instead, with a script that extracts only your delimited blocks
+(the file is large; never `cat` it), and unescape it. Several things bite while doing that:
 
 - **A NAMED agent's transcript is not symlinked into the session's `tasks/` directory** - only an
   unnamed one is. A named agent's lives under the session's `subagents/` directory.
 - **Not every record's `message` is a dict.** An unguarded walk dies partway through, AFTER it has
-  already written some blocks, so the output looks truncated rather than failed.
+  already written some blocks, so the output looks truncated rather than failed. Skip a record
+  that fails an `isinstance` check instead of letting it abort the run.
+- **The report may not be a text block.** An agent that delivers through a tool (a hand-back or
+  structured-output tool) leaves its report as the INPUT of its last `tool_use` block. A harvester
+  that reads only the last text block gets an empty string and dies on `json.loads("")`, so read
+  both: the last text block and the string values of the last `tool_use` input.
+- **Undo the neutralized control tag too.** After `html.unescape()`, replace `<\` with `<`: a
+  control tag such as `<system-reminder>` comes back as `<\system-reminder>`, which no unescape
+  restores.
+- **Drop echoed template entries, then count.** Drop any block whose identifier matches no real
+  target: an agent that echoes your return-format template produces a literal `<slug>` entry that
+  would otherwise be written as a file. Then assert the harvested count (every expected item from
+  every agent) before writing anything, because a partial harvest looks like a complete one.
 
 Prose you only read is fine to take from the delivered message; the rule is about text you parse.
 

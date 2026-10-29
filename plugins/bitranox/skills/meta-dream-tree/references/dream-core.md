@@ -284,6 +284,20 @@ Decide which question you are asking from the fact's HOOK and the level's PLACE-
 Record the sighting in the re-home case too - it costs nothing, and the fact may still be a
 genuine promotion candidate later.
 
+**Reading a high tree-top share.** When a placement pass sends most upward moves to the tree top
+and names the intermediate rungs almost never, do not read it as the router skipping rungs. Name
+the rival first: only an ancestor common to EVERY branch the hook fires in can hold a fact, so the
+number of rungs between a fact and the top is not the number that could hold it. In a tree whose
+top-level children are non-nested siblings, a fact firing in two branches has no common ancestor
+narrower than the top, and a lesson about the shell, git, the agent harness or test design fires
+in all of them - there a high top share is the expected reading, and "fixing" it (forcing a
+per-rung walk) aims at a mechanism that is not there. Test it before proposing any fix: adjudicate
+the tree-top proposals against each fact's enumerated ancestor chain. Trust a clean "the top is
+right" result only beside a LIVENESS PAIR: re-present facts already filed at an intermediate rung
+in the same shape and require the adjudicator to return that rung for a clear share of them.
+Without that pair, "the top every time" cannot be told apart from an instrument that cannot answer
+anything else.
+
 ## Verification contract (every run ends with this)
 
 Fail-loud engine calls throughout (strict env, require each command's success line, abort-and-show

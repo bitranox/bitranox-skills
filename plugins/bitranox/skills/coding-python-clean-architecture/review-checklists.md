@@ -42,6 +42,18 @@ Example:
 | A4 | Domain is pure: no framework imports, no logging, no I/O | CRITICAL | `import logging` or `import django` in domain        |
 | A5 | Adapters implement only declared ports                   | MEDIUM   | Adapter adds public methods not on any port          |
 | A6 | Adapters resolve in-package paths locally                | HIGH     | `import <pkg>` in an adapter to read `__file__`      |
+| A7 | Port signatures use app concepts, not one adapter's      | HIGH     | `VerifyPort.run(worktree: Path) -> int`              |
+
+**Judge A7 by the port's TYPE SIGNATURE, not by where the concrete class lives.** Import-linter
+contracts, a layer diagram and a code review all check WHERE a symbol lives; none reads what a
+port's parameters MEAN, so a port can pass every one of them and still bind every future adapter.
+Read each port's signature and ask what a caller from a different domain would pass for every
+parameter and get back. If any answer is "nothing sensible", the port is domain-specific whatever
+the layer diagram says, and no new adapter can free it: `run(worktree: Path) -> int` has already
+decided the work is code in a git checkout judged by a process exit code. A domain term reads as
+neutral plumbing to the people who work in that domain, which is why this survives review. Then
+grep the JSON schemas, shipped config and default policy files for the dependency's name: they are
+part of the contract, and import checks never read them.
 
 ## Reliability
 

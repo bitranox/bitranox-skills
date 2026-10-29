@@ -41,6 +41,7 @@ from ruamel.yaml import YAML
 yaml = YAML()                      # round-trip mode: keeps comments + order
 yaml.preserve_quotes = True
 yaml.indent(mapping=2, sequence=4, offset=2)   # MATCH the file; the default dedents block sequences
+yaml.width = 4096                  # the default re-wraps long plain scalars at about 80 columns
 # A file that writes explicit `key: null` or `key: ~` also needs its null spelling pinned:
 # see "Match the file's null style" below. A file with bare `key:` nulls needs nothing.
 path = Path("traefik/dynamic/services.yml")
@@ -72,7 +73,7 @@ For a quick syntax check of any YAML file without editing:
 ## Round-tripping keeps comments, not layout
 
 The round-trip loader preserves comments and key order, but a plain `YAML()` load-and-dump still
-REFLOWS the document. Two defaults do it, and both are silent:
+REFLOWS the document. Three defaults do it, and all are silent:
 
 - **Block sequences get dedented.** The default indent does not match most hand-written files, so
   every list in the document shifts. Measured: a two-key edit to a 238-line commented file
@@ -80,11 +81,16 @@ REFLOWS the document. Two defaults do it, and both are silent:
 - **Every null is written ONE way, whatever the file had.** A plain `YAML()` writes every null as a
   bare `key:`, so an explicit `key: null` or `key: ~` is rewritten. Equal to a parser, not to a
   reviewer, who now has to adjudicate that for every occurrence.
+- **Long lines are re-wrapped.** The default output width folds a long plain scalar onto a
+  continuation line at about 80 columns. `yaml.width = 4096` keeps a long single-line scalar on
+  one line. A scalar the FILE ITSELF wraps across lines is re-flowed at any width (4096 joins it
+  into one line), so for such a file the unedited round trip fails, and that scalar needs a
+  text-level edit.
 
-Neither is caught by the re-load check: the keys are all present and the file parses, so that
+None is caught by the re-load check: the keys are all present and the file parses, so that
 `assert` passes on a fully reflowed document. The unedited round trip in the pattern is what
-catches both, BEFORE you have changed anything; when it fails, diff `buf.getvalue()` against the
-file to see which lines your settings move. The diff before committing confirms the edit:
+catches all three, BEFORE you have changed anything; when it fails, diff `buf.getvalue()` against
+the file to see which lines your settings move. The diff before committing confirms the edit:
 
 ```bash
 git diff -- path/to/file.yml    # must show only the lines you meant to change

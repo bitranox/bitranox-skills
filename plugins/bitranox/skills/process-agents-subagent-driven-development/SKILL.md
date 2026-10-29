@@ -102,6 +102,19 @@ before execution begins, not one interrupt per discovery mid-plan. If the
 scan is clean, proceed without comment. The review loop remains the net for
 conflicts that only emerge from implementation.
 
+**Plan mode must have ended before the first dispatch.** A subagent dispatched
+while the session is still in plan mode has been observed to inherit it: it
+explores, writes a plan file of its own and returns "ready to execute on
+approval" instead of code. A user who approves by REJECTING the ExitPlanMode
+call with approving text ("yes, do it") has not ended plan mode, and the
+session can stay in it for several turns. Before dispatching an implementer,
+confirm plan mode has actually ended: the "Exited Plan Mode" notice has
+arrived, or a Write outside the plan file succeeds. An implementer that comes
+back with a plan and no code is obeying the mode, not being timid: resume that
+same agent with an approval message via SendMessage ("approved, execute now")
+rather than re-dispatching from scratch, since its plan and context are
+already right.
+
 ## Model Selection
 
 There are two working tiers: `haiku` for purely mechanical work, `opus` for everything else
@@ -328,6 +341,12 @@ final whole-branch review. When you fill a reviewer template:
   was pasted history. A fresh subagent needs its task, the interfaces it
   touches, the global constraints, and any earlier review finding restated as
   a short rule (see "Stale brief" under File Handoffs). Nothing else.
+  A rule you stated only in an earlier dispatch does not exist for the next
+  subagent, which inherits no earlier prompt. Put every standing rule (who
+  may spend money or reach a network, what is read-only, what must never be
+  committed) into the plan's Global Constraints, which every brief opens
+  with, never into one dispatch; when an agent breaks a rule, first check
+  that it was in THAT agent's dispatch.
 - Dispatch fix subagents for Critical and Important findings. Record Minor
   findings in the progress ledger as you go, and point the final
   whole-branch review at that list so it can triage which must be fixed
@@ -446,6 +465,17 @@ and is re-read on every later turn. Hand artifacts over as files:
   the plan says. When an earlier task needed fix rounds, forward the review
   findings that apply to later tasks as short rules under dispatch item (3),
   never as that task's history.
+- **Agents already running are a bet on the plan.** Every dispatched brief
+  freezes the plan's assumptions into a fresh context, so a plan defect voids
+  every agent in flight at once, not only the next brief, and their tokens are
+  already spent. Dispatch no further ahead than the plan is validated: the next
+  task's implementer waits for the current task's review, and no background
+  queue of later-task implementers, reviewers or fixers runs ahead of it, however
+  much spare capacity there is (one more reason for the Never rule against
+  parallel implementers). Two signals are an order to stop dispatching, not to
+  backfill the queue: a review round that changes behaviour, and a pending user
+  decision that later tasks depend on. When the plan is being rewritten, stop
+  new dispatches first, then decide what to do with what is already running.
 - **Report file:** name the implementer's report file after the brief
   (brief `.../task-<ID>-<plan8>-brief.md` -> report `.../task-<ID>-<plan8>-report.md`, where
   `<plan8>` is the plan-path digest `task_brief.py` puts in the brief's name) and put it in

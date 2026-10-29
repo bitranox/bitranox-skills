@@ -5,10 +5,11 @@ rendered output, loops until a condition holds, pins or clears an environment va
 library reads at import included), redirects or deletes coverage data from a conftest, simulates
 a race between a check and an open, blocks a stub so it can be signalled, plants a marker to prove
 a process ran, asserts a descriptor was closed or a file is held only through a memory map, binds
-a unix socket under `tmp_path`, builds a test double by subclassing a `@dataclass`, carries a
-skip or an exclusion, judges an artifact, compares against a git ref, guards against cost, or
-tests environment isolation - or when you are about to claim a code path is untested, or a
-mutation survives. Each entry names the trigger, the mechanism that makes the test pass (or fail)
+a unix socket under `tmp_path`, builds a test double by subclassing a `@dataclass`, mints
+synthetic identifiers (ids that something later truncates included), carries a skip or an
+exclusion, judges an artifact, compares against a git ref, guards against cost, or tests
+environment isolation - or when you are about to claim a code path is untested, or a mutation
+survives. Each entry names the trigger, the mechanism that makes the test pass (or fail)
 for the wrong reason, and the fix.
 
 ## Determinism and environment
@@ -182,6 +183,17 @@ A made-up address, serial, WWN or hostname wider than the real ones is clipped b
 for the real width, so the arm fails on its own fixture and reads like a defect in the code. Copy
 the shape from a real capture, keeping length and separators and changing only the characters;
 where the width IS the subject, state it in the test and assert it.
+
+### Vary the part of a minted id that truncation keeps
+
+Short forms are prefixes (a `[:8]` hash, a `--short` sha, a uuid prefix used as a file or directory
+name, a log column), so a fixture minting zero-padded ids such as `f"{n:064x}"` produces values
+that differ only where truncation throws them away: every one shares the first eight hex
+characters. They collide as files or directories, and the failure surfaces inside the code under
+test as an assertion that it cannot tell two records apart. Before minting, find where the id is
+shortened and vary THAT part, for example `f"{n:02x}" * 32`, a full-length digest whose leading
+bytes differ per `n`. When an identity test fails that way, check the fixture's ids in their
+truncated form before reading the implementation.
 
 ## Python patch and import mechanics
 

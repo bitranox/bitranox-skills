@@ -265,6 +265,9 @@ the success line, abort-and-show on a miss).
    `amend-pinned` on its behalf. `move` carries the pin through unchanged and never refuses on it,
    so re-leveling a pinned fact is ordinary placement work like any other entry - no exception, no
    separate approval step.
+   - **Most moves going to the tree top is not by itself a router defect** - in a tree whose
+     top-level children are non-nested siblings it is the expected reading. Before calling the
+     router biased, run the check in references/dream-core.md, "Reading a high tree-top share".
    - **Jev shadow on placement** (only when step 0c found `jev_shadow.py status` on; home
      `<plugin>/skills/meta-self-improve/`, launch via `hooks/run-python.sh`; procedure in its
      `references/jev-shadow.md`; both files in a fresh `D=$(mktemp -d)` outside any repo, since

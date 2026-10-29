@@ -221,6 +221,18 @@ If either kind of test exists, the item belongs in the tier that touches tests. 
 wire-compatibility saves construction and lookup tests, never identity-dispatch or
 raises-on-invalid tests.
 
+**Branch on a `StrEnum` (or `str, Enum`) PARAMETER with `==`, never `is`.** A member equals its
+own string, so `"quiet" == Mode.QUIET` is True while `"quiet" is Mode.QUIET` is False. Under `is`,
+a caller passing the raw value does not raise: it silently takes the OTHER branch and does
+something plausible and wrong. The annotation stops such a caller only inside the type-checked
+code, never a config value, a payload field or an untyped test. Do not fix it by raising inside
+the function either: validation belongs at the boundary parse (above), and on a hot or
+supervisory path an instrument must not take down the run it observes. Keep `is` only on a value a
+`parse_*` returned as `Member | None`, where a string cannot arrive. Add a test that passes the RAW
+string (`cast("Mode", "quiet")`) and asserts the branch it reached by something only that branch
+produces (a test that accepts either branch's output stays green on the wrong one), and grep the
+diff for `is <Enum>.` on anything reached from a parameter.
+
 **Where the Enum lives decides where the helper can live.** Read `[tool.importlinter]` (or
 `.importlinter`) before choosing the parameter type: when the Enum sits in a HIGHER layer than the
 module holding the `str`-taking helper, the helper cannot import it, and an import under

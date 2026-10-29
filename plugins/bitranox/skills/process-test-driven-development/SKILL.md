@@ -133,6 +133,28 @@ Confirm:
 
 **Test errors?** Fix error, re-run until it fails correctly.
 
+**Failed, but for which reason?** A RED counts only when it fails ON the assertion you owe, and
+the word FAILED is all a checkbox reads. Two doors give a red that proves nothing. (1) The test
+could not run, which a runner can still report as a failure: an async test the runner does not
+support, a fixture error, an ImportError from a typo rather than from the missing module, or a
+skip that fires where the check counts anything but PASSED as red. (2) It failed legitimately on
+an EARLIER assertion (a boot or setup precondition, an absent leaf the owed check reads), so the
+owed assertion never executed. Read WHY each new test failed, compare it with the assertion you
+owe, and require the arm to fail BY NAME on that assertion. When an earlier check shadows it,
+narrow the mutation so that check still passes (keep the leaf, break the count) instead of
+reverting more.
+
+**A double off the path.** The same symptom appears after a fix moves the call a test injects a
+fault into (a subclass overriding a per-item `take()` while the fix replaced the loop with one
+batch `take_many()`): the override stops firing, so the test fails on an EARLIER assertion than
+the one it was written for, or passes, while its real subject goes untested and still counts as
+coverage, which is worse than a missing test. Re-run that test after the move and read WHICH
+assertion fails. Re-seam the double to the window that still exists (an advisory read before the
+batch call, say), keep every assertion unchanged, and prove it RED against the pre-fix code,
+naming the real defect, and GREEN against the fix. Related: an assertion about the ENVIRONMENT in
+a test file that runs in more than one tree (a repo and a seeded copy of it) must hold in every
+tree, or whoever meets it in the other tree deletes it.
+
 **New behaviour is a refusal?** Assert the specific message or field, not only the exit code. An
 argument parser refusing a not-yet-existing flag (argparse exits 2) makes an exit-code-only test
 pass before the feature exists, green for the wrong reason. Run it against the pre-feature code
@@ -195,7 +217,9 @@ Confirm:
 - Other tests still pass
 - Output pristine (no errors, warnings)
 
-**Test fails?** Fix code, not test.
+**Test fails?** Fix code, not test - unless it now fails on an EARLIER assertion than the one it
+owes because your fix moved the call its double injects into; then re-seam the double (see "A
+double off the path" under Verify RED), keeping every assertion unchanged.
 
 **Other tests fail?** Fix now.
 

@@ -88,6 +88,17 @@ the process group at the prompt), so keep one real-terminal run for signal behav
 passes its own `env=` to the child, or the stand-in is a `.cmd`, resolve the program to an
 absolute path with `shutil.which(name, path=<that env's PATH>)`.
 
+**A program that relaunches ITSELF through an argv it builds (a background mode, a re-exec, a
+generated systemd unit) needs a test of that exact argv through the real entry point** (for click,
+`CliRunner().invoke(cli, built_argv)`), not only the in-process or `--foreground` path. The argv
+crosses the program's own argument validation (`click.Choice`, argparse `choices=`, a required
+flag), which no other test reaches. It is a caller you wrote, so it feels covered, but a value the
+parser rejects fails only in the deployed path, exits at parsing before any of your logging runs,
+and leaves the foreground test green. Add that test whenever a value is added to anything the argv
+carries, and find the sites by grepping for where the code builds an argv naming its own program.
+Keep what an operator may type separate from what the code's own relaunch paths forward, with the
+latter as the union of every value the code emits.
+
 **Mark the tiers so a bare test run stays offline.** Every ecosystem needs a way to keep the
 network/DB tests out of the default run; pick the project's and use it consistently: pytest markers
 (`-m "not integration"`), a filename or directory convention (`*.e2e.test.ts`, `test/e2e/`), a
@@ -165,6 +176,16 @@ wiring a new call through a seam:
   received;
 - add a test that fails when the seam's contract moves (check the call's keywords against
   `inspect.signature(seam).parameters`), and RED it by restoring the mismatched call.
+- a hand-written copy of a dependency's TYPES has two axes: its CONSTANTS (the limits and
+  thresholds it reports) and its SHAPE (the field and attribute names your code reads). A fidelity
+  check that pins only the constants passes while the double still carries a field the real class
+  has dropped, so every test stays green while each real call raises `AttributeError`. Prefer
+  copying the real module (its small import closure) into the fixture, keeping a stand-in only for
+  the part that touches live state, such as a write path. Where the double must stay hand-written,
+  compare its field set to the real class's, not only its values, and give it `__slots__` so
+  reading a dropped field raises instead of returning a default. RED that check by renaming one
+  field in a scratch copy of the dependency and requiring the suite to fail: a fidelity check
+  nobody has seen fail is a claim, not a guard.
 
 **After adding a wait or retry to a shared path, read the test file's WALL CLOCK, not its pass
 count.** Every pre-existing test that goes through that path now pays the real delay. One 30-second
@@ -309,7 +330,22 @@ enforced by the suite rather than remembered by a person.
   test as a review defect. The one exception, a COUNT-bounded spin (a zero-duration yield such as
   `await asyncio.sleep(0)`, which yields rather than waits) or a fake-driven production loop where
   no event exists or can be planted, is in `references/silent-test-defeaters.md`. Code that has its own timeout is driven by injecting its clock, not by
-  waiting it out.
+  waiting it out. A PRECONDITION state the test needs at a moment (a task still in flight, a file
+  not yet written) comes from an event the run emits too, never from making one delay outlast
+  another: a slower runner loses that race and the arm goes red for a non-defect. When such an arm
+  fails, check first that its precondition HELD (print the event order) before reading anything
+  the system did as a defect, in a commit message or anywhere else: what a system does under an
+  unmet precondition is not evidence about the property the arm tests.
+- **Never a zero or near-zero deadline, timeout or age.** `deadline=0.0` checked with
+  `monotonic() - started > 0.0` races the clock tick instead of testing the code. On Windows with
+  Python 3.12 or older, `time.monotonic()` advances in steps of about 15.6 ms (3.13 and later use a
+  1 microsecond clock there), so two reads inside one tick differ by exactly 0.0 and only the
+  Windows cells for those versions go red, which reads like flakiness or a version bug. Set the
+  clock state explicitly: keep a realistic deadline and move the start into the past by a wide
+  margin (`started -= 600.0` against a 60 s deadline), or inject the clock, and assert that
+  precondition held before reading what the code did. When one Windows cell reds on a timing
+  assertion while its sibling cells pass, suspect clock resolution, which itself differs by Python
+  version on Windows, before an interpreter bug.
 - **Inject time and randomness.** No bare now-clock, RNG, or UUID call in code under test - pass a
   clock / seed so the test is reproducible. (`datetime.now()`/`random`/`uuid4` in Python;
   `Date.now()`/`Math.random()`/`crypto.randomUUID()` in JS, or `vi.useFakeTimers()` at the edge;
@@ -537,7 +573,7 @@ list of local-only files: that list is a second copy of `.gitignore`, so the nex
 something writes into the tree (a state file, a scratch log) turns the local run red while a
 fresh CI clone, which never has that file, stays green.
 
-Eight mechanics worth stating because they silently defeat a test that looks right:
+Nine mechanics worth stating because they silently defeat a test that looks right:
 
 - **`from m import X` binds a COPY at import time.** `monkeypatch.setattr(m, "X", v)` mutates `m`'s
   namespace and never reaches the consumer's already-bound name, so the test runs against the
@@ -602,6 +638,14 @@ Eight mechanics worth stating because they silently defeat a test that looks rig
   is malformed, and assert the condition happened (the collaborator was called) before reading the
   RED. Once the fix exists, RED it by mutating the fix back with `__pycache__` cleared. If the RED
   message is about the fixture rather than your case, the fixture is the bug.
+- **A test that passes a non-default flag tests the path that already worked.** Supplying
+  `by_alias=True`, `sort_keys=True`, `strict=True`, an explicit encoding or a timezone exercises
+  exactly the option production omits, so a defect in the DEFAULT path stays invisible, and the
+  explicit flag reads as thoroughness. For each keyword a test passes, add the case where the
+  caller omits it. For serialization, assert on the bytes a DEFAULT dump produces and validate them
+  against the shipped schema, not a hand-written expectation, and make sure the data reaches the
+  branch at all (a round-trip fixture with no instance of the aliased field tests nothing). When a
+  docstring claims a wire format, run the default path and check the claim.
 
 Prove a codec/serializer swap by SEMANTIC equivalence - decode the new output with the OLD decoder
 and compare the values - not by byte-equality, which fails on harmless ordering or padding changes
@@ -627,7 +671,8 @@ import), redirects or deletes coverage data from a conftest, simulates a race be
 check and an open, blocks a stub so it can be signalled mid-call, plants a marker to prove a
 process ran (or did not), asserts that no file descriptor leaked or that a file is held only
 through a memory map, binds a unix socket under `tmp_path`, builds a test double by subclassing
-a `@dataclass`, carries a skip or an exclusion, judges an artifact, compares against a git ref,
+a `@dataclass`, mints synthetic identifiers (an address, a serial, ids that something later
+truncates), carries a skip or an exclusion, judges an artifact, compares against a git ref,
 guards against cost, or tests environment isolation - or before you claim a code path is untested
 or accept a surviving mutation.
 

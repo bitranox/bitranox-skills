@@ -30,6 +30,43 @@ a hole nobody has drawn a line under is one that gets rediscovered and half-fill
 two "versions with no entry" notes came to sit in this file disagreeing with it.
 
 
+## [10.3.28]
+
+### Changed
+
+- `process-test-design`: a fidelity check pins a double's field set as well as its constants;
+  test the argv a program builds for itself through the real entry point; a test passing a
+  non-default flag needs the default path too; confirm a timing precondition held before reading
+  the behaviour; a zero deadline races the clock (on Windows with Python 3.12 or older the
+  monotonic clock steps by about 15.6 ms); vary the leading characters of fixture ids that
+  downstream code truncates.
+- `process-test-driven-development`: a red that failed on the harness or on an earlier assertion
+  was never watched failing on the behaviour; a test double that is no longer on the code path
+  after a move is re-seamed, not rewritten.
+- `coding-python-enforce-data-architecture-strict`: branch on a `StrEnum` parameter with `==`,
+  never `is`.
+- `process-agents-subagent-driven-development`: in-flight dispatch depth is a bet on the plan; a
+  subagent dispatched in plan mode returns a plan; a rule stated only in an earlier dispatch does
+  not reach the next one, so standing rules go into the plan's Global Constraints.
+- `process-agents-dispatching-parallel`: an in-session Agent dispatch costs about 60k tokens
+  whatever it is sent, an SDK child with `setting_sources=[]` measured under 200; harvest a
+  subagent's structured output from its transcript, since the delivered message is HTML-escaped.
+- `meta-skill-writer`: a pressure test of skill text needs a control arm with the text removed.
+- `meta-dream-tree`: a wide, shallow tree top forces general facts upward; that is shape, not a
+  routing shortcut.
+- `compuse-git`: a clone is not finished when `rev-parse` resolves; `merge-tree --write-tree` on
+  both branch tips answers whether a stale branch still merges, and a clean trial merge is not a
+  green gate.
+- `compuse-toolbox`: `gate.py` prints its verdict to stdout, never into `--log`, and a watcher
+  needs an exit for a worker that died without one; an unchanged outcome across a confounded pair
+  supports a null reading, never a cause.
+- `coding-python-clean-architecture`: judge a layering by the port signature, not by where the
+  class lives.
+- `devops-bmk`: `integration` tests still run in push and PR CI unless
+  `[tool.ci].pytest-exclude-markers` lists them.
+- `files-edit-yml`: a long-line width setting keeps a single-line scalar whole, but a scalar the
+  file wraps itself is re-flowed at any width.
+
 ## [10.3.27]
 
 ### Fixed

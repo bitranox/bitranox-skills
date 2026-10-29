@@ -607,7 +607,8 @@ Run one with `bmk custom <name>` / `make custom <name>`. This is the only overri
 (combined with the project's own `-m`, see below), where `exclude-markers` comes from
 `[tool.scripts.test].exclude-markers` and **defaults to `"integration"`**. So out of the box
 `make test` runs your unit tests AND `local_only` tests and skips `integration`;
-`make testintegration` runs `-m integration`; a CI job typically runs `pytest -m "not local_only"`.
+`make testintegration` runs `-m integration`; the bitranox CI template runs
+`pytest -m "not local_only"` plus whatever `[tool.ci].pytest-exclude-markers` adds (see below).
 pytest takes ONE `-m` and the last wins (addopts, then `PYTEST_ADDOPTS`, then the command line,
 where bmk's goes); pytest ANDs nothing, so bmk combines them itself. It asks the project's pytest
 which `-m` its configuration ends up with (a `PYTEST_ADDOPTS` `-m` drops the addopts one, so the
@@ -621,8 +622,25 @@ since that lane runs exactly the integration tests. The local-vs-CI difference i
 | Marker                                                              | Meaning                                                                    | Where it runs                                                    |
 |---------------------------------------------------------------------|----------------------------------------------------------------------------|------------------------------------------------------------------|
 | `local_only`                                                        | needs a local resource the CI runners lack (a service, device, OS feature) | `make test` LOCALLY (guard with `skipif`); excluded from CI      |
-| `integration`                                                       | long-running / external                                                    | `make testintegration` only; skipped by `make test`              |
+| `integration`                                                       | long-running / external                                                    | `make testintegration`; push CI too unless `[tool.ci]` lists it  |
 | `os_agnostic` / `os_windows` / `os_macos` / `os_posix` / `os_linux` | labels the target OS                                                       | a label only - pair each with its own `skipif(sys.platform ...)` |
+
+**`integration` is skipped locally, not in CI.** The marker names the TEST, not the lane, and the
+two lanes are decided in different places: `[tool.scripts.test].exclude-markers` for `make test`,
+and `[tool.ci].pytest-exclude-markers` for the bitranox CI template, which builds its marker
+expression from `local_only` plus that list and never reads the bmk key. So a test marked
+`integration` stays out of `make test` and still runs in push and PR CI. For HEAVY integration
+tests (Docker databases, dataset or model downloads, anything that hangs a small runner) that a
+project-owned workflow runs instead, set in `pyproject.toml`:
+
+```toml
+[tool.ci]
+pytest-exclude-markers = ["integration"]
+```
+
+Never edit the template-managed `.github/` for this. Then check that the project's own workflow
+collects EVERY integration-marked file, or excluding them leaves some running nowhere. Light
+integration tests that skip cleanly when their resource is absent can stay in CI.
 
 Raise `exclude-markers` only to skip MORE from `make test` - e.g. a project whose `local_only`
 tests MUTATE the host and are unsafe on a real dev machine can tag them `mutating` and set
