@@ -149,6 +149,13 @@ FOR multi-item feedback:
   4. Verify no regressions
 ```
 
+**A round on an already-reviewed path that returns only Minor items is the stopping point.** Do
+not fix them and ask for yet another round. Each minor-only fix round is new code the next round
+reads afresh, so it surfaces new Minor edges on the same path and has no natural fixed point; the
+decision to stop belongs to the owner, not the loop. Record the remaining Minor items, then put
+merge-or-continue to the owner with that list, recommending merge (the same rule as "Minors never
+get a fix round of their own" in `bitranox:process-agents-subagent-driven-development`).
+
 ## When To Push Back
 
 Push back when:

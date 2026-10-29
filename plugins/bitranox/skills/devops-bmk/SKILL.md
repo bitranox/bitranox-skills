@@ -28,6 +28,15 @@ fail-fast; stages sharing the same order run in parallel.
 **Not for:** developing bmk's own source (that is the bmk repo's `CLAUDE.md`/`CONTRIBUTING.md`). This
 skill is about *using* bmk as a task runner in any project.
 
+**Not a bmk project:** a repo that is only a Claude Code skill plus helper scripts run with
+`uv run` (PEP 723 or plain) - no `src/` package, nothing built or published to PyPI, a `pyproject.toml` (if any)
+holding tool configuration only. bmk's build, import-linter, pip-audit and release stages have
+nothing to act on there, and adopting it adds a generated Makefile and a package skeleton the repo
+does not need, so do not adopt bmk or raise its adoption as an open question. Gate the scripts with
+`uv run --no-project --with pytest --with <deps> python -m pytest`, ruff, and pyright strict on
+the declared Python floor. The test is the repo's shape, not its language: a skill shipped INSIDE a
+package repo stays under that repo's bmk gate.
+
 ## 1. Install
 
 uv is the only prerequisite. You never install bmk yourself: run `bmk install` once, ephemerally,
@@ -182,7 +191,13 @@ matrix locally before you push. Each cell's pyright makes the same per-OS runs a
 pyright stage (section "Proving a gate"), so a type error on any OS in `[tool.ci].os` fails the cell
 for that Python version; pytest runs on the host OS only. A project whose suite binds fixed ports or
 shares a test database sets `[tool.scripts.test-all] workers = 1` in its `pyproject.toml` (or
-`BMK_TEST_ALL_WORKERS=1` for one run) to run the version cells serially instead. Inside a cell,
+`BMK_TEST_ALL_WORKERS=1` for one run) to run the version cells serially instead. The symptom does
+not name the cause: dozens of failures and errors per cell (loopback timeouts, database store
+tests) that read like real defects, while the same cells run one at a time pass. So when
+`test-all` fails like that, re-run it with `BMK_TEST_ALL_WORKERS=1` before diagnosing anything. Any
+fixed host-global name collides the same way (a systemd `--user` unit name a test starts, a socket
+path); where the name need not be fixed, suffix it with the process id (`os.getpid()`) so the cells
+can stay parallel, and keep `workers = 1` for resources that cannot be renamed. Inside a cell,
 pytest runs across processes when that cell's pytest loads pytest-xdist; pytest-cov is not needed,
 since a cell measures no coverage and checks no floor, and a cell without xdist runs serially
 without a hint. `[tool.scripts.test] workers = "auto"` (the default) is divided between the cells
@@ -442,6 +457,12 @@ forwarded (e.g. `make push fix login bug`). Most have short aliases.
   heading and syncs `__init__conf__.py` and `plugin.json`, so of these pins only the SKILL.md
   floors can fail (the other pins fail after a hand or script bump): nothing in bmk edits a
   SKILL.md, so raise its `uvx` floors yourself, in the same release commit.
+  In a release, and in a sweep over several repos, also gate BEFORE the bump: run `make test`,
+  commit only bmk's churn (`uv.lock`, the `pyproject.toml` floors and cooldown pins, the
+  Makefile), and gate again until the tree stays clean. A third-party release can cross the
+  cooldown between two runs minutes apart, so one pass is not enough; stop on any other changed
+  file. Then bump, gate the bump commit as above, and release. Bumping first and gating after
+  leaves that churn behind the release commit, where `release` refuses the dirty tree.
 - `push` starts with a `deps` check (its first stage, `update_deps`, runs it) that FAILS when any
   dependency floor in `pyproject.toml` is behind the latest PyPI release (an exact pin excepted,
   see the next point), which can be minutes old. In the default JSON mode that is an
@@ -469,6 +490,27 @@ forwarded (e.g. `make push fix login bug`). Most have short aliases.
   `https://pypi.org/simple/<pkg>/`. If a run already failed this way, leave the raised floor
   alone, because it is correct: re-run once the version resolves, and release the dependent only
   after CI is green on that commit.
+- **Right after a green publish, a version missing from PyPI is index lag, not a failed upload.**
+  Either `info.version` in `https://pypi.org/pypi/<pkg>/json` or the Simple index
+  `https://pypi.org/simple/<pkg>/` (what resolvers read; ask for JSON with
+  `Accept: application/vnd.pypi.simple.v1+json`) can trail the other by minutes, and neither
+  reliably catches up first. `uv --no-cache` cannot help while PyPI itself lags. Poll both rather
+  than reading once, treat the release as served only once both list it, and treat it as an upload
+  problem only when both still lack it after several minutes. Never delete or re-cut the version on
+  this evidence: a deleted filename is burned for good (next point).
+- **A publish that fails with this `400` has burned that version for good:**
+  `400 This filename was previously used by a file that has since been deleted.` (followed by
+  `Use a different version.`). PyPI never frees a filename once any upload of it existed, even
+  after the release is deleted, so that a different artifact can never take a name someone
+  already pinned; no re-run or re-tag of that version can succeed. It is not an auth problem:
+  leave the token and Trusted Publisher configuration alone. Bump to the next patch, release
+  again, and record the burned version in the CHANGELOG as not published.
+  Leave its tag and GitHub release in place: `make release` created them before the publish ran,
+  and deleting a published release is destructive. The JSON API cannot list burned versions (a
+  deleted one is absent from `releases` exactly like one never used), so "not listed" does not
+  mean free, and the next bump can hit the same wall. If the release workflow's publish step uses
+  `skip-existing`, a green run does not prove an upload: look in that step for `Uploading <file>`
+  then `200 OK`, then check `https://pypi.org/pypi/<pkg>/<version>/json`.
 - **Tests that break right after a floor was raised are a dependency change, not your edit.**
   `make test`'s first stage can move a floor to a release the project never opted into. Before
   changing code, run `git diff pyproject.toml` to see which floor moved and from where, read that
@@ -887,6 +929,9 @@ gate to go red. A gate that has only ever passed has not been shown to gate.
 | `make push` fails at `[deps] (exit code: 1)` with `(no output captured)`            | A dependency floor is behind a new PyPI release, not your edit. `bmk deps --update`, then push again (section 3).                                                                                                                                                  |
 | `make test` fails at `[pytest]` though every test passed, in a repo with no remote  | The pytest stage also uploads coverage when a `CODECOV_TOKEN` and `codecovcli` are found; with no `origin` there is no slug and the upload fails. Look for `[codecov] upload failed` before debugging code (section 6).                                            |
 | CI fails with `Because only <pkg><=<old> is available` after releasing the library  | The dependent's floor was raised to a release the index does not serve yet. The pin is correct: confirm PyPI lists the version, then re-run (section 3).                                                                                                           |
+| Right after a green publish, PyPI's `/json` or Simple index lacks the version       | Index lag, not a failed upload: poll both endpoints for a few minutes, served once both list it. Never delete or re-cut the version on this evidence (section 3).                                                                                                  |
+| PyPI publish fails `400 This filename was previously used`                          | That version is burned on PyPI for good; not an auth problem. Bump the patch, release again, record it in the CHANGELOG as not published, leave its tag and GitHub release (section 3).                                                                            |
+| `make test-all` fails dozens of tests per cell in a fixed-port or shared-DB suite   | The version cells run in parallel and collide, not a code defect: re-run with `BMK_TEST_ALL_WORKERS=1` before diagnosing; set `[tool.scripts.test-all] workers = 1` for good (section 1).                                                                          |
 | Tests break right after `make test` raised a dependency floor                       | A dependency change, not your edit: `git diff pyproject.toml`, read that dependency's CHANGELOG, adapt the caller to the documented change (section 3).                                                                                                            |
 | `ModuleNotFoundError` inside bmk's own dependencies                                 | bmk's shared env, not your code; the next `make` repairs it (section 1).                                                                                                                                                                                           |
 | `make testintegration` fails: `[pytest_integration] (exit code: 5)`                 | pytest collected no test: an empty lane, or a filter hiding the tests (section 6).                                                                                                                                                                                 |

@@ -207,7 +207,8 @@ Remove-Item $path -Force         # -Force clears it; rd /s /q does not
 
 Files inherit it from any read-only source. Copy off an ISO or a mounted image and the copy
 looks fine, then `DISM /Mount-Wim` fails `0xC1420127` claiming you only have read permissions -
-about a file you own. Clear it after any such copy.
+about a file you own. Clear it after any such copy. Key a script on that code, not the message,
+which is localized; read as a signed 32-bit exit code (`$LASTEXITCODE`) it is `-1052638937`.
 
 ## Batch tools abandon the whole walk at the first bad entry
 

@@ -22,6 +22,9 @@ APPLIES - an untrusted boundary, data from outside your control:
 - webhook payloads; queue / broker / pub-sub messages
 - CLI arguments and stdin carrying user data
 - responses from a third-party API; scraped data; rows from a foreign / legacy system
+- any value a security check vouches for before a DIFFERENT component parses it (a URL, path or
+  header handed to a driver, an HTTP client or a service in another language), the app's own
+  configuration included - see "When a different parser reads the value"
 
 DOES NOT APPLY - internal seams between trusted code:
 - a domain/application function called by your own validated code
@@ -48,6 +51,43 @@ DOES NOT APPLY - internal seams between trusted code:
 Test the edge with the adversarial input battery (UTF/emoji/CJK/binary/wrong-type/oversized) in
 `bitranox:process-test-design`.
 
+## When a different parser reads the value
+
+**A check is only as strict as its agreement with the parser that CONSUMES the input.** When a
+validator's verdict gates what a different component parses later (a password in a database URL
+handed to a driver, a path, a header), two parsers routinely disagree on edge shapes, and the check
+has holes exactly there. The usual cause is a refactor that centralises or "purifies" the predicate
+onto a stdlib parser (`urllib.parse` in place of the driver library's own URL parser): its tests
+stay green because they feed only shapes both parsers read alike, so nothing reports the loosening,
+and a display masker built on the same predicate leaks the same inputs. So:
+
+- keep a check on the consumer's own parse at the point of use, even when a shared predicate also
+  runs earlier;
+- make any shared predicate fail closed (refuse) on input it cannot parse;
+- prove it with a differential table of adversarial shapes - fragments, a raw `@` in userinfo,
+  unbalanced brackets, mixed-case and percent-encoded keys, repeated keys - fed to BOTH the
+  predicate and the consumer's parser: every row the consumer reads as dangerous must be refused.
+  Build the table first and run it against the pre-fix code for the RED.
+
+**When the consumer is another language or a binary, fuzz against a replica of it.** It cannot be
+imported into the test, so build the smallest program that runs its REAL routing and decoding code
+from its source (the service repo, a vendored copy or a module cache): its router, path cleaning
+and handler copied verbatim, driven with raw requests (Go: `http.ReadRequest`). Build it with the
+toolchain the consumer declares (Go: the `go` / `toolchain` directive in `go.mod`, never whatever
+Go is installed), since stdlib decoders change between releases. Generate a corpus from the edge
+shapes (case, encodings, repeated keys, padding, path cleaning), run every row through both sides,
+and classify it: agree; fail-closed (the validator refuses what the consumer accepts - allowed if
+documented); or dangerous (the validator reads a value the consumer does not). Require zero
+dangerous rows. Put the replica's path and the fuzz script in the fix brief so the fixer re-runs
+it, and keep both out of the repo unless that toolchain runs in CI. Typical mismatches between a
+Python validator and a Go consumer: `urllib.parse.parse_qs` drops a blank value unless
+`keep_blank_values=True`, so `k=&k=x` reads `x` where Go's `Query().Get` returns the empty first
+value; Go's `encoding/json` v1 decoder matches object keys case-insensitively (with Unicode case
+folding, so U+017F and U+212A match `s` and `k`) and the last duplicate key wins; a handler that
+tries each base64 alphabet in turn reads a mixed blob differently from Python code that normalises
+it first. Review rounds that probe one input at a time find these one mismatch per round: when
+successive rounds keep finding one more, stop probing by hand and build the replica.
+
 ## On the way OUT - escape at the SINK, for that sink's context
 
 The same value is safe for one sink and dangerous for another, so escaping belongs at the sink, not
@@ -73,6 +113,23 @@ default mode although the browser shows the text correctly: fix the escape mode,
 Compare element text against `html.escape(s, quote=False)` (the raw text itself when it holds no
 `<`, `>` or `&`) and an attribute value against `html.escape(s)`.
 
+**Outbound URL: judge the host the client will read, not a string split.** `urlsplit(url).hostname`
+passes numeric IPv4 spellings (`http://2130706433/`, `http://0x7f.1/`), IDNA spellings and a
+trailing dot, which the HTTP client and resolver then treat as the host they really are. Parse into
+the typed model first and run every host check (allowlist, no loopback/private/link-local, must
+match the configured host) on its normalised host: pydantic's `HttpUrl` turns both numeric
+spellings into `127.0.0.1`, applies IDNA (`xn--...`) and lower-cases, but KEEPS a trailing dot
+(`LOCALHOST.` becomes `localhost.`), so strip one yourself before comparing names. Parsers also
+disagree on where an authority ends: a WHATWG parser (pydantic) ends it at a backslash, an RFC 3986
+one (`urllib`, libcurl) splits userinfo at the last `@`, so `http://192.0.2.10:8000\@evil.example/`
+is `192.0.2.10` to pydantic and `evil.example` to `urllib`. Where a second parser may read the URL,
+refuse it when the authority holds a backslash, `@`, `%`, whitespace, a control character or a
+non-ASCII character, or when the two parsers' hosts differ. Store the canonical
+`scheme://host[:port]` you judged (default port omitted), or require the stored text to equal it:
+a reader of the raw text may see another origin (empty userinfo, dot segments, a backslash, a
+leading-zero port, a one-number address). This holds for a URL in the app's own settings too. Test
+numeric, IDNA, trailing-dot and backslash/userinfo spellings of a forbidden host, each refused.
+
 ## Quick checklist
 
 - [ ] Every external input parsed into a typed model at the edge; raw dict/JSON never flows inward
@@ -86,6 +143,11 @@ Compare element text against `html.escape(s, quote=False)` (the raw text itself 
 - [ ] File paths confined to a base dir; `..` / absolute rejected
 - [ ] No `pickle` / `yaml.load` / `eval` on untrusted data
 - [ ] Outbound URLs allowlisted (host + scheme); internal/link-local ranges and redirects to them blocked
+- [ ] URL host checks run on the typed model's normalised host (one trailing dot stripped); a URL
+      two parsers read differently is refused; the canonical origin you judged is what is stored
+- [ ] A check gating what a different parser reads also runs on that parser's own parse, fails
+      closed, and is proven by a differential table (by a replica for a consumer in another
+      language)
 - [ ] CR/LF + control chars stripped before writing user data to a log line or response header
 - [ ] Internal library calls NOT re-sanitized (type contract trusted)
 

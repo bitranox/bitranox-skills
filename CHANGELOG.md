@@ -30,6 +30,53 @@ a hole nobody has drawn a line under is one that gets rediscovered and half-fill
 two "versions with no entry" notes came to sit in this file disagreeing with it.
 
 
+## [10.4.3]
+
+### Changed
+
+- `process-test-design`: a slow upstream is slow to its BODY (send headers, hold the body on a
+  test-set event); reproduce a timing flake by starving the suite on one allowed cpu, tuned by the
+  slowdown ratio against an unstarved arm; wait on whatever the producer writes LAST and prove a
+  custom waiter against the state it must refuse; a rule that borrows evidence from a neighbouring
+  event loses only the last of a burst, so test a burst of one; never read the clock before the code
+  does; a fake stitched from several captured bodies refuses mismatched identities; patching
+  `pkg.mod.time.monotonic` patches the process and freezes asyncio. In the silent-test-defeaters
+  reference: assert a phrase the OLD message cannot contain, fake a process comm name with
+  `prctl(PR_SET_NAME)`, timestamp BEFORE the probe that gets in, a raising fake inside a pydantic
+  validator escapes unless it raises what pydantic converts, and `import pkg.main as m` binds a
+  re-exported function.
+- `process-debug-systematic`: new `hang-dump.md`: dump a hang from a watchdog thread inside the
+  process while it hangs, never after the timeout killed it.
+- `process-test-driven-development`: editing an assertion after its RED spends the RED; re-run it
+  against the unfixed code.
+- `process-agents-dispatching-parallel`: a fixed shared resource (ports, one device, a test
+  database) contends with VERIFICATION, so partition the gate run out of every brief instead of
+  serialising the agents.
+- `process-review-receiving-code-review`: after repeated rounds of minor findings, put
+  merge-or-continue to the owner.
+- `coding-input-sanitization`: a validator must be no looser than the parser that consumes the
+  value; judge a URL's host by the consuming parser's normalised host; fuzz a cross-language
+  validator against a replica of its consumer.
+- `coding-python-clean-architecture`: inject one frozen port bundle for many adapters and keep the
+  singleton bundles in one low composition module, the one stable patch point.
+- `coding-python-layered-config`: a redactor that masks only strings leaks a secret the loader
+  delivered as a list or table.
+- `coding-python-use-modern-libraries`: a `re.sub` replacement built from data needs a callable
+  repl; `re.escape` is not a remedy.
+- `coding-python-new-public-library`: after `rename.sh`, check every licence claim against the
+  others, resolve relative links, and check repository URL owners against the new origin.
+- `devops-bmk`: a skill-only repo of helper scripts is not a bmk project; `test-all` runs its
+  version cells in parallel (set `workers = 1` for a suite on fixed ports); a PyPI filename is burned
+  for good once deleted; the JSON API can lag a successful publish; in a release sweep, gate before
+  the first commit.
+- `infra-proxmox`: new `references/guest-ignores-shutdown.md`: a guest whose kernel registers no
+  ACPI power button ignores `qm shutdown`; load `tiny_power_button` as the workaround.
+- `infra-windows-servicing`: the read-only attribute paragraph is completed.
+- `meta-dream-tree`: a level copied from a project template keeps a structurally complete but
+  meaning-stale descriptor; compare its WHAT line with the README.
+- `meta-skill-writer`: edit a skill in the repo that owns it, found by
+  `.claude-plugin/marketplace.json`, never in the installed cache.
+
 ## [10.4.2]
 
 ### Changed

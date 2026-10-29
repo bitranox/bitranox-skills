@@ -27,6 +27,17 @@ rule does not apply.
 - **Default to integration / e2e against the real dependency** (real DB, real broker, real HTTP via a
   local server or recorded fixtures). In-memory fakes accept arguments the real service rejects, so
   green unit tests can still ship a broken contract. Treat the integration/e2e run as the proof.
+- **A slow upstream is slow to its BODY, not to its answer.** To park a client inside its wait for
+  an upstream's first bytes (the branch where it gives up when no data arrives), have the local
+  test server read the request, send and flush the response headers at once, then hold back only
+  the body. A server that simply answers late leaves the client in the connect/header wait, a
+  different branch with different timeouts; the two look alike from outside and fail alike, so a
+  test on the wrong one passes while proving nothing about the branch it names. Give the double an
+  explicit knob that holds the body until the test releases it (a `body_gate=` event the test
+  sets), rather than a blanket delay, so each test states which wait it exercises, and drive the
+  client's own first-byte timeout through its injected clock (see "No timer in a test" below). A
+  timed `first_byte_delay=` knob belongs only to the integration tier, where that rule's exception
+  applies.
 - **Avoid monkeypatching. Use dependency injection.** Pass the collaborator in (a port/protocol) and
   substitute a real-ish fake or the real thing in tests. Reach for `monkeypatch`/patch only at a true
   external edge you cannot inject (a third-party global, the clock - with the caveat below, the
@@ -48,7 +59,13 @@ rule does not apply.
   scheduler reads the clock you swap. Inject a clock; when the code is not yours, patch the
   CONSUMER's own name for it - a module-level `_now = time.monotonic` it calls (patch `pkg.mod._now`),
   or the module's `time` name replaced with a stub that keeps the rest of `time` - never the function
-  on the time module.
+  on the time module. `pkg.mod.time.time` and `pkg.mod.datetime.datetime` are process-wide the same
+  way (every reader of that name sees the patch), but only a `monotonic` patch freezes asyncio's
+  timers. A `monkeypatch` is undone only after the test returns, so an `async with` exit inside the
+  test, and any teardown that runs before the patch is undone, runs under the frozen clock: when an
+  async test hangs in `__aexit__` or a fixture teardown with no error, grep it for a patched
+  `monotonic` before suspecting the code. To skip a quiet period, add a seam the
+  code reads (an injected clock, or a method that ends the period).
 - **Drive the interaction, not the handler.** For anything a user reaches through an interaction (a
   key binding, a route, a CLI argument, a permission check), the test presses the key, clicks the
   row or runs the command, and asserts on what renders or what the command prints. A direct call to
@@ -162,10 +179,10 @@ enough to prove the contract while staying offline, deterministic and fast, so i
 DEFAULT run. "Uses the real implementation" and "must be marked and skipped" are different
 questions; answer them separately.
 
-## Injecting a callable as a seam: three traps a green suite cannot show
+## Injecting a callable as a seam: four traps a green suite cannot show
 
-Injecting a stdlib callable so a test can substitute it is the right shape. Three things about it
-fail silently.
+Injecting a callable (a stdlib function, a resolver, a validator's collaborator) so a test can
+substitute it is the right shape. Four things about it fail silently.
 
 **Annotate the attribute with YOUR contract, not the stdlib's.** A bare assignment makes pyright
 strict infer the library function's exact signature, and an honest double is then rejected:
@@ -214,6 +231,15 @@ settle took a file from 0.07s to 90.05s while staying fully green. A slow suite 
 decays until someone stops running it. Inject the sleep or clock too, and watch the file's duration
 in CI (`pytest --durations`, the runner's slow-test report) rather than asserting elapsed time inside
 a test.
+
+**A fake injected into a pydantic validator must not raise to stand in for a refusal.** pydantic
+v2 wraps a `ValueError` (subclasses included), an `AssertionError` or a `PydanticCustomError`
+raised inside a validator into the same `ValidationError` the refusal gives, so
+`pytest.raises(ValidationError)` passes with the check deleted: it matches the wrapper type, not
+the reason. Other exception types (`RuntimeError`, `OSError`, `TypeError`, `KeyError`) propagate
+unwrapped (observed on pydantic 2.14); check the installed version for the type your fake raises.
+Make the fake answer success or record its calls, assert the check's own error text or that the
+fake was never called when the check should refuse first, and RED it by deleting the check.
 
 ## Adversarial inputs at the boundary (the test side of sanitization)
 
@@ -267,6 +293,15 @@ promised. But do not just drop it: a missing branch where the axis clearly appli
 size or length reaching a real sink) is a CODE finding - report the absent validation rather than
 writing a test that documents its absence.
 
+**A rule that borrows evidence from a NEIGHBOURING event loses only the last item of a burst.** A
+pairing window, a de-duplication against the next item, or a debounce that reads the next sample
+can confirm each item with its SUCCESSOR's signal, so a burst of six reports five, which reads like
+an edge off-by-one, while a single event fails every time, silently and with no log line. The
+single event is the ordinary case for anything a person operates, and a person testing it produces
+bursts. Write the burst-of-one test first, as the named case. In a recording, check that each
+confirmation is the item's own signal and not its successor's; when the recorded data holds only
+bursts, treat the single-event behaviour as unmeasured, not as covered.
+
 **A file a library reads before your code is several inputs, not one.** For a shipped default
 config or a bundled data file, missing, unreadable and corrupt (and empty, a directory or a FIFO
 where the code can meet one) each take their own path through a library you do not own, so they
@@ -297,6 +332,14 @@ nobody asserts on can silently re-acquire unscrubbed content the next time it is
 re-capture, a re-export): the eyeball check does not repeat, the assertion does. Parse the committed
 fixture and assert the sanitized values, including the structured payload fields, so the scrub is
 enforced by the suite rather than remembered by a person.
+
+**A fake that assembles one entity from several captured bodies (a listing plus a detail body)
+must refuse a pairing whose shared identity fields disagree.** Capture and redaction happen per
+file, so two bodies from one capture set can describe different real entities, and every test on
+such a fake proves behaviour for an impossible world. Compare the identity fields the bodies share
+at the fake's construction and raise, rather than fixing the one fixture. The tell: new identity
+or consistency logic turns many tests red at once, which reads as a regression in the new code;
+check the fixture's pairing before suspecting it.
 
 ## Deterministic and order-independent
 
@@ -367,6 +410,17 @@ enforced by the suite rather than remembered by a person.
   precondition held before reading what the code did. When one Windows cell reds on a timing
   assertion while its sibling cells pass, suspect clock resolution, which itself differs by Python
   version on Windows, before an interpreter bug.
+- **A test that reads the clock and then calls code that reads it again asserts nothing ran in
+  between.** A loaded CI runner stalls there (measured: 0.23 s against a 0.05 s tolerance) while
+  local runs, where the two reads are microseconds apart, never do. In order of preference: take
+  the expectation from the time the code under test returns or reports; where only a range is
+  checkable, bound it by a read on EACH side (`before + lead <= result <= after + lead`), never by
+  `before` alone; where the input itself depends on the instant, hold the clock still at the
+  consumer's own name for it (see "Never patch the clock function itself" above). Make fixture
+  timestamps match the time that really passed, not the time a sleep asked for. Prove the fix in a
+  scratch copy of the test file, never in the committed test (see "No timer in a test"): insert a
+  real delay before each call under test and require the old form to fail and the new one to
+  pass; the same arm finds siblings of the same shape.
 - **Inject time and randomness.** No bare now-clock, RNG, or UUID call in code under test - pass a
   clock / seed so the test is reproducible. (`datetime.now()`/`random`/`uuid4` in Python;
   `Date.now()`/`Math.random()`/`crypto.randomUUID()` in JS, or `vi.useFakeTimers()` at the edge;
@@ -383,17 +437,32 @@ loses - so it passes locally for months and fails on one CI cell. Wait on the la
 producer emits, or on a signal it writes only when finished, never on the first thing that
 happens to be observable.
 
+Such a failure reads like a race in the product, but both orders are usually deliberate: turn the
+test round, not the code - wait for B, and the assertion stays as it was. When B cannot be a
+synchronous predicate (a connection attempt, anything that needs an await), write a small waiter
+for it and run that waiter once against the state it must refuse, or it can pass without
+asserting anything.
+
 ## Reproducing a flake: starve it, or slow the clock it races
 
 A flake reproduces under the pressure that matches its MECHANISM, and the two mechanisms need
 opposite apparatus. Repetition alone is the weakest option and is what most runs reach for first.
 
-- **A race between tasks** reproduces under CPU STARVATION. Pin the suite to one cpu (read the
-  allowed set from the process's own status rather than assuming cpu 0) and run N busy
-  competitors on that cpu, interleaved with an unstarved arm. It has a working range: past
-  roughly 2.3x competitors it also reports margin failures that are not defects, so a finding
-  there needs checking against the unstarved arm before you believe it. Measured: 45 unstarved
-  runs found nothing, while the starved arm found two real ordering defects on every run.
+- **A race between tasks** reproduces under CPU STARVATION. Pin the suite to one cpu taken from
+  the process's own allowed set (`Cpus_allowed_list` in `/proc/self/status`), never an assumed
+  cpu 0: a cpu outside the cpuset makes `taskset` fail at once with "invalid argument", and a
+  loop that counts exit codes files that as the suite failing, so prove the pin before measuring.
+  Run busy competitors on that cpu, INTERLEAVED with an unstarved arm, and record every run's
+  duration. The setting is the SLOWDOWN against the interleaved unstarved neighbour, not the
+  competitor count: a suite that mostly waits needs more competitors to get there, and one
+  competitor can leave a run barely slower, starving nothing while looking like it worked. Raise
+  the count until the starved arm runs about 1.6x to 2.3x as long; below that a green arm is
+  evidence of nothing, and above it margin failures appear that are not defects. Classify each
+  failure before fixing it: an assert reading something that provably happens after what was
+  waited for is an order defect at any speed (see "Wait on whatever lands LAST" above); a lost
+  wall-clock margin is the instrument talking, and inflating that timeout removes the test's
+  meaning. Measured: 45 unstarved runs found nothing, while the starved arm found two real
+  ordering defects on every run.
 - **A race against a TIMER** does not reproduce that way, because contention reschedules tasks
   and the timer keeps its own time. Find the clock the race is against and slow THAT - a UI
   framework's update tick, an animation rate, a poll interval - which widens the window the test
@@ -594,7 +663,7 @@ list of local-only files: that list is a second copy of `.gitignore`, so the nex
 something writes into the tree (a state file, a scratch log) turns the local run red while a
 fresh CI clone, which never has that file, stays green.
 
-Nine mechanics worth stating because they silently defeat a test that looks right:
+Ten mechanics worth stating because they silently defeat a test that looks right:
 
 - **`from m import X` binds a COPY at import time.** `monkeypatch.setattr(m, "X", v)` mutates `m`'s
   namespace and never reaches the consumer's already-bound name, so the test runs against the
@@ -602,6 +671,13 @@ Nine mechanics worth stating because they silently defeat a test that looks righ
   seam over patching in the first place; where you own the reader, read the qualified `m.X` at call
   time and drop the bare import; else patch at the CONSUMER (`setattr(consumer, "X")`). Default
   arguments, module splits and composition containers bind early the same way (reference below).
+- **A package attribute named like its submodule shadows the module for `import ... as`.** When
+  `pkg/__init__.py` re-exports `from .main import main`, both `import pkg.main as m` and
+  `from pkg import main` bind the FUNCTION, because import-as reads the package attribute. A test
+  that wants the module to read a constant or patch a seam gets the function instead, and fails
+  with a confusing `AttributeError` ("'function' object has no attribute ...") or patches nothing.
+  Reach the module with `importlib.import_module("pkg.main")` (or `sys.modules["pkg.main"]`), and
+  avoid re-exporting a name that collides with a submodule.
 - **A standard-library wrapper can hold its OWN copy of the function you patch, on some
   interpreter versions only.** Python 3.10's `pathlib.Path.cwd()` calls `os.getcwd` through an
   accessor that bound it at import, so `monkeypatch.setattr(os, "getcwd", fake)` never reaches it
@@ -658,7 +734,10 @@ Nine mechanics worth stating because they silently defeat a test that looks righ
   not from an input you believe
   is malformed, and assert the condition happened (the collaborator was called) before reading the
   RED. Once the fix exists, RED it by mutating the fix back with `__pycache__` cleared. If the RED
-  message is about the fixture rather than your case, the fixture is the bug.
+  message is about the fixture rather than your case, the fixture is the bug. The exception is a
+  test proving that a CHECK refuses: where the code wraps the collaborator's exception into the
+  type the refusal itself raises (a pydantic validator), a raising collaborator passes with the
+  check deleted - see the pydantic trap under "Injecting a callable as a seam".
 - **A test that passes a non-default flag tests the path that already worked.** Supplying
   `by_alias=True`, `sort_keys=True`, `strict=True`, an explicit encoding or a timezone exercises
   exactly the option production omits, so a defect in the DEFAULT path stays invisible, and the
@@ -686,16 +765,17 @@ tolerant helper the production loader uses, so its clean verdict can only confir
 already accepted.
 
 **Read `references/silent-test-defeaters.md` (Read tool)** when a test patches a name, parses tool
-output, asserts on an exception message or on rendered output, loops until a condition holds,
-pins or clears an environment variable (its own or a spawned child's, or one a library reads at
-import), redirects or deletes coverage data from a conftest, simulates a race between a
-check and an open, blocks a stub so it can be signalled mid-call, plants a marker to prove a
-process ran (or did not), asserts that no file descriptor leaked or that a file is held only
-through a memory map, binds a unix socket under `tmp_path`, builds a test double by subclassing
-a `@dataclass`, mints synthetic identifiers (an address, a serial, ids that something later
-truncates), carries a skip or an exclusion, judges an artifact, compares against a git ref,
-guards against cost, or tests environment isolation - or before you claim a code path is untested
-or accept a surviving mutation.
+output, asserts on an exception message (a reworded one included) or on rendered output, loops
+until a condition holds or times how long that takes, pins or clears an environment variable (its
+own or a spawned child's, or one a library reads at import), redirects or deletes coverage data
+from a conftest, simulates a race between a check and an open, blocks a stub so it can be
+signalled mid-call, plants a marker to prove a process ran (or did not), starts a fixture process
+that must carry a given `/proc/<pid>/comm` name, asserts that no file descriptor leaked or that a
+file is held only through a memory map, binds a unix socket under `tmp_path`, builds a test double
+by subclassing a `@dataclass`, mints synthetic identifiers (an address, a serial, ids that
+something later truncates), carries a skip or an exclusion, judges an artifact, compares against a
+git ref, guards against cost, or tests environment isolation - or before you claim a code path is
+untested or accept a surviving mutation.
 
 ## Quick checklist
 

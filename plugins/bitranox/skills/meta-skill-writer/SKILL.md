@@ -1521,6 +1521,17 @@ Deploying untested skills = deploying untested code. It's a violation of quality
 - [ ] External doc references are INSTALL-REACHABLE (see "Referencing external DOCS"): every `README`/`docs/`/`see ...md` the reader is sent to either ships in the skill dir, is a version-pinned URL, or is install-local `--help`/`help()` - no bare package-local path. Verify: `grep -nE '(docs/|README|see [^ ]*\.md)' SKILL.md | grep -v http` shows only bundled-or-discoverable hits
 
 **Deployment:**
+- [ ] Edit the skill in the repo that OWNS it, never in the installed copy under
+      `~/.claude/plugins/cache/<marketplace>/<plugin>/<version>/` or
+      `~/.claude/plugins/marketplaces/`: the next plugin update overwrites that copy, and the fix
+      vanishes while looking shipped. Find the owner by test, not by memory: a repo is a
+      marketplace exactly when it has `.claude-plugin/marketplace.json`
+      (`find <source-tree> -path '*/.claude-plugin/marketplace.json'`; a hit under a worktree dir
+      is a copy of its repo, not another owner). If the skill also ships from a second repo (a
+      tool's own marketplace and a central one), fix both copies. Bump that repo's `plugin.json`,
+      ship per its own CLAUDE.md or CONTRIBUTING.md, then load it with `/plugin marketplace update`
+      plus `/reload-plugins` or a fresh session, and prune the old cache dir
+      (`bitranox:meta-prune-plugin-cache`).
 - [ ] Place skill in the correct directory, chosen by what it teaches:
   - **USING a tool or library** (install, configure, operate): make the tool's own repo a
     single-plugin marketplace (`.claude-plugin/plugin.json` plus a `marketplace.json` listing one

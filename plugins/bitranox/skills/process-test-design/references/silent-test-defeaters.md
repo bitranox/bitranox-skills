@@ -1,15 +1,16 @@
 # Silent test defeaters: the detail
 
-Read this when a test patches a name, parses tool output, asserts on an exception message or on
-rendered output, loops until a condition holds, pins or clears an environment variable (one a
-library reads at import included), redirects or deletes coverage data from a conftest, simulates
-a race between a check and an open, blocks a stub so it can be signalled, plants a marker to prove
-a process ran, asserts a descriptor was closed or a file is held only through a memory map, binds
-a unix socket under `tmp_path`, builds a test double by subclassing a `@dataclass`, mints
-synthetic identifiers (ids that something later truncates included), carries a skip or an
-exclusion, judges an artifact, compares against a git ref, guards against cost, or tests
-environment isolation - or when you are about to claim a code path is untested, or a mutation
-survives. Each entry names the trigger, the mechanism that makes the test pass (or fail)
+Read this when a test patches a name, parses tool output, asserts on an exception message (a
+reworded one included) or on rendered output, loops until a condition holds or times how long that
+takes, pins or clears an environment variable (one a library reads at import included), redirects
+or deletes coverage data from a conftest, simulates a race between a check and an open, blocks a
+stub so it can be signalled, plants a marker to prove a process ran, starts a fixture process that
+must carry a given `/proc/<pid>/comm` name, asserts a descriptor was closed or a file is held only
+through a memory map, binds a unix socket under `tmp_path`, builds a test double by subclassing a
+`@dataclass`, mints synthetic identifiers (ids that something later truncates included), carries a
+skip or an exclusion, judges an artifact, compares against a git ref, guards against cost, or
+tests environment isolation - or when you are about to claim a code path is untested, or a
+mutation survives. Each entry names the trigger, the mechanism that makes the test pass (or fail)
 for the wrong reason, and the fix.
 
 ## Determinism and environment
@@ -28,6 +29,30 @@ cap that never binds while the real guard works) and assert in the test that it 
 advance every counter the real system advances (distinct ids, growing totals), or a
 de-duplicating consumer freezes the loop for a reason unrelated to the change. Then mutate the
 guard the loop depends on and require a fast, NAMED failure.
+
+### Timestamp BEFORE the probe that gets in, when the probe is the operation itself
+
+In a unit test, a timeout is driven by injecting the clock (the "No timer in a test" rule in
+SKILL.md). This entry covers the test that must measure REAL elapsed time, such as an integration
+test or a benchmark, of how long until a resource is freed, when the only probe is the operation
+itself (a send refused while another is in flight, a lock acquire that then does real work). The
+probe that finally gets in runs a full operation of its own, so a timestamp taken after it adds
+that whole duration (measured: every run read 1.0 s for a 0.5 s budget), the test's name ("freed
+after one budget") becomes a false claim, and the lost slack fails it on a slow CI host. Take the
+timestamp BEFORE each probe and report the one taken before the probe that succeeded:
+
+```python
+for _ in range(MAX_PROBES):
+    t = time.monotonic()
+    result = probe()
+    if freed(result):
+        break
+else:
+    raise AssertionError(f"not freed after {MAX_PROBES} probes")
+elapsed = t - started
+```
+
+Prefer a probe that observes the state without doing the work, when one exists.
 
 ### Pin the environment an output premise depends on
 
@@ -124,6 +149,24 @@ the test blocks on: a FIFO the test creates and the stub writes to before blocki
 `touch MARKER` the test polls for is the poll-until-deadline loop the "No timer in a test" rule
 forbids; the FIFO is the event planted in its place. This shape is POSIX: on Windows there is no
 FIFO or shell `exec`, and a parent's `terminate()` is `TerminateProcess`.
+
+### A fixture process with a given comm name: rename a Python child with prctl
+
+Code that recognises a process by its kernel command name (`/proc/<pid>/comm`: a live-session or
+daemon check) needs a fixture whose comm is that name. `exec -a` changes argv[0], not comm, and
+copying a binary under the wanted name works only where that binary is standalone: a multicall
+build (uutils coreutils, busybox) picks its applet from argv[0] and exits at once (uutils prints
+`coreutils: unknown program '<name>'`). Start a Python child that renames itself, with the cwd the
+check under test inspects, and kill it in teardown:
+
+```bash
+python3 -c 'import ctypes, time; ctypes.CDLL(None).prctl(15, b"NAME", 0, 0, 0); time.sleep(30)'
+```
+
+15 is `PR_SET_NAME`. It is Linux only, and a name longer than 15 bytes is silently cut to 15.
+Assert the fixture is alive (`os.kill(pid, 0)`, `kill -0`) and read its comm back before running
+the check: a fixture that died at start makes the path under test pass or fail for the wrong
+reason, and its one-line error is easy to miss in test output.
 
 ### Build a missing path under the test's temp dir
 
@@ -300,6 +343,14 @@ the failure reads like the code under test. Give every arm an impossible `match=
 what pytest prints for each - reading the raising code gets it wrong when the refusal comes from a
 lower layer - then parametrize the pattern alongside the input, or match only a substring every
 arm shares.
+
+### A substring assertion on a reworded message must fail on the OLD message
+
+A short token can already sit inside a longer word of the old text: an assertion that a reworded
+hint says "quoted" passes on an old message that said "unquoted", so the test cannot go red.
+Assert a phrase only the new wording contains (several words, or a token anchored on word
+boundaries), run the assertion against the pre-fix message, and require it to FAIL before you
+trust it.
 
 ### Prove "untested" with branch coverage, not by grepping the name
 

@@ -111,7 +111,15 @@ the success line, abort-and-show on a miss).
     descriptor is a real level that needs one; a descriptor but no pointers is usually a real level
     not used yet. Of the rest, only synthesize levels whose descriptor is EMPTY,
     INCOMPLETE (missing template keys), or whose CHILDREN list is stale vs the actual
-    subdirectories. Dispatch one `opus` subagent per stale
+    subdirectories, or whose MEANING is inherited. Those first three test STRUCTURE only: a level
+    whose repo was copied from a project template inherits the template's descriptor with only the
+    NAME swapped by the rename step, so it carries every key and a fresh CHILDREN list while its
+    WHAT, STACK and PLACE-HERE still describe the template. That is worse than an empty descriptor:
+    an empty one makes placement abstain, a confidently wrong one routes facts to the wrong level.
+    For any level that came from a template, read its WHAT line against the first sentence of the
+    repo's own README and require them to agree, and grep every `CLAUDE.local.md` (enumerated with
+    `find`: Claude Code's `grep` skips gitignored files, and pointer files often are) for the
+    template's giveaway phrasing. Treat a mismatch as stale. Dispatch one `opus` subagent per stale
     level, in parallel (bottom-up in two waves when a leaf and its parent are both stale, so the
     parent can read fresh child descriptors). An upper level's subagent reads each child dir's
     README/CLAUDE.md/docs headings + child descriptors; the project level's subagent reads the

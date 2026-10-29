@@ -155,6 +155,16 @@ naming the real defect, and GREEN against the fix. Related: an assertion about t
 a test file that runs in more than one tree (a repo and a seeded copy of it) must hold in every
 tree, or whoever meets it in the other tree deletes it.
 
+**Editing an assertion after its RED spends the RED.** The RED is evidence about the assertion
+exactly as it stood when it failed. The risky edit is the TIDY one, made because the failure output
+was noisy and the edit is obviously right on its own terms: slicing a list whose LENGTH mismatched
+(one read delivered seven items, the test expected three), loosening a type. It can remove the only
+thing that was failing, and nothing in the loop asks for the RED again. After any edit to an
+assertion that already failed, re-run the test against the unfixed code and read the failure
+again. When a test is meant to cover a specific fix, the check is the mutation: remove the fix and
+require that test to fail, once more at the very end, after every edit the test received on the
+way to green.
+
 **New behaviour is a refusal?** Assert the specific message or field, not only the exit code. An
 argument parser refusing a not-yet-existing flag (argparse exits 2) makes an exit-code-only test
 pass before the feature exists, green for the wrong reason. Run it against the pre-feature code

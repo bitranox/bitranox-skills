@@ -156,3 +156,12 @@ swap it out.
   except a `\u`/`\N{}` escape or a line continuation (so a docstring whose only backslashes are
   those needs no `r` at all). ruff offers the `r` prefix only as an UNSAFE fix; never bulk-apply it
   with `--unsafe-fixes`.
+- **Pass a computed `re.sub` replacement as a function, not a string.** `re` parses a string
+  replacement as a template, so a backslash in dynamic text (file content, a Windows path,
+  regex-like prose) raises `re.error` 'bad escape' (`re.PatternError` is its name on 3.13+), or
+  silently turns `\1` / `\g<0>` into group references. Write `re.sub(rx, lambda m: text, s)`
+  (`Pattern.sub` the same); a literal replacement is fine as a string. Do not run the data through
+  `re.escape` to make it a safe template: that escapes punctuation and spaces, which the
+  replacement then keeps as stray backslashes. If it must stay a string, double only the
+  backslashes (`text.replace("\\", "\\\\")`). A batch loop over many files doing this should be
+  idempotent, so a mid-loop crash can simply be re-run.

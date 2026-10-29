@@ -48,6 +48,13 @@ force-pushes to the first remote it finds**, so detach the template `origin` fir
 it rewrites the template's own history; with no remote it rewrites local history only. Add
 your own empty repo as `origin` and push `main` afterwards.
 
+`rename.sh` swaps the template's NAME, not its meaning: every project-specific doc the copy
+inherited still describes the template until you read it. After the rename, check the licence
+claim in every place that states one (`LICENSE`, `pyproject.toml`, the README badge, any
+transparency or policy doc) against each other, resolve every relative link, and check the owner
+segment of every repository URL against `git remote get-url origin`. A licence the docs declare
+differently from `LICENSE` ships in every release until someone reads it.
+
 ## 2. Install
 
 ```bash

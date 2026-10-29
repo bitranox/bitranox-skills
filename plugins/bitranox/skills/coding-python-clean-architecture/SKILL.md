@@ -193,6 +193,24 @@ class PaymentPort(Protocol):
 
 Ports are `Protocol`s in `application/ports/`. Adapters implement them. The business rules own the interface; adapters are **plugins**. See `port-contracts.md` for all standard port definitions (UoW, Outbox, IdempotencyStore, IdProvider, Clock).
 
+**Many adapters: inject one port bundle.** When a service reaches more adapter functions than the
+two or three a signature carries comfortably (a subprocess runner, file reads, a socket send),
+inject ONE `@dataclass(frozen=True, slots=True)` bundle of typed callables instead of N
+parameters threaded through the whole call tree. Type each field precisely, with a `Protocol` for
+any callable that has defaults or keyword-only arguments. Composition builds the real bundle from
+the concrete adapters, which removes every adapter import from the application layer in one move
+(the import-linter application -> adapters violation disappears). Store it on the instance
+(`self._io`) in a class; pass it as a parameter to free functions. Tests build a fake with a helper
+that fills the REAL-adapter defaults and takes per-port overrides, so a test names only the ports
+it fakes, and pass it in directly - the default route for every test.
+
+When an entry dispatcher needs a process-wide bundle, define it in one small, low composition
+module that the composition root and every module calling the dispatched code import (never in the
+root itself: the root imports those modules, so they would import it back, a cycle). A bundle built
+at import CAPTURES the adapter references, so patching the adapter module rebinds nothing; that one
+module attribute is the deliberate seam for tests that must enter through the dispatcher, and it
+stays the same patch point when the modules around it are split.
+
 ### Unit of Work
 
 ```python

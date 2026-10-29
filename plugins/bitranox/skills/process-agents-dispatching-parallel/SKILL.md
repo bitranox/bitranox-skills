@@ -99,6 +99,21 @@ a half-written sibling edit, and one reported having to re-read every file befor
 avoid clobbering another's work. Nothing warned them - the collision showed up only as a test that
 failed once and passed on re-run.
 
+**A fixed shared resource (bound ports, one device, one test database) usually contends with
+VERIFICATION, not editing.** It is not the "shared state" that sends work to sequential agents.
+Before serialising, write down which STEP contends for the resource: it is nearly always the
+whole-suite or global-gate run each brief closes with, and two of those runs collide ("address
+already in use") in a way that reads like a defect in whatever was just changed. Take that run out
+of every brief instead:
+
+- one agent owns the files that touch the shared resource;
+- each agent runs only the tests for its own files and commits with an explicit pathspec (never
+  `git add -A` or a bare commit), re-checking `git status --porcelain` right before it writes a path
+  and treating a dirty path as another agent's;
+- a file all of them would edit (a backlog, a changelog) follows the one-owner rule above;
+- the dispatcher runs the single full gate afterwards, and a lock around the contended command
+  stays as the backstop for the case you missed.
+
 ### 2. Create Focused Agent Tasks
 
 Each agent gets:
@@ -318,7 +333,9 @@ Return: Summary of what you found and what you fixed.
 **Related failures:** Fixing one might fix others - investigate together first
 **Need full context:** Understanding requires seeing entire system
 **Exploratory debugging:** You don't know what's broken yet
-**Shared state:** Agents would interfere (editing same files, using same resources)
+**Shared state:** Agents would interfere (editing same files, using same resources) - but first
+check whether a few shared files or a fixed resource can be partitioned instead (section 1): a
+resource that only the closing suite run contends for is not a reason to serialise
 
 ## Worked Example
 

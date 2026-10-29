@@ -64,6 +64,9 @@ You MUST complete each phase before proceeding to the next.
    - What are the exact steps?
    - Does it happen every time?
    - If not reproducible → gather more data, don't guess
+   - An intermittent HANG: dump it from a watchdog thread INSIDE the hang, never after the run
+     returns (by then the process is tidy and names no cause). See `hang-dump.md` in this
+     directory before the next reproduction attempt.
 
 3. **Check Recent Changes**
    - What changed that could cause this?
@@ -343,6 +346,8 @@ These techniques are part of systematic debugging and available in this director
 - **`root-cause-tracing.md`** - Trace bugs backward through call stack to find original trigger
 - **`defense-in-depth.md`** - Add validation at multiple layers after finding root cause
 - **`condition-based-waiting.md`** - Replace arbitrary timeouts with condition polling
+- **`hang-dump.md`** - Instrument an intermittent hang: watchdog thread, per-section guarded dump,
+  then kill the run
 
 **Related skills:**
 - **bitranox:process-test-driven-development** - For creating failing test case (Phase 4, Step 1)
