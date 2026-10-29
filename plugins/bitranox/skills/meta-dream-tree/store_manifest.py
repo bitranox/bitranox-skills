@@ -8,10 +8,12 @@ manifest it can re-derive and diff at the end. Both were hand-rolled from scratc
 two different scopes, and the diff half - the half that turns "I verified it" into something a
 reader can check - was the half most often skipped.
 
-The manifest records `(level, slug, title, pin)` per fact, sorted, so it is ORDER-INDEPENDENT: a
-level re-rendered in a different order is not a change. Slug alone would be too little. A fact
-that keeps its slug while its title or pin flips is precisely the loss that reads as "still
-there", and pin decides whether the engine will accept an ordinary `add` at all.
+The manifest records `(level, slug, title, pin)` per fact plus a sha256 of its hook and of its
+body file, sorted, so it is ORDER-INDEPENDENT: a level re-rendered in a different order is not a
+change. Slug alone would be too little. A fact that keeps its slug while its title, pin, hook or
+body changes is precisely the loss that reads as "still there", and pin decides whether the engine
+will accept an ordinary `add` at all. A manifest written before the digests existed carries none;
+verify then compares identity only and says so in `skipped`.
 
 Enumeration is where this goes wrong, twice over, and both are pinned by tests:
 
@@ -35,8 +37,10 @@ Run (from the plugin root, via the launcher that forces UTF-8):
   ... do the pass ...
   `bash hooks/run-python.sh skills/meta-dream-tree/store_manifest.py verify --out <dir>`
 
-`--out` must be outside the store, and either new, empty, or an earlier backup (it holds a
-`manifest.json`): a re-backup clears the old copies first, so any other existing dir is refused.
+`--out` must be outside the knowledge TREE (not under the anchor), and either new, empty, or an
+earlier backup (it holds a `manifest.json`): a re-backup clears the old copies first, so any other
+existing dir is refused. Inside the tree, the copied `CLAUDE.local.md` files would read as real
+levels to the engine, recall and `reconcile --check-tree`.
 
 Exit codes: 0 = backed up / verified identical, 1 = the tree differs from the manifest,
 2 = refused (no store, empty scope, unreadable level or backup, bad arguments).
@@ -45,12 +49,13 @@ on exit 2; `ok` means the run worked and is false only on exit 2.
 """
 
 import argparse
+import hashlib
 import json
 import shutil
 import sys
 import time
 from collections.abc import Callable
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 
 # The engine's pointer parser and anchor resolver, from the plugin's hooks dir:
@@ -105,14 +110,21 @@ class Entry:
     slug: str
     title: str
     pin: bool
+    # sha256 of the pointer hook and of the body file; "" when the manifest predates them, and
+    # BODY_ABSENT when the body file does not exist. Digests rather than text: the manifest is a
+    # proof of sameness, and a copy of every body already sits in the backup's store/.
+    hook_sha: str = ""
+    body_sha: str = ""
 
     def as_dict(self) -> dict:
-        return {"level": self.level, "slug": self.slug, "title": self.title, "pin": self.pin}
+        return {"level": self.level, "slug": self.slug, "title": self.title, "pin": self.pin,
+                "hook_sha": self.hook_sha, "body_sha": self.body_sha}
 
     @staticmethod
     def from_dict(d: dict) -> Entry:
         return Entry(str(d["level"]), str(d["slug"]), str(d.get("title", "")),
-                     bool(d.get("pin", False)))
+                     bool(d.get("pin", False)), str(d.get("hook_sha") or ""),
+                     str(d.get("body_sha") or ""))
 
 
 @dataclass(frozen=True)
@@ -148,6 +160,14 @@ class Diff:
                 "removed": [e.as_dict() for e in self.removed],
                 "changed": [c.as_dict() for c in self.changed],
                 "moved": [e.as_dict() for e in self.moved]}
+
+
+BODY_ABSENT = "absent"
+
+
+def digest(data: bytes) -> str:
+    """The sha256 hex digest a manifest records for a hook or a body. PURE."""
+    return hashlib.sha256(data).hexdigest()
 
 
 def is_pruned_dir(name: str) -> bool:
@@ -227,8 +247,22 @@ def parse_level(text: str, level: str) -> list[Entry]:
     Only the managed block counts, and each slug once: a pointer-shaped line in the prose around
     the block is not a fact the engine will ever load, so a manifest counting it would vouch for a
     fact that does not exist."""
-    return [Entry(level=level, slug=p.slug, title=p.title.strip(), pin=p.pin)
+    return [Entry(level=level, slug=p.slug, title=p.title.strip(), pin=p.pin,
+                  hook_sha=digest(" ".join((p.hook or "").split()).encode("utf-8")))
             for p in uuid_store.parse_pointer_index(text or "")[1] if not p.legacy]
+
+
+def body_digest(anchor: Path, slug: str, unreadable: list[str]) -> str:
+    """The digest of one fact's body file, BODY_ABSENT when it has none, "" when it cannot be read
+    (with the reason appended to `unreadable`, so the scope refuses rather than vouching for it)."""
+    path = Path(anchor) / STORE_DIR / "facts" / f"{slug}.md"
+    try:
+        return digest(path.read_bytes())
+    except (FileNotFoundError, NotADirectoryError):
+        return BODY_ABSENT
+    except OSError as exc:
+        unreadable.append(f"{path} ({type(exc).__name__})")
+        return ""
 
 
 def read_level_text(path: Path, unreadable: list[str]) -> str | None:
@@ -261,10 +295,15 @@ def derive(root: Path, *, scope: str = "tree", start: Path | None = None,
     levels = (levels_under(anchor, exclude, unreadable) if scope == "tree"
               else levels_on_chain(begin, anchor))
     entries: list[Entry] = []
+    bodies: dict[str, str] = {}
     for lvl in levels:
         text = read_level_text(lvl / LEVEL_FILE, unreadable)
-        if text is not None:
-            entries.extend(parse_level(text, str(lvl)))
+        if text is None:
+            continue
+        for e in parse_level(text, str(lvl)):
+            if e.slug not in bodies:
+                bodies[e.slug] = body_digest(anchor, e.slug, unreadable)
+            entries.append(replace(e, body_sha=bodies[e.slug]))
     if unreadable:
         raise Unreadable(sorted(unreadable))
     return sorted(entries)
@@ -284,6 +323,10 @@ def _by_slug(entries: list[Entry]) -> dict[str, dict[str, Entry]]:
 
 def _changed(slug: str, b: Entry, a: Entry) -> Change | None:
     what = [name for name in ("title", "pin") if getattr(b, name) != getattr(a, name)]
+    # A digest is compared only when BOTH sides recorded one: an older manifest has none, and
+    # reading that as "every hook changed" would bury the real differences.
+    what += [name for name, attr in (("hook", "hook_sha"), ("body", "body_sha"))
+             if getattr(b, attr) and getattr(a, attr) and getattr(b, attr) != getattr(a, attr)]
     return Change(slug, what, b, a) if what else None
 
 
@@ -343,18 +386,26 @@ def _write_manifest(out: Path, *, anchor: Path, scope: str, start: Path,
     return path
 
 
-def _check_out(out: Path, store: Path) -> None:
+def _check_out(out: Path, store: Path, anchor: Path | None = None) -> None:
     """Refuse an --out the backup would damage, or damage itself by writing into.
 
     Inside the store, copytree recurses into its own output and fills the LIVE store with nested
-    copies. An existing dir that is not an earlier backup may hold someone's files, and a
-    re-backup clears `store/` and `levels/` before copying - so only a new, empty, or earlier
-    backup dir is accepted.
+    copies. Anywhere else inside the knowledge tree, the copied `CLAUDE.local.md` files are level
+    files under the anchor, so the engine, recall and `reconcile --check-tree` read them as decoy
+    levels carrying duplicate pointers; skipping the dir in this tool's own walk protects nothing
+    else. An existing dir that is not an earlier backup may hold someone's files, and a re-backup
+    clears `store/` and `levels/` before copying - so only a new, empty, or earlier backup dir is
+    accepted.
     """
     target = Path(out).resolve()
     if target == store or store in target.parents:
         raise StoreManifestError(f"--out {target} is inside the store {store}; the copy would "
                                  "recurse into itself - write the backup outside the store")
+    if anchor is not None and (target == anchor or anchor in target.parents):
+        raise StoreManifestError(f"--out {target} is inside the knowledge tree {anchor}; its "
+                                 "copied CLAUDE.local.md files would read as real levels - write "
+                                 "the backup outside the tree (e.g. under "
+                                 "~/.claude/self-improve-audit/backups/)")
     if target.is_dir() and any(target.iterdir()) and not (target / "manifest.json").is_file():
         raise StoreManifestError(f"--out {target} exists, is not empty and holds no "
                                  "manifest.json, so it is not an earlier backup; a re-backup "
@@ -365,7 +416,7 @@ def backup(*, root: Path, scope: str, start: Path, out: Path) -> tuple[list[Entr
     """Copy the store and every in-scope level file, then record the manifest."""
     anchor = anchor_dir(root)
     store_src = anchor / STORE_DIR
-    _check_out(out, store_src.resolve())
+    _check_out(out, store_src.resolve(), Path(anchor).resolve())
     entries = derive(root, scope=scope, start=start, exclude=(Path(out).expanduser(),))
     if not entries:
         raise EmptyScope(f"no pointers found in scope {scope!r} under {anchor} - a manifest of "
@@ -420,6 +471,11 @@ def load_manifest(out: Path) -> dict:
     if why:
         raise StoreManifestError(f"{path} is not a store manifest: {why}")
     return data
+
+
+def content_compared(data: dict) -> bool:
+    """Whether a loaded manifest recorded hook and body digests, so verify compared them. PURE."""
+    return all(e.get("hook_sha") and e.get("body_sha") for e in data["entries"])
 
 
 def verify(out: Path) -> Diff:
@@ -493,9 +549,16 @@ def main(argv: list[str] | None = None) -> int:
                   {"entries": len(entries), "manifest": str(path), "scope": args.scope},
                   f"backed up {len(entries)} pointer(s) ({args.scope} scope) -> {path}")
             return 0
-        d = verify(Path(args.out).expanduser())
+        out = Path(args.out).expanduser()
+        d = verify(out)
+        compared = content_compared(load_manifest(out))
+        skipped = [] if compared else [
+            "hooks and bodies not compared: the manifest predates their digests, so only level, "
+            "slug, title and pin were checked"]
+        data = dict(d.as_dict(), content_compared=compared)
+        text = _render_diff(d) + ("" if compared else "\n(" + skipped[0] + ")")
         # ok means "ran without error" (false only on exit 2); "differs" is the answer, exit 1
-        _emit(args.as_json, True, "verify", d.as_dict(), _render_diff(d))
+        _emit(args.as_json, True, "verify", data, text, skipped)
         return 0 if d.identical else 1
     except (StoreManifestError, OSError) as exc:
         # OSError: a copy or manifest write that failed part-way (full disk, read-only target).

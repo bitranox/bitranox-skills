@@ -30,6 +30,102 @@ a hole nobody has drawn a line under is one that gets rediscovered and half-fill
 two "versions with no entry" notes came to sit in this file disagreeing with it.
 
 
+## [10.6.0]
+
+### Added
+
+- `task_brief.py --decision TEXT` (repeatable) quotes the user's own answer into a brief: the
+  question, the chosen label and each chosen option's description, read from
+  `USER-DECISIONS.jsonl` at the main checkout's root or `--decisions-file`. A text matching no
+  record, or more than one, is refused with exit 1 and named.
+- `dream_state.py session-review --prose`: user and assistant text plus failed tool results only,
+  64 MB per part. `session-reviewed` never marks past what the last `session-review` showed, so a
+  mark run with the other view cannot discharge an unread remainder.
+- `ref_map.py --moves FILE` checks a whole batch of planned moves at once; plain-prose mentions are
+  reported as their own class.
+- `landed.py --also-into REF` counts a branch contained in a known-landed ref as landed.
+- New reference files: meta-context-watcher (`survivors-after-clear.md`, `when-it-fires.md`),
+  process-agents-subagent-driven-development (`references/`), and four in infra-proxmox (PVE tasks,
+  `qm set` on a running VM plus cold start and how a VM ended, an external VNC viewer, ZFS guest
+  disks).
+
+### Changed
+
+- `mod_bridge`: an `OSError` is no longer a refusal. It reaches the internal-error path (exit 2,
+  deny relay, kind `Internal`) and keeps the exception type in the message.
+- The `memory_add` mod tool takes `body` as optional: an update without a body keeps the stored
+  body, while a new fact without one is refused (`EmptyBody`). A body with no text below its
+  frontmatter (blank, whitespace or a frame alone) counts as omitted on every update path of the
+  memory engine and is refused on a create.
+- `task_brief.py` reads ids like `Task 2.1b` and `Task 3.2.1` as their own tasks, carries the
+  preamble of the section a task sits in into every brief under it, and says so when a plan has no
+  `Task <id>` headings at all.
+- memory engine: a body file's leading blank lines are stripped; a framed body passed back to `add`
+  gets its `name:` and `description:` re-synced and an explicit `--type` applied; a sibling `move`
+  refusal names the two-move route through the nearest level above both.
+- `factedit show --body` prints the body alone on stdout and the header on stderr, so a show/apply
+  round trip stores the edit unchanged; a body file still carrying the header is refused. `apply`
+  refuses a pinned fact without `--allow-pinned` (`--dry-run` works without it), and an unknown
+  slug is searched across the tree, the error naming the owning level and the retry.
+- `store_manifest backup` refuses an `--out` inside the knowledge tree; the manifest records hook
+  and body digests and `verify` reports their changes (an older manifest says
+  `content_compared: false`).
+- `reconcile_memory_index --archive` of a fact's last pointer refuses while anything still links or
+  names it; `--force` overrides.
+- `memory-settings set <site> decide` warns that open sessions need `/reload-plugins`.
+- `audit_local` collects tests with the dependencies declared in PEP 723 script blocks and skips
+  `~/.claude/skills/synced/` (owned by the claude.ai account). The `uv run` collection retry runs
+  with `--no-project`, so it never syncs the `.venv` of the project it is launched from.
+- meta-context-watcher: answering "what next" covers every open line (state from its last progress
+  segment, a shipped check, owning repo, open PRs and issues); a count the next action relies on is
+  recounted from its data file; solved lines are always deleted and a header saying otherwise is
+  rewritten; `open:` fields lead with the current state, give time gates as an absolute UTC instant
+  and cite commits by subject or pushed sha; lines pointing into the old handover are carried over
+  before it becomes `handover.prev.md`.
+- meta-skill-writer: a RED arm sees companion files at their pre-edit text; a decline resting on a
+  factual claim cites its evidence; every fix round ends with a line-width and fence check and a
+  read of the paragraph after each insertion; the author asks about cases the edit decides beyond
+  the defect. Its testing guide adds commit titles in the git status block as a contamination
+  route, and checks that a tool-enabled arm wrote nothing to the queue or the store.
+- meta-skill-audit: an attribution-debt pass, and a forge check before calling a claim about an
+  external service wrong.
+- process-plan-writing-plans: Self-Review checks that pass criteria name something the build
+  records, and that each clause of a quoted user decision maps to a task.
+- process-agents-subagent-driven-development: rules for refusal tasks naming the tests they break,
+  verifying subagent claims before relaying them, keeping merge/bump/release steps out of
+  implementer briefs, checking a dispatch for unfilled placeholders, quoting user decisions
+  verbatim, and re-running the model gate in a resumed session; a new "Interrupted Runs" section;
+  implementers stop with NEEDS_CONTEXT when one of two remedies changes released behaviour.
+- process-agents-dispatching-parallel: no destructive git steps in lane briefs, a writable report
+  path for worktree-isolated lanes, a per-item progress record, resuming a usage-limit stop, and
+  locating findings by quoted text.
+- process-test-design: an autouse `subprocess.Popen` guard for suites that drive real hosts;
+  self-skipping tests that decide without touching the resource; a "Child processes, nested
+  runners and shared files" section; conftest fixtures never reaching `src/` doctests; mutation,
+  fake-clock, `match=` and FIFO-teardown traps; ratio-based cost guards and rare-flake A/B
+  verification.
+- process-test-driven-development: an ImportError at collection is no RED; an OS-only failure must
+  go RED on that OS.
+- coding-python-uv: `uv tool install --from` ignores the package's `exclude-newer`; a plain
+  `uv lock` keeps the locked version after an exemption; `uv run --python X.Y` replaces the project
+  `.venv`; ask `uv python find --system` which interpreter `uv venv` will use.
+- coding-python-enforce-data-architecture-strict: `model_dump_json()` is not a drop-in for
+  `json.dumps` of `model_dump` on an existing wire; a NamedTuple compares equal to the tuple it
+  replaced; re-validate a `model_copy(update=...)`; `default_factory=list[str]` before converting
+  the class.
+- coding-resilience, coding-python-use-modern-libraries, files-edit-toml (tomlkit and comments in
+  arrays), files-edit-yml (layout no ruamel setting keeps) and files-edit-json (`.ipynb` without
+  nbformat) gain rows and triggers.
+- compuse-bash, compuse-git, compuse-ssh, git-worktrees, process-ship-finishing-development-branch
+  (a stale remote-branch sweep), net-firewall-pfsense, infra-windows-servicing (growing the system
+  drive past the WinRE partition, reagentc 1614) and infra-proxmox gain rows, steps and triggers.
+- meta-dream-tree, meta-dream-nap, meta-self-improve, meta-memory-settings,
+  meta-prune-plugin-cache and meta-audit-local-skills-and-hooks follow the tool changes above.
+
+### Fixed
+
+- `uuid_store`: the add-time recurrence warning no longer reads a date as the count.
+
 ## [10.5.2]
 
 ### Fixed

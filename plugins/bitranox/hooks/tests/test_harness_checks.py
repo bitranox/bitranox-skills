@@ -714,7 +714,7 @@ def test_uncollectable_tests_falls_back_to_uv_when_the_launching_interpreter_lac
     assert problems == []
     assert len(run.calls) == 2, "the uv fallback must actually run, not just get considered"
     fallback_argv = run.calls[1][0]
-    assert fallback_argv[:4] == ["/usr/bin/uv", "run", "--with", "pytest"]
+    assert fallback_argv[:5] == ["/usr/bin/uv", "run", "--no-project", "--with", "pytest"]
 
 
 def test_uncollectable_tests_uv_fallback_still_reports_a_real_collection_failure(tmp_path):
@@ -1342,3 +1342,48 @@ def test_nodeid_paths_compare_with_forward_slashes_on_windows():
     cached id read as missing there."""
     got = hc._relative_posix(PureWindowsPath("C:/r/tests/test_x.py"), PureWindowsPath("C:/r"))
     assert got == "tests/test_x.py"
+
+
+def test_a_pep723_tool_s_missing_dependency_is_retried_with_its_declared_deps(tmp_path):
+    """A PEP 723 script declares its dependencies inline and runs under `uv run`, so its tests
+    import them; collecting those tests with the checker's own interpreter reports a dead suite
+    that passes under the tool's real launch. With the declared deps handed in, the retry runs
+    with them and a clean collection is no finding."""
+    tests = tmp_path / "tests"
+    tests.mkdir()
+    missing = types.SimpleNamespace(
+        returncode=2, stdout="ERROR tests/test_tool.py\n",
+        stderr="E   ModuleNotFoundError: No module named 'pydantic'\n")
+    run = _fake_pytest_run(missing, _clean_collection())
+    problems = hc.uncollectable_tests(tests, run=run, resolve_uv=lambda: "/usr/bin/uv",
+                                      extra_deps=("pydantic>=2.7",))
+    assert problems == []
+    fallback = run.calls[1][0]
+    assert fallback[:5] == ["/usr/bin/uv", "run", "--no-project", "--with", "pytest"]
+    assert fallback[fallback.index("pydantic>=2.7") - 1] == "--with"
+
+
+def test_a_missing_declared_dependency_without_uv_names_the_module_not_pytest(tmp_path):
+    # pytest itself ran here; saying it was not importable sent the reader after the wrong cause.
+    tests = tmp_path / "tests"
+    tests.mkdir()
+    missing = types.SimpleNamespace(
+        returncode=2, stdout="ERROR tests/test_tool.py\n",
+        stderr="E   ModuleNotFoundError: No module named 'pydantic'\n")
+    problems = hc.uncollectable_tests(tests, run=_fake_pytest_run(missing), resolve_uv=lambda: None,
+                                      extra_deps=("pydantic>=2.7",))
+    assert len(problems) == 1 and problems[0][2] is True
+    assert "pytest is not importable" not in problems[0][1]
+    assert "declared dependencies" in problems[0][1]
+
+
+def test_control_a_missing_module_with_no_declared_deps_is_still_a_finding(tmp_path):
+    tests = tmp_path / "tests"
+    tests.mkdir()
+    missing = types.SimpleNamespace(
+        returncode=2, stdout="ERROR tests/test_tool.py\n",
+        stderr="E   ModuleNotFoundError: No module named 'pydantic'\n")
+    run = _fake_pytest_run(missing)
+    problems = hc.uncollectable_tests(tests, run=run, resolve_uv=lambda: "/usr/bin/uv")
+    assert len(problems) == 1 and problems[0][2] is False
+    assert len(run.calls) == 1

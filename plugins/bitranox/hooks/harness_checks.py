@@ -644,7 +644,7 @@ def _run_pytest(argv, timeout):
                           errors="replace", timeout=timeout)
 
 
-def uncollectable_tests(tests_dir, python=None, run=_run_pytest, resolve_uv=None):
+def uncollectable_tests(tests_dir, python=None, run=_run_pytest, resolve_uv=None, extra_deps=()):
     """Test modules pytest cannot even import, as (path, message, unmeasured) triples.
 
     `unmeasured` is True only when the CHECK itself could not run - neither the launching
@@ -656,6 +656,12 @@ def uncollectable_tests(tests_dir, python=None, run=_run_pytest, resolve_uv=None
 
     A `tests/` dir that exists is not a `tests/` dir that runs. Every check that asks only
     "is there a test file?" reports a module green when it errors during collection.
+
+    `extra_deps` are requirement strings the code under test declares for itself (a PEP 723
+    script's inline `dependencies`, which `uv run` provides when the tool is launched). When the
+    direct collection fails on a missing module and these are given, collection is retried under
+    `uv run --with pytest --with <each>`, so a suite that passes under its tool's real launch is
+    not reported dead for lacking deps the checker's own interpreter never had.
 
     `run` and `resolve_uv` are the injectable seams (a subprocess call, a PATH lookup); their
     defaults are the real collaborators."""
@@ -671,8 +677,10 @@ def uncollectable_tests(tests_dir, python=None, run=_run_pytest, resolve_uv=None
     if proc.returncode in (0, 5):  # 5 = nothing collected, which is not a collection failure
         return []
     text = (proc.stdout or "") + "\n" + (proc.stderr or "")
-    if "No module named pytest" in text:
-        return _collect_via_uv_fallback(tests_dir, run, resolve_uv or _default_resolve_uv)
+    pytest_missing = "No module named pytest" in text
+    if pytest_missing or (extra_deps and "No module named" in text):
+        return _collect_via_uv_fallback(tests_dir, run, resolve_uv or _default_resolve_uv,
+                                        extra_deps, pytest_missing)
     return _parse_collection_failure(text, tests_dir)
 
 
@@ -681,16 +689,24 @@ def _default_resolve_uv():
     return shutil.which("uv")
 
 
-def _collect_via_uv_fallback(tests_dir, run, resolve_uv):
+def _collect_via_uv_fallback(tests_dir, run, resolve_uv, extra_deps=(), pytest_missing=True):
     """Retry collection under `uv run --with pytest`, since uv is already required to launch this
     script and can provision pytest on demand. Only when this ALSO cannot run does the launching
     interpreter's missing pytest become an unmeasured result instead of a real measurement."""
     uv_path = resolve_uv()
     if not uv_path:
-        return [(str(tests_dir), "pytest is not importable by the launching interpreter, and uv "
-                 "is not on PATH to fall back to - collection unverified", True)]
-    argv = [uv_path, "run", "--with", "pytest", "python", "-m", "pytest", "--collect-only", "-q",
-            "-p", "no:cacheprovider", str(tests_dir)]
+        missing = ("pytest is not importable by the launching interpreter" if pytest_missing else
+                   "a module the tests import is missing and their declared dependencies could "
+                   "not be provided")
+        return [(str(tests_dir), "%s, and uv is not on PATH to fall back to - collection "
+                 "unverified" % missing, True)]
+    # --no-project: the retry provisions only what is named here, and must not sync a .venv of
+    # whatever project the checker happens to be launched from.
+    argv = [uv_path, "run", "--no-project", "--with", "pytest"]
+    for dep in extra_deps:
+        argv += ["--with", dep]
+    argv += ["python", "-m", "pytest", "--collect-only", "-q", "-p", "no:cacheprovider",
+             str(tests_dir)]
     try:
         proc = run(argv, timeout=_UV_FALLBACK_TIMEOUT_S)
     except subprocess.TimeoutExpired:

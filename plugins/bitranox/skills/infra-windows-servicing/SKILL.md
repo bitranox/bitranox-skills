@@ -1,6 +1,6 @@
 ---
 name: infra-windows-servicing
-description: Use when a Windows machine will not install a cumulative update, its component store is damaged, DISM or setup.exe fails with an opaque code (0x800F0915, 0xC1900200, 0xC190010E, 0xC1420127, 0x80070020), an in-place upgrade reverts itself on the apply reboot ("undoing changes", "Vorgenommene Aenderungen werden rueckgaengig gemacht"), a delete of Windows.old refuses with "Access is denied" / "Zugriff verweigert" despite takeown and icacls succeeding, a CBS log search returns nothing for an update that provably failed, a long servicing job looks hung, or an in-place repair upgrade is being planned or run.
+description: Use when a Windows machine will not install a cumulative update, its component store is damaged, DISM or setup.exe fails with an opaque code (0x800F0915, 0xC1900200, 0xC190010E, 0xC1420127, 0x80070020), an in-place upgrade reverts itself on the apply reboot ("undoing changes", "Vorgenommene Aenderungen werden rueckgaengig gemacht"), a delete of Windows.old refuses with "Access is denied" / "Zugriff verweigert" despite takeown and icacls succeeding, a CBS log search returns nothing for an update that provably failed, a long servicing job looks hung, drive C will not extend after the disk was enlarged, reagentc /enable fails 1614, or an in-place repair upgrade is being planned or run.
 ---
 
 # Windows servicing and repair: the traps
@@ -453,6 +453,47 @@ above) ending in a `DONE` sentinel line; poll that file and read the outcome fro
 install plus reboot until a scan reports nothing pending. Choose by what refused: a FILE operation
 denied to SYSTEM goes to an admin session, the update agent refusing the ssh session goes to
 SYSTEM.
+
+## Growing C: when the Recovery partition is in the way, and re-enabling WinRE
+
+**The disk got bigger but C: cannot grow.** The standard layout puts a small Recovery (WinRE)
+partition directly AFTER C:, and a partition extends only into free space that FOLLOWS it, so the
+space a hypervisor added at the end of the disk is out of reach. The tell is not an error:
+`Get-PartitionSupportedSize -DriveLetter C` returns a `SizeMax` equal to C:'s current size. Run a
+rescan first (`Update-HostStorageCache`, or diskpart `rescan`) so Windows sees the new size at all.
+
+Then, elevated (an ssh session is UAC-filtered; partition work needs a real admin token):
+
+1. `reagentc /disable`. This is the step that copies `Winre.wim` OUT of the recovery partition to
+   `C:\Windows\System32\Recovery`; skip it and deleting the partition deletes the only copy.
+2. Identify the partition POSITIVELY: type Recovery AND an offset immediately after C: (allow a
+   small alignment gap). Refuse anything else - deleting the wrong partition destroys the machine.
+3. Delete it: `Remove-Partition`, or diskpart `delete partition override` when the protected
+   partition refuses the managed API.
+4. `Resize-Partition -DriveLetter C -Size <SizeMax>`, leaving about 1 GB unallocated at the end
+   for a new recovery partition. WinRE cannot live on a BitLocker-encrypted OS volume, so filling
+   the disk strands it, and undoing that means shrinking an encrypted volume.
+5. Recreate the recovery partition in the reserved space and `reagentc /enable`; confirm with
+   `reagentc /info`.
+
+This rewrites the partition table and grows C:'s extent without moving its data; extending the
+system volume is a supported online operation (it has been done with a DISM `/RestoreHealth`
+running, which completed, and `fsutil dirty query C:` stayed clean).
+
+**`reagentc /enable` fails 1614 ("The Windows RE image was not found").** The machine has no staged
+`C:\Windows\System32\Recovery\Winre.wim` - the usual state after a recovery partition was deleted
+WITHOUT `reagentc /disable`. A fresh partition does not help; seed the image from installation
+media of the same release (see "Finding the right installation media" below). `wimlib-imagex`
+extracts it on Linux, no Windows box needed:
+
+```bash
+wimlib-imagex extract <install.wim> <index> /Windows/System32/Recovery/Winre.wim \
+    --dest-dir=<out> --no-acls
+```
+
+In the guest: copy it to `C:\Windows\System32\Recovery\Winre.wim`, clear its read-only attribute
+(`attrib -r`), `reagentc /setreimage /path C:\Windows\System32\Recovery`, then `reagentc /enable`,
+and confirm `reagentc /info` reports Enabled.
 
 ## Choosing the remedy
 

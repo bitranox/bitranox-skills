@@ -109,6 +109,24 @@ execution begins, not one interrupt per discovery mid-plan. If the scan is
 clean, proceed without comment. The review loop remains the net for
 conflicts that only emerge from implementation.
 
+**Check the plan's SHAPE in the same pass.** `task_brief.py` extracts a task by its
+`Task <id>` heading and prepends the plan's `Global Constraints` section. A plan written in plan
+mode as Context / Design / Verification prose, or with its tasks as a numbered list
+(`1. **Spike**: ...`) or as numbered sections (`## 1. Parser`), has neither, and the script exits 1
+saying the plan has no task headings at all. Do not hand-cut briefs with `sed`: they lose the
+constraints block, and with it the decisions every task relies on. Restructure the PLAN first,
+content unchanged: the decisions, measured facts and design under `## Global Constraints`, one
+`### Task <id>: <name>` heading per task. Commit it where the plan is tracked, and log the
+restructure in `EXECUTION-USER-REVIEW.md` as a decision you took.
+
+**A task that ADDS or TIGHTENS a refusal** (a new validator, an empty-directory check, a stricter
+path rule) also breaks every existing test, fixture and doc example that relied on the old
+leniency, and those are part of the task. Before dispatching it, find them: grep the tests and
+fixtures for the shape the new check refuses, or apply only the new check with compuse-toolbox's
+`mutation_arm --mutate` and run the affected test files once. Name each one in the task's Files
+list (amend the plan and regenerate the brief). A brief silent about them reaches the implementer
+as a STOP, or as a test edit nobody can explain in review.
+
 **Plan mode must have ended before the first dispatch.** A subagent dispatched
 while the session is still in plan mode has been observed to inherit it: it
 explores, writes a plan file of its own and returns "ready to execute on
@@ -120,7 +138,8 @@ arrived, or a Write outside the plan file succeeds. An implementer that comes
 back with a plan and no code is obeying the mode, not being timid: resume that
 same agent with an approval message via SendMessage ("approved, execute now")
 rather than re-dispatching from scratch, since its plan and context are
-already right.
+already right. Plan mode switched on while writers are ALREADY running is a different case, with
+code already written: see "Interrupted Runs".
 
 ## Model Selection
 
@@ -150,7 +169,10 @@ When the plan is complete (after the final review), DISARM it -
 
     bash "$CLAUDE_PLUGIN_ROOT/hooks/run-python.sh" "$CLAUDE_PLUGIN_ROOT/hooks/skill_receipt.py" end plan-execution
 
-Outside an armed plan execution the same hook only warns.
+Outside an armed plan execution the same hook only warns. The receipt belongs to the SESSION
+and expires 8 hours after its latest `start`: a session that resumes a plan after a handover,
+`/clear` or restart, or a run past 8 hours, runs `start` again before its next dispatch
+(`skill_receipt.py check plan-execution` exits 0 while this session holds a fresh one).
 
 ### Review dispatches: `opus` at effort `medium`
 
@@ -175,28 +197,13 @@ that is missing either value.
 
 ### Reasoning effort: the channels and the levels
 
-**Three channels set a subagent's reasoning effort; only the Agent tool's own
-field needs an explicit ask.** (1) The Agent tool's own `effort`
-field (`low`, `medium`, `high`, `xhigh`, `max`): the tool permits it ONLY when
-the user, or instructions such as CLAUDE.md or a skill, explicitly ask that the
-agent run at a specific level, never on the dispatcher's own judgment; otherwise
-omit it and the agent runs at its usual effort. It is ignored for a `fork`, which
-runs at the parent's effort. A skill step that names the effort for a dispatch it
-prescribes is such an ask. That restriction is the Agent tool's own and binds
-this channel only: for an Agent-tool dispatch the table below is not itself an
-ask, it says which level fits once one is asked for, while channels (2) and (3)
-take the table's level directly. (2) The agent-type definition
-(`.claude/agents/*.md` frontmatter, key `effort`; the agent roster is fixed when
-the session STARTS, so a definition added mid-session cannot be dispatched until
-a NEW session - measured on Claude Code 2.1.250, where a new project agents dir
-and a new file in the already-loaded user dir both failed with "Agent type not
-found" while definitions present at session start resolved). (3) A Workflow
-`agent()` call (`opts.effort`). Probe-verified: the knob swings the same
-model's thinking budget by orders of magnitude, so it cuts both ways - set it
-only at the EXTREMES and leave everything else at the default (inherit).
-Pinning `low` broadly silently degrades tasks that occasionally need depth,
-which costs more than the tokens it saves. Reviews are the one exception to
-"extremes only": every review carries `medium` (see "Review dispatches").
+Three channels set a subagent's reasoning effort: the Agent tool's own `effort` field, which
+the tool permits ONLY when the user, CLAUDE.md or a skill step explicitly asks for a level (it is
+ignored for a `fork`); an agent-type definition's `effort` frontmatter; and a Workflow `agent()`
+call's `opts.effort`. The knob swings the thinking budget by orders of magnitude, so set it only
+at the EXTREMES and leave everything else at the default (inherit); reviews are the one exception
+and carry `medium` (see "Review dispatches"). How each channel behaves, including why a definition
+added mid-session cannot be dispatched: [references/model-tiers.md](references/model-tiers.md).
 
 | Role                                                | Effort                                       |
 |-----------------------------------------------------|----------------------------------------------|
@@ -254,21 +261,13 @@ that implementer. Single-file mechanical fixes also take `haiku`.
 
 ### The session model is fixed: delegate, or offer a choice for inline work
 
-The MAIN (session) agent's model is FIXED for the turn and CANNOT be self-switched. There is no
-read-your-model or set-your-model primitive exposed to the model, no `$CLAUDE_MODEL` env var, and
-no hook can make or choose a switch. Hooks only observe or veto one: `SessionStart` may see `model`
-(not reliably), and from CLI 2.1.251 `PreModelSwitch` can block a switch the user or a client
-REQUESTED, while `PostModelSwitch` sees `from_model`/`to_model` after every change. No hook calls the
-model (see `bitranox:meta-claude-hooks`, `references/events.md` "Model switches").
-So the ONLY way to run a sub-task on a different tier is to dispatch a
-subagent, which carries its own pinned `model`; inline work necessarily runs on the session model.
-"Save the model, switch, switch back" is NOT implementable - never write a skill step that assumes it.
-A USER-driven `/model` switch mid-session, however, PRESERVES the conversation (context is not
-lost), so offering one is legitimate in BOTH directions: switch UP when the session tier is below
-what an inline deep judgment warrants (below opus-class before placement/synthesis), and switch
-DOWN for cost when a premium session (fable) faces a long routine stretch - fable is
-premium-priced on paid API credits, so parking it on mechanical work burns money for nothing.
-Either way it is the USER's call: offer switch-model-or-continue, never demand.
+The MAIN (session) agent's model is FIXED for the turn and CANNOT be self-switched: no primitive
+reads or sets it and no hook can make a switch, so the ONLY way to run a sub-task on a different
+tier is a subagent with its own pinned `model`. "Save the model, switch, switch back" is NOT
+implementable - never write a skill step that assumes it. A USER-driven `/model` switch keeps the
+conversation, so offering one is legitimate in both directions (up for an inline deep judgment,
+down for cost on a long routine stretch); it is the user's call. The hook and harness detail behind
+this: [references/model-tiers.md](references/model-tiers.md).
 
 A model-sensitive step therefore has TWO branches - decide delegability FIRST, and only then the model:
 
@@ -302,6 +301,15 @@ Implementer subagents report one of four statuses. Handle each appropriately:
 4. If the plan itself is wrong, decide it as for a plan-mandated finding (see the review loop): escalate to the human when the fix changes what the plan text requires
 
 **Never** ignore an escalation or force the same model to retry without changes. If the implementer said it's stuck, something needs to change.
+
+**A claim in a report is the subagent's own inference.** "X is redundant", "Y is orphaned",
+"Z is the cause", "tool T deletes an empty variable": before you relay such a claim to your human
+partner, who may act on it, or forward it into a later brief, fix dispatch or plan amendment,
+check its premise with one direct read or probe. If you cannot, carry it labelled: "unmeasured,
+from the Task 3 report". A relayed claim arrives with your authority: the user turns it into an
+instruction, and a fixer writes it into code comments, docs and a CHANGELOG line. The same goes
+for a number that moved between rounds without a reason given (a test count that dropped):
+explain it before the task counts as complete.
 
 ## Handling Reviewer WARN Items
 
@@ -438,7 +446,30 @@ and is re-read on every later turn. Hand artifacts over as files:
   from earlier tasks that the brief cannot know; (4) your resolution of
   any ambiguity you noticed in the brief; (5) the report-file path and
   report contract. Exact values (numbers, magic strings, signatures, test
-  cases) appear only in the brief.
+  cases) appear only in the brief. Never add a merge, version bump, release or build step to an
+  implementer or fixer dispatch: the agent does it before any independent review, and a defect
+  the review finds is already on the main branch. You merge once the task review is clean; a
+  release or build is a dispatch of its own after that.
+- **Before you send any dispatch**, read the assembled prompt once more for two things that
+  make an agent answer confidently from nothing:
+  - an unfilled placeholder token (`EXCERPT_PLACEHOLDER`, `[BRIEF_FILE]`, `<paste here>`) left
+    from a template or an earlier dispatch: the agent runs with no material and returns an
+    empty or invented answer instead of asking;
+  - a path that does not exist where the agent runs. A worktree holds only TRACKED files, so a
+    project `CLAUDE.md` (or any doc you point at) that is untracked or gitignored is absent from
+    every worktree: check with `git ls-files --error-unmatch CLAUDE.md` and, when it is not
+    tracked, give the main checkout's absolute path instead. The same goes for a report path:
+    name one the agent can write where it runs.
+- **Quote a user decision verbatim, never the plan's restatement.** When a task rests on a
+  decision your human partner took through a question, generate the brief with
+  `task_brief.py PLAN_FILE N --decision "<text>"` (repeatable, one per decision): it quotes the
+  decision's own text under "## User decisions" (the question, the chosen label, each chosen
+  option's description, any note), from `USER-DECISIONS.jsonl` at the main checkout's root, where
+  every answered question is logged. `<text>` must occur in exactly one record's question or
+  chosen label; the script refuses (exit 1, naming the text) when it matches none or several, so
+  lengthen it until it names one. The reviewer reads the same brief, so it judges against the
+  same words. A plan's one-line summary of an option drops qualifiers, and code built and
+  reviewed against the summary passes review while contradicting the decision.
 - **A restriction you add beyond the brief** ("do not run X", "skip Y", "leave
   Z alone") reaches the implementer with MORE force than the brief, and in auto
   mode the permission classifier enforces it too, refusing the step the brief
@@ -447,7 +478,10 @@ and is re-read on every later turn. Hand artifacts over as files:
   view (a `grep` of step headers, `cut -c`, `head`): it drops a step's
   continuation lines, which is where a step's second action ("roll back, then
   restore-wu") sits. Short context is no exception: one brief costs less to
-  read than the rerun a wrong restriction causes. Then:
+  read than the rerun a wrong restriction causes. When the restriction NAMES A FILE and says what
+  it holds ("leave X alone, it is the deploy code"), read that file too: never characterise a
+  file from a file list (a stopped run's `git status`, a diff stat), where a deleted file next to
+  the one you worry about looks like part of it. Then:
   - no step needs the action and nothing is ambiguous: drop the restriction -
     the brief already does not ask for the thing you feared;
   - a step needs the action you meant to forbid: the step wins. Drop the
@@ -541,108 +575,38 @@ a ledger file, not only in todos.
 - `git clean -fdx` will destroy the ledger (it's git-ignored scratch); if
   that happens, recover from `git log`.
 
+## Interrupted Runs
+
+Four events end part of a run without a report. Each leaves state a fresh dispatch would
+trample; the full procedure for each is in [references/interrupted-runs.md](references/interrupted-runs.md).
+
+- **Plan mode switched on while writers run:** each writer stops BLOCKED with uncommitted work.
+  List them in the ledger, leave their checkouts untouched, and after approval resume each by
+  SendMessage as Phase 0 of the new plan, never a fresh re-dispatch.
+- **A dispatch stopped on the usage limit (HTTP 429):** resume it by SendMessage once requests
+  are accepted again, on the same tier. A review you do inline meanwhile is a logged deviation,
+  never the gate: the task stays open until the `opus` review has run.
+- **An agent holding a borrowed or shared resource** (another session's VM, a throwaway host, a
+  snapshot it took): write the cleanup recipe into the ledger BEFORE dispatch, and treat any
+  non-success notice from that agent as "take over the cleanup now".
+- **A session that resumes the plan:** re-arm the model gate (see "Model Selection"), then trust
+  the ledger and `git log`.
+
 ## Prompt Templates
 
 - [implementer-prompt.md](implementer-prompt.md) - Dispatch implementer subagent
 - [task-reviewer-prompt.md](task-reviewer-prompt.md) - Dispatch task reviewer subagent (spec compliance + code quality)
 - Final whole-branch review: use bitranox:process-review-requesting-code-review's [code-reviewer.md](../process-review-requesting-code-review/code-reviewer.md)
 
-## Example Workflow
+## Reference Files
 
-```
-You: I'm using Subagent-Driven Development to execute this plan.
+Use the Read tool to load a file below when its topic comes up.
 
-[Read plan file once: docs/plans/feature-plan.md]
-[Create todos for all tasks]
-
-Task 1: Hook installation script
-
-[Run task_brief.py for Task 1; dispatch implementer with brief + report paths + context]
-
-Implementer: "Before I begin - should the hook be installed at user or system level?"
-
-You: "User level (~/.config/app/hooks/)"
-
-Implementer: "Got it. Implementing now..."
-[Later] Implementer:
-  - Implemented install-hook command
-  - Added tests, 5/5 passing
-  - Self-review: Found I missed --force flag, added it
-  - Committed
-
-[Run review_package.py, dispatch task reviewer with the printed path]
-Task reviewer: Spec OK - all requirements met, nothing extra.
-  Strengths: Good test coverage, clean. Issues: None. Task quality: Approved.
-
-[Mark Task 1 complete]
-
-Task 2: Recovery modes
-
-[Run task_brief.py for Task 2; dispatch implementer with brief + report paths + context]
-
-Implementer: [No questions, proceeds]
-Implementer:
-  - Added verify/repair modes
-  - 8/8 tests passing
-  - Self-review: All good
-  - Committed
-
-[Run review_package.py, dispatch task reviewer with the printed path]
-Task reviewer: Spec NO:
-  - Missing: Progress reporting (spec says "report every 100 items")
-  - Extra: Added --json flag (not requested)
-  Issues (Important): Magic number (100)
-
-[Dispatch fix subagent with all findings]
-Fixer: Removed --json flag, added progress reporting, extracted PROGRESS_INTERVAL constant
-
-[Task reviewer reviews again]
-Task reviewer: Spec OK. Task quality: Approved.
-
-[Mark Task 2 complete]
-
-...
-
-[After all tasks]
-[Dispatch final code-reviewer]
-Final reviewer: All requirements met, ready to merge
-
-Done!
-```
-
-## Advantages
-
-**vs. Manual execution:**
-- Subagents follow TDD naturally
-- Fresh context per task (no confusion)
-- Context-isolated (each task gets its own context; no cross-task confusion). Note this is
-  NOT a licence to run implementers concurrently - see "Never: dispatch multiple
-  implementation subagents in parallel" below; the isolation is per-task, not per-worktree.
-- Subagent can ask questions (before AND during work)
-
-**vs. Executing Plans:**
-- Same session (no handoff)
-- Continuous progress (no waiting)
-- Review checkpoints automatic
-
-**Efficiency gains:**
-- Controller curates exactly what context is needed; bulk artifacts move
-  as files, not pasted text
-- Subagent gets complete information upfront
-- Questions surfaced before work begins (not after)
-
-**Quality gates:**
-- Self-review catches issues before handoff
-- Task review carries two verdicts: spec compliance and code quality
-- Review loops ensure fixes actually work
-- Spec compliance prevents over/under-building
-- Code quality ensures implementation is well-built
-
-**Cost:**
-- More subagent invocations (implementer + reviewer per task)
-- Controller does more prep work (extracting all tasks upfront)
-- Review loops add iterations
-- But catches issues early (cheaper than debugging later)
+| Topic                                                                                            | File                                                             |
+|--------------------------------------------------------------------------------------------------|------------------------------------------------------------------|
+| Interrupted runs - plan mode mid-run, usage-limit stops, borrowed resources, resumed sessions    | [references/interrupted-runs.md](references/interrupted-runs.md) |
+| Worked example of one plan run; advantages and costs against other ways to execute a plan        | [references/example-workflow.md](references/example-workflow.md) |
+| Model tiers - the three effort channels, agent roster fixed at session start, model-switch hooks | [references/model-tiers.md](references/model-tiers.md)           |
 
 ## Red Flags
 
@@ -651,6 +615,7 @@ Done!
 - Skip task review, or accept a report missing either verdict (spec compliance AND task quality are both required)
 - Proceed with unfixed issues
 - Dispatch multiple implementation subagents in parallel (conflicts)
+- Put merge, bump, release or build into an implementer's or fixer's brief (it lands before review)
 - Make a subagent read the whole plan file (hand it its task brief  - 
   `python3 "$CLAUDE_PLUGIN_ROOT/skills/process-agents-subagent-driven-development/scripts/task_brief.py"`  -  instead)
 - Skip scene-setting context (subagent needs to understand where task fits)

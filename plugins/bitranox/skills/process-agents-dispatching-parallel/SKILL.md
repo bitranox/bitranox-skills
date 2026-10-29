@@ -166,6 +166,21 @@ Each agent gets:
   ground truth yourself (the CI run for its commit finished, no gate process left in its checkout,
   the commit not yet made) and SendMessage it the verdict. Keep your own backstop armed until the
   COMMIT lands, not until the gate starts.
+- **A per-item progress record, when an agent works a list.** Have it write one line per finished
+  item (to its notes file, or as one commit per item) as it goes. Agents in a fan-out share one
+  usage limit and can all stop at once mid-batch; with the record, a resumed agent, or you, skips
+  the items already done instead of redoing them.
+- **A report path the agent can write where it runs.** An agent dispatched with
+  `isolation: worktree` cannot write to the MAIN checkout: the worktree guard refuses the write
+  and the agent falls back to some other path or hands the text back. Name a path inside its own
+  worktree or in the session scratchpad, never a main-checkout path (`.bitranox/...` at the main
+  checkout's root included), and copy the file over yourself.
+
+**Keep destructive steps out of lane briefs.** Deleting a remote ref or a branch, removing
+worktrees, a hard reset or a force push bundled into a brief with ordinary work makes the auto-mode
+permission classifier refuse the WHOLE dispatch (`[Git Destructive]`), not just that step, and the
+refusal names no item, so the lane starts late and you re-brief it by guesswork. Run destructive
+steps yourself as dispatcher steps, before or after the fan-out.
 
 ### 3. Dispatch in Parallel
 
@@ -183,6 +198,9 @@ Multiple dispatch calls in one response = parallel execution. One per response =
 ### 4. Review and Integrate
 
 When agents return:
+- Locate every finding by the TEXT it quotes, never by its line number alone. An analyser's line
+  numbers drift (other agents edited the file, it read a different version), while the quoted
+  text does not; ask for a quote with each finding, and grep for it before you act on one.
 - Tick each dispatched name (R1..Rn, or the agent ids) off a written checklist ONLY when its
   hand-back has been READ. Say "all in" only when none is unticked, and name the total and the
   last one ticked. Hand-backs arriving in a burst make the count an impression, and a
@@ -238,12 +256,16 @@ before you push. Before calling a fixer's commit "not landed", note that `git ch
 that landed with changed context or squashed; bitranox:git-worktrees Step 4 (`landed.py`) checks
 by content.
 
-**An agent that stopped mid-task left no report, so its worktree is the record.** When dispatched
-agents die on an account usage or rate limit, their final reports never arrive, and a resumed
-agent (SendMessage) continues only after the limit resets, which can be days away. Do not
-re-dispatch the item from scratch either: a fresh agent redoes the committed work and races the
-uncommitted diff the dead one left. Keep each such item unticked on the checklist (stopped, not
-finished) and finish it yourself from git:
+**An agent that stopped mid-task left no report, so its worktree is the record.** Agents in a
+fan-out share the session's usage limit, so when it is hit they can ALL stop at once, and their
+final reports never arrive. Never re-dispatch such an item from scratch: a fresh agent redoes the
+committed work and races the uncommitted diff the stopped one left. Keep each one unticked on the
+checklist (stopped, not finished), then choose by when the limit resets:
+
+- **Hours away (or an account with headroom is available):** resume each stopped agent with
+  SendMessage once requests are accepted again. It keeps its context and, with the per-item
+  progress record from its brief, skips what it finished.
+- **Days away, or the work cannot wait:** finish the item yourself from git:
 
 ```bash
 git worktree list                              # find each stopped agent's worktree

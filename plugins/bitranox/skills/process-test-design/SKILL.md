@@ -1,6 +1,6 @@
 ---
 name: process-test-design
-description: Use when writing, reviewing, or pruning tests in ANY language - deciding unit vs integration vs e2e, whether to mock/patch or use the real dependency, which edge/adversarial inputs to cover (unusual UTF, emoji, CJK, binary, wrong types, oversized), why a test is flaky or order-dependent, or whether a test earns its keep. Keywords - mock, monkeypatch, spy, stub, fake, fixture, e2e, integration test, flaky, order-dependent, sleep, adversarial input, low-value test, coverage, pytest, vitest, jest, go test, cargo test, bats. For the red-green discipline see process-test-driven-development; for what to validate at a boundary see coding-input-sanitization.
+description: Use when writing, reviewing, or pruning tests in ANY language - deciding unit vs integration vs e2e, whether to mock/patch or use the real dependency, which edge/adversarial inputs to cover (unusual UTF, emoji, CJK, binary, wrong types, oversized), why a test is flaky or order-dependent, or whether a test earns its keep. Keywords - mock, monkeypatch, spy, stub, fake, fixture, autouse, conftest, doctest, e2e, integration test, flaky, order-dependent, sleep, adversarial input, low-value test, coverage, pytest, vitest, jest, go test, cargo test, bats. For the red-green discipline see process-test-driven-development; for what to validate at a boundary see coding-input-sanitization.
 ---
 
 # process-test-design
@@ -474,6 +474,13 @@ opposite apparatus. Repetition alone is the weakest option and is what most runs
 Both arms must run through the REAL test entry point. A standalone probe that reconstructs the
 setup can stub out the very path that fails, and then passes whatever the code does.
 
+**Verifying the FIX of a rare flake is a separate question from finding it.** A few green CI runs
+after the fix are no evidence until you know the flake's base rate from CI history: at 1 failure
+in 26 runs, two green runs follow with no fix at all about 93% of the time. Run an amplified,
+interleaved A/B instead, two environments identical but for the fixed dependency, and require the
+old arm to reproduce the CI failure first; the recipe is in `references/silent-test-defeaters.md`,
+"Verify a rare-flake fix with an amplified, interleaved A/B".
+
 ## Run in a clean, project-correct environment
 
 **The rule in any language: run against the project's OWN pinned toolchain, resolved from a lockfile,
@@ -777,8 +784,14 @@ only through a memory map, binds a unix socket under `tmp_path`, builds a test d
 a `@dataclass`, configures a logger in a fixture, checks that an event from another thread wakes an
 asyncio consumer, races a call on a helper thread, mints synthetic identifiers (an address, a
 serial, ids that something later truncates), carries a skip or an exclusion, judges an artifact,
-compares against a git ref, guards against cost, or tests environment isolation - or before you
-claim a code path is untested or accept a surviving mutation.
+compares against a git ref, guards against cost (an absolute time budget or a growth ratio), or
+tests environment isolation - or before you claim a code path is untested or accept a surviving
+mutation. Read it too when code in a unit suite could reach a real host or a user-facing service
+(ssh, a keyring, a session bus), a test guards a secret its own failure output could print, a test
+spawns a nested test runner or several writers appending to one file, asserts only a real tool's
+verdict, relies on `tests/conftest.py` fixtures reaching `src/` doctests or on fixtures ported
+from a template, feeds a FIFO from a writer thread, or derives its input from a constant you are
+about to mutate.
 
 ## Quick checklist
 

@@ -61,3 +61,7 @@ cannot reach the file.
 
 ## Notes
 - A reset restores every knob to the recommended default above.
+- Setting a classifier site to `decide` reaches only sessions whose loaded hook has a decide path
+  for it: every session already open keeps the hook it loaded at start, so the setting looks
+  ignored there. Run `/reload-plugins` in each open session (or restart it); `set` prints the same
+  reminder to stderr.

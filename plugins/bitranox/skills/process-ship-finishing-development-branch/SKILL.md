@@ -1,6 +1,6 @@
 ---
 name: process-ship-finishing-development-branch
-description: Use when implementation is complete and tests pass and you need to decide how to finish a feature or bugfix branch - merge it, open a pull request, keep it, or discard it, and clean up any worktree
+description: Use when implementation is complete and tests pass and you need to decide how to finish a feature or bugfix branch - merge it, open a pull request, keep it, or discard it, and clean up any worktree - or when checking whether a repository has stale merged or closed branches left on its remote
 ---
 
 # Finishing a Development Branch
@@ -11,7 +11,7 @@ description: Use when implementation is complete and tests pass and you need to 
 
 Guide completion of development work by presenting clear options and handling chosen workflow.
 
-**Core principle:** Verify tests -> Detect environment -> Present options -> Execute choice -> Clean up.
+**Core principle:** Verify tests -> Detect environment -> Present options -> Execute choice -> Clean up (worktree, then stale remote branches).
 
 **Announce at start:** "I'm using the process-ship-finishing-development-branch skill to complete this work."
 
@@ -191,6 +191,36 @@ git worktree prune  # Self-healing: clean up any stale registrations
 
 **Otherwise:** The host environment (harness) owns this workspace. Do NOT remove it. If your platform provides a workspace-exit tool, use it. Otherwise, leave the workspace in place.
 
+### Step 7: Sweep Stale Branches on the Remote
+
+Run this after Options 1 and 4, and on its own whenever the question is "is this repository
+clean". Local cleanup never touches the remote, so merged and closed branches pile up there.
+
+**List what the remote really has, not your remote-tracking refs.** `git branch -r` (and
+`git branch -a`) keeps a branch deleted on the remote until `git fetch --prune` runs, so it reports
+ghosts, and a `git push --delete` of one fails `remote ref does not exist`. Ask the remote:
+
+```bash
+git ls-remote --heads origin                                   # any host
+gh api repos/<owner>/<repo>/branches --paginate --jq '.[].name'  # GitHub
+```
+
+For each branch other than the default one:
+
+1. Find its pull request: `gh pr list --state all --head <branch> --json number,state,mergedAt`.
+2. A candidate for deletion is a branch whose PR is MERGED or CLOSED and whose work is in the
+   default branch. Check that from content, not from `git cherry` (a squash merge reads as
+   unmerged there): `uv run <plugin>/skills/git-worktrees/scripts/landed.py origin/<branch>` after a
+   fetch (exit 0 = landed; see `bitranox:git-worktrees` Step 4).
+   A branch with no PR, or with work not in the default branch, is not a candidate - report it.
+3. PROPOSE the list and delete only what the user confirms:
+   `git push origin --delete <branch>`, then `git fetch --prune`.
+
+Then check whether the host deletes merged branches by itself:
+`gh api repos/<owner>/<repo> --jq .delete_branch_on_merge`. On `false`, offer to enable it
+(`gh api -X PATCH repos/<owner>/<repo> -F delete_branch_on_merge=true`) - it is a repository
+setting, so make the change only on the user's yes.
+
 ## Quick Reference
 
 | Option           | Merge | Push | Keep Worktree | Cleanup Branch |
@@ -239,6 +269,7 @@ git worktree prune  # Self-healing: clean up any stale registrations
 - Force-push without explicit request
 - Remove a worktree before confirming merge success
 - Clean up worktrees you didn't create (provenance check)
+- Delete a remote branch the user did not confirm (Step 7)
 - Run `git worktree remove` from inside the worktree
 
 **Always:**
@@ -249,6 +280,7 @@ git worktree prune  # Self-healing: clean up any stale registrations
 - Clean up worktree for Options 1 & 4 only
 - `cd` to main repo root before worktree removal
 - Run `git worktree prune` after removal
+- List remote branches from the remote (`git ls-remote --heads`), never from `git branch -r`
 
 Finishing a branch is the last moment its judgment calls are cheap to revisit. Before the merge or
 the PR, run `bitranox:process-review-uncertain-decisions`: the choices with no trace in the diff -

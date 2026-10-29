@@ -619,7 +619,8 @@ def test_apply_forwards_the_type_on_a_pinned_fact_too(tmp_path):
     body = tmp_path / "b.md"
     body.write_text("new prose\n", encoding="utf-8")
     r = run_cli(["apply", "--engine", str(eng), "--json", "--slug", "feedback-demo",
-                 "--from", str(level), "--body-file", str(body), "--type", "reference"], tmp_path)
+                 "--from", str(level), "--body-file", str(body), "--type", "reference",
+                 "--allow-pinned"], tmp_path)
     assert r.returncode == 0
     called = (eng.parent / "memory_engine.py.called").read_text(encoding="utf-8")
     assert "'amend-pinned'" in called and "'--type=reference'" in called
@@ -698,7 +699,7 @@ def test_a_body_only_edit_of_a_pinned_over_cap_fact_is_not_blocked_by_the_stored
     body = tmp_path / "b.md"
     body.write_text("new prose\n", encoding="utf-8")
     r = run_cli(["apply", "--engine", str(eng), "--json", "--slug", "feedback-demo",
-                 "--from", str(level), "--body-file", str(body)], tmp_path)
+                 "--from", str(level), "--body-file", str(body), "--allow-pinned"], tmp_path)
     assert r.returncode == 0, r.stdout + r.stderr
     called = (eng.parent / "memory_engine.py.called").read_text(encoding="utf-8")
     assert "'amend-pinned'" in called and "--hook-file" not in called

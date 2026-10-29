@@ -13,6 +13,19 @@ nowhere in the tree).
 Read it as: a non-empty INBOUND list is what a down-move will be refused for; an OUTBOUND target
 sitting BELOW the level you are lifting to is what will be stranded.
 
+PROSE lists the facts that name the slug in plain text rather than as a `[[ref]]` - often on
+purpose, because the target sits below the citer and a link would dangle. Nothing guards these:
+archiving or renaming the target leaves the name stale, and `--check-tree` does not report them.
+A mention is a hyphenated token that is exactly a known slug (canonical form), outside any
+`[[...]]`; a slug with no hyphen is not searched for, since it is indistinguishable from a word.
+
+`--moves FILE` judges a whole planned batch at once: FILE is JSON lines `{"slug", "to"[, "from"]}`
+(levels as paths). Every inbound and outbound `[[ref]]` of every moved fact is judged against the
+FINAL level of BOTH ends, so a mutually-citing pair lifted together is clean while a fact lifted
+away from a target left below is a `stranded-outbound`, and a fact moved below one of its citers
+is a `dangling-inbound` (a ref resolves only to the citer's own level or an ancestor). A `from`
+that is not where the fact sits now is a `stale-from` (the plan was made against an older tree).
+
 Exit codes are format-independent: 0 every slug mapped cleanly, 1 at least one slug is unknown or
 has a dangling ref, 2 the map could not be built at all (no store under the root, or a level file
 or fact body that cannot be read - a partial map would under-report inbound refs). `--json` prints
@@ -23,6 +36,7 @@ Refs resolve exactly as the engine resolves them (`[[slug|label]]`, `[[type:slug
 `_`/`-`/whitespace as one separator), and each fact's pointer hook is scanned beside its body.
 
     python3 ref_map.py --root <anchor> <slug> [<slug> ...] [--json]
+    python3 ref_map.py --root <anchor> --moves <moves.jsonl> [--json]
 """
 
 import argparse
@@ -77,7 +91,22 @@ def read_hooks(root: Path) -> dict[str, str]:
     return {canon(p.slug): p.hook or "" for _level, pointers in _pointers(root) for p in pointers}
 
 
-def read_refs(root: Path, hooks=None) -> tuple[dict[str, list[str]], dict[str, list[str]]]:
+def _fact_texts(root: Path, hooks: dict[str, str]) -> dict[str, str]:
+    """{canonical source: hook + body text} for every fact under `root`, sharded bodies included."""
+    texts = dict(hooks)
+    facts = root / ".claude-memory" / "facts"
+    flat, sharded = _rmi._store_bodies(facts)  # noqa: SLF001 - the one body-enumeration helper
+    for slug in sorted(flat):
+        source = canon(slug)
+        texts[source] = "%s\n%s" % (texts.get(source, ""), ME.read_store_text(facts / (slug + ".md")))
+    for rel in sorted(sharded.values()):
+        source = canon(rel)
+        texts[source] = "%s\n%s" % (texts.get(source, ""), ME.read_store_text(facts / (rel + ".md")))
+    return texts
+
+
+def read_refs(root: Path, hooks=None,
+              texts=None) -> tuple[dict[str, list[str]], dict[str, list[str]]]:
     """(outbound, inbound) maps over each fact's pointer HOOK plus its central body, both keyed by
     canonical slug - the same text the engine's inbound scan reads, so a ref that survives only in
     the hook (the body's copy edited away) is still an edge. Raises the engine's TreeWalkError on
@@ -92,16 +121,8 @@ def read_refs(root: Path, hooks=None) -> tuple[dict[str, list[str]], dict[str, l
     carries no slug of its own (legacy pointers are uuid-keyed), so it is keyed by the same
     `<shard>/<uuid>` pseudo-source `find_dangling_bodies` reports it as: it can be an OUTBOUND
     source but is never a valid `--root`-queried slug or ref TARGET."""
-    hooks = read_hooks(root) if hooks is None else hooks
-    texts = dict(hooks)
-    facts = root / ".claude-memory" / "facts"
-    flat, sharded = _rmi._store_bodies(facts)  # noqa: SLF001 - the one body-enumeration helper
-    for slug in sorted(flat):
-        source = canon(slug)
-        texts[source] = "%s\n%s" % (texts.get(source, ""), ME.read_store_text(facts / (slug + ".md")))
-    for rel in sorted(sharded.values()):
-        source = canon(rel)
-        texts[source] = "%s\n%s" % (texts.get(source, ""), ME.read_store_text(facts / (rel + ".md")))
+    if texts is None:
+        texts = _fact_texts(root, read_hooks(root) if hooks is None else hooks)
     outbound: dict[str, list[str]] = {}
     inbound: dict[str, list[str]] = {}
     for source in sorted(texts):
@@ -120,7 +141,9 @@ def build(root: Path, slugs):
     Raises the engine's TreeWalkError when a level file or a fact body cannot be read or is not
     UTF-8, or a directory under the root cannot be listed."""
     levels = read_levels(root)
-    outbound, inbound = read_refs(root)
+    texts = _fact_texts(root, read_hooks(root))
+    outbound, inbound = read_refs(root, texts=texts)
+    prose = _rmi.prose_mentions(texts, set(levels))
     entries, problems = [], False
     for raw in slugs:
         slug = canon(raw)
@@ -128,7 +151,7 @@ def build(root: Path, slugs):
         if not known:
             problems = True
             entries.append({"slug": slug, "level": None, "unknown": True,
-                            "inbound": [], "outbound": []})
+                            "inbound": [], "outbound": [], "prose": []})
             continue
         outs = []
         for target in outbound.get(slug, []):
@@ -142,8 +165,90 @@ def build(root: Path, slugs):
             "unknown": False,
             "inbound": [{"slug": s, "level": levels.get(s)} for s in inbound.get(slug, [])],
             "outbound": outs,
+            "prose": [{"slug": s, "level": levels.get(s)} for s in prose.get(slug, [])],
         })
     return entries, problems
+
+
+class BadMoves(ValueError):
+    """The --moves file cannot be read as a move plan."""
+
+
+def read_moves(path: Path) -> list[dict]:
+    """[{slug, to, from}] from a JSON-lines plan; blank and `#` lines skipped. Raises BadMoves."""
+    rows = []
+    try:
+        lines = Path(path).read_text(encoding="utf-8-sig").splitlines()
+    except (OSError, UnicodeDecodeError) as exc:
+        raise BadMoves("cannot read %s: %s" % (path, exc)) from exc
+    for n, line in enumerate(lines, 1):
+        if not line.strip() or line.lstrip().startswith("#"):
+            continue
+        try:
+            row = json.loads(line)
+        except ValueError as exc:
+            raise BadMoves("line %d of %s is not JSON: %s" % (n, path, exc)) from exc
+        if not (isinstance(row, dict) and isinstance(row.get("slug"), str)
+                and isinstance(row.get("to"), str)
+                and isinstance(row.get("from", ""), str)):
+            raise BadMoves('line %d of %s is not {"slug": str, "to": str[, "from": str]}' % (n, path))
+        rows.append({"slug": canon(row["slug"]), "to": str(Path(row["to"]).resolve()),
+                     "from": str(Path(row["from"]).resolve()) if row.get("from") else None})
+    return rows
+
+
+def _visible_from(target_level: str, citer_level: str) -> bool:
+    """True when a fact at `target_level` is reachable from `citer_level`: the same level or an
+    ancestor, which is the only direction the cascade loads."""
+    t, c = Path(target_level), Path(citer_level)
+    return t == c or t in c.parents
+
+
+def judge_moves(root: Path, moves: list[dict]):
+    """(conflicts, problems) for a planned batch, every ref judged at the FINAL levels. Raises the
+    engine's TreeWalkError like `build`."""
+    # read_moves resolves every target, so the levels must be resolved too: compared as given, a
+    # relative or symlinked --root put every citer outside every resolved target.
+    levels = {slug: str(Path(level).resolve()) for slug, level in read_levels(root).items()}
+    outbound, inbound = read_refs(root)
+    final = dict(levels)
+    conflicts = []
+    for mv in moves:
+        cur = levels.get(mv["slug"])
+        if cur is None:
+            conflicts.append({"kind": "unknown", "slug": mv["slug"], "other": None,
+                              "slug_level": None, "other_level": None})
+            continue
+        if mv["from"] and cur != mv["from"]:
+            conflicts.append({"kind": "stale-from", "slug": mv["slug"], "other": None,
+                              "slug_level": cur, "other_level": mv["from"]})
+        final[mv["slug"]] = mv["to"]
+    for mv in moves:
+        slug = mv["slug"]
+        if slug not in levels:
+            continue
+        here = final[slug]
+        for target in outbound.get(slug, []):
+            there = final.get(target)
+            if there is not None and not _visible_from(there, here):
+                conflicts.append({"kind": "stranded-outbound", "slug": slug, "other": target,
+                                  "slug_level": here, "other_level": there})
+        for citer in inbound.get(slug, []):
+            there = final.get(citer)
+            if there is not None and not _visible_from(here, there):
+                conflicts.append({"kind": "dangling-inbound", "slug": slug, "other": citer,
+                                  "slug_level": here, "other_level": there})
+    return conflicts, bool(conflicts)
+
+
+def render_moves(moves, conflicts, out) -> None:
+    print("%d planned move(s), %d conflict(s) judged at the final levels" % (len(moves),
+                                                                              len(conflicts)),
+          file=out)
+    for c in conflicts:
+        print("  %-18s %s @ %s  <->  %s @ %s" % (c["kind"], c["slug"], c["slug_level"] or "?",
+                                                 c["other"] or "-", c["other_level"] or "-"),
+              file=out)
 
 
 def render(entries, out) -> None:
@@ -162,16 +267,24 @@ def render(entries, out) -> None:
               % len(entry["outbound"]), file=out)
         for ref in entry["outbound"]:
             print("      -> %s  @ %s" % (ref["slug"], ref["level"] or "DANGLING"), file=out)
+        print("  prose    : %d  (bare-slug mentions, not [[refs]]: nothing guards these - "
+              "archiving or renaming leaves them stale)" % len(entry.get("prose", [])), file=out)
+        for ref in entry.get("prose", []):
+            print("      ~ %s  @ %s" % (ref["slug"], ref["level"] or "?"), file=out)
 
 
 def main(argv=None, out=None, err=None) -> int:
     out = out or sys.stdout
     err = err or sys.stderr
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
-    parser.add_argument("slugs", nargs="+", help="slugs to map (dashes or underscores)")
+    parser.add_argument("slugs", nargs="*", help="slugs to map (dashes or underscores)")
+    parser.add_argument("--moves", default=None, metavar="FILE",
+                        help='judge a planned batch: JSON lines {"slug", "to"[, "from"]}')
     parser.add_argument("--root", required=True, help="the tree anchor holding .claude-memory/")
     parser.add_argument("--json", action="store_true", help="machine-readable envelope")
     args = parser.parse_args(argv)
+    if not args.slugs and not args.moves:
+        parser.error("give one or more slugs, or --moves FILE")
 
     def _fail(error):
         if args.json:
@@ -190,6 +303,8 @@ def main(argv=None, out=None, err=None) -> int:
     # The one place a read failure becomes exit 2. TreeWalkError is not an OSError, so catching
     # only OSError here let an undecodable level file escape as a traceback that exited 1 - the
     # code for "a slug is unknown or has a dangling ref".
+    if args.moves:
+        return _main_moves(args, root, out, err, _fail)
     try:
         entries, problems = build(root, args.slugs)
     except (OSError, ME.TreeWalkError) as exc:
@@ -201,6 +316,26 @@ def main(argv=None, out=None, err=None) -> int:
                           "data": {"entries": entries}, "skipped": []}, indent=2), file=out)
     else:
         render(entries, out)
+    return 1 if problems else 0
+
+
+def _main_moves(args, root, out, err, fail) -> int:
+    """The --moves branch of main: exit 0 clean, 1 any conflict, 2 a plan or tree it cannot read."""
+    try:
+        moves = read_moves(Path(args.moves))
+        conflicts, problems = judge_moves(root, moves)
+    except BadMoves as exc:
+        print("ref_map: %s" % exc, file=err)
+        return fail(str(exc))
+    except (OSError, ME.TreeWalkError) as exc:
+        print("ref_map: cannot read %s - the judgement would be incomplete" % exc, file=err)
+        return fail("cannot read: %s" % exc)
+    if args.json:
+        print(json.dumps({"ok": True, "command": "ref-map",
+                          "data": {"moves": moves, "conflicts": conflicts}, "skipped": []},
+                         indent=2), file=out)
+    else:
+        render_moves(moves, conflicts, out)
     return 1 if problems else 0
 
 

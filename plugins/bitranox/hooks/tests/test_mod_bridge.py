@@ -209,3 +209,74 @@ def test_contrib_what_may_hold_the_backlog_field_separator(repo, env):
     rc, out = call(repo, env, "contrib_add",
                    {"what": "a | next: b", "target": "hook", "why": "w"})
     assert (rc, out["ok"], out["data"]["queued"]) == (0, True, True)
+
+
+def _stored_bodies(root):
+    return {p.name: p.read_text(encoding="utf-8") for p in root.rglob("facts/*.md")}
+
+
+def test_an_update_without_a_body_keeps_the_stored_body(tmp_path, env):
+    level = tmp_path / "proj"
+    level.mkdir()
+    fact = {"title": "Rule", "hook": "When x, y.", "body": "Because z.", "level": str(level)}
+    rc, out = call(tmp_path, env, "memory_add", fact)
+    assert rc == 0, out
+    slug = out["data"]["slug"]
+    before = _stored_bodies(tmp_path)
+    update = {"title": "Rule", "hook": "When x, do y now.", "level": str(level), "slug": slug}
+    rc, out = call(tmp_path, env, "memory_add", update)
+    assert (rc, out["data"]["action"]) == (0, "updated"), out
+    assert "Because z." in _stored_bodies(tmp_path)[slug + ".md"]
+    assert set(_stored_bodies(tmp_path)) == set(before)
+
+
+FRAME_ONLY = "---\nname: rule\ndescription: old\nmetadata:\n  type: project\n---\n\n"
+
+
+@pytest.mark.parametrize("blank", ["\n", "   ", " \t\n ", FRAME_ONLY])
+def test_an_update_with_a_blank_body_keeps_the_stored_body(tmp_path, env, blank):
+    # A blank body is no body: it once passed the engine's update branch and replaced the stored
+    # prose with the bare frame, a silent data loss through a model-callable tool.
+    level = tmp_path / "proj"
+    level.mkdir()
+    fact = {"title": "Rule", "hook": "When x, y.", "body": "Because z.", "level": str(level)}
+    rc, out = call(tmp_path, env, "memory_add", fact)
+    assert rc == 0, out
+    slug = out["data"]["slug"]
+    rc, out = call(tmp_path, env, "memory_add", {**fact, "body": blank, "slug": slug})
+    assert (rc, out["data"]["action"]) == (0, "updated"), out
+    assert "Because z." in _stored_bodies(tmp_path)[slug + ".md"]
+
+
+def test_a_create_with_a_frame_only_body_is_an_empty_body_refusal(tmp_path, env):
+    level = tmp_path / "proj"
+    level.mkdir()
+    rc, out = call(tmp_path, env, "memory_add",
+                   {"title": "Rule", "hook": "When x, y.", "body": FRAME_ONLY, "level": str(level)})
+    assert (rc, out["error"]["kind"]) == (1, "EmptyBody"), out
+    assert _stored_bodies(tmp_path) == {}
+
+
+def test_a_create_without_a_body_is_an_empty_body_refusal(tmp_path, env):
+    level = tmp_path / "proj"
+    level.mkdir()
+    rc, out = call(tmp_path, env, "memory_add",
+                   {"title": "Rule", "hook": "When x, y.", "level": str(level)})
+    assert (rc, out["error"]["kind"]) == (1, "EmptyBody")
+    assert _stored_bodies(tmp_path) == {}
+
+
+@pytest.mark.parametrize("body", [5, ["b"], {"a": 1}, True])
+def test_a_body_that_is_no_string_is_refused(tmp_path, env, body):
+    rc, out = call(tmp_path, env, "memory_add", {**FACT, "body": body})
+    assert (rc, out["error"]["kind"]) == (1, "BadInput")
+
+
+def test_an_os_error_is_could_not_run_not_a_refusal(repo, env):
+    # A directory where the backlog file belongs: the open fails with an OSError subclass on every
+    # OS (IsADirectoryError on POSIX, PermissionError on Windows). That is the environment failing,
+    # not a judgement on the request, so it is exit 2 and keeps the exception type in the message.
+    (repo / "OPEN-WORK.md").mkdir()
+    rc, out = call(repo, env, "backlog_add", ITEM)
+    assert (rc, out["ok"], out["error"]["kind"]) == (2, False, "Internal"), out
+    assert out["error"]["message"].split(":")[0] in ("IsADirectoryError", "PermissionError")

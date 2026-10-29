@@ -20,6 +20,13 @@ numbers - do not wire CI off one of them expecting the other:
 So `check` exiting 0 is the CLEAN result, and it exits 0 over an empty tree too (0 findings
 across 0 targets) - run `targets` first if you need to know anything was in scope at all.
 
+Two kinds of content are judged by their real owner rather than as yours. A skill whose scripts
+declare PEP 723 inline `dependencies` has its tests collected WITH them (the tool runs under
+`uv run`, which provides them), so a suite is not called dead for lacking deps only the checker's
+interpreter misses. And `~/.claude/skills/synced/` is the claude.ai account skill sync: it is not
+audited and is listed under `skipped` as externally owned - a defect there is fixed in claude.ai,
+where those skills come from, not in the local copy.
+
 Error (2) is anything that leaves the answer about a tree that was not read: a --root, --home or
 --shipped that is not a directory (both verbs refuse it), a directory the walk could not list
 (still reported, as `unlistable`, so it never reads as clean), or a crash. Under --json the
@@ -28,7 +35,9 @@ Error (2) is anything that leaves the answer about a tree that was not read: a -
 
 import argparse
 import json
+import re
 import sys
+import tomllib
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[3] / "hooks"))
@@ -129,22 +138,68 @@ def cmd_targets(args, out=None, err=None):
     return 0 if selected else 1
 
 
-def check_skills(target, shipped=None):
-    """Deterministic findings for one skills dir, as (check name, message) pairs."""
+# The claude.ai account skill sync: skills a user created or enabled on claude.ai, synced into
+# the personal skills dir per account. Nothing local owns them.
+SYNCED_DIRNAME = "synced"
+SYNCED_REASON = ("claude.ai account skill sync (externally owned): report only - fix a defect "
+                 "there in claude.ai, where those skills come from, not in the local copy")
+
+# PEP 723: `# /// script` ... `# ///`, every line in between a comment holding TOML.
+_PEP723_RX = re.compile(r"(?m)^# /// script\s*$\s(?P<body>(^#(| .*)$\s)+)^# ///\s*$")
+
+
+def pep723_dependencies(skill):
+    """The sorted union of the `dependencies` every PEP 723 script in `skill` declares (tests/
+    excluded), or [] when none does. A block that is not valid TOML declares nothing: this feeds a
+    retry, and guessing at a broken block would only change which error the retry reports."""
+    deps = set()
+    for script in sorted(Path(skill).rglob("*.py")):
+        if "tests" in script.relative_to(skill).parts or "__pycache__" in script.parts:
+            continue
+        try:
+            text = script.read_text(encoding="utf-8")
+        except (OSError, UnicodeDecodeError):
+            continue
+        match = _PEP723_RX.search(text)
+        if not match:
+            continue
+        toml = "".join(line[2:] if line.startswith("# ") else line[1:]
+                       for line in match.group("body").splitlines(keepends=True))
+        try:
+            declared = tomllib.loads(toml).get("dependencies", [])
+        except tomllib.TOMLDecodeError:
+            continue
+        deps.update(d for d in declared if isinstance(d, str))
+    return sorted(deps)
+
+
+def _under(path, roots):
+    path = Path(path).resolve()
+    return any(path == r or r in path.parents for r in roots)
+
+
+def check_skills(target, shipped=None, *, external=(), collect=hc.uncollectable_tests):
+    """Deterministic findings for one skills dir, as (check name, message) pairs.
+
+    `external` names dirs inside `target` that something else owns (the account skill sync);
+    they are not audited. `collect` is the test-collection check, a seam for tests."""
     target = Path(target)
+    skip = tuple(Path(e).resolve() for e in external)
     found = [("frontmatter", m) for m in hc.frontmatter_problems(target)]
-    skills = [d for d in sorted(target.iterdir()) if d.is_dir()]
+    skills = [d for d in sorted(target.iterdir()) if d.is_dir() and not _under(d, skip)]
     found += [("tests-missing", "%s ships a .py but carries no test" % p.name)
               for p in hc.packages_missing_tests(skills)]
     for skill in skills:
-        for path, error, unmeasured in hc.uncollectable_tests(skill / "tests"):
+        for path, error, unmeasured in collect(skill / "tests",
+                                               extra_deps=tuple(pep723_dependencies(skill))):
             check = "tests-unmeasured" if unmeasured else "tests-uncollectable"
             found.append((check, "%s: %s" % (path, error)))
     for name, twin, ratio in hc.unmanaged_twins(target, shipped or {}):
         found.append(("unmanaged-twin",
                       "%s duplicates the shipped skill %s (description match %.0f%%) and no "
                       "mirror gate covers the pair" % (name, twin, ratio * 100)))
-    found += [("graveyard", "%s: %s" % (p, why)) for p, why in hc.graveyard_entries(target)]
+    found += [("graveyard", "%s: %s" % (p, why)) for p, why in hc.graveyard_entries(target)
+              if not _under(p, skip)]
     return found
 
 
@@ -221,9 +276,12 @@ def check_personal(home=None, shipped_root=None):
     now ships the same thing."""
     home = Path(home) if home is not None else Path.home()
     claude, found = home / ".claude", []
+    synced = (claude / "skills" / SYNCED_DIRNAME).resolve()
     if shipped_root:
         for local, twin, status in hc.duplicate_shipped_files(
                 [claude / "hooks", claude / "skills"], shipped_root):
+            if _under(local, (synced,)):
+                continue
             if status == "identical":
                 found.append(("duplicate-of-shipped",
                               "%s is byte-identical to the shipped %s. Retire the local copy "
@@ -310,8 +368,11 @@ def cmd_check(args, out=None, err=None):
         total += 1
         results.append({"target": path, "findings": [
             {"check": "unlistable", "message": "cannot list, not audited: %s" % why}]})
+    synced = home / ".claude" / "skills" / SYNCED_DIRNAME
+    if not args.no_personal and synced.is_dir():
+        skipped.append({"path": str(synced), "reason": SYNCED_REASON})
     for target in selected:
-        findings = check_skills(target, shipped)
+        findings = check_skills(target, shipped, external=(synced,))
         total += len(findings)
         results.append({"target": str(target),
                         "findings": [{"check": c, "message": m} for c, m in findings]})

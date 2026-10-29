@@ -117,6 +117,12 @@ trigger and make the BODY a concise pointer (`Detail: bitranox:<skill>` / `enfor
 hook`) instead of restating content. The dream does not delete such a rule - the always-on trigger
 is its value.
 
+Prove "already covered" with a quote from SHIPPED skill text only - a `SKILL.md`, a reference
+file, a script's help. Exclude `*/.skillwriter/*`: those review checklists repeat rule text while
+testing it, so a quote from one makes a rule look shipped that no skill states
+(`meta-skill-audit`'s `audit_skills.py` excludes them the same way). Search with
+`grep -rn --exclude-dir=.skillwriter`.
+
 **When a fold MOVES a fact's content into a skill** (a fold campaign, often run outside any dream,
 that writes the content into SKILL.md or a reference file and then cuts the fact's hook or archives
 the fact - distinct from this pass's keep-the-trigger default), treat every behaviour claim, flag or
@@ -140,9 +146,12 @@ API name and number in the body as unverified: far more sessions trust the skill
 - If the pointer is kept, correct in the same pass any claim the fold refuted in its body, and in
   its hook if the hook states it.
 - Before archiving a fact, run `ref_map.py --root <anchor> <slug>` (home:
-  `<plugin>/skills/meta-self-improve/`, launch via `hooks/run-python.sh`) for inbound refs, then
-  grep every CLAUDE.md, doc, skill file and fact hook for the bare slug and for any heading the rule
-  sat under before the fold: `ref_map` and `--check-tree` see only `[[wikilinks]]` inside the store.
+  `<plugin>/skills/meta-self-improve/`, launch via `hooks/run-python.sh`) for inbound `[[refs]]`
+  and plain-prose mentions inside the store. `--archive` of the LAST pointer refuses on its own
+  (exit 1, nothing written) while a fact links or names the slug or a level's `CLAUDE.md` names it,
+  and lists them; `--force` archives anyway. Neither looks outside the store and the level
+  `CLAUDE.md` files, so still grep every other doc and skill file for the bare slug and for any
+  heading the rule sat under before the fold.
   Re-point each hit to the skill. For many slugs, sweep in ONE `grep -F -f <patterns-file>` pass
   that excludes vendored trees (`.venv`, build `target/`, large source checkouts). Measured: a
   per-slug walk of a large tree ran past 5 minutes.

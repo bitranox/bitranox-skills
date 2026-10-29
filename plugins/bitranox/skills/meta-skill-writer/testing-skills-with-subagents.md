@@ -54,7 +54,8 @@ This is identical to TDD's "write failing test first" - you MUST see what agents
 - [ ] **Identify patterns** - which excuses appear repeatedly?
 - [ ] **Note effective pressures** - which scenarios trigger violations?
 
-**Watch for baseline contamination - it arrives by three routes, and the obvious fix closes only one.**
+**Watch for baseline contamination - it arrives by four routes, and the obvious fix closes only
+one.**
 
 **Route 1, the agent GOES and gets it (tool/library-usage skills).** A baseline subagent whose cwd
 is the tool's own repo will explore the files, discover the tool, and use it - so the "clean
@@ -78,6 +79,15 @@ route 2. For a new skill, test a draft that is not installed; for an edit, make 
 coverage check against the pre-edit FILE. Do not close it by naming the skill off-limits in the
 prompt: that line does not bind, and in a retrieval or GREEN arm it inverts the result (SKILL.md,
 "The probe can also fetch the skill under test").
+
+**Route 4, the session's own status block HANDS it over.** Even a text-only probe with no tools
+inherits the session context the harness injects, and that includes the git status block with
+the branch name and the titles of the recent commits. When a commit title names the fix ("keep
+the stored password when an all-asterisk value is uploaded"), the RED arm can answer from the
+title instead of the pasted text. Tell the probe to answer only from the pasted text and to ignore
+commit titles, branch names and any other context outside it, and record an answer that cites
+them, or matches a commit title's wording, as contaminated. Where you can, run the RED before the
+fix is committed, or from a checkout whose recent commits do not name it.
 
 The tell is a CITATION YOU CANNOT FIND. The reply quotes a sentence and attributes it to the file
 you supplied, and the sentence is not in that file - the model presents injected text as if it read
@@ -304,6 +314,17 @@ Replace `[skill-being-tested]` with the **full content** of the SKILL.md you are
 
 Make agent believe it's real work, not a quiz.
 
+**An arm that was allowed tools can also act, so check what it wrote.** Believing the scenario is
+real work, a capable agent may finish it the way real work ends: queue a skill fix, capture a
+memory fact, edit a backlog. A test arm must write none of that, because a write from a test arm
+plants the lesson under test in the store the next RED inherits, and a queued fix built on an arm's
+guesses reads later like a real finding. After every tool-enabled RED or GREEN arm, compare the
+contribution queue (`contrib_queue.py queues`, home `skills/meta-self-improve/`, launched through
+`hooks/run-python.sh`; the open count per queue) and the memory store (`git status` in the store
+directory, or its `facts/` listing by modification time where it is not a git repo) with their
+state before the arm. Check both: an arm that queued a fix may also have written a fact. Undo
+anything the arm wrote and record it in the review artifact.
+
 ## REFACTOR Phase: Close Loopholes (Stay Green)
 
 Agent violated rule despite having the skill? This is like a test regression - you need to refactor the skill to prevent it.
@@ -503,7 +524,7 @@ OK Fix: Document exact rationalizations verbatim.
 OK Fix: Add explicit negations for each specific rationalization.
 
 **NO Stopping after first pass**
-Tests pass once ≠ bulletproof.
+Tests passing once is not bulletproof.
 OK Fix: Continue REFACTOR cycle until no new rationalizations.
 
 **NO Leaky RED/GREEN fixture (shares a namespace with the live system)**

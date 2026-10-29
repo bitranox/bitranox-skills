@@ -136,13 +136,23 @@ Confirm:
 **Failed, but for which reason?** A RED counts only when it fails ON the assertion you owe, and
 the word FAILED is all a checkbox reads. Two doors give a red that proves nothing. (1) The test
 could not run, which a runner can still report as a failure: an async test the runner does not
-support, a fixture error, an ImportError from a typo rather than from the missing module, or a
-skip that fires where the check counts anything but PASSED as red. (2) It failed legitimately on
+support, a fixture error, an ImportError at collection, or a skip that fires where the check
+counts anything but PASSED as red. The ImportError is no RED even when it names exactly the
+symbol the test is about: a new test importing a function or class that does not exist yet errors
+at COLLECTION, taking every test in its file with it, before any assertion runs. Add a no-op stub
+of the symbol first (a function returning `None`, an empty class) so each test fails on its
+behaviour, and carry that same stub into every other RED arm you run. (2) It failed legitimately on
 an EARLIER assertion (a boot or setup precondition, an absent leaf the owed check reads), so the
 owed assertion never executed. Read WHY each new test failed, compare it with the assertion you
 owe, and require the arm to fail BY NAME on that assertion. When an earlier check shadows it,
 narrow the mutation so that check still passes (keep the leaf, break the count) instead of
 reverting more.
+
+**A failure that exists only on another OS is not RED on yours.** A test for a defect that only
+one platform shows (CRLF line endings on Windows, a path separator, a case-insensitive filesystem)
+passes against the unfixed code on the dev box, and a GREEN there proves nothing either. Run its
+RED arm on that platform: the old code plus the new test (plus the stub above, when the symbol is
+new), and require it to fail on the owed assertion there before calling the test proven.
 
 **A double off the path.** The same symptom appears after a fix moves the call a test injects a
 fault into (a subclass overriding a per-item `take()` while the fix replaced the loop with one

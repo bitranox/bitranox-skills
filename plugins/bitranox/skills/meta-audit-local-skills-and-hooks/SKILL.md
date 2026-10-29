@@ -34,10 +34,11 @@ is the proof the ownership filter ran, not noise to scroll past.
 
 | Location                                                                             | Verdict                                                   |
 |--------------------------------------------------------------------------------------|-----------------------------------------------------------|
-| `~/.claude/skills`, `~/.claude/hooks`                                                | yours - audit and fix                                     |
+| `~/.claude/skills` (minus `synced/`), `~/.claude/hooks`                              | yours - audit and fix                                     |
 | a project's `.claude/skills`                                                         | yours - audit and fix                                     |
 | any dir under an ancestor holding `.claude-plugin/plugin.json` or `marketplace.json` | owned by that plugin - REPORT ONLY                        |
 | anything under `~/.claude/plugins/`                                                  | an installed copy - REPORT ONLY, an edit there evaporates |
+| `~/.claude/skills/synced/` (the claude.ai account skill sync)                        | owned by the account - REPORT ONLY, fix it in claude.ai   |
 
 **You may not edit a file the selection skipped.** Not to keep copies consistent, not because it
 is "the same skill", not because the fix is one line. A skipped file belongs to a repo with its own
@@ -73,6 +74,10 @@ Three of those repay a closer look, because the obvious version of each check is
 
 - **A `tests/` dir that exists is not a `tests/` dir that runs.** The check collects it. A module
   importing a retired shim dies at import, so every "does it have tests?" check reports it green.
+  The reverse error is a tool run with `uv run` whose scripts declare PEP 723 inline
+  `dependencies`: its tests import a package the checker's own interpreter lacks. The check reads
+  those `# /// script` blocks and collects WITH their dependencies, so a `No module named` it still
+  reports is a dependency the scripts never declared.
 - **A retired shim is not rot - it is the fix.** A tombstone that exits non-zero is what makes a
   stale caller fail loudly instead of silently skipping a guard. Deleting one re-arms the trap.
   The check asks whether it is well formed (non-executable, exits non-zero, names a replacement,

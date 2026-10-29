@@ -25,6 +25,13 @@ for the original holder: a lock whose pid is gone, or whose start time disagrees
 process, is stale and keeps nothing. An `.in_use` directory that is empty or absent means no
 session has claimed that version.
 
+**`/reload-plugins` does not release a lock; only the process exiting does.** A session that
+reloads onto a new version adds a lock there and keeps the one on every version it loaded before,
+so a long-lived session can hold several old versions at once (one live process was seen holding
+four). Running `/reload-plugins` and pruning again frees nothing. To reclaim a held version,
+the session named in the plan's `in use by pid <N>` line has to end (`ps -p <N>` shows which);
+otherwise leave the version for a later prune.
+
 **Do not reach for `lsof`, `pgrep`, or transcript mtimes.** Hooks are launched per invocation and
 hold no file open between calls, so an open-file search finds nothing and reads as "free" for a
 version that is very much in use. The lock file is the direct instrument; the rest are proxies

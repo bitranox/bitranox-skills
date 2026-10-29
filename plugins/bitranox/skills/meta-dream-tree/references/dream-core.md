@@ -156,6 +156,20 @@ after the first part leaves the rest unreviewed, and the owed-nap gate keeps ask
 `session-reviewed` and the other write verbs (`done`, `saw-promotable`, `promoted`) exit 2 with an
 error on stderr when their write did not land, so a success line means the state really changed.
 
+**A multi-MB stretch: read it with `--prose`.** A raw part is mostly thinking signatures, usage
+blocks, tool output and system reminders, while the learnings sit in the user and assistant text.
+`dream_state.py session-review "<cwd>" --prose > review.txt 2>&1` prints only that text plus tool
+results that FAILED (skill bodies and other `isMeta` records dropped, each record cut at 3,000
+characters with the cut named), and one prose part covers up to 64 MB of transcript, so a stretch
+of tens of MB is ONE review instead of a loop of 2 MB parts. Mark it with `dream_state.py
+session-reviewed "<cwd>" --prose`, which advances over exactly the window the prose review showed;
+without `--prose` it advances one raw 2 MB part only. The exit status and the `TRUNCATED` banner
+work as above. Read the raw part instead (no `--prose`) when the question is about a tool call's
+input or a successful tool's output, which the prose view leaves out. Do not hand-roll a
+transcript condenser: for a transcript that is not a review target (another project's, a
+subagent's), `transcript_tail.py --all --role both <transcript>` from `bitranox:compuse-toolbox`
+prints its text turns.
+
 Rendered inline the same call is silently cut: the harness PERSISTS the result to its own file and
 shows a short preview, and that file is a VIEW of the stretch, not the stretch. Measured twice -
 a banner reporting 1,958,654 unreviewed bytes against a persisted 244,360, an eighth; and a

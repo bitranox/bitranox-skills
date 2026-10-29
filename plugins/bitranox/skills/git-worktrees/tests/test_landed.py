@@ -287,6 +287,86 @@ def test_a_worktree_also_reports_its_branch_commits(repo):
 # ---------------------------------------------------------------------------------------------
 
 
+def _fix_round(repo) -> None:
+    """x1 adds a line, x2 (on top of x1) rewrites it, and main takes only x2's final state.
+
+    `integration` keeps the x1..x2 history. x1's added line is in no file on main, so the
+    added-line check reads x1 as unlanded although its work went into x2, which landed.
+    """
+    repo.git("switch", "-q", "-c", "x1")
+    repo.write("a.txt", "one\ntwo\nthree\nalpha\n")
+    repo.commit("x1: add alpha")
+    repo.git("switch", "-q", "-c", "x2")
+    repo.write("a.txt", "one\ntwo\nthree\nbeta\n")
+    repo.commit("x2: alpha becomes beta")
+    repo.git("branch", "-q", "integration")
+    repo.git("switch", "-q", "main")
+    repo.write("a.txt", "one\ntwo\nthree\nbeta\n")
+    repo.commit("squash of x1..x2")
+
+
+def test_a_branch_whose_lines_a_later_branch_rewrote_reads_unlanded_without_also_into(repo):
+    _fix_round(repo)
+
+    rc, env = repo.run_json("x1", "--into", "main")
+
+    assert rc == 1, env
+    assert env["data"]["verdict"] == "not_landed"
+
+
+def test_also_into_counts_a_branch_contained_in_that_ref_as_landed(repo):
+    _fix_round(repo)
+
+    rc, env = repo.run_json("x1", "--into", "main", "--also-into", "integration")
+
+    assert rc == 0, env
+    assert env["data"]["verdict"] == "landed"
+    assert env["data"]["also_into"] == [{"ref": "integration", "contains": True}]
+
+
+def test_also_into_does_not_cover_a_branch_outside_that_ref(repo):
+    _fix_round(repo)
+    repo.git("switch", "-q", "-c", "stray", "x1")
+    repo.write("b.txt", "stray work\n")
+    repo.commit("stray: not in integration")
+    repo.git("switch", "-q", "main")
+
+    rc, env = repo.run_json("stray", "--into", "main", "--also-into", "integration")
+
+    assert rc == 1, env
+    assert env["data"]["also_into"] == [{"ref": "integration", "contains": False}]
+
+
+def test_also_into_never_covers_a_worktrees_uncommitted_files(repo):
+    _fix_round(repo)
+    wt = repo.root / "wt-x1"
+    repo.git("worktree", "add", "-q", str(wt), "x1")
+    repo.write("c.txt", "uncommitted\n", where=wt)
+
+    rc, env = repo.run_json(str(wt), "--into", "main", "--also-into", "integration")
+
+    assert rc == 1, env
+    assert {f["path"]: f["status"] for f in env["data"]["files"]} == {"c.txt": "absent_in_target"}
+
+
+def test_also_into_that_does_not_resolve_is_exit_2(repo):
+    rc, env = repo.run_json("main", "--into", "main", "--also-into", "no-such-ref")
+
+    assert rc == 2
+    assert env["ok"] is False
+    assert "no-such-ref" in env["data"]["error"]
+
+
+def test_text_output_names_the_also_into_ref_that_decided(repo):
+    _fix_round(repo)
+
+    done = repo.run("x1", "--into", "main", "--also-into", "integration")
+
+    assert done.returncode == 0, done.stderr
+    # The full line: a bare substring also matched "NOT contained in integration (--also-into)".
+    assert "  commits: contained in integration (--also-into)" in done.stdout.splitlines()
+
+
 def test_unknown_target_is_exit_2_with_an_envelope(repo):
     rc, env = repo.run_json("no-such-branch", "--into", "main")
 

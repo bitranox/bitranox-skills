@@ -50,9 +50,17 @@ the dream passes use, works identically.
 Exit codes: 0 = yes (found / would be accepted / applied), 1 = no (no such fact / `check`: the
 engine would refuse this hook), 2 = could not run (no engine, an unreadable or non-UTF-8 tree or
 input file, a stage dir that cannot be written, an interpreter that cannot be launched, bad
-arguments, `apply` refusing the hook before the engine runs, or the engine exiting non-zero - a
-refusal of the whole write included). The `--json` envelope `{ok, command, data, skipped}` is
-printed on every exit, and `ok` means "ran without error": true on 0 and 1, false only on 2.
+arguments, `apply` refusing the hook before the engine runs, a pinned fact given to `apply`
+without --allow-pinned, a body file carrying `show`'s header, or the engine exiting non-zero - a
+refusal of the whole write included). A slug the chain walk misses is exit 1, and the message
+names the level that owns it when the tree has one (`--level <it>` is the retry).
+
+`show --body` prints the stored body alone on stdout (its header goes to stderr), so
+`show --body > f`, an edit of `f`, then `apply --body-file f` stores exactly the edited text: the
+engine re-syncs the frame's `description:` to the hook it is given.
+
+The `--json` envelope `{ok, command, data, skipped}` is printed on every exit, and `ok` means "ran
+without error": true on 0 and 1, false only on 2.
 Advisories are PRODUCT, so they ride in the envelope's `data`; operational warnings go to stderr
 and never into stdout.
 """
@@ -67,6 +75,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import time
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -137,6 +146,14 @@ class EngineLaunchFailed(FactEditError):
 
 class StageFailed(FactEditError):
     """The stage dir (--stage-dir, or the temp dir) or a staged file could not be written."""
+
+
+class PinnedFact(FactEditError):
+    """`apply` was asked to write a PINNED fact without --allow-pinned.
+
+    A pinned fact's content is a human's to change. `amend-pinned` is the engine's one route to it,
+    and this tool picks that verb from the stored flag, so without an explicit opt-in an autonomous
+    caller (a nap's capture subagent) would change pinned content without anyone deciding to."""
 
 
 @dataclass(frozen=True)
@@ -289,6 +306,67 @@ def body_file(anchor: Path, slug: str) -> Path:
     return Path(anchor) / STORE_DIRNAME / FACTS_SUBDIR / f"{slug}.md"
 
 
+# Dirs that hold vendored or generated trees, never a memory level. Walking them is most of the
+# cost of a tree-wide search, and a CLAUDE.local.md inside one is a copy, not an owner.
+_SKIP_DIRS = frozenset({".git", ".hg", ".svn", "node_modules", "__pycache__", STORE_DIRNAME,
+                        ".tox", ".nox", ".mypy_cache", ".pytest_cache", ".ruff_cache"})
+SEARCH_BUDGET_S = 10.0
+
+
+def _skip_dir(name: str) -> bool:
+    return name in _SKIP_DIRS or name.startswith(".venv")
+
+
+def find_pointer_owners(anchor: Path, slug: str, parse_index: Callable[[str], tuple], *,
+                        budget_s: float = SEARCH_BUDGET_S,
+                        clock: Callable[[], float] = time.monotonic) -> tuple[list[Path], bool]:
+    """Every level under `anchor` whose pointer block carries `slug`, and whether the walk finished.
+
+    The chain walk only goes UP, so a fact owned by a sibling or a descendant level reads as
+    missing; this answers where it is instead. A level file that cannot be read is skipped: this is
+    a hint for a refusal already being raised, not a verdict of its own. `budget_s` bounds the walk
+    on a large tree; an unfinished walk returns False so the caller can say so.
+    """
+    deadline = clock() + budget_s
+    needle = f"mem:{slug})"
+    owners: list[Path] = []
+    for root, dirs, files in os.walk(anchor):
+        if clock() >= deadline:
+            return owners, False
+        dirs[:] = sorted(d for d in dirs if not _skip_dir(d))
+        if LEVEL_FILE not in files:
+            continue
+        try:
+            text = (Path(root) / LEVEL_FILE).read_text(encoding="utf-8-sig")
+        except (OSError, UnicodeDecodeError):
+            continue
+        if needle in text and any(p.slug == slug for p in parse_index(text)[1]):
+            owners.append(Path(root).resolve())
+    return owners, True
+
+
+def unknown_fact_message(slug: str, start: Path, anchor: Path, owners: list[Path],
+                         complete: bool) -> str:
+    """Why `slug` was not found from `start`, and the exact retry when the tree has it. PURE."""
+    head = (f"no pointer for {slug!r} on the ancestor chain of {Path(start).resolve()} (show and "
+            "apply walk UP from --from, never into sibling or descendant levels)")
+    if len(owners) == 1:
+        return f"{head}; the tree points at it from {owners[0]}: retry with --level {owners[0]}"
+    if owners:
+        return (f"{head}; {len(owners)} levels point at it (a duplicate pointer): "
+                + ", ".join(str(o) for o in owners)
+                + f"; retry with --level <one of them>, e.g. --level {owners[0]}")
+    body = body_file(anchor, slug)
+    if not complete:
+        return (f"{head}; the tree search stopped after {SEARCH_BUDGET_S:g}s - find the owner "
+                f"with: find {anchor} -name {LEVEL_FILE} -exec grep -l 'mem:{slug})' {{}} +, "
+                "then retry with --level <that dir>")
+    if body.is_file():
+        return (f"{head}; a body exists at {body} but no level under {anchor} points at it "
+                "(a dangling body)")
+    return f"{head}; there is no body at {body} either, so no fact with this slug exists in this tree"
+
+
 # ---- engine discovery and loading ---------------------------------------------------------------
 
 def engine_candidates(home: Path | None = None) -> list[Path]:
@@ -366,7 +444,8 @@ def load_rules(engine: Path) -> EngineRules:
 
 # ---- reading a stored fact ----------------------------------------------------------------------
 
-def read_fact(slug: str, start: Path, rules: EngineRules, level: Path | None = None) -> Fact:
+def read_fact(slug: str, start: Path, rules: EngineRules, level: Path | None = None, *,
+              search_budget_s: float = SEARCH_BUDGET_S) -> Fact:
     """The stored fact for `slug`, found by walking up from `start`. Raises UnknownFact.
 
     The pointer is parsed with the ENGINE's own parser rather than a local regex: a slug may carry
@@ -394,7 +473,14 @@ def read_fact(slug: str, start: Path, rules: EngineRules, level: Path | None = N
             return Fact(slug=slug, level=lvl, anchor=anchor, title=ptr.title,
                         hook=ptr.hook or "", pin=bool(ptr.pin),
                         body=_read_text(path, missing_ok=True), body_path=path)
-    raise UnknownFact(f"no pointer for {slug!r} at any level from {Path(start).resolve()}")
+    owners, complete = ([], True)
+    if body_file(anchor, slug).is_file():
+        # Only a slug that HAS a body can be owned somewhere else; one without is simply absent,
+        # and a whole-tree walk to say so would cost seconds on a large tree for nothing.
+        owners, complete = find_pointer_owners(anchor, slug, rules.parse_index,
+                                               budget_s=search_budget_s)
+    raise UnknownFact(unknown_fact_message(slug, Path(level) if level else start, anchor,
+                                           owners, complete))
 
 
 def _read_text(path: Path, *, missing_ok: bool) -> str:
@@ -557,6 +643,28 @@ def _fact_data(fact: Fact, verdict: Verdict, rules: EngineRules) -> dict:
     }
 
 
+# `show` text output opens with these; a body file that carries them was captured from show's
+# whole output, and storing it would write the metadata header into the fact's prose.
+BODY_MARKER = "---- body ----"
+_SHOW_HEADER_RX = re.compile(r"\Aslug {2,}\S")
+
+
+def clean_body(text: str) -> str:
+    """The body text `apply` hands the engine: blank edges trimmed, show's header refused. PURE.
+
+    Leading blank lines would sit between the engine's frame and the prose (the frame already ends
+    in one blank line), and trailing ones are noise a re-read keeps. Only WHOLE blank lines go: the
+    first content line keeps its indentation. Raises BadInput for text carrying `show`'s header.
+    """
+    if BODY_MARKER in text.splitlines() or _SHOW_HEADER_RX.match(text.lstrip("\r\n")):
+        raise BadInput(f"the body file carries factedit show's header (a '{BODY_MARKER}' line or a "
+                       "leading 'slug ...' line), which would be stored as the fact's prose; "
+                       "write the file from `show --body` stdout alone, or cut the header out")
+    trimmed = re.sub(r"\A(?:[ \t]*\r?\n)+", "", text)
+    trimmed = re.sub(r"(?:\r?\n[ \t]*)+\Z", "", trimmed)
+    return trimmed + "\n" if trimmed else ""
+
+
 def _render_fact(data: dict, body: str, show_body: bool) -> str:
     lines = [
         f"slug        {data['slug']}",
@@ -579,7 +687,7 @@ def _render_fact(data: dict, body: str, show_body: bool) -> str:
     for line in data["advisories"]:
         lines.append(f"~ advisory: {line}")
     if show_body:
-        lines += ["", "---- body ----", body.rstrip("\n")]
+        lines += ["", BODY_MARKER]
     return "\n".join(lines)
 
 
@@ -605,6 +713,13 @@ def cmd_show(args, rules: EngineRules) -> int:
     data = _fact_data(fact, verdict, rules)
     if args.body:
         data["body"] = fact.body
+    if args.body and not args.as_json:
+        # The body alone goes to stdout, so `show --body > f` captures exactly the text `apply
+        # --body-file f` takes back; the header is for the person reading, so it goes to stderr.
+        print(_render_fact(data, fact.body, True), file=sys.stderr)
+        sys.stdout.write(fact.body if fact.body.endswith("\n") or not fact.body
+                         else fact.body + "\n")
+        return 0
     _emit(args.as_json, "show", True, data, [],
           _render_fact(data, fact.body, args.body))
     return 0
@@ -635,6 +750,12 @@ def cmd_apply(args, rules: EngineRules) -> int:
                      level=Path(args.level) if args.level else None)
     hook = _resolve_text(args.hook, args.hook_file, "--hook")
     body = _resolve_text(None, args.body_file, "--body")
+    if body is not None:
+        body = clean_body(body)
+    if fact.pin and not args.allow_pinned and not args.dry_run:
+        raise PinnedFact(f"{fact.slug!r} is pinned: its content is a human's to change. Pass "
+                         "--allow-pinned to write it through amend-pinned, or --dry-run to stage "
+                         "the change and print the engine command without writing")
     if hook is None and body is None and not args.title and not args.type_:
         raise BadInput("nothing to change: give --hook/--hook-file, --body-file, --title or --type")
     if args.type_:
@@ -811,6 +932,9 @@ def build_parser() -> argparse.ArgumentParser:
                      help="where to write the staged hook/body files (default: a temp dir)")
     ap_.add_argument("--dry-run", action="store_true",
                      help="stage the files and print the engine command without running it")
+    ap_.add_argument("--allow-pinned", action="store_true",
+                     help="write a PINNED fact (through amend-pinned); without it apply refuses "
+                          "one, since pinned content is a human's to change")
     ap_.add_argument("--python", default=None,
                      help="interpreter to launch the engine with (default: python3 from PATH)")
     _add_common(ap_)

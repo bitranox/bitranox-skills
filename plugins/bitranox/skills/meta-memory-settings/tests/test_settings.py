@@ -438,3 +438,18 @@ def test_classifier_subagent_signal_defaults_to_off_and_accepts_shadow(capsys):
     assert sig.load_config()["classifier_subagent_signal"] == "off"
     assert ST.main(["set", "classifier_subagent_signal", "shadow"]) == 0
     assert sig.load_config()["classifier_subagent_signal"] == "shadow"
+
+
+# ---- a decide switch reaches only sessions that loaded a hook with a decide path ---------------
+
+def test_setting_a_site_to_decide_warns_that_open_sessions_need_a_plugin_reload(capsys):
+    assert ST.main(["set", "classifier_subagent_signal", "decide"]) == 0
+    captured = capsys.readouterr()
+    assert "/reload-plugins" in captured.err
+    assert "classifier_subagent_signal = decide" in captured.out
+    assert "/reload-plugins" not in captured.out
+
+
+def test_control_shadow_needs_no_reload_warning(capsys):
+    assert ST.main(["set", "classifier_subagent_signal", "shadow"]) == 0
+    assert "/reload-plugins" not in capsys.readouterr().err

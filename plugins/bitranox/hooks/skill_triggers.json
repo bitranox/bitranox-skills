@@ -535,7 +535,7 @@
   "settings",
   "fixtures",
   "config",
-  "especially"
+  "jupyter"
  ],
  "files-edit-toml": [
   "creating",

@@ -1,4 +1,5 @@
 """task_brief.py: task boundaries, CommonMark fences, task ids, and the default output file."""
+import json
 import subprocess
 
 import pytest
@@ -339,3 +340,231 @@ def test_a_plan_with_constraints_but_no_such_task_is_still_not_found(tmp_path):
     out = tmp_path / "brief.md"
     assert TB.main([str(plan), "9", str(out)]) == 1
     assert not out.exists()
+
+
+# ---- dotted ids with a letter suffix ------------------------------------------------------------
+SPLIT_PLAN = ("### Task 2.1: first half\n\nbody two-one\n\n"
+              "### Task 2.1b: second half\n\nbody two-one-b\n\n"
+              "### Task 3.2.1: nested\n\nbody nested\n")
+
+
+def test_a_dotted_id_with_a_letter_suffix_is_its_own_task():
+    """A review split 2.1 into 2.1 and 2.1b: '2.1b' must not be read as task 2."""
+    assert "body two-one-b" in TB.extract_task(SPLIT_PLAN, "2.1b")
+    assert "body two-one-b" not in TB.extract_task(SPLIT_PLAN, "2.1")
+    assert TB.extract_task(SPLIT_PLAN, 2) == ""
+    assert TB.task_headings(SPLIT_PLAN, "2.1b") == [(5, "### Task 2.1b: second half")]
+
+
+def test_a_multi_level_dotted_id_is_its_own_task():
+    assert "body nested" in TB.extract_task(SPLIT_PLAN, "3.2.1")
+    assert TB.extract_task(SPLIT_PLAN, 3) == ""
+
+
+# ---- a plan with no task headings at all --------------------------------------------------------
+def test_a_plan_with_no_task_headings_says_how_to_restructure_it(tmp_path, capsys):
+    """A plan written as prose or a numbered list has nothing to extract: the refusal must say the
+    plan needs Task headings, not only that one id is missing."""
+    plan = tmp_path / "plan.md"
+    plan.write_bytes(b"# Plan\n\n## Context\n\ndecided X\n\n## 1. Spike\n\n"
+                     b"1. **Spike (opus)**: go\n")
+    assert TB.main([str(plan), "1", str(tmp_path / "brief.md")]) == 1
+    err = capsys.readouterr().err
+    assert "has no 'Task <id>' headings at all" in err
+    assert "Global Constraints" in err
+
+
+def test_a_plan_with_other_task_headings_gets_only_the_plain_not_found(tmp_path, capsys):
+    """Control: an id that is merely absent from a structured plan is not a restructure case."""
+    plan = tmp_path / "plan.md"
+    plan.write_bytes(b"## Task 1\none\n")
+    assert TB.main([str(plan), "7", str(tmp_path / "brief.md")]) == 1
+    err = capsys.readouterr().err
+    assert "no heading matching 'Task 7'" in err
+    assert "at all" not in err
+
+
+# ---- the enclosing section's preamble travels with the task --------------------------------------
+MILESTONE_PLAN = ("# Plan title\n\n**Goal:** g\n\n## Global Constraints\n\n* gc line\n\n"
+                  "## DETAILED tasks - M2\n\nShared procedures for every task below.\n\n"
+                  "### P1 - privacy scan\n\nrun the scan\n\n### P2 - gate\n\nrun the gate\n\n"
+                  "### Task 2.1: first\n\nbody 2.1, then P1 and P2\n\n"
+                  "### Task 2.2: second\n\nbody 2.2\n\n"
+                  "## M3\n\n### Task 3.1: third\n\nbody 3.1\n")
+
+
+@pytest.mark.parametrize("task", ["2.1", "2.2"])
+def test_every_task_of_a_milestone_carries_its_shared_preamble(task):
+    brief = TB.build_brief(MILESTONE_PLAN, task)
+    assert "### P1 - privacy scan" in brief and "run the gate" in brief
+    assert brief.index("* gc line") < brief.index("## DETAILED tasks - M2") \
+        < brief.index(f"### Task {task}")
+
+
+def test_a_preamble_with_no_text_is_not_carried_and_another_milestone_is_not_either():
+    brief = TB.build_brief(MILESTONE_PLAN, "3.1")
+    assert "## M3" not in brief
+    assert "privacy scan" not in brief
+    assert brief.endswith("### Task 3.1: third\n\nbody 3.1\n")
+
+
+def test_the_plan_title_section_is_not_carried_as_a_preamble():
+    """The title's text is the plan header (Goal, a pointer to this skill), not a procedure."""
+    plan = "# Plan title\n\n**Goal:** g\n\n> use the SDD skill\n\n## Task 1: only\n\nbody\n"
+    assert TB.build_brief(plan, 1) == "## Task 1: only\n\nbody\n"
+
+
+def test_a_milestone_that_opens_a_plan_without_a_title_is_still_carried():
+    plan = "## M1 procedures\n\nP1: scan first\n\n### Task 1: one\n\nbody one\n"
+    assert "P1: scan first" in TB.build_brief(plan, 1)
+
+
+# ---- --decision: user decisions quoted verbatim -------------------------------------------------
+DECISION_PLAN = "## Global Constraints\n\n* gc\n\n### Task 1: one\n\nbody one\n"
+
+
+def _decision(question, chosen, options, multi=False, annotation=None):
+    return {"ts": "2026-10-16T10:00:00Z", "session_id": "s", "cwd": "/opt/x", "question": question,
+            "header": "H", "multiSelect": multi, "options": options, "chosen": chosen,
+            "chosen_options": [o for o in options if o["label"] == chosen],
+            "annotation": annotation}
+
+
+DECISIONS = [
+    _decision("When does the sync window start?", "Only a real sync",
+              [{"label": "Every result", "description": "any attempt opens it"},
+               {"label": "Only a real sync",
+                "description": "only an attempt where ssh got in and ntpd ran starts the window"}]),
+    _decision("Which log format?", "JSON lines",
+              [{"label": "JSON lines", "description": "one object per line"},
+               {"label": "Plain text", "description": "human readable"}]),
+    _decision("Which log retention?", "30 days",
+              [{"label": "30 days", "description": "rotate monthly"},
+               {"label": "Forever", "description": "never rotate"}]),
+]
+
+
+def _decisions_file(tmp_path, rows=DECISIONS, extra_lines=()):
+    path = tmp_path / "decisions.jsonl"
+    lines = [json.dumps(r) for r in rows] + list(extra_lines)
+    path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    return path
+
+
+def _plan(tmp_path):
+    plan = tmp_path / "plan.md"
+    plan.write_text(DECISION_PLAN, encoding="utf-8")
+    return plan
+
+
+def test_a_matched_decision_is_appended_verbatim_under_its_own_heading(tmp_path):
+    out = tmp_path / "brief.md"
+    rc = TB.main([str(_plan(tmp_path)), "1", str(out), "--decision", "sync window",
+                  "--decisions-file", str(_decisions_file(tmp_path))])
+    assert rc == 0
+    brief = out.read_text(encoding="utf-8")
+    assert "## User decisions" in brief
+    assert "When does the sync window start?" in brief
+    assert "Only a real sync" in brief
+    assert "only an attempt where ssh got in and ntpd ran starts the window" in brief
+    assert "any attempt opens it" not in brief      # an option nobody chose is not relayed
+    assert brief.index("* gc") < brief.index("## User decisions") < brief.index("### Task 1")
+
+
+def test_the_text_may_match_the_chosen_label_and_the_flag_repeats(tmp_path):
+    out = tmp_path / "brief.md"
+    rc = TB.main([str(_plan(tmp_path)), "1", str(out), "--decision", "JSON lines",
+                  "--decision", "30 days", "--decisions-file", str(_decisions_file(tmp_path))])
+    assert rc == 0
+    brief = out.read_text(encoding="utf-8")
+    assert "one object per line" in brief and "rotate monthly" in brief
+
+
+def test_a_decision_text_that_matches_no_record_is_refused_and_writes_nothing(tmp_path, capsys):
+    out = tmp_path / "brief.md"
+    out.write_text("pre-existing brief\n", encoding="utf-8")
+    rc = TB.main([str(_plan(tmp_path)), "1", str(out), "--decision", "no such thing",
+                  "--decisions-file", str(_decisions_file(tmp_path))])
+    assert rc == 1
+    assert "no such thing" in capsys.readouterr().err
+    assert out.read_text(encoding="utf-8") == "pre-existing brief\n"
+
+
+def test_a_decision_text_that_matches_two_records_is_refused_naming_both(tmp_path, capsys):
+    out = tmp_path / "brief.md"
+    rc = TB.main([str(_plan(tmp_path)), "1", str(out), "--decision", "log",
+                  "--decisions-file", str(_decisions_file(tmp_path))])
+    assert rc == 1
+    err = capsys.readouterr().err
+    assert "'log'" in err
+    assert "Which log format?" in err and "Which log retention?" in err
+    assert not out.exists()
+
+
+def test_a_multi_select_answer_relays_every_chosen_option(tmp_path):
+    rows = [_decision("Which platforms?", "Linux, Windows",
+                      [{"label": "Linux", "description": "the CI default"},
+                       {"label": "Windows", "description": "the self-hosted runner"},
+                       {"label": "macOS", "description": "not this release"}], multi=True,
+                      annotation="Windows only for the gate")]
+    out = tmp_path / "brief.md"
+    assert TB.main([str(_plan(tmp_path)), "1", str(out), "--decision", "platforms",
+                    "--decisions-file", str(_decisions_file(tmp_path, rows))]) == 0
+    brief = out.read_text(encoding="utf-8")
+    assert "the CI default" in brief and "the self-hosted runner" in brief
+    assert "not this release" not in brief
+    assert "Windows only for the gate" in brief
+
+
+def test_a_broken_line_in_the_decisions_file_is_skipped_not_fatal(tmp_path):
+    out = tmp_path / "brief.md"
+    path = _decisions_file(tmp_path, extra_lines=["{not json", "[1, 2]"])
+    assert TB.main([str(_plan(tmp_path)), "1", str(out), "--decision", "sync window",
+                    "--decisions-file", str(path)]) == 0
+
+
+def test_a_missing_decisions_file_is_exit_2(tmp_path, capsys):
+    rc = TB.main([str(_plan(tmp_path)), "1", str(tmp_path / "brief.md"), "--decision", "x",
+                  "--decisions-file", str(tmp_path / "absent.jsonl")])
+    assert rc == 2
+    assert "absent.jsonl" in capsys.readouterr().err
+
+
+def test_without_decision_flags_the_brief_is_unchanged(tmp_path):
+    out = tmp_path / "brief.md"
+    assert TB.main([str(_plan(tmp_path)), "1", str(out),
+                    "--decisions-file", str(_decisions_file(tmp_path))]) == 0
+    assert "User decisions" not in out.read_text(encoding="utf-8")
+
+
+def test_the_default_decisions_file_is_the_main_checkout_root_of_a_linked_worktree(repo, tmp_path,
+                                                                                    monkeypatch):
+    """The same place hooks/user-decision-log.py writes it: a worktree finds the main checkout's."""
+    git = ["git", "-c", "user.name=t", "-c", "user.email=t@example.com"]
+    subprocess.run(git + ["commit", "-q", "--allow-empty", "-m", "base"], cwd=repo, check=True)
+    linked = tmp_path / "linked"
+    subprocess.run(["git", "worktree", "add", "-q", "--detach", str(linked)], cwd=repo, check=True)
+    _decisions_file(tmp_path)  # a decoy outside the repo must not be read
+    (repo / "USER-DECISIONS.jsonl").write_text(
+        "\n".join(json.dumps(r) for r in DECISIONS) + "\n", encoding="utf-8")
+    plan = linked / "plan.md"
+    plan.write_text(DECISION_PLAN, encoding="utf-8")
+    out = tmp_path / "brief.md"
+    monkeypatch.chdir(linked)
+    assert TB.main([str(plan), "1", str(out), "--decision", "sync window"]) == 0
+    assert "ntpd ran starts the window" in out.read_text(encoding="utf-8")
+
+
+def test_a_record_with_no_chosen_label_is_not_matched_by_the_text_none(tmp_path, capsys):
+    # A missing `chosen` once read as the string "None", so "--decision one" matched it.
+    unanswered = {**_decision("Which cache?", None, []), "chosen": None}
+    out = tmp_path / "brief.md"
+    rc = TB.main([str(_plan(tmp_path)), "1", str(out), "--decision", "one",
+                  "--decisions-file", str(_decisions_file(tmp_path, rows=[unanswered]))])
+    assert rc == 1
+    assert "matches no recorded" in capsys.readouterr().err
+
+
+def test_help_exits_zero(capsys):
+    assert TB.main(["--help"]) == 0
+    assert "usage: task_brief.py" in capsys.readouterr().out

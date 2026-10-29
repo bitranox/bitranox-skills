@@ -1,6 +1,6 @@
 ---
 name: files-edit-toml
-description: Use when creating or editing a TOML file (pyproject.toml, config.toml, a tool's .toml config) - adding or changing a key, bumping a version/value, editing a table or array - instead of hand-editing it or using sed/regex, which corrupt structure or silently drop comments. Covers tomllib (read), tomlkit (round-trip edit that PRESERVES comments and formatting), and rtoml/tomli_w (write).
+description: Use when creating or editing a TOML file (pyproject.toml, config.toml, a tool's .toml config) - adding or changing a key, bumping a version/value, editing a table or array, adding or removing a comment in one - instead of hand-editing it or using sed/regex, which corrupt structure or silently drop comments. Covers tomllib (read), tomlkit (round-trip edit that PRESERVES comments and formatting), and rtoml/tomli_w (write).
 ---
 
 # Edit TOML with a Python library, never by hand
@@ -52,9 +52,11 @@ fine. For a quick syntax check without editing:
 **tomlkit is not always diff-minimal.** Before editing, check `tomlkit.dumps(tomlkit.parse(src)) == src`:
 on a file that interleaves table families it can be False, because tomlkit regroups `[a.*]` sub-tables even
 with no edit, and such a file is edited by exact text at an asserted unique anchor instead. A new
-`[tool.x]` table and a `del` also produce surprise diffs. Read `references/tomlkit-not-diff-minimal.md`
-when that check is False, when a diff shows tables moved that you did not touch, or after adding a
-table or deleting a key.
+`[tool.x]` table and a `del` also produce surprise diffs, and no array operation carries a comment with
+its value: `insert`/`append` drop a comment set with `item.comment()`, while a replaced or deleted value
+leaves its comment beside the wrong one. Read `references/tomlkit-not-diff-minimal.md` when that check
+is False, when a diff shows tables moved that you did not touch, after adding a table or deleting a
+key, and before adding, replacing or removing a commented array value or an array comment.
 
 ## Common mistakes
 

@@ -140,6 +140,13 @@ swap it out.
   `typing_extensions.override`; `ExceptionGroup` is a builtin and needs the `exceptiongroup`
   backport; `except*` is syntax no guard can catch, so it means raising the floor. For TOML the
   floor is moot: `tomllib` is read-only and `tomli_w` is third-party, so `rtoml` stays the choice.
+  The same floor reaches code you did not write for the project: a test that EXECUTES a CI
+  workflow's inline script (extracts a step's `run:` block and runs it with `sys.executable`) runs
+  it on the TEST interpreter, the oldest matrix cell included, while CI runs that step on whatever
+  its `setup-python` names (often `3.x`). A script importing `tomllib` passes locally and fails
+  every 3.10 cell with `ModuleNotFoundError`. Mark such a test
+  `pytest.mark.skipif(sys.version_info < (3, 11), reason=...)` with the reason naming the step's
+  interpreter, or run the script on an interpreter matching that `setup-python`.
 - **Prefixing a docstring with `r` to satisfy ruff D301 changes EVERY escape in it at once.** Written
   non-raw, `\\` is one backslash and `\t`, `\n`, `\u2713` are real escapes; after `r"""` each is
   literal, and only some of the damage is loud. A doctest written for the non-raw form fails

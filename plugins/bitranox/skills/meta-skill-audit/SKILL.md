@@ -176,8 +176,34 @@ result (measured: 26 of 43 raw findings were this class, and every path-qualifie
 What survives is real even when the file exists: a script named bare, with no home path, cannot
 be resolved by its reader.
 
+**A doc claim about an external service integration is not WRONG because the tree is silent.** A
+claim that a repo is watched by a hosted service or GitHub App (a dependency scanner, a coverage
+app, a dependency-update bot) leaves no footprint in the workflows or the project config, so a
+grep that finds nothing has not reproduced the wrongness. Before classing it WRONG, check the
+forge side: pull requests the integration opened
+(`gh pr list --repo <owner>/<repo> --search <service name> --state all`), and the check runs and
+commit statuses on a recent commit
+(`gh api repos/<owner>/<repo>/commits/<sha>/check-runs --jq '.check_runs[].app.slug'` and
+`gh api repos/<owner>/<repo>/commits/<sha>/statuses --jq '.[].context'`). Only when all three are
+empty is the claim a WRONG candidate, and then say which you checked.
+
 Rank by what a reader DOES with the defect. A wrong command outranks every missing cross-reference,
 because the reader runs the one and merely fails to follow the other.
+
+## Audit attribution debt too
+
+A skill derived from someone else's skill must carry a `> Adapted from` credit line, and the
+repository's notices file must list it. A reviewer reading one skill cannot see this, and a gate
+that only checks credit lines and notices are in SYNC passes a skill that has neither. So a
+catalogue audit makes its own pass, deterministically:
+
+1. List each upstream's skills, for example
+   `gh api repos/<owner>/<repo>/contents/<skills-dir> --jq '.[].name'`.
+2. Strip the category prefix from each local skill name and match the rest against those names.
+3. A skill renamed on adoption matches no upstream name, so check the remaining local skills by a
+   distinctive sentence of each upstream skill's text (`grep -rlF '<sentence>' skills/`).
+4. Every match with no `> Adapted from` line is missing attribution. Fix all of them in one change,
+   per `bitranox:meta-adopting-external-skills` Step 4 (the credit line plus the notices entry).
 
 ## Common mistakes
 

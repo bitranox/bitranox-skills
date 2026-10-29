@@ -168,7 +168,9 @@ _ORDINAL_WORDS = {"second": 2, "third": 3, "fourth": 4, "fifth": 5, "sixth": 6,
 # A body that merely discusses something "recurring" must not match, or every add warns and the
 # signal degrades into noise the reader learns to skip.
 _RECURRENCE_RX = (
-    re.compile(r"\brecurrence:?\s+(\d+)", re.I),           # recurrence: 3 / recurrence 3
+    # The count must not run on into a date: "Recurrence 2026-10-24" is a dated heading, and
+    # reading it as 2026 told the author prose had failed two thousand times.
+    re.compile(r"\brecurrence:?\s+(\d+)(?![\d.:/-]?\d)", re.I),   # recurrence: 3 / recurrence 3
     re.compile(r"\b(\d+)\s*(?:st|nd|rd|th)\s+occurrence", re.I),   # 4th occurrence
     re.compile(r"\bhit\s+(\d+)\s+times?", re.I),           # hit 4 times
     re.compile(r"\b(\d+)\s+recurrences\b", re.I),          # 3 recurrences

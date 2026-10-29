@@ -18,6 +18,13 @@ uncommitted files are not commits at all. This answers it from content instead:
   the file, as a multiset, so two added copies need two copies there. A branch is landed when
   every commit is patch-equivalent or every added line is present.
 
+`--also-into REF` (repeatable) names a ref you already know landed - a kept integration or backup
+branch that carried a fix-round sequence (x1..x24) into the target. A branch whose lines a LATER
+branch rewrote has no added line left in the target, so the line check reads it as unlanded; when
+its tip is an ancestor of such a ref, its commits count as landed. It only vouches for commits: a
+worktree's uncommitted files are still compared with the target. The ref is taken on your word,
+so check it first (run this tool on it).
+
 Version numbers named in the branch's commit subjects (`1.2.3`) are listed with whether the
 target's CHANGELOG.md has a heading naming them. They inform; they do not decide the verdict.
 
@@ -29,10 +36,11 @@ Run:
   `uv run scripts/landed.py .claude/worktrees/mytopic`         # a worktree, into origin/HEAD
   `uv run scripts/landed.py feature --into main`               # a branch, into main
   `uv run scripts/landed.py feature --json`
+  `uv run scripts/landed.py x3 --also-into backup/integration`  # x3 was rewritten by x4..x9
 
 `--into` defaults to the first of origin/HEAD, origin/main, origin/master, main, master that
 resolves. Exit codes: 0 = landed, 1 = not landed, 2 = could not run (a target or `--into` that
-does not resolve, no common history, git missing). `--json` emits {ok, command, data, skipped}
+or `--also-into` that does not resolve, no common history, git missing). `--json` emits {ok, command, data, skipped}
 on every exit, ok false only on exit 2; errors go to stderr in text mode.
 """
 
@@ -261,6 +269,17 @@ def _resolve_into(cwd: Path, requested: str | None) -> str:
                     else "no default target resolves: " + ", ".join(DEFAULT_INTO))
 
 
+def _also_into(cwd: Path, head: str, refs: list[str]) -> list[dict]:
+    """For each named ref: does it contain `head` (is the tip an ancestor of it)?"""
+    found = []
+    for ref in refs:
+        if _resolve(cwd, ref) is None:
+            raise CannotRun(f"--also-into {ref!r} does not resolve to a commit")
+        done = git(cwd, "merge-base", "--is-ancestor", head, ref, check=False)
+        found.append({"ref": ref, "contains": done.returncode == 0})
+    return found
+
+
 def _locate(target: str) -> tuple[str, Path, str]:
     """(mode, the directory git runs in, the ref whose commits are judged)."""
     path = Path(target)
@@ -275,19 +294,21 @@ def _locate(target: str) -> tuple[str, Path, str]:
     return "branch", cwd, target
 
 
-def report(target: str, into_ref: str | None) -> dict:
+def report(target: str, into_ref: str | None, also_into: list[str] | None = None) -> dict:
     mode, cwd, head = _locate(target)
     into = _resolve_into(cwd, into_ref)
+    containers = _also_into(cwd, head, also_into or [])
     base_done = git(cwd, "merge-base", head, into, check=False)
     base = _text(base_done).strip()
     if base_done.returncode != 0 or not base:
         raise CannotRun(f"{target} and {into} share no history")
     files = worktree_files(cwd, base, into) if mode == "worktree" else []
     branch = branch_report(cwd, base, head, into)
-    branch_landed = branch.pop("landed")
+    branch_landed = branch.pop("landed") or any(c["contains"] for c in containers)
     landed = branch_landed and all(f["status"] in LANDED_FILE_STATES for f in files)
     return {"target": target, "mode": mode, "into": into,
-            "verdict": "landed" if landed else "not_landed", "files": files, **branch}
+            "verdict": "landed" if landed else "not_landed", "files": files,
+            "also_into": containers, **branch}
 
 
 # ---------------------------------------------------------------------------------------------
@@ -308,6 +329,9 @@ def _render(data: dict) -> str:
     c, n = data["commits"], data["lines"]
     lines.append(f"  commits: {c['total']} ({c['patch_equivalent']} patch-equivalent); "
                  f"added lines present: {n['present']}/{n['added']}")
+    for c in data["also_into"]:
+        state = "contained in" if c["contains"] else "NOT contained in"
+        lines.append(f"  commits: {state} {c['ref']} (--also-into)")
     for f in data["branch_files"]:
         for missing in f["missing"][:5]:
             lines.append(f"  missing in {f['path']}: {missing}")
@@ -323,6 +347,9 @@ def _parse(argv: list[str] | None) -> argparse.Namespace:
     parser.add_argument("target", help="a worktree directory or a branch/ref")
     parser.add_argument("--into", help="the branch to check against (default: origin/HEAD, "
                         "origin/main, origin/master, main, master - the first that resolves)")
+    parser.add_argument("--also-into", action="append", default=[], metavar="REF",
+                        help="a ref already known to have landed (a kept integration or backup "
+                        "branch); a branch whose tip is its ancestor counts as landed. Repeatable")
     parser.add_argument("--json", action="store_true", help="emit the JSON envelope")
     return parser.parse_args(argv)
 
@@ -330,7 +357,7 @@ def _parse(argv: list[str] | None) -> argparse.Namespace:
 def main(argv: list[str] | None = None) -> int:
     args = _parse(argv)
     try:
-        data = report(args.target, args.into)
+        data = report(args.target, args.into, args.also_into)
     except (CannotRun, OSError, subprocess.TimeoutExpired) as exc:
         if args.json:
             print(_envelope(False, {"error": str(exc)}))

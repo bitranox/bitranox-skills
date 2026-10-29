@@ -566,6 +566,12 @@ number as proof of either cause below.
   fix an exemption for that one package: prefer a timestamp just after the upload, which admits
   only that release (later ones stay excluded until you remove the entry, see below);
   `exclude-newer-package = { <pkg> = false }` exempts the package for good.
+- **An exemption only ADMITS a release; it does not move the lock to it.** When the package is
+  already locked (a fix release blocked by the cooldown, the vulnerable one still in `uv.lock`), a
+  plain `uv lock` after adding the exemption prints "Resolving despite existing lockfile due to
+  addition of exclude newer ... for package `<pkg>`", exits 0 and KEEPS the locked version. Run
+  `uv lock --upgrade-package <pkg>`, which prints `Updated <pkg> v<old> -> v<new>`, and confirm the
+  new version in `uv.lock` before re-running the audit (measured on uv 0.13.0).
 - **The lock state, with the exemption already working (no `hint:` names a filter).** The
   control: copy `pyproject.toml` into a scratch directory with no `uv.lock` and run `uv lock`
   there. If it resolves, the exemption works and the lock is the cause: run

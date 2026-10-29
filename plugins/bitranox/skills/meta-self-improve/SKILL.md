@@ -44,7 +44,18 @@ Read it as: a non-empty **inbound** list is what a down-move will be refused for
 refs first, or leave the fact); an **outbound** target sitting BELOW the level you are lifting to
 is what will be stranded (lift the shared targets too, or demote the irreducibly-local ones to
 plain prose). `DANGLING` means the target exists nowhere. Underscores and dashes are the same slug,
-matching the engine, so `[[a_b]]` against a fact named `a-b` is a match and not a defect.
+matching the engine, so `[[a_b]]` against a fact named `a-b` is a match and not a defect. A
+**prose** list names facts that mention the slug in plain text without a `[[link]]`: no move
+guard sees those, so a move or archive leaves them naming a fact that is gone or out of reach.
+
+Moving SEVERAL facts at once (a sibling cluster lifted to its common ancestor, a batch re-home):
+judge the whole plan in one pass, since a ref between two facts that move together is fine
+while one-at-a-time checks would flag it. Write one JSON object per line,
+`{"slug": "<slug>", "to": "<level dir>"}` (plus `"from"` to assert where it sits now), then run
+`ref_map.py --root <anchor> --moves <file> [--json]`. Exit 1 lists each conflict by kind:
+`stranded-outbound` (a moved fact cites one that will sit below it), `dangling-inbound` (a citer
+will no longer see it), `stale-from` (the fact is not where the plan says), `unknown`; exit 0 is
+a clean plan, exit 2 a malformed file.
 
 ## When to run
 
@@ -201,8 +212,9 @@ rewrites the pointer line AND the body's `description:` line. To change only the
 For an unpinned fact, `factedit.py apply --slug <slug> --level <its level> --body-file <f>`
 (home: `<plugin>/skills/meta-dream-tree/`, launch via `hooks/run-python.sh`) re-sends the stored
 title and hook for you. A pinned fact refuses an ordinary `add`: report it for human review instead.
-`amend-pinned` is a human's deliberate step, and `factedit.py apply` switches to it on its own
-for a pinned fact, so never run either on one during capture.
+`amend-pinned` is a human's deliberate step, and `factedit.py apply` refuses a pinned fact unless
+given `--allow-pinned` (which routes it through `amend-pinned`), so never run `amend-pinned` or
+pass that flag during capture: `apply --dry-run` prints the delta to report instead.
 
 **An empty search of the ancestor chain is not proof a fact is missing.** The loaded index and a
 grep of the `CLAUDE.local.md` files on the ancestor chain answer "does this load HERE", not "does
@@ -315,8 +327,9 @@ Then ONE engine call per fact, and REQUIRE its success line (the printed slug):
 
 **Where the session has `mcp__bitranox__memory_add`, call it instead** (it may be in the
 deferred-tool list: load its schema with ToolSearch, `select:mcp__bitranox__memory_add`). Its
-parameters map onto the CLI: `title`, `hook` and `body` are required (`body` is the text itself,
-not a file), `level` is `--proj` (default: the session cwd - route it by SUBJECT exactly as step
+parameters map onto the CLI: `title` and `hook` are required, `body` is the text itself (not a
+file) and may be omitted only on an update, which then keeps the stored body (a new fact without
+one is refused as `EmptyBody`), `level` is `--proj` (default: the session cwd - route it by SUBJECT exactly as step
 3b says), and `type`, `slug` and `skill` are the flags of those names. It writes through the same
 engine, so every rule above holds, an update included. Require `ok: true` in the result, whose
 `data` carries `slug`, `level`, `action` (created or updated) and `warnings`; `ok: false` names the

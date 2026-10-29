@@ -1,7 +1,7 @@
 # When a tomlkit round-trip is not diff-minimal
 
 tomlkit keeps comments and formatting inside a table, but on parse it groups tables by dotted prefix.
-Three edits come out larger than the change you made. Each one is valid TOML, so no parser complains;
+Several edits come out larger than the change you made. Each one is valid TOML, so no parser complains;
 only the diff shows it, and a reviewer cannot tell a moved table from a content change.
 
 ## 1. Interleaved table families are regrouped, even with no edit
@@ -52,3 +52,37 @@ the next header. Check where it landed before committing.
 `del doc["t"]["a"]` removes the key but not the comment line above it, which then sits above the next
 key it does not describe (or dangles at the end of the table). Read the diff for an orphaned comment
 and remove it by exact text at an asserted unique anchor.
+
+## 4. Comments inside an array belong to a position, not to a value
+
+tomlkit keeps a multiline array's comments, but no array operation moves them with the value they
+explain. The output is valid TOML and re-loads to the values you expect, so only reading the diff
+catches a comment that was dropped, stranded or left beside the wrong value (measured on tomlkit
+0.15.2):
+
+| Operation                                                         | What happens to the comment                                                       |
+|-------------------------------------------------------------------|-----------------------------------------------------------------------------------|
+| `arr.insert(i, it)` or `arr.append(it)` after `it.comment("why")` | The comment is DROPPED: the dumped line has no `# why`                            |
+| `arr.add_line("value", indent="  ", comment="why")`               | Kept as an inline `# why`, but `add_line` only appends at the end                 |
+| `arr[i] = "new"` on a value with an inline comment                | The comment stays on that line, now beside the new value it does not describe     |
+| `del arr[i]` below a whole-line `# comment`                       | The comment stays, now above the next value it does not describe                  |
+| Remove a whole-line comment itself                                | No public API: it sits in an internal `_ArrayItemGroup` that `del` cannot address |
+
+So add a commented value with `add_line(..., comment=...)` when the end of the array is an acceptable
+place, and otherwise edit the comment lines by exact text and verify the values with a parser:
+
+```python
+import tomllib
+
+# remove one value together with the whole-line comment that explains it
+block = '  # keep ruff pinned until 0.16 lands\n  "ruff>=0.15",\n'
+assert src.count(block) == 1                      # the anchor is unique
+new = src.replace(block, "")
+expected = tomllib.loads(src)["project"]["optional-dependencies"]["dev"]
+expected.remove("ruff>=0.15")
+assert tomllib.loads(new)["project"]["optional-dependencies"]["dev"] == expected
+```
+
+After any array edit, read the diff around every comment in that array. A reason that only lives in
+an inline comment (a CVE id behind a pin or an audit ignore) is also worth repeating in the commit
+message, where an array edit cannot detach it.

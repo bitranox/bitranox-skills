@@ -181,7 +181,19 @@ def _run_set(key, raw):
         # surface WHICH values are legal - "bad value" alone leaves the caller guessing
         print("bad value for %s: %s" % (key, exc), file=sys.stderr)
         return 2
-    return _save_and_print({key: value})
+    rc = _save_and_print({key: value})
+    if rc == 0 and value == "decide":
+        print(DECIDE_RELOAD_NOTE % key, file=sys.stderr)
+    return rc
+
+
+# A session runs the hook code of the plugin version it loaded at start, while every hook reads
+# this config fresh. An older hook with no decide path for a site takes `decide` as a valid value
+# and acts on it as best it can: measured, a session on an older version kept its broad-pattern
+# buffering and, since decide turns shadow logging off, stopped logging the site at all.
+DECIDE_RELOAD_NOTE = ("note: %s = decide reaches only sessions running a plugin version whose hook "
+                      "has a decide path for it; every session already open keeps the hook it "
+                      "loaded at start. Run /reload-plugins in each open session (or restart it).")
 
 
 USAGE = "usage: settings.py [view | set <key> <value> | reset]"

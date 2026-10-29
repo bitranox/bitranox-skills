@@ -85,55 +85,59 @@ Docker tags and `uv_build` pins name. Each gotcha names the uv it was measured o
 
 ## Cross-Reference by Scenario
 
-| Scenario                                                         | Read these docs                                                                                   |
-|------------------------------------------------------------------|---------------------------------------------------------------------------------------------------|
-| **"Set up a new Python project"**                                | `02-projects.md`, `03-project-config.md`                                                          |
-| **"Add a dependency"**                                           | `04-dependencies.md`, `05-resolution.md`                                                          |
-| **"Add a dev dependency"**                                       | `04-dependencies.md` (search: dependency groups, `--group dev`)                                   |
-| **"Pin Python version"**                                         | `06-python-versions.md`, `10-configuration.md`                                                    |
-| **"Use a private package index"**                                | `10-configuration.md`, `11-authentication.md`, `15-integrations.md` (Alternative Indexes section) |
-| **"Docker build with uv"**                                       | `13-docker.md`, `01-getting-started.md`                                                           |
-| **"GitHub Actions CI"**                                          | `14-ci-cd.md`                                                                                     |
-| **"GitLab CI"**                                                  | `14-ci-cd.md`                                                                                     |
-| **"Deploy to AWS Lambda"**                                       | `15-integrations.md` (AWS Lambda section), `04-dependencies.md`                                   |
-| **"Migrate from pip/requirements.txt"**                          | `16-migration.md`, `09-pip-interface.md`                                                          |
-| **"Use pip-tools workflow (compile/sync)"**                      | `09-pip-interface.md`                                                                             |
-| **"Monorepo / workspace"**                                       | `12-workspaces.md`, `04-dependencies.md`                                                          |
-| **"Run a one-off tool (like ruff, black)"**                      | `07-tools-and-scripts.md` (Tools section)                                                         |
-| **"Run a script with inline deps"**                              | `07-tools-and-scripts.md` (Scripts section)                                                       |
-| **"Build and publish a package"**                                | `08-building-and-publishing.md`, `11-authentication.md`                                           |
-| **"Configure resolution (pre-releases, overrides)"**             | `05-resolution.md`, `04-dependencies.md`                                                          |
-| **"Use PyTorch / CUDA indexes"**                                 | `15-integrations.md` (PyTorch section), `10-configuration.md`                                     |
-| **"Jupyter notebook with uv"**                                   | `15-integrations.md` (Jupyter section)                                                            |
-| **"FastAPI project"**                                            | `15-integrations.md` (FastAPI section), `02-projects.md`                                          |
-| **"SSL/TLS certificate issues"**                                 | `11-authentication.md`, `17-troubleshooting.md`                                                   |
-| **"Build failures / missing C libs"**                            | `17-troubleshooting.md`, `10-configuration.md`                                                    |
-| **"Cache problems / disk space"**                                | `10-configuration.md` (Cache and Storage sections)                                                |
-| **"`uv cache clean` hangs with no output"**                      | `10-configuration.md` (Dependency caching: a uvx process holds the lock, `--force`)               |
-| **"Just-published version not found by uv"**                     | `10-configuration.md` (Dependency caching), `08-building-and-publishing.md`                       |
-| **"Rebuilt wheel, same version, old code runs"**                 | `10-configuration.md` (Dependency caching: prove which code loaded)                               |
-| **"Pipe `uv pip compile` output / `-o -`"**                      | `09-pip-interface.md` (Locking requirements: `-o -` writes a file named `-`)                      |
-| **"Diff two uv.lock files / count what moved"**                  | `05-resolution.md` (Multi-Version Resolution: one entry per fork)                                 |
-| **"Lock reproducibility / --exclude-newer"**                     | `05-resolution.md`, `02-projects.md`                                                              |
-| **"Project dependency cooldown (exclude-newer)"**                | `05-resolution.md` (Dependency Cooldowns: `pyproject.toml`, not `uv add`)                         |
-| **"Cooldown for uvx / uv tool install (exclude-newer order)"**   | `07-tools-and-scripts.md` (A Supply-Chain Cooldown: flag before the package spec)                 |
-| **"uv lock refuses a raised floor (only X<=N available)"**       | `05-resolution.md` (Dependency Cooldowns), `02-projects.md`                                       |
-| **"Cooldown locks an older release of your own package"**        | `05-resolution.md` (Exempting your own packages from a cooldown)                                  |
-| **"Analyser via `uvx --with .` reports a removed defect"**       | `07-tools-and-scripts.md` (Including Additional Dependencies)                                     |
-| **"README install line with uv tool install --from"**            | `07-tools-and-scripts.md` (Installing Tools: package name)                                        |
-| **"Recreated venv / failed to canonicalize path"**               | `06-python-versions.md` (Gotcha: a recreate deletes the interpreter you named)                    |
-| **"Windows SSH: os error 448 untrusted mount point"**            | `06-python-versions.md` (Minor version directories)                                               |
-| **"pre-commit hooks"**                                           | `15-integrations.md` (pre-commit section)                                                         |
-| **"Dependency update bots"**                                     | `15-integrations.md` (Dependency Bots section)                                                    |
-| **"Export lockfile (requirements.txt, pylock.toml, CycloneDX)"** | `04-dependencies.md` (Export section), `09-pip-interface.md`                                      |
-| **"Editable installs"**                                          | `09-pip-interface.md`, `04-dependencies.md`                                                       |
-| **"Using system Python / --system"**                             | `09-pip-interface.md`, `06-python-versions.md`                                                    |
-| **"View or bump project version"**                               | `02-projects.md`, `08-building-and-publishing.md`                                                 |
-| **"Manage index credentials (login/logout)"**                    | `11-authentication.md`                                                                            |
-| **"Export SBOM (CycloneDX)"**                                    | `04-dependencies.md` (Export section)                                                             |
-| **"Marimo notebooks with uv"**                                   | `15-integrations.md` (Marimo section)                                                             |
-| **"Hugging Face model index"**                                   | `11-authentication.md`                                                                            |
-| **"Build isolation issues (flash-attn, deepspeed)"**             | `03-project-config.md`, `17-troubleshooting.md`                                                   |
+| Scenario                                                               | Read these docs                                                                                   |
+|------------------------------------------------------------------------|---------------------------------------------------------------------------------------------------|
+| **"Set up a new Python project"**                                      | `02-projects.md`, `03-project-config.md`                                                          |
+| **"Add a dependency"**                                                 | `04-dependencies.md`, `05-resolution.md`                                                          |
+| **"Add a dev dependency"**                                             | `04-dependencies.md` (search: dependency groups, `--group dev`)                                   |
+| **"Pin Python version"**                                               | `06-python-versions.md`, `10-configuration.md`                                                    |
+| **"Use a private package index"**                                      | `10-configuration.md`, `11-authentication.md`, `15-integrations.md` (Alternative Indexes section) |
+| **"Docker build with uv"**                                             | `13-docker.md`, `01-getting-started.md`                                                           |
+| **"GitHub Actions CI"**                                                | `14-ci-cd.md`                                                                                     |
+| **"GitLab CI"**                                                        | `14-ci-cd.md`                                                                                     |
+| **"Deploy to AWS Lambda"**                                             | `15-integrations.md` (AWS Lambda section), `04-dependencies.md`                                   |
+| **"Migrate from pip/requirements.txt"**                                | `16-migration.md`, `09-pip-interface.md`                                                          |
+| **"Use pip-tools workflow (compile/sync)"**                            | `09-pip-interface.md`                                                                             |
+| **"Monorepo / workspace"**                                             | `12-workspaces.md`, `04-dependencies.md`                                                          |
+| **"Run a one-off tool (like ruff, black)"**                            | `07-tools-and-scripts.md` (Tools section)                                                         |
+| **"Run a script with inline deps"**                                    | `07-tools-and-scripts.md` (Scripts section)                                                       |
+| **"Build and publish a package"**                                      | `08-building-and-publishing.md`, `11-authentication.md`                                           |
+| **"Configure resolution (pre-releases, overrides)"**                   | `05-resolution.md`, `04-dependencies.md`                                                          |
+| **"Use PyTorch / CUDA indexes"**                                       | `15-integrations.md` (PyTorch section), `10-configuration.md`                                     |
+| **"Jupyter notebook with uv"**                                         | `15-integrations.md` (Jupyter section)                                                            |
+| **"FastAPI project"**                                                  | `15-integrations.md` (FastAPI section), `02-projects.md`                                          |
+| **"SSL/TLS certificate issues"**                                       | `11-authentication.md`, `17-troubleshooting.md`                                                   |
+| **"Build failures / missing C libs"**                                  | `17-troubleshooting.md`, `10-configuration.md`                                                    |
+| **"Cache problems / disk space"**                                      | `10-configuration.md` (Cache and Storage sections)                                                |
+| **"`uv cache clean` hangs with no output"**                            | `10-configuration.md` (Dependency caching: a uvx process holds the lock, `--force`)               |
+| **"Just-published version not found by uv"**                           | `10-configuration.md` (Dependency caching), `08-building-and-publishing.md`                       |
+| **"Rebuilt wheel, same version, old code runs"**                       | `10-configuration.md` (Dependency caching: prove which code loaded)                               |
+| **"Pipe `uv pip compile` output / `-o -`"**                            | `09-pip-interface.md` (Locking requirements: `-o -` writes a file named `-`)                      |
+| **"Diff two uv.lock files / count what moved"**                        | `05-resolution.md` (Multi-Version Resolution: one entry per fork)                                 |
+| **"Lock reproducibility / --exclude-newer"**                           | `05-resolution.md`, `02-projects.md`                                                              |
+| **"Project dependency cooldown (exclude-newer)"**                      | `05-resolution.md` (Dependency Cooldowns: `pyproject.toml`, not `uv add`)                         |
+| **"Cooldown for uvx / uv tool install (exclude-newer order)"**         | `07-tools-and-scripts.md` (A Supply-Chain Cooldown: flag before the package spec)                 |
+| **"uv lock refuses a raised floor (only X<=N available)"**             | `05-resolution.md` (Dependency Cooldowns), `02-projects.md`                                       |
+| **"Cooldown locks an older release of your own package"**              | `05-resolution.md` (Exempting your own packages from a cooldown)                                  |
+| **"Analyser via `uvx --with .` reports a removed defect"**             | `07-tools-and-scripts.md` (Including Additional Dependencies)                                     |
+| **"README install line with uv tool install --from"**                  | `07-tools-and-scripts.md` (Installing Tools: package name)                                        |
+| **"Recreated venv / failed to canonicalize path"**                     | `06-python-versions.md` (Gotcha: a recreate deletes the interpreter you named)                    |
+| **"Windows SSH: os error 448 untrusted mount point"**                  | `06-python-versions.md` (Minor version directories)                                               |
+| **"Which interpreter will uv venv / uv sync use?"**                    | `06-python-versions.md` (Gotcha: `uv python find` answers for your CONTEXT: `--system`)           |
+| **"Try a test on another Python without touching .venv"**              | `06-python-versions.md` (Gotcha: `uv run --python X.Y` replaces the project `.venv`)              |
+| **"Exemption added, uv lock keeps the old version"**                   | `05-resolution.md` (Dependency Cooldowns: `uv lock --upgrade-package`)                            |
+| **"uv tool install ignores the package's own cooldown / build floor"** | `07-tools-and-scripts.md` (A Supply-Chain Cooldown for `uvx` and `uv tool`)                       |
+| **"pre-commit hooks"**                                                 | `15-integrations.md` (pre-commit section)                                                         |
+| **"Dependency update bots"**                                           | `15-integrations.md` (Dependency Bots section)                                                    |
+| **"Export lockfile (requirements.txt, pylock.toml, CycloneDX)"**       | `04-dependencies.md` (Export section), `09-pip-interface.md`                                      |
+| **"Editable installs"**                                                | `09-pip-interface.md`, `04-dependencies.md`                                                       |
+| **"Using system Python / --system"**                                   | `09-pip-interface.md`, `06-python-versions.md`                                                    |
+| **"View or bump project version"**                                     | `02-projects.md`, `08-building-and-publishing.md`                                                 |
+| **"Manage index credentials (login/logout)"**                          | `11-authentication.md`                                                                            |
+| **"Export SBOM (CycloneDX)"**                                          | `04-dependencies.md` (Export section)                                                             |
+| **"Marimo notebooks with uv"**                                         | `15-integrations.md` (Marimo section)                                                             |
+| **"Hugging Face model index"**                                         | `11-authentication.md`                                                                            |
+| **"Build isolation issues (flash-attn, deepspeed)"**                   | `03-project-config.md`, `17-troubleshooting.md`                                                   |
 
 ---
 

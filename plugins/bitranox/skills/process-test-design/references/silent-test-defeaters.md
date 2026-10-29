@@ -11,8 +11,12 @@ through a memory map, binds a unix socket under `tmp_path`, builds a test double
 asyncio consumer, races a call on a helper thread, mints synthetic identifiers (ids that something
 later truncates included), carries a skip or an exclusion, judges an artifact, compares against a
 git ref, guards against cost, or tests environment isolation - or when you are about to claim a code
-path is untested, or a mutation survives. Each entry names the trigger, the mechanism that makes the
-test pass (or fail) for the wrong reason, and the fix.
+path is untested, or a mutation survives. Also when a unit suite's code can reach a real host or a
+user-facing service, a test guards a secret it might print, a test spawns a nested test runner or
+several writers to one file, asserts a real tool's verdict, relies on conftest fixtures reaching
+`src/` doctests or on fixtures ported from a template, feeds a FIFO from a writer thread, times a
+cost ratio or a growth ratio, or verifies a fix for a rare flake. Each entry names the trigger, the
+mechanism that makes the test pass (or fail) for the wrong reason, and the fix.
 
 ## Determinism and environment
 
@@ -54,6 +58,16 @@ elapsed = t - started
 ```
 
 Prefer a probe that observes the state without doing the work, when one exists.
+
+### A fake clock frozen during a read cannot see read latency
+
+When code judges something by elapsed time around a slow read (a reset or liveness judge that
+compares a deadline with the time a device or log read returned), a fake reader that returns
+instantly while the injected clock stands still gives every read zero latency. Code that uses the
+timestamp taken BEFORE the read then passes exactly like code that uses the one taken after it, and
+a judge blind to read latency passes review. Make the reader fake advance the injected clock by a
+latency and sample its result at the END of the read, where the real call returns, and give at
+least one test a latency large enough to cross the judge's slack.
 
 ### Pin the environment an output premise depends on
 
@@ -132,6 +146,20 @@ arm. Keep the direct FIFO test as well; the swap test is the one that fails on a
 The fix it forces: open non-blocking (`O_NONBLOCK`), `fstat` the HANDLE and refuse a non-regular
 file, so the check and the use are about the same object.
 
+### A FIFO writer thread that is still alive may already be done
+
+A fixture that feeds a FIFO from a writer thread must not read `writer.is_alive()` in teardown as
+"nothing opened the FIFO, so release the writer by reading". The thread stays alive for a moment
+after its write and close; a teardown that then opens the FIFO for reading BLOCKS FOREVER, because
+no writer is left to open the other end. It is intermittent and hangs a CI job to its job timeout,
+and only a faulthandler stack naming the fixture teardown points at it. Join the writer first with
+a short grace (teardown cleanup, not an assertion). Then release a writer still stuck in its
+`open()` with `os.open(path, os.O_RDONLY | os.O_NONBLOCK)`, which never waits and unblocks the
+writer's open; join it, then close the descriptor. RED it deterministically with a writer that
+sleeps after its write and close, so the old teardown always meets the finished-but-alive window,
+and run that teardown on a daemon thread joined with a plain `join()` under the runner's per-test
+timeout, as in the entry above.
+
 ### A blocking stub must `exec` its blocker
 
 When a stub (a fake external program written as shell) must block so the test can signal the
@@ -177,6 +205,11 @@ machines and a missing-file error on others. Use `tmp_path / "absent.json"`, abs
 construction on every platform; in a doctest use a relative, obviously fictional path. Assert the
 error TYPE, not the operating system's message text.
 
+A doctest that ECHOES a path has a second trap besides existence: `str(Path("/abs/probe"))` renders
+`\abs\probe` on Windows, so the expected output fails every Windows cell while Linux and macOS
+pass. In a doctest that prints a path, use a relative single-component name (`Path("probe-name")`)
+or compare `.as_posix()`, never a POSIX-absolute literal.
+
 ### Reproducing a flake against a UI framework's tick
 
 A race against a timer reproduces by slowing that timer, not by starving the CPU. Textual, for
@@ -210,6 +243,15 @@ If every fixture that triggers the mutated condition also triggers another condi
 the same result, the mutation changes nothing and the test looks protective while it cannot tell
 the code with and without the check apart. Add a case where only the mutated condition varies,
 re-run the mutation, and require RED.
+
+### A test input computed from the mutated constant follows the mutation
+
+A mutation of a constant cannot turn a test RED when the test's INPUT is derived from that same
+constant: the input moves with it. `step_back = WALL_CLOCK_SLACK_S - 1` stays on the allowed side
+of the slack whatever the slack is, so mutating the slack to 0 makes the step -1 and the test stays
+green. Use a literal input and assert its relation to the constant as a separate precondition
+(`step_back = 9.0`, then `assert step_back < WALL_CLOCK_SLACK_S`), so the mutation fails the
+precondition or the behaviour and the run goes RED.
 
 ## Rendered output and fixtures
 
@@ -345,6 +387,13 @@ what pytest prints for each - reading the raising code gets it wrong when the re
 lower layer - then parametrize the pattern alongside the input, or match only a substring every
 arm shares.
 
+Match the VALIDATOR's own phrase for the rule under test, never a number or other piece of the
+input. pydantic, like most validators, echoes the input in its message (`input_value=11`), so a
+bound test that passes `offset=11` and matches `"11"` is satisfied by a refusal for a different
+reason (an `extra="forbid"` model refusing the `offset` field the feature has not added yet), and
+the arm is green before the feature exists. Match the rule's wording
+(`match="less than or equal to 10"`) and run the arm against the pre-feature code, requiring RED.
+
 ### A substring assertion on a reworded message must fail on the OLD message
 
 A short token can already sit inside a longer word of the old text: an assertion that a reworded
@@ -407,6 +456,71 @@ and read its stderr: in-process, pytest's root handlers catch every propagating 
 `lastResort` is consulted, so a warning production prints never reaches `capfd` (measured on 9.0.3
 and 9.1.1 alike).
 
+### `tests/conftest.py` fixtures never reach a `src/` doctest
+
+A conftest's fixtures, autouse ones included, apply only to items collected at or below its own
+directory. The doctests `--doctest-modules` collects from `src/` therefore get NONE of
+`tests/conftest.py`, so its autouse isolation (environment redirects, config roots pointed under
+a temp dir) silently skips every src doctest, which then runs against the machine's real
+configuration while the suite's isolation looks complete. Fix shape:
+
+- Move the autouse fixtures into a `conftest.py` at the rootdir, which reaches both trees.
+- Set `testpaths = ["src", "tests"]`. Without it a bare `pytest --doctest-modules` also collects
+  the root `conftest.py` as a module named `conftest`, and collection errors on the clash with
+  `tests/conftest.py` ("import file mismatch").
+- Move constants the tests imported from `tests/conftest.py` into a bare-name module under
+  `tests/`, with `tests` on pytest's `pythonpath` and pyright's `extraPaths`.
+- Add a pyright `executionEnvironments` entry rooted at `tests/`, so a test's
+  `from conftest import ...` still resolves to `tests/conftest.py`, not the root one.
+
+Check which fixtures each doctest really receives with a small collect-only plugin, run as
+`PYTHONPATH=. pytest -p fixture_probe --collect-only -q --doctest-modules`
+(`pytest --fixtures-per-test` crashes on a doctest item, which has no `.function`):
+
+```python
+# fixture_probe.py
+def pytest_collection_finish(session):
+    for item in session.items:
+        if type(item).__name__ == "DoctestItem":
+            print(item.nodeid, sorted(item.fixturenames))
+```
+
+An isolation fixture missing from a doctest's list is not applied to it. Check this whenever you
+add an autouse or isolation fixture to a project that runs `--doctest-modules`.
+
+### Port a template's autouse fixtures along with its tests
+
+Tests copied from a template repository into a derived one lean on the template's autouse
+fixtures without naming them, which is what autouse means. A ported test can pass locally and
+fail in CI when the fixture it needed neutralised something only CI sets (a library's
+import-time environment read, see "Pin the environment an output premise depends on"). Before
+porting, list the template's autouse fixtures by name, compare them with every `conftest.py` in
+the derived repo, and port each missing one or record why the derived repo does not need it:
+
+```python
+import ast
+import sys
+
+
+def autouse_fixtures(path: str) -> set[str]:
+    tree = ast.parse(open(path, encoding="utf-8").read())
+    return {
+        node.name
+        for node in ast.walk(tree)
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+        for deco in node.decorator_list
+        if isinstance(deco, ast.Call)
+        and any(kw.arg == "autouse" and isinstance(kw.value, ast.Constant) and kw.value.value is True
+                for kw in deco.keywords)
+    }
+
+
+template, derived = sys.argv[1], sys.argv[2]  # the two conftest.py files
+missing = sorted(autouse_fixtures(template) - autouse_fixtures(derived))
+print("\n".join(missing) or "no autouse fixture missing")
+sys.exit(1 if missing else 0)
+```
+
 ## Cross-thread tests: wait on what the call itself does
 
 ### A cross-thread wake-up test awaits only the thing being woken
@@ -457,6 +571,139 @@ inserting a `time.sleep()` between the flag and the call in a scratch copy: the 
 fail and the fixed form must not. Measured on a small worker: the flag form let it process both
 items even without the inserted sleep; waiting on the stop request processed none, with and without
 a 0.2 s sleep.
+
+## Child processes, nested runners and shared files
+
+### A nested test runner inherits the outer runner's environment
+
+A test that starts a test runner of its own (pytest in a scratch project, to test a plugin, a
+fixture or a parallel-coverage setup) hands the child the OUTER run's environment. Under
+pytest-xdist that includes `PYTEST_XDIST_WORKER=gwN`, so a serial inner run identifies itself as
+an xdist worker: the test passes run serially and fails in every `-n auto` run, with an assertion
+such as `{'gw7'} != {'main'}` that blames the code. Build the child env without the outer
+runner's variables (`PYTEST_XDIST_WORKER`, `PYTEST_XDIST_WORKER_COUNT`, `PYTEST_CURRENT_TEST`,
+`PYTEST_ADDOPTS`, and whatever an outer autouse fixture set that the nested run is meant to
+bypass), and identify the processes the nested run is about by an `os.getpid()` each records from
+inside itself, never by a label it may have inherited. Run such a test under `-n 2` as well as
+serially before trusting it.
+
+### Concurrent appends to one shared file tear on Windows
+
+Child processes (xdist workers, multiprocessing workers) that each APPEND records to one shared
+log race on Windows only. POSIX `O_APPEND` puts every write at the end atomically; Windows
+emulates append as seek-to-end then write, so two writers overwrite each other's lines (measured:
+34 to 57 of 600 lines lost and 16 to 30 torn per trial on Windows, none on Linux). The symptom
+lands in the reader, on the Windows cells only: an `IndexError` on an empty line, three records
+read as two. Give each writer its own file (named by pid or worker id), written once, and merge in
+the reader.
+
+### Put the tool's own reason in an assertion on its verdict
+
+A test that drives a real external tool (a resolver, a compiler, a linter) and asserts only its
+boolean verdict prints `assert False` when it fails, because `capsys` or `capfd` swallowed what
+the tool said. A failure that happens only in CI then cannot be diagnosed from the log and costs a
+commit and a CI cycle just to see the reason. Carry the reason in the assertion message:
+`assert ok, stream.getvalue()`, `assert proc.returncode == 0, proc.stderr`.
+
+## Tests that must not reach the outside, or leak into it
+
+### A unit suite that drives real hosts must be UNABLE to reach one
+
+Faking the remote side per test (a stub on `PATH`, an injected runner) protects only the tests
+that remember to do it. One that forgets runs the real `ssh` against a real host and does there
+whatever the code does: stop, roll back or restart a machine, flush its neighbour table. It stays
+unnoticed while it is harmless by luck, for example because a fake key path does not exist. Make
+reaching a host impossible for the whole unit suite with an autouse fixture at the true external
+edge, `subprocess.Popen`, which `run`, `call` and `check_output` all go through:
+
+```python
+import os
+import shlex
+import shutil
+import subprocess
+from pathlib import Path
+
+import pytest
+
+REMOTE = {"ssh", "scp", "sshpass", "rsync"}
+
+
+class RealHostRefused(BaseException):
+    """A BaseException, so an `except Exception` in the code under test cannot swallow it."""
+
+
+def _words(args) -> list[str]:
+    if isinstance(args, (str, bytes)):
+        args = [args]
+    words = []
+    for arg in (os.fsdecode(a) for a in args):
+        lex = shlex.shlex(arg, posix=True, punctuation_chars=True)
+        lex.whitespace_split = True
+        words.extend(lex)  # splits shell operators, and sees through timeout/env/nice and `bash -c`
+    return words
+
+
+def refuse_real_hosts(args, env, allowed: Path) -> None:
+    path = os.pathsep.join(os.get_exec_path(env))  # the CHILD's PATH, not the test's
+    for word in _words(args):
+        if os.path.basename(word) not in REMOTE:
+            continue
+        found = shutil.which(word, path=path)
+        if found and not Path(found).resolve().is_relative_to(allowed):
+            raise RealHostRefused(f"{word!r} resolves to {found}, not a stub under {allowed}")
+
+
+@pytest.fixture(autouse=True)
+def no_real_hosts(monkeypatch, tmp_path_factory):
+    allowed = tmp_path_factory.getbasetemp().resolve()
+    real_popen = subprocess.Popen
+
+    class GuardedPopen(real_popen):
+        def __init__(self, args, *a, **kw):
+            refuse_real_hosts(args, kw.get("env"), allowed)
+            super().__init__(args, *a, **kw)
+
+    monkeypatch.setattr(subprocess, "Popen", GuardedPopen)
+```
+
+The only remote program allowed is a stub the test wrote under its temp dir and put FIRST on the
+child's `PATH`; a real `ssh` earlier on that `PATH` resolves first and is refused. It inspects
+every word, so it errs towards refusing (`echo ssh` is refused too), the safe direction for this
+guard. Prove it by deleting the `raise` and requiring the refusal tests RED.
+
+To audit an existing suite before the guard lands, run it in a namespace with no route out
+(`unshare -rn`, then `ip link set lo up` inside) with logging `ssh` and `scp` stubs first on
+`PATH` that append `$PYTEST_CURRENT_TEST` and their argv to a file. A test's own `PATH` stub
+SHADOWS the audit stub, so the audit undercounts: tests driving their own stubs never reach it,
+and the Popen guard is what finds those.
+
+### A self-skipping test must decide without touching the resource
+
+A test that skips when an external resource is unavailable (a keyring, a desktop session bus, a
+device) must make that decision WITHOUT touching it. One that builds the real client on the
+inherited session bus and skips only after the first call fails has already reached the service
+on every default run: a secret-service keyring test that attempted an unlock before skipping
+activated the keyring daemon and popped a password dialog on the user's desktop at every gate run,
+while its skip looked like safe handling. Probe without side effects: make the real arm opt-in
+through an environment variable that names it, and give it a private resource
+(`dbus-run-session` around the run, with `HOME` and the `XDG_*` directories under the temp dir,
+since a private bus alone still writes the real keyring files). Then guard the default run in
+conftest so no test can reach a user-facing service at all: point `DBUS_SESSION_BUS_ADDRESS` at
+an address where nothing listens (`unix:path=<tmp>/no-bus`) rather than only deleting it, because
+with it unset some clients autolaunch or discover a session bus of their own.
+
+### A secrets or privacy gate test can leak what it guards
+
+pytest's failure output prints what a failing test compared: assertion rewriting shows both sides
+of `assert token not in text`, `-vv` prints full diffs, and `--tb=long` with `-l`
+(`--showlocals`) prints the test's locals. A test that guards against a private token reaching
+logs or CI output therefore publishes that token into the CI log the moment it fails. Keep the
+secret out of everything the failure prints: do the scan in a helper that returns only a count
+and redacted positions, never bind the scanned text in the test's own frame, and assert on the
+helper's result (`hits = token_offsets(read_output())`,
+`assert not hits, f"{len(hits)} token(s) at offsets {hits}"`). Then test the leak paths
+themselves: plant a known FAKE token so the test fails, run it with `--tb=long -vv -l`, and assert
+the captured output does not contain that token.
 
 ## Leaked and held resources
 
@@ -511,6 +758,58 @@ picked from the helper's own number passes against the same defect end to end. R
 numbers in the test, assert the crafted arm reached the hot code (a fast run can be an early
 return), and when the seam truncates or caps its input, lift that bound past the crafted size for
 the test. Then RED the arm on the pre-fix code.
+
+### Assert a same-machine ratio, never an absolute wall-clock budget
+
+A performance regression test with an ABSOLUTE budget ("processes 32 MiB in under 0.5 s") fails
+a correct implementation on a busy shared runner (measured: 0.507 s on one macOS cell), and a
+rerun only hides it. Time the code against a baseline run on the same machine over the same data
+(best of three, such as one plain `bytes.replace` pass over the same buffer) and assert the RATIO.
+Put the limit between the MEASURED ratios of the correct code and of the regression the test
+guards, measured on every interpreter the project supports (measured: correct at most 1.01x, a
+per-byte loop at least 10.7x, limit 3), and prove RED by swapping the regression in. Do not take
+the regression's cost from a comment or docstring: one claimed about 100x and measured 11x, so a
+limit derived from the claim would have kept the thin margin.
+
+### A growth-ratio check: user CPU time, equal windows, fresh pages
+
+A check that compares the time at n with the time at k*n (linear, not quadratic) needs three
+things, or it flakes just above its ceiling and each "widen the repeats" fix only moves the flake:
+
+1. Read USER CPU time (`os.times().user`), not `time.thread_time()` or `time.process_time()`.
+   Those count kernel time too, including page faults, and the k*n arm allocates above the
+   allocator's mmap threshold, so it faults in fresh pages on every scan while the n arm reuses
+   its buffers. A linear scan then reads super-linear, and a "cache step" seen through
+   `thread_time` is mostly this (measured: the large arm spent 33-35% of its time in the kernel,
+   the small one 0%; the thread-time ratio read 24-27x where user time read 15-18x).
+2. Give both arms EQUAL windows before taking the minimum of N: time the n arm as k back-to-back
+   scans and divide by k. A short pass can fall wholly inside a fast moment of the runner, while a
+   long one only averages over it.
+3. A test that must CAUSE page faults takes a fresh anonymous `mmap` per round: glibc hands a
+   freed large buffer straight back, already faulted in.
+
+RED each with a virtual-clock test: a fast window placed inside the first short pass (for 2), and
+a simulated load keyed to work done rather than to the scan count, since a cost that raises its own
+load runs away.
+
+### Verify a rare-flake fix with an amplified, interleaved A/B
+
+Green CI after a fix for a rare flake is evidence only against the flake's base rate, so measure
+that first: list the workflow's recent runs (about 25), search each failed run's log
+(`gh run view <id> --log-failed`) for the test id, and count. At 1 failure in 26 runs, two green
+runs follow with no fix at all about 93% of the time, and about 59 clean runs are needed for 90%
+confidence. Instead:
+
+1. Build two environments that differ ONLY in the fixed dependency: both from the lockfile, then
+   pin the old version in arm A (`uv pip install --no-deps <pkg>==<old>`).
+2. Amplify through the REAL test, not a probe (pytest-repeat `--count 50`, xdist at about twice
+   the core count), alternating which arm runs first each round.
+3. Require liveness: the old arm must reproduce the CI failure's own shape first. Zero failures in
+   the new arm mean nothing until it has.
+
+Measured on a platform-only stderr race: old arm 8 of 2800, new arm 0 of 2800 (P about 0.004), in
+about 45 minutes on one 12-core machine, against an estimated two months of nightly CI for the
+same confidence.
 
 ### An environment-isolation test must expect what only the right repository holds
 

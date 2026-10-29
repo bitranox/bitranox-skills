@@ -265,6 +265,14 @@ def _frontmatter(body):
     return head, None
 
 
+def _has_prose(body):
+    """True when `body` holds text below its frontmatter frame (or any text, unframed). A blank
+    body and a frame-only body both say nothing, and either one, taken as a body, replaced a stored
+    fact's prose with an empty frame."""
+    head, m = _frontmatter(body)
+    return bool((head[m.end():] if m else head).strip())
+
+
 def _has_frontmatter(body):
     """True when `body` opens with a closed frontmatter block that carries a `name:` key."""
     return _frontmatter(body)[1] is not None
@@ -284,8 +292,36 @@ def _framed_body(slug, hook, type_, body):
         head = (slug or "").split("-", 1)[0]
         type_ = head if head in us.TYPE_PREFIXES else "project"
     desc = " ".join((hook or "").split())
+    # The frame ends in ONE blank line; a body file that opens with its own blank line(s) would
+    # otherwise double it, and a read-back-and-write round trip would grow the gap every time.
+    prose = _LEADING_BLANK_LINES_RX.sub("", body or "")
     return ("---\nname: %s\ndescription: %s\nmetadata:\n  type: %s\n---\n\n%s"
-            % (slug, desc, type_, body or ""))
+            % (slug, desc, type_, prose))
+
+
+# Whole blank lines only: the first CONTENT line keeps its indentation (an indented code block).
+_LEADING_BLANK_LINES_RX = re.compile(r"\A(?:[ \t]*\r?\n)+")
+
+
+def _synced_frame(slug, hook, type_, text):
+    """Return framed `text` with its frame agreeing with this write: `name:` is the slug,
+    `description:` the hook, and an EXPLICIT `type_` replaces the kind the frame records.
+
+    A caller that hands back a body it read (the text `factedit.py show --body` prints, or a stored
+    body file) brings the OLD frame with it. `_framed_body` passes such a body through, so without
+    this its `description:` kept the previous hook while the pointer took the new one, and an
+    explicit --type was dropped in silence. The prose below the frame is never touched. An unframed
+    `text` is returned unchanged."""
+    head, m = _frontmatter(text)
+    if m is None:
+        return text
+    inner = m.group(1)
+    inner, _n = re.subn(r"(?m)^(name:)[ \t]*[^\r\n]*", lambda d: "%s %s" % (d.group(1), slug),
+                        inner, count=1)
+    text = _reframe_description(_with_frame(head, m, inner), hook)
+    if type_ and _body_type(text) != type_:
+        text = _retype_body(slug, hook, type_, text)
+    return text
 
 
 def add_or_update_entry(proj, title, hook, body="", type_=None, pin=False,
@@ -340,7 +376,7 @@ def upsert_entry(proj, title, hook, body="", type_=None, pin=False,
     # absent ones - so the only signal is a reader walking up to an empty file. Refuse here, while
     # the content still exists to supply. Keyed on the body FILE, so a mover carrying stored text
     # (rehome/migrate, which pass no body) is unaffected.
-    if not (body or "").strip() and not us.body_path(anchor, slug).is_file():
+    if not _has_prose(body) and not us.body_path(anchor, slug).is_file():
         raise EmptyBody(slug)
     store_dir = us.central_facts_dir(anchor).parent   # the `.claude-memory` store dir for this tree
     store_existed = store_dir.exists()
@@ -369,13 +405,14 @@ def upsert_entry(proj, title, hook, body="", type_=None, pin=False,
                 raise PinnedEntry(slug)
             old_hook = e.hook
             e.title, e.hook = title, (hook or e.hook)
-            if body:
-                # No explicit --type on an UPDATE means "leave the kind alone": re-deriving it from
+            if _has_prose(body):
+                # A blank or frame-only body is no body: taken as one it replaced the stored prose
+                # with the bare frame. No explicit --type on an UPDATE means "leave the kind alone": re-deriving it from
                 # the slug discards what the stored body already records, and for a prefix-less slug
                 # that always lands on "project".
                 kept_skill = skill or _body_skill(body) or _body_skill(e.body)
-                e.body = _with_skill(_framed_body(slug, e.hook, type_ or _body_type(e.body), body),
-                                     kept_skill)
+                framed = _framed_body(slug, e.hook, type_ or _body_type(e.body), body)
+                e.body = _with_skill(_synced_frame(slug, e.hook, type_, framed), kept_skill)
             else:
                 if e.hook != old_hook:
                     e.body = _reframe_description(e.body, e.hook)   # keep body description in sync
@@ -396,7 +433,9 @@ def upsert_entry(proj, title, hook, body="", type_=None, pin=False,
             if us.body_path(anchor, slug).is_file():
                 raise SlugCollision(slug, _free_slug(anchor, slug))
             e = Entry(slug=slug, title=title, hook=hook,
-                      body=_with_skill(_framed_body(slug, hook, type_, body), skill), pin=pin)
+                      body=_with_skill(_synced_frame(slug, hook, type_,
+                                                     _framed_body(slug, hook, type_, body)),
+                                       skill), pin=pin)
             entries.append(e)
         bodies[slug] = e.body
         _commit_store(proj, scope or scope_default, entries, bodies)
@@ -861,6 +900,18 @@ def _dedup_pick(entry, dst_entry):
     return fields, warning
 
 
+def _nearest_common_level(src, dst, anchor):
+    """The deepest dir above both `src` and `dst` that is a memory level (carries the level file),
+    else the anchor. A sideways re-home goes up to it and down again; the bare common PATH is not
+    the answer, because a dir with no level file has no pointer block to land in."""
+    cur = Path(os.path.commonpath([str(src), str(dst)]))
+    while anchor in cur.parents or cur == anchor:
+        if cur == anchor or sig.claude_local_md_path(str(cur)).is_file():
+            return cur
+        cur = cur.parent
+    return anchor
+
+
 def move_entry(from_level, to_level, slug, force=False):
     """Relocate a fact's POINTER LINE - or a whole SET of them, together - between two levels of one
     tree (the body file never moves - the slug is the identity and the body is anchored centrally).
@@ -904,7 +955,12 @@ def move_entry(from_level, to_level, slug, force=False):
     elif src in dst.parents:
         rep["direction"] = "down"
     else:
-        rep["refused"] = "sibling levels - a move follows the altitude chain (ancestor <-> descendant only)"
+        hub = _nearest_common_level(src, dst, Path(a_from).resolve())
+        rep["refused"] = (
+            "sibling levels - a move follows the altitude chain (ancestor <-> descendant only); "
+            "re-home it in two moves through the nearest level above both: `move --from-level %s "
+            "--to-level %s`, then `move --from-level %s --to-level %s` (the second, down, leg "
+            "refuses on its own if inbound [[refs]] would dangle)" % (src, hub, hub, dst))
         return rep
 
     _scope, entries, _bodies = read_store(str(src))

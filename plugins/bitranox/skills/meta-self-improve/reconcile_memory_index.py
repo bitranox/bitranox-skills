@@ -11,6 +11,9 @@ A curated altitude is a level dir whose `CLAUDE.local.md` holds a managed pointe
     fabricated). A body no level points at is a DANGLING body: `--check` / `--check-tree` report
     it and `--rehome` re-attaches it; nothing here deletes one.
   * `archive_entry` forgets a fact: drop its pointer line + move its central body to `.archive/`.
+    Archiving the LAST pointer is refused while another fact links it (`[[slug]]`), names it in
+    plain prose, or a level's CLAUDE.md names it (`inbound_mentions`): each would be left pointing
+    at nothing, and only the `[[ref]]` kind is ever reported afterwards. `--force` archives anyway.
   * `--repair-appended-type`: a one-off repair for the body damage `--check-tree` reports as an
     appended `metadata: type:` block (see `appended_type_damage`); `--dry-run` lists only.
 
@@ -20,7 +23,8 @@ files still carry `name`/`description` frontmatter); `migrate_memory.py` imports
 Exit codes: 0 clean; 1 a problem was found (orphan pointer or ref, downward ref, duplicate, decoy,
 frame-only or appended-type body, misplaced fact, a dangling body `--rehome` cannot re-attach
 because it is sharded or its name is not a slug, a damaged body `--repair-appended-type` could not
-repair) or `--archive` named no entry; 2 could not run: a dir argument does not exist, a level
+repair) or `--archive` named no entry or was refused because something still names the fact;
+2 could not run: a dir argument does not exist, a level
 file, fact body or store directory could not be read (not UTF-8, no permission - `--check-tree`
 still prints every finding and counts the path in its TOTAL line, `--rehome` names the body), a
 write failed (`--archive` leaves the fact as it was, or names where its body now is). A path it
@@ -326,6 +330,70 @@ def _names_invalid_pointer(level_dir, slug):
     return any(n in raw + " " for raw in us.invalid_pointer_lines(text) for n in needles)
 
 
+# A slug-shaped token: starts and ends alphanumeric, may hold `-`, `_` and `.` inside. The
+# lookarounds keep `a-b` from matching inside `xa-b` or `a-bc`.
+_TOKEN_RX = re.compile(r"(?<![A-Za-z0-9_.-])[A-Za-z0-9](?:[A-Za-z0-9_.-]*[A-Za-z0-9])?(?![A-Za-z0-9_-])")
+_LINK_RX = re.compile(r"\[\[([^\]]+)\]\]")
+
+
+def prose_mentions(texts, known):
+    """{target: [sources]} for every known HYPHENATED slug a source names in plain text. PURE.
+
+    `texts` maps a canonical source slug to its text. `[[...]]` spans are cut first, so a linked
+    ref is never counted twice, and a source never mentions itself. A slug with no hyphen is not
+    searched for: it is indistinguishable from an ordinary word. Code is NOT masked, since a slug
+    quoted in backticks is still a name that goes stale."""
+    out = {}
+    for source, text in texts.items():
+        for token in _TOKEN_RX.findall(_LINK_RX.sub(" ", text or "")):
+            target = ME._canon_slug(token)  # noqa: SLF001 - the engine owns the canonical form
+            if "-" in target and target in known and target != source:
+                out.setdefault(target, set()).add(source)
+    return {k: sorted(v) for k, v in out.items()}
+
+
+def inbound_mentions(anchor, slug):
+    """What still names `slug` anywhere under `anchor`: {"refs": [(level, source)], "prose":
+    [(level, source)], "docs": [CLAUDE.md path]}. Raises the engine's TreeWalkError on a level or
+    body it cannot read: "nothing names it" is the answer that permits an archive."""
+    qcanon = ME._canon_slug(slug)  # noqa: SLF001
+    levels = _all_curated_levels(anchor)
+    refs = ME.inbound_ref_sources(levels, slug)
+    texts, where = {}, {}
+    for lvl in levels:
+        _scope, entries, bodies = ME.read_store(str(lvl))
+        for e in entries:
+            key = ME._canon_slug(e.slug)  # noqa: SLF001
+            texts[key] = "%s\n%s" % (e.hook or "", bodies.get(e.slug, ""))
+            where[key] = str(lvl)
+    linked = {ME._canon_slug(src) for _lvl, src in refs}  # noqa: SLF001
+    prose = [(where[src], src) for src in prose_mentions(texts, {qcanon}).get(qcanon, [])
+             if src not in linked]
+    docs = []
+    for lvl in sorted({str(Path(anchor))} | {str(x) for x in levels}):
+        doc = Path(lvl) / "CLAUDE.md"
+        try:
+            text = doc.read_text(encoding="utf-8-sig")
+        except (OSError, UnicodeDecodeError):
+            continue
+        if any(ME._canon_slug(t) == qcanon for t in _TOKEN_RX.findall(text)):  # noqa: SLF001
+            docs.append(str(doc))
+    return {"refs": sorted(refs), "prose": sorted(prose), "docs": docs}
+
+
+class ArchiveBlocked(Exception):
+    """Archiving the last pointer was refused because something still names the fact.
+
+    `found` is `inbound_mentions`'s result. Not an OSError: nothing failed, the archive was
+    declined, and the CLI reports it as a found problem (exit 1), never as "could not run"."""
+
+    def __init__(self, slug, found):
+        super().__init__("%s is still named by %d fact link(s), %d prose mention(s) and %d "
+                         "CLAUDE.md file(s)" % (slug, len(found["refs"]), len(found["prose"]),
+                                                len(found["docs"])))
+        self.found = found
+
+
 class ArchiveRollbackFailed(OSError):
     """The pointer write failed after the body was archived, and the body could not be put back.
     The message names where the body now is, since the pointer still names the old place."""
@@ -349,7 +417,7 @@ def _put_back(moved, cause, move):
 
 
 def archive_entry(level_dir, slug, archive_subdir=".archive", dry_run=False, *, move=None,
-                  commit=None):
+                  commit=None, force=False):
     """Forget a fact: drop its pointer line and move its central body to `<anchor>/.claude-memory/
     <archive_subdir>/`. With `dry_run`, report whether an entry WOULD be removed but write nothing.
     Returns True if an entry was (or, under dry_run, would be) removed.
@@ -360,6 +428,10 @@ def archive_entry(level_dir, slug, archive_subdir=".archive", dry_run=False, *, 
     body that cannot move costs no pointer, and a pointer write that then fails must not leave the
     pointer naming a body already in the archive. If the body cannot be put back either, the
     error is ArchiveRollbackFailed and names where it is.
+
+    Raises ArchiveBlocked, before any write and under `dry_run` too, when this is the LAST pointer
+    of the fact and `inbound_mentions` finds anything still naming it, unless `force`. Dropping one
+    of several pointers keeps the fact, so nothing is left dangling and nothing is checked.
 
     `move` and `commit` are the body-move and pointer-write seams (shutil.move and the engine's
     store commit when omitted), resolved at call time."""
@@ -377,9 +449,13 @@ def archive_entry(level_dir, slug, archive_subdir=".archive", dry_run=False, *, 
         if not dry_run:
             commit(str(d), scope, entries, bodies)
         return True
+    anchor = ME._anchor(str(d))
+    if not force and not _other_levels_pointing(anchor, d, slug):
+        found = inbound_mentions(anchor, slug)
+        if found["refs"] or found["prose"] or found["docs"]:
+            raise ArchiveBlocked(slug, found)
     if dry_run:                                  # a dry run reports the outcome and writes NOTHING
         return True
-    anchor = ME._anchor(str(d))
     moved = []
     for e in entries:
         if _canon(e.slug) == qcanon:
@@ -402,6 +478,15 @@ def archive_entry(level_dir, slug, archive_subdir=".archive", dry_run=False, *, 
 
 
 # ---- CLI ---------------------------------------------------------------------------------------
+
+def _print_mentions(found):
+    for lvl, src in found["refs"]:
+        print("    [[ref]]  %s  @ %s" % (src, lvl))
+    for lvl, src in found["prose"]:
+        print("    prose    %s  @ %s" % (src, lvl))
+    for doc in found["docs"]:
+        print("    doc      %s" % doc)
+
 
 def _all_curated_levels(anchor, unreadable=None):
     """Every curated level dir under `anchor` (a `CLAUDE.local.md` with a managed pointer block).
@@ -889,6 +974,9 @@ def _main(argv=None):
                     help="forget a fact: drop its pointer line at the given level (the positional dir) "
                          "and move its central body to .archive/ (only when no other level still "
                          "points at it)")
+    ap.add_argument("--force", action="store_true",
+                    help="with --archive: archive even while other facts or a CLAUDE.md still name "
+                         "the slug (they are listed, and left pointing at nothing)")
     ap.add_argument("--check-tree", action="store_true", dest="check_tree",
                     help="TREE-WIDE integrity from any dir in the tree (resolved to its anchor): flags a "
                          "slug pointed at from >1 level (tree-unique violation), orphan pointers, refs "
@@ -939,8 +1027,19 @@ def _main(argv=None):
 
     if args.archive:
         level = args.dirs[0]
+        found = None
+        anchor = ME._anchor(level)
+        # Only a LAST pointer leaves its mentions dangling; while another level still points at
+        # the slug the fact survives, and listing its mentions would claim they now name nothing.
+        if args.force and not _other_levels_pointing(anchor, level, args.archive):
+            found = inbound_mentions(anchor, args.archive)
         try:
-            removed = archive_entry(level, args.archive, dry_run=args.dry_run)
+            removed = archive_entry(level, args.archive, dry_run=args.dry_run, force=args.force)
+        except ArchiveBlocked as exc:
+            print("! refused: %s - re-point or edit them first (ref_map.py lists [[refs]] and "
+                  "prose mentions), or pass --force to archive anyway:" % exc)
+            _print_mentions(exc.found)
+            return 1
         except ArchiveRollbackFailed as exc:
             print(f"! failed: could not archive {args.archive}: {exc}", file=sys.stderr)
             return 2
@@ -955,6 +1054,9 @@ def _main(argv=None):
                       % (args.archive, level))
             else:
                 print("archived %s (pointer dropped at %s)" % (args.archive, level))
+            if found and (found["refs"] or found["prose"] or found["docs"]):
+                print("--force: these still name %s and now point at nothing:" % args.archive)
+                _print_mentions(found)
             return 0
         print("! no such entry: %s at %s (nothing archived)" % (args.archive, level))
         return 1

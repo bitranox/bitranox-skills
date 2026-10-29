@@ -1237,17 +1237,20 @@ scenario until something fails.
 Write and Edit but keeps the Skill tool, so when the skill is installed a "no skill" arm can load it
 and answer from the shipped text. For a NEW skill, test a draft that is not installed yet. For an
 EDIT, the old version stays installed, so that arm measures the old text, not a no-skill baseline:
-make the coverage check against the skill FILE the evidence, run on the pre-edit text
-(`git show HEAD:<path>`). Naming the skill off-limits in the prompt is prose and does not bind. In
-a RETRIEVAL or GREEN arm it is worse than weak, it inverts the result: when the tool under test
-lives inside that skill, the agent finds the right row and still answers NONE, because it may not
-open the skill to produce a command. There, drop the off-limits line, say the index in the message
-is complete and no tool call is needed, show the whole row including its invocation column, and
-ask which row it would REACH FOR rather than for a verified command. Decide the guard per arm
-instead of reusing one prompt, and record a void arm as void in the review artifact: a
-contaminated arm manufactures a pass, an inverted one a failure, and both look like data. A GREEN
-arm with the edited text pasted in can load the installed OLD version the same way, so tell it the
-pasted text is the skill under test and check every quote it returns against the pasted text.
+make the coverage check against the skill FILE the evidence, run on the pre-edit text (`git show
+HEAD:<path>`). That holds for EVERY file the RED arm is shown, not only SKILL.md: a RED fed the
+pre-edit SKILL.md beside a reference file you already edited has been handed the fix, so take each
+companion file from `git show HEAD:<path>` too. Naming the skill off-limits in the prompt is prose
+and does not bind. In a RETRIEVAL or GREEN arm it is worse than weak, it inverts the result: when
+the tool under test lives inside that skill, the agent finds the right row and still answers NONE,
+because it may not open the skill to produce a command. There, drop the off-limits line, say the
+index in the message is complete and no tool call is needed, show the whole row including its
+invocation column, and ask which row it would REACH FOR rather than for a verified command. Decide
+the guard per arm instead of reusing one prompt, and record a void arm as void in the review
+artifact: a contaminated arm manufactures a pass, an inverted one a failure, and both look like
+data. A GREEN arm with the edited text pasted in can load the installed OLD version the same way, so
+tell it the pasted text is the skill under test and check every quote it returns against the pasted
+text.
 
 **When the arms tie on the ACTION, read their REASONS.** A RED and a GREEN that choose the same
 action read as "no gap", the cheapest conclusion there is, and nothing in either transcript flags
@@ -1370,7 +1373,10 @@ touched, not the whole skill - a full re-run costs a cycle and answers nothing y
 A gap RED and GREEN both report - a question answered NOT STATED in both arms - predates your
 edit. It is still a gap a reader hits, so it goes on the list like any other, and "not caused by
 this change" is not a decline reason: close it in this change and re-probe that question, or
-decline it for one of the reasons above.
+decline it for one of the reasons above. A decline whose reason is a claim about the system ("the
+tool already prints that line", "the hook does that for you") cites its evidence in the same
+bullet: the `file:line` you read or the command you ran and what it showed. An uncited factual
+reason is an unverified claim, not a decision, so the gap stays undecided until you look.
 
 **A probe shown only an excerpt reports gaps whose answer lives outside it.** Before adding text
 for any gap from such a probe, grep the whole skill (SKILL.md and its supporting files) for the
@@ -1390,6 +1396,45 @@ Stop only when a re-run turns up no new undecided gap, and keep that last run's 
 review artifact as the evidence. The same holds for a probe over any doc text, such as a README
 or a CLAUDE.md.
 
+**After every fix round, and before each re-probe or delta review, run the checks a probe cannot
+see.** A quote-back checks that a sentence is present, not what the edit did to the text around
+it, and each fix round can break the layout again. Two checks, every round:
+
+- **Mechanical: line width and fence closure over the ADDED lines.** The script below reads
+  `git diff -U0` for the file, maps each hunk to the new file's line numbers, and reports an added
+  prose line over 100 columns (fenced code and `|` table rows skipped) and any closing fence with
+  text after it. A closer that carries text does not close the fence, so everything after it
+  renders as code until the next bare fence.
+
+  ```bash
+  git diff -U0 -- SKILL.md | python3 -c '
+  import re, sys
+  added = set()
+  for h in re.finditer(r"^@@ -\S+ \+(\d+)(?:,(\d+))? @@", sys.stdin.read(), re.M):
+      added.update(range(int(h[1]), int(h[1]) + int(h[2] or 1)))
+  fence = None
+  for no, line in enumerate(open(sys.argv[1], encoding="utf-8").read().splitlines(), 1):
+      m = re.match(r" {0,3}(`{3,}|~{3,})(.*)", line)
+      if fence:
+          if m and m[1][0] == fence[0] and len(m[1]) >= len(fence):
+              if m[2].strip():
+                  print(f"{no}: text after a closing fence, so the fence stays open")
+              else:
+                  fence = None
+          continue
+      if m:
+          fence = m[1]
+          continue
+      if no in added and not line.lstrip().startswith("|") and len(line) > 100:
+          print(f"{no}: {len(line)} columns")
+  ' SKILL.md
+  ```
+
+- **Read the paragraph AFTER each insertion point.** A back-reference there ("the same symptom",
+  "this", "Measured: ...", "see the next paragraph") now binds to your new text instead of what it
+  meant, and a new bullet that restates one already nearby reads as a second rule. Neither shows
+  up in a quote-back, which passes on presence alone. Fix the reference or merge the duplicate.
+
 **Verify each fix by quote-back.** Re-ask the contested question and require the answer to be a
 DIRECT QUOTE of the governing text, or the single word NONE. A paraphrase proves the model can
 reason to the answer; only a quote proves the skill says it. NONE means you have not written the
@@ -1404,6 +1449,13 @@ mechanism claim in it against the code it describes: grep the symbol, read the b
 or returns. Measured: a skill said a capture call refuses a loopback interface by name; no code
 checks the name (it refuses by the link type the device reports), and two tiers quoted the false
 sentence back correctly.
+
+**Before you ship, list every case the edit decides beyond the reported defect.** A fix for one
+defect usually settles neighbouring cases too: a new exception, a "the user's own X stays as is"
+clause, a default for an input nobody mentioned. Write each one down, and for every case the user
+never ruled on, either ask them before the push or leave the text silent on it. A default you
+invent ships as policy, and reversing it after the push costs a second test cycle and a second
+release.
 
 **REQUIRED REFERENCE:** See testing-skills-with-subagents.md for the complete testing methodology:
 - How to write pressure scenarios
@@ -1490,7 +1542,11 @@ Deploying untested skills = deploying untested code. It's a violation of quality
 **REFACTOR Phase - Close Loopholes:**
 - [ ] Every RED and GREEN dispatch asked for a `Skill gaps` section, and each reply's list is
       recorded - a GREEN that reported nothing because it was never asked is not a pass
-- [ ] Every gap GREEN reported is closed or explicitly declined with a reason
+- [ ] Every gap GREEN reported is closed or explicitly declined with a reason; a decline resting
+      on a claim about the system cites the `file:line` read or the command run
+- [ ] After every fix round and before each re-probe or delta review: the width and fence check
+      over the added lines printed nothing, and the paragraph after each insertion point was read
+      for a re-bound back-reference or a duplicated bullet
 - [ ] GREEN diffed against RED in BOTH directions, with every baseline result missing from GREEN
       accounted for - a lost result is a REFACTOR requirement, not a trade
 - [ ] Each fix verified by quote-back (a direct quote of the governing text, or NONE)
@@ -1521,6 +1577,8 @@ Deploying untested skills = deploying untested code. It's a violation of quality
 - [ ] External doc references are INSTALL-REACHABLE (see "Referencing external DOCS"): every `README`/`docs/`/`see ...md` the reader is sent to either ships in the skill dir, is a version-pinned URL, or is install-local `--help`/`help()` - no bare package-local path. Verify: `grep -nE '(docs/|README|see [^ ]*\.md)' SKILL.md | grep -v http` shows only bundled-or-discoverable hits
 
 **Deployment:**
+- [ ] Every case the edit decides beyond the reported defect is listed, and each one the user
+      never ruled on was asked about before the push or left unstated in the text
 - [ ] Edit the skill in the repo that OWNS it, never in the installed copy under
       `~/.claude/plugins/cache/<marketplace>/<plugin>/<version>/` or
       `~/.claude/plugins/marketplaces/`: the next plugin update overwrites that copy, and the fix

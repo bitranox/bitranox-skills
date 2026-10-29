@@ -253,6 +253,22 @@ CPython and `--python 3.14` rebuilds a free-threaded venv on the GIL build, both
 All measured on uv 0.13.0. Derive the request from the venv's interpreter, as in the table, never
 from its path.
 
+### Gotcha: `uv run --python X.Y` in a project replaces the project's `.venv`
+
+To try a command on another interpreter, `uv run --python 3.12 ...` inside a project directory does
+not make a side environment: it removes the project's `.venv` and recreates it on 3.12 ("Removed
+virtual environment at: .venv"). A later plain `uv sync` keeps that interpreter, so the project
+stays on 3.12 for every following command, with no `.python-version` written to show it (measured
+on uv 0.13.0). Leave the project venv alone instead:
+
+```console
+$ uv run --isolated --python 3.11 --with-editable . --with pytest python -m pytest
+$ UV_PROJECT_ENVIRONMENT=.venv-311 uv run --python 3.11 python -m pytest   # a second, named venv
+```
+
+Both left `.venv` on its interpreter. After an accidental swap, check `.venv/bin/python --version`,
+delete `.venv` (it is gitignored) and let `uv sync` or the project's gate rebuild it.
+
 ### Gotcha: `uv python find` answers for your CONTEXT, not for uv's store
 
 `uv python find 3.14` looks like "which interpreter would uv use for 3.14". It is not: it resolves
@@ -265,15 +281,26 @@ $ env -u VIRTUAL_ENV uv python find 3.14
 /home/you/project/.venv/bin/python3            # now the cwd's venv
 ```
 
-Neither answer tells you what uv would *provision*. To ask what uv actually has, parse the machine
--readable list instead - it carries split version parts, so you can compare numerically rather than
-by string (`3.9` vs `3.14`):
+Neither answer tells you which interpreter `uv venv --python X.Y` would build on. Ask with
+`--system`, which skips both venvs:
 
 ```console
-$ uv python list --only-installed --output-format json
-[{"key":"cpython-3.14.5-linux-x86_64-gnu","version":"3.14.5",
-  "version_parts":{"major":3,"minor":14,"patch":5}, "path":"..."}]
+$ uv python find --system --no-python-downloads --show-version 3.14
+3.14.8
 ```
+
+It printed the version `uv venv --python 3.14` built on in all six cells measured on uv 0.13.0
+(`UV_PYTHON_PREFERENCE` unset, `managed` and `system`, each with and without an active
+`VIRTUAL_ENV`); drop `--show-version` to get the path. Without `--system` it answered with the cwd's
+`.venv` (3.14.4) while `uv venv` built on 3.14.8. `--no-python-downloads` keeps the question from
+installing an interpreter to answer it.
+
+Do NOT pick "the newest installed" from `uv python list --only-installed --output-format json`.
+uv does not choose the newest: it chooses by `python-preference` (env, `uv.toml`, `[tool.uv]`) and
+then by discovery order. Under
+`UV_PYTHON_PREFERENCE=system` uv built on the distro 3.14.4 while the listing's newest was 3.14.8,
+so a tool that compared an existing venv with the listing rebuilt it on every run. The listing
+(with its numeric `version_parts`) answers "what is installed", never "what will uv use".
 
 This is the same family as the ambient-`VIRTUAL_ENV` gotcha in `SKILL.md`: a command that silently
 answers for the environment you are standing in rather than the one you asked about.

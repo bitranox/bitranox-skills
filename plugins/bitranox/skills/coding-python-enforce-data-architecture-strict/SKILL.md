@@ -18,7 +18,7 @@ Refactor Python code to follow strict data architecture rules using Pydantic mod
 ### Core Principles
 
 1. **Pydantic at Boundaries**: All external data (API requests, file reads, env vars, CLI args) must be parsed into Pydantic models immediately upon entry
-2. **Pydantic for Export**: All outputs (API responses, file writes, serialization) must use Pydantic's `.model_dump()` or `.model_dump_json()`
+2. **Pydantic for Export**: All outputs (API responses, file writes, serialization) must use Pydantic's `.model_dump()` or `.model_dump_json()`. On a wire that already exists, `.model_dump_json()` changes bytes and exception types: read "On an existing wire, `model_dump_json()` is not a drop-in" below before swapping a serializer call
 3. **No Internal Dicts**: Inside the application, never use raw dicts for structured data - always typed models
 4. **Enums for Constants**: All string literals representing categories, statuses, modes, or fixed values must be Enums. For values that cross an external boundary as strings, use `StrEnum` (Python 3.11+) or `class X(str, Enum)` so Pydantic parses and serializes them without changing the wire format; reserve `IntEnum` for values that are genuinely integers on the wire. **If your floor is 3.10 and you take the `class X(str, Enum)` fallback, its default string form is version-dependent** - read "The `str, Enum` fallback formats differently on 3.10 and 3.11+" below before you interpolate a member anywhere.
 5. **Minimize Conversions**: Ideal flow is ONE parse at input, ONE dump at output - nothing in between
@@ -135,6 +135,32 @@ field must be renamed because its natural name shadows a `BaseModel` attribute (
 `UserWarning`: *Field name "schema" ... shadows an attribute in parent "BaseModel"*), keep the
 wire key as an alias of `schema_` and configure it as the next section says, so the default dump
 emits `schema` too; passing `by_alias=True` at each call covers only the calls that remember it.
+
+### On an existing wire, `model_dump_json()` is not a drop-in for the old serializer call
+
+Rules 2 and 5 point new output at `model_dump_json()`. When a model REPLACES a dataclass or dict on a
+wire that already exists (a JSONL file, a `--json` CLI envelope, a cache), or you collapse an
+existing `json.dumps(m.model_dump(mode="json"))` or `orjson.dumps(m.model_dump(mode="json"))` into
+`model_dump_json()`, the bytes change. Measured on pydantic 2.14.2 and orjson 3.13.0:
+
+| Input                                                                                      | `model_dump_json()`                                  | `orjson.dumps(m.model_dump(mode="json"))` | `json.dumps(m.model_dump(mode="json"))`                                                           |
+|--------------------------------------------------------------------------------------------|------------------------------------------------------|-------------------------------------------|---------------------------------------------------------------------------------------------------|
+| any record                                                                                 | compact: `{"a":1,"b":2}`                             | compact                                   | spaced: `{"a": 1, "b": 2}`                                                                        |
+| int beyond 64 bits                                                                         | written                                              | raises `JSONEncodeError` (a `TypeError`)  | written                                                                                           |
+| lone surrogate in a `str` (a non-UTF-8 env var or filename decoded with `surrogateescape`) | raises `PydanticSerializationError` (a `ValueError`) | raises `JSONEncodeError` (a `TypeError`)  | writes the escape `\udce9`; with `ensure_ascii=False`, `UnicodeEncodeError` once encoded to UTF-8 |
+| non-UTF-8 `bytes` in an `Any` field                                                        | raises `PydanticSerializationError`                  | raises `UnicodeDecodeError`               | raises `UnicodeDecodeError`                                                                       |
+| `float` NaN                                                                                | `null`                                               | `null`                                    | `NaN` (not valid JSON)                                                                            |
+
+A `float` field also changes the wire on its own, whichever serializer you keep: given an int it
+holds a float, so `30` from a dataclass is now `30.0`. Check whether a producer can pass an int
+before you dismiss that line of a byte diff as test noise; a fake that feeds ints puts it on every
+record.
+
+So keep the existing serializer call, with a comment saying why, unless a byte-identity test passes
+first: build every record class with the edge values above plus `-0.0`, non-ASCII text and naive and
+aware datetimes, dump each through the old call and through `model_dump_json()`, and compare bytes
+AND exception types (an `except TypeError` around the old call does not catch the `ValueError` the
+new one raises). Switch only if they match.
 
 ### A wire name that differs from the field name needs three settings
 
@@ -373,12 +399,32 @@ refused("add"); refused("delete")
 
 A fixed-shape tuple record becomes a `NamedTuple` (`class Target(NamedTuple): host: str;
 zone: str | None`). It is still a tuple - unpacking, indexing, `==` against a plain tuple and
-hashing all work unchanged - so the change breaks no caller. Not this pattern: an OS sockaddr tuple
+hashing all work unchanged - so a caller that unpacks or indexes keeps working. That same equality
+hides the callers you did NOT migrate: `Target("a", None) == ("a", None)` is True, so every
+existing `==` assertion stays green while a test or caller still passes a plain tuple into a
+parameter now typed `Target` (and fails at runtime the moment the code reads `.host`). Only the
+type checker reports those call sites (pyright strict: "`tuple[...]` is not assignable to
+`Target`"), and a test proving the named type arrived needs `type(x) is Target` plus an attribute
+read, never `==`. Not this pattern: an OS sockaddr tuple
 (what `socket` and `getaddrinfo` take and return), a tuple that never leaves one function (a
 local gather closure), and a variable-length `tuple[X, ...]`. A `str` parameter is found by its
 CALLERS, not its signature: grep the call sites, and when every one passes a literal from a small
 fixed set, the parameter is an Enum (see "Converting a `str` parameter to an Enum changes its
 contract").
+
+**A Model -> dict -> Model round trip that exists to RE-VALIDATE a `model_copy(update=...)`.**
+`model_copy(update=...)` skips validation, so `Model(**m.model_copy(update=u).model_dump())` is
+sometimes the only thing refusing a bad update. Do not replace it with calls into pydantic
+internals (`__pydantic_validator__`, hand-built `ValidationError.from_exception_data`). The public
+fix is two parts: `model_config = ConfigDict(revalidate_instances="always")` on the model (or the
+shared base of the family), and `Model.model_validate(m.model_copy(update=u))`. Measured on
+pydantic 2.14.2 with a `max_length=5` field: with the setting, the errors equal the dict round
+trip's (`string_too_long` at `('name',)`); WITHOUT it, `model_validate(instance)` and
+`model_validate(instance, from_attributes=True)` both return the over-long copy unvalidated, so
+the RED for this fix is removing the setting. Before setting it, check that nothing builds these
+models with `model_construct` (such an instance is now validated wherever it is passed into a
+model) and that every validator is idempotent, since instances are now validated again each time
+they enter a model.
 
 A refusal is a boundary output too: never interpolate `str(ValidationError)` into one, because it
 hands the caller pydantic's union-arm tags, a versioned docs URL and a slice of their own input.
@@ -465,13 +511,23 @@ arm), read `references/validation-error-messages.md`.
      on the parsed data, ask what it must tell apart and whether the source exposes a field for it
      that the walk dropped; declare that field and filter on it. A faithful migration carries the
      latent bug forward. Example: a model of `uv python list --output-format json` declaring only
-     `version` and `version_parts` keeps an implementation-blind "newest installed patch" pick.
-     Several implementations (CPython, PyPy, ...) can be installed for one minor while
-     `uv venv --python <minor>` provisions CPython, so a PyPy build with a higher patch is reported
-     as newest, never matches the venv's interpreter, and the venv is rebuilt on every run. The fix
-     is `implementation: str` plus an `entry.implementation == "cpython"` filter; a build variant
-     (free-threaded vs default) is the same kind of discriminator when the consumer must pick the
-     default build.
+     `version` and `version_parts` keeps an implementation-blind "newest installed patch" pick: a
+     PyPy build with a higher patch is reported as newest, and a free-threaded build of the same
+     patch cannot be told apart from the default one. The listing exposes both discriminators
+     (`implementation`, `variant`), so a migration that declares only what the old walk read
+     drops them.
+   - **When the decision is "which X will tool T pick", ask T, do not re-derive T's choice.**
+     Declaring more discriminators and filtering T's listing re-implements T's selection rules and
+     stays wrong wherever T applies a rule the listing does not show. The `uv python list` pick
+     above is that case even with every discriminator declared: `uv venv --python X.Y` chooses by
+     `python-preference` (env, `uv.toml`, `[tool.uv]`) and discovery order, not by newest patch,
+     so under `UV_PYTHON_PREFERENCE=system` it built on the distro 3.14.4 while the listing's
+     newest was 3.14.8, and a check comparing the venv with the listing rebuilt it on every run.
+     The fix is to ask uv: `uv python find --system --no-python-downloads --show-version 3.14`
+     printed the version `uv venv --python 3.14` built on in all six cells measured (uv 0.13.0,
+     preference unset/managed/system, with and without an active `VIRTUAL_ENV`); without
+     `--system` it answers with the current venv. Look for such a query command (`find`,
+     `--dry-run`, `--print-*`, `--show-*`) before modelling a listing.
 
 4. **Mark Todo Items Complete** as each DoD criterion is satisfied.
 
@@ -526,6 +582,9 @@ INITIALIZATION:
          count, metric name to value, MAC to address); for tuples, an OS sockaddr, a local
          gather closure and a variable-length `tuple[X, ...]`. Without this an analyser reports
          every `dict[str, X]` it sees, and you spend the loop re-judging its false positives.
+         Parameter ORDER is not a data-structure finding either: two positional parameters of
+         the same type are a keyword-only style question, so keep the brief to records and
+         values, or an analyser asked for "same-type pairs" reports function signatures.
        * The CALL-SITE SWEEP, named as a required step: for every `str` parameter of a function
          called from another function or module, grep its call sites and report it when every
          caller passes a literal from a small fixed set. A per-file read never sees this, because
@@ -600,6 +659,9 @@ INITIALIZATION:
          checker errors on the changed signature.
          Measured: three agents each reported "731 passed" while pyright had 24 errors, all
          of them call sites still passing raw literals into newly-Enum-typed parameters.
+         A `NamedTuple` replacing a plain tuple is the same trap: it compares equal to the
+         tuple it replaced, so tests still passing plain tuples into the newly typed parameter
+         stay green and only the type checker lists them.
        * Instruction to return JSON and nothing else, one entry per file in its set:
          {"files": {"path": {"fixed": ["violation1", ...], "remaining": [...]}},
          "hand_offs": [{"file": "path", "line": N, "description": "..."}], "type_errors": N}
@@ -1026,7 +1088,12 @@ not a value type the code defines), so each spread keeps whatever the callee dec
 
 When pyright strict reports "Type of x is partially unknown" on `x: set[str] =
 field(default_factory=set)` (likewise `dict` or `list`), it inferred `set[Unknown]` from the bare
-factory instead of the annotation, so adding the annotation again does nothing. For a class that is
+factory instead of the annotation, so adding the annotation again does nothing. Try the one-word
+fix first: pass the PARAMETRISED type as the factory, `field(default_factory=set[str])` (likewise
+`list[str]`, `dict[str, int]`). pyright 1.1.414 strict accepts it where `default_factory=list`
+errors, and a parametrised alias is callable at runtime, returning a plain empty
+`set`/`list`/`dict` (checked on Python 3.10 and 3.14). Only if that still reports unknown, or
+the factory is not a builtin container, convert: for a class that is
 pure mutable state (a registry, a session bucket) rather than a value object, convert it to a plain
 class with a typed `__init__` (`self.x: set[str] = set()`), keeping the class and attribute names so
 callers and tests are untouched; first confirm nothing uses it AS a dataclass

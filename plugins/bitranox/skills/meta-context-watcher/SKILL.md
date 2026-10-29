@@ -89,19 +89,30 @@ a list is retyped, and it breaks ties within an origin, so it is not optional. I
 ranking key - see below, where reading it as one is a named failure. A SOLVED item's line is
 DELETED, in the commit that records the solving work, and the reason goes in that commit message,
 where git history keeps the old line (the `backlog_close` tool deletes it the same way and returns
-the line and reason for that message; it neither commits nor checks whether the file is tracked). When you close several items in one pass, tag each reason
+the line and reason for that message; it neither commits nor checks whether the file is
+tracked). When you close several items in one pass, tag each reason
 `measured:` or `argued:`, because afterwards a closure settled by evidence and one settled by
 reasoning look identical, and only the second is open to reopening. A SessionStart hook prints the
 top ranks with their age.
 
-That closing rule is the default, not an override: when a backlog file's own header states a
-different one (an older file says closed lines stay as `- [x]` plus `| closed: <reason>`), the
-header governs that file - close its items by hand, since `backlog_close` always deletes. Before
-deleting a line, ask git whether the file is tracked
+That closing rule holds in every backlog, including one whose own header says closed lines stay
+as `- [x]` plus `| closed: <reason>`: rewrite that header rule to the delete rule in the same
+change, and delete the `- [x]` lines it kept, their reasons going into that change's commit
+message. A closed line left in place is noise every session reads, and a header that keeps them
+makes the next closure keep one too. Before deleting a line, ask git whether the file is tracked
 (`git ls-files --error-unmatch OPEN-WORK.md` exits 0 when it is): in an untracked or gitignored
 backlog a deleted line is gone for good, with nothing to diff it back from, so first put any
 lasting reason somewhere durable - a CHANGELOG entry, a tracked decision log, a commit message
 of the change itself - and name what you deleted in your reply.
+
+**A line can hold more than one item, so read all of it before you close any of it.** Lines
+accrete follow-ups: an appended `also:` clause, a dated `| also (<date>) ...` segment, review
+triage notes, numbered parts. Before deleting a line (with `backlog_close` or by hand), read its
+FULL text and re-home every follow-up the closing work did not address as its own line, with the
+line's original first-raised date: deleting a line as one item silently closes the rest. The
+reverse holds when you close only PART of a multi-part item: re-test the premise of each part you
+keep open (grep the code, the docs, the deployed config it names), because the fix just made can
+dissolve a remaining part, and a part kept open on a dead premise is relayed as a live blocker.
 
 **Select a line by the rank in its own prefix, never by a bare `[N]` anywhere in the line.** Items
 cite each other by rank in their text ("same blocker as [60]"), so a script that deletes or
@@ -155,8 +166,9 @@ a free number before citing it.
    is the failure in a new costume.
 2. A `USER:` item the USER has deferred sits below the live `USER:` items and still above every
    `FOUND:` one. They asked for it and put it off; they did not stop wanting it. Record who
-   deferred it and when in the `open:` field, because a deferral with no owner reads as your
-   judgement a week later.
+   deferred it, when, and the user's own reason in the `open:` field - quoted, or the words
+   `reason not given`. A deferral with no owner reads as your judgement a week later, and one with
+   only your rationale beside it cannot answer the user when they ask why they deferred it.
 3. Among items of the same origin, the bigger `size` goes first. A big item is the one that never
    fits into a spare moment, so it is the one that starves. An item whose size is unknown sorts
    after the sized ones of its origin, and sizing it is then its own next action.
@@ -171,9 +183,25 @@ a free number before citing it.
 **Never infer a date you do not have.** When the source does not say when an item was first
 raised, write TODAY's date with a question mark - `(2026-08-31?)` - or the bare word
 `(unknown)`, and say `first seen here` in the `open:` field. Both parse, and an undated item
-sorts last within its rank because it makes no age claim. An estimated date is worse than an admitted unknown: age is the entire signal
+sorts last within its rank because it makes no age claim. An estimated date is worse than an
+admitted unknown: age is the entire signal
 that makes a long-carried item conspicuous, and a plausible guess silently resets it. The same
 goes for `size`: `size: unknown` is a usable line, an invented count is not.
+
+**Write the `open:` field for a reader who cannot ask you when or what you meant.**
+
+- **When an item's state changes, rewrite `open:` to lead with the new state.** Now waiting on an
+  external party, nothing owed by us, blocked on a new thing: that goes first in `open:`, not in a
+  dated segment appended to the end of the entry. The listing and a top-of-entry read show only
+  the opening, so an old `open:` keeps the item looking workable after it stopped being so.
+- **A time-gated condition (a cooldown, an expiry, a release window) states an absolute instant.**
+  Write the UTC instant it clears and when you wrote the line - `open: cooldown ends 2026-08-31
+  22:15 UTC (written 2026-08-30 18:00 UTC)` - never `passed by now` or `in two days`: the reader
+  cannot tell when your "now" was, and acting on a condition that has not cleared yet can undo the
+  very change it gates.
+- **Cite a commit by its subject, or by a sha from the PUSHED history.** A local sha goes stale
+  when its commit is rebuilt (rebase, amend, reset and recommit) before the push. After the push,
+  rewrite any local sha a line cites from `git log origin/<default>`, or cite the subject instead.
 
 ## What belongs in it
 
@@ -269,7 +297,10 @@ after it; handover mode, and any handover the user asked for, take steps 7 and 8
    Copy only before a WHOLESALE rewrite, never before an in-place edit such as the STALE line: the
    `.prev` copy is the one step of history, and an unneeded copy replaces the last rewrite's backup
    with a near-identical file. Before replacing an existing `handover.prev.md`, check what it holds
-   and diff it first if it backs a rewrite nobody has checked yet.
+   and diff it first if it backs a rewrite nobody has checked yet. Also grep the OUTGOING
+   `handover.md` for lines that point INTO `handover.prev.md` ("see handover.prev.md", "carried,
+   not re-typed here"): the copy overwrites the text they point at, so carry the content they
+   point at into the new handover (or into `OPEN-WORK.md`, per step 2) before you copy.
 4. **Write `handover.md` at the repo root, OVERWRITING whatever is there.** If the handover will
    quote a gate result, run that gate now, after steps 2 and 3 have written their files (see "How to
    verify"), and say the handover was written after it. A stale handover from an earlier session is
@@ -366,7 +397,10 @@ holds two moments with no way to tell them apart.
 **A gate result in the handover is a claim about a past moment, not a property of the tree.** The
 session that wrote it usually ran the gate before its last writes, and those can be gitignored
 files nothing shows you. Re-run the gate before building on it; a red there belongs to the
-inherited tree, not to the change you are about to make.
+inherited tree, not to the change you are about to make. A COUNT the next action rests on (rows,
+items, owners, failures) is the same kind of claim: recount it from the data file the handover
+cites before building the action on it, because a count retyped from memory drifts, and an
+action sized on the wrong count re-runs the wrong rows.
 
 **Read `OPEN-WORK.md` too, and read it FIRST** (for a handover from an earlier session; a
 checkpoint handed back after a compaction is resumed first, as above). The handover tells you
@@ -376,9 +410,36 @@ the item that has
 been waiting longest is the one least likely to be in it.
 
 **Before naming the next item, or saying nothing here can be worked, classify EVERY open line.**
-Run `grep -n '^- \[ \]' OPEN-WORK.md`, put each line in blocked, deferred, other-repo or workable,
-and state that classification with your answer. Reasoning down from the top ranks stops at the
-first run of blocked items and declares the backlog exhausted while workable items sit below it.
+Put each line in blocked, deferred, other-repo or workable, and state that classification with
+your answer. Reasoning down from the top ranks stops at the first run of blocked items and
+declares the backlog exhausted while workable items sit below it. Each of these is part of the
+classification, not an afterthought to it:
+
+1. **List every item, and only items.** `backlog_list` reads items the way the SessionStart block
+   does. By hand, match the item shape, `grep -nE '^- \[ \] \([^)]*\) \[[0-9]+\] ' OPEN-WORK.md`:
+   a bare `^- \[ \]` also returns the format template in the file's header, and dropping that row
+   by a substring such as `YYYY` also drops a real item that quotes a dated filename. Then check
+   your count equals the open-item count the SessionStart block printed; a mismatch means a line
+   went missing from your list, so find it before you answer.
+2. **Read each candidate's WHOLE entry, and take its state from its LAST progress segment.** A
+   long item is append-only: its opening lines describe the work as first written, and the newest
+   segment at its end says where it stands now (fixed, waiting on someone, nothing owed). Quote
+   that last segment as the item's state, never the opening lines or a compaction summary's
+   paraphrase of them, and live-check any external state it names (`gh pr view`, the release).
+3. **Check the line is not already done.** Before listing an item as workable, search the history
+   since its first-raised date for its distinctive text:
+   `git log --oneline --since=<raised date> -S '<a phrase or symbol unique to the item>'`, plus
+   `git log --oneline --since=<raised date> -- <the paths it names>`. A hit means the work may
+   have shipped; read the commit before offering the item, and re-run any measurement the line's
+   premise rests on (a tool version, a reported failure) rather than repeating its claim.
+4. **Check which repo each line's fix lands in, for EVERY line you list.** A line whose fix lands
+   elsewhere is other-repo (see "Before working an item" below). When a line you keep names
+   another repo (carried over from a sibling's backlog, moved from a template), say in the listing
+   why its fix lands here, so it does not read as scope creep.
+5. **List the forge's open work too.** An empty or short backlog is not "nothing open":
+   `gh pr list --state open` and `gh issue list --state open` (bot PRs such as dependency updates
+   included) show work the backlog never recorded. Classify each like a backlog line; a PR that
+   changes files another repo distributes (a CI template's workflows) is that repo's.
 
 **A recorded "no X available" is a claim about the session that wrote it, not a class.** Before
 you put a line in blocked because a host, server, OS release, network link or disk state is
@@ -421,49 +482,20 @@ rewrite the item's line to what you found before you report it.
 **A background agent the handover names as running is LIVE.** It survived the `/clear`, may have
 committed or pushed since, and will report into this conversation. Check its branch
 (`git log origin/<default>..<its branch>`) and origin for new commits, and wait for or message it
-(`SendMessage` to its name or id) instead of starting the same fix in parallel.
+(`SendMessage` to its name or id) instead of starting the same fix in parallel. When its report
+arrives, check it against the deliverables the handover expected from it (a review verdict, a
+push, a proposed text) before acting on it. An agent resumed after the clear can have LOST ITS
+BRIEF - it may even say so - and then reports only what it remembers: a gate run and a partial
+read look like the clean review a merge was waiting for. A missing deliverable is visible only
+against the handover's list; re-dispatch with a full brief rather than accepting the partial
+report.
 
-**A peer session a backlog line names may be gone.** Before you ask the user when to hand an item
-to another Claude session ("hand X to the <name> session once it finishes Y"), check that the
-session still exists: `ListAgents` lists the other local Claude sessions by name. Outside it,
-read the registry entries `~/.claude/sessions/*.json` (under `CLAUDE_CONFIG_DIR` when that is
-set) as JSON and take the one whose TOP-LEVEL `name` matches; a grep also hits the old names kept
-under `formerNames`. No entry means the session ended, and an entry's `pid` takes a
-`kill -0 <pid>` check for a crash (observed on Claude Code 2.1.310):
-
-```bash
-python3 -c 'import json,glob,sys; print([json.load(open(f))["pid"] for f in glob.glob(sys.argv[2]) if json.load(open(f)).get("name") == sys.argv[1]])' <name> "${CLAUDE_CONFIG_DIR:-$HOME/.claude}/sessions/*.json"
-```
-
-Sessions end, are cleared or crash, and the line keeps naming them. A question's options must
-rest on the current state, not on a line written earlier: asking to schedule a handover to a
-session that is gone costs a round trip and promises coordination that cannot happen. If it is
-gone, the question changes from "when to hand over" to "who does this now": present the item as
-unowned work, and rewrite its line to say so.
-
-**After a `/clear`, look for survivors yourself; the handover may not name them.** Two kinds
-outlive the clear: background subagents and `run_in_background` shells. `ListAgents` does not
-show this session's shells, nor a subagent that has already finished (measured on Claude Code
-2.1.309), so a list with nothing of yours does not mean nothing of yours ran or is running.
-
-- **Shells:** every Bash call's shell is a child of this session's `claude` process (measured on
-  Claude Code 2.1.309), so `$PPID` names it, and `ps --ppid $PPID -o pid,etime,args` lists this
-  session's shells (beside its MCP servers and the `ps` call's own shell). Other sessions' timers
-  on the same host run under their own `claude` process: filter by parent, never by command text.
-- **Subagents:** each one's transcript is
-  `~/.claude/projects/<project key>/<session id>/subagents/agent-<id>.jsonl`, where the project
-  key is the project path with every non-alphanumeric character replaced by `-`. List them all,
-  newest first (`ls -t ~/.claude/projects/<project key>/*/subagents/*.jsonl`): the ones written
-  just before the clear head the list, whatever the session id. Read each one's prompt and last
-  messages before saying what it did; one whose file is still growing is still running. Several of
-  them: say which one you report on. Check a branch or worktree its prompt names the way the
-  paragraph above checks a handover-named agent.
-- **An obsolete shell** (a deadline timer for a subagent that has reported) does no work, but its
-  completion notice lands here, so stop it. Its argv holds the text you wrote for it, which names
-  what it guards; when that text matches no subagent you can find, ask the user before killing it.
-  Kill the shell and its child (`ps --ppid <shell pid>` names the child), then
-  `ps -o pid= -p <shell pid>,<child pid>` must print nothing. If auto mode refuses the `kill`, give the user the
-  `! kill <shell pid> <child pid>` line. Either way treat its notice as stale when it arrives.
+**A peer session a backlog line names, and whatever survived a `/clear`, are checked, not
+assumed.** Before you ask the user when to hand an item to another Claude session, check that
+the session still exists; after a `/clear`, look for this session's surviving subagents and
+`run_in_background` shells yourself, because the handover may not name them and `ListAgents`
+shows neither a shell nor a finished subagent. Read references/survivors-after-clear.md for the
+commands and for what to do with an obsolete shell.
 
 **Before working an item, check which repo its fix lands in.** If that is not the repo you are in,
 the item is misfiled: move it to the owning repo's `OPEN-WORK.md`, close it here as moved, and take
@@ -479,39 +511,12 @@ the work stands, never restate the skill's rules.
 
 ## When it fires on its own
 
-A hook measures context from the transcript's last recorded usage - the real per-request figure,
-not an estimate. The context limit is `min(context_handover_pct of the window,
-context_handover_cap)`.
-
-In compact mode the limit is the value `CLAUDE_CODE_AUTO_COMPACT_WINDOW` should hold, set in the
-`env` block of `~/.claude/settings.json`. The harness compacts about 33k tokens below that value
-(measured on Claude Code 2.1.310), and the hook asks for the checkpoint about a tenth (at least
-40k) before that point. It asks on `PostToolUse` as well as on `Stop`, because a long autonomous
-turn can pass the whole stretch without stopping once. When the variable is unset or larger than
-the limit, the request says so: tell the user once and offer to set it through the update-config
-skill. After a compaction the reading falls below the save point, and the next crossing asks for a
-fresh checkpoint.
-
-In handover mode the hook blocks on `Stop` once context crosses the limit.
-
-The window comes from the model family on the transcript's most recent assistant record, so nothing
-needs configuring for a known family. A model id no family table knows - a gateway model such as
-glm-5.3 behind `ANTHROPIC_BASE_URL` - takes the window its launcher declared in
-`CLAUDE_CODE_MAX_CONTEXT_TOKENS`, the variable Claude Code defines for exactly that case; the hook
-reads it from its own environment. A model that is neither known nor declared falls back to a
-200k window that errs small on purpose. In one rule: family table first, then the launcher's
-declaration, then 200k - a known family always wins, so a globally exported declaration left over
-from another model cannot override a measured family window.
-
-Its warning about the overwrite asks git whether `handover.md` is tracked in the repo it fires in
-and says which case applies, because some repos commit the file and others ignore it.
-
-In handover mode, declining is not permanent: the next ask waits until context has grown another
-tenth of the window, because a decline at 40% is "not yet" while 90% is a different question.
-
-If it ever reports measuring MORE context than the window, the detection failed - set
-`context_window` explicitly via `bitranox:meta-memory-settings`. That is reported rather than
-ignored because a threshold nothing can reach looks exactly like a watcher that works.
+A hook measures context from the transcript's last recorded usage and asks for the checkpoint
+(compact mode) or blocks on `Stop` (handover mode) once it crosses
+`min(context_handover_pct of the window, context_handover_cap)`. Read references/when-it-fires.md
+when it asks about `CLAUDE_CODE_AUTO_COMPACT_WINDOW`, reports a window you did not expect, or
+measures more context than the window: it covers where the window comes from, the save margin,
+and what a decline does.
 
 ## Not the same as its neighbours
 

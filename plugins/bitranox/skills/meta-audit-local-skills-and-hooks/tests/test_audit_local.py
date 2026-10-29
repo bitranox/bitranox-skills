@@ -700,3 +700,96 @@ def test_an_uncollectable_skill_test_dir_is_reported(tmp_path):
                                           encoding="utf-8")
     found = audit_local.check_skills(skills)
     assert any(c.startswith("tests-u") and "test_broken.py" in m for c, m in found), found
+
+
+# ---- PEP 723 tools and the claude.ai skill sync ----------------------------------------------------
+
+PEP723 = ('# /// script\n# requires-python = ">=3.12"\n# dependencies = [\n'
+          '#   "pydantic>=2.7",\n#   "httpx2",\n# ]\n# ///\nprint("hi")\n')
+
+
+def test_pep723_dependencies_are_read_from_the_skill_s_scripts(tmp_path):
+    skill = tmp_path / "tool"
+    (skill / "tests").mkdir(parents=True)
+    (skill / "tool.py").write_text(PEP723, encoding="utf-8")
+    (skill / "tests" / "test_tool.py").write_text(PEP723, encoding="utf-8")   # tests do not count
+    (skill / "plain.py").write_text("print(1)\n", encoding="utf-8")
+    assert audit_local.pep723_dependencies(skill) == ["httpx2", "pydantic>=2.7"]
+
+
+def test_a_malformed_pep723_block_declares_nothing(tmp_path):
+    skill = tmp_path / "tool"
+    skill.mkdir()
+    (skill / "tool.py").write_text("# /// script\n# dependencies = [\n# ///\n", encoding="utf-8")
+    assert audit_local.pep723_dependencies(skill) == []
+
+
+def test_check_skills_hands_a_skill_s_declared_deps_to_the_collection_check(tmp_path):
+    skills = _skills(tmp_path / "p" / ".claude", "tool")
+    (skills / "tool" / "tool.py").write_text(PEP723, encoding="utf-8")
+    (skills / "tool" / "tests").mkdir()
+    seen = {}
+
+    def collect(tests_dir, extra_deps=()):
+        seen[Path(tests_dir).parent.name] = tuple(extra_deps)
+        return []
+
+    audit_local.check_skills(skills, collect=collect)
+    assert seen == {"tool": ("httpx2", "pydantic>=2.7")}
+
+
+def _synced_home(tmp_path):
+    home = tmp_path / "home"
+    synced = home / ".claude" / "skills" / "synced" / "acct-1234" / "markitdown"
+    synced.mkdir(parents=True)
+    (synced / "SKILL.md").write_text("---\nname: markitdown\n---\n", encoding="utf-8")
+    (synced / "batch_convert.py").write_text("print('x')\n", encoding="utf-8")
+    return home
+
+
+def test_the_account_skill_sync_dir_is_not_audited_as_a_local_skill(tmp_path):
+    home = _synced_home(tmp_path)
+    found = audit_local.check_skills(home / ".claude" / "skills",
+                                     external=(home / ".claude" / "skills" / "synced",))
+    assert not [m for _c, m in found if "synced" in m], found
+
+
+def test_control_the_same_dir_unmarked_is_audited(tmp_path):
+    home = _synced_home(tmp_path)
+    found = audit_local.check_skills(home / ".claude" / "skills")
+    assert any(c == "tests-missing" and "synced" in m for c, m in found), found
+
+
+def test_a_synced_copy_of_a_shipped_script_is_not_a_duplicate_finding(tmp_path):
+    plug = _plugin_with(tmp_path, hooks=[])
+    shipped = plug / "skills" / "markitdown"
+    shipped.mkdir(parents=True)
+    (shipped / "batch_convert.py").write_text("print('x')\n", encoding="utf-8")
+    home = _synced_home(tmp_path)
+    found = audit_local.check_personal(home, shipped_root=plug)
+    assert not [m for c, m in found if c == "duplicate-of-shipped"], found
+
+
+def test_check_reports_the_sync_dir_as_externally_owned(tmp_path, monkeypatch, capsys):
+    home = _synced_home(tmp_path)
+    monkeypatch.setenv("HOME", str(home))
+    monkeypatch.setenv("USERPROFILE", str(home))
+    rc = audit_local.main(["check", "--home", str(home), "--json"])
+    env = json.loads(capsys.readouterr().out)
+    reasons = {s["path"]: s["reason"] for s in env["skipped"]}
+    synced = str(home / ".claude" / "skills" / "synced")
+    assert synced in reasons and "claude.ai" in reasons[synced], reasons
+    assert rc == 0, env
+
+
+def test_control_a_personal_non_synced_copy_is_still_a_duplicate_finding(tmp_path):
+    plug = _plugin_with(tmp_path, hooks=[])
+    shipped = plug / "skills" / "markitdown"
+    shipped.mkdir(parents=True)
+    (shipped / "batch_convert.py").write_text("print('x')\n", encoding="utf-8")
+    home = tmp_path / "home"
+    mine = home / ".claude" / "skills" / "markitdown"
+    mine.mkdir(parents=True)
+    (mine / "batch_convert.py").write_text("print('x')\n", encoding="utf-8")
+    found = audit_local.check_personal(home, shipped_root=plug)
+    assert [m for c, m in found if c == "duplicate-of-shipped"], found

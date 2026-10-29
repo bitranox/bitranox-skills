@@ -139,6 +139,15 @@ retry the edit. After a hand edit or any other call of the reconfigure, do it yo
 (`host <name> 127.0.0.1`) and from another host, with a timeout. Reach the firewall by IP for
 this: once unbound is down, its own name does not resolve either.
 
+**A `php -f` script that calls `filter_configure_sync()` itself can die after `write_config()`.**
+Observed on pfSense 2.8.1: the call fatal-errors on an undefined `filter_generate_dummynet_rules()`
+(`filter.inc` line 380) unless the script also includes `shaper.inc`, which the GUI loads and a
+bare script does not. By then `config.xml` already holds the change while pf and unbound still run
+the old rules, and pfSense mails a PHP crash report. Do not reload from inside the script: after
+`write_config()`, run `/etc/rc.filter_configure_sync` and `pfSsh.php playback svc restart unbound`
+as separate commands, then read the live state back (`rules`, `rules --nat`,
+`/var/unbound/host_entries.conf`) rather than trusting the script's exit.
+
 **Tailscale's Accept DNS has to be turned off twice.** With it on, `tailscaled` points
 `/etc/resolv.conf` at `100.100.100.100`, so the box stops resolving public names while LAN clients,
 which query unbound directly, notice nothing. Set `installedpackages/tailscale/config/0/acceptdns`

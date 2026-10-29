@@ -71,6 +71,10 @@ Subagent (general-purpose):
     - You feel uncertain about whether your approach is correct
     - The task involves restructuring existing code in ways the plan didn't anticipate
     - You've been reading file after file trying to understand the system without progress
+    - A finding (or the task) can be fixed two ways, and one of them changes what a RELEASED
+      version visibly does for its users (an exit code, a new refusal, an output shape) while
+      the other only corrects docs or wording: report NEEDS_CONTEXT naming both remedies, and
+      do not pick. Which behaviour ships is the owner's decision, not yours.
 
     **How to escalate:** Report back with status BLOCKED or NEEDS_CONTEXT. Describe
     specifically what you're stuck on, what you've tried, and what kind of help you need.
@@ -83,8 +87,8 @@ Subagent (general-purpose):
     the test first, run the mutation through compuse-toolbox's mutation_arm
     (`"$CLAUDE_PLUGIN_ROOT/skills/compuse-toolbox/scripts/mutation_arm.py"`,
     launched with the project's own Python; it copies the file before the edit and restores it
-    in a `finally`), or copy the file into a directory you created with
-    `mktemp -d` for this run. Never restore from a `.orig` or any copy you did
+    in a `finally`) rather than a mutation runner of your own, or copy the file into a
+    directory you created with `mktemp -d` for this run. Never restore from a `.orig` or any copy you did
     not make in this run: subagents dispatched one after another share the
     session's scratchpad, so a copy with the right name can be an earlier
     agent's stale file, and a `cmp` against it proves only that you copied it

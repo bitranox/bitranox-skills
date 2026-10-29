@@ -47,11 +47,11 @@ const TOOLS = [
       "Capture or update one curated bitranox memory fact (the memory engine's add). `level` is the directory whose subtree the fact concerns (default: the session cwd); an update must target the level that owns the fact, or it is refused as SlugCollision. The hook is trigger-first ('When <situation>, <directive>'), at most 500 chars; warnings come back in the result.",
     inputSchema: {
       type: "object",
-      required: ["title", "hook", "body"],
+      required: ["title", "hook"],
       properties: {
         title: str("short title"),
         hook: str("one line, trigger-first"),
-        body: str("the fact body (multi-line allowed)"),
+        body: str("the fact body (multi-line allowed); omit it on an update to keep the stored body, a new fact needs one"),
         level: str("directory to capture at; default the session cwd"),
         type: { type: "string", enum: ["user", "feedback", "project", "reference"] },
         slug: str("target an existing fact explicitly"),

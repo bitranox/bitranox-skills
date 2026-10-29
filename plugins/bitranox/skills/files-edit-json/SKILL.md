@@ -1,6 +1,6 @@
 ---
 name: files-edit-json
-description: Use when creating, generating, editing, or validating a JSON file - package.json, tsconfig, plugin.json, VS Code settings, API fixtures, config - especially when modifying an existing file or producing one programmatically. Use instead of hand-typing JSON or editing it with sed/regex.
+description: Use when creating, generating, editing, or validating a JSON file - package.json, tsconfig, plugin.json, VS Code settings, API fixtures, config, a Jupyter notebook (.ipynb) - especially when modifying an existing file or producing one programmatically. Use instead of hand-typing JSON or editing it with sed/regex.
 ---
 
 # Edit JSON with a Python library, never by hand
@@ -44,6 +44,34 @@ assert json.loads(path.read_text(encoding="utf-8"))["version"] == "1.5.0"
 
 For a quick syntax check of any JSON file without editing:
 `python3 -c "import json,sys; json.load(open(sys.argv[1])); print('ok')" file.json`
+
+## Jupyter notebooks (.ipynb) are JSON: edit them without nbformat
+
+`nbformat.write` normalises the whole notebook. A cell whose `source` the file stores as one string
+comes back as a list of lines, so a change to one cell rewrites every cell and the diff is the whole
+notebook (measured on nbformat 5.11.1). Edit the JSON instead, and first prove that a plain dump
+reproduces the file byte for byte - notebooks differ in indent, key order and trailing newline, so
+find the arguments that match and refuse to write when none do:
+
+```python
+import json
+from pathlib import Path
+
+path = Path("notebooks/Quickstart.ipynb")
+src = path.read_text(encoding="utf-8")
+nb = json.loads(src)
+
+def dump(obj):   # the arguments that reproduce THIS file; adjust until the assert holds
+    return json.dumps(obj, indent=1, ensure_ascii=False)   # + "\n" and sort_keys=True for some files
+
+assert dump(nb) == src, "a plain dump does not reproduce this notebook - do not write it back"
+
+cell = next(c for c in nb["cells"] if c["id"] == "a1")   # select the cell by id, not by position
+cell["source"] = cell["source"].replace("old_call()", "new_call()")   # str or list: keep its type
+path.write_text(dump(nb), encoding="utf-8")
+```
+
+Then read the diff: it must show only the cell you changed.
 
 ## Common mistakes
 

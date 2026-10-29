@@ -32,6 +32,16 @@ For the modern Python pick behind each, see `bitranox:coding-python-use-modern-l
   wait and on the whole operation - an unbounded retry with no timeout is a hang, not resilience.
   Python: `tenacity` (`@retry(stop=stop_after_attempt(n), wait=wait_exponential_jitter())`); set an
   explicit client timeout (`httpx2.Client(timeout=...)`) and `asyncio.wait_for(coro, timeout=)`.
+- **A strict status read stays strict for a DECISION, not inside a bounded WAIT.** Making a read
+  strict (an unparseable or failed answer now raises instead of being read as a negative) is right
+  where one answer decides what to do. But inside a loop that polls until a state is reached (wait
+  for a VM to stop, a service to come up, a job to finish), a failed read means "not there yet":
+  the loop must keep polling through it to its deadline, and on timeout name the LAST failure in
+  its error. When you make a read strict, grep every caller and check each wait loop, or the
+  refactor turns one transient failure during a stop or start into an aborted run. Pin it with two
+  tests driven by a fake reader: one transient failure mid-wait (the wait must still succeed) and a
+  reader that never recovers (it must time out naming the last error). Both must FAIL on a
+  fail-fast loop, so run them against one before trusting them.
 - **Validate a user-supplied socket timeout or deadline against a cap of 2147483 s, not
   `threading.TIMEOUT_MAX`.** Windows holds a socket timeout as `2**31 - 1` ms, which is
   2147483.647 s; use the whole-second 2147483 as the cap, so the allowed range is one integer a
@@ -148,13 +158,14 @@ these two first.
 
 ## Common mistakes
 
-| Mistake                                         | Do instead                                                                  |
-|-------------------------------------------------|-----------------------------------------------------------------------------|
-| Assuming a resource is always up / stable       | Treat every external call as fallible; health-check, retry, have a fallback |
-| Unbounded retries with no timeout               | Cap attempts AND bound every wait + the whole op with a timeout             |
-| Retrying a deterministic error (4xx, bad input) | Retry only transient failures; fail fast on permanent ones                  |
-| Fixed-interval retry from many clients          | Exponential backoff WITH jitter, to avoid a thundering herd                 |
-| Trusting a cached endpoint / host list          | Rediscover and re-validate each run                                         |
-| Hammering a dependency that keeps failing       | Circuit breaker: fail fast while OPEN, probe on HALF-OPEN                   |
-| Silent degradation (partial result looks whole) | Partial result + explicit warning + non-zero exit                           |
-| No headroom / concurrency / size checks         | Bound concurrency, memory, payload; check disk/CPU before a heavy step      |
+| Mistake                                         | Do instead                                                                    |
+|-------------------------------------------------|-------------------------------------------------------------------------------|
+| Assuming a resource is always up / stable       | Treat every external call as fallible; health-check, retry, have a fallback   |
+| Unbounded retries with no timeout               | Cap attempts AND bound every wait + the whole op with a timeout               |
+| Retrying a deterministic error (4xx, bad input) | Retry only transient failures; fail fast on permanent ones                    |
+| A strict status read that aborts a wait loop    | Strict for a decision; inside a bounded wait, poll on and name the last error |
+| Fixed-interval retry from many clients          | Exponential backoff WITH jitter, to avoid a thundering herd                   |
+| Trusting a cached endpoint / host list          | Rediscover and re-validate each run                                           |
+| Hammering a dependency that keeps failing       | Circuit breaker: fail fast while OPEN, probe on HALF-OPEN                     |
+| Silent degradation (partial result looks whole) | Partial result + explicit warning + non-zero exit                             |
+| No headroom / concurrency / size checks         | Bound concurrency, memory, payload; check disk/CPU before a heavy step        |

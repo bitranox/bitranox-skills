@@ -177,6 +177,25 @@ npm test / cargo test / pytest / go test ./...
 
 **If tests pass:** Report ready.
 
+**A new worktree does not have the main checkout's GITIGNORED files.** `git worktree add` checks
+out tracked files only, so a gitignored file the tests read in the main checkout - a private token
+or deny list, a `.env`, a local fixture - is simply absent there. A test written to SKIP when its
+input is missing then skips on every run in the worktree while the suite prints green, and a check
+it guards (a privacy scan, a secrets gate) protects nothing. Before trusting the baseline, list the
+gitignored files the gate reads (`git -C <main-checkout> status --ignored --short` shows them),
+wire each one in (the environment variable the test honours, or a copy that stays gitignored in
+the worktree), and prove it with one run that shows those tests PASSING, not skipped:
+`pytest -rs` lists every skip with its reason, and a skip naming a missing file means the input is
+still not there.
+
+**A worktree under your home directory can fail tests that assume the checkout is not there.** A
+test that refuses paths under `$HOME` (a forbidden-roots check), or that resolves a sibling
+checkout next to the repository, fails in a `~/wt-<topic>` worktree and passes in the main
+checkout, which reads as a broken repository. For a worktree that will run the project's suite,
+prefer a base outside `$HOME` (a `mktemp -d` directory) or the project-local layout; if a test
+fails only in the worktree, re-run it from a worktree elsewhere before calling the repository
+broken.
+
 **A worktree nested in the main checkout inherits the tool config ABOVE it.** A project-local
 worktree (`.worktrees/<name>`, `.claude/worktrees/<name>`) sits inside the main checkout, so a
 tool that searches upward for its config can find the main checkout's file before, or instead
@@ -214,6 +233,7 @@ only reads - it never writes the index or any ref:
 uv run scripts/landed.py .claude/worktrees/my-feature      # a worktree: its files AND its commits
 uv run scripts/landed.py my-feature --into main             # a branch on its own
 uv run scripts/landed.py my-feature --json                  # {ok, command, data, skipped}
+uv run scripts/landed.py x3 --also-into backup/integration  # x3 was rewritten by later branches
 ```
 
 - **A worktree's changed, deleted and untracked files** are hashed as git would store them and
@@ -234,6 +254,28 @@ uv run scripts/landed.py my-feature --json                  # {ok, command, data
 
 Only a 0 makes `--discard-uncommitted` safe; a 2 is not a 0. On a 1, save what it names first -
 commit it on the branch or copy it out of the checkout - and re-run until it exits 0.
+
+**A 1 for a branch whose lines a LATER branch rewrote.** In a fix-round sequence (`x1`, `x2`, ...
+each building on the last), only the final state reaches the target, so `x1`'s added lines are in
+no file there and the line check reports `NOT LANDED` although the work did land. The same happens
+to churn superseded by newer values (a version bump overwritten by the next one). Settle it in this
+order, and read content only for commits that fail all three:
+
+1. Is the branch tip contained in a kept integration or backup ref that you know landed? Pass that
+   ref with `--also-into <ref>` (repeatable): the commits then count as landed and the output names
+   the ref that decided. It is taken on your word, so check the ref itself first. It never covers a
+   worktree's uncommitted files, which are still compared with the target.
+2. `git cherry -v <that-ref> <branch>`: a `-` line is a patch-equivalent commit.
+3. For each commit still unmatched, a commit with the same subject on that ref
+   (`git log --format=%s <ref> | grep -Fx -- "<subject>"`).
+
+**`git branch -d` refuses a merged branch when local `master` lags.** `-d` judges "fully merged"
+against the branch's upstream, or against HEAD when it has none, never against `origin/master`. In
+a repository whose worktree branches are pushed as `<branch>:master` while the local `master` is
+not updated, `-d` reports `error: the branch '<branch>' is not fully merged` for a branch that is
+on origin. Measured: after `git push origin topic:master`, `git branch -d topic` exited 1 while
+`git merge-base --is-ancestor topic origin/master` exited 0. Fetch, check that exit 0 (or run
+`landed.py`), then delete with `-D`.
 
 ## Step 5: Finishing - Reclaim the Per-Topic Build Cache (wtclean)
 
@@ -365,6 +407,7 @@ warnings go to stderr.
 | No package.json/Cargo.toml                                         | Skip dependency install                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                          |
 | Returning to an OLD worktree                                       | `git status --porcelain` FIRST - a long-lived worktree can hold an abandoned prior op's dirty state; `git stash push -u` it. Never `commit -a` over it.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                          |
 | Sharing a build cache dir                                          | Give each worktree its OWN `CARGO_TARGET_DIR` (or equivalent). One shared incremental cache across trees with different sources serializes builds on the target lock, and makes the compiler link the OTHER worktree's crate and emit phantom errors that name real symbols - so it reads as a defect in the code in front of you and sends you editing correct code. THE TELL: grep your own worktree for the name the compiler SUGGESTS; zero hits means you are reading a sibling's build. (Measured: nine errors of the form `no method named X found, help: there is a method X_ns with a similar name`, where the suggested name existed in no file of the tree being built.) Use a compiler cache (sccache) for cross-tree reuse instead. |
+| Moving a worktree to another filesystem                            | `git worktree move` renames the directory (`rename(2)`), which fails across filesystems with `Invalid cross-device link` (exit 128). Commit (or copy out) the work, `git worktree remove <old>`, then `git worktree add <new-path> <branch>`                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                     |
 | Worktree deleted, disk still full                                  | Its per-topic build cache is still there - `git worktree remove` never touches it. `uv run scripts/wtclean.py <topic> [--apply]` (Step 5)                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                        |
 | About to discard a dirty worktree or `branch -D` a squashed branch | `uv run scripts/landed.py <worktree-or-branch>` FIRST; only exit 0 (landed) makes the discard safe (Step 4)                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                      |
 

@@ -140,6 +140,37 @@ grep -cE ':[[:space:]]+~[[:space:]]*(#.*)?$' path/to/file.yml                  #
   passes - so your edit's commit shows only your lines. Where normalising someone else's file is
   not acceptable, say so and ask; never let the rewritten null lines ride inside your change.
 
+### When no setting keeps a line: edit that line, then compare the parse
+
+Some layout no ruamel setting reproduces, so the unedited round trip keeps failing whatever you
+pin. The common one is inner spaces in a flow sequence: `branches: [ main, master ]` is dumped as
+`[main, master]` (ruamel.yaml 0.19.1 has no padding option for flow sequences). A scalar the file
+itself wraps is another. Do not normalise the file to get past the assert. Let ruamel FIND the line,
+change only the value on it, and prove with a parser that nothing else moved:
+
+```python
+import re
+import yaml as pyyaml   # safe_load for the comparison
+
+src = path.read_text(encoding="utf-8")
+job = YAML().load(src)["jobs"]["test"]
+row = job.lc.value("timeout-minutes")[0]            # 0-based line of that value
+lines = src.splitlines(keepends=True)
+lines[row], n = re.subn(r"(timeout-minutes:\s*)\d+", r"\g<1>30", lines[row])
+assert n == 1, lines[row]                           # the line holds exactly the value you meant
+new = "".join(lines)
+
+expected = pyyaml.safe_load(src)
+expected["jobs"]["test"]["timeout-minutes"] = 30    # the ONLY intended change
+assert pyyaml.safe_load(new) == expected
+path.write_text(new, encoding="utf-8")
+```
+
+`lc.value(key)` gives the value's (line, column) and `lc.key(key)` the key's, both 0-based; for a
+list item use `seq.lc.item(i)`. This edits one scalar on one line; a structural change (a new key,
+a new list item) still goes through the load-edit-dump pattern, and if that round trip reflows the
+file, say so and ask before committing the reflow.
+
 ## Common mistakes
 
 | Mistake                                              | Do instead                                                                      |

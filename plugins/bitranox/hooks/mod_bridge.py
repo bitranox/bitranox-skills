@@ -2,7 +2,9 @@
 
 hooks/mods/register.ts registers the model-callable tools and hands each call here, so every rule
 those tools obey lives in tested Python and the TypeScript only relays. Exit 0 on success, 1 when
-the request was refused (the envelope names the kind), 2 when the bridge could not run it at all.
+the request was refused (the envelope names the kind), 2 when the bridge could not run it at all -
+including an OSError (a permission, a missing file), which is the environment failing, not a
+judgement on the request.
 Output is ASCII-escaped JSON, so no console code page can mangle it.
 """
 import json
@@ -32,7 +34,7 @@ class BadRequest(ValueError):
 
 
 REFUSALS = (ow.BacklogError, BadInput, ME.SlugCollision, ME.HookTooLong, ME.EmptyBody,
-            ME.PinnedEntry, ME.InvalidSlug, ME.InvalidSkill, ME.ExcludedLevel, OSError)
+            ME.PinnedEntry, ME.InvalidSlug, ME.InvalidSkill, ME.ExcludedLevel)
 
 
 def _backlog_list(inp, cwd):
@@ -50,6 +52,15 @@ def _backlog_add(inp, cwd):
 
 def _backlog_close(inp, cwd):
     return ow.close_item(ow.backlog_path(cwd), inp.get("rank"), inp.get("reason"))
+
+
+def _optional_text(inp, name):
+    # memory_add may omit the body on an update: the engine keeps the stored one and refuses a
+    # body-less create itself (EmptyBody), so the bridge only checks the type.
+    value = inp.get(name)
+    if value is not None and not isinstance(value, str):
+        raise BadInput("%s must be a string" % name)
+    return value or ""
 
 
 def _text(inp, name):
@@ -76,7 +87,7 @@ def _memory_add(inp, cwd):
     if type_ not in MEMORY_TYPES:
         raise BadInput("type must be one of user, feedback, project, reference, got %r" % (type_,))
     slug, created, advice = ME.add_with_advice(
-        str(level), title=_text(inp, "title"), hook=_text(inp, "hook"), body=_text(inp, "body"),
+        str(level), title=_text(inp, "title"), hook=_text(inp, "hook"), body=_optional_text(inp, "body"),
         type_=type_, slug=inp.get("slug"), skill=inp.get("skill"))
     return {"slug": slug, "level": str(level.resolve()),
             "action": "created" if created else "updated", "warnings": advice}

@@ -80,7 +80,20 @@ than deleting it.
    --body-file <f> [--hook-file <f>] [--type <kind>]` (read it first with `factedit.py show --body --slug
    <slug>`), never with a hand-rolled fold script. (b) A fold target named by two batches goes to
    ONE batch, or is folded sequentially, each fold preceded by a fresh `show`, so no update is lost.
-2. **Back up + manifest** the CHAIN's levels only (per the core).
+   (c) A PINNED target is never written: `apply` refuses it without `--allow-pinned`, and that
+   flag is the human's call, not a subagent's. Run the same `apply` with `--dry-run` instead and
+   hand back the delta it prints, so the user decides it in the report.
+   `show --body --slug <slug> > f` writes the body alone (its header goes to stderr), so edit `f`
+   and pass it straight back as `--body-file`.
+   A long owed stretch: read it with `dream_state.py session-review --prose` (text turns and
+   failed tool results only, one part per 64 MB of transcript) rather than paging raw JSONL.
+   **A capture that wrote BELOW the chain** (an existing fact owned by a descendant level the
+   session edited - the Stop gate's ROUTING EVIDENCE names those dirs) widens steps 2 and 6 to
+   that level: take the backup with `--from <that descendant>` (its chain holds the cwd's chain),
+   pass it as the narrowest dir of `reconcile --check`, and name each such write in the report as
+   a capture carve-out write. Otherwise the manifest diff and the chain check never see the fold.
+2. **Back up + manifest** the CHAIN's levels only (per the core), widened to a descendant level
+   step 1 wrote at (see step 1).
 2b. **Read the toolbox inventory** - `uv run ~/.claude/skills/toolbox/tools/toolbox.py list`, the
    READ half of the toolbox pass (per the core); skip only if that path does not exist. It runs
    HERE, before steps 3-5, because those are the passes whose scans a shipped tool has often

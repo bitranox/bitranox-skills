@@ -109,6 +109,21 @@ $ uv tool install --exclude-newer "14 days" ruff@latest
   `uvx --exclude-newer "14 days" ruff@latest --version`, and compare it with the newest release on
   PyPI and with the newest one older than the cutoff; for an installed tool, also read
   `exclude-newer-span` in `<uv tool dir>/<tool>/uv-receipt.toml`. Measured on uv 0.13.0.
+- The INSTALLED package's own `[tool.uv]` settings do not apply. `uv tool install --from
+  git+<repo>@<tag>` (and `--from <local path>`) ignores the `exclude-newer` the
+  package's `pyproject.toml` declares under `[tool.uv]`: its dependencies resolve to the
+  newest releases and the receipt records no cutoff. Pass the cooldown and any per-package
+  exemptions on the install line, or set them in the user `uv.toml` or `UV_EXCLUDE_NEWER`.
+- The install cutoff also governs `build-system.requires` when uv builds the package. A cutoff
+  LONGER than the one the project develops under fails as soon as the project raised a floor
+  inside the gap, a build-backend floor included (`hatchling>=X` where X is younger than the
+  cutoff: "No solution found when resolving: `hatchling>=X`", with a hint naming
+  `exclude-newer-package`). Keep the project's own cooldown at least as long as the one its
+  installs use, or exempt that package on the install line.
+- Prove an install line with a scratch install BEFORE the deploy: the same flags, a throwaway
+  `UV_TOOL_DIR` and `UV_TOOL_BIN_DIR`, and `--no-cache`. A cached build of the same commit skips
+  resolving `build-system.requires`, so without `--no-cache` the floor gap above stays hidden until
+  a host with a cold cache installs it. Measured on uv 0.13.0.
 
 ### Requesting Extras
 

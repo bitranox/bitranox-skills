@@ -42,7 +42,12 @@ rewritten, because rewriting it would drop every earlier verdict) and
 Write or Edit on a pointer block or a body is denied by the store-edit guard; `show` reports the
 stored `type`, an amend PRESERVES it, and `--type` is the one deliberate way to re-classify, a
 PINNED fact included - `amend-pinned` carries `--type` and is the only route to a pinned fact's
-kind, since `add` refuses a pinned entry outright). The PreToolUse nudge names `statusrot.py` and
+kind, since `add` refuses a pinned entry outright; `apply` writes a pinned fact only with
+`--allow-pinned`, a human's call, and `--dry-run` stages and prints the change without it.
+`show --body` prints the stored body ALONE on stdout, its header on stderr, so `show --body > f`,
+an edit of `f`, then `apply --body-file f` stores exactly the edited text with its `description:`
+re-synced to the hook; a body file carrying `show`'s header is refused. A slug the upward chain
+walk misses is reported with the level that owns it, as the exact `--level <dir>` retry). The PreToolUse nudge names `statusrot.py` and
 `factedit.py` on the chores they answer, so they surface without this file being open. Every one
 of these tools finds the store the
 way the engine does (the topmost dir holding a `CLAUDE.md` AND a `.claude-memory/`), so a leftover
@@ -172,11 +177,14 @@ the success line, abort-and-show on a miss).
          --out ~/.claude/self-improve-audit/backups/<key>-<ts>
 
    It copies the anchor's `.claude-memory/` AND each in-scope `CLAUDE.local.md`, and records the
-   ORDER-INDEPENDENT manifest of (level, slug, title, pin) tuples that step 8 re-derives. Do not
+   ORDER-INDEPENDENT manifest of (level, slug, title, pin, hook digest, body digest) tuples that
+   step 8 re-derives. Do not
    hand-roll the walk: a gitignore-aware `grep -r` SKIPS the pointer files, and an exact-match
    prune of `.venv` misses `.venv-win` and `venv-<user>`, so vendored copies read as real levels.
    An empty scope is a REFUSAL, because a manifest of nothing verifies clean against anything.
-   So is an `--out` inside the store, or an existing dir that is not an earlier backup.
+   So is an `--out` anywhere inside the knowledge tree (its copied `CLAUDE.local.md` files would
+   read as real levels to the engine, recall and `--check-tree`), or an existing dir that is not
+   an earlier backup.
    Then commit the store's git repo (Durability pass) so the pre-dream state is one `git diff`
    away.
 
@@ -374,9 +382,14 @@ the success line, abort-and-show on a miss).
    its origin and siblings) and normalize - re-run `dedup_scan.py` from step 4, whose control line
    applies again. Then re-derive the manifest and diff against step 2 with
    `store_manifest.py verify --out <the same backup dir>`: exit 0 is identical, exit 1 NAMES what
-   was added, removed, changed or moved. Only `level` may differ (reported as `moved`), plus
-   explicitly-decided merges/prunes/rewords; anything else is a loss to explain before finishing.
-   A clean verify says nothing about a fact's KIND: the manifest holds no type, and no other
+   was added, removed, changed or moved; a change names its fields (`title`, `pin`, `hook`,
+   `body`), so a hook or body rewritten without a decision shows up here. Only `level` may differ
+   (reported as `moved`), plus explicitly-decided merges/prunes/rewords; anything else is a loss
+   to explain before finishing. A backup taken by an older release has no digests: verify then
+   prints `hooks and bodies not compared` (`content_compared: false` under `--json`) and checks
+   level, slug, title and pin only.
+   A clean verify says nothing about a fact's KIND: a body digest says THAT a body changed, never
+   whether its `type:` did, and no other
    shipped check compares a body's `metadata: type:` before and after a write (the engine prints
    its normal success line either way). For every fact whose body or hook this dream rewrote,
    read the kind back with `factedit.py show --slug <slug> --level <its level>` (its `type` line)
@@ -480,11 +493,11 @@ tests/README-acceptance.md); the bar is all-hard + >= 5/6 judgment on two consec
       a scaffold-noise level set aside in step 0b is excepted and listed as set aside, never as a
       proposed removal (the next session start recreates it).
 - [ ] Capture ran BEFORE consolidation (or a verified "nothing durable" statement).
-- [ ] Backup taken + the (level, slug, title, pin) manifest recorded pre-dream.
+- [ ] Backup taken (outside the knowledge tree) + the manifest recorded pre-dream.
 - [ ] Placement report: applied moves (with direction; pinned entries re-level like any other),
       kept UNSUREs.
 - [ ] No pinned entry's content rewritten this run; any pinned fact believed wrong is reported, not
-      amended via `add` or `amend-pinned`.
+      amended via `add`, `amend-pinned` or `factedit.py apply --allow-pinned`.
 - [ ] Voice/firing residue swept (or "0 offenders" verified via the lint).
 - [ ] Post-dream manifest diff clean (only `level` changed, plus explicitly-decided merges/prunes).
 - [ ] `reconcile ... --check` printed `TOTAL problems: 0`.
