@@ -1,22 +1,11 @@
-# Handover - 2026-10-29 15:10, [23] batch 9 (tree top) release staged
+# Handover - 2026-10-29 15:40, [23] batch 9 (tree top) complete
 
 ## In flight
 
-- [23] batch 9: 13 tree-top rows folded into 7 skills (6 changed; process-test-design already
-  covered its row). GREEN 13/13 on haiku and opus, opus review fixed, round-2 quote-back 5/5 on
-  both tiers (quotecheck 15 OK, planted negative MISMATCH). Checklists written
-  (`.skillwriter/checklist-20261029-fold23-batch9.md` in each changed skill and both twins).
-  Release staged as 10.4.1 with twins bmk (devops-bmk) and btx_lib_mail (python-send-mail),
-  both in sync per `repo-gate.py --mirrors`.
-- Version collision: the `lib_layered_config` peer session has 73a7d4db (10.4.1) committed on
-  the main checkout's local master, unpushed; it was messaged. Whoever pushes second rebases and
-  re-bumps (assert the old value). Its twin is why `--mirrors` shows coding-python-layered-config
-  DRIFT; not this work.
-- After the push: bmk twin bump 3.32.2 -> 3.32.3 (plugin.json + SKILL.md + checklist);
-  btx_lib_mail 4.6.2 -> 4.6.3 via `make bump-patch`, CHANGELOG, `make test`, commit only own
-  paths (a peer's uncommitted handover.md sits there); push both; CI on all three; user installs;
-  quote-check the installed cache; archive 9 facts and cut 4 hooks (`.plan/fold-23/batch9/
-  dispositions.json`; store backup OUTSIDE the tree); end the skill receipt.
+- Nothing. [23] batch 9 shipped as 10.4.1 (marketplace 237b6aab, bmk 3.32.3 a2195a8, btx_lib_mail
+  4.6.3 143795c), CI green on all three, installed and quote-checked; store 1a03525 archived 9
+  facts, cut 4 hooks and re-pointed 6 citing facts.
+- The `lib_layered_config` peer rebased and pushed its change as 10.4.2 (33da9706).
 
 ## Decided
 
@@ -33,8 +22,8 @@
 
 ## Next action
 
-Read the lib_layered_config peer's answer, settle the version, commit the marketplace worktree
-(own paths, `-F` message), commit bmk, push the marketplace, push bmk, release btx_lib_mail.
+[23]: propose the next group to the user (OPEN-WORK.md line for [23], "after batch 9": 20
+soundtouch, 15 provmm-umbrella, 10 projects/public and below), then run the batch 9 flow on it.
 
 ## How to verify
 
