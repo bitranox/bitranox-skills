@@ -99,6 +99,24 @@ CI, the PyPI publish workflow, and CodeQL come from `.github/`, managed by the
 Trusted Publisher on PyPI (owner, repo, workflow `default_release_public.yml`,
 environment `pypi`) or set the `PYPI_API_TOKEN` secret.
 
+## What the wheel ships
+
+`[tool.hatch.build.targets.wheel]` sets `packages = ["src/<pkg>"]`, and that ships the WHOLE
+package tree: every file under `src/<pkg>/` that the root `.gitignore` does not exclude lands in
+the wheel, data files included. The wheel's `include` list does not decide it: adding a data file there is redundant, and
+removing one from it does not drop the file from the wheel. To keep a file under `src/<pkg>/` out
+of the wheel, add a wheel-scoped exclude (the sdist still ships it through its own `include`):
+
+```toml
+[tool.hatch.build.targets.wheel]
+packages = ["src/<pkg>"]
+include = ["src/<pkg>/py.typed"]
+exclude = ["/src/<pkg>/logo.svg"]
+```
+
+Verify by building and listing, never by reading the config:
+`uv build --wheel --out-dir dist && python -m zipfile -l dist/*.whl`.
+
 ## If the new repo also ships a skill, it is a marketplace
 
 A repo that ships a Claude Code skill (a `skills/<name>/SKILL.md` plus

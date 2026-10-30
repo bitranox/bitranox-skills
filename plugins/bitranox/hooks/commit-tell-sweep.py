@@ -28,6 +28,7 @@ never wedges a turn.
 import collections
 import json
 import os
+import posixpath
 import re
 import sys
 
@@ -417,7 +418,9 @@ def provably_missing(value, windows=None):
         windows = os.name == "nt"
     if "$" in value:
         return False
-    checkable = _WINDOWS_DRIVE_PATH.match(value) if windows else os.path.isabs(value)
+    # posixpath, not os.path: from Python 3.13 os.path.isabs on Windows rejects a drive-less
+    # root, so the POSIX arm asked of a Windows interpreter judged '/x' relative.
+    checkable = _WINDOWS_DRIVE_PATH.match(value) if windows else posixpath.isabs(value)
     return bool(checkable) and not os.path.exists(value)
 
 

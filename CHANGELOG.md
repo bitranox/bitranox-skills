@@ -30,6 +30,31 @@ a hole nobody has drawn a line under is one that gets rediscovered and half-fill
 two "versions with no entry" notes came to sit in this file disagreeing with it.
 
 
+## [10.7.1]
+
+### Fixed
+
+- `commit-tell-sweep` judges a rooted path with no drive letter (`/x/msg.txt`) by POSIX rules in
+  its POSIX arm on a Windows interpreter too: from Python 3.13 `os.path.isabs` there calls such a
+  path relative, so the arm never judged it missing.
+- Two review-watermark tests write their transcript fixtures as bytes. The marks are byte offsets,
+  and a text-mode write on Windows turned every `\n` into `\r\n` and moved the file's end.
+
+### Docs
+
+- Six mirrored skills, in step with the same text in their tool repos:
+  - `devops-bmk`: release races, unreleased versions, skill-only pushes and pip-audit ignores.
+  - `ai-llm-jev-judge`: check what `run` sends without paying, against a loopback stub
+    (`JEV_JUDGE_BASE_URL` plus a dummy key).
+  - `coding-python-layered-config`: a profile replaces the base paths, `ProtectHome` in a systemd
+    unit, and writing a value into one layer.
+  - `coding-python-new-public-library`: what the wheel ships, and the wheel `exclude` that keeps a
+    file out of it while the sdist keeps it.
+  - `coding-python-send-mail`: the `--exclude-newer` cooldown in a release week, and
+    `exclude-newer-package` to pin the new version.
+  - `infra-proxmox-bindsnap`: `vzdump --mode snapshot` as the safety net on a build the checksum
+    guard refuses.
+
 ## [10.7.0]
 
 ### Added

@@ -308,6 +308,23 @@ in. The manifest install, `uv pip install --python .venv/bin/python --exact --up
 failed` line, never after a sync failure: it keeps releases newer than the lock pins, which is the
 drift the lock-first sync exists to prevent.
 
+**Before keeping a `[tool.pip-audit] ignore-vulns` entry, check that it still fires.** bmk's
+`pip_audit` stage audits this venv, the locked tree, and passes each listed id as
+`--ignore-vuln=<id>`; pip-audit then drops every finding whose id OR any of its aliases matches.
+An id that matches nothing any more (the package moved past the fix, or left the tree) silences
+nothing today and hides the next real finding under that id or alias. After a `make test` has
+synced the venv, audit it with bmk's own pip-audit and NO ignores, writing the report outside the
+repo (`push` commits every untracked file):
+
+```bash
+PIPAPI_PYTHON_LOCATION="$PWD/.venv/bin/python" "$(uv tool dir)/bmk/bin/pip-audit" \
+  --skip-editable -f json -o /tmp/audit.json
+```
+
+(on Windows `.venv\Scripts\python.exe` and `bmk\Scripts\pip-audit.exe`). Keep an entry only if it
+equals the `id` or one of the `aliases` of some `dependencies[].vulns[]` item in that report;
+delete the rest.
+
 `clean` does not delete the venv (that would throw away what bmk just built and force a full
 re-resolve); `make clean-all` removes every `.venv*` alongside the build artifacts when you do
 want them gone. bmk also keeps venvs out of git: it adds a single `.venv*` glob to `.gitignore`
@@ -367,6 +384,23 @@ forwarded (e.g. `make push fix login bug`). Most have short aliases.
 - `release` tags `v` + the version already in `pyproject.toml`, on HEAD, and refuses a dirty tree;
   it pushes the CHECKED-OUT branch (`[release] Pushing branch <branch> to <remote>`), then the
   tag, so a local release commit needs no separate push.
+- **When that branch push is rejected, nothing was tagged.** If someone pushed to the branch after
+  your last push, `release` prints `[release] Pushing branch <branch> to <remote>`, git's
+  `! [rejected] ... (fetch first)` (or `(non-fast-forward)` once you have fetched), then a
+  `CalledProcessError` traceback, and exits 1 (`make` reports 2). The tag is created only after
+  that push, so no tag exists locally or on the remote. Do not pull and re-run straight away:
+  that tags the new tip, a commit CI never verified. Decide which commit ships:
+  - **The commit you tested** (it is on the remote, now behind the new tip): tag it by hand the
+    way `release` does. The failed run already passed `release`'s own checks on it (version
+    shape, the skill-version refusal and the clean tree all run before the push):
+    `git tag -a v<version> -m "Release v<version>" <sha>`, `git push origin v<version>` (the tag
+    push is what starts the release workflow), then
+    `gh release create v<version> -t v<version> -n "Release v<version>" --verify-tag`.
+  - **The new tip, with the other session's work in it:** `git merge --ff-only origin/<branch>`,
+    wait until CI is green on that commit, then `make release` again.
+
+  If your release commit was never pushed (your branch and the remote have diverged), CI has run
+  on neither: integrate, push, wait for CI, then release.
 - **Release from a checkout on the default branch.** Run on a topic branch (a worktree is the usual
   case), `release` creates or updates THAT branch on the remote, a public one included, where it
   reads as real work; nothing in the output flags it. Fast-forwarding the default branch first does
@@ -379,9 +413,16 @@ forwarded (e.g. `make push fix login bug`). Most have short aliases.
   (`[release] HEAD is detached`). `release` never rewrites the Makefile (every other target updates
   it to the running bmk), so a bmk version published since the last `make` does not dirty the tree
   in the middle of a release.
-- When the `pyproject.toml` version is committed but not yet tagged
-  (`git tag --list "v<version>"` is empty), release it directly: running `bump` first moves past
-  it and that version is never published.
+- **Before a bump, check whether the current version was ever released**: `git ls-remote --tags
+  origin v<version>` (the remote, since `git tag --list` misses a tag pushed from another clone)
+  and `https://pypi.org/pypi/<pkg>/<version>/json` (a 404 means PyPI does not have it). A version
+  with neither is unreleased, even when the CHANGELOG already carries a dated heading for it from
+  the bump that set it. If nothing committed since needs a larger step than that version took,
+  release it directly: `bump` first moves past it and that version is never published. If it
+  does (a feature on top of a version that was a patch step), bump past it anyway. `bump` checks
+  no tag and leaves that older heading as it is (it only renames `[Unreleased]`), so add a line
+  under the old heading yourself saying the version was never tagged or published and that its
+  changes first ship in the new one; otherwise a reader looks for it on PyPI.
 - `release` counts only TRACKED changes as dirty (`git diff`, `git diff --cached`); an untracked
   file does not stop it. On `[release] Working tree not clean. Commit or stash changes first.`, do
   not commit an edit that is not part of this release to get past it: the tag lands on HEAD, so it
@@ -401,6 +442,16 @@ forwarded (e.g. `make push fix login bug`). Most have short aliases.
   name a floor bump in the commit message. Never carve them out as "not part of this change" or
   `git checkout` them away: the next `make` writes them again and leaves them for the next commit.
   Files your TEST SUITE rewrites are different: restore those (next point).
+- **When your push is rejected because someone else pushed bmk's churn first, regenerate yours;
+  do not merge it.** Both sides wrote the Makefile, the `pyproject.toml` floors and `uv.lock`
+  from a gate run, so a rebase conflicts in exactly those files and a hand merge of two lock
+  files is guesswork. Put those three files (and `.bmk-cooldown.mk`, when your commit changed it)
+  back to the state your commit started from
+  (`git checkout <base> -- Makefile pyproject.toml uv.lock`, where `<base>` is
+  `git merge-base HEAD origin/<branch>`, then `git commit --amend`), fetch and rebase onto
+  `origin/<branch>`, run `make test`, and amend what it regenerates into your commit. A
+  `pyproject.toml` edit of your own (a new dependency, a config key) is not churn: re-apply it
+  before the `make test`.
 - `push` commits AFTER its gate: `update_deps` (order 10), `build` and `test` (20), `clean` (30),
   then `commit` (40), which stages with `git add -A`. So the commit takes the tree as the gate LEFT
   it: every untracked, non-ignored file, a tracked fixture or snapshot a test rewrote, and another
@@ -518,6 +569,13 @@ forwarded (e.g. `make push fix login bug`). Most have short aliases.
   documented change rather than patching the symptom. Example: a library that starts wrapping a
   `PermissionError` in its own error type breaks an `except PermissionError`; catch the new type
   and walk `__cause__` where the original error matters.
+  The same dependency release usually breaks your LAST PUBLISHED version too: a `>=` floor has no
+  upper bound, so every fresh install of it resolves that release (a `~=`, `==1.*` or exact pin
+  would have kept it out). After adapting, run the published version as a new user gets it,
+  `uvx --isolated --refresh <pkg>@latest <a command that reaches the changed code>`, with no
+  `exclude-newer` in your own uv config (it would hide a release younger than its window). If
+  that fails, release the fix on its own as a patch at once, rather than letting it wait on the
+  local default branch behind unrelated work.
 - **Before rolling one change out over many bmk repos, dry-run one `make test` per repo** and read
   `git diff pyproject.toml` in each: every gate tests your change PLUS the floors it just raised,
   and one new major release of a shared dependency can block most of the fleet on its own. Land
@@ -587,9 +645,10 @@ An install re-fetches a skill only when `.claude-plugin/plugin.json` changes ver
 that edits `skills/` without moving that version ships the code and leaves every install on the old
 skill - no error, nothing to notice, and the skill then documents behaviour the tool no longer has.
 
-- `bump`, `push` and `release` raise `plugin.json` to the package version whenever it lags, and
-  never lower it. The plugin version can legitimately be AHEAD, because a skill ships more often
-  than the package it documents; writing the package version there unconditionally would move an
+- `bump` and `push` (and `commit`, which `push` runs) raise `plugin.json` to the package version
+  whenever it lags, and never lower it; `release` writes nothing and only checks (the refusal at
+  the end of this list). The plugin version can legitimately be AHEAD, because a skill ships more
+  often than the package it documents; writing the package version there unconditionally would move an
   install backward to a version it already had.
 - So after `make bump-*`, do not hand-edit `plugin.json`: the bump already wrote it whenever it
   lagged. The one hand edit is the `release` refusal at the end of this list. The bump writes
@@ -599,6 +658,15 @@ skill - no error, nothing to notice, and the skill then documents behaviour the 
   the versions agree, and commit every one of those files with the bump. Where a repo's own test
   pins `plugin.json` to the `pyproject.toml` version, a plugin-only bump cannot pass it: a
   skill-only change ships there as a package patch bump.
+- **Every push that changes `skills/` needs a `plugin.json` version the remote does not have yet,
+  release or not.** An install follows the marketplace's default branch, so it is the PUSH that
+  uses up a plugin version, not the release. A commit after `make release` that changes only
+  `skills/<name>/SKILL.md` and is pushed with `plugin.json` still at the released version reaches
+  no install until something moves that version again; "it rides the next release" leaves every
+  install on the old text until then. Raise `plugin.json` in that same commit, a patch step above
+  the version on the remote. Ahead of `pyproject.toml` is fine: the sync never lowers it, and a
+  later `release` passes because the version moved since the last tag. `push` cannot do this for
+  you (it only raises a LAGGING version) and the `release` refusal below never sees a plain push.
 - A **non-final** package version (`1.2.0rc1`) is NOT written into `plugin.json`. Ordering it is
   not the problem; that manifest is read by Claude Code's marketplace machinery and is only ever
   seen carrying a plain `X.Y.Z`. The final release that follows carries the skill.
@@ -926,13 +994,14 @@ gate to go red. A gate that has only ever passed has not been shown to gate.
 | `make test` fails on a `[dev]`-only import                                          | bmk runs pytest in this project's `.venv`, synced with the `[dev]` extra before every env-touching target. Re-run `make`; if it persists, check `BMK_NO_VENV_SYNC` (section 1).                                                                                    |
 | `make release` refuses: version is not canonical / carries a local segment          | Not a read failure - the version WAS read. bmk accepts any canonical PEP 440 version but refuses a spelling `packaging` would normalise (`v1.0.0`, `1.0.0-beta`) or a local segment (`1.2.3+local`); the message names the canonical form to write. See section 3. |
 | `make release` refuses: `Working tree not clean. Commit or stash changes first.`    | A tracked edit is pending. Never commit an unrelated one to get past it: set it aside, release, restore it (section 3).                                                                                                                                            |
+| `make release` fails at `Pushing branch` with `[rejected]` and a traceback          | Someone pushed after you; nothing was tagged. Do not pull and re-run: tag the CI-verified commit by hand, or fast-forward and wait for CI on the new tip (section 3).                                                                                              |
 | `make push` fails at `[deps] (exit code: 1)` with `(no output captured)`            | A dependency floor is behind a new PyPI release, not your edit. `bmk deps --update`, then push again (section 3).                                                                                                                                                  |
 | `make test` fails at `[pytest]` though every test passed, in a repo with no remote  | The pytest stage also uploads coverage when a `CODECOV_TOKEN` and `codecovcli` are found; with no `origin` there is no slug and the upload fails. Look for `[codecov] upload failed` before debugging code (section 6).                                            |
 | CI fails with `Because only <pkg><=<old> is available` after releasing the library  | The dependent's floor was raised to a release the index does not serve yet. The pin is correct: confirm PyPI lists the version, then re-run (section 3).                                                                                                           |
 | Right after a green publish, PyPI's `/json` or Simple index lacks the version       | Index lag, not a failed upload: poll both endpoints for a few minutes, served once both list it. Never delete or re-cut the version on this evidence (section 3).                                                                                                  |
 | PyPI publish fails `400 This filename was previously used`                          | That version is burned on PyPI for good; not an auth problem. Bump the patch, release again, record it in the CHANGELOG as not published, leave its tag and GitHub release (section 3).                                                                            |
 | `make test-all` fails dozens of tests per cell in a fixed-port or shared-DB suite   | The version cells run in parallel and collide, not a code defect: re-run with `BMK_TEST_ALL_WORKERS=1` before diagnosing; set `[tool.scripts.test-all] workers = 1` for good (section 1).                                                                          |
-| Tests break right after `make test` raised a dependency floor                       | A dependency change, not your edit: `git diff pyproject.toml`, read that dependency's CHANGELOG, adapt the caller to the documented change (section 3).                                                                                                            |
+| Tests break right after `make test` raised a dependency floor                       | A dependency change, not your edit: `git diff pyproject.toml`, read its CHANGELOG, adapt the caller; then check the published version with `uvx --isolated --refresh <pkg>@latest` (section 3).                                                                    |
 | `ModuleNotFoundError` inside bmk's own dependencies                                 | bmk's shared env, not your code; the next `make` repairs it (section 1).                                                                                                                                                                                           |
 | `make testintegration` fails: `[pytest_integration] (exit code: 5)`                 | pytest collected no test: an empty lane, or a filter hiding the tests (section 6).                                                                                                                                                                                 |
 | Private GitHub deps fail to resolve                                                 | `git config --global url."https://<TOKEN>@github.com/<ORG>/".insteadOf "https://github.com/<ORG>/"` before install.                                                                                                                                                |

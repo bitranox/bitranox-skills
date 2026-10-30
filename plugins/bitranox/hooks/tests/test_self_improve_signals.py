@@ -2203,9 +2203,12 @@ def test_the_premise_check_refusal_is_not_a_tool_signal():
 # cwd, the review watermark for the SAME transcript read 0 there, and the whole session came back
 # as unreviewed. The mark belongs to the transcript.
 
+# The marks are BYTE offsets, so each fixture is written as bytes: a text-mode write on Windows
+# turns every \n into \r\n and moves the end of the file past the mark under test.
+
 def test_a_project_that_never_marked_a_transcript_inherits_the_furthest_mark(home, tmp_path):
     tp = tmp_path / "t.jsonl"
-    tp.write_text("aaaa\nbbbb\n", encoding="utf-8")
+    tp.write_bytes(b"aaaa\nbbbb\n")
     S.set_watermark("/p/umbrella", str(tp), S.DREAM_REVIEWER, 5)
     S.set_watermark("/p/other", str(tp), S.DREAM_REVIEWER, 10)
     assert S.get_watermark("/p/umbrella/child", str(tp), S.DREAM_REVIEWER) == 10
@@ -2215,7 +2218,7 @@ def test_a_project_that_never_marked_a_transcript_inherits_the_furthest_mark(hom
 def test_a_project_s_own_mark_wins_over_another_project_s(home, tmp_path):
     # Its own mark is what it last wrote, and a write is checked by reading it back.
     tp = tmp_path / "t.jsonl"
-    tp.write_text("aaaa\nbbbb\n", encoding="utf-8")
+    tp.write_bytes(b"aaaa\nbbbb\n")
     S.set_watermark("/p/other", str(tp), S.DREAM_REVIEWER, 10)
     S.set_watermark("/p/x", str(tp), S.DREAM_REVIEWER, 5)
     assert S.get_watermark("/p/x", str(tp), S.DREAM_REVIEWER) == 5
@@ -2225,10 +2228,10 @@ def test_an_owed_nap_is_consumed_once_the_review_reaches_its_compaction_point(ho
     # The marker records where the transcript ended at the compaction, so even the CURRENT
     # session's obligation is discharged by a review past that point - from any cwd.
     tp = tmp_path / "live.jsonl"
-    tp.write_text("before-compaction\n", encoding="utf-8")
+    tp.write_bytes(b"before-compaction\n")
     S.mark_nap_owed("/p/umbrella/child", session_id="sid-current", transcript_path=str(tp))
-    with tp.open("a", encoding="utf-8") as fh:
-        fh.write("after-compaction\n")
+    with tp.open("ab") as fh:
+        fh.write(b"after-compaction\n")
     assert S.unsatisfiable_nap_owed("/p/umbrella/child", "sid-current") == ("", "")
     S.set_watermark("/p/umbrella", str(tp), S.DREAM_REVIEWER, len("before-compaction\n"))
     assert S.unsatisfiable_nap_owed("/p/umbrella/child", "sid-current") == (
