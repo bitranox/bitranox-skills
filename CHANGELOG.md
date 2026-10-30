@@ -30,6 +30,17 @@ a hole nobody has drawn a line under is one that gets rediscovered and half-fill
 two "versions with no entry" notes came to sit in this file disagreeing with it.
 
 
+## [10.9.4]
+
+### Fixed
+
+- `shell_text.git_verb_dir` (used by repo-gate, git-footgun-guard and git-commit-branch-guard to
+  find where a gated git command lands) now keeps a leading shell assignment for the whole
+  command, so `R=/repo; git -C "$R" add x && git -C "$R" commit` and a newline-separated script
+  resolve to `/repo` instead of falling back to the session repo. A name the rest of the command
+  could rebind (spelled as a word start, as in `read R`, `printf -v R`, a function body, a
+  backtick) is dropped, and so is every name once the command runs `source`, `.` or `eval`.
+
 ## [10.9.3]
 
 ### Changed

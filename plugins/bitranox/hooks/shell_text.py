@@ -673,6 +673,27 @@ def _expansions(raw, known):
     return usable
 
 
+#: A statement that runs text the command does not show: `source f`, `. f`, `eval "..."`.
+_REBINDS_UNSEEN = re.compile(r"(?:^|[;&|(\n{]|\b(?:then|do|else))\s*(?:source|eval|\.)\s")
+
+
+def _stable_names(known, rest):
+    """The names in `known` that `rest` (the command after the leading assignments) never starts a
+    word with.
+
+    Every way the shell can rebind a name starts a word with it - `NAME=`, `NAME+=`, `read NAME`,
+    `for NAME in`, `unset NAME`, `declare`/`local NAME`, `printf -v NAME` - so a name that appears
+    only as `$NAME`, `${NAME}` or inside another word (`-E`, `--format=%B`) keeps its leading value
+    for the whole command. A word that is not a rebinding (`echo R`) also drops it; that only costs
+    a fall back, never a wrong directory. A `source`, `.` or `eval` anywhere in `rest` drops every name: it can rebind one
+    without spelling it.
+    """
+    if _REBINDS_UNSEEN.search(rest):
+        return {}
+    return {name: value for name, value in known.items()
+            if not re.search(r"""(?:^|[\s;&|(`"']|(?<!\$)\{)%s(?![A-Za-z0-9_])""" % name, rest)}
+
+
 _LEADING_REFERENCE = re.compile(r"^\$(?:\{([A-Za-z_][A-Za-z0-9_]*)\}|([A-Za-z_][A-Za-z0-9_]*))(.*)$", re.DOTALL)
 
 
@@ -975,11 +996,12 @@ def git_verb_dir(command, cwd, verbs, tool_name=None):
     2026-10-19: read as unreadable, that commit was judged in the session's repository, which it was
     not touching, and blocked for it. The values come only from LEADING statements that do nothing
     but assign absolute literal paths, each followed by `;`, `&&` or a newline
-    (`_leading_assignments`), and they are used only in the ONE statement right after them, through
-    a reference the shell expands to exactly that value (`_expansions`); then they are forgotten.
-    Anything wider - control flow, subshells, pipelines, `read`, `declare`, `+=`, a later statement
-    that might reassign the name - is a shell this reader does not model, and a wrong directory is
-    worse than None, which falls back. Bash only: PowerShell assigns with `$W = ...`.
+    (`_leading_assignments`), and each statement after them uses one only through a reference the
+    shell expands to exactly that value (`_expansions`), so `R=/r; git -C "$R" add x && git -C "$R"
+    commit` commits in /r too. A name the rest of the command spells as a bare word anywhere - a
+    reassignment, `+=`, `read`, `for`, `unset`, `declare` - is dropped for the whole command
+    (`_stable_names`): this reader does not model which value is live where, and a wrong directory
+    is worse than None, which falls back. Bash only: PowerShell assigns with `$W = ...`.
 
     A cd inside a subshell - `(cd /r); git commit`, `x=$(cd /r; pwd)` - holds only until that
     subshell closes (`_SubshellTracker`), so the git after it runs where the command started.
@@ -1035,8 +1057,9 @@ def git_verb_dir(command, cwd, verbs, tool_name=None):
                 statement_end = at + len(segment)
                 continue
             leading = False
+            known = _stable_names(known, text[at:])
         tokens = argv_for_match(segment.strip().lstrip("(").strip(), tool)
-        usable, known = _expansions(segment, known), {}
+        usable = _expansions(segment, known)
         if not tokens:
             continue
         statement_end = at + len(segment)

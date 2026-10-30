@@ -734,6 +734,36 @@ def test_git_verb_dir_follows_a_variable_the_same_command_assigned_literally():
     assert S.git_verb_dir('W="/a b"; cd "$W" && git commit -m x', "/s", verbs) == os.path.normpath("/a b")
 
 
+def test_git_verb_dir_keeps_a_leading_value_for_the_whole_command():
+    """The value is not forgotten after the first statement that uses it: `git -C "$R"` on two
+    statements, or behind an unrelated one, commits in /r."""
+    verbs, moved = S.GATED_GIT_VERBS, os.path.normpath("/r")
+    assert S.git_verb_dir('R=/r; git -C "$R" add x && git -C "$R" commit -m y', "/s", verbs) == moved
+    assert S.git_verb_dir('R=/r; echo hi; git -C "$R" commit -m y', "/s", verbs) == moved
+    assert S.git_verb_dir('R=/r\ngit -C "$R" status\ngit -C "$R" push', "/s", verbs) == moved
+    # the name inside another word is not a rebinding: `%B`, `-B`
+    assert S.git_verb_dir('B=/r; git -C $B commit -q && git -C $B log -1 --format=%B', "/s", verbs) == moved
+    assert S.git_verb_dir('B=/r; git -C $B status -B; git -C $B push', "/s", verbs) == moved
+
+
+@pytest.mark.parametrize("command", [
+    # a later statement could rebind the name without the text spelling it
+    'R=/r; source ./env; git -C "$R" commit -m y',
+    'R=/r; . ./env; git -C "$R" commit -m y',
+    'R=/r; eval "$X"; git -C "$R" commit -m y',
+    'R=/r; if true; then source ./env; fi; git -C "$R" commit -m y',
+    # the name appears as a bare word later: rebinding or not, it is dropped
+    'R=/r; f() { R=/a; }; f; git -C "$R" commit -m y',
+    'R=/r; echo R; git -C "$R" commit -m y',
+    'R=/r; x=`R=/a`; git -C "$R" commit -m y',
+    'R=/r; declare "R=/a"; git -C "$R" commit -m y',
+    'R=/r; read -r R < f; git -C "$R" commit -m y',
+    'R=/r; printf -v R %s /a; git -C "$R" commit -m y',
+])
+def test_git_verb_dir_drops_a_kept_value_the_rest_could_rebind(command):
+    assert S.git_verb_dir(command, "/s", S.GATED_GIT_VERBS) is None
+
+
 def test_git_verb_dir_does_not_trust_a_variable_it_cannot_know():
     verbs = S.GATED_GIT_VERBS
     # the value itself is not static
