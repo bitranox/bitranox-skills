@@ -1,45 +1,35 @@
-# Handover - 2026-10-30, contribution sweep wave 3 done through the twin batch; wave 4 (NU builds) next
+# Handover - 2026-10-30, contribution sweep finished; [200] closed, [210] holds the 10 late entries
 
 ## In flight
 
-- Nothing part-done. The tool-repo twin batch is finished: marketplace 10.7.0, 10.7.1 and 10.7.2
-  with CI green from 10.7.1 on; bmk 3.33.1, btx-skill-jev-judge 0.3.7 (tag pushed first, GitHub
-  release created by hand), lib_layered_config 7.6.1 and btx_lib_mail 4.6.4 released; the template
-  (plugin 2.0.6) and pve-bindsnap (1.2.3) pushed only.
-- The pre-integration b1/b7/m1/m2 worktrees are removed; their changed files are archived in the
-  main checkout under `.plan/contrib-triage-2026-10-29/snapshots/` (gitignored).
+- Nothing part-done. Marketplace 10.9.1 (the wave-5 twin texts) is on origin with CI green; bmk
+  3.33.2 and vnc-remote-control 1.2.1 are released and served by PyPI; pve-bindsnap 1.2.4 is pushed
+  (no release workflow). The 7 twin queue entries and 22 landed wave-3 b9a/b9b entries are closed.
 
 ## Decided
 
-- Template: "Push only, no release (Recommended)" (user, verbatim in the main checkout's
-  EXECUTION-USER-REVIEW.md), because its 26 unreleased commits include a console-command rename.
-- jev-judge release order: tag pushed alone first, so PyPI served 0.3.7 before the marketplace
-  twin named it.
-- btx_lib_mail's intermittent Windows socket-handle test lives in that repo's OPEN-WORK.md [10].
+- Twin batch: "Push, bump and release (Recommended)" (user, verbatim in the main checkout's
+  EXECUTION-USER-REVIEW.md).
+- OPEN-WORK [200] closed: the three 7.34.0 decisions it named are settled by 9ef9a730, a669cb70
+  and 80cb3937; what is still queued is listed per entry in [210].
 
 ## Still open, untouched
 
-- OPEN-WORK.md [200]: NU1-NU9 and b6#23 (state: main checkout `.plan/contrib-triage-2026-10-29/WAVE3-STATE.md`).
-- OPEN-WORK.md [30], [96], [1040]-[1080].
+- OPEN-WORK.md [30], [96] (both waiting on live data), [210], [510] (two user decisions).
+- One user decision from wave 5: whether a dict keyed by a closed Enum is permitted by
+  coding-python-enforce-data-architecture-strict.
 
 ## Next action
 
-Read `.plan/contrib-triage-2026-10-29/WAVE3-STATE.md` in the main checkout and start wave 4 with
-the first decided NU item it lists, in a new worktree from origin/master. Tell the user to run
-`/plugin marketplace update bitranox-skills` then `/reload-plugins` (the installed plugin is 10.4.1,
-so this session's hooks still run the old ci_wait and repo-gate).
+Put the Enum-keyed-dict question to the user, then OPEN-WORK [210] (a): replay real history for a
+repo-gate rule that resolves or refuses a shell-variable commit/push target.
 
 ## How to verify
 
 - `env -u VIRTUAL_ENV python3 plugins/bitranox/hooks/repo-gate.py --mirrors` (0 drifted).
-- `git -C <tool repo> ls-remote --tags origin v<version>` per release above.
+- `python3 plugins/bitranox/skills/compuse-toolbox/scripts/ci_wait.py --ref HEAD`.
+- `contrib_queue.py queues` (home: `plugins/bitranox/skills/meta-self-improve/`) lists the entries [210] names.
 
 ## Lessons for the next nap
 
-- When a tool repo's release test pins its skill's version floor, grep the marketplace too for a constant pinned to that floor (`JEV_JUDGE_FLOOR` in jev_shadow.py) before pushing the twin.
-- When bmk's `make test` runs in a tool repo during a release batch, expect update_deps to raise floors, relock and add cutoff entries; a third-party release (lib_layered_config 7.6.0's Layer enum) can red the gate, so budget a fix commit per repo.
-- tooling: When the installed ci_wait is older than 10.7.0, it errors on a single slow gh call; run the repo's newer script.
-- tooling: When a worktree's pre-integration state must be kept, the commit gate refuses a snapshot commit of a tree that fails its checks; archive the changed files and prove the archive by round-trip byte count instead.
-
-Read this, then replace the first line with `# STALE - read <date>, work continued`. Do not
-delete it - if this session ends badly it is the only record of where things stood.
+- When a batch's work lands in another repo (a private repo, a local toolbox, a user command), close its queue entries in the same pass: wave-3 b9a/b9b landed on 10-29 and 22 entries stayed open a day, reading as unworked.
