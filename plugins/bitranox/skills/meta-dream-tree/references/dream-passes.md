@@ -12,21 +12,23 @@ appears. An empty or unchanged store makes only the counter-gated passes no-op.
 There is no automatic forgetting: usage cannot be measured (a note sits in context; reasoning is
 silent, so absence of a signal does NOT mean unused), and age and detail/size are not valid forget
 metrics. Detail belongs in the pulled body - near-free, never a delete reason. The ONLY removals,
-all content-based and propose-first (the backup makes them safe): (1) dedup/merge duplicates;
-(2) obsolete/superseded pruning - archive a note ONLY if its CONTENT is dead (references a deleted
+all content-based and propose-first (the backup makes them safe): (1) dedup/merge duplicates; (2)
+obsolete/superseded pruning - archive a note ONLY if its CONTENT is dead (references a deleted
 file/flag, a resolved issue, superseded by a newer entry, leaked task-state, or a version-bound
 lesson a newer release made history - a fixed bug, a finished migration, a test result on that
-version - found by `versionrot.py` and confirmed by a re-check against the current release, while
-a version-bound claim the re-check finds still true is REWORDED, not archived), via
-`reconcile_memory_index.py --archive <slug> <level>` (home:
-`<plugin>/skills/meta-self-improve/`, launch through `hooks/run-python.sh`; it archives the body only
-when NO level still points at the slug). Launch it as a real script file, never a heredoc piped into
-`run-python.sh` (a `-` stdin arg fails with `run-python.sh: script not found: -` and exit 2). (3) a manual "forget this".
-Never archive a still-valid but quiet note. Size pressure is met by representation, never by
-deletion: a fact's always-present cost is one short index line, kept lean by dedup, and its body
-costs nothing until read. The same policy binds outside a dream: a "prune memory" request removes
-only by the three routes above, and a change to the memory engine adds no decay, idle counter or
-usage metric.
+version - found by `versionrot.py` and confirmed by a re-check against the current release, while a
+version-bound claim the re-check finds still true is REWORDED, not archived), via
+`reconcile_memory_index.py --archive <slug> <level>` (home: `<plugin>/skills/meta-self-improve/`,
+launch through `hooks/run-python.sh`; it archives the body only when NO level still points at the
+slug). Launch it as a real script file, never a heredoc piped into `run-python.sh` (a `-` stdin arg
+fails with `run-python.sh: script not found: -` and exit 2). (3) a manual "forget this". (4)
+retiring a covered rule whose trigger can fire only while its skill is loaded - archived the same
+way, and only when both checks in "Point a rule at its skill or HOOK" below pass: the rule is not
+lost, the skill states it at the only moment it can apply. Never archive a still-valid but quiet
+note for being quiet. Size pressure is met by representation, never by deletion: a fact's
+always-present cost is one short index line, kept lean by dedup, and its body costs nothing until
+read. The same policy binds outside a dream: a "prune memory" request removes only by the four
+routes above, and a change to the memory engine adds no decay, idle counter or usage metric.
 
 ## Contradiction / override
 
@@ -110,12 +112,53 @@ Those affect whether an edit needs a commit, never whether a rule reaches contex
 
 Check each rule fact for a bitranox SKILL or HOOK that already covers/ENFORCES its topic
 (sanitization -> `coding-input-sanitization`, resilience -> `coding-resilience`, tells ->
-`write-humanize-en`/`-de` + the `tell-sweep` hook, shell traps -> `compuse-bash`, remote
-PowerShell -> `compuse-ssh`, pgrep self-match -> the `block-pgrep-self-match` hook). A hook is the
-strongest coverage but boundary-limited. When covered, keep the always-loaded index hook as the
-trigger and make the BODY a concise pointer (`Detail: bitranox:<skill>` / `enforced by the <hook>
-hook`) instead of restating content. The dream does not delete such a rule - the always-on trigger
-is its value.
+`write-humanize-en`/`-de` + the `tell-sweep` hook, shell traps -> `compuse-bash`, remote PowerShell
+-> `compuse-ssh`, pgrep self-match -> the `block-pgrep-self-match` hook). A hook is the strongest
+coverage but boundary-limited. When covered, keep the always-loaded index hook as the trigger and
+make the BODY a concise pointer (`Detail: bitranox:<skill>` / `enforced by the <hook> hook`) instead
+of restating content (rewrite it with `factedit.py apply --body-file`, home
+`<plugin>/skills/meta-dream-tree/`, as SKILL.md step 7 shows). Keep that pointer unless both
+retirement checks below pass: for a rule whose situation ordinary work reaches, the always-loaded
+trigger is its value, because it fires before anyone thinks to open the skill.
+
+**Retire the pointer when the skill is loaded whenever its trigger can fire.** Such a pointer
+costs always-loaded context and adds nothing: by the time it can fire, the skill already says it.
+Retire it only when BOTH checks pass:
+
+- **(a) The rule, quoted from the INSTALLED plugin.** Quote the sentence that states the rule's
+  directive, not one that only shares its topic, as a substring of the installed plugin's text (the
+  plugin's `installPath` in `~/.claude/plugins/installed_plugins.json`, the version new sessions
+  load, not an older `~/.claude/plugins/cache/` version directory left beside it), never the repo
+  checkout: an edit not yet installed reaches nobody. Run the search there. The shipped-text rule
+  below applies too, so a quote from a `.skillwriter/` checklist does not count. The quote must
+  cover the WHOLE fact: a directive, number or caveat in its body that the installed text lacks
+  fails (a).
+- **(b) Why the trigger cannot fire without that skill loaded.** The situation the trigger names
+  must be one the skill's own procedure creates: name the step of the skill that puts the reader
+  there (an artifact or section only that skill produces, a script only it runs, a phase only it
+  has). Sharing the topic is not enough. Test it: try to describe ordinary work that reaches the
+  trigger's situation without the skill invoked. If you can, (b) fails. Passes: "When filling the
+  Findings table of a <skill> report, ..." where that skill defines the report and its step 4
+  fills the table. Fails: "When a pipeline's output looks truncated, ..." even when a shell skill
+  states the same rule, because pipelines run all day without it.
+
+When either check fails, keep the pointer and make its body a concise pointer as above, keeping in
+it any directive, number or caveat the skill does not state. A rule covered only by a HOOK has no
+skill text to quote, so it fails (a) and stays. A pinned fact is never retired: the dream does not
+archive a pinned fact (dream-core.md, Boundaries); report it instead.
+
+Retiring follows the dream mode, like every other removal. In `auto`, archive the fact as it is
+(never delete it, and do not shrink its body first) with
+`reconcile_memory_index.py --archive <slug> <level>` once for each level whose pointer names it
+(home: `<plugin>/skills/meta-self-improve/`, launch via `hooks/run-python.sh`; the last pointer
+moves the body to `.archive/`, where it stays recoverable). Find those levels with
+`find <anchor> -name CLAUDE.local.md -exec grep -l 'mem:<slug>)' {} +`, never an ancestor-chain
+read, which misses a level below the cwd. Run `ref_map.py` first as the last fold bullet below
+says; when `--archive` refuses because a fact or a `CLAUDE.md` still names the slug, re-point each
+hit to the skill and archive again, never `--force`. In `propose` (the default) and any other
+mode, archive nothing: list it as a proposed retirement. Either way the dream report lists each
+retirement or proposal with its (a) quote and (b) reason, since an always-loaded rule that leaves
+in `auto` gets no other human look.
 
 Prove "already covered" with a quote from SHIPPED skill text only - a `SKILL.md`, a reference
 file, a script's help. Exclude `*/.skillwriter/*`: those review checklists repeat rule text while
@@ -125,8 +168,9 @@ testing it, so a quote from one makes a rule look shipped that no skill states
 
 **When a fold MOVES a fact's content into a skill** (a fold campaign, often run outside any dream,
 that writes the content into SKILL.md or a reference file and then cuts the fact's hook or archives
-the fact - distinct from this pass's keep-the-trigger default), treat every behaviour claim, flag or
-API name and number in the body as unverified: far more sessions trust the skill than the fact.
+the fact - distinct from this pass, which keeps the trigger unless both retirement checks pass),
+treat every behaviour claim, flag or API name and number in the body as unverified: far more
+sessions trust the skill than the fact.
 
 - Diff each body against the version the classification read: bodies change between planning and
   folding. Measured: about one body in four held a claim that was false by fold time when the batch
@@ -154,7 +198,11 @@ API name and number in the body as unverified: far more sessions trust the skill
   heading the rule sat under before the fold.
   Re-point each hit to the skill. For many slugs, sweep in ONE `grep -F -f <patterns-file>` pass
   that excludes vendored trees (`.venv`, build `target/`, large source checkouts). Measured: a
-  per-slug walk of a large tree ran past 5 minutes.
+  per-slug walk of a large tree ran past 5 minutes. A hit inside a store fact is a body edit:
+  write it through `factedit.py apply --slug <slug> --body-file <f>` (home:
+  `<plugin>/skills/meta-dream-tree/`), and several such facts through ONE
+  `factedit.py apply --batch <file.jsonl>` (one `{"slug": ..., "body_file": ...}` per line, every
+  entry checked before any is written), never a script writing `facts/*.md`.
 
 ## Filler-word classification (keeps recall precise) - PER PROJECT
 

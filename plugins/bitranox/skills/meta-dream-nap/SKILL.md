@@ -75,14 +75,19 @@ than deleting it.
    facts but not which ones mattered: start from the learnings the handover names, and read the
    last turns before the handover closely, since a lesson formed at the end was never captured by
    the session that formed it. Deferral is cheaper, never better.
-   **Fanned out to subagents**, every brief states two rules. (a) A delta to an EXISTING fact is
+   **Fanned out to subagents**, every brief states three rules. (a) A delta to an EXISTING fact is
    folded with `python3 <plugin>/skills/meta-dream-tree/factedit.py apply --slug <slug>
    --body-file <f> [--hook-file <f>] [--type <kind>]` (read it first with `factedit.py show --body --slug
-   <slug>`), never with a hand-rolled fold script. (b) A fold target named by two batches goes to
-   ONE batch, or is folded sequentially, each fold preceded by a fresh `show`, so no update is lost.
+   <slug>`), never with a hand-rolled fold script; deltas to SEVERAL existing facts go through
+   one `factedit.py apply --batch <file.jsonl>` (one line per fact,
+   `{"slug": ..., "body_file": ..., "hook_file": ..., "type": ...}`, all but `slug` optional),
+   which checks every entry before writing any. (b) A fold target named in two subagents' work
+   lists goes to ONE of them, or is folded sequentially, each fold preceded by a fresh `show`, so
+   no update is lost.
    (c) A PINNED target is never written: `apply` refuses it without `--allow-pinned`, and that
    flag is the human's call, not a subagent's. Run the same `apply` with `--dry-run` instead and
-   hand back the delta it prints, so the user decides it in the report.
+   hand back the delta it prints, so the user decides it in the report. A batch holding a pinned
+   fact is refused whole, so leave it out of the batch and dry-run it on its own.
    `show --body --slug <slug> > f` writes the body alone (its header goes to stderr), so edit `f`
    and pass it straight back as `--body-file`.
    A long owed stretch: read it with `dream_state.py session-review --prose` (text turns and

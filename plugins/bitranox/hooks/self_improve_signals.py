@@ -2159,8 +2159,9 @@ def store_changed(memory_dir_path, since_mtime):
 # NOTE: there is deliberately NO usage/age/size "forgetting" mechanism. Usage cannot be measured (the
 # note sits in context; the model reasons over it silently), and age/size are not valid forget metrics
 # (see the "Removal" policy in skills/meta-dream-tree/references/dream-passes.md). Removal happens
-# only via dedup, obsolete/superseded pruning (model-judged, propose-first), or a manual request - the
-# dream does that; no helper here.
+# only via dedup, obsolete/superseded pruning (model-judged, propose-first), retiring a pointer whose
+# rule a skill states at the only moment it can fire, or a manual request - the dream does that; no
+# helper here.
 
 
 def _model_review_file():

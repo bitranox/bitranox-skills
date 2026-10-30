@@ -47,6 +47,21 @@ def test_deny_message_names_live_layout_and_engine_commands():
     assert "memory_engine" in msg and "add" in msg and "move" in msg
 
 
+@pytest.mark.parametrize("path", ["/tree/.claude-memory/facts/f.md", "/tree/proj/CLAUDE.local.md"])
+def test_deny_message_names_the_single_and_the_batch_fact_rewrite_routes(path, tmp_path):
+    """A session re-pointing N facts wrote them with a raw script because the only route it was
+    shown took one slug per call; the refusal must name the multi-fact route as well."""
+    if path.endswith("CLAUDE.local.md"):
+        f = tmp_path / "CLAUDE.local.md"
+        f.write_text("own text\n" + _block() + "\n", encoding="utf-8")
+        ev = _event("Write", str(f), {"content": "own text\n"})
+    else:
+        ev = _event("Write", path, {"content": "x"})
+    msg = G.decide(ev, {})
+    assert "factedit.py apply --slug" in msg
+    assert "factedit.py apply --batch" in msg
+
+
 # ---- the store's own backlog: <store>/OPEN-WORK.md is not a fact and no engine verb writes it ----
 
 def test_allows_edit_and_write_of_the_store_backlog():

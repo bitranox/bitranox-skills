@@ -47,7 +47,16 @@ kind, since `add` refuses a pinned entry outright; `apply` writes a pinned fact 
 `show --body` prints the stored body ALONE on stdout, its header on stderr, so `show --body > f`,
 an edit of `f`, then `apply --body-file f` stores exactly the edited text with its `description:`
 re-synced to the hook; a body file carrying `show`'s header is refused. A slug the upward chain
-walk misses is reported with the level that owns it, as the exact `--level <dir>` retry). The PreToolUse nudge names `statusrot.py` and
+walk misses is reported with the level that owns it, as the exact `--level <dir>` retry. A change
+spanning several facts, such as a re-point across N facts, goes through ONE
+`apply --batch <file.jsonl>` (one JSON object per line: `slug` plus any of `body_file`,
+`hook_file`, `title`, `type`, `level`; relative paths resolve from the batch file's dir), never a
+script writing `facts/*.md`. It checks every entry before writing any - unknown or duplicate slug,
+unreadable file, over-cap hook, a pinned fact without `--allow-pinned` - and refuses the whole
+batch listing every problem (exit 2); `--dry-run` and `--allow-pinned` cover the whole batch. Then
+it applies each entry as a single `apply` would and stops at the first failure, naming the slugs
+applied, the one that failed, and those not applied; fix the failed entry, then re-run a batch of
+it plus the not-applied ones). The PreToolUse nudge names `statusrot.py` and
 `factedit.py` on the chores they answer, so they surface without this file being open. Every one
 of these tools finds the store the
 way the engine does (the topmost dir holding a `CLAUDE.md` AND a `.claude-memory/`), so a leftover
@@ -448,9 +457,11 @@ the success line, abort-and-show on a miss).
     `error <message>`; one that exited 2 before asking (a missing verdicts file, a malformed line)
     logged nothing - fix the input and run it again. Exit 0 prints the receipt line. Report
     counts + one line each: merges, placements (with direction), voice rewrites, prunes (the
-    versionrot candidates by outcome: reworded, archived, merged, kept), skill
-    changes, toolbox proposals (merges/flags), create-level proposals (step 3b), pinned facts
-    reported not rewritten, and
+    versionrot candidates by outcome: reworded, archived, merged, kept), retired or
+    proposed-retired skill-covered pointers (each with its (a) quote and (b) reason, per
+    references/dream-passes.md "Point a rule at its skill or HOOK"), skill changes, toolbox
+    proposals (merges/flags), create-level proposals (step 3b), pinned facts reported not
+    rewritten, and
     `jev shadow:` followed by one `<site> <form>` entry per site, joined by `; `, each in one of
     the forms defined in meta-self-improve's `references/jev-shadow.md`, "The report line":
     the counts `run` printed, `off (<reason>)`, `skipped (<reason>)`, `no items`, or

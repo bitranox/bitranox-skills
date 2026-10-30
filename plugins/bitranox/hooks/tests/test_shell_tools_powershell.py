@@ -50,6 +50,7 @@ TRIGGERS = {
     "make-push-args-nudge.py": 'make push ARGS="fix (x)"',
     "gated-prep-nudge.py": "cat > /tmp/m <<'EOF'\nx\nEOF\ngit commit -F /tmp/m",
     "warn-inline-powershell.py": "ssh host 'powershell -Command Get-ChildItem | Select-Object'",
+    "warn-ps1-copy.py": "scp -P 22 /tmp/check.ps1 admin@winhost:/tmp/",
     # Single-quoted on purpose: the PowerShell arm reads the hook text through the shared
     # splitter's single-quote handling, which is all that stands between it and `'the` + `entirely'`.
     "missing-mechanism-nudge.py":

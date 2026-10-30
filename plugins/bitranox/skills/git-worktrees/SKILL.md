@@ -85,9 +85,12 @@ says so. Before either one, when the work builds on unpushed commits:
   `git merge-base --is-ancestor <sha> HEAD` exits 0.
 
 **Bringing an isolated subagent's work back:** its commits were written and tested on its base,
-not on yours, so its green says nothing about the combination. Cherry-pick its commits onto your
-branch and re-run the full suite there before treating the work as landed. For several branches
-at once (pick the tip, union additive conflicts, keep red commits off main) see
+not on yours, so its green says nothing about the combination. Before you pick, check its commit
+messages (`git log --format=%B <base>..<branch>`) against the repo's commit-attribution policy:
+a cherry-pick carries them over unchanged, so reword a violation on its branch first (policy
+and checks: bitranox:process-agents-subagent-driven-development, File Handoffs). Cherry-pick its
+commits onto your branch and re-run the full suite there before treating the work as landed. For
+several branches at once (pick the tip, union additive conflicts, keep red commits off main) see
 bitranox:process-agents-dispatching-parallel, "Review and Integrate".
 
 Only proceed to Step 1b if you have no native worktree tool available.

@@ -27,6 +27,8 @@ from shell_text import (  # noqa: F401
     blank_unexpanded_text, heredoc_bodies, is_shell_tool, strip_heredoc_bodies,
 )
 
+import splice_span
+
 # How far apart the two halves of a two-part rule may sit. These rules also scan AUTHORED text (a
 # Write body, an Edit), so an unbounded `.*` under re.S joined a `cargo build` on line 1 to a
 # `| grep` 200 lines later. A PIPELINE lives on one logical line - a backslash continuation joins
@@ -437,13 +439,12 @@ _ANY_TOOL_RULES = [
     # 106,293 Bash calls (0.44%), this rule's reason is the one given on 262 (0.25%), and 122 of
     # those (0.11%) are calls the hook said nothing about before; 22 of 6,668 Write bodies (7 new)
     # and 1 of 10,258 Edit fragments. The new firings read, bucketed, were hand-rolled splices. Listed before the
-    # exact-text rule so a script doing both gets the span reason. `\A` anchors the lookaheads,
-    # as on the rule below: unanchored, `search` retries them at every offset and an 880 KB Write
-    # cost minutes per call.
-    (re.compile(r"(?s)\A(?=.*\.r?(?:index|find)\(.*\.r?(?:index|find)\()"
-                r"(?=.*\b\w+\[\s*:[^\]\n]+\]\s*\+)"
-                r"(?=.*\+\s*\w+\[[^\]\n:]+:\s*\])"
-                r"(?=.*(?:write_text\(|\.write\())"), "anchor_edit",
+    # exact-text rule so a script doing both gets the span reason. The pattern lives in
+    # `splice_span`, shared with block-index-splice.py, which REFUSES the same splice when a Bash
+    # heredoc runs it (`main` stays silent on those calls). This rule keeps everything the guard
+    # does not refuse: a script authored with Write, Edit or `cat > f.py`, an insert at one
+    # anchor, a program that does not parse, and a run splice that asserts every anchor unique.
+    (splice_span.SPAN_SHAPE, "anchor_edit",
      "splicing a file region between two found anchors (s[:a] + new + s[b:]), where a wrong end "
      "anchor or a find() of -1 deletes text silently - use its replace-span"),
     # The Python spelling of anchor_edit's chore. Its other rule is `sed -i`, and measured over 60
@@ -454,6 +455,32 @@ _ANY_TOOL_RULES = [
     (re.compile(r"(?s)\A(?=.*\.replace\()(?=.*write_text\()"), "anchor_edit",
      "replacing a file region by exact text, where a computed span or a double-apply goes wrong "
      "silently"),
+]
+
+
+# Rules for AUTHORED text only (Write, Edit, MultiEdit, NotebookEdit), checked BEFORE every other
+# list: the shape they describe is a program being written, and a broader rule of the first list
+# (`jsonl_grep` claims any `.jsonl` near a `json.loads`) would otherwise answer first.
+#
+# `transcript_tail`: a script that reads ONE transcript named on its command line, json-loads
+# each record and walks `message.content` down to its text blocks - a hand-rolled condenser, which
+# flattens the string-or-block-list content shapes by hand. A corpus walk (`rglob`, `glob`,
+# `.claude/projects`) is transcript_index's chore and a hook reading its event's
+# `transcript_path` is production code, so both are excluded. Replayed over the transcript corpus:
+# the shape without the single-file and text-block conditions fired on 39 of 8,418 Write bodies,
+# nearly all corpus walks; with them, 1 of 8,424 - the condenser hand-rolled while this tool
+# existed - and 0 of 14,089 Edit fragments.
+_AUTHORED_ONLY_RULES = [
+    (re.compile(r"""(?s)\A(?=.*\.jsonl\b)(?=.*\b(?:json|orjson)\.loads?\()(?=.*["']text["'])"""
+                r"""(?=.*(?:\[\s*["']message["']\s*\]|\.get\(\s*["']message["']).{0,800}?"""
+                r"""(?:\[\s*["']content["']\s*\]|\.get\(\s*["']content["']))"""
+                r"""(?!.*(?:\brglob\(|\bglob\(|\bos\.walk\(|\biterdir\(|\blistdir\("""
+                r"""|\.claude/projects|["']projects["']|transcript_path))"""),
+     "transcript_tail",
+     "condensing one transcript to its text turns by hand, where a record's content is a string "
+     "OR a list of blocks and a hand flattener drops one shape silently - `--all --role both "
+     "<transcript>` lists every text turn with its JSONL line number (`--prompts-only` for typed "
+     "prompts, `--tool NAME` for one tool's calls)"),
 ]
 
 
@@ -486,11 +513,6 @@ NO_COMMAND_SHAPE = {
         "the negative answer is the untrustworthy one.",
         "candidate `grep -[A-Za-z]*r` measured 5,592 matches in 342 of 493 sessions (69%), above "
         "what any shipped rule costs - the highest being claim_check at 57.6%."),
-    "transcript_tail": (
-        "its chore sits inside the `transcript_index` rule's shape (both touch ~/.claude/projects) "
-        "and the two differ by INTENT - search a corpus versus read one session.",
-        "no candidate separates them: the intent is not on the command line, so any pattern that "
-        "catches this one also catches every transcript_index call and would shadow it."),
     "enforced": (
         "the chore is 'does any code DECIDE on this setting, or is it only parsed?' - a question "
         "asked while reading.",
@@ -546,7 +568,8 @@ _SHELL_SCOPED_IN_RULES = frozenset({"fleet_ssh"})
 
 def ruled_tools():
     """Every tool name any rule can name. The gate's source of truth, so it cannot drift."""
-    return {tool for _rx, tool, _why in _RULES + _SHELL_ONLY_RULES + _ANY_TOOL_RULES}
+    return {tool for _rx, tool, _why in
+            _AUTHORED_ONLY_RULES + _RULES + _SHELL_ONLY_RULES + _ANY_TOOL_RULES}
 
 
 def match_tool(command, tool_name=None):
@@ -555,13 +578,14 @@ def match_tool(command, tool_name=None):
     `tool_name` decides whether the shell-only rules apply. It defaults to None meaning "treat
     this as a command", which is what every caller before the scope existed meant - so a rule
     that must not fire on authored text has to be listed as shell-only AND be given the real
-    tool name by its caller.
+    tool name by its caller. The authored-only rules are the mirror image: they run first, and
+    only when `tool_name` names an authoring tool.
     """
     if tool_name == "Monitor":
         ordered = _MONITOR_RULES
         return next(((tool, why) for rx, tool, why in ordered if rx.search(command or "")), None)
     scanning_a_command = tool_name is None or is_shell_tool(tool_name)
-    first = _RULES if scanning_a_command else [
+    first = _RULES if scanning_a_command else _AUTHORED_ONLY_RULES + [
         rule for rule in _RULES if rule[1] not in _SHELL_SCOPED_IN_RULES]
     ordered = first + (_SHELL_ONLY_RULES if scanning_a_command else []) + _ANY_TOOL_RULES
     for rx, tool, why in ordered:
@@ -832,6 +856,11 @@ def main():
     if not isinstance(event, dict) or event.get("tool_name") not in _SCANNED_TOOLS:
         return 0
     tool_input = event.get("tool_input") or {}
+    if event.get("tool_name") == "Bash" and splice_span.runs_an_unchecked_splice(
+            tool_input.get("command", "")):
+        # block-index-splice refuses this whole call and names anchor_edit itself; a nudge here
+        # would spend the session's one anchor_edit pointer on a call that never runs.
+        return 0
     text = extract_text(event.get("tool_name"), tool_input)
     hit = match_tool(text, event.get("tool_name"))
     if not hit and is_shell_tool(event.get("tool_name")):

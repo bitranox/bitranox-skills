@@ -187,13 +187,15 @@ or long, or quiet says nothing about whether it is still true. Forgetting by the
 away good notes.
 
 So nothing is removed just for being old or unused. A note leaves only for a content reason: it
-duplicates another (the two are merged into one sharper note), or it is genuinely obsolete - it points
-at a file or flag that no longer exists, an issue that was resolved, or it has been superseded by a
-newer note - or you ask for it to go. Those are judgment calls the dream makes by reading the note,
-proposing the change, never deleting silently; and the whole store is backed up first, so it is always
-reversible. Must-follow rules are never dropped. The store stays lean not by forgetting, but because
-the always-on part is just tight one-line summaries - the detail lives a step away and costs nothing
-until it is read.
+duplicates another (the two are merged into one sharper note), or it is genuinely obsolete - it
+points at a file or flag that no longer exists, an issue that was resolved, or it has been superseded
+by a newer note - or a skill already states it at the only moment it can apply (the rule's trigger
+can fire only while that skill is loaded, so its always-on line buys nothing), or you ask for it to
+go. Those are judgment calls the dream makes by reading the note and proposing the change (in auto
+mode, applying it and listing it in the report), never deleting silently; a pruned or retired note is
+archived, and the whole store is backed up first, so it is always reversible. Must-follow rules are
+never dropped. The store stays lean not by forgetting, but because the always-on part is just tight
+one-line summaries - the detail lives a step away and costs nothing until it is read.
 
 ## 8. Fast thinking and slow thinking
 

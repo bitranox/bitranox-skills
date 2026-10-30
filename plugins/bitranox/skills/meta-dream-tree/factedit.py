@@ -43,6 +43,7 @@ Run (from the plugin root):
   `uv run skills/meta-dream-tree/factedit.py show --slug <slug> --from <dir>`
   `uv run skills/meta-dream-tree/factedit.py check --hook-file draft.txt`
   `uv run skills/meta-dream-tree/factedit.py apply --slug <slug> --from <dir> --hook-file new.txt --dry-run`
+  `uv run skills/meta-dream-tree/factedit.py apply --batch edits.jsonl --from <dir> --dry-run`
 `default_python` picks a real, non-ephemeral interpreter to launch the engine with even when THIS
 script itself is run under `uv run` (see below), and the plugin's run-python.sh launcher, which
 the dream passes use, works identically.
@@ -58,6 +59,20 @@ names the level that owns it when the tree has one (`--level <it>` is the retry)
 `show --body` prints the stored body alone on stdout (its header goes to stderr), so
 `show --body > f`, an edit of `f`, then `apply --body-file f` stores exactly the edited text: the
 engine re-syncs the frame's `description:` to the hook it is given.
+
+`apply --batch <file>` edits several facts in one call, for a change that spans them (a re-point
+across N facts) and would otherwise be hand-rolled as a script writing the store directly. The
+file is JSONL, one object per line: `{"slug": ..., "body_file": ..., "hook_file": ..., "title":
+..., "type": ..., "level": ...}`, `slug` required and at least one thing to change; relative paths
+resolve against the batch file's dir, and an entry with no `level` uses --from/--level. EVERY
+entry is checked first (unknown or duplicate slug, unreadable file, bad key, over-cap hook, pinned
+without --allow-pinned, unknown type) and any problem refuses the whole batch with all of them
+listed, before anything is staged or written (exit 2). Then each entry runs through the same plan
+and write path as single `apply`, one engine call each under the engine's own lock. It is not a
+transaction: a failure part way stops the batch, exit 2, and the report names the slugs `applied`,
+the one `failed` with its reason, and those `not_applied`. --dry-run, --allow-pinned, --stage-dir
+and --python apply to every entry; --slug, --hook, --hook-file, --body-file, --title and --type
+are refused beside --batch.
 
 The `--json` envelope `{ok, command, data, skipped}` is printed on every exit, and `ok` means "ran
 without error": true on 0 and 1, false only on 2.
@@ -745,27 +760,69 @@ def cmd_check(args, rules: EngineRules) -> int:
     return 0 if verdict.accepted else 1
 
 
-def cmd_apply(args, rules: EngineRules) -> int:
-    fact = read_fact(args.slug, Path(args.start), rules,
-                     level=Path(args.level) if args.level else None)
-    hook = _resolve_text(args.hook, args.hook_file, "--hook")
-    body = _resolve_text(None, args.body_file, "--body")
+@dataclass(frozen=True)
+class ApplySpec:
+    """One recomposition request: which fact, and what to change. From the CLI or a batch line."""
+
+    slug: str
+    start: Path
+    level: Path | None = None
+    hook: str | None = None
+    hook_file: str | None = None
+    body_file: str | None = None
+    title: str | None = None
+    type_: str | None = None
+
+
+@dataclass(frozen=True)
+class ApplyPlan:
+    """A validated recomposition: the stored fact, the texts to send, and the engine's verdict."""
+
+    spec: ApplySpec
+    fact: Fact
+    hook: str
+    body: str | None
+    keep_stored_hook: bool
+    verdict: Verdict
+
+
+@dataclass(frozen=True)
+class ApplyOutcome:
+    """What running one plan produced: the exit code and the envelope parts to print."""
+
+    code: int
+    ok: bool
+    data: dict
+    skipped: list[str]
+    text: str
+
+
+def plan_apply(spec: ApplySpec, rules: EngineRules, *, allow_pinned: bool,
+               dry_run: bool) -> ApplyPlan:
+    """Read the fact and check the change, writing nothing. Raises FactEditError on a bad request.
+
+    An over-cap hook is NOT raised: it comes back as a refused verdict, because single `apply`
+    reports it as data (the refusals list) rather than as an error message.
+    """
+    fact = read_fact(spec.slug, spec.start, rules, level=spec.level)
+    hook = _resolve_text(spec.hook, spec.hook_file, "--hook")
+    body = _resolve_text(None, spec.body_file, "--body")
     if body is not None:
         body = clean_body(body)
-    if fact.pin and not args.allow_pinned and not args.dry_run:
+    if fact.pin and not allow_pinned and not dry_run:
         raise PinnedFact(f"{fact.slug!r} is pinned: its content is a human's to change. Pass "
                          "--allow-pinned to write it through amend-pinned, or --dry-run to stage "
                          "the change and print the engine command without writing")
-    if hook is None and body is None and not args.title and not args.type_:
+    if hook is None and body is None and not spec.title and not spec.type_:
         raise BadInput("nothing to change: give --hook/--hook-file, --body-file, --title or --type")
-    if args.type_:
+    if spec.type_:
         # Fail closed on an unknown vocabulary - a tool that cannot check is not a tool that
         # passes. A PINNED fact is forwarded like any other: `amend-pinned` carries --type and is
         # the only route to a pinned fact's kind, since `add` refuses a pinned entry outright.
         if not rules.types:
             raise BadInput("the engine did not report its known types; refusing to guess")
-        if args.type_ not in rules.types:
-            raise BadInput(f"unknown type {args.type_!r}; the engine knows "
+        if spec.type_ not in rules.types:
+            raise BadInput(f"unknown type {spec.type_!r}; the engine knows "
                            + ", ".join(rules.types))
     # A pinned fact given no new hook goes through amend-pinned WITHOUT --hook-file, which keeps
     # the stored hook untouched - so a stored hook over the cap (the movers can leave one) is no
@@ -780,32 +837,46 @@ def cmd_apply(args, rules: EngineRules) -> int:
                               f"the STORED hook is over the cap ({line}); it is kept unchanged "
                               "and not re-sent, so this edit is not blocked by it"
                               for line in verdict.refusals])
+    return ApplyPlan(spec=spec, fact=fact, hook=hook, body=body,
+                     keep_stored_hook=keep_stored_hook, verdict=verdict)
+
+
+_NOT_INVOKED = "the engine was not invoked; nothing was staged or written"
+
+
+def execute_plan(plan: ApplyPlan, rules: EngineRules, *, stage_dir: str | None, dry_run: bool,
+                 python: str | None) -> ApplyOutcome:
+    """Stage the plan's files and run the engine once (or only stage, on a dry run).
+
+    The one write path for both single and batch `apply`. Raises StageFailed or EngineLaunchFailed
+    when it could not get as far as an engine verdict.
+    """
+    fact, verdict = plan.fact, plan.verdict
     if not verdict.accepted:
         data = {"slug": fact.slug, "level": str(fact.level), "accepted": False,
                 "hook_chars": verdict.length, "refusals": verdict.refusals,
                 "advisories": verdict.advisories}
-        _emit(args.as_json, "apply", False, data, ["the engine was not invoked"],
-              "\n".join([f"! refused: {line}" for line in verdict.refusals]
-                        + ["the engine was not invoked; nothing was staged or written"]))
-        return 2
+        return ApplyOutcome(2, False, data, ["the engine was not invoked"],
+                            "\n".join([f"! refused: {line}" for line in verdict.refusals]
+                                      + [_NOT_INVOKED]))
 
     # A stage dir this call CREATED is this call's to remove once the engine has taken the files;
     # one the caller named with --stage-dir is the caller's, and is never touched.
-    own_stage = not args.stage_dir
-    stage = Path(args.stage_dir) if args.stage_dir else _make_temp_stage()
+    own_stage = not stage_dir
+    stage = Path(stage_dir) if stage_dir else _make_temp_stage()
     skipped: list[str] = []
     hook_path = None
-    if keep_stored_hook:
+    if plan.keep_stored_hook:
         skipped.append("hook unchanged (amend-pinned keeps the stored one; not re-sent)")
     else:
-        hook_path = stage_text(stage, f"{fact.slug}.hook.txt", hook)
+        hook_path = stage_text(stage, f"{fact.slug}.hook.txt", plan.hook)
     body_path = None
-    if body is None:
+    if plan.body is None:
         skipped.append("body unchanged (the engine keeps the stored one and syncs its description)")
     else:
-        body_path = stage_text(stage, f"{fact.slug}.body.md", body)
+        body_path = stage_text(stage, f"{fact.slug}.body.md", plan.body)
     argv = engine_argv(fact, rules.engine_path, hook_path=hook_path, body_path=body_path,
-                       title=args.title, type_=args.type_, python=args.python)
+                       title=plan.spec.title, type_=plan.spec.type_, python=python)
 
     data = {"slug": fact.slug, "level": str(fact.level), "pinned": fact.pin,
             "engine_verb": "amend-pinned" if fact.pin else "add",
@@ -813,15 +884,14 @@ def cmd_apply(args, rules: EngineRules) -> int:
             "body_file": str(body_path) if body_path else None,
             "hook_chars": verdict.length, "accepted": True,
             "advisories": verdict.advisories, "argv": argv,
-            "command": shlex.join(argv), "dry_run": bool(args.dry_run), "stage_kept": True}
-    if args.dry_run:
+            "command": shlex.join(argv), "dry_run": bool(dry_run), "stage_kept": True}
+    if dry_run:
         # The printed command names the staged files and is meant to be pasted, so they stay.
         skipped.append("the engine was not invoked (--dry-run)")
-        _emit(args.as_json, "apply", True, data, skipped,
-              "\n".join([f"~ advisory: {a}" for a in verdict.advisories]
-                        + [f"staged  {p}" for p in (hook_path, body_path) if p]
-                        + ["", shlex.join(argv)]))
-        return 0
+        return ApplyOutcome(0, True, data, skipped,
+                            "\n".join([f"~ advisory: {a}" for a in verdict.advisories]
+                                      + [f"staged  {p}" for p in (hook_path, body_path) if p]
+                                      + ["", shlex.join(argv)]))
 
     try:
         proc = _run_engine(argv)
@@ -837,10 +907,218 @@ def cmd_apply(args, rules: EngineRules) -> int:
     if ok and own_stage:
         data["stage_kept"] = not _remove_stage(stage, skipped)
     tail = [] if not data["stage_kept"] else [f"staged files kept in {stage}"]
-    _emit(args.as_json, "apply", ok, data, skipped,
-          "\n".join([f"~ advisory: {a}" for a in verdict.advisories]
-                    + [data["engine_stdout"] or "(engine printed nothing)"] + tail))
-    return _exit_for_engine(proc.returncode)
+    return ApplyOutcome(_exit_for_engine(proc.returncode), ok, data, skipped,
+                        "\n".join([f"~ advisory: {a}" for a in verdict.advisories]
+                                  + [data["engine_stdout"] or "(engine printed nothing)"] + tail))
+
+
+# Options that describe ONE fact. With --batch each entry carries its own, so a command-line value
+# would be ambiguous (every entry? a default?) and is refused rather than guessed at.
+_SINGLE_ONLY = (("slug", "--slug"), ("hook", "--hook"), ("hook_file", "--hook-file"),
+                ("body_file", "--body-file"), ("title", "--title"), ("type_", "--type"))
+
+
+def cmd_apply(args, rules: EngineRules) -> int:
+    if args.batch:
+        given = [flag for attr, flag in _SINGLE_ONLY if getattr(args, attr) is not None]
+        if given:
+            raise BadInput(f"--batch takes every per-fact value from the batch file; drop "
+                           f"{', '.join(given)} (or run single apply with --slug instead)")
+        return cmd_apply_batch(args, rules)
+    if not args.slug:
+        raise BadInput("give --slug <slug> for one fact, or --batch <file.jsonl> for several")
+    spec = ApplySpec(slug=args.slug, start=Path(args.start),
+                     level=Path(args.level) if args.level else None, hook=args.hook,
+                     hook_file=args.hook_file, body_file=args.body_file, title=args.title,
+                     type_=args.type_)
+    plan = plan_apply(spec, rules, allow_pinned=args.allow_pinned, dry_run=args.dry_run)
+    out = execute_plan(plan, rules, stage_dir=args.stage_dir, dry_run=args.dry_run,
+                       python=args.python)
+    _emit(args.as_json, "apply", out.ok, out.data, out.skipped, out.text)
+    return out.code
+
+
+# ---- apply --batch ------------------------------------------------------------------------------
+
+# The keys a batch line may carry. `slug` is required; the rest mirror single apply's options.
+BATCH_KEYS = frozenset({"slug", "level", "hook_file", "body_file", "title", "type"})
+_BATCH_PATH_KEYS = ("level", "hook_file", "body_file")
+
+
+@dataclass(frozen=True)
+class BatchEntry:
+    """One parsed batch line: its 1-based line number and the request it describes."""
+
+    line: int
+    spec: ApplySpec
+
+
+def _batch_path(raw: str, base: Path) -> str:
+    """An entry's path, a relative one taken from the batch file's dir so the file is portable."""
+    p = Path(raw).expanduser()
+    return str(p if p.is_absolute() else base / p)
+
+
+def _entry_problems(obj) -> list[str]:
+    """What is structurally wrong with one decoded batch line. PURE."""
+    if not isinstance(obj, dict):
+        return [f"not a JSON object (got {type(obj).__name__})"]
+    problems = [f"unknown key {k!r} (allowed: {', '.join(sorted(BATCH_KEYS))})"
+                for k in obj if k not in BATCH_KEYS]
+    if "slug" not in obj:
+        problems.append("no 'slug'")
+    problems += [f"{k!r} must be a non-empty string" for k in sorted(BATCH_KEYS)
+                 if k in obj and (not isinstance(obj[k], str) or not obj[k].strip())]
+    return problems
+
+
+def parse_batch(text: str, *, base: Path, start: Path,
+                level: Path | None) -> tuple[list[BatchEntry], list[str]]:
+    """The entries of a JSONL batch, and every structural problem found, each prefixed by its line.
+
+    Blank lines are skipped. `start` and `level` are the command line's --from/--level, used for an
+    entry that names no level of its own. Duplicate slugs are a problem: two writes to one fact in
+    one batch means one of them is silently lost.
+    """
+    entries: list[BatchEntry] = []
+    problems: list[str] = []
+    seen: dict[str, int] = {}
+    for n, raw in enumerate(text.splitlines(), start=1):
+        if not raw.strip():
+            continue
+        try:
+            obj = json.loads(raw)
+        except json.JSONDecodeError as exc:
+            problems.append(f"line {n}: not valid JSON ({exc.msg})")
+            continue
+        bad = _entry_problems(obj)
+        if bad:
+            problems += [f"line {n}: {p}" for p in bad]
+            continue
+        slug = obj["slug"]
+        if slug in seen:
+            problems.append(f"line {n} ({slug}): duplicate slug, already on line {seen[slug]}")
+            continue
+        seen[slug] = n
+        paths = {k: _batch_path(obj[k], base) for k in _BATCH_PATH_KEYS if k in obj}
+        own_level = paths.get("level")
+        entries.append(BatchEntry(line=n, spec=ApplySpec(
+            slug=slug, start=start, level=Path(own_level) if own_level else level,
+            hook_file=paths.get("hook_file"), body_file=paths.get("body_file"),
+            title=obj.get("title"), type_=obj.get("type"))))
+    return entries, problems
+
+
+def _preflight(entry: BatchEntry, rules: EngineRules, *, allow_pinned: bool,
+               dry_run: bool) -> list[str]:
+    """Every problem with one entry, found without writing anything.
+
+    The named files and the slug are checked independently first, so an entry with both a missing
+    file and an unknown slug reports both rather than only whichever the plan would hit first.
+    """
+    spec, tag = entry.spec, f"line {entry.line} ({entry.spec.slug})"
+    problems: list[str] = []
+    for key, path in (("hook_file", spec.hook_file), ("body_file", spec.body_file)):
+        if path:
+            try:
+                _resolve_text(None, path, f"--{key}")
+            except FactEditError as exc:
+                problems.append(f"{tag}: {key}: {exc}")
+    try:
+        read_fact(spec.slug, spec.start, rules, level=spec.level)
+    except FactEditError as exc:
+        problems.append(f"{tag}: {type(exc).__name__}: {exc}")
+    if problems:
+        return problems
+    try:
+        plan = plan_apply(spec, rules, allow_pinned=allow_pinned, dry_run=dry_run)
+    except FactEditError as exc:
+        return [f"{tag}: {type(exc).__name__}: {exc}"]
+    return [f"{tag}: refused: {r}" for r in plan.verdict.refusals]
+
+
+def _read_batch_file(path: Path) -> str:
+    try:
+        return Path(path).read_text(encoding="utf-8-sig")
+    except (OSError, UnicodeDecodeError) as exc:
+        raise BadInput(f"cannot read the batch file {path}: {exc}") from exc
+
+
+def cmd_apply_batch(args, rules: EngineRules) -> int:
+    """Validate every entry, then apply each through single apply's own plan and write path.
+
+    Not a transaction: each entry is its own engine call under the engine's lock, so a failure part
+    way through leaves the earlier entries written. The report names which were applied, which one
+    failed and why, and which were never attempted, and nothing after the failure is attempted.
+    """
+    path = Path(args.batch)
+    entries, problems = parse_batch(_read_batch_file(path), base=path.resolve().parent,
+                                    start=Path(args.start),
+                                    level=Path(args.level) if args.level else None)
+    if not entries and not problems:
+        raise BadInput(f"the batch file {path} holds no entries")
+    for entry in entries:
+        problems += _preflight(entry, rules, allow_pinned=args.allow_pinned, dry_run=args.dry_run)
+    report = {"batch": str(path), "dry_run": bool(args.dry_run), "entries": len(entries),
+              "applied": [], "staged": [], "failed": None,
+              "not_applied": [e.spec.slug for e in entries], "problems": problems, "results": []}
+    if problems:
+        problems.sort(key=_line_of)
+        _emit(args.as_json, "apply", False, report, ["the engine was not invoked"],
+              "\n".join(["batch refused; nothing was staged or written:"]
+                        + [f"  {p}" for p in problems]))
+        return 2
+    for entry in entries:
+        failure = _run_entry(entry, args, rules, report)
+        if failure:
+            report["failed"] = failure
+            break
+    ok = report["failed"] is None
+    _emit(args.as_json, "apply", ok, report, [], _render_batch(report))
+    return 0 if ok else 2
+
+
+def _line_of(problem: str) -> int:
+    m = re.match(r"line (\d+)", problem)
+    return int(m.group(1)) if m else 0
+
+
+def _run_entry(entry: BatchEntry, args, rules: EngineRules, report: dict) -> dict | None:
+    """Apply one entry exactly as single apply would; a failure dict, or None on success.
+
+    The plan is made again here rather than reused from the preflight: the store is read at the
+    moment of writing, as single apply reads it, so an earlier entry or another writer since the
+    preflight cannot be overwritten with stale text.
+    """
+    slug = entry.spec.slug
+    report["not_applied"].remove(slug)
+    try:
+        plan = plan_apply(entry.spec, rules, allow_pinned=args.allow_pinned,
+                          dry_run=args.dry_run)
+        out = execute_plan(plan, rules, stage_dir=args.stage_dir, dry_run=args.dry_run,
+                           python=args.python)
+    except FactEditError as exc:
+        return {"slug": slug, "line": entry.line, "reason": f"{type(exc).__name__}: {exc}"}
+    report["results"].append(dict(out.data, slug=slug, line=entry.line, skipped=out.skipped))
+    if out.code != 0:
+        reason = "; ".join(out.data.get("refusals") or []) or (
+            f"engine exited {out.data.get('engine_returncode')}: "
+            f"{out.data.get('engine_stdout') or '(engine printed nothing)'}")
+        return {"slug": slug, "line": entry.line, "reason": reason}
+    report["staged" if args.dry_run else "applied"].append(slug)
+    return None
+
+
+def _render_batch(report: dict) -> str:
+    lines = [f"staged       {s}" for s in report["staged"]]
+    if report["dry_run"]:
+        lines += [f"  {r['command']}" for r in report["results"]]
+    lines += [f"applied      {s}" for s in report["applied"]]
+    failed = report["failed"]
+    if failed:
+        lines.append(f"FAILED       {failed['slug']} (line {failed['line']}): {failed['reason']}")
+    lines += [f"not applied  {s}" for s in report["not_applied"]]
+    return "\n".join(lines)
 
 
 def _make_temp_stage() -> Path:
@@ -894,8 +1172,8 @@ def _add_common(p: argparse.ArgumentParser) -> None:
     p.add_argument("--json", action="store_true", dest="as_json", help="emit a JSON envelope")
 
 
-def _add_target(p: argparse.ArgumentParser) -> None:
-    p.add_argument("--slug", required=True, help="the fact's identity")
+def _add_target(p: argparse.ArgumentParser, *, slug_required: bool = True) -> None:
+    p.add_argument("--slug", required=slug_required, default=None, help="the fact's identity")
     p.add_argument("--from", dest="start", default=".",
                    help="a dir inside the tree; the chain is walked up from here (default cwd)")
     p.add_argument("--level", default=None,
@@ -918,8 +1196,15 @@ def build_parser() -> argparse.ArgumentParser:
                     help="the body it will ship with, so body advisories are checked too")
     _add_common(ck)
 
-    ap_ = sub.add_parser("apply", help="recompose a fact through the engine (add or amend-pinned)")
-    _add_target(ap_)
+    ap_ = sub.add_parser("apply", help="recompose a fact (or a --batch of them) through the engine "
+                                       "(add or amend-pinned)")
+    # Not required at the parser: --batch replaces it, and cmd_apply refuses having neither.
+    _add_target(ap_, slug_required=False)
+    ap_.add_argument("--batch", default=None,
+                     help="a JSONL file, one fact per line: {\"slug\", \"body_file\", \"hook_file\", "
+                          "\"title\", \"type\", \"level\"} (slug required; relative paths from the "
+                          "file's dir). Every entry is validated before any is written; each is "
+                          "then applied as single apply would, stopping at the first failure")
     ap_.add_argument("--hook", default=None, help="the new hook, inline (omit to keep the stored one)")
     ap_.add_argument("--hook-file", default=None, help="the new hook, from a file")
     ap_.add_argument("--body-file", default=None,

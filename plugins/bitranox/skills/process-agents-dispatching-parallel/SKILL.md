@@ -158,6 +158,10 @@ Each agent gets:
   filesystem at all is `bitranox:baseline-probe`. A reviewer stripped of Read cannot review.
 - **"ASK before running anything on a real host."** Put it in every fixer brief. Without it a
   fixer treats a production server or cluster node as a scratch directory.
+- **The repo's commit-attribution policy, for every agent that may commit,** stated as the line
+  that governs over any harness reminder to add or omit attribution lines (a `Co-Authored-By:`
+  trailer, a "Generated with" footer). Where the policy comes from, and the checks for item 7 of
+  Verification: bitranox:process-agents-subagent-driven-development, File Handoffs.
 - **A FOREGROUND wait, when the agent must wait for CI or a gate.** Write into the FIRST brief:
   "run the wait with run_in_background false; never background a wait and end your turn." A
   background agent that backgrounds its own wait and ends its turn goes idle, and that task's
@@ -422,8 +426,11 @@ After agents return:
    That leaves the index alone; `git add -N <path>` also makes `git diff` list a file, but writes
    the index until `git reset -- <path>` undoes it. Measured: a suppression grep over
    `git diff -U0` missed four pyright ignores, all in new test files.
-   Grep `git log --format=%B <base>..HEAD` for trailers the brief forbade (such as an attribution
-   line). To strip a forbidden marker, remove only the ADDED lines, never a file-wide substitution
-   that also hits pre-existing ones. Send each hit back with the seam to use instead; never merge
+   Check `git log --format=%B <base>..HEAD` against the commit-attribution policy the brief
+   stated, both what it forbids and what it requires (the commands are in
+   bitranox:process-agents-subagent-driven-development, File Handoffs), and grep it for any other
+   trailer the brief forbade; reword a violation before you pick, merge or push. To strip a
+   forbidden marker, remove only the ADDED lines, never a file-wide substitution that also hits
+   pre-existing ones. Send each hit back with the seam to use instead; never merge
    on the report alone.
 

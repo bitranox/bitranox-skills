@@ -107,10 +107,13 @@ a remove/trim/reverse recommendation, grep the decisions log and the repo's docs
 reference, ADRs) and tests for the behaviour by name, because a broad fix can silently reverse a
 recorded decision. Prefer the narrowest form that fixes the defect, and pin the recorded decision
 with a test the broad form would fail. When YOU write a fix brief for someone else, state the
-requirements and the inputs to probe, label any named mechanism or wording as a CANDIDATE to
-verify, never the remedy, and have the re-reviewer (an `opus` subagent at effort `medium`, review
-dispatch, see bitranox:process-agents-subagent-driven-development "Review dispatches") check any
-invariant the brief states against the real producer's behaviour, not against the brief.
+requirements and the inputs to probe (for an agent that may commit, also the repo's
+commit-attribution policy, and check its commit messages against that policy before you merge
+them: bitranox:process-agents-subagent-driven-development, File Handoffs), label any named
+mechanism or wording as a CANDIDATE to verify, never the remedy, and have the re-reviewer (an
+`opus` subagent at effort `medium`, review dispatch, see
+bitranox:process-agents-subagent-driven-development "Review dispatches") check any invariant the
+brief states against the real producer's behaviour, not against the brief.
 
 **Your own reading is a hypothesis too.** When your reading of a finding is looser than its
 literal prescription, do not quietly ship your version, and do not push back on argument alone. A

@@ -407,7 +407,8 @@ final whole-branch review. When you fill a reviewer template:
   printed path in the final review dispatch, so the final reviewer reads
   one file instead of re-deriving the branch diff with git commands.
 - Every fix dispatch carries the implementer contract: the fix subagent
-  re-runs the tests covering its change and reports the results. Name the
+  re-runs the tests covering its change and reports the results, and commits under the same
+  attribution policy line the implementer got (see File Handoffs). Name the
   covering test files in the dispatch  -  a one-line fix does not need the
   whole suite. Before re-dispatching the reviewer, confirm the fix report
   contains the covering tests, the command run, and the output; dispatch
@@ -445,11 +446,35 @@ and is re-read on every later turn. Hand artifacts over as files:
   with the exact values to use verbatim"; (3) interfaces and decisions
   from earlier tasks that the brief cannot know; (4) your resolution of
   any ambiguity you noticed in the brief; (5) the report-file path and
-  report contract. Exact values (numbers, magic strings, signatures, test
-  cases) appear only in the brief. Never add a merge, version bump, release or build step to an
-  implementer or fixer dispatch: the agent does it before any independent review, and a defect
-  the review finds is already on the main branch. You merge once the task review is clean; a
-  release or build is a dispatch of its own after that.
+  report contract; (6) for any agent that may commit, the repo's commit-attribution policy
+  line (see the next bullet). Exact values (numbers, magic strings, signatures, test
+  cases) appear only in the brief; the policy line is the one the dispatch repeats. Never add a
+  merge, version bump, release or build step to an implementer or fixer dispatch: the agent does
+  it before any independent review, and a defect the review finds is already on the main branch.
+  You merge once the task review is clean and the commit messages pass the attribution check
+  below; a release or build is a dispatch of its own after that.
+- **Commit attribution is a stated policy, never the subagent's default.** A subagent's harness
+  can carry a system reminder telling it to append attribution lines to every commit (a
+  `Co-Authored-By:` trailer, a "Generated with" footer), and the subagent follows it unless its
+  dispatch says otherwise, whether the repo forbids such lines or requires different ones.
+  Determine the policy once per run: your human partner's instructions (their standing rules
+  included) first, then the project's `CLAUDE.md`/`AGENTS.md` or `CONTRIBUTING`, else the
+  convention the repo's own `git log` shows. Write it into the plan's Global Constraints, so every
+  brief states it, and into the `[ATTRIBUTION_POLICY]` line of every dispatch whose agent may
+  commit, as the rule that governs over any conflicting reminder in the agent's context:
+  "Commit messages: no tool attribution lines" and "Commit messages: end each with
+  `Co-Authored-By: <assistant>`" are both valid policies.
+- **Before merging or pushing a subagent's commits**, read their messages,
+  `git log --format=%B <base>..HEAD` (`<base>` = the BASE you recorded before the dispatch; the
+  branch's merge base before finishing the branch), and check each against the stated policy,
+  both what it forbids and what it requires. A forbidden tool trailer shows in
+  `git log --format=%B <base>..HEAD | grep -inE '^co-authored-by:|generated with'` (judge each
+  hit against the policy: a human co-author can be allowed); a required trailer `<Key>` shows on
+  every line of `git log --format='%h [%(trailers:key=<Key>,valueonly,separator=%x2C)]' <base>..HEAD`,
+  and `[]` marks a commit without it. Reword a violation before the merge (a fix dispatch
+  carrying the policy line, or a reword on the branch); never merge it to fix it later. A reword
+  that changes only messages keeps the clean review valid, and needs no test re-run, when
+  `git rev-parse --verify HEAD^{tree}` is the same before and after; then re-run the check.
 - **Before you send any dispatch**, read the assembled prompt once more for two things that
   make an agent answer confidently from nothing:
   - an unfilled placeholder token (`EXCERPT_PLACEHOLDER`, `[BRIEF_FILE]`, `<paste here>`) left
@@ -616,6 +641,8 @@ Use the Read tool to load a file below when its topic comes up.
 - Proceed with unfixed issues
 - Dispatch multiple implementation subagents in parallel (conflicts)
 - Put merge, bump, release or build into an implementer's or fixer's brief (it lands before review)
+- Dispatch a committing agent without the repo's attribution policy, or merge its commits without
+  reading `git log --format=%B <base>..HEAD` against that policy
 - Make a subagent read the whole plan file (hand it its task brief  - 
   `python3 "$CLAUDE_PLUGIN_ROOT/skills/process-agents-subagent-driven-development/scripts/task_brief.py"`  -  instead)
 - Skip scene-setting context (subagent needs to understand where task fits)

@@ -921,6 +921,47 @@ def test_the_span_rule_needs_the_whole_shape(text):
     assert hit is None or not hit[1].startswith(_SPAN_REASON), hit
 
 
+def test_the_span_rule_is_the_shared_detector():
+    # one regex for the nudge and block-index-splice, so the two cannot drift apart. Compared by
+    # SOURCE: `re.compile` caches by pattern, so a second copy of the literal would be the very
+    # same object and an identity check could not see the duplicate.
+    import splice_span
+    source = Path(N.__file__).read_text(encoding="utf-8")
+    assert r"(?=.*\b\w+\[\s*:[^\]\n]+\]\s*\+)" not in source
+    assert "splice_span.SPAN_SHAPE" in source
+    assert any(rx is splice_span.SPAN_SHAPE for rx, _tool, _why in N._ANY_TOOL_RULES)
+
+
+def test_a_splice_the_guard_refuses_is_left_to_the_guard(home, monkeypatch, capsys):
+    """block-index-splice refuses the whole call and names anchor_edit itself. A nudge there would
+    spend this session's one anchor_edit pointer on a call that never runs."""
+    _feed(monkeypatch, _ev(_SPAN_IN_A_HEREDOC, "span1"))
+    assert N.main() == 0
+    assert capsys.readouterr().out.strip() == ""
+    # the pointer is still owed: the same chore authored with Write is nudged afterwards
+    _feed(monkeypatch, {"tool_name": "Write", "session_id": "span1",
+                        "tool_input": {"content": shell_text.heredoc_bodies(_SPAN_IN_A_HEREDOC)}})
+    N.main()
+    assert "anchor_edit" in capsys.readouterr().out
+
+
+def test_a_fully_checked_splice_the_guard_lets_through_is_still_nudged(home, monkeypatch, capsys):
+    checked = _SPAN_IN_A_HEREDOC.replace(
+        "a = s.index(", "assert s.count('def natural_widths(') == 1\n"
+        "assert s.count('def render(') == 1\na = s.index(", 1)
+    _feed(monkeypatch, _ev(checked, "span3"))
+    N.main()
+    assert _SPAN_REASON in capsys.readouterr().out
+
+
+def test_the_same_splice_authored_into_a_file_by_cat_is_still_nudged(home, monkeypatch, capsys):
+    authored = _SPAN_IN_A_HEREDOC.replace("python3 - ", "cat > /tmp/edit.py ", 1)
+    _feed(monkeypatch, _ev(authored, "span2"))
+    N.main()
+    out = capsys.readouterr().out
+    assert "anchor_edit" in out and _SPAN_REASON in out
+
+
 def test_a_large_authored_file_is_matched_in_linear_time():
     # The authored-text rules run on every Write and Edit. An unanchored `(?=.*X)` lookahead is
     # retried at every offset, so a 100 KB file without the shape cost seconds per call.
@@ -1516,3 +1557,82 @@ def test_main_nudges_a_written_arm_script_toward_mutation_arm(tmp_path, monkeypa
     msg = _run(event, monkeypatch, capsys)
     assert msg is not None and "mutation_arm.py" in msg, msg
     assert "scratch copy" in msg and "--battery" in msg, msg
+
+
+# ---- a hand-rolled transcript condenser: transcript_tail's chore ------------------------------
+# A Write of a script that reads ONE transcript (a `*.jsonl` path on its command line), json-loads
+# each record and walks `message.content` down to its text blocks. Replayed over the transcript
+# corpus: the broad shape (`.jsonl`, `json.loads`, `message` then `content`) fired on 39 of 8,418
+# Write bodies, nearly all CORPUS walks (transcript_index's chore) or hooks reading their event's
+# `transcript_path`; requiring one file and a text-block read left 1 of 8,424, the condenser that
+# was hand-rolled while transcript_tail existed. 0 of 14,089 Edit fragments.
+
+_CONDENSER = '''"""Condense a transcript to its text turns.
+
+Usage: python3 condense.py <transcript.jsonl> > out.txt
+"""
+import json
+import sys
+
+
+def text_of(content):
+    if isinstance(content, str):
+        return [content]
+    return [block.get("text", "") for block in content or []
+            if isinstance(block, dict) and block.get("type") == "text"]
+
+
+for raw in open(sys.argv[1], encoding="utf-8"):
+    rec = json.loads(raw)
+    if rec.get("type") not in ("user", "assistant"):
+        continue
+    msg = rec.get("message") or {}
+    for text in text_of(msg.get("content")):
+        print(rec["type"].upper(), text[:300])
+'''
+
+
+def test_a_written_transcript_condenser_points_at_transcript_tail():
+    hit = N.match_tool(_CONDENSER, "Write")
+    assert hit is not None and hit[0] == "transcript_tail", hit
+    assert "--all --role both" in hit[1]
+
+
+@pytest.mark.parametrize("tool_name", ["Edit", "MultiEdit", "NotebookEdit"])
+def test_the_condenser_signature_holds_for_every_authoring_tool(tool_name):
+    assert N.match_tool(_CONDENSER, tool_name)[0] == "transcript_tail"
+
+
+def test_the_condenser_signature_is_not_a_command_rule():
+    # scoped to authored text: a command line carrying the same words is not a script being written
+    hit = N.match_tool(_CONDENSER, "Bash")
+    assert hit is None or hit[0] != "transcript_tail", hit
+
+
+@pytest.mark.parametrize("variant", [
+    # a CORPUS walk is transcript_index's chore, not one session's turns
+    _CONDENSER.replace("open(sys.argv[1], encoding=\"utf-8\")",
+                       "(l for p in Path.home().joinpath('.claude', 'projects').rglob('*.jsonl') "
+                       "for l in open(p))"),
+    # a hook reading the transcript its event names is production code, not a hand-roll
+    _CONDENSER.replace("sys.argv[1]", "event['transcript_path']"),
+    # reading tool INPUTS, never a text block: a replay or a diff, not a condenser
+    _CONDENSER.replace('block.get("text", "")', 'block.get("input")').replace(
+        'block.get("type") == "text"', 'block.get("type") == "tool_use"'),
+])
+def test_other_transcript_readers_are_not_the_condenser(variant):
+    hit = N.match_tool(variant, "Write")
+    assert hit is None or hit[0] != "transcript_tail", hit
+
+
+def test_transcript_tail_is_ruled_and_no_longer_exempted():
+    assert "transcript_tail" in N.ruled_tools()
+    assert "transcript_tail" not in N.NO_COMMAND_SHAPE
+
+
+def test_main_nudges_a_condenser_write_with_the_shipped_tool(home, monkeypatch, capsys):
+    _feed(monkeypatch, {"tool_name": "Write", "session_id": "tt1",
+                        "tool_input": {"file_path": "/tmp/condense.py", "content": _CONDENSER}})
+    assert N.main() == 0
+    out = capsys.readouterr().out
+    assert "transcript_tail.py" in out and "--all --role both" in out

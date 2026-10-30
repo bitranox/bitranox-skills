@@ -70,6 +70,14 @@ git merge-base HEAD main 2>/dev/null || git merge-base HEAD master 2>/dev/null
 
 Or ask: "This branch split from main - is that correct?"
 
+**Before a merge or a push (Options 1 and 2), check the commit messages:** read
+`git log --format=%B <merge-base>..HEAD` and check each against the repo's commit-attribution
+policy, both what it forbids and what it requires. Attribution lines (a `Co-Authored-By:`
+trailer, a "Generated with" footer) are forbidden by some repos and required by others, and a
+harness reminder can add them whatever the repo says. Where the policy comes from and the
+forbid/require commands: bitranox:process-agents-subagent-driven-development, File Handoffs.
+Reword a violation before Step 5; never merge or push it to fix later.
+
 ### Step 4: Present Options
 
 **Normal repo and named-branch worktree  -  present exactly these 4 options:**

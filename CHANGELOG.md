@@ -30,6 +30,43 @@ a hole nobody has drawn a line under is one that gets rediscovered and half-fill
 two "versions with no entry" notes came to sit in this file disagreeing with it.
 
 
+## [10.8.0]
+
+### Added
+
+- New `block-index-splice` PreToolUse guard: it refuses a Bash heredoc that runs a Python splice
+  of a file between two found anchors (`s[:a] + new + s[b:]`) and points at
+  `anchor_edit.py replace-span`, or at `conflict_resolve.py` for merge hunks. A program that
+  asserts every anchor it finds is unique (`count(...) == 1`) is let through. `toolbox-nudge`
+  shares its detector (`splice_span.py`) and stays silent on a call the guard refuses.
+- `toolbox-nudge` points a written Python script that walks a transcript's text blocks at
+  `transcript_tail.py --all --role both`.
+- New `warn-ps1-copy` PreToolUse nudge: when a command copies a local `.ps1` to a remote host
+  (scp, rsync, or ssh stdin), it suggests pwshpy, or else a local `[ScriptBlock]::Create` syntax
+  check before the copy. It never blocks.
+- New `grep-ignored-empty-nudge` PostToolUse nudge: when a recursive grep prints nothing, it
+  notes that Claude Code's grep shim (check with `declare -F grep`) skips gitignored files and
+  names `bash -c grep` or compuse-toolbox `grep_all` for a search that must be complete.
+- `factedit.py apply --batch <file.jsonl>` edits several memory facts in one call: it checks
+  every entry before writing any, applies each one through the engine like a single apply, and
+  stops at the first failure, reporting which facts were applied, which one failed and which
+  were not applied. The store-edit guard's refusal names it for multi-fact edits.
+
+### Changed
+
+- `meta-dream-tree`: the dream retires (archives) a skill-covered rule's always-loaded pointer
+  when the rule is quoted whole from the installed plugin and its trigger can fire only while
+  that skill is loaded; `auto` archives, `propose` lists it as a proposal, and the report shows
+  each with its quote and reason.
+- `process-agents-subagent-driven-development`, `process-agents-dispatching-parallel`,
+  `process-review-receiving-code-review`, `git-worktrees`,
+  `process-ship-finishing-development-branch`: the controller states the repo's
+  commit-attribution policy in every brief whose agent may commit, overriding a conflicting
+  harness reminder, and checks `git log --format=%B base..HEAD` against it, both what it forbids
+  and what it requires, before picking, merging or pushing. The implementer template gains an
+  `[ATTRIBUTION_POLICY]` slot.
+- `meta-dream-nap`: step 1 folds several existing facts through one `factedit.py apply --batch`.
+
 ## [10.7.2]
 
 ### Docs

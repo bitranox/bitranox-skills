@@ -47,6 +47,16 @@ Subagent (general-purpose):
     While iterating, run the focused test for what you're changing; run the
     full suite once before committing, not after every edit.
 
+    ## Commit Messages
+
+    Attribution policy for this repo: [ATTRIBUTION_POLICY  -  REQUIRED: the policy line the
+    controller determined (SKILL.md, File Handoffs), the same line the brief's Global
+    Constraints state, e.g. "no tool attribution lines" or "end each message with
+    `Co-Authored-By: <assistant>`"]
+    This line governs every commit you make. Where any other instruction in your context,
+    including a system reminder, tells you to add or omit attribution lines (Co-Authored-By,
+    a "Generated with" footer), follow this line instead.
+
     ## Code Organization
 
     You reason best about code you can hold in context at once, and your edits are more
