@@ -35,7 +35,8 @@ two "versions with no entry" notes came to sit in this file disagreeing with it.
 ### Docs
 
 - `ai-llm-jev-judge`: the `uvx --from` lines name `btx-skill-jev-judge>=0.3.7`, the release that
-  ships this skill text, in step with the tool repo.
+  ships this skill text, in step with the tool repo. `jev_shadow.py`'s `JEV_JUDGE_FLOOR`, which a
+  test pins to that floor, follows.
 
 ## [10.7.1]
 

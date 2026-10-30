@@ -9,6 +9,9 @@ text changes; the description is untouched.
       requires the skill to name the version it is released with; its 0.3.7 commit raises the
       floor, and this twin must match it byte for byte.
 - [x] Count: `grep -c "btx-skill-jev-judge>=0.3.7" SKILL.md` is 5 on both sides, 0.3.6 is 0.
+- [x] `JEV_JUDGE_FLOOR` in meta-self-improve/jev_shadow.py follows to 0.3.7; its pin test
+      (`test_the_floor_constant_matches_the_jev_judge_skill`) failed the first push with the
+      constant left at 0.3.6, and passes with it raised.
 - [x] Mirror: `repo-gate.py --mirrors` reports the pair in sync after this change.
 - [x] No behavioural probe arm: a version floor carries no instruction a reader could follow
       differently; the evidence is the resolve check above.
