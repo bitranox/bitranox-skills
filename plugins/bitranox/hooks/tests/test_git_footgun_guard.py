@@ -352,3 +352,18 @@ def test_the_rev_parse_block_still_wins(repo, monkeypatch, capsys):
     monkeypatch.setattr(sys, "stdin", io.StringIO(json.dumps(
         {"tool_name": "Bash", "cwd": str(repo), "tool_input": {"command": "git rev-parse --short A B"}})))
     assert G.main() == 2
+
+
+@pytest.mark.parametrize("command", [
+    "git commit -m x -- a.py 2>&1",
+    "git commit -m x a.py > /tmp/log",
+    "git commit -m x a.py 2> /tmp/err >>/tmp/out",
+])
+def test_a_commit_pathspec_holds_no_redirection(command):
+    """OPEN-WORK [1060]: `2>&1` and a redirection's target were read as paths the commit names."""
+    assert G._commit_paths(command, None) == ["a.py"]
+
+
+def test_a_quoted_redirection_target_is_not_a_second_revision():
+    """A raw-text regex cut `2>"/tmp/a b"` at the space and left `b"` as a revision."""
+    assert G.broken_revparse('git rev-parse --short HEAD 2>"/tmp/a b"') is False

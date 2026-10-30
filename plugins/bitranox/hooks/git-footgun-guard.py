@@ -54,12 +54,6 @@ from shell_text import (
 # Split a command line into statements so a rev-parse in one segment is judged
 # on its own operands, not tokens from a neighbouring command.
 
-# Strip shell redirections BEFORE counting operands, else a `2>/dev/null` (or its
-# target when spaced, `2> /dev/null`) is miscounted as a second revision and the
-# guard false-fires on a valid single-rev command. Covers `2>/dev/null`, `> out`,
-# `>>out`, `2>&1`, `&>out`, `<in` (operator + attached or space-separated target).
-REDIR = re.compile(r"(?:&|\d+)?>>?(?:&\d+|\s*\S+)|<\s*\S+")
-
 _REV_PARSE = frozenset({"rev-parse"})
 
 
@@ -83,10 +77,13 @@ def broken_revparse(command: str, tool_name: str | None = None) -> bool:
     # the verb walk saw `A=$(git` and found nothing - this guard stayed quiet on a shape
     # its own advisory nudge (git-revparse-nudge) already fires on.
     for _at, segment in iter_segments(strip_heredoc_bodies(command), tool_name):
-        segment = REDIR.sub(" ", segment)
         rest = _revparse_operands(argv_for_match(segment, tool_name))
         if rest is None:
             continue
+        # A `2>/dev/null`, or its target when spaced (`2> /dev/null`), is no second revision.
+        # Dropped from the split words, never by a regex over the raw text: that cut a quoted
+        # target with a space (`2>"/tmp/a b"`) in two and left `b"` behind as a revision.
+        rest = drop_redirections(rest)
         if not any(t == "--short" or t.startswith("--short=") for t in rest):
             continue
         # Operands are the non-option tokens after rev-parse (the revisions). Redirections are
@@ -282,7 +279,7 @@ def _commit_paths(command, tool_name):
     for argv in _statements(command, tool_name):
         commit = git_verb_operands(argv, _COMMIT, tool_name or "Bash")
         if commit is not None:
-            return [p for p in _commit_pathspec(commit) if not _GLOB.search(p)]
+            return [p for p in _commit_pathspec(drop_redirections(commit)) if not _GLOB.search(p)]
     return []
 
 

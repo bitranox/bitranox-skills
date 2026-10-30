@@ -1602,7 +1602,11 @@ Deploying untested skills = deploying untested code. It's a violation of quality
     with no project paths in it and any hook it needs registered in `~/.claude/settings.json`; put
     project-specific bindings in a small extension skill under that project's `.claude/skills/`
     that runs the universal procedure with those bindings.
-- [ ] Verify frontmatter parses: `head -5 SKILL.md` - confirm `---` delimiters and valid YAML
+- [ ] Verify frontmatter parses with a real YAML loader after every edit to it, never by eye:
+      `uv run --no-project --with pyyaml python -c 'import sys, yaml; t = open(sys.argv[1], encoding="utf-8").read().split("\n"); print(sorted(yaml.safe_load("\n".join(t[1:t.index("---", 1)]))))' SKILL.md`
+      prints `['description', 'name']`. A `: ` inside the plain-scalar description (`drive C: will
+      not extend`) makes the block invalid YAML while regex readers still recover the value and
+      report nothing; reword it with ` - ` (`drive C will not extend`)
 - [ ] Check token budget: `wc -w SKILL.md` - target under 500 words for process/technique SKILL.md bodies; reference/hub skills may exceed but should keep the body lean and push detail to reference files
 - [ ] **If the skill ships Python scripts: `tests/` exists, covers every main function, and PASSES** (`uv run --with pytest pytest tests/`). Do not ship with missing or failing tests.
 - [ ] **Security review before any PR/push:** review the full diff for secrets, credentials, private hostnames/IPs, internal paths, PII, and unsafe code (`shell=True` on untrusted input, `eval`/`exec`, command injection, path traversal, unpinned `curl | sh`). Run the `security-review` skill/command on the change. Fix findings before opening the PR.

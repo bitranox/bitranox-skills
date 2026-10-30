@@ -365,6 +365,53 @@ def test_owed_nap_whose_earlier_transcript_the_dream_fully_consumed_is_dropped(
     assert str(old) in out.get("systemMessage", "")
 
 
+def test_owed_nap_reviewed_from_another_cwd_past_its_compaction_point_is_dropped_despite_a_stale_own_mark(
+        tmp_path, monkeypatch, capsys):
+    # The session compacted while it sat in a worktree, so the flag is filed under the worktree;
+    # the nap then reviewed the same transcript to its end from the launch checkout. An earlier
+    # partial review from the worktree left a mark there BEHIND the compaction point. The
+    # obligation is that transcript's pre-compaction bytes, and they were read: the furthest mark
+    # any cwd recorded decides, not the stale one the worktree happens to own.
+    import self_improve_signals as S
+    _iso_home(tmp_path, monkeypatch)
+    worktree, launch = tmp_path / "wt", tmp_path / "main"
+    worktree.mkdir()
+    launch.mkdir()
+    tp = tmp_path / "transcript.jsonl"
+    make_transcript(tmp_path, user="ok thanks", asst="Done.")
+    compacted_at = tp.stat().st_size
+    S.set_watermark(str(worktree), str(tp), "dream", 5)
+    S.mark_nap_owed(str(worktree), session_id="sid-current", transcript_path=str(tp))
+    with tp.open("ab") as fh:
+        fh.write(json.dumps({"type": "assistant", "message": {"content": "Done."}}).encode() + b"\n")
+    S.set_watermark(str(launch), str(tp), "dream", tp.stat().st_size)
+    assert tp.stat().st_size > compacted_at
+    run_gate(monkeypatch, tmp_path, {"transcript_path": str(tp), "cwd": str(worktree),
+                                     "session_id": "sid-current"})
+    out = _gate_output(capsys)
+    assert out.get("decision") is None
+    assert not S.is_nap_owed(str(worktree))
+
+
+def test_owed_nap_whose_furthest_mark_is_still_behind_its_compaction_point_blocks(
+        tmp_path, monkeypatch, capsys):
+    # Control for the test above: every cwd's mark behind the compaction point is unread material.
+    import self_improve_signals as S
+    _iso_home(tmp_path, monkeypatch)
+    worktree, launch = tmp_path / "wt", tmp_path / "main"
+    worktree.mkdir()
+    launch.mkdir()
+    tp = tmp_path / "transcript.jsonl"
+    make_transcript(tmp_path, user="ok thanks", asst="Done.")
+    S.set_watermark(str(worktree), str(tp), "dream", 5)
+    S.mark_nap_owed(str(worktree), session_id="sid-current", transcript_path=str(tp))
+    S.set_watermark(str(launch), str(tp), "dream", tp.stat().st_size - 1)
+    run_gate(monkeypatch, tmp_path, {"transcript_path": str(tp), "cwd": str(worktree),
+                                     "session_id": "sid-current"})
+    assert _gate_output(capsys).get("decision") == "block"
+    assert S.is_nap_owed(str(worktree))
+
+
 def test_owed_nap_whose_earlier_transcript_is_partly_consumed_still_blocks(
         tmp_path, monkeypatch, capsys):
     # Control: a watermark BEHIND the file's end is unread material, so the block stands.

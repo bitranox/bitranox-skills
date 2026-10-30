@@ -179,6 +179,12 @@ Each agent gets:
   and the agent falls back to some other path or hands the text back. Name a path inside its own
   worktree or in the session scratchpad, never a main-checkout path (`.bitranox/...` at the main
   checkout's root included), and copy the file over yourself.
+- **A base that holds what the agent builds on.** An agent dispatched with `isolation: worktree`
+  branches from origin's default branch, not from your local HEAD (setting and fixes:
+  bitranox:git-worktrees, Step 1a), so a commit you made locally and have not pushed is missing
+  from its tree, and nothing says so. Push first, or tell each agent to fast-forward to that sha,
+  and afterwards check every worktree: `git -C <worktree> merge-base --is-ancestor <sha> HEAD`
+  exits 0.
 
 **Keep destructive steps out of lane briefs.** Deleting a remote ref or a branch, removing
 worktrees, a hard reset or a force push bundled into a brief with ordinary work makes the auto-mode
@@ -198,6 +204,11 @@ Subagent (general-purpose): "Fix tool-approval-race-conditions.test.ts failures"
 ```
 
 Multiple dispatch calls in one response = parallel execution. One per response = sequential.
+
+**A fan-out large enough to reach the usage limit: dispatch what the release needs first.** Every
+agent draws on one shared usage limit, and when it lands it stops whichever agents are still
+running. With ten or more long agents, start the items the next release depends on, and the
+longest ones, in a first wave and the rest after it, so the limit stops work that can wait.
 
 ### 4. Review and Integrate
 
@@ -281,6 +292,22 @@ git -C <worktree> diff                         # the change in progress
 Compare that state with the item's brief to see what remains, finish it test-first, and run the
 branch's FULL gate before integrating: a branch that looks finished can still be red. Then land
 it by cherry-pick as above.
+
+A lane that MEASURED something (a benchmark, a check on a host) often holds its numbers nowhere in
+git: they sit in the evidence directory its brief named and in its transcript's tool results.
+Read both (the transcript with a script, never `cat`) before re-measuring or re-dispatching; a
+result already on disk can close the item without a re-run.
+
+**Landing agents' UNCOMMITTED diffs: one integration worktree, then a byte-compare.** When agents
+leave their work uncommitted, export each diff with untracked files included
+(`git -C <wt> add -N . && git -C <wt> diff --binary HEAD > <agent>.patch`) and apply them one
+after another into ONE integration worktree with `git apply --3way <agent>.patch`. Then, for every
+file only ONE agent changed, require the integrated copy to equal that agent's byte for byte
+(`cmp <integration>/<path> <wt>/<path>`; a file the agent deleted must be absent from both), and
+hand-resolve and review only the files several agents touched. `git -C <wt> diff --name-only
+HEAD` after the `add -N` lists what each agent changed, so count owners per path from those
+lists. The byte-compare is what makes a large merge trustworthy without re-reading it: a hunk the
+three-way apply placed wrongly shows up as a single-owner file that differs.
 
 **Structured output must be harvested from the TRANSCRIPT, not from the delivered message.** When
 what you need back is text you will PARSE and apply - blocks, patches, rewritten file bodies - the

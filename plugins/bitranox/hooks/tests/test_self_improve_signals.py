@@ -2224,6 +2224,18 @@ def test_a_project_s_own_mark_wins_over_another_project_s(home, tmp_path):
     assert S.get_watermark("/p/x", str(tp), S.DREAM_REVIEWER) == 5
 
 
+def test_the_furthest_mark_ignores_which_cwd_owns_it(home, tmp_path):
+    # get_watermark keeps a cwd's own mark for its read-back; the owed-nap question is only
+    # whether ANY review read the bytes, so a stale own mark must not hide a further one.
+    tp = tmp_path / "t.jsonl"
+    tp.write_bytes(b"aaaa\nbbbb\n")
+    S.set_watermark("/p/wt", str(tp), S.DREAM_REVIEWER, 3)
+    S.set_watermark("/p/main", str(tp), S.DREAM_REVIEWER, 10)
+    assert S.get_watermark("/p/wt", str(tp), S.DREAM_REVIEWER) == 3
+    assert S.furthest_watermark(str(tp), S.DREAM_REVIEWER) == 10
+    assert S.furthest_watermark(str(tmp_path / "unmarked.jsonl"), S.DREAM_REVIEWER) == 0
+
+
 def test_an_owed_nap_is_consumed_once_the_review_reaches_its_compaction_point(home, tmp_path):
     # The marker records where the transcript ended at the compaction, so even the CURRENT
     # session's obligation is discharged by a review past that point - from any cwd.

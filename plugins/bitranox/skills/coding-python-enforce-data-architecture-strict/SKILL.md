@@ -60,6 +60,14 @@ builds a string by interpolation takes `.value`.** Measured cost of getting it w
 key built as `f"{pool}:{category}"` wrote `rpool:IssueCategory.CAPACITY` instead of `rpool:capacity`
 on 3.11+, which orphans every previously-written state entry and re-fires every open alert.
 
+**The interpolation can happen far from the member, behind a `str` parameter.** A member passed
+into a `str`-annotated parameter type-checks, because the member IS a `str`, and the log context,
+event or payload builder that receives it renders it later: `%s` and `str()` give
+`Layer.DEFAULTS` on EVERY version, an f-string on 3.11+, and only a JSON encoder writes the value.
+No caller interpolated anything, so a grep for f-strings over the callers finds nothing. For every
+`str` parameter that feeds a log, event or payload builder, grep its callers for Enum members, then
+type the parameter as the Enum and take `.value` INSIDE the builder, so no caller can forget it.
+
 Pin the wire form with a test that asserts the exact string, and run the whole declared version
 range - a single-interpreter green cannot see this.
 
@@ -335,10 +343,22 @@ each hit:
   because a `str, Enum` member equals and hashes as its value; there only the type checker flags
   the call site (see STEP B). Switching `is` to `==` saves the raw-string tests but never the
   raises-on-invalid one.
+- **A raw string breaks every reader of `.value`**: a provenance record, a log key or a serializer
+  raises `AttributeError: 'str' object has no attribute 'value'`, while `==` and dict lookups on
+  the same field still pass. A field of a PUBLIC constructor (a dataclass or record that outside
+  callers build) is where this ships: a caller can hold the plain value, above all one
+  round-tripped from the library's own output. For such a field the constructor IS the boundary
+  (Core Principle 6), so parse there - an outside caller's input parsed once at entry, not a
+  Core Principle 7 shim, since no internal code passes or receives the plain string - on a frozen
+  class,
+  `__post_init__` with `object.__setattr__(self, "name", Layer(self.name))`, which also refuses an
+  unknown value at construction - and test `cast("Layer", "user")` through every path that reads
+  the field. A CHANGELOG line saying a plain string "still works" is checked on each such path,
+  not on the first one that passes.
 
-If either kind of test exists, the item belongs in the tier that touches tests. `str, Enum`
-wire-compatibility saves construction and lookup tests, never identity-dispatch or
-raises-on-invalid tests.
+If any of these kinds of test or caller exists, the item belongs in the tier that touches tests.
+`str, Enum` wire-compatibility saves construction and lookup tests, never identity-dispatch,
+raises-on-invalid or `.value`-reading ones.
 
 **Branch on a `StrEnum` (or `str, Enum`) PARAMETER with `==`, never `is`.** A member equals its
 own string, so `"quiet" == Mode.QUIET` is True while `"quiet" is Mode.QUIET` is False. Under `is`,
@@ -775,7 +795,16 @@ STEP D - FINAL VERIFICATION:
     are not signatures at all, and `-> tuple[` matches the tuple exclusions under "Anti-Patterns
     to Eliminate". Judge each hit against the Exceptions rule and those exclusions; do NOT
     auto-loop on raw match count.
-  - If a real violation is found: GOTO STEP A
+  - Write one verdict line per hit, `<file:line> real|permitted - <reason>`, where a permitted
+    hit names the exclusion it falls under. A hit that fits no named exclusion is real, whatever
+    the analysers reported for its file: reaching STEP D means they already called every file
+    clean, so their zero is not evidence about any hit you are looking at.
+  - If a real violation is found: attribute it under STEP A's SCOPE rule. Out of scope, it joins
+    `out_of_scope` and goes to the user. In scope, add it to `.data_arch_violations.json` as a
+    violation of its file (status `in_progress`, the line and your reason as its description)
+    and GOTO STEP B. Not STEP A: its analysers already passed that line as clean, and their fresh
+    results would replace the entry you just wrote. STEP B's own loop back to STEP A re-checks
+    the fix.
   - If clean:
     * Update state file: all files status = "clean"
     * Delete `.data_arch_violations.json`
@@ -796,6 +825,7 @@ STEP D - FINAL VERIFICATION:
 ```
 STEP A -> found violations? -> STEP B -> STEP A (again!)
 STEP A -> no violations? -> STEP C (run make test!) -> STEP D -> DONE
+STEP D -> real violation in scope? -> recorded in the state file -> STEP B -> STEP A
 ```
 
 **Subagent Prompt Templates:**

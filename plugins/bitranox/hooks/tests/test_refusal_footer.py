@@ -61,20 +61,120 @@ def blocking_guards():
                   if _BLOCKS.search((HOOKS_DIR / name).read_text(encoding="utf-8")))
 
 
-def _literal_exit_twos(tree):
-    """Each place a module returns or exits with a literal 2 instead of going through the helper."""
-    found = []
+# A module-level name bound to 2 that is NOT a hook refusal: the exit code of a CLI mode of the same
+# script. Each is proved confined to those modes by `test_a_cli_only_two_never_returns_in_hook_mode`.
+_CLI_ONLY_TWOS = {"repo-gate.py": "COULD_NOT_RUN"}
+# The flags a CLI-mode branch of repo-gate's `main` tests before returning its could-not-run code.
+_CLI_MODE_NAMES = frozenset({"ci", "mirrors", "pre_push"})
+
+
+def _module_twos(tree, exempt=None):
+    """Names the module binds to the constant 2 at its top level (`BLOCK = 2`, `BLOCK: int = 2`),
+    `exempt` left out."""
+    names = set()
+    for node in tree.body:
+        targets = node.targets if isinstance(node, ast.Assign) else \
+            [node.target] if isinstance(node, ast.AnnAssign) else []
+        if isinstance(getattr(node, "value", None), ast.Constant) and node.value.value == 2:
+            names.update(target.id for target in targets if isinstance(target, ast.Name))
+    return names - {exempt}
+
+
+def _is_two(node, twos):
+    """True for a literal 2, or a name the module binds to 2 at its top level."""
+    if isinstance(node, ast.Constant):
+        return node.value == 2
+    return isinstance(node, ast.Name) and node.id in twos
+
+
+def _literal_exit_twos(tree, exempt=None):
+    """Each place a module returns or exits with a 2 - a literal, or a module-level name bound to
+    one (except `exempt`) - instead of going through the helper."""
+    found, twos = [], _module_twos(tree, exempt)
     for node in ast.walk(tree):
-        if isinstance(node, ast.Return) and isinstance(node.value, ast.Constant) \
-                and node.value.value == 2:
+        if isinstance(node, ast.Return) and node.value is not None and _is_two(node.value, twos):
             found.append(node.lineno)
-        if isinstance(node, ast.Call) and node.args and isinstance(node.args[0], ast.Constant) \
-                and node.args[0].value == 2:
+        if isinstance(node, ast.Call) and node.args and _is_two(node.args[0], twos):
             func = node.func
             name = func.attr if isinstance(func, ast.Attribute) else getattr(func, "id", "")
             if name in ("exit", "SystemExit", "_exit"):
                 found.append(node.lineno)
     return found
+
+
+def test_a_module_constant_bound_to_two_counts_as_a_literal_two():
+    """OPEN-WORK [1070]: `BLOCK = 2` then `return BLOCK` exits 2 without the helper as surely as
+    `return 2` does, and the literal-only check let it through."""
+    source = (
+        "import sys\n"
+        "BLOCK = 2\n"
+        "QUIET: int = 0\n"
+        "def f():\n"
+        "    return BLOCK\n"
+        "def g():\n"
+        "    sys.exit(BLOCK)\n"
+        "def h():\n"
+        "    return QUIET\n"
+    )
+    assert _literal_exit_twos(ast.parse(source)) == [5, 7]
+
+
+def test_control_a_name_bound_to_two_only_inside_a_function_is_not_resolved():
+    """Only a MODULE-level binding is a constant the whole file shares; a local may be rebound."""
+    source = "def f():\n    code = 2\n    return code\n"
+    assert _literal_exit_twos(ast.parse(source)) == []
+
+
+def _parents(tree):
+    return {child: node for node in ast.walk(tree) for child in ast.iter_child_nodes(node)}
+
+
+def _guarded_by_a_cli_mode(node, parents):
+    """True when an `if` around `node` tests one of the CLI-mode flags."""
+    while node in parents:
+        node = parents[node]
+        if isinstance(node, ast.If) and {n.id for n in ast.walk(node.test)
+                                         if isinstance(n, ast.Name)} & _CLI_MODE_NAMES:
+            return True
+    return False
+
+
+@pytest.mark.parametrize("guard, name", sorted(_CLI_ONLY_TWOS.items()))
+def test_a_cli_only_two_never_returns_in_hook_mode(guard, name):
+    """The exemption holds only while every `return <name>` sits where hook mode cannot reach it:
+    in `main` before hook mode is decided or under a CLI-mode `if`, or in `entry` behind its
+    CLI-flag check. A new `return <name>` anywhere else fails here, not silently."""
+    tree = ast.parse((HOOKS_DIR / guard).read_text(encoding="utf-8"))
+    parents, functions = _parents(tree), {}
+    for function in ast.walk(tree):
+        if isinstance(function, ast.FunctionDef):
+            for node in ast.walk(function):
+                functions.setdefault(node, function)
+    main = next(f for f in tree.body if isinstance(f, ast.FunctionDef) and f.name == "main")
+    decided = next(n.lineno for n in ast.walk(main) if isinstance(n, ast.Assign)
+                   and any(getattr(t, "id", "") == "hook_mode" for t in n.targets))
+    sites = [n for n in ast.walk(tree) if isinstance(n, ast.Return)
+             and isinstance(n.value, ast.Name) and n.value.id == name]
+    assert sites, f"{guard} no longer returns {name}: drop the exemption"
+    for site in sites:
+        function = functions[site]
+        if function.name == "entry":
+            assert "_CLI_FLAGS" in ast.unparse(function), site.lineno
+            continue
+        assert function.name == "main", (site.lineno, function.name)
+        assert site.lineno < decided or _guarded_by_a_cli_mode(site, parents), site.lineno
+
+
+def test_control_an_unguarded_cli_two_is_caught():
+    """The confinement check must fail on a `return COULD_NOT_RUN` that hook mode reaches."""
+    source = ("COULD_NOT_RUN = 2\n"
+              "def main():\n"
+              "    hook_mode = True\n"
+              "    return COULD_NOT_RUN\n")
+    tree = ast.parse(source)
+    site = tree.body[1].body[1]
+    assert not _guarded_by_a_cli_mode(site, _parents(tree))
+    assert site.lineno > tree.body[1].body[0].lineno
 
 
 def test_the_enumeration_finds_the_known_guards():
@@ -94,7 +194,7 @@ def test_the_enumeration_skips_advisory_hooks():
 @pytest.mark.parametrize("guard", blocking_guards())
 def test_every_blocking_guard_refuses_through_the_shared_helper(guard):
     source = (HOOKS_DIR / guard).read_text(encoding="utf-8")
-    assert _literal_exit_twos(ast.parse(source)) == [], (
+    assert _literal_exit_twos(ast.parse(source), _CLI_ONLY_TWOS.get(guard)) == [], (
         f"{guard} blocks with a literal 2; use `return shell_text.refuse(message)` so the refusal "
         "says that nothing in the call ran")
     assert re.search(r"\brefuse\(", source), f"{guard} never calls shell_text.refuse"
@@ -139,3 +239,45 @@ def test_a_real_refusal_ends_with_the_footer(guard, tmp_path):
                          cwd=str(tmp_path), env=env, timeout=60)
     assert run.returncode == 2, run.stderr
     assert shell_text.WHOLE_CALL_REFUSED in run.stderr
+
+
+# A `permissionDecision: deny` refuses the whole call just as exit 2 does (OPEN-WORK [1070]).
+# A Bash-matched script that denies only OTHER tools owes no footer; each such exemption names the
+# one function its deny is confined to, and the test below proves the confinement still holds.
+_DENIES_ONLY_ELSEWHERE = {
+    "missing-mechanism-nudge.py": "_answer_question",   # refuses AskUserQuestion, never a shell call
+}
+
+
+def deny_guards():
+    """The Bash PreToolUse scripts whose source emits a `permissionDecision: deny`."""
+    return sorted(name for name in _bash_pretooluse_scripts()
+                  if re.search(r"[\"']deny[\"']", (HOOKS_DIR / name).read_text(encoding="utf-8")))
+
+
+def test_the_deny_enumeration_finds_the_known_guard():
+    assert "sha-literal-nudge.py" in deny_guards()
+
+
+@pytest.mark.parametrize("guard", deny_guards())
+def test_every_bash_deny_carries_the_footer(guard):
+    source = (HOOKS_DIR / guard).read_text(encoding="utf-8")
+    if guard in _DENIES_ONLY_ELSEWHERE:
+        return
+    assert re.search(r"\bdeny_reason\(", source), (
+        f"{guard} denies a Bash call without the whole-call footer; build the reason with "
+        "`shell_text.deny_reason(message)`")
+
+
+@pytest.mark.parametrize("guard, confined_to", sorted(_DENIES_ONLY_ELSEWHERE.items()))
+def test_an_exempt_deny_is_still_confined_to_its_one_function(guard, confined_to):
+    tree = ast.parse((HOOKS_DIR / guard).read_text(encoding="utf-8"))
+    callers = {function.name for function in ast.walk(tree) if isinstance(function, ast.FunctionDef)
+               for node in ast.walk(function)
+               if isinstance(node, ast.Call) and getattr(node.func, "id", "") == "_deny"}
+    assert callers == {confined_to}, callers
+
+
+def test_deny_reason_appends_the_footer_once():
+    assert shell_text.deny_reason("BLOCKED: x") == "BLOCKED: x\n" + shell_text.WHOLE_CALL_REFUSED
+    assert shell_text.deny_reason("BLOCKED: x\n") == "BLOCKED: x\n" + shell_text.WHOLE_CALL_REFUSED

@@ -56,12 +56,10 @@ _VALUE_FLAGS = frozenset(
     }
 )
 
-# Tokens that end the pyright invocation inside a larger shell line.
-_SHELL_BREAKS = frozenset({";", "&&", "||", "|", ">", ">>", "<", "&"})
-
-# A redirection ends the invocation too, but shlex keeps it as one token and it
-# may carry an fd prefix ("2>/dev/null", "2>&1", ">out.txt").
-_REDIRECT_RE = re.compile(r"^\d*(?:>>?|<)")
+# Tokens that end the pyright invocation inside a larger shell line. A redirection does NOT end
+# it: the shell hands the words after `2>/dev/null` to pyright too, so they are dropped
+# (`shell_text.drop_redirections`) and the reading goes on.
+_SHELL_BREAKS = frozenset({";", "&&", "||", "|", "&"})
 
 # Flags of OTHER tools that take a name/pattern as their value. Without this, a
 # token that merely spells "pyright" - `find . -name pyright`, `grep -e pyright` -
@@ -358,7 +356,8 @@ def _is_assignment(token: str) -> bool:
 def _invocation_positionals(args: list[str]) -> list[str] | None:
     """The paths one pyright invocation is given, or None when it is not a check run.
 
-    Reads `args` up to the first shell operator or redirection, which ends this invocation.
+    Reads `args` up to the first shell operator, which ends this invocation. Redirections, each
+    with its target, are dropped first: `pyright 2>/dev/null src` checks src only.
 
     A word the shell has yet to expand (`$v`, `${v}`, a backtick) is no path: what it holds -
     flags, paths, nothing - is not in the text. `for v in "" "--pythonversion 3.10"; do pyright
@@ -367,8 +366,8 @@ def _invocation_positionals(args: list[str]) -> list[str] | None:
     """
     positionals: list[str] = []
     skip_next = False
-    for arg in args:
-        if arg in _SHELL_BREAKS or _REDIRECT_RE.match(arg):
+    for arg in shell_text.drop_redirections(args):
+        if arg in _SHELL_BREAKS:
             break
         if skip_next:
             skip_next = False

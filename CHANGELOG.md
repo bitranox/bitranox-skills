@@ -30,6 +30,62 @@ a hole nobody has drawn a line under is one that gets rediscovered and half-fill
 two "versions with no entry" notes came to sit in this file disagreeing with it.
 
 
+## [10.9.0]
+
+### Added
+
+- New `forgotten-backstop-nudge` UserPromptSubmit hook: when a task notification arrives, it names
+  each deadline-only background shell whose guarded tasks have all reported, with the `TaskStop`
+  call for it, so the shell is stopped before it fires as stale news.
+- `procsig --peer HOST[:PORT]` (compuse-toolbox) lists the local processes holding a TCP
+  connection to a peer, with the owning Claude session and its working directory.
+- A test refuses `os.path.isabs` in shipped plugin code outside two listed exceptions; paths read
+  from command text are judged with `shell_text.is_rooted`.
+- infra-proxmox: `references/package-repo-from-script.md` (reading the PVE package repository
+  from a script) and a procedure for renumbering a VMID with its snapshots.
+
+### Changed
+
+- process-test-design: doctests in an extensionless script, timed stand-ins placed too near a real
+  deadline, silent fake peers that must still read the request, and structurally empty inputs.
+- process-agents-dispatching-parallel: landing uncommitted worktree diffs (`apply --3way`, then a
+  byte-compare of single-owner files), dispatching release-critical work first, measurement results
+  left in evidence directories, and checking an isolated worktree's base.
+- git-worktrees: never create a worktree inside a directory Claude Code reads skills from.
+- meta-skill-writer: front matter is verified with a real YAML loader.
+- coding-python-enforce-data-architecture-strict: str-Enum members reaching log or payload builders
+  through str parameters, `.value` readers that break on raw strings; STEP D writes one verdict line
+  per hit and routes a real finding through the state file to STEP B.
+- compuse-bash: multi-name `command -v` (dash checks only the first name), wait loops whose
+  done-test reads a fallible source, and `systemctl is-active` in the reboot rule.
+- compuse-git: peel annotated tags before comparing them with HEAD; never pack a git file list
+  with `xargs tar`.
+- coding-python-uv: how a machine-wide `uv.toml` cooldown ranks against a project's own, and how
+  its `exclude-newer-package` table enters every lock.
+- infra-proxmox: rows for PBS token creation from the CLI, where VM Notes live, arm64 templates,
+  the `pct create` nesting warning, and the full-clone-from-snapshot refusal; the fresh-node tool
+  check tests git and rsync one at a time.
+- compuse-ssh: running a remote command that reboots the host; the cmd.exe digit-before-redirect
+  trap when recording an exit code.
+- net-tailscale: the control-loss warning appears only after 8 minutes without the control
+  connection; a Common mistakes row for a probe-failure fallback that matches the restart pattern.
+
+### Fixed
+
+- `shell_text.git_verb_dir` no longer reads a cd behind `&&` or `||` as having run once its list
+  ends; `cd /r || git commit` and `cd /a || cd /b` are read correctly, and a subshell cd inside an
+  if or loop no longer hides the directory.
+- git-footgun-guard, git-path-not-here-nudge, git-revparse-nudge, block-partial-typecheck and
+  make-push-args-nudge drop redirections through one shared helper: a commit pathspec no longer
+  holds `2>&1`, pyright paths after a redirection are read, and `&>out` / `*> log` are no longer
+  taken for paths or message words.
+- sha-literal-nudge refusals say the whole call was refused, and the refusal-footer test also
+  catches an exit 2 written as a module constant.
+- repo-gate: the skill-writer checklist check counts only unticked task-list items outside fenced
+  blocks, so a checklist quoting an open-item template is no longer refused.
+- self-improve-gate: an owed nap is discharged by the furthest review mark any cwd recorded, so a
+  stale lower mark no longer keeps the Stop gate blocking.
+
 ## [10.8.2]
 
 - meta-dream-tree: step 5's Jev shadow on placement now says what a sampled line is. Each line

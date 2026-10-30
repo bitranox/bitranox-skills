@@ -496,3 +496,16 @@ def test_an_unknown_value_after_a_value_flag_is_that_flags_value(monkeypatch, pr
     """Dropping `$V` before reading flags would make `src` the value of --pythonversion."""
     assert run_main(monkeypatch, "pyright --pythonversion $V src", project) == 2
     assert "paths given: src\n" in capsys.readouterr().err
+
+
+def test_a_path_after_a_redirection_is_still_handed_to_pyright():
+    """OPEN-WORK [1060]: the shell passes the words after a redirection to the program too, so
+    `pyright 2>/dev/null src` checks src only; stopping at the redirection read a full run."""
+    assert B._pyright_invocations("pyright 2>/dev/null src") == [["src"]]
+    assert B._pyright_invocations("pyright > out.txt src tests") == [["src", "tests"]]
+
+
+def test_an_ampersand_redirection_is_not_a_path():
+    """`&>out` was not recognised as a redirection and became a positional path."""
+    assert B._pyright_invocations("pyright &>out.txt") == [[]]
+    assert B._pyright_invocations("pyright tests &> out.txt") == [["tests"]]

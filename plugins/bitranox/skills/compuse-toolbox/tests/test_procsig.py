@@ -3,8 +3,10 @@
 The load-bearing property is the exclusion: a match set NEVER contains the tool's own process or
 any ancestor (the shell), so it cannot kill the caller the way `pkill -f` does.
 """
+import ipaddress
 import os
 import signal
+import socket
 import subprocess
 import sys
 from pathlib import Path
@@ -361,3 +363,192 @@ def test_a_non_cp1252_cmdline_does_not_crash_a_cp1252_console(tmp_path):
     assert r.returncode == 0, r.stderr
     assert b"Traceback" not in r.stderr
     assert b"300" in r.stdout
+
+
+# ---- --peer: which local process holds a TCP connection to a given host[:port] ------------------
+
+_TCP_HEADER = ("  sl  local_address rem_address   st tx_queue rx_queue tr tm->when retrnsmt   uid  "
+               "timeout inode\n")
+
+
+def _hex_v4(addr):
+    """An IPv4 address the way /proc/net/tcp writes it: one 32-bit word in host byte order."""
+    raw = bytes(int(b) for b in addr.split("."))
+    return (raw[::-1] if sys.byteorder == "little" else raw).hex().upper()
+
+
+def _hex_v6(addr):
+    """An IPv6 address the way /proc/net/tcp6 writes it: four 32-bit words, each in host order."""
+    raw = ipaddress.IPv6Address(addr).packed
+    words = [raw[i:i + 4] for i in range(0, 16, 4)]
+    return "".join((w[::-1] if sys.byteorder == "little" else w).hex().upper() for w in words)
+
+
+def _tcp_row(local, remote, inode, *, state="01", v6=False):
+    enc = _hex_v6 if v6 else _hex_v4
+    (lip, lport), (rip, rport) = local, remote
+    return (f"   0: {enc(lip)}:{lport:04X} {enc(rip)}:{rport:04X} {state} 00000000:00000000 "
+            f"00:00000000 00000000  1000        0 {inode} 1 0000000000000000 20 4 30 10 -1\n")
+
+
+def _net(root, rows4=(), rows6=()):
+    net = root / "net"
+    net.mkdir(parents=True, exist_ok=True)
+    (net / "tcp").write_text(_TCP_HEADER + "".join(rows4), encoding="utf-8")
+    (net / "tcp6").write_text(_TCP_HEADER + "".join(rows6), encoding="utf-8")
+
+
+def _socket_fd(root, pid, fd, inode):
+    fds = root / str(pid) / "fd"
+    fds.mkdir(parents=True, exist_ok=True)
+    (fds / str(fd)).symlink_to(f"socket:[{inode}]")
+
+
+@pytest.mark.parametrize("text, expected", [
+    ("192.0.2.52", ("192.0.2.52", None)),
+    ("192.0.2.52:9100", ("192.0.2.52", 9100)),
+    ("[2001:db8::7]:9100", ("2001:db8::7", 9100)),
+    ("2001:db8::7", ("2001:db8::7", None)),
+    ("printer.example:515", ("printer.example", 515)),
+])
+def test_parse_peer_splits_host_and_optional_port(text, expected):
+    assert P.parse_peer(text) == expected
+
+
+@pytest.mark.parametrize("text", ["", "  ", "host:", "host:notaport", "host:70000", "[2001:db8::7"])
+def test_parse_peer_refuses_a_malformed_value(text):
+    with pytest.raises(ValueError):
+        P.parse_peer(text)
+
+
+def test_scan_peer_names_the_holder_and_its_claude_session(tmp_path):
+    _mkproc(tmp_path, 50, exe="/opt/claude/versions/2.1.0", comm="claude", cmdline=["claude"])
+    _mkproc(tmp_path, 60, exe="/usr/bin/bash", cmdline=["bash"], ppid=50)
+    _mkproc(tmp_path, 70, exe="/usr/bin/python3", cmdline=["python3", "print.py"], ppid=60)
+    (tmp_path / "50" / "cwd").symlink_to("/opt/work/repo")
+    _socket_fd(tmp_path, 70, 3, 4242)
+    _net(tmp_path, rows4=[_tcp_row(("192.0.2.10", 40000), ("192.0.2.52", 9100), 4242)])
+    found = P.scan_peer(tmp_path, {"192.0.2.52"}, 9100)
+    assert [h["pid"] for h in found.holders] == [70]
+    holder = found.holders[0]
+    assert holder["remote"] == "192.0.2.52:9100"
+    assert holder["state"] == "ESTABLISHED"
+    assert holder["claude_pid"] == 50
+    assert holder["claude_cwd"] == "/opt/work/repo"
+    assert found.unowned == 0
+
+
+def test_scan_peer_filters_on_host_and_port(tmp_path):
+    _mkproc(tmp_path, 70, exe="/usr/bin/python3", cmdline=["python3"])
+    _mkproc(tmp_path, 71, exe="/usr/bin/curl", cmdline=["curl"])
+    _mkproc(tmp_path, 72, exe="/usr/bin/nc", cmdline=["nc"])
+    _socket_fd(tmp_path, 70, 3, 1001)
+    _socket_fd(tmp_path, 71, 3, 1002)
+    _socket_fd(tmp_path, 72, 3, 1003)
+    _net(tmp_path, rows4=[
+        _tcp_row(("192.0.2.10", 40000), ("192.0.2.52", 9100), 1001),
+        _tcp_row(("192.0.2.10", 40001), ("192.0.2.52", 515), 1002),
+        _tcp_row(("192.0.2.10", 40002), ("192.0.2.99", 9100), 1003),
+    ])
+    assert [h["pid"] for h in P.scan_peer(tmp_path, {"192.0.2.52"}, 9100).holders] == [70]
+    assert [h["pid"] for h in P.scan_peer(tmp_path, {"192.0.2.52"}, None).holders] == [70, 71]
+
+
+def test_scan_peer_reads_tcp6_and_ipv4_mapped_rows(tmp_path):
+    _mkproc(tmp_path, 80, exe="/usr/bin/a", cmdline=["a"])
+    _mkproc(tmp_path, 81, exe="/usr/bin/b", cmdline=["b"])
+    _socket_fd(tmp_path, 80, 4, 2001)
+    _socket_fd(tmp_path, 81, 4, 2002)
+    _net(tmp_path, rows6=[
+        _tcp_row(("2001:db8::1", 50000), ("2001:db8::7", 22), 2001, v6=True),
+        _tcp_row(("::ffff:192.0.2.10", 50001), ("::ffff:192.0.2.52", 9100), 2002, v6=True),
+    ])
+    assert [h["pid"] for h in P.scan_peer(tmp_path, {"2001:db8::7"}, 22).holders] == [80]
+    assert [h["pid"] for h in P.scan_peer(tmp_path, {"192.0.2.52"}, 9100).holders] == [81]
+
+
+def test_scan_peer_ignores_a_listening_socket_and_a_socket_with_no_inode(tmp_path):
+    _mkproc(tmp_path, 90, exe="/usr/bin/srv", cmdline=["srv"])
+    _socket_fd(tmp_path, 90, 3, 3001)
+    _net(tmp_path, rows4=[
+        _tcp_row(("192.0.2.52", 9100), ("0.0.0.0", 0), 3001, state="0A"),
+        _tcp_row(("192.0.2.10", 40000), ("192.0.2.52", 9100), 0, state="06"),
+    ])
+    found = P.scan_peer(tmp_path, {"192.0.2.52"}, 9100)
+    assert found.holders == []
+    assert found.unowned == 0
+
+
+def test_scan_peer_counts_a_connection_whose_owner_is_unreadable(tmp_path):
+    """Another user's process: the socket row is visible, its fd table is not. That is not 'no
+    holder', and the count is what lets main say so."""
+    _mkproc(tmp_path, 70, exe="/usr/bin/python3", cmdline=["python3"])
+    _net(tmp_path, rows4=[_tcp_row(("192.0.2.10", 40000), ("192.0.2.52", 9100), 5005)])
+    found = P.scan_peer(tmp_path, {"192.0.2.52"}, 9100)
+    assert found.holders == []
+    assert found.unowned == 1
+
+
+def test_main_peer_lists_holders_and_exits_0(tmp_path, monkeypatch, capsys):
+    _mkproc(tmp_path, 50, exe="/opt/claude/versions/2.1.0", comm="claude", cmdline=["claude"])
+    _mkproc(tmp_path, 70, exe="/usr/bin/python3", cmdline=["python3", "print.py"], ppid=50)
+    _socket_fd(tmp_path, 70, 3, 4242)
+    _net(tmp_path, rows4=[_tcp_row(("192.0.2.10", 40000), ("192.0.2.52", 9100), 4242)])
+    _harness(tmp_path, monkeypatch)
+    assert P.main(["--peer", "192.0.2.52:9100"]) == 0
+    out = capsys.readouterr().out
+    assert "70" in out and "192.0.2.52:9100" in out and "claude=50" in out
+
+
+def test_main_peer_with_no_holder_says_so_and_exits_1(tmp_path, monkeypatch, capsys):
+    _net(tmp_path)
+    _harness(tmp_path, monkeypatch)
+    assert P.main(["--peer", "192.0.2.52:9100"]) == 1
+    captured = capsys.readouterr()
+    assert "no holder" in captured.out
+    assert "error" not in captured.err.lower()
+
+
+def test_main_peer_with_only_unreadable_owners_exits_2(tmp_path, monkeypatch, capsys):
+    _net(tmp_path, rows4=[_tcp_row(("192.0.2.10", 40000), ("192.0.2.52", 9100), 5005)])
+    _harness(tmp_path, monkeypatch)
+    assert P.main(["--peer", "192.0.2.52:9100"]) == 2
+    assert "not readable" in capsys.readouterr().err
+
+
+def test_main_peer_refuses_kill(tmp_path, monkeypatch, capsys):
+    _net(tmp_path)
+    sent = _harness(tmp_path, monkeypatch)
+    assert P.main(["--peer", "192.0.2.52", "--kill"]) == 2
+    assert sent == []
+    assert "--kill" in capsys.readouterr().err
+
+
+def test_main_peer_refuses_a_malformed_peer(tmp_path, monkeypatch, capsys):
+    _net(tmp_path)
+    _harness(tmp_path, monkeypatch)
+    assert P.main(["--peer", "192.0.2.52:notaport"]) == 2
+    assert "--peer" in capsys.readouterr().err
+
+
+def test_main_peer_without_a_tcp_table_is_an_error(tmp_path, monkeypatch, capsys):
+    _harness(tmp_path, monkeypatch)
+    assert P.main(["--peer", "192.0.2.52"]) == 2
+    assert "tcp" in capsys.readouterr().err
+
+
+@pytest.mark.skipif(not Path("/proc/net/tcp").is_file(), reason="needs a Linux /proc/net/tcp")
+def test_scan_peer_finds_this_process_on_a_real_loopback_connection():
+    """The real kernel table, not a fixture: proves the address decoding and the fd walk."""
+    server = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    server.bind(("127.0.0.1", 0))
+    server.listen(1)
+    port = server.getsockname()[1]
+    client = socket.create_connection(("127.0.0.1", port))
+    accepted, _ = server.accept()
+    try:
+        found = P.scan_peer(Path("/proc"), {"127.0.0.1"}, port)
+        assert os.getpid() in [h["pid"] for h in found.holders]
+    finally:
+        for s in (accepted, client, server):
+            s.close()

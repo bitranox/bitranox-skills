@@ -967,6 +967,72 @@ def test_git_verb_dir_reads_a_continued_line_with_a_quoted_dash_c_value():
         assert S.git_verb_dir(cmd, "/s", S.GATED_GIT_VERBS, tool) == moved
 
 
+@pytest.mark.parametrize("command", [
+    # OPEN-WORK [1050]: the cd runs only when the statement before it succeeds or fails, and the
+    # verb after the `;` runs either way
+    "false && cd /r; git commit -m x",
+    "test -d /r && cd /r; git commit -m x",
+    "true || cd /r; git commit -m x",
+    "x || cd /r\ngit push",
+    # the verb runs both where the cd landed and where it was skipped
+    "x || cd /r && git commit -m x",
+    "x && cd /r || true; git push",
+    "x && cd /r || git push",
+    "! cd /r && git commit -m x",
+])
+def test_a_cd_that_may_not_run_is_unknown(command):
+    """A cd that depends on another statement's exit status is not a cd at that point of the text;
+    reading it as one judged the repository the cd names when the commit ran where it started."""
+    assert S.git_verb_dir(command, "/s", S.GATED_GIT_VERBS) is None
+
+
+@pytest.mark.parametrize("command, lands", [
+    # a cd guarded by `&&` still holds for a verb joined to it by `&&`: the verb runs only after it
+    ("x && cd /r && git commit -m x", _AT_R),
+    ("test -d /r && cd /r && git add f && git push", _AT_R),
+    ("cd /a && cd r && git commit -m x", os.path.normpath("/a/r")),
+    ("cd /a && cd r; git commit -m x", os.path.normpath("/a/r")),
+    ("x || mkdir y && cd /r && git push", _AT_R),
+    # a cd that is the first statement of its list is read as succeeding, as before
+    ("cd /r || exit 1; git commit -m x", _AT_R),
+    ("cd /r && x; git push", _AT_R),
+    # the guarded cd inside a subshell is undone when the subshell closes
+    ("x && (cd /r); git commit -m x", "/s"),
+    # a later cd that always runs makes the earlier one irrelevant
+    ("false && cd /a; cd /r; git commit -m x", _AT_R),
+    # a cd behind `||` after cds that are read as succeeding never runs
+    ("cd /a || cd /b && git commit -m x", _AT_A),
+    ("cd /a || cd /b; git commit -m x", _AT_A),
+    # an ordinary statement's `||` branch ends with the list: the cd before it holds after `;`
+    ("cd /r && x || echo failed; git push", _AT_R),
+    # a substitution inside a statement does not end the list the cd guards
+    ('mkdir -p /t && cd /r && test "$(git branch --show-current)" = m && git commit -m x', _AT_R),
+])
+def test_control_a_cd_the_verb_cannot_run_without_keeps_the_walk(command, lands):
+    assert S.git_verb_dir(command, "/s", S.GATED_GIT_VERBS) == lands
+
+
+@pytest.mark.parametrize("command, lands", [
+    # OPEN-WORK [1050] review: a subshell opened INSIDE the block closes inside it, so its cd
+    # cannot reach a statement after the block, or the next pass of the loop
+    ("while x; do (cd /r); git push; done", "/s"),
+    ("if a; then (cd /r); fi; git commit -m x", "/s"),
+    ("for b in a; do (cd /r && git push); done", _AT_R),
+])
+def test_a_subshell_cd_inside_a_block_stays_in_its_subshell(command, lands):
+    assert S.git_verb_dir(command, "/s", S.GATED_GIT_VERBS) == lands
+
+
+def test_control_a_block_inside_a_subshell_still_hides_its_cd():
+    """The subshell opened BEFORE the loop: the loop's cd reaches the verb inside it."""
+    assert S.git_verb_dir("(while x; do cd /r; done; git push)", "/s", S.GATED_GIT_VERBS) is None
+
+
+def test_a_verb_only_a_failed_cd_reaches_is_not_answered_with_the_cd():
+    """`cd /r || git commit` commits only when the cd FAILED, so never in /r."""
+    assert S.git_verb_dir("cd /r || git commit -m x", "/s", S.GATED_GIT_VERBS) != _AT_R
+
+
 def test_git_verb_dir_sees_a_cd_behind_an_env_prefix_or_a_keyword():
     """The shared cd reader skips what stands in front of the program, as the git walk does."""
     moved = os.path.normpath("/r")
@@ -1124,3 +1190,17 @@ def test_git_verb_operands_keeps_redirections_so_callers_can_locate_the_verb():
     operands = S.git_verb_operands(tokens, {"push"})
     assert tokens[len(tokens) - len(operands) - 1] == "push"
     assert S.drop_redirections(operands) == ["origin", "v1"]
+
+
+def test_the_edge_of_a_substitution_before_an_and_does_not_end_the_list():
+    """`B=$(git hash-object f) && git commit` - the text between the two statements is `) &&`."""
+    command = 'printf x > /t/m && cd /r && B=$(git hash-object -w f) && git commit -q -F /t/m'
+    assert S.git_verb_dir(command, "/s", S.GATED_GIT_VERBS) == _AT_R
+
+
+@pytest.mark.parametrize("gap, joined", [
+    (" && ", "&&"), ("||\n ", "||"), ("$(", ""), (") && ", "&&"), ("`", ""),
+    ("; ", None), ("\n", None), (" & ", None), (" | ", None), ("&& (", None), (");", None),
+])
+def test_list_gap_reads_the_operator_between_two_statements(gap, joined):
+    assert S._list_gap(gap) == joined

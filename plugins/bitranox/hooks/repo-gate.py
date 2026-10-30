@@ -1150,6 +1150,37 @@ def table_repad_problem(root, rel, read_original=None):
     return None
 
 
+#: An open GFM task-list item: a bullet or ordered marker, then `[ ]`, then a space or the line end.
+_OPEN_TASK = re.compile(r"^[ \t]*(?:[-*+]|\d{1,9}[.)])[ \t]+\[ \](?:[ \t]|$)")
+#: A fence opener (CommonMark: up to three spaces of indent, three or more backticks or tildes).
+_FENCE = re.compile(r"^ {0,3}(`{3,}|~{3,})(.*)$")
+
+
+def has_open_checkbox(text):
+    """True when `text` has an unticked task-list item outside a fenced code block.
+
+    A bare substring test for `[ ]` refused a fully ticked checklist whose line QUOTED an open-item
+    template, so only a box that is itself a list item counts: one inside a code span, in prose or
+    in a fenced example is text about a box, not an open one. A fence closes on a bare run of the
+    same character at least as long as its opener; one never closed hides the rest of the file,
+    as it does from a Markdown reader.
+    """
+    fence = None
+    for line in text.splitlines():
+        found = _FENCE.match(line)
+        if fence is not None:
+            if found and found.group(1)[0] == fence[0] and len(found.group(1)) >= len(fence) \
+                    and not found.group(2).strip():
+                fence = None
+            continue
+        if found and not (found.group(1)[0] == "`" and "`" in found.group(2)):
+            fence = found.group(1)
+            continue
+        if _OPEN_TASK.match(line):
+            return True
+    return False
+
+
 def skill_review_failures(root, changed, read_original=None):
     """A changed SKILL.md needs a co-changed, fully-checked .skillwriter/checklist-*.md - the
     skill-writer procedure's committed receipt. Prose discipline gets cherry-picked; a required
@@ -1178,7 +1209,7 @@ def skill_review_failures(root, changed, read_original=None):
                 text = (root / a).read_text(encoding="utf-8")
             except OSError:
                 continue
-            if "[ ]" in text:
+            if has_open_checkbox(text):
                 fails.append("%s has unchecked boxes - finish the skill-writer checklist before "
                              "committing." % a)
     return fails
@@ -2216,7 +2247,7 @@ def _is_plain_cd(segment):
         tokens = shell_text.split_for_tool(segment, "Bash")
     except ValueError:
         return False
-    return (len(tokens) == 2 and tokens[0] == "cd" and (tokens[1].startswith("/") or os.path.isabs(tokens[1]))
+    return (len(tokens) == 2 and tokens[0] == "cd" and shell_text.is_rooted(tokens[1])
             and not _climbs(tokens[1]))
 
 

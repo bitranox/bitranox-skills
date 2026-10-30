@@ -94,3 +94,12 @@ def test_the_notice_states_the_exit_codes_real_git_gives(tmp_path):
         flat = " ".join(text.split())
         assert "128" in flat and "path" in flat, text
         assert "verbatim and exits 0" not in flat, text
+
+
+def test_a_quoted_redirection_target_with_a_space_is_not_a_revision():
+    """OPEN-WORK [1060]: the joined-text regex cut `2>"/tmp/a b"` at the space and kept `b`."""
+    assert N.notice('git rev-parse 2>"/tmp/a b"') is None
+
+
+def test_control_a_revision_beside_a_redirection_still_fires():
+    assert N.notice("git rev-parse main 2>/dev/null") is not None

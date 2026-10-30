@@ -33,6 +33,7 @@ from shell_text import (
     argv_for_match,
     blank_heredoc_bodies,
     commands_only_aligned,
+    drop_redirections,
     is_shell_tool,
     iter_segments,
     statement_program,
@@ -46,11 +47,6 @@ _VALUE_OPTS = frozenset({"-C", "-f", "-I", "-o", "-W", "--directory", "--file", 
 _ASSIGNMENT = re.compile(r"^(?P<name>[A-Za-z_][A-Za-z0-9_]*)=(?P<value>.*)$", re.S)
 _PROGRAM_WORD = re.compile(r"(?<![\w.-])make(?![\w.-])")
 _METACHARS = re.compile(r"[;()$`\"'|&<>\n]")
-# A redirection token (`>log`, `2>&1`, `&>out`, `</dev/null`, or a bare `>` whose target follows):
-# the shell consumes it before make runs, so it is never part of the message. Matched per token,
-# so a QUOTED word that happens to start with `>` is misread as one - rare, and a miss, not a
-# false alarm.
-_REDIRECT = re.compile(r"^(?:&|\d+)?(?:>>?|<)(?P<target>.*)$", re.S)
 
 _NOTICE = (
     "This bmk commit message carries shell metacharacters in ARGS= (or as trailing words). Both "
@@ -86,14 +82,15 @@ def _segment_channel(argv, tool_name):
     if idx is None:
         return None
     target_seen, words, args_value = False, [], None
-    index = idx + 1
-    while index < len(argv):
-        token = argv[index]
+    # A redirection (`>log`, `2>&1`, `*> log`, a bare `>` and its target) is consumed by the shell
+    # before make runs, so it is never part of the message. Read per word, so a QUOTED word that
+    # starts with `>` is taken for one too - rare, and a miss rather than a false alarm.
+    operands = drop_redirections(argv[idx + 1:])
+    index = 0
+    while index < len(operands):
+        token = operands[index]
         assignment = _ASSIGNMENT.match(token)
-        redirect = _REDIRECT.match(token)
-        if redirect:
-            index += 0 if redirect.group("target") else 1  # a bare `>` takes the next token
-        elif token in _VALUE_OPTS:
+        if token in _VALUE_OPTS:
             index += 1                                  # skip the option's value too
         elif assignment:
             if assignment.group("name") == "ARGS":

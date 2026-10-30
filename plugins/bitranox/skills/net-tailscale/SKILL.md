@@ -134,7 +134,8 @@ long-poll timed out!" and never reconnects on its own). Key it on what the daemo
 - With `Running`, restart only when an entry of the `Health` list (an array of strings; a
   missing key counts as empty) contains the text "Unable to connect to the Tailscale
   coordination server" (the wording 1.98 and 1.104 print), matched as a substring of the
-  entry.
+  entry. `tailscaled` raises that warning only after the control connection has been gone for
+  8 minutes, so the watchdog reacts no faster than that.
 - Do not look for a "last control contact" time: no LocalAPI endpoint reports it, and a probe
   built on one gets 404 and fails every run.
 - Keep a failure of the PROBE apart from a failure of the DAEMON. When the CLI is missing, the
@@ -223,6 +224,7 @@ deploy a managed `/etc/resolv.conf`:
 | Assuming `pct clone` copied the host `.conf`                         | Clone has no `/dev/net/tun` grant; tailscaled cannot start              |
 | Inline `--auth-key=tskey-...` on the command line                    | Key leaks into shell history and logs                                   |
 | Restarting only on process death, not a dead poll                    | A wedged daemon looks alive while the tailnet is down                   |
+| A watchdog whose probe-failure fallback matches its restart pattern  | Restarts `tailscaled` on every tick wherever the probe tool is missing  |
 | Forwarding a resolver's zone to `100.100.100.100` on FreeBSD/pfSense | `tailscaled` does not serve quad-100 there; SERVFAIL, not a broken zone |
 | Setting `accept-dns=true` on FreeBSD/pfSense to "fix" DNS            | Rewrites `resolv.conf`; breaks `pkg` and system upgrades there          |
 | Deploying a managed `resolv.conf` before `accept-dns=false`          | The switch writes Tailscale's backup over it                            |

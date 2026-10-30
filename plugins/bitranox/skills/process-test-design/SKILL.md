@@ -38,6 +38,12 @@ rule does not apply.
   client's own first-byte timeout through its injected clock (see "No timer in a test" below). A
   timed `first_byte_delay=` knob belongs only to the integration tier, where that rule's exception
   applies.
+- **A SILENT peer still reads what it is sent.** A fake for a device or service that never answers
+  must consume the request: read it from the socket or pty on the fake's side and assert it
+  arrived. A socket or pty master nobody reads models a STALLED link instead: once its buffer
+  fills, the client's send or drain timeout fires before the receive timeout the test is about.
+  Which timer wins then depends on the platform's buffer size and the runner's load, so the test
+  passes for weeks and fails once on one CI cell, and reads as a flake.
 - **Avoid monkeypatching. Use dependency injection.** Pass the collaborator in (a port/protocol) and
   substitute a real-ish fake or the real thing in tests. Reach for `monkeypatch`/patch only at a true
   external edge you cannot inject (a third-party global, the clock - with the caveat below, the
@@ -261,17 +267,22 @@ For any function/endpoint at an application or facing-API boundary, test the inp
 the happy path. (Validation rules: `bitranox:coding-input-sanitization`; full per-codepath matrix:
 enumerate every variant/caller a path serves and cover each branch.)
 
-| Axis           | Cover at least                                                                                       |
-|----------------|------------------------------------------------------------------------------------------------------|
-| Text / Unicode | empty, whitespace-only, very long; non-ASCII, accented, combining marks, RTL, zero-width, emoji, CJK |
-| Bytes          | control chars, NUL byte, invalid UTF-8 / raw binary                                                  |
-| Type           | wrong type (str where int, None, list where scalar), missing field, extra field                      |
-| Numbers        | 0, -1, 1, max, off-by-one at every limit, overflow, NaN/inf where float                              |
-| Size           | empty collection, one element, at the cap, over the cap (DoS bound)                                  |
-| Structure      | malformed JSON, truncated payload, duplicate keys, deeply nested                                     |
+| Axis           | Cover at least                                                                                                                    |
+|----------------|-----------------------------------------------------------------------------------------------------------------------------------|
+| Text / Unicode | empty, whitespace-only, very long; non-ASCII, accented, combining marks, RTL, zero-width, emoji, CJK                              |
+| Bytes          | control chars, NUL byte, invalid UTF-8 / raw binary                                                                               |
+| Type           | wrong type (str where int, None, list where scalar), missing field, extra field                                                   |
+| Numbers        | 0, -1, 1, max, off-by-one at every limit, overflow, NaN/inf where float                                                           |
+| Size           | empty collection, one element, at the cap, over the cap (DoS bound)                                                               |
+| Structure      | malformed JSON, truncated payload, duplicate keys, deeply nested; structurally empty (only a frame, header, envelope or comments) |
 
 Assert the SPECIFIC behavior (rejected with a typed error, normalized, or escaped) - not just "does
 not crash".
+
+**A fix for an empty-input defect tests every form of empty the parser can see.** Beside `''` and
+whitespace that is input which is NOT blank but carries no payload: a front matter block with no
+body after it, a file of only comments, an envelope or wrapper with nothing inside. A check on
+`text.strip()` passes the first two and lets the third through to the same defect.
 
 **A file NAME that is invalid UTF-8 is refused by macOS.** Creating one (`b"bad\xff\xfe.txt"`)
 works on Linux, but APFS rejects it with `EILSEQ`, so the macOS CI cell goes red. Windows never
@@ -437,6 +448,14 @@ check the fixture's pairing before suspecting it.
   scratch copy of the test file, never in the committed test (see "No timer in a test"): insert a
   real delay before each call under test and require the old form to fail and the new one to
   pass; the same arm finds siblings of the same shape.
+- **When the code's own deadline kills real child processes, put every stand-in far from it.**
+  Where the clock cannot be injected because the deadline governs subprocesses the test starts, a
+  test that pins WHICH child the deadline caught gives each stand-in a duration clearly on one
+  side: quick ones a small fraction of the deadline (0.05 s against 1.2 s), slow ones several times
+  it (2.5 s). A uniform step near the deadline (0.5 s steps against 1.2 s leave 0.2 s of margin)
+  lets a slow process start on a loaded runner move the kill onto the next child, red on one CI
+  cell only. Prove the timings in a scratch copy by adding a fixed start delay to every stand-in:
+  the old timings must fail and the new ones pass.
 - **Inject time and randomness.** No bare now-clock, RNG, or UUID call in code under test - pass a
   clock / seed so the test is reproducible. (`datetime.now()`/`random`/`uuid4` in Python;
   `Date.now()`/`Math.random()`/`crypto.randomUUID()` in JS, or `vi.useFakeTimers()` at the edge;
@@ -686,7 +705,7 @@ list of local-only files: that list is a second copy of `.gitignore`, so the nex
 something writes into the tree (a state file, a scratch log) turns the local run red while a
 fresh CI clone, which never has that file, stays green.
 
-Ten mechanics worth stating because they silently defeat a test that looks right:
+Eleven mechanics worth stating because they silently defeat a test that looks right:
 
 - **`from m import X` binds a COPY at import time.** `monkeypatch.setattr(m, "X", v)` mutates `m`'s
   namespace and never reaches the consumer's already-bound name, so the test runs against the
@@ -738,6 +757,23 @@ Ten mechanics worth stating because they silently defeat a test that looks right
   one whose examples carry no expected output: an import-only example passes while proving nothing.
   Write each example against the root group with the context object it expects
   (`CliRunner().invoke(cli, ["hello"], obj=...)`); invoking the bare command skips the root's setup.
+- **`python3 -m doctest <file>` reads a file without a `.py` suffix as a TEXT file.** An
+  extensionless script (a tool installed under `/usr/local/sbin` with a shebang) is not imported:
+  the whole file is parsed as one doctest document, its functions are never defined, and the run
+  fails with errors that name the wrong cause (`NameError` for a function the file defines, or a
+  `ValueError` about inconsistent leading whitespace in an unchanged docstring).
+  `importlib.util.spec_from_file_location` returns `None` for such a path too. Load it with an
+  explicit loader, in a pytest test so the examples run with the suite:
+
+  ```python
+  loader = importlib.machinery.SourceFileLoader("tool", str(path))
+  spec = importlib.util.spec_from_loader("tool", loader)
+  module = importlib.util.module_from_spec(spec)
+  sys.modules["tool"] = module  # before exec: a dataclass looks its module up there
+  loader.exec_module(module)
+  result = doctest.testmod(module)
+  assert result.failed == 0 and result.attempted > 0
+  ```
 - **Testing discovery does not prove the scan uses it.** A helper that filters paths (skipping
   `.venv`, suffixed venvs, `node_modules`, `.git`) can be covered exclusion by exclusion while the
   command run afterwards re-walks the tree (`-Recurse`, `rglob`, a bare directory argument) and

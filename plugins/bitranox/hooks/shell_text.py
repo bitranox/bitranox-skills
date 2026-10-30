@@ -770,6 +770,67 @@ _BLOCK_CLOSERS = {"fi": "if", "done": "loop"}
 _FUNCTION_NAME = re.compile(r"^[A-Za-z_][A-Za-z0-9_.:-]*$")
 _EMPTY_PARENS = re.compile(r"[ \t]*\([ \t]*\)")
 
+#: The edges of a command substitution, which cut ONE statement into segments: `test "$(git
+#: branch)" && git push` is one and-or list, and its `$(` and `)` end nothing.
+_SUBSTITUTION_EDGES = re.compile(r"\$\(|<\(|>\(|`|\)")
+
+
+def _list_gap(gap):
+    """`&&` or `||` when `gap`, the text between two statements, joins them in one and-or list; ""
+    when it holds only a command substitution's edges; None when the list ends there (`;`, a
+    newline, `&`, a pipe, a subshell's opening paren)."""
+    stripped = "".join(_SUBSTITUTION_EDGES.sub(" ", gap).split())
+    if not stripped:
+        return None if "\n" in gap else ""      # a bare newline ends the list
+    return stripped if stripped in ("&&", "||") else None
+
+
+class _AndOrList:
+    """Whether the cd in the current `&&`/`||` list holds for the statements after it.
+
+    The walk reads every cd as succeeding, but a cd behind `&&` or `||` may not RUN at all:
+    `false && cd /r; git commit` commits where the command started. Such a cd still holds for a
+    statement joined to it only by `&&` (`test -d r && cd r && git push` pushes from r or not at
+    all); once its list ends, the directory is unknown. A `||` after any cd in the list leaves the
+    verb behind it unknown too: `cd /r || git commit` commits only where the cd failed. Statements
+    of the list that are themselves cds do not make the next one conditional: `cd /a && cd b` is
+    read like `cd /a; cd b`.
+    """
+
+    def __init__(self):
+        self.only_cds = True      # every statement so far in this list was a cd
+        self.cd_seen = False
+        self.conditional = False  # a cd ran behind a statement that may have failed
+        self.or_seen = False      # a `||` followed a cd: a verb in the rest of the list is unknown
+
+    def statement(self, joined, is_cd, negated=False):
+        """Read one statement joined by `joined` ("&&", "||" or None for the first) and say what
+        happens to it: "runs", "skipped" (it never runs: the `||` branch after cds that are read as
+        succeeding, as in `cd /a || cd /b`) or "unknown" (a cd that may or may not run: `x || cd /r`).
+
+        `! cd /r && git push` pushes only where the cd FAILED, so a negated cd counts as a `||`."""
+        if joined == "||" and self.cd_seen and self.only_cds:
+            return "skipped"
+        action = "runs"
+        if is_cd and joined == "||":
+            action = "unknown"
+        elif is_cd and joined and not self.only_cds:
+            self.conditional = True
+        self.or_seen = self.or_seen or (joined == "||" and self.cd_seen) or (is_cd and negated)
+        self.cd_seen = self.cd_seen or is_cd
+        self.only_cds = self.only_cds and is_cd and not negated
+        return action
+
+
+def _negated(tokens):
+    """True when a `!` stands among the keywords in front of the statement's program."""
+    for token in tokens:
+        if token == "!":
+            return True
+        if token not in _STATEMENT_KEYWORDS:
+            return False
+    return False
+
 
 def _moves_the_shell(tokens, tool):
     """True when any word of the statement is a cd-like program, wherever it stands."""
@@ -815,7 +876,8 @@ class _BodyTracker:
     def __init__(self, tool):
         self.tool = tool
         self.cases = 0          # `case ... esac` blocks open
-        self.blocks = []        # open `if`/loop blocks, innermost last: "if" or "loop"
+        self.blocks = []        # open `if`/loop blocks, innermost last: ("if" or "loop", subshell depth)
+        self.depth = 0          # subshells open around the statement being read
         self.body = None        # [name, open braces, holds a cd] of the `{ }` body being read
         self.pending = None     # a function named without its body: `f()` then `{` on the next line
         self.moving = set()     # functions this command defined whose body holds a cd
@@ -823,10 +885,14 @@ class _BodyTracker:
 
     @property
     def in_loop(self):
-        return "loop" in self.blocks
+        return any(kind == "loop" for kind, _depth in self.blocks)
 
-    def statement(self, tokens, parens_follow=False):
-        """Read one statement; True when it sits inside a function body and must not be applied."""
+    def statement(self, tokens, parens_follow=False, depth=0):
+        """Read one statement; True when it sits inside a function body and must not be applied.
+
+        `depth` is how many subshells are open around it: a cd in a subshell opened INSIDE a block
+        is undone before that block closes, so it reaches nothing after the block."""
+        self.depth = depth
         if self.body is not None:
             return self._in_body(tokens)
         definition = _defined_function(tokens, parens_follow)
@@ -847,18 +913,22 @@ class _BodyTracker:
 
         The condition an `if` opens with runs whenever the `if` is reached, so `if cd /r; then`
         is judged by the blocks around it, as the walk's cd-succeeds reading of `cd /r; git push`
-        is. A `while`/`until` condition runs again on every pass, and an `elif` may never run."""
+        is. A `while`/`until` condition runs again on every pass, and an `elif` may never run.
+        A block guards only a cd at its own subshell depth: `while x; do (cd /r); done` keeps the
+        cd inside its subshell, which the subshell tracker already undoes."""
         opened = []
         for token in tokens:
             if token in _BLOCK_OPENERS:
                 opened.append(_BLOCK_OPENERS[token])
-                self.blocks.append(opened[-1])
+                self.blocks.append((opened[-1], self.depth))
             elif token in _BLOCK_CLOSERS:
-                if self.blocks and self.blocks[-1] == _BLOCK_CLOSERS[token]:
+                if self.blocks and self.blocks[-1][0] == _BLOCK_CLOSERS[token]:
                     self.blocks.pop()
             elif token not in _STATEMENT_KEYWORDS:
                 break
-        guarded = len(self.blocks) > len(opened) or "loop" in opened
+        outer = self.blocks[:len(self.blocks) - len(opened)]
+        guarded = (any(depth >= self.depth for _kind, depth in outer)
+                   or "loop" in opened)
         self.unknown = self.unknown or (guarded and _moves_the_shell(tokens, self.tool))
 
     def _open(self, name, rest):
@@ -924,6 +994,13 @@ def git_verb_dir(command, cwd, verbs, tool_name=None):
     commit` commits in /s), and a verb inside a loop is answered only once the loop closes without a
     cd, since the next pass would start where the last one ended.
 
+    A cd behind `&&` or `||` may not run at all, since it waits on another statement's exit status
+    (`_AndOrList`): `false && cd /r; git commit` commits in /s. It still holds for a verb joined to
+    it only by `&&` (`test -d r && cd r && git push`), and once its list ends the directory is
+    None. A verb after a `||` that follows a cd is None too: `cd /r || git commit` commits only
+    where the cd failed. Every cd itself is still read as succeeding when it runs, so
+    `cd /a || cd /b; git commit` commits in /a.
+
     Once the command assigns `CDPATH` (`CDPATH=/a; cd sub`, `export CDPATH=...`, or as a prefix),
     a RELATIVE cd is unknown: bash tries each CDPATH entry first, and whether `/a/sub` exists is not
     in the text. A CDPATH inherited from the environment is invisible here and not modelled.
@@ -933,9 +1010,15 @@ def git_verb_dir(command, cwd, verbs, tool_name=None):
     segments = list(iter_segments(text, tool))
     known, leading, previous_end = {}, tool == "Bash", 0
     subshells, gap_start, cdpath_set = _SubshellTracker(), 0, False
-    bodies = _BodyTracker(tool)
+    bodies, chain, statement_end = _BodyTracker(tool), _AndOrList(), 0
     held = _NOT_HELD    # a verb's answer found inside a loop, kept until the loop closes
     for index, (at, segment) in enumerate(segments):
+        # Measured from the last STATEMENT, not the last segment: `a &&\n b` has an empty segment
+        # between its `&&` and its newline, and the newline does not end the list there.
+        joined = _list_gap(text[statement_end:at])
+        if joined is None:
+            here = None if chain.conditional else here
+            chain = _AndOrList()
         if tool == "Bash":
             here = subshells.gap(text[gap_start:at], here)
         gap_start = at + len(segment)
@@ -949,35 +1032,46 @@ def git_verb_dir(command, cwd, verbs, tool_name=None):
             previous_end = at + len(segment)
             if found is not None:
                 known.update(found)
+                statement_end = at + len(segment)
                 continue
             leading = False
         tokens = argv_for_match(segment.strip().lstrip("(").strip(), tool)
         usable, known = _expansions(segment, known), {}
         if not tokens:
             continue
+        statement_end = at + len(segment)
         tokens = [_expand_known(token, usable) for token in tokens]
         closers = subshells.statement(segment, tokens) if tool == "Bash" else 0
-        in_body = bodies.statement(tokens, _EMPTY_PARENS.match(text, at + len(segment)) is not None)
+        in_body = bodies.statement(tokens, _EMPTY_PARENS.match(text, at + len(segment)) is not None,
+                                   len(subshells.open))
         # With CDPATH set, a relative target is unknown: reading it from no directory (None) makes
         # `_readable_dir` refuse exactly the relative ones and keep the rooted ones.
         changed, landing = _directory_change_tokens(tokens, None if cdpath_set else here, tool)
+        # `cd x & ...` and `cd x | ...` run the cd in a subshell: the next statement starts where
+        # this one did, so such a cd moves nothing.
+        moves = changed and gap_after.strip(" \t") not in ("&", "|")
         if in_body:
             # Defined here, run only where it is called: a verb in it has no readable directory.
             if held is _NOT_HELD and git_segment_dir(tokens, verbs, here, tool)[0]:
                 return None
-        elif changed:
-            # `cd x & ...` and `cd x | ...` run the cd in a subshell: the next statement starts
-            # where this one did.
-            if gap_after.strip(" \t") not in ("&", "|"):
-                here = landing
+        elif (action := chain.statement(joined or None, moves, _negated(tokens))) == "unknown":
+            here = None
+        elif action == "skipped":
+            # A verb that never runs has no directory to answer with.
+            if held is _NOT_HELD and git_segment_dir(tokens, verbs, here, tool)[0]:
+                return None
+        elif moves:
+            here = landing
         elif held is _NOT_HELD:
             is_verb, where = git_segment_dir(tokens, verbs, here, tool)
-            answer = None if subshells.lost or bodies.unknown else where
+            unknown = subshells.lost or bodies.unknown or chain.or_seen
+            answer = None if unknown else where
             if is_verb and (answer is None or not bodies.in_loop):
                 return answer
             held = answer if is_verb else held
         if closers:
-            here = subshells.gap(")" * closers, here)
+            here = subshells.gap(")" * closers, None if chain.conditional else here)
+            chain = _AndOrList()
         if held is not _NOT_HELD and (bodies.unknown or not bodies.in_loop):
             return None if bodies.unknown else held
     return None
@@ -2187,6 +2281,20 @@ WHOLE_CALL_REFUSED = (
     "NOTHING in this call ran: the whole tool call was refused, not only the part named above. "
     "Any edit, write or other step bundled into it did not happen - re-run those on their own."
 )
+
+
+def deny_reason(message: str) -> str:
+    """A `permissionDecision: deny` reason that ends with the whole-call footer.
+
+    A deny refuses the whole tool call exactly as an exit 2 does, so it owes the reader the same
+    sentence; a guard that refuses through the JSON decision rather than the exit code builds its
+    reason here (tests/test_refusal_footer.py pins that each Bash deny does).
+
+    Examples:
+        >>> deny_reason("BLOCKED: x").endswith(WHOLE_CALL_REFUSED)
+        True
+    """
+    return message.rstrip("\n") + "\n" + WHOLE_CALL_REFUSED
 
 
 def refuse(message: str, stream=None) -> int:

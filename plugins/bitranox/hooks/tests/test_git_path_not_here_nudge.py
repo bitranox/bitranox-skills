@@ -306,3 +306,21 @@ def test_main_falls_back_to_the_project_dir_then_the_process_cwd(tmp_path):
 def test_main_fails_open_on_garbage_stdin():
     proc = subprocess.run([sys.executable, str(_HOOK)], input=b"{", capture_output=True, timeout=60)
     assert (proc.returncode, proc.stdout) == (0, b"")
+
+
+def test_a_redirection_target_is_not_a_path_asked_about(tmp_path):
+    """OPEN-WORK [1060]: `> out.txt` kept `out.txt` as an operand, and an `out.txt` in the parent
+    project made the nudge claim the question was about it."""
+    outer = _repo(tmp_path, "outer")
+    (outer / "out.txt").write_text("x")
+    inner = _repo(outer, "inner")
+    (inner / "here.txt").write_text("x")
+    assert G.notice("git check-ignore -q here.txt > out.txt", str(inner)) is None
+    assert G.notice("git check-ignore -q here.txt 2> out.txt", str(inner)) is None
+
+
+def test_control_a_real_path_after_a_redirection_still_fires(tmp_path):
+    outer = _repo(tmp_path, "outer")
+    (outer / "handover.md").write_text("x")
+    inner = _repo(outer, "inner")
+    assert G.notice("git check-ignore -q 2>/dev/null handover.md", str(inner)) is not None

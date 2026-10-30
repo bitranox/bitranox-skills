@@ -32,8 +32,10 @@ still need one, clone it out first (next section).
 ## Full clone from a snapshot
 
 `qm clone <vmid> <newid> --snapname <snap> --full` cannot copy from a `zfspool` snapshot: the
-plugin offers no `copy` from a snapshot (`volume_has_feature` lists `copy` without `snap`). Do it
-by hand:
+plugin offers no `copy` from a snapshot (`volume_has_feature` lists `copy` without `snap`), so the
+clone refuses with `Full clone feature is not supported for a snapshot of '<volid>' (<disk>)`
+before copying anything. A full clone WITHOUT `--snapname` copies the current state, never a
+snapshot. Do it by hand:
 
 1. `qm config <vmid> --snapshot <snap>` lists the disks that snapshot references, including
    `efidisk0` and `tpmstate0`.
@@ -63,6 +65,35 @@ each. Undo it by hand, and ONLY when no linked clone uses the template
 What changes: a normal VM gives FULL clones only (a linked clone needs a template). And its first
 boot writes a machine id that was blanked before templating (an empty `/etc/machine-id` is filled
 at boot), so every clone made from it copies that id: blank it again before you clone or template.
+
+## Changing a VM's VMID
+
+PVE has no command that renumbers a guest, and `qm clone` to the new id keeps the disks but drops
+every snapshot. To keep the snapshots, rename by hand. Not for a template (a template's `base-`
+volumes are what its linked clones point at). Do steps 1 and 2 first, then stop the VM:
+
+1. Check the new id is free in the whole CLUSTER, not just on this node:
+   `pvesh get /cluster/nextid --vmid <new>` returns the id when it is free and fails with
+   `VM <new> already exists` when it is not.
+2. Find every other place the old id is used: `grep -rnw <old> /etc/pve`, reading each hit (a
+   bare number also matches sizes and ports), plus `ls /etc/pve/firewall/<old>.fw`, which
+   usually names the id only in its file name. A hit in `jobs.cfg` (backup jobs), `replication.cfg`,
+   `ha/resources.cfg` or `user.cfg` (pool membership) still names the old id after the rename.
+   Remove the guest from HA (`ha-manager remove vm:<old>`) and replication now, and re-add it
+   under the new id after step 6. Rename `firewall/<old>.fw` to `<new>.fw` and change the id in
+   the job and pool entries in the same pass as step 5, writing each of those files whole too;
+   inside the conf, a hit outside a volume id (the Notes, an `args:` line) is yours to decide.
+3. Copy `/etc/pve/nodes/<node>/qemu-server/<old>.conf` to a backup OUTSIDE `/etc/pve`.
+4. `zfs list -H -o name | grep -- '/vm-<old>-'` lists every volume: `disk-N` (EFI and TPM state
+   included), `cloudinit`, and the `state-<snap>` volume of a snapshot taken with RAM. Rename each
+   to `vm-<new>-...` with `zfs rename`; its `@snapshots` move with it.
+5. `mv /etc/pve/nodes/<node>/qemu-server/<old>.conf <new>.conf` in the same directory, then rewrite
+   every `vm-<old>-` volume id to `vm-<new>-` in the live section AND in every `[snapshot]`
+   section (`vmstate:` lines too). Write the file WHOLE (read, change, write back): `sed -i` fails
+   on pmxcfs.
+6. Verify before relying on it: `qm listsnapshot <new>` lists the snapshots,
+   `grep -c 'vm-<old>-' <new>.conf` prints 0, `qm rescan --vmid <new> --dryrun` adds no `unused`
+   disk (a renamed volume the conf does not name), and the VM boots.
 
 ## Growing the disk of a guest whose root is on ZFS
 

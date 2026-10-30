@@ -47,6 +47,7 @@ from self_improve_signals import session_state_path
 from shell_text import (
     argv_for_match,
     basename_for_tool,
+    is_rooted,
     is_shell_tool,
     iter_segments,
     strip_heredoc_bodies,
@@ -118,7 +119,7 @@ def _memory_add_args(argv, tool_name):
 
 def _read_hook_file(path, cwd):
     """The text of a hook file that already exists and is small, else None."""
-    if not os.path.isabs(path) and cwd:
+    if not is_rooted(path) and cwd:
         path = os.path.join(cwd, path)
     try:
         if not os.path.isfile(path) or os.path.getsize(path) > _HOOK_FILE_CAP:

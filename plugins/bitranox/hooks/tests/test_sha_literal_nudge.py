@@ -12,6 +12,7 @@ import json
 import pytest
 
 import sha_literal_nudge as N
+import shell_text
 
 S = "fb3330bd1ad7088658dda3716342906364ca87e2"            # a real-looking full sha
 PADDED = "fb3330b1d7b7b8c1e9fba1bb5cb6eb48e7d1b5ff"       # the measured padding of `fb3330b`
@@ -666,3 +667,33 @@ def test_main_refuses_a_spliced_sha_whatever_the_transcript_showed(monkeypatch, 
     payload = json.loads(out)["hookSpecificOutput"]
     assert payload["permissionDecision"] == "deny"
     assert S[:8] in payload["permissionDecisionReason"]
+
+
+# --- a refusal says the WHOLE call was refused (OPEN-WORK [1070]) ---------------------------------
+
+def test_a_deny_ends_with_the_whole_call_footer(monkeypatch, capsys, tmp_path):
+    """A `permissionDecision: deny` refuses the whole Bash call exactly as an exit 2 does, so an edit
+    bundled into it is lost the same way and the reason must say so."""
+    path = _transcript(tmp_path, "s.jsonl", [_tool_result("nothing here")])
+    out = _run_main(monkeypatch, capsys, {
+        "tool_name": "Bash", "transcript_path": str(path),
+        "tool_input": {"command": f"uv run ci_wait.py --sha {PADDED}"}})
+    reason = json.loads(out)["hookSpecificOutput"]["permissionDecisionReason"]
+    assert reason.endswith(shell_text.WHOLE_CALL_REFUSED)
+
+
+def test_a_splice_deny_ends_with_the_whole_call_footer(monkeypatch, capsys, tmp_path):
+    path = _transcript(tmp_path, "s.jsonl", [_tool_result(S)])
+    out = _run_main(monkeypatch, capsys, {
+        "tool_name": "Bash", "transcript_path": str(path),
+        "tool_input": {"command": f"uv run ci_wait.py --sha {S[:8]}$(git rev-parse HEAD | cut -c9-)"}})
+    reason = json.loads(out)["hookSpecificOutput"]["permissionDecisionReason"]
+    assert reason.endswith(shell_text.WHOLE_CALL_REFUSED)
+
+
+def test_control_a_nudge_that_refuses_nothing_carries_no_footer(monkeypatch, capsys):
+    out = _run_main(monkeypatch, capsys, {
+        "tool_name": "Bash", "tool_input": {"command": f"gh run list --commit {S}"}})
+    payload = json.loads(out)["hookSpecificOutput"]
+    assert "permissionDecision" not in payload
+    assert shell_text.WHOLE_CALL_REFUSED not in payload["additionalContext"]

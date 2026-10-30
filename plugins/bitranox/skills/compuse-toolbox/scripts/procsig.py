@@ -17,6 +17,13 @@ Match by (pick one):
   --comm NAME              the process name in /proc/<pid>/comm
   --cmdline SUBSTR         a substring of the command line, excluding any shell's command
                            string (the safe `pgrep -f` replacement)
+  --peer HOST[:PORT]       the processes holding a TCP connection to that peer (the
+                           `ss -tnp | grep HOST:` replacement), each with the nearest ancestor
+                           `claude` process and its cwd, so a shared device's port can be traced
+                           to the session holding it. List only: `--kill` is refused with it.
+                           Reads /proc/net/tcp and tcp6 of this network namespace; a connection
+                           whose owner is another user's process is counted, not listed, and
+                           makes an otherwise empty answer exit 2 rather than 1.
 
 What `--cmdline` searches, exactly:
 
@@ -102,9 +109,11 @@ Run: `uv run scripts/procsig.py --exe myserver`
 """
 
 import argparse
+import ipaddress
 import os
 import re
 import signal
+import socket
 import sys
 from pathlib import Path
 from typing import NamedTuple
@@ -128,7 +137,7 @@ def _read_exe(pdir: Path) -> str:
         target = os.readlink(pdir / "exe")
     except OSError:
         return ""
-    return target[: -len(_DELETED_SUFFIX)] if target.endswith(_DELETED_SUFFIX) else target
+    return target.removesuffix(_DELETED_SUFFIX)
 
 
 def _read_comm(pdir: Path) -> str:
@@ -543,6 +552,228 @@ def scan(proc_root, *, exe=None, comm=None, cmdline=None) -> list[dict]:
     return hits
 
 
+# ---- --peer: which local process holds a TCP connection to a given host[:port] ------------------
+
+# /proc/net/tcp state codes (include/net/tcp_states.h). LISTEN has no peer, and a row with inode 0
+# (TIME_WAIT, an orphaned FIN_WAIT) belongs to no process any more.
+_TCP_STATES = {
+    "01": "ESTABLISHED", "02": "SYN_SENT", "03": "SYN_RECV", "04": "FIN_WAIT1", "05": "FIN_WAIT2",
+    "06": "TIME_WAIT", "07": "CLOSE", "08": "CLOSE_WAIT", "09": "LAST_ACK", "0A": "LISTEN",
+    "0B": "CLOSING", "0C": "NEW_SYN_RECV",
+}
+_LISTEN = "0A"
+_PORT_MAX = 65535
+
+
+def parse_peer(text: str) -> tuple[str, int | None]:
+    """Split `HOST`, `HOST:PORT`, `[V6]:PORT` or a bare IPv6 literal into (host, port or None).
+
+    A value with more than one colon and no brackets is a bare IPv6 address, never host plus port:
+    `2001:db8::7` has no port in it, and reading its last group as one would match the wrong peer.
+
+    Raises:
+        ValueError: An empty host, an empty or non-numeric port, a port out of range, or an
+            unclosed bracket.
+    """
+    value = text.strip()
+    if value.startswith("["):
+        host, sep, rest = value[1:].partition("]")
+        if not sep:
+            raise ValueError(f"unclosed '[' in {text!r}")
+        port_text = rest[1:] if rest.startswith(":") else None
+        if rest and port_text is None:
+            raise ValueError(f"text after ']' in {text!r} is not ':PORT'")
+    elif value.count(":") == 1:
+        host, _, port_text = value.partition(":")
+    else:
+        host, port_text = value, None
+    if not host:
+        raise ValueError(f"no host in {text!r}")
+    if port_text is None:
+        return host, None
+    if not port_text.isascii() or not port_text.isdigit() or not 0 < int(port_text) <= _PORT_MAX:
+        raise ValueError(f"port {port_text!r} in {text!r} is not a number from 1 to {_PORT_MAX}")
+    return host, int(port_text)
+
+
+def resolve_peer(host: str) -> set[str]:
+    """Every address `host` stands for: itself when it is an IP literal, else what DNS returns.
+
+    Raises:
+        OSError: The name does not resolve (socket.gaierror is an OSError).
+    """
+    try:
+        return {str(ipaddress.ip_address(host))}
+    except ValueError:
+        infos = socket.getaddrinfo(host, None, type=socket.SOCK_STREAM)
+    return {str(ipaddress.ip_address(info[4][0].partition("%")[0])) for info in infos}
+
+
+def _decode_address(hex_addr: str) -> str:
+    """One /proc/net/tcp{,6} address: 32-bit words, each in host byte order.
+
+    An IPv4-mapped IPv6 address (`::ffff:192.0.2.1`, what a dual-stack socket reports) comes back
+    as the plain IPv4 address, so `--peer 192.0.2.1` finds it in tcp6 as well.
+    """
+    raw = bytes.fromhex(hex_addr)
+    words = [raw[i:i + 4] for i in range(0, len(raw), 4)]
+    host_order = b"".join(w[::-1] if sys.byteorder == "little" else w for w in words)
+    ip = ipaddress.ip_address(host_order)
+    mapped = getattr(ip, "ipv4_mapped", None)
+    return str(mapped or ip)
+
+
+class _TcpRow(NamedTuple):
+    local: str
+    remote_ip: str
+    remote_port: int
+    state: str
+    inode: int
+
+
+def _tcp_rows(proc_root: Path) -> list[_TcpRow]:
+    """Every row of <proc_root>/net/tcp and tcp6 that could belong to a live process.
+
+    Raises:
+        FileNotFoundError: Neither table exists (no Linux /proc), so nothing can be answered.
+    """
+    tables = [proc_root / "net" / name for name in ("tcp", "tcp6")]
+    if not any(t.is_file() for t in tables):
+        raise FileNotFoundError(f"no {tables[0]} or {tables[1]}")
+    rows = []
+    for table in tables:
+        try:
+            lines = table.read_text(encoding="utf-8", errors="replace").splitlines()[1:]
+        except OSError:
+            continue
+        for line in lines:
+            row = _parse_tcp_line(line)
+            if row is not None:
+                rows.append(row)
+    return rows
+
+
+def _parse_tcp_line(line: str) -> _TcpRow | None:
+    fields = line.split()
+    if len(fields) < 10 or fields[3] == _LISTEN or not fields[9].isdigit() or fields[9] == "0":
+        return None
+    try:
+        lip, lport = fields[1].split(":")
+        rip, rport = fields[2].split(":")
+        local = f"{_decode_address(lip)}:{int(lport, 16)}"
+        return _TcpRow(local, _decode_address(rip), int(rport, 16),
+                       _TCP_STATES.get(fields[3], fields[3]), int(fields[9]))
+    except ValueError:
+        return None
+
+
+def _socket_owners(proc_root: Path, inodes: set[int]) -> dict[int, int]:
+    """inode -> pid for each wanted socket, from /proc/<pid>/fd links. Unreadable fds are skipped."""
+    owners: dict[int, int] = {}
+    wanted = {f"socket:[{i}]": i for i in inodes}
+    for pdir in sorted(proc_root.glob("[0-9]*"), key=lambda p: int(p.name)):
+        try:
+            fds = list((pdir / "fd").iterdir())
+        except OSError:
+            continue
+        for fd in fds:
+            try:
+                inode = wanted.get(os.readlink(fd))
+            except OSError:
+                continue
+            if inode is not None:
+                owners.setdefault(inode, int(pdir.name))
+    return owners
+
+
+def _claude_ancestor(pid: int, proc_root: Path) -> tuple[int | None, str]:
+    """The nearest ancestor (or self) whose comm is `claude`, with its working directory."""
+    seen: set[int] = set()
+    cur: int | None = pid
+    while cur is not None and cur not in seen:
+        seen.add(cur)
+        pdir = proc_root / str(cur)
+        if _read_comm(pdir) == "claude":
+            try:
+                return cur, os.readlink(pdir / "cwd")
+            except OSError:
+                return cur, ""
+        cur = _ppid(pdir)
+    return None, ""
+
+
+class PeerScan(NamedTuple):
+    """Holders of TCP connections to a peer, and how many matching connections had no readable owner.
+
+    Attributes:
+        holders: One dict per (process, connection): pid, exe, cmdline, local, remote, state,
+            claude_pid (None when no `claude` process is an ancestor) and claude_cwd.
+        unowned: Matching connections whose socket appears in no readable /proc/<pid>/fd, which
+            is another user's process when not running as root. Not the same as no holder.
+    """
+
+    holders: list[dict]
+    unowned: int
+
+
+def scan_peer(proc_root, addresses: set[str], port: int | None) -> PeerScan:
+    """Local processes holding a TCP connection to any of `addresses` (and `port`, when given).
+
+    PURE over proc_root. Reads net/tcp and net/tcp6 of the reading process's network namespace,
+    so a process inside a container with its own namespace is not seen.
+
+    Raises:
+        FileNotFoundError: proc_root has no net/tcp or net/tcp6.
+    """
+    root = Path(proc_root)
+    rows = [r for r in _tcp_rows(root)
+            if r.remote_ip in addresses and (port is None or r.remote_port == port)]
+    owners = _socket_owners(root, {r.inode for r in rows})
+    holders = []
+    for row in rows:
+        pid = owners.get(row.inode)
+        if pid is None:
+            continue
+        pdir = root / str(pid)
+        claude_pid, claude_cwd = _claude_ancestor(pid, root)
+        remote = (f"[{row.remote_ip}]" if ":" in row.remote_ip else row.remote_ip) + f":{row.remote_port}"
+        holders.append({
+            "pid": pid, "exe": _read_exe(pdir), "comm": _read_comm(pdir),
+            "cmdline": " ".join(_read_cmdline_parts(pdir)).strip(), "local": row.local,
+            "remote": remote, "state": row.state, "claude_pid": claude_pid, "claude_cwd": claude_cwd,
+        })
+    holders.sort(key=lambda h: (h["pid"], h["remote"]))
+    return PeerScan(holders=holders, unowned=sum(1 for r in rows if r.inode not in owners))
+
+
+def _main_peer(peer: str) -> int:
+    """List the holders of connections to `peer`: 0 found, 1 no holder, 2 could not answer."""
+    try:
+        host, port = parse_peer(peer)
+        addresses = resolve_peer(host)
+    except (ValueError, OSError) as exc:
+        print(f"procsig: --peer {peer!r}: {exc}", file=sys.stderr)
+        return 2
+    try:
+        found = scan_peer(PROC, addresses, port)
+    except FileNotFoundError as exc:
+        print(f"procsig: cannot list TCP connections: {exc}", file=sys.stderr)
+        return 2
+    for h in found.holders:
+        session = f"claude={h['claude_pid']} cwd={h['claude_cwd'] or '?'}" if h["claude_pid"] else "claude=-"
+        print(f"{h['pid']:>8}  {h['state']:<11}  {h['local']} -> {h['remote']}  {session}  "
+              f"{(h['exe'] or h['comm'] or '?')[:30]}  {h['cmdline'][:60]}")
+    if found.unowned:
+        print(f"procsig: {found.unowned} connection(s) to {peer} belong to a process whose fd table is "
+              "not readable (another user's; run as root to see it)", file=sys.stderr)
+    if found.holders:
+        return 0
+    if found.unowned:
+        return 2
+    print(f"no holder: no readable TCP connection to {peer}")
+    return 1
+
+
 def ancestors(pid: int, proc_root) -> set[int]:
     """`pid` plus every ancestor pid, walking the ppid chain. Cycle/So-missing-safe. PURE."""
     seen: set[int] = set()
@@ -592,10 +823,22 @@ def main(argv=None) -> int:
                                      "launcher naming no shell and using no -c flag (watch, "
                                      "tmux, entr, parallel). Use --exe, --comm or the PID for a "
                                      "process that was skipped")
+    m.add_argument("--peer", metavar="HOST[:PORT]",
+                   help="list the local processes holding a TCP connection to HOST (an IP, a "
+                        "name, or [IPv6]:PORT), each with the nearest ancestor 'claude' process "
+                        "and its cwd. List only: --kill is refused. Exit 1 means no holder; exit "
+                        "2 also covers connections whose owner is another user's process")
     ap.add_argument("--kill", action="store_true", help="signal the matches (default: just list)")
     ap.add_argument("--signal", default="TERM", help="signal name for --kill (default TERM)")
     args = ap.parse_args(argv)
     _tolerate_unencodable_output()
+
+    if args.peer is not None:
+        if args.kill:
+            print("procsig: --peer only lists; --kill is refused with it, so signal a holder by "
+                  "its PID", file=sys.stderr)
+            return 2
+        return _main_peer(args.peer)
 
     needle = next(v for v in (args.exe, args.comm, args.cmdline) if v is not None)
     if not needle.strip():

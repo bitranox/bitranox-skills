@@ -1176,7 +1176,7 @@ def unsatisfiable_nap_owed(proj, session_id=""):
     if not os.path.exists(path):
         return path, NAP_OWED_TRANSCRIPT_GONE
     offset = _as_offset(info.get("offset"))
-    if offset and get_watermark(proj, path, DREAM_REVIEWER) >= offset:
+    if offset and furthest_watermark(path, DREAM_REVIEWER) >= offset:
         return path, NAP_OWED_TRANSCRIPT_CONSUMED
     owed_session = str(info.get("session_id") or "")
     if not owed_session or owed_session == str(session_id or ""):
@@ -1185,7 +1185,7 @@ def unsatisfiable_nap_owed(proj, session_id=""):
         size = os.path.getsize(path)
     except OSError:
         return "", ""
-    if get_watermark(proj, path, DREAM_REVIEWER) >= size:
+    if furthest_watermark(path, DREAM_REVIEWER) >= size:
         return path, NAP_OWED_TRANSCRIPT_CONSUMED
     return "", ""
 
@@ -1656,6 +1656,15 @@ def get_watermark(proj, transcript, reviewer):
     own = _watermarks(proj).get(str(reviewer), {})
     if isinstance(own, dict) and str(transcript) in own:
         return _as_offset(own.get(str(transcript)))
+    return furthest_watermark(transcript, reviewer)
+
+
+def furthest_watermark(transcript, reviewer):
+    """The furthest offset `reviewer` has consumed of `transcript` from ANY cwd. 0 when unmarked.
+
+    The question an owed nap asks: were these bytes read at all? `get_watermark` prefers the
+    cwd's own mark for its read-back, so a stale lower mark a worktree once wrote hid a review
+    that later reached the end from the launch checkout, and the Stop gate kept blocking."""
     furthest = 0
     try:
         stores = list(_audit_dir().glob("*.watermark.json"))

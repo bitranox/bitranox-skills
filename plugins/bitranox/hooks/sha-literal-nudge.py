@@ -60,8 +60,10 @@ assistant's OWN text back and so do not count:
 
 What does NOT fire, deliberately: a literal every one of whose uses is a REVISION operand of a
 local git command that resolves it (`git show <sha>`, `git log -1 <sha>`, `git diff A <sha>`,
-`git branch --contains <sha>`, `git update-ref ...`). Git refuses a nonexistent object LOUDLY
-there, so the invented sha costs one round trip and cannot become a silent wait. The same verbs
+`git branch --contains <sha>`, `git update-ref ...`), and the expected value of a lease
+(`git push --force-with-lease=<ref>:<sha>`), which the remote compares and refuses as stale when it
+differs. Git refuses a nonexistent object LOUDLY there, so the invented sha costs one round trip and
+cannot become a silent wait. The same verbs
 do not resolve every operand: `git log --grep=<sha>` / `-S<sha>` / `--author=` match TEXT and
 exit 0 on nothing, anything after `--` is a pathspec, and `git branch <sha>`, `git tag <sha>`,
 `git checkout -b <sha>` create a ref of that NAME. Those fire, as do the other silent consumers -
@@ -83,6 +85,7 @@ from pathlib import Path
 from shell_text import (
     argv_for_match,
     blank_unexpanded_text,
+    deny_reason,
     git_verb_operands,
     is_shell_tool,
     iter_segments,
@@ -737,14 +740,15 @@ def main() -> int:
     if spliced:
         # Invented by construction, so no transcript reading changes the answer.
         output = {"permissionDecision": "deny",
-                  "permissionDecisionReason": message + _SPLICE_DENY_TAIL}
+                  "permissionDecisionReason": deny_reason(message + _SPLICE_DENY_TAIL)}
     # Refuse only when the transcript that can vouch for the sha was read. Inside a subagent that
     # is the parent's: the subagent's own file (`relayed`) carries the brief the parent wrote, so
     # with the parent unreadable a sha shown to the parent cannot be told from an invented one.
     elif shown is None or not _readable(paths):
         output = {"additionalContext": message + _NUDGE_TAIL}
     else:
-        output = {"permissionDecision": "deny", "permissionDecisionReason": message + _DENY_TAIL}
+        output = {"permissionDecision": "deny",
+                  "permissionDecisionReason": deny_reason(message + _DENY_TAIL)}
     sys.stdout.write(json.dumps({"hookSpecificOutput": {"hookEventName": "PreToolUse", **output}}) + "\n")
     return 0
 

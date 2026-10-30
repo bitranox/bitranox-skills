@@ -135,6 +135,12 @@ git check-ignore -q "$LOCATION" 2>/dev/null
 
 **Why critical:** Prevents accidentally committing worktree contents to repository.
 
+**Never put a worktree inside a directory Claude Code reads skills from** (`~/.claude/skills/`, a
+project's `.claude/skills/`), whichever mechanism creates it. A worktree of a repository whose
+root holds a `SKILL.md` is then loaded as a second copy of that skill. Choose the place before
+creating it: a misplaced one moves with `git worktree move` only within one filesystem (the
+cross-filesystem case is the "Moving a worktree to another filesystem" row under Quick Reference).
+
 #### Create the Worktree
 
 ```bash

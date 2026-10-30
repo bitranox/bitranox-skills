@@ -833,6 +833,46 @@ def test_skill_review_rejects_unchecked_boxes(tmp_path):
     assert fails and "unchecked" in fails[0]
 
 
+def _checklist_body(root, name, body):
+    _skill(root, name, "Use when gamma gizmos need a checklist body test")
+    rel = f"plugins/bitranox/skills/{name}/.skillwriter/checklist-20261030.md"
+    write(root / rel, body)
+    return ["plugins/bitranox/skills/%s/SKILL.md" % name, rel]
+
+
+@pytest.mark.parametrize("body", [
+    # a quoted template line: the box is inside a code span, not a list item of its own
+    "- [x] quoted the header template `- [ ] | open: <what>` verbatim\n",
+    # a pattern named in prose
+    "- [x] the matcher looks for '[ ]' after the bullet\n",
+    # inside a fenced block, an example of an open item
+    "- [x] example below\n\n```text\n- [ ] an open item as OPEN-WORK.md writes it\n```\n",
+    "- [x] tilde fence too\n\n~~~\n* [ ] example\n~~~\n",
+])
+def test_skill_review_ignores_a_box_that_is_not_a_list_item_checkbox(tmp_path, body):
+    make_repo(tmp_path)
+    changed = _checklist_body(tmp_path, "gamma", body)
+    assert RG.skill_review_failures(tmp_path, changed) == []
+
+
+@pytest.mark.parametrize("body", [
+    "- [ ] RED baseline\n",
+    "  - [ ] nested and open\n",
+    "* [ ] star bullet\n",
+    "+ [ ] plus bullet\n",
+    "1. [ ] numbered\n",
+    "2) [ ] numbered with a paren\n",
+    # a fence that never closes does not hide what follows it from the reader either way, and the
+    # open box AFTER a closed fence is still open
+    "```\n- [ ] in the fence\n```\n- [ ] after the fence\n",
+])
+def test_skill_review_still_rejects_an_open_list_item_checkbox(tmp_path, body):
+    make_repo(tmp_path)
+    changed = _checklist_body(tmp_path, "delta", body)
+    fails = RG.skill_review_failures(tmp_path, changed)
+    assert fails and "unchecked" in fails[0]
+
+
 # --------------------------------------------------------------------------
 # Table-padding waiver: a SKILL.md change that only re-pads tables needs no checklist
 # --------------------------------------------------------------------------

@@ -59,6 +59,8 @@ from shell_text import (
     blank_heredoc_bodies,
     commands_only_aligned,
     directory_change,
+    drop_redirections,
+    is_rooted,
     is_shell_tool,
     iter_segments,
 )
@@ -69,7 +71,6 @@ _VERB = re.compile(
 )
 # a path no static read can resolve, or that is not a plain path at all
 _UNKNOWABLE = re.compile(r"[$`<>*?]")
-_REDIRECT = re.compile(r"^\d*[<>]")
 
 
 def _statements(command, tool_name="Bash"):
@@ -101,9 +102,7 @@ def _operands(rest):
     because that is what git does.
     """
     before, after, options, skip_value = [], None, [], False
-    for token in rest.split():
-        if _REDIRECT.match(token):
-            continue
+    for token in drop_redirections(rest.split()):
         if after is not None:
             after.append(token)
         elif skip_value:
@@ -220,7 +219,7 @@ def notice(command, cwd, tool_name="Bash"):
         if hit.group("verb") == "ls-files" and "--error-unmatch" not in raw_rest:
             continue                       # a listing, not a question about one path
         for path in _path_arguments(raw_rest, hit.group("verb")):
-            if _UNKNOWABLE.search(path) or os.path.isabs(path):
+            if _UNKNOWABLE.search(path) or is_rooted(path):
                 continue
             if os.path.exists(os.path.join(cwd, path)):
                 continue

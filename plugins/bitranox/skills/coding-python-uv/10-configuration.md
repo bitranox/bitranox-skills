@@ -46,6 +46,36 @@ uv accepts a `--no-config` command-line argument which, when provided, disables 
 
 uv also accepts a `--config-file` command-line argument, which accepts a path to a `uv.toml` to use as the configuration file. When provided, this file will be used in place of _any_ discovered configuration files (e.g., user-level configuration will be ignored).
 
+### A machine-wide `uv.toml` cooldown and the project's lock
+
+Measured on uv 0.13.0 with `uv lock` in scratch projects, the user file placed through
+`XDG_CONFIG_HOME`:
+
+- **A discovered user `uv.toml` (`~/.config/uv/uv.toml`; a system one such as `/etc/uv/uv.toml`
+  ranks below it) sets `exclude-newer` only for a project that sets none.** A project's own
+  `[tool.uv] exclude-newer` wins over it: with `"7 days"` in the user file, a project with no
+  value locked `P7D` and a project with `"1 day"` locked `P1D`. A machine-wide cooldown file
+  does not lengthen a shorter cooldown a project chose.
+- **`--config-file` / `UV_CONFIG_FILE` is not a stand-in for that file.** The named file replaced
+  the project's own value too: the `"1 day"` project locked `P7D` under it. A quick test through
+  `UV_CONFIG_FILE` answers a different question than the discovered file does.
+- **A discovered file's `exclude-newer-package` table is MERGED into every lock written on that
+  machine.** Each of its entries lands in the lock's `[options.exclude-newer-package]`, so a
+  machine without the file (CI) reads the lock as stale: `uv lock --check` and
+  `uv export --locked` both exit 1 there ("The lockfile at `uv.lock` needs to be updated"), while
+  the same commands pass beside the file. Keep `exclude-newer-package` out of user and system
+  files on a machine that writes locks; put per-package exemptions in each project's
+  `[tool.uv]`, where every machine sees them, then re-lock with the file hidden (next point) and
+  commit the new lock. A system-level file (measured through `XDG_CONFIG_DIRS`) merged its table
+  into the lock the same way.
+- **To check a lock for that contamination, hide the file and run plain `uv lock --check`.** For
+  the user file, point `XDG_CONFIG_HOME` at an empty directory. For the system file, point
+  `XDG_CONFIG_DIRS` at a directory holding an EMPTY `uv/uv.toml`: uv reads only the first
+  system-level file it finds, and the XDG one comes before `/etc/uv/uv.toml` (measured: a lock
+  written with a system file passed `--check` beside it and exited 1 with the empty one in
+  front). Not `uv lock --check --no-config`: it also drops the project's own `[tool.uv]`, so it
+  exits 1 on a lock written with no outside file at all.
+
 ### `.env` files
 
 `uv run` can load environment variables from dotenv files (e.g., `.env`, `.env.local`, `.env.development`), powered by the `dotenvy` crate.

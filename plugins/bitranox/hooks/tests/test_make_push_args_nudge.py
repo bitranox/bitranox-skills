@@ -91,3 +91,21 @@ def test_main_survives_garbage_stdin(monkeypatch, capsys):
     monkeypatch.setattr(sys, "stdin", io.StringIO("not json"))
     assert M.main() == 0
     assert capsys.readouterr().out == ""
+
+
+def test_a_backslash_escaped_metacharacter_fires_under_bash():
+    """OPEN-WORK [1080]: `\;` reaches make as a literal `;`, which bmk's unquoted recipe parses
+    again. The hook is handed the real tool name, under which bash escaping is read; only a call
+    with no tool name (the unknown-tool reading, which escapes nothing) cut the word at the `;`."""
+    for command in ("make push fix it\;now", "make push x\\|y", 'make push ARGS=a\;b'):
+        assert M.notice(command, "Bash") is not None, command
+
+
+def test_control_a_powershell_backslash_escapes_nothing():
+    """Under PowerShell `\\` is a path character and `;` ends the statement: make gets `it\\`."""
+    assert M.notice("make push fix it\;now", "PowerShell") is None
+
+
+def test_a_powershell_all_streams_redirection_is_not_a_message_word():
+    """`*> log` sends every stream to a file; it was read as a word holding `>`."""
+    assert M.notice("make push fix login bug *> log.txt", "PowerShell") is None
