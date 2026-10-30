@@ -30,6 +30,13 @@ a hole nobody has drawn a line under is one that gets rediscovered and half-fill
 two "versions with no entry" notes came to sit in this file disagreeing with it.
 
 
+## [10.7.2]
+
+### Docs
+
+- `ai-llm-jev-judge`: the `uvx --from` lines name `btx-skill-jev-judge>=0.3.7`, the release that
+  ships this skill text, in step with the tool repo.
+
 ## [10.7.1]
 
 ### Fixed
