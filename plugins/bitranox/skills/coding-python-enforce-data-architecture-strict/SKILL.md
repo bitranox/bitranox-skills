@@ -19,7 +19,7 @@ Refactor Python code to follow strict data architecture rules using Pydantic mod
 
 1. **Pydantic at Boundaries**: All external data (API requests, file reads, env vars, CLI args) must be parsed into Pydantic models immediately upon entry
 2. **Pydantic for Export**: All outputs (API responses, file writes, serialization) must use Pydantic's `.model_dump()` or `.model_dump_json()`. On a wire that already exists, `.model_dump_json()` changes bytes and exception types: read "On an existing wire, `model_dump_json()` is not a drop-in" below before swapping a serializer call
-3. **No Internal Dicts**: Inside the application, never use raw dicts for structured data - always typed models
+3. **No Internal Dicts**: Inside the application, never use raw dicts (or `Mapping`s) for structured data - always typed models. The two kinds listed under **Exceptions** in the Instructions checklist are exempt from this rule
 4. **Enums for Constants**: All string literals representing categories, statuses, modes, or fixed values must be Enums. For values that cross an external boundary as strings, use `StrEnum` (Python 3.11+) or `class X(str, Enum)` so Pydantic parses and serializes them without changing the wire format; reserve `IntEnum` for values that are genuinely integers on the wire. **If your floor is 3.10 and you take the `class X(str, Enum)` fallback, its default string form is version-dependent** - read "The `str, Enum` fallback formats differently on 3.10 and 3.11+" below before you interpolate a member anywhere.
 5. **Minimize Conversions**: Ideal flow is ONE parse at input, ONE dump at output - nothing in between
 6. **String-to-Enum at Edges Only**: Convert strings to Enums only at system boundaries (input parsing). All functions and methods must accept and use the Enum type directly - never convert str->Enum inside business logic. This mirrors the class/Pydantic rule: parse once at entry, use typed objects throughout
@@ -484,6 +484,16 @@ arm), read `references/validation-error-messages.md`.
 
    **Exceptions:**
    - [ ] Small local dicts (few items, single function scope) may remain - convert if used across functions/modules
+   - [ ] A lookup table keyed by a closed Enum may remain at any scope when ALL four hold: it is
+     read-only; its key type is the Enum itself; its value type is fully typed (no `Any`, no
+     `object`); and a test pins that every member has an entry
+     (`assert set(TABLE) == set(TheEnum)`). Read-only takes all three of: annotated
+     `Mapping[...]` (`Final[Mapping[...]]` at module level), built as `MappingProxyType({...})`,
+     and nothing writes to it after it is built. The proxy is not optional: pyright strict
+     narrows a `Final` name to the plain dict it was assigned and accepts `TABLE[key] = value`
+     through it, while it rejects that write on a `MappingProxyType`. Missing any one of the
+     four, it is a violation: add the missing property or convert the table. A table keyed by
+     `str` spellings of an Enum's values is not this exception - key it by the Enum
 
    **Verification:**
    - [ ] Run `make test` OR pyproject.toml tools (pytest, ruff, mypy, etc.) - fix all errors until passing
@@ -791,10 +801,14 @@ STEP C - RUN TESTS:
 STEP D - FINAL VERIFICATION:
   - Read `.data_arch_violations.json` and confirm total_violations == 0
   - Grep only to surface candidates: `-> dict`, `: dict`, `-> tuple[` in signatures. A hit is a
-    lead, not proof - `: dict` also matches the permitted small local dicts and annotations that
-    are not signatures at all, and `-> tuple[` matches the tuple exclusions under "Anti-Patterns
-    to Eliminate". Judge each hit against the Exceptions rule and those exclusions; do NOT
-    auto-loop on raw match count.
+    lead, not proof - `: dict` also matches the permitted small local dicts and Enum-keyed
+    lookup tables (both under the Exceptions rule) and annotations that are not signatures at
+    all, and `-> tuple[` matches the tuple exclusions under "Anti-Patterns to Eliminate". Judge
+    each hit against the Exceptions rule and those exclusions; do NOT auto-loop on raw match
+    count.
+  - A module-level table annotated `Mapping[...]` or `Final[dict[...]]` matches none of those
+    patterns, so also grep `^[A-Za-z_][A-Za-z0-9_]*: .*(dict|Mapping)\[` and judge each hit the
+    same way. A type alias is not a table; skip it.
   - Write one verdict line per hit, `<file:line> real|permitted - <reason>`, where a permitted
     hit names the exclusion it falls under. A hit that fits no named exclusion is real, whatever
     the analysers reported for its file: reaching STEP D means they already called every file

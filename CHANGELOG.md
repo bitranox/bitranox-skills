@@ -30,6 +30,18 @@ a hole nobody has drawn a line under is one that gets rediscovered and half-fill
 two "versions with no entry" notes came to sit in this file disagreeing with it.
 
 
+## [10.9.2]
+
+### Changed
+
+- `coding-python-enforce-data-architecture-strict`: a lookup table keyed by a closed Enum is a
+  named exception to "No Internal Dicts" when it is read-only (annotated `Mapping[...]`, built as
+  `MappingProxyType`, never written), keyed by the Enum itself, fully typed in its values, and a
+  test pins every member; missing any one, it is a violation. The proxy is required because
+  pyright strict accepts a write through a `Final[Mapping[...]]` name holding a plain dict. STEP D
+  adds a grep for module-level `Mapping[...]` / `Final[dict[...]]` tables, which the signature
+  patterns never surfaced.
+
 ## [10.9.1]
 
 ### Changed
