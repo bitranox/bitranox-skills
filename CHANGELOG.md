@@ -30,6 +30,14 @@ a hole nobody has drawn a line under is one that gets rediscovered and half-fill
 two "versions with no entry" notes came to sit in this file disagreeing with it.
 
 
+## [10.9.3]
+
+### Changed
+
+- `infra-proxmox-bindsnap`: pve-bindsnap 1.3.0 vets every guard state from pve-container 6.0.18
+  to 6.1.16 (PVE 9.1 and 9.2) for both guards; the skill names that range instead of 6.1.10 and
+  6.1.12.
+
 ## [10.9.2]
 
 ### Changed
