@@ -30,6 +30,15 @@ a hole nobody has drawn a line under is one that gets rediscovered and half-fill
 two "versions with no entry" notes came to sit in this file disagreeing with it.
 
 
+## [10.8.2]
+
+- meta-dream-tree: step 5's Jev shadow on placement now says what a sampled line is. Each line
+  pairs a fact with ONE level of its chain, usually not the level holding its pointer, so most
+  lines score 0 and a 0 rejects only that level. Before reading a 0, or a report built on these
+  lines, as a misplacement, find the level holding the fact's pointer and route the fact from
+  there with the routing prompt; that routing decides, never the 0. Step 0c's sentence on what
+  `done` requires is repaired.
+
 ## [10.8.1]
 
 - net-tailscale: the watchdog guidance names the signal to restart on (a Health entry containing the coordination-server text, or a timed-out status call), reads BackendState first and leaves anything but Running alone, and keeps a probe failure from ever restarting the daemon.

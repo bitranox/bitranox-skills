@@ -169,8 +169,8 @@ the success line, abort-and-show on a miss).
     (step 6) and `dream-prune` (step 7). The pass itself still covers every fact; only the shadow
     is sampled. Judge the sampled items while the pass is under way, in the format of that step's
     shadow bullet, and tag each `run` with `--dream <dream id>`. Step 11's `done` refuses to mark
-    the dream done until each of the three logged rows for that id, or you named why not with
-    `--jev-skip SITE=REASON`.
+    the dream done until each of the three sites has logged rows for that id, or you named why not
+    with `--jev-skip SITE=REASON`.
 
 1. **Capture first (unconditional on a manual dream).** Enumerate this session's durable learnings
    and capture via `bitranox:meta-self-improve` BEFORE consolidating, so the dream works on a
@@ -306,7 +306,13 @@ the success line, abort-and-show on a miss).
      they hold unredacted fact text), in this order: (1) `jev_shadow.py items --site
      dream-placement --anchor <anchor> --sample 40 --seed <dream id> --out "$D/items.jsonl"`, 40
      lines drawn from every pairing of a fact with a level on its chain (id `<slug>|<level>`, the
-     level relative to the anchor, `.` for the anchor); (2) YOU route every fact, as above; (3)
+     level relative to the anchor, `.` for the anchor). Each line pairs the fact with ONE level of
+     its chain, usually not the one holding its pointer, so most lines score 0, and a 0 says only
+     that THIS level is wrong for the fact, never that the fact is misplaced where it sits. Before
+     reading any 0, or a report built on these lines, as a misplacement, find the level that holds
+     the fact's pointer (`find <anchor> -name CLAUDE.local.md -exec grep -l "mem:<slug>" {} +`)
+     and route the fact from there with the routing prompt above: that routing decides, never
+     the 0; (2) YOU route every fact, as above; (3)
      write YOUR score for every sampled line to `$D/verdicts.jsonl` (`{"id": "<slug>|<level>",
      "verdict": {"fits_level": 2}}`: 2 belongs here, 1 could live here but is narrower or broader,
      0 does not belong; none left out); (4) `jev_shadow.py run --site dream-placement --dream
