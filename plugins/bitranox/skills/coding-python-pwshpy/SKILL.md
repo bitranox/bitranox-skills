@@ -214,12 +214,14 @@ catch a subclass before its parent:
   fails and raises this error - and, once `sudo -v` succeeds and sudo has cached the credential,
   relaunches under `sudo -n`) and `NativeAccessDeniedError` (a call
   refused for lack of rights: `E_ACCESSDENIED`, `EACCES`, `EPERM`, psutil `AccessDenied`, a systemd
-  D-Bus `AccessDenied` or `InteractiveAuthorizationRequired` - a Windows service stop denied,
+  or Secret Service D-Bus `AccessDenied` or `InteractiveAuthorizationRequired` - a Windows service
+  stop denied, a credential vault the keyring refuses,
   `stop_service` as a non-root Linux user, a file or registry key the caller cannot open).
   `NativeAccessDeniedError` is also a `PermissionError`, so `except PermissionError` catches it;
   `errno` holds the POSIX code when the failure carried one. Any other refusal is the plain
   `NativeCallError`, which `except PermissionError` does NOT catch - a missing executable, an error
-  from the Secret Service, a shadow-utils command's non-zero exit, and any other D-Bus error reply
+  from the Secret Service other than a refusal, a shadow-utils command's non-zero exit, and any
+  other D-Bus error reply
   from systemd (its message names the D-Bus error). Every `NativeCallError`
   carries `.hresult`, the unsigned 32-bit HRESULT when the native error had one, a Win32 code
   converted with `HRESULT_FROM_WIN32` (so a registry or file open refused with Win32 error 5
@@ -256,7 +258,9 @@ line from a runner, to stderr): 0 ok, 1 any other `PwshPyError`, 2 usage error, 
 refused for lack of rights (`NativeAccessDeniedError`; 5 on Windows, whatever errno or HRESULT the
 call reported), 22 a refused value
 (`ValueError`; 87 on Windows), 64 a relative `-PwshPyUv` / `--pwshpy-uv`, 70 the runner failed before the script ran
-(the elevated `.ps1` child, or an elevated run that cannot return to the caller's directory), 77
+(the elevated `.ps1` child, an elevated run that cannot return to the caller's directory, or a
+`.ps1` `-PwshPyElevate` on Linux or macOS with no home for root or no `/bin/sh`: `pwshpy: cannot
+elevate:`), 77
 elevation declined (`pwshpy --elevate`, `-PwshPyElevate`, `--pwshpy-elevate`; stderr line `pwshpy:
 elevation declined`), 110 `OperationTimeoutError`, 127 a missing or untrusted `uv` (an install
 of uv that failed, or found no curl or wget, counts as missing; run elevated, also an untrusted
@@ -382,7 +386,15 @@ alone), skipping others with a `pwshpy: skipping uv at` line and refusing an unt
 127, and only a uv-managed Python from the running account's own data directory, found with
 `uv python find --system`, checked like the `uv` and named to `uv run --python` (the first elevated
 run downloads one, so it fails offline or with `UV_PYTHON_DOWNLOADS` `never` / `manual` and none
-installed); every uv call it makes reads no `uv.toml` (`--no-config`).
+installed); every uv call it makes reads no `uv.toml` (`--no-config`). On Linux and macOS the
+`.ps1` `-PwshPyElevate` relaunches root pwsh through a fixed `/bin/sh` stub with root's own home
+from the passwd database, so root pwsh writes nothing into the caller's home (no
+`~/.cache/powershell` entry) and keeps the caller's module directory out of its module path, while
+the script still sees the home variables sudo passed (root's `HOME` under a default sudo, the
+caller's where sudoers keeps `HOME`). The runner's own silent no-password check runs that same
+`/bin/sh` command, so a NOPASSWD rule naming only `pwsh` does not spare the one `sudo -v`
+password prompt (with no terminal to ask on: exit 77), and with no home for root in the passwd
+database or no `/bin/sh` the run stops with exit 70.
 
 ## Every public name
 
@@ -414,7 +426,8 @@ and `config-generate-examples` hyphens), by area:
 - accounts: `get_local_user`, `get_local_group`, `new_local_user`, `remove_local_user`,
   `enable_local_user`, `disable_local_user`, `new_local_group`, `remove_local_group`,
   `add_local_group_member`, `remove_local_group_member`
-- ACLs: `get_acl`, `add_acl_ace`, `remove_acl_ace`, `set_owner`
+- ACLs (Windows and Linux; on macOS each raises `PlatformUnsupportedError` at the call): `get_acl`,
+  `add_acl_ace`, `remove_acl_ace`, `set_owner`
 - known folders and shortcuts: `get_known_folder` (any OS), `get_shortcut`, `new_shortcut` (Windows)
 - registry and CIM (Windows): `get_item_property`, `registry_keys`, `set_item_property`,
   `remove_item_property`, `new_registry_key`, `remove_registry_key`, `get_cim_instance`

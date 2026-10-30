@@ -30,6 +30,16 @@ a hole nobody has drawn a line under is one that gets rediscovered and half-fill
 two "versions with no entry" notes came to sit in this file disagreeing with it.
 
 
+## [10.9.5]
+
+### Changed
+
+- coding-python-pwshpy: the ACL verbs support Windows and Linux (macOS raises
+  `PlatformUnsupportedError` at the call); a Secret Service D-Bus refusal is a
+  `NativeAccessDeniedError`; the `.ps1` `-PwshPyElevate` on Linux and macOS relaunches root pwsh
+  through a fixed `/bin/sh` stub with root's own home, its no-password check runs that command, and
+  exit 70 covers `pwshpy: cannot elevate:`.
+
 ## [10.9.4]
 
 ### Fixed
