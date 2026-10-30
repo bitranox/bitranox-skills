@@ -1068,13 +1068,19 @@ def mark_nap_owed(proj, session_id=None, transcript_path=None):
     compacting session's id and transcript path are recorded WITH it. Without them a nap run in a
     later session reviews only its own transcript while clearing the flag, discharging the
     compacted stretch unread - and the block text asserts a compaction that session never had."""
+    record = {"ts": time.time(), "session_id": str(session_id or ""),
+              "transcript_path": str(transcript_path or "")}
+    # Where the transcript ended at the compaction: the stretch the nap owes. Recorded so a review
+    # past it discharges even the current session's obligation, whatever cwd it ran from.
+    try:
+        if transcript_path:
+            record["offset"] = os.path.getsize(str(transcript_path))
+    except OSError:
+        pass
     try:
         f = nap_owed_file(proj)
         f.parent.mkdir(parents=True, exist_ok=True)
-        f.write_text(json.dumps({"ts": time.time(),
-                                 "session_id": str(session_id or ""),
-                                 "transcript_path": str(transcript_path or "")},
-                                sort_keys=True), encoding="utf-8")
+        f.write_text(json.dumps(record, sort_keys=True), encoding="utf-8")
     except OSError:
         pass
 
@@ -1169,6 +1175,9 @@ def unsatisfiable_nap_owed(proj, session_id=""):
         return "", ""
     if not os.path.exists(path):
         return path, NAP_OWED_TRANSCRIPT_GONE
+    offset = _as_offset(info.get("offset"))
+    if offset and get_watermark(proj, path, DREAM_REVIEWER) >= offset:
+        return path, NAP_OWED_TRANSCRIPT_CONSUMED
     owed_session = str(info.get("session_id") or "")
     if not owed_session or owed_session == str(session_id or ""):
         return "", ""
@@ -1638,9 +1647,35 @@ def _watermarks(proj):
 
 
 def get_watermark(proj, transcript, reviewer):
-    """Byte offset `reviewer` has already consumed of `transcript`. 0 when unmarked."""
+    """Byte offset `reviewer` has already consumed of `transcript`. 0 when unmarked.
+
+    `proj`'s own mark when it has one, since that is what it last wrote and a write is checked by
+    reading it back. Otherwise the furthest mark any project recorded for this transcript: the
+    marks are filed under the cwd a review ran from, and one `cd` into another repository moved
+    that cwd, so a session already reviewed to its end read as unreviewed from byte 0 there."""
+    own = _watermarks(proj).get(str(reviewer), {})
+    if isinstance(own, dict) and str(transcript) in own:
+        return _as_offset(own.get(str(transcript)))
+    furthest = 0
     try:
-        return int(_watermarks(proj).get(str(reviewer), {}).get(str(transcript), 0))
+        stores = list(_audit_dir().glob("*.watermark.json"))
+    except OSError:
+        return 0
+    for store in stores:
+        try:
+            marks = _decode_json_file(store)
+        except (OSError, ValueError):
+            continue
+        per = marks.get(str(reviewer)) if isinstance(marks, dict) else None
+        if isinstance(per, dict):
+            furthest = max(furthest, _as_offset(per.get(str(transcript))))
+    return furthest
+
+
+def _as_offset(value):
+    """A stored mark as an int; 0 for anything that is not one."""
+    try:
+        return int(value or 0)
     except (TypeError, ValueError):
         return 0
 
@@ -2729,6 +2764,11 @@ _TEST_FILE_LINE = re.compile(r"^\s*[\w./\\-]*\btest_\w*\.py\b", re.IGNORECASE)
 # A numbered listing line is a file being READ, and a file's content is not a tool's report. No
 # tool announces a failure in this shape, so discounting it cannot hide one.
 _NUMBERED_LISTING = re.compile(r"^\s*\d+\t")
+# A refusal a hook issues ON PURPOSE every time, so it is the design working, never a gap: the
+# premise check refuses the first ask of each AskUserQuestion, and its text arrives as a
+# `hook error:` tool result. Keyed on the fixed phrase (missing-mechanism-nudge QUESTION_REFUSAL).
+_DESIGNED_REFUSAL = re.compile(
+    r"QUESTION PREMISES, checked BEFORE the user sees this question")
 
 
 class _FixtureScan:
@@ -2746,7 +2786,8 @@ class _FixtureScan:
         content, so a pytest marker quoted inside one must not open a run that outlives it.
         """
         return (self._in_heredoc(line) or self._in_test_diff(line) or self._in_run(line)
-                or bool(_TEST_FILE_LINE.match(line)) or bool(_NUMBERED_LISTING.match(line)))
+                or bool(_TEST_FILE_LINE.match(line)) or bool(_NUMBERED_LISTING.match(line))
+                or bool(_DESIGNED_REFUSAL.search(line)))
 
     def _in_heredoc(self, line):
         """A heredoc body, which is written text rather than a report; ends at the delimiter."""

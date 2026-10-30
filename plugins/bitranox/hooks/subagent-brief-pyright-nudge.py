@@ -51,9 +51,13 @@ _PIN = re.compile(r"--pythonpath\b|--venvpath\b|\bvenvPath\b", re.IGNORECASE)
 # pyright in COMMAND SHAPE. The left side lists what may stand directly before the program word;
 # the right side refuses a hyphenated or longer word (`pyright-strict`, `pyrightconfig`) and the
 # handful of verbs and adjectives that mean the sentence is ABOUT pyright rather than running it.
+# A span holding ONLY the name, right after another span and a comma, is an enumeration of tool
+# names ("a gate (`make test`, `pytest`, `pyright`, gate.py)"): briefs quoting skill text carry it,
+# and it instructs no run. A span with arguments, or one opened after prose, still counts.
 _RUN = re.compile(
     r"""
-    (?: `                                  # opening a code span: `pyright ...`
+    (?: (?<=`,[ ])(?P<listed>`)            # a span right after another span and a comma
+      | (?<!`,[ ])`                        # opening a code span: `pyright ...`
       | ^[ \t]*(?:\$[ \t]+)?               # a line that starts with the command, prompt or not
       | \.venv[\w.-]*/bin/                 # .venv/bin/pyright, .venv-win/bin/pyright
       | \bScripts[\\/]                     # .venv\Scripts\pyright.exe
@@ -66,7 +70,9 @@ _RUN = re.compile(
     (?![\w-])
     (?![:/])                               # `pyright: ignore` pragma, `pyright/ruff` list
     (?![`"']?[ \t]+\d)                     # a reported result: "pyright 0"
-    (?![`"']?[ \t]+(?:strict|strictness|caught|catches|reports?|says|flags|found|finds)\b)
+    (?![`"']?[ \t]+(?:strict|strictness|caught|catches|checks|reports?|says|flags|found|finds
+                       |stage)\b)
+    (?(listed)(?!`))                       # a listed span holding only the name
     """,
     re.IGNORECASE | re.MULTILINE | re.VERBOSE,
 )

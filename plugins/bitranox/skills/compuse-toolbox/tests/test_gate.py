@@ -1068,3 +1068,86 @@ class TestGateEnvFromFile:
                         "--log", str(tmp_path / "g.log")])
         assert rc == 0 and out.read_text(encoding="utf-8") == "a@b"
 
+
+
+class TestAStrayWordBesideAGateIsRefused:
+    """`gate.py --gate make test` handed argparse `--gate make` plus a positional `test`, ran
+    `make` and `test` as two gates, and the second passed trivially: a green that never ran the
+    suite. A positional written WITHOUT `--` beside a --gate is accepted only when it is plainly
+    one quoted command (a single token holding a space)."""
+
+    def test_an_unquoted_multi_word_gate_is_a_usage_error_naming_the_quoting(self, tmp_path, capsys):
+        log = tmp_path / "g.log"
+        with pytest.raises(SystemExit) as exc:
+            gate.main(["--log", str(log), "--gate", OK_ARGV[0], "stray-word"])
+        assert exc.value.code == 2
+        err = capsys.readouterr().err
+        assert "stray-word" in err and "quote" in err, err
+        assert not log.exists() or log.read_text(encoding="utf-8") == "", "nothing may run"
+
+    def test_several_stray_words_are_refused_too(self, tmp_path, capsys):
+        with pytest.raises(SystemExit) as exc:
+            gate.main(["--log", str(tmp_path / "g.log"), "--gate", OK_ARGV[0], "run", "pytest"])
+        assert exc.value.code == 2
+        assert "quote" in capsys.readouterr().err
+
+    def test_a_quoted_command_beside_a_gate_still_runs_as_its_own_gate(self, tmp_path, capsys):
+        rc = gate.main(["--log", str(tmp_path / "g.log"), "--gate", OK, OK])
+        assert rc == 0
+        assert capsys.readouterr().out.count("[PASS]") == 2
+
+    def test_a_dashdash_command_beside_a_gate_is_still_taken_verbatim(self, tmp_path, capsys):
+        rc = gate.main(["--log", str(tmp_path / "g.log"), "--gate", OK, "--", *OK_ARGV])
+        assert rc == 0
+
+
+class TestAShellOperatorInAGateIsRefused:
+    """Gates run WITHOUT a shell, so `--gate "a && b"` passed `&&` and `b` to `a` as arguments:
+    measured, `--gate "true && false"` printed [PASS] rc=0 (a false green), and a chained cargo
+    gate died on its own argument parsing and read as [FAIL] (a false red)."""
+
+    @pytest.mark.parametrize("op", ["&&", "||", ";", "|"])
+    def test_an_operator_token_is_a_usage_error_saying_one_command_per_gate(self, tmp_path,
+                                                                            capsys, op):
+        log = tmp_path / "g.log"
+        with pytest.raises(SystemExit) as exc:
+            gate.main(["--log", str(log), "--gate", f"{OK} {op} {FAIL}"])
+        assert exc.value.code == 2
+        err = capsys.readouterr().err
+        assert repr(op) in err and "one command per --gate" in err, err
+        assert not log.exists() or log.read_text(encoding="utf-8") == "", "nothing may run"
+
+    def test_an_operator_inside_a_larger_token_is_left_alone(self):
+        assert gate.shell_operator_token(["grep", "-E", "a|b", "x;y"]) is None
+
+    def test_an_explicit_shell_owns_its_operators(self):
+        assert gate.shell_operator_token(["bash", "-c", "a && b"]) is None
+        assert gate.shell_operator_token(["sh", "-c", "a", "&&"]) is None
+
+    @pytest.mark.skipif(os.name == "nt", reason="a backslash is not an escape on a Windows command line")
+    def test_an_escaped_operator_is_an_argument_not_a_chain(self):
+        """Review finding: `find ... -exec rm {} \\;` was refused - shlex turned the escaped `\\;`
+        into a bare `;` token and the chain check could not tell it from a real operator."""
+        _name, argv = gate.gate_spec("find . -name x -exec rm {} \\;")
+        assert argv[-1] == ";"
+
+    @pytest.mark.parametrize("op", ["&&", "||", ";", "|"])
+    def test_a_double_quoted_operator_is_an_argument_not_a_chain(self, op):
+        _name, argv = gate.gate_spec(f'printf "%s" "{op}"')
+        assert argv[-1] == op
+
+    def test_a_quoted_operator_does_not_hide_a_bare_one_beside_it(self):
+        with pytest.raises(ValueError, match="'&&'"):
+            gate.gate_spec('printf "%s" ";" && false')
+
+    def test_tokens_after_double_dash_are_still_verbatim(self, tmp_path):
+        rc = gate.main(["--log", str(tmp_path / "g.log"), "--", *OK_ARGV, "&&"])
+        assert rc == 0
+
+
+def test_the_help_says_the_verdict_lines_are_indented(capsys):
+    """A caller grepping `^\\[(PASS|FAIL)\\]` matched nothing and read a pass as missing."""
+    with pytest.raises(SystemExit):
+        gate.main(["--help"])
+    out = " ".join(capsys.readouterr().out.split())
+    assert "INDENTED" in out and "ALL GATES PASSED" in out, out

@@ -18,6 +18,12 @@ Rules (`--hunk N=RULE`, 1-based; `--match REGEX=RULE`; `--all RULE` for every hu
     both-theirs-first          theirs, then ours (the CHANGELOG case: the incoming entry on top)
     file:<path>                the hunk becomes that file's text, in the hunk's line ending
 
+In a Markdown file (`.md`, `.markdown`, `.mdx`) the two joined sides of `both` /
+`both-theirs-first` are separated by one blank line when the line where they meet is an ATX heading
+on either side and neither side already leaves a blank line there: measured, a joined CHANGELOG hunk
+left `...alike.` directly above `## [1.15.3]`, the re-scan found no marker and a formatter check
+passed. Elsewhere a `#` line is not a heading (a Python comment), so the sides are joined as they are.
+
 `ours` is the side after `<<<<<<<` and `theirs` the side before `>>>>>>>`, whatever git labels them: in a
 rebase git swaps the roles, so `theirs` is the commit being replayed and `ours` the branch it lands on.
 
@@ -358,21 +364,40 @@ def _file_lines(text: str, eol: str) -> list[str]:
     return [line + eol for line in body.split("\n")]
 
 
-def _replacement(hunk: Hunk, rule: Rule, read_file) -> list[str]:
+_ATX_HEADING = re.compile(r"#{1,6}(?:[ \t]|$)")
+MARKDOWN_SUFFIXES = frozenset({".md", ".markdown", ".mdx"})
+
+
+def _join(first: list[str], second: list[str], eol: str, markdown: bool) -> list[str]:
+    """`first` then `second`, with a blank line between when a Markdown heading meets text."""
+    if not (markdown and first and second):
+        return first + second
+    last, nxt = _body(first[-1]).strip(), _body(second[0]).strip()
+    if last and nxt and (_ATX_HEADING.match(last) or _ATX_HEADING.match(nxt)):
+        return first + [eol] + second
+    return first + second
+
+
+def _replacement(hunk: Hunk, rule: Rule, read_file, markdown: bool = False) -> list[str]:
     if rule.kind == "file":
         return _file_lines(read_file(rule.path), hunk.eol)
-    sides = {"ours": hunk.ours, "theirs": hunk.theirs, "base": hunk.base or [],
-             "both": hunk.ours + hunk.theirs, "both-theirs-first": hunk.theirs + hunk.ours}
+    if rule.kind == "both":
+        return _join(hunk.ours, hunk.theirs, hunk.eol, markdown)
+    if rule.kind == "both-theirs-first":
+        return _join(hunk.theirs, hunk.ours, hunk.eol, markdown)
+    sides = {"ours": hunk.ours, "theirs": hunk.theirs, "base": hunk.base or []}
     return list(sides[rule.kind])
 
 
-def resolve_text(text: str, rules: list[Rule], *, read_file=_read_replacement) -> str:
+def resolve_text(text: str, rules: list[Rule], *, read_file=_read_replacement,
+                 markdown: bool = False) -> str:
     """`text` with each hunk replaced by its rule's lines. PURE apart from `read_file`.
 
     Args:
         text: The conflicted text (a leading BOM is kept).
         rules: One per hunk, from assign_rules.
         read_file: Reads a `file:` rule's path; injectable for tests.
+        markdown: The file is Markdown, so joined sides keep a heading's blank line.
 
     Returns:
         The resolved text.
@@ -387,7 +412,7 @@ def resolve_text(text: str, rules: list[Rule], *, read_file=_read_replacement) -
     cursor = 0
     for hunk, rule in zip(hunks, rules):
         out.extend(lines[cursor:hunk.start - 1])
-        chosen = _replacement(hunk, rule, read_file)
+        chosen = _replacement(hunk, rule, read_file, markdown)
         if hunk.closes_file_unterminated and chosen:
             # The hunk was the file's last line, which had no newline: keep the file that way.
             chosen[-1] = _body(chosen[-1])
@@ -527,7 +552,7 @@ def _resolve(path: Path, args, outcome: _Outcome) -> int:
         outcome.note = "no conflict hunks in %s - nothing to resolve, file not written" % path
         return EXIT_YES
     # Every replacement file is read here, before the write, so an unreadable one refuses.
-    resolved = resolve_text(text, rules)
+    resolved = resolve_text(text, rules, markdown=path.suffix.lower() in MARKDOWN_SUFFIXES)
     outcome.hunks = [{"n": h.n, "rule": str(r), "lines": [h.start, h.end]}
                      for h, r in zip(hunks, rules)]
     _atomic_write(target, _encode(resolved))

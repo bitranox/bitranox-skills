@@ -1197,13 +1197,16 @@ GATE_JIG_NAME = r"(?<![\w.-])gate\.py\b"
 GATE_JIG_RE = re.compile(GATE_JIG_NAME)
 
 # A gate whose verdict a BACKGROUND job loses: broader than GATE_RE, because a backgrounded
-# `make push` or `ci_wait` is read for its verdict the same way, and neither matches GATE_RE's
-# build-tool vocabulary. Two guards ask about it - one about a run_in_background compound whose
-# notice reports the wrong command, one about a gate detached with a trailing `&`.
+# `make push`, `ci_wait` or this marketplace's `repo-gate.py --ci` is read for its verdict the same
+# way, and none matches GATE_RE's build-tool vocabulary. Only the repo-gate modes that run pytest
+# themselves (--ci, --pre-push) count: `--print-test-deps` inside a `$(...)` is a lookup. Two guards
+# ask about it - one about a run_in_background compound whose notice reports the wrong command,
+# one about a gate detached with a trailing `&`.
 BACKGROUND_GATE_RE = re.compile(
     r"\b(?:"
     r"make\s+\S*(?:test|check|lint|push|release)"
     r"|ci_wait(?:\.py)?"
+    r"|repo-gate\.py(?=[^;&|\n]*\s--(?:ci|pre-push)\b)"
     r"|gh\s+run\s+watch"
     r")\b"
     r"|" + GATE_RE.pattern
@@ -1211,14 +1214,16 @@ BACKGROUND_GATE_RE = re.compile(
 
 
 # Words that run the program after them. Their own operands sit in between and are skipped: the
-# value of a short option that takes one (`env -u NAME`, `nice -n 19`, `env -C DIR`), a long
-# option's value (`uv run --with pytest`), a duration (`timeout 900`), `run` after `uv`, and
-# `NAME=value` assignments (`env A=1 make test`).
+# value of a short option that takes one (`env -u NAME`, `nice -n 19`, `env -C DIR`,
+# `python -X dev`, `python -W error`), a long option's value (`uv run --with pytest`), a duration
+# (`timeout 900`), `run` after `uv` or `coverage`, and `NAME=value` assignments
+# (`env A=1 make test`). `coverage run -m pytest` runs pytest, so coverage is a launcher too.
 _GATE_LAUNCHERS = frozenset({
     "env", "timeout", "nice", "ionice", "nohup", "setsid", "stdbuf", "time", "command", "exec",
-    "sudo", "doas", "uv", "uvx", "python", "python3", "py",
+    "sudo", "doas", "uv", "uvx", "python", "python3", "py", "coverage",
 })
-_GATE_SHORT_WITH_VALUE = frozenset({"-u", "-n", "-C", "-c", "-k", "-s", "-S", "-p", "-o"})
+_GATE_SHORT_WITH_VALUE = frozenset({"-u", "-n", "-C", "-c", "-k", "-s", "-S", "-p", "-o",
+                                    "-X", "-W"})
 _GATE_SCAN_LIMIT = 16
 
 # Words in front of a pipeline's program that are syntax, not a program: a subshell or group
@@ -1254,7 +1259,11 @@ def program_word_at(words, tool_name="Bash"):
             if word == "-c" and program.startswith(("python", "py")):
                 return None
             if word == "-m":
-                return at + 1 if at + 1 < len(words) else None
+                # The module is itself checked as a launcher: `python -m coverage run -m pytest`.
+                if at + 1 >= len(words):
+                    return None
+                at += 1
+                break
             at += 2 if (word in _GATE_SHORT_WITH_VALUE
                         or (word.startswith("--") and "=" not in word)) else 1
     return None

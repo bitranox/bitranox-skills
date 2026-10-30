@@ -110,11 +110,67 @@ def _absolute(path):
     return bool(path) and is_rooted(path)
 
 
+def _gate_jig_target(tokens, here, tool_name):
+    """(writes, directory) when the statement runs the gate.py jig, else None.
+
+    Asked BEFORE the make arm: in `env ... python3 gate.py --cwd /r -- make test` the launcher scan
+    reaches the `make` the jig runs, and read as a bare make it ignored the `--cwd` that sends it
+    to /r. The jig runs a gate from `--gate`, a positional `<cmd>` or `-- <cmd ...>`; it runs them
+    in `--gate-cwd` or `--cwd` when given, else where it was started.
+    """
+    at = statement_program(tokens, _PYTHON, tool_name)
+    if at is None:
+        return None
+    script = next((index for index in range(at + 1, min(at + 4, len(tokens)))
+                   if basename_for_tool(tokens[index], tool_name) == _GATE_SCRIPT), None)
+    if script is None:
+        return None
+    args = tokens[script + 1:]
+    positional = args[_skip_option_values(args):]
+    if positional and positional[0].lstrip('"').startswith("$"):
+        # `gate.py "${args[@]}"`: the options, `--gate-cwd` included, are inside the expansion.
+        # Unreadable here, so not judged, as before this arm read positional gates at all.
+        return False, here
+    runs_a_gate = "--gate" in args or any(t.startswith("--gate=") for t in args) or bool(positional)
+    if not runs_a_gate or _HELP & set(args):
+        return False, here
+    for name in ("--gate-cwd", "--cwd"):
+        value = _option_value(tokens, script + 1, (name,))
+        if _absolute(value):
+            return True, value
+    return True, here
+
+
+# gate.py options that take a value; the first word after them that is neither an option nor a
+# value is the positional `<cmd>`, and `--` starts the `-- <cmd ...>` form.
+_GATE_VALUE_OPTIONS = frozenset({"--gate", "--name", "--log", "--summary", "--then", "--cwd",
+                                 "--env", "--gate-cwd", "--gate-env"})
+
+
+def _skip_option_values(args):
+    """Index of the first argument that is neither a gate.py option nor an option's value."""
+    index = 0
+    while index < len(args):
+        word = args[index]
+        if word == "--":
+            return index + 1
+        if word in _GATE_VALUE_OPTIONS:
+            index += 2
+        elif word.startswith("-"):
+            index += 1
+        else:
+            return index
+    return index
+
+
 def _write_target(tokens, here, tool_name):
     """(writes, directory or None) for one statement starting at `here` (None = inherited)."""
     is_git, where = git_segment_dir(tokens, WRITE_VERBS, here, tool_name)
     if is_git:
         return True, where
+    jig = _gate_jig_target(tokens, here, tool_name)
+    if jig is not None:
+        return jig
     at = statement_program(tokens, _MAKE, tool_name)
     if at is not None:
         value = _option_value(tokens, at + 1, ("-C", "--directory"))
@@ -127,12 +183,6 @@ def _write_target(tokens, here, tool_name):
         if _HELP & set(args):
             return False, here
         return any(not token.startswith("-") for token in args), here
-    at = statement_program(tokens, _PYTHON, tool_name)
-    if at is not None and "--gate" in tokens[at:]:
-        script = next((t for t in tokens[at + 1:at + 4] if basename_for_tool(t, tool_name) == _GATE_SCRIPT), None)
-        if script:
-            value = _option_value(tokens, at + 1, ("--gate-cwd",))
-            return True, value if _absolute(value) else here
     return False, here
 
 

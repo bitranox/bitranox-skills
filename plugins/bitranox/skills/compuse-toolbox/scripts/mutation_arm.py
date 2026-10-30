@@ -56,7 +56,19 @@ an environment reason. It is chosen, and named in the report as `runner` / `runn
 under the current directory when it exists; else the interpreter running this tool - which under
 `uv run scripts/mutation_arm.py` has neither pytest nor the project. An arm whose pytest exits 1
 without naming a failure is reported INCONCLUSIVE, never KILLED, so that mistake shows as a column
-of exit-2 arms rather than a battery of perfect tests.
+of exit-2 arms rather than a battery of perfect tests. When pytest's output says which module was
+missing (`No module named pytest`), the INCONCLUSIVE reason names it and the retry (`--with DEP`
+for each dependency, or `--python`).
+
+A NON-pytest arm (`cargo test -p crate`, `make check`) is `--cmd COMMAND`, split without a shell and
+run as it is, in place of `--test`: exit 0 is SURVIVED, a non-zero exit KILLED with its last output
+line as the reason, and a mutant that did not build (`error[E...]`, `could not compile`, `make:
+***`) or a command that could not run (126/127) INCONCLUSIVE - an unbuildable mutant is not a test
+noticing it. The command's own summary is not parsed, so read the reason before believing a kill.
+`--battery` with `--cmd` needs no `tests` in the spec. Every restore writes the original bytes back
+with a FRESH mtime: restoring the original mtime made it older than the build made from the
+mutant, so cargo and make reused the MUTANT build for the restored source.
+  `mutation_arm.py --mutate src/lib.rs old.txt new.txt --cmd "cargo test -p crate" --timeout 600`
   `.venv/bin/python scripts/mutation_arm.py --mutate src/x.py old.txt new.txt --test tests/t.py::test_y --timeout 90`
   `... --mutate a.py o1.txt n1.txt --mutate b.py o2.txt n2.txt --test tests/t.py::test_y`
   add `--json` for the `{ok, command, data, skipped}` envelope; "ok" is false exactly when the
@@ -95,10 +107,14 @@ exit 1, which would read as SURVIVED.
 """
 from __future__ import annotations
 
+import ctypes
 import importlib.util
 import json
 import os
+import re
+import shlex
 import shutil
+import signal
 import subprocess
 import sys
 import tempfile
@@ -166,18 +182,97 @@ def resolve_runner(python=None, with_deps=(), *, cwd=None, which=shutil.which):
     return [sys.executable, "-m", "pytest"], "this interpreter"
 
 
-def _partial_output(expired) -> str:
-    """Whatever a killed run managed to emit, as text.
+def _windows_argv(command: str) -> list[str]:
+    """Windows argv via CommandLineToArgvW, the C runtime's own command-line parser.
 
-    `TimeoutExpired.stdout` is bytes even when the call asked for text, and either stream can be
-    None, so a bare concatenation raises inside the timeout handler and loses the verdict.
+    `shlex.split(posix=False)` kept the quote characters inside each token, so `"my crate"`
+    reached the program WITH its quotes and a quoted program path was not found at all. The real
+    parser splits the string exactly as the program it names reads its own command line. Plain
+    ctypes types rather than `ctypes.wintypes`, which does not import everywhere.
     """
-    parts = []
-    for stream in (expired.stdout, expired.stderr):
-        if stream is None:
-            continue
-        parts.append(stream.decode("utf-8", "replace") if isinstance(stream, bytes) else stream)
-    return "".join(parts)
+    if sys.platform != "win32" or not command.strip():
+        # CommandLineToArgvW("") returns the CURRENT executable's path, never an empty list.
+        return []
+    shell32 = ctypes.WinDLL("shell32", use_last_error=True)
+    kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+    shell32.CommandLineToArgvW.argtypes = [ctypes.c_wchar_p, ctypes.POINTER(ctypes.c_int)]
+    shell32.CommandLineToArgvW.restype = ctypes.POINTER(ctypes.c_wchar_p)
+    kernel32.LocalFree.argtypes = [ctypes.c_void_p]
+    kernel32.LocalFree.restype = ctypes.c_void_p
+    count = ctypes.c_int(0)
+    argv = shell32.CommandLineToArgvW(command, ctypes.byref(count))
+    if not argv:
+        raise ctypes.WinError(ctypes.get_last_error())
+    try:
+        return [str(argv[i]) for i in range(count.value)]
+    finally:
+        kernel32.LocalFree(ctypes.cast(argv, ctypes.c_void_p))
+
+
+def split_command(command: str) -> list[str]:
+    """Split a `--cmd` string into argv by the platform's own rules: shlex on POSIX,
+    CommandLineToArgvW on Windows (the approach gate.py's split_command takes)."""
+    if os.name != "nt":
+        return shlex.split(command)
+    return _windows_argv(command)
+
+
+def command_runner(command, *, which=shutil.which):
+    """`(argv, "--cmd")` for a non-pytest arm command (`cargo test -p x`), split without a shell.
+
+    Refused when the program cannot be found, before any mutation, for the reason given in
+    :func:`resolve_runner`.
+    """
+    argv = split_command(command)
+    if not argv:
+        raise RunnerError("--cmd is empty")
+    if which(argv[0]) is None and not Path(argv[0]).is_file():
+        raise RunnerError(f"--cmd {argv[0]}: no such program")
+    return argv, "--cmd"
+
+
+#: What a build tool prints when the MUTANT did not compile: an unbuildable mutant, which no test
+#: had the chance to notice, so it is never scored KILLED.
+# Only a COMPILER's own words: cargo also ends a failing test run with a bare `error: test
+# failed`, and make ends ANY failed recipe with `make: ***`, so those mean a test caught the mutant.
+_DID_NOT_BUILD = re.compile(r"^error\[E\d+\]: |could not compile|compilation terminated|"
+                            r":\d+:\d+: (?:fatal )?error: ", re.MULTILINE)
+_NO_MODULE = re.compile(r"No module named '?([\w.]+)'?")
+
+
+def command_verdict(returncode: int | None, output: str) -> tuple[str, str | None]:
+    """(verdict, reason) of a ``--cmd`` arm, judged on its exit status. PURE.
+
+    0 survived; 126/127 (could not be executed) and a mutant that did not build are inconclusive;
+    any other non-zero exit is killed, with the last output line as the reason. A command's own
+    summary is not parsed, so read the reason before believing a kill.
+    """
+    if returncode is None:
+        return "timeout", None
+    tail = next((line.strip() for line in reversed(output.splitlines()) if line.strip()), "")
+    if returncode == 0:
+        return "survived", None
+    if returncode in (126, 127):
+        return "inconclusive", f"exit {returncode}: the command could not run ({tail})"
+    built = _DID_NOT_BUILD.search(output)
+    if built:
+        return "inconclusive", f"exit {returncode}: the mutant did not build ({built.group(0).strip()})"
+    return "killed", f"exit {returncode}: {tail}"
+
+
+def runner_hint(output: str, runner) -> str | None:
+    """Why a pytest arm that never ran did not run, and the retry; None when it cannot be told.
+
+    Measured: in a repo of PEP 723 scripts the project's .venv had no pytest, every arm read
+    INCONCLUSIVE, and the verdict - honest - did not say the fix, so each use cost a round.
+    """
+    missing = _NO_MODULE.search(output or "")
+    if missing is None:
+        return None
+    return (f"the runner {runner[0]} cannot import {missing.group(1)} (No module named "
+            f"{missing.group(1)}): rerun with --with DEP for each dependency the tests import "
+            f"(it runs uv run --no-project --with pytest --with DEP ...), or --python naming an "
+            f"interpreter that has pytest and the project")
 
 
 def failure_reason(output: str) -> str | None:
@@ -468,7 +563,7 @@ def plan_text_mutations(specs):
     return _plan(specs, _match_endings)
 
 
-def run_arm(planned, nodeid, *, runner=None, timeout=None):
+def run_arm(planned, nodeid, *, runner=None, timeout=None, command=False):
     """Apply every mutation, run the arm, restore from copies taken first. Returns a report.
 
     `timeout` bounds the arm in SECONDS. Without one a mutation that makes the test spin hangs
@@ -476,6 +571,8 @@ def run_arm(planned, nodeid, *, runner=None, timeout=None):
     mutation - measured 2026-09-02, where killing the hung run by hand also skipped the restore
     and left a mutated file on disk. The restore is in a `finally`, so a killed arm still
     restores. `nodeid` is one node id or a list of them; `caught_by` names those that failed.
+    With `command`, `runner` is the whole arm (a `--cmd` such as `cargo test`), run as it is,
+    and judged by :func:`command_verdict` instead of pytest's summary.
     """
     runner = runner or [sys.executable, "-m", "pytest"]
     # Before anything is written: a cache predating the mutation can be served IN PLACE of it when
@@ -504,7 +601,8 @@ def run_arm(planned, nodeid, *, runner=None, timeout=None):
                 error = f"could not apply the mutation: {exc}"
             else:
                 try:
-                    returncode, output = _run_pytest(runner, nodeid, timeout)
+                    returncode, output = (_run_command(runner, timeout) if command
+                                          else _run_pytest(runner, nodeid, timeout))
                 except OSError as exc:
                     # The mutation is ON DISK by now, so this must not escape to main(), whose
                     # handler says the arm was refused before mutating.
@@ -517,15 +615,22 @@ def run_arm(planned, nodeid, *, runner=None, timeout=None):
             # before mutating" and dropped the verdict the arm earned.
             removed, left = remove_bytecode(list(saved))
             purged += removed
-    verdict = "error" if error else verdict_for(returncode, output)
+    if error:
+        verdict, reason = "error", error
+    elif command:
+        verdict, reason = command_verdict(returncode, output)
+    else:
+        verdict = verdict_for(returncode, output)
+        reason = failure_reason(output) or (
+            runner_hint(output, runner) if verdict == "inconclusive" else None)
     return {
         "mutations": [{"path": str(p)} for p, _, _ in planned],
         "test": nodeid,
         "pytest_returncode": returncode,
         "timeout_s": timeout,
         "verdict": verdict,
-        "failure": error or failure_reason(output),
-        "caught_by": [] if error else failed_nodeids(output),
+        "failure": reason,
+        "caught_by": [] if error or command else failed_nodeids(output),
         "restored": restored,
         "bytecode_purged": purged,
         "bytecode_left": left,
@@ -541,27 +646,82 @@ def _run_pytest(runner, nodeid, timeout):
     rendering can depend on it.
     """
     nodeids = [nodeid] if isinstance(nodeid, str) else list(nodeid)
+    return _run_bounded([*runner, *nodeids, "-vv", "--no-header", "-rfE", "--tb=no",
+                         "-p", "no:cacheprovider"], timeout)
+
+
+def _run_command(argv, timeout):
+    """(returncode, merged output) of a ``--cmd`` arm; returncode None at the timeout."""
+    return _run_bounded(argv, timeout)
+
+
+#: Seconds to collect a killed tree's output. A grandchild that escaped the kill can still hold
+#: the pipes; past this the output is given up rather than the restore waited on.
+_DRAIN_S = 10
+
+
+def _run_bounded(argv, timeout):
+    """(returncode, merged output) of `argv`; returncode None when it hit `timeout`.
+
+    The arm runs as a process TREE (cargo, uv and pytest start children), and killing only the
+    direct child left the rest running on the mutant. On Windows it was worse: a grandchild kept
+    the inherited pipes open, so collecting the output hung until it exited and the mutated
+    source stayed on disk the whole time. So the whole tree is killed: its own process group on
+    POSIX, `taskkill /T` on Windows. Any interruption (Ctrl-C included) kills the tree too, since
+    a child in its own session no longer receives the terminal's SIGINT.
+    """
+    proc = subprocess.Popen(
+        argv, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, encoding="utf-8",
+        errors="replace", start_new_session=os.name != "nt",
+        # Merged onto the real environment, never a fresh dict: on Windows a child without
+        # SystemRoot loses Winsock and dies with EMPTY output.
+        env={**os.environ, "PYTHONDONTWRITEBYTECODE": "1"})
     try:
-        proc = subprocess.run(
-            [*runner, *nodeids, "-vv", "--no-header", "-rfE", "--tb=no", "-p", "no:cacheprovider"],
-            capture_output=True, text=True, encoding="utf-8", errors="replace",
-            timeout=timeout,
-            # Merged onto the real environment, never a fresh dict: on Windows a child without
-            # SystemRoot loses Winsock and dies with EMPTY output.
-            env={**os.environ, "PYTHONDONTWRITEBYTECODE": "1"},
-        )
-    except subprocess.TimeoutExpired as expired:
-        # A killed run has no exit code. Its partial output is bytes when the process was killed
-        # before the text wrapper saw it, so it is decoded defensively rather than concatenated.
-        return None, _partial_output(expired)
-    return proc.returncode, proc.stdout + proc.stderr
+        out, err = proc.communicate(timeout=timeout)
+    except subprocess.TimeoutExpired:
+        _kill_tree(proc)
+        return None, _drain(proc)
+    except BaseException:
+        _kill_tree(proc)
+        raise
+    return proc.returncode, out + err
+
+
+def _kill_tree(proc) -> None:
+    """Kill `proc` and every process it started; never raises."""
+    if os.name == "nt":
+        try:
+            subprocess.run(["taskkill", "/T", "/F", "/PID", str(proc.pid)], capture_output=True,
+                           timeout=30, check=False)
+        except (OSError, subprocess.SubprocessError):
+            pass
+    else:
+        try:
+            os.killpg(proc.pid, signal.SIGKILL)
+        except OSError:
+            pass
+    try:
+        proc.kill()
+    except OSError:
+        pass
+
+
+def _drain(proc) -> str:
+    """Whatever the killed tree managed to emit, or a note when its pipes stay held."""
+    try:
+        out, err = proc.communicate(timeout=_DRAIN_S)
+    except subprocess.TimeoutExpired:
+        return f"(output not collected: the pipes were still held {_DRAIN_S}s after the kill)\n"
+    return (out or "") + (err or "")
 
 
 def _restore(saved) -> bool:
     """Put every saved copy back; True only when every file now matches its copy byte for byte.
 
     A file that already matches is left alone, so a source that could never be written (and so
-    was never changed) is not reported as a failed restore. A copy that cannot be written back is
+    was never changed) is not reported as a failed restore. The content goes back with a FRESH
+    mtime, never the original one: copy2 put the old mtime back, older than the build made from
+    the mutant, so cargo and make reused the MUTANT build for the restored source. A copy that cannot be written back is
     reported as False rather than raised: raising here would replace the verdict with a
     traceback and skip the loud RESTORE FAILED that this outcome needs.
     """
@@ -569,7 +729,8 @@ def _restore(saved) -> bool:
     for path, copy in saved.items():
         try:
             if path.read_bytes() != copy.read_bytes():
-                shutil.copy2(copy, path)
+                shutil.copyfile(copy, path)
+                os.utime(path)
             restored = restored and path.read_bytes() == copy.read_bytes()
         except OSError:
             restored = False
@@ -600,6 +761,11 @@ def _parse(argv):
     runner.add_argument("--with", dest="with_deps", action="append", default=[], metavar="DEP",
                         help="run the arm under uv run --no-project --with pytest --with DEP "
                              "(repeatable), for a project with no venv of its own")
+    runner.add_argument("--cmd", default=None, metavar="COMMAND",
+                        help="a NON-pytest arm, e.g. \"cargo test -p crate\", split without a shell "
+                             "and run as it is: exit 0 survived, a failure killed, a mutant that "
+                             "does not build (or a command that cannot run) inconclusive. Replaces "
+                             "--test; with --battery the spec needs no tests")
     ap.add_argument("--json", action="store_true", help="machine-readable envelope")
     return ap.parse_args(argv)
 
@@ -619,7 +785,8 @@ def main(argv=None) -> int:
     if args.battery and args.revert:
         return _refuse("--battery and --revert are separate modes; give one", as_json=args.json)
     try:
-        runner, source = resolve_runner(args.python, args.with_deps)
+        runner, source = (command_runner(args.cmd) if args.cmd is not None
+                          else resolve_runner(args.python, args.with_deps))
     except RunnerError as exc:
         return _refuse(f"refused, nothing written - {exc}", as_json=args.json)
     if not args.json:
@@ -632,7 +799,11 @@ def main(argv=None) -> int:
 def _main_single(args, runner, source) -> int:
     if not args.mutate and not args.revert:
         return _refuse("no --mutate or --revert given", as_json=args.json)
-    if not args.test:
+    command = args.cmd is not None
+    if command and args.test:
+        return _refuse("--test names a pytest node; with --cmd the command itself is the arm",
+                       as_json=args.json)
+    if not args.test and not command:
         return _refuse("--test is required with --mutate or --revert", as_json=args.json)
 
     try:
@@ -646,7 +817,8 @@ def _main_single(args, runner, source) -> int:
         return _refuse(f"refused, nothing written - {exc}", as_json=args.json)
 
     try:
-        report = run_arm(planned, args.test, runner=runner, timeout=args.timeout)
+        report = run_arm(planned, args.cmd if command else args.test, runner=runner,
+                         timeout=args.timeout, command=command)
     except (AnchorError, OSError) as exc:
         return _refuse(f"refused before mutating - {exc}", as_json=args.json)
     report["runner"], report["runner_source"] = runner, source
@@ -658,7 +830,7 @@ def _main_single(args, runner, source) -> int:
     else:
         for item in reverts:
             print(f"reverted {item['path']} to {item['rev']} ({item['sha']})")
-        print(f"{report['verdict'].upper()}: {args.test}")
+        print(f"{report['verdict'].upper()}: {args.cmd if command else args.test}")
         if report["failure"]:
             print(f"  reason: {report['failure']}")
         _explain_unfinished(report, runner)
@@ -749,7 +921,7 @@ def _arm_mutations(arm: dict, label: str) -> list[tuple[str, str, str]]:
     return out
 
 
-def load_battery(path, override_tests=None):
+def load_battery(path, override_tests=None, *, need_tests=True):
     """`(tests, [(label, [(file, old, new)], arm_tests or None)])` from a battery spec file.
 
     The spec is `{"tests": [...], "arms": [...]}` or a bare list of arms (then `--test` names the
@@ -766,9 +938,9 @@ def load_battery(path, override_tests=None):
     if not isinstance(arms_raw, list) or not arms_raw:
         raise BatteryError("the battery has no arms (want {\"tests\": [...], \"arms\": [...]})")
     tests_raw = override_tests or (spec.get("tests") if isinstance(spec, dict) else None)
-    if not tests_raw:
+    if not tests_raw and need_tests:
         raise BatteryError("the battery names no tests: give \"tests\" in the spec or --test")
-    tests = _str_list(tests_raw, "tests")
+    tests = _str_list(tests_raw, "tests") if tests_raw else []
     arms, seen = [], set()
     for arm in arms_raw:
         if not isinstance(arm, dict) or not isinstance(arm.get("label"), str) or not arm["label"]:
@@ -782,18 +954,24 @@ def load_battery(path, override_tests=None):
     return tests, arms
 
 
-def _baseline(runner, tests, timeout) -> dict:
+def _baseline(runner, tests, timeout, command=False) -> dict:
     """The tests run UNMUTATED. Green only on exit 0: 5 (nothing collected) is not green."""
     try:
-        returncode, output = _run_pytest(runner, tests, timeout)
+        returncode, output = (_run_command(runner, timeout) if command
+                              else _run_pytest(runner, tests, timeout))
     except OSError as exc:
         return {"green": False, "pytest_returncode": None, "failure": f"could not start: {exc}"}
-    return {"green": returncode == 0, "pytest_returncode": returncode,
-            "failure": None if returncode == 0 else (
-                failure_reason(output) or f"pytest exit {returncode}")}
+    if returncode == 0:
+        failure = None
+    elif command:
+        failure = command_verdict(returncode, output)[1] or f"exit {returncode}"
+    else:
+        failure = (failure_reason(output) or runner_hint(output, runner)
+                   or f"pytest exit {returncode}")
+    return {"green": returncode == 0, "pytest_returncode": returncode, "failure": failure}
 
 
-def run_battery(arms, tests, *, runner, timeout=None) -> dict:
+def run_battery(arms, tests, *, runner, timeout=None, command=False) -> dict:
     """Baseline, then every arm in turn (each restored before the next), then the baseline again.
 
     `arms` holds (label, planned, arm_tests) with every anchor already validated. A red baseline
@@ -801,20 +979,21 @@ def run_battery(arms, tests, *, runner, timeout=None) -> dict:
     restore stops the battery - the next arm would mutate a file that is not the original.
     """
     purge_bytecode([path for _, planned, _ in arms for path, _, _ in planned])
-    result = {"tests": tests, "baseline": _baseline(runner, tests, timeout), "arms": [],
+    result = {"tests": tests, "baseline": _baseline(runner, tests, timeout, command), "arms": [],
               "final_baseline": None}
     if not result["baseline"]["green"]:
         return result
     for label, planned, arm_tests in arms:
         try:
-            report = run_arm(planned, arm_tests or tests, runner=runner, timeout=timeout)
+            report = run_arm(planned, arm_tests or tests, runner=runner, timeout=timeout,
+                             command=command)
         except (AnchorError, OSError) as exc:
             report = {"verdict": "error", "failure": f"refused before mutating - {exc}",
                       "caught_by": [], "restored": True, "bytecode_left": []}
         result["arms"].append({"label": label, **report})
         if not report["restored"]:
             break
-    result["final_baseline"] = _baseline(runner, tests, timeout)
+    result["final_baseline"] = _baseline(runner, tests, timeout, command)
     return result
 
 
@@ -834,7 +1013,11 @@ def battery_code(result) -> int:
 
 def _main_battery(args, runner, source) -> int:
     try:
-        tests, arms_spec = load_battery(args.battery, [args.test] if args.test else None)
+        command = args.cmd is not None
+        if command and args.test:
+            raise BatteryError("--test names a pytest node; with --cmd the command itself is the arm")
+        tests, arms_spec = load_battery(args.battery, [args.test] if args.test else None,
+                                        need_tests=not command)
         arms = []
         for label, mutations, arm_tests in arms_spec:
             try:
@@ -845,7 +1028,7 @@ def _main_battery(args, runner, source) -> int:
         return _refuse(f"refused, nothing written - {exc}", as_json=args.json)
 
     try:
-        result = run_battery(arms, tests, runner=runner, timeout=args.timeout)
+        result = run_battery(arms, tests, runner=runner, timeout=args.timeout, command=command)
     except (AnchorError, OSError) as exc:
         return _refuse(f"refused before mutating - {exc}", as_json=args.json)
     result.update(mode="battery", runner=runner, runner_source=source)

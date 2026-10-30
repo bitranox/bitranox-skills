@@ -234,3 +234,114 @@ def test_an_unreachable_remote_is_a_could_not_run(repo: Path, notes: Path, tmp_p
 
 def test_a_missing_changelog_file_is_a_could_not_run(repo: Path, tmp_path: Path) -> None:
     assert bump_version.main(["--root", str(repo), "--part", "patch", "--changelog", str(tmp_path / "no.md")]) == 2
+
+
+# ---- --rebase: a peer took the version this commit bumped to ---------------------------------
+
+
+def _my_bump_commit(repo: Path, version: str = "1.2.4", message: str = "Fix the widget; 1.2.4") -> str:
+    """One unpushed commit: a real change plus the bump of all three files to `version`."""
+    (repo / "widget.txt").write_text("fixed\n", encoding="utf-8", newline="\n")
+    pj = repo / PJ
+    pj.write_text(pj.read_text(encoding="utf-8").replace('"1.2.3"', '"%s"' % version), encoding="utf-8", newline="\n")
+    pp = repo / "pyproject.toml"
+    pp.write_text(pp.read_text(encoding="utf-8").replace('version = "1.2.3"', 'version = "%s"' % version),
+                  encoding="utf-8", newline="\n")
+    cl = repo / "CHANGELOG.md"
+    cl.write_text(cl.read_text(encoding="utf-8").replace(
+        "## [1.2.3]", "## [%s]\n\n### Fixed\n\n- mine: the widget.\n\n## [1.2.3]" % version),
+        encoding="utf-8", newline="\n")
+    _git(repo, "add", "-A")
+    _git(repo, "commit", "-q", "-m", message)
+    return _git(repo, "rev-parse", "HEAD")
+
+
+def _peer_takes(tmp_path: Path, version: str = "1.2.4", extra: str = "peer.txt") -> str:
+    peer = _clone(tmp_path / "origin.git", tmp_path / ("peer-" + version))
+    (peer / extra).write_text("peer work\n", encoding="utf-8", newline="\n")
+    cl = peer / "CHANGELOG.md"
+    _write_release(peer, version)
+    cl.write_text(CHANGELOG.format(version="1.2.3").replace(
+        "## [1.2.3]", "## [%s]\n\n### Added\n\n- peer: theirs.\n\n## [1.2.3]" % version),
+        encoding="utf-8", newline="\n")
+    _git(peer, "add", "-A")
+    _git(peer, "commit", "-q", "-m", "peer release %s" % version)
+    _git(peer, "push", "-q", "origin", "master")
+    return _git(peer, "rev-parse", "HEAD")
+
+
+def test_rebase_renumbers_a_taken_version_onto_origin(repo: Path, tmp_path: Path) -> None:
+    mine = _my_bump_commit(repo)
+    theirs = _peer_takes(tmp_path)
+    assert bump_version.main(["--root", str(repo), "--rebase"]) == 0
+    assert _git(repo, "rev-parse", "HEAD^") == theirs
+    assert _versions(repo) == ("1.2.5", "1.2.5")
+    text = (repo / "CHANGELOG.md").read_text(encoding="utf-8")
+    assert text.index("## [1.2.5]\n\n### Fixed\n\n- mine: the widget.") < text.index("## [1.2.4]\n\n### Added")
+    assert text.count("- mine: the widget.") == 1
+    assert (repo / "widget.txt").read_text(encoding="utf-8") == "fixed\n"
+    assert (repo / "peer.txt").exists()
+    assert _git(repo, "log", "-1", "--format=%s") == "Fix the widget; 1.2.5"
+    assert _git(repo, "rev-parse", "refs/bump-version/pre-rebase") == mine
+    assert _git(repo, "status", "--porcelain") == ""
+
+
+def test_rebase_refuses_when_the_version_was_not_taken(repo: Path, tmp_path: Path) -> None:
+    mine = _my_bump_commit(repo, "1.2.5", "Fix; 1.2.5")
+    _peer_takes(tmp_path, "1.2.4")
+    assert bump_version.main(["--root", str(repo), "--rebase"]) == 1
+    assert _git(repo, "rev-parse", "HEAD") == mine
+
+
+def test_rebase_refuses_a_dirty_tree(repo: Path, tmp_path: Path) -> None:
+    mine = _my_bump_commit(repo)
+    _peer_takes(tmp_path)
+    (repo / "widget.txt").write_text("uncommitted\n", encoding="utf-8", newline="\n")
+    assert bump_version.main(["--root", str(repo), "--rebase"]) == 1
+    assert _git(repo, "rev-parse", "HEAD") == mine
+    assert (repo / "widget.txt").read_text(encoding="utf-8") == "uncommitted\n"
+
+
+def test_rebase_refuses_more_than_one_unpushed_commit(repo: Path, tmp_path: Path) -> None:
+    (repo / "first.txt").write_text("one\n", encoding="utf-8", newline="\n")
+    _git(repo, "add", "first.txt")
+    _git(repo, "commit", "-q", "-m", "first")
+    mine = _my_bump_commit(repo)
+    _peer_takes(tmp_path)
+    assert bump_version.main(["--root", str(repo), "--rebase"]) == 1
+    assert _git(repo, "rev-parse", "HEAD") == mine
+
+
+def test_rebase_restores_the_commit_when_the_change_conflicts(repo: Path, tmp_path: Path) -> None:
+    mine = _my_bump_commit(repo)
+    _peer_takes(tmp_path, extra="widget.txt")          # the peer wrote the same file differently
+    assert bump_version.main(["--root", str(repo), "--rebase"]) == 1
+    assert _git(repo, "rev-parse", "HEAD") == mine
+    assert _git(repo, "status", "--porcelain") == ""
+    assert (repo / "widget.txt").read_text(encoding="utf-8") == "fixed\n"
+
+
+def test_rebase_without_part_or_changelog_is_accepted_but_a_plain_bump_still_needs_them(repo: Path) -> None:
+    with pytest.raises(SystemExit):
+        bump_version.main(["--root", str(repo), "--part", "patch"])        # no --changelog
+
+
+@pytest.mark.parametrize(("message", "expected"), [
+    ("Fix the widget; 1.2.4", "Fix the widget; 1.2.5"),
+    ("Release 1.2.4.\n\nBody names 1.2.4 and 11.2.4 and 1.2.45 and 1.2.4.1.",
+     "Release 1.2.5.\n\nBody names 1.2.5 and 11.2.4 and 1.2.45 and 1.2.4.1."),
+])
+def test_the_message_renumbers_only_whole_word_mentions(message: str, expected: str) -> None:
+    assert bump_version.renumber_message(message, "1.2.4", "1.2.5") == expected
+
+
+def test_rebase_carries_a_non_utf8_change_byte_for_byte(repo: Path, tmp_path: Path) -> None:
+    # The patch goes from `git diff` to `git apply` as BYTES: decoding it with errors="replace"
+    # turned a latin-1 byte into U+FFFD, and text-mode stdin turns \n into \r\n on Windows.
+    (repo / "legacy.txt").write_bytes(b"caf\xe4\r\nline two\n")
+    mine = _my_bump_commit(repo)
+    _peer_takes(tmp_path)
+    assert bump_version.main(["--root", str(repo), "--rebase"]) == 0
+    assert _git(repo, "rev-parse", "refs/bump-version/pre-rebase") == mine
+    assert (repo / "legacy.txt").read_bytes() == b"caf\xe4\r\nline two\n"
+    assert _git(repo, "status", "--porcelain") == ""

@@ -289,3 +289,55 @@ def test_a_crash_under_json_is_exit_2_with_an_envelope(tmp_path, monkeypatch, ca
     assert payload["ok"] is False and "checker broke" in payload["error"]
     assert "BROKEN" in cap.err
 
+
+
+# --- --literal: a quoted sentence against a wrapped, marked-up Markdown file ------------------
+# Measured: a plain substring check called two present rules missing, because the file wrapped
+# the sentence across lines and carried backticks and bold the quote did not.
+
+WRAPPED = (
+    "# Skill\n\n"
+    "Run the jig with `uv run`, never a bare **python3**: its\n"
+    "  dependencies are declared inline (PEP 723) and resolved per run.\n"
+    "git is the control word here.\n"
+)
+
+
+def test_literal_finds_a_sentence_wrapped_across_lines_with_markup(tmp_path):
+    p = _write(tmp_path, "SKILL.md", WRAPPED)
+    quote = "never a bare python3: its dependencies are declared inline (PEP 723)"
+    r = cc.check([p], quote, "git", literal=True)
+    assert r["verdict"] == cc.PRESENT, r
+    assert r["hits"][0]["line"] == 3
+
+
+def test_control_without_literal_the_same_quote_is_absent(tmp_path):
+    p = _write(tmp_path, "SKILL.md", WRAPPED)
+    quote = "never a bare python3: its dependencies are declared inline \\(PEP 723\\)"
+    assert cc.check([p], quote, "git")["verdict"] == cc.ABSENT
+
+
+def test_literal_strips_markup_on_the_quote_side_too(tmp_path):
+    p = _write(tmp_path, "SKILL.md", "Run it with uv run, never a bare python3.\ngit\n")
+    assert cc.check([p], "with `uv run`, never a **bare** python3", "git",
+                    literal=True)["verdict"] == cc.PRESENT
+
+
+def test_literal_takes_regex_metacharacters_as_text(tmp_path):
+    p = _write(tmp_path, "a.md", "call f(x) [now].\ngit\n")
+    assert cc.check([p], "f(x) [now].", "git", literal=True)["verdict"] == cc.PRESENT
+    assert cc.check([p], "f(y) [now]", "git", literal=True)["verdict"] == cc.ABSENT
+
+
+def test_literal_a_quote_that_normalises_to_nothing_is_broken(tmp_path):
+    p = _write(tmp_path, "a.md", "text\ngit\n")
+    assert cc.check([p], " ** ` ", "git", literal=True)["verdict"] == cc.BROKEN
+
+
+def test_literal_on_the_command_line(tmp_path):
+    p = _write(tmp_path, "SKILL.md", WRAPPED)
+    proc = subprocess.run([sys.executable, str(TOOL), str(p), "--literal", "--pattern",
+                           "resolved  per run", "--control", "git", "--json"],
+                          capture_output=True, text=True, encoding="utf-8")
+    assert proc.returncode == 0, proc.stderr
+    assert json.loads(proc.stdout)["data"]["verdict"] == cc.PRESENT

@@ -1282,3 +1282,40 @@ def test_open_work_reader_keeps_a_line_with_a_unicode_separator_as_one_item(code
     items = S._parse_open_work(line + "\n")
     assert [it[0] for it in items] == [50]
     assert S._shared_rank_warning(line + "\n") == ""
+
+
+# --------------------------------------------------------------------------
+# A shell cwd inside a git-ignored scratch dir (.plan/<batch>/ under a repo) must not become a
+# memory level: the heal scaffolds every gap level up to the anchor, and those CLAUDE.md /
+# CLAUDE.local.md pairs then register as curated levels inside a tree git never tracks.
+# --------------------------------------------------------------------------
+
+@pytest.fixture
+def repo_with_ignored_scratch(tmp_path, monkeypatch):
+    for var in _GIT_SCOPE_VARS:
+        monkeypatch.delenv(var, raising=False)
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    _g(repo, "init", "-q", "-b", "master")
+    (repo / ".gitignore").write_text(".plan/\n", encoding="utf-8")
+    (repo / "CLAUDE.md").write_text("# repo\n", encoding="utf-8")
+    (repo / ".plan" / "fold" / "batch").mkdir(parents=True)
+    (repo / "src" / "pkg").mkdir(parents=True)
+    return repo
+
+
+def test_a_cwd_in_an_ignored_dir_scaffolds_no_level_there(tmp_path, monkeypatch, capsys,
+                                                          repo_with_ignored_scratch):
+    repo = repo_with_ignored_scratch
+    run_with_stdin(monkeypatch, capsys, make_plugin_root(tmp_path), str(repo / ".plan" / "fold" / "batch"))
+    made = sorted(str(p.relative_to(repo)) for p in (repo / ".plan").rglob("CLAUDE*.md"))
+    assert made == []
+    assert (repo / "CLAUDE.local.md").is_file()      # the repo's own level is still healed
+
+
+def test_a_cwd_in_a_tracked_subdir_still_scaffolds_its_levels(tmp_path, monkeypatch, capsys,
+                                                              repo_with_ignored_scratch):
+    repo = repo_with_ignored_scratch
+    run_with_stdin(monkeypatch, capsys, make_plugin_root(tmp_path), str(repo / "src" / "pkg"))
+    assert (repo / "src" / "pkg" / "CLAUDE.md").is_file()
+    assert (repo / "src" / "CLAUDE.local.md").is_file()

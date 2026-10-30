@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""PreToolUse(Bash|PowerShell|Edit|Write|MultiEdit|NotebookEdit) nudge: when a tool call looks like a hand-rolled chore
+"""PreToolUse(Bash|PowerShell|Edit|Write|MultiEdit|NotebookEdit|Monitor) nudge: when a tool call looks like a hand-rolled chore
 that the local toolbox already has a tested tool for, inject a non-blocking additionalContext
 pointer ("use the jig") - once per tool per session. Silent if the toolbox (or the specific tool)
 is not installed.
@@ -211,9 +211,20 @@ _RULES = [
     (re.compile(r"\.jsonl\b" + _SCRIPT_WINDOW + r"(?:json\.loads|json\.load|for line in)"
                 r"|(?:json\.loads|json\.load)" + _SCRIPT_WINDOW + r"\.jsonl", re.S), "jsonl_grep",
      "parsing a JSONL transcript by hand"),
+    # Shipping a tree to a WINDOWS host and running pytest there: an scp to a drive path in a
+    # command that also runs pytest, or an ssh into cmd.exe's `cd /d` that runs pytest. Before
+    # `fleet_ssh`, which claims any `ssh ... BatchMode=` line: the cmd.exe traps (an `if ... &`
+    # that swallows the mkdir, a forward-slash scp destination) are what this one-liner gets
+    # wrong. pytest is required: priced over the transcript corpus, an scp to a drive path alone
+    # fired 791 times, mostly a .ps1 copied over to run or a log copied back.
+    (re.compile(r"(?s:\A(?=.*\bscp\b[^\n]*[\w.-]:['\"]?[A-Za-z]:[\\/])(?=.*\bpytest\b))"
+                r"|\bssh\b[^\n]*\bcd\s+/d\b[^\n]*\bpytest\b"), "winpytest",
+     "copying a repo to a Windows host and running its tests there over ssh"),
     # Names the SHIPPED tool, not the local `sshf.py` twin it was contributed from: the gate
     # below sweeps shipped scripts, so a rule naming only the local name left `fleet_ssh`
-    # reading as unrouted forever, and anyone without that local file got silence.
+    # reading as unrouted forever, and anyone without that local file got silence. Shell-only
+    # (see `_SHELL_SCOPED_IN_RULES`): a test file whose string literals hold `ssh -o BatchMode=yes
+    # host ...` is data, not a one-liner being built (it fired on exactly that Write, 2026-10-19).
     (re.compile(r"\bssh\b[^|]*(?:StrictHostKeyChecking|anyhost_nopass|BatchMode=)"), "fleet_ssh",
      "building an ssh fleet one-liner"),
     (re.compile(r"(?:cargo (?:build|test|clippy)|gh run (?:view|watch))\b" + _ONE_LOGICAL_LINE
@@ -274,10 +285,24 @@ _RULES = [
 # RUN, so the same words inside an authored file are a script being written rather than the chore
 # itself. Unscoped, `git push` sitting in a Write body was the dominant firing of the pushcheck
 # rule. A chore that is equally real when authored belongs in `_ANY_TOOL_RULES` below.
+_MARKERWATCH_RULE = (
+    re.compile(r"\btail\s+(?:-n\s*\S+\s+)?-[a-zA-Z]*[fF]\b[^\n|]*\|\s*grep\b"),
+    "markerwatch", "waiting for a log line that says the run finished")
+
+# A Monitor command IS a wait, so the shell rules (`backstop` above all) would fire on every one;
+# only the marker it waits for can be wrong there. Measured over the transcript corpus: 45 of 399
+# Monitor calls followed a log through grep, most matching a substring or ignoring case.
+_MONITOR_RULES = [_MARKERWATCH_RULE]
+
 _SHELL_ONLY_RULES = [
     (_PUSHCHECK_RX, "pushcheck",
      "about to push - whether this repo is public, and what the push would publish"),
     (_CI_WAIT_RX, "ci_wait", "waiting on CI for the commit you just pushed"),
+    # A follow that greps a log for a marker: `tail -f LOG | grep`, the shape a Monitor stream
+    # takes. grep matches a substring anywhere in the line, so a start banner, an echo of the
+    # waiter's own command or a case-folded neighbour answers early. A `until grep -q` poll loop
+    # stays with `backstop`: it is often already anchored (`grep -q '^RC='`), which is the fix.
+    _MARKERWATCH_RULE,
     # Three shapes of one chore. A long `sleep`, a detached job, and the two measured as missing:
     # a polling loop whose `sleep` sits inside its body however short (a poll sleeps 3-6 seconds a
     # turn - about 38 recorded calls), and a process-table check that reads "gone" as "finished"
@@ -356,7 +381,17 @@ _ANY_TOOL_RULES = [
      "sweeping the fact store for status claims that shipped and were never updated"),
     (re.compile(r"\.claude-memory/facts/[^\n]*\.md"), "factedit",
      "editing a memory fact by hand - which level owns the slug, and is the hook under the cap"),
-    (re.compile(r"\bfold\s+-[sw]|textwrap\.(?:fill|wrap)"), "mdwrap",
+    # The second half catches a rejoin-to-width loop written from scratch (no textwrap, no
+    # fold): a re-wrap/reflow word, a width set to a column count, and a `len(...) > WIDTH`
+    # test, all in one text. Any one alone is too common - prose saying a paragraph was
+    # rewrapped, a table-cell edit checking `len(new) > width` against the cell it replaces -
+    # and a replay over the transcript corpus found that cell edit firing until the column-count
+    # assignment was required.
+    (re.compile(r"\bfold\s+-[sw]|textwrap\.(?:fill|wrap)"
+                r"|\A(?s:(?=.*\b(?i:re-?wrap|reflow))"
+                r"(?=.*\b(?:[A-Z_]*WIDTH|width)\s*=\s*\d{2,3}\b)"
+                r"(?=.*\blen\([^)\n]*\)\s*>=?\s*(?:[A-Z_]*WIDTH|width)\b))"),
+     "mdwrap",
      "reflowing one markdown paragraph without touching the rest of the file"),
     (re.compile(r"\bfind\b[^\n]*-name\s+['\"]?CLAUDE\.md"
                 r"|\bgrep\s+-[A-Za-z]*r[A-Za-z]*\b[^\n]*CLAUDE\.md"), "claudemd_variance",
@@ -502,6 +537,13 @@ NO_COMMAND_SHAPE = {
 }
 
 
+# Rules of the FIRST list that apply to a command only. Not moved into `_SHELL_ONLY_RULES`,
+# because order is behaviour: listed there, after every rule of the first list, fleet_ssh lost 139
+# real ssh commands of the transcript corpus to claim_check, ci_triage and guestip (replayed
+# 2026-10-29). Filtering it out of authored text keeps its place for commands.
+_SHELL_SCOPED_IN_RULES = frozenset({"fleet_ssh"})
+
+
 def ruled_tools():
     """Every tool name any rule can name. The gate's source of truth, so it cannot drift."""
     return {tool for _rx, tool, _why in _RULES + _SHELL_ONLY_RULES + _ANY_TOOL_RULES}
@@ -515,8 +557,13 @@ def match_tool(command, tool_name=None):
     that must not fire on authored text has to be listed as shell-only AND be given the real
     tool name by its caller.
     """
+    if tool_name == "Monitor":
+        ordered = _MONITOR_RULES
+        return next(((tool, why) for rx, tool, why in ordered if rx.search(command or "")), None)
     scanning_a_command = tool_name is None or is_shell_tool(tool_name)
-    ordered = _RULES + (_SHELL_ONLY_RULES if scanning_a_command else []) + _ANY_TOOL_RULES
+    first = _RULES if scanning_a_command else [
+        rule for rule in _RULES if rule[1] not in _SHELL_SCOPED_IN_RULES]
+    ordered = first + (_SHELL_ONLY_RULES if scanning_a_command else []) + _ANY_TOOL_RULES
     for rx, tool, why in ordered:
         if rx.search(command or ""):
             return tool, why
@@ -541,7 +588,7 @@ def match_authored(text):
 # being removed, not authored), and NotebookEdit in the new cell source. Anything else (Read,
 # Grep, ...) is not a place a chore is authored. This list must cover every tool hooks.json
 # registers the hook for, or a registered call is dropped before it is read.
-_SCANNED_TOOLS = ("Bash", "PowerShell", "Write", "Edit", "MultiEdit", "NotebookEdit")
+_SCANNED_TOOLS = ("Bash", "PowerShell", "Write", "Edit", "MultiEdit", "NotebookEdit", "Monitor")
 
 
 def extract_text(tool_name, tool_input):
@@ -559,6 +606,8 @@ def extract_text(tool_name, tool_input):
         # Under the event's own shell: PowerShell escapes with a backtick, not a backslash.
         return blank_unexpanded_text(strip_heredoc_bodies(ti.get("command", "")),
                                      tool_name=tool_name)
+    if tool_name == "Monitor":
+        return strip_heredoc_bodies(ti.get("command", ""))
     if tool_name == "Write":
         return ti.get("content", "")
     if tool_name == "Edit":

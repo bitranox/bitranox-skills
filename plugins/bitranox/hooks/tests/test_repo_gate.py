@@ -2236,6 +2236,80 @@ def test_a_tool_repo_push_with_no_worktree_holding_the_text_keeps_the_regenerate
     assert "Regenerate" in err and "push that branch" not in err
 
 
+# --- the twin side of a MARKETPLACE commit or push may live in a LINKED WORKTREE of the tool repo ---
+#
+# Measured 2026-10-26: the tool repo's main checkout was on a peer's branch, so the twin edit was
+# committed in a linked worktree. The marketplace commit read the twin from the main checkout and
+# was refused as drift, and the tool repo's push needs the marketplace published first: the only
+# route that passed wrote the SKILL.md into the peer's working tree. The marketplace now also
+# accepts a tool-repo linked worktree: its committed text for a commit and a push, its uncommitted
+# text for a commit only.
+
+def _tool_worktree(tool, where):
+    _g(tool, "worktree", "add", "-q", "-b", "twt", str(where))
+    return where
+
+
+def test_a_marketplace_commit_passes_when_a_tool_worktree_committed_the_same_edit(tmp_path):
+    public, root, tool = _published_pair(tmp_path)
+    twt = _tool_worktree(tool, public / "libs" / "thing-wt-edit")
+    _drift(twt / TW_SKILL, TWIN_BODY)
+    _g(twt, "commit", "-qam", "edit in the tool worktree")
+    _drift(root / MP_SKILL, MIRROR_BODY)
+    _g(root, "add", "-A")
+    notices = []
+
+    assert RG.check_skill_mirrors(root, notices=notices, mirrors=THING) == []
+    assert len(notices) == 1 and str(twt) in notices[0] and "committed" in notices[0]
+
+
+def test_a_marketplace_push_passes_when_a_tool_worktree_committed_the_same_edit(tmp_path):
+    public, root, tool = _published_pair(tmp_path)
+    twt = _tool_worktree(tool, public / "libs" / "thing-wt-edit")
+    _drift(twt / TW_SKILL, TWIN_BODY)
+    _g(twt, "commit", "-qam", "edit in the tool worktree")
+    _drift(root / MP_SKILL, MIRROR_BODY)
+    _g(root, "commit", "-qam", "edit")
+
+    assert RG.check_skill_mirrors(root, stage=RG.STAGE_HEAD, notices=[], mirrors=THING) == []
+
+
+def test_a_marketplace_commit_accepts_an_uncommitted_tool_worktree_edit_and_names_it(tmp_path):
+    public, root, tool = _published_pair(tmp_path)
+    twt = _tool_worktree(tool, public / "libs" / "thing-wt-edit")
+    _drift(twt / TW_SKILL, TWIN_BODY)                       # uncommitted in the tool worktree
+    _drift(root / MP_SKILL, MIRROR_BODY)
+    _g(root, "add", "-A")
+    notices = []
+
+    assert RG.check_skill_mirrors(root, notices=notices, mirrors=THING) == []
+    assert len(notices) == 1 and str(twt) in notices[0] and "uncommitted" in notices[0]
+
+
+def test_a_marketplace_push_never_accepts_an_uncommitted_tool_worktree_edit(tmp_path):
+    public, root, tool = _published_pair(tmp_path)
+    twt = _tool_worktree(tool, public / "libs" / "thing-wt-edit")
+    _drift(twt / TW_SKILL, TWIN_BODY)                       # uncommitted in the tool worktree
+    _drift(root / MP_SKILL, MIRROR_BODY)
+    _g(root, "commit", "-qam", "edit")
+
+    assert len(RG.check_skill_mirrors(root, stage=RG.STAGE_HEAD, notices=[], mirrors=THING)) == 1
+
+
+def test_a_marketplace_commit_still_blocks_when_no_tool_worktree_holds_the_edit(tmp_path):
+    # Control: a tool worktree exists, but it carries a different edit.
+    public, root, tool = _published_pair(tmp_path)
+    twt = _tool_worktree(tool, public / "libs" / "thing-wt-edit")
+    write(twt / TW_SKILL, TWIN_BODY.replace("One paragraph of content.", "A DIFFERENT edit."))
+    _g(twt, "commit", "-qam", "a different edit")
+    _drift(root / MP_SKILL, MIRROR_BODY)
+    _g(root, "add", "-A")
+    notices = []
+
+    assert len(RG.check_skill_mirrors(root, notices=notices, mirrors=THING)) == 1
+    assert notices == []
+
+
 # --- a tool repo committed from a LINKED WORKTREE is still that tool repo -------------------------
 #
 # Measured 2026-10-12 (lib_layered_config 7.1.4): commits changing a mirrored SKILL.md were made in
@@ -2413,6 +2487,10 @@ def test_a_tool_repo_pathspec_commit_is_judged_on_disk_through_the_hook(tmp_path
     ("git commit --message=x --author='A B' c", "only", ("c",)),
     ("git commit -i -m x a", "include", ("a",)),
     ("git commit -m x -- a && git push", "only", ("a",)),
+    # Output redirections change where git's messages go, never what it commits.
+    ("git commit -qm x -- README.md > /tmp/log 2>&1", "only", ("README.md",)),
+    ("git commit -q -F m.txt a b >> $S/commit.log 2>&1", "only", ("a", "b")),
+    ("git commit -qm x a &> /tmp/log", "only", ("a",)),
 ])
 def test_mirror_stage_reads_the_files_a_commit_names(tmp_path, command, mode, pathspecs):
     stage = RG.mirror_stage(command, "Bash", str(tmp_path))
@@ -2434,7 +2512,7 @@ def test_mirror_stage_reads_the_files_a_commit_names(tmp_path, command, mode, pa
     "git commit -qm x *.md",                                # the shell expands the glob first
     "git commit -qm x -- d/{SKILL.md,other.md}",            # brace expansion
     "git commit -qm x -- README.md # and the skill: d/SKILL.md",
-    "git commit -qm x -- README.md > /tmp/log 2>&1",        # redirect words are not pathspecs
+    "git commit -qm x -- README.md < /tmp/list",            # an INPUT redirect is not dropped
     "git commit -qm a -- README.md && git commit -qm b",    # the second commit takes the index
     "git --icase-pathspecs commit -qm x -- d/skill.md",     # changes how git matches the pathspec
     "GIT_ICASE_PATHSPECS=1 git commit -qm x -- d/skill.md",
@@ -2447,9 +2525,24 @@ def test_mirror_stage_reads_the_files_a_commit_names(tmp_path, command, mode, pa
     "cd sub && git commit -qm x -- a",                      # relative: an inherited CDPATH may move it
     "cd /r/lnk/.. && git commit -qm x -- a",
     "git -C lnk/.. commit -qm x -- SKILL.md",               # git chdir()s physically, past the link
+    # An assignment the cd reads is resolved only when it is a plain literal, never GIT_*.
+    "B=$(pwd); cd $B && git commit -qm x -- a",
+    "GIT_ICASE_PATHSPECS=1; cd /r && git commit -qm x -- a",
+    "B=/r; cd $C && git commit -qm x -- a",
+    "B=sub; cd $B && git commit -qm x -- a",                # relative after resolving
+    "export B=/r; cd $B && git commit -qm x -- a",
 ])
 def test_a_commit_whose_selection_the_text_cannot_tell_is_judged_on_the_index(tmp_path, command):
     assert RG.mirror_stage(command, "Bash", str(tmp_path)) == "index"
+
+
+@pytest.mark.parametrize("shape", ["B={d}; cd $B && {c}", 'B={d} && cd "$B" && {c}',
+                                   "B={d}; cd ${{B}} && {c}"])
+def test_a_cd_through_a_literal_assignment_is_read(tmp_path, shape):
+    command = shape.format(d=_sh(tmp_path), c="git commit -m x -- a > /tmp/log 2>&1")
+    stage = RG.mirror_stage(command, "Bash", "/")
+
+    assert (stage.mode, stage.pathspecs, stage.where) == ("only", ("a",), str(tmp_path))
 
 
 def test_a_commit_after_a_cd_to_an_absolute_directory_is_read(tmp_path):
@@ -2709,6 +2802,30 @@ def test_a_relative_pathspec_after_an_absolute_cd_is_judged_on_disk(tmp_path, mo
 
     blocked, shipped_drift = _gate_then_commit(root, f"cd {_sh(root / SKILL_DIR)} && git commit -qm x -- SKILL.md")
     assert shipped_drift and blocked
+
+
+@_POSIX_SHELL
+@pytest.mark.parametrize("in_sync", [True, False])
+def test_the_2026_10_29_pathspec_commit_is_judged_on_what_it_ships(tmp_path, in_sync):
+    """The reported refusal: `B=<marketplace>; cd $B && git commit -q -F msg <paths> > log 2>&1`
+    with the regenerated SKILL.md on disk but not staged. The `$` and the redirect sent it to the
+    index reading, which still held the OLD text, so a correct commit was refused as DRIFT while
+    `git add` plus a plain commit of the same files passed. Both directions are checked against the
+    commit git really makes."""
+    _public, root, tool = _published_pair(tmp_path)
+    _tool_ahead(tool)
+    _drift(root / MP_SKILL, MIRROR_BODY if in_sync else MIRROR_BODY.replace("Doing", "Making"))
+    # A new file a pathspec commit can name only once it is added: it puts the skill in scope.
+    checklist = SKILL_DIR + "/.skillwriter/checklist.md"
+    write(root / checklist, "- [x] done\n")
+    _g(root, "add", checklist)
+    log = tmp_path / "commit.log"
+    blocked, shipped_drift = _gate_then_commit(
+        root, "B=%s; cd $B && git commit -q -m x %s %s > %s 2>&1"
+        % (_sh(root), MP_SKILL, checklist, _sh(log)))
+
+    assert blocked == shipped_drift == (not in_sync)
+
 
 
 # --- the audits name a published ref that has not been fetched for over a week -------------------

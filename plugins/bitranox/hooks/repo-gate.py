@@ -74,6 +74,7 @@ import importlib.util
 import json
 import os
 import re
+import shlex
 import shutil
 import subprocess
 import tempfile
@@ -1881,6 +1882,10 @@ def mirror_failures(root, names, committing=None, stage=STAGE_INDEX, notices=Non
         differing, sample = _mirror_differences(mine_files, their_files)
         if not differing:
             continue
+        held = (_twin_held_in_tool_worktree(name, twin_dir, mine_files, lenient, notices)
+                if committing == "marketplace" else False)
+        if held:
+            continue
         if lenient and _matches_uncommitted_other_side(committing, here_dir, twin_dir, mine_files, their_files):
             other = twin_dir if committing == "marketplace" else here_dir
             notices.append(
@@ -1905,6 +1910,53 @@ def mirror_failures(root, names, committing=None, stage=STAGE_INDEX, notices=Non
             % (name, relative, len(differing), ", ".join(differing[:6]), between, detail)
         )
     return fails
+
+
+def _tool_worktrees(twin_dir):
+    """The same twin directory in every OTHER checkout of the tool repo holding it: its main
+    checkout and each linked worktree, as `git worktree list` names them, that carries the skill."""
+    top, main = _checkouts(twin_dir)
+    try:
+        relative = Path(twin_dir).resolve().relative_to(top)
+    except ValueError:
+        return []
+    rc, out, _ = _git(main, "worktree", "list", "--porcelain", "-z")
+    if rc:
+        return []
+    found = []
+    for field in out.split("\0"):
+        if not field.startswith("worktree "):
+            continue
+        path = Path(field[len("worktree "):]).resolve()
+        if path != top and (path / relative / "SKILL.md").exists():
+            found.append(path / relative)
+    return found
+
+
+def _twin_held_in_tool_worktree(name, twin_dir, mine_files, lenient, notices):
+    """True when another checkout of the tool repo holds the twin text the marketplace ships.
+
+    The mirror of what a tool-repo commit already accepts from marketplace worktrees: the twin
+    edit is often committed in a linked worktree of the tool repo, because its main checkout is
+    another session's working tree. Read only the main checkout, the marketplace commit was refused
+    as drift while the tool repo's push waited for the marketplace to publish, and the one route
+    that passed wrote the twin into that other session's tree (measured 2026-10-26). A worktree's
+    COMMITTED text counts for a commit and a push; its uncommitted text for a commit only (``lenient``),
+    the same rule the main checkout follows. Each pass is reported in ``notices`` when given.
+    """
+    for other in _tool_worktrees(twin_dir):
+        if not _mirror_differences(mine_files, published_files(other))[0]:
+            if notices is not None:
+                notices.append("skills/%s matches its twin as committed in the tool repo's "
+                               "checkout at %s; publish that branch to the tool repo once this "
+                               "marketplace change is published." % (name, other))
+            return True
+        if lenient and not _mirror_differences(mine_files, mirror_files(other))[0]:
+            notices.append("skills/%s matches its twin only through uncommitted text at %s, so "
+                           "this commit is allowed; commit that side next - a push from either "
+                           "repo is refused until both sides are committed." % (name, other))
+            return True
+    return False
 
 
 #: Any file of a skill: a mirrored skill is a directory, so a change to its `references/` or
@@ -2051,7 +2103,10 @@ def _commit_selection(segment, command, tool, cwd):
     None for `-p`/`--interactive`, `--pathspec-from-file`, an option this reader does not know, `-a`
     with paths (git refuses it), a `..` in a `-C` or `cd` path, or no readable directory. None is
     the old reading, so not knowing is never laxer."""
-    if tool != "Bash" or any(c in _SHELL_REWRITES for c in segment) or not _commit_is_plainly_placed(command, tool):
+    if tool != "Bash":
+        return None
+    segment, command = _without_output_redirections(segment), _assignments_resolved(command)
+    if any(c in _SHELL_REWRITES for c in segment) or not _commit_is_plainly_placed(command, tool):
         return None
     try:
         tokens = shell_text.split_for_tool(segment, tool)
@@ -2068,6 +2123,70 @@ def _commit_selection(segment, command, tool, cwd):
     if "a" in flags:
         return CommitSelection("all", (), where)
     return CommitSelection("include" if "i" in flags else "only", pathspecs, where)
+
+
+# An OUTPUT redirection on the commit statement (`> log`, `>> $S/log`, `2>&1`, `&> log`): it moves
+# git's messages, never what git commits. Matched on the statement with quoted text masked, so a
+# `>` inside a quoted message is left alone (and still sends the statement to the index reading).
+_OUTPUT_REDIRECTION = re.compile(r"(?<!\S)(?:\d*>&\d+-?|(?:\d*|&)>>?[ \t]*[^\s;&|<>()]+)")
+
+
+def _without_output_redirections(segment):
+    """``segment`` with its output redirections cut out, so they neither read as pathspecs nor
+    send it to the index reading. Measured 2026-10-29: `git commit -q -F msg <paths> > log 2>&1`
+    was judged on the index, which still held the OLD SKILL.md the commit was about to replace,
+    and refused as DRIFT a commit whose `git add` + plain form passed. An input redirection stays."""
+    masked = shell_text.mask_data_regions(segment, tool_name="Bash")
+    spans = [m.span() for m in _OUTPUT_REDIRECTION.finditer(masked)]
+    for start, end in reversed(spans):
+        segment = segment[:start] + segment[end:]
+    return segment
+
+
+_ASSIGNMENT_WORD = re.compile(r"([A-Za-z_][A-Za-z0-9_]*)=(.*)\Z", re.DOTALL)
+_CD_VARIABLE = re.compile(r"\A\s*cd\s+(?:\$([A-Za-z_]\w*)|\$\{([A-Za-z_]\w*)\}|\"\$([A-Za-z_]\w*)\""
+                          r"|\"\$\{([A-Za-z_]\w*)\}\")\s*\Z")
+
+
+def _assignments_resolved(command):
+    """``command`` with plain literal assignments before its commit folded into the `cd` that reads them.
+
+    `B=/abs; cd $B && git commit ...` names its directory as surely as `cd /abs && ...`, and is the
+    common shape. Only a statement that is ONE `NAME=value` word with no character the shell
+    rewrites, NAME not `GIT_*` (a `GIT_*` shell variable is not exported, but reading one as
+    harmless is the kind of guess the plain reading refuses), is folded; anything else is kept as
+    written, so `_commit_is_plainly_placed` still refuses it."""
+    pieces, previous, known, commit_seen = [], 0, {}, False
+    text = shell_text.strip_heredoc_bodies(command or "")
+    for at, segment in shell_text.iter_segments(text, "Bash"):
+        separator, previous = text[previous:at], at + len(segment)
+        if not commit_seen and shell_text.is_git_verb(segment.strip().lstrip("(").strip(), {"commit"}, "Bash"):
+            commit_seen = True
+        if not commit_seen:
+            literal = _literal_assignment(segment)
+            if literal is not None:
+                known[literal[0]] = literal[1]
+                continue
+            used = _CD_VARIABLE.match(segment)
+            name = next((g for g in used.groups() if g), None) if used else None
+            if name in known:
+                segment = " cd " + shlex.quote(known[name])
+        pieces.append((separator if pieces else "", segment))
+    return "".join(separator + segment for separator, segment in pieces)
+
+
+def _literal_assignment(segment):
+    """(NAME, value) when ``segment`` is one plain `NAME=value` word, else None."""
+    if any(c in _SHELL_REWRITES for c in segment):
+        return None
+    try:
+        tokens = shell_text.split_for_tool(segment, "Bash")
+    except ValueError:
+        return None
+    match = _ASSIGNMENT_WORD.match(tokens[0]) if len(tokens) == 1 else None
+    if match is None or match.group(1).upper().startswith("GIT_"):
+        return None
+    return match.group(1), match.group(2)
 
 
 def _commit_is_plainly_placed(command, tool):

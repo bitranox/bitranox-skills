@@ -369,4 +369,53 @@ def test_changelog_both_sides_newer_first(tmp_path):
             "## 1.1.0\n")
     p = _file(tmp_path, text, "CHANGELOG.md")
     assert _run(p, "--all", "both-theirs-first", "--expect-hunks", "1").returncode == 0
-    assert p.read_text() == "# Changelog\n## 1.3.0\n- theirs\n## 1.2.0\n- ours\n## 1.1.0\n"
+    assert p.read_text() == "# Changelog\n## 1.3.0\n- theirs\n\n## 1.2.0\n- ours\n## 1.1.0\n"
+
+
+# --- joining two Markdown sides keeps a heading's separating blank line -------------------------
+# Measured: both-theirs-first on a CHANGELOG hunk (a new '### Fixed' block against an upstream
+# '## [1.15.3]' block) left '...alike.\n## [1.15.3]'; the tool said no markers remain and a
+# formatter check passed, and only reading the result caught it.
+
+CHANGELOG_HUNK = ("<<<<<<< HEAD\n## [1.15.3] - 2026-10-01\n- upstream fix\n"
+                  "=======\n### Fixed\n- both platforms alike.\n"
+                  ">>>>>>> topic\n")
+
+
+def _joined(rule, markdown, text=CHANGELOG_HUNK):
+    return R.resolve_text(text, [R.parse_rule(rule)], markdown=markdown)
+
+
+def test_joining_markdown_sides_puts_a_blank_line_before_a_heading():
+    assert _joined("both-theirs-first", True) == (
+        "### Fixed\n- both platforms alike.\n\n## [1.15.3] - 2026-10-01\n- upstream fix\n")
+
+
+def test_joining_markdown_sides_puts_a_blank_line_after_a_closing_heading():
+    text = "<<<<<<< a\n## [Unreleased]\n=======\n- an item\n>>>>>>> b\n"
+    assert _joined("both", True, text) == "## [Unreleased]\n\n- an item\n"
+
+
+def test_sides_already_separated_get_no_second_blank_line():
+    text = "<<<<<<< a\n## 1.2.0\n- ours\n\n=======\n## 1.3.0\n- theirs\n>>>>>>> b\n"
+    assert _joined("both", True, text) == "## 1.2.0\n- ours\n\n## 1.3.0\n- theirs\n"
+
+
+def test_a_non_markdown_file_is_joined_unchanged():
+    """A '#' line in Python is a comment, not a heading; its spacing is not this tool's call."""
+    assert _joined("both-theirs-first", False) == (
+        "### Fixed\n- both platforms alike.\n## [1.15.3] - 2026-10-01\n- upstream fix\n")
+
+
+def test_the_blank_line_takes_the_hunks_line_ending():
+    text = CHANGELOG_HUNK.replace("\n", "\r\n")
+    assert "alike.\r\n\r\n## [1.15.3]" in _joined("both-theirs-first", True, text)
+
+
+def test_the_cli_treats_a_dot_md_file_as_markdown(tmp_path):
+    p = _file(tmp_path, CHANGELOG_HUNK, "CHANGELOG.md")
+    assert _run(p, "--all", "both-theirs-first").returncode == 0
+    assert "alike.\n\n## [1.15.3]" in p.read_text()
+    q = _file(tmp_path, CHANGELOG_HUNK, "notes.py")
+    assert _run(q, "--all", "both-theirs-first").returncode == 0
+    assert "alike.\n## [1.15.3]" in q.read_text()

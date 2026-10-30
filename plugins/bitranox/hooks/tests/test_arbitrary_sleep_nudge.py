@@ -220,6 +220,9 @@ def test_powershell_is_out_of_scope_for_the_ampersand_check():
     "BMK_OUTPUT_FORMAT=text make test-all > all.log 2>&1 &",
     "cd /repo && make test > g.log 2>&1 &",
     "make test && git push &",
+    # Real corpus shapes: an interpreter option that takes a value, and pytest under coverage.
+    "(nohup .venv/bin/python -X dev -m pytest -q tests > rw.log 2>&1 &); echo started",
+    "nohup .venv/bin/python -m coverage run --branch -m pytest -q > cov.log 2>&1 &",
 ])
 def test_a_gate_detached_with_an_ampersand_is_named(command):
     """The 2026-10-09 recurrence was a subagent's `make test &`, which no waiter word matched.
@@ -236,6 +239,10 @@ def test_a_gate_detached_with_an_ampersand_is_named(command):
     "make test > g.log 2>&1",
     "echo 'make test' &",
     "cat > notes.md <<'EOF'\nmake test &\nEOF",
+    # A gate word as an ARGUMENT runs no gate: the program is grep, cat or xdg-open.
+    "grep -rn pytest docs/ > hits.txt &",
+    "cat pytest.ini > /tmp/copy.ini &",
+    "cd /repo && grep -c ruff pyproject.toml > n.txt &",
 ])
 def test_a_collected_or_a_quoted_gate_is_silent(command):
     """A `wait` after the last `&` collects it, a space before `wait` included.

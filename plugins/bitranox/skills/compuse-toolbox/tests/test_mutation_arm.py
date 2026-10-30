@@ -1158,3 +1158,207 @@ def test_revert_and_battery_together_are_refused(tmp_path):
     proc = run(p, "--battery", "spec.json", "--revert", "src.py", "HEAD")
     assert proc.returncode == 2
     assert "separate modes" in proc.stderr
+
+
+# --------------------------------------------------------------------------
+# The restore puts the content back with a FRESH mtime, and a non-pytest command can be the arm
+# --------------------------------------------------------------------------
+
+
+def test_the_restored_source_gets_a_fresh_mtime_so_an_mtime_cache_rebuilds(tmp_path):
+    """Restoring with copy2 put the ORIGINAL mtime back, older than the mutant's build, so cargo
+    and make reused the MUTANT build for the restored source (an implementer had to touch the
+    file by hand before the gate)."""
+    p = make_project(tmp_path)
+    before = (p / "src.py").read_bytes()
+    os.utime(p / "src.py", (978307200, 978307200))            # 2001-01-01
+    (p / "old.txt").write_text('return "zero"', encoding="utf-8")
+    (p / "new.txt").write_text('return "ZERO"', encoding="utf-8")
+    started = time.time()
+    run(p, "--mutate", "src.py", "old.txt", "new.txt", "--test", "test_src.py::test_zero")
+    assert (p / "src.py").read_bytes() == before
+    assert (p / "src.py").stat().st_mtime >= started - 2, "the old mtime came back"
+
+
+CHECK = '''\
+import sys
+sys.path.insert(0, ".")
+from src import classify
+raise SystemExit(0 if classify(0) == "zero" else 3)
+'''
+
+
+def _cmd_project(tmp_path):
+    p = make_project(tmp_path)
+    (p / "check.py").write_text(CHECK, encoding="utf-8")
+    return p
+
+
+def test_a_command_arm_that_fails_under_the_mutant_is_killed(tmp_path):
+    p = _cmd_project(tmp_path)
+    (p / "old.txt").write_text('return "zero"', encoding="utf-8")
+    (p / "new.txt").write_text('return "ZERO"', encoding="utf-8")
+    proc = run(p, "--mutate", "src.py", "old.txt", "new.txt",
+               "--cmd", f'"{sys.executable}" check.py', "--json")
+    assert proc.returncode == 0, (proc.stdout, proc.stderr)
+    data = json.loads(proc.stdout)["data"]
+    assert data["verdict"] == "killed" and data["runner_source"] == "--cmd"
+    assert "exit 3" in data["failure"]
+    assert (p / "src.py").read_text(encoding="utf-8") == SOURCE
+
+
+def test_a_command_arm_that_passes_under_the_mutant_survives(tmp_path):
+    p = _cmd_project(tmp_path)
+    (p / "old.txt").write_text('return "positive"', encoding="utf-8")
+    (p / "new.txt").write_text('return "POSITIVE"', encoding="utf-8")
+    proc = run(p, "--mutate", "src.py", "old.txt", "new.txt",
+               "--cmd", f'"{sys.executable}" check.py', "--json")
+    assert proc.returncode == 1, (proc.stdout, proc.stderr)
+    assert json.loads(proc.stdout)["data"]["verdict"] == "survived"
+
+
+def test_a_mutant_that_does_not_build_is_inconclusive_not_killed(tmp_path):
+    """A compile error is the mutant being unbuildable, not a test noticing it."""
+    p = _cmd_project(tmp_path)
+    (p / "build.py").write_text(
+        "print('error[E0425]: cannot find value `x`')\n"
+        "print('error: could not compile `demo` (lib) due to 1 previous error')\n"
+        "raise SystemExit(101)\n", encoding="utf-8")
+    (p / "old.txt").write_text('return "zero"', encoding="utf-8")
+    (p / "new.txt").write_text('return "ZERO"', encoding="utf-8")
+    proc = run(p, "--mutate", "src.py", "old.txt", "new.txt",
+               "--cmd", f'"{sys.executable}" build.py', "--json")
+    assert proc.returncode == 2, (proc.stdout, proc.stderr)
+    data = json.loads(proc.stdout)["data"]
+    assert data["verdict"] == "inconclusive" and "did not build" in data["failure"]
+
+
+def test_a_battery_under_a_command_needs_no_pytest_tests(tmp_path):
+    p = _cmd_project(tmp_path)
+    spec = tmp_path / "battery.json"
+    spec.write_text(json.dumps({"arms": [
+        {"label": "zero", "file": "src.py", "old": 'return "zero"', "new": 'return "ZERO"'},
+        {"label": "positive", "file": "src.py", "old": 'return "positive"', "new": 'return "P"'},
+    ]}), encoding="utf-8", newline="")
+    proc = run(p, "--battery", str(spec), "--cmd", f'"{sys.executable}" check.py', "--json")
+    assert proc.returncode == 1, (proc.stdout, proc.stderr)
+    data = json.loads(proc.stdout)["data"]
+    assert data["baseline"]["green"] and data["final_baseline"]["green"]
+    assert {a["label"]: a["verdict"] for a in data["arms"]} == {"zero": "killed",
+                                                                 "positive": "survived"}
+
+
+@pytest.mark.parametrize("extra", [["--test", "test_src.py::test_zero"], ["--python", sys.executable]])
+def test_cmd_with_a_pytest_option_is_a_usage_error(tmp_path, extra):
+    p = _cmd_project(tmp_path)
+    (p / "old.txt").write_text('return "zero"', encoding="utf-8")
+    (p / "new.txt").write_text('return "ZERO"', encoding="utf-8")
+    proc = run(p, "--mutate", "src.py", "old.txt", "new.txt", "--cmd", "x", *extra)
+    assert proc.returncode == 2, (proc.stdout, proc.stderr)
+    assert (p / "src.py").read_text(encoding="utf-8") == SOURCE
+
+
+def test_an_inconclusive_arm_names_the_missing_module_and_the_retry(tmp_path):
+    """A PEP 723 script repo whose .venv has no pytest made every arm INCONCLUSIVE; the verdict
+    was honest but did not say the fix."""
+    p = make_project(tmp_path)
+    (p / "old.txt").write_text('return "negative"', encoding="utf-8")
+    (p / "new.txt").write_text('return "NEGATIVE"', encoding="utf-8")
+    planned = M.plan_mutations([[str(p / "src.py"), str(p / "old.txt"), str(p / "new.txt")]])
+    report = M.run_arm(planned, "test_src.py::test_zero",
+                       runner=[sys.executable, "-m", "no_such_module_pytest_zz"])
+    assert report["verdict"] == "inconclusive"
+    assert "no_such_module_pytest_zz" in report["failure"]
+    assert "--with pytest" in report["failure"] and "--python" in report["failure"]
+
+
+def test_a_red_baseline_from_a_missing_pytest_names_the_retry_too(tmp_path):
+    p = make_project(tmp_path)
+    (p / "pytest.py").write_text(
+        "import sys\nprint(\"ModuleNotFoundError: No module named 'pytest'\", file=sys.stderr)\n"
+        "raise SystemExit(1)\n", encoding="utf-8")
+    spec = _battery(p, [{"label": "z", "file": "src.py", "old": 'return "zero"',
+                         "new": 'return "ZERO"'}])
+    proc = run(p, "--battery", str(spec), "--json")
+    assert proc.returncode == 2
+    assert "--with pytest" in json.loads(proc.stdout)["data"]["baseline"]["failure"]
+
+
+@pytest.mark.parametrize("output", [
+    "test tests::adds ... FAILED\nerror: test failed, to rerun pass `--lib`\n",
+    "FAIL: test_x\nmake: *** [Makefile:3: check] Error 1\n",
+    "FAIL: test_x\nmake[1]: *** [check] Error 2\n",
+])
+def test_a_failing_test_run_is_killed_even_when_its_runner_says_error(output):
+    """cargo ends a FAILING test run with `error: test failed`, make ends any failed recipe with
+    `make: ***`: neither says the mutant did not build."""
+    assert M.command_verdict(101, output)[0] == "killed"
+
+
+@pytest.mark.parametrize("output", [
+    "error[E0425]: cannot find value `x` in this scope\n",
+    "error: could not compile `demo` (lib) due to 1 previous error\n",
+    "src/a.c:3:1: error: expected ';' before '}' token\ncompilation terminated.\n",
+])
+def test_a_compile_error_is_inconclusive(output):
+    assert M.command_verdict(1, output)[0] == "inconclusive"
+
+
+# --------------------------------------------------------------------------
+# A timed-out arm whose grandchild holds the pipes; a Windows --cmd with quotes
+# --------------------------------------------------------------------------
+
+
+def _gone(pid: int) -> bool:
+    """Whether `pid` no longer runs (absent, or a zombie waiting for init to reap it)."""
+    if os.name == "nt":
+        # os.kill(pid, 0) TERMINATES a process on Windows, so ask tasklist instead.
+        listing = subprocess.run(["tasklist", "/FI", f"PID eq {pid}", "/NH"], capture_output=True,
+                                 text=True, encoding="utf-8", errors="replace", check=False)
+        return str(pid) not in listing.stdout
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return True
+    status = Path(f"/proc/{pid}/status")
+    return status.is_file() and "State:\tZ" in status.read_text(encoding="utf-8")
+
+
+# The arm starts a grandchild that inherits its stdout and outlives it, then waits on it.
+_GRANDCHILD = ("import subprocess, sys, time; "
+               "g = subprocess.Popen([sys.executable, '-c', 'import time; time.sleep(30)']); "
+               "open(sys.argv[1], 'w').write(str(g.pid)); time.sleep(30)")
+
+
+@pytest.mark.parametrize("command", [True, False])
+def test_a_timed_out_arm_kills_the_grandchild_holding_its_pipes_and_restores(tmp_path, command):
+    # Killing only the direct child left the grandchild running on the mutant; on Windows it also
+    # held the pipes, so collecting the output waited out its sleep with the mutant on disk.
+    p = make_project(tmp_path)
+    (p / "old.txt").write_text('return "zero"', encoding="utf-8")
+    (p / "new.txt").write_text('return "ZERO"', encoding="utf-8")
+    planned = M.plan_mutations([[str(p / "src.py"), str(p / "old.txt"), str(p / "new.txt")]])
+    pidfile = tmp_path / "grandchild.pid"
+    runner = [sys.executable, "-c", _GRANDCHILD, str(pidfile)]
+    started = time.monotonic()
+    report = M.run_arm(planned, "test_src.py::test_zero", runner=runner, timeout=3,
+                       command=command)
+    assert time.monotonic() - started < 20
+    assert report["verdict"] == "timeout" and report["restored"] is True
+    assert (p / "src.py").read_text(encoding="utf-8") == SOURCE
+    grandchild = int(pidfile.read_text(encoding="utf-8").strip())
+    deadline = time.monotonic() + 5
+    while not _gone(grandchild) and time.monotonic() < deadline:
+        time.sleep(0.05)
+    assert _gone(grandchild)
+
+
+@pytest.mark.skipif(os.name != "nt", reason="describes how a quoted --cmd is split ON Windows")
+def test_a_windows_cmd_is_split_by_commandlinetoargvw_without_its_quotes():
+    argv, _ = M.command_runner(f'"{sys.executable}" -c "import sys; sys.exit(0)" "my crate"')
+    assert argv == [sys.executable, "-c", "import sys; sys.exit(0)", "my crate"]
+
+
+@pytest.mark.skipif(os.name == "nt", reason="asserts the POSIX shlex split")
+def test_a_posix_cmd_is_split_by_shlex():
+    assert M.split_command("'my crate' a\\ b") == ["my crate", "a b"]

@@ -461,3 +461,86 @@ def test_a_variable_pattern_after_an_option_is_not_a_self_match(monkeypatch):
 
 def test_a_dash_f_with_options_but_no_operand_is_not_blocked(monkeypatch):
     assert run_main(monkeypatch, "pgrep -f -u root") == 0
+
+
+# --- shape 3: a hand-rolled ps | awk/grep | kill --------------------------------------------------
+
+@pytest.mark.parametrize("command", [
+    # The 2026-10-24 recurrence: the loop killed its own shell (exit 144) stopping a timer.
+    "ps -eo pid=,args= | awk '/sleep 900/ {print $1}' | xargs -r kill",
+    "kill $(ps -eo pid,args | awk '/backstop.sh/ {print $1}')",
+    "ps aux | grep 'make test' | awk '{print $2}' | xargs kill -9",
+    # An excluding filter that does NOT match this shell's line leaves it selected: a bracketed
+    # one never matches its own spelling. (A plain `grep -v WORD` always does - WORD is in it.)
+    "ps aux | grep 'make test' | grep -v '[p]ytest' | awk '{print $2}' | xargs kill -9",
+    "ps -ef | grep -F ci_wait.py | awk '{print $2}' | while read p; do kill $p; done",
+    "for p in `ps -eo pid=,cmd= | awk '/[s]leep 900/ {print $1}'`; do kill $p; done; echo 'sleep 900 done'",
+])
+def test_a_ps_listing_filtered_on_the_shell_s_own_text_into_kill_blocks(monkeypatch, capsys, command):
+    assert run_main(monkeypatch, command) == 2
+    assert "ps" in capsys.readouterr().err
+
+
+@pytest.mark.parametrize("command", [
+    "ps -eo pid=,args= | awk '/sleep 900/ {print $1}'",               # read only: nothing killed
+    "ps -eo pid=,comm= | awk '/sleep/ {print $1}' | xargs -r kill",   # comm, not the cmdline
+    "ps -eo pid=,args= | awk '/[s]leep 900/ {print $1}' | xargs -r kill",  # bracket, no leak
+    'ps -eo pid=,args= | grep "$PAT" | awk \'{print $1}\' | xargs kill',   # expanded pattern
+    "ps -eo pid=,args= | grep -v $$ | awk '/sleep 900/ {print $1}' | xargs kill",  # self excluded
+    "kill $(cat /run/x.pid)",
+    # The shell's own line carries `grep` / `awk`, so these excluding filters drop it.
+    "ps -eo pid,args | grep 'sleep 720' | grep -v grep | awk '{print $1}' | xargs kill",
+    "for p in $(ps --ppid $PPID -o pid=,args= | awk '/sleep 2400/ && !/awk/ {print $1}'); do kill $p; done",
+    "echo 'ps aux | grep x | xargs kill'",
+])
+def test_a_ps_pipeline_that_cannot_kill_this_shell_passes(monkeypatch, command):
+    assert run_main(monkeypatch, command) == 0
+
+
+@pytest.mark.parametrize("command", [
+    # A kill beside the listing that does not CONSUME its output kills nothing the listing chose.
+    "ps aux | grep myserver; kill 4242",
+    "kill 4242; ps aux | grep myserver",
+    "kill -0 4242 && ps aux | grep myserver",
+    "ps aux | grep -c myserver && kill 4242",
+    "ps -eo pid=,args= | while read p; do echo $p; done; kill 4242",
+    "echo $(ps aux | grep myserver); kill 4242",
+    # `-C NAME` prints only comm, and NAME is its operand, not a run of BSD format letters.
+    "ps -C sleep | grep sleep | awk '{print $1}' | xargs kill",
+    "ps -u root -C sleep -o pid= | xargs kill",
+    # A process substitution or file the kill never reads.
+    "diff <(ps aux | grep myserver) /tmp/before; kill 4242",
+    "readarray -t p < <(ps aux | grep myserver); kill 4242",
+    "ps aux | grep myserver > /tmp/p; kill 4242",
+    "ps aux | grep myserver > /tmp/p; kill $(cat /run/other.pid)",
+    "ps aux | grep myserver > /tmp/p; cat /tmp/p; kill 4242",
+    "ps aux | grep myserver > /tmp/p; kill 4242 > /tmp/p",
+    "kill 4242; while read p; do echo $p; done < <(ps aux | grep myserver)",
+])
+def test_a_kill_that_does_not_consume_a_cmdline_listing_passes(monkeypatch, command):
+    assert run_main(monkeypatch, command) == 0
+
+
+@pytest.mark.parametrize("command", [
+    # The consuming routes that remain: a substitution assigned to a variable the kill expands,
+    # and a `-C` listing that also asks for the full command line.
+    "pids=$(ps -eo pid=,args= | awk '/sleep 900/ {print $1}'); kill $pids",
+    "ps -f -C sleep | grep 'sleep 900' | awk '{print $2}' | xargs kill",
+    "ps aux | grep 'make test' | awk '{print $2}' | while read p; do echo stop; kill $p; done",
+    # A process substitution redirected into the kill, an array read from one, or a loop it feeds.
+    "xargs kill < <(ps aux | grep 'sleep 900' | awk '{print $2}')",
+    "readarray -t p < <(ps aux | grep 'sleep 900' | awk '{print $2}'); kill \"${p[@]}\"",
+    "mapfile -t pids < <(ps aux | grep 'sleep 900' | awk '{print $2}'); kill ${pids[*]}",
+    "while read p; do kill $p; done < <(ps aux | grep 'sleep 900' | awk '{print $2}')",
+    # A file handoff: the listing is written to a file a later kill reads.
+    "ps aux | grep 'sleep 900' | awk '{print $2}' > /tmp/p; kill $(cat /tmp/p)",
+    "ps aux | grep 'sleep 900' | awk '{print $2}' >/tmp/p; xargs kill < /tmp/p",
+    "ps aux | grep 'sleep 900' | awk '{print $2}' >> /tmp/p && kill `cat /tmp/p`",
+    "ps aux | grep 'sleep 900' | awk '{print $2}' | tee /tmp/p; kill $(< /tmp/p)",
+    "ps aux | grep 'sleep 900' | awk '{print $2}' > /tmp/p; cat /tmp/p | xargs kill",
+    "ps aux | grep 'sleep 900' | awk '{print $2}' > /tmp/p; while read p; do kill $p; done < /tmp/p",
+    # `-N` is --deselect and takes no value, so the `-f` after it still asks for the cmdline.
+    "ps -N -f | grep 'sleep 900' | awk '{print $2}' | xargs kill",
+])
+def test_a_kill_that_consumes_a_cmdline_listing_through_another_route_blocks(monkeypatch, command):
+    assert run_main(monkeypatch, command) == 2

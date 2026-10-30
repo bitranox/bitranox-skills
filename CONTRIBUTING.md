@@ -47,6 +47,16 @@ uv run plugins/bitranox/hooks/bump_version.py --part patch --changelog notes.md
 ```
 
 Note the bump in the commit subject (`...; bump to X.Y.Z`), matching the existing history.
+
+When a peer pushes first and takes the number your one unpushed commit bumped to, `--rebase`
+renumbers that commit onto origin instead of a hand-rolled reset, re-bump and CHANGELOG move: it
+keeps the old commit at `refs/bump-version/pre-rebase`, re-applies its change on top of origin,
+bumps all three files to the next free version with your changelog section above origin's newest
+one, and commits with your message, the taken version in it replaced:
+
+```bash
+uv run plugins/bitranox/hooks/bump_version.py --rebase
+```
 Repo-meta changes outside the plugin tree (this file, the root `README`, CI) do not ship to
 installed copies and do not need a plugin bump.
 

@@ -30,6 +30,16 @@ remote-tracking ref for tags, so nothing local changes when one lands, and a rej
 recorded like a landed one. A branch pushed to a URL instead of a named remote updates no tracking
 ref either, so it cannot pass the test and is not recorded.
 
+A push to a BRANCH that no workflow's trigger can build is announced as starting no run, and
+not recorded: "CI is now running" there sent the reader into a wait that ended `no-runs` and read
+as broken CI. That is decided only when it is certain - every workflow file parsed, none with a
+`push` trigger whose branch filters admit the branch, and none with a `pull_request`,
+`workflow_run` or `create` trigger that could still run for it. When only a `pull_request`
+trigger could run it (for an open pull request, which nothing local can see), the push is still
+recorded but the notice says the run depends on that instead of claiming CI is running. Anything that cannot be
+judged keeps the ordinary nudge. The files are read with PyYAML when it is importable; without it
+nothing is decided.
+
 Exits 0 always, and emits nothing when it has no opinion.
 """
 
@@ -39,6 +49,11 @@ import re
 import subprocess
 import sys
 from pathlib import Path
+
+try:
+    import yaml as _yaml
+except ImportError:                     # a hook provisions no dependencies; without it, decide nothing
+    _yaml = None
 
 import ci_watch_state as state
 from shell_text import (
@@ -188,6 +203,117 @@ def _has_workflows(cwd: str) -> bool:
         return workflows.is_dir() and any(workflows.glob("*.y*ml"))
     except OSError:
         return False
+
+
+# Triggers that may start a run for a branch push without a `push` filter naming it, so each keeps
+# a push from being called run-less. A pull_request run starts only for an open pull request from
+# the branch, which nothing local can see.
+_PR_EVENTS = frozenset({"pull_request", "pull_request_target"})
+# The ones that cannot be judged at all: workflow_run chains off another workflow, and `create`
+# fires on a new branch's FIRST push, which nothing local tells apart from a later one (and it
+# takes no branch filter).
+_UNJUDGED_EVENTS = frozenset({"workflow_run", "create"})
+#: What a push to one branch does, decided over every workflow file.
+RUNS, PR_ONLY, NO_RUN, UNKNOWN = "runs", "pr-only", "no-run", "unknown"
+
+
+def _branch_filter_matches(patterns, branch: str) -> bool:
+    """Does a GitHub `branches:` list admit ``branch``? Later patterns win, `!` negates.
+
+    `*` matches within one path segment, `**` across them, and `?` / `+` quantify the character
+    before them, as GitHub's filter syntax defines.
+    """
+    matched = False
+    for raw in patterns:
+        pattern = str(raw)
+        negate = pattern.startswith("!")
+        if re.fullmatch(_filter_regex(pattern[1:] if negate else pattern), branch):
+            matched = not negate
+    return matched
+
+
+def _filter_regex(pattern: str) -> str:
+    out, i = [], 0
+    while i < len(pattern):
+        if pattern.startswith("**", i):
+            out.append(".*")
+            i += 2
+            continue
+        ch = pattern[i]
+        if ch == "*":
+            out.append("[^/]*")
+        elif ch in "?+":
+            out.append(ch)
+        elif ch == "[":
+            end = pattern.find("]", i)
+            if end == -1:
+                out.append(re.escape(ch))
+            else:
+                out.append(pattern[i:end + 1])
+                i = end
+        else:
+            out.append(re.escape(ch))
+        i += 1
+    return "".join(out)
+
+
+def _workflow_builds_branch(doc, branch: str) -> str:
+    """One workflow's answer for a push to ``branch``: RUNS, PR_ONLY, NO_RUN or UNKNOWN."""
+    if not isinstance(doc, dict):
+        return UNKNOWN
+    on = doc.get("on", doc.get(True))       # PyYAML 1.1 reads a bare `on` key as the boolean True
+    if isinstance(on, str):
+        on = [on]
+    if isinstance(on, list):
+        on = {event: None for event in on if isinstance(event, str)}
+    if not isinstance(on, dict):
+        return UNKNOWN
+    if any(event in on for event in _UNJUDGED_EVENTS):
+        return UNKNOWN
+    pushed = _push_filter_admits(on["push"], branch) if "push" in on else False
+    if pushed is None:
+        return UNKNOWN
+    if pushed:
+        return RUNS
+    return PR_ONLY if any(event in on for event in _PR_EVENTS) else NO_RUN
+
+
+def _push_filter_admits(push, branch: str) -> bool | None:
+    """Does a `push:` trigger body admit a push to ``branch``? None: cannot be told."""
+    if push is None:
+        return True
+    if not isinstance(push, dict):
+        return None
+    branches, ignored = push.get("branches"), push.get("branches-ignore")
+    if branches is None and ignored is None:
+        return "tags" not in push and "tags-ignore" not in push
+    if isinstance(branches, list):
+        return _branch_filter_matches(branches, branch)
+    if isinstance(ignored, list):
+        return not _branch_filter_matches(ignored, branch)
+    return None
+
+
+def push_trigger_state(repo: str, branch: str) -> str:
+    """RUNS when any workflow's push trigger admits ``branch``; PR_ONLY or NO_RUN when every file
+    was read and none does (PR_ONLY: a pull_request trigger could still run for an open pull
+    request); UNKNOWN when any file could not be judged, or PyYAML is missing."""
+    if _yaml is None:
+        return UNKNOWN
+    root = _git(["rev-parse", "--show-toplevel"], repo)
+    if not root:
+        return UNKNOWN
+    try:
+        files = sorted((Path(root) / ".github" / "workflows").glob("*.y*ml"))
+        answers = {_workflow_builds_branch(_yaml.safe_load(path.read_text(encoding="utf-8")),
+                                           branch) for path in files}
+    except (OSError, UnicodeDecodeError, _yaml.YAMLError):
+        return UNKNOWN
+    # One workflow that certainly runs settles it; only then does an unjudged file block a no.
+    for state_name in (RUNS, UNKNOWN, PR_ONLY):
+        if state_name in answers:
+            return state_name
+    return NO_RUN if answers else UNKNOWN
 
 
 _SCP_LIKE = re.compile(r"^[^/]+@([^:/]+):")
@@ -443,8 +569,11 @@ def _watching(command: str, tool_name: str = "Bash") -> bool:
     return bool(_WRAPPER.search(masked) and _WATCHING.search(command))
 
 
-def notice(command, cwd: str = "", tool_name: str = "Bash") -> tuple[str, str, str, str] | None:
-    """The (text, sha, branch, repo) to record for this command, or None if it is not a landed push.
+def notice(command, cwd: str = "", tool_name: str = "Bash") -> tuple[str, str, str, str, bool] | None:
+    """(text, sha, branch, repo, owed) for this command, or None if it is not a landed push.
+
+    ``owed`` is False when the push certainly starts no run: the text then says so, and nothing
+    is recorded for the Stop gate to ask after.
 
     Returns the sha it resolved rather than making the caller resolve it again: every lookup here
     is a subprocess, and recomputing them is how the two halves drift into disagreeing about which
@@ -480,12 +609,29 @@ def notice(command, cwd: str = "", tool_name: str = "Bash") -> tuple[str, str, s
         if not sha:
             return None
         branch = _git(["rev-parse", "--abbrev-ref", "HEAD"], repo) or "HEAD"
+    name = branch[len("branch "):] if branch.startswith("branch ") else branch
+    triggers = RUNS if branch.startswith("tag ") or name == "HEAD" else push_trigger_state(repo, name)
+    if triggers == NO_RUN:
+        text = ("No workflow in this repo runs for a push to %s: no `on: push` trigger names that "
+                "branch and none could run for it otherwise, so this push (%s) starts no run "
+                "and nothing beyond the local gate has validated it. A merge to, or a pull "
+                "request against, a branch the triggers name would get a verdict."
+                % (name, sha[:12]))
+        return text, sha, branch, repo, False
+    if triggers == PR_ONLY:
+        text = ("No `on: push` trigger in this repo names %s, so this push (%s) starts a run only "
+                "if an open pull request from that branch matches a pull_request trigger. Check "
+                "before moving on:\n    uv run %s --sha %s\n"
+                "`no-runs` (exit 2) then means no pull request runs it and nothing beyond the "
+                "local gate has validated it; 0 passed, 1 failed."
+                % (name, sha[:12], _CI_WAIT, sha))
+        return text, sha, branch, repo, True
     text = ("CI is now running for the push you just made: %s (%s).\n"
             "Watch it before moving on - this repo's CI blocks on every cell:\n"
             "    uv run %s --sha %s\n"
             "Exit 0 every run passed, 1 something failed, 2 could not tell."
             % (sha[:12], branch, _CI_WAIT, sha))
-    return text, sha, branch, repo
+    return text, sha, branch, repo, True
 
 
 def main(raw: str | None = None) -> int:
@@ -522,8 +668,9 @@ def main(raw: str | None = None) -> int:
         found = notice(command, cwd, shell)
         if not found:
             return 0
-        text, sha, branch, repo = found
-        state.record_push(key, session, sha, repo=repo, branch=branch)
+        text, sha, branch, repo, owed = found
+        if owed:
+            state.record_push(key, session, sha, repo=repo, branch=branch)
     except Exception:  # noqa: BLE001 - a nudge must never wedge a turn
         return 0
 

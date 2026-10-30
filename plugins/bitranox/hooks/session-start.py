@@ -81,6 +81,41 @@ def _proj(event):
     return event.get("cwd") or os.environ.get("CLAUDE_PROJECT_DIR") or os.getcwd()
 
 
+def level_home(proj):
+    """The directory whose memory chain this session may scaffold: `proj` itself, or - when `proj`
+    sits inside a directory its repository git-ignores - the parent of the highest such directory.
+
+    The session's cwd is wherever the shell stood when the event fired (a compaction keeps the
+    shell's cwd), so a cwd inside an ignored scratch tree such as `.plan/<batch>/` would make the
+    heal create a CLAUDE.md / CLAUDE.local.md pair at every gap level down to it. Those then count
+    as curated levels inside a tree git never tracks. The repository root is never ignored. Outside
+    a repository, or when git cannot answer, `proj` is returned unchanged (fail-open: the previous
+    behaviour). IMPURE (runs git).
+    """
+    try:
+        here = Path(proj).resolve()
+        top = (_git(here, "rev-parse", "--show-toplevel") or "").strip()
+        if not top:
+            return proj
+        root = Path(top).resolve()
+        ladder = [d for d in [here, *here.parents] if d != root and root in d.parents]
+        if not ladder:
+            return proj
+        # --no-index: an ignored DIRECTORY holding tracked files must still read as ignored, and
+        # the question is about the pattern, not about what happens to be in the index.
+        rel = [d.relative_to(root).as_posix() + "/" for d in ladder]
+        # None covers both "nothing ignored" (exit 1) and a failed call: either way no level moves.
+        out = _git(root, "check-ignore", "--no-index", *rel) or ""
+        ignored = {line.strip() for line in out.splitlines() if line.strip()}
+        highest = None
+        for d, r in zip(ladder, rel):
+            if r in ignored or r.rstrip("/") in ignored:
+                highest = d                          # ladder runs upward: the last hit is highest
+        return str(highest.parent) if highest is not None else proj
+    except Exception:  # noqa: BLE001 - no git, a timeout: keep the cwd, never wedge the start
+        return proj
+
+
 def audit_context(proj):
     """Surface (and consume) a pending SessionEnd miss-audit for this project, if any.
 
@@ -332,7 +367,10 @@ def _age(raised, today):
 #: inherited one would answer every question below about some other repository.
 _GIT_SCOPE_VARS = ("GIT_DIR", "GIT_WORK_TREE", "GIT_INDEX_FILE", "GIT_OBJECT_DIRECTORY",
                    "GIT_ALTERNATE_OBJECT_DIRECTORIES", "GIT_COMMON_DIR", "GIT_NAMESPACE",
-                   "GIT_PREFIX", "GIT_QUARANTINE_PATH")
+                   "GIT_PREFIX", "GIT_QUARANTINE_PATH",
+                   # the pathspec modes change how check-ignore matches the paths it is handed
+                   "GIT_LITERAL_PATHSPECS", "GIT_GLOB_PATHSPECS", "GIT_NOGLOB_PATHSPECS",
+                   "GIT_ICASE_PATHSPECS")
 _BEHIND_READ_UPSTREAM = ("This checkout is %(n)s behind %(ref)s as of the last fetch, so this list "
                          "is read from %(ref)s. Other files on disk (handover.md too) are older "
                          "than %(ref)s: fast-forward the checkout before reading them.\n")
@@ -629,14 +667,17 @@ def _joined_bytes(blocks):
 def main():
     event = _read_event()
     proj = _proj(event)
-    _self_heal(proj)
+    # Only the scaffolding steps move out of an ignored dir; the audit, backlog and retrieval
+    # blocks stay keyed on the real cwd, where the hooks that wrote them looked.
+    home = level_home(proj)
+    _self_heal(home)
     # Everything else is assembled FIRST so the two listings can be given what is actually left.
     # Sized against a fixture instead, the backlog overran the ceiling on the real repo while its
     # test stayed green. The backlog is ranked work someone is waiting on, so it is sized before the
     # contribution listing, which is the dream's business and degrades to its count line - and that
     # line's size is held back first, so the backlog cannot spend it.
     retrieval, audit, decoy = retrieval_context(proj), audit_context(proj), decoy_context(proj)
-    tail = [dream_nudge(proj), newproject_nudge(proj)] if _nudges_on() else []
+    tail = [dream_nudge(home), newproject_nudge(home)] if _nudges_on() else []
     left = _ESSENTIALS_CEILING_BYTES - _joined_bytes([retrieval, audit, decoy] + tail)
     contrib_floor = _joined_bytes([contrib_pointer(proj)])
     open_work = open_work_context(proj, budget=left - contrib_floor)

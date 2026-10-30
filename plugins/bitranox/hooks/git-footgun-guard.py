@@ -16,8 +16,15 @@ Measured in temp repositories: a staged `git rm --cached p` is re-added when ano
 the same pathspec (exit 0, nothing said), a staged `update-index --chmod=+x` under
 core.fileMode=false is committed as 100644, and a partial `add -p` is replaced by the whole file.
 The index is read with git before the commit runs; a `git rm --cached` / `update-index` earlier in
-the SAME command has not run yet, so those are matched by their operands instead. Advisory, not a
-block: committing the whole worktree file can be the intent. Contrib #35 has the corpus numbers.
+the SAME command has not run yet, so those are matched by their operands instead. Over staged state
+that already existed it is advisory, not a block: committing the whole worktree file can be the
+intent. An index edit made earlier in the SAME command and then discarded by it is REFUSED: that is
+never the intent, and the advisory alone let `git update-index --chmod=+x f && git commit -- f`
+land 100644 in three repos in a row (2026-10-23). Contrib #35 has the corpus numbers.
+
+A third check REFUSES `git check-ignore -q` / `--quiet` with two or more paths: git exits 128
+`--quiet is only valid with a single pathname`, and a "non-zero means not ignored" reading takes
+that as an answer for every path.
 
 Pure standard library. Reads the PreToolUse event JSON on stdin. Exit 2 blocks the
 call and shows stderr to the model; the advisory is `additionalContext` on stdout with exit 0;
@@ -37,6 +44,7 @@ import shell_text
 from shell_text import (
     argv_for_match,
     blank_heredoc_bodies,
+    drop_redirections,
     git_verb_dir,
     git_verb_operands,
     iter_segments,
@@ -90,6 +98,31 @@ def broken_revparse(command: str, tool_name: str | None = None) -> bool:
     return False
 
 
+_CHECK_IGNORE = frozenset({"check-ignore"})
+_QUIET = frozenset({"-q", "--quiet"})
+
+
+def multi_path_quiet_check_ignore(command, tool_name=None):
+    """True when a statement runs `git check-ignore -q` with two or more path operands.
+
+    `--stdin` reads the paths from input, so it is never this shape. A bundled short form
+    (`-qv`) carries the q too. Redirections are dropped before the paths are counted.
+    """
+    for argv in _statements(command, tool_name):
+        operands = git_verb_operands(argv, _CHECK_IGNORE, tool_name or "Bash")
+        if operands is None:
+            continue
+        operands = drop_redirections(operands)
+        quiet = any(t in _QUIET or (t.startswith("-") and not t.startswith("--") and "q" in t)
+                    for t in operands)
+        if not quiet or "--stdin" in operands:
+            continue
+        paths = [t for t in operands if t == "-" or not t.startswith("-")]
+        if len(paths) >= 2:
+            return True
+    return False
+
+
 _COMMIT = frozenset({"commit"})
 _RM = frozenset({"rm"})
 _UPDATE_INDEX = frozenset({"update-index"})
@@ -134,23 +167,46 @@ def _statements(command, tool_name):
             yield argv
 
 
+_UNTRACK = "a staged untrack (`git rm --cached`) will be re-added"
+
+
+def _removed_paths(argv, tool_name):
+    """The operands of a plain `rm` statement (`rm -f -- a b`, `sudo rm a`), normalised; else []."""
+    at = shell_text.statement_program(argv, ("rm",), tool_name or "Bash")
+    if at is None:
+        return []
+    paths, operands_only = [], False
+    for token in argv[at + 1:]:
+        if token == "--" and not operands_only:
+            operands_only = True
+        elif operands_only or not token.startswith("-"):
+            paths.append(os.path.normpath(token))
+    return paths
+
+
 def _same_command_index_edits(command, tool_name):
-    """{path: what} for `git rm --cached` / `git update-index --chmod` BEFORE the first commit."""
-    edits = {}
+    """{path: what} for `git rm --cached` / `git update-index --chmod` BEFORE the first commit.
+
+    An untrack whose worktree file the same command also deletes (`rm f`) is dropped: the pathspec
+    commit then records the deletion, which is what the untrack was for, so nothing is re-added.
+    """
+    edits, removed = {}, set()
     for argv in _statements(command, tool_name):
         if git_verb_operands(argv, _COMMIT, tool_name or "Bash") is not None:
             break
+        removed.update(_removed_paths(argv, tool_name))
         rm = git_verb_operands(argv, _RM, tool_name or "Bash")
         if rm is not None and "--cached" in rm:
             for token in rm:
                 if not token.startswith("-"):
-                    edits[token] = "a staged untrack (`git rm --cached`) will be re-added"
+                    edits[token] = _UNTRACK
         upd = git_verb_operands(argv, _UPDATE_INDEX, tool_name or "Bash")
         if upd is not None and any(t.startswith("--chmod=") for t in upd):
             for token in upd:
                 if not token.startswith("-"):
                     edits[token] = "a staged mode change (`update-index --chmod`) will be dropped"
-    return edits
+    return {path: what for path, what in edits.items()
+            if not (what == _UNTRACK and os.path.normpath(path) in removed)}
 
 
 def _git(repo, *args, data=False):
@@ -208,7 +264,7 @@ def _state_losses(repo, paths):
         worktree = _worktree_entry(root, path, head, file_mode)
         if status == "D":
             if worktree is not None:
-                losses.append((path, "a staged untrack (`git rm --cached`) will be re-added"))
+                losses.append((path, _UNTRACK))
             continue
         if index is None or index[0] not in _REGULAR:
             continue
@@ -221,20 +277,30 @@ def _state_losses(repo, paths):
     return losses
 
 
-def pathspec_commit_losses(command, cwd, tool_name=None):
-    """[(path, what)] a pathspec `git commit` in `command` would silently discard, else []."""
-    commit = None
+def _commit_paths(command, tool_name):
+    """The literal (glob-free) paths the first `git commit` of `command` names, else []."""
     for argv in _statements(command, tool_name):
         commit = git_verb_operands(argv, _COMMIT, tool_name or "Bash")
         if commit is not None:
-            break
-    if commit is None:
-        return []
-    paths = [p for p in _commit_pathspec(commit) if not _GLOB.search(p)]
+            return [p for p in _commit_pathspec(commit) if not _GLOB.search(p)]
+    return []
+
+
+def same_command_losses(command, tool_name=None):
+    """[(path, what)] for index edits made earlier in `command` that its pathspec commit drops."""
+    paths = _commit_paths(command, tool_name)
     if not paths:
         return []
     same = _same_command_index_edits(command, tool_name)
-    losses = [(p, same[p]) for p in paths if p in same]
+    return [(p, same[p]) for p in paths if p in same]
+
+
+def pathspec_commit_losses(command, cwd, tool_name=None):
+    """[(path, what)] a pathspec `git commit` in `command` would silently discard, else []."""
+    paths = _commit_paths(command, tool_name)
+    if not paths:
+        return []
+    losses = same_command_losses(command, tool_name)
     repo = git_verb_dir(command, cwd, _COMMIT, tool_name)
     if repo and os.path.isdir(repo):
         try:
@@ -258,15 +324,39 @@ def _advise(losses):
     }}) + "\n")
 
 
+def _refuse_same_command(losses):
+    listed = "\n".join("  - %s: %s" % (path, what) for path, what in losses)
+    return shell_text.refuse(
+        "PATHSPEC COMMIT DISCARDS AN INDEX EDIT MADE EARLIER IN THIS SAME COMMAND:\n" + listed +
+        "\n`git commit <paths>` records the WORKTREE copy of each named path, so the edit this "
+        "command just staged is thrown away (exit 0, nothing said).\n"
+        "Fix: commit WITHOUT a pathspec after the edit (`git commit -F msg`), having checked that "
+        "`git diff --cached --stat` lists only your paths - or make the edit in the worktree "
+        "instead (chmod, git rm)."
+    )
+
+
 def main() -> int:
     try:
         event = json.load(sys.stdin)
     except Exception:
         return 0
     command = (event.get("tool_input") or {}).get("command") or ""
-    if not broken_revparse(command, event.get("tool_name")):
+    tool_name = event.get("tool_name")
+    if multi_path_quiet_check_ignore(command, tool_name):
+        return shell_text.refuse(
+            "git check-ignore -q/--quiet takes a SINGLE path; with 2+ it fails `--quiet is only "
+            "valid with a single pathname` (exit 128; the text is LOCALIZED - match the code), "
+            "and a non-zero-means-not-ignored reading takes that as an answer for every path.\n"
+            "Fix: one path per call (`git check-ignore -q -- p`), or drop -q and read which "
+            "paths it prints.\n"
+        )
+    if not broken_revparse(command, tool_name):
+        same = same_command_losses(command, tool_name)
+        if same:
+            return _refuse_same_command(same)
         try:
-            losses = pathspec_commit_losses(command, event.get("cwd"), event.get("tool_name"))
+            losses = pathspec_commit_losses(command, event.get("cwd"), tool_name)
         except Exception:  # noqa: BLE001 - an advisory must never wedge a turn
             losses = []
         if losses:

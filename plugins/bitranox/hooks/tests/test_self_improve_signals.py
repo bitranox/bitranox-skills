@@ -3,6 +3,7 @@
 All content is ASCII.
 """
 
+import importlib.util
 import sys
 import json
 import os
@@ -790,12 +791,16 @@ def test_unsatisfiable_nap_owed_keeps_a_legacy_marker_it_cannot_judge(home):
 
 
 def test_unsatisfiable_nap_owed_never_judges_the_current_session_consumed(home, tmp_path):
-    # The live transcript keeps growing past the compaction point, so a watermark at its CURRENT
-    # end says nothing about whether the pre-compaction stretch was read. Only an earlier
-    # session's transcript can be judged consumed.
+    # The live transcript keeps growing past the compaction point, so for a marker that does not
+    # record where the compaction was (one written before the offset was), a watermark at the
+    # CURRENT end says nothing about whether the pre-compaction stretch was read. Only an earlier
+    # session's transcript can be judged consumed then.
     tp = tmp_path / "live.jsonl"
     tp.write_text("{}\n", encoding="utf-8")
     S.mark_nap_owed("/p/x", session_id="sid-current", transcript_path=str(tp))
+    legacy = json.loads(S.nap_owed_file("/p/x").read_text(encoding="utf-8"))
+    legacy.pop("offset")
+    S.nap_owed_file("/p/x").write_text(json.dumps(legacy), encoding="utf-8")
     S.set_watermark("/p/x", str(tp), S.DREAM_REVIEWER, tp.stat().st_size)
     assert S.unsatisfiable_nap_owed("/p/x", "sid-current") == ("", "")
     assert S.unsatisfiable_nap_owed("/p/x", "sid-later") == (str(tp), S.NAP_OWED_TRANSCRIPT_CONSUMED)
@@ -2177,3 +2182,54 @@ def test_why_not_queued_says_when_the_closed_set_cannot_be_read(tmp_path, monkey
     S.rejected_file(proj).mkdir(parents=True)
     why = S.why_not_queued(proj, "fix x", "hook")
     assert why.startswith("already queued or closed - the closed set could not be read: ")
+
+
+def test_the_premise_check_refusal_is_not_a_tool_signal():
+    """missing-mechanism-nudge refuses the FIRST ask of every question on purpose; its text arrives
+    as a `hook error:` tool result and read as a learning, twice a session plus the audit's flag."""
+    spec = importlib.util.spec_from_file_location(
+        "_mm_nudge_for_signal_test", Path(__file__).resolve().parent.parent / "missing-mechanism-nudge.py")
+    nudge = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(nudge)
+    block = "PreToolUse:AskUserQuestion hook error: " + nudge.QUESTION_REFUSAL
+    assert S.tool_matches_outside_fixtures(block) == []
+    assert S.tool_signal_offset(block) is None
+    # A real failure in the same block still counts.
+    assert S.tool_matches_outside_fixtures(block + "\nerror: unrecognized arguments: --x") != []
+
+
+# ---- a cd into another project must not re-open what this session already reviewed -------------
+# Session state used to be keyed by the shell cwd alone: one `cd child && ...` moved the harness
+# cwd, the review watermark for the SAME transcript read 0 there, and the whole session came back
+# as unreviewed. The mark belongs to the transcript.
+
+def test_a_project_that_never_marked_a_transcript_inherits_the_furthest_mark(home, tmp_path):
+    tp = tmp_path / "t.jsonl"
+    tp.write_text("aaaa\nbbbb\n", encoding="utf-8")
+    S.set_watermark("/p/umbrella", str(tp), S.DREAM_REVIEWER, 5)
+    S.set_watermark("/p/other", str(tp), S.DREAM_REVIEWER, 10)
+    assert S.get_watermark("/p/umbrella/child", str(tp), S.DREAM_REVIEWER) == 10
+    assert S.unreviewed_transcript_text("/p/umbrella/child", S.DREAM_REVIEWER, str(tp))[0] == ""
+
+
+def test_a_project_s_own_mark_wins_over_another_project_s(home, tmp_path):
+    # Its own mark is what it last wrote, and a write is checked by reading it back.
+    tp = tmp_path / "t.jsonl"
+    tp.write_text("aaaa\nbbbb\n", encoding="utf-8")
+    S.set_watermark("/p/other", str(tp), S.DREAM_REVIEWER, 10)
+    S.set_watermark("/p/x", str(tp), S.DREAM_REVIEWER, 5)
+    assert S.get_watermark("/p/x", str(tp), S.DREAM_REVIEWER) == 5
+
+
+def test_an_owed_nap_is_consumed_once_the_review_reaches_its_compaction_point(home, tmp_path):
+    # The marker records where the transcript ended at the compaction, so even the CURRENT
+    # session's obligation is discharged by a review past that point - from any cwd.
+    tp = tmp_path / "live.jsonl"
+    tp.write_text("before-compaction\n", encoding="utf-8")
+    S.mark_nap_owed("/p/umbrella/child", session_id="sid-current", transcript_path=str(tp))
+    with tp.open("a", encoding="utf-8") as fh:
+        fh.write("after-compaction\n")
+    assert S.unsatisfiable_nap_owed("/p/umbrella/child", "sid-current") == ("", "")
+    S.set_watermark("/p/umbrella", str(tp), S.DREAM_REVIEWER, len("before-compaction\n"))
+    assert S.unsatisfiable_nap_owed("/p/umbrella/child", "sid-current") == (
+        str(tp), S.NAP_OWED_TRANSCRIPT_CONSUMED)

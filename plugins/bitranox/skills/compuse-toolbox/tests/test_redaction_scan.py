@@ -100,6 +100,31 @@ def test_the_file_header_is_not_an_added_line():
     assert read == 1 and hits == []
 
 
+# ---- a re-padded line is not an authored one -------------------------------------------------
+
+def test_a_re_padded_table_row_is_marked_padding_only():
+    """A table formatter re-pads every row of a touched table: same cells, new whitespace."""
+    hits, _ = R.scan_diff(_diff("-| Zorblax | 1 |", "+| Zorblax   |   1 |"), RULES)
+    assert [(h.rule.pattern, h.padding_only) for h in hits] == [("Zorblax", True)]
+
+
+def test_a_changed_cell_beside_the_name_is_authored():
+    hits, _ = R.scan_diff(_diff("-| Zorblax | 1 |", "+| Zorblax | 2 |"), RULES)
+    assert [h.padding_only for h in hits] == [False]
+
+
+def test_one_removed_line_excuses_only_one_added_copy():
+    hits, _ = R.scan_diff(_diff("-| Zorblax |", "+| Zorblax |", "+|  Zorblax  |"), RULES)
+    assert sorted(h.padding_only for h in hits) == [False, True]
+
+
+def test_a_removal_in_another_file_excuses_nothing():
+    diff = ("diff --git a/a.md b/a.md\n--- a/a.md\n+++ b/a.md\n@@ -1 +0,0 @@\n-Zorblax row\n"
+            "diff --git a/b.md b/b.md\n--- a/b.md\n+++ b/b.md\n@@ -0,0 +1 @@\n+Zorblax row\n")
+    hits, _ = R.scan_diff(diff, RULES)
+    assert [(h.location, h.padding_only) for h in hits] == [("b.md", False)]
+
+
 # ---- the liveness control ----------------------------------------------------------------------
 
 def test_the_control_passes_for_every_parsed_pattern():
@@ -278,6 +303,20 @@ def test_cli_a_failing_control_refuses_rather_than_report_clean(tmp_path, capsys
     assert R.execute(args, matcher=lambda text, rules: []) == 2
     assert "liveness control failed: a planted added line holding rule #1, #2, #3" \
         in capsys.readouterr().err
+
+
+def test_cli_a_re_padded_row_is_reported_apart_and_does_not_fail_the_scan(tmp_path):
+    repo = _repo(tmp_path)
+    (repo / "doc.md").write_text("old  line   mentioning Zorblax\nkeep\n", encoding="utf-8")
+    _git(repo, "commit", "-qam", "re-pad")
+    r = run_cli("--list", str(_list(tmp_path)), "--range", "HEAD~1..HEAD", "--json", cwd=repo)
+    assert r.returncode == 0, r.stdout + r.stderr
+    data = json.loads(r.stdout)["data"]
+    assert data["hits"] == []
+    assert [(h["file"], h["line"]) for h in data["padding_only_hits"]] == [("doc.md", 1)]
+    text = run_cli("--list", str(_list(tmp_path)), "--range", "HEAD~1..HEAD", cwd=repo)
+    assert text.returncode == 0
+    assert "CLEAN" in text.stdout and "1 re-padded" in text.stdout
 
 
 @pytest.mark.parametrize("bom", [b"\xef\xbb\xbf", b""])

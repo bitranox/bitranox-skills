@@ -54,6 +54,12 @@ def test_a_bare_commit_whose_siblings_never_cd_is_allowed():
     "make -C /work/bmk test",
     "python3 /tools/gate.py --gate-cwd /work/bmk --gate 'make test'",
     "python3 /tools/gate.py --gate-cwd=/work/bmk --gate 'make test'",
+    # gate.py --cwd runs every gate there; the reported false refusal was the `-- cmd` form.
+    "env -u VIRTUAL_ENV python3 /tools/gate.py --cwd /work/bmk -- make test",
+    "python3 /tools/gate.py --cwd=/work/bmk --gate 'make test'",
+    "python3 /tools/gate.py --cwd /work/bmk 'make test'",
+    # The options, --gate-cwd included, are inside the expansion: not readable, so not judged.
+    'python3 /tools/gate.py "${args[@]}"',
 ])
 def test_an_explicit_target_is_allowed_even_beside_a_cd_ing_sibling(command):
     assert guard.verdict(command, [PLANNING_COMMIT]) is None
@@ -93,6 +99,8 @@ def test_a_cd_that_is_only_data_in_a_sibling_does_not_count(sibling):
     "git push origin HEAD:master",
     "git checkout -- file.txt",
     "git reset --hard HEAD~1",
+    "python3 /tools/gate.py -- make test",
+    "python3 /tools/gate.py --cwd sub -- make test",
 ])
 def test_a_write_without_an_absolute_target_is_refused_beside_a_cd_ing_sibling(command):
     assert guard.verdict(command, [PLANNING_COMMIT]) is not None

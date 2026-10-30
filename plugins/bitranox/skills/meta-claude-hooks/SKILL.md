@@ -167,6 +167,11 @@ Five things make the number trustworthy:
 - **Price the variant you are actually proposing, not the whole hook.** A narrowing that sounds
   obviously safer can score WORSE than the thing it narrows, and the arm you meant to downgrade can
   turn out to have the HIGHER precision - which inverts the proposal rather than trimming it.
+  Never derive a narrower variant's count by filtering ANOTHER predicate's labelled firings: a
+  firing label records ONE reason a command fired (typically the first matching statement), so the
+  filter drops every command the variant would still fire on for a different reason. Replay the
+  variant's own predicate and diff the firing sets by `id`. Measured: a narrow arm priced at 95
+  firings that way fired 211 times when its own predicate was replayed.
 - **Diff firing SETS, not counts, when you narrow a matcher.** A narrowing is quieter whether it
   dropped noise or real work, so a falling count cannot tell the two apart, and the unit tests were
   written from the same imagination as the narrowing. Replay the old and the new predicate over the

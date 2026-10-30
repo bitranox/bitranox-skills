@@ -27,6 +27,7 @@ never wedges a turn.
 """
 import collections
 import json
+import os
 import re
 import sys
 
@@ -308,6 +309,190 @@ def _messages(command, tool_name="Bash"):
     return msgs
 
 
+# A write whose target is a message file: a `>`/`>>` redirect or a `tee` operand. Read on the
+# command text (heredoc bodies stripped), because a split argv glues `>$M;` into one word.
+_WRITE_TARGET = re.compile(r"""(?:(?<![<>&\d])>>?|\btee(?:\s+-a)?)\s*(["']?)([^\s;&|<>"']+)\1""")
+
+
+def _message_file_values(toks):
+    """Every -F/--file value of a git command and --body-file value of a gh pr command."""
+    values = []
+    if "git" in toks:
+        values += [v for kind, v, _i in _message_flags(toks) if kind == "file"]
+    values += [v for kind, v in _gh_body_flags(toks) if kind == "file"]
+    return [v for v in values if v not in _STDIN_PATHS]
+
+
+_PRINTERS = frozenset({"printf", "echo"})
+_ESCAPES = {"\\n": "\n", "\\t": "\t"}
+
+
+def _printed_text(segment, tool_name):
+    """What a printf/echo statement prints, escapes decoded; None when it is not one of them."""
+    try:
+        toks = shell_text.split_for_tool(segment.strip(), tool_name)
+    except ValueError:
+        return None
+    if not toks or shell_text.basename_for_tool(toks[0], tool_name) not in _PRINTERS:
+        return None
+    words = []
+    for tok in toks[1:]:
+        if re.match(r"\d*>|\|", tok):
+            break                                  # the redirection and what follows it
+        if tok.startswith("-") and not words:
+            continue                               # printf --, echo -e / -n
+        words.append(tok)
+    text = " ".join(words)
+    for escape, char in _ESCAPES.items():
+        text = text.replace(escape, char)
+    return text
+
+
+def _heredoc_writes(command, value):
+    """Bodies of the heredocs whose opener line writes `value` (`cat > $M <<'EOF'`)."""
+    lines = command.split("\n")
+    bodies = []
+    for at, _opener, (start, end) in shell_text.iter_heredocs(command):
+        line = _logical_line(lines, at)
+        if any(match.group(2) == value for match in _WRITE_TARGET.finditer(line)):
+            bodies.append("\n".join(lines[start:end]))
+    return bodies
+
+
+def _statement_writes(text, value, limit, tool_name):
+    """(texts, unrecoverable) for the statements before `limit` whose redirect or tee writes `value`.
+
+    A printf/echo writer's text is read off the command; a `| tee value` takes the printer before
+    the pipe. Any other writer (cp, a script) cannot be read here, which is `unrecoverable`.
+    """
+    texts, unrecoverable, previous, prior = [], False, 0, None
+    for at, segment in shell_text.iter_segments(text, tool_name):
+        separator, previous = text[previous:at], at + len(segment)
+        if at >= limit:
+            break
+        if re.search(r"(?<!<)<<(?!<)", segment):
+            prior = segment
+            continue                               # a heredoc writer: `_heredoc_writes` reads it
+        if any(match.group(2) == value for match in _WRITE_TARGET.finditer(segment)):
+            printed = _printed_text(segment, tool_name)
+            if printed is None and separator.strip() == "|" and prior is not None:
+                printed = _printed_text(prior, tool_name)
+            if printed is None:
+                unrecoverable = True
+            else:
+                texts.append(printed)
+        prior = segment
+    return texts, unrecoverable
+
+
+# The programs that read a message file.
+_MESSAGE_READERS = frozenset({"git", "gh"})
+
+# Runners that start their command on ANOTHER machine or inside a container, mapped to the
+# subcommand that does so (None: the runner itself does). A git behind one of these reads its -F
+# path over there. This is deliberately the closed set of REMOTE runners and not an allow-list of
+# local launchers: a local list can never be complete (flock, xargs, uv run, parallel ...), and
+# every wrapper missing from it silently exempted a provably missing message file.
+_REMOTE_RUNNERS = {
+    "ssh": None, "lxc-attach": None, "nsenter": None, "chroot": None,
+    "pct": frozenset({"exec", "enter"}), "docker": frozenset({"exec", "run"}),
+    "podman": frozenset({"exec", "run"}), "kubectl": frozenset({"exec"}),
+    "machinectl": frozenset({"shell", "run"}), "incus": frozenset({"exec"}),
+    "lxc": frozenset({"exec"}),
+}
+
+# A Windows path this Python resolves the way the shell does: drive-qualified (`C:/x`, `C:\\x`).
+_WINDOWS_DRIVE_PATH = re.compile(r"[A-Za-z]:[\\/]")
+
+
+def provably_missing(value, windows=None):
+    """True only when `value` is a message-file path this host can check and it does not exist.
+
+    `windows` defaults to the running host. On Windows a drive-less root is not checkable: Git Bash
+    maps `/tmp` and `/c/...` itself, while Python resolves `/tmp/msg.txt` as `C:\\tmp\\msg.txt`,
+    so a naive exists() there judged every POSIX-style -F path missing and blocked the commit. Such
+    a path degrades to unchecked rather than refused. A path with an expansion names nothing yet.
+    """
+    if windows is None:
+        windows = os.name == "nt"
+    if "$" in value:
+        return False
+    checkable = _WINDOWS_DRIVE_PATH.match(value) if windows else os.path.isabs(value)
+    return bool(checkable) and not os.path.exists(value)
+
+
+def _read_on_this_host(text, value, tool_name):
+    """True when a statement in `text` runs git or gh HERE with `value` as its message file.
+
+    `ssh host git commit -F /x` and `pct exec 100 -- git commit -F /x` carry the same flag, but a
+    remote runner stands in front of the git, so the file is on the other machine and cannot be
+    checked. Any other word in front of it (sudo, flock, xargs, uv run) runs the git here.
+    """
+    for _at, segment in shell_text.iter_segments(text, tool_name):
+        try:
+            toks = shell_text.split_for_tool(segment, tool_name)
+        except ValueError:
+            continue
+        reader = _reader_index(toks, tool_name)
+        if (reader is not None and value in _message_file_values(toks)
+                and not _runs_remotely(toks[:reader], tool_name)):
+            return True
+    return False
+
+
+def _reader_index(toks, tool_name):
+    """Index of the first git or gh word in `toks`, else None."""
+    for at, tok in enumerate(toks):
+        if shell_text.basename_for_tool(tok, tool_name) in _MESSAGE_READERS:
+            return at
+    return None
+
+
+def _runs_remotely(before, tool_name):
+    """True when the words in front of the reader include a remote runner (with its subcommand)."""
+    for at, tok in enumerate(before):
+        runner = shell_text.basename_for_tool(tok, tool_name)
+        if runner not in _REMOTE_RUNNERS:
+            continue
+        subcommands = _REMOTE_RUNNERS[runner]
+        if subcommands is None or subcommands.intersection(before[at + 1:]):
+            return True
+    return False
+
+
+def same_command_messages(command, tool_name="Bash"):
+    """(messages, unread) for message files that do not exist yet when this guard runs.
+
+    A file the SAME command writes before the commit (`printf ... > $M && git commit -F $M`) is
+    created only after this PreToolUse guard has run, so opening it reads nothing - and an
+    attribution trailer written that way went through (2026-10-29, a public repo). Its text is
+    read off the command instead: a heredoc body, or what a printf/echo prints. A writer whose
+    text cannot be read here (cp, a script), or a path that `provably_missing` says is absent, that
+    a git or gh run on THIS host reads and that nothing in the command writes, lands in `unread`:
+    the guard refuses rather than approve a message it never saw. A relative path that nothing
+    writes is left to `_messages`, since the command may run the commit in another directory, and
+    so is a path a remote git reads (`ssh host git commit -F /x`, `pct exec 100 -- git ...`): that
+    file lives on the other machine, so its absence here proves nothing.
+    """
+    toks = _argv(command, tool_name)
+    if not toks:
+        return [], []
+    text = shell_text.strip_heredoc_bodies(command)
+    messages, unread = [], []
+    for value in dict.fromkeys(_message_file_values(toks)):
+        verb = re.search(r"(?:-F|--file|--body-file)(?:=|\s+)([\"']?)" + re.escape(value) + r"\1",
+                         text)
+        limit = verb.start() if verb else len(text)
+        bodies = [] if tool_name == "PowerShell" else _heredoc_writes(command, value)
+        texts, unrecoverable = _statement_writes(text, value, limit, tool_name)
+        messages += [Message(t, False, None, None) for t in bodies + texts]
+        written = bool(bodies or texts or unrecoverable)
+        missing = provably_missing(value) and _read_on_this_host(text, value, tool_name)
+        if unrecoverable or (missing and not written):
+            unread.append(value)
+    return messages, unread
+
+
 def main() -> int:
     try:
         event = json.load(sys.stdin)
@@ -315,7 +500,16 @@ def main() -> int:
         return 0
     command = (event.get("tool_input") or {}).get("command") or ""
     tool_name = event.get("tool_name") or "Bash"
-    messages = _messages(command, tool_name)
+    written, unread = same_command_messages(command, tool_name)
+    if unread:
+        return shell_text.refuse(
+            "The message file %s does not exist yet when this check runs, and this command "
+            "creates it in a way the check cannot read (or nothing creates it). Its text cannot be "
+            "checked for AI-writing tells or an AI attribution trailer, so it would be committed "
+            "unread. Write the message file in its own earlier command (the Write tool, or a "
+            "separate Bash call), then run the commit with -F naming it.\n" % ", ".join(unread)
+        )
+    messages = _messages(command, tool_name) + written
     if any(_ATTRIBUTION.search(msg.text) for msg in messages + _gh_bodies(command, tool_name)):
         # The line is not quoted back: a -F file's content is never echoed (see below), and the
         # caller knows which trailer or footer they added.

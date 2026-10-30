@@ -34,6 +34,8 @@ def run_main(monkeypatch, event):
     "Then run\n    pyright\nfrom the repo root.",
     "$ pyright src",
     "whole-project `pyright`, `lint-imports` (11 kept, 0 broken)",
+    "Then run `ruff check .`, then `pyright`.",
+    "gates: `.venv/bin/ruff check .`, `.venv/bin/pyright`",
     "PYTHONPATH=$PWD/src $PY -m pyright tests/<file>",
 ], ids=lambda p: p[:40])
 def test_command_shaped_unpinned_pyright_fires(prompt):
@@ -51,6 +53,10 @@ def test_command_shaped_unpinned_pyright_fires(prompt):
     "Python is pyright-strict and ruff-checked.",
     "Cross-platform (each OS branch; pyright with --pythonplatform Windows).",
     "Write a pyrightconfig.json in the scratch dir.",
+    # A bare tool NAME listed among other code spans is an enumeration, not a gate line.
+    'a call that ran a gate (`make test`, `pytest`, `ruff check`, `pyright`, gate.py).',
+    "**`pyright` checks every OS your CI runs on.**",
+    "the same per-OS runs as `make test`'s\npyright stage (section 3)",
 ], ids=lambda p: p[:40])
 def test_prose_about_pyright_is_silent(prompt):
     assert N.unpinned_pyright_snippet(prompt) is None

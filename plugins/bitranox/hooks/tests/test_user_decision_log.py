@@ -162,6 +162,29 @@ def test_a_multi_select_answer_maps_every_chosen_label(repo, tmp_path):
     assert rec["chosen_options"] == q["options"]
 
 
+def _multi(labels):
+    return {**_QUESTION, "multiSelect": True,
+            "options": [{"label": label, "description": "d"} for label in labels]}
+
+
+@pytest.mark.parametrize("chosen", ["Yes, but slowly, No, never", "No, never, Yes, but slowly"])
+def test_a_multi_select_answer_keeps_labels_that_contain_a_comma_whole(repo, tmp_path, chosen):
+    """Reproduced by the 2026-10-26 review: split on ', ' this recorded chosen_options [], which a
+    reader takes as free text - nothing chosen. Most real labels in one repo carry a comma."""
+    q = _multi(["Yes, but slowly", "No, never", "Maybe"])
+    _run(_event(repo, questions=[q], answers={q["question"]: chosen}), tmp_path / "home")
+    [rec] = _records(repo / U.LOG_NAME)
+    assert [o["label"] for o in rec["chosen_options"]] == ["Yes, but slowly", "No, never"]
+
+
+def test_an_ambiguous_multi_select_answer_claims_no_options(repo, tmp_path):
+    """`a, b, c` is both {`a, b`, `c`} and {`a`, `b, c`}: recording either would be a guess."""
+    q = _multi(["a, b", "c", "a", "b, c"])
+    _run(_event(repo, questions=[q], answers={q["question"]: "a, b, c"}), tmp_path / "home")
+    [rec] = _records(repo / U.LOG_NAME)
+    assert rec["chosen_options"] == []
+
+
 def test_each_question_of_a_batch_gets_its_own_line(repo, tmp_path):
     q2 = {**_QUESTION, "question": "And the format?", "header": "Format"}
     answers = {_QUESTION["question"]: "Append to review log", "And the format?": "Own JSONL file (Recommended)"}

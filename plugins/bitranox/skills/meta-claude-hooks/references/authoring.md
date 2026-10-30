@@ -123,6 +123,13 @@ Always pipe the event in. With no stdin a hook blocks at a terminal, and in an a
 `/dev/null`) it reads EOF and usually fails open with exit 0, which looks exactly like an allow. When the
 live guard does fire on a probe, record it as data - it is a verified observation of the shipped behaviour.
 
+**A test that launches the hook through a bash shim must not name a bare `bash`.** On a Windows runner
+(`windows-latest`), `subprocess.run(["bash", shim, script])` resolves to the WSL launcher in `System32`, not Git
+Bash: it prints UTF-16 and exits 1, so the test fails there while every Linux and macOS cell stays green. Either
+skip that test on Windows (`@pytest.mark.skipif(sys.platform == "win32", reason=...)`, and cover the hook itself
+by running its script directly with `sys.executable`), or resolve Git Bash's own `bash.exe` explicitly and pass
+that path. Never rely on `PATH` lookup for `bash` in a test that must pass on Windows.
+
 **An interactive-only tool needs an interactive probe.** Headless `claude -p` does not offer `AskUserQuestion`
 (observed on CLI 2.1.296; check `ExitPlanMode` the same way), so the model reports no matching tool and the hook
 never fires - a non-answer that looks like a hook that found nothing. Probe in a real interactive session under

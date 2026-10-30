@@ -159,7 +159,9 @@ def test_the_same_command_under_bash_is_not_second_guessed(monkeypatch, tmp_path
     defect, not a wider net.
     """
     f = _backslashed_file(tmp_path, "Subject %s tell\n" % EM_DASH)
-    assert _run(monkeypatch, 'git commit -F %s' % f, tool_name="Bash") == 0
+    # The mangled path names no file, so the file is never read as the message. (The commit is
+    # still refused, as one whose absolute -F path does not exist: git could not read it either.)
+    assert C._messages('git commit -F %s' % f, "Bash") == []
 
 
 REPLACEMENT = chr(0xFFFD)
@@ -421,3 +423,114 @@ def test_a_footer_line_with_an_emoji_or_trailing_punctuation_blocks(monkeypatch,
     msg = tmp_path / "msg.txt"
     msg.write_text("Fix\n\n%s\n" % footer, encoding="utf-8")
     assert _run(monkeypatch, 'git commit -F "%s"' % msg.as_posix()) == 2
+
+
+# --- a message file the same command writes: it does not exist yet when this guard reads it ------
+
+@pytest.mark.parametrize("command", [
+    # The 2026-10-29 leak: printf wrote the trailer, the guard found no file and let it through.
+    'printf "Fix x\\n\\nCo-Authored-By: Claude <noreply@anthropic.com>\\n" > $M && git commit -F $M',
+    'echo "Co-Authored-By: Claude <noreply@anthropic.com>" >"$M"; git commit -q -F "$M" -- a.py',
+    "printf 'Fix x\\n\\nCo-Authored-By: Claude <c@anthropic.com>' | tee $M >/dev/null && git commit --file=$M",
+    "cat > $M <<'EOF'\nFix x\n\nCo-Authored-By: Claude <noreply@anthropic.com>\nEOF\ngit commit -F $M",
+    'printf "Body\\n\\nGenerated with Claude Code\\n" > $B && gh pr create --title t --body-file $B',
+])
+def test_attribution_in_a_message_file_the_same_command_writes_is_refused(monkeypatch, capsys, command):
+    assert _run(monkeypatch, command) == 2
+    assert "AI attribution" in capsys.readouterr().err
+
+
+def test_a_tell_in_a_message_file_the_same_command_writes_is_refused(monkeypatch, capsys):
+    command = "cat > $M <<'EOF'\nFix x %s properly\nEOF\ngit commit -F $M" % EM_DASH
+    assert _run(monkeypatch, command) == 2
+    assert "tell" in capsys.readouterr().err
+
+
+@pytest.mark.parametrize("command", [
+    "cat > $M <<'EOF'\nFix x\n\nA clean body.\nEOF\ngit commit -F $M",
+    'printf "Fix x\\n\\nA clean body.\\n" > $M && git commit -F $M',
+])
+def test_a_clean_message_file_the_same_command_writes_passes(monkeypatch, command):
+    assert _run(monkeypatch, command) == 0
+
+
+@pytest.mark.parametrize("command", [
+    "cp /tmp/draft.txt $M && python3 fix.py > $M && git commit -F $M",
+    "python3 make_msg.py > $M; git commit -F $M",
+])
+def test_a_message_file_written_by_an_unreadable_writer_is_refused(monkeypatch, capsys, command):
+    assert _run(monkeypatch, command) == 2
+    assert "its own earlier command" in capsys.readouterr().err
+
+
+def test_an_absolute_message_file_that_does_not_exist_is_refused(monkeypatch, tmp_path, capsys):
+    missing = (tmp_path / "nope.txt").as_posix()
+    assert _run(monkeypatch, "git commit -F %s" % missing) == 2
+    assert "its own earlier command" in capsys.readouterr().err
+
+
+@pytest.mark.parametrize("command", [
+    "git commit -F $M",                           # written by an earlier call: unknowable here
+    "git commit -F msg.txt",                      # relative: the commit may run elsewhere
+    "printf x > other.txt && git commit -F msg.txt",
+    "git commit -F msg.txt && python3 x.py > $M",  # written AFTER the commit
+])
+def test_a_message_file_the_command_does_not_write_is_not_refused_for_it(monkeypatch, command):
+    assert _run(monkeypatch, command) == 0
+
+
+# --- a message file this host cannot check: refusing it as missing blocks a commit for nothing -----
+
+@pytest.mark.parametrize("command", [
+    # The git runs on another machine or in a container, so its -F path names a file THERE.
+    "ssh host git commit -F /srv/repo/msg-missing.txt",
+    "pct exec 100 -- git -C /opt/app commit -F /root/msg-missing.txt",
+    "docker exec app git commit -F /root/msg-missing.txt",
+    "ssh -o BatchMode=yes host gh pr create --title t --body-file /root/body-missing.txt",
+    "sudo ssh host git commit -F /root/msg-missing.txt",
+    "podman exec -it app git commit -F /root/msg-missing.txt",
+    "kubectl exec pod -- git commit -F /root/msg-missing.txt",
+    "lxc-attach -n ct -- git commit -F /root/msg-missing.txt",
+    "machinectl shell box /usr/bin/git commit -F /root/msg-missing.txt",
+    "incus exec ct -- git commit -F /root/msg-missing.txt",
+    "lxc exec ct -- git commit -F /root/msg-missing.txt",
+])
+def test_a_message_file_for_a_git_that_runs_elsewhere_is_not_judged_missing(monkeypatch, command):
+    assert _run(monkeypatch, command) == 0
+
+
+@pytest.mark.parametrize("command", [
+    "sudo git commit -F %s",                       # a LOCAL launcher still runs the git here
+    "ssh host true && git commit -F %s",           # the ssh is a different statement
+    # Wrappers no launcher list names still run the git HERE: only a remote runner moves the file.
+    "python3 gen.py %s && flock /tmp/l git commit -F %s",
+    "uv run git commit -F %s",
+    "xargs -a /dev/null git commit -F %s",
+])
+def test_a_local_git_after_a_launcher_or_a_remote_statement_is_still_judged(
+        monkeypatch, tmp_path, capsys, command):
+    missing = (tmp_path / "nope.txt").as_posix()
+    assert _run(monkeypatch, command.replace("%s", missing)) == 2
+    assert "its own earlier command" in capsys.readouterr().err
+
+
+@pytest.mark.parametrize(("path", "expected"), [
+    # Git Bash maps /tmp and /c/... itself; Python on Windows reads /tmp as C:\tmp, so a
+    # drive-less path cannot be checked there and must never be judged missing.
+    ("/tmp/msg-missing.txt", False),
+    ("/c/Users/x/msg-missing.txt", False),
+    ("\\tmp\\msg-missing.txt", False),
+    ("Z:/no/such/dir/msg-missing.txt", True),
+    ("Z:\\no\\such\\dir\\msg-missing.txt", True),
+])
+def test_on_windows_only_a_drive_qualified_path_is_judged_missing(path, expected):
+    assert C.provably_missing(path, windows=True) is expected
+
+
+@pytest.mark.parametrize(("path", "expected"), [
+    ("/no/such/dir/msg-missing.txt", True),
+    ("msg-missing.txt", False),                    # relative: the commit may run elsewhere
+    ("$M", False),
+])
+def test_on_posix_an_absolute_missing_path_is_judged_missing(path, expected):
+    assert C.provably_missing(path, windows=False) is expected

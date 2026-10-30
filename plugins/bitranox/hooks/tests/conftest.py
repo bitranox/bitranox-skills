@@ -47,6 +47,7 @@ _HOOK_MODULES = {
     "sha-literal-nudge": "sha_literal_nudge",
     "tooling-detour-nudge": "tooling_detour_nudge",
     "block-git-semicolon-chain": "block_git_semicolon_chain",
+    "block-env-dump": "block_env_dump",
     "gated-prep-nudge": "gated_prep_nudge",
     "sed-line1-range-nudge": "sed_line1_range_nudge",
     "tail-obsolete-count-nudge": "tail_obsolete_count_nudge",

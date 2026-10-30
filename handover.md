@@ -1,42 +1,52 @@
-# Handover - 2026-10-30, contribution sweep wave 3: 10.6.0 shipped, the rest in flight
+# Handover - 2026-10-30, contribution sweep wave 3: 10.7.0 under review fixes, twin batch next
 
 ## In flight
 
 - The user's scope decision stands: work every open OPEN-WORK item (main checkout
-  EXECUTION-USER-REVIEW.md, "Backlog sweep scope"). Current item: [200] wave 3. Full state: main
-  checkout `.plan/contrib-triage-2026-10-29/WAVE3-STATE.md`.
-- 10.6.0 carries the b2-b6 and b8 batches plus [510] (4) and (5). The contribution entries it fixed
-  are NOT shipped in the queue yet: ship each DONE line of the b2-b6, b8 `*.results.txt` files with
-  `contrib_queue.py ship queue_key:<key> --match <text> --note 10.6.0`; drop STALE lines with
-  their evidence.
-- Stopped by the usage limit, work saved uncommitted in their worktrees, resume with SendMessage
-  after the reset: b1 compuse-toolbox (`.claude/worktrees/bl3-b1`), b7 hooks (`bl3-b7`), m2 twins
-  (`bl3-m2` plus five `<tool>-bl3` worktrees beside the tool repos).
-- m1 devops-bmk twin is done but held out of 10.6.0: `bl3-m1` plus `apps/utils/bmk-bl3`, byte
-  identical. Shipping it needs the bmk repo pushed, which is part of the tool-repo push batch: ask
-  the user ONCE before pushing that batch.
-- Integration scripts: scratchpad `integrate3.py` / `verify_integrate3.py` (args: worktree names).
+  EXECUTION-USER-REVIEW.md, "Backlog sweep scope"). Current item: [200] wave 3; its line says
+  where each batch stands.
+- 10.7.0 (b1 toolbox + b7 hooks) is integrated UNCOMMITTED in this worktree
+  (`.claude/worktrees/bl4-int`, branch bl4-int, based on origin/master b26e0198 = 10.6.1). Bumped
+  to 10.7.0, CHANGELOG [10.7.0] written, artifacts regenerated, CI-parity gate passed BEFORE the
+  review fixes (not valid any more).
+- An independent review found 14 defects; four fix agents work in this worktree on disjoint files.
+  Three reported FIXED (findings 1-6, 10, 11, 14 and the lows; CHANGELOG and the compuse-toolbox
+  gate row updated to match). STILL RUNNING: the agent for winpytest (7), markerwatch (8, 9),
+  bump_version --rebase bytes (12), mutation_arm Windows split and tree kill (13). Its report
+  arrives as a message; a 60-minute pure-deadline shell (sleep 3600) backs it up.
+- Mirrored-skill work (m1 devops-bmk, m2 five twins) is held OUT of 10.7.0: restored to HEAD in
+  this worktree; the edits live in `.claude/worktrees/bl3-m1`, `bl3-m2` and in the tool-repo
+  worktrees `apps/utils/bmk-bl3`, `KI/btx-skill-jev-judge-bl3`, `libs/lib_layered_config-bl3`
+  (already fast-forwarded to origin 7.6.0 and the twin 3-way merged, clean),
+  `libs/bitranox_template_py_lib-bl3`, `libs/btx_lib_mail-bl3`, `apps/pve-bindsnap-bl3`.
 
 ## Decided
 
-- 10.6.0 shipped without the mirrored-skill changes, since a marketplace push with a twin change
-  is refused until the tool repo has it committed and pushed.
-- Review rounds: the first review found 3 defects and 4 nits, the re-review 2 more; all fixed
-  with a test that failed first. No third round: the round-two fixes are two small changes, each
-  proven RED then GREEN.
-- All user decisions of this sweep are in EXECUTION-USER-REVIEW.md (main checkout), including the
-  9 NEEDS-USER entries (NU1-NU9) still to be built.
+- User decision (verbatim in EXECUTION-USER-REVIEW.md): "Push, bump and release" for the six tool
+  repos (five PyPI releases; pve-bindsnap push only).
+- Order that avoids the mirror-gate deadlock with the INSTALLED (10.4.1) PreToolUse gate, which
+  reads twins from main checkouts: (1) ship 10.7.0; (2) commit each twin in the tool repo's MAIN
+  checkout after a ff pull, pathspec only, with a bmk patch bump (bump writes pyproject, CHANGELOG,
+  plugin.json, uv.lock); (3) marketplace commit + push of m1+m2 as 10.7.1; (4) push each tool repo,
+  wait CI, make release (release from a checkout on the default branch; btx_lib_mail's main has a
+  peer's tracked handover.md edit, so release it from `git worktree add -f <path> master`).
+- Peer sessions told: the lib_layered_config one (go; check `git diff uv.lock` shows only the
+  version line and `grep -c '^agentdag = false' uv.lock` prints 0), the one near bmk (go), the
+  jev-judge one (no reply yet).
+- Review rounds for 10.7.0: one re-review of the fix round, against its real parent; no third
+  round for exotic-path findings.
 
 ## Still open, untouched
 
-- [30], [96], [1040]-[1080] in OPEN-WORK.md. [200]: see its line.
+- [30], [96], [1040]-[1080] in OPEN-WORK.md; the NEEDS-USER builds NU1-NU9 under [200].
 
 ## Next action
 
-Ship the 10.6.0 entries with contrib_queue.py from the b2-b6, b8 results files; then, after the
-usage reset, SendMessage b1, b7 and m2 to continue, integrate them with m1 into a new integration
-worktree from origin/master, and release 10.6.1/10.7.0 (ask the user once before the tool-repo
-pushes).
+When the last fix agent reports: grep all four fix diffs' ADDED lines for monkeypatch/noqa/ignore,
+update CHANGELOG for its findings, rerun `env -u VIRTUAL_ENV PYTHONUNBUFFERED=1 python3
+plugins/bitranox/hooks/repo-gate.py --ci` and `--mirrors`, dispatch one re-review of the fix round,
+then commit 10.7.0 (message file first, no attribution), push in the background (pre-push suite),
+ci_wait twice, ship the b1/b7 queue entries (`--note 10.7.0`; b7 line 8 is "partial", keep it).
 
 ## How to verify
 
@@ -45,7 +55,8 @@ pushes).
 
 ## Lessons for the next nap
 
-- When a session moves into a worktree, the owed-nap flag is keyed by the worktree path: mark a
-  finished nap done for that path too (queued as a gate fix).
-- When a reviewer finds a blank-input data-loss bug, test the frame-only form too: the first fix
-  checked strip() and a body holding only frontmatter still wiped the fact.
+- tooling: When a PreToolUse gate fix ships in the marketplace, it does not gate the shipping session: the hook runs from the installed cache until the user updates and reloads, so plan push order against the OLD gate.
+- When a reviewer is handed a merged branch, ask it to check verdict precedence across the merged parameters: the ci_wait merge kept every parameter wired and still let a completed failed run wait into a timeout.
+
+Read this, then replace the first line with `# STALE - read <date>, work continued`. Do not
+delete it - if this session ends badly it is the only record of where things stood.

@@ -347,6 +347,18 @@ after it; handover mode, and any handover the user asked for, take steps 7 and 8
    > Handover written to `handover.md`. Type `/clear` to start the next session - I cannot run it
    > for you.
 
+   **An active `/goal` must be cleared too.** When a `/goal` is running in this session (its
+   condition comes back to you after each turn; in the transcript, the last `goal_status`
+   attachment reads `met: false`), its check re-fires after every turn and asks you to continue the
+   work the handover just stopped. You cannot clear it any more than you can run `/clear`, so the
+   loop has no exit on your side. Name both commands in the nudge line:
+
+   > Handover written to `handover.md`. Type `/goal clear`, then `/clear`, to start the next
+   > session - I cannot run either for you.
+
+   If the goal's check fires again before the user acts, reply with that same line and nothing
+   else: no work, and no new wording each turn.
+
    `handover.md` there is the path slot, not a literal to copy. Send the path that reaches the file
    from where the user is standing, and a bare basename only when that is unambiguous: a second
    `handover.md` in another worktree, checkout or package makes the bare name point at somebody

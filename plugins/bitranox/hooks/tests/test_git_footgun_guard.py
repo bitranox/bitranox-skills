@@ -255,11 +255,85 @@ def test_a_commit_without_a_pathspec_is_silent(repo, monkeypatch, capsys):
     assert _advise(monkeypatch, capsys, "git commit -m x", repo) is None
 
 
-def test_an_untrack_in_the_same_command_is_advised_without_reading_state(repo, monkeypatch, capsys):
-    """PreToolUse runs before `git rm --cached` does, so the index cannot show it yet."""
-    text = _advise(monkeypatch, capsys,
-                   "git rm --cached f.txt && git commit -m x -- .gitignore f.txt", repo)
-    assert text and "f.txt" in text
+def _refused(monkeypatch, capsys, command, cwd):
+    monkeypatch.setattr(sys, "stdin", io.StringIO(json.dumps(
+        {"tool_name": "Bash", "cwd": str(cwd), "tool_input": {"command": command}})))
+    rc = G.main()
+    return rc, capsys.readouterr()
+
+
+@pytest.mark.parametrize("command", [
+    # PreToolUse runs before `git rm --cached` does, so the index cannot show it yet.
+    "git rm --cached f.txt && git commit -m x -- .gitignore f.txt",
+    # The 2026-10-23 recurrence, in three repos: the exec bit landed 100644 every time.
+    "git add f.txt && git update-index --chmod=+x f.txt && git commit -q -F m.txt -- f.txt",
+])
+def test_a_pathspec_commit_dropping_an_index_edit_of_the_same_command_is_refused(
+        repo, monkeypatch, capsys, command):
+    """An index edit made a statement earlier and then discarded by the commit is never the intent:
+    the advisory arrived, the commit ran, and all three repos landed 100644."""
+    rc, captured = _refused(monkeypatch, capsys, command, repo)
+    assert rc == 2
+    assert "f.txt" in captured.err and "WITHOUT a pathspec" in captured.err
+    assert captured.out == ""
+
+
+@pytest.mark.parametrize("command", [
+    # The worktree file is deleted too, so the pathspec commit records the deletion the untrack
+    # meant: nothing is re-added and nothing is lost.
+    "git rm --cached f.txt && rm f.txt && git commit -m x f.txt",
+    "rm -f -- ./f.txt; git rm --cached -q f.txt && git commit -m x -- f.txt",
+    "git rm --cached f.txt && sudo rm f.txt && git commit -m x -- f.txt",
+])
+def test_a_same_command_untrack_whose_file_is_also_removed_is_not_refused(
+        repo, monkeypatch, capsys, command):
+    rc, captured = _refused(monkeypatch, capsys, command, repo)
+    assert rc == 0, captured.err
+
+
+def test_removing_another_file_does_not_clear_the_untrack_refusal(repo, monkeypatch, capsys):
+    """Control: only an rm of THAT path makes the deletion the commit records."""
+    command = "git rm --cached f.txt && rm other.txt && git commit -m x -- other.txt f.txt"
+    rc, captured = _refused(monkeypatch, capsys, command, repo)
+    assert rc == 2 and "f.txt" in captured.err
+
+
+def test_an_rm_after_the_commit_does_not_clear_the_untrack_refusal(repo, monkeypatch, capsys):
+    """Control: an rm that runs only after the commit cannot change what the commit recorded."""
+    command = "git rm --cached f.txt && git commit -m x -- other.txt f.txt && rm f.txt"
+    rc, captured = _refused(monkeypatch, capsys, command, repo)
+    assert rc == 2 and "f.txt" in captured.err
+
+
+def test_a_pre_existing_staged_state_stays_advisory(repo, monkeypatch, capsys):
+    """Committing the whole worktree file over an older stage CAN be the intent: advise only."""
+    _git(repo, "update-index", "--chmod=+x", "f.txt")
+    rc, captured = _refused(monkeypatch, capsys, "git commit -F m.txt -- f.txt", repo)
+    assert rc == 0 and "PATHSPEC COMMIT" in captured.out
+
+
+@pytest.mark.parametrize("command", [
+    "git check-ignore -q a.txt b.txt",
+    "git check-ignore --quiet a.txt b.txt && echo ignored",
+    "cd /r && git -C sub check-ignore -qv a b",
+])
+def test_check_ignore_quiet_with_several_paths_is_refused(monkeypatch, capsys, command):
+    """git exits 128 `--quiet is only valid with a single pathname`, which a nonzero=not-ignored
+    reading takes as an answer for every path."""
+    assert _run(monkeypatch, command) == 2
+    assert "check-ignore" in capsys.readouterr().err
+
+
+@pytest.mark.parametrize("command", [
+    "git check-ignore -q a.txt",
+    "git check-ignore -q a.txt 2>/dev/null",
+    "git check-ignore a.txt b.txt",
+    "printf 'a\\nb\\n' | git check-ignore -q --stdin",
+    "git check-ignore -q -- a.txt",
+    "echo 'git check-ignore -q a b'",
+])
+def test_check_ignore_with_one_path_or_without_quiet_passes(monkeypatch, command):
+    assert _run(monkeypatch, command) == 0
 
 
 def test_the_repo_is_the_one_the_commit_runs_in(repo, tmp_path, monkeypatch, capsys):

@@ -23,6 +23,13 @@ and any `PIPESTATUS` expansion are honoured as the fix and exit clean (the bare
 words in a quoted message or a comment are not), as does
 running the gate bare (no pipe) or ending the pipeline with the gate itself.
 
+A STATE CHANGE that is no gate is blocked in a narrower shape (`masks_a_state_change`): a git
+commit/merge/rebase/cherry-pick/push/bundle create/tag, a make run or a pip install, piped into
+head/tail/grep/wc and chained by `&&` into a git commit/push/merge/tag, make release, rm, scp or
+ssh - `git merge --ff-only x | tail -2 && git push` pushes whether or not the merge happened. A
+read-only producer, a `;` or newline after the pipeline, a `grep -q` predicate ending it, pipefail,
+PIPESTATUS and the redirect form `step > log 2>&1 && ...` all pass.
+
 A BACKGROUNDED gate (`run_in_background`) is blocked too when the task's exit code will not be
 the gate's own: something runs after it (`; tail`, `&& echo`, `| tee`, a newline), a trailing `&`
 detaches it, or it is a `gh run watch` without --exit-status. A gate backgrounded alone is
@@ -601,6 +608,209 @@ def _runs_a_gate(command: str, tool_name: str = "Bash") -> bool:
                for raw, _readable in _statements(command, tool_name))
 
 
+# A STATE-CHANGING step that is no gate: its failure is a refused merge, a rejected push, a commit
+# that never happened, an install that left the old version. Only these verbs, at the program word.
+# `bundle` counts only when it writes one. `tag` and `make` are matched bare and judged on their
+# arguments by `_step_changes_state`: whether `git tag` makes a tag or lists them, and whether a
+# `make` only prints, is decided by options anywhere on the line, past values a regex cannot skip.
+# `(?![\w-])` keeps `merge-base` and `commit-tree` out.
+_GIT_OPTIONS = r"git(?:\s+(?:-[Cc]\s+\S+|--[\w-]+(?:=\S+)?|-[A-Za-z]\b))*\s+"
+STATE_STEP = re.compile(
+    _GIT_OPTIONS + r"(?:commit|merge|rebase|cherry-pick|push|bundle\s+create|(?P<tag>tag))"
+    r"(?![\w-])"
+    r"|(?P<make>make)(?![\w-])"
+    # `uv` and `python -m` are launchers to the program-word walk, so `uv pip install` is read
+    # at `pip`; a bare `pip install` is the same state change and is matched with it.
+    r"|pip3?\s+install(?![\w-])"
+)
+
+# A redirection word: `2>&1`, `>log`, or a bare `>` whose file is the next word.
+_REDIRECTION = re.compile(r"^(?:\d*|&)(?:>>?|<)(?P<rest>.*)$")
+
+# `git tag` (git-tag(1)). A listing or verifying option makes it read-only whatever else is given;
+# a create/delete option, or a tag-name operand without one, makes it write.
+_TAG_READS = frozenset({"-l", "--list", "-v", "--verify", "--contains", "--no-contains",
+                        "--merged", "--no-merged", "--points-at"})
+_TAG_WRITES = frozenset({"-a", "--annotate", "-s", "--sign", "-u", "--local-user", "-f", "--force",
+                         "-d", "--delete", "-m", "--message", "-F", "--file", "-e", "--edit"})
+_TAG_VALUE_OPTS = frozenset({"-u", "--local-user", "-m", "--message", "-F", "--file", "--sort",
+                             "--format", "--cleanup", "--trailer"})
+
+# GNU make: options whose value is the next word, the two whose number is optional, the ones that
+# only print, and the targets that only print.
+_MAKE_VALUE_OPTS = frozenset({"-C", "--directory", "-f", "--file", "--makefile", "-I",
+                              "--include-dir", "-o", "--old-file", "--assume-old", "-W",
+                              "--what-if", "--new-file", "--assume-new", "-E", "--eval"})
+_MAKE_OPTIONAL_NUMBER = frozenset({"-j", "--jobs", "-l", "--load-average", "--max-load"})
+_MAKE_PRINTS = frozenset({"-n", "--dry-run", "--just-print", "--recon", "-q", "--question"})
+_MAKE_PRINT_TARGETS = frozenset({"help"})
+
+
+def _without_redirections(words: list[str]) -> list[str]:
+    """`words` without redirections, so `2>&1` and `> log` are not read as operands."""
+    kept, i = [], 0
+    while i < len(words):
+        redirection = _REDIRECTION.match(words[i])
+        if redirection is None:
+            kept.append(words[i])
+        elif not redirection.group("rest"):
+            i += 1                                   # the file of a bare `>`
+        i += 1
+    return kept
+
+
+def _short_cluster(word: str) -> str:
+    """The letters of a bundled short-option word (`-am` -> `am`), else ""."""
+    return word[1:] if re.fullmatch(r"-[A-Za-z]+", word) else ""
+
+
+def _cluster_flags(cluster: str, value_letters: str) -> tuple[str, bool]:
+    """(flag letters, value is the next word) of a bundled short-option cluster.
+
+    Read left to right the way getopt does: the first letter that takes a value ends the flags,
+    and the rest of the word is that value (`-Cfrontend` is -C with `frontend`, not -C -f -r ...
+    -n). Reading every letter as a flag let the letters of a value pose as a list or dry-run flag.
+    The value is the next word only when the value-taking letter is the cluster's last.
+    """
+    for at, letter in enumerate(cluster):
+        if letter in value_letters:
+            return cluster[:at + 1], at == len(cluster) - 1
+    return cluster, False
+
+
+def _tag_writes(args: list[str]) -> bool:
+    """Does `git tag <args>` create or delete a tag, rather than list or verify them?"""
+    reads = writes = operand = False
+    i = 0
+    while i < len(args):
+        word, cluster = args[i], _short_cluster(args[i])
+        name = word.split("=", 1)[0]
+        flags, value_next = _cluster_flags(cluster, "muF") if len(cluster) > 1 else ("", False)
+        reads = reads or name in _TAG_READS or bool(re.fullmatch(r"-n\d*", word))
+        reads = reads or bool(set(flags) & set("lv"))
+        writes = writes or name in _TAG_WRITES or bool(set(flags) & set("asufdmFe"))
+        if word == "--":
+            operand = operand or i + 1 < len(args)
+            break
+        if word.startswith("-"):
+            takes_value = word in _TAG_VALUE_OPTS or value_next
+            i += 2 if takes_value else 1
+            continue
+        operand, i = True, i + 1
+    return not reads and (writes or operand)
+
+
+def _make_writes(args: list[str]) -> bool:
+    """Does `make <args>` build something, rather than only print (`-n`, `help`)?"""
+    targets, i = [], 0
+    while i < len(args):
+        word, cluster = args[i], _short_cluster(args[i])
+        flags, value_next = _cluster_flags(cluster, "CfIoWE") if len(cluster) > 1 else ("", False)
+        if word.split("=", 1)[0] in _MAKE_PRINTS or set(flags) & set("nq"):
+            return False
+        if word.startswith("-"):
+            number_follows = i + 1 < len(args) and args[i + 1].isdigit()
+            takes_value = (word in _MAKE_VALUE_OPTS or value_next
+                           or (word in _MAKE_OPTIONAL_NUMBER and number_follows))
+            i += 2 if takes_value else 1
+            continue
+        if not re.match(r"^[A-Za-z_][A-Za-z0-9_]*\+?[:?!]?=", word):
+            targets.append(word)                 # NAME=value is a variable, not a target
+        i += 1
+    return not targets or not set(targets) <= _MAKE_PRINT_TARGETS
+
+
+def _step_changes_state(step: re.Match[str], element: str) -> bool:
+    """False for a `git tag` that only lists or a `make` that only prints; True for every other step."""
+    if not (step.group("tag") or step.group("make")):
+        return True
+    args = _without_redirections(element[step.end():].split())
+    return _tag_writes(args) if step.group("tag") else _make_writes(args)
+
+
+# The filters the owner decision names: each exits 0 on output it was handed, so it hides the step.
+STATE_FILTER = re.compile(r"^[\s(]*(?:head|tail|grep|egrep|wc)(?![\w-])")
+
+# What a masked step must not be allowed to set off: publishing, merging, tagging, a release, a
+# delete, a copy or command on another host.
+STATE_CONSEQUENCE = re.compile(
+    _GIT_OPTIONS + r"(?:commit|push|merge|tag)(?![\w-])"
+    r"|make\s+release(?![\w-])"
+    r"|(?:rm|scp|ssh)(?![\w-])"
+)
+
+# A `grep -q` / `--quiet` / `--silent` that ENDS the pipeline is a deliberate predicate on the
+# step's output (`git pull | grep -q 'Already up to date' && ...`), not a filter hiding a status.
+_QUIET_FLAG = re.compile(r"^(?:-[A-Za-z]*q[A-Za-z]*|--quiet|--silent)$")
+
+
+def _is_quiet_grep(element: str) -> bool:
+    """True when this pipeline element is a grep run as a yes/no predicate."""
+    words = element.replace("(", " ").split()
+    if not words or basename_for_tool(words[0]) not in ("grep", "egrep"):
+        return False
+    return any(_QUIET_FLAG.match(w) for w in words[1:])
+
+
+def _statements_with_separators(command: str, tool_name: str) -> list[tuple[str, str]]:
+    """Each statement's raw text and the list separator that FOLLOWS it (`&&`, `;`, ... or "").
+
+    Cut on the masked command, so a separator inside quotes, a substitution or a comment is not
+    one; a newline reads as "" like the end of the command, since it sequences unconditionally.
+    """
+    raw = blank_heredoc_bodies(command)
+    masked = mask_data_regions(raw, tool_name=tool_name)
+    out, start = [], 0
+    for sep in SPLIT.finditer(masked):
+        out.append((raw[start:sep.start()], sep.group(0).strip()))
+        start = sep.end()
+    out.append((raw[start:], ""))
+    return out
+
+
+def _masked_state_step(statement: str, tool_name: str) -> re.Match[str] | None:
+    """The state-changing step this pipeline hides behind a filter, or None."""
+    elements = _pipeline_elements(statement, tool_name)
+    if len(elements) < 2 or _is_quiet_grep(elements[-1]):
+        return None
+    for index, element in enumerate(elements[:-1]):
+        step = gate_program_in(element, tool_name, STATE_STEP)
+        if step is not None and _step_changes_state(step, element):
+            return step if any(STATE_FILTER.match(e) for e in elements[index + 1:]) else None
+    return None
+
+
+def masks_a_state_change(command: str, tool_name: str = "Bash") -> tuple[str, str, str] | None:
+    """(step, pipeline, consequence) when a masked state change is chained by `&&` into another.
+
+    The narrowed form of the pipefail guard (owner decision 2026-10-20). The literal form, refusing
+    any pipe into a filter, fired on about a quarter of all Bash calls and was mostly wrong, so this
+    needs all three: a state-changing STEP that is no gate (a gate is `masks_a_gate`'s case), a
+    head/tail/grep/wc after it in the same pipeline, and an `&&` chain from that pipeline into a
+    CONSEQUENCE. `git merge x | tail -2 && git push` pushes whether or not the merge happened.
+
+    Left alone on purpose: a read-only producer (`git log | head && git push`), a `;` or newline
+    after the pipeline (the next command runs regardless, so it is not gated on the step), a
+    `grep -q` predicate ending the pipeline, pipefail or a PIPESTATUS read, and the redirect form
+    `step > log 2>&1 && ...`, whose status is the step's.
+    """
+    if handles_pipe_status(command, tool_name):
+        return None
+    statements = _statements_with_separators(command, tool_name)
+    for index, (statement, separator) in enumerate(statements):
+        step = _masked_state_step(statement, tool_name)
+        if step is None:
+            continue
+        follow = index
+        while separator == "&&" and follow + 1 < len(statements):
+            follow += 1
+            following, separator = statements[follow]
+            masked = mask_data_regions(following, tool_name=tool_name)
+            if gate_program_in(masked, tool_name, STATE_CONSEQUENCE) is not None:
+                return step.group(0), statement.strip(), following.strip()
+    return None
+
+
 def main() -> int:
     try:
         data = json.load(sys.stdin)
@@ -671,6 +881,28 @@ def main() -> int:
             "the gate with DOUBLE quotes: a Windows command line has no single-quoting.",
             "",
             "Or run it in the FOREGROUND, where the exit status you see is the gate's own.",
+        ]))
+
+    # A state-changing step that is no gate, its failure hidden by a filter and chained into a
+    # publish or delete. Checked before the gate fast path below, which returns when no GATE runs.
+    hidden = masks_a_state_change(cmd, tool_name)
+    if hidden is not None:
+        step, pipeline, consequence = hidden
+        return shell_text.refuse("\n".join([
+            "BLOCKED: a state change whose failure the pipe hides, chained by && into another.",
+            "",
+            f"  step      : {step}",
+            f"  piped into: {pipeline[:100]}",
+            f"  then      : {consequence[:100]}",
+            "",
+            "A pipeline exits with its LAST element's status, so head/tail/grep/wc succeed even",
+            "when the step failed: a refused merge, a rejected push or a commit that never",
+            "happened still lets the && run what comes next.",
+            "",
+            "Fix it one of these ways:",
+            "  - redirect, then read the log:   <step> > out.log 2>&1 && <next>; tail out.log",
+            "  - check the step itself:         <step> | tail -3; [ \"${PIPESTATUS[0]}\" -eq 0 ] && <next>",
+            "  - make the pipe propagate:       set -o pipefail; <step> | tail -3 && <next>",
         ]))
 
     # A heredoc BODY is stdin data, so a doc that WRITES an example of the footgun is not one.

@@ -82,6 +82,7 @@ from pathlib import Path
 
 from shell_text import (
     argv_for_match,
+    blank_unexpanded_text,
     git_verb_operands,
     is_shell_tool,
     iter_segments,
@@ -91,7 +92,7 @@ from shell_text import (
 )
 from transcript_siblings import agent_transcript
 
-__all__ = ["main", "notice", "shas_in", "shown_shas"]
+__all__ = ["main", "notice", "shas_in", "shown_shas", "spliced_prefixes"]
 
 # A full sha as git prints it: exactly 40 LOWERCASE hex characters, not part of a longer word. An
 # uppercase run is a GPG fingerprint, a longer one a sha256 or a hash inside an identifier. A
@@ -196,6 +197,26 @@ _DENY_TAIL = (
     "somewhere the transcript cannot show, assert it in the same command: "
     "`git cat-file -e <sha>^{commit} && <your command>`."
 )
+# A typed hex prefix glued straight onto an expansion: `b0a67e2d$(git rev-parse HEAD | cut -c9-)`,
+# `fb3330b${SHA:7}`. No 40-hex literal is written, so the literal check above never sees it, yet
+# the value is invented exactly as a padded one is: nothing ties the derived tail to the typed
+# head. At least one digit, so an English word made of hex letters (`decade$(date +%Y)`) is not one;
+# at least one letter, so a decimal number (`bs=1048576${X}`) is not one either - the price is an
+# all-digit sha prefix, about 1 in 27 of 7-char ones, going unseen. A run after `#` is a colour
+# (`#ff0000${x}`), not a sha.
+_SPLICE = re.compile(
+    r"(?<![0-9A-Za-z_./#-])(?=[a-f]*[0-9])(?=[0-9]*[a-f])[0-9a-f]{6,39}(?=\$\(|\$\{|`)"
+)
+
+_SPLICE_NOTICE = (
+    "SHA PREFIX SPLICED ONTO A DERIVED TAIL: {prefixes} is typed and glued to an expansion that "
+    "supplies the rest. The derived part is real, the typed part is not checked against it, so "
+    "the whole value is invented however it is finished - and like a padded sha it passes every "
+    "shape check. Derive the WHOLE value in this command (`--sha $(git rev-parse --verify -q "
+    "HEAD)`)."
+)
+_SPLICE_DENY_TAIL = " REFUSED: no transcript can vouch for a value assembled this way."
+
 _NOT_SHOWN = "does not appear in anything this session was shown (only a prefix, at most)"
 _UNKNOWN = "could not be checked against the session transcript"
 
@@ -634,19 +655,39 @@ def _readable(paths):
     return False
 
 
+def spliced_prefixes(command, tool_name=None):
+    """Typed hex prefixes glued onto an expansion outside data regions, in order. PURE."""
+    if not command or not isinstance(command, str):
+        return []
+    found = []
+    # Single quotes expand nothing, so a hex word before a backtick there is markdown in a sed
+    # replacement, not a splice.
+    expanding = blank_unexpanded_text(_executed_text(command, tool_name),
+                                      tool_name=tool_name or "Bash")
+    for match in _SPLICE.finditer(expanding):
+        if match.group(0) not in found:
+            found.append(match.group(0))
+    return found
+
+
 def notice(command, tool_name=None, shown=None):
-    """The nudge text for unverified full-sha literals, else None.
+    """The nudge text for unverified full-sha literals and spliced prefixes, else None.
 
     `shown` is the set of shas the transcript carried, or None when it could not be read; a sha in
-    it was copied from real output and is left alone.
+    it was copied from real output and is left alone. A spliced prefix is never excused that way:
+    the transcript can show a full sha, never that the typed head belongs to the derived tail.
     """
+    parts = []
     shas = shas_in(command, tool_name)
     if shown is not None:
         shas = [sha for sha in shas if sha not in shown]
-    if not shas:
-        return None
-    listed = ", ".join(sha[:12] + "..." for sha in shas)
-    return _NOTICE.format(shas=listed, where=_UNKNOWN if shown is None else _NOT_SHOWN)
+    if shas:
+        listed = ", ".join(sha[:12] + "..." for sha in shas)
+        parts.append(_NOTICE.format(shas=listed, where=_UNKNOWN if shown is None else _NOT_SHOWN))
+    spliced = spliced_prefixes(command, tool_name)
+    if spliced:
+        parts.append(_SPLICE_NOTICE.format(prefixes=", ".join("`%s`" % p for p in spliced)))
+    return " ".join(parts) or None
 
 
 def _transcripts(event):
@@ -685,17 +726,22 @@ def main() -> int:
     command = (event.get("tool_input") or {}).get("command")
     tool_name = event.get("tool_name")
     candidates = shas_in(command, tool_name)
-    if not candidates:
+    spliced = spliced_prefixes(command, tool_name)
+    if not candidates and not spliced:
         return 0
     paths, relayed = _transcripts(event)
-    shown = shown_shas(paths, candidates, relayed)
+    shown = shown_shas(paths, candidates, relayed) if candidates else set()
     message = notice(command, tool_name, shown)
     if not message:
         return 0
+    if spliced:
+        # Invented by construction, so no transcript reading changes the answer.
+        output = {"permissionDecision": "deny",
+                  "permissionDecisionReason": message + _SPLICE_DENY_TAIL}
     # Refuse only when the transcript that can vouch for the sha was read. Inside a subagent that
     # is the parent's: the subagent's own file (`relayed`) carries the brief the parent wrote, so
     # with the parent unreadable a sha shown to the parent cannot be told from an invented one.
-    if shown is None or not _readable(paths):
+    elif shown is None or not _readable(paths):
         output = {"additionalContext": message + _NUDGE_TAIL}
     else:
         output = {"permissionDecision": "deny", "permissionDecisionReason": message + _DENY_TAIL}

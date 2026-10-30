@@ -6,6 +6,12 @@ branches of `str.replace` (a silent no-op), `str.partition` (returns `(whole, ""
 traps below are about INTENT: the anchor matched exactly once and the edit is still wrong. They
 apply to `anchor_edit` and to any edit you script by hand.
 
+**Every path you hand `anchor_edit` must be ABSOLUTE.** Each subcommand's `F` (`replace`,
+`insert`, `replace-span`, `reap`) and every `file` inside a `batch --spec` is refused with exit 2
+when relative: which file a relative path names depends on a cwd that persists across calls, and
+a sibling repo holding the same template-copied text is exactly where the anchor would match the
+wrong file. Write `anchor_edit.py replace /abs/path/doc.md ...`, never `replace doc.md ...`.
+
 ## Check the intended result, not the match count
 
 - **When the new text is a substring of the old, a count==1 replace deletes content and reports

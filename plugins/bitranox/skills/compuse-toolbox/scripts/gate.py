@@ -62,6 +62,17 @@ characters - measured, `make push MSG="$(cat msgfile)"` as a gate pushed a commi
 unexpanded text. Tokens after a word naming a shell (`bash -c '...'`) are that shell's script and
 are allowed; tokens after `--` are real argv and are taken verbatim, as always.
 
+A bare shell operator as its own word (`&&`, `||`, `|`, `;`) in a quoted gate is refused the same
+way: one command per --gate, repeated in run order. A quoted or escaped one (`";"`, or the `\\;`
+that `find -exec` ends with) is an ordinary argument and passes. And a positional written WITHOUT
+`--` beside a --gate is accepted only when it is one token holding a space (a quoted command):
+`--gate make test` reaches argparse as `--gate make` plus a stray `test`, and running both as gates
+turned a missing quote into a green that never ran the suite.
+
+The report on stdout prints each gate's line INDENTED by two spaces (`  [PASS] <cmd> (rc=0)`), so a
+caller must match it unanchored; the closing `ALL GATES PASSED` / `GATE RED - follow-up NOT run`
+line is not indented.
+
 Exit codes: 0 every gate passed (or, with --then, the follow-up's own code); a red run exits the
 single failing gate's OWN code where that is unambiguous (a taxonomy code such as 2 survives),
 else 1; 2 when the runner itself could not do its job - a gate that could not be STARTED (not
@@ -311,6 +322,14 @@ def gate_spec(spec: str):
             "it as --gate-env K=@file, or put the command in a script; for real shell expansion "
             "name the shell: --gate \"bash -c '...'\"; to pass the characters literally, give "
             "the gate after --")
+    operator = shell_operator_token(argv, written=written_words(spec))
+    if operator is not None:
+        raise ValueError(
+            f"gate {spec!r} holds the shell operator {operator!r}, but a gate runs without a "
+            "shell, so the operator and everything after it would reach the first program as "
+            "ARGUMENTS (`--gate \"true && false\"` passed; a chained cargo gate failed on its "
+            "own option parsing). Give one command per --gate, repeated in the order to run; "
+            "for a real pipeline name the shell: --gate \"bash -c '...'\"")
     return (name[:_NAME_WIDTH] if name else derived_name(argv)), argv
 
 
@@ -347,6 +366,69 @@ def shell_syntax_token(argv: list[str]) -> str | None:
         if word in _SHELLS:
             return None
         if any(marker in token for marker in _SHELL_SUBSTITUTIONS):
+            return token
+    return None
+
+
+_SHELL_OPERATORS = frozenset({"&&", "||", "|", ";"})
+"""Whole argv tokens that only a shell gives meaning to. Only WHOLE tokens: `a|b` inside a regex
+argument and `x;y` inside a value are ordinary text."""
+
+
+def written_words(spec: str) -> frozenset[str] | None:
+    r"""Each word of ``spec`` exactly as WRITTEN, quotes and escapes included; None if unsplittable.
+
+    Splitting erases the one fact the operator check needs: `\;` (what `find -exec` takes), `";"`
+    and a bare `;` all become the argv token `;`, and only the bare one is a chain. So the words
+    are read again with the same quoting rules as :func:`split_command`, each kept as the slice of
+    ``spec`` it came from. A word equal to an operator therefore had no quote or escape around it.
+    On Windows only `"` quotes and a backslash is not an escape, as for CommandLineToArgvW.
+
+    Examples:
+        >>> sorted(written_words('rm {} \\; "&&"'))
+        ['"&&"', '\\;', 'rm', '{}']
+    """
+    lexer = shlex.shlex(spec, posix=True)
+    lexer.whitespace_split = True
+    lexer.commenters = ""
+    if os.name == "nt":
+        lexer.quotes, lexer.escape = '"', ""
+    words: set[str] = set()
+    try:
+        while True:
+            start = lexer.instream.tell()
+            if lexer.get_token() is None:
+                return frozenset(words)
+            words.add(spec[start:lexer.instream.tell()].strip())
+    except ValueError:
+        # Only reachable where these rules approximate the real splitter (a Windows `\"`): no
+        # word can be vouched for, so every operator token counts as bare, as before.
+        return None
+
+
+def shell_operator_token(argv: list[str], *, written: frozenset[str] | None = None) -> str | None:
+    r"""The first argv token that is a bare shell operator no shell will act on, else None.
+
+    Tokens after a word naming a shell are that shell's script, as in :func:`shell_syntax_token`.
+    ``written`` is :func:`written_words` of the string ``argv`` was split from: an operator token
+    that is not among them was quoted or escaped there, so it is an argument, not a chain. None
+    (argv given verbatim, or not re-readable) counts every operator token.
+
+    Examples:
+        >>> shell_operator_token(["cargo", "fmt", "--check", "&&", "cargo", "clippy"])
+        '&&'
+        >>> shell_operator_token(["grep", "-E", "a|b"]) is None
+        True
+        >>> shell_operator_token(["rm", "{}", ";"], written=frozenset({"\\;"})) is None
+        True
+    """
+    for token in argv:
+        word = os.path.basename(token).lower()
+        if word.endswith(".exe"):
+            word = word[:-4]
+        if word in _SHELLS:
+            return None
+        if token in _SHELL_OPERATORS and (written is None or token in written):
             return token
     return None
 
@@ -638,6 +720,11 @@ def _name_follows_positional(raw: list[str]) -> bool:
     return False
 
 
+def _one_quoted_command(rest: list[str]) -> bool:
+    """A lone positional token holding whitespace: one quoted command string, not a split word."""
+    return len(rest) == 1 and any(c.isspace() for c in rest[0].strip())
+
+
 def _tolerate_unencodable_stdout() -> None:
     """`plain python3` on Windows leaves a piped stdout at cp1252, so a summary line holding a
     character outside it crashed the report - and with it the --then the gates had earned."""
@@ -717,7 +804,13 @@ def main(argv=None) -> int:
 def _main(argv=None) -> int:
     _tolerate_unencodable_stdout()
     raw = list(sys.argv[1:] if argv is None else argv)
-    p = argparse.ArgumentParser(description="run gates, keep their real exit status")
+    p = argparse.ArgumentParser(
+        description="run gates, keep their real exit status",
+        epilog="The report goes to stdout: one line per gate, each INDENTED by two spaces "
+               "before '[PASS] <cmd> (rc=0)' or '[FAIL] <cmd> (rc=N)', so match it unanchored "
+               "(grep -E '\\[(PASS|FAIL)\\]'), then the unindented closing line 'ALL GATES PASSED' "
+               "or 'GATE RED - follow-up NOT run'. One command per --gate: a gate has no shell, so "
+               "'&&', '||', '|' and ';' as bare words are refused.")
     p.add_argument("--gate", action=_WrittenOrder, default=None,
                    help="a gate as one DOUBLE-quoted string (repeatable), split into argv by "
                         "the platform's rules (shlex on POSIX, CommandLineToArgvW on Windows, "
@@ -783,7 +876,15 @@ def _main(argv=None) -> int:
             positional = _usage_checked(p, gate_spec, args.rest[0])
 
     written = getattr(args, "written", None) or []
-    if not any(option == "gate" for option, _ in written) and positional is None:
+    has_gate_option = any(option == "gate" for option, _ in written)
+    if has_gate_option and args.rest and "--" not in raw and not _one_quoted_command(args.rest):
+        # `--gate make test` reaches here as `--gate make` plus a stray positional `test`, and
+        # running the two as gates turns a missing quote into a green that never ran the suite.
+        # A positional beside --gate is kept only when it is plainly one quoted command.
+        p.error(f"stray argument(s) {args.rest!r} beside --gate: quote the WHOLE command, "
+                f"--gate \"make test\", or write each gate as its own --gate (a command already "
+                f"split into words goes after --)")
+    if not has_gate_option and positional is None:
         p.error('no gate given: use --gate "<cmd>" or -- <cmd ...>')
     if positional is not None and any(option == "gate" for option, _ in written) \
             and _name_follows_positional(raw):

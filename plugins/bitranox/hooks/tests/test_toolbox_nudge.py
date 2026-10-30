@@ -26,6 +26,19 @@ def test_match_ssh_fleet():
     assert N.match_tool("ssh -o StrictHostKeyChecking=no -i k host uptime")[0] == "fleet_ssh"
 
 
+@pytest.mark.parametrize("tool_name", ["Write", "Edit", "MultiEdit", "NotebookEdit"])
+def test_an_ssh_one_liner_inside_authored_text_is_not_a_fleet_ssh_chore(tool_name):
+    """A pytest file whose string literals hold `ssh -o BatchMode=yes host python3 ...` commands is
+    test DATA, not a one-liner being built (false positive observed 2026-10-19)."""
+    text = 'CMD = "ssh -o BatchMode=yes -i ~/.ssh/k host python3 /tmp/x.py"\n'
+    hit = N.match_tool(text, tool_name)
+    assert hit is None or hit[0] != "fleet_ssh"
+
+
+def test_the_same_one_liner_typed_as_a_command_still_nudges():
+    assert N.match_tool("ssh -o BatchMode=yes -i ~/.ssh/k host uptime", "Bash")[0] == "fleet_ssh"
+
+
 def test_match_ci_triage():
     assert N.match_tool("cargo build 2>&1 | grep error")[0] == "ci_triage"
 
@@ -227,6 +240,32 @@ def test_main_dedup_second_time_is_silent(home, monkeypatch, capsys):
     assert capsys.readouterr().out.strip() == ""
 
 
+def _monitor(cmd, session):
+    return {"tool_name": "Monitor", "session_id": session, "tool_input": {"command": cmd}}
+
+
+def test_main_nudges_a_monitor_that_follows_a_log_through_grep(home, monkeypatch, capsys):
+    """A Monitor stream is where a marker follow is written: 45 of 399 recorded Monitor calls."""
+    _feed(monkeypatch, _monitor("tail -n 0 -F run.log | grep --line-buffered -i FAIL", "m1"))
+    assert N.main() == 0
+    assert "markerwatch" in capsys.readouterr().out
+
+
+def test_main_leaves_an_ordinary_monitor_wait_loop_alone(home, monkeypatch, capsys):
+    """A Monitor IS the wait mechanism: the shell rules (backstop first) must not run on it."""
+    _feed(monkeypatch, _monitor("until [ -s out.jsonl ]; do sleep 5; done; echo ready", "m2"))
+    assert N.main() == 0
+    assert capsys.readouterr().out.strip() == ""
+    assert N.match_tool("until [ -s out.jsonl ]; do sleep 5; done", "Monitor") is None
+
+
+def test_the_hooks_json_routes_monitor_to_the_nudge():
+    hooks = json.loads((Path(N.__file__).parent / "hooks.json").read_text(encoding="utf-8"))
+    routed = [e["matcher"] for e in hooks["hooks"]["PreToolUse"]
+              if any("toolbox-nudge.py" in h.get("command", "") for h in e["hooks"])]
+    assert any("Monitor" in m.split("|") for m in routed), routed
+
+
 def test_main_nudges_on_hand_rolled_write(home, monkeypatch, capsys):
     """The blind spot: a chore hand-rolled by WRITING a script file, not a Bash one-liner."""
     _with_tool(home, "jsonl_grep")
@@ -239,12 +278,13 @@ def test_main_nudges_on_hand_rolled_write(home, monkeypatch, capsys):
 
 
 def test_main_nudges_on_edit_new_string(home, monkeypatch, capsys):
-    _with_tool(home, "fleet_ssh")
+    # A rule that applies to authored text too; fleet_ssh is shell-only.
+    _with_tool(home, "git_state")
     _feed(monkeypatch, {"tool_name": "Edit", "session_id": "e1",
                         "tool_input": {"file_path": "/tmp/f.sh", "old_string": "x",
-                                       "new_string": "ssh -o StrictHostKeyChecking=no -i k host uptime"}})
+                                       "new_string": "b=$(git rev-parse --abbrev-ref HEAD)"}})
     assert N.main() == 0
-    assert "fleet_ssh" in capsys.readouterr().out
+    assert "git_state" in capsys.readouterr().out
 
 
 def test_main_silent_on_write_without_matching_content(home, monkeypatch, capsys):
@@ -679,8 +719,80 @@ def test_match_factedit_on_editing_a_fact_by_hand():
         "vim /media/srv-main-softdev/.claude-memory/facts/no-em-dashes.md", "Bash")[0] == "factedit"
 
 
+@pytest.mark.parametrize("command", [
+    "tail -F gate.log | grep --line-buffered 'ALL GATES'",
+    "tail -n 0 -f ci.log | grep -m1 PASSED",
+])
+def test_match_markerwatch_on_a_marker_wait(command):
+    assert N.match_tool(command, "Bash")[0] == "markerwatch"
+
+
+def test_a_plain_poll_loop_without_a_marker_grep_stays_backstop():
+    assert N.match_tool("until [ -f done.flag ]; do sleep 5; done", "Bash")[0] == "backstop"
+
+
+@pytest.mark.parametrize("command", [
+    "scp -i k /tmp/src.tgz 'tester@winbox:C:\\work\\src.tgz' && ssh winbox 'uv run pytest'",
+    "scp -o BatchMode=yes src.tar winbox:C:/work/src.tar\nssh winbox \"cd C:/work && pytest\"",
+    "ssh -i k -o BatchMode=yes tester@winbox 'cd /d C:\\work && uv run pytest -q'",
+])
+def test_match_winpytest_on_a_hand_rolled_windows_test_run(command):
+    assert N.match_tool(command, "Bash")[0] == "winpytest"
+
+
+def test_an_scp_of_a_script_to_a_windows_host_without_pytest_stays_fleet_ssh():
+    command = "scp -o BatchMode=yes probe.ps1 'u@winbox:C:\\Temp\\probe.ps1' && ssh -o BatchMode=yes u@winbox x"
+    assert N.match_tool(command, "Bash")[0] == "fleet_ssh"
+
+
+def test_an_scp_to_a_posix_host_stays_fleet_ssh():
+    assert N.match_tool("scp -o BatchMode=yes f.tar host:/srv/f.tar && ssh -o BatchMode=yes host ls",
+                        "Bash")[0] == "fleet_ssh"
+
+
 def test_match_mdwrap_on_reflowing_a_paragraph():
     assert N.match_tool("fold -s -w 100 TODO.md", "Bash")[0] == "mdwrap"
+
+
+_HAND_ROLLED_REWRAP = '''"""Rewrap the Markdown paragraph starting at each given line to WIDTH columns."""
+WIDTH = 100
+TOKEN = re.compile(r"[^\\s`]*`[^`]*`[^\\s`]*|\\S+")
+
+
+def wrap(words):
+    lines, current = [], ""
+    for word in words:
+        candidate = f"{current} {word}" if current else word
+        if current and len(candidate) > WIDTH:
+            lines.append(current)
+            current = word
+        else:
+            current = candidate
+    return lines
+'''
+
+
+def test_match_mdwrap_on_a_hand_rolled_width_rewrap_script():
+    """No textwrap and no fold: a rejoin-to-WIDTH loop written from scratch is the same chore."""
+    assert N.match_authored(_HAND_ROLLED_REWRAP)[0] == "mdwrap"
+    assert N.match_tool(_HAND_ROLLED_REWRAP, "Write")[0] == "mdwrap"
+
+
+def test_prose_saying_a_paragraph_was_rewrapped_is_not_mdwrap():
+    msg = "de/PAGES.md's paragraphs are rewrapped to the file's 100 columns, words unchanged."
+    assert (N.match_authored(msg) or ("",))[0] != "mdwrap"
+
+
+def test_a_table_cell_edit_quoting_rewrapped_prose_is_not_mdwrap():
+    """Replay find: a cell edit checks the new text against the cell's own width."""
+    code = ("width = len(cells[k])\nnb = body.replace(old, new)\nif len(nb) > width:\n"
+            "    sys.exit('no slack')\nNEW = '- **Long lines are re-wrapped.** ...'\n")
+    assert (N.match_authored(code) or ("",))[0] != "mdwrap"
+
+
+def test_a_width_check_without_any_wrapping_is_not_mdwrap():
+    code = "for line in text.splitlines():\n    if len(line) > WIDTH:\n        print(line)\n"
+    assert (N.match_authored(code) or ("",))[0] != "mdwrap"
 
 
 def test_an_identifier_rename_routes_to_renamescope_not_anchor_edit():
@@ -1113,6 +1225,7 @@ _SPAWNS_ONLY_FIXED_PROGRAMS = {
     "pushcheck": "git",
     "wtclean": "git worktree remove",
     "factedit": "memory_engine.py, on the first NON-venv python3 on PATH (it skips uv's)",
+    "winpytest": "git, ssh and scp; the pytest it starts runs on the remote host",
 }
 
 

@@ -96,12 +96,46 @@ def log_path(cwd):
     return audit / (project_slug(str(cwd or "unknown")) + "." + LOG_NAME)
 
 
+_JOIN = ", "
+
+
+def _segmentations(text, labels):
+    """Every set of distinct `labels` whose members, joined by ', ' in SOME order, spell `text`.
+
+    A multiSelect answer arrives as the chosen labels joined by ', ', and a label may itself hold
+    ', ' ("Yes, but slowly"), so splitting on the separator shatters it. The walk tries each
+    unused label at each position instead; labels are few, so the search stays small.
+    """
+    found = set()
+
+    def walk(at, used):
+        if at == len(text):
+            found.add(used)
+            return
+        for label in labels:
+            if label in used or not text.startswith(label, at):
+                continue
+            end = at + len(label)
+            if end == len(text):
+                walk(end, used | {label})
+            elif text.startswith(_JOIN, end):
+                walk(end + len(_JOIN), used | {label})
+
+    walk(0, frozenset())
+    return found
+
+
 def _chosen_options(question, chosen):
+    """The option dicts the answer names, in option order; [] for free text or an ambiguous join."""
     options = [o for o in question.get("options") or [] if isinstance(o, dict)]
     exact = [o for o in options if o.get("label") == chosen]
     if exact or not question.get("multiSelect"):
         return exact
-    picked = set(chosen.split(", "))
+    labels = [o.get("label") for o in options if isinstance(o.get("label"), str) and o.get("label")]
+    readings = _segmentations(chosen, labels)
+    if len(readings) != 1:
+        return []                                  # free text, or two readings: either is a guess
+    picked = next(iter(readings))
     return [o for o in options if o.get("label") in picked]
 
 

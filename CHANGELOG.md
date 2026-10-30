@@ -30,6 +30,91 @@ a hole nobody has drawn a line under is one that gets rediscovered and half-fill
 two "versions with no entry" notes came to sit in this file disagreeing with it.
 
 
+## [10.7.0]
+
+### Added
+
+- `compuse-toolbox`: new `markerwatch.py` (watch a log for a completion marker, or `calibrate` one
+  against a finished log) and `winpytest.py` (run a repo's pytest on a Windows test host and
+  return its real exit code), each with tests and a `toolbox-nudge` rule. `toolbox-nudge` now also
+  scans `Monitor` calls.
+- `ci_wait.py`: `--workflow NAME`; per-job progress on every poll (done, running, and each queued
+  job with how long it has waited); failed jobs named on every poll and on timeout;
+  `--fail-on-failed-job` exits 1 as soon as a job fails; `--repo` also takes a checkout directory.
+  A new `billing-blocked` verdict (exit 2) covers a run GitHub refused to start for billing (zero
+  steps and a payments annotation); no wait or retry fixes it. On GitHub Enterprise
+  (`--repo HOST/OWNER/NAME`) that check asks the repo's own host.
+- `claim_check.py --literal` matches a literal after normalising Markdown markup and whitespace.
+- `mutation_arm.py --cmd` runs an arm whose check is not pytest, and the verdict tells a compile
+  error from a failing run.
+- `hooks/bump_version.py --rebase` rebases an unpushed bump onto origin: it keeps a backup ref,
+  takes the next free version, moves this change's CHANGELOG section and renumbers the message.
+- New hook `block-env-dump.py` refuses a command that prints the whole environment (`env`,
+  `printenv`, `/proc/<pid>/environ`).
+
+### Changed
+
+- `ci_wait.py`: the default `--timeout` is 3600 s, and a timeout names each workflow's usual
+  duration. A green run stays pending while any job is unfinished. A run that already concluded
+  with a failure ends the wait as `failed` at once, even beside runs still going (it no longer
+  waits into a timeout or `stuck-queued`), and the summary names the runs still going. The poll
+  listing gets at least 10 s per call; every other `gh` call shares one window ending 10 s past
+  the deadline, so a stalled API cannot hold the wait longer. A deadline reached while `gh` keeps
+  failing is a timeout that counts the failed calls. When no run is found, the summary says
+  whether the sha is not on the remote or no workflow's trigger matches.
+- `ci-watch-nudge` reads a workflow's `on: push` triggers and stays quiet where no run can come; a
+  workflow with a `create` trigger is left unjudged, so the nudge stays.
+- `gate.py` refuses stray words beside `--gate` and a bare (unquoted, unescaped) `&&`, `||`, `|`
+  or `;` inside one `--gate` (exit 2); `--cwd <abs>` names the repository like `--gate-cwd`. `--help` explains that
+  verdict lines are indented and the match is unanchored.
+- `block-masked-gate-exit` also refuses a masked commit, merge, push, rebase, bundle or
+  `pip install`, and a masked state change chained into push, commit, tag, rm, scp or ssh.
+- `repo-gate`: a marketplace commit or push accepts a mirrored skill's twin committed in a linked
+  worktree of the tool repo, with a notice. A pathspec commit, an output redirection and an
+  assignment followed by `cd` are read as the commit's selection.
+- `session-start` no longer scaffolds a memory level inside a gitignored directory; it uses the
+  parent of the highest ignored ancestor.
+- `git-footgun-guard` refuses `git check-ignore -q` with two or more paths (git exits 128) and a
+  pathspec commit that drops an index edit made in the same command (exit 2).
+- `block-pgrep-self-match` catches the `ps -o pid=,args= | awk /text/ | kill` self-kill form,
+  also when the listing reaches the kill through a process substitution (`< <(...)`, `readarray`,
+  `mapfile`) or a file written and then read back (`> /tmp/p; kill $(cat /tmp/p)`).
+- `sha-literal-nudge` catches a typed hex prefix spliced onto `$(...)`, `${...}` or a backtick
+  substitution; an all-digit number or a `#rrggbb` colour glued to one is not denied.
+- `commit-tell-sweep` reads a `-F` message file that the same command writes, and refuses a
+  writer it cannot read back. A `-F` path is skipped only for a git run by a remote runner (ssh,
+  `pct exec`, `docker exec` and similar), not behind a local launcher such as `flock` or `uv run`.
+- `arbitrary-sleep-nudge`, `subagent-brief-pyright-nudge` and the background-gate check fire on
+  fewer false positives; `toolbox-nudge`'s fleet-ssh rule fires only on shell commands, and its
+  mdwrap rule also matches a rewrap script.
+- `user-decision-log` splits a multi-select answer into whole option labels, so a label holding
+  `, ` stays intact.
+- `self_improve_signals` ignores the premise-check hook's designed refusal.
+- `conflict_resolve.py` puts a blank line where a Markdown heading meets text in a join.
+- `redaction_scan.py` marks a line that only re-spaces a removed line as re-padded and does not
+  count it toward exit 1.
+- `mutation_arm.py` restores a file with a fresh mtime, so a build cache cannot reuse the mutated
+  build, and names a missing module with the `--with DEP` rerun. On a timeout or Ctrl-C it kills
+  the arm's whole process tree before restoring, and on Windows `--cmd` is split the way
+  Windows splits a command line.
+- `winpytest.py` exits 1 (tests failed) only when pytest's output shows it ran; an rc 1 from a
+  failed `cd`, `tar` or `uv` step is exit 2.
+- `markerwatch.py` judges a last line with no newline once it stops growing, as `calibrate`
+  does; `--timeout` must be a finite number above 0.
+- `bump_version.py --rebase` carries the patch as bytes, so a non-UTF-8 or CRLF file survives
+  byte for byte.
+
+### Docs
+
+- `compuse-toolbox`: `anchor_edit` takes absolute paths only; the description names mutation
+  batteries.
+- `meta-claude-hooks`: measured auto-compaction behaviour (`references/events.md`); a test that
+  launches the shim must not call bare `bash` (WSL on windows-latest); never derive a narrower arm
+  by filtering another predicate's firings.
+- `meta-context-watcher`: an active `/goal` must be cleared before `/clear`.
+- `CLAUDE.md` and `CONTRIBUTING.md`: a bump names `plugin.json`, `pyproject.toml` and the CHANGELOG
+  heading, done by `bump_version.py`.
+
 ## [10.6.1]
 
 ### Fixed

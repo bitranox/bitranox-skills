@@ -642,3 +642,116 @@ def test_a_src_dst_push_names_the_destination_ref(repo, capsys):
     assert hook.main(_event("git push origin master:release", repo)) == 0
     text = _context(capsys)
     assert "branch release" in text and "branch master" not in text
+
+
+# --- a push to a branch no workflow trigger names starts no run -------------------------------
+# Measured: a feature-branch push drew "CI is now running" and a ci_wait that ended no-runs, read
+# as broken CI. The repo had workflow files and a forge that runs them; their `on: push:
+# branches` simply did not name the branch.
+
+_ONLY_MASTER = "name: ci\non:\n  push:\n    branches: [master]\n"
+
+
+def _workflow(repo, text, name="ci.yml"):
+    (repo / ".github" / "workflows" / name).write_text(text, encoding="utf-8")
+
+
+def _push_feature_branch(repo):
+    _git(repo, "checkout", "-q", "-b", "feature/x")
+    (repo / "f.txt").write_text("feature\n", encoding="utf-8")
+    _git(repo, "commit", "-q", "-am", "feature")
+    _git(repo, "push", "-q", "-u", "origin", "feature/x")
+
+
+def test_a_push_to_a_branch_no_trigger_names_is_not_announced_as_running(repo, capsys):
+    _workflow(repo, _ONLY_MASTER)
+    _push_feature_branch(repo)
+    assert hook.main(_event("git push", repo)) == 0
+    context = json.loads(capsys.readouterr().out)["hookSpecificOutput"]["additionalContext"]
+    assert "CI is now running" not in context
+    assert "feature/x" in context and "no run" in context
+    assert state.pending_for(str(repo), "sess-1") == [], "nothing to watch, so nothing owed"
+
+
+def test_control_a_push_to_a_branch_the_trigger_names_is_still_announced(repo, capsys):
+    _workflow(repo, _ONLY_MASTER)
+    (repo / "f.txt").write_text("two\n", encoding="utf-8")
+    _git(repo, "commit", "-q", "-am", "two")
+    _git(repo, "push", "-q")
+    assert hook.main(_event("git push", repo)) == 0
+    assert "CI is now running" in capsys.readouterr().out
+
+
+@pytest.mark.parametrize("text", [
+    "on: push\n",
+    "on: [push, pull_request]\n",
+    "on:\n  push:\n    branches: ['feature/**']\n",
+    "on:\n  push:\n    branches-ignore: [master]\n",
+    "on:\n  push:\n",
+    "on:\n  push:\n    branches: [master]\n  workflow_run:\n    workflows: [x]\n",
+    "on:\n  push:\n    branches: [master]\n  create:\n",
+    "on: [create]\n",
+    "this: is: not: yaml: [\n",
+    "name: no trigger block at all\n",
+])
+def test_anything_that_may_run_or_cannot_be_read_keeps_the_nudge(repo, capsys, text):
+    """Only a CERTAIN no-run silences it. A workflow_run may chain off another workflow, a
+    `create` trigger fires on a new branch's first push (which nothing local can tell from a
+    later one), and an unreadable file proves nothing."""
+    _workflow(repo, text)
+    _push_feature_branch(repo)
+    hook.main(_event("git push", repo))
+    assert "CI is now running" in capsys.readouterr().out
+
+
+def test_one_matching_workflow_among_several_keeps_the_nudge(repo, capsys):
+    _workflow(repo, _ONLY_MASTER)
+    _workflow(repo, "on:\n  push:\n    branches: ['**']\n", name="other.yml")
+    _push_feature_branch(repo)
+    hook.main(_event("git push", repo))
+    assert "CI is now running" in capsys.readouterr().out
+
+
+def test_a_tags_only_push_trigger_does_not_build_a_branch(repo, capsys):
+    _workflow(repo, "on:\n  push:\n    tags: ['v*']\n")
+    _push_feature_branch(repo)
+    hook.main(_event("git push", repo))
+    assert "CI is now running" not in capsys.readouterr().out
+
+
+@pytest.mark.parametrize("patterns,branch,expected", [
+    (["master"], "master", True),
+    (["master"], "feature/x", False),
+    (["feature/*"], "feature/x", True),
+    (["feature/*"], "feature/x/y", False),
+    (["feature/**"], "feature/x/y", True),
+    (["**", "!feature/**"], "feature/x", False),
+    (["**", "!feature/**", "feature/keep"], "feature/keep", True),
+])
+def test_branch_filter_patterns_follow_github(patterns, branch, expected):
+    assert hook._branch_filter_matches(patterns, branch) is expected
+
+
+@pytest.mark.parametrize("text", [
+    "on:\n  pull_request:\n    branches: [master]\n",
+    "on: {push: {branches: [master]}, pull_request: {}}\n",
+])
+def test_a_branch_only_a_pull_request_trigger_could_build_says_so_and_stays_owed(repo, capsys, text):
+    """The measured shape: `on: push: branches: [main, master]` plus a pull_request trigger. A run
+    starts only if a pull request from the branch is open, which nothing local can see."""
+    _workflow(repo, text)
+    _push_feature_branch(repo)
+    hook.main(_event("git push", repo))
+    context = json.loads(capsys.readouterr().out)["hookSpecificOutput"]["additionalContext"]
+    assert "CI is now running" not in context
+    assert "pull request" in context and "ci_wait.py" in context
+    assert [e["sha"] for e in state.pending_for(str(repo), "sess-1")] == [_head(repo)]
+
+
+def test_one_workflow_that_runs_outweighs_one_that_cannot_be_judged(repo, capsys):
+    _workflow(repo, _ONLY_MASTER)
+    _workflow(repo, "on:\n  workflow_run:\n    workflows: [ci]\n", name="chained.yml")
+    (repo / "f.txt").write_text("two\n", encoding="utf-8")
+    _git(repo, "commit", "-q", "-am", "two")
+    _git(repo, "push", "-q")
+    assert hook.push_trigger_state(str(repo), "master") == hook.RUNS

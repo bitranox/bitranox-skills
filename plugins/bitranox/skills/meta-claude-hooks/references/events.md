@@ -524,6 +524,27 @@ Fires after compaction completes. **Cannot be blocked**; stderr to the user only
 
 Matcher: `manual`, `auto`. Input adds `trigger` and `compact_summary`.
 
+### What auto-compaction does around a hook (measured)
+
+The documentation is silent on these; scripted probes on CLI 2.1.310 established them. Re-probe on a newer
+build before a hook depends on one.
+
+- **It fires about 33k tokens BELOW `CLAUDE_CODE_AUTO_COMPACT_WINDOW`, not at it.** With the window at 100k and
+  200k, compaction fired at estimated contexts of 69-99k and 166-178k while requests of 84k and 171k still went
+  through: a fixed reserve, not a percentage. A hook that wants to act before compaction must plan for that
+  point, and leave room for one more tool result (a single one added up to 42k in the same probes).
+- **The same turn continues after an AUTO compaction.** Tool calls followed the compaction boundary under the
+  original prompt id, five times in a row; the agent does not stop and wait for a new prompt.
+- **`SessionStart` with source `compact` is how a hook reaches the model after it.** Its `additionalContext`
+  is present in the very next API request. `PreCompact` can block but not inject, and `PostCompact`'s output
+  fields are discarded.
+- **An `env` block in `settings.json` reaches hook subprocesses.** Setting `CLAUDE_CODE_AUTO_COMPACT_WINDOW`
+  there both sets the session's window and lets a hook read it, so a hook can check it agrees with the window
+  it assumes.
+- **Repeated rapid compactions end the turn.** When compaction keeps refilling, the run stops with
+  `terminal_reason` `rapid_refill_breaker` in a `claude -p` result record, so a headless run that compacts
+  back to back finishes early rather than looping.
+
 ---
 
 ## Model switches

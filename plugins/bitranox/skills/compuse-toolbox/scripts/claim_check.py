@@ -31,7 +31,14 @@ Verdicts and exit codes (format-independent):
 Under --json the envelope {ok, command, data, skipped} is printed on every exit, a usage error and
 a crash included; `ok` is false only on exit 2 (BROKEN), so ABSENT is ok with exit 1.
 
+`--literal` takes the pattern as TEXT, not a regex, for checking that a quoted sentence is present
+in a Markdown file: both sides drop inline markup (backticks, `*` and `_`) and collapse every run of
+whitespace, line breaks included, to one space, so a sentence the file wraps across lines or marks
+up as code or bold still matches the plain quote. A hit is reported at the line where the match
+starts. The control stays a regex matched per line.
+
 Run: uv run scripts/claim_check.py FILE... --pattern REGEX --control REGEX [--json] [--case-sensitive]
+     uv run scripts/claim_check.py SKILL.md --literal --pattern 'the quoted sentence' --control 'git'
      uv run scripts/claim_check.py skills/*/SKILL.md --pattern 'LC_ALL=C' --control 'git'
 """
 
@@ -90,18 +97,68 @@ def _compile(pattern: str, control: str, flags: int):
         raise ValueError("invalid regex: %s" % e) from e
 
 
-def check(paths, pattern: str, control: str, *, ignore_case: bool = True) -> dict:
+_MARKUP = frozenset("`*_")
+
+
+def normalise_literal(text: str, *, ignore_case: bool = True) -> tuple[str, list[int]]:
+    """``text`` with inline markup dropped and whitespace runs collapsed, plus each kept
+    character's 1-based line number in ``text``. PURE.
+
+    Leading and trailing whitespace is dropped. Used on both sides of a ``--literal`` match, so a
+    quote and a file that differ only by wrapping or by backticks and bold normalise alike.
+    """
+    out: list[str] = []
+    lines: list[int] = []
+    line = 1
+    pending_space = False
+    for ch in text:
+        if ch == "\n":
+            line += 1
+        if ch in _MARKUP:
+            continue
+        if ch.isspace():
+            pending_space = bool(out)
+            continue
+        if pending_space:
+            out.append(" ")
+            lines.append(line)
+            pending_space = False
+        for piece in (ch.lower() if ignore_case else ch):
+            out.append(piece)
+            lines.append(line)
+    return "".join(out), lines
+
+
+def _literal_hits(path: Path, text: str, needle: str, ignore_case: bool) -> list[dict]:
+    haystack, line_of = normalise_literal(text, ignore_case=ignore_case)
+    original = dict(_lines(text))
+    hits, start = [], haystack.find(needle)
+    while start != -1:
+        n = line_of[start]
+        hits.append({"path": str(path), "line": n, "text": original.get(n, "").strip()})
+        start = haystack.find(needle, start + len(needle))
+    return hits
+
+
+def check(paths, pattern: str, control: str, *, ignore_case: bool = True,
+          literal: bool = False) -> dict:
     """Return a verdict dict for `pattern` over `paths`, gated on `control` matching.
 
     PURE over the given paths (no globbing, no cwd) so it is unit-testable. `paths` may hold str
     or Path. A file that cannot be read is NOT silently skipped: it is listed in `unreadable`, and
     any unreadable file blocks ABSENT, because the control matching elsewhere proves nothing
-    about a file that was never read.
+    about a file that was never read. With ``literal`` the pattern is text matched after
+    :func:`normalise_literal` on both sides.
     """
     try:
-        pat, ctl = _compile(pattern, control, re.IGNORECASE if ignore_case else 0)
+        pat, ctl = _compile(re.escape(pattern) if literal else pattern, control,
+                            re.IGNORECASE if ignore_case else 0)
     except ValueError as e:
         return _result(BROKEN, str(e), [], 0, 0, [], [])
+    needle = normalise_literal(pattern, ignore_case=ignore_case)[0] if literal else ""
+    if literal and not needle:
+        return _result(BROKEN, "the --literal pattern is empty once markup and whitespace are "
+                               "dropped", [], 0, 0, [], [])
 
     hits, control_hits, files_read, unreadable, no_control = [], 0, 0, [], []
     for raw in paths:
@@ -116,8 +173,10 @@ def check(paths, pattern: str, control: str, *, ignore_case: bool = True) -> dic
             continue
         files_read += 1
         file_control_hits = 0
+        if literal:
+            hits.extend(_literal_hits(p, text, needle, ignore_case))
         for n, line in _lines(text):
-            if pat.search(line):
+            if not literal and pat.search(line):
                 hits.append({"path": str(p), "line": n, "text": line.strip()})
             if ctl.search(line):
                 file_control_hits += 1
@@ -182,10 +241,15 @@ def _main(argv) -> int:
     ap.add_argument("--control", required=True,
                     help="a regex that MUST match; if it does not, the verdict is BROKEN not ABSENT")
     ap.add_argument("--case-sensitive", action="store_true", help="default is case-insensitive")
+    ap.add_argument("--literal", action="store_true",
+                    help="take --pattern as TEXT: both sides drop backticks, * and _ and collapse "
+                         "whitespace (line breaks included), so a quote matches a sentence the "
+                         "file wraps or marks up; --control stays a regex")
     ap.add_argument("--json", action="store_true", help="emit a JSON envelope on stdout")
     args = ap.parse_args(sys.argv[1:] if argv is None else argv)
 
-    r = check(args.paths, args.pattern, args.control, ignore_case=not args.case_sensitive)
+    r = check(args.paths, args.pattern, args.control, ignore_case=not args.case_sensitive,
+              literal=args.literal)
     v = r["verdict"]
 
     if args.json:

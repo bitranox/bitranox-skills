@@ -11,8 +11,18 @@ marketplace: Claude Code keeps a clone at `~/.claude/plugins/marketplaces/bitran
 update is a `git pull` there, which cannot fast-forward a rewritten history - so the update silently
 does nothing and existing installs stay on the old version.
 
-Ship changes with normal additive commits and a `version` bump in
-`plugins/bitranox/.claude-plugin/plugin.json`.
+Ship changes with normal additive commits and a version bump. The version lives in two files,
+`plugins/bitranox/.claude-plugin/plugin.json` and `pyproject.toml`, and each release needs its own
+`CHANGELOG.md` heading; the commit gate (`check_version_sync`) refuses a bump that touches only
+one of the two files. Bump all three at once with the jig, which starts from the version origin
+holds:
+
+```bash
+uv run plugins/bitranox/hooks/bump_version.py --part patch --changelog notes.md
+```
+
+`notes.md` holds the new section's body (`### Fixed` and its bullets); `--to <version>` sets an
+exact version, and `--help` lists the rest.
 
 `master` enforces this with GitHub branch protection: `allow_force_pushes: false`,
 `allow_deletions: false`, `enforce_admins: true` (normal additive pushes stay free, no PR or
@@ -95,7 +105,10 @@ since forking from it, so another session's half-done edit there never blocks a 
 exception keeps a change made to BOTH copies from deadlocking, where each side waits for the other
 to commit first: a COMMIT whose text matches the other repo's uncommitted text exactly passes, with
 a notice naming that repo as the one to commit next. A push never takes it, so the pair cannot be
-published until both sides are committed. Nothing fetches; the audits, and every DRIFT message, name a repo whose `origin` was last fetched more than
+published until both sides are committed. A marketplace commit or push also accepts the twin as
+committed in any linked worktree of the tool repo (its main checkout is often another session's
+tree), and a marketplace commit its uncommitted text there, each with a notice naming that
+checkout. Nothing fetches; the audits, and every DRIFT message, name a repo whose `origin` was last fetched more than
 7 days ago, because a stale ref is the likeliest source of a false drift.
 
 - The commit and push gates check the twin of any mirrored skill the current change touches.

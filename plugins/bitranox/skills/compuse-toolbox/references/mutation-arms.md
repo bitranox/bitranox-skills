@@ -26,6 +26,12 @@ Each of these has produced a verdict that looked right and meant nothing.
   held only by a doctest reads as SURVIVED. Name both as the arm's tests (`"tests": ["tests",
   "src"]` in a `--battery` spec; `--test` takes a single node id) and check the collected count
   includes the doctest items before reading a survivor as a gap.
+- **A NON-pytest suite runs through `--cmd "<command>"`** (`cargo test -p crate`, `make check`),
+  split without a shell. Its exit decides the arm: 0 survived, a failure killed, and a mutant that
+  does not BUILD (or a command that cannot run) INCONCLUSIVE, because a compile error is not a test
+  catching the change. The restore writes the original bytes with a FRESH mtime: an mtime-keyed
+  build cache (cargo, make) would otherwise see the restored file as older than the mutant's build
+  and keep running the mutant.
 
 ## When the tool is not in reach
 
@@ -34,5 +40,6 @@ in the same second as the last edit is invisible to the cache, in both direction
 served after the restore, or a pre-mutation cache served in place of the mutant, which reads
 SURVIVED). Hand-rolled, set `PYTHONDONTWRITEBYTECODE=1` in the pytest environment (pytest has no
 `-B` flag and exits with a usage error on it), remove every `__pycache__` under the tree before and
-after the arm, restore from a copy taken first (never `git checkout --`, which discards
+after the arm, restore from a copy taken first with a plain copy (never `cp -p` or `copy2`,
+which bring the OLD mtime back for a build cache to trust; never `git checkout --`, which discards
 uncommitted work), and prefer a length-CHANGING mutation, which invalidates the cache on size alone.

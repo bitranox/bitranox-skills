@@ -621,3 +621,48 @@ def test_main_ignores_other_tools_and_bad_stdin(monkeypatch, capsys):
     assert _run_main(monkeypatch, capsys, {"tool_name": "Read", "tool_input": {"file_path": S}}) == ""
     monkeypatch.setattr("sys.stdin", io.StringIO("not json"))
     assert N.main() == 0
+
+
+# --- a typed prefix spliced onto a derived tail ----------------------------------------------------
+
+@pytest.mark.parametrize("command", [
+    "uv run ci_wait.py --sha b0a67e2d$(git rev-parse HEAD | cut -c9-)",
+    'gh run list --commit "fb3330b${SHA:7}"',
+    "git update-ref refs/heads/x 1d7b7a`git rev-parse HEAD | cut -c7-`",
+])
+def test_a_typed_prefix_spliced_onto_a_derived_tail_is_found(command):
+    """The 8th recurrence of the invented-identifier fact carried no 40-hex literal at all: the
+    prefix was typed and only the tail derived, so the whole value is invented however it is
+    finished."""
+    assert N.spliced_prefixes(command)
+    assert "SPLICED" in N.notice(command, "Bash", shown=set())
+
+
+@pytest.mark.parametrize("command", [
+    "uv run ci_wait.py --sha $(git rev-parse HEAD)",
+    "git commit -m 'b0a67e2d$(x)'",
+    "cp build$(date +%F).log out/",                         # not hex
+    "mv decade$(date +%Y) archive/",                        # hex letters only: an English word
+    "ls -la /proc/$(pgrep -x sshd)/fd",
+    # Inside single quotes nothing expands: markdown backticks in a sed replacement.
+    "sed -i 's/^Commit: `768fd57` (branch x)$/done/' notes.md",
+    # A decimal number and a #rrggbb colour are hex-shaped, and no sha is typed in either.
+    "dd if=/dev/zero of=f bs=1048576${X} count=1",
+    "printf 'x' > f-1048576$(date +%s)",
+    "color=#ff0000${x}",
+    "sed -i s/c/#a0b1c2$(cat alpha)/ style.css",
+])
+def test_no_splice_without_a_typed_hex_prefix_glued_to_an_expansion(command):
+    assert N.spliced_prefixes(command) == []
+
+
+def test_main_refuses_a_spliced_sha_whatever_the_transcript_showed(monkeypatch, capsys, tmp_path):
+    """The derived tail is never checked against the typed prefix, so the transcript cannot vouch
+    for the value: even a session that printed the full sha gets a refusal."""
+    path = _transcript(tmp_path, "s.jsonl", [_tool_result(S)])
+    out = _run_main(monkeypatch, capsys, {
+        "tool_name": "Bash", "transcript_path": str(path),
+        "tool_input": {"command": f"uv run ci_wait.py --sha {S[:8]}$(git rev-parse HEAD | cut -c9-)"}})
+    payload = json.loads(out)["hookSpecificOutput"]
+    assert payload["permissionDecision"] == "deny"
+    assert S[:8] in payload["permissionDecisionReason"]

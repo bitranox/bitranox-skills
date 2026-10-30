@@ -5,6 +5,7 @@ Both are the same bug wearing two hats. A sha shorter than 40 characters matches
 terminal yet?" test over an empty list is vacuous, so the loop spins to its deadline looking busy.
 """
 
+import inspect
 import json
 import os
 import subprocess
@@ -16,8 +17,15 @@ import pytest
 
 import ci_wait
 
-#: The real lookup, kept before the autouse stub below replaces it, for the tests that exercise it.
+#: The real lookups, kept before the autouse stub below replaces them, for the tests that exercise
+#: them.
 REAL_RESOLVE_REPO = getattr(ci_wait, "resolve_repo", None)
+REAL_GH_RUN_JOBS = getattr(ci_wait, "gh_run_jobs", None)
+REAL_GH_TYPICAL_DURATION = getattr(ci_wait, "gh_typical_duration", None)
+REAL_SHA_ON_A_REMOTE = getattr(ci_wait, "sha_on_a_remote", None)
+REAL_BILLING_BLOCKED = getattr(ci_wait, "gh_run_billing_blocked", None)
+#: The real loop, kept so a fake standing in for it can check each call against its signature.
+REAL_WAIT_FOR = ci_wait.wait_for
 
 
 @pytest.fixture(autouse=True)
@@ -26,6 +34,31 @@ def _no_real_repo_lookup(monkeypatch):
     test that stubs only gh_runs would otherwise reach the network. gh is a true external edge."""
     if REAL_RESOLVE_REPO is not None:
         monkeypatch.setattr(ci_wait, "resolve_repo", lambda **kw: "o/r")
+    # The same for every other gh or git lookup main makes beside the run listing: a test that
+    # fakes only the listing must not reach the network, and a subprocess-level fake written for
+    # `gh run list` must not be handed a `gh run view` it cannot parse.
+    for name in ("gh_run_jobs", "gh_typical_duration", "sha_on_a_remote"):
+        if hasattr(ci_wait, name):
+            monkeypatch.setattr(ci_wait, name, lambda *a, **kw: None)
+    # A failed verdict asks each failed run's jobs whether GitHub refused them for billing; a
+    # test that stubs only the listing would otherwise send that question to the real gh.
+    if REAL_BILLING_BLOCKED is not None:
+        monkeypatch.setattr(ci_wait, "gh_run_billing_blocked", lambda rid, **kw: None)
+
+
+def recording_wait_for(seen: dict[str, object]):
+    """A stand-in for `wait_for` that records the keywords main passed and returns success.
+
+    It binds each call against the REAL signature first: a bare `**kw` fake accepts any keyword,
+    so main passing a misspelt or removed one would pass here and raise TypeError in production.
+    """
+
+    def fake_wait(*args, **kw):
+        inspect.signature(REAL_WAIT_FOR).bind(*args, **kw)
+        seen.update(kw)
+        return ci_wait.Verdict("success", "CI=success")
+
+    return fake_wait
 
 
 def run(workflow: str, status: str, conclusion: str | None, sha: str = "a" * 40) -> dict[str, object]:
@@ -590,13 +623,8 @@ class TestTheRetryReachesTheRealCommandLine:
         """Parsed and then dropped is the shape a green suite cannot see: the flag exists, the
         help text is right, and the loop keeps its default."""
         seen: dict[str, object] = {}
-
-        def fake_wait(fetch, **kw):
-            seen.update(kw)
-            return ci_wait.Verdict("success", "CI=success")
-
         monkeypatch.setattr(ci_wait, "sha_is_known_locally", lambda sha, **kw: True)
-        monkeypatch.setattr(ci_wait, "wait_for", fake_wait)
+        monkeypatch.setattr(ci_wait, "wait_for", recording_wait_for(seen))
 
         ci_wait.main(["--sha", "a" * 40, "--error-grace", "300"])
 
@@ -646,7 +674,7 @@ class TestGracesAreMeasuredInTime:
     def test_an_interval_as_long_as_the_grace_still_waits_the_grace_once(self):
         slept: list[float] = []
         result = ci_wait.wait_for(
-            lambda: [], deadline_polls=100, sleep=slept.append, interval_s=120.0, appear_grace_s=120.0
+            list, deadline_polls=100, sleep=slept.append, interval_s=120.0, appear_grace_s=120.0
         )
         assert result.state == "no-runs"
         assert sum(slept) >= 120.0
@@ -654,7 +682,7 @@ class TestGracesAreMeasuredInTime:
     def test_a_grace_that_is_not_a_multiple_of_the_interval_is_honoured(self):
         slept: list[float] = []
         ci_wait.wait_for(
-            lambda: [], deadline_polls=100, sleep=slept.append, interval_s=2.0, appear_grace_s=3.0
+            list, deadline_polls=100, sleep=slept.append, interval_s=2.0, appear_grace_s=3.0
         )
         assert sum(slept) >= 3.0
 
@@ -747,14 +775,40 @@ class TestAStalledGhCannotOutliveTheTimeout:
     def test_the_last_sleep_is_cut_to_the_deadline_rather_than_overshooting_it(self, monkeypatch):
         rc, polled_at, ended = self._cli_on_a_fake_clock(
             monkeypatch, ["--sha", SHA, "--timeout", "50", "--interval", "30"])
+        assert rc == 2
         assert polled_at == [0.0, 31.0, 50.0], polled_at
         assert ended <= 51.0, ended
 
     def test_slow_polls_do_not_stretch_the_wait_past_the_timeout(self, monkeypatch):
-        rc, polled_at, ended = self._cli_on_a_fake_clock(
+        rc, _polled_at, ended = self._cli_on_a_fake_clock(
             monkeypatch, ["--sha", SHA, "--timeout", "100", "--interval", "10"], gh_seconds=15.0)
         assert rc == 2
         assert ended <= 115.0, ended
+
+    def test_stalled_job_reads_cannot_hold_the_wait_past_the_floor(self, monkeypatch):
+        """Review finding: every pending poll reads each unfinished run's jobs, each read with its
+        own floor-bounded timeout, so three stalled reads held the wait 20s past a 50s deadline
+        while the docstring promised at most GH_CALL_FLOOR_S."""
+        now = [1000.0]
+        rows = [{**run(name, "in_progress", None), "databaseId": rid}
+                for rid, name in enumerate(("ci", "docs", "lint"), start=1)]
+
+        def fake_gh(argv, **kw):
+            if argv[:3] == ["gh", "run", "list"]:
+                return subprocess.CompletedProcess(argv, 0, stdout=json.dumps(rows), stderr="")
+            now[0] += kw["timeout"]               # a stalled job read takes its whole bound
+            raise subprocess.TimeoutExpired(argv, kw["timeout"])
+
+        monkeypatch.setattr(ci_wait, "sha_is_known_locally", lambda sha, **kw: True)
+        monkeypatch.setattr(ci_wait, "gh_run_jobs", REAL_GH_RUN_JOBS)
+        monkeypatch.setattr(ci_wait.subprocess, "run", fake_gh)
+        monkeypatch.setattr(ci_wait.time, "monotonic", lambda: now[0])
+        monkeypatch.setattr(ci_wait.time, "sleep", lambda s: now.__setitem__(0, now[0] + s))
+
+        rc = ci_wait.main(["--sha", SHA, "--repo", "o/r", "--timeout", "50", "--interval", "30"])
+
+        assert rc == 2
+        assert now[0] - 1000.0 <= 50.0 + ci_wait.GH_CALL_FLOOR_S, now[0] - 1000.0
 
     @pytest.mark.skipif(os.name == "nt", reason="a fake gh on PATH needs a POSIX shebang")
     def test_a_hanging_gh_is_ended_by_timeout_end_to_end(self, tmp_path):
@@ -767,7 +821,7 @@ class TestAStalledGhCannotOutliveTheTimeout:
         proc = subprocess.run(
             [sys.executable, str(SCRIPT), "--sha", SHA, "--repo", "o/r", "--timeout", "2",
              "--interval", str(ci_wait.MIN_INTERVAL_S)],
-            capture_output=True, text=True, env=env, timeout=45,
+            capture_output=True, text=True, env=env, timeout=45, check=False,
         )
         assert proc.returncode == 2, proc.stderr
         # Exit 2 is also a usage error: require that the wait actually RAN and timed out on gh.
@@ -868,7 +922,7 @@ class TestAConsoleThatCannotEncodeAWorkflowName:
         env = {**os.environ, "PYTHONIOENCODING": "cp1252"}
         env.pop("PYTHONUTF8", None)
         proc = subprocess.run(
-            [sys.executable, str(driver)], capture_output=True, env=env, timeout=60
+            [sys.executable, str(driver)], capture_output=True, env=env, timeout=60, check=False
         )
         assert proc.returncode == 0, proc.stderr.decode("cp1252", "replace")
         assert b"CI " in proc.stdout
@@ -1014,6 +1068,11 @@ def event_gh(rows: list[dict[str, object]], calls: list[list[str]]):
 
     def fake_run(argv, **kwargs):
         calls.append(list(argv))
+        if argv[:3] == ["gh", "run", "view"]:
+            # A failed run's own jobs, as the billing check reads them: one that ran steps, so a
+            # failure here stays an ordinary failure.
+            jobs = {"jobs": [{"databaseId": 1, "steps": [{"name": "Set up job"}]}]}
+            return subprocess.CompletedProcess(argv, 0, stdout=json.dumps(jobs), stderr="")
         kept = [r for r in rows if r["headSha"] == argv[argv.index("--commit") + 1]]
         if "--event" in argv:
             kept = [r for r in kept if r.get("event") == argv[argv.index("--event") + 1]]
@@ -1462,8 +1521,8 @@ class TestARunNoRunnerPicksUpIsReportedNotWaitedOut:
                                   interval_s=30.0, queued_grace_s=60.0)
 
         assert len(calls) >= 6, "the wait must not end while the ci run is still in progress"
-        assert result.state == "stuck-queued"
-        assert "ci=failure" in result.summary
+        assert result.state == "failed"
+        assert "ci=failure" in result.summary and "release=queued" in result.summary
 
     def test_a_grace_of_zero_disables_the_check(self):
         result = ci_wait.wait_for(lambda: [queued_row("release", 777)], deadline_polls=5,
@@ -1691,7 +1750,7 @@ class TestARunThatVanishesFromTheListingIsReReadById:
 
     def test_a_sha_never_seen_with_runs_reads_no_runs_without_any_re_read(self):
         fetch_one_calls: list[object] = []
-        fetch = ci_wait.keep_seen_runs(lambda: [], lambda rid: fetch_one_calls.append(rid) or {})
+        fetch = ci_wait.keep_seen_runs(list, lambda rid: fetch_one_calls.append(rid) or {})
 
         assert ci_wait.verdict(fetch()).state == "no-runs"
         assert fetch_one_calls == []
@@ -1748,3 +1807,490 @@ class TestGhRun:
 
         with pytest.raises(ci_wait.GhFailed):
             ci_wait.gh_run(5)
+
+
+
+# --- job-level reading: a run's own status hides what its jobs are doing ----------------------
+
+
+def job(name: str, status: str, conclusion: str | None = None) -> dict[str, object]:
+    """One `gh run view --json jobs` entry."""
+    return {"name": name, "status": status, "conclusion": conclusion}
+
+
+def _cells(done: int, *rest: dict[str, object]) -> list[dict[str, object]]:
+    return [job(f"test ({i})", "completed", "success") for i in range(done)] + list(rest)
+
+
+class TestTallyJobs:
+    def test_counts_done_running_queued_and_names_the_queued_and_failed(self):
+        tally = ci_wait.tally_jobs(_cells(14, job("lint", "completed", "failure"),
+                                          job("win", "in_progress"),
+                                          job("test (macos-latest)", "queued")))
+        assert (tally.done, tally.running, tally.queued, tally.total) == (15, 1, 1, 17)
+        assert tally.queued_names == ("test (macos-latest)",)
+        assert tally.failed_names == ("lint",)
+
+    @pytest.mark.parametrize("conclusion", ["failure", "timed_out"])
+    def test_a_failure_or_timeout_is_a_failed_job(self, conclusion):
+        assert ci_wait.tally_jobs([job("a", "completed", conclusion)]).failed_names == ("a",)
+
+    @pytest.mark.parametrize("conclusion", ["success", "skipped", "cancelled", "neutral"])
+    def test_other_conclusions_are_not_failed_jobs(self, conclusion):
+        assert ci_wait.tally_jobs([job("a", "completed", conclusion)]).failed_names == ()
+
+    def test_waiting_and_pending_count_as_queued(self):
+        tally = ci_wait.tally_jobs([job("a", "waiting"), job("b", "pending")])
+        assert tally.queued == 2
+
+
+class TestPerJobProgress:
+    """1775aa1c / 713ff207: 35+ polls of `CI=queued` while 15 of 16 jobs were green and one
+    macos-latest job waited for a runner. The poll line must say what the jobs are doing."""
+
+    def test_each_pending_poll_names_the_job_counts_and_the_queued_job(self):
+        lines: list[str] = []
+        now = [0.0]
+        jobs = _cells(15, job("test (macos-latest)", "queued"))
+
+        def sleep(s):
+            now[0] += s
+
+        result = ci_wait.wait_for(lambda: [run("CI", "queued", None)], deadline_s=200.0,
+                                  sleep=sleep, clock=lambda: now[0], interval_s=60.0,
+                                  report=lines.append, run_jobs=lambda _rid: jobs,
+                                  queued_grace_s=0)
+        assert result.state == "timeout"
+        assert "15/16 jobs done" in lines[0] and "test (macos-latest)" in lines[0], lines
+        assert "queued 2m" in lines[2] or "queued 120s" in lines[2], lines
+        assert "15/16 jobs done" in result.summary, result.summary
+
+    def test_no_job_reader_keeps_the_old_line(self):
+        lines: list[str] = []
+        ci_wait.wait_for(lambda: [run("CI", "in_progress", None)], deadline_polls=1,
+                         sleep=lambda _s: None, report=lines.append)
+        assert lines == ["poll 1/1: CI=in_progress"]
+
+    def test_an_unreadable_job_list_says_so_rather_than_inventing_counts(self):
+        lines: list[str] = []
+        ci_wait.wait_for(lambda: [run("CI", "in_progress", None)], deadline_polls=1,
+                         sleep=lambda _s: None, report=lines.append, run_jobs=lambda _rid: None)
+        assert "jobs" not in lines[0] or "not read" in lines[0], lines
+
+
+class TestAFailedJobInAnUnfinishedRun:
+    """99e2eca2: six Windows jobs failed within 3 minutes, one macOS job stayed queued, and the
+    wait polled `CI=queued` for 25 minutes and exited 2 for a run that had certainly failed."""
+
+    @staticmethod
+    def _rows():
+        return [run("CI", "queued", None)]
+
+    @staticmethod
+    def _jobs(_rid):
+        return _cells(3, job("test (windows-latest)", "completed", "failure"),
+                      job("test (macos-latest)", "queued"))
+
+    def test_it_is_named_on_every_poll_and_in_the_timeout(self):
+        lines: list[str] = []
+        result = ci_wait.wait_for(self._rows, deadline_polls=2, sleep=lambda _s: None,
+                                  report=lines.append, run_jobs=self._jobs, queued_grace_s=0)
+        assert "failed: test (windows-latest)" in lines[0], lines
+        assert result.state == "timeout"
+        assert "test (windows-latest)" in result.summary
+
+    def test_with_fail_on_failed_job_it_ends_the_wait_as_failed_at_once(self):
+        polls: list[int] = []
+
+        def fetch():
+            polls.append(1)
+            return self._rows()
+
+        result = ci_wait.wait_for(fetch, deadline_polls=50, sleep=lambda _s: None,
+                                  run_jobs=self._jobs, fail_on_failed_job=True)
+        assert result.state == "failed" and len(polls) == 1
+        assert "test (windows-latest)" in result.summary
+
+    def test_control_without_a_failed_job_the_flag_changes_nothing(self):
+        result = ci_wait.wait_for(self._rows, deadline_polls=2, sleep=lambda _s: None,
+                                  run_jobs=lambda _rid: _cells(2, job("m", "queued")),
+                                  fail_on_failed_job=True, queued_grace_s=0)
+        assert result.state == "timeout"
+
+
+class TestARunThatAlreadyFailedBesideOneStillGoing:
+    """Review finding: a run that had CONCLUDED failure beside one still in progress was never
+    reported. The verdict read `pending` while any run was unfinished, and the per-job check skips
+    terminal runs, so the wait timed out (exit 2) on a push that had certainly failed."""
+
+    @staticmethod
+    def _rows():
+        return [{**run("CI", "completed", "failure"), "databaseId": 1},
+                {**run("Docs", "in_progress", None), "databaseId": 2}]
+
+    @staticmethod
+    def _jobs(rid):
+        return [job("test", "completed", "failure")] if rid == 1 else [job("build", "in_progress")]
+
+    def _wait(self, **kw):
+        polls: list[int] = []
+
+        def fetch():
+            polls.append(1)
+            return self._rows()
+
+        now = [0.0]
+        result = ci_wait.wait_for(fetch, deadline_s=100.0, interval_s=30.0, clock=lambda: now[0],
+                                  sleep=lambda s: now.__setitem__(0, now[0] + s),
+                                  run_jobs=self._jobs, **kw)
+        return result, len(polls)
+
+    def test_with_fail_on_failed_job_it_ends_as_failed_at_once(self):
+        result, polls = self._wait(fail_on_failed_job=True)
+        assert (result.state, polls) == ("failed", 1), result
+        assert ci_wait.exit_code_for(result.state) == 1
+
+    def test_without_the_flag_it_also_ends_as_failed_at_once(self):
+        """A completed run's failure is final - no later run rescues it - so the module's
+        'a failure is reported at once' holds whatever else is still going."""
+        result, polls = self._wait()
+        assert (result.state, polls) == ("failed", 1), result
+        assert "CI=failure" in result.summary and "Docs=in_progress" in result.summary
+
+    def test_the_verdict_alone_names_the_failure_and_what_is_still_going(self):
+        verdict = ci_wait.verdict(self._rows())
+        assert verdict.state == "failed"
+        assert "CI=failure" in verdict.summary and "Docs=in_progress" in verdict.summary
+
+    def test_control_a_success_beside_a_run_still_going_is_still_pending(self):
+        rows = [run("CI", "completed", "success"), run("Docs", "in_progress", None)]
+        assert ci_wait.verdict(rows).state == "pending"
+
+
+class TestSuccessNeedsEveryJobFinished:
+    """a389f515: run 39794411508 read completed/success and the wait exited 0 while its jobs
+    endpoint still showed 9 of 18 jobs in_progress or queued."""
+
+    def test_a_green_run_with_unfinished_jobs_is_waited_for(self):
+        answers = iter([_cells(9, job("mac", "in_progress"))] * 2 + [_cells(10)] * 10)
+        lines: list[str] = []
+        result = ci_wait.wait_for(lambda: [run("CI", "completed", "success")], deadline_polls=20,
+                                  sleep=lambda _s: None, settle_s=5.0, report=lines.append,
+                                  run_jobs=lambda _rid: next(answers))
+        assert result.state == "success"
+        assert any("mac" in line and "not finished" in line for line in lines), lines
+
+    def test_it_never_reports_success_while_a_job_is_running(self):
+        result = ci_wait.wait_for(lambda: [run("CI", "completed", "success")], deadline_polls=4,
+                                  sleep=lambda _s: None, settle_s=0,
+                                  run_jobs=lambda _rid: _cells(3, job("mac", "queued")))
+        assert result.state == "timeout"
+        assert "mac" in result.summary
+
+    def test_an_unreadable_job_list_keeps_the_run_level_answer(self):
+        result = ci_wait.wait_for(lambda: [run("CI", "completed", "success")], deadline_polls=4,
+                                  sleep=lambda _s: None, settle_s=0, run_jobs=lambda _rid: None)
+        assert result.state == "success"
+
+
+class TestGhRunJobs:
+    def test_it_reads_the_jobs_of_one_run(self, monkeypatch):
+        calls: list[list[str]] = []
+        monkeypatch.setattr(ci_wait.subprocess, "run", jobs_gh([job("a", "queued")], calls))
+        assert REAL_GH_RUN_JOBS(7, repo="o/r") == [job("a", "queued")]
+        assert calls[0][:4] == ["gh", "run", "view", "7"] and calls[0][-2:] == ["--repo", "o/r"]
+
+    def test_a_failed_read_is_unknown(self, monkeypatch):
+        monkeypatch.setattr(ci_wait.subprocess, "run", jobs_gh(None, [], rc=1))
+        assert REAL_GH_RUN_JOBS(7) is None
+
+
+class TestTheDeadlineCuttingTheLastGhCall:
+    """b76cc15a / 32998619: --timeout 580 ended rc 2 with 'gh did not answer within 1s' on a run
+    still in_progress: the final call was bounded by the second left, failed, and read as an
+    API outage."""
+
+    def test_a_failure_of_the_call_the_deadline_cut_reports_a_timeout(self):
+        answers = iter([[run("CI", "in_progress", None)]])
+        now = [0.0]
+
+        def fetch():
+            try:
+                return next(answers)
+            except StopIteration:
+                raise ci_wait.GhFailed("gh did not answer within 1s") from None
+
+        def sleep(s):
+            now[0] += s
+
+        result = ci_wait.wait_for(fetch, deadline_s=60.0, sleep=sleep, clock=lambda: now[0],
+                                  interval_s=30.0, error_grace_s=300.0)
+        assert result.state == "timeout", result
+        assert "CI=in_progress" in result.summary and "deadline" in result.summary
+
+    def test_the_cli_never_bounds_a_gh_call_below_its_floor(self, monkeypatch):
+        bounds: list[float] = []
+        now = [0.0]
+
+        def pending(sha, **kw):
+            bounds.append(kw["timeout_s"])
+            return [run("CI", "in_progress", None)]
+
+        monkeypatch.setattr(ci_wait, "sha_is_known_locally", lambda sha, **kw: True)
+        monkeypatch.setattr(ci_wait, "gh_runs", pending)
+        monkeypatch.setattr(ci_wait.time, "monotonic", lambda: now[0])
+        monkeypatch.setattr(ci_wait.time, "sleep", lambda s: now.__setitem__(0, now[0] + s))
+        ci_wait.main(["--sha", SHA, "--timeout", "61", "--interval", "30"])
+        assert min(bounds) >= ci_wait.GH_CALL_FLOOR_S >= 10.0, bounds
+
+
+class TestTimeoutDefaultAndExpectedDuration:
+    """b76cc15a: the default --timeout 1500 was shorter than this repo's own ci run (24 m 51 s),
+    and the timeout said nothing about how long the run normally takes."""
+
+    def test_the_default_timeout_outlasts_a_25_minute_run(self):
+        assert ci_wait._parse_args(["--sha", SHA]).timeout >= 3600.0
+
+    def test_a_timeout_names_how_long_the_unfinished_workflow_usually_takes(self, monkeypatch,
+                                                                         capsys):
+        monkeypatch.setattr(ci_wait, "sha_is_known_locally", lambda sha, **kw: True)
+        monkeypatch.setattr(ci_wait, "gh_runs", lambda sha, **kw: [run("ci", "in_progress", None)])
+        monkeypatch.setattr(ci_wait, "gh_typical_duration", lambda wf, **kw: 1491.0)
+        now = [0.0]
+        monkeypatch.setattr(ci_wait.time, "monotonic", lambda: now[0])
+        monkeypatch.setattr(ci_wait.time, "sleep", lambda s: now.__setitem__(0, now[0] + s))
+        rc = ci_wait.main(["--sha", SHA, "--timeout", "10", "--interval", "5"])
+        err = capsys.readouterr().err
+        assert rc == 2
+        assert "ci usually takes 24m51s" in err, err
+
+    def test_gh_typical_duration_is_the_median_of_recent_successful_runs(self, monkeypatch):
+        rows = [{"createdAt": "2026-10-22T10:00:00Z", "updatedAt": f"2026-10-22T10:{m:02d}:00Z"}
+                for m in (20, 25, 30)]
+        calls: list[list[str]] = []
+
+        def fake(argv, **kw):
+            calls.append(list(argv))
+            return subprocess.CompletedProcess(argv, 0, stdout=json.dumps(rows), stderr="")
+
+        monkeypatch.setattr(ci_wait.subprocess, "run", fake)
+        assert REAL_GH_TYPICAL_DURATION("ci", repo="o/r") == 25 * 60.0
+        assert "--workflow" in calls[0] and "ci" in calls[0] and "success" in calls[0]
+
+    def test_gh_typical_duration_with_no_history_is_unknown(self, monkeypatch):
+        monkeypatch.setattr(ci_wait.subprocess, "run",
+                            lambda argv, **kw: subprocess.CompletedProcess(argv, 0, stdout="[]",
+                                                                           stderr=""))
+        assert REAL_GH_TYPICAL_DURATION("ci") is None
+
+
+class TestAWorkflowFilter:
+    """a389f515: waiting on only the Release workflow after `make release` needed a hand-picked
+    run id and `gh run watch`; --sha alone also waits on CI and CodeQL."""
+
+    def test_the_cli_value_reaches_gh_server_side(self, monkeypatch):
+        calls: list[list[str]] = []
+        monkeypatch.setattr(ci_wait.subprocess, "run", event_gh(
+            [evrun("Release", "completed", "success", "push")], calls))
+        monkeypatch.setattr(ci_wait.time, "sleep", lambda _s: None)
+        rc = ci_wait.main(["--sha", SHA, "--repo", "o/r", "--settle", "0", "--timeout", "60",
+                           "--workflow", "Release"])
+        assert rc == 0
+        listing = [c for c in calls if c[:3] == ["gh", "run", "list"]]
+        assert listing and listing[0][listing[0].index("--workflow") + 1] == "Release"
+
+    def test_no_runs_under_a_workflow_filter_names_it(self):
+        assert "Release" in ci_wait.verdict([], workflow="Release").summary
+
+
+class TestARepoGivenAsALocalPath:
+    """32998619: --repo given a checkout path made every gh poll fail and the wait ended rc 2 with
+    no verdict, after polling nothing until its deadline."""
+
+    def test_an_existing_directory_is_resolved_to_its_owner_and_name(self, monkeypatch, tmp_path):
+        asked: list[object] = []
+        seen: list[object] = []
+        monkeypatch.setattr(ci_wait, "resolve_repo", lambda **kw: asked.append(kw.get("cwd"))
+                            or "owner/name")
+        monkeypatch.setattr(ci_wait, "gh_runs", lambda sha, **kw: seen.append(kw.get("repo"))
+                            or [run("CI", "completed", "success")])
+        rc = ci_wait.main(["--sha", SHA, "--repo", str(tmp_path), "--settle", "0"])
+        assert rc == 0
+        assert asked == [str(tmp_path)] and seen == ["owner/name"]
+
+    @pytest.mark.parametrize("value", ["./no/such/dir", "a b/c", "o/r/x/y", "/abs/missing"])
+    def test_a_value_that_is_neither_a_directory_nor_owner_name_is_refused(self, value, capsys,
+                                                                          monkeypatch):
+        polled: list[int] = []
+        monkeypatch.setattr(ci_wait, "gh_runs", lambda sha, **kw: polled.append(1) or [])
+        rc = ci_wait.main(["--sha", SHA, "--repo", value, "--json"])
+        assert rc == 2 and polled == []
+        assert "OWNER/NAME" in json.loads(capsys.readouterr().out)["error"]
+
+    @pytest.mark.parametrize("value", ["o/r", "bitranox/bitranox-skills", "ghe.example.com/o/r"])
+    def test_owner_name_forms_pass_untouched(self, value, monkeypatch):
+        seen: list[object] = []
+        monkeypatch.setattr(ci_wait, "gh_runs", lambda sha, **kw: seen.append(kw.get("repo"))
+                            or [run("CI", "completed", "success")])
+        assert ci_wait.main(["--sha", SHA, "--repo", value, "--settle", "0"]) == 0
+        assert seen == [value]
+
+
+class TestANoRunsVerdictNamesTheLiveCauses:
+    """b76cc15a: 'no runs found for that sha' read as broken CI and invited a retry loop, when
+    the push went to a branch the workflows' on: push: branches exclude, or the sha is not on
+    origin (a peer's rebase republished it under a new sha)."""
+
+    def _main(self, monkeypatch, on_remote):
+        monkeypatch.setattr(ci_wait, "sha_is_known_locally", lambda sha, **kw: True)
+        monkeypatch.setattr(ci_wait, "gh_runs", lambda sha, **kw: [])
+        monkeypatch.setattr(ci_wait, "sha_on_a_remote", lambda sha, **kw: on_remote)
+        monkeypatch.setattr(ci_wait.time, "sleep", lambda _s: None)
+        return ci_wait.main(["--sha", SHA, "--appear-grace", "0", "--json"])
+
+    def test_it_names_the_branch_filter_cause(self, monkeypatch, capsys):
+        assert self._main(monkeypatch, True) == 2
+        summary = json.loads(capsys.readouterr().out)["data"]["summary"]
+        assert "on: push" in summary and "branches" in summary, summary
+
+    def test_a_sha_on_no_remote_branch_says_so(self, monkeypatch, capsys):
+        self._main(monkeypatch, False)
+        summary = json.loads(capsys.readouterr().out)["data"]["summary"]
+        assert "no remote-tracking branch" in summary and "rebase" in summary, summary
+
+    def test_control_a_sha_on_a_remote_does_not_claim_otherwise(self, monkeypatch, capsys):
+        self._main(monkeypatch, True)
+        assert "no remote-tracking branch" not in json.loads(capsys.readouterr().out)["data"][
+            "summary"]
+
+    def test_sha_on_a_remote_reads_git(self, repo):
+        sha = _git(repo, "rev-parse", "HEAD")
+        assert REAL_SHA_ON_A_REMOTE(sha) is False
+        _git(repo, "update-ref", "refs/remotes/origin/main", sha)
+        assert REAL_SHA_ON_A_REMOTE(sha) is True
+
+    def test_sha_on_a_remote_outside_a_repository_is_unknown(self, tmp_path, monkeypatch):
+        monkeypatch.chdir(tmp_path)
+        assert REAL_SHA_ON_A_REMOTE(SHA) is None
+
+
+class TestTheNewFlagsReachTheLoop:
+    def test_fail_on_failed_job_and_the_job_reader_are_wired(self, monkeypatch):
+        seen: dict[str, object] = {}
+        monkeypatch.setattr(ci_wait, "sha_is_known_locally", lambda sha, **kw: True)
+        monkeypatch.setattr(ci_wait, "wait_for", recording_wait_for(seen))
+        ci_wait.main(["--sha", SHA, "--fail-on-failed-job"])
+        assert seen["fail_on_failed_job"] is True and callable(seen["run_jobs"])
+
+
+# --- a run GitHub refused to start for billing ------------------------------------------------
+# A billing block fails every job before a runner takes it: conclusion `failure`, ZERO steps, and
+# a check-run annotation saying recent account payments have failed. No wait or retry fixes it,
+# so reporting it as an ordinary failure sends the reader into the job log for a code defect.
+
+_BILLING_MSG = ("The job was not started because recent account payments have failed or your "
+                "spending limit needs to be increased. Please check the 'Billing & plans' section "
+                "in your settings")
+
+
+def failed_row(workflow: str, run_id: int) -> dict[str, object]:
+    return {"headSha": "a" * 40, "workflowName": workflow, "status": "completed",
+            "conclusion": "failure", "databaseId": run_id, "event": "push"}
+
+
+class TestBillingBlocked:
+    def test_every_failed_run_billing_blocked_is_its_own_verdict(self):
+        asked: list[object] = []
+
+        def blocked(run_id):
+            asked.append(run_id)
+            return True
+
+        result = ci_wait.wait_for(lambda: [failed_row("ci", 11), failed_row("codeql", 12)],
+                                  deadline_polls=5, sleep=lambda _s: None,
+                                  run_billing_blocked=blocked)
+
+        assert result.state == "billing-blocked"
+        assert sorted(asked) == [11, 12]
+        assert "11" in result.summary and "billing" in result.summary.lower()
+        assert ci_wait.exit_code_for(result.state) == 2
+
+    def test_a_real_failure_beside_a_billing_block_stays_failed(self):
+        result = ci_wait.wait_for(lambda: [failed_row("ci", 11), failed_row("lint", 12)],
+                                  deadline_polls=5, sleep=lambda _s: None,
+                                  run_billing_blocked=lambda rid: rid == 11)
+        assert result.state == "failed"
+
+    def test_an_unknown_answer_never_turns_a_failure_into_billing(self):
+        result = ci_wait.wait_for(lambda: [failed_row("ci", 11)], deadline_polls=5,
+                                  sleep=lambda _s: None, run_billing_blocked=lambda _rid: None)
+        assert result.state == "failed"
+
+    def test_without_the_check_a_failure_is_reported_as_before(self):
+        result = ci_wait.wait_for(lambda: [failed_row("ci", 11)], deadline_polls=5,
+                                  sleep=lambda _s: None)
+        assert result.state == "failed"
+
+
+def billing_gh(jobs: object, annotations: object, calls: list[list[str]]):
+    """`gh run view --json jobs` answers ``jobs``; `gh api .../annotations` answers ``annotations``."""
+
+    def fake_run(argv, **kwargs):
+        calls.append(list(argv))
+        payload = {"jobs": jobs} if argv[:3] == ["gh", "run", "view"] else annotations
+        return subprocess.CompletedProcess(argv, 0, stdout=json.dumps(payload), stderr="")
+
+    return fake_run
+
+
+class TestGhRunBillingBlocked:
+    def test_zero_step_jobs_with_the_billing_annotation_are_blocked(self, monkeypatch):
+        calls: list[list[str]] = []
+        monkeypatch.setattr(ci_wait.subprocess, "run", billing_gh(
+            [{"databaseId": 901, "steps": [], "conclusion": "failure"}],
+            [{"message": _BILLING_MSG, "annotation_level": "failure"}], calls))
+
+        assert REAL_BILLING_BLOCKED(11, repo="o/r") is True
+        assert calls[1][:3] == ["gh", "api", "repos/o/r/check-runs/901/annotations"]
+
+    def test_a_job_that_ran_steps_is_not_a_billing_block(self, monkeypatch):
+        calls: list[list[str]] = []
+        monkeypatch.setattr(ci_wait.subprocess, "run", billing_gh(
+            [{"databaseId": 901, "steps": [{"name": "Set up job"}]}], [], calls))
+
+        assert REAL_BILLING_BLOCKED(11, repo="o/r") is False
+        assert len(calls) == 1                # no annotation read for a job that ran
+
+    def test_zero_steps_for_another_reason_is_not_billing(self, monkeypatch):
+        monkeypatch.setattr(ci_wait.subprocess, "run", billing_gh(
+            [{"databaseId": 901, "steps": []}],
+            [{"message": "The runner has received a shutdown signal."}], []))
+        assert REAL_BILLING_BLOCKED(11, repo="o/r") is False
+
+    def test_an_unreadable_job_list_is_unknown(self, monkeypatch):
+        monkeypatch.setattr(ci_wait.subprocess, "run", jobs_gh(None, [], rc=1))
+        assert REAL_BILLING_BLOCKED(11, repo="o/r") is None
+
+    def test_an_enterprise_repo_sends_the_annotation_read_to_its_own_host(self, monkeypatch):
+        """`--repo HOST/OWNER/NAME` is accepted, and `gh api` takes no host inside the path: the
+        annotation read went to github.com as `repos/HOST/OWNER/NAME/...` and always failed."""
+        calls: list[list[str]] = []
+        monkeypatch.setattr(ci_wait.subprocess, "run", billing_gh(
+            [{"databaseId": 901, "steps": []}], [{"message": _BILLING_MSG}], calls))
+
+        assert REAL_BILLING_BLOCKED(11, repo="ghe.example.com/o/r") is True
+        assert calls[1] == ["gh", "api", "--hostname", "ghe.example.com",
+                            "repos/o/r/check-runs/901/annotations"], calls[1]
+
+    def test_the_billing_block_through_the_command_line(self, monkeypatch, capsys):
+        monkeypatch.setattr(ci_wait, "sha_is_known_locally", lambda sha, **kw: True)
+        listing = [failed_row("ci", 41)]
+        monkeypatch.setattr(ci_wait, "gh_runs", lambda sha, **kw: listing)
+        monkeypatch.setattr(ci_wait, "gh_run_billing_blocked", lambda rid, **kw: True)
+        monkeypatch.setattr(ci_wait.time, "sleep", lambda _s: None)
+
+        rc = ci_wait.main(["--sha", SHA, "--repo", "o/r", "--json"])
+
+        payload = json.loads(capsys.readouterr().out)
+        assert rc == 2
+        assert payload["data"]["state"] == "billing-blocked"

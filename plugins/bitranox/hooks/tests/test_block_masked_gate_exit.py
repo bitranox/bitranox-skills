@@ -337,6 +337,10 @@ def run_main_bg(monkeypatch, command, background):
         ("a trailing ampersand", "make test > log 2>&1 &"),
         ("a second gate after the first", "make test; make lint"),
         ("ci_wait then a status echo", 'uv run ci_wait.py --sha deadbeef; echo "RC=$?"'),
+        # repo-gate.py --ci runs the whole pytest suite itself, so tail's status is not its verdict.
+        ("repo-gate --ci then tail",
+         "env -u VIRTUAL_ENV python3 plugins/bitranox/hooks/repo-gate.py --ci > /s/g.log 2>&1; "
+         "tail -5 /s/g.log"),
     ],
 )
 def test_a_backgrounded_gate_without_the_jig_is_blocked(monkeypatch, capsys, label, command):
@@ -370,6 +374,12 @@ def test_a_backgrounded_gate_without_the_jig_is_blocked(monkeypatch, capsys, lab
          True),
         ("ci_wait after a cd", "cd /some/dir && uv run /p/scripts/ci_wait.py --sha deadbeef", True),
         ("gh run watch with --exit-status", "gh run watch 123 --exit-status", True),
+        ("repo-gate --ci alone, redirected",
+         "uv run --with pytest python plugins/bitranox/hooks/repo-gate.py --ci > /s/g.log 2>&1",
+         True),
+        ("repo-gate named as an operand", "cat plugins/bitranox/hooks/repo-gate.py; tail x", True),
+        ("a repo-gate lookup, not a gate run",
+         "D=$(python3 plugins/bitranox/hooks/repo-gate.py --print-test-deps); echo $D", True),
         ("a lone redirected gate", "pytest tests/ -q > out.log 2>&1", True),
         ("a gate continued over two lines", "pytest tests/ \\\n  -q > out.log 2>&1", True),
         ("a trailing comment", "make test > log 2>&1  # the unit suite; slow", True),
@@ -780,3 +790,75 @@ def test_a_gate_at_the_program_word_is_still_a_masked_gate(monkeypatch, label, c
 
 def test_a_backgrounded_gate_at_the_program_word_is_still_blocked(monkeypatch):
     assert run_main_bg(monkeypatch, "ruff check . | tail -3", True) == 2
+
+
+# ---------------------------------------------------------------------------
+# A state-changing STEP (not a gate) piped into a filter, then && into another state change
+# ---------------------------------------------------------------------------
+# `git commit ... | tail -1 && git push`: tail succeeds whether or not the commit did, so the push
+# publishes whatever was already there. The narrowed rule: the step must change state, the pipe
+# must end in tail/head/grep/wc, and only `&&` into another state change counts.
+
+@pytest.mark.parametrize("command", [
+    "git commit -q -F msg.txt 2>&1 | tail -1 && git push",
+    "git merge --ff-only origin/main 2>&1 | tail -2 && git push origin main",
+    "git rebase origin/master | head -5 && git push --force-with-lease",
+    "git cherry-pick abc1234 2>&1 | grep -v hint && git tag v1.2.3",
+    "make release 2>&1 | tail -3 && git push --tags",
+    "uv pip install -e . 2>&1 | tail -1 && rm -rf build",
+    "git push origin topic 2>&1 | tail -2 && ssh host 'deploy'",
+    "git bundle create x.bundle HEAD | wc -l && scp x.bundle host:/tmp/",
+    "git -C /repo commit -qm x | tail -1 && git -C /repo push",
+    # A tag that CREATES (an operand, or an annotate/message/force flag) and a make that builds
+    # past its options are still state changes.
+    "git tag v1.2.3 2>&1 | tail -1 && git push origin v1.2.3",
+    "git tag -a v1 -m rel | tail -1 && git push origin v1",
+    "git tag -f v1 | tail -1 && git push --force origin v1",
+    "git tag -d v1 | tail -1 && git push origin :v1",
+    "make -C /x release 2>&1 | tail -3 && git push --tags",
+    "make -j 4 install | tail -1 && rm -rf build",
+    # An ATTACHED option value is not a run of flags: the l/v of `Release` and the n of
+    # `frontend` are the value's letters, not a list or dry-run flag.
+    "make -Cfrontend build 2>&1 | tail -3 && git push",
+    "make -sCfrontend build | tail -1 && git push",
+    "git tag -mRelease v1 | tail -1 && git push origin v1",
+    "git tag -amlevel v1 | tail -1 && git push origin v1",
+])
+def test_blocks_a_masked_state_change_followed_by_another(monkeypatch, capsys, command):
+    assert run_main(monkeypatch, command) == 2
+    err = capsys.readouterr().err
+    assert "BLOCKED" in err and "PIPESTATUS" in err
+
+
+@pytest.mark.parametrize("command", [
+    "git log --oneline | head -5 && git push",                     # a read-only producer
+    "git status --porcelain | wc -l && git commit -qm x",          # a read-only producer
+    "git commit -qm x 2>&1 | tail -1; git log --oneline -1",       # `;` then a read
+    "git commit -qm x 2>&1 | tail -1 && git log --oneline -1",     # && then a read
+    "git commit -qm x | grep -q 'nothing to commit' && git push",  # a grep -q predicate
+    "set -o pipefail; git commit -qm x | tail -1 && git push",
+    'git commit -qm x | tail -1; [ "${PIPESTATUS[0]}" -eq 0 ] && git push',
+    "git commit -qm x > log 2>&1 && git push",                     # no pipe at all
+    "git commit -qm x | tail -1",                                  # nothing follows
+    "git commit -qm x | tee log.txt && git push",                  # tee is not in the narrowed set
+    "echo 'git commit | tail && git push' > notes.txt",            # quoted text
+    # `git tag` LISTS with no operand, or with a listing option; only an operand or a
+    # create/delete flag makes a tag.
+    "git tag --sort=-creatordate | head -3 && git push origin v1",
+    "git tag --sort=-v:refname | head -1 && ssh host true",
+    "git tag --merged HEAD | grep v1 && git push",
+    "git tag --format='%(refname)' | head && git push",
+    "git tag -l 'v1*' | tail -1 && git push",
+    "git tag -n5 | head && git push",
+    # A make that only prints help, past its options and -C's operand.
+    "make -C /x help | grep test && rm -f x",
+    "make -s help | grep test && rm -f x",
+    "make --directory /x -n release | tail && rm -f x",
+    # A cluster's own flags still count before its value-taking letter, and a cluster ENDING in
+    # one takes the next word as that value (`-sC docs` is a directory, not a target).
+    "make -sn release | tail && rm -f x",
+    "make -sC docs help | grep test && rm -f x",
+    "git tag -ln | head && git push",
+])
+def test_allows_what_the_narrowed_state_change_rule_leaves_alone(monkeypatch, capsys, command):
+    assert run_main(monkeypatch, command) == 0

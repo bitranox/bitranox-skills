@@ -42,6 +42,13 @@ neither: each hit names the rule by its index and list line, plus a short hash o
 The JSON always carries the index and list line; the pattern text and the hit's excerpt appear
 only without `--redact-hits`.
 
+A table formatter re-pads EVERY row of a table it touches, so rows nobody edited come back as
+removed-and-added with only their whitespace changed, and a name already in them reads as newly
+added. An added line whose whitespace-collapsed text equals a line the same file section
+removes (each removed line excusing one added copy) is therefore reported apart, as a
+`padding_only_hits` entry (text mode: "N re-padded"), and does not make the scan exit 1: the
+change moved that name, it did not add it. A line whose cell text changed is still a hit.
+
 Binary files are never scanned; each one is named in `skipped`. Diff hunk lines are read with
 pushcheck's parser (a `+++ ` line is a header only before a file's first hunk; lines split on
 newline only), so the two jigs cannot disagree about what a diff adds.
@@ -56,9 +63,11 @@ Run:
 """
 
 import argparse
+import re
 import subprocess
 import sys
-from dataclasses import dataclass
+from collections import Counter
+from dataclasses import dataclass, replace
 from collections.abc import Callable, Iterable
 from pathlib import Path
 from typing import Any
@@ -67,6 +76,7 @@ from _cli_envelope import EXIT_ERROR, EXIT_NO, EXIT_YES, EnvelopeArgumentParser,
 from pushcheck import (
     PushCheckError,
     Rule,
+    _changed_lines,
     RuleList,
     added_lines,
     binary_files,
@@ -79,7 +89,7 @@ from pushcheck import (
 )
 
 __all__ = ["Hit", "Matcher", "Rule", "RuleList", "control_failures", "execute", "match_rules",
-           "parse_rules", "scan_added", "scan_diff", "scan_messages", "scan_untracked_text"]
+           "parse_rules", "re_padded_lines", "scan_added", "scan_diff", "scan_messages", "scan_untracked_text"]
 
 COMMAND = "redaction_scan"
 _SHORT_PATTERN = 3                  # a pattern this short matches nearly every line; warn about it
@@ -98,6 +108,7 @@ class Hit:
     line: int
     rule: Rule
     excerpt: str
+    padding_only: bool = False      # the same text, re-spaced, was removed in the same section
 
     def as_dict(self, redact: bool) -> dict[str, Any]:
         out: dict[str, Any] = {"file": self.location, "line": self.line, "pattern_index": self.rule.index,
@@ -130,10 +141,51 @@ def scan_added(lines: Iterable[tuple[str, int, str]], rules: tuple[Rule, ...],
     return hits, count
 
 
+_WHITESPACE = re.compile(r"\s+")
+
+
+def _collapsed(text: str) -> str:
+    return _WHITESPACE.sub(" ", text).strip()
+
+
+def _sections(diff: str) -> list[str]:
+    """The diff split at each `diff ` line: one file of one commit per section."""
+    sections: list[list[str]] = [[]]
+    for line in split_lines(diff):          # newline only, as pushcheck's parser splits
+        if line.startswith("diff ") and sections[-1]:
+            sections.append([])
+        sections[-1].append(line)
+    return ["\n".join(lines) + "\n" for lines in sections if lines]
+
+
+def re_padded_lines(diff: str) -> set[tuple[str, int]]:
+    """(path, new-file line) of every added line that only re-spaces a removed one. PURE.
+
+    Pairing stays inside one file section of one commit, so a removal elsewhere never excuses an
+    addition, and a Counter makes one removed line excuse at most one added copy.
+    """
+    padded: set[tuple[str, int]] = set()
+    for section in _sections(diff):
+        changed = list(_changed_lines(section))
+        removed = Counter(_collapsed(text) for _, _, sign, text in changed if sign == "-")
+        for path, lineno, sign, text in changed:
+            key = _collapsed(text)
+            if sign == "+" and removed[key] > 0:
+                removed[key] -= 1
+                padded.add((path, lineno))
+    return padded
+
+
 def scan_diff(diff: str, rules: tuple[Rule, ...],
               matcher: Matcher = match_rules) -> tuple[list[Hit], int]:
-    """Hits in the ADDED lines of a unified diff only; removed and context lines never count."""
-    return scan_added(added_lines(diff), rules, matcher)
+    """Hits in the ADDED lines of a unified diff only; removed and context lines never count.
+
+    A hit on a line that only re-spaces a removed one carries `padding_only=True`.
+    """
+    hits, count = scan_added(added_lines(diff), rules, matcher)
+    padded = re_padded_lines(diff)
+    return [replace(h, padding_only=True) if (h.location, h.line) in padded else h
+            for h in hits], count
 
 
 def scan_messages(messages: list[tuple[str, str]], rules: tuple[Rule, ...],
@@ -338,22 +390,28 @@ def execute(argv: list[str] | None = None, *, matcher: Matcher = match_rules) ->
     if scan.added + scan.message_lines == 0:
         return _refuse(args, f"the {mode} change adds no lines, so there was nothing to scan",
                        {**counts, "added_lines_scanned": 0})
-    code = EXIT_NO if scan.hits else EXIT_YES
+    authored = [h for h in scan.hits if not h.padding_only]
+    padded = [h for h in scan.hits if h.padding_only]
+    code = EXIT_NO if authored else EXIT_YES
     data: dict[str, Any] = {"mode": mode, "range": args.rev_range, **counts, "control": "fired",
             "added_lines_scanned": scan.added, "message_lines_scanned": scan.message_lines,
-            "hits": [h.as_dict(args.redact_hits) for h in scan.hits]}
+            "hits": [h.as_dict(args.redact_hits) for h in authored],
+            "padding_only_hits": [h.as_dict(args.redact_hits) for h in padded]}
     if args.json or args.json_bare:
         return emit(code, COMMAND, data, skipped=scan.skipped,
                     indent=None if args.json_bare else 2)
-    verdict = f"{len(scan.hits)} HIT(S)" if scan.hits else "CLEAN"
+    verdict = f"{len(authored)} HIT(S)" if authored else "CLEAN"
     print(f"{verdict}: {len(parsed.rules)} pattern(s) parsed ({parsed.comment_lines} comment "
           f"line(s) skipped), control fired, {scan.added} added line(s)"
           + (f" and {scan.message_lines} commit-message line(s)" if mode == "range" else "")
-          + f" scanned ({mode})")
+          + f" scanned ({mode})"
+          + (f", {len(padded)} re-padded (unchanged text, not counted)" if padded else ""))
     for line in scan.skipped:
         print(f"  not scanned: {line}")
-    for hit in scan.hits:
+    for hit in authored:
         print(_render_hit(hit, args.redact_hits))
+    for hit in padded:
+        print(_render_hit(hit, args.redact_hits) + "  [re-padded]")
     return code
 
 

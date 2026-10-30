@@ -33,7 +33,9 @@ import shell_text
 from shell_text import (
     BACKGROUND_GATE_RE,
     blank_heredoc_bodies,
+    gate_program_in,
     is_shell_tool,
+    iter_segments,
     mask_data_regions,
     strip_heredoc_bodies,
 )
@@ -233,9 +235,24 @@ def backgrounded_waiter(command, tool_name="Bash"):
         if _WAITER.search(unit.strip()):
             return " ".join(unit.split())[:100]
         start = _unit_start(masked, at, and_or=True)
-        if BACKGROUND_GATE_RE.search(masked[start:at]):
+        if _runs_a_background_gate(masked, start, at, tool_name):
             return " ".join(raw[start:at].split())[:100]
     return None
+
+
+def _runs_a_background_gate(masked, start, end, tool_name):
+    """True when a statement of `masked[start:end]` RUNS a gate as its program word.
+
+    Searched anywhere, the gate's name as an ARGUMENT counted: `grep -rn pytest docs/ > h &` was
+    refused as a detached pytest. The AND-list may hold several statements (`cd /r && make test`),
+    so each is asked on its own, the way block-masked-gate-exit asks it.
+    """
+    for offset, segment in iter_segments(masked[start:end], tool_name):
+        seg_start = start + offset
+        if gate_program_in(masked, tool_name, BACKGROUND_GATE_RE, seg_start,
+                           seg_start + len(segment)):
+            return True
+    return False
 
 
 def refusal(waiter, *, background):
