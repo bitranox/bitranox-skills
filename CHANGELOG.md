@@ -30,6 +30,18 @@ a hole nobody has drawn a line under is one that gets rediscovered and half-fill
 two "versions with no entry" notes came to sit in this file disagreeing with it.
 
 
+## [10.9.1]
+
+### Changed
+
+- devops-bmk: choose a release's bump step from everything unreleased (CHANGELOG `[Unreleased]`
+  and the log since the last tag); a floor declared by a git-URL dependency is invisible to bmk's
+  cooldown pins, so declare it in the consumer too; register every marker bmk's `-m` names,
+  since pytest 9.2 with strict markers exits 4 on an unregistered one.
+- compuse-vnc: Step 0 installs or upgrades (`uv tool install --upgrade`) instead of keeping an
+  old install; send all of `qm monitor`'s output to `/dev/null` when setting a VNC password.
+- infra-proxmox-bindsnap: also triggers on the CLI refusal `snapshot feature is not available`.
+
 ## [10.9.0]
 
 ### Added

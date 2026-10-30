@@ -28,11 +28,16 @@ This skill installs `vnc-remote-control` and then drives it. First make sure the
 are present on the machine you drive FROM (never on the target):
 
 ```bash
-# the CLI - persistent on PATH via uv; skip if already installed
-command -v vnc-remote-control >/dev/null || uv tool install vnc-remote-control
+# the CLI - persistent on PATH via uv; installs it, or upgrades an older install
+uv tool install --upgrade vnc-remote-control
 # tesseract is a REQUIRED system dependency (OCR is how you find what to click)
 command -v tesseract >/dev/null || sudo apt-get install -y tesseract-ocr   # macOS: brew install tesseract | Windows: choco install tesseract
 ```
+
+Do not skip the install because `vnc-remote-control` is already on PATH: that keeps whatever
+release was installed, and this skill describes the latest one. An older install lacks options
+documented here and stops with `No such option '--us-shift'`; `vnc-remote-control --version`
+shows what you have.
 
 For a one-off without a persistent install, `uvx vnc-remote-control ...` runs it on demand (uv
 fetches it each run); tesseract is still required. Then drive the target with the commands below.
@@ -132,12 +137,15 @@ A plain Proxmox QEMU VM is different in three ways:
 
   ```bash
   printf 'set_password vnc %s\nexpire_password vnc never\n' "$(cat pw.txt)" \
-    | ssh root@<node> 'qm monitor <vmid>'
+    | ssh root@<node> 'qm monitor <vmid>' >/dev/null 2>&1
   VNC_REMOTE_CONTROL_PASSWORD="$(cat pw.txt)" vnc-remote-control --port <local-port> \
     type --us-shift 'root@pam' --enter
   ```
 
-  The client takes the same password through its environment variable. Without
+  Send ALL of the monitor's output to `/dev/null`: `qm monitor` echoes every line it reads back
+  after its `qm>` prompt, so the password is in its stdout, and a filter such as
+  `grep -v '^qm>'` still lets it through. Judge the result by the client's login instead. The
+  client takes the same password through its environment variable. Without
   `expire_password` the login fails with "VNC authentication failed". Delete the file when done.
   Opening the VM's console in the Proxmox web UI sets a new password and replaces yours, so set it
   again when authentication suddenly starts failing mid-session. It lives only in the running QEMU

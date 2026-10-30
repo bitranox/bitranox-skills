@@ -423,6 +423,13 @@ forwarded (e.g. `make push fix login bug`). Most have short aliases.
   no tag and leaves that older heading as it is (it only renames `[Unreleased]`), so add a line
   under the old heading yourself saying the version was never tagged or published and that its
   changes first ship in the new one; otherwise a reader looks for it on PyPI.
+- **Choose the bump step from everything unreleased, not from the change you just made.** Read
+  the CHANGELOG `[Unreleased]` section and `git log --oneline <last-tag>..HEAD` first (the last
+  tag: `git describe --tags --abbrev=0`):
+  earlier commits ride along in the release, and a renamed or removed command, option or API
+  among them needs a minor or major step even when your own change is a docs-only patch. In a
+  multi-repo batch, read each repo's log; one premise for the whole batch ("every repo only
+  carries skill text") is a guess about each repo until its log says so.
 - `release` counts only TRACKED changes as dirty (`git diff`, `git diff --cached`); an untracked
   file does not stop it. On `[release] Working tree not clean. Commit or stash changes first.`, do
   not commit an edit that is not part of this release to get past it: the tag lands on HEAD, so it
@@ -603,6 +610,13 @@ forwarded (e.g. `make push fix login bug`). Most have short aliases.
   one second counts as bmk's; any other entry is left alone, and so is the whole block when PyPI
   does not answer (bmk says so on stderr). Never lower a floor to get under the cooldown: the
   release the floor names is the one the project needs, and the pin is what admits it.
+- **A dependency installed from a git URL (`pkg @ git+https://...`) is invisible to those pins.**
+  bmk reads a package's requirements from its PyPI releases, never from a git source, so a floor
+  the git source declares is never walked. When that floor needs a release younger than the
+  cooldown, `uv lock` fails with `Because only <pkg><=<old> is available` and bmk writes no pin.
+  Declare that floor in the consumer's own `pyproject.toml` too: bmk then writes the per-package
+  pin that admits that release now, as for any declared floor younger than the cooldown (above).
+  Or depend on a PyPI release of the package instead.
 - **Which bmk you are running:** `bmk --version` (run `$(uv tool dir --bin)/bmk --version` when
   `bmk` is not on your PATH). The Makefile's first line, `# BMK MAKEFILE X.Y.Z`, names the bmk
   that wrote the Makefile, not necessarily the one the next `make` runs, since every `make`
@@ -854,6 +868,16 @@ Never edit the template-managed `.github/` for this. Then check that the project
 collects EVERY integration-marked file, or excluding them leaves some running nowhere. Light
 integration tests that skip cleanly when their resource is absent can stay in CI.
 
+**Register every marker the `-m` names.** bmk always passes `not (<exclude-markers>)`, and with
+strict markers on (`--strict-markers` in `addopts`, or `strict = true`) pytest 9.2 refuses an
+UNREGISTERED marker named in `-m`: it exits 4 with
+`Unknown marker(s) in '-m' expression: integration` and runs no test, where pytest 9.1 ran the
+suite (measured on one project: 9.1.1 exit 0, 9.2.0 exit 4). So a pytest floor bump alone turns
+the gate red with no code change. Register `integration` under
+`[tool.pytest.ini_options] markers` (`"integration: long-running / external"`), and every
+other marker your `exclude-markers` or your own `addopts` `-m` names (in `pytest.ini`, the
+`markers` key of its `[pytest]` section).
+
 Raise `exclude-markers` only to skip MORE from `make test` - e.g. a project whose `local_only`
 tests MUTATE the host and are unsafe on a real dev machine can tag them `mutating` and set
 `exclude-markers = "mutating"` (a common project-specific marker). Do NOT set it to "match CI" -
@@ -1003,6 +1027,7 @@ gate to go red. A gate that has only ever passed has not been shown to gate.
 | `make test-all` fails dozens of tests per cell in a fixed-port or shared-DB suite   | The version cells run in parallel and collide, not a code defect: re-run with `BMK_TEST_ALL_WORKERS=1` before diagnosing; set `[tool.scripts.test-all] workers = 1` for good (section 1).                                                                          |
 | Tests break right after `make test` raised a dependency floor                       | A dependency change, not your edit: `git diff pyproject.toml`, read its CHANGELOG, adapt the caller; then check the published version with `uvx --isolated --refresh <pkg>@latest` (section 3).                                                                    |
 | `ModuleNotFoundError` inside bmk's own dependencies                                 | bmk's shared env, not your code; the next `make` repairs it (section 1).                                                                                                                                                                                           |
+| `make test` exits 4: `Unknown marker(s) in '-m' expression: integration`            | Strict markers refuse an unregistered marker that bmk's `-m` names (pytest 9.2 and later). Register it under `[tool.pytest.ini_options] markers` (section 6).                                                                                                      |
 | `make testintegration` fails: `[pytest_integration] (exit code: 5)`                 | pytest collected no test: an empty lane, or a filter hiding the tests (section 6).                                                                                                                                                                                 |
 | Private GitHub deps fail to resolve                                                 | `git config --global url."https://<TOKEN>@github.com/<ORG>/".insteadOf "https://github.com/<ORG>/"` before install.                                                                                                                                                |
 
