@@ -105,6 +105,20 @@ the process group at the prompt), so keep one real-terminal run for signal behav
 passes its own `env=` to the child, or the stand-in is a `.cmd`, resolve the program to an
 absolute path with `shutil.which(name, path=<that env's PATH>)`.
 
+**A test that REPLACES `PATH` with the stub dir, rather than prepending to it, must still provide
+every other command the program calls** - `cat`, `date`, `logger`, whatever runs besides the
+stubbed program. Otherwise the script dies on the first of them with `command not found` (exit
+127) before it reaches the branch under test, and a RED arm reads that as the failure it was
+looking for. Prepend when you only add a stub; when the test needs a real program ABSENT and so
+cannot keep the real `PATH`, symlink the other commands the script needs into the stub dir and
+leave the absent one out (a stub you also need goes into the same dir). List the commands by
+reading the script, resolve each one with `command -v` (or `shutil.which`) before `PATH` is
+replaced, and include what a `#!/usr/bin/env bash` shebang looks up (`bash`; `env` itself is
+called by absolute path); shell builtins such as `echo` and `printf` need none. Assert that
+`command -v <absent program>` fails under the new `PATH` before relying on it. An exit 127 in any
+run is the sign one is still missing. Read the RED's error line before believing it: a RED counts
+only when it fails on the assertion the test makes.
+
 **A program that relaunches ITSELF through an argv it builds (a background mode, a re-exec, a
 generated systemd unit) needs a test of that exact argv through the real entry point** (for click,
 `CliRunner().invoke(cli, built_argv)`), not only the in-process or `--foreground` path. The argv

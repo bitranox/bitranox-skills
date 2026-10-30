@@ -30,6 +30,11 @@ a hole nobody has drawn a line under is one that gets rediscovered and half-fill
 two "versions with no entry" notes came to sit in this file disagreeing with it.
 
 
+## [10.8.1]
+
+- net-tailscale: the watchdog guidance names the signal to restart on (a Health entry containing the coordination-server text, or a timed-out status call), reads BackendState first and leaves anything but Running alone, and keeps a probe failure from ever restarting the daemon.
+- process-test-design: a test that replaces PATH with a stub dir must still provide every other command the script calls, or its RED is a command-not-found artifact.
+
 ## [10.8.0]
 
 ### Added

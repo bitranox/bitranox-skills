@@ -122,10 +122,30 @@ Wants=network-online.target
 connectivity. For unattended fleet nodes, add a small watchdog that restarts `tailscaled`
 when its control long-poll goes dead (not merely when the process exists - Tailscale issue
 12021 is exactly this failure, still open, where the daemon logs "control: map response
-long-poll timed out!" and never reconnects on its own): probe
-`tailscale status --json` for a recent control-plane contact on a timer, restart the unit on
-a stale/failed result. Build it self-healing per `bitranox:coding-resilience` (timeout,
-backoff, a stderr note on failure).
+long-poll timed out!" and never reconnects on its own). Key it on what the daemon reports:
+
+- Run `tailscale status --json` with a timeout (20 s). A call that times out means `tailscaled`
+  did not answer on its local socket at all, which is evidence about the daemon: restart, with
+  no JSON left to read. A call that exits non-zero without timing out, a refused socket
+  included, is a probe failure (last bullet).
+- Read `BackendState` before `Health`. Anything but `Running` (`Stopped` after `tailscale down`,
+  `NeedsLogin`) is left alone whatever `Health` says: a restart fixes none of them, and
+  restarting a stopped node undoes a deliberate `down`.
+- With `Running`, restart only when an entry of the `Health` list (an array of strings; a
+  missing key counts as empty) contains the text "Unable to connect to the Tailscale
+  coordination server" (the wording 1.98 and 1.104 print), matched as a substring of the
+  entry.
+- Do not look for a "last control contact" time: no LocalAPI endpoint reports it, and a probe
+  built on one gets 404 and fails every run.
+- Keep a failure of the PROBE apart from a failure of the DAEMON. When the CLI is missing, the
+  call exits non-zero, its output does not parse or has no `BackendState`, or a helper the probe
+  needs (`jq`) is absent, report that and do not restart. No fallback value may match the
+  restart condition, or every probe failure becomes a restart: a probe whose missing-`jq`
+  fallback emitted a string the restart pattern matched restarted a healthy `tailscaled` on
+  every 5-minute run, about 270 times a day.
+
+Build it self-healing per `bitranox:coding-resilience` (timeout, backoff, a stderr note on
+failure).
 
 ## DNS: MagicDNS on quad-100 is platform-asymmetric
 
