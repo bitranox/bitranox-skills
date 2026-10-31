@@ -1,13 +1,13 @@
-# Handover - 2026-10-31, [210] sweep: (e) shipped in 10.9.10; (s) next
+# Handover - 2026-10-31, [210] sweep: (e) 10.9.10, (s) 10.9.11; (d) next
 
 ## In flight
 
-- 10.9.10 (block-env-dump also refuses `git remote -v`, `git config --list` and reads of `.env` or
-  credentials files) is committed from this worktree (`.claude/worktrees/bl9-twins`, branch
-  bl9-twins, pushes go HEAD:master); watch its CI with `ci_wait.py --sha <full sha>`.
-- bmk plugin 3.33.3 (devops-bmk mirror of 10.9.9) is pushed; its CI wait runs as a background
-  shell from the bmk checkout. No PyPI release follows: bmk's release workflow fires on `v*` tags
-  only.
+- 10.9.10 (block-env-dump: git remote -v, git config --list, .env and credentials reads) is pushed
+  as ca506fa8; 10.9.11 (git_verb_dir tilde expansion) is committed and pushed after it, from this
+  worktree (`.claude/worktrees/bl9-twins`, branch bl9-twins, pushes go HEAD:master). Watch each with
+  `ci_wait.py --sha <full sha>`.
+- bmk plugin 3.33.3 (devops-bmk mirror of 10.9.9) is on origin with CI and CodeQL green; bmk's
+  release workflow fires on `v*` tags only, so no PyPI release followed.
 
 ## Decided
 
@@ -25,9 +25,9 @@
 
 ## Next action
 
-[210] (s): make `shell_text.git_verb_dir` expand a leading `~` the way `directory_change` does
-with `expand_home=True` (plugins/bitranox/hooks/shell_text.py), TDD in hooks/tests. Then (d), (f),
-(r), (p).
+[210] (d): the toolbox nudge does not fire on a Write of a new script whose docstring states a
+chore a local jig covers (queue 883992d0); find the nudge hook and decide whether a Write matcher
+belongs there. Then (f), (r), (p). (s) shipped in 10.9.11.
 
 ## How to verify
 

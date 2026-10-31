@@ -30,6 +30,12 @@ a hole nobody has drawn a line under is one that gets rediscovered and half-fill
 two "versions with no entry" notes came to sit in this file disagreeing with it.
 
 
+## [10.9.11]
+
+### Fixed
+
+- `shell_text.git_verb_dir` now expands a leading `~` or `~/...` in a cd target or a `git -C` value against the hook's HOME. So `cd ~/repo && git commit` is judged in that repo, not in the session's own. A command that assigns `HOME`, a quoted or escaped `~`, and `~user` still read as unknown.
+
 ## [10.9.10]
 
 ### Changed

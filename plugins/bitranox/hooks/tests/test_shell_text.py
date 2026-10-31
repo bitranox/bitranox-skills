@@ -981,6 +981,40 @@ def test_a_relative_cd_after_the_command_sets_cdpath_is_unknown():
     assert S.git_verb_dir("cd sub; git commit -m x", "/s", verbs) == os.path.normpath("/s/sub")
 
 
+@pytest.mark.parametrize(("command", "below_home"), [
+    ("cd ~/proj && git commit -m x", "proj"),
+    ("cd ~/proj; git push", "proj"),
+    ("git -C ~/proj commit -m x", "proj"),
+    ("cd ~/a && git -C sub push", "a/sub"),
+    ("cd ~ && git push", ""),
+    ("CDPATH=/c; cd ~/proj && git commit -m x", "proj"),   # rooted once expanded: CDPATH is skipped
+])
+def test_git_verb_dir_expands_a_leading_tilde_against_this_home(monkeypatch, command, below_home):
+    """The hook and the Bash tool's shell are children of one Claude process and share its HOME,
+    so `cd ~/proj && git commit` commits in HOME/proj; read as unknown it fell back to the session's
+    repository and judged the wrong one."""
+    home = os.path.normpath("/home/someone")
+    monkeypatch.setenv("HOME", home)
+    monkeypatch.setenv("USERPROFILE", home)
+    assert S.git_verb_dir(command, "/s", S.GATED_GIT_VERBS) == os.path.normpath(
+        os.path.join(home, below_home))
+
+
+@pytest.mark.parametrize("command", [
+    "HOME=/x; cd ~/proj && git commit -m x",           # the shell's HOME is no longer this one
+    "export HOME=/x && cd ~ && git push",
+    "HOME=/x git -C ~/proj commit -m x",
+    'cd "~/proj" && git commit -m x',                  # quoted: a directory literally named ~
+    "cd '~'/proj; git push",
+    "cd \\~/proj && git commit -m x",                # escaped: the same literal name
+    "cd ~other/proj && git commit -m x",               # another account's home
+])
+def test_git_verb_dir_leaves_a_tilde_it_cannot_resolve_unknown(monkeypatch, command):
+    monkeypatch.setenv("HOME", os.path.normpath("/home/someone"))
+    monkeypatch.setenv("USERPROFILE", os.path.normpath("/home/someone"))
+    assert S.git_verb_dir(command, "/s", S.GATED_GIT_VERBS) is None
+
+
 def test_powershell_parentheses_do_not_open_a_subshell():
     """PowerShell's ( ) and $( ) run in the same runspace, so Set-Location inside them persists."""
     assert S.git_verb_dir("(cd /r); git commit -m x", "/s", S.GATED_GIT_VERBS, "PowerShell") == _AT_R

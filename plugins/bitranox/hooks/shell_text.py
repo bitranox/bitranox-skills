@@ -708,6 +708,20 @@ def _expand_known(token, usable):
 
 #: `CDPATH=...` as a word, as a statement, a prefix, or after `export`.
 _CDPATH_ASSIGNMENT = re.compile(r"(?:^|\s)CDPATH=")
+#: Once the command assigns HOME, the shell's `~` is no longer this process's HOME.
+_HOME_ASSIGNMENT = re.compile(r"(?:^|\s)HOME=")
+#: A quoted or backslash-escaped `~` is a literal directory name; the word split hides which.
+_LITERAL_TILDE = re.compile(r"[\"'\\]~")
+
+
+def _expand_home(token):
+    """`~` and `~/...` resolved against this process's HOME; any other word unchanged.
+
+    `~user` is another account's home and is left alone, so `_readable_dir` still refuses it.
+    """
+    if token == "~" or token.startswith(("~/", "~\\")):
+        return os.path.expanduser(token)
+    return token
 
 
 #: Quoted text and backslash escapes, removed before counting a statement's own parentheses.
@@ -1023,6 +1037,13 @@ def git_verb_dir(command, cwd, verbs, tool_name=None):
     where the cd failed. Every cd itself is still read as succeeding when it runs, so
     `cd /a || cd /b; git commit` commits in /a.
 
+    A leading `~` or `~/...` in a cd target or a `-C` value is expanded against this process's
+    HOME: a hook and the Bash tool's shell are children of one Claude process, so they share it.
+    Measured 2026-10-31: 21 of 317 gated commands read as unreadable were tilde or relative paths.
+    Once the command assigns `HOME`, or the segment holds a quoted or escaped `~` (a literal
+    directory name, which the word split cannot tell apart), the tilde stays unexpanded and the
+    verb's directory is None; `~user` is never expanded.
+
     Once the command assigns `CDPATH` (`CDPATH=/a; cd sub`, `export CDPATH=...`, or as a prefix),
     a RELATIVE cd is unknown: bash tries each CDPATH entry first, and whether `/a/sub` exists is not
     in the text. A CDPATH inherited from the environment is invisible here and not modelled.
@@ -1031,7 +1052,7 @@ def git_verb_dir(command, cwd, verbs, tool_name=None):
     text = blank_heredoc_bodies(command or "")
     segments = list(iter_segments(text, tool))
     known, leading, previous_end = {}, tool == "Bash", 0
-    subshells, gap_start, cdpath_set = _SubshellTracker(), 0, False
+    subshells, gap_start, cdpath_set, home_set = _SubshellTracker(), 0, False, False
     bodies, chain, statement_end = _BodyTracker(tool), _AndOrList(), 0
     held = _NOT_HELD    # a verb's answer found inside a loop, kept until the loop closes
     for index, (at, segment) in enumerate(segments):
@@ -1047,6 +1068,7 @@ def git_verb_dir(command, cwd, verbs, tool_name=None):
         # Read off the raw text, before the leading-assignment block can consume the statement. A
         # quoted `CDPATH=` in an echo also counts; that only costs a None, never a wrong directory.
         cdpath_set = cdpath_set or _CDPATH_ASSIGNMENT.search(segment) is not None
+        home_set = home_set or _HOME_ASSIGNMENT.search(segment) is not None
         following = segments[index + 1][0] if index + 1 < len(segments) else len(text)
         gap_after = text[at + len(segment):following]
         if leading:
@@ -1064,6 +1086,8 @@ def git_verb_dir(command, cwd, verbs, tool_name=None):
             continue
         statement_end = at + len(segment)
         tokens = [_expand_known(token, usable) for token in tokens]
+        if not home_set and not _LITERAL_TILDE.search(segment):
+            tokens = [_expand_home(token) for token in tokens]
         closers = subshells.statement(segment, tokens) if tool == "Bash" else 0
         in_body = bodies.statement(tokens, _EMPTY_PARENS.match(text, at + len(segment)) is not None,
                                    len(subshells.open))
