@@ -30,6 +30,12 @@ a hole nobody has drawn a line under is one that gets rediscovered and half-fill
 two "versions with no entry" notes came to sit in this file disagreeing with it.
 
 
+## [10.9.15]
+
+### Changed
+
+- `infra-proxmox-bindsnap`: mirrors pve-bindsnap 1.4.0. Installing with `install-apt.sh` (the Debian package from a signed apt repository, updated with Proxmox) is now the recommended way, beside the manual `.deb` and `install.sh`; options to a piped installer go after `bash -s --`; clone runs each build's own upstream `clone_vm` variant.
+
 ## [10.9.14]
 
 ### Changed

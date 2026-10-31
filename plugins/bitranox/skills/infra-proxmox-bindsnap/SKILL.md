@@ -30,7 +30,26 @@ plain `zfs snapshot <pool>/subvol-<vmid>-disk-0@name` on the stopped CT is simpl
 
 ## 1. Install
 
-The model is "read the source, then install from it." Inspect first:
+Two ways; both install the same overlay, clone variants and two diverts (the package keeps the
+module in `/usr/share/perl5`, the script in `/usr/local/lib/site_perl`). **Prefer the apt package** when the node should keep
+pve-bindsnap current through Proxmox's own updates (GUI Node -> Updates, or `apt-get upgrade`):
+
+```
+curl -fsSL https://raw.githubusercontent.com/bitranox/pve-bindsnap/main/install-apt.sh | bash
+```
+
+It adds the signed pve-bindsnap repository (key fingerprint
+`1445 C598 166A 481A C529  2FE1 A5A5 351D 2BC8 8FDC`, trusted for that repository only) and
+installs the `pve-bindsnap` package. On a node installed by `install.sh`, run it as is, WITHOUT
+uninstalling first: the package takes that installation over. Options: `--no-install` (only add
+the repository), `--remove` (remove the repository and its key, keep the package), `--purge`
+with `--remove` (also purge the package), `--repo-url URL` (a mirror or test repository instead
+of the GitHub release one); piped from curl they go after
+`bash -s --` (`... install-apt.sh | bash -s -- --remove --purge`). While the package is installed,
+`install.sh` and `uninstall.sh` refuse; use apt. Details: docs/install-apt.md in the repo.
+
+**Or the script**, updated by re-running it. The model is "read the source, then install from
+it." Inspect first:
 
 ```
 curl -fsSL https://raw.githubusercontent.com/bitranox/pve-bindsnap/main/install.sh | less
@@ -44,7 +63,7 @@ curl -fsSL https://raw.githubusercontent.com/bitranox/pve-bindsnap/main/install.
 
 Or clone and run locally: `git clone https://github.com/bitranox/pve-bindsnap && cd pve-bindsnap && less install.sh && ./install.sh`.
 
-It installs the overlay module to `/usr/local/lib/site_perl`, adds two dpkg-diverts (Config.pm
+It installs the overlay module and its clone variants to `/usr/local/lib/site_perl`, adds two dpkg-diverts (Config.pm
 and API2/LXC.pm) with thin wrappers, pre-flights the load, and rolls back automatically (EXIT
 trap) if anything fails before the daemons restart -- so a failed install leaves the node stock.
 
@@ -59,7 +78,7 @@ journalctl -u pvedaemon -b --no-pager | grep pve-bindsnap | tail -3
 - `overlay active (... checksum-validated ...)` and `clone overlay active (... checksum-validated ...)`
   -> this pve-container build is tested; bind-mount snapshots and clones work with no keyword.
 - `overlay active in TEST mode: ... is untested` -> build not in the table; bind-mount snapshots
-  are refused unless opted in (section 5), and `clone overlay loaded but NOT active` -> clone stays
+  are refused unless opted in (sections 4 and 5), and `clone overlay loaded but NOT active` -> clone stays
   stock (bind clones refused). See section 5 to get the build vetted.
 
 Optional direct check:
@@ -128,7 +147,7 @@ bind snapshots are refused and clone stays stock. The correct response is NOT to
 Which builds count as vetted is decided by the overlay, not from memory: the journal line in
 section 2 tells you about THIS node's build, and
 https://github.com/bitranox/pve-bindsnap/blob/main/docs/compatible-versions.md is the
-authoritative list. As of pve-bindsnap **1.3.0** it holds, for both guards, each
+authoritative list. As of pve-bindsnap **1.4.0** it holds, for both guards, each
 **pve-container build from 6.0.18 to 6.1.16** (PVE 9.1 and 9.2) together with the
 `libpve-guest-common-perl` version it shipped with; each row of the list names that pairing.
 The pairing matters because the snapshot checksum also covers `AbstractConfig.pm`, which ships in
@@ -136,7 +155,8 @@ The pairing matters because the snapshot checksum also covers `AbstractConfig.pm
 can move a node into TEST mode.
 
 A **known-BAD** build is a hard block: `BINDSNAP-UNSUPPORTED` will NOT override it; update
-pve-container or use `zfs snapshot` directly.
+pve-container (and libpve-guest-common-perl, whose `AbstractConfig.pm` the snapshot checksum also
+covers) or use `zfs snapshot` directly.
 
 **A pre-change safety net on a build the guard refuses:** take a stock backup,
 `vzdump <vmid> --storage <store>`. The overlay passes every `vzdump` call straight to stock code
@@ -154,6 +174,9 @@ precede.
 `mpN`) clone as stock, and each bind/device mount is **carried to the clone unchanged -- pointing
 at the SAME host path as the source** (not a copy). The clone task finishes as a yellow
 `TASK WARNINGS` naming the carried mounts, because the two CTs then share that host data.
+Otherwise the clone behaves exactly as the node's own Proxmox clone does: the override runs that
+build's own upstream `clone_vm` with only the bind-mount change applied (one shipped variant per
+upstream version; the journal's `clone overlay active` line names it, e.g. `clone_vm variant v6_1_7`).
 
 To stop the clone inheriting a bind/data mount, add `#### BINDSNAP-EXCLUDE: mp0` to the **source**
 CT's Notes before cloning. A full clone of a RUNNING CT still needs `--snapname` (Proxmox rule):
@@ -161,11 +184,14 @@ snapshot it first with `BINDSNAP-FORCE-RUNNING`, then `pct clone <vmid> <newid> 
 
 ## 7. Uninstall
 
+Installed with apt: `curl -fsSL https://raw.githubusercontent.com/bitranox/pve-bindsnap/main/install-apt.sh | bash -s -- --remove --purge` (purges the package and
+removes the repository), or `apt-get purge pve-bindsnap` to keep the repository. Installed with the script:
+
 ```
 curl -fsSL https://raw.githubusercontent.com/bitranox/pve-bindsnap/main/uninstall.sh | bash
 ```
 
-Reverts both diverts and restores stock Proxmox. Snapshots you already took persist as zfs
+Each of these reverts both diverts and restores stock Proxmox. Snapshots you already took persist as zfs
 snapshots and in the CT config (`zfs list -t snapshot | grep subvol-<vmid>`).
 
 ## Troubleshooting
@@ -177,7 +203,7 @@ snapshots and in the CT config (`zfs list -t snapshot | grep subvol-<vmid>`).
 | `unable to clone mountpoint 'mpN' (type bind)`                 | Clone override not active: not installed, OR build untested (clone stays stock). Install / get the build vetted (section 5).           |
 | `CT <vmid> is running ... stop ... or BINDSNAP-FORCE-RUNNING`  | Stop the CT, or add `BINDSNAP-FORCE-RUNNING` (section 4).                                                                              |
 | `pve-container <ver> is ... untested ... BINDSNAP-UNSUPPORTED` | Build not in the table. Opt in to TEST and get it vetted (section 5).                                                                  |
-| `on the overlay's known-BAD list ... BLOCKED`                  | Hard block; update pve-container or use `zfs snapshot`.                                                                                |
+| `on the overlay's known-BAD list ... BLOCKED`                  | Hard block; update pve-container (and libpve-guest-common-perl) or use `zfs snapshot`.                                                 |
 | Clone inherited a data mount it should not have                | Add `BINDSNAP-EXCLUDE: mpN` to the SOURCE CT Notes (section 6).                                                                        |
 | No `pve-bindsnap:` line in the journal                         | Banner only prints from a PVE daemon (not a TTY). Check `journalctl -u pvedaemon -b`; confirm `$APPLIED`/`$CLONE_APPLIED` (section 2). |
 
@@ -188,6 +214,7 @@ Self-contained above; for depth, read these (WebFetch the URL, or read the local
 | Topic                                      | URL                                                                            |
 |--------------------------------------------|--------------------------------------------------------------------------------|
 | Overview, install, "Using it"              | https://github.com/bitranox/pve-bindsnap/blob/main/README.md                   |
+| Apt repository, package, key, migration    | https://github.com/bitranox/pve-bindsnap/blob/main/docs/install-apt.md         |
 | How it works, limits, mechanism            | https://github.com/bitranox/pve-bindsnap/blob/main/docs/design.md              |
 | The checksum guard, adding a version       | https://github.com/bitranox/pve-bindsnap/blob/main/docs/checksum-guard.md      |
 | Supported / hard-blocked / untested builds | https://github.com/bitranox/pve-bindsnap/blob/main/docs/compatible-versions.md |
