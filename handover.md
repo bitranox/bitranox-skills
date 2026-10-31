@@ -26,9 +26,10 @@
 
 ## Next action
 
-[210] (k) devops-bmk: it is mirrored with apps/utils/bmk, so change the bmk repo's twin, release
-bmk, and only then let the marketplace copy name the version. Then (q) a claim count in
-`contrib_queue.py queues`, then (e), (d), (f). (i), (j), (l), (n), (o) shipped together in 10.9.8.
+[210] (e): a background agent extends `plugins/bitranox/hooks/block-env-dump.py` in the worktree
+`.claude/worktrees/secret-print` (branch secret-print-guard), uncommitted, and reports by
+SendMessage. Integrate its diff after checking its replay numbers, then (d), (f). (k) and (q)
+shipped in 10.9.9 (devops-bmk mirrored to bmk as a plugin-only 3.33.3 push).
 
 ## How to verify
 

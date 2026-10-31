@@ -30,6 +30,18 @@ a hole nobody has drawn a line under is one that gets rediscovered and half-fill
 two "versions with no entry" notes came to sit in this file disagreeing with it.
 
 
+## [10.9.9]
+
+### Changed
+
+- devops-bmk: `make test` never executes `notebooks/Quickstart.ipynb`, while the CI template's
+  "Execute notebooks" job runs it under nbclient with `allow_errors=False`, so a change a notebook
+  cell depends on passes the local gate and turns CI red. The skill gives a command that runs the
+  notebook the way that job does, and says to read the notebook's install cell first: one that
+  always installs from `git+https://...` tests what is already pushed, not the change.
+- meta-self-improve: `contrib_queue.py queues` prints how many entries of each queue a session
+  holds a live claim on (`3 open, 1 claimed`); an expired claim is not counted.
+
 ## [10.9.8]
 
 ### Changed

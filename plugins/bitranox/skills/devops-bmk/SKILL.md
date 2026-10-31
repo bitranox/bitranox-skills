@@ -1000,6 +1000,38 @@ Two project files change those runs:
 The two combine: with a pin, the gate makes the one pinned run plus one run per platform file, so
 a pinned project type-checks another OS only through that OS's `pyrightconfig.<platform>.json`.
 
+**`make test` never executes a notebook; CI does.** No bmk stage runs `notebooks/Quickstart.ipynb`,
+while the bitranox CI template's "Execute notebooks" job runs it under nbclient with
+`allow_errors=False`. A change a notebook cell depends on (CLI output it asserts on, a new
+refusal, a renamed option) therefore passes `make test` and turns CI red. When a change touches
+what the notebook calls, run it the way that job does, from the repo root, before pushing:
+
+```bash
+env -u VIRTUAL_ENV uv run --no-project -q --python 3.14 --with nbclient --with ipykernel \
+  --with nbformat python -c "
+import nbformat
+from nbclient import NotebookClient
+nb = nbformat.read('notebooks/Quickstart.ipynb', as_version=4)
+NotebookClient(nb, timeout=900, kernel_name='python3', allow_errors=False).execute()
+print('NOTEBOOK OK')
+"
+```
+
+It exits 0 and prints `NOTEBOOK OK` when every cell ran, and exits 1 with a `CellExecutionError`
+naming the failing cell otherwise; exit 1 is the CI failure you would push, so fix it first. The
+notebook file is not rewritten. `--python` must be the version the CI job's notebook step names
+(edit `3.14` to match). No `resources` path is passed, as in CI, so the kernel starts in the repo
+root.
+
+The command installs only the notebook runner, as the CI job does: the notebook's own install
+cell installs the project. Read that cell before trusting a local run. A notebook that installs
+from the checkout it runs in (`pip install <checkout root>` when it finds the project's
+`pyproject.toml` in its working directory or a parent) tests your change. One that always installs
+`git+https://github.com/...` installs what is already pushed, so a run before the push says
+nothing about the change; for that notebook, run a scratch copy whose install line names the
+checkout path instead of the URL (read that copy in the command, and leave the tracked notebook
+alone), or let CI be the check.
+
 **Prove it rather than reasoning about it:** run the arm where the check must FAIL, and require the
 gate to go red. A gate that has only ever passed has not been shown to gate.
 

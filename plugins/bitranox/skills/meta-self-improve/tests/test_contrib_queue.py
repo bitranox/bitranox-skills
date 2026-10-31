@@ -735,3 +735,29 @@ def test_a_claimed_entry_still_ships_and_stays_closed(monkeypatch, capsys):
     capsys.readouterr()
     Q.main(["add", "--what", "the gap", "/p/cl"])
     assert "shipped earlier" in capsys.readouterr().out
+
+
+def test_queues_counts_the_live_claims_beside_the_open_entries(tmp_path, capsys):
+    """`queues` is the machine-wide view, so it says how many entries some session holds; an
+    expired claim holds nothing and is not counted."""
+    import time
+    where = tmp_path / "claimed"
+    where.mkdir()
+    for what in ("held gap", "lapsed gap", "free gap"):
+        Q.main(["add", "--what", what, str(where)])
+    S.claim_contribution(str(where), "held gap", _SID_A, hours=1)
+    S.claim_contribution(str(where), "lapsed gap", _SID_B, hours=1, now=time.time() - 7200)
+    capsys.readouterr()
+    assert Q.main(["queues"]) == 0
+    row = next(line for line in capsys.readouterr().out.splitlines() if str(where) in line)
+    assert "  3 open, 1 claimed  %s" % where in row
+
+
+def test_queues_names_no_claim_count_when_nothing_is_claimed(tmp_path, capsys):
+    where = tmp_path / "unclaimed"
+    where.mkdir()
+    Q.main(["add", "--what", "a gap", str(where)])
+    capsys.readouterr()
+    assert Q.main(["queues"]) == 0
+    row = next(line for line in capsys.readouterr().out.splitlines() if str(where) in line)
+    assert "  1 open  %s" % where in row            # no claim field between count and path

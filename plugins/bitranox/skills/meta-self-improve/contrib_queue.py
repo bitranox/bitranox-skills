@@ -112,14 +112,14 @@ def _read_or_report(reader, proj, what):
 
 
 def _queue_rows(qdir):
-    """[(key, open count or None when unreadable, where)] for every queue file in `qdir`."""
+    """[(key, open count or None when unreadable, live claims, where)] per queue file in `qdir`."""
     rows = []
     for f in sorted(qdir.glob("*.contrib.jsonl")):
         key = f.name[: -len(".contrib.jsonl")]
         try:
             recs = sig.read_contributions(sig.QUEUE_KEY_PREFIX + key)
         except OSError as exc:
-            rows.append((key, None, "(unreadable: %s)" % exc))
+            rows.append((key, None, 0, "(unreadable: %s)" % exc))
             continue
         path = next((r.get("proj") for r in recs if r.get("proj")), "")
         if not path:
@@ -130,7 +130,8 @@ def _queue_rows(qdir):
             where = path
         else:
             where = "%s  (cwd gone)" % path
-        rows.append((key, len(recs), where))
+        claimed = sum(1 for r in recs if sig.claim_state(r) == "live")
+        rows.append((key, len(recs), claimed, where))
     return rows
 
 
@@ -152,11 +153,16 @@ def _print_queues():
     unreadable = sum(1 for r in shown if r[1] is None)
     print("%d queue(s) with open contributions%s:"
           % (len(shown), " (%d unreadable)" % unreadable if unreadable else ""))
-    for key, n, where in shown:
+    for key, n, claimed, where in shown:
         # The WHOLE key, not a prefix: the next line tells the operator to pass
         # queue_key:<full-key>, and a truncated one selects nothing while every verb
         # answers "no pending upstream contributions" - indistinguishable from done.
-        print("  %s  %s  %s" % (key, "? open" if n is None else "%d open" % n, where))
+        # Only a LIVE claim is counted: an expired one holds nothing, so another session may
+        # take that entry, and counting it would steer the reader away from free work.
+        count = "? open" if n is None else "%d open" % n
+        if claimed:
+            count += ", %d claimed" % claimed
+        print("  %s  %s  %s" % (key, count, where))
     print("address one with: contrib_queue.py list|ship|drop ... queue_key:<full-key>|<path>")
     return 2 if unreadable else 0
 
@@ -287,7 +293,8 @@ def main(argv=None):
     rl = sub.add_parser("release", help="remove the claim from ONE entry without closing it")
     rl.add_argument("--match", required=True, help="unique text from its what/target")
     rl.add_argument("proj", nargs="?", default=None)
-    qs = sub.add_parser("queues", help="enumerate EVERY queue on this machine (key, open count, project)")
+    qs = sub.add_parser("queues", help="enumerate EVERY queue on this machine "
+                                       "(key, open count, live claims, project)")
     qs.add_argument("proj", nargs="?", default=None)
     rh = sub.add_parser("rehome-tombstones",
                         help="merge closes an older queue_key: ship/drop filed under the wrong key")
