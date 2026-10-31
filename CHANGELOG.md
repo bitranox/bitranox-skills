@@ -30,6 +30,26 @@ a hole nobody has drawn a line under is one that gets rediscovered and half-fill
 two "versions with no entry" notes came to sit in this file disagreeing with it.
 
 
+## [10.9.8]
+
+### Changed
+
+- process-test-design: a port that must refuse a connection comes from just below the OS dynamic
+  range (a `refusing_port()` helper), never from a released `bind(0)`, which the next `bind(0)` can
+  be handed under pytest-xdist; give the connect a 5 s timeout for Windows. A pacer that spaces
+  events start to start is asserted on the start instants, not on completion stamps.
+- process-agents-subagent-driven-development: the "an existing test asserts the old behaviour"
+  STOP does not fire on a test that passed only because of the bug being fixed; the implementer
+  brief says how to tell the two apart.
+- compuse-toolbox: gate.py indents its `[PASS]`/`[FAIL]` lines, so grep for them unanchored, or
+  for the unindented `ALL GATES PASSED` closing line.
+- process-agents-dispatching-parallel: a brief names an output directory for whatever does not
+  land in git, and an agent that stopped (usage limit, stopped by you, idle) is recovered from
+  every place its brief told it to write before anything is re-dispatched.
+- compuse-bash: in `cd X && VAR=y && (job1) & (job2) &` the `&&` list binds to the first
+  background job only; the second job and the lines after `wait` see neither the cd nor the
+  variable.
+
 ## [10.9.7]
 
 ### Changed

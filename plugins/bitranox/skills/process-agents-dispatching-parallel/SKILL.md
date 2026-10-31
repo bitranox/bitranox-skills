@@ -179,6 +179,11 @@ Each agent gets:
   and the agent falls back to some other path or hands the text back. Name a path inside its own
   worktree or in the session scratchpad, never a main-checkout path (`.bitranox/...` at the main
   checkout's root included), and copy the file over yourself.
+- **An output directory for whatever does not land in git.** A lane that measures on a host, or
+  writes logs and captures outside its worktree, gets that directory named in its brief (for
+  example `evidence/<item>-<date>/` on the test host) and writes there as it goes. If the agent
+  stops without a report, that path is where you look for its numbers; a brief that names none
+  leaves them only in its transcript.
 - **A base that holds what the agent builds on.** An agent dispatched with `isolation: worktree`
   branches from origin's default branch, not from your local HEAD (setting and fixes:
   bitranox:git-worktrees, Step 1a), so a commit you made locally and have not pushed is missing
@@ -271,32 +276,39 @@ before you push. Before calling a fixer's commit "not landed", note that `git ch
 that landed with changed context or squashed; bitranox:git-worktrees Step 4 (`landed.py`) checks
 by content.
 
-**An agent that stopped mid-task left no report, so its worktree is the record.** Agents in a
-fan-out share the session's usage limit, so when it is hit they can ALL stop at once, and their
-final reports never arrive. Never re-dispatch such an item from scratch: a fresh agent redoes the
-committed work and races the uncommitted diff the stopped one left. Keep each one unticked on the
-checklist (stopped, not finished), then choose by when the limit resets:
+**An agent that stopped mid-task left no report, so the places its brief told it to write are
+the record.** That holds however it stopped: it hit a session or usage limit, you stopped it, or
+it went idle without a report. Agents in a fan-out share the session's usage limit, so when it is
+hit they can ALL stop at once, and their final reports never arrive. Never re-dispatch such an
+item from scratch: a fresh agent redoes the committed work and races the uncommitted diff the
+stopped one left. Keep each one unticked on the checklist (stopped, not finished), then choose by
+when it can work again (one that idled can be resumed now; one you stopped for drifting is
+finished by you, not resumed into the same drift):
 
 - **Hours away (or an account with headroom is available):** resume each stopped agent with
   SendMessage once requests are accepted again. It keeps its context and, with the per-item
   progress record from its brief, skips what it finished.
-- **Days away, or the work cannot wait:** finish the item yourself from git:
+- **Days away, or the work cannot wait:** finish the item yourself from what it left:
 
 ```bash
 git worktree list                              # find each stopped agent's worktree
 git -C <worktree> log --oneline <base>..HEAD   # what it committed
 git -C <worktree> status --porcelain           # what it left uncommitted
 git -C <worktree> diff                         # the change in progress
+ls -la <evidence-dir>                          # what it wrote outside git (via ssh on a host)
 ```
 
 Compare that state with the item's brief to see what remains, finish it test-first, and run the
 branch's FULL gate before integrating: a branch that looks finished can still be red. Then land
 it by cherry-pick as above.
 
-A lane that MEASURED something (a benchmark, a check on a host) often holds its numbers nowhere in
-git: they sit in the evidence directory its brief named and in its transcript's tool results.
-Read both (the transcript with a script, never `cat`) before re-measuring or re-dispatching; a
-result already on disk can close the item without a re-run.
+Recover from EVERY place the brief told it to write, not only its worktree and branch. A lane
+that MEASURED something (a benchmark, a check on a host) often holds its numbers nowhere in git
+and in no message: they sit in the evidence directory its brief named, often on the host it
+measured, and in its transcript's tool results. Read both (the transcript with a script, never
+`cat`) before re-measuring or re-dispatching. A result already on disk can close the item without
+a re-run, while a re-run costs the hours the measurement took and can disturb a host state that
+cannot be recreated.
 
 **Landing agents' UNCOMMITTED diffs: one integration worktree, then a byte-compare.** When agents
 leave their work uncommitted, export each diff with untracked files included

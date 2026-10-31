@@ -127,6 +127,13 @@ fixtures for the shape the new check refuses, or apply only the new check with c
 list (amend the plan and regenerate the brief). A brief silent about them reaches the implementer
 as a STOP, or as a test edit nobody can explain in review.
 
+**A brief's "stop if an existing test asserts the old behaviour" must add: decide by the test's
+SUBJECT.** A bug fix also breaks tests that passed only because the bug masked an input they
+never meant to depend on (a rounding that swallowed a default offset under a scaling test). Such
+a test keeps its subject and its expectation: the implementer pins the masked input with a
+comment saying why, and STOPs only when the test is about the old behaviour itself. The
+implementer template carries this rule; keep it when you write a brief's constraints by hand.
+
 **Plan mode must have ended before the first dispatch.** A subagent dispatched
 while the session is still in plan mode has been observed to inherit it: it
 explores, writes a plan file of its own and returns "ready to execute on

@@ -86,6 +86,17 @@ Subagent (general-purpose):
       the other only corrects docs or wording: report NEEDS_CONTEXT naming both remedies, and
       do not pick. Which behaviour ships is the owner's decision, not yours.
 
+    **When your change breaks an existing test, decide by the test's SUBJECT.** A STOP
+    rule such as "stop if an existing test asserts the old behaviour", in this template
+    or in your brief's constraints, fires only when the test is ABOUT the behaviour you
+    changed. A test about something else may have passed only because the bug masked an
+    input it never meant to depend on (the bug's rounding hid a default offset, say).
+    Keep that test's subject and its expectation: pin the incidental input to the value
+    the bug produced (`offset_along=0`) or pass one that fits, with a comment saying
+    why, and list it in your report. Do not rewrite its expected values to match the
+    new output. If the pinned test still fails, its subject is affected after all:
+    STOP. STOP also when the failing test's subject is the old behaviour itself.
+
     **How to escalate:** Report back with status BLOCKED or NEEDS_CONTEXT. Describe
     specifically what you're stuck on, what you've tried, and what kind of help you need.
     The controller can provide more context, re-dispatch with a more capable model,

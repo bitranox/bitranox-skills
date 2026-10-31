@@ -408,6 +408,37 @@ check the fixture's pairing before suspecting it.
   a summary line, so a RED that reads "1 failed, 1 skipped" passes for a RED, and later a GREEN
   that is half skips passes for a GREEN. Run every RED with `-rs` and require 0 skipped for the
   tests you just wrote: a skipped test has not gone RED.
+- **A port that must REFUSE a connection comes from below the dynamic range, never a released
+  `bind(0)`.** A connection-refused test needs a port NOTHING is bound to for as long as it runs:
+  macOS ignores a SYN to a port that is bound but not listening, so the client waits instead of
+  being refused, and Windows reports a refusal only after about 2 s of SYN retries, so give the
+  connect a timeout well above that (5 s). A port read from `bind(("127.0.0.1", 0))` and closed
+  again sits in the OS dynamic range, and the next `bind(0)` on the host can be handed the same
+  number (measured on Linux: 2000 `bind(0)` calls returned 1865 distinct ports). Under pytest-xdist
+  another worker's server then listens on it, and the test fails `DID NOT RAISE`: green locally,
+  red once in CI. Take a port just below the dynamic range, which `bind(0)` never hands out (Linux:
+  the first number in `/proc/sys/net/ipv4/ip_local_port_range`, default 32768; Windows and macOS:
+  49152), and confirm it is free with a bind that is closed again:
+
+  ```python
+  def refusing_port() -> int:
+      if sys.platform.startswith("linux"):
+          text = Path("/proc/sys/net/ipv4/ip_local_port_range").read_text(encoding="utf-8")
+          floor = int(text.split()[0])
+      else:
+          floor = 49152  # the Windows and macOS dynamic range starts here
+      for port in range(floor - 1, 1024, -1):
+          with socket.socket() as probe:
+              try:
+                  probe.bind(("127.0.0.1", port))
+              except OSError:
+                  continue
+          return port  # the probe is closed again, so nothing is bound
+      raise RuntimeError("no free port below the dynamic range")
+  ```
+
+  The port stays free after the probe because no `bind(0)` can be handed it; only a fixed-port
+  bind can, so keep the suite's fixed-port servers off the ports just below the range.
 - **No timer in a test: no `sleep`, no poll-until-deadline loop, no `*_timeout` wait.** A fixed
   `sleep(n)` is flaky or slow, and a deadline loop or `wait(timeout=5)` is the same bet against the
   machine's load with a longer fuse. Block on an event the code under test signals - a channel/queue
@@ -448,6 +479,23 @@ check the fixture's pairing before suspecting it.
   scratch copy of the test file, never in the committed test (see "No timer in a test"): insert a
   real delay before each call under test and require the old form to fail and the new one to
   pass; the same arm finds siblings of the same shape.
+- **Assert a pacer's spacing on the instants it schedules from, not on completion stamps.** A
+  pacer that spaces events start to start promises nothing about when they END: a slow event
+  followed by a fast one puts the two end stamps closer than the interval, with no defect. When
+  the code logs or reports at completion, record each event's START in the test (wrap the call
+  the pacer issues, or have the code report the instant it scheduled) and assert on that:
+
+  ```python
+  INTERVAL = 0.18
+  starts = [0.000, 0.201]  # the pacer spaces each START at least INTERVAL apart
+  durations = [0.025, 0.001]  # a slow connect, then a fast one
+  ends = [s + d for s, d in zip(starts, durations)]  # where a log-at-completion stamps
+  print(round(starts[1] - starts[0], 3))  # 0.201: the pacer kept its promise
+  print(round(ends[1] - ends[0], 3))  # 0.177: below the 0.18 floor, and no defect
+  ```
+
+  Measured: end stamps read 0.177 s against a 0.18 s floor on one CI cell. A pacer that spaces
+  end to start makes the end stamp the right instant, so read which one the pacer computes from.
 - **When the code's own deadline kills real child processes, put every stand-in far from it.**
   Where the clock cannot be injected because the deadline governs subprocesses the test starts, a
   test that pins WHICH child the deadline caught gives each stand-in a duration clearly on one
