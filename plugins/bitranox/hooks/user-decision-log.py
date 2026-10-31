@@ -13,7 +13,11 @@ that was actually shown and answered - a call refused at PreToolUse produces no 
 
 Where it writes (user decision 2026-10-12, "Own JSONL file"): `USER-DECISIONS.jsonl` at the root of
 the MAIN checkout of the repository the session's cwd is in - a linked worktree logs there too, so
-removing the worktree does not take the log with it. The name goes into the repository's own
+removing the worktree does not take the log with it. "The session's cwd" is the event's `cwd`,
+where the shell sat when the user ANSWERED: a session that had changed into a nested repository
+(a sub-checkout under an umbrella) logs into that repository's log, not the one it started in, so
+look there before calling an answer unlogged (measured 2026-10-31: an answer reported missing was
+in the nested repository's log, written the second it was given). The name goes into the repository's own
 exclude file unless git already ignores it, never into a tracked .gitignore and never skipped for
 `track_private`: this log must not be committable. Outside a repository it falls back to
 `~/.claude/self-improve-audit/<project-slug>.USER-DECISIONS.jsonl`. The hand-written

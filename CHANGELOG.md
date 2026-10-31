@@ -30,6 +30,13 @@ a hole nobody has drawn a line under is one that gets rediscovered and half-fill
 two "versions with no entry" notes came to sit in this file disagreeing with it.
 
 
+## [10.9.14]
+
+### Changed
+
+- `git-worktrees`: new row for a finished isolated agent's worktree that refuses `git worktree remove --force` because the harness lock outlived the agent. Unlock it only once `landed.py` says its work is landed, and only when the lock's pid is this session's claude or no longer running. Any other pid is not yours.
+- `user-decision-log.py`: the docstring says the log follows the event's cwd at answer time, so a session that had changed into a nested repository logged there.
+
 ## [10.9.13]
 
 ### Changed

@@ -1,43 +1,63 @@
-# Handover - 2026-10-31, [210] sweep: (d)(e)(f)(r)(s) done through 10.9.13; (p) next
+# Handover - 2026-10-31, [210] sweep nearly done through 10.9.13; 10.9.14 in progress
 
 ## In flight
 
-- 10.9.10 (block-env-dump: git remote -v, git config --list, .env and credentials reads) is pushed
-  as ca506fa8; 10.9.11 (git_verb_dir tilde expansion, 4a356a9e) and 10.9.12 (toolbox nudge for a written
-  template-distribution script) follow it, from this
-  worktree (`.claude/worktrees/bl9-twins`, branch bl9-twins, pushes go HEAD:master). Watch each with
-  `ci_wait.py --sha <full sha>`.
-- bmk plugin 3.33.3 (devops-bmk mirror of 10.9.9) is on origin with CI and CodeQL green; bmk's
-  release workflow fires on `v*` tags only, so no PyPI release followed.
+- Pushed today from this worktree (`.claude/worktrees/bl9-twins`, branch bl9-twins, pushes go
+  HEAD:master): 10.9.10 ca506fa8 (CI green), 10.9.11 4a356a9e (CI green), 10.9.12 b6b8bbf1 and
+  10.9.13 2ba1f0a6. The last two have CI waits running as background shells (`ci_wait.py --sha <full sha>`).
+  Confirm both are green.
+- UNCOMMITTED here, for 10.9.14:
+  - `plugins/bitranox/hooks/user-decision-log.py`: a docstring sentence. "The session's cwd" means
+    where the shell was when the user ANSWERED, so a session that cd'd into a nested repo logs there.
+  - Next: one row in the `git-worktrees` SKILL.md mistakes table (near "Worktree deleted, disk
+    still full"). A harness agent worktree (`isolation: "worktree"`) that still holds uncommitted
+    edits stays git-locked, with reason `claude agent <id> (pid <session claude pid>)`, and
+    `git worktree remove --force` refuses it. Once its edits are integrated and its branch has no
+    commits of its own, check that the pid is your own session's claude (`ps -p`), then run
+    `git worktree unlock`, then `remove --force`, then `branch -D`. Needs a RED/GREEN haiku probe
+    and a `.skillwriter/checklist-*.md` in git-worktrees. Then ship queue entry
+    b76cc15ac35f308a "A worktree the harness created".
+  - In the same commit, DELETE the OPEN-WORK [210] line: every marketplace part is done. (g)-(h)
+    stay in their own private queue e8eb69253790161d for that repo's sessions; put that in the
+    commit message.
+- The local toolbox (~/.claude/skills/toolbox, no remote) has commit e161c0b: on no match,
+  decisionlog names the log it read and points `--log` at a nested repo's matching log.
+- The meta-skill-writer receipt is STARTED. Run `skill_receipt.py end meta-skill-writer` after the
+  git-worktrees edit is committed.
 
 ## Decided
 
-- `git remote -v` is refused even though the replay found 277 harmless hits and no https userinfo:
-  logged with the reason in the main checkout's EXECUTION-USER-REVIEW.md ("secret-print guard").
-- repo-gate unreadable commit/push target: "Keep fallback + note (Recommended)" (user,
-  2026-10-31); no code change follows.
-- The pve-bindsnap pair drifts in `--mirrors` because a peer session has unpushed 1.3.0 commits
-  there; theirs to mirror.
+- `git remote -v` is refused even though the replay found 277 harmless hits. Logged with the
+  reason in the main checkout's EXECUTION-USER-REVIEW.md ("secret-print guard").
+- (p) refuted: the hook logged the M6 answer at 18:14:00Z into provmm_proxmox_shim's log, because
+  the event cwd was there. The lookup ran from the umbrella. Fixed in the decisionlog lookup, not
+  in the hook.
+- (f): fixed at the source (the template CLAUDE.md, and rename_project 1ff508a). The 14 stale
+  derived copies moved to bitranox_template_py_cli's OPEN-WORK.md [40].
+- The datamax "serialise implementers in one worktree" entry was dropped: the SDD skill's Never
+  list already covers it.
+- repo-gate unreadable target: "Keep fallback + note (Recommended)" (user, 2026-10-31).
 
 ## Still open, untouched
 
-- OPEN-WORK.md [30], [96] (both waiting on live data), [210] (rest of the sweep), [510] (two user
-  decisions).
+- OPEN-WORK.md [30], [96] (both waiting on live data), [510] (two user decisions, (4) and (5);
+  ask them ONE at a time, each with upsides, downsides and a recommendation).
 
 ## Next action
 
-[210] (p): reproduce first. Does the user-decision-log hook miss the answer to an AskUserQuestion
-whose first send the premise hook refused? This session's own refused-then-resent answer WAS
-logged (queue e8eb6925, a private repo's queue). Replay the hook on the two events and compare
-before changing anything. (r) shipped in 10.9.13, (f) moved to the template's OPEN-WORK.md [40],
-(d) 10.9.12, (s) 10.9.11, (e) 10.9.10.
+Finish 10.9.14 (the git-worktrees row with RED/GREEN and its checklist, the docstring, the [210]
+deletion), then bump, commit, push and watch CI. Then [510], then cleanup: remove this worktree and
+branch after the last push, and fast-forward the main checkout. Final report to the user: run
+`/plugin marketplace update bitranox-skills` then `/reload-plugins` (installed 10.7.2); the
+pinned-fact recurrence mismatch (index 12 vs body 13); the template notebook git+https finding
+(template OPEN-WORK [30]).
 
 ## How to verify
 
 - `python3 plugins/bitranox/skills/compuse-toolbox/scripts/ci_wait.py --ref HEAD`.
 - `env -u VIRTUAL_ENV python3 plugins/bitranox/hooks/repo-gate.py --mirrors` (only the peer's
   pve-bindsnap pair may drift).
-- `contrib_queue.py queues` lists the entries [210] names.
+- `contrib_queue.py queues` lists what is still open.
 
 ## Lessons for the next nap
 
@@ -46,6 +66,8 @@ before changing anything. (r) shipped in 10.9.13, (f) moved to the template's OP
 - When peers push to the marketplace during the 5-6 minute pre-push gate (three times on 2026-10-30/31), expect the cannot-lock-ref refusal and rebase plus re-bump from origin's plugin.json; consider messaging the active peers before a push.
 - tooling: the dream_state nap flag is keyed by cwd, so a nap marked done from the main checkout does not clear the gate for a session whose cwd is a worktree; mark it for the session's own cwd.
 - When a refusal guard adds firings that a replay shows are all harmless, put a form the guard itself passes into the refusal text, so each block costs one retry (block-env-dump's redacted `git remote -v | sed` hint).
+- When an answer reads as missing from USER-DECISIONS.jsonl, search the logs of nested repos too: the hook writes where the session's cwd was at answer time (found 2026-10-31, M6 in the shim's log).
+- When a queue entry says a skill "says nothing" about X, grep the skill's Never list first: the datamax serialise-implementers entry was already a Never line.
 
 Read this, then replace the first line with `# STALE - read <date>, work continued`. Do not
 delete it - if this session ends badly it is the only record of where things stood.
