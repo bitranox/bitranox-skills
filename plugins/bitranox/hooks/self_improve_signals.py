@@ -960,6 +960,99 @@ def ship_contribution(proj, index=None, note="", max_items=200, match=None):
     return _close_contribution(proj, index, SHIPPED, note, max_items, match)
 
 
+# ---- claims: a sweeping session marks the entry it is working ----------------------------------
+# Two sessions sweeping the same queue had no way to see each other: on 2026-10-30 a peer shipped
+# two entries while another session's batch had the same two in progress, and the duplicate work
+# ended in a merge conflict. A claim is advisory and expires, so a session that died mid-entry
+# blocks nobody for longer than its own estimate; ship and drop ignore it, since whoever lands the
+# work is the one to record it.
+
+
+class ClaimHeld(Exception):
+    """Another holder has an unexpired claim on the entry. `.claim` is that claim."""
+
+    def __init__(self, claim):
+        super().__init__("claimed by %s until %s" % (claim.get("session"), claim.get("until")))
+        self.claim = claim
+
+
+def claim_state(rec, now=None):
+    """'live' or 'expired' for a record carrying a claim, None for one without."""
+    claim = rec.get("claim") if isinstance(rec, dict) else None
+    if not isinstance(claim, dict):
+        return None
+    until = claim.get("until")
+    if not isinstance(until, (int, float)):
+        return "expired"
+    return "live" if until > (time.time() if now is None else now) else "expired"
+
+
+_SESSION_ID_RE = re.compile(r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}")
+
+
+def claim_holder(holder):
+    """A claim's holder for display: a session id cut to the 8 characters its transcript file name
+    starts with, any other name as it is."""
+    holder = str(holder or "?")
+    return holder[:8] if _SESSION_ID_RE.fullmatch(holder) else holder
+
+
+def claim_label(rec, now=None):
+    """'[claimed by X, Nm left] ', '[expired claim by X] ' or '' - the prefix a listing gives an
+    entry, so every reader of the queue sees the same claim the same way."""
+    state = claim_state(rec, now)
+    if state is None:
+        return ""
+    claim = rec["claim"]
+    if state == "expired":
+        return "[expired claim by %s] " % claim_holder(claim.get("session"))
+    left = (claim["until"] - (time.time() if now is None else now)) / 60
+    return "[claimed by %s, %dm left] " % (claim_holder(claim.get("session")), left)
+
+
+def _rewrite_queue(f, cur):
+    f.write_text("\n".join(json.dumps(r, sort_keys=True) for r in cur) + "\n", encoding="utf-8")
+
+
+def claim_contribution(proj, match, holder, hours, now=None):
+    """Mark the ONE entry `match` selects as worked on by `holder` for `hours`. Returns the record.
+
+    Raises ClaimHeld when a DIFFERENT holder's claim on it has not expired; the same holder claiming
+    again restarts the clock from `now`. Raises IndexError for a selector that does not resolve to
+    exactly one entry and OSError when the queue cannot be read or written, like a close."""
+    stamp = time.time() if now is None else now
+    try:
+        f = contrib_file(proj)
+    except ValueError as exc:
+        raise IndexError(str(exc)) from exc
+    with memory_lock(f):
+        cur = _load_queue(f)
+        rec = cur[_resolve_in(cur, match=match)]
+        held = rec.get("claim")
+        if claim_state(rec, stamp) == "live" and held.get("session") != holder:
+            raise ClaimHeld(held)
+        rec["claim"] = {"session": str(holder), "cwd": os.getcwd(), "ts": stamp,
+                        "until": stamp + float(hours) * 3600}
+        _rewrite_queue(f, cur)
+    return rec
+
+
+def release_contribution(proj, match):
+    """Remove the claim from the ONE entry `match` selects. Returns the removed claim, or None when
+    it carried none. Raises like `claim_contribution`, except never ClaimHeld."""
+    try:
+        f = contrib_file(proj)
+    except ValueError as exc:
+        raise IndexError(str(exc)) from exc
+    with memory_lock(f):
+        cur = _load_queue(f)
+        rec = cur[_resolve_in(cur, match=match)]
+        held = rec.pop("claim", None)
+        if held is not None:
+            _rewrite_queue(f, cur)
+    return held
+
+
 # ---- orphaned tombstones: closes the pre-7.24.0 queue_key: path wrote under the wrong key -------
 # Before `_queue_file_key`, `rejected_file("queue_key:<H>")` hashed the PSEUDO-PATH, made absolute
 # under whatever cwd the close ran from. So a ship or drop addressed by queue key removed the entry

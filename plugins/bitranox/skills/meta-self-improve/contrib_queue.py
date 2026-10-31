@@ -19,14 +19,22 @@ Usage (cwd defaults to the current directory):
   contrib_queue.py ship --match TEXT [--note WHERE] [cwd]  # this one DELIVERED
   contrib_queue.py drop --match TEXT [--reason WHY] [cwd]  # this one is wrong or stale
   contrib_queue.py shipped | rejected [cwd]
+  contrib_queue.py claim --match TEXT [--by NAME] [--hours H] [cwd]  # I am working this one
+  contrib_queue.py release --match TEXT [cwd]
   contrib_queue.py drain [cwd]      # ONLY after the contributions actually shipped
   contrib_queue.py queues           # every queue on this machine, by key
   contrib_queue.py rehome-tombstones [--apply]  # repair closes filed under the wrong key
 
-Exit codes: 0 done (a duplicate or already-closed add included); 2 could not run: the store could
+Exit codes: 0 done (a duplicate or already-closed add included); 1 only from `claim`, when another
+holder's claim on the entry has not expired (`! held:`, naming it); 2 could not run: the store could
 not be read or written (nothing was recorded; the message starts `! failed:`), a usage error, an
-empty --what, or a selector / queue key that names nothing (`! refused:` or `no such queue`). No
-verb answers a yes/no question, so none exits 1.
+empty --what, or a selector / queue key that names nothing (`! refused:` or `no such queue`).
+
+`claim` is for a session about to work an entry while others may sweep the same queue: it stamps
+the entry with the holder (`--by`, else `$CLAUDE_CODE_SESSION_ID`) and an expiry (`--hours`,
+default 4), and `list` shows it. A claim is advisory: it expires on its own so a session that died
+mid-entry blocks nobody for long, the holder claiming again extends it, and `ship` / `drop` ignore
+it, since whoever lands the work records it.
 
 `rehome-tombstones` repairs what a `ship`/`drop` addressed as `queue_key:<hash>` wrote before
 7.24.0: the tombstone went to a file keyed by the pseudo-path, which no reader consults, so the close
@@ -54,8 +62,11 @@ Pure standard library.
 """
 import argparse
 import json
+import math
 import os
+import re
 import sys
+import time
 from pathlib import Path
 
 # self_improve_signals is the shared state layer, in the plugin's hooks dir
@@ -195,6 +206,52 @@ def _rehome_tombstones(apply):
     return 0
 
 
+def _claim_hours(text):
+    """`--hours` as a positive finite float, or None."""
+    try:
+        hours = float(text)
+    except ValueError:
+        return None
+    return hours if math.isfinite(hours) and hours > 0 else None
+
+
+def _claim_verb(args, proj):
+    """The `claim` and `release` verbs. Exit 0 done; 1 another session holds a live claim; 2 a
+    selector that names no single entry, a bad --hours, no holder, or a store error."""
+    try:
+        if args.cmd == "release":
+            held = sig.release_contribution(proj, args.match)
+            print("released: claim by %s removed" % sig.claim_holder(held.get("session")) if held
+                  else "not claimed: nothing to release")
+            return 0
+        holder = args.by.strip() or os.environ.get("CLAUDE_CODE_SESSION_ID", "").strip()
+        if not holder:
+            print("! refused: no holder - pass --by NAME (no CLAUDE_CODE_SESSION_ID in the "
+                  "environment)", file=sys.stderr)
+            return 2
+        hours = _claim_hours(args.hours)
+        if hours is None:
+            print("! refused: --hours must be a positive number (got %r)" % args.hours,
+                  file=sys.stderr)
+            return 2
+        rec = sig.claim_contribution(proj, args.match, holder, hours)
+    except sig.ClaimHeld as exc:
+        claim = exc.claim
+        print("! held: claimed by %s (cwd %s) for another %dm - leave it, or ask that session"
+              % (sig.claim_holder(claim.get("session")), claim.get("cwd") or "?",
+                 (claim["until"] - time.time()) / 60), file=sys.stderr)
+        return 1
+    except IndexError as exc:
+        print("! refused: %s" % exc, file=sys.stderr)
+        return 2
+    except OSError as exc:
+        print("! failed: could not record the %s (%s) - nothing changed" % (args.cmd, exc),
+              file=sys.stderr)
+        return 2
+    print("claimed for %gh by %s: %s" % (hours, sig.claim_holder(holder), rec.get("what") or ""))
+    return 0
+
+
 def main(argv=None):
     ap = argparse.ArgumentParser(description="Pending upstream-contribution queue (durable intent).")
     sub = ap.add_subparsers(dest="cmd")
@@ -222,6 +279,14 @@ def main(argv=None):
     rj.add_argument("proj", nargs="?", default=None)
     sl = sub.add_parser("shipped", help="show the intents that delivered, and where")
     sl.add_argument("proj", nargs="?", default=None)
+    cl = sub.add_parser("claim", help="mark ONE entry as being worked by this session (expires)")
+    cl.add_argument("--match", required=True, help="unique text from its what/target")
+    cl.add_argument("--by", default="", help="holder name (default: $CLAUDE_CODE_SESSION_ID)")
+    cl.add_argument("--hours", default="4", help="how long the claim holds (default 4)")
+    cl.add_argument("proj", nargs="?", default=None)
+    rl = sub.add_parser("release", help="remove the claim from ONE entry without closing it")
+    rl.add_argument("--match", required=True, help="unique text from its what/target")
+    rl.add_argument("proj", nargs="?", default=None)
     qs = sub.add_parser("queues", help="enumerate EVERY queue on this machine (key, open count, project)")
     qs.add_argument("proj", nargs="?", default=None)
     rh = sub.add_parser("rehome-tombstones",
@@ -289,10 +354,13 @@ def main(argv=None):
             return 0
         print("%d pending upstream contribution(s):" % len(recs))
         for i, r in enumerate(recs, 1):                 # numbered so `drop --index` can target one
-            print("  %d. %s%s%s" % (i, r.get("what") or "",
-                                    " -> %s" % r["target"] if r.get("target") else "",
-                                    " (%s)" % r["why"] if r.get("why") else ""))
+            print("  %d. %s%s%s%s" % (i, sig.claim_label(r), r.get("what") or "",
+                                      " -> %s" % r["target"] if r.get("target") else "",
+                                      " (%s)" % r["why"] if r.get("why") else ""))
         return 0
+
+    if args.cmd in ("claim", "release"):
+        return _claim_verb(args, proj)
 
     if args.cmd in ("drop", "ship"):
         shipping = args.cmd == "ship"

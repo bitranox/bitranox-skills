@@ -952,6 +952,18 @@ def test_a_contribution_listing_that_does_not_fit_says_how_many_it_left_out(tmp_
     assert "more" in block and "contrib_queue.py list" in block
 
 
+def test_a_dream_room_listing_shows_who_has_claimed_an_entry(tmp_path):
+    # Two sweeping sessions once worked the same entry because nothing showed one had started it.
+    cwd = _marketplace(tmp_path, "claimed")
+    _fill_queue(cwd, 2)
+    SIG.claim_contribution(cwd, "contribution 001", "cccccccc-1111-2222-3333-444444444444", hours=2)
+    block = S.contrib_context(cwd, budget=1500)
+    claimed = next(ln for ln in block.splitlines() if "contribution 001" in ln)
+    free = next(ln for ln in block.splitlines() if "contribution 000" in ln)
+    assert "claimed by cccccccc" in claimed
+    assert "claimed" not in free
+
+
 def test_a_contribution_budget_too_small_for_one_entry_leaves_the_count(tmp_path):
     cwd = _marketplace(tmp_path, "tiny")
     _fill_queue(cwd, 3)

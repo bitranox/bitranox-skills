@@ -429,8 +429,10 @@ the success line, abort-and-show on a miss).
 
 10. **Skill-fit -> batched change.** FIRST drain what is already pending: `contrib_queue.py list`
     (home: `<plugin>/skills/meta-self-improve/`) shows the skill/hook contributions earlier sessions
-    judged shippable but never shipped - they are part of THIS batch. Then collect this dream's
-    generalizations that match or warrant a shipped skill, and QUEUE each one
+    judged shippable but never shipped - they are part of THIS batch. Claim each one before you
+    work it (`contrib_queue.py claim --match <text>`; exit 1 means another session holds it -
+    leave it). Then collect this dream's generalizations that match or warrant a shipped skill,
+    and QUEUE each one
     (`contrib_queue.py add --what ... --target skill:<name> --why ...`) as you find it, so an
     unshipped one survives this session. Then DELIVER them via the upstream loop
     (`bitranox:meta-self-improve` -> references/upstream-propagation.md) as ONE structured change - a

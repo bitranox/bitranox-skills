@@ -24,6 +24,14 @@ Queue first, then do the steps below now or later. `contrib_queue.py list` shows
 (numbered); `contrib_queue.py drain` clears it and records each entry as shipped, so a drained
 intent is not queued again - ONLY after the change actually shipped.
 
+**Claim an entry before you work it** whenever another session may sweep the same queue.
+`contrib_queue.py claim --match <text>` stamps it with this session's id and a 4-hour expiry
+(`--hours` to change it), and `list` and the dream room's SessionStart listing show
+`[claimed by <id>, Nm left]`. A claim another session holds refuses with exit 1 and names it:
+leave that entry, or ask that session. Claim again to extend; `release --match <text>` hands it
+back unfinished. `ship` and `drop` close a claimed entry like any other, since whoever lands the
+work records it. Without a claim two sweeps work the same entry and meet in a merge conflict.
+
 **Close every entry by its OUTCOME, and close it individually.** `ship --match <text> --note <where
 it landed>` for one that DELIVERED; `drop --match <text> --reason "<why>"` for one that turns out
 FALSE (you verified the claim and it is wrong) or SUPERSEDED (a later release already covers it).

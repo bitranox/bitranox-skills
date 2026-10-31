@@ -623,3 +623,115 @@ def test_a_cp1252_console_survives_a_what_it_cannot_encode(home):
                         "/p/c1"], env=env, capture_output=True, encoding="utf-8", errors="replace")
     assert r.returncode == 0, r.stderr
     assert "queued" in r.stdout
+
+
+# ---- claim: two sweeping sessions must not work the same entry --------------------------------
+
+_SID_A = "aaaaaaaa-1111-2222-3333-444444444444"
+_SID_B = "bbbbbbbb-1111-2222-3333-444444444444"
+
+
+def _claim_cli(monkeypatch, sid, *extra):
+    monkeypatch.setenv("CLAUDE_CODE_SESSION_ID", sid)
+    return Q.main(["claim", "--match", "the gap", *extra, "/p/cl"])
+
+
+def test_a_claim_held_by_another_session_refuses_a_second_claim(monkeypatch, capsys):
+    Q.main(["add", "--what", "the gap", "--target", "skill:foo", "/p/cl"])
+    assert _claim_cli(monkeypatch, _SID_A) == 0
+    capsys.readouterr()
+    assert _claim_cli(monkeypatch, _SID_B) == 1
+    out = capsys.readouterr()
+    assert "aaaaaaaa" in out.out + out.err                    # the refusal names the holder
+    assert S.read_contributions("/p/cl")[0]["claim"]["session"] == _SID_A    # A keeps it
+
+
+def test_the_holder_may_claim_again_to_extend(monkeypatch):
+    import time
+    Q.main(["add", "--what", "the gap", "/p/cl"])
+    started = time.time() - 60
+    S.claim_contribution("/p/cl", "the gap", _SID_A, hours=1, now=started)   # still live
+    assert S.claim_state(S.read_contributions("/p/cl")[0]) == "live"
+    monkeypatch.setenv("CLAUDE_CODE_SESSION_ID", _SID_A)
+    assert Q.main(["claim", "--match", "the gap", "--hours", "2", "/p/cl"]) == 0
+    claim = S.read_contributions("/p/cl")[0]["claim"]
+    assert claim["until"] > started + 1.5 * 3600              # restarted from now, for 2h
+
+
+def test_an_expired_claim_does_not_block_another_session(monkeypatch):
+    Q.main(["add", "--what", "the gap", "/p/cl"])
+    S.claim_contribution("/p/cl", "the gap", _SID_A, hours=1, now=1000.0)   # expired long ago
+    assert _claim_cli(monkeypatch, _SID_B) == 0
+    assert S.read_contributions("/p/cl")[0]["claim"]["session"] == _SID_B
+
+
+def test_list_marks_a_live_claim_and_an_expired_one(monkeypatch, capsys):
+    Q.main(["add", "--what", "the gap", "/p/cl"])
+    Q.main(["add", "--what", "old gap", "/p/cl"])
+    S.claim_contribution("/p/cl", "old gap", _SID_B, hours=1, now=1000.0)
+    _claim_cli(monkeypatch, _SID_A)
+    capsys.readouterr()
+    assert Q.main(["list", "/p/cl"]) == 0
+    lines = capsys.readouterr().out.splitlines()
+    live = next(ln for ln in lines if "the gap" in ln)
+    stale = next(ln for ln in lines if "old gap" in ln)
+    assert "claimed by aaaaaaaa" in live
+    assert "expired claim" in stale and "bbbbbbbb" in stale
+
+
+def test_release_removes_the_claim_and_says_whose_it_was(monkeypatch, capsys):
+    Q.main(["add", "--what", "the gap", "/p/cl"])
+    _claim_cli(monkeypatch, _SID_A)
+    capsys.readouterr()
+    assert Q.main(["release", "--match", "the gap", "/p/cl"]) == 0
+    assert "aaaaaaaa" in capsys.readouterr().out
+    assert "claim" not in S.read_contributions("/p/cl")[0]
+    assert _claim_cli(monkeypatch, _SID_B) == 0                # free again
+
+
+def test_release_of_an_unclaimed_entry_is_not_an_error(capsys):
+    Q.main(["add", "--what", "the gap", "/p/cl"])
+    capsys.readouterr()
+    assert Q.main(["release", "--match", "the gap", "/p/cl"]) == 0
+    assert "not claimed" in capsys.readouterr().out
+
+
+def test_claim_without_a_session_id_or_by_is_refused(monkeypatch, capsys):
+    Q.main(["add", "--what", "the gap", "/p/cl"])
+    monkeypatch.delenv("CLAUDE_CODE_SESSION_ID", raising=False)
+    assert Q.main(["claim", "--match", "the gap", "/p/cl"]) == 2
+    assert "--by" in capsys.readouterr().err
+    assert "claim" not in S.read_contributions("/p/cl")[0]
+
+
+def test_claim_by_name_works_without_a_session_id(monkeypatch):
+    Q.main(["add", "--what", "the gap", "/p/cl"])
+    monkeypatch.delenv("CLAUDE_CODE_SESSION_ID", raising=False)
+    assert Q.main(["claim", "--match", "the gap", "--by", "nightly-sweep", "/p/cl"]) == 0
+    assert S.read_contributions("/p/cl")[0]["claim"]["session"] == "nightly-sweep"
+
+
+def test_claim_refuses_an_ambiguous_or_missing_match(monkeypatch, capsys):
+    Q.main(["add", "--what", "the gap one", "/p/cl"])
+    Q.main(["add", "--what", "the gap two", "/p/cl"])
+    assert _claim_cli(monkeypatch, _SID_A) == 2                # "the gap" matches both
+    monkeypatch.setenv("CLAUDE_CODE_SESSION_ID", _SID_A)
+    assert Q.main(["claim", "--match", "nothing like it", "/p/cl"]) == 2
+    assert all("claim" not in r for r in S.read_contributions("/p/cl"))
+
+
+@pytest.mark.parametrize("hours", ["0", "-1", "nan", "inf"])
+def test_claim_refuses_a_duration_that_is_not_a_positive_finite_number(monkeypatch, hours):
+    Q.main(["add", "--what", "the gap", "/p/cl"])
+    assert _claim_cli(monkeypatch, _SID_A, "--hours", hours) == 2
+    assert "claim" not in S.read_contributions("/p/cl")[0]
+
+
+def test_a_claimed_entry_still_ships_and_stays_closed(monkeypatch, capsys):
+    Q.main(["add", "--what", "the gap", "/p/cl"])
+    _claim_cli(monkeypatch, _SID_A)
+    assert Q.main(["ship", "--match", "the gap", "--note", "1.0", "/p/cl"]) == 0
+    assert S.read_contributions("/p/cl") == []
+    capsys.readouterr()
+    Q.main(["add", "--what", "the gap", "/p/cl"])
+    assert "shipped earlier" in capsys.readouterr().out

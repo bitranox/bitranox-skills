@@ -30,6 +30,20 @@ a hole nobody has drawn a line under is one that gets rediscovered and half-fill
 two "versions with no entry" notes came to sit in this file disagreeing with it.
 
 
+## [10.9.6]
+
+### Added
+
+- `contrib_queue.py claim --match <text> [--by NAME] [--hours H]` marks a queued contribution as
+  being worked by this session (`$CLAUDE_CODE_SESSION_ID` unless `--by` names a holder) for a
+  limited time (default 4 hours), and `release --match <text>` hands it back unfinished. A claim
+  another holder has not let expire refuses with exit 1 and names it; the holder claiming again
+  extends it; `ship` and `drop` close a claimed entry like any other. `list` and the dream room's
+  SessionStart listing show `[claimed by <id>, Nm left]` or `[expired claim by <id>]`.
+- meta-self-improve's upstream loop and the skill-fit steps of meta-dream-tree and
+  meta-dream-crosstree claim each pending entry before working it and leave one another session
+  holds.
+
 ## [10.9.5]
 
 ### Changed

@@ -30,6 +30,7 @@ import open_work
 from self_improve_signals import (
     MEMORY_DIRNAME,
     audit_file,
+    claim_label,
     dream_due,
     dream_mode,
     knowledge_store_empty,
@@ -189,9 +190,9 @@ def contrib_context(proj, budget=None):
                 "that have NOT shipped yet. They persist until shipped, so pick them up when the "
                 "work suits (route via bitranox:meta-self-improve -> references/upstream-propagation.md; "
                 "a dream drains the queue once they land):\n" % len(recs))
-        lines = ["- %s%s%s" % (r.get("what") or "",
-                               " -> %s" % r["target"] if r.get("target") else "",
-                               " (%s)" % r["why"] if r.get("why") else "")
+        lines = ["- %s%s%s%s" % (claim_label(r), r.get("what") or "",
+                                 " -> %s" % r["target"] if r.get("target") else "",
+                                 " (%s)" % r["why"] if r.get("why") else "")
                  for r in recs]
         allowed = _ESSENTIALS_CEILING_BYTES if budget is None else budget
         if allowed < _listing_floor(head, lines, _CONTRIB_MORE):

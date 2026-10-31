@@ -163,7 +163,9 @@ Create one todo per step.
    at from two levels, which the chain-only `--check` cannot see.
 7. **Skill-fit -> batched change.** FIRST `contrib_queue.py list` (home:
    `<plugin>/skills/meta-self-improve/`) - contributions earlier sessions judged shippable but never
-   shipped are part of THIS batch. QUEUE each new one as you find it (`contrib_queue.py add --what ...
+   shipped are part of THIS batch. Claim each one before you work it (`contrib_queue.py claim
+   --match <text>`; exit 1 means another session holds it - leave it). QUEUE each new one as
+   you find it (`contrib_queue.py add --what ...
    --target skill:<name> --why ...`) so it survives this session, then - as a REQUIRED end-of-dream
    action, not an optional one - DELIVER them via `bitranox:meta-self-improve` -> "Propagating skill
    (or hook) improvements upstream" (self-PR in `propose`, commit-or-PR in `auto`, skipped in `off`).
