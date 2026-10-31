@@ -1636,3 +1636,74 @@ def test_main_nudges_a_condenser_write_with_the_shipped_tool(home, monkeypatch, 
     assert N.main() == 0
     out = capsys.readouterr().out
     assert "transcript_tail.py" in out and "--all --role both" in out
+
+
+# ---- a hand-written CI-template distribution script: template_sweep's chore ------------------
+#
+# The miss: a Write of a scratch script that distributed a CI template to 27 repos, committed,
+# gated and pushed, while the local template_sweep jig did exactly that. Replayed over the
+# transcript corpus: 5 of 8,673 Write bodies, every one such a script; 0 of 14,665 Edit fragments.
+
+_DIST_SCRIPT = '''#!/usr/bin/env python3
+"""Distribute the default_cicd_private template to an explicit repo list, one repo at a time."""
+import subprocess
+import sys
+
+for repo in sys.argv[1:]:
+    subprocess.run(["./distribute.sh", repo], check=True)
+    subprocess.run(["git", "-C", repo, "commit", "-am", "ci: distribute"], check=True)
+    subprocess.run(["git", "-C", repo, "push"], check=True)
+'''
+
+
+@pytest.mark.parametrize("tool_name", ["Write", "Edit", "MultiEdit", "NotebookEdit"])
+def test_a_written_template_distribution_script_points_at_template_sweep(tool_name):
+    hit = N.match_tool(_DIST_SCRIPT, tool_name)
+    assert hit is not None and hit[0] == "template_sweep", hit
+
+
+@pytest.mark.parametrize("variant", [
+    _DIST_SCRIPT.replace("default_cicd_private", "default_cicd_public"),
+    _DIST_SCRIPT.replace("the default_cicd_private template", "a default_cicd template's .github"),
+    _DIST_SCRIPT.replace("#!/usr/bin/env python3\n", "").replace("import subprocess\n", "import subprocess as sp\n"),
+    "#!/usr/bin/env bash\n# Distribute default_cicd_public to every consumer\n"
+    "for r in a b; do ./distribute.sh \"$r\"; git -C \"$r\" push; done\n",
+])
+def test_the_distribution_signature_covers_its_spellings(variant):
+    hit = N.match_tool(variant, "Write")
+    assert hit is not None and hit[0] == "template_sweep", hit
+
+
+@pytest.mark.parametrize("text", [
+    # prose that names the chore is not a script performing it: handovers, commit messages, plans
+    "# Handover\n\nDistribute default_cicd_private to the remaining 12 repos, then gate each.\n",
+    "ci: distribute default_cicd_private 1d6765f\n\n- Free-threaded cells from [tool.ci]\n",
+    # the jig's own source and tests name themselves
+    _DIST_SCRIPT + "\n# superseded by template_sweep\n",
+    # a script that runs subprocess for something else, beside a mention of a template
+    '"""Drop the Quickstart notebook from one repo."""\nimport subprocess\n'
+    "# the notebook came from default_cicd_private\n",
+])
+def test_other_text_naming_a_template_is_not_the_distribution_chore(text):
+    hit = N.match_tool(text, "Write")
+    assert hit is None or hit[0] != "template_sweep", hit
+
+
+def test_the_distribution_signature_is_not_a_command_rule():
+    hit = N.match_tool(_DIST_SCRIPT, "Bash")
+    assert hit is None or hit[0] != "template_sweep", hit
+
+
+def test_main_nudges_a_distribution_script_write_when_the_jig_is_installed(home, monkeypatch, capsys):
+    _with_tool(home, "template_sweep")
+    _feed(monkeypatch, {"tool_name": "Write", "session_id": "ts1",
+                        "tool_input": {"file_path": "/tmp/dist_batch.py", "content": _DIST_SCRIPT}})
+    assert N.main() == 0
+    assert "template_sweep" in capsys.readouterr().out
+
+
+def test_main_is_silent_on_a_distribution_script_without_the_jig(home, monkeypatch, capsys):
+    _feed(monkeypatch, {"tool_name": "Write", "session_id": "ts2",
+                        "tool_input": {"file_path": "/tmp/dist_batch.py", "content": _DIST_SCRIPT}})
+    assert N.main() == 0
+    assert "template_sweep" not in capsys.readouterr().out

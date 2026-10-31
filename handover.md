@@ -1,9 +1,10 @@
-# Handover - 2026-10-31, [210] sweep: (e) 10.9.10, (s) 10.9.11; (d) next
+# Handover - 2026-10-31, [210] sweep: (e) 10.9.10, (s) 10.9.11, (d) 10.9.12; (f) next
 
 ## In flight
 
 - 10.9.10 (block-env-dump: git remote -v, git config --list, .env and credentials reads) is pushed
-  as ca506fa8; 10.9.11 (git_verb_dir tilde expansion) is committed and pushed after it, from this
+  as ca506fa8; 10.9.11 (git_verb_dir tilde expansion, 4a356a9e) and 10.9.12 (toolbox nudge for a written
+  template-distribution script) follow it, from this
   worktree (`.claude/worktrees/bl9-twins`, branch bl9-twins, pushes go HEAD:master). Watch each with
   `ci_wait.py --sha <full sha>`.
 - bmk plugin 3.33.3 (devops-bmk mirror of 10.9.9) is on origin with CI and CodeQL green; bmk's
@@ -25,9 +26,10 @@
 
 ## Next action
 
-[210] (d): the toolbox nudge does not fire on a Write of a new script whose docstring states a
-chore a local jig covers (queue 883992d0); find the nudge hook and decide whether a Write matcher
-belongs there. Then (f), (r), (p). (s) shipped in 10.9.11.
+[210] (f): template CLAUDE.md point (4), rename_project collapsing both [project.scripts] keys
+into a duplicate TOML key for a single-word name (queue 114e718b). The 2026-10-29 decision log
+says "fix in rename_project"; check bitranox_template_py_cli's git log first, since a fix may
+already be there. Then (r), (p). (d) shipped in 10.9.12, (s) in 10.9.11.
 
 ## How to verify
 

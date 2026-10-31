@@ -481,6 +481,21 @@ _AUTHORED_ONLY_RULES = [
      "OR a list of blocks and a hand flattener drops one shape silently - `--all --role both "
      "<transcript>` lists every text turn with its JSONL line number (`--prompts-only` for typed "
      "prompts, `--tool NAME` for one tool's calls)"),
+    # `template_sweep` (a LOCAL toolbox jig, silent where it is not installed): a script that says
+    # it distributes a default_cicd CI template and runs commands, i.e. a hand-rolled sweep of the
+    # template's consumers. Prose naming the same chore (a handover, a commit message, a plan) runs
+    # nothing, hence the subprocess or shell-shebang condition; the jig's own source and tests name
+    # it and are excluded. Replayed over the transcript corpus: 5 of 8,673 Write bodies, each a
+    # hand-written distribution script, against 45 for the template name near "distribute" alone;
+    # 0 of 14,665 Edit fragments.
+    (re.compile(r"(?s)\A(?!.*\btemplate_sweep\b)(?=.*(?:\bsubprocess\b|\A#![^\n]*\b(?:ba)?sh\b))"
+                r"(?=.*\b[Dd]istribut\w*\s+(?:the\s+|a\s+)?default_cicd(?:_public|_private)?\b)"),
+     "template_sweep",
+     "hand-writing a script that distributes a CI template to its consumer repos: the jig "
+     "preflights every repo against its LIVE remote before touching any, never hands a worktree "
+     "or the template itself to `distribute`, names the gate's churn files in the commit, and "
+     "only believes a push once origin holds the sha (`survey`, `distribute`, `commit`, `gate`, "
+     "`ci-wait`)"),
 ]
 
 

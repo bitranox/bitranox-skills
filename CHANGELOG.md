@@ -30,6 +30,12 @@ a hole nobody has drawn a line under is one that gets rediscovered and half-fill
 two "versions with no entry" notes came to sit in this file disagreeing with it.
 
 
+## [10.9.12]
+
+### Added
+
+- `toolbox-nudge.py` points a Write or Edit of a hand-written CI-template distribution script at the local `template_sweep` jig. That is a script that says it distributes a `default_cicd` template and runs commands. Prose naming the chore (a handover, a commit message) does not count. The rule is silent wherever the jig is not installed.
+
 ## [10.9.11]
 
 ### Fixed
