@@ -1,29 +1,12 @@
-# Handover - 2026-10-31, [210] sweep nearly done through 10.9.13; 10.9.14 in progress
+# Handover - 2026-10-31, [210] and [510] closed; 10.9.14 pushed; cleanup next
 
 ## In flight
 
 - Pushed today from this worktree (`.claude/worktrees/bl9-twins`, branch bl9-twins, pushes go
-  HEAD:master): 10.9.10 ca506fa8 (CI green), 10.9.11 4a356a9e (CI green), 10.9.12 b6b8bbf1 and
-  10.9.13 2ba1f0a6. The last two have CI waits running as background shells (`ci_wait.py --sha <full sha>`).
-  Confirm both are green.
-- UNCOMMITTED here, for 10.9.14:
-  - `plugins/bitranox/hooks/user-decision-log.py`: a docstring sentence. "The session's cwd" means
-    where the shell was when the user ANSWERED, so a session that cd'd into a nested repo logs there.
-  - Next: one row in the `git-worktrees` SKILL.md mistakes table (near "Worktree deleted, disk
-    still full"). A harness agent worktree (`isolation: "worktree"`) that still holds uncommitted
-    edits stays git-locked, with reason `claude agent <id> (pid <session claude pid>)`, and
-    `git worktree remove --force` refuses it. Once its edits are integrated and its branch has no
-    commits of its own, check that the pid is your own session's claude (`ps -p`), then run
-    `git worktree unlock`, then `remove --force`, then `branch -D`. Needs a RED/GREEN haiku probe
-    and a `.skillwriter/checklist-*.md` in git-worktrees. Then ship queue entry
-    b76cc15ac35f308a "A worktree the harness created".
-  - In the same commit, DELETE the OPEN-WORK [210] line: every marketplace part is done. (g)-(h)
-    stay in their own private queue e8eb69253790161d for that repo's sessions; put that in the
-    commit message.
-- The local toolbox (~/.claude/skills/toolbox, no remote) has commit e161c0b: on no match,
-  decisionlog names the log it read and points `--log` at a nested repo's matching log.
-- The meta-skill-writer receipt is STARTED. Run `skill_receipt.py end meta-skill-writer` after the
-  git-worktrees edit is committed.
+  HEAD:master): 10.9.10 through 10.9.14. CI is green on 10.9.10 through 10.9.12; 10.9.13 and
+  10.9.14 have CI waits running as background shells. Confirm both.
+- The local toolbox (~/.claude/skills/toolbox, no remote) has commit e161c0b (the decisionlog
+  nested-log pointer).
 
 ## Decided
 
@@ -36,21 +19,20 @@
   derived copies moved to bitranox_template_py_cli's OPEN-WORK.md [40].
 - The datamax "serialise implementers in one worktree" entry was dropped: the SDD skill's Never
   list already covers it.
+- [510] closed: (4) and (5) were both fixed in 10.6.0 (9e44f63f) and are test-pinned, so no
+  user decision is left.
 - repo-gate unreadable target: "Keep fallback + note (Recommended)" (user, 2026-10-31).
 
 ## Still open, untouched
 
-- OPEN-WORK.md [30], [96] (both waiting on live data), [510] (two user decisions, (4) and (5);
-  ask them ONE at a time, each with upsides, downsides and a recommendation).
+- OPEN-WORK.md [30], [96]: both waiting on live data.
 
 ## Next action
 
-Finish 10.9.14 (the git-worktrees row with RED/GREEN and its checklist, the docstring, the [210]
-deletion), then bump, commit, push and watch CI. Then [510], then cleanup: remove this worktree and
-branch after the last push, and fast-forward the main checkout. Final report to the user: run
-`/plugin marketplace update bitranox-skills` then `/reload-plugins` (installed 10.7.2); the
-pinned-fact recurrence mismatch (index 12 vs body 13); the template notebook git+https finding
-(template OPEN-WORK [30]).
+Cleanup: once CI is green on the last push, remove this worktree and its branch, then fast-forward
+the main checkout. Final report to the user: run `/plugin marketplace update bitranox-skills`
+then `/reload-plugins` (installed 10.7.2); the pinned-fact recurrence mismatch (index 12 vs body
+13); the template notebook git+https finding (template OPEN-WORK [30]).
 
 ## How to verify
 
