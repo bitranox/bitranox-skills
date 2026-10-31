@@ -1,23 +1,22 @@
-# Handover - 2026-10-31, [210] sweep: (a)-(c), (i)-(o) shipped in 10.9.4-10.9.8; (k) next
+# Handover - 2026-10-31, [210] sweep: (e) shipped in 10.9.10; (s) next
 
 ## In flight
 
-- 10.9.7 (compuse-ssh: remote-state waiters, stdout JSON envelopes) is pushed (147e1f65); its CI
-  wait runs as a background shell `ci_wait.py --sha 147e1f651af71de26a5159bb0c73aaa199db2487`.
-  When it reports, confirm both workflows green; nothing else waits on it.
-- Uncommitted in this worktree (`.claude/worktrees/bl9-twins`, branch bl9-twins, pushes go
-  HEAD:master): `OPEN-WORK.md` ([210] gained (p)-(s)) and this file. Both ride the next commit.
-- 10.9.6 (contrib_queue claim/release) and 10.9.4 (git_verb_dir leading assignments) are on
-  origin with CI and the release workflow green.
+- 10.9.10 (block-env-dump also refuses `git remote -v`, `git config --list` and reads of `.env` or
+  credentials files) is committed from this worktree (`.claude/worktrees/bl9-twins`, branch
+  bl9-twins, pushes go HEAD:master); watch its CI with `ci_wait.py --sha <full sha>`.
+- bmk plugin 3.33.3 (devops-bmk mirror of 10.9.9) is pushed; its CI wait runs as a background
+  shell from the bmk checkout. No PyPI release follows: bmk's release workflow fires on `v*` tags
+  only.
 
 ## Decided
 
+- `git remote -v` is refused even though the replay found 277 harmless hits and no https userinfo:
+  logged with the reason in the main checkout's EXECUTION-USER-REVIEW.md ("secret-print guard").
 - repo-gate unreadable commit/push target: "Keep fallback + note (Recommended)" (user,
-  2026-10-31, verbatim in the main checkout's EXECUTION-USER-REVIEW.md); no code change follows.
-- Queue entries for (a), (b), (c), (m) are shipped; claims are this session's (ca45088c) only on
-  entries already shipped, so nothing is held.
-- The pve-bindsnap pair drifts in `--mirrors` because a peer session has two unpushed 1.3.0
-  commits there; theirs to mirror, not this session's.
+  2026-10-31); no code change follows.
+- The pve-bindsnap pair drifts in `--mirrors` because a peer session has unpushed 1.3.0 commits
+  there; theirs to mirror.
 
 ## Still open, untouched
 
@@ -26,10 +25,9 @@
 
 ## Next action
 
-[210] (e): a background agent extends `plugins/bitranox/hooks/block-env-dump.py` in the worktree
-`.claude/worktrees/secret-print` (branch secret-print-guard), uncommitted, and reports by
-SendMessage. Integrate its diff after checking its replay numbers, then (d), (f). (k) and (q)
-shipped in 10.9.9 (devops-bmk mirrored to bmk as a plugin-only 3.33.3 push).
+[210] (s): make `shell_text.git_verb_dir` expand a leading `~` the way `directory_change` does
+with `expand_home=True` (plugins/bitranox/hooks/shell_text.py), TDD in hooks/tests. Then (d), (f),
+(r), (p).
 
 ## How to verify
 
@@ -44,6 +42,7 @@ shipped in 10.9.9 (devops-bmk mirrored to bmk as a plugin-only 3.33.3 push).
 - When a background CI wait uses `--ref HEAD` and a later local commit moves HEAD, read the sha it printed before trusting its verdict; pass `--sha <full sha>` for a wait that outlives the next commit.
 - When peers push to the marketplace during the 5-6 minute pre-push gate (three times on 2026-10-30/31), expect the cannot-lock-ref refusal and rebase plus re-bump from origin's plugin.json; consider messaging the active peers before a push.
 - tooling: the dream_state nap flag is keyed by cwd, so a nap marked done from the main checkout does not clear the gate for a session whose cwd is a worktree; mark it for the session's own cwd.
+- When a refusal guard adds firings that a replay shows are all harmless, put a form the guard itself passes into the refusal text, so each block costs one retry (block-env-dump's redacted `git remote -v | sed` hint).
 
 Read this, then replace the first line with `# STALE - read <date>, work continued`. Do not
 delete it - if this session ends badly it is the only record of where things stood.

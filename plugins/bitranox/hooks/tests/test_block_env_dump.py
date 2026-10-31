@@ -120,3 +120,184 @@ def test_main_fails_open_on_bad_input():
 @pytest.mark.parametrize("command", ["uv --quiet run env", "uv --directory x run env"])
 def test_main_refuses_a_dump_run_by_uv_behind_a_global_option(command):
     assert _main(command) == 2
+
+
+# A git remote listing prints each URL, and a URL can carry a token in its userinfo.
+GIT_REMOTE_BLOCKED = [
+    "git remote -v",
+    "git remote --verbose",
+    "git -C /opt/app remote -v",
+    "cd /opt/app && git remote -v",
+    "git remote -v | head -2",
+    "git --no-pager remote -v",
+    "git remote -v > r.txt; cat r.txt",
+]
+GIT_REMOTE_ALLOWED = [
+    "git remote",
+    "git remote get-url origin | sed -E 's#//[^@/]*@#//***@#'",
+    "git remote -v | sed -E 's#//[^@/]*@#//***@#'",
+    "git remote -v > /tmp/remotes.txt",
+    "git remote add origin https://example.com/app.git",
+    "git remote set-url origin git@example.com:app.git",
+    # `-v` with a verb is that verb run verbosely, not the URL listing.
+    "git remote -v update",
+]
+
+# A full git config listing prints insteadOf URLs, credential helpers and http extraheaders.
+GIT_CONFIG_BLOCKED = [
+    "git config -l",
+    "git config --list",
+    "git config --global --list",
+    "git config --list --show-origin",
+    "git -C /opt/app config --list",
+    "git -c core.pager=cat config -l | sort",
+    "git config list",
+    "git config --system list",
+]
+GIT_CONFIG_ALLOWED = [
+    "git config --get user.name",
+    "git config user.name",
+    "git config --list --name-only",
+    "git config -l | grep -c insteadof",
+    "git config --list > /tmp/cfg.txt",
+    "git config --global core.fileMode false",
+    "git config --get-regexp '^user\\.'",
+]
+
+# A reader of a .env file, or of a file under a credentials directory, prints the secrets in it.
+SECRET_FILE_BLOCKED = [
+    "cat .env",
+    "cat /opt/app/.env",
+    "head -5 .env.local",
+    "tail .env.production",
+    "less ./config/.env",
+    "cat .env | sort",
+    "tr '\\n' ' ' < .env",
+    "sudo cat /opt/app/credentials/db_password.txt",
+    "cat ~/.credentials/token",
+    "cat $HOME/.credentials/api.key | head -1",
+    "cat \"/opt/app/credentials/key one.txt\"",
+]
+SECRET_FILE_ALLOWED = [
+    "cat .env.example",
+    "cat .env.sample",
+    "cat /opt/app/.env.template",
+    "grep -c API_TOKEN .env",
+    "cut -d= -f1 .env",
+    "cat .env | cut -d= -f1",
+    "cat .env | grep -c NAME",
+    "wc -c /opt/app/credentials/token",
+    "sudo cat /opt/app/credentials/token | ssh host 'umask 077; cat > /opt/k'",
+    "cat .envrc",
+    "cat app.env.md",
+    "cat credentials.json",
+    "cat /opt/app/credentials",
+    "ls /opt/app/credentials/",
+    "source .env",
+]
+
+
+@pytest.mark.parametrize(
+    "command", GIT_REMOTE_BLOCKED + GIT_CONFIG_BLOCKED + SECRET_FILE_BLOCKED
+)
+def test_a_secret_bearing_print_is_found(command):
+    assert G.dump_leaks(command) != []
+
+
+@pytest.mark.parametrize(
+    "command", GIT_REMOTE_ALLOWED + GIT_CONFIG_ALLOWED + SECRET_FILE_ALLOWED
+)
+def test_a_narrow_secret_query_passes(command):
+    assert G.dump_leaks(command) == []
+
+
+@pytest.mark.parametrize(
+    ("command", "shape"),
+    [
+        ("env", G.Shape.ENVIRONMENT),
+        ("git remote -v", G.Shape.GIT_REMOTE),
+        ("git config --list", G.Shape.GIT_CONFIG),
+        ("cat .env", G.Shape.SECRET_FILE),
+        ("env FOO=1 git remote -v", G.Shape.GIT_REMOTE),
+        ("git config -l > c.txt; tail c.txt", G.Shape.GIT_CONFIG),
+    ],
+)
+def test_each_print_is_classified_by_its_shape(command, shape):
+    assert [found for found, _ in G.secret_prints(command)] == [shape]
+
+
+@pytest.mark.parametrize(
+    ("command", "narrow_form"),
+    [
+        ("git remote -v", "git remote get-url origin | sed -E 's#//[^@/]*@#//***@#'"),
+        ("git config --list", "git config --get <key>"),
+        ("cat .env", "grep -c NAME .env"),
+        ("env | tail -3", "printenv NAME"),
+    ],
+)
+def test_main_names_the_narrow_form_for_the_shape(capsys, command, narrow_form):
+    assert _main(command) == 2
+    err = capsys.readouterr().err
+    assert narrow_form in err
+    assert err.rstrip("\n").endswith(shell_text.WHOLE_CALL_REFUSED)
+
+
+_REDACTED_LISTING = "git remote -v | sed -E 's#//[^@/]*@#//***@#'"
+
+
+def test_git_remote_refusal_offers_the_full_listing_redacted_and_the_offer_passes(capsys):
+    # A blocked `git remote -v | head` must be one retry away from the answer it wanted.
+    assert _main("git remote -v | head -5") == 2
+    assert _REDACTED_LISTING in capsys.readouterr().err
+    assert G.secret_prints(_REDACTED_LISTING) == []
+
+
+def test_main_names_only_the_shapes_the_command_has(capsys):
+    assert _main("git remote -v") == 2
+    err = capsys.readouterr().err
+    assert "git remote get-url" in err
+    assert "printenv NAME" not in err
+    assert "git config --get" not in err
+
+
+def test_main_names_every_shape_of_a_mixed_command(capsys):
+    assert _main("git config -l; cat .env") == 2
+    err = capsys.readouterr().err
+    assert "git config --get <key>" in err
+    assert "grep -c NAME .env" in err
+
+
+# A print captured into a variable, or a group whose combined output goes elsewhere, shows nothing.
+CAPTURED_OR_GROUPED_ALLOWED = [
+    "TOK=$(sudo cat /opt/app/credentials/t.token | tr -d '\\r\\n'); echo ok",
+    "a=$(cat .env | sha256sum | cut -c1-12); echo \"$a\"",
+    "for f in a b; do t=$(sudo cat \"/opt/app/credentials/$f\" | tr -d '\\r\\n'); done",
+    "X=`cat .env | tr -d x`",
+    "{ printf 'u:'; cat ~/.credentials/pw; } | ssh host 'sudo chpasswd'",
+    "{ printf 'A: '; sudo cat /opt/app/credentials/t | tr -d x; printf '\\n'; } > \"$D/h\"",
+    "{ git remote -v; git config -l; } > /tmp/both.txt",
+    "{ cat .env; }>/tmp/e.txt",
+    # The word split leaves a lone backtick: the words after it are the substitution's command.
+    "X=` cat .env | tr -d x`",
+]
+CAPTURED_OR_GROUPED_BLOCKED = [
+    "{ printf 'u:'; cat ~/.credentials/pw; }",
+    "{ cat .env; } | sort",
+    "{ git remote -v; } > r.txt; tail r.txt",
+    "X=$(mktemp) git remote -v",
+    # What the group is piped into prints on its own.
+    "{ echo a; } | cat .env",
+    # A group never closed is judged as if it printed.
+    "{ cat .env",
+    "{ echo start; { cat .env; } | head -2; } > /dev/null; cat /opt/app/credentials/k",
+]
+
+
+@pytest.mark.parametrize("command", CAPTURED_OR_GROUPED_ALLOWED)
+def test_a_captured_or_redirected_group_print_passes(command):
+    assert G.dump_leaks(command) == []
+
+
+@pytest.mark.parametrize("command", CAPTURED_OR_GROUPED_BLOCKED)
+def test_a_group_or_assignment_that_still_prints_is_found(command):
+    assert G.dump_leaks(command) != []

@@ -30,6 +30,17 @@ a hole nobody has drawn a line under is one that gets rediscovered and half-fill
 two "versions with no entry" notes came to sit in this file disagreeing with it.
 
 
+## [10.9.10]
+
+### Changed
+
+- `block-env-dump.py` now refuses every unfiltered print of secret-bearing output, not only an environment dump:
+  - `git remote -v` / `--verbose`. The refusal offers `git remote`, and `git remote -v` or `get-url` piped through a userinfo-redacting `sed`.
+  - `git config -l` / `--list` / `list`, unless `--name-only` is given.
+  - A reader (`cat`, `head`, `tail`, ...) of a `.env` or `.env.<suffix>` file, or of a file inside a `credentials/` or `.credentials/` directory. `.env.example`, `.env.sample` and `.env.template` still pass.
+  - The refusal names only the shapes the command has, with the narrow form for each.
+- A reader whose output is captured into a variable (`T=$(cat f | tr -d x)`) passes. So does a `{ ...; }` group sent to a file or into a consumer.
+
 ## [10.9.9]
 
 ### Changed
