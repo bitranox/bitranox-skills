@@ -1,4 +1,4 @@
-# Handover - 2026-10-31, [210] sweep: (e) 10.9.10, (s) 10.9.11, (d) 10.9.12; (f) next
+# Handover - 2026-10-31, [210] sweep: (d)(e)(f)(r)(s) done through 10.9.13; (p) next
 
 ## In flight
 
@@ -26,10 +26,11 @@
 
 ## Next action
 
-[210] (f): template CLAUDE.md point (4), rename_project collapsing both [project.scripts] keys
-into a duplicate TOML key for a single-word name (queue 114e718b). The 2026-10-29 decision log
-says "fix in rename_project"; check bitranox_template_py_cli's git log first, since a fix may
-already be there. Then (r), (p). (d) shipped in 10.9.12, (s) in 10.9.11.
+[210] (p): reproduce first. Does the user-decision-log hook miss the answer to an AskUserQuestion
+whose first send the premise hook refused? This session's own refused-then-resent answer WAS
+logged (queue e8eb6925, a private repo's queue). Replay the hook on the two events and compare
+before changing anything. (r) shipped in 10.9.13, (f) moved to the template's OPEN-WORK.md [40],
+(d) 10.9.12, (s) 10.9.11, (e) 10.9.10.
 
 ## How to verify
 

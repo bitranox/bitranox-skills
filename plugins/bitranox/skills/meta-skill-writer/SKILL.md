@@ -1097,6 +1097,12 @@ neither the receipt nor the skill load. A SKILL.md edit that no skill-loading su
 is applied in the agent that ran this procedure. A marketplace repo may additionally require a
 committed review artifact (a `.skillwriter/checklist-<date>.md` next to the SKILL.md, all boxes
 checked) co-changed with any SKILL.md change - its commit gate enforces that; see the repo's CONTRIBUTING.
+That gate checks each skill DIRECTORY on its own. A change that lands in several skills of the
+repo (one sentence added to two of them) needs a checklist in EACH skill's `.skillwriter/`, each
+recording its own probe; one checklist covering the set is refused for every
+other skill. The gate reports that only after its test run has finished (minutes on a push), so
+before committing, list the skill directories the change touches and confirm each has a new
+checklist of its own.
 
 **A passing gate is not evidence the procedure ran for THIS change.** Such a gate proves only that
 some checklist file was co-changed and holds no open box (or that the change was a pure table
@@ -1281,6 +1287,14 @@ Write skill that addresses those specific rationalizations. Don't add extra cont
 > When developing a skill in the current directory (e.g., `./my-skill/SKILL.md`), GREEN and REFACTOR tests MUST use that file - not whatever may be installed at `~/.claude/skills/`. Two approaches:
 > 1. **Paste content into prompt** (subagent testing): Read the current `./SKILL.md` and paste its full content into the subagent prompt.
 > 2. **Copy to project skills dir** (live-agent testing): `cp -r ./my-skill/ .claude/skills/my-skill/` - project-level skills take priority over user-space.
+
+**Execute every command and snippet the edit adds BEFORE the GREEN probe.** Run each one against
+the real target, or a fake standing in for it (a stub `ssh` on PATH, a scratch repo), and keep its
+output for the review artifact. A probe copies a snippet verbatim, so a broken one passes straight
+through it as compliance: a wait-loop whose check could never see the process gone (its `pgrep`
+exits 1 once nothing matches) was quoted word for word by a GREEN probe that read as a pass, and
+only a fake-ssh run caught it. A probe tests whether the text is FOLLOWED, never whether what it
+says WORKS.
 
 **How to dispatch a verification test:**
 
@@ -1537,6 +1551,9 @@ Deploying untested skills = deploying untested code. It's a violation of quality
 - [ ] One excellent example (not multi-language)
 - [ ] Cross-references use skill name with REQUIRED markers (no `@` links)
 - [ ] Test uses current working-directory version (not a stale copy at `~/.claude/skills/`)
+- [ ] Every command or snippet the change adds was EXECUTED (real target or a fake) before the
+      GREEN probe, and its output is in the review artifact
+- [ ] One `.skillwriter/checklist-*.md` in EACH skill directory the change touches
 - [ ] Run scenarios WITH skill - verify agents now comply
 
 **REFACTOR Phase - Close Loopholes:**
