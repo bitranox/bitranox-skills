@@ -30,6 +30,16 @@ a hole nobody has drawn a line under is one that gets rediscovered and half-fill
 two "versions with no entry" notes came to sit in this file disagreeing with it.
 
 
+## [10.9.7]
+
+### Changed
+
+- compuse-ssh: a remote-state waiter such as `until ! ssh host cmd | grep -q X` reads ssh's own
+  failure (exit 255, a timeout) as "X absent" and exits as if the condition held; read the output
+  and the exit code separately and treat 255 or 124 as unknown, never as done (for `pgrep`, 1 is
+  gone). A remote tool that reports failure as a JSON envelope on stdout is diagnosed from that
+  envelope, never from ssh's `Warning:` lines on stderr.
+
 ## [10.9.6]
 
 ### Added
