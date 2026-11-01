@@ -30,6 +30,13 @@ a hole nobody has drawn a line under is one that gets rediscovered and half-fill
 two "versions with no entry" notes came to sit in this file disagreeing with it.
 
 
+## [10.9.19]
+
+### Changed
+
+- coding-python-pwshpy: mirror of pwshpy's using-pwsh: `elevate()` refuses a directory on a `net use` drive on Windows
+  before any prompt, the scheduled-task verbs raise on a failed state read, an empty `-PwshPyUv` is exit 64.
+
 ## [10.9.18]
 
 ### Fixed

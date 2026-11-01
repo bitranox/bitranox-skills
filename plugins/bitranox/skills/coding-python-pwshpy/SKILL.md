@@ -232,7 +232,14 @@ catch a subclass before its parent:
   failure: on Linux branch on that, never on the message text. Catch `NativeAccessDeniedError` and
   `OperationTimeoutError` first, then `NativeCallError`. The wait and read-back of a Linux service verb (`stop_service(wait=False)` reads back too) raise
   `NativeCallError` when systemd does not answer (only `NoSuchUnit` reads as a stopped unit), while the `get_service`
-  listing keeps a field's default.
+  listing keeps a field's default. `register_scheduled_task`, `enable_scheduled_task` and `disable_scheduled_task` raise
+  `NativeCallError` when a read of the unit file state, the unit or its `ActiveState` fails, while the `get_scheduled_task` listing
+  keeps a field's default.
+- `ElevationDirectoryError` (Windows, not a `NativeCallError`): `elevate()` called from, or given, a directory on
+  a `net use` drive, raised before any prompt and naming the drive's UNC path, because the elevated child would
+  run from that path. Change to a local path, or pass that UNC path as `cwd=` if you mean it. A script file on such
+  a drive started from a local directory is not refused: it gets the prompt, and then `elevate(wait=True)` returns
+  the child's non-zero exit code because the child cannot open the script.
 - `ElevationRequiredError` (`require_elevation()`), `PlatformUnsupportedError` (no analog on this OS),
   `ConfigurationError`, `PowerShellError` / `FeatureUnavailableError` (.NET, `[full]`; `run`, `cmdlet`
   and the module wrappers `get_ad_user`, `get_ad_group`, `get_ad_computer`, `get_mailbox`, `get_az_vm`
@@ -262,10 +269,10 @@ CLI and packed-runner exit codes (an error also writes one `ErrorName: message` 
 line from a runner, to stderr): 0 ok, 1 any other `PwshPyError`, 2 usage error, 13 a native call
 refused for lack of rights (`NativeAccessDeniedError`; 5 on Windows, whatever errno or HRESULT the
 call reported), 22 a refused value
-(`ValueError`; 87 on Windows), 64 a relative `-PwshPyUv` / `--pwshpy-uv`, 70 the runner failed before the script ran
+(`ValueError`; 87 on Windows), 64 a relative or empty `-PwshPyUv` / `--pwshpy-uv`, 70 the runner failed before the script ran
 (the elevated `.ps1` child, an elevated run that cannot return to the caller's directory, or a
 `.ps1` `-PwshPyElevate` on Linux or macOS with no home for root or no `/bin/sh`: `pwshpy: cannot
-elevate:`), 77
+elevate:`), or `pwshpy --elevate` refused a directory on a `net use` drive (that `pwshpy: cannot elevate:` line too), 77
 elevation declined (`pwshpy --elevate`, `-PwshPyElevate`, `--pwshpy-elevate`; stderr line `pwshpy:
 elevation declined`), 110 `OperationTimeoutError`, 127 a missing or untrusted `uv` (an install
 of uv that failed, or found no curl or wget, counts as missing; run elevated, also an untrusted
@@ -385,7 +392,7 @@ automatically. Two ways:
 The artefact forwards every argument to your script untouched (empty strings, quotes, unicode,
 `-v`/`-d`) and takes its own help/info/clean/no-install-uv/elevate switches - spelled
 `-PwshPyHelp` ... on the `.ps1`, `--pwshpy-help` ... on the `.sh` - plus `-PwshPyUv PATH` /
-`--pwshpy-uv PATH` to pin the `uv` it runs (absolute path; relative exits 64). Run elevated
+`--pwshpy-uv PATH` to pin the `uv` it runs (absolute path; relative or empty exits 64). Run elevated
 (administrator, SYSTEM or root) it only runs a `uv` no other account can modify (on POSIX: root
 alone), skipping others with a `pwshpy: skipping uv at` line and refusing an untrusted pin with exit
 127, and only a uv-managed Python from the running account's own data directory, found with
