@@ -353,13 +353,39 @@ def test_fetch_exits_2_with_an_empty_pool(tmp_path, stand):
 
 
 # The message, not just the flag name: the single-proxy probe warning also names --sha256. And
-# no request at all: a bad argument is refused before the network is touched.
-@pytest.mark.parametrize("extra, message", [(("--chunk-size", "8X"), "--chunk-size: not a size"),
-                                            (("--sha256", "abc"), "--sha256 must be 64 hex")])
+# no request at all, not even to a proxy: a zero timeout times out every connect before the
+# origin sees anything, and the probe would ban each proxy into bad.txt for it.
+@pytest.mark.parametrize("extra, message", [
+    (("--chunk-size", "8X"), "--chunk-size: not a size"),
+    (("--sha256", "abc"), "--sha256 must be 64 hex"),
+    (("--chunk-timeout", "0"), "--chunk-timeout must be a positive"),
+    (("--chunk-timeout", "-1"), "--chunk-timeout must be a positive"),
+    (("--chunk-timeout", "nan"), "--chunk-timeout must be a positive"),
+    (("--chunk-timeout", "inf"), "--chunk-timeout must be a positive"),
+    (("--max-attempts-per-chunk", "0"), "--max-attempts-per-chunk must be at least 1"),
+    (("--need", "-2"), "--need must not be negative"),
+])
 def test_fetch_exits_2_on_a_bad_argument(tmp_path, stand, extra, message, capsys):
-    origin = stand.origin(10)
-    rc = _fetch_main(_fetch_store(tmp_path, [stand.proxy()]), origin, tmp_path / "f.bin", *extra)
-    assert rc == 2 and message in capsys.readouterr().err and origin.log == []
+    origin, proxy = stand.origin(10), stand.proxy()
+    store = _fetch_store(tmp_path, [proxy])
+    rc = _fetch_main(store, origin, tmp_path / "f.bin", *extra)
+    assert rc == 2 and message in capsys.readouterr().err
+    assert origin.log == [] and stand.proxies[proxy].hits == 0
+    assert not os.path.exists(os.path.join(store, "bad.txt"))
+
+
+def test_validate_refuses_a_negative_need(tmp_path, capsys):
+    store = _fetch_store(tmp_path, ["127.0.0.1:9"])
+    assert pp.main(["--store", store, "validate", "--need", "-1"]) == 2
+    assert "--need must not be negative" in capsys.readouterr().err
+
+
+def test_fetch_records_each_good_proxy_once_however_many_chunks_it_served(tmp_path, stand):
+    origin, proxy = stand.origin(200_000), stand.proxy()     # 4 chunks of 64K, one proxy
+    store = _fetch_store(tmp_path, [proxy])
+    assert _fetch_main(store, origin, tmp_path / "f.bin") == 0
+    with open(os.path.join(store, "good.txt"), encoding="utf-8") as f:
+        assert f.read().split() == [proxy]
 
 
 def test_fetch_exits_2_when_the_output_cannot_be_written(tmp_path, stand, capsys):

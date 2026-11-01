@@ -47,8 +47,9 @@ Exit codes: 0 = every item succeeded (discover: at least one source answered),
 1 = some items did not succeed, 2 = error (the --cmd binary was not found, no usable
 proxy in the store, every discovery source failed, a --cmd that cannot be parsed, an invalid
 --dead-regex, a --worklist that is not UTF-8). validate is a report: it exits 0 even when no
-candidate turned out live. fetch: 0 = verified file, 1 = chunks still missing or no proxy
-answered, 2 = no proxies, bad argument, hash mismatch, manifest for another download.
+candidate turned out live. fetch: 0 = complete file (hash-verified when --sha256 is given),
+1 = chunks still missing or the probe settled nothing, 2 = no proxies, bad argument, hash
+mismatch, a manifest for another download, an output that cannot be written.
 
 The --cmd template may contain {proxy} (host:port) and {item}. Example:
   uv run proxy_pool.py run --worklist ids.txt --workers 16 --success-glob 'out/{item}*.vtt'
@@ -762,6 +763,10 @@ def main(argv=None):
 
 
 def _dispatch(a):
+    # A negative --need slices the ranked pool from the end, so the store reads as empty and the
+    # refusal names the wrong cause. 0 stays legal: it means no cap, like omitting the flag.
+    if getattr(a, "need", None) is not None and a.need < 0:
+        raise BadInput("--need must not be negative")
     if a.action == "discover":
         if discover(a.store, a.sources) == 0 and a.sources:
             print("proxy_pool: no discovery source answered", file=sys.stderr)
@@ -786,6 +791,12 @@ def _fetch(a):
         raise BadInput(f"--chunk-size: {exc}") from exc
     if a.sha256 is not None and not re.fullmatch(r"[0-9a-fA-F]{64}", a.sha256):
         raise BadInput("--sha256 must be 64 hex digits")
+    # A zero timeout makes every connect time out, which the probe reads as a dead proxy and
+    # bans: one typo would poison the whole store. The comparison also refuses nan.
+    if not 0 < a.chunk_timeout < float("inf"):
+        raise BadInput("--chunk-timeout must be a positive number of seconds")
+    if a.max_attempts_per_chunk < 1:
+        raise BadInput("--max-attempts-per-chunk must be at least 1")
     pool = ProxyPool(a.store, a.need, cooldown=a.cooldown, flaky_max_fail_ratio=a.flaky_fail_ratio)
     if not pool.active():
         raise NoProxies(f"no usable proxies in {a.store} (live + good - bad is empty); "
@@ -793,10 +804,18 @@ def _fetch(a):
     if not a.sha256:
         print("proxy_pool: no --sha256 given: size and identity are checked only where the origin "
               "sends them, and bytes altered behind correct headers go unnoticed", file=sys.stderr)
+    recorded = set()
+
+    def record_good(proxy):
+        # One line per proxy, not per chunk: a large file would otherwise add a line for every
+        # chunk, and every acquire re-reads the file. A race writes one extra line at worst.
+        if proxy not in recorded:
+            recorded.add(proxy)
+            _append(_p(a.store, "good.txt"), proxy)
+
     result = cfetch.fetch(a.url, a.output, pool, chunk_size=chunk_size, workers=a.workers,
                           sha256=a.sha256, timeout=a.chunk_timeout,
-                          max_attempts=a.max_attempts_per_chunk,
-                          on_success=lambda p: _append(_p(a.store, "good.txt"), p))
+                          max_attempts=a.max_attempts_per_chunk, on_success=record_good)
     if not result.ok:
         print(f"proxy_pool: {result.note}", file=sys.stderr)
         return 1

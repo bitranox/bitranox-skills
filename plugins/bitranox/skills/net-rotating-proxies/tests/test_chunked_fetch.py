@@ -7,6 +7,9 @@ import hashlib
 import json
 import os
 import re
+import signal
+import sys
+import threading
 import time
 
 import chunked_fetch as cfetch
@@ -611,3 +614,24 @@ def test_a_ranged_runs_manifest_is_refused_when_the_origin_now_ignores_range(sta
         _fetch(origin, tmp_path / "f.bin", clean)
     # The stream never started: the bytes the manifest records as received are still there.
     assert manifest.exists() and part.read_bytes() == kept
+
+
+@pytest.mark.skipif(sys.platform == "win32",
+                    reason="os.kill(own pid, SIGINT) terminates the process on Windows rather "
+                           "than raising KeyboardInterrupt")
+def test_a_ctrl_c_stops_running_chunks_after_their_current_attempt(stand, tmp_path):
+    # Two trickling proxies cut every attempt at the 0.5 s budget. Without the stop flag the two
+    # running chunks spend all 15 attempts after the interrupt (~7.5 s); with it, one attempt each.
+    origin = stand.origin(SIZE)
+    _, pool = _pool(tmp_path, [stand.proxy("trickle:0.05"), stand.proxy("trickle:0.05")],
+                    fail_ratio=1.0)
+    timer = threading.Timer(1.5, os.kill, (os.getpid(), signal.SIGINT))
+    began = time.monotonic()
+    timer.start()
+    try:
+        with pytest.raises(KeyboardInterrupt):
+            _fetch(origin, tmp_path / "f.bin", pool, workers=2, timeout=0.5, max_attempts=15)
+    finally:
+        timer.cancel()
+    # 1.5 s to the signal, at most one 0.5 s attempt after it, and slack for a loaded host.
+    assert time.monotonic() - began < 4.0

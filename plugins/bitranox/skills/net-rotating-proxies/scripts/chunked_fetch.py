@@ -470,7 +470,7 @@ def fetch(url, out, pool, *, chunk_size, workers=8, sha256=None, timeout=120.0, 
     info = probe(url, pool, timeout, max_attempts, warn)
     if info is None:
         return FetchResult(False, note="the probe settled nothing: no proxy answered, or the "
-                                       "answers disagreed (see the warning)")
+                                       "answers disagreed")
     if not info.ranged:
         return _fetch_whole(url, out, pool, sha256, timeout, max_attempts, on_success, info, log,
                             warn or _stderr)
@@ -482,14 +482,14 @@ def fetch(url, out, pool, *, chunk_size, workers=8, sha256=None, timeout=120.0, 
         state["received"] = [0] * len(chunks)   # progress without its bytes is no progress
     with open(part, "a+b") as f:
         f.truncate(info.total)
-    lock, counts, dry = threading.Lock(), {}, threading.Event()
+    lock, counts, dry, stop = threading.Lock(), {}, threading.Event(), threading.Event()
 
     def run_chunk(index):
         start, end = chunks[index]
         tries = 0
         # A wait for a proxy is not an attempt: counted, it burnt max_attempts per chunk while
         # every proxy was busy, and spun the whole budget once the pool was empty.
-        while tries < max_attempts and not dry.is_set():
+        while tries < max_attempts and not dry.is_set() and not stop.is_set():
             offset = start + state["received"][index]
             if offset > end:
                 return True
@@ -512,7 +512,14 @@ def fetch(url, out, pool, *, chunk_size, workers=8, sha256=None, timeout=120.0, 
         return start + state["received"][index] > end
 
     with cf.ThreadPoolExecutor(max_workers=max(1, workers)) as ex:
-        done = sum(ex.map(run_chunk, range(len(chunks))))
+        try:
+            done = sum(ex.map(run_chunk, range(len(chunks))))
+        except BaseException:
+            # A Ctrl-C lands here; map cancels the queued chunks, but leaving the with-block joins
+            # the running ones, which would spend their whole attempt budget first. Stopping them
+            # after their current attempt bounds the wait to one attempt.
+            stop.set()
+            raise
     log(f"chunks {done}/{len(chunks)}, attempts {sum(counts.values())}: "
         + ", ".join(f"{k} {v}" for k, v in sorted(counts.items())))
     if dry.is_set():
