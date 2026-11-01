@@ -30,6 +30,20 @@ a hole nobody has drawn a line under is one that gets rediscovered and half-fill
 two "versions with no entry" notes came to sit in this file disagreeing with it.
 
 
+## [10.9.16]
+
+### Fixed
+
+- `compact-resume.py` now finds the checkpoint wherever the session wrote it. It used to look only
+  at the git top level of the cwd at compaction, so a `handover.md` saved in a linked worktree
+  while the cwd was the main checkout, or at a parent while the cwd had moved into a nested repo,
+  was reported as "no checkpoint was saved". The hook now also checks every `handover.md` the
+  session wrote with Write or Edit, and hands back the newest one written after the save request
+  and not marked STALE.
+- The per-session touched-paths record moves a re-edited path to its newest end. It used to keep
+  the first-seen slot, so in a long session the 400-line cap evicted a file that had just been
+  rewritten.
+
 ## [10.9.15]
 
 ### Changed

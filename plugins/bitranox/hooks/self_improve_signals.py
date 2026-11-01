@@ -2000,7 +2000,7 @@ def touched_file(session):
 
 
 def read_touched_paths(session):
-    """The distinct paths recorded for `session`, oldest first. [] when none/unreadable."""
+    """The distinct paths recorded for `session`, least recently touched first. [] when none."""
     try:
         lines = touched_file(session).read_text(encoding="utf-8").splitlines()
     except OSError:
@@ -2009,7 +2009,7 @@ def read_touched_paths(session):
 
 
 def record_touched_path(session, path, max_lines=400):
-    """Append `path` for `session` (deduped, newest-capped). Best-effort: never raises.
+    """Record `path` for `session` as its newest entry (deduped, newest-capped). Never raises.
 
     A path carrying a line break (CR or LF) is REFUSED, not recorded: the file holds one path per
     line, so such a path came back as two bogus fragments that never deduped against each other,
@@ -2021,8 +2021,12 @@ def record_touched_path(session, path, max_lines=400):
         return
     try:
         cur = read_touched_paths(session)
+        if cur and cur[-1] == path:
+            return                                  # dedup: already the newest entry, nothing moves
         if path in cur:
-            return                                  # dedup: the same file edited twice is one subject
+            # A repeat edit is NEW for the cap below: left in its first-seen slot, a file rewritten
+            # just now (compact-resume's handover.md) was the first one a long session evicted.
+            cur.remove(path)
         cur.append(path)
         if len(cur) > max_lines:
             cur = cur[-max_lines:]                  # keep the NEWEST (the turn's current subject)

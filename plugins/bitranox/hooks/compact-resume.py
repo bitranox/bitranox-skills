@@ -18,6 +18,14 @@ feeding it in as current is worse than feeding nothing; another session's reques
 this one, because the request flag is session-keyed. With no qualifying checkpoint the hook says so
 and points at the transcript on disk, which compaction never shortens.
 
+WHERE it looks. The git top level of the cwd at compaction, AND every `handover.md` this session
+wrote with Write/Edit (the session-keyed touched-paths record); the newest qualifying one wins. The
+cwd alone is not enough: it is wherever the last `cd` left the session, so a checkpoint written in a
+linked worktree while the cwd sat in the main checkout, or at a parent while the cwd had drifted
+into a nested repo, was reported as "no checkpoint" (measured: 23 of 106 checkpoints written after
+the request, across real transcripts). The cwd candidate stays because a checkpoint written through
+Bash never reaches touched-paths.
+
 WHY its own hook rather than a branch of session-start.py: that hook's essentials are held under a
 small byte ceiling so they always land inline, and a checkpoint can be several KB. The harness inlines
 an additionalContext up to 10,000 characters and replaces anything larger with a 2,000-character
@@ -110,12 +118,38 @@ def build(event, today=None):
         return None
     cwd = event.get("cwd") or os.environ.get("CLAUDE_PROJECT_DIR") or os.getcwd()
     session = str(event.get("session_id") or "")
-    path = repo_root(cwd) / "handover.md"
-    text = fresh_checkpoint(path, sig.checkpoint_asked_at(session)) if session else None
-    if text is None:
+    found = latest_checkpoint(candidates(cwd, session), sig.checkpoint_asked_at(session)) \
+        if session else None
+    if found is None:
         return _NO_CHECKPOINT % {"transcript": event.get("transcript_path") or "(unknown)"}
     today = today or datetime.date.today().isoformat()
-    return resume_context(path, text, today)
+    return resume_context(found[0], found[1], today)
+
+
+def candidates(cwd, session):
+    """Every path that may hold this session's checkpoint, the cwd's repo root first. IMPURE."""
+    paths = [repo_root(cwd) / "handover.md"]
+    for touched in sig.read_touched_paths(session):
+        p = Path(touched)
+        if p.name == "handover.md" and p not in paths:
+            paths.append(p)
+    return paths
+
+
+def latest_checkpoint(paths, asked_at):
+    """(path, text) of the newest qualifying checkpoint among `paths`, else None. IMPURE (reads)."""
+    best = None
+    for path in paths:
+        text = fresh_checkpoint(path, asked_at)
+        if text is None:
+            continue
+        try:
+            mtime = os.path.getmtime(path)
+        except OSError:
+            continue
+        if best is None or mtime > best[0]:
+            best = (mtime, path, text)
+    return (best[1], best[2]) if best else None
 
 
 def main() -> int:

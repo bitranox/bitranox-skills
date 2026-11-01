@@ -161,3 +161,85 @@ def test_end_to_end_through_the_shim(tmp_path):
                           env=env)
     assert proc.returncode == 0
     assert "session-review" in _context(json.loads(proc.stdout))
+
+
+# ---- the checkpoint the session WROTE, wherever its cwd has drifted to --------------------------
+# Measured over real transcripts: 23 of 106 checkpoints written after the save nudge were reported
+# as "no checkpoint" because the hook looked only at the git top level of the cwd at compaction,
+# while the session had written handover.md in a linked worktree (cwd the main checkout) or at a
+# parent directory (cwd drifted into a nested repo by a `cd`). The touched-paths record names the
+# file the session actually wrote.
+
+def _write_fresh(path, text, session="s-1", age=0):
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(text, encoding="utf-8")
+    if age:
+        t = time.time() - age
+        os.utime(path, (t, t))
+    SIG.record_touched_path(session, str(path))
+    return path
+
+
+def test_a_checkpoint_written_in_another_tree_is_found_through_touched_paths(tmp_path,
+                                                                              monkeypatch, capsys):
+    repo = _repo(tmp_path)
+    SIG.mark_checkpoint_asked("s-1", now=time.time() - 60)
+    elsewhere = _write_fresh(repo / ".claude" / "worktrees" / "wt" / "handover.md",
+                             "# Handover\n- WORKTREE-CHECKPOINT-11\n")
+    ctx = _context(_run(monkeypatch, capsys, _event(repo)))
+    assert "WORKTREE-CHECKPOINT-11" in ctx
+    assert str(elsewhere) in ctx
+
+
+def test_a_checkpoint_at_a_parent_is_found_when_the_cwd_is_a_nested_repo(tmp_path, monkeypatch,
+                                                                          capsys):
+    parent = tmp_path / "umbrella"
+    nested = parent / "child"
+    nested.mkdir(parents=True)
+    env = {k: v for k, v in os.environ.items() if not k.startswith("GIT_")}
+    subprocess.run(["git", "init", "-q", str(nested)], check=True, env=env)
+    SIG.mark_checkpoint_asked("s-1", now=time.time() - 60)
+    _write_fresh(parent / "handover.md", "# Handover\n- PARENT-CHECKPOINT-12\n")
+    ctx = _context(_run(monkeypatch, capsys, _event(nested)))
+    assert "PARENT-CHECKPOINT-12" in ctx
+
+
+def test_the_newest_fresh_checkpoint_wins(tmp_path, monkeypatch, capsys):
+    repo = _repo(tmp_path)
+    SIG.mark_checkpoint_asked("s-1", now=time.time() - 120)
+    _write_fresh(repo / "handover.md", "# Handover\n- OLDER-FRESH-13\n", age=30)
+    _write_fresh(tmp_path / "other" / "handover.md", "# Handover\n- NEWER-FRESH-14\n")
+    ctx = _context(_run(monkeypatch, capsys, _event(repo)))
+    assert "NEWER-FRESH-14" in ctx
+    assert "OLDER-FRESH-13" not in ctx
+
+
+def test_a_touched_handover_from_before_the_nudge_does_not_displace_a_fresh_one(tmp_path,
+                                                                                 monkeypatch,
+                                                                                 capsys):
+    repo = _repo(tmp_path)
+    _write_fresh(tmp_path / "other" / "handover.md", "# Handover\n- EARLIER-MOMENT-15\n", age=600)
+    _checkpoint(repo, "# Handover\n- CURRENT-16\n")
+    ctx = _context(_run(monkeypatch, capsys, _event(repo)))
+    assert "CURRENT-16" in ctx
+    assert "EARLIER-MOMENT-15" not in ctx
+
+
+@pytest.mark.parametrize("name", ["handover.prev.md", "my-handover.md", "HANDOVER.md.bak"])
+def test_only_a_file_named_handover_md_counts(tmp_path, monkeypatch, capsys, name):
+    repo = _repo(tmp_path)
+    SIG.mark_checkpoint_asked("s-1", now=time.time() - 60)
+    _write_fresh(tmp_path / "other" / name, "# Handover\n- NOT-A-CHECKPOINT-17\n")
+    ctx = _context(_run(monkeypatch, capsys, _event(repo)))
+    assert "NOT-A-CHECKPOINT-17" not in ctx
+    assert "no checkpoint" in ctx.lower()
+
+
+def test_another_sessions_touched_handover_is_not_this_sessions_checkpoint(tmp_path, monkeypatch,
+                                                                            capsys):
+    repo = _repo(tmp_path)
+    SIG.mark_checkpoint_asked("s-1", now=time.time() - 60)
+    _write_fresh(tmp_path / "other" / "handover.md", "# Handover\n- OTHER-SESSION-18\n",
+                 session="someone-else")
+    ctx = _context(_run(monkeypatch, capsys, _event(repo, session="s-1")))
+    assert "OTHER-SESSION-18" not in ctx

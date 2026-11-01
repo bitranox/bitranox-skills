@@ -973,6 +973,23 @@ def test_record_touched_path_roundtrips_dedups_and_caps(home):
     assert len(got) <= 10 and got[-1] == "/p/f29.py"      # capped, newest kept
 
 
+def test_a_retouched_path_moves_to_the_newest_end_and_survives_the_cap(home):
+    # The cap keeps the NEWEST entries, so a path edited again must count as new: kept in its
+    # first-seen slot, a handover.md written early in a long session and rewritten just before a
+    # compaction was evicted first (measured on a real 400-line record), and compact-resume then
+    # reported "no checkpoint" for a file the session had just saved.
+    S.record_touched_path("sessLRU", "/r/a.py")
+    S.record_touched_path("sessLRU", "/r/b.py")
+    S.record_touched_path("sessLRU", "/r/a.py")
+    assert S.read_touched_paths("sessLRU") == ["/r/b.py", "/r/a.py"]
+    S.record_touched_path("sessCap", "/r/handover.md", max_lines=3)
+    for i in range(2):
+        S.record_touched_path("sessCap", "/r/f%d.py" % i, max_lines=3)
+    S.record_touched_path("sessCap", "/r/handover.md", max_lines=3)
+    S.record_touched_path("sessCap", "/r/f9.py", max_lines=3)
+    assert "/r/handover.md" in S.read_touched_paths("sessCap")
+
+
 def test_record_touched_path_refuses_a_path_carrying_a_line_break(home):
     # The file is one path per line, so an embedded newline split one path into bogus fragments
     # that never deduped - the same path sent 3 times grew the file by 6 lines.
