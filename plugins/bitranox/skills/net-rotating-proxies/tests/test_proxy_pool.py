@@ -51,7 +51,8 @@ def test_grow_is_grow_only_never_shrinks(store):
 def test_grow_result_is_sorted(store):
     path = pp._p(store, "pool.txt")
     pp._grow(path, ["10.0.0.1:80", "9.0.0.1:80", "100.0.0.1:80"])
-    lines = [l for l in open(path, encoding="utf-8").read().splitlines() if l]
+    with open(path, encoding="utf-8") as f:
+        lines = [line for line in f.read().splitlines() if line]
     assert lines == sorted(lines)
 
 
@@ -223,7 +224,8 @@ def test_append_adds_lines(store):
     path = pp._p(store, "good.txt")
     pp._append(path, "p:1")
     pp._append(path, "p:2")
-    assert open(path, encoding="utf-8").read() == "p:1\np:2\n"
+    with open(path, encoding="utf-8") as f:
+        assert f.read() == "p:1\np:2\n"
 
 
 # ----------------------------------------------------------------------------

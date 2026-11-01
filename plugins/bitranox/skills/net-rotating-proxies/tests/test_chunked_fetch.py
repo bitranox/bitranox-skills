@@ -14,7 +14,7 @@ def test_parse_size_reads_binary_units(text, want):
     assert cfetch.parse_size(text) == want
 
 
-@pytest.mark.parametrize("text", ["0", "8X", "", "-1", "1.5M", "8 M"])
+@pytest.mark.parametrize("text", ["0", "8X", "", "-1", "1.5M", "8 M", "8" + chr(0x0661) + "M"])
 def test_parse_size_refuses_junk(text):
     with pytest.raises(ValueError):
         cfetch.parse_size(text)
@@ -41,10 +41,13 @@ OK_HEADERS = {"content-range": "bytes 10-19/100", "etag": '"v1"',
 @pytest.mark.parametrize("status, headers, want", [
     (206, OK_HEADERS, None),
     (429, {}, "throttled"), (403, {}, "throttled"), (407, {}, "throttled"), (503, {}, "throttled"),
+    (502, {}, "throttled"),
     (200, OK_HEADERS, "wrong-object"), (404, {}, "wrong-object"),
     (206, {**OK_HEADERS, "content-range": "bytes 0-9/100"}, "wrong-object"),
+    (206, {**OK_HEADERS, "content-range": "bytes 10-18/100"}, "wrong-object"),
     (206, {**OK_HEADERS, "content-range": "bytes 10-19/999"}, "wrong-object"),
     (206, {**OK_HEADERS, "etag": '"v2"'}, "identity"),
+    (206, {**OK_HEADERS, "last-modified": "Sun, 02 Nov 2026 10:00:00 GMT"}, "identity"),
     (206, {k: v for k, v in OK_HEADERS.items() if k != "etag"}, "identity"),
 ])
 def test_reply_problem_classifies_a_reply_before_any_byte_is_written(status, headers, want):
@@ -61,6 +64,11 @@ def test_reply_problem_skips_identity_fields_the_probe_did_not_see():
     ("throttled", "fail"), ("cut", "fail"), ("overrun", "fail")])
 def test_action_for_maps_each_reason_to_the_pool_call(reason, want):
     assert cfetch.action_for(reason) == want
+
+
+def test_action_for_refuses_an_unknown_reason():
+    with pytest.raises(ValueError, match="unknown attempt reason"):
+        cfetch.action_for("wrong_object")
 
 
 SIZE = 300_000

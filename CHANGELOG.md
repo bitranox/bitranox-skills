@@ -37,10 +37,11 @@ two "versions with no entry" notes came to sit in this file disagreeing with it.
 - net-rotating-proxies: `proxy_pool.py fetch URL -o FILE` downloads one large file as byte-range
   chunks spread over the rotating pool. A ban or a dropped session costs only the unfinished part
   of one chunk: the bytes already received are kept and the rest is retried on a fresh proxy.
-  Every reply is checked for being the requested slice of the same object before a byte is
-  written, so a proxy answering with an injected page, a stale cache or the wrong range is banned
-  instead of corrupting the file. A run that stops resumes from its `FILE.part.json` manifest;
-  `--sha256` verifies the result. An origin that ignores `Range` falls back to whole-file
+  Each reply's headers are checked for being the requested slice of the same object before a
+  byte is written, so a proxy answering with an injected page, a stale cache or the wrong range
+  is banned instead of corrupting the file. Altered bytes behind correct headers pass that check:
+  only `--sha256` catches them, and `fetch` warns when no hash is given. A run that stops resumes
+  from its `FILE.part.json` manifest. An origin that ignores `Range` falls back to whole-file
   attempts. (GitHub issue #4)
 
 ## [10.9.19]

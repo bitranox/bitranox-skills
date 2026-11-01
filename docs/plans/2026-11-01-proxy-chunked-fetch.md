@@ -1122,9 +1122,13 @@ description changes.
 
 ### Task 7: Ship
 
-- [ ] CHANGELOG notes file (`### Added` for `fetch`), then
-  `uv run plugins/bitranox/hooks/bump_version.py --part minor --changelog <notes>` (assert origin
-  is still 10.9.18 first; the jig refuses otherwise). Commit.
+- [ ] The bump is already made: 10.10.0 with its `### Added` entry rides the Task 1 commit
+  (f945f50c), because the commit gate refuses a `plugins/` change without one and later task
+  commits ride it. Do NOT run `bump_version.py` again. Instead: `git fetch origin`, then rebase
+  onto `origin/master` if it moved (a peer may have released, e.g. 10.9.19); the rebase can
+  conflict only in `plugin.json`, `pyproject.toml` and `CHANGELOG.md` - keep 10.10.0 if it is
+  still above origin's version, else re-cut the version with `bump_version.py --rebase`. Then
+  re-read the `[10.10.0]` entry against what Tasks 2-6 actually shipped and correct it if needed.
 - [ ] `python3 plugins/bitranox/hooks/repo-gate.py --ci`, then
   `git push origin HEAD:master` (pre-push gate ~6 min), `ci_wait.py --ref HEAD`, release tag.
 - [ ] Close backlog [40] (`backlog_close`, reason `measured: fetch shipped in <version>`), in the

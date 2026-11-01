@@ -23,6 +23,7 @@ _SIZE = re.compile(r"([0-9]+)([KMG]?)", re.IGNORECASE)
 _UNITS = {"": 1, "K": 1024, "M": 1024**2, "G": 1024**3}
 _THROTTLED = {403, 407, 429}
 _BAN = {"dead", "wrong-object", "identity"}
+_FAIL = {"throttled", "cut", "overrun"}
 
 
 class FetchError(Exception):
@@ -81,10 +82,15 @@ def reply_problem(status, headers, start, end, total, identity):
 
 def action_for(reason):
     """The pool call an attempt's reason earns: 'ok' -> record success, 'ban' -> bad.txt,
-    'fail' -> record a failure (flaky eviction for this run, never bad.txt)."""
+    'fail' -> record a failure (flaky eviction for this run, never bad.txt). An unknown reason
+    raises: mapped to 'fail' it would silently spare a proxy that a misspelt reason meant to ban."""
     if reason == "ok":
         return "ok"
-    return "ban" if reason in _BAN else "fail"
+    if reason in _BAN:
+        return "ban"
+    if reason in _FAIL:
+        return "fail"
+    raise ValueError(f"unknown attempt reason: {reason!r}")
 
 
 def _stderr(message):
