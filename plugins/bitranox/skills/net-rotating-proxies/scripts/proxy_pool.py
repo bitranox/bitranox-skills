@@ -749,7 +749,8 @@ def main(argv=None):
     f.add_argument("--need", type=int, default=None, help="working-set size, as for run")
     f.add_argument("--sha256", default=None, help="expected hex digest; strongly recommended")
     f.add_argument("--chunk-timeout", type=float, default=120,
-                   help="seconds a chunk transfer may stall before it counts as cut")
+                   help="seconds one attempt may take, connect to last byte, before it counts as "
+                        "cut; the bytes it received are kept (default 120)")
     f.add_argument("--max-attempts-per-chunk", type=int, default=20)
     f.add_argument("--cooldown", type=float, default=5.0)
     f.add_argument("--flaky-fail-ratio", type=float, default=0.5)
