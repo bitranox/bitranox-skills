@@ -28,46 +28,13 @@ Prints nothing, exits 0 always; any failure loses one record rather than wedging
 
 import datetime
 import json
-import os
-import subprocess
 import sys
 from pathlib import Path
 
-from self_improve_signals import project_slug
+from self_improve_signals import git_scoped as _git
+from self_improve_signals import main_checkout_root, project_slug
 
 LOG_NAME = "USER-DECISIONS.jsonl"
-
-# Git variables that point a git call at some OTHER repository than the one -C names; a session
-# launched from a git hook or a worktree push can inherit them.
-_GIT_SCOPE_PREFIX = "GIT_"
-
-
-def _git(cwd, *args):
-    """(returncode, stdout) of one git call in `cwd` with inherited GIT_* scoping removed, or None."""
-    env = {k: v for k, v in os.environ.items() if not k.startswith(_GIT_SCOPE_PREFIX)}
-    try:
-        r = subprocess.run(["git", "-C", str(cwd), *args], check=False, capture_output=True,
-                           timeout=5, env=env)
-    except (OSError, subprocess.SubprocessError):
-        return None
-    return r.returncode, os.fsdecode(r.stdout).strip()
-
-
-def main_checkout_root(cwd):
-    """The main checkout's root for the repository `cwd` is in, or None outside a work tree."""
-    top = _git(cwd, "rev-parse", "--path-format=absolute", "--show-toplevel", "--git-common-dir")
-    if top is None or top[0] != 0:
-        return None
-    lines = top[1].splitlines()
-    if len(lines) != 2:
-        return None
-    toplevel, common = Path(lines[0]), Path(lines[1])
-    # A linked worktree's common dir is the main checkout's `.git`; anything else (a separate git
-    # dir, a submodule's modules/ path) has no main checkout to find, so the work tree is used.
-    if common.name == ".git" and common.parent.is_dir():
-        return common.parent
-    return toplevel
-
 
 def ensure_excluded(root):
     """Add LOG_NAME to `root`'s exclude file unless git already ignores it. True when ignored."""

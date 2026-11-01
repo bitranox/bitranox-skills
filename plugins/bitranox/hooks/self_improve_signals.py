@@ -16,10 +16,12 @@ realizations only from the ASSISTANT; endorsement counts from either side. Engli
 """
 
 import contextlib
+import functools
 import hashlib
 import json
 import os
 import re
+import subprocess
 import tempfile
 import time
 from collections.abc import Mapping
@@ -1148,10 +1150,82 @@ def rehome_orphan_tombstone(orphan):
 # pass (hooks have no model), so PostCompact records an OBLIGATION here and the Stop gate refuses to
 # stop while it is owed - the same proven block mechanism the capture nudge uses. Running the dream
 # (mark_dream_done) discharges it.
+#
+# The marker is keyed by the REPOSITORY the cwd sits in (its main checkout), never the raw cwd. A
+# session's cwd drifts with every `cd` - into a subdirectory, into a linked worktree - so a raw key
+# put the flag where PostCompact stood, the Stop gate read another key, and `done --kind nap`
+# cleared a third (measured 2026-10-31: one session ran `done --kind nap` for three directories in
+# a row before the gate let it stop). A directory outside any work tree keeps its own key.
+
+# Git variables that point a git call at some OTHER repository than the one -C names; a session
+# launched from a git hook or a worktree push can inherit them.
+_GIT_SCOPE_PREFIX = "GIT_"
+
+
+def git_scoped(cwd, *args):
+    """(returncode, stdout) of one git call in `cwd` with inherited GIT_* scoping removed, or None."""
+    env = {k: v for k, v in os.environ.items() if not k.startswith(_GIT_SCOPE_PREFIX)}
+    try:
+        r = subprocess.run(["git", "-C", str(cwd), *args], check=False, capture_output=True,
+                           timeout=5, env=env)
+    except (OSError, subprocess.SubprocessError):
+        return None
+    return r.returncode, os.fsdecode(r.stdout).strip()
+
+
+def main_checkout_root(cwd):
+    """The main checkout's root for the repository `cwd` is in, or None outside a work tree."""
+    top = git_scoped(cwd, "rev-parse", "--path-format=absolute", "--show-toplevel",
+                     "--git-common-dir")
+    if top is None or top[0] != 0:
+        return None
+    lines = top[1].splitlines()
+    if len(lines) != 2:
+        return None
+    toplevel, common = Path(lines[0]), Path(lines[1])
+    # A linked worktree's common dir is the main checkout's `.git`; anything else (a separate git
+    # dir, a submodule's modules/ path) has no main checkout to find, so the work tree is used.
+    if common.name == ".git" and common.parent.is_dir():
+        return common.parent
+    return toplevel
+
+
+@functools.lru_cache(maxsize=64)
+def _nap_owner_of(absolute):
+    root = main_checkout_root(absolute) if os.path.isdir(absolute) else None
+    return str(root) if root else absolute
+
+
+def nap_owner(proj):
+    """The directory an owed nap is keyed by: the main checkout of `proj`'s repository, else
+    `proj` itself (normalized). Cached per process: the Stop gate reads the marker several times."""
+    try:
+        absolute = os.path.abspath(os.fspath(proj) if proj else os.getcwd())
+    except (TypeError, ValueError):
+        return proj
+    return _nap_owner_of(absolute)
+
+
+def _nap_owed_files(proj):
+    """[canonical, legacy raw-cwd] marker paths, deduped. The legacy one was written before the
+    marker was keyed by repository; it is read and cleared so an old obligation does not silently
+    stop blocking, and never written again."""
+    files = [_audit_dir() / (proj_key(nap_owner(proj)) + ".nap-owed")]
+    legacy = _audit_dir() / (proj_key(proj) + ".nap-owed")
+    return files if legacy == files[0] else files + [legacy]
+
 
 def nap_owed_file(proj):
-    """Marker: a compaction happened and the consolidation pass has not run since."""
-    return _audit_dir() / (proj_key(proj) + ".nap-owed")
+    """Marker: a compaction happened and the consolidation pass has not run since. The existing
+    file when there is one (canonical first), else the canonical path a new marker is written to."""
+    files = _nap_owed_files(proj)
+    for f in files:
+        try:
+            if f.is_file():
+                return f
+        except OSError:
+            pass
+    return files[0]
 
 
 def mark_nap_owed(proj, session_id=None, transcript_path=None):
@@ -1171,9 +1245,12 @@ def mark_nap_owed(proj, session_id=None, transcript_path=None):
     except OSError:
         pass
     try:
-        f = nap_owed_file(proj)
-        f.parent.mkdir(parents=True, exist_ok=True)
-        f.write_text(json.dumps(record, sort_keys=True), encoding="utf-8")
+        canonical, *legacy = _nap_owed_files(proj)
+        canonical.parent.mkdir(parents=True, exist_ok=True)
+        canonical.write_text(json.dumps(record, sort_keys=True), encoding="utf-8")
+        for old in legacy:                          # the new marker supersedes a raw-cwd one
+            with contextlib.suppress(OSError):
+                old.unlink()
     except OSError:
         pass
 
@@ -1231,11 +1308,10 @@ def nap_owed_blocks(proj):
 
 
 def clear_nap_owed(proj):
-    """Discharge the owed nap (best-effort)."""
-    try:
-        nap_owed_file(proj).unlink()
-    except OSError:
-        pass
+    """Discharge the owed nap (best-effort), the legacy raw-cwd marker included."""
+    for f in _nap_owed_files(proj):
+        with contextlib.suppress(OSError):
+            f.unlink()
 
 
 # The watermark reviewer the dream (and the nap) consume transcripts under. dream_state.py marks

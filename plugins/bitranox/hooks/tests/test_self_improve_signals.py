@@ -842,6 +842,74 @@ def test_a_decline_needs_a_who(home):
         S.decline_nap_owed("/p/x", by="  ")
 
 
+def _git_repo(path):
+    """A real repository with one commit, built with every inherited GIT_* variable stripped."""
+    import subprocess
+    env = {k: v for k, v in os.environ.items() if not k.startswith("GIT_")}
+    path.mkdir(parents=True, exist_ok=True)
+    for args in (["init", "-q", "-b", "main"], ["config", "user.email", "t@example.invalid"],
+                 ["config", "user.name", "T"], ["commit", "-q", "--allow-empty", "-m", "init"]):
+        subprocess.run(["git", "-C", str(path), *args], check=True, env=env, capture_output=True)
+    return path
+
+
+def _git_worktree(repo, wt):
+    import subprocess
+    env = {k: v for k, v in os.environ.items() if not k.startswith("GIT_")}
+    subprocess.run(["git", "-C", str(repo), "worktree", "add", "-q", "-b", "topic", str(wt)],
+                   check=True, env=env, capture_output=True)
+    return wt
+
+
+# The obligation is keyed by the REPOSITORY, not the raw cwd: a session's cwd drifts with every
+# `cd` (a subdirectory, a linked worktree), so a raw-cwd key put the flag where PostCompact stood,
+# the Stop gate read another key, and `done --kind nap` cleared a third (measured 2026-10-31: a
+# session ran `done --kind nap` for three directories in a row before the gate let it stop).
+
+def test_an_owed_nap_marked_in_a_subdirectory_is_the_repositorys(home, tmp_path):
+    repo = _git_repo(tmp_path / "repo")
+    (repo / "a" / "b").mkdir(parents=True)
+    (repo / "c").mkdir()
+    S.mark_nap_owed(str(repo / "a" / "b"), session_id="sid")
+    assert S.nap_owed_blocks(str(repo)) is True
+    assert S.nap_owed_blocks(str(repo / "c")) is True
+    S.clear_nap_owed(str(repo))
+    assert S.is_nap_owed(str(repo / "a" / "b")) is False
+
+
+def test_an_owed_nap_marked_in_a_linked_worktree_is_the_main_checkouts(home, tmp_path):
+    repo = _git_repo(tmp_path / "repo")
+    wt = _git_worktree(repo, tmp_path / "repo" / ".claude" / "worktrees" / "wt")
+    (wt / "sub").mkdir()
+    S.mark_nap_owed(str(wt / "sub"), session_id="sid")
+    assert S.nap_owed_blocks(str(repo)) is True
+    assert S.mark_dream_done(str(repo)) is True        # the nap's discharge, run from the main checkout
+    assert S.nap_owed_blocks(str(wt)) is False
+
+
+def test_plain_directories_keep_their_own_owed_nap(home, tmp_path):
+    a, b = tmp_path / "plain-a", tmp_path / "plain-b"
+    a.mkdir()
+    b.mkdir()
+    S.mark_nap_owed(str(a))
+    assert S.is_nap_owed(str(a)) is True
+    assert S.is_nap_owed(str(b)) is False
+
+
+def test_a_legacy_marker_under_the_raw_cwd_key_still_blocks_and_is_cleared(home, tmp_path):
+    repo = _git_repo(tmp_path / "repo")
+    sub = repo / "sub"
+    sub.mkdir()
+    legacy = S._audit_dir() / (S.proj_key(str(sub)) + ".nap-owed")
+    legacy.parent.mkdir(parents=True, exist_ok=True)
+    legacy.write_text(json.dumps({"ts": 1.0, "session_id": "old"}), encoding="utf-8")
+    assert S.nap_owed_blocks(str(sub)) is True
+    assert S.nap_owed_info(str(sub)).get("session_id") == "old"
+    S.clear_nap_owed(str(sub))
+    assert not legacy.exists()
+    assert S.is_nap_owed(str(sub)) is False
+
+
 def test_mark_dream_done_clears_a_owed_nap(home):
     # running the nap is what discharges the obligation - the marker must not outlive it
     _mem(home, "/p/x")

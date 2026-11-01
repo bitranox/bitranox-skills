@@ -30,6 +30,16 @@ a hole nobody has drawn a line under is one that gets rediscovered and half-fill
 two "versions with no entry" notes came to sit in this file disagreeing with it.
 
 
+## [10.9.18]
+
+### Fixed
+
+- The owed post-compaction nap is now keyed by the repository (its main checkout), not by the raw
+  cwd. A session that had moved into a subdirectory or a linked worktree wrote the obligation
+  under one directory, the Stop gate read it under another, and `dream_state.py done --kind nap`
+  cleared a third, so the gate kept blocking after the nap ran. A marker written by an earlier
+  version under the raw cwd is still read and cleared.
+
 ## [10.9.17]
 
 ### Changed
