@@ -5,6 +5,7 @@ Everything runs against fetch_standins (an origin and fault-injecting forward pr
 """
 import chunked_fetch as cfetch
 import pytest
+from fetch_standins import Standins
 
 
 @pytest.mark.parametrize("text, want", [("8M", 8 * 1024**2), ("512k", 512 * 1024), ("100", 100),
@@ -60,3 +61,46 @@ def test_reply_problem_skips_identity_fields_the_probe_did_not_see():
     ("throttled", "fail"), ("cut", "fail"), ("overrun", "fail")])
 def test_action_for_maps_each_reason_to_the_pool_call(reason, want):
     assert cfetch.action_for(reason) == want
+
+
+SIZE = 300_000
+CHUNK = 64 * 1024
+
+
+@pytest.fixture
+def stand():
+    s = Standins()
+    yield s
+    s.close()
+
+
+def _part(tmp_path, total):
+    path = tmp_path / "f.bin.part"
+    path.write_bytes(b"\x00" * total)
+    return str(path)
+
+
+@pytest.mark.parametrize("mode, want", [
+    ("clean", ("ok", 1000)), ("refuse", ("dead", 0)), ("429", ("throttled", 0)),
+    ("403", ("throttled", 0)), ("html", ("wrong-object", 0)), ("wrong-range", ("wrong-object", 0)),
+    ("etag", ("identity", 0)), ("cut:300", ("cut", 300)), ("overrun", ("overrun", 1000)),
+    ("stall", ("cut", 0))])
+def test_attempt_classifies_each_proxy_behaviour(stand, tmp_path, mode, want):
+    origin = stand.origin(SIZE)
+    path = _part(tmp_path, SIZE)
+    ident = {"etag": '"v1"', "last_modified": "Sat, 01 Nov 2026 10:00:00 GMT"}
+    got = cfetch.attempt(origin.url, stand.proxy(mode), 5000, 5999, SIZE, ident, path, timeout=0.5)
+    assert got == want
+    with open(path, "rb") as f:
+        on_disk = f.read()
+    written = want[1]
+    assert on_disk[5000:5000 + written] == origin.data[5000:5000 + written]
+    assert on_disk[5000 + written:6001] == b"\x00" * (6001 - 5000 - written)   # nothing past it
+
+
+def test_attempt_resumes_inside_a_chunk_at_the_offset_it_is_given(stand, tmp_path):
+    origin = stand.origin(SIZE)
+    path = _part(tmp_path, SIZE)
+    ident = cfetch.identity_of({"etag": '"v1"'})
+    assert cfetch.attempt(origin.url, stand.proxy(), 5300, 5999, SIZE, ident, path, 2.0) == ("ok", 700)
+    assert origin.log[-1] == "bytes=5300-5999"

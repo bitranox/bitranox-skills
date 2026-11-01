@@ -11,7 +11,11 @@ each range is retried on a fresh proxy, and the bytes a cut attempt already deli
 of the same object BEFORE any byte is written: a proxy that answers with an injected page, a
 stale cache or the wrong range is banned instead of corrupting the file.
 """
+import os
 import re
+import sys
+
+import httpx2
 
 # [0-9], not \d: \d also matches non-ASCII digits, which int() then accepts.
 _CONTENT_RANGE = re.compile(r"bytes ([0-9]+)-([0-9]+)/([0-9]+)")
@@ -81,3 +85,48 @@ def action_for(reason):
     if reason == "ok":
         return "ok"
     return "ban" if reason in _BAN else "fail"
+
+
+def _stderr(message):
+    # Warnings never share stdout with the progress lines a caller may parse.
+    print(message, file=sys.stderr)
+
+
+def _client(proxy, timeout):
+    # trust_env=False: a machine-wide HTTP_PROXY / NO_PROXY must never reroute or bypass the
+    # proxy this attempt was given.
+    limits = httpx2.Timeout(timeout, connect=min(timeout, 15.0))
+    return httpx2.Client(proxy=f"http://{proxy}", timeout=limits, trust_env=False)
+
+
+def attempt(url, proxy, offset, end, total, identity, path, timeout):
+    """One GET of bytes offset..end through proxy, written into path at offset.
+
+    Returns (reason, written). The reply is classified before the file is opened, so a wrong
+    object never touches it; bytes past `end` are dropped ('overrun'); a transfer cut short
+    keeps what arrived ('cut'), and the caller asks for the rest on the next attempt.
+    """
+    want, written = end - offset + 1, 0
+    headers = {"Range": f"bytes={offset}-{end}", "Accept-Encoding": "identity"}
+    try:
+        with _client(proxy, timeout) as client, client.stream("GET", url, headers=headers) as reply:
+            problem = reply_problem(reply.status_code, reply.headers, offset, end, total, identity)
+            if problem:
+                return problem, 0
+            with open(path, "r+b") as f:
+                f.seek(offset)
+                try:
+                    for block in reply.iter_raw():      # raw: nothing may be decoded in between
+                        take = block[:want - written]
+                        f.write(take)
+                        written += len(take)
+                        if len(take) < len(block):
+                            return "overrun", written
+                finally:
+                    f.flush()
+                    os.fsync(f.fileno())   # the manifest records `written` only once it is on disk
+    except (httpx2.ConnectError, httpx2.ConnectTimeout, httpx2.ProxyError):
+        return "dead", written
+    except httpx2.TransportError:
+        return "cut", written
+    return ("ok" if written == want else "cut"), written
