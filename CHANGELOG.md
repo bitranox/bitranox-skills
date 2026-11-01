@@ -30,6 +30,12 @@ a hole nobody has drawn a line under is one that gets rediscovered and half-fill
 two "versions with no entry" notes came to sit in this file disagreeing with it.
 
 
+## [10.9.17]
+
+### Changed
+
+- `coding-python-pwshpy`: mirror pwshpy's `.dbus_error_name`, the strict wait and read-back of a Linux service verb, and what `-PwshPyElevate` does with a `net use` drive.
+
 ## [10.9.16]
 
 ### Fixed

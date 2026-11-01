@@ -227,7 +227,12 @@ catch a subclass before its parent:
   converted with `HRESULT_FROM_WIN32` (so a registry or file open refused with Win32 error 5
   reads `0x80070005`, `E_ACCESSDENIED`), else `None` (always `None` for a Linux or macOS
   failure, where the type and `errno` are the signal): branch on it, never on the localized
-  message. Catch `NativeAccessDeniedError` and `OperationTimeoutError` first, then `NativeCallError`.
+  message. `.dbus_error_name` holds the error name of a failed D-Bus call (systemd, Secret Service),
+  such as `org.freedesktop.systemd1.NoSuchUnit` (the unit is not loaded), and is `None` for any other
+  failure: on Linux branch on that, never on the message text. Catch `NativeAccessDeniedError` and
+  `OperationTimeoutError` first, then `NativeCallError`. The wait and read-back of a Linux service verb (`stop_service(wait=False)` reads back too) raise
+  `NativeCallError` when systemd does not answer (only `NoSuchUnit` reads as a stopped unit), while the `get_service`
+  listing keeps a field's default.
 - `ElevationRequiredError` (`require_elevation()`), `PlatformUnsupportedError` (no analog on this OS),
   `ConfigurationError`, `PowerShellError` / `FeatureUnavailableError` (.NET, `[full]`; `run`, `cmdlet`
   and the module wrappers `get_ad_user`, `get_ad_group`, `get_ad_computer`, `get_mailbox`, `get_az_vm`
@@ -386,7 +391,12 @@ alone), skipping others with a `pwshpy: skipping uv at` line and refusing an unt
 127, and only a uv-managed Python from the running account's own data directory, found with
 `uv python find --system`, checked like the `uv` and named to `uv run --python` (the first elevated
 run downloads one, so it fails offline or with `UV_PYTHON_DOWNLOADS` `never` / `manual` and none
-installed); every uv call it makes reads no `uv.toml` (`--no-config`). On Linux and macOS the
+installed); every uv call it makes reads no `uv.toml` (`--no-config`). On Windows an elevated process
+does not see a `net use` drive unless `EnableLinkedConnections` is set, and the runner does not
+switch to the share: from a directory on one the `-PwshPyElevate` child stops with exit 70 naming the drive's UNC path, and a runner on one (`.\tool.ps1` run there too) cannot
+start at all, with the child's own exit code rather than 70 and the parent naming its UNC path. Change to a local path, or to the UNC path if you mean it: from
+a UNC directory an elevated `cmd.exe` works in `C:\Windows` instead, and a bare program name can run
+an executable on the share as administrator. On Linux and macOS the
 `.ps1` `-PwshPyElevate` relaunches root pwsh through a fixed `/bin/sh` stub with root's own home
 from the passwd database, so root pwsh writes nothing into the caller's home (no
 `~/.cache/powershell` entry) and keeps the caller's module directory out of its module path, while
