@@ -48,8 +48,9 @@ Exit codes: 0 = every item succeeded (discover: at least one source answered),
 proxy in the store, every discovery source failed, a --cmd that cannot be parsed, an invalid
 --dead-regex, a --worklist that is not UTF-8). validate is a report: it exits 0 even when no
 candidate turned out live. fetch: 0 = complete file (hash-verified when --sha256 is given),
-1 = chunks still missing or the probe settled nothing, 2 = no proxies, bad argument, hash
-mismatch, a manifest for another download, an output that cannot be written.
+1 = chunks still missing or the probe settled nothing, 2 = no proxies, bad argument (a URL
+that is not http or https included), hash mismatch, a manifest for another download, an
+output that cannot be written, or two proxies reporting the same changed origin answer.
 
 The --cmd template may contain {proxy} (host:port) and {item}. Example:
   uv run proxy_pool.py run --worklist ids.txt --workers 16 --success-glob 'out/{item}*.vtt'
@@ -477,6 +478,15 @@ class ProxyPool:
                 self._ban_locked(proxy)
                 self._refill_active_locked()
 
+    def evict(self, proxy):
+        """Drop a proxy from THIS run's working set at once and backfill; never writes bad.txt.
+
+        For an answer that may be the target's fault rather than the proxy's (fetch: a changed
+        ETag, a 404): acting on it now is right, persisting it on one proxy's word is not."""
+        with self._lock:
+            self._ban_locked(proxy)
+            self._refill_active_locked()
+
     def ban(self, proxy):
         """Evict a hard-dead proxy (connection-level failure), persist it, and backfill."""
         with self._lock:
@@ -749,8 +759,8 @@ def main(argv=None):
     f.add_argument("--need", type=int, default=None, help="working-set size, as for run")
     f.add_argument("--sha256", default=None, help="expected hex digest; strongly recommended")
     f.add_argument("--chunk-timeout", type=float, default=120,
-                   help="seconds one attempt may take, connect to last byte, before it counts as "
-                        "cut; the bytes it received are kept (default 120)")
+                   help="seconds one attempt may take, connect to last byte (redirects included), "
+                        "before it counts as cut; the bytes it received are kept (default 120)")
     f.add_argument("--max-attempts-per-chunk", type=int, default=20)
     f.add_argument("--cooldown", type=float, default=5.0)
     f.add_argument("--flaky-fail-ratio", type=float, default=0.5)
@@ -786,6 +796,7 @@ def _dispatch(a):
 
 def _fetch(a):
     """The fetch subcommand: 0 verified file, 1 work left undone, 2 cannot work."""
+    cfetch.check_url(a.url)       # a FetchError: exit 2 before the pool is even read
     try:
         chunk_size = cfetch.parse_size(a.chunk_size)
     except ValueError as exc:

@@ -137,12 +137,24 @@ them in parallel over the pool, and keeps every byte that arrived.
 first. It has no background refresh, so validate a generous pool before a long download. Defaults:
 `--chunk-size 8M`, `--chunk-timeout 120` (seconds), `--max-attempts-per-chunk 20`.
 
-- **A cut keeps its bytes.** When a proxy drops, stalls or runs out its `--chunk-timeout` (the
-  budget of one attempt, connect to last byte), what it delivered stays on disk and the chunk
-  continues at the next byte on another proxy. A cut, a 429 or a 5xx rotates the proxy; a dead
-  proxy, or a reply that is not the requested range of this object (a page instead of the range,
-  a wrong size, a changed ETag or Last-Modified, a compressed body), bans it to `bad.txt`. A
-  chunk gives up after `--max-attempts-per-chunk`.
+- **A cut keeps its bytes.** When a proxy drops, stalls, trickles or runs out its
+  `--chunk-timeout` (the budget of one attempt, connect to last byte, headers and redirects
+  included), what it delivered stays on disk and the chunk continues at the next byte on another
+  proxy. A cut, a 403, 407, 429 or 5xx rotates the proxy, and so does a CONNECT that the proxy
+  refuses with such a status for an https URL. Only a dead proxy is banned to `bad.txt`: one that
+  cannot be connected to, fails the TLS handshake, or refuses a CONNECT without a 4xx/5xx status.
+  A chunk gives up after `--max-attempts-per-chunk`.
+- **One odd answer is not trusted.** A reply that is not the requested range of this object (a
+  page instead of the range, another status such as 404, a wrong size, a changed ETag or
+  Last-Modified, a compressed body) is the proxy lying or the origin having changed, and one
+  reply cannot tell which. That proxy is dropped for the rest of this run but is not written to
+  `bad.txt`. When a second proxy gives the same answer, the origin changed: `fetch` stops with
+  exit 2, names what the origin now answers and bans nobody. A ranged download keeps `FILE.part`
+  and `FILE.part.json`: a rerun resumes once the URL serves the probed file again, and against a
+  replaced file it refuses the manifest and names the two files to delete.
+- **Redirects are followed** through the same proxy, up to 8 hops, so a release asset or a mirror
+  URL that answers 302 downloads; every check applies to the final target, and a longer chain
+  counts as an odd answer.
 - **Always pass `--sha256`.** Size and identity headers catch a proxy answering with the wrong
   file; only the hash catches bytes altered behind correct headers. Without it `fetch` warns, and
   exit 0 means only that the expected length arrived. A mismatch keeps the bytes as `FILE.part`
@@ -150,10 +162,14 @@ first. It has no background refresh, so validate a generous pool before a long d
 - **Resume by rerunning the same command.** Progress is in `FILE.part` plus `FILE.part.json`; one
   Ctrl-C stops after the attempts in flight. A manifest for a different download (URL, size,
   identity or `--chunk-size` changed) is refused with the two files to delete.
-- **The size comes from a vote.** Before downloading, proxies are asked for byte 0; two different
-  proxies giving the same size and identity decide it, even beside a dissenter. If no two agree
-  once every proxy has answered, the view with the most votes wins, a tie stops it with exit 1
-  rather than guess, and a decision resting on one proxy is warned as not cross-checked.
+- **The size comes from a vote.** Before downloading, proxies are asked for byte 0, at most
+  `--max-attempts-per-chunk` times. The first view (size, ETag and Last-Modified, Range support)
+  that two different proxies give decides at once, even beside dissenters. When the probe ends
+  without that (every active proxy answered, or the probes ran out), each view has one proxy:
+  a lone ranged view beats whole-file views and is taken with a "took the ranged view of one
+  proxy" warning, and a single answering proxy is taken with a not-cross-checked warning. Two
+  ranged views, or two whole-file views and no ranged one, stop with exit 1 rather than guess.
+  Only a dead proxy is banned during the probe.
 - **No Range support** (the origin answers the whole file): each attempt streams the whole file
   from byte 0, with no resume. If the origin sends no size either, a cut transfer cannot be told
   from a complete one, so `--sha256` is the only check left.
@@ -163,8 +179,10 @@ Exit codes of `fetch`:
 - **0**: the file is complete, and hash-verified when `--sha256` was given.
 - **1**: chunks are still missing, or the probe settled nothing (no proxy answered, or the answers
   disagreed). Grow the pool with `validate` and rerun the same command.
-- **2**: it cannot work: a bad argument, no usable proxy, a hash mismatch, a manifest for another
-  download, an output that cannot be written.
+- **2**: it cannot work: a bad argument (a URL that is not `http://` or `https://`, such as
+  `example.com/big.iso` or `ftp://...`, is refused before any proxy is asked), no usable proxy,
+  a hash mismatch, a manifest for another download, an output that cannot be written, or two
+  proxies reporting the same changed origin answer.
 
 Run `fetch --help` for the remaining flags.
 

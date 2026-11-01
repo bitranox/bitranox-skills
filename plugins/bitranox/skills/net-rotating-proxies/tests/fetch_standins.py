@@ -3,8 +3,9 @@
 Everything binds 127.0.0.1; no internet. httpx2 sends a plain http:// target to a proxy as an
 absolute-form request (`GET http://127.0.0.1:<port>/f.bin HTTP/1.1`, verified 2026-11-01), so a
 proxy here reads the target from the request line and either relays it or misbehaves in the one
-way its mode names. The handlers answer HTTP/1.0, so closing early after a full Content-Length
-header is what a dropped session looks like to the client.
+way its mode names. An https:// target arrives as a CONNECT instead, which these proxies only
+ever refuse (mode 'connect:STATUS'). The handlers answer HTTP/1.0, so closing early after a full
+Content-Length header is what a dropped session looks like to the client.
 """
 import http.client
 import http.server
@@ -36,18 +37,26 @@ class _Origin(http.server.BaseHTTPRequestHandler):
         rng = self.headers.get("Range")
         srv.log.append(rng)
         srv.ae_log.append(self.headers.get("Accept-Encoding"))
+        if srv.redirect_to:
+            return self._send(302, b"", {"Location": srv.redirect_to})
+        # Anything but the probe's byte 0 is a download request: chunk_status / chunk_etag model
+        # an origin that changes between the probe and the download (replaced file, removed URL).
+        download = rng != "bytes=0-0"
+        etag = srv.chunk_etag if download and srv.chunk_etag else srv.etag
+        if download and srv.chunk_status:
+            return self._send(srv.chunk_status, b"", {}, etag)
         if rng is None or srv.ignore_range:
-            return self._send(200, data, {})
+            return self._send(200, data, {}, etag)
         first, last = rng.removeprefix("bytes=").split("-")
         first, last = int(first), min(int(last), len(data) - 1)
         if first >= len(data):
-            return self._send(416, b"", {"Content-Range": f"bytes */{len(data)}"})
+            return self._send(416, b"", {"Content-Range": f"bytes */{len(data)}"}, etag)
         return self._send(206, data[first:last + 1],
-                          {"Content-Range": f"bytes {first}-{last}/{len(data)}"})
+                          {"Content-Range": f"bytes {first}-{last}/{len(data)}"}, etag)
 
-    def _send(self, status, body, extra):
+    def _send(self, status, body, extra, etag=None):
         self.send_response(status)
-        headers = {"ETag": self.server.etag, "Last-Modified": LAST_MODIFIED,
+        headers = {"ETag": etag or self.server.etag, "Last-Modified": LAST_MODIFIED,
                    "Content-Length": str(len(body)), **extra}
         for key, value in headers.items():
             self.send_header(key, value)
@@ -67,7 +76,7 @@ class _Proxy(http.server.BaseHTTPRequestHandler):
         if mode == "probe-only" and self.headers.get("Range") != "bytes=0-0":
             # Honest for the probe, then a page for every chunk: banned on first download contact.
             return self._reply(200, b"<html>blocked</html>", {"Content-Type": "text/html"})
-        if mode in ("429", "403"):
+        if mode.isdigit():                  # "429", "403", "404": that status, no body
             return self._reply(int(mode), b"", {})
         if mode == "html":
             return self._reply(200, b"<html>blocked</html>", {"Content-Type": "text/html"})
@@ -77,6 +86,12 @@ class _Proxy(http.server.BaseHTTPRequestHandler):
             srv.stop.wait(srv.stall)        # answer nothing; the client's read timeout fires first
             return
         status, headers, body = self._relay()
+        if mode.startswith("trickle-head:"):
+            # The status line and headers one byte per pause: the reply never starts, yet every
+            # read completes inside the read timeout.
+            head = "".join(f"{k}: {v}\r\n" for k, v in headers.items())
+            raw = f"HTTP/1.0 {status} Relayed\r\n{head}\r\n".encode("latin-1") + body
+            return self._trickle(raw, float(mode[13:]))
         if mode == "etag":
             headers["ETag"] = '"changed"'
         if mode == "overrun":
@@ -99,18 +114,35 @@ class _Proxy(http.server.BaseHTTPRequestHandler):
             return
         if mode.startswith("trickle:"):
             return self._trickle(body, float(mode[8:]))
+        if mode.startswith("trickle-stall:"):
+            # 'trickle-stall:PAUSE:N': N body bytes one per PAUSE, then silence.
+            pause, count = mode[14:].split(":")
+            if not self._trickle(body[:int(count)], float(pause)):
+                srv.stop.wait(srv.stall)
+            return
         self.wfile.write(body)
+
+    def do_CONNECT(self):
+        # 'connect:STATUS': refuse the tunnel with that status, as a proxy does that cannot reach
+        # the origin (502) or will not tunnel to it (403). No mode here opens a real tunnel.
+        srv = self.server
+        srv.hits += 1
+        srv.log.append("CONNECT")
+        status = int(srv.mode[8:]) if srv.mode.startswith("connect:") else 501
+        self._reply(status, b"", {})
 
     def _trickle(self, body, pause):
         # One byte per pause: every read completes inside the client's read timeout, so only a
         # wall-time budget on the whole attempt ends it. close() releases it through `stop`.
+        # Returns True when it stopped early (closed, or the client went away).
         try:
             for i in range(len(body)):
                 self.wfile.write(body[i:i + 1])
                 if self.server.stop.wait(pause):
-                    return
+                    return True
         except OSError:          # the client gave up and closed the connection
-            return
+            return True
+        return False
 
     def _relay(self):
         url = urllib.parse.urlsplit(self.path)
@@ -142,6 +174,7 @@ class Standins:
     def origin(self, size, etag='"v1"'):
         srv = self._start(_Origin)
         srv.data, srv.etag, srv.ignore_range, srv.log, srv.ae_log = payload(size), etag, False, [], []
+        srv.chunk_status = srv.chunk_etag = srv.redirect_to = None
         srv.url = f"http://127.0.0.1:{srv.server_address[1]}/f.bin"
         return srv
 

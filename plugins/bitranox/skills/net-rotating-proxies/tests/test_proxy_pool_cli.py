@@ -413,3 +413,25 @@ def test_fetch_without_a_hash_warns_on_stderr(tmp_path, stand, capsys):
     captured = capsys.readouterr()
     # "no --sha256 given", not bare "--sha256": the single-proxy probe warning names the flag too.
     assert "no --sha256 given" in captured.err and "--sha256" not in captured.out
+
+
+def test_fetch_exits_2_naming_the_answer_when_two_proxies_see_the_origin_change(tmp_path, stand,
+                                                                                capsys):
+    origin = stand.origin(200_000)
+    origin.chunk_status = 410
+    store = _fetch_store(tmp_path, [stand.proxy() for _ in range(3)])
+    assert _fetch_main(store, origin, tmp_path / "f.bin") == 2
+    assert "now answers HTTP 410" in capsys.readouterr().err
+    assert not os.path.exists(os.path.join(store, "bad.txt"))
+
+
+@pytest.mark.parametrize("url", ["example.com/big.iso", "ftp://example.com/big.iso"])
+def test_fetch_refuses_a_url_that_is_not_http_or_https_before_any_proxy_is_asked(tmp_path, stand,
+                                                                               url, capsys):
+    proxy = stand.proxy()
+    store = _fetch_store(tmp_path, [proxy])
+    rc = pp.main(["--store", store, "fetch", url, "-o", str(tmp_path / "f.bin"),
+                  "--cooldown", "0", "--chunk-timeout", "1"])
+    assert rc == 2 and "http or https" in capsys.readouterr().err
+    assert stand.proxies[proxy].hits == 0
+    assert not os.path.exists(os.path.join(store, "bad.txt"))

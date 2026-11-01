@@ -601,6 +601,16 @@ def test_pool_ban_evicts_and_backfills(store):
     assert pool.active() == {"spare:1"}  # backfilled from live
 
 
+def test_pool_evict_drops_a_proxy_for_this_run_only_and_backfills(store):
+    _seed_store(store, live=["odd:1", "spare:1"], speeds={"odd:1": 0.1, "spare:1": 0.2})
+    pool = pp.ProxyPool(store, need=1)
+    pool.mark_in_use("odd:1")
+    pool.evict("odd:1")
+    assert pool.active() == {"spare:1"}
+    assert pp._read(pp._p(store, "bad.txt")) == set()
+    assert "odd:1" in pp.ProxyPool(store, need=2).active()     # a later run uses it again
+
+
 def test_pool_benchmark_swaps_fast_candidate_for_slow_member(store, monkeypatch):
     # active starts as the two slow proxies; a fresh fast candidate is in live but not active.
     _seed_store(
