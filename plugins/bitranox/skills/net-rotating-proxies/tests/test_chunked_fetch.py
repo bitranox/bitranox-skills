@@ -6,6 +6,7 @@ Everything runs against fetch_standins (an origin and fault-injecting forward pr
 import hashlib
 import json
 import os
+import time
 
 import chunked_fetch as cfetch
 import proxy_pool as pp
@@ -54,6 +55,11 @@ OK_HEADERS = {"content-range": "bytes 10-19/100", "etag": '"v1"',
     (206, {**OK_HEADERS, "etag": '"v2"'}, "identity"),
     (206, {**OK_HEADERS, "last-modified": "Sun, 02 Nov 2026 10:00:00 GMT"}, "identity"),
     (206, {k: v for k, v in OK_HEADERS.items() if k != "etag"}, "identity"),
+    # A proxy ignoring Accept-Encoding: identity would have compressed bytes written as content.
+    (206, {**OK_HEADERS, "content-encoding": "gzip"}, "wrong-object"),
+    (206, {**OK_HEADERS, "content-encoding": " GZIP "}, "wrong-object"),
+    (206, {**OK_HEADERS, "content-encoding": "identity"}, None),
+    (206, {**OK_HEADERS, "content-encoding": " Identity "}, None),
 ])
 def test_reply_problem_classifies_a_reply_before_any_byte_is_written(status, headers, want):
     assert cfetch.reply_problem(status, headers, 10, 19, 100, IDENT) == want
@@ -127,10 +133,13 @@ def _pool(tmp_path, proxies, name="store", fail_ratio=0.5):
 
 
 def _fetch(origin, out, pool, **kw):
+    url = kw.pop("url", origin.url)
     kw.setdefault("chunk_size", CHUNK)
     kw.setdefault("workers", 4)
     kw.setdefault("timeout", 1.0)
-    return cfetch.fetch(origin.url, str(out), pool, log=lambda *a: None, warn=lambda *a: None, **kw)
+    kw.setdefault("log", lambda *a: None)
+    kw.setdefault("warn", lambda *a: None)
+    return cfetch.fetch(url, str(out), pool, **kw)
 
 
 def _starts_per_chunk(origin):
@@ -163,6 +172,11 @@ def test_mixed_pool_still_writes_an_identical_file_and_bans_only_the_bannable(st
     assert out.read_bytes() == origin.data
     banned = pp._read(os.path.join(store, "bad.txt"))      # tolerates a missing file
     assert banned <= bannable
+    # The probe bans only on a refused connect, so a served bannable proxy is banned exactly
+    # when a CHUNK request reached it; "nothing banned" passes only if none was reached.
+    served = {p for p in bannable if p in stand.proxies}
+    reached = {p for p in served if any(r != "bytes=0-0" for r in stand.proxies[p].log)}
+    assert banned & served == reached
 
 
 def test_a_cut_chunk_resumes_from_its_offset_never_from_its_start(stand, tmp_path):
@@ -192,15 +206,25 @@ def test_a_stopped_run_resumes_from_its_manifest(stand, tmp_path):
         i: i * CHUNK + 10000 for i in range(5)}
 
 
-def test_a_manifest_for_another_version_is_refused(stand, tmp_path):
+@pytest.mark.parametrize("key, change", [
+    ("url", lambda origin, kw: kw.update(url=origin.url + "?v=2")),
+    ("total", lambda origin, kw: setattr(origin, "data", origin.data + b"x")),
+    ("chunk_size", lambda origin, kw: kw.update(chunk_size=CHUNK * 2)),
+    ("identity", lambda origin, kw: setattr(origin, "etag", '"v2"')),
+])
+def test_a_manifest_for_another_download_is_refused(stand, tmp_path, key, change):
     origin = stand.origin(SIZE)
     _, cutting = _pool(tmp_path, [stand.proxy("cut:10000")], fail_ratio=1.0)
     out = tmp_path / "f.bin"
     _fetch(origin, out, cutting, workers=1, max_attempts=1)
-    origin.etag = '"v2"'
+    kw = {}
+    change(origin, kw)
     _, clean = _pool(tmp_path, [stand.proxy()], name="store2")
-    with pytest.raises(cfetch.ManifestMismatch):
-        _fetch(origin, out, clean)
+    with pytest.raises(cfetch.ManifestMismatch) as refused:
+        _fetch(origin, out, clean, **kw)
+    # Read the key list out of '(a, b differ)', not the whole message: the path holds the test name.
+    listed = str(refused.value).rsplit("(", 1)[1].split(" differ")[0].split(", ")
+    assert key in listed
 
 
 def test_a_wrong_hash_removes_the_manifest_and_keeps_the_part(stand, tmp_path):
@@ -267,3 +291,141 @@ def test_the_first_probe_answer_alone_does_not_decide(stand, tmp_path):
     store, _ = _pool(tmp_path, order)
     info = cfetch.probe(origin.url, _InOrder(store, order), 1.0, 20, warn=lambda *a: None)
     assert info.ranged and info.total == SIZE and info.identity["etag"] == '"v1"'
+
+
+@pytest.mark.parametrize("liar_first", [True, False])
+def test_a_tie_between_two_different_views_refuses_instead_of_guessing(stand, tmp_path, liar_first):
+    origin = stand.origin(SIZE)
+    liar, honest = stand.proxy("etag"), stand.proxy()
+    order = [liar, honest] if liar_first else [honest, liar]
+    store, _ = _pool(tmp_path, order)
+    warnings = []
+    assert cfetch.probe(origin.url, _InOrder(store, order), 1.0, 20, warn=warnings.append) is None
+    assert warnings == [("probe: proxies disagree about the object (2 distinct views); "
+                         "refusing to guess - rerun later or use --sha256")]
+    store2, _ = _pool(tmp_path, order, name="store2")
+    result = _fetch(origin, tmp_path / "f.bin", _InOrder(store2, order))
+    assert not result.ok and result.done == 0
+    assert not (tmp_path / "f.bin.part.json").exists()
+    assert pp._read(os.path.join(store2, "bad.txt")) == set()
+
+
+def test_on_a_tie_a_ranged_answer_still_beats_a_whole_file_one(stand, tmp_path):
+    origin = stand.origin(SIZE)
+    order = [stand.proxy("html"), stand.proxy()]
+    store, _ = _pool(tmp_path, order)
+    warnings = []
+    info = cfetch.probe(origin.url, _InOrder(store, order), 1.0, 20, warn=warnings.append)
+    assert info.ranged and info.total == SIZE and info.identity["etag"] == '"v1"'
+    assert warnings == []           # two proxies answered: the single-voter warning does not apply
+
+
+def test_a_single_answering_proxy_decides_with_a_warning(stand, tmp_path):
+    origin = stand.origin(SIZE)
+    _, pool = _pool(tmp_path, [stand.proxy()])
+    warnings = []
+    info = cfetch.probe(origin.url, pool, 1.0, 20, warn=warnings.append)
+    assert info.ranged and info.total == SIZE
+    assert len(warnings) == 1 and warnings[0].startswith("probe: only one proxy answered")
+
+
+def test_attempt_gives_up_a_trickling_proxy_at_its_wall_time_budget(stand, tmp_path):
+    origin = stand.origin(SIZE)
+    path = _part(tmp_path, SIZE)
+    began = time.monotonic()
+    reason, written = cfetch.attempt(origin.url, stand.proxy("trickle:0.05"), 5000, 14999, SIZE,
+                                     IDENT, path, timeout=0.5)
+    assert time.monotonic() - began < 2.0
+    assert reason == "cut" and 0 < written < 10000
+    with open(path, "rb") as f:
+        on_disk = f.read()
+    assert on_disk[5000:5000 + written] == origin.data[5000:5000 + written]
+    assert on_disk[5000 + written:15000] == b"\x00" * (10000 - written)
+
+
+def test_an_attempt_asks_for_identity_encoding(stand, tmp_path):
+    origin = stand.origin(SIZE)
+    path = _part(tmp_path, SIZE)
+    assert cfetch.attempt(origin.url, stand.proxy(), 0, 999, SIZE, IDENT, path, 2.0)[0] == "ok"
+    assert origin.ae_log == ["identity"]
+
+
+def test_the_probe_asks_for_identity_encoding(stand, tmp_path):
+    origin = stand.origin(SIZE)
+    _, pool = _pool(tmp_path, [stand.proxy(), stand.proxy()])
+    assert cfetch.probe(origin.url, pool, 2.0, 20, warn=lambda *a: None) is not None
+    assert origin.ae_log and set(origin.ae_log) == {"identity"}
+
+
+def test_a_pool_that_runs_dry_stops_the_run_instead_of_spinning(stand, tmp_path):
+    origin = stand.origin(SIZE)
+    _, pool = _pool(tmp_path, [stand.proxy("probe-only")])     # banned on its first chunk
+    lines = []
+    began = time.monotonic()
+    result = _fetch(origin, tmp_path / "f.bin", pool, chunk_size=16 * 1024, log=lines.append)
+    assert time.monotonic() - began < 2.0
+    assert not result.ok and result.done == 0 and result.chunks == 19
+    attempts = {k: v for k, v in result.counts.items() if k != "pool-dry"}
+    assert result.counts["pool-dry"] == 1
+    assert set(attempts) == {"wrong-object"} and 1 <= attempts["wrong-object"] <= 4   # one per worker
+    assert "pool ran dry: 19 chunk(s) left" in lines
+    assert any(line.startswith(f"chunks 0/19, attempts {attempts['wrong-object']}:") for line in lines)
+    assert (tmp_path / "f.bin.part").exists() and (tmp_path / "f.bin.part.json").exists()
+
+
+def _stopped_run(stand, tmp_path):
+    origin = stand.origin(SIZE)
+    _, cutting = _pool(tmp_path, [stand.proxy("cut:10000")], fail_ratio=1.0)
+    _fetch(origin, tmp_path / "f.bin", cutting, workers=1, max_attempts=1)
+    return origin, tmp_path / "f.bin.part.json"
+
+
+def _with_received(received):
+    def damage(text):
+        state = json.loads(text)
+        state["received"] = received
+        return json.dumps(state)
+    return damage
+
+
+@pytest.mark.parametrize("damage", [
+    lambda text: text[:len(text) // 2],              # a truncated write
+    lambda text: "[]",                               # valid JSON, not an object
+    _with_received([10000] * 4),                     # one chunk short
+    _with_received([10000] * 6),
+    _with_received([10000] * 4 + [CHUNK + 1]),       # more than the chunk holds
+    _with_received([-1] + [10000] * 4),
+    _with_received(["x"] + [10000] * 4),
+    _with_received([True] + [10000] * 4),
+    _with_received({"0": 10000}),
+], ids=["truncated", "not-object", "short", "long", "over", "negative", "text", "bool", "dict"])
+def test_a_damaged_manifest_is_refused_with_a_reason(stand, tmp_path, damage):
+    origin, manifest = _stopped_run(stand, tmp_path)
+    manifest.write_text(damage(manifest.read_text(encoding="utf-8")), encoding="utf-8")
+    _, clean = _pool(tmp_path, [stand.proxy()], name="store2")
+    with pytest.raises(cfetch.ManifestMismatch, match="delete it and the .part file"):
+        _fetch(origin, tmp_path / "f.bin", clean)
+
+
+def _flaky_op(failures):
+    calls = []
+
+    def op():
+        calls.append(1)
+        if len(calls) <= failures:
+            raise PermissionError(13, "The process cannot access the file")
+        return "replaced"
+    return op, calls
+
+
+def test_a_windows_sharing_violation_on_replace_is_retried():
+    op, calls = _flaky_op(2)
+    assert cfetch._retry_sharing_violation(op, windows=True, sleep=lambda s: None) == "replaced"
+    assert len(calls) == 3
+
+
+def test_a_permission_error_off_windows_is_raised_at_once():
+    op, calls = _flaky_op(1)
+    with pytest.raises(PermissionError):
+        cfetch._retry_sharing_violation(op, windows=False, sleep=lambda s: None)
+    assert len(calls) == 1

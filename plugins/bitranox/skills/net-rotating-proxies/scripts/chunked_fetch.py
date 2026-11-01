@@ -78,6 +78,10 @@ def reply_problem(status, headers, start, end, total, identity):
         return "throttled"
     if status != 206 or parse_content_range(headers.get("content-range")) != (start, end, total):
         return "wrong-object"
+    # A proxy that ignored 'Accept-Encoding: identity' sends compressed bytes, which written at
+    # these offsets would be content no other chunk lines up with.
+    if (headers.get("content-encoding") or "identity").strip().lower() != "identity":
+        return "wrong-object"
     seen = identity_of(headers)
     # A validator the probe never saw cannot be compared; one it saw must come back unchanged.
     if any(want and seen[key] != want for key, want in identity.items()):
@@ -116,7 +120,13 @@ def attempt(url, proxy, offset, end, total, identity, path, timeout):
     Returns (reason, written). The reply is classified before the file is opened, so a wrong
     object never touches it; bytes past `end` are dropped ('overrun'); a transfer cut short
     keeps what arrived ('cut'), and the caller asks for the rest on the next attempt.
+
+    `timeout` bounds each read AND is the budget of the whole attempt, connect to last byte: a
+    proxy sending one byte inside every read timeout would otherwise hold a worker forever.
+    Running out of it is a 'cut' - the bytes already written stay and the next attempt resumes
+    after them.
     """
+    deadline = time.monotonic() + timeout
     want, written = end - offset + 1, 0
     headers = {"Range": f"bytes={offset}-{end}", "Accept-Encoding": "identity"}
     try:
@@ -133,6 +143,8 @@ def attempt(url, proxy, offset, end, total, identity, path, timeout):
                         written += len(take)
                         if len(take) < len(block):
                             return "overrun", written
+                        if written < want and time.monotonic() > deadline:
+                            return "cut", written
                 finally:
                     f.flush()
                     os.fsync(f.fileno())   # the manifest records `written` only once it is on disk
@@ -184,9 +196,11 @@ def probe(url, pool, timeout, attempts, warn=None):
     One proxy's answer is not trusted alone: an injecting proxy answers 200 with a page, and one
     that rewrites ETag would plant an identity every honest proxy then fails, getting them all
     banned. So each reply is a vote, and the probe decides when two distinct proxies agree, or
-    when every proxy still active has answered (most votes wins, a ranged answer wins a tie, and
-    a decision only one proxy backs is logged as not cross-checked). Returns a _Probe, or None
-    when nobody answered within `attempts`.
+    when every proxy still active has answered (most votes wins, a ranged answer wins a tie
+    against whole-file ones, and a lone answering proxy is logged as not cross-checked). A top
+    count shared by two different ranged views (or two whole-file ones) is not a decision: the
+    probe refuses rather than let whichever answered first plant its view. Returns a _Probe, or
+    None when nobody answered within `attempts` or the answers disagree.
     """
     votes = {}
     for _ in range(attempts):
@@ -215,11 +229,17 @@ def probe(url, pool, timeout, attempts, warn=None):
             break
     if not votes:
         return None
-    key = max(votes, key=lambda k: (len(votes[k]), k[0]))
-    if len(votes[key]) < 2:
+    top = max(len(v) for v in votes.values())
+    tied = [k for k in votes if len(votes[k]) == top]
+    winners = [k for k in tied if k[0]] or tied     # a ranged view beats whole-file ones on a tie
+    if len(winners) > 1:
+        (warn or _stderr)(f"probe: proxies disagree about the object ({len(votes)} distinct "
+                          f"views); refusing to guess - rerun later or use --sha256")
+        return None
+    if len(set().union(*votes.values())) == 1:
         (warn or _stderr)("probe: only one proxy answered; its view of the object was not "
                           "cross-checked - pass --sha256 to verify the result")
-    return _decide(key)
+    return _decide(winners[0])
 
 
 def _decide(key):
@@ -228,23 +248,70 @@ def _decide(key):
 
 
 def _load_manifest(path, expected):
-    """The saved progress, or a fresh one; refuses a manifest for another object or plan."""
+    """The saved progress, or a fresh one; refuses a manifest for another object or plan, and
+    one that is damaged (a crash mid-write, a hand edit) rather than trusting its offsets."""
     if not os.path.exists(path):
         return dict(expected, received=[0] * expected["chunks"])
-    with open(path, encoding="utf-8") as f:
-        saved = json.load(f)
+    try:
+        with open(path, encoding="utf-8") as f:
+            saved = json.load(f)
+    except (json.JSONDecodeError, UnicodeDecodeError) as exc:
+        raise _damaged(path, f"it is not valid JSON ({exc})") from exc
+    if not isinstance(saved, dict):
+        raise _damaged(path, "it is not a JSON object")
     differs = [key for key in expected if saved.get(key) != expected[key]]
     if differs:
         raise ManifestMismatch(f"{path} belongs to another download ({', '.join(differs)} differ); "
                                f"delete it and the .part file to start over")
+    problem = _received_problem(saved.get("received"), expected)
+    if problem:
+        raise _damaged(path, problem)
     return saved
+
+
+def _damaged(path, why):
+    return ManifestMismatch(f"{path} is damaged: {why}; delete it and the .part file to start over")
+
+
+def _received_problem(received, expected):
+    """Why `received` cannot be this plan's per-chunk byte counts, or None."""
+    if not isinstance(received, list) or len(received) != expected["chunks"]:
+        return f"'received' is not a list of {expected['chunks']} counts"
+    total, size = expected["total"], expected["chunk_size"]
+    for index, value in enumerate(received):
+        length = min(size, total - index * size)
+        # bool is an int subclass, and True would read as one byte received.
+        if type(value) is not int or not 0 <= value <= length:
+            return f"'received'[{index}] is {value!r}, not a count between 0 and {length}"
+    return None
+
+
+# Mirrors proxy_pool._retry_sharing_violation; this module must never import proxy_pool.
+_SHARING_RETRY_DELAYS = (0.01, 0.02, 0.05, 0.1, 0.2, 0.4)
+
+
+def _retry_sharing_violation(op, windows=os.name == "nt", sleep=time.sleep):
+    """Return op(), retrying while Windows reports a sharing violation (PermissionError).
+
+    A reader or a virus scanner holding the manifest open makes os.replace onto it fail for a few
+    milliseconds on Windows; off Windows a PermissionError is an access right, raised at once."""
+    for delay in _SHARING_RETRY_DELAYS:
+        try:
+            return op()
+        except PermissionError:
+            if not windows:
+                raise
+            sleep(delay)
+    return op()
 
 
 def _save_manifest(path, state):
     tmp = path + ".tmp"
     with open(tmp, "w", encoding="utf-8") as f:
         json.dump(state, f)
-    os.replace(tmp, path)
+        f.flush()
+        os.fsync(f.fileno())     # on disk before it replaces the old one, or a crash leaves it empty
+    _retry_sharing_violation(lambda: os.replace(tmp, path))
 
 
 def _sha256_of(path):
@@ -283,6 +350,8 @@ def fetch(url, out, pool, *, chunk_size, workers=8, sha256=None, timeout=120.0, 
     """Download url to out through pool; see the module docstring. Returns a FetchResult.
 
     `log` gets the progress/report lines (stdout by default), `warn` the warnings (stderr).
+    `timeout` is one attempt's whole budget, connect to last byte (see attempt). A pool emptied
+    by bans stops the run at once, reported as a 'pool-dry' count, never as attempts.
     """
     info = probe(url, pool, timeout, max_attempts, warn)
     if info is None:
@@ -297,20 +366,25 @@ def fetch(url, out, pool, *, chunk_size, workers=8, sha256=None, timeout=120.0, 
         state["received"] = [0] * len(chunks)   # progress without its bytes is no progress
     with open(part, "a+b") as f:
         f.truncate(info.total)
-    lock, counts = threading.Lock(), {}
+    lock, counts, dry = threading.Lock(), {}, threading.Event()
 
     def run_chunk(index):
         start, end = chunks[index]
-        for _ in range(max_attempts):
+        tries = 0
+        # A wait for a proxy is not an attempt: counted, it burnt max_attempts per chunk while
+        # every proxy was busy, and spun the whole budget once the pool was empty.
+        while tries < max_attempts and not dry.is_set():
             offset = start + state["received"][index]
             if offset > end:
                 return True
             picks = pool.acquire(1)
             if not picks:
-                with lock:
-                    counts["no-proxy"] = counts.get("no-proxy", 0) + 1
-                time.sleep(0.2)
+                if not pool.active():
+                    dry.set()          # nothing left to ask: every worker stops taking attempts
+                    break
+                time.sleep(0.05)
                 continue
+            tries += 1
             pool.mark_in_use(picks[0])
             reason, written = attempt(url, picks[0], offset, end, info.total, info.identity, part,
                                       timeout)
@@ -325,6 +399,9 @@ def fetch(url, out, pool, *, chunk_size, workers=8, sha256=None, timeout=120.0, 
         done = sum(ex.map(run_chunk, range(len(chunks))))
     log(f"chunks {done}/{len(chunks)}, attempts {sum(counts.values())}: "
         + ", ".join(f"{k} {v}" for k, v in sorted(counts.items())))
+    if dry.is_set():
+        counts["pool-dry"] = 1                  # added after the line above: it is not an attempt
+        log(f"pool ran dry: {len(chunks) - done} chunk(s) left")
     if done < len(chunks):
         _save_manifest(manifest, state)
         return FetchResult(False, done, len(chunks), counts, "chunks still missing; rerun to resume")

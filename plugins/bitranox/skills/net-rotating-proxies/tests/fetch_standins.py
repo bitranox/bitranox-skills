@@ -35,6 +35,7 @@ class _Origin(http.server.BaseHTTPRequestHandler):
         srv, data = self.server, self.server.data
         rng = self.headers.get("Range")
         srv.log.append(rng)
+        srv.ae_log.append(self.headers.get("Accept-Encoding"))
         if rng is None or srv.ignore_range:
             return self._send(200, data, {})
         first, last = rng.removeprefix("bytes=").split("-")
@@ -61,7 +62,11 @@ class _Proxy(http.server.BaseHTTPRequestHandler):
     def do_GET(self):
         srv = self.server
         srv.hits += 1
+        srv.log.append(self.headers.get("Range"))
         mode = srv.mode
+        if mode == "probe-only" and self.headers.get("Range") != "bytes=0-0":
+            # Honest for the probe, then a page for every chunk: banned on first download contact.
+            return self._reply(200, b"<html>blocked</html>", {"Content-Type": "text/html"})
         if mode in ("429", "403"):
             return self._reply(int(mode), b"", {})
         if mode == "html":
@@ -84,7 +89,20 @@ class _Proxy(http.server.BaseHTTPRequestHandler):
         if mode.startswith("cut:"):
             self.wfile.write(body[:int(mode[4:])])   # then close: the promised length never comes
             return
+        if mode.startswith("trickle:"):
+            return self._trickle(body, float(mode[8:]))
         self.wfile.write(body)
+
+    def _trickle(self, body, pause):
+        # One byte per pause: every read completes inside the client's read timeout, so only a
+        # wall-time budget on the whole attempt ends it. close() releases it through `stop`.
+        try:
+            for i in range(len(body)):
+                self.wfile.write(body[i:i + 1])
+                if self.server.stop.wait(pause):
+                    return
+        except OSError:          # the client gave up and closed the connection
+            return
 
     def _relay(self):
         url = urllib.parse.urlsplit(self.path)
@@ -115,7 +133,7 @@ class Standins:
 
     def origin(self, size, etag='"v1"'):
         srv = self._start(_Origin)
-        srv.data, srv.etag, srv.ignore_range, srv.log = payload(size), etag, False, []
+        srv.data, srv.etag, srv.ignore_range, srv.log, srv.ae_log = payload(size), etag, False, [], []
         srv.url = f"http://127.0.0.1:{srv.server_address[1]}/f.bin"
         return srv
 
@@ -123,7 +141,7 @@ class Standins:
         if mode == "refuse":
             return f"127.0.0.1:{_free_port()}"
         srv = self._start(_Proxy)
-        srv.mode, srv.hits, srv.stall, srv.stop = mode, 0, stall, self.stop
+        srv.mode, srv.hits, srv.stall, srv.stop, srv.log = mode, 0, stall, self.stop, []
         address = f"127.0.0.1:{srv.server_address[1]}"
         self.proxies[address] = srv
         return address
