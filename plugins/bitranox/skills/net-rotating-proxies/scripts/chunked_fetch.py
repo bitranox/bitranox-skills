@@ -239,6 +239,11 @@ def probe(url, pool, timeout, attempts, warn=None):
     if len(set().union(*votes.values())) == 1:
         (warn or _stderr)("probe: only one proxy answered; its view of the object was not "
                           "cross-checked - pass --sha256 to verify the result")
+    elif len(votes[winners[0]]) == 1:
+        # A ranged view that won a tie against whole-file ones still has ONE voter: its size and
+        # identity were never confirmed by a second proxy.
+        (warn or _stderr)("probe: proxies disagreed; took the ranged view of one proxy, not "
+                          "cross-checked - pass --sha256 to verify the result")
     return _decide(winners[0])
 
 

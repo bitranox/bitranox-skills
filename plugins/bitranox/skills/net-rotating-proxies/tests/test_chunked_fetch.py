@@ -317,7 +317,9 @@ def test_on_a_tie_a_ranged_answer_still_beats_a_whole_file_one(stand, tmp_path):
     warnings = []
     info = cfetch.probe(origin.url, _InOrder(store, order), 1.0, 20, warn=warnings.append)
     assert info.ranged and info.total == SIZE and info.identity["etag"] == '"v1"'
-    assert warnings == []           # two proxies answered: the single-voter warning does not apply
+    # Two proxies answered, but the winning view has one voter: it is warned as not cross-checked.
+    assert warnings == [("probe: proxies disagreed; took the ranged view of one proxy, not "
+                         "cross-checked - pass --sha256 to verify the result")]
 
 
 def test_a_single_answering_proxy_decides_with_a_warning(stand, tmp_path):
@@ -348,6 +350,15 @@ def test_an_attempt_asks_for_identity_encoding(stand, tmp_path):
     path = _part(tmp_path, SIZE)
     assert cfetch.attempt(origin.url, stand.proxy(), 0, 999, SIZE, IDENT, path, 2.0)[0] == "ok"
     assert origin.ae_log == ["identity"]
+
+
+def test_every_client_ignores_the_environment():
+    # Measured on httpx2 2.16: with an explicit proxy= the env proxy variables are not read even
+    # under trust_env=True, so no env-based test can fail; trust_env=False still keeps .netrc
+    # credentials and SSL_CERT_* overrides out. Pin the setting on the one factory both the
+    # probe and attempt use.
+    with cfetch._client("127.0.0.1:9", 1.0) as client:
+        assert client.trust_env is False
 
 
 def test_the_probe_asks_for_identity_encoding(stand, tmp_path):
