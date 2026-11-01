@@ -3,7 +3,12 @@
 Everything runs against fetch_standins (an origin and fault-injecting forward proxies bound to
 127.0.0.1) and the real ProxyPool, so the pool's ban/record/eviction paths are the ones exercised.
 """
+import hashlib
+import json
+import os
+
 import chunked_fetch as cfetch
+import proxy_pool as pp
 import pytest
 from fetch_standins import Standins
 
@@ -112,3 +117,153 @@ def test_attempt_resumes_inside_a_chunk_at_the_offset_it_is_given(stand, tmp_pat
     ident = cfetch.identity_of({"etag": '"v1"'})
     assert cfetch.attempt(origin.url, stand.proxy(), 5300, 5999, SIZE, ident, path, 2.0) == ("ok", 700)
     assert origin.log[-1] == "bytes=5300-5999"
+
+
+def _pool(tmp_path, proxies, name="store", fail_ratio=0.5):
+    store = tmp_path / name
+    store.mkdir()
+    (store / "live.txt").write_text("\n".join(proxies) + "\n", encoding="utf-8")
+    return str(store), pp.ProxyPool(str(store), None, cooldown=0, flaky_max_fail_ratio=fail_ratio)
+
+
+def _fetch(origin, out, pool, **kw):
+    kw.setdefault("chunk_size", CHUNK)
+    kw.setdefault("workers", 4)
+    kw.setdefault("timeout", 1.0)
+    return cfetch.fetch(origin.url, str(out), pool, log=lambda *a: None, warn=lambda *a: None, **kw)
+
+
+def _starts_per_chunk(origin):
+    """Range starts the origin saw, grouped by chunk index, probe excluded."""
+    starts = {}
+    for value in origin.log:
+        if value and value != "bytes=0-0":
+            first = int(value.removeprefix("bytes=").split("-")[0])
+            starts.setdefault(first // CHUNK, []).append(first)
+    return starts
+
+
+def test_clean_pool_writes_an_identical_file_and_cleans_up(stand, tmp_path):
+    origin = stand.origin(SIZE)
+    _, pool = _pool(tmp_path, [stand.proxy(), stand.proxy()])
+    out = tmp_path / "f.bin"
+    result = _fetch(origin, out, pool, sha256=hashlib.sha256(origin.data).hexdigest())
+    assert result.ok and result.done == result.chunks == 5
+    assert out.read_bytes() == origin.data
+    assert not (tmp_path / "f.bin.part").exists() and not (tmp_path / "f.bin.part.json").exists()
+
+
+def test_mixed_pool_still_writes_an_identical_file_and_bans_only_the_bannable(stand, tmp_path):
+    origin = stand.origin(SIZE)
+    bannable = {stand.proxy(m) for m in ("refuse", "html", "wrong-range", "etag")}
+    kept = {stand.proxy(m) for m in ("clean", "429", "cut:5000", "stall")}
+    store, pool = _pool(tmp_path, sorted(bannable | kept))
+    out = tmp_path / "f.bin"
+    assert _fetch(origin, out, pool, max_attempts=40).ok
+    assert out.read_bytes() == origin.data
+    banned = pp._read(os.path.join(store, "bad.txt"))      # tolerates a missing file
+    assert banned <= bannable
+
+
+def test_a_cut_chunk_resumes_from_its_offset_never_from_its_start(stand, tmp_path):
+    origin = stand.origin(SIZE)
+    _, pool = _pool(tmp_path, [stand.proxy("cut:10000")], fail_ratio=1.0)   # never evicted
+    out = tmp_path / "f.bin"
+    assert _fetch(origin, out, pool, workers=1).ok
+    assert out.read_bytes() == origin.data
+    for index, starts in _starts_per_chunk(origin).items():
+        first = index * CHUNK
+        assert starts == list(range(first, min(first + CHUNK, SIZE), 10000))
+
+
+def test_a_stopped_run_resumes_from_its_manifest(stand, tmp_path):
+    origin = stand.origin(SIZE)
+    _, cutting = _pool(tmp_path, [stand.proxy("cut:10000")], fail_ratio=1.0)
+    out = tmp_path / "f.bin"
+    first = _fetch(origin, out, cutting, workers=1, max_attempts=1)
+    assert not first.ok and first.done == 0
+    manifest = json.loads((tmp_path / "f.bin.part.json").read_text(encoding="utf-8"))
+    assert manifest["received"] == [10000] * 5
+    origin.log.clear()
+    _, clean = _pool(tmp_path, [stand.proxy()], name="store2")
+    assert _fetch(origin, out, clean).ok
+    assert out.read_bytes() == origin.data
+    assert {i: s[0] for i, s in _starts_per_chunk(origin).items()} == {
+        i: i * CHUNK + 10000 for i in range(5)}
+
+
+def test_a_manifest_for_another_version_is_refused(stand, tmp_path):
+    origin = stand.origin(SIZE)
+    _, cutting = _pool(tmp_path, [stand.proxy("cut:10000")], fail_ratio=1.0)
+    out = tmp_path / "f.bin"
+    _fetch(origin, out, cutting, workers=1, max_attempts=1)
+    origin.etag = '"v2"'
+    _, clean = _pool(tmp_path, [stand.proxy()], name="store2")
+    with pytest.raises(cfetch.ManifestMismatch):
+        _fetch(origin, out, clean)
+
+
+def test_a_wrong_hash_removes_the_manifest_and_keeps_the_part(stand, tmp_path):
+    origin = stand.origin(SIZE)
+    _, pool = _pool(tmp_path, [stand.proxy()])
+    out = tmp_path / "f.bin"
+    with pytest.raises(cfetch.HashMismatch):
+        _fetch(origin, out, pool, sha256="0" * 64)
+    assert not out.exists() and not (tmp_path / "f.bin.part.json").exists()
+    assert (tmp_path / "f.bin.part").read_bytes() == origin.data
+
+
+def test_spent_attempts_leave_the_part_and_manifest_for_a_later_run(stand, tmp_path):
+    origin = stand.origin(SIZE)
+    _, pool = _pool(tmp_path, [stand.proxy("cut:10000")], fail_ratio=1.0)
+    result = _fetch(origin, tmp_path / "f.bin", pool, max_attempts=2)
+    assert not result.ok and result.counts["cut"] == 10
+    assert (tmp_path / "f.bin.part").exists() and (tmp_path / "f.bin.part.json").exists()
+
+
+def test_an_empty_object_needs_no_chunks(stand, tmp_path):
+    origin = stand.origin(0)
+    _, pool = _pool(tmp_path, [stand.proxy()])
+    out = tmp_path / "f.bin"
+    assert _fetch(origin, out, pool).ok and out.read_bytes() == b""
+
+
+def test_one_etag_rewriting_proxy_cannot_plant_the_identity(stand, tmp_path):
+    origin = stand.origin(SIZE)
+    _, pool = _pool(tmp_path, [stand.proxy("etag"), stand.proxy(), stand.proxy()])
+    info = cfetch.probe(origin.url, pool, 1.0, 20, warn=lambda *a: None)
+    assert info.ranged and info.total == SIZE and info.identity["etag"] == '"v1"'
+
+
+def test_a_proxy_answering_another_range_cannot_plant_the_size(stand, tmp_path):
+    origin = stand.origin(SIZE)
+    _, pool = _pool(tmp_path, [stand.proxy("wrong-range"), stand.proxy()])
+    info = cfetch.probe(origin.url, pool, 1.0, 20, warn=lambda *a: None)
+    assert info.ranged and info.total == SIZE
+
+
+class _InOrder(pp.ProxyPool):
+    """The real pool, but acquire() hands proxies out in a fixed order (skipping evicted ones),
+    so a test can make a lying proxy answer the probe FIRST instead of hoping the random pick
+    does."""
+
+    def __init__(self, store, order):
+        super().__init__(store, None, cooldown=0)
+        self._order, self._turn = list(order), 0
+
+    def acquire(self, n):
+        active = self.active()
+        for _ in range(len(self._order)):
+            proxy = self._order[self._turn % len(self._order)]
+            self._turn += 1
+            if proxy in active:
+                return [proxy]
+        return []
+
+
+def test_the_first_probe_answer_alone_does_not_decide(stand, tmp_path):
+    origin = stand.origin(SIZE)
+    order = [stand.proxy("etag"), stand.proxy(), stand.proxy()]
+    store, _ = _pool(tmp_path, order)
+    info = cfetch.probe(origin.url, _InOrder(store, order), 1.0, 20, warn=lambda *a: None)
+    assert info.ranged and info.total == SIZE and info.identity["etag"] == '"v1"'
