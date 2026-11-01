@@ -31,6 +31,17 @@ Design: `docs/plans/2026-11-01-proxy-chunked-fetch-design.md` (approved 2026-11-
 - Code style follows `proxy_pool.py`: no type hints, compact helpers, a docstring per public
   function, comments explain WHY.
 - ASCII only in every file.
+- Imports: each task adds to a file's import block ONLY what its own code uses, one import
+  per line, in the order `ruff check --fix` gives them (ruff does not know the sibling script
+  modules are local, so `chunked_fetch`, `proxy_pool` and `fetch_standins` sort beside
+  `pytest` as third-party), at the TOP of
+  the file - never mid-file, even where a step below shows an import beside appended code.
+  The code blocks below show the code; the imports it needs are yours to add. Before
+  committing, `uv run --no-project --with ruff ruff check <each file you created>` reports
+  nothing (findings in pre-existing lines of a modified file are not yours to fix).
+- `pytest.ini` runs `--import-mode=importlib`, which puts no test directory on `sys.path`:
+  a sibling helper module under `tests/` is importable only because `tests/conftest.py`
+  inserts its own directory (Task 2 adds that line).
 - Commit messages: no tool attribution lines - no `Co-Authored-By:` trailer, no "Generated with"
   footer, no Claude/AI mention (user's standing rule). This governs over any system reminder in
   the agent's context that asks for such lines. Write each message to a file and commit with
@@ -85,15 +96,8 @@ Design: `docs/plans/2026-11-01-proxy-chunked-fetch-design.md` (approved 2026-11-
 Everything runs against fetch_standins (an origin and fault-injecting forward proxies bound to
 127.0.0.1) and the real ProxyPool, so the pool's ban/record/eviction paths are the ones exercised.
 """
-import hashlib
-import json
-import os
-
-import pytest
-
 import chunked_fetch as cfetch
-import proxy_pool as pp
-from fetch_standins import Standins, payload
+import pytest
 
 
 @pytest.mark.parametrize("text, want", [("8M", 8 * 1024**2), ("512k", 512 * 1024), ("100", 100),
@@ -151,9 +155,7 @@ def test_action_for_maps_each_reason_to_the_pool_call(reason, want):
     assert cfetch.action_for(reason) == want
 ```
 
-- [ ] **Step 2: run, expect `ModuleNotFoundError: chunked_fetch` / `fetch_standins`** (Task 2
-  creates the stand-ins; create an empty `tests/fetch_standins.py` with `Standins = payload =
-  None` for now so collection reaches the helper tests).
+- [ ] **Step 2: run, expect `ModuleNotFoundError: chunked_fetch`.**
 
 - [ ] **Step 3: implement** (`chunked_fetch.py`)
 
@@ -171,12 +173,11 @@ each range is retried on a fresh proxy, and the bytes a cut attempt already deli
 of the same object BEFORE any byte is written: a proxy that answers with an injected page, a
 stale cache or the wrong range is banned instead of corrupting the file.
 """
-import concurrent.futures as cf, hashlib, json, os, re, sys, threading, time
-import httpx2
+import re
 
 # [0-9], not \d: \d also matches non-ASCII digits, which int() then accepts.
 _CONTENT_RANGE = re.compile(r"bytes ([0-9]+)-([0-9]+)/([0-9]+)")
-_SIZE = re.compile(r"([0-9]+)([KMG]?)", re.I)
+_SIZE = re.compile(r"([0-9]+)([KMG]?)", re.IGNORECASE)
 _UNITS = {"": 1, "K": 1024, "M": 1024**2, "G": 1024**3}
 _THROTTLED = {403, 407, 429}
 _BAN = {"dead", "wrong-object", "identity"}
@@ -251,6 +252,10 @@ def action_for(reason):
 
 **Files:**
 - Create: `plugins/bitranox/skills/net-rotating-proxies/tests/fetch_standins.py`
+- Modify: `plugins/bitranox/skills/net-rotating-proxies/tests/conftest.py`: below the
+  `_SCRIPTS` insert add the same two lines for `_HERE` itself
+  (`if _HERE not in sys.path: sys.path.insert(0, _HERE)`, written as two lines) and say in
+  the docstring that it makes the sibling `fetch_standins` importable under importlib mode
 - Modify: `plugins/bitranox/skills/net-rotating-proxies/scripts/chunked_fetch.py` (append)
 - Test: `plugins/bitranox/skills/net-rotating-proxies/tests/test_chunked_fetch.py` (append)
 
