@@ -247,6 +247,19 @@ the wrong reason. When the decision has an identifiable site in code, put a comm
 saying what is deliberately absent and why: it reaches the one reader who can act on it, at the
 moment they would re-make the decision.
 
+**A refusal you keep despite harmless firings must name a command form the guard passes.** When
+the replay shows a widened guard's new firings are harmless, but you keep the refusal for the rare
+real case, put into the refusal text a command that does the same job and that the guard itself
+lets through. Then add a test that feeds the offered command back to the guard and asserts it
+passes. Each false block then costs one retry, not a dead end the agent routes around. This
+plugin's `hooks/block-env-dump.py` does both: a refused `git remote -v` names
+`git remote -v | sed -E 's#//[^@/]*@#//***@#'`, and
+`test_git_remote_refusal_offers_the_full_listing_redacted_and_the_offer_passes` pins that the
+offered form passes. That is why 277 harmless replay firings were acceptable there. When no form
+can do the whole job because the job itself is the harm (printing a secret), offer the narrowest
+question that can: for a secret file the same hook offers `grep -c NAME .env` and
+`cut -d= -f1 .env`.
+
 **The worked example is this plugin's own `hooks/gated-prep-nudge.py`.** Its docstring carries the
 figures for both escalations proposed against it - a blanket deny and a target-aware one - and this
 section carries the method. That split is deliberate: no number appears in both places, so they

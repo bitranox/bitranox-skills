@@ -40,6 +40,16 @@ two "versions with no entry" notes came to sit in this file disagreeing with it.
   cleared a third, so the gate kept blocking after the nap ran. A marker written by an earlier
   version under the raw cwd is still read and cleared.
 
+### Changed
+
+- `meta-claude-hooks`: a refusing guard kept despite harmless replay firings must name, in its
+  refusal text, a command form the guard itself passes, with a test that feeds the offered form
+  back to the guard; when the job itself is the harm (printing a secret), offer the narrowest
+  question that can.
+- `meta-self-improve`: a queued contribution delivered in another repo (a private repo, the local
+  toolbox, a user command) is closed in the same pass that verifies the landing, against the
+  queue it was filed in, one `ship` per entry, then `list <queue>` to confirm.
+
 ## [10.9.17]
 
 ### Changed

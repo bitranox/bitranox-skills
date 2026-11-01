@@ -299,6 +299,15 @@ PLACE-HERE line) before calling the placement wrong.
   disproven or stale. Select by `--match`, never `--index`: an index shifts under the previous
   close, so two closes from one listing destroy the wrong entry. A delivered contribution recorded
   as rejected tells every later reader the work was not done.
+  **A contribution that lands in ANOTHER repo is still shipped** (a private repo, the local
+  toolbox, a user command): close it in the same pass that verifies the landing, because the queue
+  never sees that repo's commit. Close it against the queue it was FILED in, not the repo it
+  landed in: pass the project path that `contrib_queue.py queues` lists for it (or
+  `queue_key:<full-key>`). Run one `ship --match <unique text> --note "<repo> <commit>" <queue>`
+  per entry, the queue last as on `add`. `--match` refuses an ambiguous match rather than guess,
+  so lengthen the text until it names one entry, and `list <queue>` afterwards to confirm none is
+  left. Left open, they read as unworked: 22 entries delivered by one commit stayed open a day,
+  until someone re-matched them against the diff.
 
 ### 4. Write it (the engine, fail-loud)
 
