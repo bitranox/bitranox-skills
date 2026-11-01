@@ -1,6 +1,6 @@
 ---
 name: net-rotating-proxies
-description: Use when a download, scrape, or API pull is blocked or rate-limited by the target (HTTP 429, IP ban, geoblock) and must be routed through proxies, or when fetching many items from a host that throttles per IP (bulk YouTube transcripts, scraping, API harvesting).
+description: Use when a download, scrape, or API pull is blocked or rate-limited by the target (HTTP 429, IP ban, geoblock) and must be routed through proxies, or when fetching many items from a host that throttles per IP (bulk YouTube transcripts, scraping, API harvesting), or when one large file (an ISO, an archive) must be downloaded through proxies and bans or dropped connections keep killing it mid-transfer.
 ---
 
 # Rotating proxies for blocked / rate-limited fetches
@@ -123,6 +123,50 @@ The tool classifies each attempt itself, portably:
 
 Pick `--test-url` and `--success-glob` to match the host and tool you are unblocking; widen
 `--dead-regex` if your tool words connection failures differently.
+
+## One large file across proxies
+
+`run` treats an item as all-or-nothing, so one big file (an ISO, an archive) restarts from byte 0
+on every proxy that drops it. Use `fetch` instead: it splits the file into byte ranges, downloads
+them in parallel over the pool, and keeps every byte that arrived.
+
+    uv run scripts/proxy_pool.py --store ./.proxies fetch https://example.com/big.iso \
+        -o big.iso --sha256 <published hex digest> --workers 8
+
+`fetch` draws from the same store as `run` (`live + good - bad`), so run `discover` and `validate`
+first. It has no background refresh, so validate a generous pool before a long download. Defaults:
+`--chunk-size 8M`, `--chunk-timeout 120` (seconds), `--max-attempts-per-chunk 20`.
+
+- **A cut keeps its bytes.** When a proxy drops, stalls or runs out its `--chunk-timeout` (the
+  budget of one attempt, connect to last byte), what it delivered stays on disk and the chunk
+  continues at the next byte on another proxy. A cut, a 429 or a 5xx rotates the proxy; a dead
+  proxy, or a reply that is not the requested range of this object (a page instead of the range,
+  a wrong size, a changed ETag or Last-Modified, a compressed body), bans it to `bad.txt`. A
+  chunk gives up after `--max-attempts-per-chunk`.
+- **Always pass `--sha256`.** Size and identity headers catch a proxy answering with the wrong
+  file; only the hash catches bytes altered behind correct headers. Without it `fetch` warns, and
+  exit 0 means only that the expected length arrived. A mismatch keeps the bytes as `FILE.part`
+  and drops the manifest, so rerunning the command downloads the whole file again.
+- **Resume by rerunning the same command.** Progress is in `FILE.part` plus `FILE.part.json`; one
+  Ctrl-C stops after the attempts in flight. A manifest for a different download (URL, size,
+  identity or `--chunk-size` changed) is refused with the two files to delete.
+- **The size comes from a vote.** Before downloading, proxies are asked for byte 0; two different
+  proxies giving the same size and identity decide it, even beside a dissenter. If no two agree
+  once every proxy has answered, the view with the most votes wins, a tie stops it with exit 1
+  rather than guess, and a decision resting on one proxy is warned as not cross-checked.
+- **No Range support** (the origin answers the whole file): each attempt streams the whole file
+  from byte 0, with no resume. If the origin sends no size either, a cut transfer cannot be told
+  from a complete one, so `--sha256` is the only check left.
+
+Exit codes of `fetch`:
+
+- **0**: the file is complete, and hash-verified when `--sha256` was given.
+- **1**: chunks are still missing, or the probe settled nothing (no proxy answered, or the answers
+  disagreed). Grow the pool with `validate` and rerun the same command.
+- **2**: it cannot work: a bad argument, no usable proxy, a hash mismatch, a manifest for another
+  download, an output that cannot be written.
+
+Run `fetch --help` for the remaining flags.
 
 ## Notes
 

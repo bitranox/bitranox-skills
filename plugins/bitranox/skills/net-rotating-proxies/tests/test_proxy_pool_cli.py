@@ -348,6 +348,19 @@ def test_fetch_exits_2_on_a_hash_mismatch(tmp_path, stand, capsys):
     assert rc == 2 and "sha256 of the downloaded file does not match" in capsys.readouterr().err
 
 
+def test_a_rerun_after_a_hash_mismatch_downloads_every_byte_again(tmp_path, stand):
+    # SKILL.md promises this: the mismatch drops the manifest, so no byte of the kept part is
+    # trusted. Zeroing the part proves it: a rerun that skipped chunks would fail the hash.
+    origin = stand.origin(200_000)
+    store, out = _fetch_store(tmp_path, [stand.proxy()]), tmp_path / "f.bin"
+    part = tmp_path / "f.bin.part"
+    assert _fetch_main(store, origin, out, "--sha256", "0" * 64) == 2
+    assert part.exists() and not (tmp_path / "f.bin.part.json").exists()
+    part.write_bytes(bytes(len(origin.data)))
+    rc = _fetch_main(store, origin, out, "--sha256", hashlib.sha256(origin.data).hexdigest())
+    assert rc == 0 and out.read_bytes() == origin.data
+
+
 def test_fetch_exits_2_with_an_empty_pool(tmp_path, stand):
     assert _fetch_main(_fetch_store(tmp_path, []), stand.origin(10), tmp_path / "f.bin") == 2
 

@@ -1079,7 +1079,8 @@
   "proxies",
   "fetching",
   "many",
-  "items"
+  "items",
+  "mid-transfer"
  ],
  "net-tailscale": [
   "installing",
