@@ -440,3 +440,149 @@ def test_a_permission_error_off_windows_is_raised_at_once():
     with pytest.raises(PermissionError):
         cfetch._retry_sharing_violation(op, windows=False, sleep=lambda s: None)
     assert len(calls) == 1
+
+
+def test_a_server_without_range_support_takes_the_whole_file_fallback(stand, tmp_path):
+    origin = stand.origin(SIZE)
+    origin.ignore_range = True
+    _, pool = _pool(tmp_path, [stand.proxy(), stand.proxy()])
+    out = tmp_path / "f.bin"
+    result = _fetch(origin, out, pool)
+    assert result.ok and out.read_bytes() == origin.data
+    assert None in origin.log                 # the download itself sent no Range header
+    assert set(origin.ae_log) == {"identity"}
+    assert not (tmp_path / "f.bin.part").exists() and not (tmp_path / "f.bin.part.json").exists()
+
+
+def test_one_injecting_proxy_cannot_switch_the_download_to_whole_file(stand, tmp_path):
+    origin = stand.origin(SIZE)
+    _, pool = _pool(tmp_path, [stand.proxy("html"), stand.proxy()])
+    out = tmp_path / "f.bin"
+    assert _fetch(origin, out, pool, max_attempts=40).ok
+    assert out.read_bytes() == origin.data
+    assert None not in origin.log             # every origin request was ranged
+
+
+def test_a_single_proxy_on_a_rangeless_server_still_falls_back_after_its_budget(stand, tmp_path):
+    origin = stand.origin(SIZE)
+    origin.ignore_range = True
+    _, pool = _pool(tmp_path, [stand.proxy()])
+    lines = []
+    result = cfetch.fetch(origin.url, str(tmp_path / "f.bin"), pool, chunk_size=CHUNK, timeout=1.0,
+                          max_attempts=3, log=lambda *a: None, warn=lines.append)
+    assert result.ok and (tmp_path / "f.bin").read_bytes() == origin.data
+    assert any("only one proxy" in line for line in lines)
+
+
+WHOLE_HEADERS = {"content-length": "100", "etag": '"v1"',
+                 "last-modified": "Sat, 01 Nov 2026 10:00:00 GMT"}
+
+
+@pytest.mark.parametrize("status, headers, want", [
+    (200, WHOLE_HEADERS, None),
+    (200, {k: v for k, v in WHOLE_HEADERS.items() if k != "content-length"}, None),
+    (429, {}, "throttled"), (403, {}, "throttled"), (407, {}, "throttled"), (503, {}, "throttled"),
+    (206, {**WHOLE_HEADERS, "content-range": "bytes 0-99/100"}, "wrong-object"),
+    (404, {}, "wrong-object"),
+    # An injected page answers 200 too; only its length gives it away before a byte is written.
+    (200, {**WHOLE_HEADERS, "content-length": "20"}, "wrong-object"),
+    (200, {**WHOLE_HEADERS, "content-encoding": "gzip"}, "wrong-object"),
+    (200, {**WHOLE_HEADERS, "content-encoding": " Identity "}, None),
+    (200, {**WHOLE_HEADERS, "etag": '"v2"'}, "identity"),
+    (200, {k: v for k, v in WHOLE_HEADERS.items() if k != "last-modified"}, "identity"),
+])
+def test_whole_reply_problem_classifies_a_plain_reply_before_any_byte_is_written(status, headers, want):
+    assert cfetch.whole_reply_problem(status, headers, 100, IDENT) == want
+
+
+def test_whole_reply_problem_takes_any_length_when_the_probe_saw_none():
+    assert cfetch.whole_reply_problem(200, {"content-length": "7"}, None,
+                                      {"etag": None, "last_modified": None}) is None
+
+
+def _rangeless(stand):
+    origin = stand.origin(SIZE)
+    origin.ignore_range = True
+    return origin
+
+
+def test_a_cut_whole_file_attempt_restarts_from_byte_zero(stand, tmp_path):
+    origin = _rangeless(stand)
+    order = [stand.proxy("cut:10000"), stand.proxy()]
+    store, _ = _pool(tmp_path, order)
+    out = tmp_path / "f.bin"
+    result = _fetch(origin, out, _InOrder(store, order))
+    assert result.ok and result.counts == {"cut": 1, "ok": 1}
+    assert out.read_bytes() == origin.data     # an appended second stream would be 10000 too long
+
+
+def test_a_page_serving_proxy_on_a_rangeless_server_is_banned_not_written(stand, tmp_path):
+    origin = _rangeless(stand)
+    liar = stand.proxy("html")
+    order = [stand.proxy(), stand.proxy(), liar]
+    store, _ = _pool(tmp_path, order)
+    out = tmp_path / "f.bin"
+    result = _fetch(origin, out, _InOrder(store, order))
+    assert result.ok and out.read_bytes() == origin.data
+    assert result.counts == {"wrong-object": 1, "ok": 1}
+    assert pp._read(os.path.join(store, "bad.txt")) == {liar}
+
+
+def test_a_trickling_whole_file_attempt_ends_at_its_wall_time_budget(stand, tmp_path):
+    # 100 bytes at one per 50 ms: 5 s without a budget, so a regression completes and fails
+    # rather than hanging the suite.
+    origin = stand.origin(100)
+    origin.ignore_range = True
+    _, pool = _pool(tmp_path, [stand.proxy("trickle:0.05")], fail_ratio=1.0)
+    began = time.monotonic()
+    result = _fetch(origin, tmp_path / "f.bin", pool, timeout=0.5, max_attempts=2)
+    assert time.monotonic() - began < 4.0
+    assert not result.ok and result.counts == {"cut": 2}
+
+
+@pytest.mark.parametrize("mode, reason", [("unsized-cut:10000", "cut"), ("unsized-overrun", "overrun")])
+def test_an_unsized_whole_reply_is_judged_by_the_bytes_it_carried(stand, tmp_path, mode, reason):
+    # Without Content-Length a short or long body ends cleanly; only counting it against the
+    # probed size tells it from the whole object.
+    origin = _rangeless(stand)
+    order = [stand.proxy(), stand.proxy(), stand.proxy(mode)]     # the two clean ones probe
+    store, _ = _pool(tmp_path, order)
+    out = tmp_path / "f.bin"
+    result = _fetch(origin, out, _InOrder(store, order))
+    assert result.ok and result.counts == {reason: 1, "ok": 1}
+    assert out.read_bytes() == origin.data
+
+
+def test_a_spent_whole_file_budget_reports_the_file_missing(stand, tmp_path):
+    origin = _rangeless(stand)
+    _, pool = _pool(tmp_path, [stand.proxy("cut:10000")], fail_ratio=1.0)
+    lines = []
+    result = _fetch(origin, tmp_path / "f.bin", pool, max_attempts=2, log=lines.append)
+    assert not result.ok and result.done == 0 and result.chunks == 1
+    assert result.counts == {"cut": 2} and "rerun" in result.note
+    assert "whole file, attempts 2: cut 2" in lines
+    assert not (tmp_path / "f.bin").exists() and not (tmp_path / "f.bin.part.json").exists()
+
+
+def test_a_whole_file_pool_that_runs_dry_stops_instead_of_spinning(stand, tmp_path):
+    origin = _rangeless(stand)
+    _, pool = _pool(tmp_path, [stand.proxy("probe-only")])     # banned on its first download
+    lines = []
+    began = time.monotonic()
+    result = _fetch(origin, tmp_path / "f.bin", pool, log=lines.append)
+    assert time.monotonic() - began < 2.0
+    assert not result.ok and result.counts == {"wrong-object": 1, "pool-dry": 1}
+    assert "whole file, attempts 1: wrong-object 1" in lines
+    assert "pool ran dry: the whole file is still missing" in lines
+
+
+def test_a_ranged_runs_manifest_is_refused_when_the_origin_now_ignores_range(stand, tmp_path):
+    origin, manifest = _stopped_run(stand, tmp_path)
+    part = tmp_path / "f.bin.part"
+    kept = part.read_bytes()
+    origin.ignore_range = True
+    _, clean = _pool(tmp_path, [stand.proxy(), stand.proxy()], name="store2")
+    with pytest.raises(cfetch.ManifestMismatch, match="delete it and the .part file"):
+        _fetch(origin, tmp_path / "f.bin", clean)
+    # The stream never started: the bytes the manifest records as received are still there.
+    assert manifest.exists() and part.read_bytes() == kept

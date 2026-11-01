@@ -82,6 +82,14 @@ class _Proxy(http.server.BaseHTTPRequestHandler):
         if mode == "overrun":
             body += b"\x00" * 100
             headers["Content-Length"] = str(len(body))
+        if mode.startswith("unsized"):
+            # No length: an HTTP/1.0 body then ends where the connection closes, so a short or
+            # long one arrives as a clean end of stream, never as a transport error.
+            headers.pop("Content-Length", None)
+            if mode == "unsized-overrun":
+                body += b"\x00" * 100
+            elif mode.startswith("unsized-cut:"):
+                body = body[:int(mode[12:])]
         self.send_response(status)
         for key, value in headers.items():
             self.send_header(key, value)

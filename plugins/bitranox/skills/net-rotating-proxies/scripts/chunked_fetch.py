@@ -9,7 +9,8 @@ ban or a dropped session mid-transfer is the normal case, so the file is split i
 each range is retried on a fresh proxy, and the bytes a cut attempt already delivered are kept
 (the next attempt asks only for the rest). Every reply is checked for being the requested slice
 of the same object BEFORE any byte is written: a proxy that answers with an injected page, a
-stale cache or the wrong range is banned instead of corrupting the file.
+stale cache or the wrong range is banned instead of corrupting the file. An origin that ignores
+Range gets one whole-file stream per attempt, rotated over the same pool, with no resume.
 """
 import concurrent.futures as cf
 import hashlib
@@ -78,8 +79,29 @@ def reply_problem(status, headers, start, end, total, identity):
         return "throttled"
     if status != 206 or parse_content_range(headers.get("content-range")) != (start, end, total):
         return "wrong-object"
-    # A proxy that ignored 'Accept-Encoding: identity' sends compressed bytes, which written at
-    # these offsets would be content no other chunk lines up with.
+    return _body_problem(headers, identity)
+
+
+def whole_reply_problem(status, headers, total, identity):
+    """Why a reply to a plain GET (no Range) is not the whole object, or None.
+
+    The reasons mean what they mean in reply_problem. An injected page answers 200 as well, so a
+    Content-Length other than the probed size is 'wrong-object'; a reply without one is accepted
+    here and its length is counted while it streams.
+    """
+    if status in _THROTTLED or status >= 500:
+        return "throttled"
+    if status != 200:
+        return "wrong-object"
+    length = headers.get("content-length")
+    if total is not None and length is not None and length.strip() != str(total):
+        return "wrong-object"
+    return _body_problem(headers, identity)
+
+
+def _body_problem(headers, identity):
+    # A proxy that ignored 'Accept-Encoding: identity' sends compressed bytes, which written as
+    # content would be bytes nothing else lines up with.
     if (headers.get("content-encoding") or "identity").strip().lower() != "identity":
         return "wrong-object"
     seen = identity_of(headers)
@@ -350,19 +372,98 @@ def _finish(part, out, sha256, manifest=None):
         os.remove(manifest)
 
 
+def _stream_whole(url, proxy, part, info, timeout):
+    """One plain GET of the whole object through proxy, written into part from byte 0.
+
+    Returns the reason only: without Range there is no way to ask for the rest, so the bytes of a
+    failed attempt are never resumed and the next one rewrites part from byte 0. The reply is
+    classified before part is opened, and `timeout` is the
+    whole attempt's budget as in attempt (a trickling proxy would otherwise hold the run).
+    """
+    deadline = time.monotonic() + timeout
+    total, written = info.total, 0
+    try:
+        with _client(proxy, timeout) as client, \
+                client.stream("GET", url, headers={"Accept-Encoding": "identity"}) as reply:
+            problem = whole_reply_problem(reply.status_code, reply.headers, total, info.identity)
+            if problem:
+                return problem
+            with open(part, "wb") as f:
+                for block in reply.iter_raw():      # raw: nothing may be decoded in between
+                    if total is not None and written + len(block) > total:
+                        return "overrun"            # only reachable for a reply without a length
+                    f.write(block)
+                    written += len(block)
+                    if (total is None or written < total) and time.monotonic() > deadline:
+                        return "cut"
+    except (httpx2.ConnectError, httpx2.ConnectTimeout, httpx2.ProxyError):
+        return "dead"
+    except httpx2.TransportError:
+        return "cut"
+    return "ok" if total is None or written == total else "cut"
+
+
+def _whole_attempts(url, part, pool, info, timeout, attempts, on_success, counts):
+    """Stream attempts until one succeeds; returns (ok, dry). Same rules as a chunk's loop:
+    waiting for a proxy spends no attempt, and an empty active pool stops at once."""
+    tries = 0
+    while tries < attempts:
+        picks = pool.acquire(1)
+        if not picks:
+            if not pool.active():
+                return False, True
+            time.sleep(0.05)
+            continue
+        tries += 1
+        pool.mark_in_use(picks[0])
+        reason = _stream_whole(url, picks[0], part, info, timeout)
+        counts[reason] = counts.get(reason, 0) + 1
+        _settle(pool, picks[0], reason, on_success)
+        if reason == "ok":
+            return True, False
+    return False, False
+
+
+def _fetch_whole(url, out, pool, sha256, timeout, attempts, on_success, info, log):
+    """Origin ignores Range: one whole-file stream per attempt, restarted from 0 each time.
+
+    No manifest is kept, since there is nothing to resume. One that a ranged run left for this
+    file is refused: the stream would overwrite the bytes it records as received, and a later
+    ranged run trusting it would leave holes in the file.
+    """
+    part, manifest = out + ".part", out + ".part.json"
+    if os.path.exists(manifest):
+        raise ManifestMismatch(f"{manifest} belongs to a ranged download, but the origin now "
+                               f"ignores Range; delete it and the .part file to start over")
+    log("origin ignores Range: one whole-file stream per attempt, no resume")
+    counts = {}
+    ok, dry = _whole_attempts(url, part, pool, info, timeout, attempts, on_success, counts)
+    log(f"whole file, attempts {sum(counts.values())}: "
+        + ", ".join(f"{k} {v}" for k, v in sorted(counts.items())))
+    if dry:
+        counts["pool-dry"] = 1                  # added after the line above: it is not an attempt
+        log("pool ran dry: the whole file is still missing")
+    if not ok:
+        return FetchResult(False, 0, 1, counts, "whole file still missing; rerun to start over")
+    _finish(part, out, sha256)
+    return FetchResult(True, 1, 1, counts)
+
+
 def fetch(url, out, pool, *, chunk_size, workers=8, sha256=None, timeout=120.0, max_attempts=20,
           on_success=None, log=print, warn=None):
     """Download url to out through pool; see the module docstring. Returns a FetchResult.
 
     `log` gets the progress/report lines (stdout by default), `warn` the warnings (stderr).
     `timeout` is one attempt's whole budget, connect to last byte (see attempt). A pool emptied
-    by bans stops the run at once, reported as a 'pool-dry' count, never as attempts.
+    by bans stops the run at once, reported as a 'pool-dry' count, never as attempts. When the
+    probe finds the origin ignores Range, the file comes as one whole stream per attempt instead
+    (max_attempts in all, no manifest, no resume).
     """
     info = probe(url, pool, timeout, max_attempts, warn)
     if info is None:
         return FetchResult(False, note="no proxy answered the probe")
-    if not info.ranged:                       # Task 4 replaces this with the whole-file download
-        return FetchResult(False, note="the origin ignores Range")
+    if not info.ranged:
+        return _fetch_whole(url, out, pool, sha256, timeout, max_attempts, on_success, info, log)
     part, manifest = out + ".part", out + ".part.json"
     chunks = plan_chunks(info.total, chunk_size)
     state = _load_manifest(manifest, {"url": url, "total": info.total, "identity": info.identity,
