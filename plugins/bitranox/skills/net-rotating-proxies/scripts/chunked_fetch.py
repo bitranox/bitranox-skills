@@ -199,6 +199,8 @@ def _vote_key(status, headers):
     Key = (ranged, total, etag, last_modified). Only an exact 'bytes 0-0/N' counts as ranged: a
     proxy answering some other range would otherwise plant a bogus size.
     """
+    if (headers.get("content-encoding") or "identity").strip().lower() != "identity":
+        return None                         # a compressed reply describes no byte offsets
     ident = identity_of(headers)
     found = parse_content_range(headers.get("content-range"))
     if status == 206 and found and found[:2] == (0, 0):
@@ -289,7 +291,7 @@ def _load_manifest(path, expected):
     differs = [key for key in expected if saved.get(key) != expected[key]]
     if differs:
         raise ManifestMismatch(f"{path} belongs to another download ({', '.join(differs)} differ); "
-                               f"delete it and the .part file to start over")
+                               f"delete it and {path.removesuffix('.json')} to start over")
     problem = _received_problem(saved.get("received"), expected)
     if problem:
         raise _damaged(path, problem)
@@ -297,7 +299,8 @@ def _load_manifest(path, expected):
 
 
 def _damaged(path, why):
-    return ManifestMismatch(f"{path} is damaged: {why}; delete it and the .part file to start over")
+    return ManifestMismatch(f"{path} is damaged: {why}; delete it and "
+                            f"{path.removesuffix('.json')} to start over")
 
 
 def _received_problem(received, expected):
@@ -424,7 +427,7 @@ def _whole_attempts(url, part, pool, info, timeout, attempts, on_success, counts
     return False, False
 
 
-def _fetch_whole(url, out, pool, sha256, timeout, attempts, on_success, info, log):
+def _fetch_whole(url, out, pool, sha256, timeout, attempts, on_success, info, log, warn):
     """Origin ignores Range: one whole-file stream per attempt, restarted from 0 each time.
 
     No manifest is kept, since there is nothing to resume. One that a ranged run left for this
@@ -434,8 +437,13 @@ def _fetch_whole(url, out, pool, sha256, timeout, attempts, on_success, info, lo
     part, manifest = out + ".part", out + ".part.json"
     if os.path.exists(manifest):
         raise ManifestMismatch(f"{manifest} belongs to a ranged download, but the origin now "
-                               f"ignores Range; delete it and the .part file to start over")
+                               f"ignores Range; delete it and {part} to start over")
     log("origin ignores Range: one whole-file stream per attempt, no resume")
+    if info.total is None and sha256 is None:
+        # No size to count against: a cut close-delimited body or a substituted page ends as
+        # cleanly as the real object, so nothing but a hash can tell them apart.
+        warn("probe: the origin sent no size; a cut or substituted transfer cannot be detected "
+             "- pass --sha256 to verify the result")
     counts = {}
     ok, dry = _whole_attempts(url, part, pool, info, timeout, attempts, on_success, counts)
     log(f"whole file, attempts {sum(counts.values())}: "
@@ -461,9 +469,11 @@ def fetch(url, out, pool, *, chunk_size, workers=8, sha256=None, timeout=120.0, 
     """
     info = probe(url, pool, timeout, max_attempts, warn)
     if info is None:
-        return FetchResult(False, note="no proxy answered the probe")
+        return FetchResult(False, note="the probe settled nothing: no proxy answered, or the "
+                                       "answers disagreed (see the warning)")
     if not info.ranged:
-        return _fetch_whole(url, out, pool, sha256, timeout, max_attempts, on_success, info, log)
+        return _fetch_whole(url, out, pool, sha256, timeout, max_attempts, on_success, info, log,
+                            warn or _stderr)
     part, manifest = out + ".part", out + ".part.json"
     chunks = plan_chunks(info.total, chunk_size)
     state = _load_manifest(manifest, {"url": url, "total": info.total, "identity": info.identity,

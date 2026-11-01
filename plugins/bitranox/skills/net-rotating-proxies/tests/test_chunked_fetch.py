@@ -6,6 +6,7 @@ Everything runs against fetch_standins (an origin and fault-injecting forward pr
 import hashlib
 import json
 import os
+import re
 import time
 
 import chunked_fetch as cfetch
@@ -414,8 +415,13 @@ def test_a_damaged_manifest_is_refused_with_a_reason(stand, tmp_path, damage):
     origin, manifest = _stopped_run(stand, tmp_path)
     manifest.write_text(damage(manifest.read_text(encoding="utf-8")), encoding="utf-8")
     _, clean = _pool(tmp_path, [stand.proxy()], name="store2")
-    with pytest.raises(cfetch.ManifestMismatch, match="delete it and the .part file"):
+    with pytest.raises(cfetch.ManifestMismatch, match=_start_over(tmp_path)):
         _fetch(origin, tmp_path / "f.bin", clean)
+
+
+def _start_over(tmp_path):
+    # The refusal names the exact part file to delete, so the reader need not guess its name.
+    return re.escape(f"delete it and {tmp_path / 'f.bin.part'} to start over")
 
 
 def _flaky_op(failures):
@@ -553,6 +559,25 @@ def test_an_unsized_whole_reply_is_judged_by_the_bytes_it_carried(stand, tmp_pat
     assert out.read_bytes() == origin.data
 
 
+@pytest.mark.parametrize("with_hash", [False, True])
+def test_an_unsized_whole_file_download_warns_that_a_cut_cannot_be_detected(stand, tmp_path,
+                                                                            with_hash):
+    origin = _rangeless(stand)
+    _, pool = _pool(tmp_path, [stand.proxy("unsized"), stand.proxy("unsized")])
+    warnings = []
+    kw = {"sha256": hashlib.sha256(origin.data).hexdigest()} if with_hash else {}
+    result = _fetch(origin, tmp_path / "f.bin", pool, warn=warnings.append, **kw)
+    assert result.ok and (tmp_path / "f.bin").read_bytes() == origin.data
+    unsized = [w for w in warnings if w.startswith("probe: the origin sent no size")]
+    assert len(unsized) == (0 if with_hash else 1)
+
+
+def test_a_compressed_probe_reply_casts_no_vote():
+    headers = {"content-range": "bytes 0-0/100", "content-encoding": "gzip"}
+    assert cfetch._vote_key(206, headers) is None
+    assert cfetch._vote_key(200, {"content-length": "100", "content-encoding": " GZIP "}) is None
+
+
 def test_a_spent_whole_file_budget_reports_the_file_missing(stand, tmp_path):
     origin = _rangeless(stand)
     _, pool = _pool(tmp_path, [stand.proxy("cut:10000")], fail_ratio=1.0)
@@ -582,7 +607,7 @@ def test_a_ranged_runs_manifest_is_refused_when_the_origin_now_ignores_range(sta
     kept = part.read_bytes()
     origin.ignore_range = True
     _, clean = _pool(tmp_path, [stand.proxy(), stand.proxy()], name="store2")
-    with pytest.raises(cfetch.ManifestMismatch, match="delete it and the .part file"):
+    with pytest.raises(cfetch.ManifestMismatch, match=_start_over(tmp_path)):
         _fetch(origin, tmp_path / "f.bin", clean)
     # The stream never started: the bytes the manifest records as received are still there.
     assert manifest.exists() and part.read_bytes() == kept
