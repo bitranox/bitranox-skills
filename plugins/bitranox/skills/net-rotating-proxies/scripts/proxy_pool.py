@@ -26,6 +26,7 @@ Subcommands:
   validate   test pool entries for reachability -> grow live.txt (parallel)
   run        run a worklist through rotating proxies, N-wide parallel, good-first,
              optionally with a background discover+validate loop refreshing live.txt
+  fetch      download ONE large file as byte-range chunks over rotating proxies (resumable)
 
 OS-independent by design: --cmd is parsed into an argv list and run WITHOUT a shell
 (no shell=True), so it behaves the same on Linux/macOS/Windows and is injection-safe.
@@ -46,7 +47,8 @@ Exit codes: 0 = every item succeeded (discover: at least one source answered),
 1 = some items did not succeed, 2 = error (the --cmd binary was not found, no usable
 proxy in the store, every discovery source failed, a --cmd that cannot be parsed, an invalid
 --dead-regex, a --worklist that is not UTF-8). validate is a report: it exits 0 even when no
-candidate turned out live.
+candidate turned out live. fetch: 0 = verified file, 1 = chunks still missing or no proxy
+answered, 2 = no proxies, bad argument, hash mismatch, manifest for another download.
 
 The --cmd template may contain {proxy} (host:port) and {item}. Example:
   uv run proxy_pool.py run --worklist ids.txt --workers 16 --success-glob 'out/{item}*.vtt'
@@ -55,6 +57,7 @@ The --cmd template may contain {proxy} (host:port) and {item}. Example:
             https://www.youtube.com/watch?v={item}'
 """
 import argparse, concurrent.futures as cf, glob, os, random, re, shlex, subprocess, sys, tempfile, threading, time
+import chunked_fetch as cfetch
 import httpx2
 
 DEAD_DEFAULT = r"connection refused|connection reset|timed out|cannot connect|unreachable|EOF occurred|proxy|tunnel|ProxyError"
@@ -737,11 +740,23 @@ def main(argv=None):
                    help="seconds between background re-benchmark + swap-up passes (needs --background-discovery)")
     r.add_argument("--flaky-fail-ratio", type=float, default=0.5,
                    help="evict a proxy once its failure fraction exceeds this (after a few attempts)")
+    f = sub.add_parser("fetch", help="download one large file as byte-range chunks over the pool")
+    f.add_argument("url")
+    f.add_argument("-o", "--output", required=True)
+    f.add_argument("--chunk-size", default="8M", help="bytes per range, e.g. 8M, 512K (default 8M)")
+    f.add_argument("--workers", type=int, default=8)
+    f.add_argument("--need", type=int, default=None, help="working-set size, as for run")
+    f.add_argument("--sha256", default=None, help="expected hex digest; strongly recommended")
+    f.add_argument("--chunk-timeout", type=float, default=120,
+                   help="seconds a chunk transfer may stall before it counts as cut")
+    f.add_argument("--max-attempts-per-chunk", type=int, default=20)
+    f.add_argument("--cooldown", type=float, default=5.0)
+    f.add_argument("--flaky-fail-ratio", type=float, default=0.5)
     a = ap.parse_args(argv)
     try:
         os.makedirs(a.store, exist_ok=True)
         return _dispatch(a)
-    except (CommandNotFound, NoProxies, BadInput, OSError) as e:
+    except (CommandNotFound, NoProxies, BadInput, cfetch.FetchError, OSError) as e:
         print(f"proxy_pool: {e}", file=sys.stderr)
         return 2
 
@@ -755,10 +770,38 @@ def _dispatch(a):
     if a.action == "validate":
         validate(a.store, a.test_url, a.workers, a.timeout, a.need)
         return 0
+    if a.action == "fetch":
+        return _fetch(a)
     succeeded, total = run(a.store, a.worklist, a.cmd, a.workers, a.per_item_proxies, a.item_timeout,
                            a.background_discovery, a.test_url, a.vworkers, a.vtimeout, a.success_glob,
                            a.dead_regex, a.need, a.cooldown, a.bench_interval, a.flaky_fail_ratio)
     return 0 if succeeded == total else 1
+
+
+def _fetch(a):
+    """The fetch subcommand: 0 verified file, 1 work left undone, 2 cannot work."""
+    try:
+        chunk_size = cfetch.parse_size(a.chunk_size)
+    except ValueError as exc:
+        raise BadInput(f"--chunk-size: {exc}") from exc
+    if a.sha256 is not None and not re.fullmatch(r"[0-9a-fA-F]{64}", a.sha256):
+        raise BadInput("--sha256 must be 64 hex digits")
+    pool = ProxyPool(a.store, a.need, cooldown=a.cooldown, flaky_max_fail_ratio=a.flaky_fail_ratio)
+    if not pool.active():
+        raise NoProxies(f"no usable proxies in {a.store} (live + good - bad is empty); "
+                        f"run discover and validate first")
+    if not a.sha256:
+        print("proxy_pool: no --sha256 given: size and identity are checked only where the origin "
+              "sends them, and bytes altered behind correct headers go unnoticed", file=sys.stderr)
+    result = cfetch.fetch(a.url, a.output, pool, chunk_size=chunk_size, workers=a.workers,
+                          sha256=a.sha256, timeout=a.chunk_timeout,
+                          max_attempts=a.max_attempts_per_chunk,
+                          on_success=lambda p: _append(_p(a.store, "good.txt"), p))
+    if not result.ok:
+        print(f"proxy_pool: {result.note}", file=sys.stderr)
+        return 1
+    print(f"done: {a.output}")
+    return 0
 
 
 if __name__ == "__main__":

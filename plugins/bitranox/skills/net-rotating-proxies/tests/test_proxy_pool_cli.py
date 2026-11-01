@@ -4,6 +4,7 @@ No real proxy and no internet: the worklist command is a small Python fake that 
 proxy it is handed, and discovery reads from an http.server bound to 127.0.0.1. Proxy environment
 variables are cleared so httpx2 cannot route the local fetch through a machine-wide proxy.
 """
+import hashlib
 import http.server
 import os
 import socket
@@ -11,9 +12,9 @@ import subprocess
 import sys
 import threading
 
-import pytest
-
 import proxy_pool as pp
+import pytest
+from fetch_standins import Standins
 
 FAKE_TOOL = r'''
 import pathlib, sys, time
@@ -303,3 +304,73 @@ def test_a_non_cp1252_item_name_does_not_crash_the_report(tmp_path, tool):
         capture_output=True, env=env, check=False, timeout=60)
     assert proc.returncode == 0, proc.stderr.decode("utf-8", "replace")
     assert b"OK ok?" in proc.stdout
+
+
+# ---- fetch: one large file as ranged chunks -----------------------------------------------------
+@pytest.fixture
+def stand():
+    s = Standins()
+    yield s
+    s.close()
+
+
+def _fetch_store(tmp_path, proxies):
+    store = tmp_path / "fstore"
+    store.mkdir()
+    (store / "live.txt").write_text("\n".join(proxies) + "\n", encoding="utf-8")
+    return str(store)
+
+
+def _fetch_main(store, origin, out, *extra):
+    return pp.main(["--store", store, "fetch", origin.url, "-o", str(out), "--chunk-size", "64K",
+                    "--cooldown", "0", "--chunk-timeout", "1", *extra])
+
+
+def test_fetch_exits_0_with_a_verified_file(tmp_path, stand):
+    origin = stand.origin(200_000)
+    out = tmp_path / "f.bin"
+    rc = _fetch_main(_fetch_store(tmp_path, [stand.proxy()]), origin, out,
+                     "--sha256", hashlib.sha256(origin.data).hexdigest())
+    assert rc == 0 and out.read_bytes() == origin.data
+
+
+def test_fetch_exits_1_when_chunks_are_still_missing(tmp_path, stand, capsys):
+    origin = stand.origin(200_000)
+    rc = _fetch_main(_fetch_store(tmp_path, [stand.proxy("cut:1000")]), origin, tmp_path / "f.bin",
+                     "--max-attempts-per-chunk", "1", "--flaky-fail-ratio", "1.0")
+    assert rc == 1 and "chunks still missing" in capsys.readouterr().err
+
+
+def test_fetch_exits_2_on_a_hash_mismatch(tmp_path, stand, capsys):
+    origin = stand.origin(200_000)
+    rc = _fetch_main(_fetch_store(tmp_path, [stand.proxy()]), origin, tmp_path / "f.bin",
+                     "--sha256", "0" * 64)
+    assert rc == 2 and "sha256 of the downloaded file does not match" in capsys.readouterr().err
+
+
+def test_fetch_exits_2_with_an_empty_pool(tmp_path, stand):
+    assert _fetch_main(_fetch_store(tmp_path, []), stand.origin(10), tmp_path / "f.bin") == 2
+
+
+# The message, not just the flag name: the single-proxy probe warning also names --sha256. And
+# no request at all: a bad argument is refused before the network is touched.
+@pytest.mark.parametrize("extra, message", [(("--chunk-size", "8X"), "--chunk-size: not a size"),
+                                            (("--sha256", "abc"), "--sha256 must be 64 hex")])
+def test_fetch_exits_2_on_a_bad_argument(tmp_path, stand, extra, message, capsys):
+    origin = stand.origin(10)
+    rc = _fetch_main(_fetch_store(tmp_path, [stand.proxy()]), origin, tmp_path / "f.bin", *extra)
+    assert rc == 2 and message in capsys.readouterr().err and origin.log == []
+
+
+def test_fetch_exits_2_when_the_output_cannot_be_written(tmp_path, stand, capsys):
+    out = tmp_path / "no-such-dir" / "f.bin"
+    assert _fetch_main(_fetch_store(tmp_path, [stand.proxy()]), stand.origin(10_000), out) == 2
+    assert "no-such-dir" in capsys.readouterr().err
+
+
+def test_fetch_without_a_hash_warns_on_stderr(tmp_path, stand, capsys):
+    origin = stand.origin(10_000)
+    assert _fetch_main(_fetch_store(tmp_path, [stand.proxy()]), origin, tmp_path / "f.bin") == 0
+    captured = capsys.readouterr()
+    # "no --sha256 given", not bare "--sha256": the single-proxy probe warning names the flag too.
+    assert "no --sha256 given" in captured.err and "--sha256" not in captured.out
