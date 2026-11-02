@@ -38,11 +38,18 @@ two "versions with no entry" notes came to sit in this file disagreeing with it.
   chunks spread over the rotating pool. A ban or a dropped session costs only the unfinished part
   of one chunk: the bytes already received are kept and the rest is retried on a fresh proxy.
   Each reply's headers are checked for being the requested slice of the same object before a
-  byte is written, so a proxy answering with an injected page, a stale cache or the wrong range
-  is banned instead of corrupting the file. Altered bytes behind correct headers pass that check:
-  only `--sha256` catches them, and `fetch` warns when no hash is given. A run that stops resumes
-  from its `FILE.part.json` manifest. An origin that ignores `Range` falls back to whole-file
-  attempts. (GitHub issue #4)
+  byte is written, so a proxy answering with an injected page, a stale cache, the wrong range, a
+  compressed body or a rejected origin certificate is dropped for the run instead of corrupting
+  the file. Only a proxy whose TCP connect fails is banned to `bad.txt`; a cut or a timeout only
+  rotates to another proxy. What proxies answer never stops a run: when chunks are still missing,
+  exit 1 names the answers grouped by how many proxies gave each. Altered bytes behind correct
+  headers pass the header check: only `--sha256` catches them (a mismatch is exit 2), and `fetch`
+  warns when no hash is given. Redirects are followed through the same proxy, up to 8 hops. A run
+  that stops (one Ctrl-C ends it after the attempts in flight) resumes from its `FILE.part.json`
+  manifest, which the rerun trusts over a fresh vote of the proxies, and only the bytes the part
+  file still holds count as received. The file's size comes from a vote of proxies when no
+  manifest exists yet. An origin that ignores `Range` falls back to whole-file attempts. (GitHub
+  issue #4)
 
 ## [10.9.19]
 
