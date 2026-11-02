@@ -1,4 +1,4 @@
-# Handover 2026-11-02: backlog [40] shipped as 10.10.0
+# STALE - read 2026-11-02, work continued
 
 ## In flight
 
