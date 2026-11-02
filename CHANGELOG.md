@@ -30,6 +30,14 @@ a hole nobody has drawn a line under is one that gets rediscovered and half-fill
 two "versions with no entry" notes came to sit in this file disagreeing with it.
 
 
+## [10.11.2]
+
+### Changed
+
+- `block-commit-beside-sibling-gate` now also refuses `daily-topic-refresh.sh` and a `git push` sent in
+  the same message, in either order. The script reads what is on origin, so beside a refused push it
+  spends its long gates on the old state. Chaining both in one call with `&&` stays allowed.
+
 ## [10.11.1]
 
 ### Fixed

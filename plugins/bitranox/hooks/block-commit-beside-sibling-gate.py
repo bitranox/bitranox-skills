@@ -40,16 +40,64 @@ transcript does not yet hold the earlier siblings when this hook runs, so a prob
 both arms in a throwaway session). A file EDIT that fails is invisible to every PreToolUse hook; the
 PostToolBatch hook publish-after-failed-edit-note covers that case after the fact. BLOCKING: exit 2
 with the reason on stderr. Fail-open on any error. ASCII only.
+
+The dependency can also point the other way: a long run that READS what a push published, sent beside
+that push. `daily-topic-refresh.sh` rebases every topic from origin, so a run sent with the push it
+needs validates the old topic when the push is refused or fails, and costs a re-run of its long
+gates. Incident 2026-11-02: a hook refused the push, the `--force` run started anyway against the
+unfixed topic. The script is named literally rather than through a vocabulary, because it is the one
+script known to read pushed state and a general "reads what was pushed" cannot be seen in a command.
+A push beside the run is refused in either order; the chained form in one call stays allowed.
+PRICED 2026-11-02 by replaying 197,983 recorded Bash calls with their real earlier siblings: 61 runs
+of the script, 1 refusal, and that one is the incident. The gate arm fired 26 times on the same walk,
+so the walk does see sibling pairs.
 """
 
 import json
+import os
 import sys
 
 # `runs_a_gate` lives in shell_text beside the gate vocabulary, so block-masked-gate-exit reads the
 # program word the same way when it asks whether a piped element is a gate.
 import shell_text
-from shell_text import is_gated_command, is_shell_tool, runs_a_gate
+from shell_text import (
+    basename_for_tool,
+    commands_only,
+    is_gated_command,
+    is_git_verb,
+    is_shell_tool,
+    iter_segments,
+    program_word_at,
+    runs_a_gate,
+)
 from transcript_siblings import siblings_for_event
+
+PUSH_READING_SCRIPT = "daily-topic-refresh.sh"
+_SCRIPT_RUNNERS = frozenset({"bash", "sh"})
+
+
+def _segments(command, tool_name):
+    return [seg for _at, seg in iter_segments(commands_only(command or "", tool_name), tool_name)]
+
+
+def runs_push_reading_script(command, tool_name="Bash"):
+    """True when a statement of `command` RUNS the script as its program, directly or through bash/sh."""
+    for segment in _segments(command, tool_name):
+        words = segment.split()
+        at = program_word_at(words, tool_name)
+        if at is None:
+            continue
+        if basename_for_tool(words[at], tool_name) in _SCRIPT_RUNNERS:
+            at = next((i for i in range(at + 1, len(words)) if not words[i].startswith("-")), None)
+            if at is None:
+                continue
+        if os.path.basename(words[at].strip("'\"")) == PUSH_READING_SCRIPT:
+            return True
+    return False
+
+
+def _pushes(command, tool_name):
+    return any(is_git_verb(seg.strip().lstrip("(").strip(), {"push"}, tool_name) for seg in _segments(command, tool_name))
 
 
 def verdict(command, siblings, tool_name="Bash"):
@@ -57,6 +105,32 @@ def verdict(command, siblings, tool_name="Bash"):
     if not is_gated_command(command, tool_name):
         return None
     return next((s for s in siblings if runs_a_gate(s, tool_name)), None)
+
+
+def push_reader_verdict(command, siblings, tool_name="Bash"):
+    """The earlier sibling that pairs a push with the script reading it, or None; one call doing both is the fix."""
+    if runs_push_reading_script(command, tool_name):
+        if _pushes(command, tool_name):
+            return None
+        return next((s for s in siblings if _pushes(s, tool_name)), None)
+    if _pushes(command, tool_name):
+        return next((s for s in siblings if runs_push_reading_script(s, tool_name)), None)
+    return None
+
+
+def push_reader_refusal(sibling):
+    first = (sibling.strip().splitlines() or [""])[0][:120]
+    return "\n".join([
+        "BLOCKED: a push and " + PUSH_READING_SCRIPT + " in the same message. The script reads",
+        "what is on origin, and calls in one message do not wait for each other: a refused or failed",
+        "push does not stop the run, which then validates the old state through its long gates.",
+        "",
+        "  earlier sibling: " + first,
+        "",
+        "Do one of these instead:",
+        "  - chain them in ONE call:  git push origin <branch> && ./scripts/" + PUSH_READING_SCRIPT + " --force",
+        "  - or start the run in the next message, after reading that the push landed.",
+    ])
 
 
 def refusal(gate):
@@ -87,12 +161,16 @@ def main() -> int:
     if not is_shell_tool(tool_name):
         return 0
     command = (event.get("tool_input") or {}).get("command") or ""
-    if not is_gated_command(command, tool_name):
+    if not is_gated_command(command, tool_name) and not runs_push_reading_script(command, tool_name):
         return 0                                    # the common case never opens the transcript
-    gate = verdict(command, siblings_for_event(event) or [], tool_name)
-    if gate is None:
-        return 0
-    return shell_text.refuse(refusal(gate))
+    siblings = siblings_for_event(event) or []
+    gate = verdict(command, siblings, tool_name)
+    if gate is not None:
+        return shell_text.refuse(refusal(gate))
+    paired = push_reader_verdict(command, siblings, tool_name)
+    if paired is not None:
+        return shell_text.refuse(push_reader_refusal(paired))
+    return 0
 
 
 if __name__ == "__main__":

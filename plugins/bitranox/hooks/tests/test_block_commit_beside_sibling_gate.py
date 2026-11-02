@@ -90,7 +90,75 @@ def test_a_commit_that_is_only_text_does_not_count():
     assert guard.verdict(note, ["pytest -q"]) is None
 
 
+# --- a run that reads what a push published --------------------------------------------------------
+
+PUSH = "git -C /w/fork push --force-with-lease origin feat-x"
+REFRESH = "./scripts/daily-topic-refresh.sh --force"
+
+
+@pytest.mark.parametrize("run", [
+    REFRESH,
+    "cd /w/umbrella && ./scripts/daily-topic-refresh.sh --force > log 2>&1",
+    "bash /w/umbrella/scripts/daily-topic-refresh.sh --force",
+    "setsid nohup /w/umbrella/scripts/daily-topic-refresh.sh --force",
+    "bash -x scripts/daily-topic-refresh.sh",
+])
+def test_the_incident_a_refresh_after_a_sibling_push_is_refused(run):
+    assert guard.push_reader_verdict(run, [PUSH]) == PUSH
+
+
+def test_a_push_after_a_sibling_refresh_is_refused():
+    assert guard.push_reader_verdict(PUSH, [REFRESH]) == REFRESH
+
+
+def test_the_chained_form_the_refusal_offers_is_allowed():
+    chained = "git push origin feat-x && ./scripts/daily-topic-refresh.sh --force"
+    assert guard.runs_push_reading_script(chained)
+    assert guard.push_reader_verdict(chained, []) is None
+    assert guard.push_reader_verdict(chained, ["git status"]) is None
+
+
+@pytest.mark.parametrize("command,sibling", [
+    (REFRESH, "git status --porcelain"),
+    (REFRESH, "git fetch origin"),
+    (REFRESH, "grep -n 'git push' scripts/x.sh"),
+    ("grep -n daily-topic-refresh.sh CLAUDE.md", PUSH),
+    ("cat scripts/daily-topic-refresh.sh", PUSH),
+    ("python3 scripts/other.py daily-topic-refresh.sh", PUSH),
+    ("./scripts/other-refresh.sh --force", PUSH),
+    (PUSH, "grep -n daily-topic-refresh.sh CLAUDE.md"),
+    (PUSH, "git status"),
+])
+def test_text_naming_the_script_or_the_push_is_not_the_pair(command, sibling):
+    assert guard.push_reader_verdict(command, [sibling]) is None
+
+
+def test_a_commit_is_not_the_push_the_script_reads():
+    assert guard.push_reader_verdict(REFRESH, ["git commit -F /tmp/m"]) is None
+
+
 # --- the hook --------------------------------------------------------------------------------------
+
+
+def test_the_hook_refuses_a_refresh_beside_its_push_and_names_the_fix(monkeypatch, capsys, tmp_path):
+    path = _transcript(tmp_path, [_record("m", "t1", PUSH), _record("m", "t2", REFRESH)])
+    event = {"tool_name": "Bash", "tool_input": {"command": REFRESH}, "transcript_path": path, "tool_use_id": "t2"}
+
+    code, err = _run(monkeypatch, capsys, event)
+
+    assert code == 2
+    assert "daily-topic-refresh.sh" in err
+    assert "&&" in err
+    assert "next message" in err
+
+
+def test_the_hook_allows_a_refresh_after_a_push_from_an_earlier_message(monkeypatch, capsys, tmp_path):
+    path = _transcript(tmp_path, [_record("a", "t1", PUSH), _record("b", "t2", REFRESH)])
+    event = {"tool_name": "Bash", "tool_input": {"command": REFRESH}, "transcript_path": path, "tool_use_id": "t2"}
+
+    code, _err = _run(monkeypatch, capsys, event)
+
+    assert code == 0
 
 
 def _run(monkeypatch, capsys, event):
