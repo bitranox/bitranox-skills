@@ -7,6 +7,7 @@ variables are cleared so httpx2 cannot route the local fetch through a machine-w
 import hashlib
 import http.server
 import os
+import re
 import socket
 import subprocess
 import sys
@@ -415,22 +416,39 @@ def test_fetch_without_a_hash_warns_on_stderr(tmp_path, stand, capsys):
     assert "no --sha256 given" in captured.err and "--sha256" not in captured.out
 
 
-def test_fetch_exits_2_naming_the_answer_when_two_proxies_see_the_origin_change(tmp_path, stand,
-                                                                                capsys):
+def test_fetch_exits_1_naming_the_answer_when_every_proxy_sees_the_origin_change(tmp_path, stand,
+                                                                                 capsys):
+    # Agreeing proxies may all be lying, so agreement is never exit 2: the run ends with the
+    # chunks missing and says what the proxies answered.
     origin = stand.origin(200_000)
     origin.chunk_status = 410
     store = _fetch_store(tmp_path, [stand.proxy() for _ in range(3)])
-    assert _fetch_main(store, origin, tmp_path / "f.bin") == 2
-    assert "now answers HTTP 410" in capsys.readouterr().err
+    assert _fetch_main(store, origin, tmp_path / "f.bin") == 1
+    assert "3 proxies answered HTTP 410" in capsys.readouterr().err
     assert not os.path.exists(os.path.join(store, "bad.txt"))
 
 
-def test_fetch_exits_2_naming_the_error_every_proxy_gets_for_the_url(tmp_path, stand, capsys):
+def test_fetch_exits_1_naming_the_error_every_proxy_gets_for_the_url(tmp_path, stand, capsys):
     origin = stand.origin(200_000)
     origin.status = 404
     store = _fetch_store(tmp_path, [stand.proxy() for _ in range(3)])
-    assert _fetch_main(store, origin, tmp_path / "f.bin") == 2
-    assert "answers HTTP 404" in capsys.readouterr().err
+    assert _fetch_main(store, origin, tmp_path / "f.bin") == 1
+    # The count is not pinned: the real pool picks at random and may evict a proxy as flaky
+    # before every one was asked (test_chunked_fetch pins it with a fixed order).
+    assert re.search(r"[23] proxies answered HTTP 404", capsys.readouterr().err)
+    assert not os.path.exists(os.path.join(store, "bad.txt"))
+
+
+def test_a_changed_file_exits_1_naming_it_then_2_on_the_rerun(tmp_path, stand, capsys):
+    origin = stand.origin(200_000)
+    origin.chunk_etag = '"v2"'
+    store, out = _fetch_store(tmp_path, [stand.proxy() for _ in range(3)]), tmp_path / "f.bin"
+    assert _fetch_main(store, origin, out) == 1
+    err = capsys.readouterr().err
+    assert 'proxies answered ETag "v2"' in err and 'the probe saw ETag "v1"' in err
+    origin.etag, origin.chunk_etag = '"v2"', None        # the replaced file, now probed too
+    assert _fetch_main(store, origin, out) == 2
+    assert "f.bin.part.json belongs to another download (identity differ" in capsys.readouterr().err
     assert not os.path.exists(os.path.join(store, "bad.txt"))
 
 

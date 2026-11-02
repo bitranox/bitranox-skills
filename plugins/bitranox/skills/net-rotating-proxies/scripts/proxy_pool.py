@@ -50,11 +50,11 @@ Exit codes: 0 = every item succeeded (discover: at least one source answered),
 proxy in the store, every discovery source failed, a --cmd that cannot be parsed, an invalid
 --dead-regex, a --worklist that is not UTF-8). validate is a report: it exits 0 even when no
 candidate turned out live. fetch: 0 = complete file (hash-verified when --sha256 is given),
-1 = chunks still missing or the probe settled nothing, 2 = no proxies, bad argument (a URL
-that is not http or https included), hash mismatch, a manifest for another download, an
-output that cannot be written, a probe that settled nothing while two proxies got the same
-error for the URL (a 404, a rejected TLS certificate), or proxies agreeing that the origin
-changed while no other proxy still receives the file.
+1 = chunks still missing or the probe settled nothing (the message names what the proxies
+answered, e.g. "3 proxies answered HTTP 404"), 2 = no proxies, bad argument (a URL that is not
+http or https included), hash mismatch, a manifest for another download (how a file that
+changed since the last run shows), or an output that cannot be written. What proxies answer,
+however many agree, never makes exit 2: free proxies often inject the same page alike.
 
 The --cmd template may contain {proxy} (host:port) and {item}. Example:
   uv run proxy_pool.py run --worklist ids.txt --workers 16 --success-glob 'out/{item}*.vtt'
@@ -486,7 +486,7 @@ class ProxyPool:
         """Drop a proxy from THIS run's working set at once and backfill; never writes bad.txt.
 
         For an answer that may be the target's fault rather than the proxy's (fetch: a changed
-        ETag, a 404): acting on it now is right, persisting it on one proxy's word is not."""
+        ETag, a 404): acting on it now is right, persisting it is not, however many give it."""
         with self._lock:
             self._ban_locked(proxy)
             self._refill_active_locked()

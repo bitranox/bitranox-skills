@@ -10,17 +10,20 @@ each range is retried on a fresh proxy, and the bytes a cut attempt already deli
 (the next attempt asks only for the rest). Every reply is checked for being the requested slice
 of the same object BEFORE any byte is written. A reply that is not - an injected page, another
 range, a changed ETag, a 404, a TLS certificate that fails verification - may be the proxy lying
-or the origin having changed, and one proxy's word cannot tell which: that proxy is evicted for
-this run only. The run stops (OriginChanged) on such an answer only while no other proxy keeps
-receiving the file (see _Witnesses), so a few lying proxies cannot end a healthy run and a real
-change does not burn the pool. Only a proxy that gave no HTTP answer at all is banned to the
-permanent bad.txt; a CONNECT it refuses with a status, and an attempt whose time budget ran out,
-only rotate it. An origin that ignores Range gets one whole-file stream per attempt, rotated over
-the same pool, with no resume.
+or the origin having changed, and no number of proxies can tell which: free proxies often lie
+alike, so even all of them agreeing is no verdict. Such a proxy is evicted for this run only, and
+the run goes on with the others. It never ends on what proxies answered: when chunks are still
+missing at the end, the result's note names the answers, grouped (describe_answers), so a dead
+URL or a changed file can still be diagnosed. A file that really changed shows on the rerun,
+whose own probe votes for the new identity: the manifest saved for the old one is refused
+(ManifestMismatch). Only a connect to the proxy that failed before it answered bans it to the
+permanent bad.txt (failure_outcome); once it answered, whatever fails later on that attempt
+only rotates it. An
+origin that ignores Range gets one whole-file stream per attempt, rotated over the same pool,
+with no resume.
 """
 import concurrent.futures as cf
 import contextlib
-import functools
 import hashlib
 import json
 import os
@@ -38,7 +41,6 @@ import httpx2
 # [0-9], not \d: \d also matches non-ASCII digits, which int() then accepts.
 _CONTENT_RANGE = re.compile(r"bytes ([0-9]+)-([0-9]+)/([0-9]+)")
 _SIZE = re.compile(r"([0-9]+)([KMG]?)", re.IGNORECASE)
-_CONNECT_STATUS = re.compile(r"([0-9]{3})(?: |$)")
 _UNITS = {"": 1, "K": 1024, "M": 1024**2, "G": 1024**3}
 _THROTTLED = {403, 407, 429}
 _BAN = {"dead"}
@@ -65,15 +67,6 @@ class ManifestMismatch(FetchError):
     pass
 
 
-class OriginChanged(FetchError):
-    """Proxies agree the origin no longer answers what the probe saw, and none contradicts them."""
-
-
-class ProbeRefused(FetchError):
-    """The probe decided nothing, and two proxies got the same error for the URL (a 404, a
-    rejected certificate): that is the URL's answer, not a pool too small to settle it."""
-
-
 class BadUrl(FetchError):
     pass
 
@@ -82,13 +75,13 @@ class BudgetSpent(httpx2.TimeoutException):
     """An attempt's time budget ran out, whichever socket operation it was in.
 
     Its own class, not httpcore2's ConnectTimeout: a connect or a TLS handshake cut short by the
-    budget says nothing about the proxy - it is a cut like a slow body - while one that ran out
-    its own full per-operation timeout is a dead proxy and banned."""
+    budget says nothing about the proxy - it is a cut like a slow body - while a connect to the
+    proxy that ran out its own full per-operation timeout is a dead proxy (failure_outcome)."""
 
 
 class Outcome(typing.NamedTuple):
     """One attempt: its reason, the bytes it wrote, and - for a suspect reply - what it says the
-    origin now answers (proxies agreeing on an `answer` may stop the run, see _Witnesses)."""
+    origin now answers, in words that name no chunk offset (describe_answers groups them)."""
     reason: str
     written: int = 0
     answer: str | None = None
@@ -139,7 +132,7 @@ def ranged_verdict(status, headers, start, end, total, identity):
     'wrong-object' and 'identity' are suspect: the reply is not the slice, and it may be the
     proxy's doing (an injected page, a stale cache, a rewritten header) or the origin's (the file
     was replaced, the URL removed). `answer` then says what the origin would now be answering, in
-    words that name no chunk offset, so two proxies on different chunks can agree on it.
+    words that name no chunk offset, so the answers of proxies on different chunks group together.
     """
     if status in _THROTTLED or status >= 500:
         return "throttled", None
@@ -200,11 +193,11 @@ def _body_verdict(headers, identity):
 
 def action_for(reason):
     """The pool call an attempt's reason earns: 'ok' -> record success, 'ban' -> bad.txt,
-    'suspect' -> evict for this run and count its answer toward an origin change, 'fail' ->
-    record a failure (flaky eviction for this run, never bad.txt). 'refused' is a CONNECT the
-    proxy turned down with a status; 'certificate' an origin certificate that failed
-    verification. An unknown reason raises: mapped to 'fail' it would silently spare a proxy
-    that a misspelt reason meant to ban."""
+    'suspect' -> evict for this run (its answer is named at the end), 'fail' -> record a failure
+    (flaky eviction for this run, never bad.txt). 'refused' is a CONNECT the proxy turned down
+    with a status; 'certificate' an origin certificate that failed verification. An unknown
+    reason raises: mapped to 'fail' it would silently spare a proxy that a misspelt reason meant
+    to ban."""
     if reason == "ok":
         return "ok"
     if reason in _BAN:
@@ -216,26 +209,16 @@ def action_for(reason):
     raise ValueError(f"unknown attempt reason: {reason!r}")
 
 
-def connect_status(exc):
-    """The 4xx/5xx status of a CONNECT the proxy refused, or None when the error carries none.
-
-    httpcore2 raises ProxyError(f"{status} {reason}") for any non-2xx CONNECT reply
-    (httpcore2/_sync/http_proxy.py lines 285-290 in 2.16.0) and nothing else of its http proxy
-    raises one; _httpx2_errors below keeps that message. So the status exists only as the text's
-    first three digits. A 3xx refusal, or a SOCKS error worded otherwise, gives None.
-    """
-    m = _CONNECT_STATUS.match(str(exc))
-    status = int(m.group(1)) if m else 0
-    return status if 400 <= status <= 599 else None
-
-
 def certificate_problem(exc):
     """The verify message of an origin certificate that failed verification, or None.
 
     httpcore2's SyncStream.start_tls maps every OSError of the handshake, ssl's
-    SSLCertVerificationError included, to its ConnectError raised `from` it
-    (httpcore2/_backends/sync.py, map_exceptions, 2.16.0), and _httpx2_errors chains once more, so
-    the verification error sits in the cause chain, never at the top."""
+    SSLCertVerificationError included, to its ConnectError raised `from` it (map_exceptions in
+    httpcore2/_exceptions.py, 2.16.0). Its connection pool then re-raises that ConnectError
+    `from None` (httpcore2/_sync/connection_pool.py), which clears its __cause__; the
+    verification error is still its __context__, the exception it was raised while handling. So
+    the walk follows __cause__ where one is set and __context__ otherwise (_httpx2_errors adds one
+    more `from` link on top), and the verification error is never at the top."""
     seen = set()
     while exc is not None and id(exc) not in seen:
         if isinstance(exc, ssl.SSLCertVerificationError):
@@ -267,19 +250,33 @@ def _bounded(deadline, call, timeout):
         raise BudgetSpent("the attempt's time budget ran out") from exc
 
 
+class Heard:
+    """Whether the proxy has sent this attempt any byte yet.
+
+    Set on the first read that returns data. Through a proxy that first read is the proxy's own
+    reply - to an https URL its CONNECT reply, which comes before any TLS handshake with the
+    origin - so a failure after it is never that the proxy gave no answer (failure_outcome)."""
+
+    def __init__(self):
+        self.answered = False
+
+
 class _DeadlineStream(httpcore2.NetworkStream):
     """A socket stream whose every operation is cut short at one wall-clock deadline.
 
     httpx2's own timeouts bound each read, not the attempt: a proxy sending one header byte per
     read timeout, or stalling after its last body byte, outlives any budget checked between body
     blocks. Clamping each operation's timeout to what is left of the budget ends it in time with
-    no watchdog thread (see _bounded)."""
+    no watchdog thread (see _bounded). Every read that returns data marks `heard`."""
 
-    def __init__(self, inner, deadline):
-        self._inner, self._deadline = inner, deadline
+    def __init__(self, inner, deadline, heard):
+        self._inner, self._deadline, self._heard = inner, deadline, heard
 
     def read(self, max_bytes, timeout=None):
-        return _bounded(self._deadline, lambda t: self._inner.read(max_bytes, t), timeout)
+        data = _bounded(self._deadline, lambda t: self._inner.read(max_bytes, t), timeout)
+        if data:
+            self._heard.answered = True
+        return data
 
     def write(self, buffer, timeout=None):
         _bounded(self._deadline, lambda t: self._inner.write(buffer, t), timeout)
@@ -290,20 +287,21 @@ class _DeadlineStream(httpcore2.NetworkStream):
     def start_tls(self, ssl_context, server_hostname=None, timeout=None):
         tls = _bounded(self._deadline,
                        lambda t: self._inner.start_tls(ssl_context, server_hostname, t), timeout)
-        return _DeadlineStream(tls, self._deadline)
+        return _DeadlineStream(tls, self._deadline, self._heard)
 
     def get_extra_info(self, info):
         return self._inner.get_extra_info(info)
 
 
 class _DeadlineBackend(httpcore2.NetworkBackend):
-    def __init__(self, deadline):
+    def __init__(self, deadline, heard=None):
         self._inner, self._deadline = httpcore2.SyncBackend(), deadline
+        self._heard = Heard() if heard is None else heard
 
     def connect_tcp(self, host, port, timeout=None, local_address=None, socket_options=None):
         stream = _bounded(self._deadline, lambda t: self._inner.connect_tcp(
             host, port, t, local_address, socket_options), timeout)
-        return _DeadlineStream(stream, self._deadline)
+        return _DeadlineStream(stream, self._deadline, self._heard)
 
     def sleep(self, seconds):
         self._inner.sleep(seconds)
@@ -313,7 +311,7 @@ class _DeadlineBackend(httpcore2.NetworkBackend):
 def _httpx2_errors():
     # The httpx2 class of the same name, as httpx2's own transport maps them (its table pairs
     # every httpcore2 class with the httpx2 one of that name), so callers catch httpx2 classes.
-    # The message is kept: connect_status reads the refused CONNECT's status out of it.
+    # The message is kept: a refused CONNECT's status is in it, for whoever reads the error.
     try:
         yield
     except Exception as exc:
@@ -343,14 +341,15 @@ class _DeadlineTransport(httpx2.BaseTransport):
     """httpx2's proxy transport, rebuilt on the public httpcore2 API with a _DeadlineBackend.
 
     httpx2.HTTPTransport takes no network backend, so it cannot carry the deadline. `ssl_context`
-    verifies the ORIGIN through the tunnel (None: the system trust store)."""
+    verifies the ORIGIN through the tunnel (None: the system trust store); `heard` records
+    whether the proxy answered."""
 
-    def __init__(self, proxy, deadline, ssl_context=None):
+    def __init__(self, proxy, deadline, ssl_context=None, heard=None):
         # trust_env=False: SSL_CERT_FILE / SSL_CERT_DIR must not swap the trust store either.
         if ssl_context is None:
             ssl_context = httpx2.create_ssl_context(trust_env=False)
         self._pool = httpcore2.HTTPProxy(proxy_url=f"http://{proxy}", ssl_context=ssl_context,
-                                         network_backend=_DeadlineBackend(deadline))
+                                         network_backend=_DeadlineBackend(deadline, heard))
 
     def handle_request(self, request):
         url = httpcore2.URL(scheme=request.url.raw_scheme, host=request.url.raw_host,
@@ -366,59 +365,67 @@ class _DeadlineTransport(httpx2.BaseTransport):
         self._pool.close()
 
 
-def _client(proxy, timeout, ssl_context=None):
+def _client(proxy, timeout, ssl_context=None, heard=None):
     # `timeout` bounds each read AND, through the transport's deadline, the whole attempt from
     # connect to last byte, redirects included. trust_env=False: a machine-wide HTTP_PROXY /
     # NO_PROXY must never reroute or bypass the proxy this attempt was given. Redirects are
     # followed (through the same proxy): release assets and mirror redirectors answer 302, and
     # every check below applies to the final reply.
     limits = httpx2.Timeout(timeout, connect=min(timeout, 15.0))
-    transport = _DeadlineTransport(proxy, time.monotonic() + timeout, ssl_context)
+    transport = _DeadlineTransport(proxy, time.monotonic() + timeout, ssl_context, heard)
     return httpx2.Client(transport=transport, timeout=limits, trust_env=False,
                          follow_redirects=True, max_redirects=MAX_REDIRECTS)
 
 
-def _refused_connect(exc):
-    """The Outcome of a ProxyError: a CONNECT refused with a 4xx/5xx status is the proxy's word
-    about itself - the origin was never contacted, so whatever the status, it rotates the proxy
-    and says nothing about the origin. One without such a status is a proxy that will not carry
-    the request at all."""
-    return Outcome("dead" if connect_status(exc) is None else "refused")
+# What an attempt that raised one of these turns into; failure_outcome decides which reason.
+_FAILURES = (httpx2.TransportError, httpx2.TooManyRedirects)
 
 
-def _connect_failed(exc, written):
-    """The Outcome of a ConnectError: a certificate failure is the origin's answer as every proxy
-    relays it (suspect, never banned); any other connect or handshake failure is a dead proxy."""
+def failure_outcome(exc, written, heard):
+    """The Outcome of an attempt that raised exc (one of _FAILURES) after writing `written` bytes.
+
+    Only a proxy that gave no answer at all is 'dead', the one reason that bans to the permanent
+    bad.txt: a connect to it that was refused, failed or ran out its own full timeout before it
+    sent one byte (`heard`). Once it answered - a CONNECT reply of any status,
+    or any byte of a reply - a later failure may be the origin's or the route's behind it (a TLS
+    handshake to an origin that stalls or speaks no TLS), so the attempt is a 'cut' and only
+    rotates. A refused CONNECT is 'refused': the origin was never contacted, so the refusal is the
+    proxy's word about itself. A rejected origin certificate is 'certificate' and a redirect loop
+    'wrong-object', both the origin's answer as every proxy relays it.
+    """
+    if isinstance(exc, httpx2.TooManyRedirects):
+        return Outcome("wrong-object", written, f"more than {MAX_REDIRECTS} redirects")
     problem = certificate_problem(exc)
-    if problem is None:
+    if problem is not None:
+        return Outcome("certificate", written, f"TLS certificate rejected: {problem}")
+    if isinstance(exc, httpx2.ProxyError):
+        return Outcome("refused", written)
+    if isinstance(exc, (httpx2.ConnectError, httpx2.ConnectTimeout)) and not heard.answered:
         return Outcome("dead", written)
-    return Outcome("certificate", written, f"TLS certificate rejected: {problem}")
+    return Outcome("cut", written)
 
 
-def attempt(url, proxy, offset, end, total, identity, path, timeout, *, ssl_context=None,
-            on_valid=None):
+def attempt(url, proxy, offset, end, total, identity, path, timeout, *, ssl_context=None):
     """One GET of bytes offset..end through proxy, written into path at offset. Returns an Outcome.
 
     The reply is classified before the file is opened, so a wrong object never touches it; bytes
     past `end` are dropped ('overrun'); a transfer cut short keeps what arrived ('cut'), and the
-    caller asks for the rest on the next attempt. on_valid() is called the moment a reply has
-    passed every check, before its first byte is written: the evidence _Witnesses weighs.
+    caller asks for the rest on the next attempt. A transport error is classified by
+    failure_outcome.
 
     `timeout` bounds each read AND is the budget of the whole attempt, connect to last byte (see
     _DeadlineStream). Running out of it is a 'cut' - the bytes already written stay and the next
     attempt resumes after them. `ssl_context` verifies an https origin (None: the system store).
     """
-    want, written = end - offset + 1, 0
+    want, written, heard = end - offset + 1, 0, Heard()
     headers = {"Range": f"bytes={offset}-{end}", "Accept-Encoding": "identity"}
     try:
-        with _client(proxy, timeout, ssl_context) as client, \
+        with _client(proxy, timeout, ssl_context, heard) as client, \
                 client.stream("GET", url, headers=headers) as reply:
             reason, answer = ranged_verdict(reply.status_code, reply.headers, offset, end, total,
                                             identity)
             if reason:
                 return Outcome(reason, 0, answer)
-            if on_valid:
-                on_valid()
             with open(path, "r+b") as f:
                 f.seek(offset)
                 try:
@@ -431,16 +438,8 @@ def attempt(url, proxy, offset, end, total, identity, path, timeout, *, ssl_cont
                 finally:
                     f.flush()
                     os.fsync(f.fileno())   # the manifest records `written` only once it is on disk
-    except httpx2.ProxyError as exc:
-        return _refused_connect(exc)
-    except httpx2.ConnectError as exc:
-        return _connect_failed(exc, written)
-    except httpx2.ConnectTimeout:
-        return Outcome("dead", written)
-    except httpx2.TooManyRedirects:
-        return Outcome("wrong-object", written, f"more than {MAX_REDIRECTS} redirects")
-    except httpx2.TransportError:
-        return Outcome("cut", written)
+    except _FAILURES as exc:
+        return failure_outcome(exc, written, heard)
     return Outcome("ok" if written == want else "cut", written)
 
 
@@ -454,9 +453,9 @@ class _Probe:
         self.total, self.identity, self.ranged = total, identity, ranged
 
 
-def _probe_once(url, proxy, timeout, ssl_context):
+def _probe_once(url, proxy, timeout, ssl_context, heard):
     headers = {"Range": "bytes=0-0", "Accept-Encoding": "identity"}
-    with _client(proxy, timeout, ssl_context) as client, \
+    with _client(proxy, timeout, ssl_context, heard) as client, \
             client.stream("GET", url, headers=headers) as reply:
         return reply.status_code, reply.headers
 
@@ -464,9 +463,9 @@ def _probe_once(url, proxy, timeout, ssl_context):
 def _probe_error(status):
     """What a probe reply that casts no vote says about the URL, or None when it says nothing.
 
-    Only a status that is no view of the object and cannot lift by itself counts (a 404, a 410):
-    a 403, 407, 429 or 5xx may be throttling or a proxy that cannot reach the origin, for which
-    'grow the pool and rerun later' is the right answer."""
+    Only a status that is no view of the object and cannot lift by itself is named (a 404, a
+    410): a 403, 407, 429 or 5xx may be throttling or a proxy that cannot reach the origin, for
+    which 'grow the pool and rerun later' is the right answer."""
     if status in _VOTE_STATUSES or status in _THROTTLED or status >= 500:
         return None
     return f"HTTP {status}"
@@ -503,10 +502,16 @@ def probe(url, pool, timeout, attempts, warn=None, ssl_context=None):
     the most votes wins, and a ranged view wins a tie against whole-file ones; a top count shared
     by two ranged views (or two whole-file ones) is no decision, and the probe refuses rather than
     let whichever answered first plant its view. A view resting on one proxy is warned as not
-    cross-checked. Returns a _Probe, or None when nobody answered or the views tie - unless two
-    proxies got the same error for the URL (_probe_error, or the same rejected certificate): that
-    is the URL's answer, and ProbeRefused names it. Votes always decide first.
+    cross-checked. Returns a _Probe, or None when nobody gave a view or the views tie: errors for
+    the URL, however many proxies agree on one, never decide anything (_probe_views names them).
     """
+    return _probe_views(url, pool, timeout, attempts, warn, ssl_context)[0]
+
+
+def _probe_views(url, pool, timeout, attempts, warn, ssl_context):
+    """(probe's decision, {error answer: proxies that gave it}); see probe. The errors are what a
+    probe reply that casts no vote says (_probe_error), a rejected certificate and a redirect
+    loop, kept only to be named when nothing was decided."""
     votes, errors, answered = {}, {}, set()
     for _ in range(attempts):
         picks = pool.acquire(1)
@@ -514,31 +519,18 @@ def probe(url, pool, timeout, attempts, warn=None, ssl_context=None):
             break
         proxy = picks[0]
         pool.mark_in_use(proxy)
+        heard = Heard()
         try:
-            status, headers = _probe_once(url, proxy, timeout, ssl_context)
-        except httpx2.ProxyError as exc:
-            # A CONNECT refused with a 4xx/5xx status never reached the origin: no vote and no
-            # word about the URL. One without such a status is a dead proxy.
-            if connect_status(exc) is None:
-                pool.ban(proxy)
-            else:
-                pool.record(proxy, False)
-            continue
-        except httpx2.ConnectError as exc:
-            problem = certificate_problem(exc)
-            if problem is None:
+            status, headers = _probe_once(url, proxy, timeout, ssl_context, heard)
+        except _FAILURES as exc:
+            outcome = failure_outcome(exc, 0, heard)
+            if outcome.reason == "dead":
                 pool.ban(proxy)
                 continue
-            # The origin's certificate, as every proxy relays it: an error for the URL, no ban.
-            pool.record(proxy, False)
-            errors.setdefault(f"TLS certificate rejected: {problem}", set()).add(proxy)
-            answered.add(proxy)
-            continue
-        except httpx2.ConnectTimeout:
-            pool.ban(proxy)
-            continue
-        except (httpx2.TransportError, httpx2.TooManyRedirects):
-            pool.record(proxy, False)   # BudgetSpent too: the proxy was slow, not dead
+            pool.record(proxy, False)       # a refused CONNECT, a cut, a spent budget: rotate
+            if outcome.answer:              # the origin's answer as the proxies relay it
+                errors.setdefault(outcome.answer, set()).add(proxy)
+                answered.add(proxy)
             continue
         key = _vote_key(status, headers)
         pool.record(proxy, key is not None)
@@ -550,21 +542,10 @@ def probe(url, pool, timeout, attempts, warn=None, ssl_context=None):
         else:
             votes.setdefault(key, set()).add(proxy)
             if len(votes[key]) >= 2:
-                return _decide(key)
+                return _decide(key), errors
         if pool.active() <= answered:
             break
-    decided = _tally(votes, warn)
-    if decided is None:
-        _refuse_on_agreed_error(url, errors)
-    return decided
-
-
-def _refuse_on_agreed_error(url, errors):
-    agreed = [(len(proxies), answer) for answer, proxies in errors.items() if len(proxies) >= 2]
-    if agreed:
-        count, answer = max(agreed)
-        raise ProbeRefused(f"{count} proxies report that {url} answers {answer}, and none gave a "
-                           f"view of the file; banned none - check the URL")
+    return _tally(votes, warn), errors
 
 
 def _tally(votes, warn):
@@ -594,85 +575,24 @@ def _decide(key):
     return _Probe(total, {"etag": etag, "last_modified": last_modified}, ranged)
 
 
-class _Witnesses:
-    """Suspect answers, the distinct proxies that gave each, and the replies that contradict them.
+def describe_answers(answers):
+    """'3 proxies answered HTTP 404, 1 answered ETag "v2" (...)' from {answer: proxies}.
 
-    One proxy's odd answer may be that proxy or the origin. Banning on it wrote every clean proxy
-    into the permanent bad.txt whenever it was the origin (a replaced file, a removed URL), so it
-    only evicts. Two proxies agreeing is not enough to stop either: attempts run concurrently,
-    and two page-injecting proxies often answer before any clean proxy's reply is in, which ended
-    healthy runs. So an answer stops the run only when no other proxy has had a VALID reply since
-    the first proxy gave it (valid() starts the answer over), and either:
+    Grouped by answer, counted by distinct proxy, most first; '' when nothing was answered. The
+    words are the reader's diagnosis: every proxy answering one 404 points at a dead URL, every
+    proxy answering one new ETag at a changed file (which the rerun's probe then confirms)."""
+    parts = []
+    for answer, proxies in sorted(answers.items(), key=lambda item: (-len(item[1]), item[0])):
+        count = len(proxies)
+        who = f"{count} prox{'y' if count == 1 else 'ies'}" if not parts else str(count)
+        parts.append(f"{who} answered {answer}")
+    return ", ".join(parts)
 
-      - one more proxy gives it from an attempt that BEGAN after two had agreed - an attempt with
-        every chance a clean proxy would have had to contradict them; or
-      - the run ends with work left and nothing contradicted the two (verdict(work_left=True)):
-        no proxy is left to ask, or the attempts are spent.
 
-    `began` is a tick from started(), taken before the proxy is acquired, so an attempt on a
-    proxy picked before it was evicted can never count as one that began after the agreement.
-    All state is behind one lock: reports and valid replies come from every worker thread.
-    """
-
-    def __init__(self):
-        self._lock, self._tick, self._open, self._stop = threading.Lock(), 0, {}, None
-
-    def started(self):
-        """The tick of an attempt about to start."""
-        with self._lock:
-            self._tick += 1
-            return self._tick
-
-    def valid(self, proxy):
-        """proxy received the probed object: every answer it did not give starts over."""
-        with self._lock:
-            self._tick += 1
-            self._open = {a: w for a, w in self._open.items() if proxy in w["proxies"]}
-
-    def report(self, answer, proxy, began):
-        """Record proxy's answer from an attempt that began at tick `began`; True once the run
-        must stop on some answer."""
-        with self._lock:
-            self._tick += 1
-            seen = self._open.setdefault(answer, {"proxies": set(), "agreed": None})
-            new = proxy not in seen["proxies"]
-            seen["proxies"].add(proxy)
-            if seen["agreed"] is None:
-                if len(seen["proxies"]) >= 2:
-                    seen["agreed"] = self._tick
-            elif new and began > seen["agreed"] and self._stop is None:
-                self._stop = (answer, len(seen["proxies"]))
-            return self._stop is not None
-
-    @property
-    def answer(self):
-        """The answer the run stopped on during the run, or None."""
-        with self._lock:
-            return self._stop[0] if self._stop else None
-
-    def pending(self):
-        """An answer two proxies agree on that no valid reply has contradicted, or None."""
-        with self._lock:
-            return next((a for a, w in self._open.items() if w["agreed"] is not None), None)
-
-    def verdict(self, work_left):
-        """(answer, proxies) to stop the run on, or None. An agreed, uncontradicted answer counts
-        only when work is left: a run that completed was contradicted by its own bytes."""
-        with self._lock:
-            if self._stop:
-                return self._stop
-            if work_left:
-                for answer, seen in self._open.items():
-                    if seen["agreed"] is not None:
-                        return answer, len(seen["proxies"])
-            return None
-
-    @staticmethod
-    def error(url, verdict, kept):
-        answer, count = verdict
-        return OriginChanged(f"{count} proxies report that {url} now answers {answer}, and no "
-                             f"other proxy received the file since; stopped without banning "
-                             f"any. {kept}")
+def _noted(note, answers):
+    """note, followed by what the proxies answered when any answered something odd."""
+    said = describe_answers(answers)
+    return f"{note}; {said}" if said else note
 
 
 def _load_manifest(path, expected):
@@ -751,9 +671,16 @@ def _sha256_of(path):
     return digest.hexdigest()
 
 
-def _settle(pool, proxy, outcome, on_success, witnesses, began):
-    """Make the pool call the outcome earns; True when it settled that the origin changed.
-    `began` is the attempt's tick from witnesses.started()."""
+def _tally_outcome(counts, answers, proxy, outcome):
+    """Count the attempt's reason and, for an odd answer, the proxy that gave it (callers that
+    share the two dicts across threads hold their lock)."""
+    counts[outcome.reason] = counts.get(outcome.reason, 0) + 1
+    if outcome.answer:
+        answers.setdefault(outcome.answer, set()).add(proxy)
+
+
+def _settle(pool, proxy, outcome, on_success):
+    """Make the pool call the outcome earns (action_for)."""
     action = action_for(outcome.reason)
     if action == "ok":
         pool.record(proxy, True)
@@ -763,10 +690,8 @@ def _settle(pool, proxy, outcome, on_success, witnesses, began):
         pool.ban(proxy)
     elif action == "suspect":
         pool.evict(proxy)
-        return witnesses.report(outcome.answer, proxy, began)
     else:
         pool.record(proxy, False)
-    return False
 
 
 def _finish(part, out, sha256, manifest=None, retry=_retry_sharing_violation):
@@ -783,51 +708,39 @@ def _finish(part, out, sha256, manifest=None, retry=_retry_sharing_violation):
         retry(lambda: os.remove(manifest))
 
 
-def _stream_whole(url, proxy, part, info, timeout, *, ssl_context=None, on_valid=None):
+def _stream_whole(url, proxy, part, info, timeout, *, ssl_context=None):
     """One plain GET of the whole object through proxy, written into part from byte 0.
 
     Returns an Outcome whose `written` is always 0: without Range there is no way to ask for the
     rest, so the bytes of a failed attempt are never resumed and the next one rewrites part from
     byte 0. The reply is classified before part is opened, and `timeout` is the whole attempt's
     budget as in attempt (a trickling proxy would otherwise hold the run) - so the whole file
-    must arrive within it. ssl_context and on_valid mean what they mean in attempt.
+    must arrive within it. ssl_context means what it means in attempt.
     """
-    total, written = info.total, 0
+    total, written, heard = info.total, 0, Heard()
     try:
-        with _client(proxy, timeout, ssl_context) as client, \
+        with _client(proxy, timeout, ssl_context, heard) as client, \
                 client.stream("GET", url, headers={"Accept-Encoding": "identity"}) as reply:
             reason, answer = whole_verdict(reply.status_code, reply.headers, total, info.identity)
             if reason:
                 return Outcome(reason, 0, answer)
-            if on_valid:
-                on_valid()
             with open(part, "wb") as f:
                 for block in reply.iter_raw():      # raw: nothing may be decoded in between
                     if total is not None and written + len(block) > total:
                         return Outcome("overrun")   # only reachable for a reply without a length
                     f.write(block)
                     written += len(block)
-    except httpx2.ProxyError as exc:
-        return _refused_connect(exc)
-    except httpx2.ConnectError as exc:
-        return _connect_failed(exc, 0)
-    except httpx2.ConnectTimeout:
-        return Outcome("dead")
-    except httpx2.TooManyRedirects:
-        return Outcome("wrong-object", 0, f"more than {MAX_REDIRECTS} redirects")
-    except httpx2.TransportError:
-        return Outcome("cut")
+    except _FAILURES as exc:
+        return failure_outcome(exc, 0, heard)
     return Outcome("ok" if total is None or written == total else "cut")
 
 
-def _whole_attempts(url, part, pool, info, timeout, attempts, on_success, counts, witnesses,
+def _whole_attempts(url, part, pool, info, timeout, attempts, on_success, counts, answers,
                     ssl_context):
     """Stream attempts until one succeeds; returns (ok, dry). Same rules as a chunk's loop:
-    waiting for a proxy spends no attempt, an empty active pool stops at once, and so does an
-    origin change the witnesses settle."""
+    waiting for a proxy spends no attempt, and an empty active pool stops at once."""
     tries = 0
     while tries < attempts:
-        began = witnesses.started()
         picks = pool.acquire(1)
         if not picks:
             if not pool.active():
@@ -837,11 +750,9 @@ def _whole_attempts(url, part, pool, info, timeout, attempts, on_success, counts
         tries += 1
         proxy = picks[0]
         pool.mark_in_use(proxy)
-        outcome = _stream_whole(url, proxy, part, info, timeout, ssl_context=ssl_context,
-                                on_valid=functools.partial(witnesses.valid, proxy))
-        counts[outcome.reason] = counts.get(outcome.reason, 0) + 1
-        if _settle(pool, proxy, outcome, on_success, witnesses, began):
-            return False, False
+        outcome = _stream_whole(url, proxy, part, info, timeout, ssl_context=ssl_context)
+        _tally_outcome(counts, answers, proxy, outcome)
+        _settle(pool, proxy, outcome, on_success)
         if outcome.reason == "ok":
             return True, False
     return False, False
@@ -865,19 +776,17 @@ def _fetch_whole(url, out, pool, sha256, timeout, attempts, on_success, info, lo
         # cleanly as the real object, so nothing but a hash can tell them apart.
         warn("probe: the origin sent no size; a cut or substituted transfer cannot be detected "
              "- pass --sha256 to verify the result")
-    counts, witnesses = {}, _Witnesses()
+    counts, answers = {}, {}
     ok, dry = _whole_attempts(url, part, pool, info, timeout, attempts, on_success, counts,
-                              witnesses, ssl_context)
+                              answers, ssl_context)
     log(f"whole file, attempts {sum(counts.values())}: "
         + ", ".join(f"{k} {v}" for k, v in sorted(counts.items())))
-    verdict = witnesses.verdict(work_left=not ok)
-    if verdict:
-        raise witnesses.error(url, verdict, "Rerun once the URL serves the file again.")
     if dry:
         counts["pool-dry"] = 1                  # added after the line above: it is not an attempt
         log("pool ran dry: the whole file is still missing")
     if not ok:
-        return FetchResult(False, 0, 1, counts, "whole file still missing; rerun to start over")
+        return FetchResult(False, 0, 1, counts,
+                           _noted("whole file still missing; rerun to start over", answers))
     _finish(part, out, sha256)
     return FetchResult(True, 1, 1, counts)
 
@@ -892,15 +801,17 @@ def fetch(url, out, pool, *, chunk_size, workers=8, sha256=None, timeout=120.0, 
     attempts. When the probe finds the origin ignores Range, the file comes as one whole stream
     per attempt instead (max_attempts in all, no manifest, no resume). `ssl_context` verifies an
     https origin (None: the system trust store). Raises BadUrl before any network work for a URL
-    that is not http(s), ProbeRefused when the probe decided nothing and two proxies got the same
-    error for the URL, and OriginChanged when proxies agree on an answer that is not the probed
-    object and none contradicts them (see _Witnesses; the part and manifest are kept).
+    that is not http(s). What proxies answered never raises: a run that ends with work left (the
+    probe settled nothing, or chunks are missing) returns a result whose note names the odd
+    answers, grouped (describe_answers); the part and manifest are kept for the rerun.
+    Exceptions a worker raises (an OSError writing the part or manifest, one from on_success) stop
+    every chunk after its current attempt and propagate.
     """
     check_url(url)
-    info = probe(url, pool, timeout, max_attempts, warn, ssl_context)
+    info, errors = _probe_views(url, pool, timeout, max_attempts, warn, ssl_context)
     if info is None:
-        return FetchResult(False, note="the probe settled nothing: no proxy answered, or the "
-                                       "answers disagreed")
+        return FetchResult(False, note=_noted("the probe settled nothing: no proxy gave a usable "
+                                              "view of the file, or the views disagreed", errors))
     if not info.ranged:
         return _fetch_whole(url, out, pool, sha256, timeout, max_attempts, on_success, info, log,
                             warn or _stderr, ssl_context)
@@ -912,10 +823,10 @@ def fetch(url, out, pool, *, chunk_size, workers=8, sha256=None, timeout=120.0, 
         state["received"] = [0] * len(chunks)   # progress without its bytes is no progress
     with open(part, "a+b") as f:
         f.truncate(info.total)
-    lock, counts, dry, stop = threading.Lock(), {}, threading.Event(), threading.Event()
-    witnesses = _Witnesses()
+    lock, counts, answers = threading.Lock(), {}, {}
+    dry, stop = threading.Event(), threading.Event()
 
-    def run_chunk(index):
+    def chunk_attempts(index):
         start, end = chunks[index]
         tries = 0
         # A wait for a proxy is not an attempt: counted, it burnt max_attempts per chunk while
@@ -924,7 +835,6 @@ def fetch(url, out, pool, *, chunk_size, workers=8, sha256=None, timeout=120.0, 
             offset = start + state["received"][index]
             if offset > end:
                 return True
-            began = witnesses.started()       # before acquire: see _Witnesses
             picks = pool.acquire(1)
             if not picks:
                 if not pool.active():
@@ -936,48 +846,52 @@ def fetch(url, out, pool, *, chunk_size, workers=8, sha256=None, timeout=120.0, 
             proxy = picks[0]
             pool.mark_in_use(proxy)
             outcome = attempt(url, proxy, offset, end, info.total, info.identity, part, timeout,
-                              ssl_context=ssl_context,
-                              on_valid=functools.partial(witnesses.valid, proxy))
+                              ssl_context=ssl_context)
             with lock:
                 state["received"][index] += outcome.written
-                counts[outcome.reason] = counts.get(outcome.reason, 0) + 1
+                _tally_outcome(counts, answers, proxy, outcome)
                 _save_manifest(manifest, state)
-            if _settle(pool, proxy, outcome, on_success, witnesses, began):
-                stop.set()             # the origin changed: no more attempts on any chunk
+            _settle(pool, proxy, outcome, on_success)
         return start + state["received"][index] > end
+
+    def run_chunk(index):
+        try:
+            return chunk_attempts(index)
+        except BaseException:
+            stop.set()      # set here, in the failing thread: no other chunk starts another attempt
+            raise
 
     with cf.ThreadPoolExecutor(max_workers=max(1, workers)) as ex:
         futures = [ex.submit(run_chunk, index) for index in range(len(chunks))]
         try:
             # Timed, not one untimed wait: the kernel may deliver a Ctrl-C to a worker thread, and
             # Python runs the handler only when the main thread next executes, so an untimed wait
-            # raised it after every attempt was spent.
+            # raised it after every attempt was spent. FIRST_EXCEPTION: a worker's error is
+            # re-raised the moment its chunk ends, not after every other chunk ran.
             pending = set(futures)
             while pending:
-                _, pending = cf.wait(pending, timeout=_WAKE)
+                finished, pending = cf.wait(pending, timeout=_WAKE,
+                                            return_when=cf.FIRST_EXCEPTION)
+                for future in finished:
+                    future.result()
             done = sum(future.result() for future in futures)
         except BaseException:
-            # A Ctrl-C lands here. Leaving the with-block joins the running chunks, which would
-            # spend their whole attempt budget first: cancel the queued ones and stop the running
-            # ones after their current attempt, which bounds the wait to one attempt.
+            # A Ctrl-C or a worker's error lands here. Leaving the with-block joins the running
+            # chunks, which would spend their whole attempt budget first: cancel the queued ones
+            # and stop the running ones after their current attempt, which bounds the wait to one
+            # attempt.
             stop.set()
             for future in futures:
                 future.cancel()
             raise
     log(f"chunks {done}/{len(chunks)}, attempts {sum(counts.values())}: "
         + ", ".join(f"{k} {v}" for k, v in sorted(counts.items())))
-    verdict = witnesses.verdict(work_left=done < len(chunks))
-    if verdict:
-        _save_manifest(manifest, state)
-        raise witnesses.error(url, verdict, f"The bytes received so far stay in {part}: rerun "
-                                            f"once the URL serves the file again (if the file "
-                                            f"itself changed, the rerun refuses the old manifest "
-                                            f"and names the files to delete).")
     if dry.is_set():
         counts["pool-dry"] = 1                  # added after the line above: it is not an attempt
         log(f"pool ran dry: {len(chunks) - done} chunk(s) left")
     if done < len(chunks):
         _save_manifest(manifest, state)
-        return FetchResult(False, done, len(chunks), counts, "chunks still missing; rerun to resume")
+        return FetchResult(False, done, len(chunks), counts,
+                           _noted("chunks still missing; rerun to resume", answers))
     _finish(part, out, sha256, manifest)
     return FetchResult(True, done, len(chunks), counts)

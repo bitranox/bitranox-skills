@@ -174,8 +174,8 @@ def test_clean_pool_writes_an_identical_file_and_cleans_up(stand, tmp_path):
 def test_mixed_pool_still_writes_an_identical_file_and_bans_only_the_dead(stand, tmp_path):
     origin = stand.origin(SIZE)
     dead = stand.proxy("refuse")
-    # Each answers something other than the requested slice, and each a DIFFERENT something, so
-    # no two agree on an origin change: one proxy's word evicts it for the run, never bans it.
+    # Each answers something other than the requested slice: that evicts it for the run, never
+    # bans it.
     suspects = {stand.proxy(m) for m in ("html", "wrong-range", "etag")}
     kept = {stand.proxy(m) for m in ("clean", "429", "cut:5000", "stall")}
     store, pool = _pool(tmp_path, sorted({dead} | suspects | kept))
@@ -645,6 +645,22 @@ def test_a_ctrl_c_stops_running_chunks_after_their_current_attempt(stand, tmp_pa
     assert time.monotonic() - began < 4.0
 
 
+def test_a_worker_exception_stops_the_remaining_chunks(stand, tmp_path):
+    # An error inside a worker (here on_success, as a full disk would be from the part or the
+    # manifest) must end the run at once: waiting for every chunk first ran all 19 of them.
+    origin = stand.origin(SIZE)
+    _, pool = _pool(tmp_path, [stand.proxy(), stand.proxy()])
+
+    def full_disk(proxy):
+        raise OSError(28, "No space left on device")
+
+    with pytest.raises(OSError, match="No space left"):
+        _fetch(origin, tmp_path / "f.bin", pool, chunk_size=16 * 1024, workers=2,
+               on_success=full_disk)
+    downloads = [r for r in origin.log if r != "bytes=0-0"]
+    assert len(downloads) <= 3, downloads      # the failing one and the other worker's current one
+
+
 @pytest.mark.skipif(not hasattr(signal, "pthread_kill"), reason="no pthread_kill on this platform")
 def test_a_ctrl_c_delivered_to_another_thread_still_stops_the_run(stand, tmp_path):
     # The kernel may deliver a process-directed SIGINT to any thread that does not block it. Here
@@ -669,72 +685,69 @@ def test_a_ctrl_c_delivered_to_another_thread_still_stops_the_run(stand, tmp_pat
     assert time.monotonic() - began < 4.0
 
 
-# ---- an answer that may be the origin's: evict on one proxy's word, stop on two ----------------
+# ---- an answer that may be the origin's: evict on one proxy's word, name the answers at the end --
 def _bad(store):
     return pp._read(os.path.join(store, "bad.txt"))
 
 
-def _stop_message(run):
-    """The FetchError text run() stopped with, or None when it returned instead."""
-    try:
-        run()
-    except cfetch.FetchError as exc:
-        return str(exc)
-    return None
-
-
-def test_an_origin_whose_etag_changes_after_the_probe_stops_the_run_and_bans_nobody(stand, tmp_path):
+def test_an_origin_whose_etag_changes_after_the_probe_ends_with_work_left_naming_it(stand,
+                                                                                  tmp_path):
     origin = stand.origin(SIZE)
     origin.chunk_etag = '"v2"'
     store, pool = _pool(tmp_path, [stand.proxy() for _ in range(6)])
-    stopped = _stop_message(lambda: _fetch(origin, tmp_path / "f.bin", pool))
-    assert _bad(store) == set()
-    assert stopped is not None and "now answers" in stopped and 'ETag "v2"' in stopped
+    result = _fetch(origin, tmp_path / "f.bin", pool)
+    assert not result.ok and _bad(store) == set()
+    assert '6 proxies answered ETag "v2"' in result.note
+    assert 'the probe saw ETag "v1"' in result.note
     # The bytes and the manifest stay: a rerun against the changed file refuses it by name.
     assert (tmp_path / "f.bin.part.json").exists()
 
 
-def test_an_origin_that_starts_answering_404_stops_the_run_and_bans_nobody(stand, tmp_path):
+def test_an_origin_that_starts_answering_404_ends_with_work_left_naming_it(stand, tmp_path):
     origin = stand.origin(SIZE)
     origin.chunk_status = 404
     store, pool = _pool(tmp_path, [stand.proxy() for _ in range(5)])
-    stopped = _stop_message(lambda: _fetch(origin, tmp_path / "f.bin", pool))
-    assert _bad(store) == set()
-    assert stopped is not None and "now answers HTTP 404" in stopped
+    result = _fetch(origin, tmp_path / "f.bin", pool)
+    assert not result.ok and _bad(store) == set()
+    assert "5 proxies answered HTTP 404" in result.note
 
 
-def test_a_rerun_after_an_origin_stop_resumes_once_the_url_serves_the_file_again(stand, tmp_path):
-    # SKILL.md promises both halves: the manifest survives the stop, and a rerun against the
+def test_a_rerun_after_an_origin_404_resumes_once_the_url_serves_the_file_again(stand, tmp_path):
+    # SKILL.md promises both halves: the manifest survives the run, and a rerun against the
     # probed file uses it, while one against a replaced file refuses it.
     origin = stand.origin(SIZE)
     origin.chunk_status = 404
     _, pool = _pool(tmp_path, [stand.proxy() for _ in range(3)])
     out = tmp_path / "f.bin"
-    assert _stop_message(lambda: _fetch(origin, out, pool)) is not None
+    assert not _fetch(origin, out, pool).ok
     origin.chunk_status = None
     _, again = _pool(tmp_path, [stand.proxy(), stand.proxy()], name="store2")
     assert _fetch(origin, out, again).ok and out.read_bytes() == origin.data
 
 
-def test_a_rerun_after_an_identity_stop_refuses_the_old_manifest(stand, tmp_path):
+def test_a_changed_file_shows_on_the_rerun_as_a_refused_manifest(stand, tmp_path):
+    # The first run cannot tell lying proxies from a replaced file, so it only names the answer
+    # (exit 1); the rerun's own probe votes for the new file and refuses the old manifest (exit 2).
     origin = stand.origin(SIZE)
     origin.chunk_etag = '"v2"'
     _, pool = _pool(tmp_path, [stand.proxy() for _ in range(3)])
     out = tmp_path / "f.bin"
-    assert _stop_message(lambda: _fetch(origin, out, pool)) is not None
+    first = _fetch(origin, out, pool)
+    assert not first.ok and 'answered ETag "v2"' in first.note
     origin.etag, origin.chunk_etag = '"v2"', None          # the replaced file, served throughout
     _, again = _pool(tmp_path, [stand.proxy(), stand.proxy()], name="store2")
     with pytest.raises(cfetch.ManifestMismatch, match=_start_over(tmp_path)):
         _fetch(origin, out, again)
 
 
-def test_a_rangeless_origin_that_starts_answering_410_stops_the_whole_file_run(stand, tmp_path):
+def test_a_rangeless_origin_that_starts_answering_410_ends_the_whole_file_run_naming_it(stand,
+                                                                                      tmp_path):
     origin = _rangeless(stand)
     origin.chunk_status = 410
     store, pool = _pool(tmp_path, [stand.proxy() for _ in range(4)])
-    stopped = _stop_message(lambda: _fetch(origin, tmp_path / "f.bin", pool))
-    assert _bad(store) == set()
-    assert stopped is not None and "now answers HTTP 410" in stopped
+    result = _fetch(origin, tmp_path / "f.bin", pool)
+    assert not result.ok and _bad(store) == set()
+    assert "4 proxies answered HTTP 410" in result.note
 
 
 @pytest.mark.parametrize("mode", ["etag", "404", "html"])
@@ -793,25 +806,16 @@ def _https(origin):
     return origin.url.replace("http://", "https://", 1)
 
 
-@pytest.mark.parametrize("message, want", [
-    ("502 Bad Gateway", 502), ("403 Forbidden", 403), ("404 ", 404), ("599", 599),
-    ("302 Found", None), ("200 OK", None), ("5021 Odd", None),
-    ("Proxy Server could not connect: 1.", None), ("Invalid username/password", None)])
-def test_connect_status_reads_the_status_httpcore2_writes_into_the_message(message, want):
-    assert cfetch.connect_status(httpx2.ProxyError(message)) == want
-
-
 # The origin was never contacted: whatever status the proxy refuses the tunnel with is its own
-# word about itself, so it rotates the proxy and says nothing about the origin.
-@pytest.mark.parametrize("mode, want", [
-    ("connect:502", "refused"), ("connect:429", "refused"), ("connect:403", "refused"),
-    ("connect:404", "refused"), ("connect:405", "refused"), ("connect:599", "refused"),
-    ("connect:302", "dead")])
-def test_attempt_over_https_rotates_on_any_refused_connect_status(stand, tmp_path, mode, want):
+# word about itself, so it rotates the proxy and says nothing about the origin. A 3xx is an
+# answer too: only a proxy that gave none is banned.
+@pytest.mark.parametrize("mode", ["connect:502", "connect:429", "connect:403", "connect:404",
+                                  "connect:405", "connect:599", "connect:302"])
+def test_attempt_over_https_rotates_on_any_refused_connect_status(stand, tmp_path, mode):
     origin = stand.origin(SIZE)
     path = _part(tmp_path, SIZE)
     got = cfetch.attempt(_https(origin), stand.proxy(mode), 0, 999, SIZE, IDENT, path, 1.0)
-    assert got == (want, 0, None)
+    assert got == ("refused", 0, None)
 
 
 def test_proxies_that_cannot_reach_an_https_origin_are_rotated_not_banned(stand, tmp_path):
@@ -823,12 +827,19 @@ def test_proxies_that_cannot_reach_an_https_origin_are_rotated_not_banned(stand,
     assert not result.ok and sum(stand.proxies[p].hits for p in proxies) == 4
 
 
-def test_a_connect_refused_without_an_error_status_still_bans(stand, tmp_path):
+def test_a_connect_refused_with_a_3xx_status_bans_no_proxy_during_the_probe(stand, tmp_path):
     origin = stand.origin(SIZE)
     proxy = stand.proxy("connect:302")
     store, pool = _pool(tmp_path, [proxy])
     assert cfetch.probe(_https(origin), pool, 1.0, 3, warn=lambda *a: None) is None
-    assert _bad(store) == {proxy}
+    assert _bad(store) == set()
+
+
+def test_a_proxy_refusing_tcp_is_still_banned_during_the_probe(stand, tmp_path):
+    dead = stand.proxy("refuse")
+    store, pool = _pool(tmp_path, [dead])
+    assert cfetch.probe(stand.origin(SIZE).url, pool, 1.0, 3, warn=lambda *a: None) is None
+    assert _bad(store) == {dead}
 
 
 # ---- redirects ----------------------------------------------------------------------------------
@@ -849,8 +860,8 @@ def test_the_identity_check_applies_to_the_redirect_target(stand, tmp_path):
     front = stand.origin(10)
     front.redirect_to = target.url
     store, pool = _pool(tmp_path, [stand.proxy() for _ in range(3)])
-    stopped = _stop_message(lambda: _fetch(front, tmp_path / "f.bin", pool))
-    assert stopped is not None and 'ETag "v2"' in stopped and _bad(store) == set()
+    result = _fetch(front, tmp_path / "f.bin", pool)
+    assert not result.ok and 'answered ETag "v2"' in result.note and _bad(store) == set()
 
 
 def test_a_redirect_loop_is_bounded_and_bans_nobody(stand, tmp_path):
@@ -946,17 +957,17 @@ def test_a_hash_mismatch_drops_the_manifest_through_the_sharing_retry(tmp_path):
     assert part.exists() and not manifest.exists() and len(seen) == 1
 
 
-# ---- two agreeing proxies are not enough while the file keeps arriving -------------------------
-@pytest.mark.parametrize("clean, liar, chunk", [
-    (6, "probe-only", SIZE // 64 + 1), (6, "404", SIZE // 16 + 1),
-    (10, "probe-only", SIZE // 64 + 1)])
-def test_two_agreeing_liars_do_not_stop_a_healthy_run(stand, tmp_path, clean, liar, chunk):
-    # Both liars give the same answer ("HTTP 200" for a page, or "HTTP 404"), often before any
-    # clean proxy's reply is in: stopping on two agreeing voices alone ended these runs early.
+# ---- agreeing liars never end a healthy run ----------------------------------------------------
+@pytest.mark.parametrize("clean, liars, liar, chunk", [
+    (6, 2, "probe-only", SIZE // 64 + 1), (6, 2, "404", SIZE // 16 + 1),
+    (10, 2, "probe-only", SIZE // 64 + 1), (3, 4, "probe-only", SIZE // 64 + 1)])
+def test_agreeing_liars_do_not_stop_a_healthy_run(stand, tmp_path, clean, liars, liar, chunk):
+    # The liars give the same answer ("HTTP 200" for a page, or "HTTP 404"), often before any
+    # clean proxy's reply is in: no number of agreeing voices ends the run.
     origin = stand.origin(SIZE)
     digest = hashlib.sha256(origin.data).hexdigest()
     for run in range(3):
-        proxies = [stand.proxy() for _ in range(clean)] + [stand.proxy(liar) for _ in range(2)]
+        proxies = [stand.proxy() for _ in range(clean)] + [stand.proxy(liar) for _ in range(liars)]
         store, pool = _pool(tmp_path, proxies, name=f"store{run}")
         out = tmp_path / f"f{run}.bin"
         result = _fetch(origin, out, pool, chunk_size=chunk, workers=8, sha256=digest,
@@ -965,39 +976,28 @@ def test_two_agreeing_liars_do_not_stop_a_healthy_run(stand, tmp_path, clean, li
         assert _bad(store) == set()
 
 
-@pytest.mark.parametrize("mode, valid", [("clean", 1), ("cut:300", 1), ("html", 0), ("404", 0),
-                                         ("refuse", 0)])
-def test_an_attempt_reports_a_valid_reply_once_it_passed_every_check(stand, tmp_path, mode, valid):
-    # The witnesses' evidence: a cut reply was still the right object, a page never was.
+@pytest.mark.parametrize("liars", [2, 4])
+def test_agreeing_liars_answering_in_a_row_do_not_stop_a_healthy_run(stand, tmp_path, liars):
+    # Deterministic: two honest proxies decide the probe, then every liar answers the first chunk
+    # with the same injected page ("HTTP 200") one after the other, before any honest proxy is
+    # asked again. Agreement among them is no verdict: each is evicted and the honest ones finish.
     origin = stand.origin(SIZE)
-    calls = []
-    cfetch.attempt(origin.url, stand.proxy(mode), 0, 999, SIZE, IDENT, _part(tmp_path, SIZE), 1.0,
-                   on_valid=lambda: calls.append(1))
-    assert len(calls) == valid
+    honest = [stand.proxy(), stand.proxy()]
+    order = honest + [stand.proxy("probe-only") for _ in range(liars)] + [stand.proxy()]
+    store, _ = _pool(tmp_path, order)
+    out = tmp_path / "f.bin"
+    result = _fetch(origin, out, _InOrder(store, order), workers=1,
+                    sha256=hashlib.sha256(origin.data).hexdigest())
+    assert result.ok and out.read_bytes() == origin.data, result.counts
+    assert result.counts["wrong-object"] == liars and _bad(store) == set()
 
 
-def test_a_whole_file_stream_reports_a_valid_reply_too(stand, tmp_path):
-    origin = _rangeless(stand)
-    info = cfetch._Probe(SIZE, IDENT, False)
-    calls = []
-    got = cfetch._stream_whole(origin.url, stand.proxy(), str(tmp_path / "f.part"), info, 2.0,
-                               on_valid=lambda: calls.append(1))
-    assert got.reason == "ok" and calls == [1]
-
-
-def test_witnesses_stop_on_a_later_proxy_only_while_no_valid_reply_contradicts():
-    w = cfetch._Witnesses()
-    first, second = w.started(), w.started()          # two attempts in flight together
-    assert not w.report("HTTP 404", "p1", first)
-    assert not w.report("HTTP 404", "p2", second)     # they agree, but were asked before agreeing
-    assert w.pending() == "HTTP 404"
-    w.valid("p3")                                     # another proxy got the file: they lied
-    assert w.pending() is None
-    third, fourth = w.started(), w.started()
-    assert not w.report("HTTP 404", "p4", third)
-    assert not w.report("HTTP 404", "p5", fourth)
-    assert not w.report("HTTP 404", "p5", w.started())     # the same proxy again is no new voice
-    assert w.report("HTTP 404", "p6", w.started()) and w.answer == "HTTP 404"
+def test_the_answers_are_grouped_by_distinct_proxy_most_first():
+    answers = {"HTTP 404": {"a", "b", "c"}, 'ETag "v2" (the probe saw ETag "v1")': {"d"}}
+    assert cfetch.describe_answers(answers) == (
+        '3 proxies answered HTTP 404, 1 answered ETag "v2" (the probe saw ETag "v1")')
+    assert cfetch.describe_answers({"HTTP 410": {"a"}}) == "1 proxy answered HTTP 410"
+    assert cfetch.describe_answers({}) == ""
 
 
 # ---- https: a working tunnel, a TLS origin, a CA handed in -------------------------------------
@@ -1037,14 +1037,16 @@ def test_attempt_through_a_tunnel_reads_an_untrusted_certificate_as_a_suspect_an
     assert answer.startswith("TLS certificate rejected: ") and len(answer) > 26
 
 
-def test_an_origin_whose_certificate_is_untrusted_stops_with_exit_2_and_bans_nobody(
-        stand, tmp_path, ca_files):
+def test_an_origin_whose_certificate_is_untrusted_names_it_and_bans_nobody(stand, tmp_path,
+                                                                           ca_files):
     # Without the CA, every proxy sees the same rejected certificate: it is the origin's, not
     # theirs, and banning each one would empty the permanent store in one run.
     origin = stand.origin(SIZE, tls=ca_files[1])
-    store, pool = _pool(tmp_path, [stand.proxy("tunnel") for _ in range(3)])
-    stopped = _stop_message(lambda: _fetch(origin, tmp_path / "f.bin", pool))
-    assert stopped is not None and "TLS certificate rejected" in stopped
+    order = [stand.proxy("tunnel") for _ in range(3)]
+    store, _ = _pool(tmp_path, order)
+    result = _fetch(origin, tmp_path / "f.bin", _InOrder(store, order))   # each asked once
+    assert not result.ok and "probe settled nothing" in result.note
+    assert "3 proxies answered TLS certificate rejected: " in result.note
     assert _bad(store) == set()
 
 
@@ -1070,15 +1072,53 @@ def test_a_budget_spent_in_the_tls_handshake_is_a_cut_not_a_dead_proxy(stand, tm
     assert got == ("cut", 0, None)
 
 
-def test_a_silent_https_origin_bans_no_proxy_during_the_probe(stand, tmp_path):
+def test_a_budget_spent_in_the_probe_s_tls_handshake_bans_no_proxy(stand, tmp_path):
     store, pool = _pool(tmp_path, [stand.proxy("tunnel"), stand.proxy("tunnel")], fail_ratio=1.0)
     assert cfetch.probe(stand.silent(), pool, 0.5, 4, warn=lambda *a: None) is None
     assert _bad(store) == set()
 
 
+def test_a_tls_handshake_failure_after_the_tunnel_opened_bans_no_proxy(stand, tmp_path):
+    # A normal 20 s budget, so nothing is cut short: the proxy said "200 Connection established"
+    # and the handshake to the origin then failed (a plain-http server on the https port). The
+    # proxy answered, so whatever fails after that rotates it and never bans it.
+    origin = stand.origin(SIZE)
+    tunnels = [stand.proxy("tunnel"), stand.proxy("tunnel")]
+    store, _ = _pool(tmp_path, tunnels)
+    began = time.monotonic()          # _InOrder: each tunnel is asked, not one of them twice
+    assert cfetch.probe(_https(origin), _InOrder(store, tunnels), 20.0, 4,
+                        warn=lambda *a: None) is None
+    assert time.monotonic() - began < 5.0
+    assert _bad(store) == set() and all("CONNECT" in stand.proxies[p].log for p in tunnels)
+
+
 def _silent_address(stand):
     host, port = stand.silent().removeprefix("https://").removesuffix("/f.bin").split(":")
     return host, int(port)
+
+
+def _tunnel_to(stand, heard, budget):
+    """A stream through a real tunnel proxy to a silent origin, its CONNECT answered 200."""
+    host, port = _silent_address(stand)
+    proxy_host, proxy_port = stand.proxy("tunnel").split(":")
+    stream = cfetch._DeadlineBackend(time.monotonic() + budget, heard).connect_tcp(
+        proxy_host, int(proxy_port), timeout=5)
+    stream.write(f"CONNECT {host}:{port} HTTP/1.1\r\nHost: {host}:{port}\r\n\r\n".encode(), 5)
+    assert stream.read(4096, 5).startswith(b"HTTP/1.0 200")
+    return stream, host
+
+
+def test_a_handshake_stall_after_the_proxy_answered_is_a_cut_never_a_ban(stand):
+    # The silent-origin probe at a 20 s budget, without waiting out the 15 s per-operation limit:
+    # the same handshake with a 0.3 s own timeout raises the same ConnectTimeout, after the
+    # proxy's answer was read, and the classification of that is what decides the ban.
+    heard = cfetch.Heard()
+    stream, host = _tunnel_to(stand, heard, budget=30)
+    assert heard.answered
+    with pytest.raises(httpx2.ConnectTimeout) as raised, cfetch._httpx2_errors():
+        stream.start_tls(ssl.create_default_context(), host, timeout=0.3)
+    assert cfetch.failure_outcome(raised.value, 0, heard) == ("cut", 0, None)
+    assert cfetch.failure_outcome(raised.value, 0, cfetch.Heard()) == ("dead", 0, None)
 
 
 def test_a_handshake_timeout_with_budget_to_spare_stays_a_connect_timeout(stand):
@@ -1097,13 +1137,15 @@ def test_a_handshake_cut_short_by_the_budget_raises_budget_spent(stand):
         stream.start_tls(ssl.create_default_context(), host, timeout=5)
 
 
-# ---- a probe that settles nothing but heard the same error twice ------------------------------
-def test_a_url_that_answers_an_error_through_every_proxy_stops_naming_it(stand, tmp_path):
+# ---- a probe that settles nothing names what the proxies answered -----------------------------
+def test_a_url_that_answers_an_error_through_every_proxy_ends_naming_it(stand, tmp_path):
     origin = stand.origin(SIZE)
     origin.status = 404
-    store, pool = _pool(tmp_path, [stand.proxy() for _ in range(3)])
-    stopped = _stop_message(lambda: _fetch(origin, tmp_path / "f.bin", pool))
-    assert stopped is not None and "HTTP 404" in stopped
+    order = [stand.proxy() for _ in range(3)]
+    store, _ = _pool(tmp_path, order)
+    result = _fetch(origin, tmp_path / "f.bin", _InOrder(store, order))   # each asked once
+    assert not result.ok and result.done == 0
+    assert "probe settled nothing" in result.note and "3 proxies answered HTTP 404" in result.note
     assert _bad(store) == set() and not (tmp_path / "f.bin.part").exists()
 
 
@@ -1116,6 +1158,19 @@ def test_a_throttling_status_or_a_lone_error_still_settles_nothing(stand, tmp_pa
     _, pool = _pool(tmp_path, [stand.proxy() for _ in range(proxies)])
     result = _fetch(origin, tmp_path / "f.bin", pool)
     assert not result.ok and result.done == 0 and "probe settled nothing" in result.note
+
+
+def test_two_agreeing_errors_beside_a_split_view_settle_nothing_and_raise_nothing(stand,
+                                                                                tmp_path):
+    # A healthy URL: one clean view, one ETag-rewriting view, and two proxies injecting the same
+    # 404. Their agreement is no verdict on the URL: the probe settles nothing (exit 1) and says
+    # what was answered.
+    origin = stand.origin(SIZE)
+    order = [stand.proxy(), stand.proxy("etag"), stand.proxy("404"), stand.proxy("404")]
+    store, _ = _pool(tmp_path, order)
+    result = _fetch(origin, tmp_path / "f.bin", _InOrder(store, order))
+    assert not result.ok and "2 proxies answered HTTP 404" in result.note
+    assert _bad(store) == set()
 
 
 def test_valid_probe_votes_decide_before_two_matching_errors(stand, tmp_path):
