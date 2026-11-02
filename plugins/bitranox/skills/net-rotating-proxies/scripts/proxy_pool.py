@@ -260,7 +260,8 @@ def _median(xs):
 
 
 def _reachable(proxy, test_url, timeout):
-    """Return (ok, latency_seconds). latency is None on failure."""
+    """Return (ok, latency_seconds). latency is None when nothing answered; a proxy that answered
+    with another status is (False, latency)."""
     t0 = time.perf_counter()
     try:
         with httpx2.Client(proxy=f"http://{proxy}", timeout=timeout, follow_redirects=True) as c:

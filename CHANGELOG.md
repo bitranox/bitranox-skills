@@ -30,6 +30,14 @@ a hole nobody has drawn a line under is one that gets rediscovered and half-fill
 two "versions with no entry" notes came to sit in this file disagreeing with it.
 
 
+## [10.10.4]
+
+### Fixed
+
+- `net-rotating-proxies`: a test of hostile proxy strings no longer fails on Windows, where an empty
+  host can reach a local listener. 10.10.3 was never released because of it; 10.10.4 carries its
+  changes.
+
 ## [10.10.3]
 
 ### Fixed
