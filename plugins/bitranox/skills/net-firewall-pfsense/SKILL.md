@@ -9,6 +9,18 @@ pfSense has no CLI for its own configuration, so changes get made by hand-writin
 it over SSH through four quoting layers. `scripts/pfsense.py` does that part, so the effort goes
 into deciding what to change.
 
+## Before you change a firewall
+
+Read that site's own change rule first, if it has one, in the project's CLAUDE.md, network docs or
+runbook; it outranks the defaults here, and nothing in this tool will point you at it. A site may
+require a hypervisor disk snapshot or a dated config copy in a named folder, and may forbid a RAM
+snapshot. Where no rule says otherwise, on a firewall that runs as a VM also take a hypervisor
+snapshot: `snapshot` saves the config, not the disk.
+
+`snapshot`, and the one each `--apply` takes, writes to the tool's private state directory, which
+is not the site's backup folder. Where the site keeps one, copy the file there or point
+`--snapshot-dir <folder>` at it, and check that it arrived.
+
 ## Diagnose first
 
 | Symptom                                                                   | Look at                                             |
@@ -20,6 +32,7 @@ into deciding what to change.
 | "Another instance of pfSense-upgrade is running"                          | broken box DNS, the lock is a symptom - `doctor`    |
 | A name resolves to the wrong address                                      | `dns list`                                          |
 | A dummynet limiter is on a rule but shapes nothing                        | `references/limiters.md`                            |
+| A host should give way to others, with no fixed cap                       | the ALTQ section of `references/limiters.md`        |
 
 **The first row is the one that gets missed.** Every instinct points at firewall rules, aliases,
 policy routing and gateways, and none of them is it.
@@ -53,8 +66,8 @@ Run `pfsense.py --help` and `pfsense.py <verb> --help` for the current flags.
 | `rules [--counters] [--nat]`                              | the live ruleset, with per-rule counters              |
 | `snort check` / `why` / `unblock` / `verify` / `fixsteps` | a Snort block and its durable fix                     |
 
-Everything is a dry run until `--apply`. The six verbs that edit `config.xml` (`dhcp add`,
-`dhcp rename`, `dhcp rm`, `dhcp rm-static-arp`, `dns add`, `dns rm`) snapshot it first and abort if
+Every verb that changes the firewall is a dry run until `--apply`. The six verbs that edit
+`config.xml` (`dhcp add`, `dhcp rename`, `dhcp rm`, `dhcp rm-static-arp`, `dns add`, `dns rm`) snapshot it first and abort if
 the snapshot fails. `dhcp add --mac M --ip A --hostname H` refuses a MAC or address that is already
 reserved and an address outside the interface's subnet (the interface is the one holding the
 address, or `--interface lan`); `dhcp rename --mac M --hostname H` sets one reservation's
@@ -73,9 +86,7 @@ included. Only some of several addresses left present is a partial outcome: exit
 
 A snapshot is a whole `config.xml`, with password hashes, private keys and certificates in it, so
 it is written to a private per-user state directory (`--snapshot-dir` to choose another). Writing
-one into a git work tree is refused unless you pass `--allow-repo-snapshot`. On a firewall that
-runs as a VM, also take a hypervisor snapshot before a change: `snapshot` saves the config, not
-the disk.
+one into a git work tree is refused unless you pass `--allow-repo-snapshot`.
 
 ```bash
 pfsense.py --host 192.0.2.1 --user admin --ssh "ssh -i /path/to/key" doctor
@@ -195,8 +206,9 @@ sites still answer. Public DNS records at the registrar sit outside the firewall
 
 pfBlockerNG, certificate and acme renewal, and traffic shaping in general are inspection-shaped
 and change between releases. Drive them from the GUI or `pfSsh.php playback`, and take a
-`snapshot` first. The one shaping case this skill does cover is a dummynet limiter: read
-`references/limiters.md` before attaching one, or when one is on a rule but shapes nothing.
+`snapshot` first. The shaping this skill does cover is a dummynet limiter and a low-priority ALTQ
+queue: read `references/limiters.md` before attaching either, or when a limiter is on a rule but
+shapes nothing.
 
 If you edited `config.xml` out of band rather than through the config API, the running config is
 stale until `rm -f /tmp/config.cache && /etc/rc.filter_configure_sync`. That reloads the filter

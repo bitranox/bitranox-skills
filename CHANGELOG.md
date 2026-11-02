@@ -30,6 +30,22 @@ a hole nobody has drawn a line under is one that gets rediscovered and half-fill
 two "versions with no entry" notes came to sit in this file disagreeing with it.
 
 
+## [10.11.1]
+
+### Fixed
+
+- `net-firewall-pfsense`: read the site's own change rule before changing a firewall, and `snapshot`
+  writes to the tool's private state directory, not the site's backup folder.
+- `net-firewall-pfsense` `references/limiters.md`: the proof of shaping is the measured rate against a
+  control plus the `dnctl pipe show` counters, since `0 active` in `dnctl sched show` does not prove
+  idle; the gateway claim is marked as resting on that reading. Leftover pipes and a control on the
+  same public IP are covered.
+
+### Added
+
+- `net-firewall-pfsense` `references/limiters.md`: a low-share ALTQ queue for a host that should give
+  way with no cap, with its A/B trap and the modest gain measured.
+
 ## [10.11.0]
 
 ### Changed
