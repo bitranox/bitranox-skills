@@ -425,6 +425,15 @@ def test_fetch_exits_2_naming_the_answer_when_two_proxies_see_the_origin_change(
     assert not os.path.exists(os.path.join(store, "bad.txt"))
 
 
+def test_fetch_exits_2_naming_the_error_every_proxy_gets_for_the_url(tmp_path, stand, capsys):
+    origin = stand.origin(200_000)
+    origin.status = 404
+    store = _fetch_store(tmp_path, [stand.proxy() for _ in range(3)])
+    assert _fetch_main(store, origin, tmp_path / "f.bin") == 2
+    assert "answers HTTP 404" in capsys.readouterr().err
+    assert not os.path.exists(os.path.join(store, "bad.txt"))
+
+
 @pytest.mark.parametrize("url", ["example.com/big.iso", "ftp://example.com/big.iso"])
 def test_fetch_refuses_a_url_that_is_not_http_or_https_before_any_proxy_is_asked(tmp_path, stand,
                                                                                url, capsys):

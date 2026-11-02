@@ -138,20 +138,31 @@ first. It has no background refresh, so validate a generous pool before a long d
 `--chunk-size 8M`, `--chunk-timeout 120` (seconds), `--max-attempts-per-chunk 20`.
 
 - **A cut keeps its bytes.** When a proxy drops, stalls, trickles or runs out its
-  `--chunk-timeout` (the budget of one attempt, connect to last byte, headers and redirects
-  included), what it delivered stays on disk and the chunk continues at the next byte on another
-  proxy. A cut, a 403, 407, 429 or 5xx rotates the proxy, and so does a CONNECT that the proxy
-  refuses with such a status for an https URL. Only a dead proxy is banned to `bad.txt`: one that
-  cannot be connected to, fails the TLS handshake, or refuses a CONNECT without a 4xx/5xx status.
-  A chunk gives up after `--max-attempts-per-chunk`.
+  `--chunk-timeout` (the budget of one attempt, connect to last byte, TLS handshake, headers and
+  redirects included), what it delivered stays on disk and the chunk continues at the next byte
+  on another proxy. A cut, a 403, 407, 429 or 5xx rotates the proxy. So does any CONNECT the
+  proxy refuses with a 4xx or 5xx status for an https URL: the origin was never contacted, so the
+  refusal says nothing about it and never counts toward stopping the run. Only a dead proxy is
+  banned to `bad.txt`: one that cannot be connected to, that fails the TLS handshake with the
+  origin for any reason but its certificate, that takes more than 15 seconds for the connect or
+  for that handshake (each one) while the budget still has time, or that refuses a CONNECT
+  without a 4xx/5xx status. A budget that runs out during the connect or the handshake is a cut,
+  never a ban. A chunk gives up after `--max-attempts-per-chunk`.
 - **One odd answer is not trusted.** A reply that is not the requested range of this object (a
   page instead of the range, another status such as 404, a wrong size, a changed ETag or
-  Last-Modified, a compressed body) is the proxy lying or the origin having changed, and one
+  Last-Modified, a compressed body, or an origin certificate that fails verification, named as
+  `TLS certificate rejected: <reason>`) is the proxy lying or the origin having changed, and one
   reply cannot tell which. That proxy is dropped for the rest of this run but is not written to
-  `bad.txt`. When a second proxy gives the same answer, the origin changed: `fetch` stops with
-  exit 2, names what the origin now answers and bans nobody. A ranged download keeps `FILE.part`
-  and `FILE.part.json`: a rerun resumes once the URL serves the probed file again, and against a
-  replaced file it refuses the manifest and names the two files to delete.
+  `bad.txt`. Two proxies giving the same answer (the same status, size, identity or certificate
+  reason) do not stop the run while others still receive the file: a valid reply (one that
+  passed every check, before its bytes are written) from any other proxy since the first of them
+  makes the answer start over, so a few lying proxies cannot end a healthy download. `fetch`
+  stops with exit 2, names what the origin now answers and bans nobody when, with no valid reply
+  in between, a further proxy asked after two agreed gives the same answer, or the run ends with
+  work left (no proxy left, or the attempts spent) while two agree.
+  A ranged download keeps `FILE.part` and `FILE.part.json`: a rerun resumes once the URL serves
+  the probed file again, and against a replaced file it refuses the manifest and names the two
+  files to delete.
 - **Redirects are followed** through the same proxy, up to 8 hops, so a release asset or a mirror
   URL that answers 302 downloads; every check applies to the final target, and a longer chain
   counts as an odd answer.
@@ -169,20 +180,28 @@ first. It has no background refresh, so validate a generous pool before a long d
   a lone ranged view beats whole-file views and is taken with a "took the ranged view of one
   proxy" warning, and a single answering proxy is taken with a not-cross-checked warning. Two
   ranged views, or two whole-file views and no ranged one, stop with exit 1 rather than guess.
-  Only a dead proxy is banned during the probe.
+  A probe that settled nothing ends with exit 2 instead when two proxies got the same error for
+  the URL: the same status other than 403, 407, 429 or 5xx (a 404, a 410), or the same rejected
+  certificate. A refused CONNECT is never such an error. Only a dead proxy is banned during the
+  probe.
 - **No Range support** (the origin answers the whole file): each attempt streams the whole file
-  from byte 0, with no resume. If the origin sends no size either, a cut transfer cannot be told
-  from a complete one, so `--sha256` is the only check left.
+  from byte 0, with no resume, and must finish within one `--chunk-timeout`. For a large file
+  raise it above size divided by proxy speed (4 GiB at 1 MiB/s needs more than 4096 seconds). If
+  the origin sends no size either, a cut transfer cannot be told from a complete one, so
+  `--sha256` is the only check left.
 
 Exit codes of `fetch`:
 
 - **0**: the file is complete, and hash-verified when `--sha256` was given.
-- **1**: chunks are still missing, or the probe settled nothing (no proxy answered, or the answers
-  disagreed). Grow the pool with `validate` and rerun the same command.
+- **1**: chunks are still missing, or the probe settled nothing (no proxy answered, the answers
+  disagreed, or only a 403, 407, 429, 5xx or refused CONNECT came back). Grow the pool with
+  `validate` and rerun the same command.
 - **2**: it cannot work: a bad argument (a URL that is not `http://` or `https://`, such as
-  `example.com/big.iso` or `ftp://...`, is refused before any proxy is asked), no usable proxy,
-  a hash mismatch, a manifest for another download, an output that cannot be written, or two
-  proxies reporting the same changed origin answer.
+  `example.com/big.iso` or `ftp://...`, is refused before any proxy is asked), no usable proxy
+  in the store at the start, a hash mismatch, a manifest for another download, an output that
+  cannot be written, a probe that settled nothing while two proxies got the same error for the
+  URL (check the URL, or the origin's certificate), or an origin change the proxies agree on as
+  described above.
 
 Run `fetch --help` for the remaining flags.
 

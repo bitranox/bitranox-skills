@@ -1,11 +1,13 @@
 #!/usr/bin/env python3
 # /// script
 # requires-python = ">=3.14"
-# dependencies = ["httpx2"]
+# dependencies = ["httpx2", "httpcore2"]
 # ///
 """Rotating free-proxy pool: discover, validate, and run a worklist through proxies.
 
-Run with `uv run proxy_pool.py ...` so uv fetches httpx2 into an isolated env.
+Run with `uv run proxy_pool.py ...` so uv fetches httpx2 into an isolated env. httpcore2 is
+listed too because chunked_fetch imports it directly; it is left unpinned, since httpx2 pins the
+exact httpcore2 it was built against and any other pin here could only conflict with that.
 HTTP uses httpx2 (HTTP/2, sync + async, clean proxy support); everything else is
 stdlib, portable across Linux/macOS/Windows. The proxy pool is a persistent
 store that is never trusted as-is, because free proxies constantly die, recover,
@@ -50,7 +52,9 @@ proxy in the store, every discovery source failed, a --cmd that cannot be parsed
 candidate turned out live. fetch: 0 = complete file (hash-verified when --sha256 is given),
 1 = chunks still missing or the probe settled nothing, 2 = no proxies, bad argument (a URL
 that is not http or https included), hash mismatch, a manifest for another download, an
-output that cannot be written, or two proxies reporting the same changed origin answer.
+output that cannot be written, a probe that settled nothing while two proxies got the same
+error for the URL (a 404, a rejected TLS certificate), or proxies agreeing that the origin
+changed while no other proxy still receives the file.
 
 The --cmd template may contain {proxy} (host:port) and {item}. Example:
   uv run proxy_pool.py run --worklist ids.txt --workers 16 --success-glob 'out/{item}*.vtt'
@@ -760,7 +764,9 @@ def main(argv=None):
     f.add_argument("--sha256", default=None, help="expected hex digest; strongly recommended")
     f.add_argument("--chunk-timeout", type=float, default=120,
                    help="seconds one attempt may take, connect to last byte (redirects included), "
-                        "before it counts as cut; the bytes it received are kept (default 120)")
+                        "before it counts as cut; the bytes it received are kept. From an origin "
+                        "without Range support one attempt is the whole file, which must then "
+                        "arrive within this (default 120)")
     f.add_argument("--max-attempts-per-chunk", type=int, default=20)
     f.add_argument("--cooldown", type=float, default=5.0)
     f.add_argument("--flaky-fail-ratio", type=float, default=0.5)

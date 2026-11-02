@@ -3,13 +3,17 @@
 Everything binds 127.0.0.1; no internet. httpx2 sends a plain http:// target to a proxy as an
 absolute-form request (`GET http://127.0.0.1:<port>/f.bin HTTP/1.1`, verified 2026-11-01), so a
 proxy here reads the target from the request line and either relays it or misbehaves in the one
-way its mode names. An https:// target arrives as a CONNECT instead, which these proxies only
-ever refuse (mode 'connect:STATUS'). The handlers answer HTTP/1.0, so closing early after a full
-Content-Length header is what a dropped session looks like to the client.
+way its mode names. An https:// target arrives as a CONNECT instead: mode 'tunnel' opens it and
+pipes bytes both ways (so the TLS handshake is the client's with the origin, as through a real
+proxy), mode 'connect:STATUS' refuses it. A TLS origin presents a certificate from tls_certs. The
+handlers answer HTTP/1.0, so closing early after a full Content-Length header is what a dropped
+session looks like to the client.
 """
 import http.client
 import http.server
+import selectors
 import socket
+import ssl
 import threading
 import urllib.parse
 
@@ -39,6 +43,8 @@ class _Origin(http.server.BaseHTTPRequestHandler):
         srv.ae_log.append(self.headers.get("Accept-Encoding"))
         if srv.redirect_to:
             return self._send(302, b"", {"Location": srv.redirect_to})
+        if srv.status:                      # every request, the probe's included: a URL that 404s
+            return self._send(srv.status, b"", {})
         # Anything but the probe's byte 0 is a download request: chunk_status / chunk_etag model
         # an origin that changes between the probe and the download (replaced file, removed URL).
         download = rng != "bytes=0-0"
@@ -123,13 +129,39 @@ class _Proxy(http.server.BaseHTTPRequestHandler):
         self.wfile.write(body)
 
     def do_CONNECT(self):
-        # 'connect:STATUS': refuse the tunnel with that status, as a proxy does that cannot reach
-        # the origin (502) or will not tunnel to it (403). No mode here opens a real tunnel.
+        # 'tunnel': open it and pipe. 'connect:STATUS': refuse it with that status, as a proxy does
+        # that cannot reach the origin (502) or will not tunnel to it (403, 405). Any other mode
+        # refuses with 501, as an http-only proxy does.
         srv = self.server
         srv.hits += 1
         srv.log.append("CONNECT")
+        if srv.mode == "tunnel":
+            return self._tunnel()
         status = int(srv.mode[8:]) if srv.mode.startswith("connect:") else 501
         self._reply(status, b"", {})
+
+    def _tunnel(self):
+        host, _, port = self.path.rpartition(":")
+        try:
+            upstream = socket.create_connection((host, int(port)), timeout=10)
+        except OSError:
+            return self._reply(502, b"", {})
+        self.send_response(200, "Connection established")
+        self.end_headers()
+        self.wfile.flush()
+        with upstream, selectors.DefaultSelector() as sel:
+            sel.register(self.connection, selectors.EVENT_READ, upstream)
+            sel.register(upstream, selectors.EVENT_READ, self.connection)
+            # Polled, so close() ends a tunnel that both ends keep open.
+            while not self.server.stop.is_set():
+                for key, _ in sel.select(timeout=0.05):
+                    try:
+                        data = key.fileobj.recv(65536)
+                        if not data:
+                            return
+                        key.data.sendall(data)
+                    except OSError:
+                        return
 
     def _trickle(self, body, pause):
         # One byte per pause: every read completes inside the client's read timeout, so only a
@@ -163,6 +195,18 @@ class _Proxy(http.server.BaseHTTPRequestHandler):
         self.wfile.write(body)
 
 
+class _TLSServer(http.server.ThreadingHTTPServer):
+    """The handshake runs in the request's own thread, not in the accept loop: a client that
+    rejects the certificate, or one that never finishes, must not hold up every other one."""
+
+    def finish_request(self, request, client_address):
+        try:
+            request.do_handshake()
+        except OSError:              # the client refused the certificate, or went away
+            return
+        super().finish_request(request, client_address)
+
+
 class Standins:
     """Start origins and proxies; close() stops every server and releases stalled handlers."""
 
@@ -170,13 +214,31 @@ class Standins:
         self.stop = threading.Event()
         self.proxies = {}
         self._servers = []
+        self._sockets = []
 
-    def origin(self, size, etag='"v1"'):
-        srv = self._start(_Origin)
+    def origin(self, size, etag='"v1"', tls=None):
+        """A Range-capable origin; tls=(certfile, keyfile) serves it over https."""
+        srv = self._start(_Origin, _TLSServer if tls else http.server.ThreadingHTTPServer)
+        if tls:
+            ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+            ctx.load_cert_chain(*tls)
+            srv.socket = ctx.wrap_socket(srv.socket, server_side=True,
+                                         do_handshake_on_connect=False)
         srv.data, srv.etag, srv.ignore_range, srv.log, srv.ae_log = payload(size), etag, False, [], []
-        srv.chunk_status = srv.chunk_etag = srv.redirect_to = None
-        srv.url = f"http://127.0.0.1:{srv.server_address[1]}/f.bin"
+        srv.chunk_status = srv.chunk_etag = srv.redirect_to = srv.status = None
+        scheme = "https" if tls else "http"
+        srv.url = f"{scheme}://127.0.0.1:{srv.server_address[1]}/f.bin"
         return srv
+
+    def silent(self):
+        """An https URL whose server accepts the connection and never answers: the kernel
+        completes the TCP handshake for a listening socket nobody accepts on, so a TLS handshake
+        through a tunnel waits out its timeout."""
+        s = socket.socket()
+        s.bind(("127.0.0.1", 0))
+        s.listen(16)
+        self._sockets.append(s)
+        return f"https://127.0.0.1:{s.getsockname()[1]}/f.bin"
 
     def proxy(self, mode="clean", stall=3.0):
         if mode == "refuse":
@@ -187,8 +249,8 @@ class Standins:
         self.proxies[address] = srv
         return address
 
-    def _start(self, handler):
-        srv = http.server.ThreadingHTTPServer(("127.0.0.1", 0), handler)
+    def _start(self, handler, server=http.server.ThreadingHTTPServer):
+        srv = server(("127.0.0.1", 0), handler)
         srv.daemon_threads = True
         # A short poll: shutdown() waits up to one poll interval per server, and the default
         # 0.5 s made every test teardown cost a second.
@@ -202,3 +264,5 @@ class Standins:
         for srv in self._servers:
             srv.shutdown()
             srv.server_close()
+        for s in self._sockets:
+            s.close()
