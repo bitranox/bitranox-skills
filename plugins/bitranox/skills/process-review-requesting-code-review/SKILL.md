@@ -112,7 +112,7 @@ You: [Fix progress indicators]
 - Catch issues before they compound
 - Fix before moving to next task
 
-**Executing Plans:**
+**Attended plan execution (bitranox:process-agents-subagent-driven-development, Attended Mode):**
 - Review after each task or at natural checkpoints
 - Get feedback, apply, continue
 

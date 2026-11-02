@@ -70,7 +70,7 @@ A task is the smallest unit that carries its own test cycle and is worth a fresh
 ```markdown
 # [Feature Name] Implementation Plan
 
-> **For Claude:** REQUIRED SUB-SKILL: Use bitranox:process-agents-subagent-driven-development (recommended) or bitranox:process-plan-executor to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
+> **For Claude:** REQUIRED SUB-SKILL: Use bitranox:process-agents-subagent-driven-development to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** [One sentence describing what this builds]
 
@@ -161,7 +161,7 @@ Every step must contain the actual content an engineer needs. These are **plan f
 - Exact file paths always
 - Complete code in every step: if a step changes code, show the code (not "add validation")
 - Exact commands with expected output
-- Reference relevant skills by name with a REQUIRED marker (e.g. `REQUIRED SUB-SKILL: bitranox:process-plan-executor`)
+- Reference relevant skills by name with a REQUIRED marker (e.g. `REQUIRED SUB-SKILL: bitranox:process-test-driven-development`)
 - DRY, YAGNI, TDD, frequent commits
 
 ## Self-Review
@@ -190,7 +190,7 @@ After saving the plan, offer execution choice:
 
 **1. Subagent-Driven (this session)** - I dispatch a fresh subagent per task, review between tasks, fast iteration
 
-**2. Parallel Session (separate)** - Open a new session with plan-executor, batch execution with checkpoints
+**2. Attended (this session or a new one)** - The tasks are executed without subagents, in batches, with a checkpoint for your review after each
 
 **Which approach?"**
 
@@ -200,7 +200,7 @@ After saving the plan, offer execution choice:
 - Fresh subagent per task + two-stage review (each reviewer an `opus` subagent at effort `medium`,
   review dispatch, see bitranox:process-agents-subagent-driven-development "Review dispatches")
 
-**If Parallel Session chosen:**
-- Guide them to open a new session in the worktree
-- **REQUIRED SUB-SKILL:** New session uses bitranox:process-plan-executor
+**If Attended chosen:**
+- For a new session, guide them to open it in the worktree
+- **REQUIRED SUB-SKILL:** The executing session uses bitranox:process-agents-subagent-driven-development, section "Attended Mode"
 - Batch execution with checkpoints for review

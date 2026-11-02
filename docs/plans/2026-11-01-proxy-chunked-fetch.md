@@ -1,6 +1,6 @@
 # net-rotating-proxies chunked fetch Implementation Plan
 
-> **For Claude:** REQUIRED SUB-SKILL: Use bitranox:process-agents-subagent-driven-development (recommended) or bitranox:process-plan-executor to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
+> **For Claude:** REQUIRED SUB-SKILL: Use bitranox:process-agents-subagent-driven-development to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** `proxy_pool.py fetch URL -o FILE` downloads one large file as byte-range chunks over the
 rotating proxy pool, resuming a cut chunk from its offset and verifying the result.

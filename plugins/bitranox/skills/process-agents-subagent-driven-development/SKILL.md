@@ -1,6 +1,6 @@
 ---
 name: process-agents-subagent-driven-development
-description: Use when executing an implementation plan with mostly independent tasks in the current session, or when choosing the model tier for ANY dispatched subagent - this is the canonical model-tier reference (haiku / opus / fable; the session model is fixed) that other skills cite. Keywords - subagent-driven development, dispatch per task, parallel agents, task brief, model tier.
+description: Use when executing a written implementation plan, in this session or a separate one, with subagents or attended without them, with review checkpoints between batches, or when choosing the model tier for ANY dispatched subagent - this is the canonical model-tier reference (haiku / opus / fable; the session model is fixed) that other skills cite. Keywords - subagent-driven development, dispatch per task, parallel agents, task brief, model tier, execute plan, independent tasks.
 ---
 
 # Subagent-Driven Development
@@ -20,33 +20,70 @@ bolted on. See `bitranox:meta-self-improve` ("Pathfinder discipline").
 **Narration:** between tool calls, narrate at most one short line  -  the
 ledger and the tool results carry the record.
 
-**Continuous execution:** Do not pause to check in with your human partner between tasks. Execute all tasks from the plan without stopping. The only reasons to stop are: BLOCKED status you cannot resolve, ambiguity that genuinely prevents progress, or all tasks complete. "Should I continue?" prompts and progress summaries waste their time  -  they asked you to execute the plan, so execute it.
+**Continuous execution:** Do not pause to check in with your human partner between tasks. Execute all tasks from the plan without stopping. The only reasons to stop are: BLOCKED status you cannot resolve, ambiguity that genuinely prevents progress, or all tasks complete. "Should I continue?" prompts and progress summaries waste their time  -  they asked you to execute the plan, so execute it. The one exception is Attended Mode below, which your human partner has to ask for.
 
 ## When to Use
 
 ```dot
 digraph when_to_use {
     "Have implementation plan?" [shape=diamond];
+    "Partner asked for checkpoints or no subagents?" [shape=diamond];
     "Tasks mostly independent?" [shape=diamond];
-    "Stay in this session?" [shape=diamond];
     "subagent-driven-development" [shape=box];
-    "plan-executor" [shape=box];
+    "Attended Mode" [shape=box];
     "Manual execution or brainstorm first" [shape=box];
 
-    "Have implementation plan?" -> "Tasks mostly independent?" [label="yes"];
+    "Have implementation plan?" -> "Partner asked for checkpoints or no subagents?" [label="yes"];
     "Have implementation plan?" -> "Manual execution or brainstorm first" [label="no"];
-    "Tasks mostly independent?" -> "Stay in this session?" [label="yes"];
+    "Partner asked for checkpoints or no subagents?" -> "Attended Mode" [label="yes"];
+    "Partner asked for checkpoints or no subagents?" -> "Tasks mostly independent?" [label="no"];
+    "Tasks mostly independent?" -> "subagent-driven-development" [label="yes"];
     "Tasks mostly independent?" -> "Manual execution or brainstorm first" [label="no - tightly coupled"];
-    "Stay in this session?" -> "subagent-driven-development" [label="yes"];
-    "Stay in this session?" -> "plan-executor" [label="no - parallel session"];
 }
 ```
 
-**vs. Executing Plans (parallel session):**
-- Same session (no context switch)
+**vs. Attended Mode:**
 - Fresh subagent per task (no context pollution)
 - Review after each task (spec compliance + code quality), broad review at the end
 - Faster iteration (no human-in-loop between tasks)
+
+## Attended Mode
+
+You execute the plan's tasks yourself, in batches, and wait for your human partner's feedback
+between batches. Use it only when they asked for it: they want to see the work at checkpoints, or
+they do not want subagents writing this code. A bare "execute the plan" means the subagent flow,
+and a new session opened to run a plan follows the same test. In this mode "Continuous execution",
+"The Process" and the subagent rules under "Red Flags" do not apply: you do not dispatch
+implementers or fixers, you make the fix attempt on a failing task yourself, and your partner's
+feedback takes the place of the task and final reviews.
+
+1. **Review the plan.** Read it and review it critically; "Pre-Flight Plan Review" lists the
+   conflicts to look for. Raise any concern with your partner before starting. Once none is open,
+   create the todos and arm the model gate:
+
+       bash "$CLAUDE_PLUGIN_ROOT/hooks/run-python.sh" "$CLAUDE_PLUGIN_ROOT/hooks/skill_receipt.py" start plan-execution
+
+   While it is armed, a subagent you dispatch is DENIED unless it pins `model`. Any review helper or
+   verification agent you do dispatch is a review dispatch: `model: "opus"`, `effort: "medium"`
+   (see "Review dispatches"). Do not start on main/master without explicit consent.
+2. **Execute a batch.** 3 tasks, unless your partner named a size. For each task: mark it in
+   progress, follow each step exactly, run the verifications the plan specifies, mark it completed.
+3. **Report and wait.** After every batch, the last one included, show what was implemented and the
+   verification output, then say "Ready for feedback." Do not go on until they answer.
+4. **Continue.** Apply the feedback, execute the next batch, repeat. Go back to step 1 when your
+   partner updates the plan or the approach needs rethinking.
+5. **Finish.** Confirm every task is completed and the full test suite is green with pristine
+   output (no errors or warnings), then disarm the gate:
+
+       bash "$CLAUDE_PLUGIN_ROOT/hooks/run-python.sh" "$CLAUDE_PLUGIN_ROOT/hooks/skill_receipt.py" end plan-execution
+
+   Summarize what changed across the batches. As your partner prefers, hand off to
+   bitranox:process-ship-finishing-development-branch or open a PR.
+
+**Stop at once and ask, rather than guess or force through,** when you hit a blocker mid-batch (a
+missing dependency, say), the plan has a gap that prevents starting, you do not understand an
+instruction, or a verification still fails after one reasonable fix attempt. A test the plan's step
+expects to fail is not a failure.
 
 ## The Process
 
@@ -714,6 +751,3 @@ signal to run the standard loop.
 
 **Subagents should use:**
 - **bitranox:process-test-driven-development** - Subagents follow TDD for each task
-
-**Alternative workflow:**
-- **bitranox:process-plan-executor** - Use for parallel session instead of same-session execution

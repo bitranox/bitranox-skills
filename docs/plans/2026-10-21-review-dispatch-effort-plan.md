@@ -1,6 +1,6 @@
 # [29] Review dispatches run on opus at effort medium - Implementation Plan
 
-> **For Claude:** REQUIRED SUB-SKILL: Use bitranox:process-agents-subagent-driven-development (recommended) or bitranox:process-plan-executor to implement this plan task-by-task. Every SKILL.md / skill reference edit goes through REQUIRED SUB-SKILL bitranox:meta-skill-writer (its checklist, one task per phase; the skill-edit-guard hook refuses the edit otherwise). Steps use checkbox (`- [ ]`) syntax.
+> **For Claude:** REQUIRED SUB-SKILL: Use bitranox:process-agents-subagent-driven-development to implement this plan task-by-task. Every SKILL.md / skill reference edit goes through REQUIRED SUB-SKILL bitranox:meta-skill-writer (its checklist, one task per phase; the skill-edit-guard hook refuses the edit otherwise). Steps use checkbox (`- [ ]`) syntax.
 
 **Goal:** Every judging-review subagent dispatch the bitranox plugin prescribes runs on `opus` at
 effort `medium`, stated at the point of dispatch, with a warn-only hook that flags a review dispatch

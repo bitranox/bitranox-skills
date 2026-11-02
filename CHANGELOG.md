@@ -30,6 +30,20 @@ a hole nobody has drawn a line under is one that gets rediscovered and half-fill
 two "versions with no entry" notes came to sit in this file disagreeing with it.
 
 
+## [10.11.0]
+
+### Changed
+
+- `process-agents-subagent-driven-development` is now the one skill for executing a plan. Its new
+  "Attended Mode" section runs the tasks without subagents, in batches of 3, and waits for feedback
+  after each. A bare "execute the plan" still means the subagent flow.
+- `process-plan-writing-plans` offers Attended as its second execution option and names that skill
+  in every plan header.
+
+### Removed
+
+- `process-plan-executor`. Use Attended Mode in `process-agents-subagent-driven-development`.
+
 ## [10.10.4]
 
 ### Fixed

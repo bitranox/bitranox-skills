@@ -1,7 +1,7 @@
 # Subagent-Driven Development: a worked example and the trade-offs
 
 Supporting reference for `SKILL.md`. It shows one plan run end to end and what the method
-costs against executing the plan inline or in a parallel session.
+costs against executing the plan yourself (Attended Mode in `SKILL.md`).
 
 ## Example Workflow
 
@@ -76,10 +76,9 @@ Done!
   subagents in parallel" under Red Flags in SKILL.md; the isolation is per-task, not per-worktree.
 - Subagent can ask questions (before AND during work)
 
-**vs. Executing Plans:**
-- Same session (no handoff)
-- Continuous progress (no waiting)
-- Review checkpoints automatic
+**vs. Attended Mode:**
+- Continuous progress (no waiting between batches)
+- Review automatic after every task, not only at checkpoints
 
 **Efficiency gains:**
 - Controller curates exactly what context is needed; bulk artifacts move

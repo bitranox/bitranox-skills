@@ -3,7 +3,7 @@
 
 # Skill catalog
 
-All 83 skills shipped by the `bitranox` plugin, grouped by taxonomy category
+All 82 skills shipped by the `bitranox` plugin, grouped by taxonomy category
 ([`skill-taxonomy.json`](../plugins/bitranox/skill-taxonomy.json)). Invoke any of them as
 `/bitranox:<skill>`; Claude also picks one up automatically when a task matches its
 description. Each description below is the skill's own trigger description - it states WHEN
@@ -119,10 +119,9 @@ Computer-use mechanics: running shell/git/ssh commands, reading exit codes/outpu
 Software-engineering workflow discipline: plan, review, debug, agent orchestration, ship.
 
 - [`process-agents-dispatching-parallel`](../plugins/bitranox/skills/process-agents-dispatching-parallel/SKILL.md) - Use when facing 2+ independent tasks (failing test files, broken subsystems, separate bugs, audit or worklist items) that can be worked without shared state or sequential dependencies and you want to run them concurrently instead of one at a time. Keywords - parallel subagents, dispatch agents, fan-out, worklist, batching, concurrent investigation, one agent per domain.
-- [`process-agents-subagent-driven-development`](../plugins/bitranox/skills/process-agents-subagent-driven-development/SKILL.md) - Use when executing an implementation plan with mostly independent tasks in the current session, or when choosing the model tier for ANY dispatched subagent - this is the canonical model-tier reference (haiku / opus / fable; the session model is fixed) that other skills cite. Keywords - subagent-driven development, dispatch per task, parallel agents, task brief, model tier.
+- [`process-agents-subagent-driven-development`](../plugins/bitranox/skills/process-agents-subagent-driven-development/SKILL.md) - Use when executing a written implementation plan, in this session or a separate one, with subagents or attended without them, with review checkpoints between batches, or when choosing the model tier for ANY dispatched subagent - this is the canonical model-tier reference (haiku / opus / fable; the session model is fixed) that other skills cite. Keywords - subagent-driven development, dispatch per task, parallel agents, task brief, model tier, execute plan, independent tasks.
 - [`process-debug-systematic`](../plugins/bitranox/skills/process-debug-systematic/SKILL.md) - Use when encountering any bug, test failure, or unexpected behavior, before proposing fixes
 - [`process-plan-brainstorming`](../plugins/bitranox/skills/process-plan-brainstorming/SKILL.md) - Use when starting non-trivial feature, component, or behaviour-change work whose design or requirements are not yet settled, or when a request adds a setting, option or feature that reverses or undoes a decision the user made earlier. Not for trivial, mechanical, or fully-specified changes.
-- [`process-plan-executor`](../plugins/bitranox/skills/process-plan-executor/SKILL.md) - Use when you have a written implementation plan to execute in a separate session with review checkpoints
 - [`process-plan-writing-plans`](../plugins/bitranox/skills/process-plan-writing-plans/SKILL.md) - Use when you have a spec or requirements for a multi-step task and want an implementation plan before touching code
 - [`process-review-enhance-code-quality`](../plugins/bitranox/skills/process-review-enhance-code-quality/SKILL.md) - Use when asked to rate, score, audit, or improve code quality of a project, when user wants a 0-10 quality assessment, or when asked what needs to change to reach perfect quality
 - [`process-review-receiving-code-review`](../plugins/bitranox/skills/process-review-receiving-code-review/SKILL.md) - Use when receiving code review feedback or PR review comments, before implementing suggestions - especially when a suggestion seems unclear, technically questionable, or breaks existing behavior, or when you feel the urge to reply "You're absolutely right"

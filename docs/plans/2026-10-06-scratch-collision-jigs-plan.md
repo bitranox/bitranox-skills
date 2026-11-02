@@ -1,6 +1,6 @@
 # Scratch-collision jigs Implementation Plan
 
-> **For Claude:** REQUIRED SUB-SKILL: Use bitranox:process-agents-subagent-driven-development (recommended) or bitranox:process-plan-executor to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
+> **For Claude:** REQUIRED SUB-SKILL: Use bitranox:process-agents-subagent-driven-development to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Give the two recorded scratch-collision mechanisms a jig each - `mutation_arm --revert FILE REV` for "run this test against the committed version of a file", `fanout_crosscheck` for "did an agent write into a sibling's target" - and wire both in so the rule stops living in prose.
 

@@ -1,6 +1,6 @@
 # Memory and backlog tools (Claude Code mod) Implementation Plan
 
-> **For Claude:** REQUIRED SUB-SKILL: Use bitranox:process-agents-subagent-driven-development (recommended) or bitranox:process-plan-executor to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
+> **For Claude:** REQUIRED SUB-SKILL: Use bitranox:process-agents-subagent-driven-development to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Register five model-callable tools (`backlog_list`, `backlog_add`, `backlog_close`, `memory_add`, `contrib_add`) from a Claude Code mod shipped inside the bitranox plugin, with every rule they obey in tested Python.
 
