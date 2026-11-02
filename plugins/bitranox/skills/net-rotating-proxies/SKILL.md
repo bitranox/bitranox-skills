@@ -144,9 +144,11 @@ first. It has no background refresh, so validate a generous pool before a long d
   answers an https URL's CONNECT request with any status other than success: the origin was
   never contacted.
 - **Only a failed connect bans** a proxy to `bad.txt`: the TCP connect to the proxy is refused
-  (an immediate "connection refused"), ends in any other error before the budget runs out (for
-  example no route to it, however long that error takes), or gets no reply at all for more than
-  15 seconds while the attempt's budget still has time left. Once a proxy
+  ("connection refused") or ends in any other error (for example no route to it), at any point
+  before the attempt's budget runs out, or the TCP connect gets no reply at all for more than 15
+  seconds while the budget still has time left. A refusal arrives at once on
+  Linux and macOS, but Windows reports it only after about 2 seconds, so there a
+  `--chunk-timeout` under that turns a refusing proxy into a cut that only rotates. Once a proxy
   answered (a CONNECT reply of any status, or any byte of a reply), nothing later on that
   attempt bans it: a TLS handshake with the origin that fails, stalls or times out after the
   proxy opened the tunnel, a timeout or a dropped connection only rotate it. A proxy that

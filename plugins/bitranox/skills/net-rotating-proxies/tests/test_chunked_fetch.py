@@ -93,6 +93,7 @@ def test_action_for_refuses_an_unknown_reason():
 
 SIZE = 300_000
 CHUNK = 64 * 1024
+REFUSE_BUDGET = 5.0     # above the ~2 s a refused connect takes to be reported on Windows
 
 
 @pytest.fixture
@@ -117,7 +118,10 @@ def test_attempt_classifies_each_proxy_behaviour(stand, tmp_path, mode, want):
     origin = stand.origin(SIZE)
     path = _part(tmp_path, SIZE)
     ident = {"etag": '"v1"', "last_modified": "Sat, 01 Nov 2026 10:00:00 GMT"}
-    got = cfetch.attempt(origin.url, stand.proxy(mode), 5000, 5999, SIZE, ident, path, timeout=0.5)
+    # Windows retries a refused SYN itself and reports the refusal only after about 2 s, so a
+    # 0.5 s budget would end that connect first and read as a cut there.
+    timeout = REFUSE_BUDGET if mode == "refuse" else 0.5
+    got = cfetch.attempt(origin.url, stand.proxy(mode), 5000, 5999, SIZE, ident, path, timeout=timeout)
     assert got[:2] == want
     with open(path, "rb") as f:
         on_disk = f.read()
@@ -880,7 +884,8 @@ def test_a_dead_proxy_is_still_banned(stand, tmp_path):
     dead = stand.proxy("refuse")
     order = [stand.proxy(), stand.proxy(), dead]
     store, _ = _pool(tmp_path, order)
-    assert _fetch(origin, tmp_path / "f.bin", _InOrder(store, order), workers=1).ok
+    assert _fetch(origin, tmp_path / "f.bin", _InOrder(store, order), workers=1,
+                  timeout=REFUSE_BUDGET).ok
     assert _bad(store) == {dead}
 
 
@@ -921,7 +926,7 @@ def test_a_connect_refused_with_a_3xx_status_bans_no_proxy_during_the_probe(stan
 def test_a_proxy_refusing_tcp_is_still_banned_during_the_probe(stand, tmp_path):
     dead = stand.proxy("refuse")
     store, pool = _pool(tmp_path, [dead])
-    assert cfetch.probe(stand.origin(SIZE).url, pool, 1.0, 3, warn=lambda *a: None) is None
+    assert cfetch.probe(stand.origin(SIZE).url, pool, REFUSE_BUDGET, 3, warn=lambda *a: None) is None
     assert _bad(store) == {dead}
 
 
@@ -968,17 +973,18 @@ def test_attempt_ends_at_its_budget_against_a_header_trickling_proxy(stand, tmp_
 
 
 def test_attempt_ends_at_its_budget_when_the_body_stalls_and_keeps_its_bytes(stand, tmp_path):
-    # 18 bytes at one per 50 ms reach 0.9 s, then silence: a read timeout restarted by the last
-    # byte would end it near 1.9 s.
+    # 12 bytes at one per 100 ms reach 1.2 s of a 2 s budget, then silence: the budget ends it near
+    # 2 s, while a read timeout restarted by the last byte would end it near 3.2 s. The 0.8 s left
+    # after the last byte is margin for a slow runner (a 0.1 s margin lost bytes on macOS CI).
     origin = stand.origin(SIZE)
     path = _part(tmp_path, SIZE)
     began = time.monotonic()
-    got = cfetch.attempt(origin.url, stand.proxy("trickle-stall:0.05:18", stall=10.0), 5000, 5999,
-                         SIZE, IDENT, path, timeout=1.0)
-    assert time.monotonic() - began < 1.5
-    assert got[:2] == ("cut", 18)
+    got = cfetch.attempt(origin.url, stand.proxy("trickle-stall:0.1:12", stall=10.0), 5000, 5999,
+                         SIZE, IDENT, path, timeout=2.0)
+    assert time.monotonic() - began < 2.8
+    assert got[:2] == ("cut", 12)
     with open(path, "rb") as f:
-        assert f.read()[5000:5018] == origin.data[5000:5018]
+        assert f.read()[5000:5012] == origin.data[5000:5012]
 
 
 def test_a_whole_file_attempt_ends_at_its_budget_against_a_header_trickling_proxy(stand, tmp_path):

@@ -30,6 +30,17 @@ a hole nobody has drawn a line under is one that gets rediscovered and half-fill
 two "versions with no entry" notes came to sit in this file disagreeing with it.
 
 
+## [10.10.1]
+
+### Fixed
+
+- net-rotating-proxies: the `fetch` ban rule now says that a refused or failed TCP connect bans
+  only when it comes before the attempt's budget runs out, and that Windows reports a refusal
+  only after about 2 seconds, so there a `--chunk-timeout` under that rotates a refusing proxy
+  instead of banning it. The `fetch` tests give a refusing proxy a budget above that delay and
+  leave a slow runner more margin in the stalled-body test, which failed on the Windows and macOS
+  CI cells.
+
 ## [10.10.0]
 
 ### Added
