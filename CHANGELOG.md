@@ -30,6 +30,14 @@ a hole nobody has drawn a line under is one that gets rediscovered and half-fill
 two "versions with no entry" notes came to sit in this file disagreeing with it.
 
 
+## [10.10.2]
+
+### Fixed
+
+- net-rotating-proxies tests: the trickling proxy stand-in turns Nagle off, so one byte per pause
+  arrives at that pace, and the stalled-body test checks that the bytes `fetch` reports as
+  received are exactly the ones on disk instead of pinning a count a slow runner cannot meet.
+
 ## [10.10.1]
 
 ### Fixed

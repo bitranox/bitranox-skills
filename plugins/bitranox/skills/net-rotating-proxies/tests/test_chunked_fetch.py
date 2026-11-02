@@ -973,18 +973,22 @@ def test_attempt_ends_at_its_budget_against_a_header_trickling_proxy(stand, tmp_
 
 
 def test_attempt_ends_at_its_budget_when_the_body_stalls_and_keeps_its_bytes(stand, tmp_path):
-    # 12 bytes at one per 100 ms reach 1.2 s of a 2 s budget, then silence: the budget ends it near
-    # 2 s, while a read timeout restarted by the last byte would end it near 3.2 s. The 0.8 s left
-    # after the last byte is margin for a slow runner (a 0.1 s margin lost bytes on macOS CI).
+    # 12 bytes at one per 100 ms, then silence: the budget ends the attempt near 2 s, while a read
+    # timeout restarted by each byte would end it at least 2 s after the last one. How many bytes
+    # a slow runner delivers inside the budget varies (macOS CI delivered 6 of 18, then 11 of 12),
+    # so the count is not pinned: what is reported as received must be exactly what is on disk.
     origin = stand.origin(SIZE)
     path = _part(tmp_path, SIZE)
     began = time.monotonic()
     got = cfetch.attempt(origin.url, stand.proxy("trickle-stall:0.1:12", stall=10.0), 5000, 5999,
                          SIZE, IDENT, path, timeout=2.0)
     assert time.monotonic() - began < 2.8
-    assert got[:2] == ("cut", 12)
+    reason, written = got[:2]
+    assert reason == "cut" and 0 < written <= 12
     with open(path, "rb") as f:
-        assert f.read()[5000:5012] == origin.data[5000:5012]
+        on_disk = f.read()
+    assert on_disk[5000:5000 + written] == origin.data[5000:5000 + written]
+    assert on_disk[5000 + written:5012] == b"\x00" * (12 - written)    # nothing beyond the count
 
 
 def test_a_whole_file_attempt_ends_at_its_budget_against_a_header_trickling_proxy(stand, tmp_path):

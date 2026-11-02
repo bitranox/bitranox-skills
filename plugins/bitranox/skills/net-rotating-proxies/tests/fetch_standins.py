@@ -71,6 +71,10 @@ class _Origin(http.server.BaseHTTPRequestHandler):
 
 
 class _Proxy(http.server.BaseHTTPRequestHandler):
+    # A trickle writes one byte per pause; with Nagle on, the stack may hold each tiny segment
+    # until the previous one is acknowledged, and the bytes arrive slower than the pause says.
+    disable_nagle_algorithm = True
+
     def log_message(self, *args):
         pass
 
