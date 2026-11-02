@@ -30,6 +30,18 @@ a hole nobody has drawn a line under is one that gets rediscovered and half-fill
 two "versions with no entry" notes came to sit in this file disagreeing with it.
 
 
+## [10.10.3]
+
+### Fixed
+
+- `net-rotating-proxies`: `proxy_pool.py run` stops on the first Ctrl-C or worker error. It used to
+  start every queued item and walk each running item's whole proxy chain before exiting (measured:
+  12 of 12 items after one Ctrl-C, 8 of 8 proxies in a chain). The running commands now finish their
+  current attempt and nothing else starts.
+- `net-rotating-proxies`: `proxy_pool.py` catches the errors each site can raise instead of every
+  `Exception`: a real bug in `discover`, `_reachable` or the two background loops is no longer
+  reported as a dead proxy or an unreachable source.
+
 ## [10.10.2]
 
 ### Fixed

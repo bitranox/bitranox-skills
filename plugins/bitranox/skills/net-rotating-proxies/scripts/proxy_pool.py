@@ -560,11 +560,17 @@ def _bg_refresh(store, test_url, workers, timeout, stop, need=None, interval=600
             print(f"bg refresh error: {e}")
 
 
-def _run_item(store, item, argv_tpl, per_item, item_timeout, success_glob, dead_re, pool=None):
+# How often run()'s main thread wakes to take a pending Ctrl-C while the workers are busy.
+_WAKE = 0.1
+
+
+def _run_item(store, item, argv_tpl, per_item, item_timeout, success_glob, dead_re, pool=None, stop=None):
     # With a ProxyPool the chain is drawn rotated (cool-down/weighted-LRU) and outcomes are
     # fed back for flaky tracking; without one it falls back to the stateless speed-weighted pick.
     proxies = pool.acquire(per_item) if pool is not None else _pick(store, per_item)
     for proxy in proxies:
+        if stop is not None and stop.is_set():
+            break
         if pool is not None:
             pool.mark_in_use(proxy)
         # argv list, NO shell: identical behaviour on Linux/macOS/Windows, injection-safe.
@@ -694,16 +700,25 @@ def run(store, worklist, cmd, workers, per_item, item_timeout, bg, test_url, vwo
     ok = 0
     try:
         with cf.ThreadPoolExecutor(max_workers=workers) as ex:
-            futs = [ex.submit(_run_item, store, it, argv_tpl, per_item, item_timeout, success_glob, dead_re, pool) for it in items]
+            futs = [ex.submit(_run_item, store, it, argv_tpl, per_item, item_timeout, success_glob, dead_re, pool, stop) for it in items]
             try:
-                for fut in cf.as_completed(futs):
-                    item, proxy = fut.result()
-                    if proxy:
-                        ok += 1
-                        print(f"OK {item} via {proxy}  ({ok}/{len(items)})")
-            except CommandNotFound:
-                for pending in futs:  # it can never succeed; do not start the rest
-                    pending.cancel()
+                waiting = set(futs)
+                while waiting:
+                    # Timed, not as_completed: the kernel may deliver a Ctrl-C to a worker thread,
+                    # and Python runs the handler only when the main thread next executes.
+                    finished, waiting = cf.wait(waiting, timeout=_WAKE, return_when=cf.FIRST_COMPLETED)
+                    for fut in finished:
+                        item, proxy = fut.result()
+                        if proxy:
+                            ok += 1
+                            print(f"OK {item} via {proxy}  ({ok}/{len(items)})")
+            except BaseException:
+                # A Ctrl-C or a worker's error. Leaving the with-block joins every future, so the
+                # whole queue would run first: the stop ends the running items after their current
+                # attempt and makes any queued one a no-op; cancel only spares each its pool draw.
+                stop.set()
+                for fut in futs:
+                    fut.cancel()
                 raise
     finally:
         stop.set()
