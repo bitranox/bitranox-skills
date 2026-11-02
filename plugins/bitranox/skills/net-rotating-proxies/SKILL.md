@@ -148,25 +148,23 @@ first. It has no background refresh, so validate a generous pool before a long d
   handshake with the origin that fails, stalls or times out after the proxy opened the tunnel,
   a timeout or a dropped connection only rotate it. A proxy that accepts the connection and then
   sends nothing until the budget runs out, or closes without a byte, is a cut, not a ban, and so
-  is a budget that runs out during the connect. A chunk gives up after
-  `--max-attempts-per-chunk`.
-- **Odd answers are not trusted, however many proxies agree.** A reply that is not the
-  requested range of this object (a page instead of the range, another status such as 404, a
-  wrong size, a changed ETag or Last-Modified, a compressed body, a redirect loop, or an origin
-  certificate that fails verification, named as `TLS certificate rejected: <reason>`) is the
-  proxy lying or the origin having changed, and no number of replies can tell which: free
-  proxies often inject the same page alike. The reply is judged before any of its bytes is
-  written. That proxy is dropped for the rest of this run but is not written to `bad.txt`, and
-  the run goes on with the others until the file is complete, no proxy is left, or the missing
-  chunks have spent their attempts; what proxies answer never stops a run and never makes
-  exit 2. When chunks are still missing at the end (exit 1), the message names the answers,
-  grouped by how many proxies gave each, e.g.
-  `3 proxies answered HTTP 404, 1 answered ETag "v2" (the probe saw ETag "v1")`: every proxy
-  answering the same 404 points at a dead URL, the same new ETag at a changed file.
-  A ranged download keeps `FILE.part` and `FILE.part.json`: a rerun resumes once the URL serves
-  the probed file again. A file that really changed shows on the rerun: its probe sees the new
-  version, and the manifest of the old one is refused with exit 2, naming the two files to
-  delete.
+  is a budget that runs out during the connect. So with a `--chunk-timeout` of 15 seconds or
+  less, a proxy that never accepts the TCP connect is only rotated, never banned: the budget
+  ends its connect first. A chunk gives up after `--max-attempts-per-chunk`.
+- **Odd answers are not trusted, however many proxies agree.** A reply that is not the requested
+  range of this object (a page instead of the range, named `HTTP 200 without the requested range`,
+  another status such as 404, a wrong size, a changed ETag or Last-Modified, a compressed body, a
+  redirect loop, or an origin certificate that fails verification, named as `TLS certificate
+  rejected: <reason>`) is the proxy lying or the origin having changed, and no number of replies can
+  tell which: free proxies often inject the same page alike. The reply is judged before any of its
+  bytes is written. That proxy is dropped for the rest of this run but is not written to `bad.txt`,
+  and the run goes on with the others until the file is complete, no proxy is left, or the missing
+  chunks have spent their attempts. What proxies answer never stops a run, and never makes exit 2
+  except a hash mismatch (see `--sha256` below). When chunks are still missing at the end (exit 1),
+  the message names the answers, grouped by how many proxies gave each, e.g. `3 proxies answered
+  HTTP 404, 1 answered ETag "v2" (the probe saw ETag "v1")`: every proxy answering the same 404
+  points at a dead URL, the same new ETag at a changed file, or at proxies that lie alike. A ranged
+  download keeps `FILE.part` and `FILE.part.json` for the rerun (see "Resume" below).
 - **Redirects are followed** through the same proxy, up to 8 hops, so a release asset or a mirror
   URL that answers 302 downloads; every check applies to the final target, and a longer chain
   counts as an odd answer.
@@ -175,24 +173,33 @@ first. It has no background refresh, so validate a generous pool before a long d
   exit 0 means only that the expected length arrived. A mismatch keeps the bytes as `FILE.part`
   and drops the manifest, so rerunning the command downloads the whole file again.
 - **Resume by rerunning the same command.** Progress is in `FILE.part` plus `FILE.part.json`; one
-  Ctrl-C stops after the attempts in flight. A manifest for a different download (URL, size,
-  identity or `--chunk-size` changed) is refused with the two files to delete.
-- **The size comes from a vote.** Before downloading, proxies are asked for byte 0, at most
-  `--max-attempts-per-chunk` times. The first view (size, ETag and Last-Modified, Range support)
-  that two different proxies give decides at once, even beside dissenters. When the probe ends
-  without that (every active proxy answered, or the probes ran out), each view has one proxy:
-  a lone ranged view beats whole-file views and is taken with a "took the ranged view of one
-  proxy" warning, and a single answering proxy is taken with a not-cross-checked warning. Two
-  ranged views, or two whole-file views and no ranged one, stop with exit 1 rather than guess.
-  Errors never decide the probe, however many proxies agree on one: a probe that got only
-  errors ends with exit 1 too, and its message names them grouped (`3 proxies answered HTTP
-  404`, or the same rejected certificate), so check the URL or the origin's certificate. A
-  403, 407, 429, 5xx or refused CONNECT is not named. The probe bans as the download does: only
-  a failed connect.
-- **No Range support** (the origin answers the whole file): each attempt streams the whole file
-  from byte 0, with no resume, and must finish within one `--chunk-timeout`. For a large file
-  raise it above size divided by proxy speed (4 GiB at 1 MiB/s needs more than 4096 seconds). If
-  the origin sends no size either, a cut transfer cannot be told from a complete one, so
+  Ctrl-C stops after the attempts in flight. A rerun that finds `FILE.part.json` resumes from it
+  with no probe: size, ETag and Last-Modified are the saved ones, and every reply is checked against
+  them. Proxies that agree on another view (an injected page, a rewritten ETag) are only dropped for
+  the run, which ends with exit 1 and keeps both files. A file that really changed on the server
+  ends the rerun the same way, and no run can tell the two apart: after any such answer the resumed
+  run's message adds `if the file changed on the server, delete FILE.part.json and FILE.part to
+  start over` with the real paths, whether or not it did. Delete both only once you know the file
+  changed (a new published digest or size), then rerun with the new file's `--sha256`; otherwise
+  keep them and rerun with other proxies. A first run only names the answers. A damaged
+  `FILE.part.json`, or one written for another URL or another `--chunk-size`, is refused with exit
+  2, naming the two files to delete and leaving both in place; for the last two, a rerun with the
+  original URL and `--chunk-size` resumes instead.
+- **The size comes from a vote.** Before a download with no `FILE.part.json` yet, proxies are asked
+  for byte 0, at most `--max-attempts-per-chunk` times. The first view (size, ETag and
+  Last-Modified, Range support) that two different proxies give decides at once, even beside
+  dissenters. When the probe ends without that (every active proxy answered, or the probes ran out),
+  each view has one proxy: a lone ranged view beats whole-file views and is taken with a "took the
+  ranged view of one proxy" warning, and a single answering proxy is taken with a not-cross-checked
+  warning. Two ranged views, or two whole-file views and no ranged one, stop with exit 1 rather than
+  guess. Errors never decide the probe, however many proxies agree on one: a probe that got only
+  errors ends with exit 1 too, and its message names them grouped (`3 proxies answered HTTP 404`, or
+  the same rejected certificate), so check the URL or the origin's certificate. A 403, 407, 429, 5xx
+  or refused CONNECT is not named. The probe bans as the download does: only a failed connect.
+- **No Range support** (that vote finds the origin answers the whole file): each attempt streams the
+  whole file from byte 0, with no resume, and must finish within one `--chunk-timeout`. For a large
+  file raise it above size divided by proxy speed (4 GiB at 1 MiB/s needs more than 4096 seconds).
+  If the origin sends no size either, a cut transfer cannot be told from a complete one, so
   `--sha256` is the only check left.
 
 Exit codes of `fetch`:
@@ -202,12 +209,14 @@ Exit codes of `fetch`:
   disagreed, or only errors came back). The message names the odd answers and probe errors
   described above, grouped, when there were any; a 403, 407, 429, 5xx or refused CONNECT is
   never named. Grow the pool with `validate` and rerun the same command; when every proxy gave
-  the same error, check the URL or the origin's certificate first.
+  the same error, check the URL or the origin's certificate first. A rerun that resumed and got
+  answers about another object also names the two files to delete if the file changed.
 - **2**: it cannot work: a bad argument (a URL that is not `http://` or `https://`, such as
   `example.com/big.iso` or `ftp://...`, is refused before any proxy is asked), no usable proxy
-  in the store at the start, a hash mismatch, a manifest for another download (how a file that
-  changed since the run that wrote it shows on the rerun), or an output that cannot be written.
-  No combination of proxy answers makes exit 2.
+  in the store at the start, a `FILE.part.json` that is damaged or was written for another URL
+  or `--chunk-size`, a hash mismatch, or an output that cannot be written. No combination of
+  proxy answers makes exit 2 except a hash mismatch: bytes altered behind correct headers fail
+  the hash, which is the check to trust.
 
 Run `fetch --help` for the remaining flags.
 

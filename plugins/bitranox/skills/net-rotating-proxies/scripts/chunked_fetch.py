@@ -14,13 +14,14 @@ or the origin having changed, and no number of proxies can tell which: free prox
 alike, so even all of them agreeing is no verdict. Such a proxy is evicted for this run only, and
 the run goes on with the others. It never ends on what proxies answered: when chunks are still
 missing at the end, the result's note names the answers, grouped (describe_answers), so a dead
-URL or a changed file can still be diagnosed. A file that really changed shows on the rerun,
-whose own probe votes for the new identity: the manifest saved for the old one is refused
-(ManifestMismatch). Only a connect to the proxy that failed before it answered bans it to the
-permanent bad.txt (failure_outcome); once it answered, whatever fails later on that attempt
-only rotates it. An
-origin that ignores Range gets one whole-file stream per attempt, rotated over the same pool,
-with no resume.
+URL or a changed file can still be diagnosed. A rerun resumes from its manifest and runs no
+probe: size and identity are the saved ones, so proxies agreeing on another view cannot make it
+refuse or overwrite its progress, and a file that really changed ends the rerun the same way,
+with a note naming the two files to delete to start over. Only a connect to the proxy that
+failed before it answered bans it to the permanent bad.txt (failure_outcome); once it answered,
+whatever fails later on that attempt only rotates it. An origin that ignores Range (as the
+probe of a run without a manifest finds) gets one whole-file stream per attempt, rotated over
+the same pool, with no resume.
 """
 import concurrent.futures as cf
 import contextlib
@@ -46,6 +47,9 @@ _THROTTLED = {403, 407, 429}
 _BAN = {"dead"}
 _SUSPECT = {"wrong-object", "identity", "certificate"}
 _FAIL = {"throttled", "refused", "cut", "overrun"}
+# The suspect reasons that are an answer about the object (another range, size, status or
+# identity), so the file may have changed: a rejected certificate says nothing about the file.
+_OBJECT_ANSWERS = {"wrong-object", "identity"}
 # The probe statuses that ARE a view of the object (a vote), not an error it answers.
 _VOTE_STATUSES = {200, 206, 416}
 # Enough for a release-asset or mirror-redirector chain (one to three hops); a loop ends here.
@@ -56,7 +60,8 @@ _WAKE = 0.1
 
 
 class FetchError(Exception):
-    """The download cannot be done as asked (exit 2): hash mismatch, mismatching manifest."""
+    """The download cannot be done as asked (exit 2): a hash mismatch, a URL that is not http(s),
+    or a manifest that is damaged or was written for another URL or chunk size."""
 
 
 class HashMismatch(FetchError):
@@ -136,6 +141,9 @@ def ranged_verdict(status, headers, start, end, total, identity):
     """
     if status in _THROTTLED or status >= 500:
         return "throttled", None
+    if status == 200:
+        # A page or the whole file: either way not the slice asked for.
+        return "wrong-object", "HTTP 200 without the requested range"
     if status != 206:
         return "wrong-object", f"HTTP {status}"
     found = parse_content_range(headers.get("content-range"))
@@ -580,7 +588,8 @@ def describe_answers(answers):
 
     Grouped by answer, counted by distinct proxy, most first; '' when nothing was answered. The
     words are the reader's diagnosis: every proxy answering one 404 points at a dead URL, every
-    proxy answering one new ETag at a changed file (which the rerun's probe then confirms)."""
+    proxy answering one new ETag at a changed file - or at proxies that lie alike, which no
+    count of answers can rule out, so deleting the progress stays the reader's decision."""
     parts = []
     for answer, proxies in sorted(answers.items(), key=lambda item: (-len(item[1]), item[0])):
         count = len(proxies)
@@ -595,11 +604,12 @@ def _noted(note, answers):
     return f"{note}; {said}" if said else note
 
 
-def _load_manifest(path, expected):
-    """The saved progress, or a fresh one; refuses a manifest for another object or plan, and
-    one that is damaged (a crash mid-write, a hand edit) rather than trusting its offsets."""
-    if not os.path.exists(path):
-        return dict(expected, received=[0] * expected["chunks"])
+def _load_manifest(path, url, chunk_size):
+    """The saved progress a rerun resumes from, size, identity and plan included.
+
+    Refuses a manifest written for another URL or another chunk size - the user's own inputs,
+    never a proxy's answer - and one that is damaged (a crash mid-write, a hand edit) rather than
+    trusting its offsets."""
     try:
         with open(path, encoding="utf-8") as f:
             saved = json.load(f)
@@ -607,14 +617,30 @@ def _load_manifest(path, expected):
         raise _damaged(path, f"it is not valid JSON ({exc})") from exc
     if not isinstance(saved, dict):
         raise _damaged(path, "it is not a JSON object")
+    expected = {"url": url, "chunk_size": chunk_size}
     differs = [key for key in expected if saved.get(key) != expected[key]]
     if differs:
         raise ManifestMismatch(f"{path} belongs to another download ({', '.join(differs)} differ); "
                                f"delete it and {path.removesuffix('.json')} to start over")
-    problem = _received_problem(saved.get("received"), expected)
+    problem = _plan_problem(saved) or _received_problem(saved.get("received"), saved)
     if problem:
         raise _damaged(path, problem)
     return saved
+
+
+def _plan_problem(saved):
+    """Why the saved size, identity or chunk count cannot be resumed from, or None."""
+    total, identity = saved.get("total"), saved.get("identity")
+    # bool is an int subclass, and True would read as a one-byte file.
+    if type(total) is not int or total < 0:
+        return f"'total' is {total!r}, not a byte count"
+    if (not isinstance(identity, dict) or set(identity) != {"etag", "last_modified"}
+            or not all(v is None or isinstance(v, str) for v in identity.values())):
+        return f"'identity' is {identity!r}, not an ETag and a Last-Modified"
+    want = len(plan_chunks(total, saved["chunk_size"]))
+    if saved.get("chunks") != want:
+        return f"'chunks' is {saved.get('chunks')!r}, but {total} bytes make {want} chunks"
+    return None
 
 
 def _damaged(path, why):
@@ -762,14 +788,10 @@ def _fetch_whole(url, out, pool, sha256, timeout, attempts, on_success, info, lo
                  ssl_context):
     """Origin ignores Range: one whole-file stream per attempt, restarted from 0 each time.
 
-    No manifest is kept, since there is nothing to resume. One that a ranged run left for this
-    file is refused: the stream would overwrite the bytes it records as received, and a later
-    ranged run trusting it would leave holes in the file.
+    No manifest is kept, since there is nothing to resume. fetch comes here only when no
+    manifest exists: one that a ranged run left is resumed instead, never streamed over.
     """
-    part, manifest = out + ".part", out + ".part.json"
-    if os.path.exists(manifest):
-        raise ManifestMismatch(f"{manifest} belongs to a ranged download, but the origin now "
-                               f"ignores Range; delete it and {part} to start over")
+    part = out + ".part"
     log("origin ignores Range: one whole-file stream per attempt, no resume")
     if info.total is None and sha256 is None:
         # No size to count against: a cut close-delimited body or a substituted page ends as
@@ -798,28 +820,43 @@ def fetch(url, out, pool, *, chunk_size, workers=8, sha256=None, timeout=120.0, 
     `log` gets the progress/report lines (stdout by default), `warn` the warnings (stderr).
     `timeout` is one attempt's whole budget, connect to last byte (see attempt). A pool emptied
     by bans and evictions stops the run at once, reported as a 'pool-dry' count, never as
-    attempts. When the probe finds the origin ignores Range, the file comes as one whole stream
-    per attempt instead (max_attempts in all, no manifest, no resume). `ssl_context` verifies an
-    https origin (None: the system trust store). Raises BadUrl before any network work for a URL
-    that is not http(s). What proxies answered never raises: a run that ends with work left (the
-    probe settled nothing, or chunks are missing) returns a result whose note names the odd
-    answers, grouped (describe_answers); the part and manifest are kept for the rerun.
-    Exceptions a worker raises (an OSError writing the part or manifest, one from on_success) stop
-    every chunk after its current attempt and propagate.
+    attempts. When `out`'s manifest exists, the run resumes from it with no probe, taking size,
+    identity and plan from it (_load_manifest raises ManifestMismatch for a damaged one or one
+    written for another url or chunk_size). Otherwise the probe decides, and when it finds the
+    origin ignores Range, the file comes as one whole stream per attempt instead (max_attempts in
+    all, no manifest, no resume). `ssl_context` verifies an https origin (None: the system trust
+    store). Raises BadUrl before any network work for a URL that is not http(s). What proxies
+    answered never raises: a run that ends with work left (the probe settled nothing, or chunks
+    are missing) returns a result whose note names the odd answers, grouped (describe_answers);
+    the part and manifest are kept for the rerun. A resumed run that ends so after any answer
+    about the object (_OBJECT_ANSWERS) adds the two files to delete if the file changed.
+    HashMismatch is the one exception what proxies send can cause: bytes altered behind correct
+    headers fail the hash. Exceptions a worker raises (an OSError writing the part or manifest,
+    one from on_success) stop every chunk after its current attempt and propagate.
     """
     check_url(url)
-    info, errors = _probe_views(url, pool, timeout, max_attempts, warn, ssl_context)
-    if info is None:
-        return FetchResult(False, note=_noted("the probe settled nothing: no proxy gave a usable "
-                                              "view of the file, or the views disagreed", errors))
-    if not info.ranged:
-        return _fetch_whole(url, out, pool, sha256, timeout, max_attempts, on_success, info, log,
-                            warn or _stderr, ssl_context)
     part, manifest = out + ".part", out + ".part.json"
+    resumed = os.path.exists(manifest)
+    if resumed:
+        # The manifest, not a new vote: proxies agreeing on another view (an injected page, a
+        # rewritten ETag) must not make the rerun refuse or overwrite its own progress. Every
+        # reply is still checked against the saved size and identity.
+        state = _load_manifest(manifest, url, chunk_size)
+        info = _Probe(state["total"], state["identity"], True)
+        log(f"resuming from {manifest}; no probe")
+    else:
+        info, errors = _probe_views(url, pool, timeout, max_attempts, warn, ssl_context)
+        if info is None:
+            return FetchResult(False, note=_noted("the probe settled nothing: no proxy gave a "
+                                                  "usable view of the file, or the views "
+                                                  "disagreed", errors))
+        if not info.ranged:
+            return _fetch_whole(url, out, pool, sha256, timeout, max_attempts, on_success, info,
+                                log, warn or _stderr, ssl_context)
+        state = {"url": url, "total": info.total, "identity": info.identity,
+                 "chunk_size": chunk_size, "chunks": len(plan_chunks(info.total, chunk_size))}
     chunks = plan_chunks(info.total, chunk_size)
-    state = _load_manifest(manifest, {"url": url, "total": info.total, "identity": info.identity,
-                                      "chunk_size": chunk_size, "chunks": len(chunks)})
-    if not os.path.exists(part):
+    if not resumed or not os.path.exists(part):
         state["received"] = [0] * len(chunks)   # progress without its bytes is no progress
     with open(part, "a+b") as f:
         f.truncate(info.total)
@@ -891,7 +928,12 @@ def fetch(url, out, pool, *, chunk_size, workers=8, sha256=None, timeout=120.0, 
         log(f"pool ran dry: {len(chunks) - done} chunk(s) left")
     if done < len(chunks):
         _save_manifest(manifest, state)
-        return FetchResult(False, done, len(chunks), counts,
-                           _noted("chunks still missing; rerun to resume", answers))
+        note = _noted("chunks still missing; rerun to resume", answers)
+        if resumed and any(counts.get(reason) for reason in _OBJECT_ANSWERS):
+            # The answers may be lying proxies or a file that changed since the manifest was
+            # written; only the reader can decide to drop the progress.
+            note += (f"; if the file changed on the server, delete {manifest} and {part} to "
+                     f"start over")
+        return FetchResult(False, done, len(chunks), counts, note)
     _finish(part, out, sha256, manifest)
     return FetchResult(True, done, len(chunks), counts)

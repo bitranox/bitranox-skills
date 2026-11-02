@@ -6,6 +6,7 @@ variables are cleared so httpx2 cannot route the local fetch through a machine-w
 """
 import hashlib
 import http.server
+import json
 import os
 import re
 import socket
@@ -315,8 +316,8 @@ def stand():
     s.close()
 
 
-def _fetch_store(tmp_path, proxies):
-    store = tmp_path / "fstore"
+def _fetch_store(tmp_path, proxies, name="fstore"):
+    store = tmp_path / name
     store.mkdir()
     (store / "live.txt").write_text("\n".join(proxies) + "\n", encoding="utf-8")
     return str(store)
@@ -439,17 +440,78 @@ def test_fetch_exits_1_naming_the_error_every_proxy_gets_for_the_url(tmp_path, s
     assert not os.path.exists(os.path.join(store, "bad.txt"))
 
 
-def test_a_changed_file_exits_1_naming_it_then_2_on_the_rerun(tmp_path, stand, capsys):
+def _start_over_clause(out):
+    return f"delete {out}.part.json and {out}.part to start over"
+
+
+def _received(out):
+    with open(f"{out}.part.json", encoding="utf-8") as f:
+        return json.load(f)["received"]
+
+
+def test_a_changed_file_exits_1_on_the_run_and_on_the_rerun_naming_how_to_start_over(
+        tmp_path, stand, capsys):
+    # A rerun trusts its manifest and runs no probe, so agreeing proxies cannot turn it into a
+    # refusal; when the file really changed, the rerun's exit-1 note says how to start over.
     origin = stand.origin(200_000)
     origin.chunk_etag = '"v2"'
     store, out = _fetch_store(tmp_path, [stand.proxy() for _ in range(3)]), tmp_path / "f.bin"
     assert _fetch_main(store, origin, out) == 1
     err = capsys.readouterr().err
     assert 'proxies answered ETag "v2"' in err and 'the probe saw ETag "v1"' in err
-    origin.etag, origin.chunk_etag = '"v2"', None        # the replaced file, now probed too
-    assert _fetch_main(store, origin, out) == 2
-    assert "f.bin.part.json belongs to another download (identity differ" in capsys.readouterr().err
+    assert "to start over" not in err                    # a first run is no resume
+    origin.etag, origin.chunk_etag = '"v2"', None        # the replaced file, served throughout
+    assert _fetch_main(store, origin, out) == 1
+    err = capsys.readouterr().err
+    assert 'proxies answered ETag "v2"' in err and _start_over_clause(out) in err
+    assert os.path.exists(f"{out}.part.json") and os.path.exists(f"{out}.part")
+    os.remove(f"{out}.part.json")
+    os.remove(f"{out}.part")
+    rc = _fetch_main(store, origin, out, "--sha256", hashlib.sha256(origin.data).hexdigest())
+    assert rc == 0 and out.read_bytes() == origin.data
     assert not os.path.exists(os.path.join(store, "bad.txt"))
+
+
+def test_a_rerun_through_page_injecting_proxies_exits_1_and_keeps_its_progress(tmp_path, stand,
+                                                                               capsys):
+    # Two page-injecting proxies agree in a probe vote that the origin ignores Range. A rerun used
+    # to act on that vote and refuse its own manifest (exit 2), telling the reader to delete real
+    # progress; it now resumes without a probe, so the injected pages only evict those proxies.
+    # Run 1: a probe-only proxy (honest for the probe, a page for every chunk) beside a cutting
+    # one, so the manifest records real progress for run 2 to keep.
+    origin = stand.origin(200_000)
+    out = tmp_path / "f.bin"
+    first = _fetch_store(tmp_path, [stand.proxy("probe-only"), stand.proxy("cut:1000")], "s1")
+    assert _fetch_main(first, origin, out) == 1
+    before = _received(out)
+    assert sum(before) > 0
+    capsys.readouterr()
+    second = _fetch_store(tmp_path, [stand.proxy("html"), stand.proxy("html")], "s2")
+    assert _fetch_main(second, origin, out) == 1
+    err = capsys.readouterr().err
+    assert "HTTP 200 without the requested range" in err and _start_over_clause(out) in err
+    after = _received(out)
+    assert all(a >= b for a, b in zip(after, before, strict=True))
+    kept = (tmp_path / "f.bin.part").read_bytes()
+    for index, count in enumerate(before):
+        start = index * 64 * 1024
+        assert kept[start:start + count] == origin.data[start:start + count]
+    third = _fetch_store(tmp_path, [stand.proxy(), stand.proxy()], "s3")
+    rc = _fetch_main(third, origin, out, "--sha256", hashlib.sha256(origin.data).hexdigest())
+    assert rc == 0 and out.read_bytes() == origin.data
+
+
+def test_a_rerun_through_proxies_agreeing_on_a_rewritten_etag_exits_1_and_keeps_its_manifest(
+        tmp_path, stand, capsys):
+    origin = stand.origin(200_000)
+    out = tmp_path / "f.bin"
+    first = _fetch_store(tmp_path, [stand.proxy("probe-only"), stand.proxy("probe-only")], "s1")
+    assert _fetch_main(first, origin, out) == 1
+    capsys.readouterr()
+    second = _fetch_store(tmp_path, [stand.proxy("etag"), stand.proxy("etag")], "s2")
+    assert _fetch_main(second, origin, out) == 1
+    assert 'answered ETag "changed"' in capsys.readouterr().err
+    assert os.path.exists(f"{out}.part.json") and os.path.exists(f"{out}.part")
 
 
 @pytest.mark.parametrize("url", ["example.com/big.iso", "ftp://example.com/big.iso"])

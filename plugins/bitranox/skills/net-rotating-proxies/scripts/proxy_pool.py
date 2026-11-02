@@ -51,10 +51,12 @@ proxy in the store, every discovery source failed, a --cmd that cannot be parsed
 --dead-regex, a --worklist that is not UTF-8). validate is a report: it exits 0 even when no
 candidate turned out live. fetch: 0 = complete file (hash-verified when --sha256 is given),
 1 = chunks still missing or the probe settled nothing (the message names what the proxies
-answered, e.g. "3 proxies answered HTTP 404"), 2 = no proxies, bad argument (a URL that is not
-http or https included), hash mismatch, a manifest for another download (how a file that
-changed since the last run shows), or an output that cannot be written. What proxies answer,
-however many agree, never makes exit 2: free proxies often inject the same page alike.
+answered, e.g. "3 proxies answered HTTP 404"; a rerun, which resumes its manifest with no
+probe, adds the two files to delete if the file changed on the server), 2 = no proxies, bad
+argument (a URL that is not http or https included), a manifest that is damaged or was written
+for another URL or --chunk-size, a hash mismatch, or an output that cannot be written. What
+proxies answer, however many agree, never makes exit 2 except a hash mismatch (bytes altered
+behind correct headers): free proxies often inject the same page alike.
 
 The --cmd template may contain {proxy} (host:port) and {item}. Example:
   uv run proxy_pool.py run --worklist ids.txt --workers 16 --success-glob 'out/{item}*.vtt'

@@ -218,11 +218,11 @@ def test_a_stopped_run_resumes_from_its_manifest(stand, tmp_path):
 
 @pytest.mark.parametrize("key, change", [
     ("url", lambda origin, kw: kw.update(url=origin.url + "?v=2")),
-    ("total", lambda origin, kw: setattr(origin, "data", origin.data + b"x")),
     ("chunk_size", lambda origin, kw: kw.update(chunk_size=CHUNK * 2)),
-    ("identity", lambda origin, kw: setattr(origin, "etag", '"v2"')),
 ])
 def test_a_manifest_for_another_download_is_refused(stand, tmp_path, key, change):
+    # The URL and the chunk size are the user's own inputs, not proxy answers: a mismatch is a
+    # local refusal (exit 2).
     origin = stand.origin(SIZE)
     _, cutting = _pool(tmp_path, [stand.proxy("cut:10000")], fail_ratio=1.0)
     out = tmp_path / "f.bin"
@@ -235,6 +235,46 @@ def test_a_manifest_for_another_download_is_refused(stand, tmp_path, key, change
     # Read the key list out of '(a, b differ)', not the whole message: the path holds the test name.
     listed = str(refused.value).rsplit("(", 1)[1].split(" differ")[0].split(", ")
     assert key in listed
+
+
+def _start_over_clause(tmp_path):
+    out = tmp_path / "f.bin"
+    return f"if the file changed on the server, delete {out}.part.json and {out}.part to start over"
+
+
+@pytest.mark.parametrize("change", [
+    lambda origin: setattr(origin, "data", origin.data + b"x"),     # another size
+    lambda origin: setattr(origin, "etag", '"v2"'),                 # another identity
+], ids=["total", "identity"])
+def test_a_rerun_trusts_its_manifest_and_names_a_changed_file(stand, tmp_path, change):
+    # Size and identity come from the manifest, never from a new probe: proxies agreeing on
+    # another view cannot make the rerun refuse its own progress. Each reply is still checked
+    # against the manifest, so the run ends with work left and says how to start over.
+    origin, manifest = _stopped_run(stand, tmp_path)
+    saved = manifest.read_text(encoding="utf-8")
+    change(origin)
+    _, clean = _pool(tmp_path, [stand.proxy(), stand.proxy()], name="store2")
+    result = _fetch(origin, tmp_path / "f.bin", clean)
+    assert not result.ok and _start_over_clause(tmp_path) in result.note
+    assert json.loads(manifest.read_text(encoding="utf-8"))["received"] == json.loads(saved)["received"]
+
+
+def test_a_resume_sends_no_probe(stand, tmp_path):
+    origin, _ = _stopped_run(stand, tmp_path)
+    origin.log.clear()
+    _, clean = _pool(tmp_path, [stand.proxy()], name="store2")
+    assert _fetch(origin, tmp_path / "f.bin", clean).ok
+    assert origin.log and "bytes=0-0" not in origin.log
+
+
+def test_a_resumed_run_cut_short_does_not_suggest_starting_over(stand, tmp_path):
+    # Only an answer about the object (another range, size or identity) hints that the file
+    # changed; a resume that ran out of attempts on cuts just says to rerun.
+    origin, _ = _stopped_run(stand, tmp_path)
+    _, cutting = _pool(tmp_path, [stand.proxy("cut:10000")], name="store2", fail_ratio=1.0)
+    result = _fetch(origin, tmp_path / "f.bin", cutting, workers=1, max_attempts=1)
+    assert not result.ok and "rerun to resume" in result.note
+    assert "to start over" not in result.note
 
 
 def test_a_wrong_hash_removes_the_manifest_and_keeps_the_part(stand, tmp_path):
@@ -402,9 +442,13 @@ def _stopped_run(stand, tmp_path):
 
 
 def _with_received(received):
+    return _with_field("received", received)
+
+
+def _with_field(key, value):
     def damage(text):
         state = json.loads(text)
-        state["received"] = received
+        state[key] = value
         return json.dumps(state)
     return damage
 
@@ -419,7 +463,16 @@ def _with_received(received):
     _with_received(["x"] + [10000] * 4),
     _with_received([True] + [10000] * 4),
     _with_received({"0": 10000}),
-], ids=["truncated", "not-object", "short", "long", "over", "negative", "text", "bool", "dict"])
+    # A resume takes size, identity and plan from the manifest, so those must be sound too.
+    _with_field("total", "300000"),
+    _with_field("total", -1),
+    _with_field("total", True),
+    _with_field("identity", '"v1"'),
+    _with_field("identity", {"etag": 1, "last_modified": None}),
+    _with_field("chunks", 4),
+], ids=["truncated", "not-object", "short", "long", "over", "negative", "text", "bool", "dict",
+        "total-text", "total-negative", "total-bool", "identity-text", "identity-etag-number",
+        "chunks-off"])
 def test_a_damaged_manifest_is_refused_with_a_reason(stand, tmp_path, damage):
     origin, manifest = _stopped_run(stand, tmp_path)
     manifest.write_text(damage(manifest.read_text(encoding="utf-8")), encoding="utf-8")
@@ -612,16 +665,19 @@ def test_a_whole_file_pool_that_runs_dry_stops_instead_of_spinning(stand, tmp_pa
     assert "pool ran dry: the whole file is still missing" in lines
 
 
-def test_a_ranged_runs_manifest_is_refused_when_the_origin_now_ignores_range(stand, tmp_path):
+def test_a_ranged_runs_manifest_is_resumed_even_when_the_origin_now_ignores_range(stand,
+                                                                                tmp_path):
+    # The same answer an injecting proxy gives: a whole page for a range. The resume never
+    # switches to a whole-file stream over its own progress; each such reply only evicts.
     origin, manifest = _stopped_run(stand, tmp_path)
     part = tmp_path / "f.bin.part"
-    kept = part.read_bytes()
+    kept, saved = part.read_bytes(), manifest.read_text(encoding="utf-8")
     origin.ignore_range = True
     _, clean = _pool(tmp_path, [stand.proxy(), stand.proxy()], name="store2")
-    with pytest.raises(cfetch.ManifestMismatch, match=_start_over(tmp_path)):
-        _fetch(origin, tmp_path / "f.bin", clean)
-    # The stream never started: the bytes the manifest records as received are still there.
-    assert manifest.exists() and part.read_bytes() == kept
+    result = _fetch(origin, tmp_path / "f.bin", clean)
+    assert not result.ok and "answered HTTP 200 without the requested range" in result.note
+    assert _start_over_clause(tmp_path) in result.note
+    assert manifest.read_text(encoding="utf-8") == saved and part.read_bytes() == kept
 
 
 @pytest.mark.skipif(sys.platform == "win32",
@@ -699,7 +755,7 @@ def test_an_origin_whose_etag_changes_after_the_probe_ends_with_work_left_naming
     assert not result.ok and _bad(store) == set()
     assert '6 proxies answered ETag "v2"' in result.note
     assert 'the probe saw ETag "v1"' in result.note
-    # The bytes and the manifest stay: a rerun against the changed file refuses it by name.
+    # The bytes and the manifest stay for the rerun, which resumes them.
     assert (tmp_path / "f.bin.part.json").exists()
 
 
@@ -713,8 +769,8 @@ def test_an_origin_that_starts_answering_404_ends_with_work_left_naming_it(stand
 
 
 def test_a_rerun_after_an_origin_404_resumes_once_the_url_serves_the_file_again(stand, tmp_path):
-    # SKILL.md promises both halves: the manifest survives the run, and a rerun against the
-    # probed file uses it, while one against a replaced file refuses it.
+    # SKILL.md promises it: the manifest survives the run, and a rerun once the URL serves the
+    # probed file again resumes it.
     origin = stand.origin(SIZE)
     origin.chunk_status = 404
     _, pool = _pool(tmp_path, [stand.proxy() for _ in range(3)])
@@ -725,19 +781,25 @@ def test_a_rerun_after_an_origin_404_resumes_once_the_url_serves_the_file_again(
     assert _fetch(origin, out, again).ok and out.read_bytes() == origin.data
 
 
-def test_a_changed_file_shows_on_the_rerun_as_a_refused_manifest(stand, tmp_path):
-    # The first run cannot tell lying proxies from a replaced file, so it only names the answer
-    # (exit 1); the rerun's own probe votes for the new file and refuses the old manifest (exit 2).
+def test_a_changed_file_ends_the_rerun_with_work_left_naming_how_to_start_over(stand, tmp_path):
+    # No run can tell lying proxies from a replaced file, so neither refuses: the first names the
+    # answer, the rerun (resuming its manifest, no probe) names it and how to start over.
     origin = stand.origin(SIZE)
     origin.chunk_etag = '"v2"'
     _, pool = _pool(tmp_path, [stand.proxy() for _ in range(3)])
     out = tmp_path / "f.bin"
     first = _fetch(origin, out, pool)
     assert not first.ok and 'answered ETag "v2"' in first.note
+    assert "to start over" not in first.note
     origin.etag, origin.chunk_etag = '"v2"', None          # the replaced file, served throughout
     _, again = _pool(tmp_path, [stand.proxy(), stand.proxy()], name="store2")
-    with pytest.raises(cfetch.ManifestMismatch, match=_start_over(tmp_path)):
-        _fetch(origin, out, again)
+    second = _fetch(origin, out, again)
+    assert not second.ok and 'answered ETag "v2"' in second.note
+    assert _start_over_clause(tmp_path) in second.note
+    os.remove(f"{out}.part.json")
+    os.remove(f"{out}.part")
+    _, fresh = _pool(tmp_path, [stand.proxy(), stand.proxy()], name="store3")
+    assert _fetch(origin, out, fresh).ok and out.read_bytes() == origin.data
 
 
 def test_a_rangeless_origin_that_starts_answering_410_ends_the_whole_file_run_naming_it(stand,
@@ -773,7 +835,7 @@ def test_two_proxies_with_different_odd_answers_do_not_stop_the_run(stand, tmp_p
 
 @pytest.mark.parametrize("status, headers, want", [
     (404, {}, "HTTP 404"),
-    (200, OK_HEADERS, "HTTP 200"),
+    (200, OK_HEADERS, "HTTP 200 without the requested range"),
     (206, {**OK_HEADERS, "content-range": "bytes 10-19/999"}, "size 999"),
     (206, {**OK_HEADERS, "content-range": "bytes 0-9/100"}, "another range"),
     (206, {**OK_HEADERS, "content-encoding": "gzip"}, "Content-Encoding gzip"),
