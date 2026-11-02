@@ -30,6 +30,11 @@ a hole nobody has drawn a line under is one that gets rediscovered and half-fill
 two "versions with no entry" notes came to sit in this file disagreeing with it.
 
 
+## [10.11.3]
+
+- coding-python-pwshpy: `elevate()` refuses the script of a `python Z:\tool.py` start on a `net use` drive before any
+  prompt when `EnableLinkedConnections` is not set; the policy cases and what is never refused are stated, each measured.
+
 ## [10.11.2]
 
 ### Changed

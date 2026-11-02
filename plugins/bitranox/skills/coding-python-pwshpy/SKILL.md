@@ -237,9 +237,13 @@ catch a subclass before its parent:
   keeps a field's default.
 - `ElevationDirectoryError` (Windows, not a `NativeCallError`): `elevate()` called from, or given, a directory on
   a `net use` drive, raised before any prompt and naming the drive's UNC path, because the elevated child would
-  run from that path. Change to a local path, or pass that UNC path as `cwd=` if you mean it. A script file on such
-  a drive started from a local directory is not refused: it gets the prompt, and then `elevate(wait=True)` returns
-  the child's non-zero exit code because the child cannot open the script.
+  run from that path. Change to a local path, or pass that UNC path as `cwd=` if you mean it. The script of a
+  `python Z:\tool.py` start raises it too, also before any prompt, when `EnableLinkedConnections` is not set, naming
+  the script's UNC path, because the elevated child has no such drive letter; copy the script to a local path, or
+  start it by that UNC path, which the elevated account must be able to reach. With the policy set and the machine
+  rebooted since, it runs; set but not yet rebooted, it gets the prompt and `elevate(wait=True)` then returns 2. A
+  console-script `.exe`, or a `python.exe` running a local script, on the drive is never refused: Windows runs the
+  program from the UNC path. An `argv` that differs from `sys.argv`, and a `python -m` start, are not judged.
 - `ElevationRequiredError` (`require_elevation()`), `PlatformUnsupportedError` (no analog on this OS),
   `ConfigurationError`, `PowerShellError` / `FeatureUnavailableError` (.NET, `[full]`; `run`, `cmdlet`
   and the module wrappers `get_ad_user`, `get_ad_group`, `get_ad_computer`, `get_mailbox`, `get_az_vm`
@@ -272,7 +276,7 @@ call reported), 22 a refused value
 (`ValueError`; 87 on Windows), 64 a relative or empty `-PwshPyUv` / `--pwshpy-uv`, 70 the runner failed before the script ran
 (the elevated `.ps1` child, an elevated run that cannot return to the caller's directory, or a
 `.ps1` `-PwshPyElevate` on Linux or macOS with no home for root or no `/bin/sh`: `pwshpy: cannot
-elevate:`), or `pwshpy --elevate` refused a directory on a `net use` drive (that `pwshpy: cannot elevate:` line too), 77
+elevate:`), or `pwshpy --elevate` refused a directory or script on a `net use` drive (that `pwshpy: cannot elevate:` line too), 77
 elevation declined (`pwshpy --elevate`, `-PwshPyElevate`, `--pwshpy-elevate`; stderr line `pwshpy:
 elevation declined`), 110 `OperationTimeoutError`, 127 a missing or untrusted `uv` (an install
 of uv that failed, or found no curl or wget, counts as missing; run elevated, also an untrusted
