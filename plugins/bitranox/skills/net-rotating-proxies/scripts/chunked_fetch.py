@@ -637,7 +637,8 @@ def _plan_problem(saved):
     if (not isinstance(identity, dict) or set(identity) != {"etag", "last_modified"}
             or not all(v is None or isinstance(v, str) for v in identity.values())):
         return f"'identity' is {identity!r}, not an ETag and a Last-Modified"
-    want = len(plan_chunks(total, saved["chunk_size"]))
+    want = -(-total // saved["chunk_size"])     # ceil: plan_chunks would build a hand-edited
+                                                # total's whole chunk list just to count it
     if saved.get("chunks") != want:
         return f"'chunks' is {saved.get('chunks')!r}, but {total} bytes make {want} chunks"
     return None
@@ -858,6 +859,11 @@ def fetch(url, out, pool, *, chunk_size, workers=8, sha256=None, timeout=120.0, 
     chunks = plan_chunks(info.total, chunk_size)
     if not resumed or not os.path.exists(part):
         state["received"] = [0] * len(chunks)   # progress without its bytes is no progress
+    elif (have := os.path.getsize(part)) < info.total:
+        # A part cut short outside fetch holds fewer bytes than `received` claims, and the
+        # truncate() below zero-fills the gap: trust only the bytes the part still has.
+        state["received"] = [max(0, min(got, have - start))
+                             for got, (start, _) in zip(state["received"], chunks, strict=True)]
     with open(part, "a+b") as f:
         f.truncate(info.total)
     lock, counts, answers = threading.Lock(), {}, {}

@@ -140,17 +140,23 @@ first. It has no background refresh, so validate a generous pool before a long d
 - **A cut keeps its bytes.** When a proxy drops, stalls, trickles or runs out its
   `--chunk-timeout` (the budget of one attempt, connect to last byte, TLS handshake, headers and
   redirects included), what it delivered stays on disk and the chunk continues at the next byte
-  on another proxy. A cut, a 403, 407, 429 or 5xx rotates the proxy. So does any CONNECT the
-  proxy refuses for an https URL, whatever its status: the origin was never contacted.
-- **Only a failed connect bans** a proxy to `bad.txt`: its TCP connect is refused, fails, or
-  takes more than 15 seconds while the budget still has time. Once a proxy answered (a CONNECT
-  reply of any status, or any byte of a reply), nothing later on that attempt bans it: a TLS
-  handshake with the origin that fails, stalls or times out after the proxy opened the tunnel,
-  a timeout or a dropped connection only rotate it. A proxy that accepts the connection and then
-  sends nothing until the budget runs out, or closes without a byte, is a cut, not a ban, and so
-  is a budget that runs out during the connect. So with a `--chunk-timeout` of 15 seconds or
-  less, a proxy that never accepts the TCP connect is only rotated, never banned: the budget
-  ends its connect first. A chunk gives up after `--max-attempts-per-chunk`.
+  on another proxy. A cut, a 403, 407, 429 or 5xx rotates the proxy. So does a proxy that
+  answers an https URL's CONNECT request with any status other than success: the origin was
+  never contacted.
+- **Only a failed connect bans** a proxy to `bad.txt`: the TCP connect to the proxy is refused
+  (an immediate "connection refused"), ends in any other error before the budget runs out (for
+  example no route to it, however long that error takes), or gets no reply at all for more than
+  15 seconds while the attempt's budget still has time left. Once a proxy
+  answered (a CONNECT reply of any status, or any byte of a reply), nothing later on that
+  attempt bans it: a TLS handshake with the origin that fails, stalls or times out after the
+  proxy opened the tunnel, a timeout or a dropped connection only rotate it. A proxy that
+  accepts the connection and then sends nothing until the budget runs out, or closes without a
+  byte, is a cut, not a ban, and so is a budget that runs out during the TCP connect. So with a
+  `--chunk-timeout` of 15 seconds or less, a proxy whose TCP connect gets no reply at all
+  (no accept, no refusal, no error) is only rotated, never banned: the budget ends its connect
+  first. A connect refused or ended by an error before the budget runs out still bans, unless the
+  proxy already answered earlier in that attempt. A chunk gives up after
+  `--max-attempts-per-chunk`.
 - **Odd answers are not trusted, however many proxies agree.** A reply that is not the requested
   range of this object (a page instead of the range, named `HTTP 200 without the requested range`,
   another status such as 404, a wrong size, a changed ETag or Last-Modified, a compressed body, a

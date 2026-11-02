@@ -446,9 +446,13 @@ def _with_received(received):
 
 
 def _with_field(key, value):
+    return _with_fields(**{key: value})
+
+
+def _with_fields(**fields):
     def damage(text):
         state = json.loads(text)
-        state[key] = value
+        state.update(fields)
         return json.dumps(state)
     return damage
 
@@ -470,15 +474,32 @@ def _with_field(key, value):
     _with_field("identity", '"v1"'),
     _with_field("identity", {"etag": 1, "last_modified": None}),
     _with_field("chunks", 4),
+    # Consistent with each other but not with the total: only the plan check sees it, and a
+    # resume trusting it would index past the end of `received`.
+    _with_fields(chunks=4, received=[10000] * 4),
 ], ids=["truncated", "not-object", "short", "long", "over", "negative", "text", "bool", "dict",
         "total-text", "total-negative", "total-bool", "identity-text", "identity-etag-number",
-        "chunks-off"])
+        "chunks-off", "chunks-and-received-off"])
 def test_a_damaged_manifest_is_refused_with_a_reason(stand, tmp_path, damage):
     origin, manifest = _stopped_run(stand, tmp_path)
     manifest.write_text(damage(manifest.read_text(encoding="utf-8")), encoding="utf-8")
     _, clean = _pool(tmp_path, [stand.proxy()], name="store2")
     with pytest.raises(cfetch.ManifestMismatch, match=_start_over(tmp_path)):
         _fetch(origin, tmp_path / "f.bin", clean)
+
+
+def test_a_resume_trusts_only_the_bytes_a_shortened_part_still_holds(stand, tmp_path):
+    # A part cut short outside fetch (a copy, a restore) is zero-filled back to the full size,
+    # so trusting `received` would keep zeros as data: exit 0 with a wrong file, no hash given.
+    origin, _ = _stopped_run(stand, tmp_path)
+    part = tmp_path / "f.bin.part"
+    with open(part, "r+b") as f:
+        f.truncate(5000)
+    _, clean = _pool(tmp_path, [stand.proxy()], name="store2")
+    result = _fetch(origin, tmp_path / "f.bin", clean)
+    assert result.ok
+    assert (tmp_path / "f.bin").read_bytes() == origin.data
+    assert f"bytes=5000-{CHUNK - 1}" in origin.log        # chunk 0 resumed where the part ends
 
 
 def _start_over(tmp_path):
