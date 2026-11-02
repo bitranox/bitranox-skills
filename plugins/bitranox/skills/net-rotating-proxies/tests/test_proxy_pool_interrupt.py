@@ -10,9 +10,8 @@ import threading
 import time
 import uuid
 
-import pytest
-
 import proxy_pool as pp
+import pytest
 
 _WORKER = """\
 import os, sys, time, uuid

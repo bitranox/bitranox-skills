@@ -10,9 +10,8 @@ import os
 import random
 import sys
 
-import pytest
-
 import proxy_pool as pp
+import pytest
 
 
 # ----------------------------------------------------------------------------
@@ -388,7 +387,7 @@ def test_run_item_success_records_proxy_and_returns_it(store, tmp_path):
     # write a file named after {item}; exit 0
     code = (
         "import sys;"
-        "open(r'%s/{item}.done','w').write('{proxy}')" % outdir
+        f"open(r'{outdir}/{{item}}.done','w').write('{{proxy}}')"
     )
     success_glob = str(outdir / "{item}.done")
     dead_re = pp.re.compile(pp.DEAD_DEFAULT, pp.re.I)
@@ -407,7 +406,7 @@ def test_run_item_substitutes_proxy_and_item_in_argv(store, tmp_path):
     _seed_store(store, live=["HOST:9"], speeds={"HOST:9": 1.0})
     marker = tmp_path / "marker.txt"
     # write "<proxy>|<item>" so we can verify BOTH substitutions happened in argv
-    code = "open(r'%s','w').write('{proxy}|{item}')" % marker
+    code = f"open(r'{marker}','w').write('{{proxy}}|{{item}}')"
     success_glob = str(marker)
     dead_re = pp.re.compile(pp.DEAD_DEFAULT, pp.re.I)
     pp._run_item(store, "ITM", _argv_tpl(code), 4, 30, success_glob, dead_re)
@@ -420,7 +419,7 @@ def test_run_item_success_glob_must_match(store, tmp_path):
     code = "pass"  # exits 0, writes nothing
     success_glob = str(tmp_path / "{item}.never")
     dead_re = pp.re.compile(pp.DEAD_DEFAULT, pp.re.I)
-    item, proxy = pp._run_item(store, "JOB", _argv_tpl(code), 3, 30, success_glob, dead_re)
+    _item, proxy = pp._run_item(store, "JOB", _argv_tpl(code), 3, 30, success_glob, dead_re)
     assert proxy is None
     assert pp._read(pp._p(store, "good.txt")) == set()
 
@@ -430,7 +429,7 @@ def test_run_item_connection_error_bans_proxy(store, tmp_path):
     _seed_store(store, live=["dead:1"], speeds={"dead:1": 1.0})
     code = "import sys; sys.stderr.write('connection refused by proxy'); sys.exit(1)"
     dead_re = pp.re.compile(pp.DEAD_DEFAULT, pp.re.I)
-    item, proxy = pp._run_item(store, "JOB", _argv_tpl(code), 1, 30, None, dead_re)
+    _item, proxy = pp._run_item(store, "JOB", _argv_tpl(code), 1, 30, None, dead_re)
     assert proxy is None
     assert "dead:1" in pp._read(pp._p(store, "bad.txt"))
     assert pp._read(pp._p(store, "good.txt")) == set()
@@ -441,7 +440,7 @@ def test_run_item_transient_failure_does_not_ban(store):
     _seed_store(store, live=["px:1"], speeds={"px:1": 1.0})
     code = "import sys; sys.stderr.write('HTTP 429 too many requests'); sys.exit(1)"
     dead_re = pp.re.compile(pp.DEAD_DEFAULT, pp.re.I)
-    item, proxy = pp._run_item(store, "JOB", _argv_tpl(code), 1, 30, None, dead_re)
+    _item, proxy = pp._run_item(store, "JOB", _argv_tpl(code), 1, 30, None, dead_re)
     assert proxy is None
     assert pp._read(pp._p(store, "bad.txt")) == set()
     assert pp._read(pp._p(store, "good.txt")) == set()
@@ -648,9 +647,9 @@ def test_run_item_with_pool_records_success(store, tmp_path):
     _seed_store(store, live=["px:1"], speeds={"px:1": 1.0})
     pool = pp.ProxyPool(store, need=1)
     marker = tmp_path / "m.txt"
-    code = "open(r'%s','w').write('{proxy}')" % marker
+    code = f"open(r'{marker}','w').write('{{proxy}}')"
     dead_re = pp.re.compile(pp.DEAD_DEFAULT, pp.re.I)
-    item, proxy = pp._run_item(store, "JOB", _argv_tpl(code), 2, 30, str(marker), dead_re, pool)
+    _item, proxy = pp._run_item(store, "JOB", _argv_tpl(code), 2, 30, str(marker), dead_re, pool)
     assert proxy == "px:1"
     assert "px:1" in pp._read(pp._p(store, "good.txt"))
 
@@ -660,7 +659,7 @@ def test_run_item_with_pool_bans_dead_proxy(store):
     pool = pp.ProxyPool(store, need=1)
     code = "import sys; sys.stderr.write('connection refused by proxy'); sys.exit(1)"
     dead_re = pp.re.compile(pp.DEAD_DEFAULT, pp.re.I)
-    item, proxy = pp._run_item(store, "JOB", _argv_tpl(code), 1, 30, None, dead_re, pool)
+    _item, proxy = pp._run_item(store, "JOB", _argv_tpl(code), 1, 30, None, dead_re, pool)
     assert proxy is None
     assert "dead:1" in pp._read(pp._p(store, "bad.txt"))
     assert "dead:1" not in pool.active()

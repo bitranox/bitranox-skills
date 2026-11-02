@@ -64,7 +64,19 @@ The --cmd template may contain {proxy} (host:port) and {item}. Example:
             --sub-langs en.*,en --sub-format vtt -o out/{item}.%(ext)s
             https://www.youtube.com/watch?v={item}'
 """
-import argparse, concurrent.futures as cf, glob, os, random, re, shlex, subprocess, sys, tempfile, threading, time
+import argparse
+import concurrent.futures as cf
+import glob
+import os
+import random
+import re
+import shlex
+import subprocess
+import sys
+import tempfile
+import threading
+import time
+
 import chunked_fetch as cfetch
 import httpx2
 
@@ -79,6 +91,12 @@ DEFAULT_SOURCES = [
     "https://api.proxyscrape.com/v2/?request=getproxies&protocol=http&timeout=10000&country=all",
 ]
 _lock = threading.Lock()
+# What httpx2 raises for a dead proxy or source: InvalidURL covers the unparsable strings a public
+# list can hold, and it is not an HTTPError. Anything else is a bug and must surface.
+_HTTP_FAILURES = (httpx2.HTTPError, httpx2.InvalidURL)
+# What a background loop's round can raise once _HTTP_FAILURES are handled inside it: a store file
+# that cannot be read or written, or one holding undecodable bytes (UnicodeDecodeError).
+_STORE_FAILURES = (OSError, ValueError)
 
 
 class CommandNotFound(Exception):
@@ -173,9 +191,8 @@ def _grow(path, items):
 
 
 def _append(path, line):
-    with _lock:
-        with open(path, "a", encoding="utf-8") as f:
-            f.write(line + "\n")
+    with _lock, open(path, "a", encoding="utf-8") as f:
+        f.write(line + "\n")
 
 
 def discover(store, sources):
@@ -194,7 +211,7 @@ def discover(store, sources):
             found |= hits
             answered += 1
             print(f"  {len(hits):5d} from {url[:60]}")
-        except Exception as e:
+        except _HTTP_FAILURES as e:
             print(f"  ERR  {url[:60]}: {e}")
     found.discard("0.0.0.0:80")
     _grow(_p(store, "pool.txt"), found)
@@ -248,7 +265,7 @@ def _reachable(proxy, test_url, timeout):
     try:
         with httpx2.Client(proxy=f"http://{proxy}", timeout=timeout, follow_redirects=True) as c:
             ok = c.get(test_url).status_code in (200, 204)
-    except Exception:
+    except _HTTP_FAILURES:
         return (False, None)
     return (ok, time.perf_counter() - t0)
 
@@ -533,7 +550,7 @@ class ProxyPool:
                 break
             try:
                 self.benchmark_once()
-            except Exception as e:
+            except _STORE_FAILURES as e:
                 print(f"benchmark error: {e}")
 
 
@@ -556,7 +573,7 @@ def _bg_refresh(store, test_url, workers, timeout, stop, need=None, interval=600
             deficit = need - len(available)
             if deficit > 0:             # one (or more) went away -> top back up to the target
                 validate(store, test_url, workers, timeout, need=deficit)
-        except Exception as e:
+        except _STORE_FAILURES as e:
             print(f"bg refresh error: {e}")
 
 
@@ -580,7 +597,7 @@ def _run_item(store, item, argv_tpl, per_item, item_timeout, success_glob, dead_
             # (past every handler here) and loses stdout on Windows when the tool prints bytes it
             # cannot decode.
             r = subprocess.run(argv, capture_output=True, text=True, encoding="utf-8",
-                               errors="replace", timeout=item_timeout)
+                               errors="replace", timeout=item_timeout, check=False)
             rc, out = r.returncode, (r.stdout or "") + (r.stderr or "")
         except subprocess.TimeoutExpired:
             rc, out = 124, ""
@@ -664,7 +681,7 @@ def _parse_run_inputs(cmd, dead_regex, worklist):
     except ValueError as exc:            # shlex: "No closing quotation", "No escaped character"
         raise BadInput(f"--cmd cannot be parsed: {exc}") from exc
     try:
-        dead_re = re.compile(dead_regex, re.I)
+        dead_re = re.compile(dead_regex, re.IGNORECASE)
     except re.error as exc:
         raise BadInput(f"--dead-regex is not a valid regex: {exc}") from exc
     try:

@@ -93,6 +93,9 @@ def test_action_for_refuses_an_unknown_reason():
 
 SIZE = 300_000
 CHUNK = 64 * 1024
+# Probe tests that need the honest view to win. Honest proxies answer at once, so this costs nothing;
+# 1 s let one stall on a loaded host lose a vote and turn the decision into a tie.
+PROBE_BUDGET = 10.0
 REFUSE_BUDGET = 5.0     # above the ~2 s a refused connect takes to be reported on Windows
 
 
@@ -309,14 +312,23 @@ def test_an_empty_object_needs_no_chunks(stand, tmp_path):
 def test_one_etag_rewriting_proxy_cannot_plant_the_identity(stand, tmp_path):
     origin = stand.origin(SIZE)
     _, pool = _pool(tmp_path, [stand.proxy("etag"), stand.proxy(), stand.proxy()])
-    info = cfetch.probe(origin.url, pool, 1.0, 20, warn=lambda *a: None)
+    info = cfetch.probe(origin.url, pool, PROBE_BUDGET, 20, warn=lambda *a: None)
     assert info.ranged and info.total == SIZE and info.identity["etag"] == '"v1"'
+
+
+def test_a_tie_left_by_a_lost_honest_proxy_is_refused_not_decided_by_arrival(stand, tmp_path):
+    # One rewriter and one honest vote are a tie once the third proxy spends its budget: nobody
+    # can tell which of the two lies. This is why a test needing the honest view to win gives its
+    # proxies PROBE_BUDGET: one 1 s stall on a loaded host produced this None in the test above.
+    origin = stand.origin(SIZE)
+    _, pool = _pool(tmp_path, [stand.proxy("etag"), stand.proxy(), stand.proxy("stall")])
+    assert cfetch.probe(origin.url, pool, 0.5, 20, warn=lambda *a: None) is None
 
 
 def test_a_proxy_answering_another_range_cannot_plant_the_size(stand, tmp_path):
     origin = stand.origin(SIZE)
     _, pool = _pool(tmp_path, [stand.proxy("wrong-range"), stand.proxy()])
-    info = cfetch.probe(origin.url, pool, 1.0, 20, warn=lambda *a: None)
+    info = cfetch.probe(origin.url, pool, PROBE_BUDGET, 20, warn=lambda *a: None)
     assert info.ranged and info.total == SIZE
 
 
@@ -343,7 +355,7 @@ def test_the_first_probe_answer_alone_does_not_decide(stand, tmp_path):
     origin = stand.origin(SIZE)
     order = [stand.proxy("etag"), stand.proxy(), stand.proxy()]
     store, _ = _pool(tmp_path, order)
-    info = cfetch.probe(origin.url, _InOrder(store, order), 1.0, 20, warn=lambda *a: None)
+    info = cfetch.probe(origin.url, _InOrder(store, order), PROBE_BUDGET, 20, warn=lambda *a: None)
     assert info.ranged and info.total == SIZE and info.identity["etag"] == '"v1"'
 
 
@@ -369,7 +381,7 @@ def test_on_a_tie_a_ranged_answer_still_beats_a_whole_file_one(stand, tmp_path):
     order = [stand.proxy("html"), stand.proxy()]
     store, _ = _pool(tmp_path, order)
     warnings = []
-    info = cfetch.probe(origin.url, _InOrder(store, order), 1.0, 20, warn=warnings.append)
+    info = cfetch.probe(origin.url, _InOrder(store, order), PROBE_BUDGET, 20, warn=warnings.append)
     assert info.ranged and info.total == SIZE and info.identity["etag"] == '"v1"'
     # Two proxies answered, but the winning view has one voter: it is warned as not cross-checked.
     assert warnings == [("probe: proxies disagreed; took the ranged view of one proxy, not "
@@ -380,7 +392,7 @@ def test_a_single_answering_proxy_decides_with_a_warning(stand, tmp_path):
     origin = stand.origin(SIZE)
     _, pool = _pool(tmp_path, [stand.proxy()])
     warnings = []
-    info = cfetch.probe(origin.url, pool, 1.0, 20, warn=warnings.append)
+    info = cfetch.probe(origin.url, pool, PROBE_BUDGET, 20, warn=warnings.append)
     assert info.ranged and info.total == SIZE
     assert len(warnings) == 1 and warnings[0].startswith("probe: only one proxy answered")
 
@@ -418,7 +430,7 @@ def test_every_client_ignores_the_environment():
 def test_the_probe_asks_for_identity_encoding(stand, tmp_path):
     origin = stand.origin(SIZE)
     _, pool = _pool(tmp_path, [stand.proxy(), stand.proxy()])
-    assert cfetch.probe(origin.url, pool, 2.0, 20, warn=lambda *a: None) is not None
+    assert cfetch.probe(origin.url, pool, PROBE_BUDGET, 20, warn=lambda *a: None) is not None
     assert origin.ae_log and set(origin.ae_log) == {"identity"}
 
 
@@ -1270,5 +1282,5 @@ def test_valid_probe_votes_decide_before_two_matching_errors(stand, tmp_path):
     origin = stand.origin(SIZE)
     order = [stand.proxy("404"), stand.proxy("404"), stand.proxy(), stand.proxy()]
     store, _ = _pool(tmp_path, order)
-    info = cfetch.probe(origin.url, _InOrder(store, order), 1.0, 20, warn=lambda *a: None)
+    info = cfetch.probe(origin.url, _InOrder(store, order), PROBE_BUDGET, 20, warn=lambda *a: None)
     assert info.ranged and info.total == SIZE
