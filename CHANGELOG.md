@@ -34,7 +34,7 @@ two "versions with no entry" notes came to sit in this file disagreeing with it.
 
 ### Added
 
-- `BITRANOX_MEMORY_WRITES=off`: every memory write path (the engine's write verbs, `factedit apply`, the `memory_add` and `contrib_add` tools, `contrib_queue add`) refuses with one line and exit 2, and the self-improve, dream and audit nudges stay quiet, while recall, the skill router and every guard keep running. Set per session by a harness that runs headless sessions in a real repository and must keep them out of the shared store; a test per write path proves each refusal and its control.
+- `BITRANOX_MEMORY_WRITES=off`: every memory write path refuses with one line and exit 2 (the engine's write verbs and the library functions they share, `factedit apply`, the `memory_add` and `contrib_add` tools, `contrib_queue add`, the reconcile archive, `migrate_memory.py --apply`/`--restore`, `migrate_to_slug_store.py --apply`, `statusrot.py clear`), and the self-heal plus the self-improve, dream, audit and new-project nudges stay quiet, while recall, the skill router and every guard keep running. Set per session by a harness that runs headless sessions in a real repository and must keep them out of the shared store; a test per write path proves each refusal and its control.
 
 ## [10.11.5]
 
