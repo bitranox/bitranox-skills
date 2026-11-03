@@ -38,6 +38,10 @@ import self_improve_signals as sig
 import tell_chars
 import uuid_store as us
 
+WRITE_VERBS = frozenset({"add", "amend-pinned", "move", "relocate", "rename", "retitle", "set-scope",
+                         "heal", "ensure-memory-structure", "ensure-all-trees"})
+"""CLI verbs that write the store or a pointer block; refused under BITRANOX_MEMORY_WRITES=off."""
+
 SCOPE_BEGIN = sig.SCOPE_MARK_BEGIN          # <!-- bitranox:self-learning -->
 SCOPE_END = sig.SCOPE_MARK_END              # <!-- /bitranox:self-learning -->
 
@@ -453,6 +457,7 @@ def add_with_advice(proj, title, hook, body="", type_=None, pin=False, scope_def
     gets the same validation and the same warnings. Returns (slug, created, advice): `created` is
     False when the fact already had a body (an update); `advice` holds the '~ warning: ...' and
     '~ note: ...' lines in the order the CLI prints them. Raises what `add_or_update_entry` raises."""
+    sig.refuse_if_memory_writes_off()
     hook = (hook or "").strip()
     _require_known_type(type_)                # same refusal order as add_or_update_entry
     _require_valid_skill(skill)
@@ -934,6 +939,7 @@ def move_entry(from_level, to_level, slug, force=False):
 
     Returns {"slug","slugs","from","to","direction","moved","moved_slugs","refused","warnings"};
     `slug` is the comma-joined set, identical to the input for a single slug."""
+    sig.refuse_if_memory_writes_off()
     slugs = _as_slug_list(slug)
     rep = {"slug": ", ".join(slugs), "slugs": list(slugs),
            "from": str(from_level), "to": str(to_level),
@@ -1178,7 +1184,12 @@ def heal(proj):
     A level whose files cannot be read or are not UTF-8 is left untouched and REPORTED under
     'unreadable' - skipping it without a word read exactly like a healthy level.
     FAIL-OPEN (never raises). Returns {'healed': [paths], 'orphans': [(level, slug)],
-    'invalid_pointers': [(level, line)], 'unreadable': [(level, reason)], 'levels': n}."""
+    'invalid_pointers': [(level, line)], 'unreadable': [(level, reason)], 'levels': n}.
+    Under BITRANOX_MEMORY_WRITES=off it touches nothing and returns every key empty plus
+    'skipped': the refusal line (SessionStart calls it on every start, so it must not raise)."""
+    if sig.memory_writes_off():
+        return {"healed": [], "orphans": [], "invalid_pointers": [], "unreadable": [], "levels": 0,
+                "skipped": sig.MEMORY_WRITES_OFF_LINE}
     report = {"healed": [], "orphans": [], "invalid_pointers": [], "unreadable": [], "levels": 0}
     try:
         levels = sig.altitude_chain(proj)            # level dirs, narrowest -> the tree's anchor
@@ -1267,6 +1278,7 @@ def relocate_entry(from_level, to_level, slug, force=False):
     earlier archived body of the same slug.
     Returns {"slug","from","to","cross_tree","relocated","refused","warnings"}.
     """
+    sig.refuse_if_memory_writes_off()
     rep = {"slug": slug, "from": str(from_level), "to": str(to_level),
            "cross_tree": False, "relocated": False, "refused": None, "warnings": []}
     src, dst = Path(from_level).resolve(), Path(to_level).resolve()
@@ -1453,6 +1465,7 @@ def rename_entry(level, slug, to_slug):
     frontmatter `name:` and every inbound citation.
     Returns {"slug","to_slug","level","renamed","refs_rewritten","refused","warnings"}.
     """
+    sig.refuse_if_memory_writes_off()
     rep = {"slug": slug, "to_slug": to_slug, "level": str(level), "renamed": False,
            "refs_rewritten": [], "refused": None, "warnings": []}
     lvl = Path(level).resolve()
@@ -1573,6 +1586,7 @@ def retitle_entry(level, slug, to_title):
     deliberate route through the pin gate. Returns
     {"slug","to_title","level","retitled","levels","refused","warnings"}.
     """
+    sig.refuse_if_memory_writes_off()
     rep = {"slug": slug, "to_title": to_title, "level": str(level), "retitled": False,
            "levels": [], "refused": None, "warnings": []}
     lvl = Path(level).resolve()
@@ -1778,6 +1792,7 @@ def ensure_all_trees(roots=None, apply=False):
     ONLY when no other group's top lies strictly beneath it; otherwise it is reported `ambiguous`
     ("a stray top CLAUDE.md above store-bearing trees; scaffolding would merge them") and skipped -
     never auto-merged. Default is a DRY-RUN report; `apply=True` writes."""
+    sig.refuse_if_memory_writes_off()
     roots = [str(r) for r in (roots or sig.discovery_roots())]
     groups = sig.tree_groups(sig.find_claude_md_dirs(roots))
     tops = list(groups)
@@ -1869,8 +1884,8 @@ def main(argv=None):
        not read, a level lock held past its timeout, a failed write, `heal` leaving a level it
        could not read, or a refusal - `! refused: <why>` on stdout - where the engine declined
        the whole action (slug collision, hook over the hard cap, empty body on a new fact, pinned
-       target, unknown or invalid slug, excluded altitude, a refused move/relocate/rename/retitle).
-       Nothing is written on a refusal.
+       target, unknown or invalid slug, excluded altitude, a refused move/relocate/rename/retitle,
+       any WRITE_VERBS verb under BITRANOX_MEMORY_WRITES=off). Nothing is written on a refusal.
 
     TreeWalkError and OSError (TimeoutError from the lock is one) are mapped HERE, once, rather
     than at each verb: they can surface from any read or write of the store, and a verb that
@@ -2002,7 +2017,10 @@ def _main(argv=None):
     rt.add_argument("--slug", required=True, help="the fact to retitle")
     rt.add_argument("--to-title", required=True, dest="to_title",
                     help="the new title (whitespace collapsed to one line)")
-    args = ap.parse_args(sys.argv[1:] if argv is None else argv)
+    raw = sys.argv[1:] if argv is None else argv
+    if raw and raw[0] in WRITE_VERBS and sig.memory_writes_off():
+        return _refused(sig.MEMORY_WRITES_OFF_LINE)
+    args = ap.parse_args(raw)
     if getattr(args, "proj", None):
         # `--proj .` names the cwd; made absolute here so every verb (not only the write path)
         # walks the real altitude chain instead of a relative path with no parents.
