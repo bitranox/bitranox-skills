@@ -36,6 +36,7 @@ from self_improve_signals import (
     knowledge_store_empty,
     load_config,
     mark_seeded,
+    memory_writes_off,
     project_unseeded,
     read_contributions,
 )
@@ -123,7 +124,12 @@ def audit_context(proj):
     The SessionEnd hook (self-improve-audit.py) writes candidate gate-misses to a per-project
     file; here we inject it once so the model reviews them, then delete it so it is not
     resurfaced.
+
+    Under BITRANOX_MEMORY_WRITES=off it returns None and leaves the file: the report asks for a
+    capture the session may not make.
     """
+    if memory_writes_off():
+        return None
     try:
         path = audit_file(proj)
         if not path.is_file():
@@ -534,8 +540,11 @@ _DREAM_DEFERRED = (
 def dream_nudge(proj):
     """Self-silencing nudge to run meta-dream-tree when a consolidation is due (off when mode=off).
 
-    The full ask only in a dream room (see `dream_room`); elsewhere the one-line deferral.
+    The full ask only in a dream room (see `dream_room`); elsewhere the one-line deferral. None under
+    BITRANOX_MEMORY_WRITES=off: a dream writes the store, which such a session may not do.
     """
+    if memory_writes_off():
+        return None
     try:
         if not dream_due(proj):
             return None
@@ -587,7 +596,11 @@ def _nudges_on():
 
 def _self_heal(proj):
     """Best-effort repair of the project's memory chain every session (missing/malformed stores,
-    markers, index files). Fail-open: any error is swallowed so a broken store never wedges a start."""
+    markers, index files). Fail-open: any error is swallowed so a broken store never wedges a start.
+    Skipped under BITRANOX_MEMORY_WRITES=off (heal itself is a no-op there too; this also spares the
+    engine import)."""
+    if memory_writes_off():
+        return
     try:
         import memory_engine
         memory_engine.heal(proj)

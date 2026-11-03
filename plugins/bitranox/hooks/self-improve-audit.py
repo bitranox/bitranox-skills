@@ -26,8 +26,9 @@ from pathlib import Path
 
 import transcript_turns
 from self_improve_signals import (asst_said_offset, audit_file, broad_matches, inert_snippet,
-                                  is_injected_skill_body, quoted_snippet, skills_invoked,
-                                  snippet_was_escaped, strict_asst_hit, strict_user_hit,
+                                  is_injected_skill_body, memory_writes_off, quoted_snippet,
+                                  skills_invoked, snippet_was_escaped, strict_asst_hit,
+                                  strict_user_hit,
                                   tool_matches_outside_fixtures, tool_signal_offset, unquoted,
                                   user_signal_offset)
 
@@ -251,6 +252,10 @@ def main():
     try:
         event = json.load(sys.stdin)
     except (ValueError, OSError):
+        return 0
+    # Under BITRANOX_MEMORY_WRITES=off neither event (PreCompact, SessionEnd) writes a report: it
+    # would ask the next session for a capture it may not make, and a stale one is left as it is.
+    if memory_writes_off():
         return 0
     transcript = event.get("transcript_path") or ""
     if not transcript or not Path(transcript).is_file():

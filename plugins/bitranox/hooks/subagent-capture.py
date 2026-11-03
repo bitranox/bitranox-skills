@@ -279,6 +279,10 @@ def main() -> int:
         event = json.load(sys.stdin)
     except Exception:                                     # noqa: BLE001 - never wedge a subagent
         return 0
+    # Under BITRANOX_MEMORY_WRITES=off nothing is buffered: the main gate is quiet too, so a
+    # buffered learning would only wait for a capture that never comes.
+    if sig.memory_writes_off():
+        return 0
     try:
         session = event.get("session_id") or ""
         if not session:

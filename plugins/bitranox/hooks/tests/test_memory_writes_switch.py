@@ -11,7 +11,11 @@ import pytest
 
 import memory_engine as ME
 import mod_bridge
+import self_improve_audit
+import self_improve_gate
 import self_improve_signals as sig
+import session_start
+import subagent_capture
 
 OFF = {"BITRANOX_MEMORY_WRITES": "off"}
 
@@ -114,3 +118,127 @@ def test_mod_contrib_add_queues_when_on(tmp_path, monkeypatch, capsys):
     rc, out = _bridge(monkeypatch, capsys, "contrib_add", {"what": "w", "target": "skill:x", "why": "y"})
     assert rc == 0 and out["data"]["queued"] is True
     assert list((tmp_path / ".claude").rglob("*.contrib.jsonl"))
+
+
+# ---- Task 7: the nudges and capture hooks stay quiet -------------------------------------------
+# The transcript carries a signal for EACH capture hook, so the ON control proves every hook really
+# prints or writes for it; without that, an OFF arm on a quiet transcript passes with no change.
+#   gate:     the last user message is a strict correction -> a block decision on stdout
+#   audit:    the first two messages are broad-but-not-strict candidates -> an audit file
+#   subagent: an assistant self-admission in the agent transcript -> a buffered learning
+_SIGNAL_TURNS = [
+    ("user", "why did you skip the tests again?"),
+    ("assistant", "let me reconsider the parser approach"),
+    ("user", "No, that's wrong, from now on always use --tree"),
+    ("assistant", "I was wrong - the real cause is the stale venv"),
+]
+
+
+def _event(tmp_path):
+    transcript = tmp_path / "t.jsonl"
+    transcript.write_text("".join(json.dumps({"type": role, "message": {"role": role, "content": text}}) + "\n"
+                                  for role, text in _SIGNAL_TURNS), encoding="utf-8")
+    return {"transcript_path": str(transcript), "cwd": str(tmp_path / "proj"), "session_id": "s1",
+            "hook_event_name": "Stop", "agent_id": "a1", "agent_type": "general-purpose",
+            "agent_transcript_path": str(transcript)}
+
+
+def _run_hook(hook, tmp_path, monkeypatch):
+    """Run `hook.main()` with HOME and the gate's tempdir state confined under `tmp_path`.
+
+    Returns the dirs a hook may write to; both start empty."""
+    home, state = tmp_path / "home", tmp_path / "state"
+    home.mkdir()
+    state.mkdir()
+    monkeypatch.setenv("HOME", str(home))
+    monkeypatch.setenv("USERPROFILE", str(home))
+    monkeypatch.setattr("tempfile.gettempdir", lambda: str(state))
+    monkeypatch.setattr(sys, "stdin", io.StringIO(json.dumps(_event(tmp_path))))
+    assert hook.main() == 0
+    return home, state
+
+
+def _written(*dirs):
+    return [p for d in dirs for p in d.rglob("*")]
+
+
+CAPTURE_HOOKS = [self_improve_gate, self_improve_audit, subagent_capture]
+
+
+@pytest.mark.parametrize("hook", CAPTURE_HOOKS, ids=lambda h: h.__name__)
+def test_capture_hooks_are_silent_when_off(hook, tmp_path, monkeypatch, capsys):
+    monkeypatch.setenv("BITRANOX_MEMORY_WRITES", "off")
+    home, state = _run_hook(hook, tmp_path, monkeypatch)
+    out = capsys.readouterr()
+    assert out.out == "" and out.err == ""
+    assert _written(home, state) == [], "no audit file, no state file"
+
+
+def test_gate_blocks_when_on(tmp_path, monkeypatch, capsys):
+    """Control for the gate's OFF arm: the same event with the switch unset blocks."""
+    monkeypatch.delenv("BITRANOX_MEMORY_WRITES", raising=False)
+    _run_hook(self_improve_gate, tmp_path, monkeypatch)
+    assert json.loads(capsys.readouterr().out)["decision"] == "block"
+
+
+def test_audit_writes_its_report_when_on(tmp_path, monkeypatch):
+    """Control for the audit's OFF arm: the same event with the switch unset writes the report."""
+    monkeypatch.delenv("BITRANOX_MEMORY_WRITES", raising=False)
+    _run_hook(self_improve_audit, tmp_path, monkeypatch)
+    assert sig.audit_file(str(tmp_path / "proj")).is_file()
+
+
+def test_subagent_capture_buffers_when_on(tmp_path, monkeypatch):
+    """Control for subagent-capture's OFF arm: the same event with the switch unset buffers it."""
+    monkeypatch.delenv("BITRANOX_MEMORY_WRITES", raising=False)
+    _run_hook(subagent_capture, tmp_path, monkeypatch)
+    assert sig.read_subagent_learnings("s1")
+
+
+def _session_start_home(tmp_path, monkeypatch):
+    """A HOME where the dream is due and an audit report is pending for `proj`."""
+    home = tmp_path / "home"
+    (home / ".claude").mkdir(parents=True)
+    monkeypatch.setenv("HOME", str(home))
+    monkeypatch.setenv("USERPROFILE", str(home))
+    proj = str(tmp_path / "proj")
+    mem = sig.memory_dir(proj)
+    mem.mkdir(parents=True)
+    (mem / "a.md").write_text("x", encoding="utf-8")       # memory exists, never dreamed -> due
+    report = sig.audit_file(proj)
+    report.parent.mkdir(parents=True, exist_ok=True)
+    report.write_text("<SELF-IMPROVE-AUDIT>pending</SELF-IMPROVE-AUDIT>", encoding="utf-8")
+    return proj, report
+
+
+def test_session_start_dream_nudge_is_quiet_when_off(tmp_path, monkeypatch):
+    proj, _report = _session_start_home(tmp_path, monkeypatch)
+    monkeypatch.setenv("BITRANOX_MEMORY_WRITES", "off")
+    assert session_start.dream_nudge(proj) is None
+
+
+def test_session_start_audit_context_is_quiet_when_off(tmp_path, monkeypatch):
+    proj, report = _session_start_home(tmp_path, monkeypatch)
+    monkeypatch.setenv("BITRANOX_MEMORY_WRITES", "off")
+    assert not session_start.audit_context(proj)
+    assert report.is_file(), "the pending report is left in place, not consumed"
+
+
+def test_session_start_dream_and_audit_fire_when_on(tmp_path, monkeypatch):
+    """Control: the same HOME with the switch unset yields the nudge and the report."""
+    proj, _report = _session_start_home(tmp_path, monkeypatch)
+    monkeypatch.delenv("BITRANOX_MEMORY_WRITES", raising=False)
+    assert session_start.dream_nudge(proj)
+    assert "pending" in session_start.audit_context(proj)
+
+
+def test_session_start_heal_is_quiet_when_off_and_heals_when_on(tmp_path, monkeypatch):
+    off, on = tmp_path / "off", tmp_path / "on"
+    off.mkdir()
+    on.mkdir()
+    monkeypatch.setenv("BITRANOX_MEMORY_WRITES", "off")
+    session_start._self_heal(str(off))
+    assert list(off.iterdir()) == []
+    monkeypatch.delenv("BITRANOX_MEMORY_WRITES")
+    session_start._self_heal(str(on))
+    assert list(on.iterdir()), "control: heal writes the level files with the switch unset"

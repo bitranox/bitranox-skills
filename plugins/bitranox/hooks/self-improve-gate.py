@@ -327,6 +327,10 @@ def main():
         return 0
     if not isinstance(event, dict) or event.get("stop_hook_active"):
         return 0
+    # Before the session-meta record and the per-message state file: an arm session under
+    # BITRANOX_MEMORY_WRITES=off may not capture, so asking it to would only stall its turn.
+    if _sig.memory_writes_off():
+        return 0
 
     transcript = event.get("transcript_path") or ""
     if not transcript or not Path(transcript).is_file():
