@@ -182,3 +182,48 @@ variant identical to the control must tie.
 (4) the skill text, authored on fable; (5) the liveness pair, run on opus; (6) the first real
 experiment. Authoring (skill text, pre-registration, acceptance suite) happens in a fable session;
 every arm and judge runs on opus.
+
+## 5. Amendments (fable review, 2026-11-03, before the implementation plan)
+
+Section-by-section re-read on the authoring tier, against the plugin's code and the prototype's.
+Each item names the section it changes; the text above stays as approved.
+
+- **(1) The cascade in a nested worktree is an assumption, not a given.** A worktree under
+  `<repo>/.claude/worktrees/` loads its own CLAUDE.md and the levels above the repo; whether the
+  repo-level `CLAUDE.local.md` pointer block (untracked, so absent from the checkout) reaches the
+  arm, and what the plugin's SessionStart writes into the worktree (`session-start.py` runs
+  `memory_engine.heal()` on every start, and heal writes pointer blocks), is MEASURED by the
+  build's first task, with one short headless run, before any task rests on it. If the project
+  level's index does not load, the runner copies the repo's `CLAUDE.local.md` into the worktree
+  as an untracked file; the memory-writes switch keeps the engine from writing there.
+- **(2) A priced advantage names its commit.** The judge's beyond-plan verdict carries the sha(s)
+  of the variant commit(s) that deliver each advantage. The repair charge is the input-side cost of
+  the stream span attributed to those commits (the prototype's method: from the message after the
+  previous commit's call through the commit's result). An advantage whose named commit is the arm's
+  only commit, or that the judge cannot tie to a commit, is charged 0 and listed as "unpriced".
+- **(3) The control must carry the switch.** `skills_ref` must be at or after the release that
+  ships `BITRANOX_MEMORY_WRITES`; `run` checks the frozen checkout's `hooks/self_improve_signals.py`
+  for that name and refuses otherwise, because an arm on an older plugin would honour nothing.
+  The switch covers every engine verb that writes (add, amend-pinned, move, relocate, rename,
+  retitle, set-scope, heal, ensure-memory-structure, ensure-all-trees) and the hooks that call them,
+  not only the four paths section 3 names.
+- **(4) Exact arithmetic for the labels.** Per variant V with runs r = 1..n and control C:
+  `cost(V)` = median over V's valid runs of the result record's total cost (all models);
+  `repair(r)` = the sum of priced advantages of V's run r; `adjusted(C)` = median over r of
+  `cost(C, r) + repair(r)`; the control band is `[min_r cost(C, r), max_r cost(C, r)]`. A round is
+  WON by V when the weighted criterion sum (A = +1, B = -1, tie = 0, after the order-swap tie rule)
+  is above 0. KEPT needs `cost(V) <= adjusted(C) + 0.10 USD` (the prototype's cost resolution);
+  "higher cost with no quality gain" is `cost(V) > max_r cost(C, r) + 0.10` without a majority of
+  rounds won. Default weights, fixed at `seal`: correctness 0.30, task coverage 0.25, tests 0.20,
+  beyond-plan fixes 0.10, readability 0.10, scope creep 0.05.
+- **(5) The warmth check has a knob.** An arm is void when its first assistant message's cache
+  read differs by more than `warmth_tolerance` (default 0.25) from the median of the run's other
+  finished arms. The prototype's spread was 1 percent; the default is a guess until measured.
+- **(6) Profile validation is stdlib.** `tomllib` plus frozen dataclasses with explicit checks,
+  not Pydantic: the repo's gate runs every skill's tests in a bare environment with no PEP 723
+  dependency provisioned, so a third-party import fails the gate. Gate and suite commands are argv
+  lists run without a shell.
+- **(7) Dropped with the prototype:** the absolute quality judge and the mutation battery. Both
+  depended on an external checkout and Rust-specific scoring; the rubric now lives inside the
+  pairwise call (section 2), and the mutation battery's job is not part of any label.
+
