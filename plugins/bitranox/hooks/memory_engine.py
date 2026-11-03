@@ -226,7 +226,9 @@ def read_store(proj):
 
 def _commit_store(proj, scope, entries, bodies):
     """Write each entry's central body + the pointer block in `CLAUDE.local.md`; mtime-neutral. Returns
-    True if anything changed."""
+    True if anything changed. Refuses first under BITRANOX_MEMORY_WRITES=off: reconcile's archive
+    commits a pointer block through here without going through `upsert_entry`."""
+    sig.refuse_if_memory_writes_off()
     anchor = _anchor(proj)
     changed = False
     pointers = []
@@ -363,7 +365,12 @@ def upsert_entry(proj, title, hook, body="", type_=None, pin=False,
 
     `skill` ties the fact to the skill it belongs with (`metadata: skill:`); it follows the same
     rules as `type_` - kept on an update that does not name it, set in place by one with no body -
-    and an invalid name raises `InvalidSkill` before any write."""
+    and an invalid name raises `InvalidSkill` before any write.
+
+    Under BITRANOX_MEMORY_WRITES=off it raises `sig.MemoryWritesOff` as its first statement, before
+    the lock is taken and before anything is read: this is the entry write path the skill scripts
+    (reconcile, migrate) call directly, so a guard on the CLI verbs alone left it open."""
+    sig.refuse_if_memory_writes_off()
     proj = os.path.abspath(str(proj))
     _require_known_type(type_)
     _require_valid_skill(skill)
@@ -1060,7 +1067,11 @@ def ensure_level(proj, scope_default="", _locked=False):
 
     REFUSES an excluded altitude (home, the system temp dir, the filesystem root): those dirs are
     never a memory level, and scaffolding them turns e.g. all of /tmp into a fake knowledge tree
-    that pollutes recall (bitten twice on 2026-07-05)."""
+    that pollutes recall (bitten twice on 2026-07-05).
+
+    Refuses first under BITRANOX_MEMORY_WRITES=off, before the lock: it writes both level files
+    with no entry, so `upsert_entry`'s guard does not cover a direct caller."""
+    sig.refuse_if_memory_writes_off()
     proj = os.path.abspath(str(proj))
     if _is_excluded_level(proj):
         raise ExcludedLevel(proj)
@@ -1226,7 +1237,10 @@ def _heal_one_level(level, report):
 
 def scaffold(proj):
     """Create every MISSING CLAUDE.md (marker) + CLAUDE.local.md (pointer block) from `proj` up to the
-    anchor, and the anchor's `.claude-memory/` body-store. Idempotent; returns the created paths."""
+    anchor, and the anchor's `.claude-memory/` body-store. Idempotent; returns the created paths.
+    Refuses first under BITRANOX_MEMORY_WRITES=off: it writes the CLAUDE.md marker
+    (`_ensure_claude_md`) before `ensure_level`'s own guard is reached."""
+    sig.refuse_if_memory_writes_off()
     created = []
     try:
         levels = sig.altitude_chain(proj)            # level dirs, narrowest -> the tree's anchor

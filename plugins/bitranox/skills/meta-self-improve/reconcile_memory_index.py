@@ -42,6 +42,7 @@ from pathlib import Path
 # reuse the UUID-native engine (single source of truth for the on-disk format) from the hooks dir
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "hooks"))
 import memory_engine as ME  # noqa: E402
+import self_improve_signals as sig  # noqa: E402
 import uuid_store as us  # noqa: E402
 
 _HOOK_MAX = 160
@@ -434,7 +435,14 @@ def archive_entry(level_dir, slug, archive_subdir=".archive", dry_run=False, *, 
     of several pointers keeps the fact, so nothing is left dangling and nothing is checked.
 
     `move` and `commit` are the body-move and pointer-write seams (shutil.move and the engine's
-    store commit when omitted), resolved at call time."""
+    store commit when omitted), resolved at call time.
+
+    Raises `sig.MemoryWritesOff` before anything is read under BITRANOX_MEMORY_WRITES=off, unless
+    `dry_run`. It cannot leave that to the commit's own guard: the body is moved BEFORE the commit,
+    and a refusal there is not the OSError `_put_back` answers, so the body would stay in the
+    archive while its pointer still named it."""
+    if not dry_run:
+        sig.refuse_if_memory_writes_off()
     move = move or shutil.move
     commit = commit or ME._commit_store
     d = Path(level_dir)
@@ -941,9 +949,14 @@ def main(argv=None):
     write of the store can raise one, and a mode that forgot to catch it let a traceback exit 1 -
     the code for "problems found", so a store that could not be read passed for one with findings.
     --check-tree collects what it could not read instead, so every other finding is still
-    reported, and then exits 2."""
+    reported, and then exits 2. A write mode under BITRANOX_MEMORY_WRITES=off (the engine refuses
+    with MemoryWritesOff, a RuntimeError) is mapped here too: unmapped it was a traceback and exit 1.
+    """
     try:
         return _main(argv)
+    except sig.MemoryWritesOff as exc:
+        print("! refused: %s" % exc, file=sys.stderr)
+        return 2
     except ME.TreeWalkError as exc:
         print("! error: cannot read the memory store - %s" % exc, file=sys.stderr)
         return 2

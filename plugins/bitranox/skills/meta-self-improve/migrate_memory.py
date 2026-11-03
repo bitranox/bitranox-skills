@@ -728,8 +728,15 @@ def _restore_cmd(backup_dir):
 
 def main(argv=None):
     """Exit codes are in the module docstring: 0 all placed; 1 a parked store or a refused entry;
-    2 usage, an unreadable input, a failed backup/write, or an unexpected failure mid-run."""
+    2 usage, an unreadable input, a failed backup/write, or an unexpected failure mid-run.
+
+    --apply and --restore exit 2 with one line under BITRANOX_MEMORY_WRITES=off, before anything is
+    written: --restore rewrites store paths from a manifest without the engine, and --apply would
+    take its backup before the engine refused the first entry. A dry run still runs."""
     args = _parser().parse_args(sys.argv[1:] if argv is None else argv)
+    if (args.apply or args.restore) and sig.memory_writes_off():
+        print("migrate_memory: refused: %s" % sig.MEMORY_WRITES_OFF_LINE, file=sys.stderr)
+        return 2
     if args.restore:
         return _restore_cmd(args.restore)
     dry = not args.apply

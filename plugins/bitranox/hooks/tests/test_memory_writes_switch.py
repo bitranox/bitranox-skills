@@ -3,9 +3,13 @@
 One test per path. Each pair has a GREEN control (writes on) beside the RED arm (writes off), so a
 test that passes because the path is broken for another reason cannot pass both.
 """
+import importlib
 import io
 import json
+import os
+import subprocess
 import sys
+from pathlib import Path
 
 import pytest
 
@@ -84,6 +88,174 @@ def test_library_write_functions_raise_first(fn, args, monkeypatch):
     monkeypatch.setenv("BITRANOX_MEMORY_WRITES", "off")
     with pytest.raises(sig.MemoryWritesOff):
         fn(*args)
+
+
+@pytest.mark.parametrize("fn", [ME.upsert_entry, ME.add_or_update_entry], ids=lambda f: f.__name__)
+def test_single_entry_write_path_refuses_when_off_and_writes_when_on(fn, tmp_path, monkeypatch):
+    """The two-function entry write path every skill script calls directly (reconcile, migrate):
+    guarding only the CLI verbs and add_with_advice left these open."""
+    monkeypatch.setenv("BITRANOX_MEMORY_WRITES", "off")
+    with pytest.raises(sig.MemoryWritesOff):
+        fn(str(tmp_path), **FACT)
+    assert list(tmp_path.iterdir()) == [], "the refusal must come before any write"
+    monkeypatch.delenv("BITRANOX_MEMORY_WRITES")
+    fn(str(tmp_path), **FACT)
+    assert (tmp_path / "CLAUDE.local.md").is_file(), "control: the same call writes with the switch unset"
+
+
+# The other library writers a caller outside the CLI can reach: `_commit_store` is the pointer
+# commit reconcile's archive uses directly; `ensure_level` and `scaffold` write level files with
+# no entry. Each takes a level under tmp_path, so an unguarded arm writes there and is caught.
+_LEVEL_WRITERS = [
+    ("_commit_store", lambda level: ME._commit_store(level, "scope", [], {})),
+    ("ensure_level", lambda level: ME.ensure_level(level, scope_default="scope")),
+    ("scaffold", lambda level: ME.scaffold(level)),
+]
+
+
+@pytest.mark.parametrize("name, call", _LEVEL_WRITERS, ids=[n for n, _c in _LEVEL_WRITERS])
+def test_level_writers_raise_first_when_off_and_write_when_on(name, call, tmp_path, monkeypatch):
+    monkeypatch.setenv("BITRANOX_MEMORY_WRITES", "off")
+    level = tmp_path / "level"
+    level.mkdir()
+    with pytest.raises(sig.MemoryWritesOff):
+        call(str(level))
+    assert list(tmp_path.rglob("*")) == [level], "%s wrote before refusing" % name
+    monkeypatch.delenv("BITRANOX_MEMORY_WRITES")
+    call(str(level))
+    assert (level / "CLAUDE.local.md").is_file(), "control: %s writes with the switch unset" % name
+
+
+# ---- end to end through the shipped skill scripts that call the engine library directly ---------
+_SKILL_DIR = Path(ME.__file__).resolve().parents[1] / "skills" / "meta-self-improve"
+
+
+def _tree_bytes(root):
+    return {str(p.relative_to(root)): p.read_bytes() for p in sorted(root.rglob("*")) if p.is_file()}
+
+
+def _script(script, args, tmp_path, off):
+    """Run a shipped script as a real process, HOME confined under tmp_path."""
+    env = {k: v for k, v in os.environ.items() if k != "BITRANOX_MEMORY_WRITES"}
+    home = tmp_path / "home"
+    home.mkdir(exist_ok=True)
+    env.update(HOME=str(home), USERPROFILE=str(home), PYTHONUTF8="1")
+    if off:
+        env["BITRANOX_MEMORY_WRITES"] = "off"
+    return subprocess.run([sys.executable, str(_SKILL_DIR / script), *args], env=env,
+                          capture_output=True, text=True, encoding="utf-8", errors="replace",
+                          timeout=120)
+
+
+def _tree_with_fact(tmp_path, monkeypatch):
+    """A one-level tree holding one fact, written by the engine with the switch unset."""
+    monkeypatch.delenv("BITRANOX_MEMORY_WRITES", raising=False)
+    monkeypatch.setenv("HOME", str(tmp_path / "home"))
+    tree = tmp_path / "tree"
+    tree.mkdir()
+    (tree / "CLAUDE.md").write_text("# tree\n", encoding="utf-8")
+    slug = ME.add_or_update_entry(str(tree), **FACT)
+    return tree, slug
+
+
+def _dangling_tree(tmp_path, monkeypatch):
+    """The tree plus a second body no pointer names: what reconcile --rehome re-attaches through
+    ME.add_or_update_entry."""
+    tree, slug = _tree_with_fact(tmp_path, monkeypatch)
+    facts = tree / ".claude-memory" / "facts"
+    text = (facts / (slug + ".md")).read_text(encoding="utf-8")
+    (facts / "feedback-dangling-probe.md").write_text(
+        text.replace("name: %s" % slug, "name: feedback-dangling-probe"), encoding="utf-8")
+    return tree
+
+
+@pytest.mark.parametrize("off", [True, False], ids=["off", "on-control"])
+def test_reconcile_rehome_end_to_end(off, tmp_path, monkeypatch):
+    tree = _dangling_tree(tmp_path, monkeypatch)
+    before = _tree_bytes(tree)
+    r = _script("reconcile_memory_index.py", [str(tree), "--rehome"], tmp_path, off)
+    if off:
+        assert r.returncode == 2, r.stdout + r.stderr
+        assert sig.MEMORY_WRITES_OFF_LINE in r.stderr and "Traceback" not in r.stderr
+        assert _tree_bytes(tree) == before
+    else:
+        assert r.returncode == 0, r.stdout + r.stderr
+        assert "re-homed: feedback-dangling-probe" in r.stdout
+        assert _tree_bytes(tree) != before
+
+
+@pytest.mark.parametrize("off", [True, False], ids=["off", "on-control"])
+def test_reconcile_archive_end_to_end(off, tmp_path, monkeypatch):
+    """archive moves the body BEFORE its pointer commit, so a guard on the commit alone would
+    strand the body in .archive/ with its pointer still in place; it must refuse before the move."""
+    tree, slug = _tree_with_fact(tmp_path, monkeypatch)
+    before = _tree_bytes(tree)
+    r = _script("reconcile_memory_index.py", [str(tree), "--archive", slug], tmp_path, off)
+    body = tree / ".claude-memory" / "facts" / (slug + ".md")
+    if off:
+        assert r.returncode == 2, r.stdout + r.stderr
+        assert sig.MEMORY_WRITES_OFF_LINE in r.stderr and "Traceback" not in r.stderr
+        assert _tree_bytes(tree) == before
+    else:
+        assert r.returncode == 0, r.stdout + r.stderr
+        assert not body.exists() and list((tree / ".claude-memory" / ".archive").glob("*.md"))
+
+
+@pytest.mark.parametrize("off", [True, False], ids=["off", "on-control"])
+def test_migrate_restore_end_to_end(off, tmp_path, monkeypatch):
+    """--restore rewrites store paths from a manifest without the engine; under the switch it must
+    refuse before touching them."""
+    tree, slug = _tree_with_fact(tmp_path, monkeypatch)
+    target = tree / "CLAUDE.local.md"
+    backup = tmp_path / "backup"
+    backup.mkdir()
+    item = {"path": str(target), "kind": "file", "restore": True, "existed": False, "copy": None}
+    (backup / "manifest.json").write_text(json.dumps({"version": 1, "items": [item]}), encoding="utf-8")
+    before = _tree_bytes(tree)
+    r = _script("migrate_memory.py", ["--restore", str(backup)], tmp_path, off)
+    if off:
+        assert r.returncode == 2, r.stdout + r.stderr
+        assert sig.MEMORY_WRITES_OFF_LINE in r.stderr
+        assert _tree_bytes(tree) == before
+    else:
+        assert r.returncode == 0, r.stdout + r.stderr
+        assert not target.exists(), "control: the manifest's restore removes the file"
+
+
+@pytest.mark.parametrize("off", [True, False], ids=["off", "on-control"])
+def test_migrate_apply_end_to_end(off, tmp_path, monkeypatch, capsys):
+    """--apply takes an out-of-tree backup, then places each native entry through
+    ME.add_or_update_entry. Under the switch it refuses before the backup: nothing under HOME but
+    the native store, the target level untouched. Run in-process, because the target sits under
+    the temp dir, which migrate excludes unless its prefix list is emptied as its own suite does."""
+    monkeypatch.syspath_prepend(str(_SKILL_DIR))
+    migrate = importlib.import_module("migrate_memory")
+    monkeypatch.setattr(migrate, "_EXCLUDE_PREFIXES", ())
+    home = tmp_path / "home"
+    monkeypatch.setenv("HOME", str(home))
+    monkeypatch.setenv("USERPROFILE", str(home))
+    slug = "-media-probe-moved-proj"
+    native = home / ".claude" / "projects" / slug / "memory"
+    native.mkdir(parents=True)
+    (native / "MEMORY.md").write_text("# Memory index\n", encoding="utf-8")
+    (native / "a.md").write_text("---\nname: project-a\ndescription: fact a\nmetadata:\n  type: project\n"
+                                 "---\nBody A.\n", encoding="utf-8")
+    target = tmp_path / "target"
+    target.mkdir()
+    home_before = sorted(home.rglob("*"))
+    if off:
+        monkeypatch.setenv("BITRANOX_MEMORY_WRITES", "off")
+    else:
+        monkeypatch.delenv("BITRANOX_MEMORY_WRITES", raising=False)
+    rc = migrate.main(["--apply", "--slug=" + slug, "--redirect=%s=%s" % (slug, target)])
+    if off:
+        assert rc == 2
+        assert sig.MEMORY_WRITES_OFF_LINE in capsys.readouterr().err
+        assert list(target.iterdir()) == []
+        assert sorted(home.rglob("*")) == home_before, "no backup, no receipt"
+    else:
+        assert rc == 0
+        assert (target / "CLAUDE.local.md").is_file()
 
 
 def _bridge(monkeypatch, capsys, tool, payload):
