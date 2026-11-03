@@ -21,8 +21,9 @@ would break resolution):
 
 Exit codes: 0 the run covered everything it was pointed at; 2 it could not - a --root that is not
 a directory, a CLAUDE.local.md it could not read (dry run and apply), a tree --apply refused for
-that reason, a backup that failed (nothing applied), or a write that failed part-way through the
-apply (the report, with the backup to restore from, is still printed first).
+that reason, a backup that failed (nothing applied), a write that failed part-way through the
+apply (the report, with the backup to restore from, is still printed first), or --apply under
+BITRANOX_MEMORY_WRITES=off (one line, nothing backed up or moved; a dry run still runs).
 
 Pure standard library; mtime-neutral writers; ASCII output.
 """
@@ -302,6 +303,11 @@ def main(argv=None):
                     help="tree root(s) to scan (repeatable)")
     ap.add_argument("--apply", action="store_true", help="write (default: DRY-RUN, writes nothing)")
     args = ap.parse_args(sys.argv[1:] if argv is None else argv)
+    # The apply writes pointer blocks through uuid_store, outside the engine, so the engine's own
+    # guards never see it; refuse before the backup, which would already write into the tree.
+    if args.apply and sig.memory_writes_off():
+        print(f"migrate_to_slug_store: refused: {sig.MEMORY_WRITES_OFF_LINE}", file=sys.stderr)
+        return 2
     # A typo'd --root walks nothing and reported "0 pointer file(s)" with exit 0, which reads
     # exactly like a tree with nothing left to migrate.
     missing = [r for r in args.roots if not Path(r).is_dir()]

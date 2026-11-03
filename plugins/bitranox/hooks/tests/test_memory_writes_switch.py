@@ -1,7 +1,16 @@
-"""BITRANOX_MEMORY_WRITES=off: every write path refuses with one line, every nudge stays quiet.
+"""BITRANOX_MEMORY_WRITES=off: the store's write paths refuse with one line, the nudges stay quiet.
 
-One test per path. Each pair has a GREEN control (writes on) beside the RED arm (writes off), so a
-test that passes because the path is broken for another reason cannot pass both.
+Covered here: the switch reading itself; the engine (its CLI write verbs, add_with_advice, the
+library writers, upsert_entry and add_or_update_entry, the level writers); heal, which is a silent
+no-op rather than a refusal because SessionStart calls it; the reconcile_memory_index and
+migrate_memory skill scripts; the mod tools and the contribution queue; the capture hooks; and the
+SessionStart nudges. Two writers are tested beside their own fixtures instead:
+migrate_to_slug_store --apply in test_migrate_to_slug_store.py, and statusrot clear in the
+meta-dream-tree skill's tests/test_statusrot_memory_writes.py.
+
+Where a path writes when on, its OFF arm has a GREEN control (writes on) on the same input, in the
+same test or the next one, so a test that passes because the path is broken for another reason
+cannot pass both.
 """
 import importlib
 import io
@@ -20,8 +29,6 @@ import self_improve_gate
 import self_improve_signals as sig
 import session_start
 import subagent_capture
-
-OFF = {"BITRANOX_MEMORY_WRITES": "off"}
 
 
 @pytest.mark.parametrize("value, expected", [
@@ -45,7 +52,8 @@ def test_refuse_raises_only_when_off(monkeypatch):
     assert "BITRANOX_MEMORY_WRITES=off" in str(exc.value)
 
 
-FACT = dict(title="Probe fact", hook="When probing the switch, expect a refusal.", body="body", type_="feedback")
+FACT = {"title": "Probe fact", "hook": "When probing the switch, expect a refusal.",
+        "body": "body", "type_": "feedback"}
 
 
 def test_engine_add_refuses_when_off_and_writes_when_on(tmp_path, monkeypatch, capsys):

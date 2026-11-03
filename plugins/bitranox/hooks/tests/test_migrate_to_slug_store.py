@@ -5,6 +5,7 @@ from pathlib import Path, PureWindowsPath
 
 import pytest
 
+import self_improve_signals as sig
 import uuid_store as us
 import migrate_to_slug_store as MS
 
@@ -402,3 +403,42 @@ def test_an_oserror_mid_apply_exits_2_and_still_names_the_backup(tmp_path, capsy
     assert "Traceback" not in captured.err
     assert "! error:" in captured.err and "backup" in captured.err.lower()
     assert "backup:" in captured.out
+
+
+# ---- BITRANOX_MEMORY_WRITES=off: --apply refuses, a dry run still reports ----------------------
+
+def _snapshot(root):
+    """Every file under `root` with its bytes, so a refusal can be checked as byte-identical."""
+    return {p.relative_to(root).as_posix(): p.read_bytes()
+            for p in sorted(Path(root).rglob("*")) if p.is_file()}
+
+
+def test_apply_refuses_when_memory_writes_are_off_and_applies_when_on(tmp_path, monkeypatch,
+                                                                       capsys):
+    """--apply writes the shared store outside the engine (uuid_store directly), so the engine's
+    own guards never see it. It must refuse in main, before the backup and before any move."""
+    anchor, _proj = _legacy_tree(tmp_path)
+    before = _snapshot(anchor)
+    monkeypatch.setenv(sig.MEMORY_WRITES_ENV, "off")
+    assert MS.main(["--root", str(tmp_path), "--apply"]) == 2
+    captured = capsys.readouterr()
+    assert captured.err.strip().splitlines() == [
+        f"migrate_to_slug_store: refused: {sig.MEMORY_WRITES_OFF_LINE}"]
+    assert captured.out == ""
+    assert _snapshot(anchor) == before, "nothing - no backup, no move, no rewrite - may be written"
+    assert not list(anchor.glob(MS.BACKUP_PREFIX + "*"))
+
+    monkeypatch.delenv(sig.MEMORY_WRITES_ENV)
+    assert MS.main(["--root", str(tmp_path), "--apply"]) == 0, "control: the same apply works"
+    assert us.body_path(anchor, "proj-fact").read_text(encoding="utf-8") == "PROJ BODY\n"
+    assert list(anchor.glob(MS.BACKUP_PREFIX + "*"))
+
+
+def test_a_dry_run_still_reports_when_memory_writes_are_off(tmp_path, monkeypatch, capsys):
+    anchor, _proj = _legacy_tree(tmp_path)
+    before = _snapshot(anchor)
+    monkeypatch.setenv(sig.MEMORY_WRITES_ENV, "off")
+    assert MS.main(["--root", str(tmp_path)]) == 0
+    out = capsys.readouterr().out
+    assert out.startswith("DRY-RUN: ") and "2 legacy line(s)" in out
+    assert _snapshot(anchor) == before

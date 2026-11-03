@@ -23,7 +23,8 @@ Two things this tool is careful about, both learned the hard way:
    saying "superseded" - which needs no lookup and is reported separately as a finding.
 
 Exit codes: 0 = no self-contradictions, 1 = at least one, 2 = error (no levels, a missing or
-unreadable level, a --chain that is not a directory, a baseline `clear` cannot read or write).
+unreadable level, a --chain that is not a directory, a baseline `clear` cannot read or write,
+or a `clear` under BITRANOX_MEMORY_WRITES=off, which writes nothing).
 The candidate list is informational and never on its own sets exit 1.
 --json prints the envelope {ok, command, data, skipped} on every exit, an `error` key added
 on exit 2; `ok` means the run worked and is false only on exit 2.
@@ -55,6 +56,7 @@ from pathlib import Path
 # facts a level holds - including a dotted slug, which a hand-rolled [a-z0-9-]+ silently skips
 # and so mistakes its body for an orphan.
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "hooks"))
+import self_improve_signals as sig
 import uuid_store
 
 # tree_support is this script's sibling; a caller loading the script by path does not put this
@@ -469,7 +471,12 @@ def _do_clear(result: ScanResult, bl_path: Path | None, args: argparse.Namespace
     the candidates nobody read, or losing the work. A name that matches no flagged candidate is
     REFUSED and nothing is written - a selector that silently records nothing reports a clean sweep
     while certifying neither the typo nor the entry it was aimed at.
+
+    Under BITRANOX_MEMORY_WRITES=off it refuses first, with exit 2 and nothing written: the
+    baseline lives inside the shared store, and the store's snapshot guard cannot see this write.
     """
+    if sig.memory_writes_off():
+        return _clear_error(sig.MEMORY_WRITES_OFF_LINE, args.json)
     if bl_path is None:
         return _clear_error("no .claude-memory store above the given level; "
                             "nothing to record against", args.json)

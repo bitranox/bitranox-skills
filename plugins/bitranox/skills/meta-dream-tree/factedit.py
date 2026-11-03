@@ -440,12 +440,14 @@ def load_rules(engine: Path) -> EngineRules:
     """Import the engine's lint modules and bind the LIVE caps and predicates."""
     hooks_dir = str(Path(engine).resolve().parent)
     sys.path.insert(0, hooks_dir)
-    # Drop any previously-imported copy first. Both names are plain top-level modules, so a second
+    # Drop any previously-imported copy first. All three are plain top-level modules, so a second
     # call with a DIFFERENT engine dir would otherwise get the cached first one and report that
     # engine's caps under this engine's path - the exact silent-wrong-answer this tool exists to
-    # stop. Nothing else in this process imports them, so evicting them is safe. The anchor
-    # resolver and the memory-writes switch live in self_improve_signals (uuid_store re-exports
-    # the resolver), so that goes too.
+    # stop. In production nothing else in this process imports them, so evicting them is safe.
+    # Under pytest, test modules (statusrot's, for one) bound them at collection, before any
+    # eviction; those keep the module objects they bound, and this load binds fresh copies beside
+    # them. The anchor resolver and the memory-writes switch live in self_improve_signals
+    # (uuid_store re-exports the resolver), so that goes too.
     for name in ("uuid_store", "capture_constraints", "self_improve_signals"):
         sys.modules.pop(name, None)
     importlib.invalidate_caches()
