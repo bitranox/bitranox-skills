@@ -30,6 +30,12 @@ a hole nobody has drawn a line under is one that gets rediscovered and half-fill
 two "versions with no entry" notes came to sit in this file disagreeing with it.
 
 
+## [10.12.2]
+
+### Added
+
+- `coding-python-use-modern-libraries`: a quick-reference row for reading a large JSON array one element at a time with memory that does not grow with the record count. orjson has no streaming API, so stdlib `json.JSONDecoder().raw_decode` finds where each element ends and `orjson.loads` parses the slice (records stay exactly orjson's), or `ijson.items(..., use_float=True)` when a dependency is fine; a whole-array parse and a hand-rolled byte or regex scanner go under Avoid. A Notes entry gives the chunked recipe: the incremental UTF-8 decoder, stepping over the separators, reading more on an incomplete element, a maximum element size so a malformed element cannot pull in the whole file, refusing `RecursionError` from deep nesting with its own message, mapping `UnicodeDecodeError` to the same refusal, and dropping the consumed prefix only when reading the next chunk. It records a measured version difference: from Python 3.12 `raw_decode` parses 5000 nesting levels, while on 3.10 and 3.11 it stops at 997 (the default recursion limit), below orjson's 1024, so a depth test belongs on every supported minor.
+
 ## [10.12.1]
 
 ### Fixed
