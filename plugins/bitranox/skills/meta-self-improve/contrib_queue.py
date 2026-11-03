@@ -337,6 +337,9 @@ def main(argv=None):
             queued = sig.add_contribution(proj, {"what": args.what, "target": args.target,
                                                  "why": args.why, "source": args.source},
                                           strict=True)
+        except sig.MemoryWritesOff as exc:
+            print("! refused: %s" % exc, file=sys.stderr)
+            return 2
         except OSError as exc:
             print("! failed: could not queue %r (%s) - nothing was recorded; fix the store and "
                   "re-run" % (args.what, exc), file=sys.stderr)
