@@ -10,6 +10,7 @@ import sys
 import pytest
 
 import memory_engine as ME
+import mod_bridge
 import self_improve_signals as sig
 
 OFF = {"BITRANOX_MEMORY_WRITES": "off"}
@@ -79,3 +80,37 @@ def test_library_write_functions_raise_first(fn, args, monkeypatch):
     monkeypatch.setenv("BITRANOX_MEMORY_WRITES", "off")
     with pytest.raises(sig.MemoryWritesOff):
         fn(*args)
+
+
+def _bridge(monkeypatch, capsys, tool, payload):
+    request = json.dumps({"tool": tool, "input": payload}).encode("utf-8")
+    monkeypatch.setattr(sys, "stdin", io.TextIOWrapper(io.BytesIO(request), encoding="utf-8"))
+    rc = mod_bridge.main()
+    return rc, json.loads(capsys.readouterr().out)
+
+
+def test_mod_memory_add_refuses_when_off(tmp_path, monkeypatch, capsys):
+    monkeypatch.setenv("BITRANOX_MEMORY_WRITES", "off")
+    monkeypatch.chdir(tmp_path)
+    rc, out = _bridge(monkeypatch, capsys, "memory_add",
+                      {"level": str(tmp_path), "title": "T", "hook": "When x, do y.", "body": "b", "type": "feedback"})
+    assert rc == 1 and out["ok"] is False and out["error"]["kind"] == "MemoryWritesOff"
+    assert not (tmp_path / "CLAUDE.local.md").exists()
+
+
+def test_mod_contrib_add_refuses_when_off(tmp_path, monkeypatch, capsys):
+    monkeypatch.setenv("BITRANOX_MEMORY_WRITES", "off")
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.chdir(tmp_path)
+    rc, out = _bridge(monkeypatch, capsys, "contrib_add", {"what": "w", "target": "skill:x", "why": "y"})
+    assert rc == 1 and out["error"]["kind"] == "MemoryWritesOff"
+    assert not list((tmp_path / ".claude").rglob("*.contrib.jsonl"))
+
+
+def test_mod_contrib_add_queues_when_on(tmp_path, monkeypatch, capsys):
+    monkeypatch.delenv("BITRANOX_MEMORY_WRITES", raising=False)
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.chdir(tmp_path)
+    rc, out = _bridge(monkeypatch, capsys, "contrib_add", {"what": "w", "target": "skill:x", "why": "y"})
+    assert rc == 0 and out["data"]["queued"] is True
+    assert list((tmp_path / ".claude").rglob("*.contrib.jsonl"))

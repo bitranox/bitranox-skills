@@ -736,7 +736,12 @@ def add_contribution(proj, record, max_items=100, strict=False):
 
     Returns True when queued, False when not (a duplicate, a closed intent, no `what`). Best-effort
     by default: a store error is also False and never raises. `strict=True` raises that OSError
-    instead, so an operator CLI does not report a failed write as "already queued"."""
+    instead, so an operator CLI does not report a failed write as "already queued".
+
+    One exception to best-effort, in either mode: under BITRANOX_MEMORY_WRITES=off this raises
+    MemoryWritesOff before the queue is read, because a False would read as "already queued" and
+    hide that the switch refused the write."""
+    refuse_if_memory_writes_off()
     if not isinstance(record, dict) or not record.get("what"):
         return False
     try:
