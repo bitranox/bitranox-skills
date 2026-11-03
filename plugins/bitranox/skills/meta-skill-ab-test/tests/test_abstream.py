@@ -192,3 +192,34 @@ def test_per_message_model_counts_two_interleaved_models():
                                "claude-opus-5-5"]):
         acct.feed(_assistant(f"m{i}", model))
     assert acct.per_message_model == {"claude-opus-5-5": 3, "claude-haiku-5-5": 2}
+
+
+def _synthetic(mid, text):
+    return {"type": "assistant", "message": {
+        "id": mid, "model": "<synthetic>", "content": [{"type": "text", "text": text}],
+        "usage": {"input_tokens": 9, "cache_creation_input_tokens": 9, "cache_read_input_tokens": 9,
+                  "output_tokens": 9}}}
+
+
+def test_a_cli_synthetic_message_voids_with_its_text_and_charges_nothing():
+    acct = S.StreamAccount()
+    acct.feed(OPUS_INIT)
+    acct.feed(_assistant("m1", "claude-opus-5-5", input_tokens=5, cache_read_input_tokens=7, output_tokens=3))
+    acct.feed(_synthetic("s1", "You've hit your weekly limit - resets Monday"))
+    acct.feed(_synthetic("s2", "You've hit your weekly limit - resets Monday"))
+    s = acct.summary()
+    assert len(s["void_reasons"]) == 1
+    (reason,) = s["void_reasons"]
+    assert reason.startswith(S.SYNTHETIC_REASON_PREFIX) and "weekly limit" in reason
+    assert S.SYNTHETIC_REASON_PREFIX == "CLI synthetic message: "
+    assert not any("<synthetic>" in r for r in s["void_reasons"])
+    assert (s["main_new_tokens"], s["main_cache_read"], s["main_output_tokens"]) == (5, 7, 3)
+    assert (s["assistant_messages"], s["per_message_model"], s["first_cache_read"]) == (1, {"claude-opus-5-5": 1}, 7)
+
+
+def test_a_synthetic_reason_is_cut_to_80_characters_and_tolerates_no_text():
+    acct = S.StreamAccount()
+    acct.feed(_synthetic("s1", "x" * 200))
+    acct.feed({"type": "assistant", "message": {"id": "s2", "model": "<synthetic>"}})
+    assert acct.void_reasons == ["CLI synthetic message: " + "x" * 80, "CLI synthetic message: "]
+    assert (acct.first_cache_read, acct.new_tokens, acct.output_tokens) == (None, 0, 0)

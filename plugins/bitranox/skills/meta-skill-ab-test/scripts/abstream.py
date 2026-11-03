@@ -19,6 +19,8 @@ __all__ = [
     "NO_INIT_REASON",
     "OPUS_PREFIX",
     "PRICES",
+    "SYNTHETIC_MODEL",
+    "SYNTHETIC_REASON_PREFIX",
     "StreamAccount",
     "UnknownModel",
     "account_stream_file",
@@ -34,6 +36,12 @@ ALLOWED_MODEL_PREFIXES = (OPUS_PREFIX, "claude-haiku")
 # Kept for importers; the void check reads ALLOWED_MODEL_PREFIXES, which already refuses these.
 FORBIDDEN_MODEL_SUBSTRINGS = ("fable", "mythos")
 NO_INIT_REASON = "no init record (main model not asserted)"
+# The CLI writes its own notices (a usage limit hit, an API error) as assistant records under this
+# model id. It names no model, so the allowlist skips it; the notice itself voids the arm, with its
+# text, because a run that hit a limit or lost its connection did not do the work it was given.
+SYNTHETIC_MODEL = "<synthetic>"
+SYNTHETIC_REASON_PREFIX = "CLI synthetic message: "
+SYNTHETIC_TEXT_LIMIT = 80
 INPUT_CLASSES = ("input", "cache_read", "cache_write_5m", "cache_write_1h")
 # USD per million tokens. Add a row from the published price list, never from memory.
 PRICES: dict[str, dict[str, float]] = {
@@ -168,6 +176,8 @@ class StreamAccount:
             self.void_reasons.append(reason)
 
     def _check_model(self, model_id: str, where: str) -> None:
+        if model_id == SYNTHETIC_MODEL:
+            return
         if model_id and not model_id.lower().startswith(ALLOWED_MODEL_PREFIXES):
             self._void(f"model {model_id} appears in {where}, not an opus or haiku id")
 
@@ -186,6 +196,10 @@ class StreamAccount:
         if not isinstance(message, dict):
             self.skipped_lines += 1
             return
+        if message.get("model") == SYNTHETIC_MODEL:
+            # A CLI notice charges no tokens and is no model message: it only voids the arm.
+            self._void(SYNTHETIC_REASON_PREFIX + _text_of(message)[:SYNTHETIC_TEXT_LIMIT])
+            return
         usage = message.get("usage")
         usage = usage if isinstance(usage, dict) else {}
         mid = message.get("id") if isinstance(message.get("id"), str) else None
@@ -197,8 +211,10 @@ class StreamAccount:
         if mid:
             self.seen_ids.add(mid)
         self._count_input(usage)
+        self._count_model(str(message.get("model") or ""))
+
+    def _count_model(self, model: str) -> None:
         self.assistant_messages += 1
-        model = str(message.get("model") or "")
         self.per_message_model[model] = self.per_message_model.get(model, 0) + 1
         self._check_model(model, "an assistant message")
 
@@ -258,6 +274,16 @@ class StreamAccount:
                 "duration_ms": r.get("duration_ms"), "result_subtype": r.get("subtype"),
                 "has_result": self.result is not None, "skipped_lines": self.skipped_lines,
                 "void_reasons": void_reasons}
+
+
+def _text_of(message: dict[str, Any]) -> str:
+    """The text content blocks of a message joined on one line ("" when it carries none)."""
+    content = message.get("content")
+    if isinstance(content, str):
+        return " ".join(content.split())
+    blocks = content if isinstance(content, list) else []
+    texts = [b["text"] for b in blocks if isinstance(b, dict) and b.get("type") == "text" and isinstance(b.get("text"), str)]
+    return " ".join(" ".join(texts).split())
 
 
 def _model_usage(record: dict[str, Any]) -> dict[str, Any]:
