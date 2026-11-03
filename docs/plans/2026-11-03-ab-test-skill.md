@@ -907,8 +907,7 @@ After the `BITRANOX_HOOKS_OFF=1` row in `docs/reference.md`, one row in the same
 - `BITRANOX_MEMORY_WRITES=off`: every memory write path (the engine's write verbs, `factedit apply`, the `memory_add` and `contrib_add` tools, `contrib_queue add`) refuses with one line and exit 2, and the self-improve, dream and audit nudges stay quiet, while recall, the skill router and every guard keep running. Set per session by a harness that runs headless sessions in a real repository and must keep them out of the shared store; a test per write path proves each refusal and its control.
 ```
 
-Run from the worktree root: `uv run plugins/bitranox/hooks/bump_version.py --part minor --changelog <scratch>/m1-notes.md`
-Expected: it prints the new version and leaves `plugin.json`, `pyproject.toml` and `CHANGELOG.md` modified.
+DONE AT THE FRONT OF THE BRANCH (2026-11-03, commit bf1948e5 on ab-m1-switch, 10.11.3 -> 10.12.0): the repo's commit gate refuses any commit under `plugins/` while `plugin.json` equals origin's version, so the bump has to precede the per-task commits, which then ride on it. Skip this step; Step 4 commits only `docs/reference.md`. For M2 make the same bump the first commit of its branch.
 
 - [ ] **Step 3: Run the CI-parity gate**
 
@@ -918,7 +917,7 @@ Expected: `RC=0`.
 - [ ] **Step 4: Commit the bump**
 
 Message file subject: `BITRANOX_MEMORY_WRITES=off: a per-session memory-writes switch (10.12.0)` (the version the jig printed); body: one line per write path covered and "tests: one per path, each with a writes-on control".
-`git -C <scratch>/wt-m1 commit -F <scratch>/m1-t8.txt -- docs/reference.md CHANGELOG.md pyproject.toml plugins/bitranox/.claude-plugin/plugin.json`
+`git -C <scratch>/wt-m1 commit -F <scratch>/m1-t8.txt -- docs/reference.md`
 
 - [ ] **Step 5: Push and watch CI**
 
@@ -3271,6 +3270,8 @@ Write the provisional `SKILL.md` as described (ASCII only). Then from the worktr
 ```
 
 Run: `uv run plugins/bitranox/hooks/bump_version.py --part minor --changelog <scratch>/m2-notes.md`
+
+DONE AT THE FRONT OF THE BRANCH: repo-gate refuses a commit under `plugins/` while `plugin.json` equals origin's version, so this bump (with the notes above) is the FIRST commit on the wt-m2 branch, made by the controller before Task 9 is dispatched, as M1's was (bf1948e5). Skip the Run here, and Step 2's commit leaves `CHANGELOG.md pyproject.toml plugins/bitranox/.claude-plugin/plugin.json` out of its pathspec; if origin moved past that version meanwhile, re-bump from origin's `plugin.json` in its own commit.
 
 - [ ] **Step 2: Gate, commit, push, watch CI**
 
