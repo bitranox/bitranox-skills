@@ -30,6 +30,21 @@ a hole nobody has drawn a line under is one that gets rediscovered and half-fill
 two "versions with no entry" notes came to sit in this file disagreeing with it.
 
 
+## [10.11.4]
+
+### Fixed
+
+- infra-proxmox: a restored CT copy keeps the source's net0 whatever `--net0` is passed to
+  `pct restore` (measured: `--unique 1` gave a fresh MAC, the source's static ip stayed); the
+  restored-CT row and its reference now say to set the whole net0 with `pct set` before the first
+  start and read back both hwaddr and ip. They also say that a first `pct start` exiting 1 with
+  `unable to get PID for CT <id> (not running?)` can leave the CT running, so read `pct status`
+  before retrying.
+- infra-chrome-remote-desktop: a new section for a cloned host - archive the inherited
+  `host#*.json` and `paired-clients`, find every unit that can start the host by content (a site
+  wrapper such as a `crd.service` starts `chrome-remote-desktop@<user>` on its own), disable them
+  and confirm with `is-enabled`.
+
 ## [10.11.3]
 
 - coding-python-pwshpy: `elevate()` refuses the script of a `python Z:\tool.py` start on a `net use` drive before any

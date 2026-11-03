@@ -13,15 +13,21 @@ volume lives depends on the storage, so take it from `pct config <id>` if you ne
 
 ## Checklist
 
-1. **MAC (`net0` hwaddr).** `pct restore` keeps the source's hwaddr. `--hostname` and `--onboot`
-   given to `pct restore` do take effect; the MAC is the one field that silently does not change.
-   Restore with `pct restore <id> <archive> --unique 1`, which assigns a random MAC, or set a fresh
-   one before the first start with `pct set <id> --net0 name=eth0,bridge=vmbr0,hwaddr=<new>,...`
-   (keep the other `net0` fields). Read it back: `pct config <id> | grep ^net0`. A duplicate MAC on
-   one L2 breaks DHCP for both guests, and only from the moment the copy first starts.
+1. **Network (`net0`: hwaddr AND ip).** `pct restore` keeps the source's `net0`. `--hostname` and
+   `--onboot` given to `pct restore` do take effect; a `--net0` given to it does not, and it fails
+   silently. Measured on pve-container 6.1.16 (PVE 9.2): `pct restore <id> <archive> --unique 1
+   --net0 ...,ip=<new>/24` produced the fresh MAC that `--unique` generates, but net0 still carried
+   the source's static `ip=`. Started like that, the copy takes the source's address. So use
+   `--unique 1` for the MAC, read the line it left (`pct config <id> | grep ^net0`), then set the
+   whole line before the first start with
+   `pct set <id> --net0 name=eth0,bridge=vmbr0,hwaddr=<the MAC just read>,ip=<new>/24,gw=<gw>,...`
+   (copy every other field from that readback unchanged), and read it back:
+   `pct config <id> | grep ^net0` must show the new hwaddr AND the new ip. A duplicate MAC on one
+   L2 breaks DHCP for both guests, and a duplicate static ip breaks the source; both surface only
+   once the copy first starts.
 2. **machine-id.** Blank `<rootfs>/etc/machine-id` (an empty file; systemd generates a new id at
    boot) and delete `<rootfs>/var/lib/dbus/machine-id`. For the other identities a clone shares,
-   see `bitranox:net-tailscale`.
+   see `bitranox:net-tailscale` (node key) and `bitranox:infra-chrome-remote-desktop` (CRD host id).
 3. **SSH host keys.** Delete `<rootfs>/etc/ssh/ssh_host_*` and regenerate with
    `ssh-keygen -A -f <rootfs>`. On an unprivileged CT, chown the new files to the idmap base
    (`100000:100000` by default) afterwards, because they were created as host root. Inherited keys
@@ -41,6 +47,14 @@ volume lives depends on the storage, so take it from `pct config <id>` if you ne
 
 Archive everything you remove into a dated tar inside the guest rather than deleting it, so a
 wrong call about whose data it was costs one restore.
+
+## The first start can report a failure that did not happen
+
+`pct start <id>` on the restored copy exited 1 with
+`failed to connect to monitor socket: Connection refused` and
+`unable to get PID for CT <id> (not running?)`, while the CT had started and was running
+(pve-container 6.1.16). Read `pct status <id>` before acting on that error. A blind second
+`pct start`, or a stop-and-start, against a CT that is already up only adds a fault of your own.
 
 ## Verify from ground truth
 

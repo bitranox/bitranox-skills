@@ -185,7 +185,8 @@ inside quotes or in a variable and silently becomes a literal path component.
 The config lives at `~<user>/.config/chrome-remote-desktop/host#*.json`, and **there must be
 exactly one**. Extra files from earlier registrations, and the `host_id` plus `private_key` a
 cloned image inherits from the machine it was cloned from, produce a device entry that can never
-connect. Remove them.
+connect. Remove them from the config directory; on a clone, archive them as described under
+"A cloned host" below rather than deleting them.
 
 The stored value is `"hmac:" + base64(HMAC_SHA256(key=host_id, message=pin))`. This is an
 internal, undocumented format, read off chrome-remote-desktop 151.0.7922.13 (2026-08-28);
@@ -266,6 +267,36 @@ systemctl enable --now chrome-remote-desktop@<user>
 systemctl status chrome-remote-desktop@<user>
 ```
 
+## A cloned host: retire the inherited registration before the first start
+
+A copy of a registered host (a restored backup, a cloned VM or container) carries the source's
+`host#*.json`, with its `host_id` and `private_key`, plus `paired-clients`, and its units are still
+enabled. Started like that, it comes up AS the source and the two fight over one device entry. Do
+this offline, against the copy's stopped root filesystem (`<rootfs>`, e.g. after `pct mount`):
+
+1. Move `host#*.json` and `paired-clients` out of
+   `<rootfs><home>/.config/chrome-remote-desktop/` into a root-only archive outside that
+   directory; outside `<rootfs>` altogether when the copy leaves your control, since the file holds
+   the source's `private_key`. Keep the archive: it is the only record of the source's
+   registration. Never move it back into the copy's config directory.
+2. Disable every unit that can start the host, not just `chrome-remote-desktop@<user>`. A site
+   wrapper unit that runs `systemctl start chrome-remote-desktop@<user>` from its `ExecStart=`, or
+   names it in `Wants=`, starts it anyway (observed: a local `crd.service` doing both, enabled in
+   `multi-user.target`). Find them by content, not by name:
+
+   ```bash
+   grep -rl 'chrome-remote-desktop@' <rootfs>/etc/systemd/system <rootfs>/usr/lib/systemd/system
+   systemctl --root=<rootfs> disable chrome-remote-desktop@<user>.service <each wrapper unit>
+   systemctl --root=<rootfs> is-enabled chrome-remote-desktop@<user>.service <each wrapper unit>
+   ```
+
+   The last line must print `disabled` (or `masked`) for every unit named. Read the words, not
+   the exit code: `is-enabled` exits 1 when none of the named units is enabled, which here is the
+   result you want.
+
+3. After the first start, register the copy as a new host (see Registration above) and check that
+   exactly one `host#*.json` exists and that its `host_id` differs from the source's.
+
 ## Common mistakes
 
 | Mistake                                                  | Why it goes wrong                                                                          |
@@ -282,6 +313,7 @@ systemctl status chrome-remote-desktop@<user>
 | Stacking a second `start-host` on a half-written config  | The local `host_id` and the directory entry disagree and the host never connects.          |
 | Trusting one PIN-hash comparison                         | The swapped-argument form returns `False` for every input.                                 |
 | Cloning a machine that already had CRD registered        | The clone inherits `host_id` and `private_key` and fights the original for the entry.      |
+| Disabling only `chrome-remote-desktop@<user>` on a clone | A wrapper unit that starts it (`ExecStart=systemctl start ...`) brings it up regardless.   |
 
 ## Red flags - stop
 
