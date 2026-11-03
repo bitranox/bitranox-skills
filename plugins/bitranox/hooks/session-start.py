@@ -574,7 +574,13 @@ def _collect_skill_available():
 
 def newproject_nudge(proj):
     """Fire ONCE for a fresh, unseeded project - only when the collect skill is installed AND there
-    is knowledge elsewhere to seed from. Marks the project seeded so it self-silences."""
+    is knowledge elsewhere to seed from. Marks the project seeded so it self-silences.
+
+    None under BITRANOX_MEMORY_WRITES=off, before the marker is written: /collect-knowledge writes
+    the store, which such a session may not do.
+    """
+    if memory_writes_off():
+        return None
     try:
         if not _collect_skill_available():
             return None

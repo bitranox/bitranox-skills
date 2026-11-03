@@ -233,6 +233,10 @@ def test_session_start_dream_and_audit_fire_when_on(tmp_path, monkeypatch):
 
 
 def test_session_start_heal_is_quiet_when_off_and_heals_when_on(tmp_path, monkeypatch):
+    home = tmp_path / "home"
+    home.mkdir()
+    monkeypatch.setenv("HOME", str(home))
+    monkeypatch.setenv("USERPROFILE", str(home))
     off, on = tmp_path / "off", tmp_path / "on"
     off.mkdir()
     on.mkdir()
@@ -242,3 +246,39 @@ def test_session_start_heal_is_quiet_when_off_and_heals_when_on(tmp_path, monkey
     monkeypatch.delenv("BITRANOX_MEMORY_WRITES")
     session_start._self_heal(str(on))
     assert list(on.iterdir()), "control: heal writes the level files with the switch unset"
+
+
+def _newproject_inputs(tmp_path, monkeypatch):
+    """A fresh project for which the new-project nudge would fire: the collect skill is installed
+    under CLAUDE_PLUGIN_ROOT, HOME holds a sibling project's native memory to seed from, and `proj`
+    itself has no facts and no seeded marker."""
+    home = tmp_path / "home"
+    (home / ".claude").mkdir(parents=True)
+    monkeypatch.setenv("HOME", str(home))
+    monkeypatch.setenv("USERPROFILE", str(home))
+    plugin_root = tmp_path / "plugin"
+    skill = plugin_root / "skills" / "meta-collect-knowledge" / "SKILL.md"
+    skill.parent.mkdir(parents=True)
+    skill.write_text("---\nname: meta-collect-knowledge\n---\n\nB\n", encoding="utf-8")
+    monkeypatch.setenv("CLAUDE_PLUGIN_ROOT", str(plugin_root))
+    other = sig.memory_dir(str(tmp_path / "other"))
+    other.mkdir(parents=True)
+    (other / "note.md").write_text("a useful note", encoding="utf-8")
+    proj = tmp_path / "fresh"
+    proj.mkdir()
+    return str(proj)
+
+
+def test_session_start_newproject_nudge_is_quiet_when_off(tmp_path, monkeypatch):
+    proj = _newproject_inputs(tmp_path, monkeypatch)
+    monkeypatch.setenv("BITRANOX_MEMORY_WRITES", "off")
+    assert session_start.newproject_nudge(proj) is None
+    assert not sig.seeded_file(proj).exists(), "the seeded marker is not written"
+
+
+def test_session_start_newproject_nudge_fires_when_on(tmp_path, monkeypatch):
+    """Control: the same inputs with the switch unset yield the nudge and mark the project seeded."""
+    proj = _newproject_inputs(tmp_path, monkeypatch)
+    monkeypatch.delenv("BITRANOX_MEMORY_WRITES", raising=False)
+    assert "BITRANOX-NEW-PROJECT" in session_start.newproject_nudge(proj)
+    assert sig.seeded_file(proj).exists()
