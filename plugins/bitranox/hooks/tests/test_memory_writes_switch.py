@@ -159,6 +159,7 @@ def _tree_with_fact(tmp_path, monkeypatch):
     """A one-level tree holding one fact, written by the engine with the switch unset."""
     monkeypatch.delenv("BITRANOX_MEMORY_WRITES", raising=False)
     monkeypatch.setenv("HOME", str(tmp_path / "home"))
+    monkeypatch.setenv("USERPROFILE", str(tmp_path / "home"))  # Path.home() on Windows
     tree = tmp_path / "tree"
     tree.mkdir()
     (tree / "CLAUDE.md").write_text("# tree\n", encoding="utf-8")
@@ -285,6 +286,7 @@ def test_mod_memory_add_refuses_when_off(tmp_path, monkeypatch, capsys):
 def test_mod_contrib_add_refuses_when_off(tmp_path, monkeypatch, capsys):
     monkeypatch.setenv("BITRANOX_MEMORY_WRITES", "off")
     monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.setenv("USERPROFILE", str(tmp_path))  # Path.home() on Windows
     monkeypatch.chdir(tmp_path)
     rc, out = _bridge(monkeypatch, capsys, "contrib_add", {"what": "w", "target": "skill:x", "why": "y"})
     assert rc == 1 and out["error"]["kind"] == "MemoryWritesOff"
@@ -294,6 +296,7 @@ def test_mod_contrib_add_refuses_when_off(tmp_path, monkeypatch, capsys):
 def test_mod_contrib_add_queues_when_on(tmp_path, monkeypatch, capsys):
     monkeypatch.delenv("BITRANOX_MEMORY_WRITES", raising=False)
     monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.setenv("USERPROFILE", str(tmp_path))  # Path.home() on Windows
     monkeypatch.chdir(tmp_path)
     rc, out = _bridge(monkeypatch, capsys, "contrib_add", {"what": "w", "target": "skill:x", "why": "y"})
     assert rc == 0 and out["data"]["queued"] is True

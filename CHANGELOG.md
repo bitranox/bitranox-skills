@@ -30,6 +30,12 @@ a hole nobody has drawn a line under is one that gets rediscovered and half-fill
 two "versions with no entry" notes came to sit in this file disagreeing with it.
 
 
+## [10.12.1]
+
+### Fixed
+
+- The `BITRANOX_MEMORY_WRITES=off` tests for the `contrib_add` mod tool and the engine fixture now isolate `USERPROFILE` as well as `HOME`, so on Windows (where `Path.home()` reads `USERPROFILE`) they write into the test's own directory instead of the runner's profile, and the refusal test can no longer pass without looking at the queue it checks.
+
 ## [10.12.0]
 
 ### Added
