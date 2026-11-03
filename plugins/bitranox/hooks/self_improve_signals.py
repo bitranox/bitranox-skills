@@ -616,6 +616,36 @@ def mark_dream_done(proj, now=None):
 QUEUE_KEY_PREFIX = "queue_key:"
 _QUEUE_KEY_RE = re.compile(r"[0-9a-f]{16}")   # exactly what proj_key emits: sha1 hex, truncated
 
+MEMORY_WRITES_ENV = "BITRANOX_MEMORY_WRITES"
+MEMORY_WRITES_OFF_LINE = (
+    "memory writes are off for this session (BITRANOX_MEMORY_WRITES=off): nothing was recorded. "
+    "A harness sets this per run; the lesson belongs in that run's report, not the shared store.")
+
+
+class MemoryWritesOff(RuntimeError):
+    """A memory write path was reached while BITRANOX_MEMORY_WRITES=off.
+
+    Raised at the TOP of every write path (engine verbs, the mod tools, the contribution queue,
+    factedit apply) so nothing is staged before the refusal; callers turn it into one line and the
+    plugin-wide "could not run" exit (2), or the mod tools' error envelope.
+    """
+
+
+def memory_writes_off(environ=None):
+    """True when the process runs with BITRANOX_MEMORY_WRITES=off (case-insensitive, trimmed).
+
+    One spelling only: "0", "false" or a typo leave writes ON, because a switch that fails closed
+    on a typo would silently disable the store for a normal session.
+    """
+    env = os.environ if environ is None else environ
+    return (env.get(MEMORY_WRITES_ENV) or "").strip().lower() == "off"
+
+
+def refuse_if_memory_writes_off():
+    """Raise MemoryWritesOff when the switch is set; the first statement of every write path."""
+    if memory_writes_off():
+        raise MemoryWritesOff(MEMORY_WRITES_OFF_LINE)
+
 
 def contrib_file(proj):
     """Queue of pending upstream contributions (skill/hook changes a learning warrants).
