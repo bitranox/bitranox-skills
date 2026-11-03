@@ -30,6 +30,12 @@ a hole nobody has drawn a line under is one that gets rediscovered and half-fill
 two "versions with no entry" notes came to sit in this file disagreeing with it.
 
 
+## [10.13.0]
+
+### Added
+
+- `meta-skill-ab-test` (MVP): `abtest.py init / seal / run / score / prune-run` compare a shipped skill against variants on one real task in the real repository: serial interleaved arms in nested worktrees with their own config dir and a frozen plugin checkout, exact per-model cost from the stream, an executed floor from the profile, a bundle and a branch per arm, a memory-store guard and `BITRANOX_MEMORY_WRITES=off`, and a resume journal. Judging and the report follow in a later release.
+
 ## [10.12.2]
 
 ### Added
