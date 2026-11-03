@@ -30,6 +30,16 @@ a hole nobody has drawn a line under is one that gets rediscovered and half-fill
 two "versions with no entry" notes came to sit in this file disagreeing with it.
 
 
+## [10.11.5]
+
+### Changed
+
+- `process-review-enhance-code-quality`: the aspect checklist now says the cost rows (Algorithmic
+  cost, memory growth under Concurrency, Unbounded input) are read, never measured, so a finished
+  loop is not a performance review. It points at `coding-python-performance-review` for the
+  measured part as a pass of its own, and the final report says performance was read, not
+  measured, when that pass did not run.
+
 ## [10.11.4]
 
 ### Fixed
