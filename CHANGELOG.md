@@ -30,6 +30,12 @@ a hole nobody has drawn a line under is one that gets rediscovered and half-fill
 two "versions with no entry" notes came to sit in this file disagreeing with it.
 
 
+## [10.12.0]
+
+### Added
+
+- `BITRANOX_MEMORY_WRITES=off`: every memory write path (the engine's write verbs, `factedit apply`, the `memory_add` and `contrib_add` tools, `contrib_queue add`) refuses with one line and exit 2, and the self-improve, dream and audit nudges stay quiet, while recall, the skill router and every guard keep running. Set per session by a harness that runs headless sessions in a real repository and must keep them out of the shared store; a test per write path proves each refusal and its control.
+
 ## [10.11.5]
 
 ### Changed
