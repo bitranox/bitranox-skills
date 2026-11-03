@@ -1,8 +1,9 @@
 """Stand-in for store_manifest.py with the same CLI surface the guard drives.
 
-backup: a --from containing "nostore" exits 2 with the real script's no-store message, one
-containing "refuse" exits 2 with another refusal, one containing "slow" sleeps past any short
-timeout; otherwise it writes manifest.json and reports 3 entries. verify: a file named CHANGED
+backup: a --from whose last component is named "nostore" exits 2 with the real script's no-store
+message, one named "refuse" exits 2 with another refusal, one named "slow" sleeps past any short
+timeout; otherwise it writes manifest.json and reports 3 entries. Only the dir's own name counts,
+never a substring of the whole path: pytest names tmp_path after the test function. verify: a file named CHANGED
 beside the manifest makes it exit 1 with a diff, one named UNREADABLE makes it exit 2.
 """
 import argparse
@@ -17,13 +18,14 @@ def _envelope(ok, command, data):
 
 
 def _backup(start, out):
-    if "nostore" in start:
+    name = Path(start).name
+    if name == "nostore":
         _envelope(False, "backup", {"error": "no .claude-memory/ store at the memory anchor of " + start})
         return 2
-    if "refuse" in start:
+    if name == "refuse":
         _envelope(False, "backup", {"error": "--out exists, is not empty and holds no manifest.json"})
         return 2
-    if "slow" in start:
+    if name == "slow":
         time.sleep(30)
     out.mkdir(parents=True, exist_ok=True)
     (out / "manifest.json").write_text("{}", encoding="utf-8")

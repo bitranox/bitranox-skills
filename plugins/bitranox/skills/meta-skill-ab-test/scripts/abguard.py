@@ -2,11 +2,13 @@
 
 The guard drives skills/meta-dream-tree/store_manifest.py as a subprocess: its exit code is the
 answer (0 identical, 1 differs, 2 could not run). The login check asks the API directly because
-the CLI reports an exhausted quota (429) with the same "not logged in" text as a bad token (401),
-and a run must PAUSE on the first and VOID nothing (design S4).
+the CLI reports a 429 (rate limited: an exhausted quota, or a refusal of this request shape -
+measured 2026-11-04: a 429 came back while the account was serving) with the same "not logged
+in" text as a bad token (401), and a run must PAUSE on the first and VOID nothing (design S4).
 """
 from __future__ import annotations
 
+import http.client
 import json
 import subprocess
 import sys
@@ -76,7 +78,12 @@ def snapshot(chain_from: Path, out: Path, *, manifest: Path = MANIFEST) -> dict[
 
 
 def verify(out: Path, *, manifest: Path = MANIFEST) -> list[str]:
-    """One line per change since the snapshot; empty when identical or when no snapshot was taken."""
+    """One line per change since the snapshot; empty when identical or when no snapshot was taken.
+
+    A missing manifest.json under out reads as no change, so a store an arm damaged after a
+    skipped or failed snapshot passes silently: call this only after snapshot() returned
+    taken=True for the same out.
+    """
     if not (out / "manifest.json").is_file():
         return []
     rc, data = _manifest(["verify", "--out", str(out)], manifest)
@@ -103,6 +110,10 @@ def _post(url: str, headers: dict[str, str], body: bytes) -> tuple[int, str]:
         # No network, DNS down: reported as unknown:0, which pauses the run like a quota would.
         # repr of these carries the reason only, never the request headers.
         return 0, repr(exc)
+    except (ValueError, http.client.HTTPException) as exc:
+        # A refused header value (ValueError) quotes that value, the token, in its message, and
+        # a malformed answer (BadStatusLine and kin) is no status either: name the type only.
+        return 0, type(exc).__name__
 
 
 def _read_token(credentials: Path) -> str | None:
@@ -112,13 +123,21 @@ def _read_token(credentials: Path) -> str | None:
         return None
     oauth = doc.get("claudeAiOauth") if isinstance(doc, dict) else None
     token = oauth.get("accessToken") if isinstance(oauth, dict) else None
-    return token if isinstance(token, str) and token else None
+    if not isinstance(token, str) or not token:
+        return None
+    # A control or non-ASCII character cannot travel in a header, and http.client's refusal would
+    # quote the token in its message; such a credential is unusable, so it reads as no login.
+    return token if token.isascii() and token.isprintable() else None
 
 
 def check_login(credentials: Path, *, post: PostFn = _post) -> str:
     """ok / login / quota / unknown:<status>, from one minimal request with the arm's credential.
 
-    The token is read from the credentials copy and sent once; it is never logged or returned.
+    200 is ok, 401 login, 429 quota (rate limited: an exhausted quota, or a refusal of this
+    request shape - measured 2026-11-04: a 429 came back while the account was serving), anything
+    else unknown:<status>, 0 when no answer came. A missing, unreadable or malformed token (empty,
+    or holding a control or non-ASCII character) is login and is never sent. The token is read
+    from the credentials copy and sent once; it is never logged or returned.
     """
     token = _read_token(credentials)
     if token is None:
