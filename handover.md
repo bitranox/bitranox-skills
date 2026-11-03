@@ -31,4 +31,3 @@ Task 1 of the plan (the M0 probe, about 0.20 USD) under whichever execution mode
 ## Lessons for the next nap
 
 - When a user's directive pins the authoring tier (plans and skill text on fable), check the session's own model before starting the authoring and ask for the switch first: a design doc was written on opus and only caught at the plan stage.
-- When writing a plan for a PUBLIC repo, scan it for tree paths and for the home-directory prefix inside any string literal before the commit: a gitignore pattern ending in that prefix (arms/*/home with a trailing slash) is refused by pushcheck like a real path.

@@ -503,8 +503,7 @@ def test_engine_add_refuses_when_off_and_writes_when_on(tmp_path, monkeypatch, c
 @pytest.mark.parametrize("verb", sorted(ME.WRITE_VERBS))
 def test_every_write_verb_is_refused_at_the_cli(verb, tmp_path, monkeypatch, capsys):
     monkeypatch.setenv("BITRANOX_MEMORY_WRITES", "off")
-    # the refusal precedes argument handling, so a bare verb is enough to reach it
-    assert ME.main([verb, "--proj", str(tmp_path)] if verb != "ensure-all-trees" else [verb]) == 2
+    assert ME.main([verb]) == 2, "the refusal precedes argparse, so required arguments never matter"
     assert "! refused:" in capsys.readouterr().out
 
 
@@ -556,10 +555,11 @@ In `heal`, after the docstring and before the report literal:
                 "skipped": sig.MEMORY_WRITES_OFF_LINE}
 ```
 
-In `main`, directly after `args = ap.parse_args(sys.argv[1:] if argv is None else argv)`:
+In `main`, BEFORE `args = ap.parse_args(...)` (argparse exits 2 on a missing required argument before any later check could run; the parser has no global options, so the verb is always the first word):
 
 ```python
-    if args.cmd in WRITE_VERBS and sig.memory_writes_off():
+    raw = sys.argv[1:] if argv is None else argv
+    if raw and raw[0] in WRITE_VERBS and sig.memory_writes_off():
         return _refused(sig.MEMORY_WRITES_OFF_LINE)
 ```
 
@@ -747,7 +747,7 @@ def test_apply_refuses_before_staging(tmp_path, monkeypatch, capsys):
     body.write_text("new body\n", encoding="utf-8")
     stage = tmp_path / "stage"
     rc = factedit.main(["apply", "--slug", "no-such-fact", "--body-file", str(body),
-                        "--stage-dir", str(stage), "--start", str(tmp_path)])
+                        "--stage-dir", str(stage), "--from", str(tmp_path)])
     assert rc == 2
     assert "BITRANOX_MEMORY_WRITES=off" in capsys.readouterr().err
     assert not stage.exists(), "the refusal must precede the staging copy"
@@ -1879,6 +1879,7 @@ Subject: `meta-skill-ab-test: abstream, stream accounting and the input price ta
 
 ```python
 """abarm: freeze, install, worktree, dispatch, bundle, prune; through the fake claude and a scratch repo."""
+import dataclasses
 import json
 import os
 from pathlib import Path
@@ -1937,7 +1938,7 @@ def test_freeze_control_and_variant(tmp_path, scratch_repo, skills_repo):
 def test_freeze_refuses_a_ref_without_the_switch(tmp_path, scratch_repo, skills_repo):
     run_dir, prof = _profile(tmp_path, scratch_repo, skills_repo)
     (skills_repo / "hooks" / "self_improve_signals.py").write_text("# no switch here\n", encoding="utf-8")
-    L.git(skills_repo, "commit", "-q", "-am", "drop the switch")
+    L.git(skills_repo, "-c", "user.name=t", "-c", "user.email=t@x", "commit", "-q", "-am", "drop the switch")
     ref = L.git(skills_repo, "rev-parse", "HEAD").stdout.strip()
     prof2 = P.Profile(path=prof.path, workpiece=prof.workpiece, control=P.Control(skills_ref=ref, skill="demo-skill"),
                       variants=prof.variants, floor=prof.floor, run=prof.run)
@@ -1955,9 +1956,10 @@ def test_install_plugin_verifies_bytes(tmp_path, scratch_repo, skills_repo, arm_
     info = A.install_plugin(cfg, frozen, creds, arm_env_base)
     assert info["drift"] == [] and info["installed_version"] == "0.0.1-fixture"
     assert (cfg / ".credentials.json").stat().st_mode & 0o777 == 0o600
-    (Path(info["installed_path"]) / "skills" / "demo-skill" / "SKILL.md").write_text("tampered", encoding="utf-8")
+    # A re-install overwrites the cache, so drift is planted on the frozen side's recorded hashes.
+    bad = dataclasses.replace(frozen, hashes=dict(frozen.hashes, **{"SKILL.md": "0" * 64}))
     with pytest.raises(A.ArmError, match="drift"):
-        A.install_plugin(cfg, frozen, creds, arm_env_base)
+        A.install_plugin(cfg, bad, creds, arm_env_base)
 
 
 def test_make_worktree_branch_hook_and_local_md(scratch_repo, tmp_path):
@@ -2801,9 +2803,12 @@ def _init_and_fill(tmp_path, scratch_repo, skills_repo, n=1):
     toml = (run_dir / "abtest.toml").read_text(encoding="utf-8")
     toml = toml.replace('gate = ["make", "test"]', 'gate = ["./gate.sh"]').replace("n = 3", f"n = {n}")
     toml = toml.replace('changes = ["<one change per entry>"]', 'changes = ["louder"]')
+    # FAKE_CLAUDE_STREAM must reach the arm: the arm env is built from env_keep only.
+    toml = toml.replace("warmth_tolerance = 0.25", 'warmth_tolerance = 0.25\nenv_keep = ["PATH", "LANG", "FAKE_CLAUDE_STREAM"]')
     (run_dir / "abtest.toml").write_text(toml, encoding="utf-8")
     (run_dir / "task.md").write_text("Do the task.\n", encoding="utf-8")
-    (run_dir / "PREREG.md").write_text((run_dir / "PREREG.md").read_text(encoding="utf-8") + "\nH1: V1 is cheaper.\n", encoding="utf-8")
+    # seal refuses a PREREG that still holds a <placeholder>, so the skeleton is replaced, not appended to.
+    (run_dir / "PREREG.md").write_text("# Pre-registration\n\nQuestion: is V1 cheaper?\nH1: V1 is cheaper.\n", encoding="utf-8")
     (run_dir / "variants" / "V1" / "SKILL.md").write_text("---\nname: demo-skill\n---\nLOUDER.\n", encoding="utf-8")
     return run_dir
 
