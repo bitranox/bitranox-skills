@@ -70,7 +70,8 @@ def test_duplicate_variant_names_and_missing_repo(tmp_path, scratch_repo):
     text = text.replace('repo = "{repo}"', 'repo = "{repo}/nonexistent"')
     with pytest.raises(P.ProfileError) as exc:
         P.load_profile(_write(tmp_path, scratch_repo, text))
-    assert "variant[1].name" in str(exc.value) and "workpiece.repo" in str(exc.value)
+    msg = str(exc.value)
+    assert "variant[1].name" in msg and "duplicate" in msg and "workpiece.repo" in msg, msg
 
 
 def test_skeleton_fails_validation_until_filled(tmp_path):
@@ -78,3 +79,63 @@ def test_skeleton_fails_validation_until_filled(tmp_path):
     p.write_text(P.SKELETON, encoding="utf-8")
     with pytest.raises(P.ProfileError):
         P.load_profile(p)
+
+
+_VARIANT_BLOCK = '[[variant]]\nname = "V1"\ndir = "variants/V1"\nchanges = ["one change"]\nmarkers = []\n'
+
+
+def _filled_skeleton(tmp_path, scratch_repo, changes=None):
+    """SKELETON with every scalar placeholder filled; `changes` replaces its placeholder list when given."""
+    base = (scratch_repo / ".base").read_text(encoding="utf-8")
+    text = (P.SKELETON.replace('"<absolute path of the real repository>"', f'"{scratch_repo}"')
+            .replace('"<40-char sha every arm starts from>"', f'"{base}"')
+            .replace('"<bitranox-skills sha that carries BITRANOX_MEMORY_WRITES>"', f'"{"a" * 40}"')
+            .replace('"<skill directory name under plugins/bitranox/skills/>"', '"demo-skill"'))
+    # Every placeholder but the changes list is filled, so a refusal can only be about changes.
+    assert text.count('"<') == 1 and 'changes = ["<one change per entry>"]' in text, text
+    if changes is not None:
+        text = text.replace('changes = ["<one change per entry>"]', f"changes = {changes}")
+    p = tmp_path / "abtest.toml"
+    p.write_text(text, encoding="utf-8")
+    return p
+
+
+def test_filled_skeleton_loads(tmp_path, scratch_repo):
+    prof = P.load_profile(_filled_skeleton(tmp_path, scratch_repo, changes='["swap the intro"]'))
+    assert prof.variants[0].changes == ("swap the intro",)
+
+
+@pytest.mark.parametrize("changes", [None, "[]", '["  "]', '[""]', '["ok", "<todo>"]'])
+def test_variant_changes_must_be_filled(tmp_path, scratch_repo, changes):
+    with pytest.raises(P.ProfileError) as exc:
+        P.load_profile(_filled_skeleton(tmp_path, scratch_repo, changes=changes))
+    msg = str(exc.value)
+    assert msg.splitlines() and all(line.startswith("variant[0].changes:") for line in msg.splitlines()), msg
+
+
+@pytest.mark.parametrize(("text", "needle"), [
+    (GOOD.replace("[[variant]]", "[variant]"), "variant: must be an array of tables ([[variant]])"),
+    ('variant = "V1"\n' + GOOD.replace(_VARIANT_BLOCK, ""), "variant: must be an array of tables ([[variant]])"),
+    ('variant = ["V1"]\n' + GOOD.replace(_VARIANT_BLOCK, ""), "variant[0]: must be a table"),
+    (GOOD.replace("[workpiece]", "[[workpiece]]"), "workpiece: must be a table"),
+    ("run = 3\n" + GOOD.split("[run]")[0], "run: must be a table"),
+])
+def test_wrong_table_shape_is_a_profile_error(tmp_path, scratch_repo, text, needle):
+    with pytest.raises(P.ProfileError) as exc:
+        P.load_profile(_write(tmp_path, scratch_repo, text))
+    assert needle in str(exc.value).splitlines(), str(exc.value)
+
+
+def test_workpiece_repo_must_be_absolute(tmp_path, scratch_repo):
+    with pytest.raises(P.ProfileError) as exc:
+        P.load_profile(_write(tmp_path, scratch_repo, GOOD.replace('repo = "{repo}"', 'repo = "r"')))
+    assert "workpiece.repo: must be an absolute path" in str(exc.value).splitlines(), str(exc.value)
+
+
+@pytest.mark.parametrize("suite", ["/abs/t.py", "../t.py", "acceptance/../../t.py"])
+def test_floor_suite_must_be_relative_and_inside(tmp_path, scratch_repo, suite):
+    text = GOOD.replace('gate = ["./gate.sh"]', f'gate = ["./gate.sh"]\nsuite = "{suite}"\nsuite_cmd = ["pytest", "{{{{suite}}}}"]')
+    with pytest.raises(P.ProfileError) as exc:
+        P.load_profile(_write(tmp_path, scratch_repo, text))
+    lines = str(exc.value).splitlines()
+    assert len(lines) == 1 and lines[0].startswith("floor.suite: must be a non-empty relative path"), lines

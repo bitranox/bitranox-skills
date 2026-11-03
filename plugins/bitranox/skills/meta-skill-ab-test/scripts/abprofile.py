@@ -8,7 +8,7 @@ from __future__ import annotations
 import re
 import tomllib
 from dataclasses import dataclass
-from pathlib import Path
+from pathlib import Path, PurePosixPath, PureWindowsPath
 from typing import Any
 
 SHA_RE = re.compile(r"^[0-9a-f]{40}$")
@@ -143,6 +143,51 @@ class _Check:
             return minimum
         return v
 
+    def sha(self, table: dict[str, Any], key: str, where: str) -> str:
+        v = self.text(table, key, where)
+        if v and not SHA_RE.match(v):
+            self.problems.append(f"{where}.{key}: must be a full 40-char lowercase sha")
+        return v
+
+
+def _table(c: _Check, data: dict[str, Any], key: str) -> dict[str, Any]:
+    """The [key] table, or {} after reporting a wrong shape (an array, a scalar) as a problem."""
+    v = data.get(key)
+    if v is None:
+        return {}
+    if not isinstance(v, dict):
+        c.problems.append(f"{key}: must be a table")
+        return {}
+    return v
+
+
+def _variant_tables(c: _Check, data: dict[str, Any]) -> list[tuple[int, dict[str, Any]]]:
+    """The [[variant]] entries with their index; a wrong shape is reported, never an AttributeError."""
+    v = data.get("variant")
+    if v is None or v == []:
+        c.problems.append("variant: at least one [[variant]] is required")
+        return []
+    if not isinstance(v, list):
+        c.problems.append("variant: must be an array of tables ([[variant]])")
+        return []
+    tables = [(i, t) for i, t in enumerate(v) if isinstance(t, dict)]
+    c.problems.extend(f"variant[{i}]: must be a table" for i, t in enumerate(v) if not isinstance(t, dict))
+    return tables
+
+
+def _changes(c: _Check, t: dict[str, Any], where: str) -> tuple[str, ...]:
+    """At least one change, none blank and none still the skeleton's <placeholder>."""
+    before = len(c.problems)
+    changes = c.str_list(t, "changes", where)
+    if len(c.problems) > before:
+        return changes
+    if not changes:
+        c.problems.append(f"{where}.changes: at least one change is required")
+    for k, entry in enumerate(changes):
+        if not entry.strip() or entry.strip().startswith("<"):
+            c.problems.append(f"{where}.changes: entry {k} is empty or still a <placeholder>")
+    return changes
+
 
 def _variant(c: _Check, i: int, t: dict[str, Any], seen: set[str]) -> Variant:
     where = f"variant[{i}]"
@@ -153,7 +198,75 @@ def _variant(c: _Check, i: int, t: dict[str, Any], seen: set[str]) -> Variant:
         c.problems.append(f"{where}.name: duplicate {name!r}")
     seen.add(name)
     return Variant(name=name, dir=c.text(t, "dir", where),
-                   changes=c.str_list(t, "changes", where), markers=c.str_list(t, "markers", where, required=False))
+                   changes=_changes(c, t, where), markers=c.str_list(t, "markers", where, required=False))
+
+
+def _variants(c: _Check, data: dict[str, Any]) -> tuple[Variant, ...]:
+    seen: set[str] = set()
+    return tuple(_variant(c, i, t, seen) for i, t in _variant_tables(c, data))
+
+
+def _workpiece(c: _Check, wp: dict[str, Any]) -> Workpiece:
+    repo_text = c.text(wp, "repo", "workpiece")
+    repo = Path(repo_text).expanduser()
+    # An empty repo_text is already reported; Path("") is the cwd, whose .git says nothing.
+    if repo_text and not repo.is_absolute():
+        c.problems.append("workpiece.repo: must be an absolute path")
+    elif repo_text and not (repo / ".git").exists():
+        c.problems.append(f"workpiece.repo: {repo} is not a git repository")
+    return Workpiece(repo=repo.resolve(), base=c.sha(wp, "base", "workpiece"),
+                     task_file=c.text(wp, "task_file", "workpiece", default="task.md"))
+
+
+def _control(c: _Check, ct: dict[str, Any]) -> Control:
+    return Control(skills_ref=c.sha(ct, "skills_ref", "control"), skill=c.text(ct, "skill", "control"))
+
+
+def _is_inside_relative(text: str) -> bool:
+    """A non-empty relative path that cannot leave the workpiece: not absolute, no drive, no '..'."""
+    posix = PurePosixPath(text.replace("\\", "/"))
+    return (bool(text.strip()) and not posix.is_absolute() and not PureWindowsPath(text).drive
+            and ".." not in posix.parts)
+
+
+def _suite(c: _Check, fl: dict[str, Any]) -> str | None:
+    suite = fl.get("suite")
+    if suite is None:
+        return None
+    if not isinstance(suite, str) or not _is_inside_relative(suite):
+        c.problems.append("floor.suite: must be a non-empty relative path, not absolute and with no '..', when set")
+        return None
+    return suite
+
+
+def _floor(c: _Check, fl: dict[str, Any]) -> Floor:
+    suite = _suite(c, fl)
+    floor = Floor(gate=c.str_list(fl, "gate", "floor"), suite=suite,
+                  suite_cmd=c.str_list(fl, "suite_cmd", "floor", required=suite is not None),
+                  cache_paths=c.str_list(fl, "cache_paths", "floor", required=False),
+                  timeout_s=c.integer(fl, "timeout_s", "floor", minimum=1, default=1800))
+    if suite is not None and "{suite}" not in " ".join(floor.suite_cmd):
+        c.problems.append("floor.suite_cmd: must contain the {suite} placeholder")
+    return floor
+
+
+def _warmth_tolerance(c: _Check, rn: dict[str, Any]) -> float:
+    tol = rn.get("warmth_tolerance", 0.25)
+    if not isinstance(tol, (int, float)) or isinstance(tol, bool) or not 0 < tol < 1:
+        c.problems.append("run.warmth_tolerance: must be a number in (0, 1)")
+        return 0.25
+    return float(tol)
+
+
+def _run(c: _Check, rn: dict[str, Any]) -> Run:
+    run = Run(model=c.text(rn, "model", "run", default="opus"),
+              n=c.integer(rn, "n", "run", minimum=1), deadline_s=c.integer(rn, "deadline_s", "run", minimum=60),
+              max_tokens=c.integer(rn, "max_tokens", "run", minimum=1000), warmth_tolerance=_warmth_tolerance(c, rn),
+              env_keep=c.str_list(rn, "env_keep", "run", required=False, default=DEFAULT_ENV_KEEP),
+              home_links=c.str_list(rn, "home_links", "run", required=False, default=DEFAULT_HOME_LINKS))
+    if run.model != "opus":
+        c.problems.append("run.model: only 'opus' is allowed (user directive: every arm runs on opus)")
+    return run
 
 
 def load_profile(path: Path) -> Profile:
@@ -163,45 +276,11 @@ def load_profile(path: Path) -> Profile:
         data = tomllib.loads(path.read_text(encoding="utf-8"))
     except (OSError, tomllib.TOMLDecodeError) as exc:
         raise ProfileError(f"{path}: {exc}") from exc
-    wp, ct, fl, rn = (data.get(k) or {} for k in ("workpiece", "control", "floor", "run"))
-    repo_text = c.text(wp, "repo", "workpiece")
-    repo = Path(repo_text).expanduser()
-    # An empty repo_text is already reported; Path("") is the cwd, whose .git says nothing.
-    if repo_text and not (repo / ".git").exists():
-        c.problems.append(f"workpiece.repo: {repo} is not a git repository")
-    base = c.text(wp, "base", "workpiece")
-    if base and not SHA_RE.match(base):
-        c.problems.append("workpiece.base: must be a full 40-char lowercase sha")
-    workpiece = Workpiece(repo=repo.resolve(), base=base, task_file=c.text(wp, "task_file", "workpiece", default="task.md"))
-    ref = c.text(ct, "skills_ref", "control")
-    if ref and not SHA_RE.match(ref):
-        c.problems.append("control.skills_ref: must be a full 40-char lowercase sha")
-    control = Control(skills_ref=ref, skill=c.text(ct, "skill", "control"))
-    seen: set[str] = set()
-    variants = tuple(_variant(c, i, t, seen) for i, t in enumerate(data.get("variant") or []))
-    if not variants:
-        c.problems.append("variant: at least one [[variant]] is required")
-    suite = fl.get("suite")
-    if suite is not None and (not isinstance(suite, str) or not suite):
-        c.problems.append("floor.suite: must be a non-empty relative path when set")
-        suite = None
-    floor = Floor(gate=c.str_list(fl, "gate", "floor"), suite=suite,
-                  suite_cmd=c.str_list(fl, "suite_cmd", "floor", required=suite is not None),
-                  cache_paths=c.str_list(fl, "cache_paths", "floor", required=False),
-                  timeout_s=c.integer(fl, "timeout_s", "floor", minimum=1, default=1800))
-    if suite is not None and "{suite}" not in " ".join(floor.suite_cmd):
-        c.problems.append("floor.suite_cmd: must contain the {suite} placeholder")
-    tol = rn.get("warmth_tolerance", 0.25)
-    if not isinstance(tol, (int, float)) or isinstance(tol, bool) or not 0 < tol < 1:
-        c.problems.append("run.warmth_tolerance: must be a number in (0, 1)")
-        tol = 0.25
-    run = Run(model=c.text(rn, "model", "run", default="opus"),
-              n=c.integer(rn, "n", "run", minimum=1), deadline_s=c.integer(rn, "deadline_s", "run", minimum=60),
-              max_tokens=c.integer(rn, "max_tokens", "run", minimum=1000), warmth_tolerance=float(tol),
-              env_keep=c.str_list(rn, "env_keep", "run", required=False, default=DEFAULT_ENV_KEEP),
-              home_links=c.str_list(rn, "home_links", "run", required=False, default=DEFAULT_HOME_LINKS))
-    if run.model != "opus":
-        c.problems.append("run.model: only 'opus' is allowed (user directive: every arm runs on opus)")
+    workpiece = _workpiece(c, _table(c, data, "workpiece"))
+    control = _control(c, _table(c, data, "control"))
+    variants = _variants(c, data)
+    floor = _floor(c, _table(c, data, "floor"))
+    run = _run(c, _table(c, data, "run"))
     if c.problems:
         raise ProfileError("\n".join(c.problems))
     return Profile(path=path.resolve(), workpiece=workpiece, control=control, variants=variants, floor=floor, run=run)
