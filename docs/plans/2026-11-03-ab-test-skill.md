@@ -172,7 +172,8 @@ import time
 from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
-PLUGIN = sorted(Path.home().glob(".claude/plugins/cache/bitranox-skills/bitranox/*/"))[-1]
+PLUGIN = max(Path.home().glob(".claude/plugins/cache/bitranox-skills/bitranox/*/"),
+             key=lambda d: tuple(int(x) if x.isdigit() else 0 for x in d.name.split(".")))  # text sort picks 10.9 over 10.11
 MANIFEST = PLUGIN / "skills" / "meta-dream-tree" / "store_manifest.py"
 PROMPT = "Reply with the single word READY and nothing else."
 SKIP_DIRS = {".git", "target", "node_modules", ".venv", "__pycache__"}
@@ -1865,14 +1866,14 @@ Subject: `meta-skill-ab-test: abstream, stream accounting and the input price ta
 
 **Interfaces:**
 - Consumes: `_ablib.run/git/tree_hashes/sha256_file`, `abstream.StreamAccount`, `abprofile.Profile/Variant`; the fake `claude`, `scratch_repo`, `skills_repo` fixtures.
-- Produces: `class ArmError(RuntimeError)`; `@dataclass(frozen=True) Frozen(path: Path, skills_ref: str, skill_dir: Path, overlay_written: tuple[str, ...], hashes: dict[str, str])`; `freeze_variant(run_dir, profile, name, skills_repo) -> Frozen`; `install_plugin(cfg, frozen, credentials, env) -> dict`; `make_worktree(repo, base, branch, path, *, copy_local_md) -> dict`; `arm_env(cfg, home, keep) -> dict[str, str]`; `arm_home(arm_dir, links) -> Path`; `claude_argv(prompt, max_turns) -> list[str]`; `dispatch(arm_dir, ws, env, argv, *, max_tokens, deadline_s) -> dict`; `bundle(ws, base, out) -> int`; `prune(ws, repo, cache_paths) -> dict`; `delete_cfg(cfg) -> None`; `PRE_PUSH_HOOK: str`.
+- Produces: `class ArmError(RuntimeError)`; `@dataclass(frozen=True) Frozen(path: Path, skills_ref: str, skill_dir: Path, overlay_written: tuple[str, ...], hashes: dict[str, str])`; `freeze_variant(run_dir, profile, name, skills_repo) -> Frozen`; `install_plugin(cfg, frozen, credentials, env, *, settings_keep=("skillListingBudgetFraction",)) -> dict`; `make_worktree(repo, base, branch, path, *, copy_untracked_claude_md) -> dict`; `arm_env(cfg, home, keep) -> dict[str, str]`; `arm_home(arm_dir, links) -> Path`; `claude_argv(prompt, max_turns) -> list[str]`; `dispatch(arm_dir, ws, env, argv, *, max_tokens, deadline_s) -> dict`; `bundle(ws, base, out) -> int`; `prune(ws, repo, cache_paths) -> dict`; `delete_cfg(cfg) -> None`; `PRE_PUSH_HOOK: str`.
 
 **Out of scope** - do NOT touch, though they look related:
 - The prototype's `link_packages` (a Rust-specific gitignored `.packages` dir) - a workpiece that needs a gitignored dir linked declares it in `run.home_links` or keeps it absolute; a worktree shares the repo's config, so nothing else is needed.
 - `git clone -s` (the prototype's workspace) - replaced by a nested worktree (design S1, decided by checkpoint 1).
 
 **STOP conditions** - stop and report rather than improvise, if:
-- checkpoint 1 recorded that the arm did NOT load the repo's `CLAUDE.local.md` AND copying it in made the plugin treat the worktree as a curated level that writes somewhere: then `copy_local_md` must stay False and the plan's M2 verification changes; report before building;
+- checkpoint 1 (2026-11-03, measured) found the arm loads the repo-root `CLAUDE.local.md` through the ancestor walk but NOT an untracked repo-root `CLAUDE.md` (a nested worktree skips the parent's CLAUDE.md), and runs its one session at the CLI's default `skillListingBudgetFraction` because the plugin's raise lands only next session; `make_worktree` therefore copies an untracked `CLAUDE.md` (never `CLAUDE.local.md`, which would then load twice) and `install_plugin` seeds `settings.json` from the user's settings. If either premise reads false on the code you find, STOP;
 - `git worktree add` refuses because `.claude/worktrees/` is not ignorable (the exclude write fails): report the repo's `.git/info/exclude` state.
 
 - [ ] **Step 1: Write the failing tests**
@@ -1955,6 +1956,8 @@ def test_install_plugin_verifies_bytes(tmp_path, scratch_repo, skills_repo, arm_
     cfg = run_dir / "arms" / "r1-V1" / "cfg"
     info = A.install_plugin(cfg, frozen, creds, arm_env_base)
     assert info["drift"] == [] and info["installed_version"] == "0.0.1-fixture"
+    seeded = json.loads((cfg / "settings.json").read_text(encoding="utf-8"))
+    assert set(seeded) <= {"skillListingBudgetFraction"}, "only the named keys are seeded"
     assert (cfg / ".credentials.json").stat().st_mode & 0o777 == 0o600
     # A re-install overwrites the cache, so drift is planted on the frozen side's recorded hashes.
     bad = dataclasses.replace(frozen, hashes=dict(frozen.hashes, **{"SKILL.md": "0" * 64}))
@@ -1962,16 +1965,29 @@ def test_install_plugin_verifies_bytes(tmp_path, scratch_repo, skills_repo, arm_
         A.install_plugin(cfg, bad, creds, arm_env_base)
 
 
-def test_make_worktree_branch_hook_and_local_md(scratch_repo, tmp_path):
-    base = (scratch_repo / ".base").read_text()
+def test_make_worktree_branch_hook_and_untracked_claude_md(scratch_repo, tmp_path):
+    L.git(scratch_repo, "rm", "-q", "--cached", "CLAUDE.md")
+    L.git(scratch_repo, "-c", "user.name=t", "-c", "user.email=t@x", "commit", "-q", "-m", "untrack")
+    base = L.git(scratch_repo, "rev-parse", "HEAD").stdout.strip()
+    (scratch_repo / "CLAUDE.md").write_text("# untracked root rules\n", encoding="utf-8")
     path = scratch_repo / ".claude" / "worktrees" / "abx-t-r1-C"
-    info = A.make_worktree(scratch_repo, base, "abx/t/r1-C", path, copy_local_md=True)
-    assert info["head"] == base and (path / "CLAUDE.local.md").read_text(encoding="utf-8").startswith("WHAT:")
+    info = A.make_worktree(scratch_repo, base, "abx/t/r1-C", path, copy_untracked_claude_md=True)
+    assert info["head"] == base and info["claude_md_copied"] is True
+    assert (path / "CLAUDE.md").read_text(encoding="utf-8") == "# untracked root rules\n"
+    assert not (path / "CLAUDE.local.md").exists(), "CLAUDE.local.md already loads via the ancestor walk"
     assert L.git(path, "rev-parse", "--abbrev-ref", "HEAD").stdout.strip() == "abx/t/r1-C"
     assert L.git(scratch_repo, "check-ignore", "-q", ".claude/worktrees/x").returncode == 0
     assert L.git(path, "push", "origin", "HEAD").returncode != 0, "the pre-push hook refuses"
     with pytest.raises(A.ArmError):
-        A.make_worktree(scratch_repo, base, "abx/t/r1-C", path, copy_local_md=False)
+        A.make_worktree(scratch_repo, base, "abx/t/r1-C", path, copy_untracked_claude_md=False)
+
+
+def test_make_worktree_leaves_a_tracked_claude_md_alone(scratch_repo):
+    base = (scratch_repo / ".base").read_text()
+    path = scratch_repo / ".claude" / "worktrees" / "abx-t-r1-V1"
+    info = A.make_worktree(scratch_repo, base, "abx/t/r1-V1", path, copy_untracked_claude_md=True)
+    assert info["claude_md_copied"] is False
+    assert (path / "CLAUDE.md").read_text(encoding="utf-8") == "# workpiece\n"
 
 
 def test_arm_env_is_built_from_scratch(tmp_path, monkeypatch):
@@ -1994,7 +2010,7 @@ def test_arm_home_links_only_what_exists(tmp_path, monkeypatch):
 def test_dispatch_streams_and_bundles(tmp_path, scratch_repo, arm_env_base, fake_claude_path):
     base = (scratch_repo / ".base").read_text()
     ws = scratch_repo / ".claude" / "worktrees" / "abx-t-r1-C"
-    A.make_worktree(scratch_repo, base, "abx/t/r1-C", ws, copy_local_md=False)
+    A.make_worktree(scratch_repo, base, "abx/t/r1-C", ws, copy_untracked_claude_md=False)
     arm_dir = tmp_path / "arm"
     arm_dir.mkdir()
     env = dict(A.arm_env(arm_dir / "cfg", arm_dir / "home", ("PATH",)), **arm_env_base,
@@ -2015,7 +2031,7 @@ def test_dispatch_streams_and_bundles(tmp_path, scratch_repo, arm_env_base, fake
 def test_dispatch_token_cap_ends_the_run(tmp_path, scratch_repo, arm_env_base):
     base = (scratch_repo / ".base").read_text()
     ws = scratch_repo / ".claude" / "worktrees" / "abx-t-r1-V1"
-    A.make_worktree(scratch_repo, base, "abx/t/r1-V1", ws, copy_local_md=False)
+    A.make_worktree(scratch_repo, base, "abx/t/r1-V1", ws, copy_untracked_claude_md=False)
     arm_dir = tmp_path / "arm2"
     (arm_dir / "cfg").mkdir(parents=True)
     env = dict(A.arm_env(arm_dir / "cfg", arm_dir / "home", ("PATH",)), **arm_env_base,
@@ -2135,13 +2151,23 @@ def installed_plugin_path(cfg: Path) -> Path | None:
     return None
 
 
-def install_plugin(cfg: Path, frozen: Frozen, credentials: Path, env: dict[str, str]) -> dict[str, Any]:
+def install_plugin(cfg: Path, frozen: Frozen, credentials: Path, env: dict[str, str], *,
+                   settings_keep: tuple[str, ...] = ("skillListingBudgetFraction",)) -> dict[str, Any]:
     """Install the frozen plugin into cfg and verify the installed skill byte for byte.
 
     env must carry PATH (so `claude` resolves); CLAUDE_CONFIG_DIR is set here. The credentials
     file is copied in at mode 0600 and must be removed by delete_cfg when the arm ends.
+    settings_keep names the user settings.json keys seeded into cfg/settings.json: a fresh config
+    dir runs its only session at the CLI defaults (measured at checkpoint 1: the skill listing
+    budget the plugin raises applies only from the next session), which is not normal work.
     """
     cfg.mkdir(mode=0o700, parents=True, exist_ok=True)
+    try:
+        user = json.loads((Path.home() / ".claude" / "settings.json").read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        user = {}
+    seeded = {k: user[k] for k in settings_keep if k in user}
+    (cfg / "settings.json").write_text(json.dumps(seeded), encoding="utf-8")
     if not credentials.is_file():
         raise ArmError(f"no credentials file at {credentials}")
     target = cfg / ".credentials.json"
@@ -2161,13 +2187,14 @@ def install_plugin(cfg: Path, frozen: Frozen, credentials: Path, env: dict[str, 
     installed_hashes = tree_hashes(installed / "skills" / frozen.skill_dir.name)
     drift = sorted(k for k in set(frozen.hashes) | set(installed_hashes) if frozen.hashes.get(k) != installed_hashes.get(k))
     version = json.loads((installed / ".claude-plugin" / "plugin.json").read_text(encoding="utf-8")).get("version")
-    info = {"installed_path": str(installed), "installed_version": version, "drift": drift, "steps": steps}
+    info = {"installed_path": str(installed), "installed_version": version, "drift": drift, "steps": steps,
+            "settings_seeded": sorted(seeded)}
     if drift:
         raise ArmError(f"installed skill drifts from the frozen checkout: {drift}")
     return info
 
 
-def make_worktree(repo: Path, base: str, branch: str, path: Path, *, copy_local_md: bool) -> dict[str, Any]:
+def make_worktree(repo: Path, base: str, branch: str, path: Path, *, copy_untracked_claude_md: bool) -> dict[str, Any]:
     """A nested worktree of repo at base on a NEW branch, with a refusing pre-push hook.
 
     `.claude/worktrees/` is added to repo's .git/info/exclude when not already ignored, so the
@@ -2192,11 +2219,17 @@ def make_worktree(repo: Path, base: str, branch: str, path: Path, *, copy_local_
     (hooks / "pre-push").write_text(PRE_PUSH_HOOK, encoding="utf-8")
     (hooks / "pre-push").chmod(0o755)
     git(path, "config", "core.hooksPath", str(hooks))
+    # Measured at checkpoint 1: a nested worktree skips the parent repo's CLAUDE.md but still loads
+    # the repo-root CLAUDE.local.md through the ancestor walk. So an UNTRACKED root CLAUDE.md is
+    # copied in (a tracked one is already in the checkout), and CLAUDE.local.md never is (it would
+    # then load twice).
     copied = False
-    if copy_local_md and (repo / "CLAUDE.local.md").is_file() and not (path / "CLAUDE.local.md").exists():
-        shutil.copyfile(repo / "CLAUDE.local.md", path / "CLAUDE.local.md")
+    root_md = repo / "CLAUDE.md"
+    if (copy_untracked_claude_md and root_md.is_file() and not (path / "CLAUDE.md").exists()
+            and git(repo, "ls-files", "--error-unmatch", "CLAUDE.md").returncode != 0):
+        shutil.copyfile(root_md, path / "CLAUDE.md")
         copied = True
-    return {"head": head, "branch": branch, "hooks_path": str(hooks), "local_md_copied": copied}
+    return {"head": head, "branch": branch, "hooks_path": str(hooks), "claude_md_copied": copied}
 
 
 def arm_home(arm_dir: Path, links: tuple[str, ...]) -> Path:
@@ -2309,7 +2342,7 @@ def delete_cfg(cfg: Path) -> None:
 
 - [ ] **Step 4: Run the tests to verify they pass**
 
-Expected: `10 passed` in `test_abarm.py`. If `test_make_worktree...`'s push assertion fails because the scratch repo has no `origin`, the hook still refuses first (git runs pre-push before contacting the remote); if it exits 128 before the hook, change the assertion to run the hook file directly: `L.run([str(hooks / "pre-push")]).returncode == 1`.
+Expected: `11 passed` in `test_abarm.py`. If `test_make_worktree...`'s push assertion fails because the scratch repo has no `origin`, the hook still refuses first (git runs pre-push before contacting the remote); if it exits 128 before the hook, change the assertion to run the hook file directly: `L.run([str(hooks / "pre-push")]).returncode == 1`.
 
 - [ ] **Step 5: Commit**
 
@@ -3080,7 +3113,7 @@ def run_arm(ctx: RunContext, round_no: int, name: str) -> dict[str, Any]:
         result["frozen"] = {"ref": frozen.skills_ref, "overlay_written": list(frozen.overlay_written)}
         env = abarm.arm_env(cfg, home, p.run.env_keep)
         result["install"] = abarm.install_plugin(cfg, frozen, ctx.credentials, env)
-        result["worktree"] = abarm.make_worktree(repo, p.workpiece.base, branch, ws, copy_local_md=True)
+        result["worktree"] = abarm.make_worktree(repo, p.workpiece.base, branch, ws, copy_untracked_claude_md=True)
         result["guard"] = abguard.snapshot(ws, arm_dir / "guard")
         if not ctx.dry_run:
             result.update(abarm.dispatch(arm_dir, ws, env, abarm.claude_argv(ctx.task, ctx.max_turns),
@@ -3252,12 +3285,12 @@ From the INSTALLED plugin (`~/.claude/plugins/cache/bitranox-skills/bitranox/<ve
 1. `python3 <scripts>/abtest.py init ~/.abtest/<run-id> --repo <workpiece> --base 033e25e8adc43116b7c16a3ff57629aaa744a3df --skills-ref <M1 release sha, 40 chars> --skill process-agents-subagent-driven-development`
 2. Fill `abtest.toml` (`gate` = the workpiece's real gate as an argv list; `cache_paths` = its build dir; `n = 1`; `deadline_s` = 7200), `task.md` (the prototype's prompt text for the plan branch, from `EXECUTION-USER-REVIEW.md`'s record of it), `PREREG.md` (question + one hypothesis), `variants/V1/SKILL.md` (a copy of the control's SKILL.md with one marker line added; it is never run here).
 3. `python3 <scripts>/abtest.py seal ~/.abtest/<run-id>` then `python3 <scripts>/abtest.py run ~/.abtest/<run-id> --dry-run --only C --json > <scratch>/dry.json 2>&1; echo RC=$? >> <scratch>/dry.json`.
-Expected: `RC=0`; `arms/r1-C/result.json` has `floor.passed: true`, `guard.taken: true`, `install.drift: []`, `worktree.local_md_copied` as checkpoint 1 decided; the workpiece shows a branch `abx/<run-id>/r1-C` and NO worktree. Then `prune-run` to drop that branch.
+Expected: `RC=0`; `arms/r1-C/result.json` has `floor.passed: true`, `guard.taken: true`, `install.drift: []`, `install.settings_seeded: ["skillListingBudgetFraction"]`, `worktree.claude_md_copied: true` (the workpiece's root CLAUDE.md is untracked); the workpiece shows a branch `abx/<run-id>/r1-C` and NO worktree. Then `prune-run` to drop that branch.
 
 - [ ] **Step 4: ONE real control arm (checkpoint 2; about 25 USD and 1 to 2 h, unverified for this version)**
 
 `python3 <scripts>/abtest.py run ~/.abtest/<run-id> --only C > <scratch>/arm1.log 2>&1; echo RC=$? >> <scratch>/arm1.log` in the FOREGROUND of a dedicated terminal (the user's, since it outlives a tool call: give them the line), then `python3 <scripts>/abtest.py score ~/.abtest/<run-id> --json`.
-Read: `result.json` (`stop_reason`, `wall_s`, `total_cost_usd`, `per_model`, `guard_changes`, `bundle_commits`, `floor.passed`), `scores.json` (`void`), `git -C <workpiece> status --porcelain` (must be unchanged), `ls <workpiece>/.claude/worktrees/` (must not hold the arm), `ls ~/.abtest/<run-id>/arms/r1-C/` (no `cfg/`).
+Read: `result.json` (`stop_reason`, `wall_s`, `total_cost_usd`, `per_model`, `guard_changes`, `bundle_commits`, `floor.passed`), `scores.json` (`void`), `git -C <workpiece> status --porcelain` (must be unchanged), `ls <workpiece>/.claude/worktrees/` (must not hold the arm), `ls ~/.abtest/<run-id>/arms/r1-C/` (no `cfg/`), and the CLAUDE files the arm transcript loaded: the repo's `CLAUDE.md` exactly once (the worktree copy) and its `CLAUDE.local.md` exactly once (count the `Contents of .../CLAUDE` lines in the transcript the stream's session_id names, as the M0 probe did).
 
 - [ ] **Step 5: Record checkpoint 2**
 
@@ -3273,7 +3306,7 @@ M3 (`abjudge.py`, `abfixes.py`, `abverdict.py`, the `judge` and `report` subcomm
 
 ## Self-review (run after writing, fixed inline)
 
-1. Spec coverage: design S1 (arms, worktree, config dir, switch, guard, opus assert) -> Tasks 12, 13, 15; S3 profile and CLI verbs init/seal/run/score/prune-run -> Tasks 10, 15; judge/report -> M3 (after the checkpoint, by design); S4 void rules, quota check, resume -> Tasks 13, 14, 15; S5.1 -> Task 1 + Task 12's `copy_local_md`; S5.3 -> Tasks 2-8 + Task 12's switch check; S5.5 -> Task 14; S5.6 -> Task 10; S5.7 -> nothing ported, by design.
+1. Spec coverage: design S1 (arms, worktree, config dir, switch, guard, opus assert) -> Tasks 12, 13, 15; S3 profile and CLI verbs init/seal/run/score/prune-run -> Tasks 10, 15; judge/report -> M3 (after the checkpoint, by design); S4 void rules, quota check, resume -> Tasks 13, 14, 15; S5.1 -> Task 1 + Task 12's `copy_untracked_claude_md` and `settings_keep` (checkpoint 1); S5.3 -> Tasks 2-8 + Task 12's switch check; S5.5 -> Task 14; S5.6 -> Task 10; S5.7 -> nothing ported, by design.
 2. Placeholder scan: none of TBD/TODO/"similar to"; the angle-bracket placeholders are the profile skeleton's own and the test asserts they are refused.
 3. Type consistency: `Profile.arm_names()`, `suite_argv()`, `Frozen.hashes`, `install_plugin(...)["drift"]`, `dispatch(...)["stop_reason"]`, `score_arm(...)["void"]`, journal statuses `ran|dry|scored|sealed|<quota state>` are used by the same names in Tasks 12-15.
 4. Absence checks: Task 7's test asserts an EMPTY `.claude` tree under the arm HOME; Task 12's tests assert the worktree is gone and the branch stays; Task 15's resume test asserts an unchanged mtime, not a log line.
