@@ -23,10 +23,16 @@ def test_non_opus_main_model_is_void():
     assert acct.void_reasons == ["session model is 'claude-sonnet-5-5', not an opus id"]
 
 
+OPUS_INIT = {"type": "system", "subtype": "init", "model": "claude-opus-5-5"}
+
+
 def test_forbidden_model_in_usage_is_void_and_haiku_is_not():
     acct = S.StreamAccount()
+    # The init record keeps this test about modelUsage alone: without it the stream is also
+    # void for having no init record.
+    acct.feed(OPUS_INIT)
     acct.feed({"type": "result", "modelUsage": {"claude-haiku-5-5": {}, "claude-fable-5-1": {}}})
-    assert acct.void_reasons == ["model claude-fable-5-1 appears in modelUsage"]
+    assert acct.void_reasons == ["model claude-fable-5-1 appears in modelUsage, not an opus or haiku id"]
 
 
 def test_assistant_messages_are_counted_once_per_id():
@@ -52,7 +58,8 @@ def test_input_usage_prefers_the_split_and_prices_exactly():
 def test_non_json_lines_are_skipped(tmp_path):
     p = tmp_path / "s.jsonl"
     p.write_text("garbage\n" + FIXTURE.read_text(encoding="utf-8"), encoding="utf-8")
-    assert S.account_stream_file(p).summary()["total_cost_usd"] == 0.25
+    s = S.account_stream_file(p).summary()
+    assert (s["total_cost_usd"], s["skipped_lines"]) == (0.25, 1)
 
 
 def test_a_torn_last_line_is_counted_not_fatal(tmp_path):
@@ -81,3 +88,107 @@ def test_price_input_is_the_units_in_dollars():
     u = {"input": 1_000_000, "cache_read": 0, "cache_write_5m": 0, "cache_write_1h": 0}
     assert S.price_input("claude-opus-5-5", u) == 4.0
     assert S.price_input("claude-haiku-5-5", u) == 0.1
+
+
+def _assistant(mid, model, **usage):
+    return {"type": "assistant", "message": {"id": mid, "model": model, "usage": usage}}
+
+
+NO_INIT = "no init record (main model not asserted)"
+
+
+def test_feed_line_parses_one_line_and_counts_what_it_cannot_use():
+    acct = S.StreamAccount()
+    for line in ("", "   \n", "garbage", "[1, 2]", "7", json.dumps(OPUS_INIT) + "\n"):
+        acct.feed_line(line)
+    assert (acct.model, acct.skipped_lines) == ("claude-opus-5-5", 3)
+
+
+def test_account_stream_file_equals_feeding_every_line(tmp_path):
+    text = "garbage\n\n[1]\n" + FIXTURE.read_text(encoding="utf-8")
+    p = tmp_path / "s.jsonl"
+    p.write_text(text, encoding="utf-8")
+    live = S.StreamAccount()
+    for line in text.splitlines(keepends=True):
+        live.feed_line(line)
+    assert S.account_stream_file(p).summary() == live.summary()
+
+
+def test_a_stream_without_an_init_record_is_void():
+    acct = S.StreamAccount()
+    acct.feed(_assistant("m1", "claude-opus-5-5", input_tokens=5))
+    assert acct.void_reasons == [] and acct.summary()["void_reasons"] == [NO_INIT]
+    acct.feed({"type": "result", "modelUsage": {"claude-opus-5-5": {}}})
+    assert acct.void_reasons == [NO_INIT] and acct.summary()["void_reasons"] == [NO_INIT]
+
+
+def test_an_init_record_without_a_model_is_not_reported_as_missing():
+    acct = S.StreamAccount()
+    acct.feed({"type": "system", "subtype": "init"})
+    acct.feed({"type": "result", "modelUsage": {}})
+    assert acct.summary()["void_reasons"] == ["session model is None, not an opus id"]
+
+
+@pytest.mark.parametrize(("record", "reason"), [
+    ({"type": "result", "modelUsage": {"claude-sonnet-5-5": {}}},
+     "model claude-sonnet-5-5 appears in modelUsage, not an opus or haiku id"),
+    ({"type": "result", "modelUsage": {"claude-Fable-5": {}}},
+     "model claude-Fable-5 appears in modelUsage, not an opus or haiku id"),
+    (_assistant("m1", "claude-fable-5-1"),
+     "model claude-fable-5-1 appears in an assistant message, not an opus or haiku id"),
+])
+def test_a_model_outside_the_allowlist_voids_the_arm(record, reason):
+    acct = S.StreamAccount()
+    acct.feed(OPUS_INIT)
+    acct.feed(record)
+    assert acct.void_reasons == [reason]
+
+
+def test_opus_and_haiku_together_are_clean_and_a_repeat_voids_once():
+    acct = S.StreamAccount()
+    acct.feed(OPUS_INIT)
+    acct.feed(_assistant("m1", "claude-opus-5-5"))
+    acct.feed(_assistant("m2", "claude-haiku-5-5"))
+    acct.feed({"type": "result", "modelUsage": {"claude-opus-5-5": {}, "claude-haiku-5-5": {}}})
+    assert acct.summary()["void_reasons"] == []
+    acct.feed(_assistant("m3", "claude-sonnet-5-5"))
+    acct.feed(_assistant("m4", "claude-sonnet-5-5"))
+    assert len(acct.void_reasons) == 1
+
+
+def test_output_tokens_take_the_largest_reading_per_message_id():
+    acct = S.StreamAccount()
+    acct.feed(_assistant("m1", "claude-opus-5-5", input_tokens=5, output_tokens=1))
+    acct.feed(_assistant("m1", "claude-opus-5-5", input_tokens=5, output_tokens=400))
+    acct.feed(_assistant("m1", "claude-opus-5-5", input_tokens=5, output_tokens=3))
+    acct.feed(_assistant("m2", "claude-opus-5-5", output_tokens=7))
+    s = acct.summary()
+    assert (s["main_output_tokens"], s["main_new_tokens"], s["assistant_messages"]) == (407, 5, 2)
+
+
+def test_a_null_or_non_dict_model_usage_entry_is_skipped():
+    acct = S.StreamAccount()
+    acct.feed(OPUS_INIT)
+    acct.feed({"type": "result", "modelUsage": {"claude-opus-5-5": None, "claude-haiku-5-5": [1],
+                                                 "claude-opus-5-6": {"inputTokens": 3}}})
+    assert list(acct.per_model()) == ["claude-opus-5-6"] and acct.summary()["void_reasons"] == []
+
+
+@pytest.mark.parametrize("message", ["x", [1], None, 3])
+def test_a_non_dict_assistant_message_is_skipped_and_counted(message):
+    acct = S.StreamAccount()
+    acct.feed({"type": "assistant", "message": message})
+    assert (acct.skipped_lines, acct.assistant_messages, acct.per_message_model) == (1, 0, {})
+
+
+def test_a_partial_cache_creation_split_puts_the_remainder_in_the_5m_class():
+    u = S.input_usage({"cache_creation_input_tokens": 30, "cache_creation": {"ephemeral_1h_input_tokens": 20}})
+    assert (u["cache_write_5m"], u["cache_write_1h"]) == (10, 20)
+
+
+def test_per_message_model_counts_two_interleaved_models():
+    acct = S.StreamAccount()
+    for i, model in enumerate(["claude-opus-5-5", "claude-haiku-5-5", "claude-opus-5-5", "claude-haiku-5-5",
+                               "claude-opus-5-5"]):
+        acct.feed(_assistant(f"m{i}", model))
+    assert acct.per_message_model == {"claude-opus-5-5": 3, "claude-haiku-5-5": 2}
