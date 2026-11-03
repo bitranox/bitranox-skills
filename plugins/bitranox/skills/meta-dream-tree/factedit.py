@@ -107,11 +107,6 @@ FACTS_SUBDIR = "facts"
 # The engine this plugin ships, beside this skill: skills/<skill> -> skills -> bitranox/hooks.
 # It is the one whose caps match the running plugin, whatever else the machine has installed.
 OWN_ENGINE = Path(__file__).resolve().parents[2] / "hooks" / "memory_engine.py"
-# The memory-writes switch lives in the same hooks dir, and apply must consult it before it
-# stages anything: the engine it launches would refuse too, but only after the stage dir exists.
-if str(OWN_ENGINE.parent) not in sys.path:
-    sys.path.insert(0, str(OWN_ENGINE.parent))
-import self_improve_signals as sig  # after the insert: the hooks dir comes from OWN_ENGINE
 
 # Where a plugin-installed engine lives, the fallback for a copy of this file run outside the
 # plugin. The version segment is a glob on purpose: a hardcoded version goes stale on the next
@@ -176,6 +171,11 @@ class PinnedFact(FactEditError):
     caller (a nap's capture subagent) would change pinned content without anyone deciding to."""
 
 
+def _writes_never_off() -> bool:
+    """The switch reading for an engine too old to export memory_writes_off: never off."""
+    return False
+
+
 @dataclass(frozen=True)
 class EngineRules:
     """The engine's live lint surface, injected so the judging below is testable without a store."""
@@ -194,6 +194,13 @@ class EngineRules:
     # The engine's anchor resolver, bound like the parser so the body is read from the store THAT
     # engine writes. None only for an engine too old to export it, which read_fact refuses.
     resolve_anchor: Callable[[str], object] | None = None
+    # The memory-writes switch, bound from the SAME engine's self_improve_signals, so a copy of
+    # this file run outside the plugin reads it through --engine like every other rule. apply
+    # consults it before staging: the engine it launches would refuse too, but only after the
+    # stage dir exists. The defaults stand for an engine too old to know the switch, which
+    # cannot honour it either.
+    writes_off: Callable[[], bool] = field(default=_writes_never_off)
+    writes_off_line: str = ""
 
 
 @dataclass(frozen=True)
@@ -436,18 +443,22 @@ def load_rules(engine: Path) -> EngineRules:
     # Drop any previously-imported copy first. Both names are plain top-level modules, so a second
     # call with a DIFFERENT engine dir would otherwise get the cached first one and report that
     # engine's caps under this engine's path - the exact silent-wrong-answer this tool exists to
-    # stop. Nothing else in this process imports them by name, so evicting them is safe; the
-    # module-level `sig` keeps its own reference to this file's switch, which eviction leaves
-    # alone. The anchor resolver lives in self_improve_signals (uuid_store re-exports it), so
-    # that goes too.
+    # stop. Nothing else in this process imports them, so evicting them is safe. The anchor
+    # resolver and the memory-writes switch live in self_improve_signals (uuid_store re-exports
+    # the resolver), so that goes too.
     for name in ("uuid_store", "capture_constraints", "self_improve_signals"):
         sys.modules.pop(name, None)
     importlib.invalidate_caches()
     try:
         us = importlib.import_module("uuid_store")
         cc = importlib.import_module("capture_constraints")
+        sis = importlib.import_module("self_improve_signals")
     except ImportError as exc:
         raise EngineNotFound(f"engine at {engine} is not importable: {exc}") from exc
+    switch = {}
+    if hasattr(sis, "memory_writes_off"):
+        switch = {"writes_off": sis.memory_writes_off,
+                  "writes_off_line": sis.MEMORY_WRITES_OFF_LINE}
     return EngineRules(
         soft_max=us.HOOK_SOFT_MAX,
         hard_max=us.HOOK_HARD_MAX,
@@ -461,6 +472,7 @@ def load_rules(engine: Path) -> EngineRules:
         types=tuple(us.TYPE_PREFIXES),
         engine_path=Path(engine).resolve(),
         resolve_anchor=getattr(us, "resolve_anchor", None),
+        **switch,
     )
 
 
@@ -926,8 +938,8 @@ _SINGLE_ONLY = (("slug", "--slug"), ("hook", "--hook"), ("hook_file", "--hook-fi
 
 
 def cmd_apply(args, rules: EngineRules) -> int:
-    if sig.memory_writes_off():
-        raise BadInput(sig.MEMORY_WRITES_OFF_LINE)
+    if rules.writes_off():
+        raise BadInput(rules.writes_off_line)
     if args.batch:
         given = [flag for attr, flag in _SINGLE_ONLY if getattr(args, attr) is not None]
         if given:
@@ -1060,8 +1072,8 @@ def cmd_apply_batch(args, rules: EngineRules) -> int:
     way through leaves the earlier entries written. The report names which were applied, which one
     failed and why, and which were never attempted, and nothing after the failure is attempted.
     """
-    if sig.memory_writes_off():
-        raise BadInput(sig.MEMORY_WRITES_OFF_LINE)
+    if rules.writes_off():
+        raise BadInput(rules.writes_off_line)
     path = Path(args.batch)
     entries, problems = parse_batch(_read_batch_file(path), base=path.resolve().parent,
                                     start=Path(args.start),
