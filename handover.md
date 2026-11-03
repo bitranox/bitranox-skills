@@ -1,39 +1,34 @@
-# STALE - read 2026-11-02, work continued
+# Handover 2026-11-03 (the [27] implementation plan is written; execution not started)
 
 ## In flight
 
-Nothing in code. 10.10.0 ships `proxy_pool.py fetch` (issue #4): a chunked byte-range download
-over the rotating pool. Built in the worktree `.claude/worktrees/chunked-fetch` from the plan
-`docs/plans/2026-11-01-proxy-chunked-fetch.md`, then five review-fix rounds.
+- Nothing is part-done. The plan `docs/plans/2026-11-03-ab-test-skill.md` (16 tasks, M0-M2, later milestones after checkpoint 2) is complete and committed with the design amendments (24273510); the user has been offered the two execution options (subagent-driven on opus in this session, or attended) and has not answered yet.
 
-- Pending with the USER: whether to comment on or close GitHub issue #4. Ask; never post unasked.
-- The worktree is removed once CI on the pushed release is green and its gitignored
-  `EXECUTION-USER-REVIEW.md` is merged into the main checkout's copy.
+## Committed, or not
 
-## Decided
+- bitranox-skills: the plan, the design amendments, this file and the [27] backlog line are in the commit on top of 4019c1ca; pushed if `git log origin/master -1 --format=%s` names the plan.
+- RESEARCH: all local, unpushed (public repo; reword run_arm.py's docstring before any push); branch abx-better-work-axis at 2838fe1.
+- EXECUTION-USER-REVIEW.md (gitignored) holds the plan-writing decisions under "[27] implementation plan written on fable".
 
-The decisions behind the fix rounds are in the main checkout's `EXECUTION-USER-REVIEW.md` (four
-2026-11-02 entries): only a failed connect bans to `bad.txt`; odd answers evict for the run only;
-no exit 2 from what proxies answer (exit 2 = local causes and a sha256 mismatch); a rerun trusts
-its manifest over a fresh probe vote; a shortened part counts only the bytes it holds.
+## Decided, and why
+
+- Plan authored on fable; every implementer subagent and every arm/judge runs on opus, pinned and asserted (user directive 2026-11-02).
+- Tasks are detailed only to checkpoint 2 (one real control arm): its duration and cost fix M5's deadline and cap, and whether the arm commits per task decides how M3 prices an advantage.
 
 ## Still open, untouched
 
-- OPEN-WORK.md [30] (re-count on/after 2026-11-05), [50] (issue #4's geo-routing part, ask the
-  user first), [96], [100] (`run`'s Ctrl-C), [110] (pre-existing ruff findings in proxy_pool.py).
+OPEN-WORK.md: [27] (next: Task 1, the M0 probe), [25] (after [27] by the user), [40], [50] parked, [96].
 
 ## Next action
 
-[30] once 2026-11-05 has passed; before that, ask the user about [50].
+Task 1 of the plan (the M0 probe, about 0.20 USD) under whichever execution mode the user picks; if attended, a fresh session opens in a marketplace worktree per the plan's Global Constraints.
 
 ## How to verify
 
-- `uv run --no-project --with pytest --with PyYAML --with lxml --with defusedxml --with ruamel.yaml --with httpx2 python -m pytest plugins/bitranox/skills/net-rotating-proxies/ -q -W error`
-- `ci_wait.py --ref HEAD` (bitranox:compuse-toolbox) on the release commit
+- `ls docs/plans/2026-11-03-ab-test-skill*.md` lists the design and the plan; `grep -c '^### Task' docs/plans/2026-11-03-ab-test-skill.md` prints 16.
+- CI on the pushed commit: `uv run <plugin cache>/skills/compuse-toolbox/scripts/ci_wait.py --ref HEAD`.
 
 ## Lessons for the next nap
 
-(none open; this session's were captured by its naps)
-
-Read this, then replace the first line with `# STALE - read <date>, work continued`. Do not
-delete it - if this session ends badly it is the only record of where things stood.
+- When a user's directive pins the authoring tier (plans and skill text on fable), check the session's own model before starting the authoring and ask for the switch first: a design doc was written on opus and only caught at the plan stage.
+- When writing a plan for a PUBLIC repo, scan it for tree paths and for the home-directory prefix inside any string literal before the commit: a gitignore pattern ending in that prefix (arms/*/home with a trailing slash) is refused by pushcheck like a real path.
