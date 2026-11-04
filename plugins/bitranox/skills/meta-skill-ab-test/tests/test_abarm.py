@@ -898,59 +898,57 @@ def _git_ok(repo, *args):
 
 
 @POSIX_ONLY
-def test_bwrap_problem_probes_the_arms_own_namespaces_and_proc(tmp_path):
+@pytest.mark.parametrize("sandbox", ["bwrap", "bwrap-tmpfs-proc"])
+def test_bwrap_problem_probes_the_values_own_namespaces_and_proc(tmp_path, sandbox):
     """`bwrap --ro-bind / / true` alone passed on a host where the arm's argv then failed."""
     log = tmp_path / "argv.txt"
     fake = tmp_path / "bin" / "bwrap"
     fake.parent.mkdir()
     fake.write_text(f'#!/bin/sh\nprintf "%s\\n" "$@" > "{log}"\n', encoding="utf-8")
     fake.chmod(0o755)
-    assert A.bwrap_problem(str(fake.parent)) is None
-    assert log.read_text(encoding="utf-8").splitlines() == [*A.BWRAP_BASE[1:], "true"]
-    assert A.sandbox_argv(_mounts(tmp_path))[:len(A.BWRAP_BASE)] == list(A.BWRAP_BASE)
-
-
-def _without_private_proc(argv):
-    """argv with its private /proc swapped for an empty tmpfs; every other element unchanged."""
-    i = next(k for k in range(len(argv) - 1) if argv[k:k + 2] == ["--proc", "/proc"])
-    return [*argv[:i], "--tmpfs", "/proc", *argv[i + 2:]]
-
-
-def _real_bwrap_shape():
-    """(the argv transform the real-bwrap test runs, a description), or (None, the skip reason).
-
-    The full shape when the arm's own probe passes. Where only the private /proc is refused (an
-    LXC container with lxcfs overmounts, measured on the dev box) the filesystem layout under test
-    is the same with /proc swapped for an empty tmpfs, so that layout is still proven for real; a
-    live arm there is refused by bwrap_problem. Skipped only when bwrap is absent or refused a
-    user namespace outright.
-    """
-    path = os.environ.get("PATH")
-    full = A.bwrap_problem(path)
-    if full is None:
-        return (lambda argv: argv), "the arm's full bwrap argv"
-    exe = shutil.which("bwrap", path=path)
-    if exe is None:
-        return None, full
-    reduced = L.run(_without_private_proc([exe, *A.BWRAP_BASE[1:], "true"]), timeout=30)
-    if reduced.returncode != 0:
-        return None, f"{full}; and without a private /proc: rc {reduced.returncode}: {reduced.stderr.strip()}"
-    return _without_private_proc, f"the arm's bwrap argv with /proc as an empty tmpfs (full shape refused here: {full})"
+    assert A.bwrap_problem(str(fake.parent), sandbox) is None
+    base = A.BWRAP_BASES[sandbox]
+    assert log.read_text(encoding="utf-8").splitlines() == [*base[1:], "true"]
+    assert A.sandbox_argv(_mounts(tmp_path), sandbox=sandbox)[:len(base)] == list(base)
 
 
 @POSIX_ONLY
-def test_a_real_bwrap_sandbox_confines_writes_and_hides_the_real_home(tmp_path):
-    """sandbox_argv run for real: the four writable paths take writes, the real home is hidden.
+def test_a_bwrap_refused_only_its_private_proc_names_bwrap_tmpfs_proc(tmp_path):
+    fake = tmp_path / "bin" / "bwrap"
+    fake.parent.mkdir()
+    fake.write_text('#!/bin/sh\nfor a in "$@"; do\n  if [ "$a" = --proc ]; then\n'
+                    "    echo \"bwrap: Can't mount proc on /newroot/proc: Operation not permitted\" >&2; exit 1\n"
+                    "  fi\ndone\nexit 0\n", encoding="utf-8")
+    fake.chmod(0o755)
+    problem = A.bwrap_problem(str(fake.parent), "bwrap")
+    assert problem is not None and 'set sandbox = "bwrap-tmpfs-proc"' in problem and "Can't mount proc" in problem
+    assert A.bwrap_problem(str(fake.parent), "bwrap-tmpfs-proc") is None
 
-    The fake real home sits under tmp_path; `tmp` points the private tmpfs away from /tmp, which
-    holds tmp_path: a tmpfs over /tmp would hide the fake home whatever the home tmpfs does, and
-    the test could not see that element go missing. A second, read-only check runs the production
-    layout against the user's actual home and only asks whether ~/.ssh is visible.
+
+def test_bwrap_tmpfs_proc_differs_from_bwrap_only_in_its_proc(tmp_path):
+    m = _mounts(tmp_path)
+    plain, empty = A.sandbox_argv(m), A.sandbox_argv(m, sandbox="bwrap-tmpfs-proc")
+    i = plain.index("--proc")
+    assert plain[i:i + 2] == ["--proc", "/proc"]
+    assert empty == [*plain[:i], "--tmpfs", "/proc", *plain[i + 2:]]
+    assert "--proc" not in empty and "--unshare-pid" in empty
+
+
+@POSIX_ONLY
+@pytest.mark.parametrize("sandbox", ["bwrap", "bwrap-tmpfs-proc"])
+def test_a_real_bwrap_sandbox_confines_writes_and_hides_the_real_home(tmp_path, sandbox):
+    """sandbox_argv run for real, each value's full argv: the writable paths take writes, the real home is hidden.
+
+    Each value is skipped only when its own probe fails (on the LXC dev box "bwrap" is refused a
+    private /proc, while "bwrap-tmpfs-proc" runs). The fake real home sits under tmp_path; `tmp`
+    points the private tmpfs away from /tmp, which holds tmp_path: a tmpfs over /tmp would hide the
+    fake home whatever the home tmpfs does, and the test could not see that element go missing. A
+    second, read-only check runs the production layout against the user's actual home and only
+    asks whether ~/.ssh is visible.
     """
-    shape, what = _real_bwrap_shape()
-    if shape is None:
-        pytest.skip(f"no usable bwrap on this machine: {what}")
-    print(f"real bwrap run: {what}")
+    reason = A.bwrap_problem(os.environ.get("PATH"), sandbox)
+    if reason:
+        pytest.skip(f'sandbox = "{sandbox}" cannot run on this machine: {reason}')
     repo = tmp_path / "wp"
     repo.mkdir()
     _git_ok(repo, "init", "-q", "-b", "main")
@@ -979,7 +977,7 @@ def test_a_real_bwrap_sandbox_confines_writes_and_hides_the_real_home(tmp_path):
               'cat "$2/.cargo/tool.txt"\n'
               'echo w > "$2/.cargo/w" 2>/dev/null && echo LINK_TARGET_WRITABLE\n'
               'echo "PWD=$(pwd)"\n')
-    proc = L.run([*shape(A.sandbox_argv(m)), "sh", "-c", script, "sh", str(ws), str(real_home), str(common)], timeout=60)
+    proc = L.run([*A.sandbox_argv(m, sandbox=sandbox), "sh", "-c", script, "sh", str(ws), str(real_home), str(common)], timeout=60)
     out = proc.stdout
     assert "A_WS_WRITABLE" in out and (ws / "inside.txt").is_file(), proc.stderr  # (a)
     assert "REAL-HOME-CONTENT" not in out, "(b) the real home's file is readable inside the sandbox"
@@ -991,6 +989,6 @@ def test_a_real_bwrap_sandbox_confines_writes_and_hides_the_real_home(tmp_path):
     real_ssh = Path.home() / ".ssh"
     if real_ssh.exists():
         live = dataclasses.replace(m, real_home=Path.home(), read_only=(repo,), tmp=Path("/tmp"))
-        seen = L.run([*shape(A.sandbox_argv(live)), "sh", "-c", 'test -e "$1" && echo VISIBLE; echo done', "sh",
+        seen = L.run([*A.sandbox_argv(live, sandbox=sandbox), "sh", "-c", 'test -e "$1" && echo VISIBLE; echo done', "sh",
                       str(real_ssh)], timeout=60)
         assert "done" in seen.stdout and "VISIBLE" not in seen.stdout, seen.stderr

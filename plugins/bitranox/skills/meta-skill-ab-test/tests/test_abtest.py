@@ -1090,7 +1090,7 @@ def test_seal_refuses_a_sandbox_value_it_does_not_know(tmp_path, scratch_repo, s
     run_dir = _init_and_fill(tmp_path, scratch_repo, skills_repo, sandbox="docker")
     capsys.readouterr()
     assert T.main(["seal", str(run_dir)]) == 2
-    assert 'run.sandbox: must be "bwrap" or "none"' in capsys.readouterr().err
+    assert 'run.sandbox: must be "bwrap", "bwrap-tmpfs-proc" or "none"' in capsys.readouterr().err
 
 
 def test_a_run_sealed_without_the_key_dry_runs_but_refuses_a_live_arm(tmp_path, scratch_repo, skills_repo,
@@ -1126,15 +1126,17 @@ def test_sandbox_none_is_recorded_in_the_journal_the_result_the_score_and_prune_
     assert json.loads(capsys.readouterr().out)["data"]["sandbox"] == {"r1-C": "none"}
 
 
+@pytest.mark.parametrize("sandbox", ["bwrap", "bwrap-tmpfs-proc"])
 def test_a_bwrap_run_starts_the_session_inside_the_sandbox_argv(tmp_path, scratch_repo, skills_repo,
-                                                               fake_claude_path, fake_bwrap, monkeypatch):
-    run_dir = _init_and_fill(tmp_path, scratch_repo, skills_repo, sandbox="bwrap")
+                                                               fake_claude_path, fake_bwrap, monkeypatch, sandbox):
+    run_dir = _init_and_fill(tmp_path, scratch_repo, skills_repo, sandbox=sandbox)
     env, creds = _env(fake_claude_path, tmp_path)
     _use_env(monkeypatch, env)
     assert T.main(["seal", str(run_dir)]) == 0
     assert T.main(_run_args(run_dir, creds, skills_repo, "--only", "C"), login_check=_Probe("ok")) == 0
     probe, session = [json.loads(line) for line in fake_bwrap.read_text(encoding="utf-8").splitlines()]
-    assert probe == [*A.BWRAP_BASE[1:], "true"], "the probe runs the arm's own shape, once"
+    assert probe == [*A.BWRAP_BASES[sandbox][1:], "true"], "the probe runs the value's own shape, once"
+    assert session[:len(A.BWRAP_BASES[sandbox]) - 1] == list(A.BWRAP_BASES[sandbox][1:])
     ws = scratch_repo / ".claude" / "worktrees" / f"abx-{run_dir.name}-r1-C"
     arm = run_dir / "arms" / "r1-C"
     pairs = list(zip(session, session[1:], session[2:], strict=False))
@@ -1146,7 +1148,7 @@ def test_a_bwrap_run_starts_the_session_inside_the_sandbox_argv(tmp_path, scratc
     chdir = session.index("--chdir")
     assert session[chdir + 1] == str(ws) and session[chdir + 2:chdir + 4] == ["claude", "-p"]
     rows = [r for r in L.read_jsonl(run_dir / "journal.jsonl") if r["step"] == "arm"]
-    assert [(r["status"], r["sandbox"]) for r in rows] == [("ran", "bwrap")]
+    assert [(r["status"], r["sandbox"]) for r in rows] == [("ran", sandbox)]
     assert json.loads((arm / "result.json").read_text(encoding="utf-8"))["bundle_commits"] == 1
 
 
@@ -1161,5 +1163,18 @@ def test_a_bwrap_that_cannot_build_its_sandbox_refuses_the_live_run(tmp_path, sc
     capsys.readouterr()
     assert T.main(_run_args(run_dir, creds, skills_repo, "--only", "C"), login_check=_Probe("ok")) == 2
     err = capsys.readouterr().err
-    assert "cannot create its sandbox here" in err and "No permissions to create new namespace" in err, err
+    assert 'cannot create its sandbox = "bwrap" here' in err and "No permissions to create new namespace" in err, err
     assert _arm_rows(run_dir) == [(1, "C", "dry")], "no live arm started"
+
+
+def test_a_bwrap_refused_a_private_proc_names_bwrap_tmpfs_proc_as_the_remedy(
+        tmp_path, scratch_repo, skills_repo, fake_claude_path, fake_bwrap, monkeypatch, capsys):
+    run_dir = _init_and_fill(tmp_path, scratch_repo, skills_repo, sandbox="bwrap")
+    env, creds = _env(fake_claude_path, tmp_path)
+    _use_env(monkeypatch, dict(env, FAKE_BWRAP_REFUSE="proc"))
+    assert T.main(["seal", str(run_dir)]) == 0
+    capsys.readouterr()
+    assert T.main(_run_args(run_dir, creds, skills_repo, "--only", "C"), login_check=_Probe("ok")) == 2
+    err = capsys.readouterr().err
+    assert 'set sandbox = "bwrap-tmpfs-proc"' in err and "Can't mount proc" in err, err
+    assert _arm_rows(run_dir) == [], "no live arm started"

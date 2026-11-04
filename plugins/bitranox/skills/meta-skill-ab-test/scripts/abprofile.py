@@ -15,13 +15,17 @@ SHA_RE = re.compile(r"^[0-9a-f]{40}$")
 NAME_RE = re.compile(r"^V[0-9A-Za-z_-]{1,20}$")
 DEFAULT_ENV_KEEP = ("PATH", "LANG", "LC_ALL", "TERM", "TZ")
 DEFAULT_HOME_LINKS = (".cargo", ".rustup", ".local", ".cache", ".gitconfig")
-# [run] sandbox: "bwrap" runs the session inside a bubblewrap sandbox the harness builds; "none"
-# is an explicit opt-out that every journal row and score then shows (user decision 2026-11-04:
-# refuse a live arm unless the profile names its sandbox). There is no default on purpose.
-SANDBOX_BWRAP, SANDBOX_NONE = "bwrap", "none"
-SANDBOX_VALUES = (SANDBOX_BWRAP, SANDBOX_NONE)
+# [run] sandbox: "bwrap" runs the session inside a bubblewrap sandbox the harness builds;
+# "bwrap-tmpfs-proc" is the same sandbox with an empty /proc, for hosts that refuse a private one
+# (an LXC container with lxcfs); "none" is an explicit opt-out that every journal row and score
+# then shows (user decisions 2026-11-04: refuse a live arm unless the profile names its sandbox;
+# offer the empty-/proc variant). There is no default on purpose.
+SANDBOX_BWRAP, SANDBOX_BWRAP_TMPFS_PROC, SANDBOX_NONE = "bwrap", "bwrap-tmpfs-proc", "none"
+SANDBOX_BWRAP_KINDS = (SANDBOX_BWRAP, SANDBOX_BWRAP_TMPFS_PROC)
+SANDBOX_VALUES = (*SANDBOX_BWRAP_KINDS, SANDBOX_NONE)
 SANDBOX_MISSING = ('run.sandbox: missing; a live arm runs only inside a sandbox: set sandbox = "bwrap" '
-                   '(or sandbox = "none" knowingly, which every journal row and score then shows)')
+                   '(in an LXC container "bwrap-tmpfs-proc", or sandbox = "none" knowingly, which every '
+                   'journal row and score then shows)')
 
 SKELETON = '''# meta-skill-ab-test profile. Fill every <...>; `abtest.py seal` validates it.
 [workpiece]
@@ -54,6 +58,7 @@ max_tokens = 6000000
 warmth_tolerance = 0.25
 # "bwrap": the session sees the filesystem read-only except its worktree, home, config dir and the
 # repo's .git; the real home is hidden. "none" runs it unconfined, and the journal and score say so.
+# In an LXC container (lxcfs refuses a private /proc) use "bwrap-tmpfs-proc": the same, /proc empty.
 sandbox = "bwrap"
 '''
 
@@ -101,7 +106,7 @@ class Run:
     warmth_tolerance: float
     env_keep: tuple[str, ...]
     home_links: tuple[str, ...]
-    # SANDBOX_BWRAP, SANDBOX_NONE, or None when the key is missing: a dry run may go ahead, while a
+    # One of SANDBOX_VALUES, or None when the key is missing: a dry run may go ahead, while a
     # live run and a seal refuse it (SANDBOX_MISSING).
     sandbox: str | None = None
 
@@ -277,7 +282,7 @@ def _sandbox(c: _Check, rn: dict[str, Any]) -> str | None:
     if v is None:
         return None
     if v not in SANDBOX_VALUES:
-        c.problems.append('run.sandbox: must be "bwrap" or "none"')
+        c.problems.append('run.sandbox: must be "bwrap", "bwrap-tmpfs-proc" or "none"')
         return None
     return str(v)
 

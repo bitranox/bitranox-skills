@@ -48,7 +48,7 @@ from _ablib import (
     sha256_file,
     utc_now,
 )
-from abprofile import SANDBOX_BWRAP, SANDBOX_MISSING, SKELETON, Profile, ProfileError, load_profile
+from abprofile import SANDBOX_BWRAP_KINDS, SANDBOX_MISSING, SKELETON, Profile, ProfileError, load_profile
 from abstream import OPUS_PREFIX, SYNTHETIC_REASON_PREFIX
 
 __all__ = [
@@ -113,7 +113,8 @@ PAUSE_EXPIRY = "a login that expires before the arm's deadline"
 # A seal refuses a PREREG.md still holding a skeleton placeholder; a bare "<" ("cost < 0.10") is prose.
 PLACEHOLDER_RE = re.compile(r"<[^>\n]+>")
 EPILOG = """[run] sandbox in abtest.toml: "bwrap" runs each live session in a bubblewrap sandbox (writable:
-its worktree, home, config dir, the repo's .git; real home hidden); "none" opts out, recorded per arm."""
+its worktree, home, config dir, the repo's .git; real home hidden); "bwrap-tmpfs-proc" is the same with an
+empty /proc (an LXC container); "none" opts out, recorded per arm."""
 SEAL_GIT = ("-c", "user.name=abtest", "-c", "user.email=abtest@localhost", "-c", "commit.gpgsign=false",
             "-c", "core.hooksPath=/dev/null")
 
@@ -387,14 +388,15 @@ def _guard_after(result: dict[str, Any], guard_dir: Path) -> None:
 
 
 def _session_argv(ctx: RunContext, frozen: abarm.Frozen, ws: Path, home: Path, cfg: Path) -> list[str]:
-    """claude_argv, behind the bubblewrap prefix when the profile says sandbox = "bwrap"."""
+    """claude_argv, behind the bubblewrap prefix when the profile names a bwrap sandbox."""
     argv = abarm.claude_argv(ctx.task, ctx.max_turns)
-    if ctx.profile.run.sandbox != SANDBOX_BWRAP:
+    sandbox = ctx.profile.run.sandbox
+    if sandbox not in SANDBOX_BWRAP_KINDS:
         return argv
     read_only = (*abarm.home_link_targets(home, ctx.profile.run.home_links), ctx.profile.workpiece.repo, frozen.path)
     mounts = abarm.SandboxMounts(ws=ws, home=home, cfg=cfg, git_common_dir=abarm.git_common_dir(ws),
                                  real_home=Path.home(), read_only=read_only)
-    return abarm.sandbox_argv(mounts) + argv
+    return abarm.sandbox_argv(mounts, sandbox=sandbox) + argv
 
 
 def _arm_steps(ctx: RunContext, result: dict[str, Any], frozen: abarm.Frozen, label: str) -> None:
@@ -809,8 +811,8 @@ def _require_sandbox(profile: Profile) -> None:
     """
     if profile.run.sandbox is None:
         raise RunRefused(SANDBOX_MISSING)
-    if profile.run.sandbox == SANDBOX_BWRAP:
-        problem = abarm.bwrap_problem(os.environ.get("PATH"))
+    if profile.run.sandbox in SANDBOX_BWRAP_KINDS:
+        problem = abarm.bwrap_problem(os.environ.get("PATH"), profile.run.sandbox)
         if problem:
             raise RunRefused(problem)
 

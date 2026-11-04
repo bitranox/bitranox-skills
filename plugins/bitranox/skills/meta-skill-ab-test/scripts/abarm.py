@@ -19,7 +19,7 @@ from pathlib import Path
 from typing import IO, Any
 
 from _ablib import clear_group, git, git_env, run, signal_group, tree_hashes
-from abprofile import Profile
+from abprofile import SANDBOX_BWRAP, SANDBOX_BWRAP_TMPFS_PROC, Profile
 from abstream import StreamAccount
 
 __all__ = [
@@ -27,7 +27,7 @@ __all__ = [
     "PRE_PUSH_HOOK",
     "UNCOMMITTED_PATCH",
     "UNTRACKED_TAR",
-    "BWRAP_BASE",
+    "BWRAP_BASES",
     "BWRAP_PROBE_TIMEOUT_S",
     "ArmError",
     "Frozen",
@@ -76,12 +76,19 @@ UNCOMMITTED_PATCH = "uncommitted.patch"
 UNTRACKED_TAR = "untracked.tar"
 # The one probe of a working bubblewrap before a live run; a bwrap that hangs is a refusal too.
 BWRAP_PROBE_TIMEOUT_S = 30
-# The namespaces and the private /dev and /proc every arm's sandbox starts with, and exactly what
-# the probe runs: `bwrap --ro-bind / / true` alone passes where the arm's own argv then fails
-# (measured in an LXC container whose /proc carries lxcfs overmounts: the kernel refuses a fresh
-# proc mount for a new PID namespace there, "Can't mount proc on /newroot/proc").
-BWRAP_BASE = ("bwrap", "--die-with-parent", "--unshare-pid", "--unshare-ipc", "--unshare-uts",
-              "--ro-bind", "/", "/", "--dev", "/dev", "--proc", "/proc")
+# {[run] sandbox: the namespaces, /dev and /proc its sandbox starts with}, and exactly what the
+# probe for that value runs: `bwrap --ro-bind / / true` alone passes where the arm's own argv then
+# fails (measured in an LXC container whose /proc carries lxcfs overmounts: the kernel refuses a
+# fresh proc mount for a new PID namespace there, "Can't mount proc on /newroot/proc").
+_BWRAP_NAMESPACES = ("bwrap", "--die-with-parent", "--unshare-pid", "--unshare-ipc", "--unshare-uts",
+                     "--ro-bind", "/", "/", "--dev", "/dev")
+BWRAP_BASES = {
+    SANDBOX_BWRAP: (*_BWRAP_NAMESPACES, "--proc", "/proc"),
+    # A private /proc cannot be mounted inside an LXC with lxcfs, so /proc is an empty tmpfs; that
+    # also removes the same-uid /proc/<pid>/root escape a bound host /proc would open. The PID
+    # namespace stays: the session still cannot signal processes outside it.
+    SANDBOX_BWRAP_TMPFS_PROC: (*_BWRAP_NAMESPACES, "--tmpfs", "/proc"),
+}
 PRE_PUSH_HOOK = "#!/bin/sh\necho 'abtest arm: pushing is refused; the branch is collected by the harness' >&2\nexit 1\n"
 
 
@@ -776,8 +783,11 @@ class SandboxMounts:
     tmp: Path = Path("/tmp")  # nosec B108
 
 
-def sandbox_argv(m: SandboxMounts) -> list[str]:
+def sandbox_argv(m: SandboxMounts, *, sandbox: str = SANDBOX_BWRAP) -> list[str]:
     """The bubblewrap prefix that runs the session with m's writable set and nothing else.
+
+    sandbox picks the base (BWRAP_BASES): "bwrap" mounts a private /proc, "bwrap-tmpfs-proc" an
+    empty one; everything after the base is the same for both.
 
     bwrap applies its mount options in order, so the order is the design: the read-only root,
     the private /dev, /proc and tmp, then the tmpfs over the real home, then the read-only
@@ -786,7 +796,7 @@ def sandbox_argv(m: SandboxMounts) -> list[str]:
     under the real one). Network stays shared: the session must reach the API, and a narrower
     egress filter needs a network namespace setup this harness does not own.
     """
-    argv = [*BWRAP_BASE, "--tmpfs", str(m.tmp), "--tmpfs", str(m.real_home)]
+    argv = [*BWRAP_BASES[sandbox], "--tmpfs", str(m.tmp), "--tmpfs", str(m.real_home)]
     for path in m.read_only:
         argv += ["--ro-bind", str(path), str(path)]
     for path in (m.ws, m.home, m.cfg, m.git_common_dir):
@@ -812,27 +822,38 @@ def home_link_targets(home: Path, links: tuple[str, ...]) -> tuple[Path, ...]:
     return tuple(targets)
 
 
-def bwrap_problem(path_env: str | None) -> str | None:
-    """Why a live run with sandbox = "bwrap" cannot start here, or None when bwrap works.
+def _probe(exe: str, sandbox: str) -> str | None:
+    """None when BWRAP_BASES[sandbox] runs `true` here, else what bwrap said (rc and stderr)."""
+    try:
+        proc = subprocess.run([exe, *BWRAP_BASES[sandbox][1:], "true"], capture_output=True, text=True,  # nosec B603
+                              encoding="utf-8", errors="replace", timeout=BWRAP_PROBE_TIMEOUT_S, check=False)
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        return f"could not run its probe: {exc}"
+    if proc.returncode != 0:
+        return f"rc {proc.returncode}: {proc.stderr.strip()[-300:]}"
+    return None
 
-    One real probe of BWRAP_BASE (the arm's namespaces, /dev and /proc) running `true`, never an
-    assumption: bwrap can be installed and still be refused a user namespace (a kernel switch, an
-    AppArmor rule) or a private /proc (a container whose /proc has overmounts).
+
+def bwrap_problem(path_env: str | None, sandbox: str = SANDBOX_BWRAP) -> str | None:
+    """Why a live run with this [run] sandbox value cannot start here, or None when it can.
+
+    One real probe of that value's own base (BWRAP_BASES: namespaces, /dev, /proc) running
+    `true`, never an assumption: bwrap can be installed and still be refused a user namespace (a
+    kernel switch, an AppArmor rule) or a private /proc (an LXC container with lxcfs). When
+    "bwrap" fails and "bwrap-tmpfs-proc" passes, the message names that value as the remedy.
     """
     exe = shutil.which("bwrap", path=path_env)
     if exe is None:
-        return ('sandbox = "bwrap" but bwrap is not on PATH: install bubblewrap, '
+        return (f'sandbox = "{sandbox}" but bwrap is not on PATH: install bubblewrap, '
                 'or set sandbox = "none" knowingly')
-    try:
-        proc = subprocess.run([exe, *BWRAP_BASE[1:], "true"], capture_output=True, text=True,  # nosec B603
-                              encoding="utf-8", errors="replace", timeout=BWRAP_PROBE_TIMEOUT_S, check=False)
-    except (OSError, subprocess.TimeoutExpired) as exc:
-        return f"{exe} could not run its probe: {exc}"
-    if proc.returncode != 0:
-        return (f"{exe} cannot create its sandbox here (rc {proc.returncode}: {proc.stderr.strip()[-300:]}); "
-                "a refused user namespace, or a container /proc that refuses a private proc mount, "
-                "is the usual cause")
-    return None
+    said = _probe(exe, sandbox)
+    if said is None:
+        return None
+    if sandbox == SANDBOX_BWRAP and _probe(exe, SANDBOX_BWRAP_TMPFS_PROC) is None:
+        return (f'{exe} cannot mount a private /proc here ({said}); set sandbox = "{SANDBOX_BWRAP_TMPFS_PROC}": '
+                "the same sandbox with an empty /proc, for an LXC container whose lxcfs refuses a private one")
+    return (f'{exe} cannot create its sandbox = "{sandbox}" here ({said}); '
+            "a refused user namespace is the usual cause")
 
 
 def claude_argv(prompt: str, max_turns: int) -> list[str]:

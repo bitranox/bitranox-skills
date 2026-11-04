@@ -3,7 +3,8 @@
 
 Each call appends its argv as one JSON line to bwrap-calls.jsonl beside this file, skips the
 options by their arity, changes to the --chdir dir and execs what follows. With
-FAKE_BWRAP_REFUSE set it fails the way a bwrap refused a user namespace does.
+FAKE_BWRAP_REFUSE set it fails the way a bwrap refused a user namespace does; with
+FAKE_BWRAP_REFUSE=proc only an argv holding --proc fails, as in an LXC container with lxcfs.
 """
 import json
 import os
@@ -18,7 +19,11 @@ ARITY = {"--die-with-parent": 0, "--unshare-pid": 0, "--unshare-ipc": 0, "--unsh
 def main(argv):
     with (Path(__file__).resolve().parent / "bwrap-calls.jsonl").open("a", encoding="utf-8") as fh:
         fh.write(json.dumps(argv) + "\n")
-    if os.environ.get("FAKE_BWRAP_REFUSE"):
+    refuse = os.environ.get("FAKE_BWRAP_REFUSE")
+    if refuse == "proc" and "--proc" in argv:
+        print("bwrap: Can't mount proc on /newroot/proc: Operation not permitted", file=sys.stderr)
+        return 1
+    if refuse and refuse != "proc":
         print("bwrap: No permissions to create new namespace, likely because the kernel does not allow "
               "non-privileged user namespaces.", file=sys.stderr)
         return 1
