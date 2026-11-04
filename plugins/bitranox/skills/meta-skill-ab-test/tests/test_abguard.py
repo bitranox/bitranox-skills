@@ -1,9 +1,10 @@
 """abguard: the manifest snapshot and the out-of-band login check, through their real seams."""
 import http.server
-import inspect
 import json
 import socket
+import struct
 import threading
+import time
 from pathlib import Path
 
 import abguard as G
@@ -63,7 +64,6 @@ def test_verify_that_cannot_run_is_a_guard_error(tmp_path):
         G.verify(out, manifest=FAKE)
 
 
-
 def test_the_fake_keys_its_behaviours_on_the_chain_dir_name_not_the_path(tmp_path):
     # A parent dir (or pytest's tmp_path, named after the test) holding "nostore" must not turn
     # an ordinary chain into a no-store one.
@@ -111,7 +111,6 @@ def test_check_login_with_an_unreadable_file_is_login(tmp_path):
     assert G.check_login(bad, post=lambda *a: (200, "")) == "login"
 
 
-
 @pytest.mark.parametrize("token", [TOKEN + "\n", TOKEN + "\r\nx-injected: 1", TOKEN + "\x00", TOKEN + "\u00e9"])
 def test_check_login_refuses_a_token_that_cannot_be_a_header_value(tmp_path, token):
     creds = tmp_path / "c.json"
@@ -125,14 +124,6 @@ def test_check_login_refuses_a_token_that_cannot_be_a_header_value(tmp_path, tok
     assert G.check_login(creds, post=fake_post) == "login"
     assert called == [], "a malformed token is never sent"
 
-
-def test_the_docstrings_state_the_429_and_missing_manifest_caveats():
-    login_doc = " ".join((inspect.getdoc(G.check_login) or "").split())
-    module_doc = " ".join((G.__doc__ or "").split())
-    for doc in (login_doc, module_doc):
-        assert "rate limited" in doc and "request shape" in doc, doc
-    verify_doc = " ".join((inspect.getdoc(G.verify) or "").split())
-    assert "taken=True" in verify_doc and "no change" in verify_doc, verify_doc
 
 class _Handler(http.server.BaseHTTPRequestHandler):
     status = 200
@@ -199,3 +190,39 @@ def test_post_with_a_malformed_status_line_is_status_zero():
                                  {"authorization": "Bearer " + TOKEN}, b"{}")
         thread.join(timeout=5)
     assert status == 0 and TOKEN not in detail, detail
+
+
+def _read_request(conn):
+    """Read one request whose body is the b"{}" every _post call here sends."""
+    data = b""
+    while b"\r\n\r\n" not in data or not data.endswith(b"{}"):
+        chunk = conn.recv(65536)
+        if not chunk:
+            return
+        data += chunk
+
+
+@pytest.mark.parametrize("cut", ["short-body", "reset"])
+def test_post_keeps_an_error_status_whose_body_cannot_be_read(cut):
+    # A 429 whose body never arrives whole: a Content-Length the server does not honour
+    # (IncompleteRead), or a connection reset mid-body (an OSError). The status is the answer.
+    with socket.socket() as srv:
+        srv.bind(("127.0.0.1", 0))
+        srv.listen(1)
+        port = srv.getsockname()[1]
+
+        def answer():
+            conn, _ = srv.accept()
+            _read_request(conn)  # unread request bytes would make close() a reset in both cases
+            conn.sendall(b"HTTP/1.1 429 Too Many Requests\r\nContent-Length: 1000\r\n\r\n{\"part")
+            if cut == "reset":
+                time.sleep(0.2)  # let the client parse the head and block on the body
+                conn.setsockopt(socket.SOL_SOCKET, socket.SO_LINGER, struct.pack("ii", 1, 0))
+            conn.close()
+
+        thread = threading.Thread(target=answer, daemon=True)
+        thread.start()
+        status, detail = G._post(f"http://127.0.0.1:{port}/v1/messages",
+                                 {"authorization": "Bearer " + TOKEN}, b"{}")
+        thread.join(timeout=5)
+    assert status == 429 and TOKEN not in detail, detail

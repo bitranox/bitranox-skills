@@ -98,6 +98,18 @@ def verify(out: Path, *, manifest: Path = MANIFEST) -> list[str]:
     return lines
 
 
+def _error_body(exc: urllib.error.HTTPError) -> str:
+    """The first 500 chars of an error response; "" when the body itself cannot be read.
+
+    The status already answers the question, so a body cut off mid-read (a reset, a short
+    Content-Length) must not turn a 429 into an exception that escapes check_login.
+    """
+    try:
+        return exc.read().decode("utf-8", "replace")[:500]
+    except (OSError, ValueError, http.client.HTTPException):
+        return ""
+
+
 def _post(url: str, headers: dict[str, str], body: bytes) -> tuple[int, str]:
     """POST body; (HTTP status, first 500 chars of the response). Status 0: no answer at all."""
     req = urllib.request.Request(url, data=body, headers=headers, method="POST")
@@ -105,7 +117,7 @@ def _post(url: str, headers: dict[str, str], body: bytes) -> tuple[int, str]:
         with urllib.request.urlopen(req, timeout=30) as resp:  # nosec B310 - API_URL is a fixed https URL
             return resp.status, resp.read().decode("utf-8", "replace")[:500]
     except urllib.error.HTTPError as exc:
-        return exc.code, exc.read().decode("utf-8", "replace")[:500]
+        return exc.code, _error_body(exc)
     except (urllib.error.URLError, OSError) as exc:
         # No network, DNS down: reported as unknown:0, which pauses the run like a quota would.
         # repr of these carries the reason only, never the request headers.
