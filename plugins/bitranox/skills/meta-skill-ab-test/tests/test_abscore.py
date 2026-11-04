@@ -405,8 +405,9 @@ def test_the_floor_runs_without_the_launcher_venv_and_the_git_redirects(tmp_path
     # The gate prints the variable NAMES and PATH only, never another value.
     gate = [sys.executable, "-c", "import json, os; print(json.dumps([sorted(os.environ), os.environ['PATH']]))"]
     res = S.run_floor(tmp_path, _pure_profile(tmp_path, gate=gate), tmp_path / "logs")
-    names, seen_path = json.loads(Path(res["steps"][0]["log"]).read_text(encoding="utf-8"))
-    assert res["passed"] is True
+    log = Path(res["steps"][0]["log"]).read_text(encoding="utf-8")
+    assert res["passed"] is True, log
+    names, seen_path = json.loads(log)
     assert set(names).isdisjoint(_LEAKS), sorted(set(names) & set(_LEAKS))
     assert set(_KEPT) <= set(names)
     assert seen_path.split(os.pathsep) == [others[0], others[1], "", others[2]]
