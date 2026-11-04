@@ -1,12 +1,16 @@
 """abscore: the floor runs the profile's argv lists; the score reads result.json and the peers."""
 import dataclasses
 import json
+import os
+import signal
 import sys
+import time
 from pathlib import Path
 
 import abprofile as P
 import abscore as S
 import abstream
+import pytest
 
 FIXTURES = Path(__file__).resolve().parent / "fixtures"
 SHA = "0" * 40
@@ -121,7 +125,8 @@ def test_score_of_a_clean_arm(tmp_path):
 def test_score_carries_the_listed_fields(tmp_path):
     s = _score(tmp_path, _result(), TWO_PEERS)
     assert set(s) == {"arm", "cost_usd", "per_model", "main_new_tokens", "first_cache_read", "floor_passed",
-                      "bundle_commits", "void", "wall_s"}
+                      "bundle_commits", "void", "wall_s", "floor_error", "floor_steps", "warmth_checked",
+                      "result_subtype"}
     assert (s["arm"], s["main_new_tokens"], s["bundle_commits"], s["wall_s"]) == ("r1-C", 20010, 1, 1.2)
 
 
@@ -206,3 +211,179 @@ def test_warmth_against_a_zero_median(tmp_path):
 
 def test_warmth_skips_an_arm_without_a_reading(tmp_path):
     assert _score(tmp_path, _result(first_cache_read=None), TWO_PEERS)["void"] == []
+
+
+# --- a timed-out floor step takes its whole process tree with it ---------------------------------
+
+POSIX_ONLY = pytest.mark.skipif(sys.platform == "win32",
+                                reason="the A/B harness is Linux only (POSIX process groups); Windows is unsupported")
+
+# The gate starts a grandchild that records its pid and sleeps, then sleeps itself: a timeout that
+# kills only the direct child leaves the grandchild running. With "ignore" the grandchild ignores
+# SIGTERM, so only the SIGKILL escalation removes it.
+_TREE_GATE = """
+import subprocess, sys, time
+from pathlib import Path
+pidfile = Path(sys.argv[1])
+child = (
+    "import os, signal, sys, time\\n"
+    "if sys.argv[2] == 'ignore': signal.signal(signal.SIGTERM, signal.SIG_IGN)\\n"
+    "tmp = sys.argv[1] + '.tmp'\\n"
+    "open(tmp, 'w').write(str(os.getpid()))\\n"
+    "os.replace(tmp, sys.argv[1])\\n"
+    "time.sleep(30)\\n")
+subprocess.Popen([sys.executable, "-c", child, str(pidfile), sys.argv[2]])
+while not pidfile.exists():
+    time.sleep(0.01)
+time.sleep(30)
+"""
+
+
+def _alive(pid):
+    """True while pid runs; a zombie (killed, not yet reaped by its new parent) counts as gone."""
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        return True
+    if not Path("/proc/self/stat").exists():
+        return True  # no procfs (macOS): kill(0) is the only reading there is
+    try:
+        state = Path(f"/proc/{pid}/stat").read_text(encoding="utf-8").rsplit(")", 1)[1].split()[0]
+    except FileNotFoundError:
+        return False  # it exited between the two reads
+    except (OSError, IndexError):
+        return True
+    return state != "Z"
+
+
+def _gone_within(pid, seconds=5.0):
+    deadline = time.monotonic() + seconds
+    while time.monotonic() < deadline:
+        if not _alive(pid):
+            return True
+        time.sleep(0.05)
+    return False
+
+
+@POSIX_ONLY
+@pytest.mark.parametrize("on_term", ["exit", "ignore"])
+def test_a_timed_out_floor_step_leaves_no_process_behind(tmp_path, monkeypatch, on_term):
+    monkeypatch.setattr(S, "KILL_GRACE_S", 0.3)
+    pidfile = tmp_path / "grandchild.pid"
+    prof = _pure_profile(tmp_path, gate=[sys.executable, "-c", _TREE_GATE, str(pidfile), on_term], timeout_s=1)
+    t0 = time.monotonic()
+    res = S.run_floor(tmp_path, prof, tmp_path / "logs")
+    elapsed = time.monotonic() - t0
+    pid = int(pidfile.read_text(encoding="utf-8"))
+    try:
+        assert res["steps"][0]["rc"] == S.RC_TIMEOUT
+        assert _gone_within(pid), f"grandchild {pid} survived the floor's timeout"
+        assert elapsed < 10, elapsed
+    finally:
+        if _alive(pid):
+            try:
+                os.kill(pid, signal.SIGKILL)
+            except ProcessLookupError:
+                pass
+
+
+# --- the floor's environment ---------------------------------------------------------------------
+
+_LEAKS = ("VIRTUAL_ENV", "GIT_DIR", "GIT_WORK_TREE", "GIT_INDEX_FILE", "GIT_COMMON_DIR", "GIT_OBJECT_DIRECTORY",
+          "GIT_ALTERNATE_OBJECT_DIRECTORIES", "GIT_NAMESPACE", "GIT_CEILING_DIRECTORIES", "GIT_LITERAL_PATHSPECS",
+          "GIT_GLOB_PATHSPECS", "GIT_NOGLOB_PATHSPECS", "GIT_ICASE_PATHSPECS")
+
+
+def test_the_floor_runs_without_the_venv_and_the_repo_scoping_git_variables(tmp_path, monkeypatch):
+    for name in _LEAKS:
+        monkeypatch.setenv(name, str(tmp_path / "leak"))
+    monkeypatch.setenv("PYTHONUTF8", "1")
+    monkeypatch.setenv("ABSCORE_TEST_KEEP", "yes")
+    monkeypatch.setenv("GIT_SSH_COMMAND", "ssh")
+    # The gate prints the variable NAMES only, never a value.
+    gate = [sys.executable, "-c", "import json, os; print(json.dumps(sorted(os.environ)))"]
+    res = S.run_floor(tmp_path, _pure_profile(tmp_path, gate=gate), tmp_path / "logs")
+    seen = set(json.loads(Path(res["steps"][0]["log"]).read_text(encoding="utf-8")))
+    assert res["passed"] is True
+    assert seen.isdisjoint(_LEAKS), sorted(seen & set(_LEAKS))
+    assert {"PYTHONUTF8", "ABSCORE_TEST_KEEP", "GIT_SSH_COMMAND"} <= seen
+
+
+# --- floor_error and floor_steps -----------------------------------------------------------------
+
+def _scored_floor(tmp_path, gate, timeout_s=30):
+    floor = S.run_floor(tmp_path, _pure_profile(tmp_path, gate=gate, timeout_s=timeout_s), tmp_path / "logs")
+    return _score(tmp_path, _result(floor=floor), TWO_PEERS)
+
+
+def test_floor_error_names_a_step_that_could_not_start(tmp_path):
+    s = _scored_floor(tmp_path, [str(tmp_path / "no-such-gate")])
+    assert s["floor_error"] == "gate: could not start (rc 127)"
+    assert s["floor_steps"] == [{"name": "gate", "rc": 127}] and s["floor_passed"] is False
+
+
+def test_floor_error_names_a_step_that_timed_out(tmp_path, monkeypatch):
+    monkeypatch.setattr(S, "KILL_GRACE_S", 0.3)
+    s = _scored_floor(tmp_path, [sys.executable, "-c", "import time; time.sleep(10)"], timeout_s=1)
+    assert s["floor_error"] == "gate: timed out after 1 s (rc 124)"
+    assert s["floor_steps"] == [{"name": "gate", "rc": 124}]
+
+
+def test_a_gate_that_exits_124_itself_ran_and_has_no_floor_error(tmp_path):
+    s = _scored_floor(tmp_path, [sys.executable, "-c", "raise SystemExit(124)"])
+    assert s["floor_error"] is None and s["floor_steps"] == [{"name": "gate", "rc": 124}]
+
+
+def test_a_clean_floor_has_no_error_and_lists_its_steps(tmp_path):
+    s = _scored_floor(tmp_path, [sys.executable, "-c", "pass"])
+    assert s["floor_error"] is None and s["floor_steps"] == [{"name": "gate", "rc": 0}]
+    assert s["floor_passed"] is True
+
+
+# --- a missing stop reason -----------------------------------------------------------------------
+
+MISSING_STOP = "no stop reason recorded (the arm did not end normally: interrupted or crashed)"
+
+
+def test_a_missing_stop_reason_says_the_arm_did_not_end_normally(tmp_path):
+    res = _result()
+    del res["stop_reason"]
+    assert _score(tmp_path, res, TWO_PEERS, name="a")["void"] == [MISSING_STOP]
+    assert _score(tmp_path, _result(stop_reason=None), TWO_PEERS, name="b")["void"] == [MISSING_STOP]
+
+
+def test_an_unknown_stop_reason_keeps_its_own_text(tmp_path):
+    (reason,) = _score(tmp_path, _result(stop_reason="interrupted"), TWO_PEERS)["void"]
+    assert "'interrupted'" in reason and reason != MISSING_STOP
+
+
+# --- first_cache_read as an integral float --------------------------------------------------------
+
+def test_warmth_accepts_an_integral_float_reading_for_the_arm_and_its_peers(tmp_path):
+    float_peers = [_result(first_cache_read=11000.0), _result(first_cache_read=11200.0)]
+    assert _score(tmp_path, _result(first_cache_read=20000.0), TWO_PEERS, name="a")["void"] != []
+    assert _score(tmp_path, _result(first_cache_read=20000), float_peers, name="b")["void"] != []
+    assert _score(tmp_path, _result(first_cache_read=11000.0), float_peers, name="c")["void"] == []
+
+
+def test_warmth_refuses_a_fractional_float_and_a_bool(tmp_path):
+    s = _score(tmp_path, _result(first_cache_read=20000.5), TWO_PEERS, name="a")
+    assert s["void"] == [] and s["warmth_checked"] is False
+    s = _score(tmp_path, _result(first_cache_read=True), TWO_PEERS, name="b")
+    assert s["void"] == [] and s["warmth_checked"] is False
+
+
+# --- warmth_checked and result_subtype -----------------------------------------------------------
+
+def test_warmth_checked_says_whether_the_check_ran(tmp_path):
+    assert _score(tmp_path, _result(), TWO_PEERS, name="a")["warmth_checked"] is True
+    assert _score(tmp_path, _result(), TWO_PEERS[:1], name="b")["warmth_checked"] is False
+    assert _score(tmp_path, _result(first_cache_read=None), TWO_PEERS, name="c")["warmth_checked"] is False
+
+
+def test_result_subtype_is_copied_and_does_not_void(tmp_path):
+    s = _score(tmp_path, _result(result_subtype="error_max_turns"), TWO_PEERS, name="a")
+    assert s["result_subtype"] == "error_max_turns" and s["void"] == []
+    assert _score(tmp_path, _result(), TWO_PEERS, name="b")["result_subtype"] is None
