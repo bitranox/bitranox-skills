@@ -407,7 +407,8 @@ def _score_record(res: dict[str, Any], arm_dir: Path, profile: Profile,
             "bundle_commits": int(res.get("bundle_commits") or 0), "wall_s": res.get("wall_s"),
             "warmth_checked": checked, "result_subtype": res.get("result_subtype"),
             "store_changes": changes, "store_guard": _store_guard(res, changes),
-            "sandbox": res.get("sandbox"), "void": _void_reasons(res, warmth_reasons)}
+            "sandbox": res.get("sandbox"), "task_file": res.get("task_file"), "task_sha256": res.get("task_sha256"),
+            "void": _void_reasons(res, warmth_reasons)}
 
 
 def score_arm(arm_dir: Path, profile: Profile, peers: list[dict[str, Any]]) -> dict[str, Any]:
@@ -430,7 +431,9 @@ def score_arm(arm_dir: Path, profile: Profile, peers: list[dict[str, Any]]) -> d
         result_subtype (the result record's subtype, informational: it never voids), store_changes
         (the guard's change lines, [] when none) and store_guard (STORE_GUARD_CLEAN, _CHANGED or
         _SKIPPED; recorded for adjudication, it never voids), sandbox (the profile's [run] sandbox the
-        arm ran under, "bwrap" or "none"; None for an arm run before the key existed), and void (every reason, the stream
+        arm ran under, "bwrap", "bwrap-host-proc" or "none"; None for an arm run before the key existed),
+        task_file and task_sha256 (the prompt the arm was given, relative to the run dir; None for an
+        arm run before per-arm prompts existed), and void (every reason, the stream
         account's own ones first and unchanged; empty means the arm counts).
 
     Raises:

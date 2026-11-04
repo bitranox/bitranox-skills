@@ -143,6 +143,66 @@ def test_install_plugin_verifies_bytes(tmp_path, scratch_repo, skills_repo, arm_
         A.install_plugin(cfg, bad, creds, arm_env_base)
 
 
+def _bare_profile(tmp_path, scratch_repo, skills_repo, skill="demo-skill"):
+    """_profile plus a remove_skill variant Vbare with its own task file."""
+    run_dir, prof = _profile(tmp_path, scratch_repo, skills_repo)
+    toml = run_dir / "abtest.toml"
+    text = toml.read_text(encoding="utf-8").replace('skill = "demo-skill"', f'skill = "{skill}"')
+    text = text.replace("[floor]", '[[variant]]\nname = "Vbare"\nremove_skill = true\ntask_file = "task-bare.md"\n'
+                                   'changes = ["no skill"]\n[floor]')
+    toml.write_text(text, encoding="utf-8")
+    return run_dir, P.load_profile(toml)
+
+
+def _triggers(root):
+    return json.loads((root / "hooks" / "skill_triggers.json").read_text(encoding="utf-8"))
+
+
+def test_freeze_a_bare_variant_removes_the_skill_and_its_router_entry(tmp_path, scratch_repo, skills_repo):
+    run_dir, prof = _bare_profile(tmp_path, scratch_repo, skills_repo)
+    bare = A.freeze_variant(run_dir, prof, "Vbare", skills_repo)
+    assert bare.skill_removed and bare.hashes == {} and bare.overlay_written == ()
+    assert bare.removed == ("skills/demo-skill/", "hooks/skill_triggers.json#demo-skill")
+    assert not bare.skill_dir.exists()
+    assert _triggers(bare.path) == {"other-skill": ["other"]}, "only the removed skill's router key goes"
+    again = A.freeze_variant(run_dir, prof, "Vbare", skills_repo)
+    assert again.path == bare.path and again.removed == ("skills/demo-skill/",), "idempotent on a reused checkout"
+    c = A.freeze_variant(run_dir, prof, "C", skills_repo)
+    assert (c.skill_dir / "SKILL.md").is_file() and "demo-skill" in _triggers(c.path), "the control keeps it"
+
+
+def test_freeze_a_bare_variant_refuses_a_skill_the_ref_does_not_carry(tmp_path, scratch_repo, skills_repo):
+    run_dir, prof = _bare_profile(tmp_path, scratch_repo, skills_repo, skill="no-such-skill")
+    with pytest.raises(A.ArmError, match="skill no-such-skill is not at"):
+        A.freeze_variant(run_dir, prof, "Vbare", skills_repo)
+
+
+def test_install_of_a_bare_arm_asserts_the_skill_is_absent(tmp_path, scratch_repo, skills_repo, arm_env_base, user_home):
+    run_dir, prof = _bare_profile(tmp_path, scratch_repo, skills_repo)
+    bare = A.freeze_variant(run_dir, prof, "Vbare", skills_repo)
+    creds = tmp_path / "creds.json"
+    creds.write_text('{"fake": true}', encoding="utf-8")
+    cfg = run_dir / "arms" / "r1-Vbare" / "cfg"
+    info = A.install_plugin(cfg, bare, creds, arm_env_base)
+    installed = Path(info["installed_path"])
+    assert info["drift"] == [] and not (installed / "skills" / "demo-skill").exists()
+    assert "demo-skill" not in _triggers(installed)
+    # The removal skipped: the skill is back in the checkout the install copies, so the generalised
+    # check (hashes {} against the installed files, plus the absence) refuses it.
+    shutil.copytree(skills_repo / "skills" / "demo-skill", bare.skill_dir)
+    with pytest.raises(A.ArmError, match="skills/demo-skill/ is installed"):
+        A.install_plugin(cfg, bare, creds, arm_env_base)
+    # Even an empty dir is a presence, and a router key alone is caught too.
+    shutil.rmtree(bare.skill_dir)
+    bare.skill_dir.mkdir()
+    with pytest.raises(A.ArmError, match="skills/demo-skill/ is installed"):
+        A.install_plugin(cfg, bare, creds, arm_env_base)
+    bare.skill_dir.rmdir()
+    (bare.path / "hooks" / "skill_triggers.json").write_text(json.dumps({"demo-skill": ["x"]}), encoding="utf-8")
+    with pytest.raises(A.ArmError, match="still routes demo-skill"):
+        A.install_plugin(cfg, bare, creds, arm_env_base)
+
+
 @POSIX_ONLY
 def test_install_plugin_turns_a_missing_claude_into_an_arm_error(tmp_path, user_home):
     plugin = tmp_path / "frozen"

@@ -161,3 +161,65 @@ def test_a_bad_sandbox_value_is_a_profile_error(tmp_path, scratch_repo, value):
 def test_the_skeleton_names_the_bwrap_sandbox():
     assert P.SKELETON.count('sandbox = "bwrap"\n') == 1 and '"bwrap-host-proc"' in P.SKELETON
     assert 'sandbox = "bwrap"' in P.SANDBOX_MISSING and 'sandbox = "none"' in P.SANDBOX_MISSING
+
+
+BARE = GOOD.replace('''name = "V1"
+dir = "variants/V1"
+changes = ["one change"]
+markers = []
+''', '''name = "V1"
+dir = "variants/V1"
+changes = ["one change"]
+markers = []
+
+[[variant]]
+name = "Vbare"
+remove_skill = true
+task_file = "task-bare.md"
+changes = ["the plugin without the skill"]
+''')
+
+
+def test_a_bare_variant_loads_without_dir_and_with_its_own_task_file(tmp_path, scratch_repo):
+    prof = P.load_profile(_write(tmp_path, scratch_repo, BARE))
+    bare = prof.variant("Vbare")
+    assert bare is not None and bare.remove_skill and bare.dir is None and bare.markers == ()
+    assert prof.variant("V1").remove_skill is False and prof.variant("V1").task_file is None
+    assert prof.task_file_for("Vbare") == "task-bare.md"
+    assert prof.task_file_for("C") == prof.task_file_for("V1") == "task.md"
+    assert prof.task_files() == ["task.md", "task-bare.md"]
+
+
+@pytest.mark.parametrize(("value", "problem"), [
+    ('"yes"', "variant[1].remove_skill: must be true or false"),
+    ("1", "variant[1].remove_skill: must be true or false"),
+])
+def test_remove_skill_must_be_a_bool(tmp_path, scratch_repo, value, problem):
+    text = BARE.replace("remove_skill = true", f"remove_skill = {value}").replace('task_file = "task-bare.md"\n', 'dir = "variants/Vbare"\n')
+    with pytest.raises(P.ProfileError) as exc:
+        P.load_profile(_write(tmp_path, scratch_repo, text))
+    assert problem in str(exc.value).splitlines()
+
+
+def test_a_bare_variant_refuses_markers_and_a_dir(tmp_path, scratch_repo):
+    text = BARE.replace("remove_skill = true", 'remove_skill = true\ndir = "variants/Vbare"\nmarkers = ["[abx] idea=1"]')
+    with pytest.raises(P.ProfileError) as exc:
+        P.load_profile(_write(tmp_path, scratch_repo, text))
+    lines = str(exc.value).splitlines()
+    assert "variant[1].dir: must be absent when remove_skill = true (the arm has no skill to overlay)" in lines
+    assert "variant[1].markers: must be empty when remove_skill = true (the arm has no skill text)" in lines
+
+
+def test_remove_skill_false_still_requires_a_dir(tmp_path, scratch_repo):
+    text = BARE.replace("remove_skill = true", "remove_skill = false")
+    with pytest.raises(P.ProfileError) as exc:
+        P.load_profile(_write(tmp_path, scratch_repo, text))
+    assert "variant[1].dir: missing or still a <placeholder>" in str(exc.value).splitlines()
+
+
+@pytest.mark.parametrize("value", ['""', "3", '"/etc/task.md"', '"../task.md"', '"<prompt>"', '"C:/t.md"'])
+def test_a_variant_task_file_must_be_a_relative_path_inside_the_run_dir(tmp_path, scratch_repo, value):
+    text = BARE.replace('task_file = "task-bare.md"', f"task_file = {value}")
+    with pytest.raises(P.ProfileError) as exc:
+        P.load_profile(_write(tmp_path, scratch_repo, text))
+    assert str(exc.value).startswith("variant[1].task_file: must be a non-empty relative path inside the run dir")

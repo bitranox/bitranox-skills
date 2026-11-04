@@ -76,9 +76,10 @@ def skills_repo(tmp_path):
     _skip_on_windows()
     repo = tmp_path / "skills"
     shutil.copytree(FIXTURES / "skills-repo", repo)
-    # The fixture's hook is stored as .py.fixture and renamed here: tracked as .py it would share
-    # a basename with the plugin's real hooks/self_improve_signals.py, which the repo gate refuses.
-    for stored in repo.rglob(f"*.py{FIXTURE_SUFFIX}"):
+    # The fixture's hook files are stored as <name>.fixture and renamed here: tracked under their
+    # real names they would share a basename with the plugin's real hooks/self_improve_signals.py
+    # and hooks/skill_triggers.json, which the repo gate refuses or a generator would rewrite.
+    for stored in repo.rglob(f"*{FIXTURE_SUFFIX}"):
         stored.rename(stored.with_suffix(""))
     _git(repo, "init", "-q", "-b", "master")
     _git(repo, "add", "-A")

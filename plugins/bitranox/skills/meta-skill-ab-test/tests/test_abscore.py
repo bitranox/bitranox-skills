@@ -127,7 +127,7 @@ def test_score_carries_the_listed_fields(tmp_path):
     s = _score(tmp_path, _result(), TWO_PEERS)
     assert set(s) == {"arm", "cost_usd", "per_model", "main_new_tokens", "first_cache_read", "floor_passed",
                       "bundle_commits", "void", "wall_s", "floor_error", "floor_steps", "warmth_checked",
-                      "result_subtype", "store_changes", "store_guard", "sandbox"}
+                      "result_subtype", "store_changes", "store_guard", "sandbox", "task_file", "task_sha256"}
     assert (s["arm"], s["main_new_tokens"], s["bundle_commits"], s["wall_s"]) == ("r1-C", 20010, 1, 1.2)
 
 

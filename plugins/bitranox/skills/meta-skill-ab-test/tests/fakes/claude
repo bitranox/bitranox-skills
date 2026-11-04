@@ -7,7 +7,8 @@ plugin install bitranox@bitranox-skills --json   records the install
 -p <prompt> ...                             replays FAKE_CLAUDE_STREAM (a stream.jsonl path) to
                                             stdout, writes a transcript under the config dir's
                                             projects/<cwd dashkey>/<session id>.jsonl as the real
-                                            CLI does, and makes one commit in the cwd; then, when
+                                            CLI does (it also records the prompt and the installed
+                                            plugin's skill dirs), and makes one commit in the cwd; then, when
                                             FAKE_CLAUDE_SCRIPT names a Python file, runs it in the
                                             cwd with stdout still open (a test's extra behaviour);
                                             with FAKE_CLAUDE_CWD_FROM_PROC set it first resolves its
@@ -24,14 +25,26 @@ import sys
 from pathlib import Path
 
 
-def _write_transcript(cfg, stream_text):
-    """One transcript line naming the session the replayed stream's init record gives."""
+def _installed_skills(cfg):
+    """The skill dirs of the installed plugin, so a test can read what the session could load."""
+    registry = cfg / "plugins" / "installed_plugins.json"
+    if not registry.is_file():
+        return []
+    entries = json.loads(registry.read_text(encoding="utf-8"))["plugins"]["bitranox@bitranox-skills"]
+    skills = Path(entries[0]["installPath"]) / "skills"
+    return sorted(p.name for p in skills.iterdir()) if skills.is_dir() else []
+
+
+def _write_transcript(cfg, stream_text, prompt):
+    """One transcript line naming the session the replayed stream's init record gives, the prompt
+    the session was given and the installed skills it could load."""
     first = json.loads(stream_text.splitlines()[0]) if stream_text.strip() else {}
     session = first.get("session_id") or "fake-session"
     project = cfg / "projects" / re.sub(r"[^a-zA-Z0-9]", "-", os.getcwd())
     project.mkdir(parents=True, exist_ok=True)
     (project / f"{session}.jsonl").write_text(
-        json.dumps({"type": "user", "message": {"content": "fake transcript of " + session}}) + "\n", encoding="utf-8")
+        json.dumps({"type": "user", "message": {"content": "fake transcript of " + session},
+                    "prompt": prompt, "installed_skills": _installed_skills(cfg)}) + "\n", encoding="utf-8")
 
 
 def main(argv):
@@ -66,7 +79,7 @@ def main(argv):
         text = stream.read_text(encoding="utf-8")
         sys.stdout.write(text)
         sys.stdout.flush()
-        _write_transcript(cfg, text)
+        _write_transcript(cfg, text, argv[1])
         Path("arm-work.txt").write_text("done by the fake arm\n", encoding="utf-8")
         env = dict(os.environ, GIT_AUTHOR_NAME="arm", GIT_AUTHOR_EMAIL="arm@x",
                    GIT_COMMITTER_NAME="arm", GIT_COMMITTER_EMAIL="arm@x")

@@ -1178,3 +1178,107 @@ def test_a_bwrap_refused_a_private_proc_names_bwrap_host_proc_as_the_remedy(
     err = capsys.readouterr().err
     assert 'set sandbox = "bwrap-host-proc"' in err and "Can't mount proc" in err, err
     assert _arm_rows(run_dir) == [], "no live arm started"
+
+
+# --- a bare arm (remove_skill) with its own prompt (variant task_file) ---------------------------
+
+BARE_TASK = "Do the task. Plan it yourself.\n"
+
+
+def _add_bare(run_dir, *, write_task=BARE_TASK):
+    """Add a remove_skill variant Vbare whose prompt is task-bare.md; write that file unless None."""
+    toml = run_dir / "abtest.toml"
+    text = toml.read_text(encoding="utf-8")
+    assert text.count("\n[floor]\n") == 1
+    toml.write_text(text.replace("\n[floor]\n", '\n[[variant]]\nname = "Vbare"\nremove_skill = true\n'
+                                 'task_file = "task-bare.md"\nchanges = ["the plugin without the skill"]\n\n[floor]\n'),
+                    encoding="utf-8")
+    if write_task is not None:
+        (run_dir / "task-bare.md").write_text(write_task, encoding="utf-8")
+
+
+def _session_line(run_dir, label):
+    (transcript,) = _transcripts(run_dir / "arms" / label)
+    return json.loads((run_dir / "arms" / label / "transcripts" / transcript).read_text(encoding="utf-8"))
+
+
+def test_a_bare_arm_gets_its_own_prompt_runs_without_the_skill_and_every_record_names_its_prompt(
+        tmp_path, scratch_repo, skills_repo, fake_claude_path, monkeypatch, capsys):
+    run_dir = _init_and_fill(tmp_path, scratch_repo, skills_repo)
+    _add_bare(run_dir)
+    env, creds = _env(fake_claude_path, tmp_path)
+    _use_env(monkeypatch, env)
+    capsys.readouterr()
+    assert T.main(["seal", str(run_dir), "--json"]) == 0
+    sha = {"task.md": L.sha256_file(run_dir / "task.md"), "task-bare.md": L.sha256_file(run_dir / "task-bare.md")}
+    want = {"C": {"file": "task.md", "sha256": sha["task.md"]}, "V1": {"file": "task.md", "sha256": sha["task.md"]},
+            "Vbare": {"file": "task-bare.md", "sha256": sha["task-bare.md"]}}
+    assert json.loads(capsys.readouterr().out)["data"]["task_files"] == want
+    (seal,) = [r for r in L.read_jsonl(run_dir / "journal.jsonl") if r["step"] == "seal"]
+    assert seal["task_files"] == want and "task-bare.md" in (run_dir / "PREREG.md").read_text(encoding="utf-8")
+    for arm in ("Vbare", "C"):
+        assert T.main(_run_args(run_dir, creds, skills_repo, "--only", arm), login_check=_Probe("ok")) == 0
+    bare, control = _session_line(run_dir, "r1-Vbare"), _session_line(run_dir, "r1-C")
+    assert bare["prompt"] == BARE_TASK and control["prompt"] == "Do the task.\n", "each arm's prompt reached claude"
+    assert "demo-skill" not in bare["installed_skills"] and "demo-skill" in control["installed_skills"]
+    res = json.loads((run_dir / "arms" / "r1-Vbare" / "result.json").read_text(encoding="utf-8"))
+    assert (res["task_file"], res["task_sha256"]) == ("task-bare.md", sha["task-bare.md"])
+    assert res["frozen"]["skill_removed"] is True and res["install"]["drift"] == []
+    rows = [(r["arm"], r["task_file"], r["task_sha256"]) for r in L.read_jsonl(run_dir / "journal.jsonl") if r["step"] == "arm"]
+    assert rows == [("Vbare", "task-bare.md", sha["task-bare.md"]), ("C", "task.md", sha["task.md"])]
+    capsys.readouterr()
+    assert T.main(["score", str(run_dir), "--json"]) == 0
+    arms = json.loads(capsys.readouterr().out)["data"]["arms"]
+    assert {k: (v["task_file"], v["task_sha256"]) for k, v in arms.items()} == {
+        "r1-Vbare": ("task-bare.md", sha["task-bare.md"]), "r1-C": ("task.md", sha["task.md"])}
+    assert T.main(["score", str(run_dir)]) == 0
+    assert f"task=task-bare.md@{sha['task-bare.md'][:12]}" in capsys.readouterr().out
+
+
+@pytest.mark.parametrize("content", [None, "", "  \n"], ids=["missing", "empty", "blank"])
+def test_seal_refuses_a_variant_task_file_that_is_missing_or_empty(tmp_path, scratch_repo, skills_repo, capsys, content):
+    run_dir = _init_and_fill(tmp_path, scratch_repo, skills_repo)
+    _add_bare(run_dir, write_task=content)
+    capsys.readouterr()
+    assert T.main(["seal", str(run_dir), "--json"]) == 2
+    assert "task-bare.md is missing or empty" in json.loads(capsys.readouterr().out)["data"]["error"]
+    assert not (run_dir / "journal.jsonl").exists()
+
+
+def _edit_bare_task(run_dir):
+    (run_dir / "task-bare.md").write_text(BARE_TASK + "Use bitranox:demo-skill.\n", encoding="utf-8")
+
+
+def _commit_bare_task(run_dir):
+    _edit_bare_task(run_dir)
+    _commit_all(run_dir, "edit the bare prompt")
+
+
+@pytest.mark.parametrize("change", [_edit_bare_task, _commit_bare_task], ids=["uncommitted", "committed"])
+def test_run_refuses_an_edited_variant_task_file(tmp_path, scratch_repo, skills_repo, fake_claude_path, monkeypatch,
+                                                 capsys, change):
+    run_dir = _init_and_fill(tmp_path, scratch_repo, skills_repo)
+    _add_bare(run_dir)
+    env, creds = _env(fake_claude_path, tmp_path)
+    _use_env(monkeypatch, env)
+    assert T.main(["seal", str(run_dir)]) == 0
+    change(run_dir)
+    capsys.readouterr()
+    assert T.main(_run_args(run_dir, creds, skills_repo, "--dry-run", "--only", "C", "--json")) == 2
+    assert "task-bare.md" in json.loads(capsys.readouterr().out)["data"]["error"] and _arm_rows(run_dir) == []
+
+
+def test_run_refuses_a_prompt_whose_sha_differs_from_the_seal_row(tmp_path, scratch_repo, skills_repo, fake_claude_path,
+                                                                  monkeypatch, capsys):
+    run_dir = _init_and_fill(tmp_path, scratch_repo, skills_repo)
+    _add_bare(run_dir)
+    env, creds = _env(fake_claude_path, tmp_path)
+    _use_env(monkeypatch, env)
+    assert T.main(["seal", str(run_dir)]) == 0
+    journal = run_dir / "journal.jsonl"
+    rows = L.read_jsonl(journal)
+    rows[0]["task_files"]["Vbare"]["sha256"] = "0" * 64
+    journal.write_text("".join(json.dumps(r) + "\n" for r in rows), encoding="utf-8")
+    capsys.readouterr()
+    assert T.main(_run_args(run_dir, creds, skills_repo, "--dry-run", "--only", "C", "--json")) == 2
+    assert "the prompt of arm Vbare (task-bare.md) differs from the seal" in json.loads(capsys.readouterr().out)["data"]["error"]

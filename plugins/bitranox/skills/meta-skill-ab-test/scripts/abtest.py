@@ -114,7 +114,11 @@ PAUSE_EXPIRY = "a login that expires before the arm's deadline"
 PLACEHOLDER_RE = re.compile(r"<[^>\n]+>")
 EPILOG = """[run] sandbox in abtest.toml: "bwrap" runs each live session in a bubblewrap sandbox (writable:
 its worktree, home, config dir, the repo's .git; real home hidden); "bwrap-host-proc" is the same with the
-host's /proc read-only (an LXC container); "none" opts out, recorded per arm."""
+host's /proc read-only (an LXC container); "none" opts out, recorded per arm.
+
+[[variant]] remove_skill = true (no dir, no markers): a bare arm, the plugin without the skill under test.
+[[variant]] task_file = "task-V1.md": that arm's own prompt (default [workpiece].task_file); seal records
+its sha256 per arm, run refuses a changed one, and the journal, result.json and score name it."""
 SEAL_GIT = ("-c", "user.name=abtest", "-c", "user.email=abtest@localhost", "-c", "commit.gpgsign=false",
             "-c", "core.hooksPath=/dev/null")
 
@@ -132,10 +136,19 @@ class UsageError(RuntimeError):
 
 
 @dataclass(frozen=True)
+class ArmTask:
+    """The prompt one arm is given: its file relative to the run dir, the text and its sha256."""
+
+    file: str
+    text: str
+    sha256: str
+
+
+@dataclass(frozen=True)
 class RunContext:
     run_dir: Path
     profile: Profile
-    task: str
+    tasks: dict[str, ArmTask]
     credentials: Path
     skills_repo: Path
     dry_run: bool
@@ -146,6 +159,11 @@ class RunContext:
     @property
     def run_id(self) -> str:
         return self.run_dir.name
+
+    def arm_meta(self, name: str) -> dict[str, Any]:
+        """What every journal row and result.json of arm `name` records beside its outcome."""
+        task = self.tasks[name]
+        return {"sandbox": self.profile.run.sandbox, "task_file": task.file, "task_sha256": task.sha256}
 
 
 def _warn(text: str) -> None:
@@ -301,12 +319,15 @@ def _seal_problems(run_dir: Path, profile: Profile) -> list[str]:
     # sealed without the key could never run a live arm.
     if profile.run.sandbox is None:
         problems.append(SANDBOX_MISSING)
-    if not _read_or_empty(run_dir / profile.workpiece.task_file).strip():
-        problems.append(f"{profile.workpiece.task_file} is empty")
+    for task_file in profile.task_files():
+        if not _read_or_empty(run_dir / task_file).strip():
+            problems.append(f"{task_file} is missing or empty")
     prereg = _read_or_empty(run_dir / "PREREG.md")
     if not prereg.strip() or PLACEHOLDER_RE.search(prereg):
         problems.append("PREREG.md is empty or still holds a <placeholder>")
     for v in profile.variants:
+        if v.dir is None:
+            continue  # a remove_skill variant: the arm runs without the skill, nothing to overlay
         if not (run_dir / v.dir).is_dir() or not any(p.is_file() for p in (run_dir / v.dir).rglob("*")):
             problems.append(f"variants/{v.name}: {v.dir} holds no file")
     return problems
@@ -329,6 +350,12 @@ def _seal_suite(run_dir: Path, profile: Profile) -> str | None:
     return sha256_file(sealed)
 
 
+def _task_stamp(run_dir: Path, profile: Profile) -> dict[str, dict[str, str]]:
+    """{arm name: {"file", "sha256"}} of the prompt each arm is given; the seal records it."""
+    return {name: {"file": f, "sha256": sha256_file(run_dir / f)}
+            for name, f in ((n, profile.task_file_for(n)) for n in profile.arm_names())}
+
+
 def _commit_seal(run_dir: Path, stamp: dict[str, Any]) -> str:
     """Append the stamp to PREREG.md and commit the inputs, then journal the seal with that commit.
 
@@ -348,7 +375,8 @@ def _commit_seal(run_dir: Path, stamp: dict[str, Any]) -> str:
         shutil.rmtree(run_dir / SEALED_DIR, ignore_errors=True)
         raise RunRefused(f"seal commit failed: {proc.stderr.strip()}")
     commit = _git_out(run_dir, "rev-parse", "--verify", "-q", "HEAD").strip()
-    record(run_dir, step="seal", round=0, arm="", status="sealed", commit=commit, suite_sha256=stamp["suite_sha256"])
+    record(run_dir, step="seal", round=0, arm="", status="sealed", commit=commit, suite_sha256=stamp["suite_sha256"],
+           task_files=stamp["task_files"])
     return commit
 
 
@@ -363,7 +391,8 @@ def cmd_seal(args: argparse.Namespace) -> int:
     if problems:
         raise RunRefused("; ".join(problems))
     stamp = {"sealed_at": utc_now(), "weights": WEIGHTS, "suite_sha256": _seal_suite(run_dir, profile), "arms": profile.arm_names(),
-             "n": profile.run.n, "warmth_tolerance": profile.run.warmth_tolerance}
+             "n": profile.run.n, "warmth_tolerance": profile.run.warmth_tolerance,
+             "task_files": _task_stamp(run_dir, profile)}
     commit = _commit_seal(run_dir, stamp)
     _emit(args.json, "seal", dict(stamp, commit=commit), True, f"sealed {run_dir}: {len(profile.arm_names())} arms x {profile.run.n} rounds")
     return EXIT_YES
@@ -387,9 +416,9 @@ def _guard_after(result: dict[str, Any], guard_dir: Path) -> None:
         result["guard_skipped"] = guard.get("skipped")
 
 
-def _session_argv(ctx: RunContext, frozen: abarm.Frozen, ws: Path, home: Path, cfg: Path) -> list[str]:
-    """claude_argv, behind the bubblewrap prefix when the profile names a bwrap sandbox."""
-    argv = abarm.claude_argv(ctx.task, ctx.max_turns)
+def _session_argv(ctx: RunContext, name: str, frozen: abarm.Frozen, ws: Path, home: Path, cfg: Path) -> list[str]:
+    """claude_argv with arm `name`'s prompt, behind the bubblewrap prefix when the profile names a bwrap sandbox."""
+    argv = abarm.claude_argv(ctx.tasks[name].text, ctx.max_turns)
     sandbox = ctx.profile.run.sandbox
     if sandbox not in SANDBOX_BWRAP_KINDS:
         return argv
@@ -410,7 +439,7 @@ def _arm_steps(ctx: RunContext, result: dict[str, Any], frozen: abarm.Frozen, la
     result["worktree"] = abarm.make_worktree(p.workpiece.repo, p.workpiece.base, branch, ws, copy_untracked_claude_md=True)
     result["guard"] = abguard.snapshot(ws, arm_dir / "guard")
     if not ctx.dry_run:
-        result.update(abarm.dispatch(arm_dir, ws, env, _session_argv(ctx, frozen, ws, home, cfg),
+        result.update(abarm.dispatch(arm_dir, ws, env, _session_argv(ctx, result["name"], frozen, ws, home, cfg),
                                      max_tokens=p.run.max_tokens, deadline_s=p.run.deadline_s,
                                      stop_grace_s=ctx.stop_grace_s))
     # Right after the session, before the floor writes into the worktree (build output, the suite).
@@ -548,11 +577,12 @@ def run_arm(ctx: RunContext, round_no: int, name: str) -> dict[str, Any]:
     arm_dir, ws, _ = _paths(ctx, label)
     arm_dir.mkdir(parents=True, exist_ok=True)
     result: dict[str, Any] = {"arm": label, "round": round_no, "name": name, "dry_run": ctx.dry_run,
-                              "sandbox": ctx.profile.run.sandbox}
+                              **ctx.arm_meta(name)}
     frozen: abarm.Frozen | None = None
     try:
         frozen = abarm.freeze_variant(ctx.run_dir, ctx.profile, name, ctx.skills_repo)
-        result["frozen"] = {"ref": frozen.skills_ref, "overlay_written": list(frozen.overlay_written)}
+        result["frozen"] = {"ref": frozen.skills_ref, "overlay_written": list(frozen.overlay_written),
+                            "skill_removed": frozen.skill_removed, "removed": list(frozen.removed)}
         _arm_steps(ctx, result, frozen, label)
     except KeyboardInterrupt:
         result["session_stop_reason"] = result.get("stop_reason")
@@ -657,10 +687,17 @@ def _context(args: argparse.Namespace, run_dir: Path, profile: Profile,
         raise RunRefused("--max-turns must be at least 1")
     if not args.stop_grace_s > 0:
         raise RunRefused("--stop-grace-s must be above 0")
-    return RunContext(run_dir=run_dir, profile=profile, task=_read_text(run_dir / profile.workpiece.task_file),
+    return RunContext(run_dir=run_dir, profile=profile, tasks=_arm_tasks(run_dir, profile),
                       credentials=Path(args.credentials).expanduser(), skills_repo=Path(args.skills_repo).expanduser(),
                       dry_run=args.dry_run, max_turns=args.max_turns, stop_grace_s=args.stop_grace_s,
                       sealed_suite=sealed_suite)
+
+
+def _arm_tasks(run_dir: Path, profile: Profile) -> dict[str, ArmTask]:
+    """{arm name: the prompt it is given}; a file shared by several arms is read once."""
+    texts = {f: _read_text(run_dir / f) for f in profile.task_files()}
+    return {n: ArmTask(file=f, text=texts[f], sha256=sha256_file(run_dir / f))
+            for n, f in ((n, profile.task_file_for(n)) for n in profile.arm_names())}
 
 
 def _schedule(profile: Profile, only: str | None) -> Iterator[tuple[int, str]]:
@@ -679,20 +716,20 @@ def _attempt(ctx: RunContext, round_no: int, name: str) -> dict[str, Any]:
     dispatched (a floor or bundle step), that rerun pays for the session again.
     """
     aside = _set_aside(ctx, f"r{round_no}-{name}")
-    sandbox = ctx.profile.run.sandbox
+    meta = ctx.arm_meta(name)
     try:
         result = run_arm(ctx, round_no, name)
     except KeyboardInterrupt:
-        record(ctx.run_dir, step="arm", round=round_no, arm=name, status=INTERRUPTED, set_aside=aside, sandbox=sandbox)
+        record(ctx.run_dir, step="arm", round=round_no, arm=name, status=INTERRUPTED, set_aside=aside, **meta)
         raise
     except Exception as exc:
         record(ctx.run_dir, step="arm", round=round_no, arm=name, status="error", error=str(exc)[:500], set_aside=aside,
-               sandbox=sandbox)
+               **meta)
         raise
     trigger = None if ctx.dry_run else _pause_trigger(result, ctx.run_dir / "arms" / result["arm"] / "stream.jsonl")
     status = "dry" if ctx.dry_run else ("paused" if trigger else "ran")
     record(ctx.run_dir, step="arm", round=round_no, arm=name, status=status, stop_reason=result.get("stop_reason"),
-           set_aside=aside, pause_trigger=trigger, sandbox=sandbox)
+           set_aside=aside, pause_trigger=trigger, **meta)
     result.update(set_aside=aside, status=status, pause_trigger=trigger)
     return result
 
@@ -780,7 +817,7 @@ def _refuse_changed_since_seal(run_dir: Path, commit: str, paths: list[str]) -> 
     changed = _git_out(run_dir, "diff", "--name-only", commit, "HEAD", "--", *paths).split()
     if changed:
         raise RunRefused(f"{', '.join(changed)} changed in a commit since the seal ({commit[:12]}); "
-                         "the profile, the task and the variants are frozen at the seal")
+                         "the profile, the task files and the variants are frozen at the seal")
     sealed = _git_out(run_dir, "show", f"{commit}:PREREG.md")
     if not _git_out(run_dir, "show", "HEAD:PREREG.md").startswith(sealed):
         raise RunRefused(f"PREREG.md was rewritten since the seal ({commit[:12]}), not appended to; "
@@ -790,17 +827,36 @@ def _refuse_changed_since_seal(run_dir: Path, commit: str, paths: list[str]) -> 
 def _require_seal_intact(run_dir: Path, profile: Profile) -> abscore.SealedSuite | None:
     """Refuse a run whose sealed inputs differ from the seal; the sealed suite every floor runs.
 
-    Uncommitted or untracked changes under abtest.toml, the task file, PREREG.md, variants/,
+    Uncommitted or untracked changes under abtest.toml, every arm's task file, PREREG.md, variants/,
     sealed/ and .gitignore are refused (journal.jsonl and arms/ are the run's own output and are
     not looked at). A committed change since the seal commit is refused for abtest.toml, the task
-    file, variants/ and sealed/; PREREG.md may grow by committed amendments, never be rewritten.
+    files, variants/ and sealed/; PREREG.md may grow by committed amendments, never be rewritten.
     The sealed suite copy must still hash to the sha256 the seal recorded (design S1).
     """
     row = _seal_row(run_dir)
-    frozen = ["abtest.toml", profile.workpiece.task_file, "variants", SEALED_DIR]
+    frozen = ["abtest.toml", *profile.task_files(), "variants", SEALED_DIR]
     _refuse_uncommitted(run_dir, [*frozen, "PREREG.md", ".gitignore"])
     _refuse_changed_since_seal(run_dir, row["commit"], frozen)
+    _refuse_task_drift(run_dir, profile, row)
     return _sealed_suite(run_dir, profile, row)
+
+
+def _refuse_task_drift(run_dir: Path, profile: Profile, row: dict[str, Any]) -> None:
+    """Refuse an arm prompt whose file or sha256 differs from what the seal row recorded for that arm.
+
+    A seal row from before per-arm prompts records none; git (above) then guards the task file alone.
+    """
+    sealed = row.get("task_files")
+    if not isinstance(sealed, dict):
+        return
+    for name in profile.arm_names():
+        f = profile.task_file_for(name)
+        path = run_dir / f
+        want = sealed.get(name)
+        got = {"file": f, "sha256": sha256_file(path) if path.is_file() else None}
+        if want != got:
+            raise RunRefused(f"the prompt of arm {name} ({f}) differs from the seal ({want}); "
+                             "every arm's task file is frozen at the seal")
 
 
 def _require_sandbox(profile: Profile) -> None:
@@ -896,7 +952,8 @@ def _store_flag(label: str, score: dict[str, Any]) -> str | None:
 
 def _score_line(label: str, score: dict[str, Any]) -> str:
     line = (f"{label}: cost={score['cost_usd']} floor={score['floor_passed']} void={score['void'] or '-'} "
-            f"sandbox={score.get('sandbox') or '-'}")
+            f"sandbox={score.get('sandbox') or '-'} task={score.get('task_file') or '-'}"
+            f"@{(score.get('task_sha256') or '-')[:12]}")
     flag = _store_flag(label, score)
     return line if flag is None else f"{line} FLAG {flag}"
 

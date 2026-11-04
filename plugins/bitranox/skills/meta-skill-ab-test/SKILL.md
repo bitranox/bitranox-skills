@@ -23,6 +23,9 @@ repository with its own config dir and a frozen plugin checkout; the memory stor
 A live run requires `[run] sandbox` in `abtest.toml`: `"bwrap"`, `"bwrap-host-proc"` (the same
 with the host's `/proc` read-only, for an LXC container; other processes' command lines stay
 readable there) or an explicit `"none"`; `prune-run` and `score` show which one each arm ran under.
+A `[[variant]]` with `remove_skill = true` (no `dir`, no `markers`) is a bare arm that runs the
+plugin without the skill under test, and a variant's `task_file` gives that arm its own prompt,
+sealed and recorded per arm with its sha256 (a bare arm's prompt must not name the missing skill).
 
 The run dir is a new directory OUTSIDE the workpiece, its own git repo (`seal` commits there,
 never into the workpiece); `init --repo <workpiece> --base <commit> --skills-ref <plugin commit>

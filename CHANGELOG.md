@@ -30,6 +30,21 @@ a hole nobody has drawn a line under is one that gets rediscovered and half-fill
 two "versions with no entry" notes came to sit in this file disagreeing with it.
 
 
+## [10.15.0]
+
+### Added
+
+- `meta-skill-ab-test`: a bare arm. A `[[variant]]` with `remove_skill = true` (no `dir`, no
+  `markers`, both refused when set) runs the plugin WITHOUT the skill under test: the frozen
+  checkout loses the skill directory and the skill's key in `hooks/skill_triggers.json`, and the
+  install check asserts both are absent from the installed plugin (an empty directory counts as
+  present).
+- `meta-skill-ab-test`: a per-arm prompt. A variant's `task_file` gives that arm its own prompt
+  (default `[workpiece].task_file`). `seal` refuses a missing or empty one and records every
+  arm's prompt file and sha256 in PREREG.md and the seal row; `run` refuses a prompt changed
+  since the seal; every arm row in the journal, `result.json` and `score` (JSON and text) name the
+  prompt file and its sha256.
+
 ## [10.14.2]
 
 ### Fixed

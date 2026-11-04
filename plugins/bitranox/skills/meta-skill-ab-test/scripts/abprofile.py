@@ -42,6 +42,9 @@ name = "V1"
 dir = "variants/V1"
 changes = ["<one change per entry>"]
 markers = []
+# A bare arm: remove_skill = true deletes the skill from that arm's frozen plugin instead of
+# overlaying it (then leave out dir and keep markers empty). task_file = "task-V1.md" gives the
+# arm its own prompt (a bare arm's prompt must not name the missing skill); default: [workpiece].
 
 [floor]
 gate = ["make", "test"]
@@ -82,10 +85,23 @@ class Control:
 
 @dataclass(frozen=True)
 class Variant:
+    """One [[variant]] table.
+
+    Attributes:
+        name: V<short id>.
+        dir: the overlay directory relative to the run dir; None for a remove_skill variant.
+        changes: what the variant changes, one entry each.
+        markers: lines the variant's text must carry; always empty for a remove_skill variant.
+        remove_skill: the arm runs the plugin WITHOUT the skill under test (a bare arm).
+        task_file: this arm's prompt relative to the run dir; None falls back to [workpiece].task_file.
+    """
+
     name: str
-    dir: str
+    dir: str | None
     changes: tuple[str, ...]
     markers: tuple[str, ...]
+    remove_skill: bool = False
+    task_file: str | None = None
 
 
 @dataclass(frozen=True)
@@ -122,6 +138,19 @@ class Profile:
 
     def arm_names(self) -> list[str]:
         return ["C", *(v.name for v in self.variants)]
+
+    def variant(self, name: str) -> Variant | None:
+        """The [[variant]] named `name`, or None (for "C" or an unknown name)."""
+        return next((v for v in self.variants if v.name == name), None)
+
+    def task_file_for(self, name: str) -> str:
+        """The prompt file of arm `name` relative to the run dir: its own task_file, else the workpiece's."""
+        v = self.variant(name)
+        return v.task_file if v is not None and v.task_file is not None else self.workpiece.task_file
+
+    def task_files(self) -> list[str]:
+        """Every distinct prompt file an arm of this profile reads, the workpiece's first."""
+        return list(dict.fromkeys(self.task_file_for(n) for n in self.arm_names()))
 
     def suite_argv(self) -> list[str] | None:
         if self.floor.suite is None:
@@ -207,6 +236,34 @@ def _changes(c: _Check, t: dict[str, Any], where: str) -> tuple[str, ...]:
     return changes
 
 
+def _remove_skill(c: _Check, t: dict[str, Any], where: str) -> bool:
+    v = t.get("remove_skill", False)
+    if not isinstance(v, bool):
+        c.problems.append(f"{where}.remove_skill: must be true or false")
+        return False
+    return v
+
+
+def _variant_task_file(c: _Check, t: dict[str, Any], where: str) -> str | None:
+    v = t.get("task_file")
+    if v is None:
+        return None
+    if not isinstance(v, str) or not _is_inside_relative(v) or v.strip().startswith("<"):
+        c.problems.append(f"{where}.task_file: must be a non-empty relative path inside the run dir, "
+                          "not absolute and with no '..', when set")
+        return None
+    return v
+
+
+def _variant_dir(c: _Check, t: dict[str, Any], where: str, remove_skill: bool) -> str | None:
+    """The overlay dir; a remove_skill variant has none, and naming one is refused, never ignored."""
+    if not remove_skill:
+        return c.text(t, "dir", where)
+    if "dir" in t:
+        c.problems.append(f"{where}.dir: must be absent when remove_skill = true (the arm has no skill to overlay)")
+    return None
+
+
 def _variant(c: _Check, i: int, t: dict[str, Any], seen: set[str]) -> Variant:
     where = f"variant[{i}]"
     name = c.text(t, "name", where)
@@ -215,8 +272,12 @@ def _variant(c: _Check, i: int, t: dict[str, Any], seen: set[str]) -> Variant:
     if name in seen:
         c.problems.append(f"{where}.name: duplicate {name!r}")
     seen.add(name)
-    return Variant(name=name, dir=c.text(t, "dir", where),
-                   changes=_changes(c, t, where), markers=c.str_list(t, "markers", where, required=False))
+    remove_skill = _remove_skill(c, t, where)
+    markers = c.str_list(t, "markers", where, required=False)
+    if remove_skill and markers:
+        c.problems.append(f"{where}.markers: must be empty when remove_skill = true (the arm has no skill text)")
+    return Variant(name=name, dir=_variant_dir(c, t, where, remove_skill), changes=_changes(c, t, where),
+                   markers=markers, remove_skill=remove_skill, task_file=_variant_task_file(c, t, where))
 
 
 def _variants(c: _Check, data: dict[str, Any]) -> tuple[Variant, ...]:

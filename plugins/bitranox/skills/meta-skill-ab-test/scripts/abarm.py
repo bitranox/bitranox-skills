@@ -60,6 +60,9 @@ PLUGIN_ID = "bitranox@bitranox-skills"
 # Both relative to the plugin root, which in the bitranox-skills repo is plugins/bitranox/.
 SWITCH_REL = "hooks/self_improve_signals.py"
 SWITCH_NAME = "BITRANOX_MEMORY_WRITES"
+# The skill router's map, keyed by skill name: a bare arm's copy drops the removed skill's key so
+# the router cannot name a skill the arm does not have.
+TRIGGERS_REL = "hooks/skill_triggers.json"
 WORKTREES_PROBE = ".claude/worktrees/probe"
 WORKTREES_PATTERN = ".claude/worktrees/"
 INSTALL_TIMEOUT_S = 300
@@ -110,6 +113,9 @@ class Frozen:
         skill_dir: the skill under test inside the checkout's plugin root.
         overlay_written: the skill-relative paths the variant's files replaced (empty for C).
         hashes: {skill-relative path: sha256} of the skill as frozen; the install is checked against it.
+            Empty for a removed skill, whose install is checked for the skill's ABSENCE.
+        skill_removed: a remove_skill variant (a bare arm): skill_dir no longer exists.
+        removed: what the removal took out, plugin-root relative (the skill dir, the router entry).
     """
 
     path: Path
@@ -117,6 +123,8 @@ class Frozen:
     skill_dir: Path
     overlay_written: tuple[str, ...]
     hashes: dict[str, str]
+    skill_removed: bool = False
+    removed: tuple[str, ...] = ()
 
 
 def _git(repo: Path, *args: str) -> subprocess.CompletedProcess[str]:
@@ -208,6 +216,8 @@ def _variant_dir(run_dir: Path, profile: Profile, name: str) -> Path | None:
     match = [v for v in profile.variants if v.name == name]
     if not match:
         raise ArmError(f"no variant named {name!r} in the profile")
+    if match[0].dir is None:
+        raise ArmError(f"variant {name} has no dir (a remove_skill variant is frozen by removal, not overlay)")
     variant_dir = run_dir / match[0].dir
     if not variant_dir.is_dir():
         raise ArmError(f"variant dir {variant_dir} is missing")
@@ -244,10 +254,44 @@ def freeze_variant(run_dir: Path, profile: Profile, name: str, skills_repo: Path
     root = plugin_root(path)
     _require_switch(root, ref)
     skill_dir = root / "skills" / profile.control.skill
+    variant = profile.variant(name)
+    if variant is not None and variant.remove_skill:
+        removed = _remove_skill(path, skill_dir, ref)
+        return Frozen(path=path, skills_ref=ref, skill_dir=skill_dir, overlay_written=(), hashes={},
+                      skill_removed=True, removed=removed)
     if not skill_dir.is_dir():
         raise ArmError(f"skill {profile.control.skill} is not at {skill_dir}")
     written = _apply_overlay(_variant_dir(run_dir, profile, name), skill_dir)
     return Frozen(path=path, skills_ref=ref, skill_dir=skill_dir, overlay_written=written, hashes=tree_hashes(skill_dir))
+
+
+def _remove_skill(path: Path, skill_dir: Path, ref: str) -> tuple[str, ...]:
+    """Delete the skill dir and its router entry from the checkout; what was taken out.
+
+    Idempotent like the overlay: a reused checkout whose dir is already gone is accepted when the
+    ref itself carries the skill, so a typo in [control].skill is still refused.
+    """
+    rel = skill_dir.relative_to(path).as_posix()
+    if not skill_dir.is_dir() and _git(path, "cat-file", "-e", f"HEAD:{rel}").returncode != 0:
+        raise ArmError(f"skill {skill_dir.name} is not at {skill_dir} in {ref}")
+    if skill_dir.is_dir():
+        shutil.rmtree(skill_dir)
+    removed = [f"skills/{skill_dir.name}/"]
+    if _drop_trigger(skill_dir.parent.parent / TRIGGERS_REL, skill_dir.name):
+        removed.append(f"{TRIGGERS_REL}#{skill_dir.name}")
+    return tuple(removed)
+
+
+def _drop_trigger(triggers: Path, skill: str) -> bool:
+    """Remove the skill's key from the router map; True when the copy named it."""
+    if not triggers.is_file():
+        return False
+    data = _read_json(triggers)
+    if not isinstance(data, dict) or skill not in data:
+        return False
+    del data[skill]
+    triggers.write_text(json.dumps(data, indent=1, ensure_ascii=False) + "\n", encoding="utf-8")
+    return True
 
 
 def _forget_worktree(repo: Path, path: Path) -> subprocess.CompletedProcess[str] | None:
@@ -346,14 +390,32 @@ def _verify_install(cfg: Path, frozen: Frozen) -> dict[str, Any]:
     installed_hashes = tree_hashes(installed / "skills" / frozen.skill_dir.name)
     keys = set(frozen.hashes) | set(installed_hashes)
     drift = sorted(k for k in keys if frozen.hashes.get(k) != installed_hashes.get(k))
+    drift += _absence_drift(installed, frozen)
     manifest = _read_json(installed / ".claude-plugin" / "plugin.json")
     version = manifest.get("version") if isinstance(manifest, dict) else None
     return {"installed_path": str(installed), "installed_version": version, "drift": drift}
 
 
+def _absence_drift(installed: Path, frozen: Frozen) -> list[str]:
+    """For a removed skill: what the install still carries of it (its dir, even empty; its router key)."""
+    if not frozen.skill_removed:
+        return []
+    name = frozen.skill_dir.name
+    found = []
+    if (installed / "skills" / name).exists():
+        found.append(f"skills/{name}/ is installed; a remove_skill arm must run without it")
+    triggers = installed / TRIGGERS_REL
+    data = _read_json(triggers) if triggers.is_file() else None
+    if isinstance(data, dict) and name in data:
+        found.append(f"{TRIGGERS_REL} still routes {name}")
+    return found
+
+
 def install_plugin(cfg: Path, frozen: Frozen, credentials: Path, env: dict[str, str], *,
                    settings_keep: tuple[str, ...] = ("skillListingBudgetFraction",)) -> dict[str, Any]:
     """Install the frozen plugin into cfg and verify the installed skill byte for byte.
+
+    For a remove_skill arm the same check asserts the ABSENCE: no installed skill dir, no router key.
 
     A fresh config dir runs its only session at the CLI defaults (measured at checkpoint 1: the
     skill listing budget the plugin raises applies only from the next session), which is not
