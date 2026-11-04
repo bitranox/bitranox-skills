@@ -27,16 +27,22 @@ __all__ = [
     "PRE_PUSH_HOOK",
     "UNCOMMITTED_PATCH",
     "UNTRACKED_TAR",
+    "BWRAP_BASE",
+    "BWRAP_PROBE_TIMEOUT_S",
     "ArmError",
     "Frozen",
+    "SandboxMounts",
     "arm_env",
     "arm_home",
     "bundle",
+    "bwrap_problem",
     "claude_argv",
     "delete_cfg",
     "dispatch",
     "ensure_worktrees_ignored",
     "freeze_variant",
+    "git_common_dir",
+    "home_link_targets",
     "install_plugin",
     "installed_plugin_path",
     "make_worktree",
@@ -44,6 +50,7 @@ __all__ = [
     "prune",
     "release_frozen",
     "remove_worktrees_exclude",
+    "sandbox_argv",
     "save_transcripts",
     "save_uncommitted",
 ]
@@ -67,6 +74,14 @@ STATE_KEY = "worktree_config_set_by_harness"
 # What save_uncommitted writes into the arm dir: tracked changes as a patch, untracked files as a tar.
 UNCOMMITTED_PATCH = "uncommitted.patch"
 UNTRACKED_TAR = "untracked.tar"
+# The one probe of a working bubblewrap before a live run; a bwrap that hangs is a refusal too.
+BWRAP_PROBE_TIMEOUT_S = 30
+# The namespaces and the private /dev and /proc every arm's sandbox starts with, and exactly what
+# the probe runs: `bwrap --ro-bind / / true` alone passes where the arm's own argv then fails
+# (measured in an LXC container whose /proc carries lxcfs overmounts: the kernel refuses a fresh
+# proc mount for a new PID namespace there, "Can't mount proc on /newroot/proc").
+BWRAP_BASE = ("bwrap", "--die-with-parent", "--unshare-pid", "--unshare-ipc", "--unshare-uts",
+              "--ro-bind", "/", "/", "--dev", "/dev", "--proc", "/proc")
 PRE_PUSH_HOOK = "#!/bin/sh\necho 'abtest arm: pushing is refused; the branch is collected by the harness' >&2\nexit 1\n"
 
 
@@ -732,6 +747,92 @@ def arm_env(cfg: Path, home: Path, keep: tuple[str, ...]) -> dict[str, str]:
     env = {k: os.environ[k] for k in keep if k in os.environ and k != "CLAUDECODE"}
     env.update({"HOME": str(home), "CLAUDE_CONFIG_DIR": str(cfg), "BITRANOX_MEMORY_WRITES": "off"})
     return env
+
+
+@dataclass(frozen=True)
+class SandboxMounts:
+    """What one arm's bubblewrap sandbox exposes beyond a read-only view of the root.
+
+    Attributes:
+        ws: the arm's worktree; writable, and the session's cwd.
+        home: the arm's HOME (arm_home); writable.
+        cfg: the arm's CLAUDE_CONFIG_DIR; writable.
+        git_common_dir: the workpiece's git common dir, absolute; writable, the arm commits into it.
+        real_home: the user's real home, hidden behind an empty tmpfs (~/.ssh, ~/.config/gh,
+            ~/.credentials, the real ~/.claude).
+        read_only: paths re-exposed read-only after the tmpfs: the home_links targets, the
+            workpiece checkout (its CLAUDE.md cascade and the arm's hooks dir) and the frozen
+            plugin checkout the installed plugin is read from.
+        tmp: the directory given a private tmpfs; /tmp, a test points it elsewhere.
+    """
+
+    ws: Path
+    home: Path
+    cfg: Path
+    git_common_dir: Path
+    real_home: Path
+    read_only: tuple[Path, ...] = ()
+    # A private tmpfs is mounted over it, so nothing of the host's /tmp is read or written.
+    tmp: Path = Path("/tmp")  # nosec B108
+
+
+def sandbox_argv(m: SandboxMounts) -> list[str]:
+    """The bubblewrap prefix that runs the session with m's writable set and nothing else.
+
+    bwrap applies its mount options in order, so the order is the design: the read-only root,
+    the private /dev, /proc and tmp, then the tmpfs over the real home, then the read-only
+    re-binds, and the writable binds LAST: a mount placed after another one under it would cover
+    it again (a tmpfs over the real home after the arm's home would hide that home when it lives
+    under the real one). Network stays shared: the session must reach the API, and a narrower
+    egress filter needs a network namespace setup this harness does not own.
+    """
+    argv = [*BWRAP_BASE, "--tmpfs", str(m.tmp), "--tmpfs", str(m.real_home)]
+    for path in m.read_only:
+        argv += ["--ro-bind", str(path), str(path)]
+    for path in (m.ws, m.home, m.cfg, m.git_common_dir):
+        argv += ["--bind", str(path), str(path)]
+    return [*argv, "--chdir", str(m.ws)]
+
+
+def git_common_dir(ws: Path) -> Path:
+    """The absolute git common dir of the worktree ws: where the arm's commits land."""
+    out = Path(_git_ok(ws, "rev-parse", "--git-common-dir"))
+    return out if out.is_absolute() else (ws / out).resolve()
+
+
+def home_link_targets(home: Path, links: tuple[str, ...]) -> tuple[Path, ...]:
+    """The existing targets of the symlinks arm_home made in home, in links order."""
+    targets: list[Path] = []
+    for name in links:
+        link = home / name
+        if link.is_symlink():
+            target = Path(os.readlink(link))
+            if target.exists():
+                targets.append(target)
+    return tuple(targets)
+
+
+def bwrap_problem(path_env: str | None) -> str | None:
+    """Why a live run with sandbox = "bwrap" cannot start here, or None when bwrap works.
+
+    One real probe of BWRAP_BASE (the arm's namespaces, /dev and /proc) running `true`, never an
+    assumption: bwrap can be installed and still be refused a user namespace (a kernel switch, an
+    AppArmor rule) or a private /proc (a container whose /proc has overmounts).
+    """
+    exe = shutil.which("bwrap", path=path_env)
+    if exe is None:
+        return ('sandbox = "bwrap" but bwrap is not on PATH: install bubblewrap, '
+                'or set sandbox = "none" knowingly')
+    try:
+        proc = subprocess.run([exe, *BWRAP_BASE[1:], "true"], capture_output=True, text=True,  # nosec B603
+                              encoding="utf-8", errors="replace", timeout=BWRAP_PROBE_TIMEOUT_S, check=False)
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        return f"{exe} could not run its probe: {exc}"
+    if proc.returncode != 0:
+        return (f"{exe} cannot create its sandbox here (rc {proc.returncode}: {proc.stderr.strip()[-300:]}); "
+                "a refused user namespace, or a container /proc that refuses a private proc mount, "
+                "is the usual cause")
+    return None
 
 
 def claude_argv(prompt: str, max_turns: int) -> list[str]:

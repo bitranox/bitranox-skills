@@ -48,7 +48,7 @@ from _ablib import (
     sha256_file,
     utc_now,
 )
-from abprofile import SKELETON, Profile, ProfileError, load_profile
+from abprofile import SANDBOX_BWRAP, SANDBOX_MISSING, SKELETON, Profile, ProfileError, load_profile
 from abstream import OPUS_PREFIX, SYNTHETIC_REASON_PREFIX
 
 __all__ = [
@@ -112,6 +112,8 @@ PAUSE_LOGIN, PAUSE_SYNTHETIC_ONLY, PAUSE_LIMIT = ("a login-looking failure", "on
 PAUSE_EXPIRY = "a login that expires before the arm's deadline"
 # A seal refuses a PREREG.md still holding a skeleton placeholder; a bare "<" ("cost < 0.10") is prose.
 PLACEHOLDER_RE = re.compile(r"<[^>\n]+>")
+EPILOG = """[run] sandbox in abtest.toml: "bwrap" runs each live session in a bubblewrap sandbox (writable:
+its worktree, home, config dir, the repo's .git; real home hidden); "none" opts out, recorded per arm."""
 SEAL_GIT = ("-c", "user.name=abtest", "-c", "user.email=abtest@localhost", "-c", "commit.gpgsign=false",
             "-c", "core.hooksPath=/dev/null")
 
@@ -294,6 +296,10 @@ def _read_or_empty(path: Path) -> str:
 
 def _seal_problems(run_dir: Path, profile: Profile) -> list[str]:
     problems = []
+    # Checked here, not only before a live run: abtest.toml is frozen at the seal, so a profile
+    # sealed without the key could never run a live arm.
+    if profile.run.sandbox is None:
+        problems.append(SANDBOX_MISSING)
     if not _read_or_empty(run_dir / profile.workpiece.task_file).strip():
         problems.append(f"{profile.workpiece.task_file} is empty")
     prereg = _read_or_empty(run_dir / "PREREG.md")
@@ -380,17 +386,29 @@ def _guard_after(result: dict[str, Any], guard_dir: Path) -> None:
         result["guard_skipped"] = guard.get("skipped")
 
 
+def _session_argv(ctx: RunContext, frozen: abarm.Frozen, ws: Path, home: Path, cfg: Path) -> list[str]:
+    """claude_argv, behind the bubblewrap prefix when the profile says sandbox = "bwrap"."""
+    argv = abarm.claude_argv(ctx.task, ctx.max_turns)
+    if ctx.profile.run.sandbox != SANDBOX_BWRAP:
+        return argv
+    read_only = (*abarm.home_link_targets(home, ctx.profile.run.home_links), ctx.profile.workpiece.repo, frozen.path)
+    mounts = abarm.SandboxMounts(ws=ws, home=home, cfg=cfg, git_common_dir=abarm.git_common_dir(ws),
+                                 real_home=Path.home(), read_only=read_only)
+    return abarm.sandbox_argv(mounts) + argv
+
+
 def _arm_steps(ctx: RunContext, result: dict[str, Any], frozen: abarm.Frozen, label: str) -> None:
     p = ctx.profile
     arm_dir, ws, branch = _paths(ctx, label)
     cfg = arm_dir / "cfg"
-    env = abarm.arm_env(cfg, abarm.arm_home(arm_dir, p.run.home_links), p.run.env_keep)
+    home = abarm.arm_home(arm_dir, p.run.home_links)
+    env = abarm.arm_env(cfg, home, p.run.env_keep)
     result["install"] = abarm.install_plugin(cfg, frozen, ctx.credentials, env)
     _ignore_worktrees(ctx)
     result["worktree"] = abarm.make_worktree(p.workpiece.repo, p.workpiece.base, branch, ws, copy_untracked_claude_md=True)
     result["guard"] = abguard.snapshot(ws, arm_dir / "guard")
     if not ctx.dry_run:
-        result.update(abarm.dispatch(arm_dir, ws, env, abarm.claude_argv(ctx.task, ctx.max_turns),
+        result.update(abarm.dispatch(arm_dir, ws, env, _session_argv(ctx, frozen, ws, home, cfg),
                                      max_tokens=p.run.max_tokens, deadline_s=p.run.deadline_s,
                                      stop_grace_s=ctx.stop_grace_s))
     # Right after the session, before the floor writes into the worktree (build output, the suite).
@@ -527,7 +545,8 @@ def run_arm(ctx: RunContext, round_no: int, name: str) -> dict[str, Any]:
     label = f"r{round_no}-{name}"
     arm_dir, ws, _ = _paths(ctx, label)
     arm_dir.mkdir(parents=True, exist_ok=True)
-    result: dict[str, Any] = {"arm": label, "round": round_no, "name": name, "dry_run": ctx.dry_run}
+    result: dict[str, Any] = {"arm": label, "round": round_no, "name": name, "dry_run": ctx.dry_run,
+                              "sandbox": ctx.profile.run.sandbox}
     frozen: abarm.Frozen | None = None
     try:
         frozen = abarm.freeze_variant(ctx.run_dir, ctx.profile, name, ctx.skills_repo)
@@ -658,18 +677,20 @@ def _attempt(ctx: RunContext, round_no: int, name: str) -> dict[str, Any]:
     dispatched (a floor or bundle step), that rerun pays for the session again.
     """
     aside = _set_aside(ctx, f"r{round_no}-{name}")
+    sandbox = ctx.profile.run.sandbox
     try:
         result = run_arm(ctx, round_no, name)
     except KeyboardInterrupt:
-        record(ctx.run_dir, step="arm", round=round_no, arm=name, status=INTERRUPTED, set_aside=aside)
+        record(ctx.run_dir, step="arm", round=round_no, arm=name, status=INTERRUPTED, set_aside=aside, sandbox=sandbox)
         raise
     except Exception as exc:
-        record(ctx.run_dir, step="arm", round=round_no, arm=name, status="error", error=str(exc)[:500], set_aside=aside)
+        record(ctx.run_dir, step="arm", round=round_no, arm=name, status="error", error=str(exc)[:500], set_aside=aside,
+               sandbox=sandbox)
         raise
     trigger = None if ctx.dry_run else _pause_trigger(result, ctx.run_dir / "arms" / result["arm"] / "stream.jsonl")
     status = "dry" if ctx.dry_run else ("paused" if trigger else "ran")
     record(ctx.run_dir, step="arm", round=round_no, arm=name, status=status, stop_reason=result.get("stop_reason"),
-           set_aside=aside, pause_trigger=trigger)
+           set_aside=aside, pause_trigger=trigger, sandbox=sandbox)
     result.update(set_aside=aside, status=status, pause_trigger=trigger)
     return result
 
@@ -780,12 +801,28 @@ def _require_seal_intact(run_dir: Path, profile: Profile) -> abscore.SealedSuite
     return _sealed_suite(run_dir, profile, row)
 
 
+def _require_sandbox(profile: Profile) -> None:
+    """Refuse a live run whose profile names no sandbox, or whose bwrap cannot build one here.
+
+    Probed once per `run`, before any arm: the arm env inherits this PATH (env_keep), so the
+    bwrap found here is the one the session is started with.
+    """
+    if profile.run.sandbox is None:
+        raise RunRefused(SANDBOX_MISSING)
+    if profile.run.sandbox == SANDBOX_BWRAP:
+        problem = abarm.bwrap_problem(os.environ.get("PATH"))
+        if problem:
+            raise RunRefused(problem)
+
+
 def cmd_run(args: argparse.Namespace) -> int:
     run_dir = _run_dir(args.run_dir)
     _require_sealed(run_dir)
     profile = load_profile(run_dir / "abtest.toml")
     sealed_suite = _require_seal_intact(run_dir, profile)
     ctx = _context(args, run_dir, profile, sealed_suite)
+    if not ctx.dry_run:
+        _require_sandbox(profile)
     for cfg in _sweep_cfgs(run_dir):
         _warn(f"deleted the config dir a killed arm left at {cfg} (it held a credentials copy); "
               "its transcripts are kept beside it")
@@ -856,7 +893,8 @@ def _store_flag(label: str, score: dict[str, Any]) -> str | None:
 
 
 def _score_line(label: str, score: dict[str, Any]) -> str:
-    line = f"{label}: cost={score['cost_usd']} floor={score['floor_passed']} void={score['void'] or '-'}"
+    line = (f"{label}: cost={score['cost_usd']} floor={score['floor_passed']} void={score['void'] or '-'} "
+            f"sandbox={score.get('sandbox') or '-'}")
     flag = _store_flag(label, score)
     return line if flag is None else f"{line} FLAG {flag}"
 
@@ -911,6 +949,12 @@ def _restore_exclude(run_dir: Path, repo: Path, errors: list[str]) -> str:
     return "removed"
 
 
+def _sandboxes(run_dir: Path) -> dict[str, str | None]:
+    """{label: sandbox} of every arm the journal says ran live, the last row per label winning."""
+    return {f"r{r.get('round')}-{r.get('arm')}": r.get("sandbox") for r in load_journal(run_dir)
+            if r.get("step") == "arm" and r.get("status") in DONE_LIVE}
+
+
 def cmd_prune_run(args: argparse.Namespace) -> int:
     """Prune every arm worktree of the run, then delete its branches.
 
@@ -937,8 +981,11 @@ def cmd_prune_run(args: argparse.Namespace) -> int:
     errors += [f"branch {b} could not be deleted" for b in refs if b not in deleted]
     skipped = [f"frozen checkout {p} is left (release it from the skills repo)" for p in sorted((run_dir / "frozen").glob("*"))]
     exclude = _restore_exclude(run_dir, repo, errors)
-    data = {"deleted": deleted, "errors": errors, "exclude": exclude, "cfg_removed": cfg_removed}
+    sandbox = _sandboxes(run_dir)
+    data = {"deleted": deleted, "errors": errors, "exclude": exclude, "cfg_removed": cfg_removed, "sandbox": sandbox}
+    used = ", ".join(sorted({str(v) for v in sandbox.values()}))
     _emit(args.json, "prune-run", data, not errors, f"deleted {len(deleted)} branch(es) under abx/{run_id}/"
+          + (f" (arms ran with sandbox: {used})" if used else "")
           + "".join(f"\nerror: {e}" for e in errors), skipped)
     if errors:
         print(f"abtest prune-run: error: {len(errors)} cleanup step(s) failed; first: {' '.join(errors[0].split())}",
@@ -964,7 +1011,7 @@ def _add_run_options(sp: argparse.ArgumentParser) -> None:
 
 
 def build_parser() -> argparse.ArgumentParser:
-    ap = _Parser(prog="abtest.py", description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    ap = _Parser(prog="abtest.py", description=__doc__, epilog=EPILOG, formatter_class=argparse.RawDescriptionHelpFormatter)
     sub = ap.add_subparsers(dest="cmd", required=True, parser_class=_Parser)
     for name, fn in (("init", cmd_init), ("seal", cmd_seal), ("run", cmd_run), ("score", cmd_score), ("prune-run", cmd_prune_run)):
         sp = sub.add_parser(name)

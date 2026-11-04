@@ -15,6 +15,13 @@ SHA_RE = re.compile(r"^[0-9a-f]{40}$")
 NAME_RE = re.compile(r"^V[0-9A-Za-z_-]{1,20}$")
 DEFAULT_ENV_KEEP = ("PATH", "LANG", "LC_ALL", "TERM", "TZ")
 DEFAULT_HOME_LINKS = (".cargo", ".rustup", ".local", ".cache", ".gitconfig")
+# [run] sandbox: "bwrap" runs the session inside a bubblewrap sandbox the harness builds; "none"
+# is an explicit opt-out that every journal row and score then shows (user decision 2026-11-04:
+# refuse a live arm unless the profile names its sandbox). There is no default on purpose.
+SANDBOX_BWRAP, SANDBOX_NONE = "bwrap", "none"
+SANDBOX_VALUES = (SANDBOX_BWRAP, SANDBOX_NONE)
+SANDBOX_MISSING = ('run.sandbox: missing; a live arm runs only inside a sandbox: set sandbox = "bwrap" '
+                   '(or sandbox = "none" knowingly, which every journal row and score then shows)')
 
 SKELETON = '''# meta-skill-ab-test profile. Fill every <...>; `abtest.py seal` validates it.
 [workpiece]
@@ -45,6 +52,9 @@ n = 3
 deadline_s = 14400
 max_tokens = 6000000
 warmth_tolerance = 0.25
+# "bwrap": the session sees the filesystem read-only except its worktree, home, config dir and the
+# repo's .git; the real home is hidden. "none" runs it unconfined, and the journal and score say so.
+sandbox = "bwrap"
 '''
 
 
@@ -91,6 +101,9 @@ class Run:
     warmth_tolerance: float
     env_keep: tuple[str, ...]
     home_links: tuple[str, ...]
+    # SANDBOX_BWRAP, SANDBOX_NONE, or None when the key is missing: a dry run may go ahead, while a
+    # live run and a seal refuse it (SANDBOX_MISSING).
+    sandbox: str | None = None
 
 
 @dataclass(frozen=True)
@@ -258,12 +271,24 @@ def _warmth_tolerance(c: _Check, rn: dict[str, Any]) -> float:
     return float(tol)
 
 
+def _sandbox(c: _Check, rn: dict[str, Any]) -> str | None:
+    """The [run] sandbox value; a missing key is None here, refused only where an arm would run."""
+    v = rn.get("sandbox")
+    if v is None:
+        return None
+    if v not in SANDBOX_VALUES:
+        c.problems.append('run.sandbox: must be "bwrap" or "none"')
+        return None
+    return str(v)
+
+
 def _run(c: _Check, rn: dict[str, Any]) -> Run:
     run = Run(model=c.text(rn, "model", "run", default="opus"),
               n=c.integer(rn, "n", "run", minimum=1), deadline_s=c.integer(rn, "deadline_s", "run", minimum=60),
               max_tokens=c.integer(rn, "max_tokens", "run", minimum=1000), warmth_tolerance=_warmth_tolerance(c, rn),
               env_keep=c.str_list(rn, "env_keep", "run", required=False, default=DEFAULT_ENV_KEEP),
-              home_links=c.str_list(rn, "home_links", "run", required=False, default=DEFAULT_HOME_LINKS))
+              home_links=c.str_list(rn, "home_links", "run", required=False, default=DEFAULT_HOME_LINKS),
+              sandbox=_sandbox(c, rn))
     if run.model != "opus":
         c.problems.append("run.model: only 'opus' is allowed (user directive: every arm runs on opus)")
     return run

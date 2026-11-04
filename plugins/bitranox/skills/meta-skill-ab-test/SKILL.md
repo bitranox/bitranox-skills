@@ -20,6 +20,9 @@ repository with its own config dir and a frozen plugin checkout; the memory stor
 | `score`     | per-arm cost from the stream, floor result, void rules and store-change flags                   |
 | `prune-run` | deletes the run's branches, worktrees and hook dirs in the workpiece; leaves nothing of the run |
 
+A live run requires `[run] sandbox = "bwrap"` in `abtest.toml` (or an explicit `"none"`), and
+`prune-run` and `score` show which one each arm ran under.
+
 The run dir is a new directory OUTSIDE the workpiece, its own git repo (`seal` commits there,
 never into the workpiece); `init --repo <workpiece> --base <commit> --skills-ref <plugin commit>
 --skill <name>` names the repository, the commit every arm starts from, the frozen plugin

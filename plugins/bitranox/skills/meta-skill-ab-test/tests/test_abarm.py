@@ -790,3 +790,207 @@ def test_save_transcripts_copies_regular_files_under_projects_only(tmp_path):
     copied = [p for p in dest.rglob("*") if p.is_file() or p.is_symlink()]
     assert copied == [dest / "-p" / "s1.jsonl"]
     assert A.save_transcripts(tmp_path / "no-cfg", dest) == []
+
+
+# --- the bubblewrap sandbox a live arm runs in ------------------------------------------------------
+
+def _mounts(root, **over):
+    """SandboxMounts laid out as a real arm is: the arm dir under the real home, the worktree under the repo."""
+    real_home = root / "home" / "user"
+    run = real_home / "runs" / "run1" / "arms" / "r1-C"
+    repo = root / "wp"
+    fields = {"ws": repo / ".claude" / "worktrees" / "abx-run1-r1-C", "home": run / "home", "cfg": run / "cfg",
+              "git_common_dir": repo / ".git", "real_home": real_home,
+              "read_only": (real_home / ".cargo", real_home / ".local", repo)}
+    fields.update(over)
+    return A.SandboxMounts(**fields)
+
+
+def _binds(argv, flag):
+    """Every (src, dest) of one bind flag, in argv order, with the index of the flag."""
+    return [(i, argv[i + 1], argv[i + 2]) for i, a in enumerate(argv) if a == flag]
+
+
+def test_sandbox_argv_is_the_exact_documented_prefix(tmp_path):
+    m = _mounts(tmp_path)
+    s = str
+    assert A.sandbox_argv(m) == [
+        "bwrap", "--die-with-parent", "--unshare-pid", "--unshare-ipc", "--unshare-uts",
+        "--ro-bind", "/", "/", "--dev", "/dev", "--proc", "/proc", "--tmpfs", "/tmp",
+        "--tmpfs", s(m.real_home),
+        "--ro-bind", s(m.read_only[0]), s(m.read_only[0]), "--ro-bind", s(m.read_only[1]), s(m.read_only[1]),
+        "--ro-bind", s(m.read_only[2]), s(m.read_only[2]),
+        "--bind", s(m.ws), s(m.ws), "--bind", s(m.home), s(m.home), "--bind", s(m.cfg), s(m.cfg),
+        "--bind", s(m.git_common_dir), s(m.git_common_dir),
+        "--chdir", s(m.ws)]
+
+
+def test_sandbox_argv_binds_exactly_the_four_writable_paths(tmp_path):
+    m = _mounts(tmp_path)
+    rw = [(src, dest) for _, src, dest in _binds(A.sandbox_argv(m), "--bind")]
+    assert rw == [(str(p), str(p)) for p in (m.ws, m.home, m.cfg, m.git_common_dir)]
+    assert "--bind-try" not in A.sandbox_argv(m) and "--dev-bind" not in A.sandbox_argv(m)
+
+
+def test_sandbox_argv_mounts_the_home_tmpfs_before_every_bind_under_it(tmp_path):
+    m = _mounts(tmp_path)
+    argv = A.sandbox_argv(m)
+    tmpfs_at = argv.index("--tmpfs", argv.index("--tmpfs") + 1)
+    assert argv[tmpfs_at + 1] == str(m.real_home)
+    under = [i for flag in ("--bind", "--ro-bind") for i, _, dest in _binds(argv, flag)
+             if Path(dest).is_relative_to(m.real_home)]
+    assert len(under) == 4, "the arm home, the arm cfg and the two link targets live under the real home"
+    assert all(i > tmpfs_at for i in under)
+
+
+def test_sandbox_argv_rebinds_the_link_targets_read_only_and_writable_binds_last(tmp_path):
+    m = _mounts(tmp_path)
+    argv = A.sandbox_argv(m)
+    ro = _binds(argv, "--ro-bind")
+    assert [(s, d) for _, s, d in ro[1:]] == [(str(p), str(p)) for p in m.read_only]
+    first_rw = min(i for i, _, _ in _binds(argv, "--bind"))
+    assert all(i < first_rw for i, _, _ in ro), "a read-only bind after a writable one under it would cover it"
+
+
+def test_sandbox_argv_starts_the_session_in_the_worktree(tmp_path):
+    m = _mounts(tmp_path)
+    assert A.sandbox_argv(m)[-2:] == ["--chdir", str(m.ws)]
+    assert "--unshare-net" not in A.sandbox_argv(m), "the session must reach the API"
+
+
+def test_home_link_targets_names_the_existing_targets_only(tmp_path):
+    real = tmp_path / "real"
+    (real / ".cargo").mkdir(parents=True)
+    home = tmp_path / "armhome"
+    home.mkdir()
+    (home / ".cargo").symlink_to(real / ".cargo")
+    (home / ".rustup").symlink_to(real / ".rustup")  # dangling: its target is gone
+    (home / ".local").mkdir()  # a plain dir is no link
+    assert A.home_link_targets(home, (".cargo", ".rustup", ".local", ".cache")) == (real / ".cargo",)
+
+
+def test_git_common_dir_of_a_worktree_is_the_main_repos_git_dir(scratch_repo, tmp_path):
+    ws = tmp_path / "ws"
+    _git_ok(scratch_repo, "worktree", "add", "-q", "-b", "sbx", str(ws))
+    assert A.git_common_dir(ws) == (scratch_repo / ".git").resolve()
+
+
+def test_bwrap_problem_names_a_missing_bwrap(tmp_path):
+    empty = tmp_path / "emptybin"
+    empty.mkdir()
+    problem = A.bwrap_problem(str(empty))
+    assert problem is not None and "bwrap is not on PATH" in problem and 'sandbox = "none"' in problem
+
+
+@POSIX_ONLY
+def test_bwrap_problem_names_a_refused_namespace(tmp_path):
+    fake = tmp_path / "bin" / "bwrap"
+    fake.parent.mkdir()
+    fake.write_text("#!/bin/sh\necho 'bwrap: No permissions to create new namespace' >&2\nexit 1\n", encoding="utf-8")
+    fake.chmod(0o755)
+    problem = A.bwrap_problem(str(fake.parent))
+    assert problem is not None and "rc 1" in problem and "No permissions to create new namespace" in problem
+
+
+def _git_ok(repo, *args):
+    proc = L.git(repo, *args)
+    assert proc.returncode == 0, f"git {' '.join(args)}: {proc.stderr}"
+
+
+@POSIX_ONLY
+def test_bwrap_problem_probes_the_arms_own_namespaces_and_proc(tmp_path):
+    """`bwrap --ro-bind / / true` alone passed on a host where the arm's argv then failed."""
+    log = tmp_path / "argv.txt"
+    fake = tmp_path / "bin" / "bwrap"
+    fake.parent.mkdir()
+    fake.write_text(f'#!/bin/sh\nprintf "%s\\n" "$@" > "{log}"\n', encoding="utf-8")
+    fake.chmod(0o755)
+    assert A.bwrap_problem(str(fake.parent)) is None
+    assert log.read_text(encoding="utf-8").splitlines() == [*A.BWRAP_BASE[1:], "true"]
+    assert A.sandbox_argv(_mounts(tmp_path))[:len(A.BWRAP_BASE)] == list(A.BWRAP_BASE)
+
+
+def _without_private_proc(argv):
+    """argv with its private /proc swapped for an empty tmpfs; every other element unchanged."""
+    i = next(k for k in range(len(argv) - 1) if argv[k:k + 2] == ["--proc", "/proc"])
+    return [*argv[:i], "--tmpfs", "/proc", *argv[i + 2:]]
+
+
+def _real_bwrap_shape():
+    """(the argv transform the real-bwrap test runs, a description), or (None, the skip reason).
+
+    The full shape when the arm's own probe passes. Where only the private /proc is refused (an
+    LXC container with lxcfs overmounts, measured on the dev box) the filesystem layout under test
+    is the same with /proc swapped for an empty tmpfs, so that layout is still proven for real; a
+    live arm there is refused by bwrap_problem. Skipped only when bwrap is absent or refused a
+    user namespace outright.
+    """
+    path = os.environ.get("PATH")
+    full = A.bwrap_problem(path)
+    if full is None:
+        return (lambda argv: argv), "the arm's full bwrap argv"
+    exe = shutil.which("bwrap", path=path)
+    if exe is None:
+        return None, full
+    reduced = L.run(_without_private_proc([exe, *A.BWRAP_BASE[1:], "true"]), timeout=30)
+    if reduced.returncode != 0:
+        return None, f"{full}; and without a private /proc: rc {reduced.returncode}: {reduced.stderr.strip()}"
+    return _without_private_proc, f"the arm's bwrap argv with /proc as an empty tmpfs (full shape refused here: {full})"
+
+
+@POSIX_ONLY
+def test_a_real_bwrap_sandbox_confines_writes_and_hides_the_real_home(tmp_path):
+    """sandbox_argv run for real: the four writable paths take writes, the real home is hidden.
+
+    The fake real home sits under tmp_path; `tmp` points the private tmpfs away from /tmp, which
+    holds tmp_path: a tmpfs over /tmp would hide the fake home whatever the home tmpfs does, and
+    the test could not see that element go missing. A second, read-only check runs the production
+    layout against the user's actual home and only asks whether ~/.ssh is visible.
+    """
+    shape, what = _real_bwrap_shape()
+    if shape is None:
+        pytest.skip(f"no usable bwrap on this machine: {what}")
+    print(f"real bwrap run: {what}")
+    repo = tmp_path / "wp"
+    repo.mkdir()
+    _git_ok(repo, "init", "-q", "-b", "main")
+    _git_ok(repo, "-c", "user.name=t", "-c", "user.email=t@x", "commit", "-q", "--allow-empty", "-m", "base")
+    ws = repo / ".claude" / "worktrees" / "ws"
+    _git_ok(repo, "worktree", "add", "-q", "-b", "arm", str(ws))
+    real_home = tmp_path / "realhome"
+    (real_home / ".ssh").mkdir(parents=True)
+    (real_home / ".ssh" / "id_test").write_text("PRIVATE-KEY-7d1e\n", encoding="utf-8")
+    secret = real_home / "notes.txt"
+    secret.write_text("REAL-HOME-CONTENT-3b9a\n", encoding="utf-8")
+    (real_home / ".cargo").mkdir()
+    (real_home / ".cargo" / "tool.txt").write_text("CARGO-TOOL-5c2f\n", encoding="utf-8")
+    home, cfg, priv_tmp = tmp_path / "armhome", tmp_path / "cfg", tmp_path / "privtmp"
+    for d in (home, cfg, priv_tmp):
+        d.mkdir()
+    (home / ".cargo").symlink_to(real_home / ".cargo")
+    common = A.git_common_dir(ws)
+    m = A.SandboxMounts(ws=ws, home=home, cfg=cfg, git_common_dir=common, real_home=real_home,
+                        read_only=(*A.home_link_targets(home, (".cargo",)), repo), tmp=priv_tmp)
+    script = ('echo inside > "$1/inside.txt" && echo A_WS_WRITABLE\n'
+              'cat "$2/notes.txt" 2>/dev/null\n'
+              'echo tampered >> "$2/notes.txt" 2>/dev/null\n'
+              'echo probe > "$3/sbx-probe" && echo C_COMMON_WRITABLE\n'
+              'test -e "$2/.ssh" && echo D_SSH_VISIBLE\n'
+              'cat "$2/.cargo/tool.txt"\n'
+              'echo w > "$2/.cargo/w" 2>/dev/null && echo LINK_TARGET_WRITABLE\n'
+              'echo "PWD=$(pwd)"\n')
+    proc = L.run([*shape(A.sandbox_argv(m)), "sh", "-c", script, "sh", str(ws), str(real_home), str(common)], timeout=60)
+    out = proc.stdout
+    assert "A_WS_WRITABLE" in out and (ws / "inside.txt").is_file(), proc.stderr  # (a)
+    assert "REAL-HOME-CONTENT" not in out, "(b) the real home's file is readable inside the sandbox"
+    assert secret.read_text(encoding="utf-8") == "REAL-HOME-CONTENT-3b9a\n", "(b) a write reached the real home"
+    assert "C_COMMON_WRITABLE" in out and (common / "sbx-probe").is_file(), proc.stderr  # (c)
+    assert "D_SSH_VISIBLE" not in out, "(d) the real ~/.ssh is visible inside the sandbox"
+    assert "CARGO-TOOL-5c2f" in out and "LINK_TARGET_WRITABLE" not in out, "a link target is re-bound read-only"
+    assert f"PWD={ws}" in out
+    real_ssh = Path.home() / ".ssh"
+    if real_ssh.exists():
+        live = dataclasses.replace(m, real_home=Path.home(), read_only=(repo,), tmp=Path("/tmp"))
+        seen = L.run([*shape(A.sandbox_argv(live)), "sh", "-c", 'test -e "$1" && echo VISIBLE; echo done', "sh",
+                      str(real_ssh)], timeout=60)
+        assert "done" in seen.stdout and "VISIBLE" not in seen.stdout, seen.stderr

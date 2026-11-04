@@ -1,0 +1,40 @@
+#!/usr/bin/env python3
+"""A fake `bwrap` for the suite: records its argv, then runs the wrapped command without a sandbox.
+
+Each call appends its argv as one JSON line to bwrap-calls.jsonl beside this file, skips the
+options by their arity, changes to the --chdir dir and execs what follows. With
+FAKE_BWRAP_REFUSE set it fails the way a bwrap refused a user namespace does.
+"""
+import json
+import os
+import sys
+from pathlib import Path
+
+# Every option sandbox_argv emits, with the number of values it takes.
+ARITY = {"--die-with-parent": 0, "--unshare-pid": 0, "--unshare-ipc": 0, "--unshare-uts": 0,
+         "--ro-bind": 2, "--bind": 2, "--dev": 1, "--proc": 1, "--tmpfs": 1, "--chdir": 1}
+
+
+def main(argv):
+    with (Path(__file__).resolve().parent / "bwrap-calls.jsonl").open("a", encoding="utf-8") as fh:
+        fh.write(json.dumps(argv) + "\n")
+    if os.environ.get("FAKE_BWRAP_REFUSE"):
+        print("bwrap: No permissions to create new namespace, likely because the kernel does not allow "
+              "non-privileged user namespaces.", file=sys.stderr)
+        return 1
+    i, chdir = 0, None
+    while i < len(argv) and argv[i] in ARITY:
+        if argv[i] == "--chdir":
+            chdir = argv[i + 1]
+        i += 1 + ARITY[argv[i]]
+    if i >= len(argv):
+        print(f"fake bwrap: no command in {argv}", file=sys.stderr)
+        return 2
+    if chdir:
+        os.chdir(chdir)
+    os.execvp(argv[i], argv[i:])
+    return 2
+
+
+if __name__ == "__main__":
+    raise SystemExit(main(sys.argv[1:]))

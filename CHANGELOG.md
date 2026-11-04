@@ -30,6 +30,12 @@ a hole nobody has drawn a line under is one that gets rediscovered and half-fill
 two "versions with no entry" notes came to sit in this file disagreeing with it.
 
 
+## [10.13.1]
+
+### Added
+
+- meta-skill-ab-test: the profile key `[run] sandbox`. A live arm runs only when it names a sandbox: `"bwrap"` starts the session inside a bubblewrap sandbox (the filesystem read-only except the arm's worktree, home, config dir and the workpiece's git dir; the real home hidden), and `"none"` is an explicit opt-out that the journal, `score` and `prune-run` show per arm. `seal` refuses a profile without it, and a live run is refused when bwrap cannot build the sandbox on the host.
+
 ## [10.13.0]
 
 ### Added

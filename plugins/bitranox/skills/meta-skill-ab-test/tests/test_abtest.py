@@ -1,6 +1,7 @@
 """abtest CLI: init, seal, run (dry and fake-live), score, prune-run, resume; through the fake claude."""
 import json
 import os
+import shutil
 import sys
 import tarfile
 import time
@@ -17,13 +18,17 @@ SECRET = "fake-arm-token-UNIQUE-7f3c91-abtest"  # unique, so a hit in any file i
 LOGIN_TEXT = "Not logged in - Please run /login"
 
 
-def _init_and_fill(tmp_path, scratch_repo, skills_repo, n=1, gate='["./gate.sh"]'):
+def _init_and_fill(tmp_path, scratch_repo, skills_repo, n=1, gate='["./gate.sh"]', sandbox="none"):
     run_dir = tmp_path / "run1"
     assert T.main(["init", str(run_dir), "--repo", str(scratch_repo), "--base", (scratch_repo / ".base").read_text(),
                    "--skills-ref", (skills_repo / ".ref").read_text(), "--skill", "demo-skill"]) == 0
     toml = (run_dir / "abtest.toml").read_text(encoding="utf-8")
     toml = toml.replace('gate = ["make", "test"]', f"gate = {gate}").replace("n = 3", f"n = {n}")
     toml = toml.replace('changes = ["<one change per entry>"]', 'changes = ["louder"]')
+    # The fake claude and its stream live under tmp_path, which a real sandbox's /tmp tmpfs hides;
+    # the bwrap path has its own tests (a fake bwrap here, the real one in test_abarm).
+    assert toml.count('sandbox = "bwrap"') == 1
+    toml = toml.replace('sandbox = "bwrap"', f'sandbox = "{sandbox}"')
     # FAKE_CLAUDE_STREAM and _SCRIPT must reach the arm: the arm env is built from env_keep only.
     toml = toml.replace("warmth_tolerance = 0.25", 'warmth_tolerance = 0.25\nenv_keep = ["PATH", "LANG", "FAKE_CLAUDE_STREAM", "FAKE_CLAUDE_SCRIPT"]')
     (run_dir / "abtest.toml").write_text(toml, encoding="utf-8")
@@ -1041,3 +1046,120 @@ def test_a_failed_save_of_uncommitted_work_never_fails_the_paid_arm(tmp_path, sc
     res = json.loads((run_dir / "arms" / "r1-C" / "result.json").read_text(encoding="utf-8"))
     assert res["uncommitted"]["left_work"] is None and "untracked.tar" in res["uncommitted"]["error"]
     assert "save_uncommitted" in capsys.readouterr().err
+
+
+# --- the sandbox a live arm runs in ([run] sandbox) -------------------------------------------------
+
+@pytest.fixture
+def fake_bwrap(fake_claude_path):
+    """tests/fakes/bwrap beside the fake claude (so first on PATH); its calls land in bwrap-calls.jsonl."""
+    target = fake_claude_path / "bwrap"
+    shutil.copyfile(Path(__file__).resolve().parent / "fakes" / "bwrap", target)
+    target.chmod(0o755)
+    return fake_claude_path / "bwrap-calls.jsonl"
+
+
+def _seal_as_an_older_harness_did(run_dir):
+    """Drop the sandbox key after the seal and move the seal record onto that commit.
+
+    A run sealed before the key existed looks exactly like this: a sealed, intact profile with no
+    [run] sandbox. (seal itself now refuses such a profile.)
+    """
+    toml = run_dir / "abtest.toml"
+    text = toml.read_text(encoding="utf-8")
+    assert text.count('sandbox = "none"\n') == 1
+    toml.write_text(text.replace('sandbox = "none"\n', ""), encoding="utf-8")
+    for args in (("add", "abtest.toml"), (*T.SEAL_GIT, "commit", "-q", "-m", "older seal")):
+        assert L.git(run_dir, *args).returncode == 0
+    head = L.git(run_dir, "rev-parse", "HEAD").stdout.strip()
+    rows = [dict(r, commit=head) if r.get("step") == "seal" else r for r in L.read_jsonl(run_dir / "journal.jsonl")]
+    (run_dir / "journal.jsonl").write_text("".join(json.dumps(r) + "\n" for r in rows), encoding="utf-8")
+
+
+def test_seal_refuses_a_profile_that_names_no_sandbox(tmp_path, scratch_repo, skills_repo, capsys):
+    run_dir = _init_and_fill(tmp_path, scratch_repo, skills_repo)
+    toml = run_dir / "abtest.toml"
+    toml.write_text(toml.read_text(encoding="utf-8").replace('sandbox = "none"\n', ""), encoding="utf-8")
+    capsys.readouterr()
+    assert T.main(["seal", str(run_dir)]) == 2
+    assert 'set sandbox = "bwrap"' in capsys.readouterr().err
+    assert not (run_dir / "journal.jsonl").exists()
+
+
+def test_seal_refuses_a_sandbox_value_it_does_not_know(tmp_path, scratch_repo, skills_repo, capsys):
+    run_dir = _init_and_fill(tmp_path, scratch_repo, skills_repo, sandbox="docker")
+    capsys.readouterr()
+    assert T.main(["seal", str(run_dir)]) == 2
+    assert 'run.sandbox: must be "bwrap" or "none"' in capsys.readouterr().err
+
+
+def test_a_run_sealed_without_the_key_dry_runs_but_refuses_a_live_arm(tmp_path, scratch_repo, skills_repo,
+                                                                     fake_claude_path, monkeypatch, capsys):
+    run_dir = _init_and_fill(tmp_path, scratch_repo, skills_repo)
+    env, creds = _env(fake_claude_path, tmp_path)
+    _use_env(monkeypatch, env)
+    assert T.main(["seal", str(run_dir)]) == 0
+    _seal_as_an_older_harness_did(run_dir)
+    assert T.main(_run_args(run_dir, creds, skills_repo, "--dry-run", "--only", "C")) == 0
+    capsys.readouterr()
+    assert T.main(_run_args(run_dir, creds, skills_repo, "--only", "C"), login_check=_Probe("ok")) == 2
+    assert 'set sandbox = "bwrap"' in capsys.readouterr().err
+    assert _arm_rows(run_dir) == [(1, "C", "dry")], "the live arm never started"
+
+
+def test_sandbox_none_is_recorded_in_the_journal_the_result_the_score_and_prune_run(
+        tmp_path, scratch_repo, skills_repo, fake_claude_path, monkeypatch, capsys):
+    run_dir = _init_and_fill(tmp_path, scratch_repo, skills_repo)
+    env, creds = _env(fake_claude_path, tmp_path)
+    _use_env(monkeypatch, env)
+    assert T.main(["seal", str(run_dir)]) == 0
+    assert T.main(_run_args(run_dir, creds, skills_repo, "--only", "C"), login_check=_Probe("ok")) == 0
+    rows = [r for r in L.read_jsonl(run_dir / "journal.jsonl") if r["step"] == "arm"]
+    assert [(r["status"], r["sandbox"]) for r in rows] == [("ran", "none")]
+    assert json.loads((run_dir / "arms" / "r1-C" / "result.json").read_text(encoding="utf-8"))["sandbox"] == "none"
+    capsys.readouterr()
+    assert T.main(["score", str(run_dir), "--json"]) == 0
+    assert json.loads(capsys.readouterr().out)["data"]["arms"]["r1-C"]["sandbox"] == "none"
+    assert T.main(["score", str(run_dir)]) == 0
+    assert "sandbox=none" in capsys.readouterr().out
+    assert T.main(["prune-run", str(run_dir), "--json"]) == 0
+    assert json.loads(capsys.readouterr().out)["data"]["sandbox"] == {"r1-C": "none"}
+
+
+def test_a_bwrap_run_starts_the_session_inside_the_sandbox_argv(tmp_path, scratch_repo, skills_repo,
+                                                               fake_claude_path, fake_bwrap, monkeypatch):
+    run_dir = _init_and_fill(tmp_path, scratch_repo, skills_repo, sandbox="bwrap")
+    env, creds = _env(fake_claude_path, tmp_path)
+    _use_env(monkeypatch, env)
+    assert T.main(["seal", str(run_dir)]) == 0
+    assert T.main(_run_args(run_dir, creds, skills_repo, "--only", "C"), login_check=_Probe("ok")) == 0
+    probe, session = [json.loads(line) for line in fake_bwrap.read_text(encoding="utf-8").splitlines()]
+    assert probe == [*A.BWRAP_BASE[1:], "true"], "the probe runs the arm's own shape, once"
+    ws = scratch_repo / ".claude" / "worktrees" / f"abx-{run_dir.name}-r1-C"
+    arm = run_dir / "arms" / "r1-C"
+    pairs = list(zip(session, session[1:], session[2:], strict=False))
+    rw = [(s, d) for flag, s, d in pairs if flag == "--bind"]
+    assert rw == [(str(p), str(p)) for p in (ws, arm / "home", arm / "cfg", (scratch_repo / ".git").resolve())]
+    assert ("--tmpfs", str(Path.home())) in list(zip(session, session[1:], strict=False))
+    ro = [s for flag, s, _ in pairs if flag == "--ro-bind"]
+    assert str(scratch_repo) in ro and any(Path(s).parent == run_dir / "frozen" for s in ro), ro
+    chdir = session.index("--chdir")
+    assert session[chdir + 1] == str(ws) and session[chdir + 2:chdir + 4] == ["claude", "-p"]
+    rows = [r for r in L.read_jsonl(run_dir / "journal.jsonl") if r["step"] == "arm"]
+    assert [(r["status"], r["sandbox"]) for r in rows] == [("ran", "bwrap")]
+    assert json.loads((arm / "result.json").read_text(encoding="utf-8"))["bundle_commits"] == 1
+
+
+def test_a_bwrap_that_cannot_build_its_sandbox_refuses_the_live_run(tmp_path, scratch_repo, skills_repo,
+                                                                   fake_claude_path, fake_bwrap, monkeypatch, capsys):
+    run_dir = _init_and_fill(tmp_path, scratch_repo, skills_repo, sandbox="bwrap")
+    env, creds = _env(fake_claude_path, tmp_path)
+    _use_env(monkeypatch, dict(env, FAKE_BWRAP_REFUSE="1"))
+    assert T.main(["seal", str(run_dir)]) == 0
+    assert T.main(_run_args(run_dir, creds, skills_repo, "--dry-run", "--only", "C")) == 0, "a dry run needs no bwrap"
+    assert not fake_bwrap.exists(), "a dry run never probes bwrap"
+    capsys.readouterr()
+    assert T.main(_run_args(run_dir, creds, skills_repo, "--only", "C"), login_check=_Probe("ok")) == 2
+    err = capsys.readouterr().err
+    assert "cannot create its sandbox here" in err and "No permissions to create new namespace" in err, err
+    assert _arm_rows(run_dir) == [(1, "C", "dry")], "no live arm started"

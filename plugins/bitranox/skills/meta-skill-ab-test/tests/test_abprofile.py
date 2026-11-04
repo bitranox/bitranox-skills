@@ -139,3 +139,25 @@ def test_floor_suite_must_be_relative_and_inside(tmp_path, scratch_repo, suite):
         P.load_profile(_write(tmp_path, scratch_repo, text))
     lines = str(exc.value).splitlines()
     assert len(lines) == 1 and lines[0].startswith("floor.suite: must be a non-empty relative path"), lines
+
+
+def test_a_missing_sandbox_key_loads_as_none_for_the_dry_run(tmp_path, scratch_repo):
+    assert P.load_profile(_write(tmp_path, scratch_repo)).run.sandbox is None
+
+
+@pytest.mark.parametrize("value", ["bwrap", "none"])
+def test_both_sandbox_values_load(tmp_path, scratch_repo, value):
+    text = GOOD.replace("max_tokens = 5000", f'max_tokens = 5000\nsandbox = "{value}"')
+    assert P.load_profile(_write(tmp_path, scratch_repo, text)).run.sandbox == value
+
+
+@pytest.mark.parametrize("value", ['"firejail"', '"BWRAP"', '""', "true"])
+def test_a_bad_sandbox_value_is_a_profile_error(tmp_path, scratch_repo, value):
+    text = GOOD.replace("max_tokens = 5000", f"max_tokens = 5000\nsandbox = {value}")
+    with pytest.raises(P.ProfileError, match='run.sandbox: must be "bwrap" or "none"'):
+        P.load_profile(_write(tmp_path, scratch_repo, text))
+
+
+def test_the_skeleton_names_the_bwrap_sandbox():
+    assert P.SKELETON.count('sandbox = "bwrap"') == 1
+    assert 'sandbox = "bwrap"' in P.SANDBOX_MISSING and 'sandbox = "none"' in P.SANDBOX_MISSING
