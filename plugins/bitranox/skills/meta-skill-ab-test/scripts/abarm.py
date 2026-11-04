@@ -17,7 +17,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import IO, Any
 
-from _ablib import git, run, tree_hashes
+from _ablib import clear_group, git, run, signal_group, tree_hashes
 from abprofile import Profile
 from abstream import StreamAccount
 
@@ -732,17 +732,6 @@ def claude_argv(prompt: str, max_turns: int) -> list[str]:
             "--max-turns", str(max_turns), "--dangerously-skip-permissions"]
 
 
-def _signal_group(proc: subprocess.Popen[str], sig: int) -> None:
-    """Signal the session's whole process group: its tool children hold the stdout pipe too."""
-    try:
-        os.killpg(proc.pid, sig)
-    except (AttributeError, OSError):  # no killpg off POSIX, or the group is already gone
-        try:
-            proc.send_signal(sig)
-        except OSError:
-            pass
-
-
 class _Stopper:
     """Ends the session once, keeping the first reason; called from the reader and the deadline timer.
 
@@ -770,7 +759,7 @@ class _Stopper:
             self.reason = reason
             self._kill_timer = threading.Timer(self.grace_s, self._kill)
             self._kill_timer.daemon = True
-        _signal_group(self.proc, signal.SIGTERM)
+        signal_group(self.proc.pid, signal.SIGTERM)
         self._kill_timer.start()
 
     def on_deadline(self) -> None:
@@ -784,7 +773,7 @@ class _Stopper:
 
     def _kill(self) -> None:
         if not self.over():
-            _signal_group(self.proc, getattr(signal, "SIGKILL", signal.SIGTERM))
+            signal_group(self.proc.pid, signal.SIGKILL)
 
 
 def _cap_reason(acct: StreamAccount, max_tokens: int) -> str | None:
@@ -824,9 +813,30 @@ def _start(argv: list[str], ws: Path, env: dict[str, str], err: IO[str]) -> subp
         raise ArmError(f"{argv[0]} could not start in {ws}: {exc}") from exc
 
 
+def _end_group_now(proc: subprocess.Popen[str], stopper: _Stopper, grace_s: float) -> None:
+    """End the session's whole group before returning: SIGTERM, up to grace_s, SIGKILL, reap.
+
+    Synchronous on purpose. The stopper's SIGKILL runs on a daemon timer, and Popen's own exit
+    waits only 0.25 s after a KeyboardInterrupt, so on an interrupt the session could outlive
+    the arm's cleanup and write into a config dir that was just deleted. The SIGKILL and the
+    reap sit in a finally, so a second Ctrl-C during the grace still ends the group.
+    """
+    stopper.cancel()
+    try:
+        clear_group(proc.pid, grace_s, reap=proc.poll)
+    finally:
+        signal_group(proc.pid, signal.SIGKILL)
+        proc.wait()
+
+
 def _run_session(proc: subprocess.Popen[str], out: IO[str], acct: StreamAccount, *, max_tokens: int,
                  deadline_s: float, stop_grace_s: float) -> tuple[str, int]:
-    """Pump the session under a deadline timer; (stop reason, exit code)."""
+    """Pump the session under a deadline timer; (stop reason, exit code).
+
+    However the session ends, nothing of its process group outlives this call: an interrupt ends
+    the group synchronously before re-raising, and a normal end sweeps the group (SIGTERM,
+    stop_grace_s, SIGKILL), so a daemon a tool call started does not survive the arm.
+    """
     stopper = _Stopper(proc, stop_grace_s)
     # The deadline runs on a timer, not between lines: a session that prints nothing (a hung
     # tool call) would otherwise never reach a check. It stays armed through the final wait, so
@@ -838,11 +848,12 @@ def _run_session(proc: subprocess.Popen[str], out: IO[str], acct: StreamAccount,
         _pump(proc, out, acct, stopper, max_tokens)
         rc = proc.wait()
     except BaseException:
-        stopper.stop("interrupted")  # its SIGKILL timer stays armed for Popen's own final wait
+        _end_group_now(proc, stopper, stop_grace_s)
         raise
     finally:
         timer.cancel()
     stopper.cancel()
+    clear_group(proc.pid, stop_grace_s)
     return stopper.reason or "finished", rc
 
 
@@ -857,8 +868,9 @@ def dispatch(arm_dir: Path, ws: Path, env: dict[str, str], argv: list[str], *, m
         argv: the session command, normally claude_argv().
         max_tokens: new input tokens (every model) at which the session is ended.
         deadline_s: wall seconds after which the session is ended.
-        stop_grace_s: seconds between the SIGTERM that ends the session and the SIGKILL of its
-            process group, when the group is not over by then.
+        stop_grace_s: seconds between the SIGTERM that ends the session (or, after a normal end,
+            sweeps what is left of its process group) and the SIGKILL of the group, when the
+            group is not over by then.
 
     Returns:
         The stream account's summary plus stop_reason (finished, void, token_cap, deadline),
@@ -866,6 +878,7 @@ def dispatch(arm_dir: Path, ws: Path, env: dict[str, str], argv: list[str], *, m
 
     Raises:
         ArmError: the session binary could not be started.
+        KeyboardInterrupt: re-raised once the session's whole process group is ended and reaped.
     """
     stream_path, stderr_path = arm_dir / "stream.jsonl", arm_dir / "stderr.txt"
     acct = StreamAccount()

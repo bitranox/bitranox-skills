@@ -9,8 +9,10 @@ import hashlib
 import json
 import os
 import re
+import signal
 import subprocess
 import time
+from collections.abc import Callable
 from pathlib import Path, PurePath
 from typing import Any
 
@@ -19,7 +21,9 @@ __all__ = [
     "EXIT_ERROR",
     "EXIT_NO",
     "EXIT_YES",
+    "GROUP_POLL_S",
     "append_jsonl",
+    "clear_group",
     "dashkey",
     "envelope",
     "git",
@@ -28,6 +32,7 @@ __all__ = [
     "rotated_schedule",
     "run",
     "sha256_file",
+    "signal_group",
     "tree_hashes",
     "utc_now",
 ]
@@ -36,6 +41,8 @@ EXIT_YES = 0
 EXIT_NO = 1
 EXIT_ERROR = 2
 EXCLUDED_TREE_DIRS = {"__pycache__", ".skillwriter", "tests"}
+# How often clear_group asks whether a process group is empty yet during its grace.
+GROUP_POLL_S = 0.05
 
 
 def envelope(command: str, data: Any, *, ok: bool = True, skipped: list[str] | None = None) -> str:
@@ -120,3 +127,32 @@ def append_jsonl(path: Path, row: dict[str, Any]) -> None:
     """Append one row as a sorted-key JSON line, LF-terminated on every platform."""
     with path.open("a", encoding="utf-8", newline="\n") as fh:
         fh.write(json.dumps(row, sort_keys=True) + "\n")
+
+
+def signal_group(pgid: int, sig: int) -> bool:
+    """Send sig to the process group pgid (POSIX); False once no member is left that this run may signal."""
+    try:
+        os.killpg(pgid, sig)
+    except (ProcessLookupError, PermissionError):
+        return False
+    return True
+
+
+def clear_group(pgid: int, grace: float, *, reap: Callable[[], object] | None = None) -> None:
+    """SIGTERM every member of the group, give them grace to exit, then SIGKILL whatever is left (POSIX).
+
+    Returns as soon as the group is empty. A member killed but not yet reaped still counts as
+    present, so the wait can run its whole grace: a caller whose own child leads the group passes
+    reap (e.g. Popen.poll) so that child is collected while the others are waited for. The
+    SIGKILL after a full grace is then a no-op for anything that already exited.
+    """
+    if not signal_group(pgid, signal.SIGTERM):
+        return
+    deadline = time.monotonic() + grace
+    while time.monotonic() < deadline:
+        if reap is not None:
+            reap()
+        if not signal_group(pgid, 0):
+            return
+        time.sleep(GROUP_POLL_S)
+    signal_group(pgid, signal.SIGKILL)

@@ -22,7 +22,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from _ablib import median
+from _ablib import clear_group, median, signal_group
 from abprofile import Profile
 
 __all__ = [
@@ -57,8 +57,6 @@ MISSING_STOP_REASON = "no stop reason recorded (the arm did not end normally: in
 # How long a step's leftover process group gets between SIGTERM and SIGKILL: long enough for a
 # test runner to flush and remove its temp files, short against any floor timeout.
 KILL_GRACE_S = 5.0
-# How often the leftover group is asked whether it is empty yet during that grace.
-_GROUP_POLL_S = 0.05
 ERROR_NOT_STARTED = "could not start"
 # The leader exited before the timeout, but something it started kept stdout or stderr open past
 # it. The leader's own exit code is recorded; the step still fails, since it hit the timeout.
@@ -126,31 +124,6 @@ def _floor_env() -> dict[str, str]:
     return env
 
 
-def _signal_group(pgid: int, sig: int) -> bool:
-    """Send sig to the step's process group; False once no member is left that this run may signal."""
-    try:
-        os.killpg(pgid, sig)
-    except (ProcessLookupError, PermissionError):
-        return False
-    return True
-
-
-def _clear_group(pgid: int, grace: float) -> None:
-    """SIGTERM whatever the step left in its group, give it grace to exit, then SIGKILL the rest.
-
-    A member killed but not yet reaped by its new parent still counts as present, so the wait can
-    run its whole grace; the SIGKILL after it is then a no-op.
-    """
-    if not _signal_group(pgid, signal.SIGTERM):
-        return
-    deadline = time.monotonic() + grace
-    while time.monotonic() < deadline:
-        if not _signal_group(pgid, 0):
-            return
-        time.sleep(_GROUP_POLL_S)
-    _signal_group(pgid, signal.SIGKILL)
-
-
 def _reap(proc: subprocess.Popen[str], grace: float) -> str:
     """Collect everything the stopped step printed; a process that left its group cannot hang us."""
     try:
@@ -168,17 +141,17 @@ def _reap(proc: subprocess.Popen[str], grace: float) -> str:
 def _stop_tree(proc: subprocess.Popen[str], grace: float) -> str:
     """Stop a step that hit its timeout and the members holding its pipes; return what it printed.
 
-    A member that ignores SIGTERM and holds no pipe outlives this; _clear_group, which runs after
+    A member that ignores SIGTERM and holds no pipe outlives this; clear_group, which runs after
     every step, is what removes it.
     """
     if sys.platform == "win32":
         proc.kill()  # no process groups to signal; the direct child is what can be stopped
         return _reap(proc, grace)
-    _signal_group(proc.pid, signal.SIGTERM)
+    signal_group(proc.pid, signal.SIGTERM)
     try:
         out, err = proc.communicate(timeout=grace)
     except subprocess.TimeoutExpired:
-        _signal_group(proc.pid, signal.SIGKILL)
+        signal_group(proc.pid, signal.SIGKILL)
         return _reap(proc, grace)
     return (out or "") + (err or "")
 
@@ -213,7 +186,7 @@ def _execute(argv: list[str], tree: Path, limits: _Limits) -> tuple[int, str, st
     finally:
         if sys.platform != "win32":
             # A daemon with its stdio on /dev/null never shows in the pipes: only the group finds it.
-            _clear_group(proc.pid, limits.kill_grace_s)
+            clear_group(proc.pid, limits.kill_grace_s)
 
 
 def _step(name: str, argv: list[str], tree: Path, *, limits: _Limits, log: Path) -> dict[str, Any]:

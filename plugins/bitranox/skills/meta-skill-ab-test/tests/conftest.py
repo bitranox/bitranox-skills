@@ -1,4 +1,4 @@
-"""Put scripts/ on sys.path; provide the fake claude binary, a scratch workpiece and a skills repo."""
+"""Put scripts/ and this dir on sys.path; provide the fake claude binary, a scratch workpiece and a skills repo."""
 import os
 import shutil
 import subprocess
@@ -9,8 +9,11 @@ import pytest
 
 HERE = Path(__file__).resolve().parent
 SCRIPTS = HERE.parent / "scripts"
-if str(SCRIPTS) not in sys.path:
-    sys.path.insert(0, str(SCRIPTS))
+# HERE too: the shared test helpers (abproc_testkit) import by bare name, which an
+# --import-mode=importlib run (the repo gate's) would not otherwise resolve.
+for _dir in (SCRIPTS, HERE):
+    if str(_dir) not in sys.path:
+        sys.path.insert(0, str(_dir))
 
 FIXTURES = HERE / "fixtures"
 FIXTURE_SUFFIX = ".fixture"

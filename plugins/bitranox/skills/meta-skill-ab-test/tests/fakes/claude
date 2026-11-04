@@ -5,10 +5,13 @@
 plugin marketplace add <dir> --json         copies <dir> to the config dir's plugin cache
 plugin install bitranox@bitranox-skills --json   records the install
 -p <prompt> ...                             replays FAKE_CLAUDE_STREAM (a stream.jsonl path) to
-                                            stdout and makes one commit in the cwd
+                                            stdout and makes one commit in the cwd; then, when
+                                            FAKE_CLAUDE_SCRIPT names a Python file, runs it in the
+                                            cwd with stdout still open (a test's extra behaviour)
 """
 import json
 import os
+import runpy
 import shutil
 import subprocess
 import sys
@@ -45,6 +48,8 @@ def main(argv):
                    GIT_COMMITTER_NAME="arm", GIT_COMMITTER_EMAIL="arm@x")
         subprocess.run(["git", "add", "arm-work.txt"], check=True, env=env)
         subprocess.run(["git", "commit", "-q", "-m", "Task 1: arm work"], check=True, env=env)
+        if os.environ.get("FAKE_CLAUDE_SCRIPT"):
+            runpy.run_path(os.environ["FAKE_CLAUDE_SCRIPT"], run_name="__main__")
         return 0
     print(f"fake claude: unknown argv {argv}", file=sys.stderr)
     return 2

@@ -4,6 +4,7 @@ import json
 import os
 import shutil
 import sys
+import time
 from pathlib import Path
 
 import _ablib as L
@@ -11,6 +12,7 @@ import abarm as A
 import abprofile as P
 import abstream as S
 import pytest
+from abproc_testkit import SigintOnMarker, alive, gone_within, kill_if_alive, pids_in
 
 FIXTURES = Path(__file__).resolve().parent / "fixtures"
 POSIX_ONLY = pytest.mark.skipif(sys.platform == "win32", reason="the A/B harness is Linux only; Windows is unsupported")
@@ -697,3 +699,78 @@ def test_release_frozen_keeps_the_skills_repos_other_stale_registrations(tmp_pat
         A.release_frozen(frozen, skills_repo)
         assert str(frozen.path) not in _registered(skills_repo)
     assert str(foreign) in _registered(skills_repo), "a repo-wide prune dropped the user's registration"
+
+
+# --- whole-branch review: nothing of the session's process group outlives dispatch -------------
+
+# Ignores SIGTERM (its child inherits SIG_IGN), writes the child's pid and then its own (the
+# marker), and keeps recreating out_dir while holding stdout open.
+_IGNORES_TERM_SESSION = """
+import os, signal, subprocess, sys, time
+from pathlib import Path
+signal.signal(signal.SIGTERM, signal.SIG_IGN)
+pidfile, child_pidfile, out_dir = Path(sys.argv[1]), Path(sys.argv[2]), Path(sys.argv[3])
+child = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(60)"])
+child_pidfile.write_text(str(child.pid), encoding="utf-8")
+pidfile.write_text(str(os.getpid()), encoding="utf-8")
+for _ in range(1200):
+    out_dir.mkdir(parents=True, exist_ok=True)
+    (out_dir / "still-writing").write_text("x", encoding="utf-8")
+    time.sleep(0.05)
+"""
+
+# Starts a daemon with its stdio on /dev/null (invisible to the pipes), waits for its pid, exits 0.
+_DAEMON_SESSION = """
+import subprocess, sys, time
+from pathlib import Path
+pidfile, mode = Path(sys.argv[1]), sys.argv[2]
+code = ("import os, signal, sys, time; "
+        + ("signal.signal(signal.SIGTERM, signal.SIG_IGN); " if mode == "ignore" else "")
+        + "open(sys.argv[1], 'w').write(str(os.getpid())); time.sleep(60)")
+subprocess.Popen([sys.executable, "-c", code, str(pidfile)], stdin=subprocess.DEVNULL,
+                 stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+while not pidfile.exists() or not pidfile.read_text():
+    time.sleep(0.01)
+"""
+
+
+@POSIX_ONLY
+def test_an_interrupt_ends_the_whole_session_group_before_dispatch_returns(tmp_path):
+    arm_dir = tmp_path / "arm"
+    arm_dir.mkdir()
+    pidfile, child_pidfile, cfg = tmp_path / "leader.pid", tmp_path / "child.pid", tmp_path / "cfg"
+    argv = [sys.executable, "-c", _IGNORES_TERM_SESSION, str(pidfile), str(child_pidfile), str(cfg)]
+    try:
+        with SigintOnMarker(pidfile) as sigint, pytest.raises(KeyboardInterrupt):
+            A.dispatch(arm_dir, tmp_path, {"PATH": os.environ["PATH"]}, argv, max_tokens=10**7, deadline_s=60,
+                       stop_grace_s=1)
+        assert sigint.sent
+        leader, child = pids_in(pidfile, child_pidfile)
+        assert not alive(leader), "the leader is reaped before dispatch re-raises"
+        # A SIGKILLed process can take a moment to be scheduled out; the old daemon-timer kill
+        # came only after the whole grace, by which time the session had rewritten cfg.
+        assert gone_within(child, 0.5), "the session's child outlived dispatch"
+        shutil.rmtree(cfg)
+        time.sleep(0.3)
+        assert not cfg.exists(), "a session still running recreated the deleted dir"
+    finally:
+        for pid in pids_in(pidfile, child_pidfile):
+            kill_if_alive(pid)
+
+
+@POSIX_ONLY
+@pytest.mark.parametrize("mode", ["exit", "ignore"])
+def test_a_daemon_the_session_left_is_gone_when_dispatch_returns(tmp_path, mode):
+    arm_dir = tmp_path / "arm"
+    arm_dir.mkdir()
+    pidfile = tmp_path / "daemon.pid"
+    argv = [sys.executable, "-c", _DAEMON_SESSION, str(pidfile), mode]
+    try:
+        res = A.dispatch(arm_dir, tmp_path, {"PATH": os.environ["PATH"]}, argv, max_tokens=10**7, deadline_s=60,
+                         stop_grace_s=1)
+        assert res["stop_reason"] == "finished" and res["process_rc"] == 0
+        (pid,) = pids_in(pidfile)
+        assert gone_within(pid, 0.5), f"daemon {pid} outlived the arm's session"
+    finally:
+        for pid in pids_in(pidfile):
+            kill_if_alive(pid)

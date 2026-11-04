@@ -2,12 +2,12 @@
 import dataclasses
 import json
 import os
-import signal
 import sys
 import time
 from pathlib import Path
 
 import abprofile as P
+from abproc_testkit import gone_within, kill_if_alive
 import abscore as S
 import abstream
 import pytest
@@ -261,43 +261,6 @@ time.sleep(float(sys.argv[4]))
 """
 
 
-def _alive(pid):
-    """True while pid runs; a zombie (killed, not yet reaped by its new parent) counts as gone."""
-    try:
-        os.kill(pid, 0)
-    except ProcessLookupError:
-        return False
-    except PermissionError:
-        return True
-    if not Path("/proc/self/stat").exists():
-        return True  # no procfs (macOS): kill(0) is the only reading there is
-    try:
-        state = Path(f"/proc/{pid}/stat").read_text(encoding="utf-8").rsplit(")", 1)[1].split()[0]
-    except FileNotFoundError:
-        return False  # it exited between the two reads
-    except (OSError, IndexError):
-        return True
-    return state != "Z"
-
-
-def _gone_within(pid, seconds=5.0):
-    deadline = time.monotonic() + seconds
-    while time.monotonic() < deadline:
-        if not _alive(pid):
-            return True
-        time.sleep(0.05)
-    return False
-
-
-def _kill_if_alive(pid):
-    """Cleanup for a test that failed: never leave its grandchild running past the test."""
-    if pid is not None and _alive(pid):
-        try:
-            os.kill(pid, signal.SIGKILL)
-        except ProcessLookupError:
-            pass
-
-
 def _pid_in(pidfile):
     return int(pidfile.read_text(encoding="utf-8")) if pidfile.exists() else None
 
@@ -322,10 +285,10 @@ def test_a_timed_out_floor_step_leaves_no_process_behind(tmp_path, on_term):
     pid = _pid_in(pidfile)
     try:
         assert res["steps"][0]["rc"] == S.RC_TIMEOUT
-        assert pid is not None and _gone_within(pid), f"grandchild {pid} survived the floor's timeout"
+        assert pid is not None and gone_within(pid), f"grandchild {pid} survived the floor's timeout"
         assert elapsed < _grace_bound(1), elapsed
     finally:
-        _kill_if_alive(pid)
+        kill_if_alive(pid)
 
 
 @POSIX_ONLY
@@ -337,9 +300,9 @@ def test_a_clean_step_leaves_no_background_process_behind(tmp_path):
     pid = _pid_in(pidfile)
     try:
         assert res["passed"] is True and res["steps"][0]["error"] is None
-        assert pid is not None and _gone_within(pid, 2.0), f"daemon {pid} outlived its floor step"
+        assert pid is not None and gone_within(pid, 2.0), f"daemon {pid} outlived its floor step"
     finally:
-        _kill_if_alive(pid)
+        kill_if_alive(pid)
 
 
 # The gate starts a grandchild that inherits its stdout and stderr, then exits 0 at once: the
@@ -371,9 +334,9 @@ def test_a_step_whose_output_is_held_open_past_the_timeout_keeps_its_rc_and_fail
         assert "gate ok" in Path(step["log"]).read_text(encoding="utf-8")
         assert _score(tmp_path, _result(floor=res), TWO_PEERS)["floor_error"] == (
             "gate: output held open past the timeout by a process the step started (rc 0)")
-        assert pid is not None and _gone_within(pid), f"holder {pid} survived the floor step"
+        assert pid is not None and gone_within(pid), f"holder {pid} survived the floor step"
     finally:
-        _kill_if_alive(pid)
+        kill_if_alive(pid)
 
 
 # --- the floor's environment ---------------------------------------------------------------------

@@ -1,9 +1,7 @@
 """abtest CLI: init, seal, run (dry and fake-live), score, prune-run, resume; through the fake claude."""
 import json
 import os
-import signal
 import sys
-import threading
 import time
 from pathlib import Path
 
@@ -11,6 +9,7 @@ import _ablib as L
 import abarm as A
 import abtest as T
 import pytest
+from abproc_testkit import SigintOnMarker, alive, kill_if_alive, pids_in
 
 FIXTURES = Path(__file__).resolve().parent / "fixtures"
 SECRET = "fake-arm-token-UNIQUE-7f3c91-abtest"  # unique, so a hit in any file is the copy leaking
@@ -24,8 +23,8 @@ def _init_and_fill(tmp_path, scratch_repo, skills_repo, n=1, gate='["./gate.sh"]
     toml = (run_dir / "abtest.toml").read_text(encoding="utf-8")
     toml = toml.replace('gate = ["make", "test"]', f"gate = {gate}").replace("n = 3", f"n = {n}")
     toml = toml.replace('changes = ["<one change per entry>"]', 'changes = ["louder"]')
-    # FAKE_CLAUDE_STREAM must reach the arm: the arm env is built from env_keep only.
-    toml = toml.replace("warmth_tolerance = 0.25", 'warmth_tolerance = 0.25\nenv_keep = ["PATH", "LANG", "FAKE_CLAUDE_STREAM"]')
+    # FAKE_CLAUDE_STREAM and _SCRIPT must reach the arm: the arm env is built from env_keep only.
+    toml = toml.replace("warmth_tolerance = 0.25", 'warmth_tolerance = 0.25\nenv_keep = ["PATH", "LANG", "FAKE_CLAUDE_STREAM", "FAKE_CLAUDE_SCRIPT"]')
     (run_dir / "abtest.toml").write_text(toml, encoding="utf-8")
     (run_dir / "task.md").write_text("Do the task.\n", encoding="utf-8")
     # seal refuses a PREREG that still holds a <placeholder>, so the skeleton is replaced, not appended to.
@@ -309,37 +308,6 @@ def test_a_failing_arm_exits_2_records_an_error_row_and_cleans_up(tmp_path, scra
     assert "ArmError" in res["error"] and not (run_dir / "arms" / "r1-C" / "cfg").exists()
 
 
-class _SigintOnMarker:
-    """Send this process one SIGINT as soon as `marker` exists, i.e. once the step to interrupt has started.
-
-    A fixed timer would land wherever a slow runner happens to be; the marker is written by the
-    very step the test means to interrupt.
-    """
-
-    def __init__(self, marker, timeout_s=60.0):
-        self.marker, self.timeout_s = marker, timeout_s
-        self.sent = False
-        self._stop = threading.Event()
-        self._thread = threading.Thread(target=self._watch, daemon=True)
-
-    def _watch(self):
-        deadline = time.monotonic() + self.timeout_s
-        while not self._stop.is_set() and time.monotonic() < deadline:
-            if self.marker.exists():
-                self.sent = True
-                os.kill(os.getpid(), signal.SIGINT)
-                return
-            self._stop.wait(0.02)
-
-    def __enter__(self):
-        self._thread.start()
-        return self
-
-    def __exit__(self, *exc):
-        self._stop.set()
-        self._thread.join()
-
-
 @pytest.mark.skipif(sys.platform == "win32", reason="SIGINT delivery to the process is POSIX here")
 def test_ctrl_c_still_writes_result_and_journal_then_reraises(tmp_path, scratch_repo, skills_repo, fake_claude_path, monkeypatch):
     marker = tmp_path / "gate-started"
@@ -347,7 +315,7 @@ def test_ctrl_c_still_writes_result_and_journal_then_reraises(tmp_path, scratch_
     env, creds = _env(fake_claude_path, tmp_path)
     _use_env(monkeypatch, env)
     assert T.main(["seal", str(run_dir)]) == 0
-    with _SigintOnMarker(marker) as sigint, pytest.raises(KeyboardInterrupt):
+    with SigintOnMarker(marker) as sigint, pytest.raises(KeyboardInterrupt):
         T.main(_run_args(run_dir, creds, skills_repo, "--only", "C"), login_check=_Probe("ok"))
     assert sigint.sent, "the interrupt must land inside the gate"
     assert _arm_rows(run_dir) == [(1, "C", "interrupted")]
@@ -506,7 +474,7 @@ def test_ctrl_c_right_after_worktree_add_still_prunes_the_worktree(tmp_path, scr
     _use_env(monkeypatch, env)
     assert T.main(["seal", str(run_dir)]) == 0
     try:
-        with _SigintOnMarker(marker) as sigint, pytest.raises(KeyboardInterrupt):
+        with SigintOnMarker(marker) as sigint, pytest.raises(KeyboardInterrupt):
             T.main(_run_args(run_dir, creds, skills_repo, "--only", "C"), login_check=_Probe("ok"))
     finally:
         release.write_text("", encoding="utf-8")
@@ -687,3 +655,43 @@ def test_init_and_seal_refuse_a_run_id_whose_branches_exist(tmp_path, scratch_re
     assert L.git(scratch_repo, "branch", "abx/run1/r2-V1", base).returncode == 0  # made after init
     assert T.main(["seal", str(run_dir)]) == 2
     assert not (run_dir / "journal.jsonl").exists()
+
+
+# --- whole-branch review: an interrupted session is over before the arm's cleanup runs -----------
+
+# Run by the fake claude after its commit, stdout still open: ignores SIGTERM, then keeps
+# recreating a file in its config dir, as a real session would keep writing its transcript.
+_STUCK_SESSION = """
+import os, signal, time
+from pathlib import Path
+signal.signal(signal.SIGTERM, signal.SIG_IGN)
+cfg = Path(os.environ["CLAUDE_CONFIG_DIR"])
+Path(MARKER).write_text(str(os.getpid()), encoding="utf-8")
+for _ in range(1200):
+    cfg.mkdir(parents=True, exist_ok=True)
+    (cfg / "still-writing").write_text("x", encoding="utf-8")
+    time.sleep(0.05)
+"""
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="SIGINT delivery to the process is POSIX here")
+def test_ctrl_c_ends_a_session_that_ignores_sigterm_before_its_config_dir_is_deleted(tmp_path, scratch_repo, skills_repo,
+                                                                                     fake_claude_path, monkeypatch):
+    marker, script = tmp_path / "session.pid", tmp_path / "stuck.py"
+    script.write_text(_STUCK_SESSION.replace("MARKER", repr(str(marker))), encoding="utf-8")
+    run_dir = _init_and_fill(tmp_path, scratch_repo, skills_repo)
+    env, creds = _env(fake_claude_path, tmp_path)
+    _use_env(monkeypatch, dict(env, FAKE_CLAUDE_SCRIPT=str(script)))
+    assert T.main(["seal", str(run_dir)]) == 0
+    try:
+        with SigintOnMarker(marker) as sigint, pytest.raises(KeyboardInterrupt):
+            T.main(_run_args(run_dir, creds, skills_repo, "--only", "C", "--stop-grace-s", "1"), login_check=_Probe("ok"))
+        assert sigint.sent
+        (pid,) = pids_in(marker)
+        assert not alive(pid), "the session outlived the arm"
+        time.sleep(0.3)
+        assert not (run_dir / "arms" / "r1-C" / "cfg").exists(), "the session recreated the deleted config dir"
+        assert _arm_rows(run_dir) == [(1, "C", "interrupted")]
+    finally:
+        for pid in pids_in(marker):
+            kill_if_alive(pid)

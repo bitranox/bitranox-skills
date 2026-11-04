@@ -124,6 +124,7 @@ class RunContext:
     skills_repo: Path
     dry_run: bool
     max_turns: int
+    stop_grace_s: float
 
     @property
     def run_id(self) -> str:
@@ -361,7 +362,8 @@ def _arm_steps(ctx: RunContext, result: dict[str, Any], frozen: abarm.Frozen, la
     result["guard"] = abguard.snapshot(ws, arm_dir / "guard")
     if not ctx.dry_run:
         result.update(abarm.dispatch(arm_dir, ws, env, abarm.claude_argv(ctx.task, ctx.max_turns),
-                                     max_tokens=p.run.max_tokens, deadline_s=p.run.deadline_s))
+                                     max_tokens=p.run.max_tokens, deadline_s=p.run.deadline_s,
+                                     stop_grace_s=ctx.stop_grace_s))
     _guard_after(result, arm_dir / "guard")
     result["floor"] = abscore.run_floor(ws, p, arm_dir)
     result["bundle_commits"] = abarm.bundle(ws, p.workpiece.base, arm_dir / "bundle.git")
@@ -530,9 +532,11 @@ def _context(args: argparse.Namespace, run_dir: Path, profile: Profile) -> RunCo
         raise RunRefused(f"--only {args.only!r} is not an arm of this run ({', '.join(profile.arm_names())})")
     if args.max_turns < 1:
         raise RunRefused("--max-turns must be at least 1")
+    if not args.stop_grace_s > 0:
+        raise RunRefused("--stop-grace-s must be above 0")
     return RunContext(run_dir=run_dir, profile=profile, task=_read_text(run_dir / profile.workpiece.task_file),
                       credentials=Path(args.credentials).expanduser(), skills_repo=Path(args.skills_repo).expanduser(),
-                      dry_run=args.dry_run, max_turns=args.max_turns)
+                      dry_run=args.dry_run, max_turns=args.max_turns, stop_grace_s=args.stop_grace_s)
 
 
 def _schedule(profile: Profile, only: str | None) -> Iterator[tuple[int, str]]:
@@ -744,6 +748,8 @@ def _add_run_options(sp: argparse.ArgumentParser) -> None:
     sp.add_argument("--credentials", default=str(DEFAULT_CREDENTIALS))
     sp.add_argument("--skills-repo", default=str(DEFAULT_SKILLS_REPO))
     sp.add_argument("--max-turns", type=int, default=400)
+    sp.add_argument("--stop-grace-s", type=float, default=float(abarm.STOP_GRACE_S),
+                    help="seconds a session's process group gets between SIGTERM and SIGKILL when it is ended")
 
 
 def build_parser() -> argparse.ArgumentParser:
