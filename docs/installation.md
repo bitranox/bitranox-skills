@@ -26,7 +26,7 @@ uv tool install bitranox-skills
 bitranox-skills install
 ```
 
-`install` copies all 82 skills into `~/.claude/skills/`, where Claude Code loads them as personal
+`install` copies all 83 skills into `~/.claude/skills/`, where Claude Code loads them as personal
 skills. Existing directories are left alone unless you pass `--force`; `--dry-run` prints the plan
 and writes nothing; `--dest` points somewhere other than the default. `bitranox-skills list` names
 what is bundled and `bitranox-skills path` prints where it lives.
