@@ -326,11 +326,12 @@ def test_ctrl_c_still_writes_result_and_journal_then_reraises(tmp_path, scratch_
     assert not (scratch_repo / ".claude" / "worktrees" / f"abx-{run_dir.name}-r1-C").exists()
 
 
-def _fabricate_arm(run_dir, round_no, *, cache_read, stop_reason="finished"):
+def _fabricate_arm(run_dir, round_no, *, cache_read, stop_reason="finished", guard_changes=()):
     arm = run_dir / "arms" / f"r{round_no}-C"
     arm.mkdir(parents=True)
     res = {"arm": f"r{round_no}-C", "round": round_no, "name": "C", "dry_run": False, "has_result": True,
-           "stop_reason": stop_reason, "first_cache_read": cache_read, "void_reasons": [], "guard_changes": [],
+           "stop_reason": stop_reason, "first_cache_read": cache_read, "void_reasons": [],
+           "guard": {"taken": True, "entries": 3, "skipped": None}, "guard_changes": list(guard_changes),
            "floor": {"passed": True, "steps": []}, "bundle_commits": 1, "total_cost_usd": 0.25}
     (arm / "result.json").write_text(json.dumps(res), encoding="utf-8")
     T.record(run_dir, step="arm", round=round_no, arm="C", status="ran")
@@ -350,6 +351,26 @@ def test_score_never_lets_a_void_arm_set_the_warmth_median(tmp_path, scratch_rep
     for label in ("r1-C", "r2-C", "r3-C"):
         assert arms[label]["warmth_checked"] is True and arms[label]["void"] == [], label
     assert arms["r4-C"]["void"] and arms["r5-C"]["void"]
+
+
+def test_score_flags_an_arm_whose_store_changed_without_voiding_it(tmp_path, scratch_repo, skills_repo, capsys):
+    run_dir = _init_and_fill(tmp_path, scratch_repo, skills_repo)
+    assert T.main(["seal", str(run_dir)]) == 0
+    _fabricate_arm(run_dir, 1, cache_read=11000, guard_changes=["changed: slug x", "added: slug y"])
+    _fabricate_arm(run_dir, 2, cache_read=11000)
+    flag = "store changed: 2 entries, adjudicate against arms/r1-C/transcripts/"
+    capsys.readouterr()
+    assert T.main(["score", str(run_dir)]) == 0
+    lines = capsys.readouterr().out.splitlines()
+    r1 = [ln for ln in lines if ln.startswith("r1-C:")]
+    r2 = [ln for ln in lines if ln.startswith("r2-C:")]
+    assert len(r1) == 1 and flag in r1[0] and "void=-" in r1[0], lines
+    assert len(r2) == 1 and "store changed" not in r2[0], lines
+    assert T.main(["score", str(run_dir), "--json"]) == 0
+    data = json.loads(capsys.readouterr().out)["data"]
+    assert data["flags"] == {"r1-C": flag}
+    assert data["arms"]["r1-C"]["void"] == [] and data["arms"]["r1-C"]["store_guard"] == "changed"
+    assert data["arms"]["r2-C"]["store_guard"] == "clean" and data["arms"]["r2-C"]["store_changes"] == []
 
 
 def test_prune_run_deletes_the_branches(tmp_path, scratch_repo, skills_repo, fake_claude_path, monkeypatch):

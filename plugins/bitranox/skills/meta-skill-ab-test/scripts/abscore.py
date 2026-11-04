@@ -2,8 +2,12 @@
 
 Void rules (design S4) apply to every arm the same way and a void arm counts as nothing: main
 model not opus (and every other reason the stream account gives), no result record, deadline or
-token cap, store guard fired, first-message cache read out of line with the other finished arms
-(design S5.5, warmth_tolerance). The floor's answer is each command's exit code, nothing else.
+token cap, first-message cache read out of line with the other finished arms (design S5.5,
+warmth_tolerance). The floor's answer is each command's exit code, nothing else.
+
+The store guard never voids (user decision 2026-11-04): concurrent sessions share the memory
+store, so a change it saw may not be the arm's. Its changes are recorded in scores.json
+(store_changes, store_guard) for someone to adjudicate against the arm's kept transcripts.
 
 Each floor step runs in its own process group (POSIX) with an explicit environment: when a step
 ends, timed out or not, every process it left in its group is stopped, and a venv, a uv project
@@ -37,6 +41,9 @@ __all__ = [
     "MISSING_STOP_REASON",
     "RC_NOT_STARTED",
     "RC_TIMEOUT",
+    "STORE_GUARD_CHANGED",
+    "STORE_GUARD_CLEAN",
+    "STORE_GUARD_SKIPPED",
     "STREAM_VOID_STOP_REASON",
     "WARMTH_MIN_PEERS",
     "SealedSuite",
@@ -58,6 +65,12 @@ STREAM_VOID_STOP_REASON = "void"
 # Written when result.json carries no stop reason: abarm records one for every way an arm ENDS,
 # so its absence means the run never reached that point.
 MISSING_STOP_REASON = "no stop reason recorded (the arm did not end normally: interrupted or crashed)"
+# What the store guard saw, as scores.json's store_guard: a snapshot taken and verified with no
+# change, one or more changes, or no verified snapshot (none taken, or the arm ended before the
+# after-check), where "no change" cannot be claimed.
+STORE_GUARD_CLEAN = "clean"
+STORE_GUARD_CHANGED = "changed"
+STORE_GUARD_SKIPPED = "skipped"
 # How long a step's leftover process group gets between SIGTERM and SIGKILL: long enough for a
 # test runner to flush and remove its temp files, short against any floor timeout.
 KILL_GRACE_S = 5.0
@@ -352,9 +365,20 @@ def _warmth(res: dict[str, Any], tolerance: float, peers: list[dict[str, Any]]) 
 
 def _void_reasons(res: dict[str, Any], warmth_reasons: list[str]) -> list[str]:
     stream_reasons = [str(r) for r in res.get("void_reasons") or []]
-    guard = [str(g) for g in res.get("guard_changes") or []]
-    return (stream_reasons + _result_reason(res) + _stop_reason(res, stream_reasons)
-            + (["store guard fired: " + "; ".join(guard)] if guard else []) + warmth_reasons)
+    return stream_reasons + _result_reason(res) + _stop_reason(res, stream_reasons) + warmth_reasons
+
+
+def _store_changes(res: dict[str, Any]) -> list[str]:
+    return [str(g) for g in res.get("guard_changes") or []]
+
+
+def _store_guard(res: dict[str, Any], changes: list[str]) -> str:
+    """clean only for a snapshot that was taken AND verified; a missing after-check is not clean."""
+    if changes:
+        return STORE_GUARD_CHANGED
+    guard = res.get("guard")
+    taken = isinstance(guard, dict) and guard.get("taken") is True
+    return STORE_GUARD_CLEAN if taken and "guard_changes" in res else STORE_GUARD_SKIPPED
 
 
 def _floor_steps(floor: dict[str, Any]) -> list[dict[str, Any]]:
@@ -374,6 +398,7 @@ def _score_record(res: dict[str, Any], arm_dir: Path, profile: Profile,
     floor = res.get("floor") or {}
     steps = _floor_steps(floor)
     checked, warmth_reasons = _warmth(res, profile.run.warmth_tolerance, peers)
+    changes = _store_changes(res)
     return {"arm": res.get("arm", arm_dir.name), "cost_usd": res.get("total_cost_usd"),
             "per_model": res.get("per_model") or {}, "main_new_tokens": res.get("main_new_tokens"),
             "first_cache_read": res.get("first_cache_read"), "floor_passed": bool(floor.get("passed")),
@@ -381,6 +406,7 @@ def _score_record(res: dict[str, Any], arm_dir: Path, profile: Profile,
             "floor_steps": [{"name": s.get("name"), "rc": s.get("rc")} for s in steps],
             "bundle_commits": int(res.get("bundle_commits") or 0), "wall_s": res.get("wall_s"),
             "warmth_checked": checked, "result_subtype": res.get("result_subtype"),
+            "store_changes": changes, "store_guard": _store_guard(res, changes),
             "void": _void_reasons(res, warmth_reasons)}
 
 
@@ -401,8 +427,10 @@ def score_arm(arm_dir: Path, profile: Profile, peers: list[dict[str, Any]]) -> d
         output held open past the timeout by a process the step started (rc <the leader's>)" for
         the first such step), floor_steps ([{"name", "rc"}] per step attempted, in order), bundle_commits, wall_s,
         warmth_checked (False when the arm or fewer than WARMTH_MIN_PEERS peers had a reading),
-        result_subtype (the result record's subtype, informational: it never voids) and void (every
-        reason, the stream account's own ones first and unchanged; empty means the arm counts).
+        result_subtype (the result record's subtype, informational: it never voids), store_changes
+        (the guard's change lines, [] when none) and store_guard (STORE_GUARD_CLEAN, _CHANGED or
+        _SKIPPED; recorded for adjudication, it never voids), and void (every reason, the stream
+        account's own ones first and unchanged; empty means the arm counts).
 
     Raises:
         FileNotFoundError: arm_dir has no result.json.

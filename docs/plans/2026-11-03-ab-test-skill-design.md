@@ -39,7 +39,7 @@ written, over 11 arms), so serial arms need no cold-start correction; the per-ar
 - its own HOME and config directory, with the arm's skill version installed from a frozen detached
   checkout, verified byte for byte against the plugin cache before launch;
 - `BITRANOX_MEMORY_WRITES=off` (section 3) plus a snapshot guard over the memory store and the
-  ancestor `CLAUDE.local.md` files that voids the arm if they changed;
+  ancestor `CLAUDE.local.md` files that records any change for adjudication;
 - a headless `claude -p --model opus` run. The main model is asserted from the transcript's init
   record; delegation to haiku inside the arm (subagents, side calls) is allowed and its cost is
   counted per model.
@@ -159,8 +159,10 @@ repository so the pre-registration and its amendments are append-only commits.
 ## 4. Failure handling, testing, build order
 
 **Void rules apply to every arm**, never to one: main model not opus, no result record, deadline
-or token cap hit, store guard fired, first-message cache read out of line. A void arm counts as
-nothing, never as the null result.
+or token cap hit, first-message cache read out of line. A void arm counts as nothing, never as the
+null result. The store guard does not void: it records each change in the arm's scores for
+adjudication against the arm's transcripts (user decision 2026-11-04: concurrent sessions share
+the store, so a change it sees may not be the arm's).
 
 **"Not logged in" is checked out of band**: one request to `/v1/messages` with the arm's
 credential; 401 is a real login failure, 429 an exhausted quota (the CLI reports both the same

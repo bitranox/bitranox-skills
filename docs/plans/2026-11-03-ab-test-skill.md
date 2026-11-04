@@ -2690,7 +2690,6 @@ def test_every_void_rule_fires_by_itself(tmp_path, scratch_repo, skills_repo):
         "no result": _result(has_result=False, total_cost_usd=None),
         "deadline": _result(stop_reason="deadline"),
         "token_cap": _result(stop_reason="token_cap"),
-        "guard": _result(guard_changes=["changed: slug x"]),
         "warmth": _result(first_cache_read=20000),
     }
     for name, res in cases.items():
@@ -2721,8 +2720,8 @@ Expected: `ModuleNotFoundError: No module named 'abscore'`.
 """The floor (the profile's gate and suite, as argv lists) and the per-arm score with void rules.
 
 Void rules (design S4) apply to every arm the same way and a void arm counts as nothing: main
-model not opus, no result record, deadline or token cap, store guard fired, first-message cache
-read out of line with the other finished arms (design S5.5, warmth_tolerance).
+model not opus, no result record, deadline or token cap, first-message cache read out of line
+with the other finished arms (design S5.5, warmth_tolerance). The store guard records, never voids.
 """
 from __future__ import annotations
 
@@ -2764,8 +2763,7 @@ def _void_reasons(res: dict[str, Any], profile: Profile, peers: list[dict[str, A
         reasons.append("no result record in the stream")
     if res.get("stop_reason") in ("deadline", "token_cap"):
         reasons.append(f"ended by {res['stop_reason']}")
-    if res.get("guard_changes"):
-        reasons.append("store guard fired: " + "; ".join(res["guard_changes"]))
+    # guard_changes are recorded for adjudication, never a void (user decision 2026-11-04).
     mine = res.get("first_cache_read")
     reads = [p["first_cache_read"] for p in peers if isinstance(p.get("first_cache_read"), int)]
     if mine is not None and len(reads) >= WARMTH_MIN_PEERS:

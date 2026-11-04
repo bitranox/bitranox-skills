@@ -5,7 +5,7 @@ Subcommands (every one takes --json; exit 0 yes / 1 no / 2 could not run):
   init <run_dir> [--repo --base --skills-ref --skill]   write the profile, task and PREREG skeletons
   seal <run_dir>                                       validate and commit them; fixes the weights
   run <run_dir> [--dry-run] [--only ARM] ...           the serial interleaved arms (resumes)
-  score <run_dir>                                      per-arm scores and void rules
+  score <run_dir>                                      per-arm scores, void rules, store-change flags
   prune-run <run_dir>                                  delete the run's branches in the workpiece
 
 The run dir is its own git repo so the pre-registration is append-only. Its journal.jsonl records
@@ -843,19 +843,38 @@ def _score_all(run_dir: Path, profile: Profile, results: dict[str, dict[str, Any
                                      [r for other, r in eligible.items() if other != label]) for label in results}
 
 
+def _store_flag(label: str, score: dict[str, Any]) -> str | None:
+    """The line that makes a store change impossible to miss; it flags the arm, it never voids it.
+
+    The guard records rather than voids (user decision 2026-11-04): another session may have
+    changed the shared store, so the change is checked against what the arm's transcripts show.
+    """
+    changes = score.get("store_changes") or []
+    if not changes:
+        return None
+    return f"store changed: {len(changes)} entries, adjudicate against arms/{label}/{TRANSCRIPTS}/"
+
+
+def _score_line(label: str, score: dict[str, Any]) -> str:
+    line = f"{label}: cost={score['cost_usd']} floor={score['floor_passed']} void={score['void'] or '-'}"
+    flag = _store_flag(label, score)
+    return line if flag is None else f"{line} FLAG {flag}"
+
+
 def cmd_score(args: argparse.Namespace) -> int:
     run_dir = _run_dir(args.run_dir)
     _require_sealed(run_dir)
     profile = load_profile(run_dir / "abtest.toml")
     results = _finished(run_dir)
     if not results:
-        _emit(args.json, "score", {"arms": {}}, False, "no finished arm to score")
+        _emit(args.json, "score", {"arms": {}, "flags": {}}, False, "no finished arm to score")
         return EXIT_NO
     scores = _score_all(run_dir, profile, results)
     for res in results.values():
         record(run_dir, step="score", round=res.get("round", 0), arm=res.get("name", ""), status="scored")
-    _emit(args.json, "score", {"arms": scores}, True,
-          "\n".join(f"{k}: cost={v['cost_usd']} floor={v['floor_passed']} void={v['void'] or '-'}" for k, v in scores.items()))
+    flags = {label: flag for label, score in scores.items() if (flag := _store_flag(label, score)) is not None}
+    _emit(args.json, "score", {"arms": scores, "flags": flags}, True,
+          "\n".join(_score_line(k, v) for k, v in scores.items()))
     return EXIT_YES
 
 

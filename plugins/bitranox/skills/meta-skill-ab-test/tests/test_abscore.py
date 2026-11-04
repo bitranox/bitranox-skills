@@ -127,7 +127,7 @@ def test_score_carries_the_listed_fields(tmp_path):
     s = _score(tmp_path, _result(), TWO_PEERS)
     assert set(s) == {"arm", "cost_usd", "per_model", "main_new_tokens", "first_cache_read", "floor_passed",
                       "bundle_commits", "void", "wall_s", "floor_error", "floor_steps", "warmth_checked",
-                      "result_subtype"}
+                      "result_subtype", "store_changes", "store_guard"}
     assert (s["arm"], s["main_new_tokens"], s["bundle_commits"], s["wall_s"]) == ("r1-C", 20010, 1, 1.2)
 
 
@@ -146,12 +146,41 @@ def test_every_void_rule_fires_by_itself(tmp_path):
         "no result": _result(has_result=False, total_cost_usd=None),
         "deadline": _result(stop_reason="deadline"),
         "token_cap": _result(stop_reason="token_cap"),
-        "guard": _result(guard_changes=["changed: slug x"]),
         "warmth": _result(first_cache_read=20000),
     }
     for name, res in cases.items():
         s = _score(tmp_path, res, TWO_PEERS, name=f"r1-{name}")
         assert len(s["void"]) == 1, (name, s["void"])
+
+
+TAKEN = {"taken": True, "entries": 3, "skipped": None}
+
+
+def test_a_store_change_is_recorded_and_never_voids(tmp_path):
+    """User decision 2026-11-04: concurrent sessions share the store, so a change is adjudicated."""
+    changes = ["changed: slug x", "added: slug y"]
+    s = _score(tmp_path, _result(guard=TAKEN, guard_changes=list(changes)), TWO_PEERS)
+    assert s["void"] == []
+    assert s["store_changes"] == changes and s["store_guard"] == S.STORE_GUARD_CHANGED == "changed"
+
+
+def test_a_taken_and_verified_snapshot_with_no_change_is_clean(tmp_path):
+    s = _score(tmp_path, _result(guard=TAKEN, guard_changes=[]), TWO_PEERS)
+    assert (s["store_guard"], s["store_changes"], s["void"]) == (S.STORE_GUARD_CLEAN, [], [])
+
+
+def test_a_snapshot_not_taken_is_skipped_not_clean(tmp_path):
+    skipped = _result(guard={"taken": False, "entries": 0, "skipped": "no .claude-memory store"}, guard_changes=[],
+                      guard_skipped="no .claude-memory store")
+    s = _score(tmp_path, skipped, TWO_PEERS, name="r1-a")
+    assert (s["store_guard"], s["store_changes"], s["void"]) == (S.STORE_GUARD_SKIPPED, [], [])
+    assert _score(tmp_path, _result(), TWO_PEERS, name="r1-b")["store_guard"] == "skipped", "no guard record at all"
+
+
+def test_a_taken_snapshot_whose_after_check_never_ran_is_skipped(tmp_path):
+    res = _result(guard=TAKEN)
+    del res["guard_changes"]  # the arm ended before _guard_after: nothing was compared
+    assert _score(tmp_path, res, TWO_PEERS)["store_guard"] == S.STORE_GUARD_SKIPPED
 
 
 def test_every_stream_void_reason_is_carried_unchanged(tmp_path):
