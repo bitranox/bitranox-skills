@@ -223,11 +223,30 @@ def _fill_skeleton(args: argparse.Namespace) -> str:
     return text
 
 
+def _run_branches(repo: Path, run_id: str) -> list[str]:
+    """The branches under abx/<run_id>/ in repo: an earlier run of the same id left them."""
+    proc = git(repo, "for-each-ref", "--format=%(refname:short)", f"refs/heads/abx/{run_id}/")
+    if proc.returncode != 0:
+        raise RunRefused(f"cannot list the branches of {repo}: {proc.stderr.strip()}")
+    return proc.stdout.split()
+
+
+def _refuse_run_id_collision(repo: Path, run_id: str) -> None:
+    """Refuse a run id whose branches already exist: its arms would be refused as leftovers, and
+    prune-run would delete the other run's branches with this one's."""
+    taken = _run_branches(repo, run_id)
+    if taken:
+        raise RunRefused(f"the workpiece {repo} already has {len(taken)} branch(es) under abx/{run_id}/ "
+                         f"(first: {taken[0]}): pick another run dir name, or prune the old run first")
+
+
 def cmd_init(args: argparse.Namespace) -> int:
     run_dir = _run_dir(args.run_dir)
     if run_dir.exists():
         _emit(args.json, "init", {"run_dir": str(run_dir)}, False, f"{run_dir} already exists; refusing to overwrite")
         return EXIT_NO
+    if args.repo:
+        _refuse_run_id_collision(Path(args.repo).expanduser(), run_dir.name)
     (run_dir / "variants" / "V1").mkdir(parents=True)
     (run_dir / "abtest.toml").write_text(_fill_skeleton(args), encoding="utf-8")
     (run_dir / "task.md").write_text("", encoding="utf-8")
@@ -302,6 +321,7 @@ def cmd_seal(args: argparse.Namespace) -> int:
         _emit(args.json, "seal", {}, False, f"{run_dir} is already sealed; amendments are appended to PREREG.md and committed")
         return EXIT_NO
     profile = load_profile(run_dir / "abtest.toml")
+    _refuse_run_id_collision(profile.workpiece.repo, run_dir.name)
     problems = _seal_problems(run_dir, profile)
     if problems:
         raise RunRefused("; ".join(problems))
@@ -697,7 +717,7 @@ def cmd_prune_run(args: argparse.Namespace) -> int:
             abarm.prune(ws, repo, profile.floor.cache_paths)
         except abarm.ArmError as exc:
             errors.append(f"{ws}: {exc}")
-    refs = git(repo, "for-each-ref", "--format=%(refname:short)", f"refs/heads/abx/{run_id}/").stdout.split()
+    refs = _run_branches(repo, run_id)
     deleted = [b for b in refs if git(repo, "branch", "-D", b).returncode == 0]
     errors += [f"branch {b} could not be deleted" for b in refs if b not in deleted]
     skipped = [f"frozen checkout {p} is left (release it from the skills repo)" for p in sorted((run_dir / "frozen").glob("*"))]

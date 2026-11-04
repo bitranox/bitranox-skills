@@ -673,3 +673,17 @@ def test_prune_run_keeps_an_exclude_line_the_user_wrote(tmp_path, scratch_repo, 
     assert T.main(["prune-run", str(run_dir), "--json"]) == 0
     assert json.loads(capsys.readouterr().out)["data"]["exclude"] == "not_added"
     assert _exclude_text(scratch_repo) == ".claude/worktrees/\n"
+
+
+def test_init_and_seal_refuse_a_run_id_whose_branches_exist(tmp_path, scratch_repo, skills_repo, capsys):
+    base = (scratch_repo / ".base").read_text()
+    assert L.git(scratch_repo, "branch", "abx/run1/r1-C", base).returncode == 0
+    capsys.readouterr()
+    assert T.main(["init", str(tmp_path / "run1"), "--repo", str(scratch_repo), "--json"]) == 2
+    assert "abx/run1/" in json.loads(capsys.readouterr().out)["data"]["error"]
+    assert not (tmp_path / "run1").exists()
+    assert L.git(scratch_repo, "branch", "-D", "abx/run1/r1-C").returncode == 0
+    run_dir = _init_and_fill(tmp_path, scratch_repo, skills_repo)
+    assert L.git(scratch_repo, "branch", "abx/run1/r2-V1", base).returncode == 0  # made after init
+    assert T.main(["seal", str(run_dir)]) == 2
+    assert not (run_dir / "journal.jsonl").exists()
