@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import json
 import os
+import shutil
 import signal
 import subprocess
 import sys
@@ -22,7 +23,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from _ablib import clear_group, median, signal_group
+from _ablib import clear_group, median, sha256_file, signal_group
 from abprofile import Profile
 
 __all__ = [
@@ -30,12 +31,15 @@ __all__ = [
     "CLEAN_STOP_REASON",
     "ERROR_HELD_OPEN",
     "ERROR_NOT_STARTED",
+    "ERROR_SUITE_HASH",
+    "ERROR_SUITE_NOT_PLACED",
     "KILL_GRACE_S",
     "MISSING_STOP_REASON",
     "RC_NOT_STARTED",
     "RC_TIMEOUT",
     "STREAM_VOID_STOP_REASON",
     "WARMTH_MIN_PEERS",
+    "SealedSuite",
     "run_floor",
     "score_arm",
 ]
@@ -58,6 +62,10 @@ MISSING_STOP_REASON = "no stop reason recorded (the arm did not end normally: in
 # test runner to flush and remove its temp files, short against any floor timeout.
 KILL_GRACE_S = 5.0
 ERROR_NOT_STARTED = "could not start"
+# The suite step did not run because the sealed copy could not be put in place, or its bytes
+# (the sealed copy's or the placed file's) differ from the sha256 the seal recorded.
+ERROR_SUITE_NOT_PLACED = "the sealed suite could not be placed"
+ERROR_SUITE_HASH = "the sealed suite's sha256 differs from the seal"
 # The leader exited before the timeout, but something it started kept stdout or stderr open past
 # it. The leader's own exit code is recorded; the step still fails, since it hit the timeout.
 ERROR_HELD_OPEN = "output held open past the timeout by a process the step started"
@@ -76,6 +84,19 @@ _LAUNCHER_VARS = frozenset({
     "VIRTUAL_ENV", "UV_PROJECT_ENVIRONMENT", "PYTHONPATH", "PYTHONHOME",
     "GIT_CONFIG_PARAMETERS", "GIT_CONFIG_COUNT", "GIT_CONFIG_GLOBAL", "GIT_CONFIG_SYSTEM"})
 _LAUNCHER_VAR_PREFIXES = ("GIT_CONFIG_KEY_", "GIT_CONFIG_VALUE_")
+
+
+@dataclass(frozen=True)
+class SealedSuite:
+    """The acceptance suite as sealed: the copy in the run dir and the sha256 the seal recorded.
+
+    The floor copies it over the suite path in the arm's tree right before the suite step, so an
+    arm can neither edit the suite nor run without it (a suite untracked in the workpiece is not
+    in a worktree at all).
+    """
+
+    path: Path
+    sha256: str
 
 
 @dataclass(frozen=True)
@@ -197,11 +218,59 @@ def _step(name: str, argv: list[str], tree: Path, *, limits: _Limits, log: Path)
             "log": str(log)}
 
 
+def _inside(tree: Path, path: Path) -> bool:
+    real, root = os.path.realpath(path), os.path.realpath(tree)
+    return real == root or real.startswith(root + os.sep)
+
+
+def _place_suite(tree: Path, rel: str, sealed: SealedSuite) -> str | None:
+    """Copy the sealed suite over rel in tree and verify both hashes; why it failed, or None.
+
+    Whatever the arm left at the path (a file, a symlink) is unlinked first, so the copy never
+    writes through a link, and a parent directory that resolves outside the tree is refused.
+    """
+    target = tree / rel
+    try:
+        if sha256_file(sealed.path) != sealed.sha256:
+            return f"{ERROR_SUITE_HASH} ({sealed.path})"
+        # realpath resolves the existing part of a path that is not there yet, so this is
+        # checked before mkdir, which would otherwise create directories through a planted link.
+        if not _inside(tree, target.parent):
+            return f"{ERROR_SUITE_NOT_PLACED}: {target.parent} resolves outside {tree}"
+        target.parent.mkdir(parents=True, exist_ok=True)
+        if target.is_symlink() or target.is_file():
+            target.unlink()
+        elif target.exists():
+            return f"{ERROR_SUITE_NOT_PLACED}: {target} is not a file"
+        shutil.copyfile(sealed.path, target)
+        if sha256_file(target) != sealed.sha256:
+            return f"{ERROR_SUITE_HASH} ({target}, after the copy)"
+    except OSError as exc:
+        return f"{ERROR_SUITE_NOT_PLACED}: {exc}"
+    return None
+
+
+def _not_run(name: str, argv: list[str], error: str, log: Path) -> dict[str, Any]:
+    log.write_text(error + "\n", encoding="utf-8")
+    return {"name": name, "argv": argv, "rc": RC_NOT_STARTED, "error": error, "wall_s": 0.0, "log": str(log)}
+
+
+def _suite_step(suite: list[str], tree: Path, profile: Profile, sealed: SealedSuite | None, *, limits: _Limits,
+                log: Path) -> dict[str, Any]:
+    """The suite step, after the sealed copy (when there is one) is put in place and verified."""
+    if sealed is not None and profile.floor.suite is not None:
+        error = _place_suite(tree, profile.floor.suite, sealed)
+        if error is not None:
+            return _not_run("suite", suite, error, log)
+    return _step("suite", suite, tree, limits=limits, log=log)
+
+
 def _step_passed(step: dict[str, Any]) -> bool:
     return step["rc"] == 0 and step["error"] is None
 
 
-def run_floor(tree: Path, profile: Profile, log_dir: Path, *, kill_grace_s: float = KILL_GRACE_S) -> dict[str, Any]:
+def run_floor(tree: Path, profile: Profile, log_dir: Path, *, kill_grace_s: float = KILL_GRACE_S,
+              sealed_suite: SealedSuite | None = None) -> dict[str, Any]:
     """Run the gate, then the suite (when set); the suite is skipped once the gate failed.
 
     Args:
@@ -209,6 +278,10 @@ def run_floor(tree: Path, profile: Profile, log_dir: Path, *, kill_grace_s: floa
         profile: the sealed profile; its floor names the argv lists and the per-step timeout.
         log_dir: where floor-gate.log and floor-suite.log are written (created when missing).
         kill_grace_s: how long a step's leftover process group gets between SIGTERM and SIGKILL.
+        sealed_suite: the sealed copy of the suite. When given, it is copied over the suite path
+            in tree after the gate and right before the suite step, and both hashes are checked;
+            a failure there is the suite step's error (ERROR_SUITE_NOT_PLACED or
+            ERROR_SUITE_HASH, rc RC_NOT_STARTED) and the suite does not run.
 
     Returns:
         {"passed": every step exited 0 and ran to its end, "steps": [{"name", "argv", "rc", "error",
@@ -227,7 +300,7 @@ def run_floor(tree: Path, profile: Profile, log_dir: Path, *, kill_grace_s: floa
     steps = [_step("gate", list(profile.floor.gate), tree, limits=limits, log=log_dir / "floor-gate.log")]
     suite = profile.suite_argv()
     if suite is not None and _step_passed(steps[0]):
-        steps.append(_step("suite", suite, tree, limits=limits, log=log_dir / "floor-suite.log"))
+        steps.append(_suite_step(suite, tree, profile, sealed_suite, limits=limits, log=log_dir / "floor-suite.log"))
     return {"passed": all(_step_passed(s) for s in steps), "steps": steps}
 
 

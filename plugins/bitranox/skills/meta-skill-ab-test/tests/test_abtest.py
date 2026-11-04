@@ -908,3 +908,89 @@ def test_a_committed_prereg_amendment_runs_and_the_seal_row_names_the_commit(tmp
         fh.write("\n## Amendment 1\n\nH2: V1 also writes fewer tests.\n")
     _commit_all(run_dir, "amend")
     assert T.main(_run_args(run_dir, creds, skills_repo, "--dry-run", "--only", "C")) == 0
+
+
+# --- whole-branch review: every arm's floor runs the suite as sealed ------------------------------
+
+def _with_suite(tmp_path, scratch_repo, skills_repo, suite_text):
+    """A run whose floor has an acceptance suite that is UNTRACKED in the workpiece (so no worktree has it)."""
+    (scratch_repo / "acceptance").mkdir()
+    (scratch_repo / "acceptance" / "check.sh").write_text(suite_text, encoding="utf-8")
+    run_dir = _init_and_fill(tmp_path, scratch_repo, skills_repo)
+    toml = run_dir / "abtest.toml"
+    text = toml.read_text(encoding="utf-8")
+    old = '# suite = "acceptance/test_task.py"\n# suite_cmd = ["pytest", "{suite}", "-q"]\n'
+    assert text.count(old) == 1
+    toml.write_text(text.replace(old, 'suite = "acceptance/check.sh"\nsuite_cmd = ["sh", "{suite}"]\n'), encoding="utf-8")
+    return run_dir
+
+
+def _suite_step(run_dir):
+    res = json.loads((run_dir / "arms" / "r1-C" / "result.json").read_text(encoding="utf-8"))
+    return res["floor"]["passed"], res["floor"]["steps"][-1]
+
+
+def test_an_untracked_acceptance_suite_still_reaches_every_arms_floor(tmp_path, scratch_repo, skills_repo,
+                                                                     fake_claude_path, monkeypatch):
+    run_dir = _with_suite(tmp_path, scratch_repo, skills_repo, "echo acceptance ok\n")
+    env, creds = _env(fake_claude_path, tmp_path)
+    _use_env(monkeypatch, env)
+    assert T.main(["seal", str(run_dir)]) == 0
+    assert L.git(run_dir, "ls-files", "--error-unmatch", "sealed/acceptance/check.sh").returncode == 0, "committed"
+    assert T.main(_run_args(run_dir, creds, skills_repo, "--dry-run", "--only", "C")) == 0
+    passed, step = _suite_step(run_dir)
+    assert passed is True and (step["name"], step["rc"], step["error"]) == ("suite", 0, None)
+
+
+_REWRITES_SUITE = """
+import subprocess
+from pathlib import Path
+Path("acceptance").mkdir(exist_ok=True)
+Path("acceptance/check.sh").write_text("exit 0\\n", encoding="utf-8")
+subprocess.run(["git", "add", "acceptance/check.sh"], check=True)
+subprocess.run(["git", "-c", "user.name=arm", "-c", "user.email=arm@x", "commit", "-q", "-m", "make it pass"], check=True)
+"""
+
+
+def test_an_arm_that_rewrites_the_suite_still_runs_the_sealed_one(tmp_path, scratch_repo, skills_repo, fake_claude_path,
+                                                                  monkeypatch):
+    run_dir = _with_suite(tmp_path, scratch_repo, skills_repo, "echo the sealed suite fails\nexit 3\n")
+    script = tmp_path / "rewrites_suite.py"
+    script.write_text(_REWRITES_SUITE, encoding="utf-8")
+    env, creds = _env(fake_claude_path, tmp_path)
+    _use_env(monkeypatch, dict(env, FAKE_CLAUDE_SCRIPT=str(script)))
+    assert T.main(["seal", str(run_dir)]) == 0
+    assert T.main(_run_args(run_dir, creds, skills_repo, "--only", "C"), login_check=_Probe("ok")) == 0
+    passed, step = _suite_step(run_dir)
+    assert passed is False and (step["name"], step["rc"]) == ("suite", 3), "the arm's `exit 0` suite ran instead"
+
+
+def test_run_refuses_a_sealed_suite_whose_hash_differs_from_the_seal_record(tmp_path, scratch_repo, skills_repo,
+                                                                           fake_claude_path, monkeypatch, capsys):
+    run_dir = _with_suite(tmp_path, scratch_repo, skills_repo, "exit 0\n")
+    env, creds = _env(fake_claude_path, tmp_path)
+    _use_env(monkeypatch, env)
+    assert T.main(["seal", str(run_dir)]) == 0
+    journal = run_dir / "journal.jsonl"
+    rows = L.read_jsonl(journal)
+    rows[-1]["suite_sha256"] = "0" * 64
+    journal.write_text("".join(json.dumps(r) + "\n" for r in rows), encoding="utf-8")
+    capsys.readouterr()
+    assert T.main(_run_args(run_dir, creds, skills_repo, "--dry-run", "--only", "C", "--json")) == 2
+    assert "sealed/acceptance/check.sh" in json.loads(capsys.readouterr().out)["data"]["error"]
+    assert _arm_rows(run_dir) == []
+
+
+def test_run_refuses_an_edited_sealed_suite_copy(tmp_path, scratch_repo, skills_repo, fake_claude_path, monkeypatch, capsys):
+    run_dir = _with_suite(tmp_path, scratch_repo, skills_repo, "exit 3\n")
+    env, creds = _env(fake_claude_path, tmp_path)
+    _use_env(monkeypatch, env)
+    assert T.main(["seal", str(run_dir)]) == 0
+    (run_dir / "sealed" / "acceptance" / "check.sh").write_text("exit 0\n", encoding="utf-8")
+    capsys.readouterr()
+    assert T.main(_run_args(run_dir, creds, skills_repo, "--dry-run", "--only", "C", "--json")) == 2
+    assert "sealed/acceptance/check.sh" in json.loads(capsys.readouterr().out)["data"]["error"]
+    _commit_all(run_dir, "loosen the suite")
+    assert T.main(_run_args(run_dir, creds, skills_repo, "--dry-run", "--only", "C", "--json")) == 2
+    assert "sealed/acceptance/check.sh" in json.loads(capsys.readouterr().out)["data"]["error"]
+    assert _arm_rows(run_dir) == []

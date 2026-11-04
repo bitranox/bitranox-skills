@@ -23,6 +23,7 @@ import argparse
 import json
 import os
 import re
+import shutil
 import subprocess
 import sys
 import tarfile
@@ -85,6 +86,8 @@ GITIGNORE = ("frozen/\narms/*/cfg\narms/*/home\narms/*/stream.jsonl\narms/*/bund
 # Where an arm's session transcripts (copied out of its config dir before that is deleted) go.
 TRANSCRIPTS = "transcripts"
 JOURNAL, TORN = "journal.jsonl", "journal.torn"
+# The run dir's copy of the acceptance suite, committed at the seal: what every arm's floor runs.
+SEALED_DIR = "sealed"
 # The run id names branches (abx/<id>/...) and worktree dirs, so it must be a plain ref component.
 RUN_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$")
 # A live run skips only what really ran; a dry run also skips what an earlier dry run did.
@@ -134,6 +137,7 @@ class RunContext:
     dry_run: bool
     max_turns: int
     stop_grace_s: float
+    sealed_suite: abscore.SealedSuite | None
 
     @property
     def run_id(self) -> str:
@@ -300,13 +304,21 @@ def _seal_problems(run_dir: Path, profile: Profile) -> list[str]:
     return problems
 
 
-def _suite_sha(profile: Profile) -> str | None:
+def _seal_suite(run_dir: Path, profile: Profile) -> str | None:
+    """Copy the acceptance suite into sealed/ (committed with the seal); its sha256, None without a suite.
+
+    The copy, not the workpiece's file, is what every arm's floor runs: the workpiece's suite may
+    be untracked (then no worktree has it) or edited later, and an arm could edit its own.
+    """
     if not profile.floor.suite:
         return None
     suite_path = profile.workpiece.repo / profile.floor.suite
     if not suite_path.is_file():
         raise RunRefused(f"floor.suite {suite_path} does not exist at the workpiece")
-    return sha256_file(suite_path)
+    sealed = run_dir / SEALED_DIR / profile.floor.suite
+    sealed.parent.mkdir(parents=True, exist_ok=True)
+    shutil.copyfile(suite_path, sealed)
+    return sha256_file(sealed)
 
 
 def _commit_seal(run_dir: Path, stamp: dict[str, Any]) -> str:
@@ -325,6 +337,7 @@ def _commit_seal(run_dir: Path, stamp: dict[str, Any]) -> str:
     if proc.returncode != 0:
         prereg.write_text(before, encoding="utf-8")
         git(run_dir, "reset", "-q")
+        shutil.rmtree(run_dir / SEALED_DIR, ignore_errors=True)
         raise RunRefused(f"seal commit failed: {proc.stderr.strip()}")
     commit = _git_out(run_dir, "rev-parse", "--verify", "-q", "HEAD").strip()
     record(run_dir, step="seal", round=0, arm="", status="sealed", commit=commit, suite_sha256=stamp["suite_sha256"])
@@ -341,7 +354,7 @@ def cmd_seal(args: argparse.Namespace) -> int:
     problems = _seal_problems(run_dir, profile)
     if problems:
         raise RunRefused("; ".join(problems))
-    stamp = {"sealed_at": utc_now(), "weights": WEIGHTS, "suite_sha256": _suite_sha(profile), "arms": profile.arm_names(),
+    stamp = {"sealed_at": utc_now(), "weights": WEIGHTS, "suite_sha256": _seal_suite(run_dir, profile), "arms": profile.arm_names(),
              "n": profile.run.n, "warmth_tolerance": profile.run.warmth_tolerance}
     commit = _commit_seal(run_dir, stamp)
     _emit(args.json, "seal", dict(stamp, commit=commit), True, f"sealed {run_dir}: {len(profile.arm_names())} arms x {profile.run.n} rounds")
@@ -382,7 +395,7 @@ def _arm_steps(ctx: RunContext, result: dict[str, Any], frozen: abarm.Frozen, la
     # Right after the session, before the floor writes into the worktree (build output, the suite).
     result["uncommitted"] = _save_uncommitted(ctx, arm_dir, ws)
     _guard_after(result, arm_dir / "guard")
-    result["floor"] = abscore.run_floor(ws, p, arm_dir)
+    result["floor"] = abscore.run_floor(ws, p, arm_dir, sealed_suite=ctx.sealed_suite)
     result["bundle_commits"] = abarm.bundle(ws, p.workpiece.base, arm_dir / "bundle.git")
 
 
@@ -603,7 +616,8 @@ def _pause_trigger(result: dict[str, Any], stream: Path) -> str | None:
     return None
 
 
-def _context(args: argparse.Namespace, run_dir: Path, profile: Profile) -> RunContext:
+def _context(args: argparse.Namespace, run_dir: Path, profile: Profile,
+             sealed_suite: abscore.SealedSuite | None) -> RunContext:
     if args.only and args.only not in profile.arm_names():
         raise RunRefused(f"--only {args.only!r} is not an arm of this run ({', '.join(profile.arm_names())})")
     if args.max_turns < 1:
@@ -612,7 +626,8 @@ def _context(args: argparse.Namespace, run_dir: Path, profile: Profile) -> RunCo
         raise RunRefused("--stop-grace-s must be above 0")
     return RunContext(run_dir=run_dir, profile=profile, task=_read_text(run_dir / profile.workpiece.task_file),
                       credentials=Path(args.credentials).expanduser(), skills_repo=Path(args.skills_repo).expanduser(),
-                      dry_run=args.dry_run, max_turns=args.max_turns, stop_grace_s=args.stop_grace_s)
+                      dry_run=args.dry_run, max_turns=args.max_turns, stop_grace_s=args.stop_grace_s,
+                      sealed_suite=sealed_suite)
 
 
 def _schedule(profile: Profile, only: str | None) -> Iterator[tuple[int, str]]:
@@ -682,14 +697,27 @@ def _cleanup_warnings(result: dict[str, Any]) -> None:
         _warn(f"{result.get('arm')}: {err}")
 
 
-def _seal_commit(run_dir: Path) -> str:
-    """The commit the seal journal row names, verified to exist in the run dir's repository."""
+def _seal_row(run_dir: Path) -> dict[str, Any]:
+    """The seal journal row, its commit verified to exist in the run dir's repository."""
     rows = [r for r in load_journal(run_dir) if r.get("step") == "seal"]
-    commit = rows[-1].get("commit") if rows else None
+    row = rows[-1] if rows else {}
+    commit = row.get("commit")
     if not isinstance(commit, str) or git(run_dir, "cat-file", "-e", f"{commit}^{{commit}}").returncode != 0:
         raise RunRefused(f"the seal record in {run_dir / JOURNAL} names no commit of {run_dir}; "
                          "the seal cannot be checked, so the run is refused")
-    return commit
+    return row
+
+
+def _sealed_suite(run_dir: Path, profile: Profile, row: dict[str, Any]) -> abscore.SealedSuite | None:
+    """The sealed suite copy, refused when its sha256 differs from the one the seal recorded."""
+    if profile.floor.suite is None:
+        return None
+    sha = row.get("suite_sha256")
+    path = run_dir / SEALED_DIR / profile.floor.suite
+    if not isinstance(sha, str) or not path.is_file() or sha256_file(path) != sha:
+        raise RunRefused(f"the sealed suite {path} is missing or differs from the sha256 the seal recorded "
+                         f"({sha}); the acceptance suite is frozen at the seal")
+    return abscore.SealedSuite(path=path, sha256=sha)
 
 
 def _git_out(run_dir: Path, *args: str) -> str:
@@ -724,26 +752,28 @@ def _refuse_changed_since_seal(run_dir: Path, commit: str, paths: list[str]) -> 
                          "the pre-registration is append-only")
 
 
-def _require_seal_intact(run_dir: Path, profile: Profile) -> None:
-    """Refuse a run whose sealed inputs differ from the seal.
+def _require_seal_intact(run_dir: Path, profile: Profile) -> abscore.SealedSuite | None:
+    """Refuse a run whose sealed inputs differ from the seal; the sealed suite every floor runs.
 
-    Uncommitted or untracked changes under abtest.toml, the task file, PREREG.md, variants/ and
-    .gitignore are refused (journal.jsonl and arms/ are the run's own output and are not looked
-    at). A committed change since the seal commit is refused for abtest.toml, the task file and
-    variants/; PREREG.md may grow by committed amendments, never be rewritten.
+    Uncommitted or untracked changes under abtest.toml, the task file, PREREG.md, variants/,
+    sealed/ and .gitignore are refused (journal.jsonl and arms/ are the run's own output and are
+    not looked at). A committed change since the seal commit is refused for abtest.toml, the task
+    file, variants/ and sealed/; PREREG.md may grow by committed amendments, never be rewritten.
+    The sealed suite copy must still hash to the sha256 the seal recorded (design S1).
     """
-    commit = _seal_commit(run_dir)
-    frozen = ["abtest.toml", profile.workpiece.task_file, "variants"]
+    row = _seal_row(run_dir)
+    frozen = ["abtest.toml", profile.workpiece.task_file, "variants", SEALED_DIR]
     _refuse_uncommitted(run_dir, [*frozen, "PREREG.md", ".gitignore"])
-    _refuse_changed_since_seal(run_dir, commit, frozen)
+    _refuse_changed_since_seal(run_dir, row["commit"], frozen)
+    return _sealed_suite(run_dir, profile, row)
 
 
 def cmd_run(args: argparse.Namespace) -> int:
     run_dir = _run_dir(args.run_dir)
     _require_sealed(run_dir)
     profile = load_profile(run_dir / "abtest.toml")
-    _require_seal_intact(run_dir, profile)
-    ctx = _context(args, run_dir, profile)
+    sealed_suite = _require_seal_intact(run_dir, profile)
+    ctx = _context(args, run_dir, profile, sealed_suite)
     for cfg in _sweep_cfgs(run_dir):
         _warn(f"deleted the config dir a killed arm left at {cfg} (it held a credentials copy); "
               "its transcripts are kept beside it")

@@ -6,6 +6,7 @@ import sys
 import time
 from pathlib import Path
 
+import _ablib as L
 import abprofile as P
 import abscore as S
 import abstream
@@ -454,3 +455,57 @@ def test_result_subtype_is_copied_and_does_not_void(tmp_path):
     s = _score(tmp_path, _result(result_subtype="error_max_turns"), TWO_PEERS, name="a")
     assert s["result_subtype"] == "error_max_turns" and s["void"] == []
     assert _score(tmp_path, _result(), TWO_PEERS, name="b")["result_subtype"] is None
+
+
+# --- whole-branch review: the floor runs the SEALED suite -----------------------------------------
+
+def _sealed(tmp_path, text):
+    path = tmp_path / "sealed" / "check.sh"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(text, encoding="utf-8")
+    return S.SealedSuite(path=path, sha256=L.sha256_file(path))
+
+
+def test_the_floor_runs_the_sealed_suite_over_the_arms_own(tmp_path, scratch_repo, skills_repo):
+    prof = _profile(tmp_path, scratch_repo, skills_repo, suite=True)
+    (scratch_repo / "check.sh").write_text("echo the arm's suite\nexit 0\n", encoding="utf-8")
+    res = S.run_floor(scratch_repo, prof, tmp_path / "logs", sealed_suite=_sealed(tmp_path, "echo sealed\nexit 3\n"))
+    assert res["passed"] is False and res["steps"][1]["rc"] == 3 and res["steps"][1]["error"] is None
+    assert "sealed" in Path(res["steps"][1]["log"]).read_text(encoding="utf-8")
+
+
+def test_the_floor_places_a_suite_the_tree_does_not_have(tmp_path, scratch_repo, skills_repo):
+    prof = _profile(tmp_path, scratch_repo, skills_repo, suite=True)
+    assert not (scratch_repo / "check.sh").exists()
+    res = S.run_floor(scratch_repo, prof, tmp_path / "logs", sealed_suite=_sealed(tmp_path, "exit 0\n"))
+    assert res["passed"] is True and [s["rc"] for s in res["steps"]] == [0, 0]
+
+
+def _symlinked_parent(tmp_path, scratch_repo):
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    (scratch_repo / "acceptance").symlink_to(outside, target_is_directory=True)
+    return outside
+
+
+@pytest.mark.parametrize(("setup", "error"), [
+    ("tampered", S.ERROR_SUITE_HASH),
+    ("directory", S.ERROR_SUITE_NOT_PLACED),
+    ("parent-outside", S.ERROR_SUITE_NOT_PLACED),
+])
+def test_a_suite_that_cannot_be_placed_as_sealed_fails_without_running(tmp_path, scratch_repo, skills_repo, setup, error):
+    prof = _profile(tmp_path, scratch_repo, skills_repo, suite=True)
+    rel = "acceptance/check.sh" if setup == "parent-outside" else "check.sh"
+    prof = dataclasses.replace(prof, floor=dataclasses.replace(prof.floor, suite=rel))
+    sealed = _sealed(tmp_path, "exit 0\n")
+    outside = None
+    if setup == "tampered":
+        sealed.path.write_text("exit 0 # edited after the seal\n", encoding="utf-8")
+    elif setup == "directory":
+        (scratch_repo / "check.sh").mkdir()
+    else:
+        outside = _symlinked_parent(tmp_path, scratch_repo)
+    res = S.run_floor(scratch_repo, prof, tmp_path / "logs", sealed_suite=sealed)
+    suite = res["steps"][1]
+    assert res["passed"] is False and suite["rc"] == S.RC_NOT_STARTED and suite["error"].startswith(error)
+    assert outside is None or list(outside.iterdir()) == [], "nothing was written outside the tree"
