@@ -7,10 +7,10 @@ import time
 from pathlib import Path
 
 import abprofile as P
-from abproc_testkit import gone_within, kill_if_alive
 import abscore as S
 import abstream
 import pytest
+from abproc_testkit import gone_within, kill_if_alive
 
 FIXTURES = Path(__file__).resolve().parent / "fixtures"
 SHA = "0" * 40
