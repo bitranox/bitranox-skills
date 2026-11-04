@@ -790,3 +790,38 @@ def test_run_and_prune_run_delete_a_config_dir_a_killed_arm_left(tmp_path, scrat
     assert not aside.exists()
     hits, scanned = _files_carrying(run_dir, PLANTED, SECRET)
     assert hits == [] and scanned > 5
+
+
+# --- whole-branch review: an arm is not started on a login that lapses before its deadline -------
+
+def _creds_expiring(tmp_path, expires_at):
+    creds = tmp_path / "expiring-creds.json"
+    oauth = {"accessToken": SECRET} if expires_at is None else {"accessToken": SECRET, "expiresAt": expires_at}
+    creds.write_text(json.dumps({"claudeAiOauth": oauth}), encoding="utf-8")
+    return creds
+
+
+@pytest.mark.parametrize(("expires_in_s", "starts"), [(-60, False), (14400 - 600, False), (14400 + 3600, True),
+                                                      (None, True), ("soon", True)],
+                         ids=["expired", "lapses-before-the-deadline", "outlives-the-deadline", "no-expiresAt", "malformed"])
+def test_an_arm_is_not_started_on_a_login_that_lapses_before_its_deadline(tmp_path, scratch_repo, skills_repo,
+                                                                          fake_claude_path, monkeypatch, capsys,
+                                                                          expires_in_s, starts):
+    run_dir = _init_and_fill(tmp_path, scratch_repo, skills_repo)  # deadline_s = 14400, the skeleton's
+    env, _ = _env(fake_claude_path, tmp_path)
+    _use_env(monkeypatch, env)
+    at = expires_in_s if not isinstance(expires_in_s, int) else int((time.time() + expires_in_s) * 1000)
+    creds = _creds_expiring(tmp_path, at)
+    assert T.main(["seal", str(run_dir)]) == 0
+    probe = _Probe("ok")
+    capsys.readouterr()
+    rc = T.main(_run_args(run_dir, creds, skills_repo, "--only", "C", "--json"), login_check=probe)
+    out = json.loads(capsys.readouterr().out)
+    assert probe.calls == []
+    if starts:
+        assert rc == 0 and _arm_rows(run_dir) == [(1, "C", "ran")]
+        return
+    assert rc == 1 and _arm_rows(run_dir) == [(1, "C", "paused")]
+    assert not (run_dir / "arms" / "r1-C").exists(), "the arm was never started, nothing was copied"
+    assert "refreshed first" in out["data"]["message"] and out["data"]["paused_at"] == "r1-C"
+    assert str(at) not in json.dumps(out), "no value of the credentials file is reported"

@@ -27,6 +27,7 @@ __all__ = [
     "NO_STORE_MARK",
     "GuardError",
     "check_login",
+    "credentials_expiry_s",
     "snapshot",
     "verify",
 ]
@@ -142,14 +143,34 @@ def _read_token(credentials: Path) -> str | None:
     return token if token.isascii() and token.isprintable() else None
 
 
+def credentials_expiry_s(credentials: Path) -> float | None:
+    """When the OAuth login in the credentials file expires, as epoch seconds; None when unknown.
+
+    Read from claudeAiOauth.expiresAt (epoch milliseconds). A missing or unreadable file, a
+    missing field or one that is not a positive number is None: the caller cannot tell, so it
+    must not refuse on it. Nothing of the file is logged or returned beyond this one number.
+    """
+    try:
+        doc = json.loads(credentials.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+    oauth = doc.get("claudeAiOauth") if isinstance(doc, dict) else None
+    ms = oauth.get("expiresAt") if isinstance(oauth, dict) else None
+    if isinstance(ms, bool) or not isinstance(ms, (int, float)) or not ms > 0:
+        return None
+    return float(ms) / 1000.0
+
+
 def check_login(credentials: Path, *, post: PostFn = _post) -> str:
-    """ok / login / quota / unknown:<status>, from one minimal request with the arm's credential.
+    """ok / login / quota / unknown:<status>, from one minimal request with the given credential.
 
     200 is ok, 401 login, 429 quota (rate limited: an exhausted quota, or a refusal of this
     request shape - measured 2026-11-04: a 429 came back while the account was serving), anything
     else unknown:<status>, 0 when no answer came. A missing, unreadable or malformed token (empty,
-    or holding a control or non-ASCII character) is login and is never sent. The token is read
-    from the credentials copy and sent once; it is never logged or returned.
+    or holding a control or non-ASCII character) is login and is never sent. abtest passes the
+    user's REAL credentials file (its --credentials), not an arm's copy, which is deleted by the
+    time the probe is asked. The token is read from that file and sent once; it is never logged
+    or returned.
     """
     token = _read_token(credentials)
     if token is None:

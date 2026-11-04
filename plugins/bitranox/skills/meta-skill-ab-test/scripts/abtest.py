@@ -26,6 +26,7 @@ import re
 import subprocess
 import sys
 import tarfile
+import time
 from collections.abc import Callable, Iterator
 from dataclasses import dataclass
 from pathlib import Path
@@ -101,6 +102,10 @@ AUTH_FAILED = "authentication_failed"
 # The three ways a session can end that pause the run: what was observed, never a cause.
 PAUSE_LOGIN, PAUSE_SYNTHETIC_ONLY, PAUSE_LIMIT = ("a login-looking failure", "only CLI synthetic messages",
                                                   "a usage-limit notice")
+# The pause before an arm starts: the login the arm copies would expire before the arm's
+# deadline. Refreshing is the user's step (a normal Claude session refreshes the real file); the
+# run pauses rather than starting an arm that may lose its login mid-way (design S4: pause, not void).
+PAUSE_EXPIRY = "a login that expires before the arm's deadline"
 # A seal refuses a PREREG.md still holding a skeleton placeholder; a bare "<" ("cost < 0.10") is prose.
 PLACEHOLDER_RE = re.compile(r"<[^>\n]+>")
 SEAL_GIT = ("-c", "user.name=abtest", "-c", "user.email=abtest@localhost", "-c", "commit.gpgsign=false",
@@ -647,6 +652,25 @@ def _pause(ctx: RunContext, args: argparse.Namespace, round_no: int, name: str, 
             f"answered {word}; run the same command again to resume (the attempt is set aside and {label} runs again)")
 
 
+def _login_lapses(ctx: RunContext) -> bool:
+    """Whether the login in the real credentials file expires before an arm started now could end.
+
+    An unknown expiry (no expiresAt, an unreadable file) never refuses: there is nothing to judge.
+    """
+    expiry = abguard.credentials_expiry_s(ctx.credentials)
+    return expiry is not None and expiry < time.time() + ctx.profile.run.deadline_s
+
+
+def _pause_before(ctx: RunContext, round_no: int, name: str) -> str:
+    """Journal a paused row for an arm that was not started; the message for the user (no value of the file)."""
+    label = f"r{round_no}-{name}"
+    record(ctx.run_dir, step="arm", round=round_no, arm=name, status="paused", pause_trigger=PAUSE_EXPIRY,
+           set_aside=None)
+    return (f"paused before {label}: the login in {ctx.credentials} expires within the arm's deadline "
+            f"({ctx.profile.run.deadline_s} s); the login must be refreshed first (use Claude normally once so it "
+            "refreshes), then run the same command again to resume")
+
+
 def _cleanup_warnings(result: dict[str, Any]) -> None:
     for err in (result.get("cleanup") or {}).get("errors") or []:
         _warn(f"{result.get('arm')}: {err}")
@@ -678,6 +702,11 @@ def cmd_run(args: argparse.Namespace) -> int:
         if _done(run_dir, round_no, name, DONE_DRY if ctx.dry_run else DONE_LIVE):
             skipped.append(f"r{round_no}-{name} already ran")
             continue
+        if not ctx.dry_run and _login_lapses(ctx):
+            message = _pause_before(ctx, round_no, name)
+            _emit(args.json, "run", {"done": done, "paused_at": f"r{round_no}-{name}", "pause_trigger": PAUSE_EXPIRY,
+                                     "message": message}, False, message, skipped)
+            return EXIT_NO
         result = _attempt(ctx, round_no, name)
         _cleanup_warnings(result)
         if result["status"] == "paused":

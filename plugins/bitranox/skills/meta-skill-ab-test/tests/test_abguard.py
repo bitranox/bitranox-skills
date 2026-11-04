@@ -226,3 +226,24 @@ def test_post_keeps_an_error_status_whose_body_cannot_be_read(cut):
                                  {"authorization": "Bearer " + TOKEN}, b"{}")
         thread.join(timeout=5)
     assert status == 429 and TOKEN not in detail, detail
+
+
+@pytest.mark.parametrize(("doc", "expected"), [
+    ({"claudeAiOauth": {"accessToken": "t", "expiresAt": 1_700_000_000_123}}, 1_700_000_000.123),
+    ({"claudeAiOauth": {"accessToken": "t"}}, None),
+    ({"claudeAiOauth": {"expiresAt": "soon"}}, None),
+    ({"claudeAiOauth": {"expiresAt": True}}, None),
+    ({"claudeAiOauth": {"expiresAt": 0}}, None),
+    ({"claudeAiOauth": "x"}, None),
+    ([], None),
+], ids=["ms", "absent", "string", "bool", "zero", "not-a-table", "not-an-object"])
+def test_credentials_expiry_reads_expires_at_in_seconds(tmp_path, doc, expected):
+    path = tmp_path / "creds.json"
+    path.write_text(json.dumps(doc), encoding="utf-8")
+    assert G.credentials_expiry_s(path) == expected
+
+
+def test_credentials_expiry_of_an_unreadable_file_is_unknown(tmp_path):
+    assert G.credentials_expiry_s(tmp_path / "missing.json") is None
+    (tmp_path / "bad.json").write_text("{not json", encoding="utf-8")
+    assert G.credentials_expiry_s(tmp_path / "bad.json") is None
