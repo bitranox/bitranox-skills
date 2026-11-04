@@ -30,6 +30,13 @@ a hole nobody has drawn a line under is one that gets rediscovered and half-fill
 two "versions with no entry" notes came to sit in this file disagreeing with it.
 
 
+## [10.13.1]
+
+### Changed
+
+- `process-review-enhance-code-quality` Step 7: a fix batch contains the change each finding needs and its test, and adds no setting, mode, option or refactor no finding asked for; a standing rule about how things are built never makes an addition requested, and an addition already merged is put to the user (keep as its own change, or revert), never kept or removed silently. When the previous fix batch caused most of a sweep's gate-holding findings, that batch's diff is reviewed before the next sweep, the additions are settled before anything inside them is fixed (a reverted addition takes its findings with it), and the full sweep that can end the loop comes after. Before the change, haiku and opus both went straight to another full sweep and quoted no line governing additions.
+- `process-review-uncertain-decisions`: the question and its options name things by what the person sees or handles, never by field names, element types, internal flags or `None`, with examples; a word of the person's own trade (a check digit) stays. Before the change, no line governed the wording, on haiku or opus.
+
 ## [10.13.0]
 
 ### Added
