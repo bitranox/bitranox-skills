@@ -49,7 +49,7 @@ SWITCH_NAME = "BITRANOX_MEMORY_WRITES"
 WORKTREES_PROBE = ".claude/worktrees/probe"
 WORKTREES_PATTERN = ".claude/worktrees/"
 INSTALL_TIMEOUT_S = 300
-# Seconds between SIGTERM and SIGKILL of the session's process group; read at call time.
+# Default seconds between SIGTERM and SIGKILL of the session's process group (dispatch's stop_grace_s).
 STOP_GRACE_S = 60
 WORKTREE_CONFIG_KEY = "extensions.worktreeConfig"
 # Beside the arm's hooks: what make_worktree changed in the repo, so prune can undo exactly that.
@@ -696,8 +696,9 @@ class _Stopper:
     and the reader blocks until that child lets go.
     """
 
-    def __init__(self, proc: subprocess.Popen[str]) -> None:
+    def __init__(self, proc: subprocess.Popen[str], grace_s: float) -> None:
         self.proc = proc
+        self.grace_s = grace_s
         self.eof = threading.Event()
         self.reason: str | None = None
         self._lock = threading.Lock()
@@ -707,12 +708,12 @@ class _Stopper:
         return self.eof.is_set() and self.proc.poll() is not None
 
     def stop(self, reason: str) -> None:
-        """SIGTERM the group now and SIGKILL it after STOP_GRACE_S unless the session is over by then."""
+        """SIGTERM the group now and SIGKILL it after grace_s unless the session is over by then."""
         with self._lock:
             if self.reason is not None:
                 return
             self.reason = reason
-            self._kill_timer = threading.Timer(STOP_GRACE_S, self._kill)
+            self._kill_timer = threading.Timer(self.grace_s, self._kill)
             self._kill_timer.daemon = True
         _signal_group(self.proc, signal.SIGTERM)
         self._kill_timer.start()
@@ -769,9 +770,9 @@ def _start(argv: list[str], ws: Path, env: dict[str, str], err: IO[str]) -> subp
 
 
 def _run_session(proc: subprocess.Popen[str], out: IO[str], acct: StreamAccount, *, max_tokens: int,
-                 deadline_s: float) -> tuple[str, int]:
+                 deadline_s: float, stop_grace_s: float) -> tuple[str, int]:
     """Pump the session under a deadline timer; (stop reason, exit code)."""
-    stopper = _Stopper(proc)
+    stopper = _Stopper(proc, stop_grace_s)
     # The deadline runs on a timer, not between lines: a session that prints nothing (a hung
     # tool call) would otherwise never reach a check. It stays armed through the final wait, so
     # a leader that closed stdout but keeps running is ended too.
@@ -791,7 +792,7 @@ def _run_session(proc: subprocess.Popen[str], out: IO[str], acct: StreamAccount,
 
 
 def dispatch(arm_dir: Path, ws: Path, env: dict[str, str], argv: list[str], *, max_tokens: int,
-             deadline_s: float) -> dict[str, Any]:
+             deadline_s: float, stop_grace_s: float = STOP_GRACE_S) -> dict[str, Any]:
     """Stream the session to arm_dir/stream.jsonl, account it, end it on a cap or the deadline.
 
     Args:
@@ -801,6 +802,8 @@ def dispatch(arm_dir: Path, ws: Path, env: dict[str, str], argv: list[str], *, m
         argv: the session command, normally claude_argv().
         max_tokens: new input tokens (every model) at which the session is ended.
         deadline_s: wall seconds after which the session is ended.
+        stop_grace_s: seconds between the SIGTERM that ends the session and the SIGKILL of its
+            process group, when the group is not over by then.
 
     Returns:
         The stream account's summary plus stop_reason (finished, void, token_cap, deadline),
@@ -815,7 +818,8 @@ def dispatch(arm_dir: Path, ws: Path, env: dict[str, str], argv: list[str], *, m
     with (stream_path.open("w", encoding="utf-8", newline="\n") as out,
           stderr_path.open("w", encoding="utf-8") as err,
           _start(argv, ws, env, err) as proc):
-        stop_reason, rc = _run_session(proc, out, acct, max_tokens=max_tokens, deadline_s=deadline_s)
+        stop_reason, rc = _run_session(proc, out, acct, max_tokens=max_tokens, deadline_s=deadline_s,
+                                       stop_grace_s=stop_grace_s)
     summary = acct.summary()
     summary.update({"stop_reason": stop_reason, "process_rc": rc, "wall_s": round(time.monotonic() - started, 1),
                     "stream": str(stream_path)})

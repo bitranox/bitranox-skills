@@ -503,15 +503,14 @@ def test_dispatch_deadline_fires_while_a_grandchild_holds_the_stream(tmp_path):
 
 
 @POSIX_ONLY
-def test_dispatch_kills_a_group_that_ignores_sigterm_after_the_grace(tmp_path, monkeypatch):
-    monkeypatch.setattr(A, "STOP_GRACE_S", 1)
+def test_dispatch_kills_a_group_that_ignores_sigterm_after_the_grace(tmp_path):
     arm_dir = tmp_path / "arm"
     arm_dir.mkdir()
     # SIG_IGN survives exec, so the grandchild ignores SIGTERM too; only SIGKILL ends it.
     code = ("import signal, subprocess, sys; signal.signal(signal.SIGTERM, signal.SIG_IGN); "
             "subprocess.Popen([sys.executable, '-c', 'import time; time.sleep(30)']); sys.exit(0)")
     res = A.dispatch(arm_dir, tmp_path, {"PATH": os.environ["PATH"]}, [sys.executable, "-c", code],
-                     max_tokens=10**7, deadline_s=1)
+                     max_tokens=10**7, deadline_s=1, stop_grace_s=1)
     assert res["stop_reason"] == "deadline"
     assert 1.5 <= res["wall_s"] < 15, "deadline plus the lowered grace, then SIGKILL"
 
