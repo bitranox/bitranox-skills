@@ -4,9 +4,11 @@ import os
 import signal
 import sys
 import threading
+import time
 from pathlib import Path
 
 import _ablib as L
+import abarm as A
 import abtest as T
 import pytest
 
@@ -48,17 +50,38 @@ def _run_args(run_dir, creds, skills_repo, *extra):
     return ["run", str(run_dir), "--credentials", str(creds), "--skills-repo", str(skills_repo), *extra]
 
 
-def _login_failure_stream(tmp_path):
-    """What the CLI writes when it calls a failed request a login failure (401 or 429 alike)."""
+def _synthetic_stream(tmp_path, text, *, error=None, real_work_first=False, name="stream-synthetic.jsonl"):
+    """A session whose last assistant message is a CLI synthetic notice carrying `text`.
+
+    real_work_first puts one real opus message (the control fixture's) before the notice.
+    """
+    control = (FIXTURES / "stream-control.jsonl").read_text(encoding="utf-8").splitlines()
     rows = [{"type": "system", "subtype": "init", "model": "claude-opus-5-5", "claude_code_version": "9.9.9",
-             "session_id": "fake-login", "permissionMode": "bypassPermissions", "plugins": [], "skills": []},
-            {"type": "assistant", "error": "authentication_failed",
-             "message": {"id": "s1", "model": "<synthetic>", "content": [{"type": "text", "text": LOGIN_TEXT}]}},
-            {"type": "result", "subtype": "success", "is_error": True, "result": LOGIN_TEXT, "total_cost_usd": 0,
-             "num_turns": 1, "duration_ms": 10, "modelUsage": {}}]
-    path = tmp_path / "stream-login.jsonl"
+             "session_id": "fake-synthetic", "permissionMode": "bypassPermissions", "plugins": [], "skills": []}]
+    rows += [json.loads(control[1])] if real_work_first else []
+    notice = {"type": "assistant", "message": {"id": "s1", "model": "<synthetic>", "content": [{"type": "text", "text": text}]}}
+    rows.append(dict(notice, error=error) if error else notice)
+    rows.append({"type": "result", "subtype": "success", "is_error": True, "result": text, "total_cost_usd": 0,
+                 "num_turns": 1, "duration_ms": 10, "modelUsage": {}})
+    path = tmp_path / name
     path.write_text("".join(json.dumps(r) + "\n" for r in rows), encoding="utf-8")
     return path
+
+
+def _login_failure_stream(tmp_path):
+    """What the CLI writes when it calls a failed request a login failure (401 or 429 alike)."""
+    return _synthetic_stream(tmp_path, LOGIN_TEXT, error="authentication_failed", name="stream-login.jsonl")
+
+
+def _files_carrying(root, *tokens):
+    """Every regular file under root (symlinks and the linked-in home skipped) holding any token; and the count read."""
+    hits, scanned = [], 0
+    for p in root.rglob("*"):
+        if p.is_file() and not p.is_symlink() and "home" not in p.relative_to(root).parts:
+            scanned += 1
+            data = p.read_bytes()
+            hits += [str(p) for t in tokens if t.encode() in data]
+    return hits, scanned
 
 
 class _Probe:
@@ -261,10 +284,9 @@ def test_no_file_under_the_run_dir_carries_the_credentials(tmp_path, scratch_rep
     assert T.main(["score", str(run_dir)]) == 0
     scanned = 0
     for root in (run_dir, scratch_repo):
-        for p in root.rglob("*"):
-            if p.is_file() and not p.is_symlink() and "home" not in p.relative_to(root).parts:
-                scanned += 1
-                assert SECRET.encode() not in p.read_bytes(), p
+        hits, count = _files_carrying(root, SECRET)
+        assert hits == []
+        scanned += count
     assert scanned > 20, "the scan must have read the arm's files"
 
 
@@ -285,19 +307,47 @@ def test_a_failing_arm_exits_2_records_an_error_row_and_cleans_up(tmp_path, scra
     assert "ArmError" in res["error"] and not (run_dir / "arms" / "r1-C" / "cfg").exists()
 
 
+class _SigintOnMarker:
+    """Send this process one SIGINT as soon as `marker` exists, i.e. once the step to interrupt has started.
+
+    A fixed timer would land wherever a slow runner happens to be; the marker is written by the
+    very step the test means to interrupt.
+    """
+
+    def __init__(self, marker, timeout_s=60.0):
+        self.marker, self.timeout_s = marker, timeout_s
+        self.sent = False
+        self._stop = threading.Event()
+        self._thread = threading.Thread(target=self._watch, daemon=True)
+
+    def _watch(self):
+        deadline = time.monotonic() + self.timeout_s
+        while not self._stop.is_set() and time.monotonic() < deadline:
+            if self.marker.exists():
+                self.sent = True
+                os.kill(os.getpid(), signal.SIGINT)
+                return
+            self._stop.wait(0.02)
+
+    def __enter__(self):
+        self._thread.start()
+        return self
+
+    def __exit__(self, *exc):
+        self._stop.set()
+        self._thread.join()
+
+
 @pytest.mark.skipif(sys.platform == "win32", reason="SIGINT delivery to the process is POSIX here")
 def test_ctrl_c_still_writes_result_and_journal_then_reraises(tmp_path, scratch_repo, skills_repo, fake_claude_path, monkeypatch):
-    run_dir = _init_and_fill(tmp_path, scratch_repo, skills_repo, gate='["sleep", "6"]')
+    marker = tmp_path / "gate-started"
+    run_dir = _init_and_fill(tmp_path, scratch_repo, skills_repo, gate=f'["sh", "-c", "touch {marker} && sleep 30"]')
     env, creds = _env(fake_claude_path, tmp_path)
     _use_env(monkeypatch, env)
     assert T.main(["seal", str(run_dir)]) == 0
-    timer = threading.Timer(1.5, os.kill, (os.getpid(), signal.SIGINT))
-    timer.start()
-    try:
-        with pytest.raises(KeyboardInterrupt):
-            T.main(_run_args(run_dir, creds, skills_repo, "--only", "C"), login_check=_Probe("ok"))
-    finally:
-        timer.cancel()
+    with _SigintOnMarker(marker) as sigint, pytest.raises(KeyboardInterrupt):
+        T.main(_run_args(run_dir, creds, skills_repo, "--only", "C"), login_check=_Probe("ok"))
+    assert sigint.sent, "the interrupt must land inside the gate"
     assert _arm_rows(run_dir) == [(1, "C", "interrupted")]
     arm = run_dir / "arms" / "r1-C"
     res = json.loads((arm / "result.json").read_text(encoding="utf-8"))
@@ -339,3 +389,228 @@ def test_prune_run_deletes_the_branches(tmp_path, scratch_repo, skills_repo, fak
     assert T.main(_run_args(run_dir, creds, skills_repo, "--dry-run")) == 0
     assert T.main(["prune-run", str(run_dir)]) == 0
     assert L.git(scratch_repo, "branch", "--list", f"abx/{run_dir.name}/*").stdout.strip() == ""
+
+
+# --- review round: pause on a refused request, leftovers of a killed attempt, refusals ------------
+
+PLANTED = "fake-planted-token-UNIQUE-0d41e2-abtest"  # a credentials copy a hard kill left behind
+REFUSED_INSTALL = """#!/usr/bin/env python3
+import os, runpy, sys
+from pathlib import Path
+if sys.argv[1:4] == ["plugin", "marketplace", "add"]:
+    cfg = Path(os.environ["CLAUDE_CONFIG_DIR"])
+    if (cfg / ".credentials.json").is_file():
+        (cfg.parent / "saw-credentials").write_text("yes", encoding="utf-8")
+    print("marketplace add refused", file=sys.stderr)
+    sys.exit(3)
+sys.argv[0] = str(Path(__file__).with_name("claude_real"))
+runpy.run_path(sys.argv[0], run_name="__main__")
+"""
+
+
+def _ws(scratch_repo, run_dir, label):
+    return scratch_repo / ".claude" / "worktrees" / f"abx-{run_dir.name}-{label}"
+
+
+def _extension_set(repo):
+    return L.git(repo, "config", "--local", "--get", "extensions.worktreeConfig").returncode == 0
+
+
+@pytest.mark.parametrize(("text", "real_work_first", "trigger"), [
+    ("You've hit your weekly limit - resets Monday", False, "a usage-limit notice"),
+    ("You've hit your usage limit", True, "a usage-limit notice"),
+    ("Something the CLI said instead of the model", False, "only CLI synthetic messages"),
+], ids=["weekly-limit-only", "usage-limit-after-real-work", "synthetic-only"])
+def test_a_refused_session_pauses_the_run_instead_of_voiding_the_rest(tmp_path, scratch_repo, skills_repo, fake_claude_path,
+                                                                       monkeypatch, capsys, text, real_work_first, trigger):
+    run_dir = _init_and_fill(tmp_path, scratch_repo, skills_repo)
+    env, creds = _env(fake_claude_path, tmp_path, stream=_synthetic_stream(tmp_path, text, real_work_first=real_work_first))
+    _use_env(monkeypatch, env)
+    assert T.main(["seal", str(run_dir)]) == 0
+    probe = _Probe("quota")
+    capsys.readouterr()
+    assert T.main(_run_args(run_dir, creds, skills_repo, "--json"), login_check=probe) == 1
+    out = json.loads(capsys.readouterr().out)
+    assert probe.calls == [creds] and out["data"]["pause_trigger"] == trigger
+    assert _arm_rows(run_dir) == [(1, "C", "paused")] and not (run_dir / "arms" / "r1-V1").exists()
+    last = L.read_jsonl(run_dir / "journal.jsonl")[-1]
+    assert (last["step"], last["status"], last["pause_trigger"]) == ("pause", "quota", trigger)
+    assert "exhausted" not in json.dumps(out).lower(), "the probe's word is reported, never a cause"
+    env["FAKE_CLAUDE_STREAM"] = str(FIXTURES / "stream-control.jsonl")
+    _use_env(monkeypatch, env)
+    assert T.main(_run_args(run_dir, creds, skills_repo), login_check=_Probe("ok")) == 0
+    assert _arm_rows(run_dir) == [(1, "C", "paused"), (1, "C", "ran"), (1, "V1", "ran")]
+
+
+def test_a_synthetic_notice_after_real_work_that_is_no_limit_does_not_pause(tmp_path, scratch_repo, skills_repo,
+                                                                            fake_claude_path, monkeypatch):
+    run_dir = _init_and_fill(tmp_path, scratch_repo, skills_repo)
+    stream = _synthetic_stream(tmp_path, "Something the CLI said", real_work_first=True)
+    env, creds = _env(fake_claude_path, tmp_path, stream=stream)
+    _use_env(monkeypatch, env)
+    assert T.main(["seal", str(run_dir)]) == 0
+    probe = _Probe("ok")
+    assert T.main(_run_args(run_dir, creds, skills_repo, "--only", "C"), login_check=probe) == 0
+    assert probe.calls == [] and _arm_rows(run_dir) == [(1, "C", "ran")], "the scorer voids it; the run goes on"
+
+
+def test_the_arm_row_is_journaled_before_the_probe_is_asked(tmp_path, scratch_repo, skills_repo, fake_claude_path, monkeypatch):
+    run_dir = _init_and_fill(tmp_path, scratch_repo, skills_repo)
+    env, creds = _env(fake_claude_path, tmp_path, stream=_login_failure_stream(tmp_path))
+    _use_env(monkeypatch, env)
+    assert T.main(["seal", str(run_dir)]) == 0
+    seen = []
+
+    def probe(credentials):
+        seen.append(_arm_rows(run_dir))
+        return "ok"
+
+    assert T.main(_run_args(run_dir, creds, skills_repo, "--only", "C"), login_check=probe) == 1
+    assert seen == [[(1, "C", "paused")]], "a kill inside the probe must not lose the paid arm's row"
+
+
+def test_a_hard_killed_attempt_is_cleaned_up_before_the_rerun(tmp_path, scratch_repo, skills_repo, fake_claude_path, monkeypatch):
+    run_dir = _init_and_fill(tmp_path, scratch_repo, skills_repo)
+    env, creds = _env(fake_claude_path, tmp_path)
+    _use_env(monkeypatch, env)
+    assert T.main(["seal", str(run_dir)]) == 0
+    # What a SIGKILL mid-dispatch leaves: the credentials copy, the harness's worktree and its hooks dir.
+    ws = _ws(scratch_repo, run_dir, "r1-C")
+    A.make_worktree(scratch_repo, (scratch_repo / ".base").read_text(), f"abx/{run_dir.name}/r1-C", ws,
+                    copy_untracked_claude_md=True)
+    cfg = run_dir / "arms" / "r1-C" / "cfg"
+    cfg.mkdir(parents=True)
+    (cfg / ".credentials.json").write_text(json.dumps({"claudeAiOauth": {"accessToken": PLANTED}}), encoding="utf-8")
+    hooks = ws.parent / f"{ws.name}.githooks"
+    assert hooks.is_dir() and _extension_set(scratch_repo)
+    assert T.main(_run_args(run_dir, creds, skills_repo, "--only", "C"), login_check=_Probe("ok")) == 0
+    assert _arm_rows(run_dir) == [(1, "C", "ran")] and (run_dir / "arms" / "r1-C.attempt-1").is_dir()
+    hits, scanned = _files_carrying(run_dir, PLANTED, SECRET)
+    assert hits == [] and scanned > 10
+    assert not ws.exists() and not hooks.exists() and not _extension_set(scratch_repo)
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="SIGINT delivery to the process is POSIX here")
+def test_ctrl_c_right_after_worktree_add_still_prunes_the_worktree(tmp_path, scratch_repo, skills_repo, fake_claude_path,
+                                                                   monkeypatch):
+    marker, release = tmp_path / "worktree-added", tmp_path / "release-hook"
+    # post-checkout runs once `worktree add` has registered the worktree, before make_worktree returns.
+    hook = scratch_repo / ".git" / "hooks" / "post-checkout"
+    hook.write_text(f"#!/bin/sh\ntouch {marker}\ni=0\nwhile [ ! -e {release} ] && [ $i -lt 300 ]; do sleep 0.1; i=$((i+1)); done\n",
+                    encoding="utf-8")
+    hook.chmod(0o755)
+    run_dir = _init_and_fill(tmp_path, scratch_repo, skills_repo)
+    env, creds = _env(fake_claude_path, tmp_path)
+    _use_env(monkeypatch, env)
+    assert T.main(["seal", str(run_dir)]) == 0
+    try:
+        with _SigintOnMarker(marker) as sigint, pytest.raises(KeyboardInterrupt):
+            T.main(_run_args(run_dir, creds, skills_repo, "--only", "C"), login_check=_Probe("ok"))
+    finally:
+        release.write_text("", encoding="utf-8")
+    assert sigint.sent
+    ws = _ws(scratch_repo, run_dir, "r1-C")
+    res = json.loads((run_dir / "arms" / "r1-C" / "result.json").read_text(encoding="utf-8"))
+    assert "worktree" not in res, "the interrupt landed inside make_worktree"
+    assert not ws.exists() and str(ws) not in L.git(scratch_repo, "worktree", "list", "--porcelain").stdout
+    assert _arm_rows(run_dir) == [(1, "C", "interrupted")]
+
+
+def test_prune_run_finishes_a_locked_arm_the_user_removed_by_hand(tmp_path, scratch_repo, skills_repo, capsys):
+    run_dir = _init_and_fill(tmp_path, scratch_repo, skills_repo)
+    ws = _ws(scratch_repo, run_dir, "r1-C")
+    hooks = ws.parent / f"{ws.name}.githooks"
+    A.make_worktree(scratch_repo, (scratch_repo / ".base").read_text(), f"abx/{run_dir.name}/r1-C", ws,
+                    copy_untracked_claude_md=False)
+    assert L.git(scratch_repo, "worktree", "lock", str(ws)).returncode == 0
+    with pytest.raises(A.ArmError):
+        A.prune(ws, scratch_repo, ())
+    capsys.readouterr()
+    # While it is locked, prune-run fails and says so on exactly one stderr line, in both modes.
+    assert T.main(["prune-run", str(run_dir)]) == 2
+    assert capsys.readouterr().err.count("\n") == 1
+    assert T.main(["prune-run", str(run_dir), "--json"]) == 2
+    captured = capsys.readouterr()
+    assert json.loads(captured.out)["ok"] is False and captured.err.count("\n") == 1
+    assert L.git(scratch_repo, "worktree", "remove", "-f", "-f", str(ws)).returncode == 0
+    assert hooks.is_dir() and _extension_set(scratch_repo), "what the hand removal leaves"
+    assert T.main(["prune-run", str(run_dir)]) == 0
+    assert not hooks.exists() and not _extension_set(scratch_repo)
+
+
+def test_a_task_file_that_is_not_utf8_is_refused_not_a_traceback(tmp_path, scratch_repo, skills_repo, capsys):
+    run_dir = _init_and_fill(tmp_path, scratch_repo, skills_repo)
+    (run_dir / "task.md").write_bytes(b"\xff\xfe bad")
+    capsys.readouterr()
+    assert T.main(["seal", str(run_dir), "--json"]) == 2
+    captured = capsys.readouterr()
+    assert "task.md is not UTF-8" in json.loads(captured.out)["data"]["error"] and captured.err.count("\n") == 1
+    (run_dir / "task.md").write_text("Do the task.\n", encoding="utf-8")
+    assert T.main(["seal", str(run_dir)]) == 0
+    (run_dir / "task.md").write_bytes(b"\xff\xfe bad")
+    capsys.readouterr()
+    assert T.main(["run", str(run_dir), "--dry-run", "--json"]) == 2
+    assert "task.md is not UTF-8" in json.loads(capsys.readouterr().out)["data"]["error"]
+
+
+@pytest.mark.parametrize("change", ["modified", "untracked"])
+def test_run_refuses_a_prereg_changed_after_the_seal(tmp_path, scratch_repo, skills_repo, fake_claude_path, monkeypatch,
+                                                     capsys, change):
+    run_dir = _init_and_fill(tmp_path, scratch_repo, skills_repo)
+    env, creds = _env(fake_claude_path, tmp_path)
+    _use_env(monkeypatch, env)
+    assert T.main(["seal", str(run_dir)]) == 0
+    prereg = run_dir / "PREREG.md"
+    if change == "modified":
+        prereg.write_text(prereg.read_text(encoding="utf-8") + "\n## Amendment\n\nH2 added.\n", encoding="utf-8")
+    else:
+        assert L.git(run_dir, "rm", "-q", "--cached", "PREREG.md").returncode == 0
+    capsys.readouterr()
+    assert T.main(_run_args(run_dir, creds, skills_repo, "--dry-run", "--only", "C", "--json")) == 2
+    error = json.loads(capsys.readouterr().out)["data"]["error"]
+    assert "PREREG.md" in error and "commit" in error and _arm_rows(run_dir) == []
+    assert L.git(run_dir, "add", "PREREG.md").returncode == 0
+    if change == "modified":  # re-adding an untracked PREREG.md already restores the committed state
+        assert L.git(run_dir, *T.SEAL_GIT, "commit", "-q", "-m", "amend").returncode == 0
+    assert T.main(_run_args(run_dir, creds, skills_repo, "--dry-run", "--only", "C")) == 0, "a committed amendment runs"
+
+
+@pytest.mark.parametrize(("question", "sealed"), [("Is V1 cheaper when cost < 0.10?", True),
+                                                  ("<what the variants are expected to change>", False)])
+def test_seal_refuses_only_placeholder_shaped_angle_brackets(tmp_path, scratch_repo, skills_repo, question, sealed):
+    run_dir = _init_and_fill(tmp_path, scratch_repo, skills_repo)
+    (run_dir / "PREREG.md").write_text(f"# Pre-registration\n\nQuestion: {question}\n", encoding="utf-8")
+    assert T.main(["seal", str(run_dir)]) == (0 if sealed else 2)
+
+
+def test_set_aside_skips_an_attempt_number_whose_branch_survives(tmp_path, scratch_repo, skills_repo, fake_claude_path,
+                                                                 monkeypatch):
+    run_dir = _init_and_fill(tmp_path, scratch_repo, skills_repo)
+    env, creds = _env(fake_claude_path, tmp_path)
+    _use_env(monkeypatch, env)
+    assert T.main(["seal", str(run_dir)]) == 0
+    branch = f"abx/{run_dir.name}/r1-C"
+    # An unfinished attempt's branch, and an older set-aside branch whose directory was deleted.
+    for name in (branch, branch + ".attempt-1"):
+        assert L.git(scratch_repo, "branch", name, (scratch_repo / ".base").read_text()).returncode == 0
+    assert T.main(_run_args(run_dir, creds, skills_repo, "--dry-run", "--only", "C")) == 0
+    assert L.read_jsonl(run_dir / "journal.jsonl")[-1]["set_aside"] == "r1-C.attempt-2"
+    for name in (branch + ".attempt-1", branch + ".attempt-2"):
+        assert L.git(scratch_repo, "rev-parse", "--verify", "-q", name).returncode == 0, name
+
+
+def test_a_failing_install_step_deletes_the_credentials_copy_and_journals_an_error(tmp_path, scratch_repo, skills_repo,
+                                                                                   fake_claude_path, monkeypatch, capsys):
+    (fake_claude_path / "claude").rename(fake_claude_path / "claude_real")
+    (fake_claude_path / "claude").write_text(REFUSED_INSTALL, encoding="utf-8")
+    (fake_claude_path / "claude").chmod(0o755)
+    run_dir = _init_and_fill(tmp_path, scratch_repo, skills_repo)
+    env, creds = _env(fake_claude_path, tmp_path)
+    _use_env(monkeypatch, env)
+    assert T.main(["seal", str(run_dir)]) == 0
+    capsys.readouterr()
+    assert T.main(_run_args(run_dir, creds, skills_repo, "--only", "C")) == 2
+    arm = run_dir / "arms" / "r1-C"
+    assert (arm / "saw-credentials").is_file(), "the step failed while the copy existed"
+    assert not (arm / "cfg").exists() and _arm_rows(run_dir) == [(1, "C", "error")]
+    assert "marketplace add" in json.loads((arm / "result.json").read_text(encoding="utf-8"))["error"]
