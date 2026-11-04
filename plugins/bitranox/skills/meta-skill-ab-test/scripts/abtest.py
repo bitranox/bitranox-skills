@@ -1,0 +1,630 @@
+#!/usr/bin/env python3
+"""abtest: A/B test a skill against its variants on one real task in the real repository.
+
+Subcommands (every one takes --json; exit 0 yes / 1 no / 2 could not run):
+  init <run_dir> [--repo --base --skills-ref --skill]   write the profile, task and PREREG skeletons
+  seal <run_dir>                                       validate and commit them; fixes the weights
+  run <run_dir> [--dry-run] [--only ARM] ...           the serial interleaved arms (resumes)
+  score <run_dir>                                      per-arm scores and void rules
+  prune-run <run_dir>                                  delete the run's branches in the workpiece
+
+The run dir is its own git repo so the pre-registration is append-only. Its journal.jsonl records
+every arm attempt; `run` skips an arm the journal says ran, and sets aside (renames) the directory
+and branch of an attempt that did not finish (paused, interrupted, failed, or a dry run before a
+live one) before running that arm again. A session that ends with a login-looking failure is the
+only time the out-of-band login probe is asked; its answer pauses the run and names no cause.
+"""
+from __future__ import annotations
+
+import argparse
+import json
+import os
+import re
+import subprocess
+import sys
+from collections.abc import Callable, Iterator
+from dataclasses import dataclass
+from pathlib import Path
+from typing import Any
+
+import abarm
+import abguard
+import abscore
+from _ablib import (
+    EXIT_ERROR,
+    EXIT_NO,
+    EXIT_YES,
+    append_jsonl,
+    envelope,
+    git,
+    rotated_schedule,
+    sha256_file,
+    utc_now,
+)
+from abprofile import SKELETON, Profile, ProfileError, load_profile
+from abstream import OPUS_PREFIX, SYNTHETIC_REASON_PREFIX
+
+__all__ = [
+    "DEFAULT_CREDENTIALS",
+    "DEFAULT_SKILLS_REPO",
+    "OPUS_PREFIX",
+    "WEIGHTS",
+    "JournalError",
+    "RunContext",
+    "RunRefused",
+    "build_parser",
+    "load_journal",
+    "main",
+    "record",
+    "run_arm",
+]
+
+LoginCheck = Callable[[Path], str]
+DEFAULT_CREDENTIALS = Path.home() / ".claude" / ".credentials.json"
+DEFAULT_SKILLS_REPO = Path.home() / ".claude" / "plugins" / "marketplaces" / "bitranox-skills"  # the clone every install has
+WEIGHTS = {"correctness": 0.30, "task_coverage": 0.25, "tests": 0.20, "beyond_plan_fixes": 0.10,
+           "readability": 0.10, "scope_creep": 0.05}
+PREREG_SKELETON = """# Pre-registration
+
+## Question
+<what the variants are expected to change, in one sentence>
+
+## Hypotheses
+<H1 ... per variant: direction and the criterion it should move>
+
+## Decision rule
+Pairwise blind judge (design S2), A/B swap tie rule, control first then finalists; labels per design S5.4.
+"""
+GITIGNORE = "frozen/\narms/*/cfg\narms/*/home\narms/*/stream.jsonl\narms/*/bundle.git\narms/*/guard\n"
+JOURNAL, TORN = "journal.jsonl", "journal.torn"
+# The run id names branches (abx/<id>/...) and worktree dirs, so it must be a plain ref component.
+RUN_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$")
+# A live run skips only what really ran; a dry run also skips what an earlier dry run did.
+DONE_LIVE, DONE_DRY = ("ran",), ("ran", "dry")
+INTERRUPTED = "interrupted"
+# What the CLI prints when it calls a failed request a login failure: a bad token (401) and a
+# refused or rate-limited request (429) read the same, which is why only the probe can tell.
+LOGIN_MARKS = ("not logged in", "/login")
+AUTH_FAILED = "authentication_failed"
+SEAL_GIT = ("-c", "user.name=abtest", "-c", "user.email=abtest@localhost", "-c", "commit.gpgsign=false",
+            "-c", "core.hooksPath=/dev/null")
+
+
+class RunRefused(RuntimeError):
+    """A precondition of the subcommand is not met; exit 2 with this message."""
+
+
+class JournalError(RuntimeError):
+    """journal.jsonl holds an unparsable line before its last one; it cannot be trusted to resume."""
+
+
+class UsageError(RuntimeError):
+    """The command line does not parse; reported like any other could-not-run."""
+
+
+@dataclass(frozen=True)
+class RunContext:
+    run_dir: Path
+    profile: Profile
+    task: str
+    credentials: Path
+    skills_repo: Path
+    dry_run: bool
+    max_turns: int
+
+    @property
+    def run_id(self) -> str:
+        return self.run_dir.name
+
+
+def _warn(text: str) -> None:
+    print(f"abtest: warning: {text}", file=sys.stderr)
+
+
+def _emit(as_json: bool, command: str, data: dict[str, Any], ok: bool, text: str, skipped: list[str] | None = None) -> None:
+    print(envelope(command, data, ok=ok, skipped=skipped) if as_json else text)
+
+
+# --- the journal ---------------------------------------------------------------------------------
+
+def _parse_journal(path: Path) -> tuple[list[str], list[dict[str, Any]], str | None]:
+    """(the good lines, their rows, the torn last line or None); a bad earlier line raises."""
+    lines = [ln for ln in path.read_text(encoding="utf-8").splitlines() if ln.strip()]
+    rows: list[dict[str, Any]] = []
+    for i, line in enumerate(lines):
+        try:
+            row = json.loads(line)
+        except ValueError:
+            row = None
+        if isinstance(row, dict):
+            rows.append(row)
+        elif i == len(lines) - 1:
+            return lines[:-1], rows, line
+        else:
+            raise JournalError(f"{path}: line {i + 1} is not a JSON object; only a torn LAST line is tolerated")
+    return lines, rows, None
+
+
+def load_journal(run_dir: Path) -> list[dict[str, Any]]:
+    """Every journal row; a torn last line (a run killed mid-append) is moved to journal.torn.
+
+    The repair keeps the next append from landing on the torn fragment's line, and the fragment
+    is kept beside the journal rather than deleted. It is reported on stderr.
+
+    Raises:
+        JournalError: an unparsable line sits before the last one.
+    """
+    path = run_dir / JOURNAL
+    if not path.is_file():
+        return []
+    good, rows, torn = _parse_journal(path)
+    if torn is not None:
+        with (run_dir / TORN).open("a", encoding="utf-8", newline="\n") as fh:
+            fh.write(torn + "\n")
+        tmp = path.with_suffix(".tmp")
+        tmp.write_text("".join(ln + "\n" for ln in good), encoding="utf-8", newline="\n")
+        os.replace(tmp, path)
+        _warn(f"{path}: the last line was torn (a run killed mid-append); moved it to {run_dir / TORN}")
+    return rows
+
+
+def record(run_dir: Path, **row: Any) -> None:
+    """Append one journal row stamped with `at`, on a line of its own even after a torn write."""
+    path = run_dir / JOURNAL
+    if path.is_file() and path.stat().st_size and not path.read_bytes().endswith(b"\n"):
+        with path.open("a", encoding="utf-8", newline="\n") as fh:
+            fh.write("\n")
+    append_jsonl(path, dict(row, at=utc_now()))
+
+
+def _sealed(run_dir: Path) -> bool:
+    return any(r.get("step") == "seal" for r in load_journal(run_dir))
+
+
+def _require_sealed(run_dir: Path) -> None:
+    if not _sealed(run_dir):
+        raise RunRefused(f"{run_dir} is not sealed; run `abtest.py seal` first")
+
+
+def _done(run_dir: Path, round_no: int, arm: str, statuses: tuple[str, ...]) -> bool:
+    return any(r.get("step") == "arm" and r.get("round") == round_no and r.get("arm") == arm
+               and r.get("status") in statuses for r in load_journal(run_dir))
+
+
+def _run_dir(raw: str) -> Path:
+    run_dir = Path(raw).expanduser()
+    if not RUN_ID_RE.match(run_dir.name):
+        raise RunRefused(f"run dir name {run_dir.name!r} must match {RUN_ID_RE.pattern}: it names branches")
+    return run_dir
+
+
+# --- init and seal -------------------------------------------------------------------------------
+
+def _fill_skeleton(args: argparse.Namespace) -> str:
+    text = SKELETON
+    for key, value in (("<absolute path of the real repository>", args.repo), ("<40-char sha every arm starts from>", args.base),
+                       ("<bitranox-skills sha that carries BITRANOX_MEMORY_WRITES>", args.skills_ref),
+                       ("<skill directory name under plugins/bitranox/skills/>", args.skill)):
+        if value:
+            text = text.replace(key, str(value))
+    return text
+
+
+def cmd_init(args: argparse.Namespace) -> int:
+    run_dir = _run_dir(args.run_dir)
+    if run_dir.exists():
+        _emit(args.json, "init", {"run_dir": str(run_dir)}, False, f"{run_dir} already exists; refusing to overwrite")
+        return EXIT_NO
+    (run_dir / "variants" / "V1").mkdir(parents=True)
+    (run_dir / "abtest.toml").write_text(_fill_skeleton(args), encoding="utf-8")
+    (run_dir / "task.md").write_text("", encoding="utf-8")
+    (run_dir / "PREREG.md").write_text(PREREG_SKELETON, encoding="utf-8")
+    (run_dir / ".gitignore").write_text(GITIGNORE, encoding="utf-8")
+    proc = git(run_dir, "init", "-q", "-b", "main")
+    if proc.returncode != 0:
+        raise RunRefused(f"git init failed in {run_dir}: {proc.stderr.strip()}")
+    _emit(args.json, "init", {"run_dir": str(run_dir)}, True,
+          f"initialised {run_dir}: fill abtest.toml, task.md, PREREG.md and variants/, then seal")
+    return EXIT_YES
+
+
+def _read_or_empty(path: Path) -> str:
+    return path.read_text(encoding="utf-8") if path.is_file() else ""
+
+
+def _seal_problems(run_dir: Path, profile: Profile) -> list[str]:
+    problems = []
+    if not _read_or_empty(run_dir / profile.workpiece.task_file).strip():
+        problems.append(f"{profile.workpiece.task_file} is empty")
+    prereg = _read_or_empty(run_dir / "PREREG.md")
+    if not prereg.strip() or "<" in prereg:
+        problems.append("PREREG.md is empty or still holds a <placeholder>")
+    for v in profile.variants:
+        if not (run_dir / v.dir).is_dir() or not any(p.is_file() for p in (run_dir / v.dir).rglob("*")):
+            problems.append(f"variants/{v.name}: {v.dir} holds no file")
+    return problems
+
+
+def _suite_sha(profile: Profile) -> str | None:
+    if not profile.floor.suite:
+        return None
+    suite_path = profile.workpiece.repo / profile.floor.suite
+    if not suite_path.is_file():
+        raise RunRefused(f"floor.suite {suite_path} does not exist at the workpiece")
+    return sha256_file(suite_path)
+
+
+def _commit_seal(run_dir: Path, stamp: dict[str, Any]) -> None:
+    """Append the stamp to PREREG.md, journal the seal and commit both; undo both when the commit fails."""
+    prereg = run_dir / "PREREG.md"
+    before = prereg.read_text(encoding="utf-8")
+    with prereg.open("a", encoding="utf-8", newline="\n") as fh:
+        fh.write("\n## Sealed\n\n```json\n" + json.dumps(stamp, indent=1, sort_keys=True) + "\n```\n")
+    record(run_dir, step="seal", round=0, arm="", status="sealed")
+    git(run_dir, "add", "-A")
+    proc = git(run_dir, *SEAL_GIT, "commit", "-q", "-m", "seal")
+    if proc.returncode != 0:
+        prereg.write_text(before, encoding="utf-8")
+        (run_dir / JOURNAL).unlink(missing_ok=True)
+        git(run_dir, "reset", "-q")
+        raise RunRefused(f"seal commit failed: {proc.stderr.strip()}")
+
+
+def cmd_seal(args: argparse.Namespace) -> int:
+    run_dir = _run_dir(args.run_dir)
+    if _sealed(run_dir):
+        _emit(args.json, "seal", {}, False, f"{run_dir} is already sealed; amendments are appended to PREREG.md and committed")
+        return EXIT_NO
+    profile = load_profile(run_dir / "abtest.toml")
+    problems = _seal_problems(run_dir, profile)
+    if problems:
+        raise RunRefused("; ".join(problems))
+    stamp = {"sealed_at": utc_now(), "weights": WEIGHTS, "suite_sha256": _suite_sha(profile), "arms": profile.arm_names(),
+             "n": profile.run.n, "warmth_tolerance": profile.run.warmth_tolerance}
+    _commit_seal(run_dir, stamp)
+    _emit(args.json, "seal", stamp, True, f"sealed {run_dir}: {len(profile.arm_names())} arms x {profile.run.n} rounds")
+    return EXIT_YES
+
+
+# --- one arm -------------------------------------------------------------------------------------
+
+def _paths(ctx: RunContext, label: str) -> tuple[Path, Path, str]:
+    """(arm dir, worktree path, branch) of one arm."""
+    ws = ctx.profile.workpiece.repo / ".claude" / "worktrees" / f"abx-{ctx.run_id}-{label}"
+    return ctx.run_dir / "arms" / label, ws, f"abx/{ctx.run_id}/{label}"
+
+
+def _guard_after(result: dict[str, Any], guard_dir: Path) -> None:
+    """Verify only a snapshot that was taken: a missing manifest would read as no change."""
+    guard = result["guard"]
+    if guard.get("taken"):
+        result["guard_changes"] = abguard.verify(guard_dir)
+    else:
+        result["guard_changes"] = []
+        result["guard_skipped"] = guard.get("skipped")
+
+
+def _arm_steps(ctx: RunContext, result: dict[str, Any], frozen: abarm.Frozen, label: str) -> None:
+    p = ctx.profile
+    arm_dir, ws, branch = _paths(ctx, label)
+    cfg = arm_dir / "cfg"
+    env = abarm.arm_env(cfg, abarm.arm_home(arm_dir, p.run.home_links), p.run.env_keep)
+    result["install"] = abarm.install_plugin(cfg, frozen, ctx.credentials, env)
+    result["worktree"] = abarm.make_worktree(p.workpiece.repo, p.workpiece.base, branch, ws, copy_untracked_claude_md=True)
+    result["guard"] = abguard.snapshot(ws, arm_dir / "guard")
+    if not ctx.dry_run:
+        result.update(abarm.dispatch(arm_dir, ws, env, abarm.claude_argv(ctx.task, ctx.max_turns),
+                                     max_tokens=p.run.max_tokens, deadline_s=p.run.deadline_s))
+    _guard_after(result, arm_dir / "guard")
+    result["floor"] = abscore.run_floor(ws, p, arm_dir)
+    result["bundle_commits"] = abarm.bundle(ws, p.workpiece.base, arm_dir / "bundle.git")
+
+
+def _cleanup(ctx: RunContext, result: dict[str, Any], frozen: abarm.Frozen | None, ws: Path) -> dict[str, Any]:
+    """Prune the worktree this arm made and release its frozen checkout; never raises, errors are listed."""
+    out: dict[str, Any] = {"prune": None, "frozen_released": False, "errors": []}
+    try:
+        # Only a worktree make_worktree returned is ours: a path it refused is an earlier arm's leftover.
+        if "worktree" in result and ws.exists():
+            out["prune"] = abarm.prune(ws, ctx.profile.workpiece.repo, ctx.profile.floor.cache_paths)
+    except (abarm.ArmError, OSError) as exc:
+        out["errors"].append(f"prune: {exc}")
+    try:
+        if frozen is not None:
+            abarm.release_frozen(frozen, ctx.skills_repo)
+            out["frozen_released"] = True
+    except (abarm.ArmError, OSError) as exc:
+        out["errors"].append(f"release_frozen: {exc}")
+    return out
+
+
+def _write_result(arm_dir: Path, result: dict[str, Any]) -> None:
+    (arm_dir / "result.json").write_text(json.dumps(result, indent=1, sort_keys=True), encoding="utf-8")
+
+
+def run_arm(ctx: RunContext, round_no: int, name: str) -> dict[str, Any]:
+    """One arm, start to finish; the result dict is also written to arms/r<round>-<name>/result.json.
+
+    result.json is written whatever happens, a Ctrl-C included (stop_reason "interrupted", which
+    the scorer voids); the credentials copy is deleted first, then the worktree pruned and the
+    frozen checkout released, and the exception is re-raised.
+    """
+    label = f"r{round_no}-{name}"
+    arm_dir, ws, _ = _paths(ctx, label)
+    arm_dir.mkdir(parents=True, exist_ok=True)
+    result: dict[str, Any] = {"arm": label, "round": round_no, "name": name, "dry_run": ctx.dry_run}
+    frozen: abarm.Frozen | None = None
+    try:
+        frozen = abarm.freeze_variant(ctx.run_dir, ctx.profile, name, ctx.skills_repo)
+        result["frozen"] = {"ref": frozen.skills_ref, "overlay_written": list(frozen.overlay_written)}
+        _arm_steps(ctx, result, frozen, label)
+    except KeyboardInterrupt:
+        result["session_stop_reason"] = result.get("stop_reason")
+        result["stop_reason"] = INTERRUPTED
+        raise
+    except Exception as exc:
+        result["error"] = f"{type(exc).__name__}: {exc}"
+        raise
+    finally:
+        abarm.delete_cfg(arm_dir / "cfg")
+        result["cleanup"] = _cleanup(ctx, result, frozen, ws)
+        _write_result(arm_dir, result)
+    return result
+
+
+# --- run -----------------------------------------------------------------------------------------
+
+def _set_aside(ctx: RunContext, label: str) -> str | None:
+    """Rename an unfinished attempt's arm dir and branch to <label>.attempt-<k>; the new name or None."""
+    arm_dir, _, branch = _paths(ctx, label)
+    has_branch = git(ctx.profile.workpiece.repo, "rev-parse", "--verify", "-q", f"refs/heads/{branch}").returncode == 0
+    if not arm_dir.exists() and not has_branch:
+        return None
+    k = 1
+    while (arm_dir.parent / f"{label}.attempt-{k}").exists():
+        k += 1
+    suffix = f".attempt-{k}"
+    if has_branch:
+        proc = git(ctx.profile.workpiece.repo, "branch", "-m", branch, branch + suffix)
+        if proc.returncode != 0:
+            raise RunRefused(f"cannot set aside branch {branch}: {proc.stderr.strip()}")
+    if arm_dir.exists():
+        arm_dir.rename(arm_dir.parent / (label + suffix))
+    return label + suffix
+
+
+def _login_looking(result: dict[str, Any], stream: Path) -> bool:
+    """Whether the session ended the way the CLI reports a 401 and a 429 alike."""
+    for reason in result.get("void_reasons") or []:
+        text = str(reason)
+        if text.startswith(SYNTHETIC_REASON_PREFIX) and any(m in text.lower() for m in LOGIN_MARKS):
+            return True
+    if not stream.is_file():
+        return False
+    for line in stream.read_text(encoding="utf-8", errors="replace").splitlines():
+        try:
+            rec = json.loads(line)
+        except ValueError:
+            continue
+        msg = rec.get("message") if isinstance(rec, dict) else None
+        if isinstance(rec, dict) and (rec.get("error") == AUTH_FAILED or (isinstance(msg, dict) and msg.get("error") == AUTH_FAILED)):
+            return True
+    return False
+
+
+def _context(args: argparse.Namespace, run_dir: Path, profile: Profile) -> RunContext:
+    if args.only and args.only not in profile.arm_names():
+        raise RunRefused(f"--only {args.only!r} is not an arm of this run ({', '.join(profile.arm_names())})")
+    if args.max_turns < 1:
+        raise RunRefused("--max-turns must be at least 1")
+    return RunContext(run_dir=run_dir, profile=profile, task=(run_dir / profile.workpiece.task_file).read_text(encoding="utf-8"),
+                      credentials=Path(args.credentials).expanduser(), skills_repo=Path(args.skills_repo).expanduser(),
+                      dry_run=args.dry_run, max_turns=args.max_turns)
+
+
+def _schedule(profile: Profile, only: str | None) -> Iterator[tuple[int, str]]:
+    for round_no, order in enumerate(rotated_schedule(profile.arm_names(), profile.run.n), start=1):
+        yield from ((round_no, name) for name in order if not only or name == only)
+
+
+def _attempt(ctx: RunContext, round_no: int, name: str) -> dict[str, Any]:
+    """Set aside an unfinished earlier attempt, run the arm, journal a row however it ends."""
+    aside = _set_aside(ctx, f"r{round_no}-{name}")
+    try:
+        result = run_arm(ctx, round_no, name)
+    except KeyboardInterrupt:
+        record(ctx.run_dir, step="arm", round=round_no, arm=name, status=INTERRUPTED, set_aside=aside)
+        raise
+    except Exception as exc:
+        record(ctx.run_dir, step="arm", round=round_no, arm=name, status="error", error=str(exc)[:500], set_aside=aside)
+        raise
+    result["set_aside"] = aside
+    return result
+
+
+def _pause(ctx: RunContext, args: argparse.Namespace, round_no: int, name: str, result: dict[str, Any]) -> str:
+    """Journal the paused arm, ask the probe, record its word; the message for the user."""
+    label = f"r{round_no}-{name}"
+    record(ctx.run_dir, step="arm", round=round_no, arm=name, status="paused", stop_reason=result.get("stop_reason"))
+    word = args.login_check(ctx.credentials)
+    result["login_probe"] = word
+    _write_result(ctx.run_dir / "arms" / label, result)
+    record(ctx.run_dir, step="pause", round=round_no, arm=name, status=word)
+    return (f"paused after {label}: the session ended with a login-looking failure and the out-of-band probe "
+            f"answered {word}; run the same command again to resume (the attempt is set aside and {label} runs again)")
+
+
+def _cleanup_warnings(result: dict[str, Any]) -> None:
+    for err in (result.get("cleanup") or {}).get("errors") or []:
+        _warn(f"{result.get('arm')}: {err}")
+
+
+def cmd_run(args: argparse.Namespace) -> int:
+    run_dir = _run_dir(args.run_dir)
+    _require_sealed(run_dir)
+    ctx = _context(args, run_dir, load_profile(run_dir / "abtest.toml"))
+    done: list[dict[str, Any]] = []
+    skipped: list[str] = []
+    for round_no, name in _schedule(ctx.profile, args.only):
+        if _done(run_dir, round_no, name, DONE_DRY if ctx.dry_run else DONE_LIVE):
+            skipped.append(f"r{round_no}-{name} already ran")
+            continue
+        result = _attempt(ctx, round_no, name)
+        _cleanup_warnings(result)
+        if not ctx.dry_run and _login_looking(result, run_dir / "arms" / result["arm"] / "stream.jsonl"):
+            message = _pause(ctx, args, round_no, name, result)
+            _emit(args.json, "run", {"done": done, "paused_at": result["arm"], "login_probe": result["login_probe"],
+                                     "message": message}, False, message, skipped)
+            return EXIT_NO
+        status = "dry" if ctx.dry_run else "ran"
+        record(run_dir, step="arm", round=round_no, arm=name, status=status, stop_reason=result.get("stop_reason"),
+               set_aside=result.get("set_aside"))
+        done.append({"arm": result["arm"], "status": status, "cost_usd": result.get("total_cost_usd"),
+                     "wall_s": result.get("wall_s"), "floor_passed": result["floor"]["passed"]})
+    text = "\n".join(f"{d['arm']}: {d['status']} cost={d['cost_usd']} floor={d['floor_passed']}" for d in done)
+    _emit(args.json, "run", {"done": done}, True, text or "nothing to run", skipped)
+    return EXIT_YES
+
+
+# --- score and prune-run -------------------------------------------------------------------------
+
+def _finished(run_dir: Path) -> dict[str, dict[str, Any]]:
+    """{label: result.json} of every arm the journal says ran or dry-ran, in journal order."""
+    out: dict[str, dict[str, Any]] = {}
+    for row in load_journal(run_dir):
+        if row.get("step") != "arm" or row.get("status") not in DONE_DRY:
+            continue
+        label = f"r{row.get('round')}-{row.get('arm')}"
+        path = run_dir / "arms" / label / "result.json"
+        if path.is_file():
+            out[label] = json.loads(path.read_text(encoding="utf-8"))
+    return out
+
+
+def _score_all(run_dir: Path, profile: Profile, results: dict[str, dict[str, Any]]) -> dict[str, dict[str, Any]]:
+    """Score twice: first without warmth, then with the OTHER live arms that pass every other rule as peers.
+
+    A void arm never sets the warmth median (controller decision 2026-11-04): its first-message
+    cache read says nothing about how warm a normal arm starts.
+    """
+    first = {label: abscore.score_arm(run_dir / "arms" / label, profile, []) for label in results}
+    eligible = {label: res for label, res in results.items()
+                if not res.get("dry_run") and res.get("has_result") and not first[label]["void"]}
+    return {label: abscore.score_arm(run_dir / "arms" / label, profile,
+                                     [r for other, r in eligible.items() if other != label]) for label in results}
+
+
+def cmd_score(args: argparse.Namespace) -> int:
+    run_dir = _run_dir(args.run_dir)
+    _require_sealed(run_dir)
+    profile = load_profile(run_dir / "abtest.toml")
+    results = _finished(run_dir)
+    if not results:
+        _emit(args.json, "score", {"arms": {}}, False, "no finished arm to score")
+        return EXIT_NO
+    scores = _score_all(run_dir, profile, results)
+    for res in results.values():
+        record(run_dir, step="score", round=res.get("round", 0), arm=res.get("name", ""), status="scored")
+    _emit(args.json, "score", {"arms": scores}, True,
+          "\n".join(f"{k}: cost={v['cost_usd']} floor={v['floor_passed']} void={v['void'] or '-'}" for k, v in scores.items()))
+    return EXIT_YES
+
+
+def _run_worktrees(repo: Path, run_id: str) -> list[Path]:
+    out = git(repo, "worktree", "list", "--porcelain").stdout
+    paths = [Path(line[len("worktree "):]) for line in out.splitlines() if line.startswith("worktree ")]
+    return [p for p in paths if p.name.startswith(f"abx-{run_id}-")]
+
+
+def cmd_prune_run(args: argparse.Namespace) -> int:
+    run_dir = _run_dir(args.run_dir)
+    profile = load_profile(run_dir / "abtest.toml")
+    repo, run_id = profile.workpiece.repo, run_dir.name
+    git(repo, "worktree", "prune")
+    errors = []
+    for ws in _run_worktrees(repo, run_id):
+        try:
+            abarm.prune(ws, repo, profile.floor.cache_paths)
+        except abarm.ArmError as exc:
+            errors.append(f"{ws}: {exc}")
+    refs = git(repo, "for-each-ref", "--format=%(refname:short)", f"refs/heads/abx/{run_id}/").stdout.split()
+    deleted = [b for b in refs if git(repo, "branch", "-D", b).returncode == 0]
+    errors += [f"branch {b} could not be deleted" for b in refs if b not in deleted]
+    skipped = [f"frozen checkout {p} is left (release it from the skills repo)" for p in sorted((run_dir / "frozen").glob("*"))]
+    data = {"deleted": deleted, "errors": errors}
+    _emit(args.json, "prune-run", data, not errors, f"deleted {len(deleted)} branch(es) under abx/{run_id}/"
+          + "".join(f"\nerror: {e}" for e in errors), skipped)
+    return EXIT_ERROR if errors else EXIT_YES
+
+
+# --- the command line ----------------------------------------------------------------------------
+
+class _Parser(argparse.ArgumentParser):
+    def error(self, message: str) -> Any:  # argparse's own exit would print no JSON envelope
+        raise UsageError(f"{self.prog}: {message}")
+
+
+def _add_run_options(sp: argparse.ArgumentParser) -> None:
+    sp.add_argument("--dry-run", action="store_true", help="everything but the paid claude -p step")
+    sp.add_argument("--only", help="run only this arm name (C or a variant name)")
+    sp.add_argument("--credentials", default=str(DEFAULT_CREDENTIALS))
+    sp.add_argument("--skills-repo", default=str(DEFAULT_SKILLS_REPO))
+    sp.add_argument("--max-turns", type=int, default=400)
+
+
+def build_parser() -> argparse.ArgumentParser:
+    ap = _Parser(prog="abtest.py", description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    sub = ap.add_subparsers(dest="cmd", required=True, parser_class=_Parser)
+    for name, fn in (("init", cmd_init), ("seal", cmd_seal), ("run", cmd_run), ("score", cmd_score), ("prune-run", cmd_prune_run)):
+        sp = sub.add_parser(name)
+        sp.add_argument("run_dir")
+        sp.add_argument("--json", action="store_true")
+        sp.set_defaults(fn=fn)
+        if name == "init":
+            for opt in ("--repo", "--base", "--skills-ref", "--skill"):
+                sp.add_argument(opt)
+        if name == "run":
+            _add_run_options(sp)
+    return ap
+
+
+_COULD_NOT_RUN = (ProfileError, RunRefused, JournalError, UsageError, abarm.ArmError, abguard.GuardError, OSError,
+                  subprocess.TimeoutExpired, json.JSONDecodeError)
+
+
+def _fail(as_json: bool, command: str, exc: BaseException) -> int:
+    """Exit 2: the envelope under --json, and always exactly one line on stderr."""
+    message = str(exc)
+    if as_json:
+        print(envelope(command, {"error": message, "type": type(exc).__name__}, ok=False))
+    print(f"abtest {command}: error: {' '.join(message.split())}", file=sys.stderr)
+    return EXIT_ERROR
+
+
+def _command_of(argv: list[str]) -> str:
+    return next((a for a in argv if not a.startswith("-")), "abtest")
+
+
+def main(argv: list[str] | None = None, *, login_check: LoginCheck = abguard.check_login) -> int:
+    """Entry point; login_check is the one injectable seam (tests pass a stub, never a monkeypatch).
+
+    A KeyboardInterrupt is re-raised after the arm's result.json and journal row are written.
+    """
+    argv = list(sys.argv[1:] if argv is None else argv)
+    try:
+        args = build_parser().parse_args(argv)
+    except UsageError as exc:
+        return _fail("--json" in argv, _command_of(argv), exc)
+    args.login_check = login_check
+    try:
+        return int(args.fn(args))
+    except _COULD_NOT_RUN as exc:
+        return _fail(args.json, args.cmd, exc)
+
+
+if __name__ == "__main__":
+    try:
+        sys.exit(main())
+    except KeyboardInterrupt:
+        print("abtest: interrupted; the journal records the arm, run the same command to resume", file=sys.stderr)
+        sys.exit(130)
