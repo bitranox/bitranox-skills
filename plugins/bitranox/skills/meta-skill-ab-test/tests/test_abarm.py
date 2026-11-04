@@ -643,7 +643,7 @@ def test_make_worktree_prunes_a_registration_whose_path_is_gone_then_refuses(scr
     assert str(ws) in _registered(scratch_repo), "precondition: a stale registration"
     with pytest.raises(A.ArmError, match="abx/t/r1-C"):
         A.make_worktree(scratch_repo, base, "abx/t/r1-C", ws, copy_untracked_claude_md=False)
-    assert str(ws) not in _registered(scratch_repo), "git worktree prune ran"
+    assert str(ws) not in _registered(scratch_repo), "the stale registration of this path was removed"
     assert L.git(scratch_repo, "rev-parse", "--verify", "-q", "refs/heads/abx/t/r1-C").returncode == 0
 
 
@@ -661,3 +661,39 @@ def test_release_frozen_of_a_vanished_checkout_prunes_the_registration(tmp_path,
     shutil.rmtree(frozen.path)
     A.release_frozen(frozen, skills_repo)
     assert str(frozen.path) not in _registered(skills_repo)
+
+
+# --- whole-branch review: the harness never prunes the user's other stale registrations ----------
+
+
+def _foreign_stale_worktree(repo, tmp_path, name):
+    """A worktree of repo outside the harness's paths whose directory is gone (a disk not mounted)."""
+    foreign = tmp_path / name
+    assert L.git(repo, "worktree", "add", "-q", "--detach", str(foreign)).returncode == 0
+    shutil.rmtree(foreign)
+    assert str(foreign) in _registered(repo), "precondition: a stale foreign registration"
+    return foreign
+
+
+def test_a_leftover_refusal_drops_only_its_own_stale_registration(scratch_repo, tmp_path):
+    base = (scratch_repo / ".base").read_text()
+    foreign = _foreign_stale_worktree(scratch_repo, tmp_path, "users-offline-worktree")
+    ws = _arm_ws(scratch_repo)
+    A.make_worktree(scratch_repo, base, "abx/t/r1-C", ws, copy_untracked_claude_md=False)
+    shutil.rmtree(ws)
+    with pytest.raises(A.ArmError):
+        A.make_worktree(scratch_repo, base, "abx/t/r1-C", ws, copy_untracked_claude_md=False)
+    assert str(ws) not in _registered(scratch_repo)
+    assert str(foreign) in _registered(scratch_repo), "a repo-wide prune dropped the user's registration"
+
+
+def test_release_frozen_keeps_the_skills_repos_other_stale_registrations(tmp_path, scratch_repo, skills_repo):
+    run_dir, prof = _profile(tmp_path, scratch_repo, skills_repo)
+    foreign = _foreign_stale_worktree(skills_repo, tmp_path, "users-skills-worktree")
+    for vanish in (False, True):
+        frozen = A.freeze_variant(run_dir, prof, "C", skills_repo)
+        if vanish:
+            shutil.rmtree(frozen.path)
+        A.release_frozen(frozen, skills_repo)
+        assert str(frozen.path) not in _registered(skills_repo)
+    assert str(foreign) in _registered(skills_repo), "a repo-wide prune dropped the user's registration"

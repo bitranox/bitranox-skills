@@ -214,17 +214,28 @@ def freeze_variant(run_dir: Path, profile: Profile, name: str, skills_repo: Path
     return Frozen(path=path, skills_ref=ref, skill_dir=skill_dir, overlay_written=written, hashes=tree_hashes(skill_dir))
 
 
+def _forget_worktree(repo: Path, path: Path) -> subprocess.CompletedProcess[str] | None:
+    """`worktree remove --force` of path alone, when git lists it; None when it is not registered.
+
+    Never `git worktree prune`: that drops EVERY stale registration of the repository, including
+    ones the user keeps for a worktree on a disk that is not mounted right now. `remove --force`
+    also drops the registration of a worktree whose directory is already gone (git 2.53).
+    """
+    if os.path.realpath(path) not in _registered_paths(repo):
+        return None
+    return _git(repo, "worktree", "remove", "--force", str(path))
+
+
 def release_frozen(frozen: Frozen, skills_repo: Path) -> None:
     """Remove the detached checkout freeze_variant made, and its registration in skills_repo.
 
-    A checkout that is already gone only has its stale registration pruned.
+    A checkout that is already gone only has its own stale registration removed.
 
     Raises:
-        ArmError: the checkout exists and git could not remove it, or the prune failed.
+        ArmError: git could not remove the checkout or its registration.
     """
-    removed = _git(skills_repo, "worktree", "remove", "--force", str(frozen.path)) if frozen.path.exists() else None
-    _git_ok(skills_repo, "worktree", "prune")
-    if removed is not None and removed.returncode != 0:
+    removed = _forget_worktree(skills_repo, frozen.path)
+    if removed is not None and not _worktree_gone(skills_repo, frozen.path):
         raise ArmError(f"worktree remove of {frozen.path} failed: {removed.stderr.strip()[-500:]}")
 
 
@@ -574,7 +585,7 @@ def _leftovers(repo: Path, branch: str, path: Path) -> list[str]:
     elif path.exists() or path.is_symlink():
         found.append(f"{path} exists and is not a worktree of {repo} (move or delete it)")
     elif registered:
-        found.append(f"worktree {path} is registered but its directory is gone (pruned now)")
+        found.append(f"worktree {path} is registered but its directory is gone (its registration is removed now)")
     hooks = _hooks_dir(path)
     if hooks.exists() or hooks.is_symlink():
         found.append(_hooks_leftover(repo, path, hooks))
@@ -584,10 +595,11 @@ def _leftovers(repo: Path, branch: str, path: Path) -> list[str]:
 
 
 def _refuse_leftovers(repo: Path, branch: str, path: Path) -> None:
-    """Prune stale registrations once and refuse; a branch is never deleted here, it may hold work."""
+    """Drop this path's own stale registration and refuse; a branch is never deleted here, it may hold work."""
     found = _leftovers(repo, branch, path)
     if found:
-        _git(repo, "worktree", "prune")
+        if not (path.exists() or path.is_symlink()):
+            _forget_worktree(repo, path)
         raise ArmError("leftover of an earlier arm: " + "; ".join(found) + "; clean it up, then retry")
 
 
@@ -614,7 +626,7 @@ def make_worktree(repo: Path, base: str, branch: str, path: Path, *, copy_untrac
     `.claude/worktrees/` is added to the repo's info/exclude when not already ignored, so the
     arm's tree never shows up as untracked in the real checkout. The workpiece's own hooks other
     than pre-push stay active in the arm. A leftover path, branch or stale registration is
-    refused (after one `git worktree prune`), and so is a leftover `<path>.githooks`, before
+    refused (a stale registration of this path alone is removed first), and so is a leftover `<path>.githooks`, before
     `worktree add` runs. A failure after `worktree add` removes the worktree, then the hooks dir
     and the extension the harness set, before raising; when the worktree cannot be removed, the
     hooks dir and the extension are kept with it and the error names the cleanup.

@@ -616,3 +616,20 @@ def test_a_failing_install_step_deletes_the_credentials_copy_and_journals_an_err
     assert (arm / "saw-credentials").is_file(), "the step failed while the copy existed"
     assert not (arm / "cfg").exists() and _arm_rows(run_dir) == [(1, "C", "error")]
     assert "marketplace add" in json.loads((arm / "result.json").read_text(encoding="utf-8"))["error"]
+
+
+# --- whole-branch review: the user's repo is touched only at the harness's own paths ------------
+
+
+def test_prune_run_keeps_a_stale_registration_that_is_not_the_runs(tmp_path, scratch_repo, skills_repo, fake_claude_path,
+                                                                    monkeypatch):
+    run_dir = _init_and_fill(tmp_path, scratch_repo, skills_repo)
+    env, creds = _env(fake_claude_path, tmp_path)
+    _use_env(monkeypatch, env)
+    foreign = tmp_path / "users-offline-worktree"
+    assert L.git(scratch_repo, "worktree", "add", "-q", "--detach", str(foreign)).returncode == 0
+    foreign.rename(tmp_path / "moved-away")
+    assert T.main(["seal", str(run_dir)]) == 0
+    assert T.main(_run_args(run_dir, creds, skills_repo, "--dry-run")) == 0
+    assert T.main(["prune-run", str(run_dir)]) == 0
+    assert str(foreign) in L.git(scratch_repo, "worktree", "list", "--porcelain").stdout

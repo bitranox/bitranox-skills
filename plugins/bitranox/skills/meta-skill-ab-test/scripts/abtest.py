@@ -652,7 +652,6 @@ def cmd_prune_run(args: argparse.Namespace) -> int:
     run_dir = _run_dir(args.run_dir)
     profile = load_profile(run_dir / "abtest.toml")
     repo, run_id = profile.workpiece.repo, run_dir.name
-    git(repo, "worktree", "prune")
     errors = []
     for ws in _arm_worktrees(profile, run_id):
         if not _harness_worktree_left(repo, ws):
