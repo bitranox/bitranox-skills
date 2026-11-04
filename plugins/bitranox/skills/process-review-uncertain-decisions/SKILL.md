@@ -82,6 +82,15 @@ what the decision is about; each option's `description` carries its upside AND i
 because a bare label is a non-answer; the recommended option comes first, `(Recommended)` on its
 label and the reason in its description, including what would settle it.
 
+Name things in the question and the options by what the person sees or handles, never by the
+code's terms. A field name, a type or element name, an internal flag or a `None` means something
+only to someone reading the source, and a person who cannot map it answers a different question or
+spends follow-ups asking what it means. Translate each one: "a picture already saved in the
+printer", not "an image without bitmap"; "the setting that turns this off", not
+`reset_check=false`. A word of the person's own trade is not a code term: a barcode's "check
+digit" is what they print and scan, so keep it. Keep a code term only when the person works in the
+code themselves, and then say what it does as well.
+
 The options ARE the alternatives you did not take. Cannot name a second real candidate? Then you
 do not understand the point well enough to ask about it - work it out, or drop it from the list.
 Do NOT add an "Other" option yourself - the tool supplies free text on its own, so an open-ended

@@ -568,9 +568,28 @@ together, once, as `accept:` proposals, asking whether "fix all" was meant to co
 rule like "accept no technical debt" does not change this; an item recorded under `# Code Quality`
 with its reason is a decision on the record, not hidden debt.
 
+**A fix batch fixes findings and adds no behaviour.** It contains the change each finding needs and
+its test, nothing else: no new setting, mode, option or refactor that no finding asked for, however
+useful it looks while you are in the code. Every addition is unreviewed code the next sweep has to
+find faults in, so a batch that grows features keeps the gate open by itself. A standing project
+rule about HOW things are built ("every limit is a settings key") shapes the change a finding asks
+for; it never turns an addition into a requested one. An addition already merged is a decision for
+the user: name it, say which findings it caused, and ask whether to keep it as its own change or
+revert it, rather than keeping or removing it silently.
+
+**When the previous fix batch caused most of a sweep's gate-holding findings, review that batch
+before sweeping again.** That is the batch the sweep just finished was run over, and the severity
+table's "caused by the last sweep's fixes" column shows it. Read the batch's diff against the
+findings it was meant to fix: every hunk either serves a finding or is an addition to settle as
+above. Settle the additions with the user before fixing anything inside them: a finding inside an
+addition that is reverted goes with it and needs no fix. Findings outside the additions need not
+wait. Once every finding still standing is fixed, run the full sweep - only a full sweep with no
+gate-holding finding ends the loop. A sweep that keeps finding faults in the previous batch's own
+code is reviewing the fixes, not the project.
+
 **The last sweep** - the one that found no gate-holding finding - still presents and settles all
-its findings (Steps 5-6b) by the rule above before the re-score. Its fixes get their own tests and
-the decision review below, not another full sweep.
+its findings (Steps 5-6b) by the cheap-or-accept rule above before the re-score. Its fixes get
+their own tests and the decision review below, not another full sweep.
 
 **Parking the review across sessions.** When the review outlives a session (a handover, an
 `OPEN-WORK.md` line), record the sweep number, the severity table, where the findings ledger lives,
