@@ -38,6 +38,7 @@ __all__ = [
     "make_worktree",
     "plugin_root",
     "prune",
+    "release_frozen",
 ]
 
 PLUGIN_NAME = "bitranox"
@@ -48,7 +49,11 @@ SWITCH_NAME = "BITRANOX_MEMORY_WRITES"
 WORKTREES_PROBE = ".claude/worktrees/probe"
 WORKTREES_PATTERN = ".claude/worktrees/"
 INSTALL_TIMEOUT_S = 300
+# Seconds between SIGTERM and SIGKILL of the session's process group; read at call time.
 STOP_GRACE_S = 60
+WORKTREE_CONFIG_KEY = "extensions.worktreeConfig"
+# Beside the arm's hooks: what make_worktree changed in the repo, so prune can undo exactly that.
+STATE_FILE = ".abx-state.json"
 PRE_PUSH_HOOK = "#!/bin/sh\necho 'abtest arm: pushing is refused; the branch is collected by the harness' >&2\nexit 1\n"
 
 
@@ -206,6 +211,20 @@ def freeze_variant(run_dir: Path, profile: Profile, name: str, skills_repo: Path
     return Frozen(path=path, skills_ref=ref, skill_dir=skill_dir, overlay_written=written, hashes=tree_hashes(skill_dir))
 
 
+def release_frozen(frozen: Frozen, skills_repo: Path) -> None:
+    """Remove the detached checkout freeze_variant made, and its registration in skills_repo.
+
+    A checkout that is already gone only has its stale registration pruned.
+
+    Raises:
+        ArmError: the checkout exists and git could not remove it, or the prune failed.
+    """
+    removed = _git(skills_repo, "worktree", "remove", "--force", str(frozen.path)) if frozen.path.exists() else None
+    _git_ok(skills_repo, "worktree", "prune")
+    if removed is not None and removed.returncode != 0:
+        raise ArmError(f"worktree remove of {frozen.path} failed: {removed.stderr.strip()[-500:]}")
+
+
 def installed_plugin_path(cfg: Path) -> Path | None:
     """The install path cfg's plugin registry records for the bitranox plugin; None when absent."""
     registry = cfg / "plugins" / "installed_plugins.json"
@@ -239,14 +258,22 @@ def _seed_settings(cfg: Path, keep: tuple[str, ...]) -> list[str]:
 
 
 def _copy_credentials(credentials: Path, cfg: Path) -> None:
-    """Copy the credentials into cfg, created at mode 0600 so no wider-mode copy ever exists."""
+    """Copy the credentials into cfg as a NEW file at mode 0600.
+
+    Whatever sits at the target is unlinked first and the file is created with O_EXCL, so the
+    copy never writes through a planted symlink and never inherits an older, wider mode.
+    """
     if not credentials.is_file():
         raise ArmError(f"no credentials file at {credentials}")
     target = cfg / ".credentials.json"
-    fd = os.open(target, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    try:
+        target.unlink(missing_ok=True)
+        fd = os.open(target, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+    except OSError as exc:
+        raise ArmError(f"cannot create {target}: {exc}") from exc
     with os.fdopen(fd, "wb") as fh:
+        os.fchmod(fh.fileno(), 0o600)  # the umask may have narrowed it; never wider than 0600
         fh.write(credentials.read_bytes())
-    target.chmod(0o600)  # an already existing file keeps its old mode through O_CREAT
 
 
 def _run_claude(argv: list[str], cwd: Path, env: dict[str, str]) -> dict[str, Any]:
@@ -282,8 +309,12 @@ def install_plugin(cfg: Path, frozen: Frozen, credentials: Path, env: dict[str, 
     skill listing budget the plugin raises applies only from the next session), which is not
     normal work, so the `settings_keep` keys of the user's settings.json are seeded into cfg.
 
+    The caller must open its try/finally with delete_cfg(cfg) BEFORE calling this: the
+    credentials are copied in before the install steps run, so a failure after that copy (claude
+    missing, a step failing, drift) leaves the copy in cfg.
+
     Args:
-        cfg: the arm's config dir (created at mode 0700).
+        cfg: the arm's config dir (created, or tightened when it exists, to mode 0700).
         frozen: the checkout to install.
         credentials: the user's credentials file; copied in at mode 0600, removed by delete_cfg.
         env: must carry PATH so `claude` resolves; CLAUDE_CONFIG_DIR is set here.
@@ -296,6 +327,7 @@ def install_plugin(cfg: Path, frozen: Frozen, credentials: Path, env: dict[str, 
         ArmError: claude is missing, a step fails or times out, or the installed skill drifts.
     """
     cfg.mkdir(mode=0o700, parents=True, exist_ok=True)
+    cfg.chmod(0o700)  # an existing dir keeps its old mode through mkdir
     seeded = _seed_settings(cfg, settings_keep)
     _copy_credentials(credentials, cfg)
     env = dict(env, CLAUDE_CONFIG_DIR=str(cfg))
@@ -333,21 +365,141 @@ def _ensure_worktrees_ignored(repo: Path) -> None:
                        "a .gitignore negation un-ignores it")
 
 
-def _install_refusing_hook(path: Path) -> Path:
-    """A pre-push hook that refuses, configured for this worktree ONLY.
+def _hooks_dir(path: Path) -> Path:
+    """The arm's own hooks dir, beside (never inside) its worktree."""
+    return path.parent / f"{path.name}.githooks"
+
+
+def _abs(base: Path, raw: str) -> Path:
+    p = Path(raw)
+    return p if p.is_absolute() else base / p
+
+
+def _worktree_config_needed(repo: Path) -> bool:
+    """Whether extensions.worktreeConfig must be set; an explicit false is refused, never overridden."""
+    proc = _git(repo, "config", "--local", "--type=bool", "--get", WORKTREE_CONFIG_KEY)
+    if proc.returncode == 1:
+        return True
+    if proc.returncode != 0:
+        raise ArmError(f"cannot read {WORKTREE_CONFIG_KEY} in {repo}: {proc.stderr.strip()}")
+    if proc.stdout.strip() == "true":
+        return False
+    raise ArmError(f"{WORKTREE_CONFIG_KEY} is false in {repo}: the arm's per-worktree hook needs it on, "
+                   "and the harness does not override an explicit setting")
+
+
+def _worktree_configs(repo: Path) -> list[str]:
+    """Every config.worktree file of the repo (main and linked worktrees), which the extension enables."""
+    common = _abs(repo, _git_ok(repo, "rev-parse", "--git-common-dir"))
+    main = [str(common / "config.worktree")] if (common / "config.worktree").is_file() else []
+    return main + sorted(str(p) for p in common.glob("worktrees/*/config.worktree"))
+
+
+def _unset_worktree_config(repo: Path) -> None:
+    proc = _git(repo, "config", "--local", "--unset", WORKTREE_CONFIG_KEY)
+    if proc.returncode not in (0, 5):  # 5: already unset
+        raise ArmError(f"cannot unset {WORKTREE_CONFIG_KEY} in {repo}: {proc.stderr.strip()}")
+
+
+def _workpiece_hooks_source(path: Path) -> Path:
+    """The hooks dir git would use in this worktree, read before the arm's own hooksPath is set."""
+    proc = _git(path, "config", "--path", "--get", "core.hooksPath")
+    if proc.returncode not in (0, 1):
+        raise ArmError(f"cannot read core.hooksPath in {path}: {proc.stderr.strip()}")
+    if proc.returncode == 0 and proc.stdout.strip():
+        # A relative core.hooksPath is relative to the worktree root, where git runs hooks.
+        return _abs(path, proc.stdout.strip())
+    return _abs(path, _git_ok(path, "rev-parse", "--git-path", "hooks"))
+
+
+def _link_workpiece_hooks(source: Path, hooks: Path) -> list[str]:
+    """Symlink every executable hook of source into hooks, except pre-push; the names linked.
+
+    The workpiece's own hooks (a pre-commit gate, a commit-msg check) are part of normal work,
+    so the arm keeps them; only pushing is the harness's to refuse.
+    """
+    if not source.is_dir():
+        return []
+    linked = []
+    for entry in sorted(source.iterdir()):
+        if entry.name == "pre-push" or entry.name.startswith(".") or entry.name.endswith(".sample"):
+            continue
+        if entry.is_file() and os.access(entry, os.X_OK):
+            (hooks / entry.name).symlink_to(entry.resolve())
+            linked.append(entry.name)
+    return linked
+
+
+class _HookSetup:
+    """What _install_hooks has changed so far, so a failure can be rolled back exactly."""
+
+    def __init__(self) -> None:
+        self.worktree_config_set = False
+        self.hooks_dir: Path | None = None
+
+
+def _install_hooks(repo: Path, path: Path, needs_config: bool, done: _HookSetup) -> list[str]:
+    """The arm's hooks dir: the workpiece's hooks linked in, a refusing pre-push, set for this worktree ONLY.
 
     A plain `git config` in a linked worktree writes the repository's shared config, so the real
     checkout's pushes would be refused too and, after prune, its hooks would point at a deleted
-    dir. The per-worktree config needs extensions.worktreeConfig, which this sets on the repo.
+    dir. The per-worktree config needs extensions.worktreeConfig, which is set only when unset and
+    recorded in the state file so prune can undo it.
     """
-    hooks = path.parent / f"{path.name}.githooks"
-    hooks.mkdir(exist_ok=True)
+    source = _workpiece_hooks_source(path)
+    if needs_config:
+        _git_ok(repo, "config", "--local", WORKTREE_CONFIG_KEY, "true")
+        done.worktree_config_set = True
+    hooks = _hooks_dir(path)
+    try:
+        hooks.mkdir()
+    except OSError as exc:
+        raise ArmError(f"cannot create the arm's hooks dir {hooks} (a leftover of an earlier arm?): {exc}") from exc
+    done.hooks_dir = hooks
+    (hooks / STATE_FILE).write_text(json.dumps({"worktree_config_set_by_harness": needs_config}), encoding="utf-8")
+    linked = _link_workpiece_hooks(source, hooks)
     hook = hooks / "pre-push"
     hook.write_text(PRE_PUSH_HOOK, encoding="utf-8", newline="\n")
     hook.chmod(0o755)
-    _git_ok(path, "config", "extensions.worktreeConfig", "true")
     _git_ok(path, "config", "--worktree", "core.hooksPath", str(hooks))
-    return hooks
+    return linked
+
+
+def _roll_back(repo: Path, path: Path, done: _HookSetup) -> None:
+    """Undo a half-made arm worktree: the worktree, the hooks dir and the extension the harness set."""
+    _git(repo, "worktree", "remove", "--force", str(path))
+    if done.hooks_dir is not None:
+        shutil.rmtree(done.hooks_dir, ignore_errors=True)
+    if done.worktree_config_set and not _worktree_configs(repo):
+        _unset_worktree_config(repo)
+
+
+def _registered_paths(repo: Path) -> set[str]:
+    out = _git_ok(repo, "worktree", "list", "--porcelain")
+    return {os.path.realpath(line[len("worktree "):]) for line in out.splitlines() if line.startswith("worktree ")}
+
+
+def _leftovers(repo: Path, branch: str, path: Path) -> list[str]:
+    """What an earlier arm left at this path or branch, each with the command that cleans it up."""
+    found = []
+    registered = os.path.realpath(path) in _registered_paths(repo)
+    if path.exists() and registered:
+        found.append(f"worktree {path} exists (git -C {repo} worktree remove --force {path})")
+    elif path.exists() or path.is_symlink():
+        found.append(f"{path} exists and is not a worktree of {repo} (move or delete it)")
+    elif registered:
+        found.append(f"worktree {path} is registered but its directory is gone (pruned now)")
+    if _git(repo, "rev-parse", "--verify", "-q", f"refs/heads/{branch}").returncode == 0:
+        found.append(f"branch {branch} exists (git -C {repo} branch -D {branch}, once its work is collected)")
+    return found
+
+
+def _refuse_leftovers(repo: Path, branch: str, path: Path) -> None:
+    """Prune stale registrations once and refuse; a branch is never deleted here, it may hold work."""
+    found = _leftovers(repo, branch, path)
+    if found:
+        _git(repo, "worktree", "prune")
+        raise ArmError("leftover of an earlier arm: " + "; ".join(found) + "; clean it up, then retry")
 
 
 def _copy_untracked_claude_md(repo: Path, path: Path) -> bool:
@@ -371,26 +523,37 @@ def make_worktree(repo: Path, base: str, branch: str, path: Path, *, copy_untrac
     """A nested worktree of repo at base on a NEW branch, with a refusing pre-push hook.
 
     `.claude/worktrees/` is added to the repo's info/exclude when not already ignored, so the
-    arm's tree never shows up as untracked in the real checkout.
+    arm's tree never shows up as untracked in the real checkout. The workpiece's own hooks other
+    than pre-push stay active in the arm. A leftover path, branch or stale registration is
+    refused (after one `git worktree prune`); a failure after `worktree add` removes the worktree
+    and restores the extension again before raising.
 
     Returns:
-        head, branch, hooks_path and claude_md_copied.
+        head, branch, hooks_path, hooks_linked (the workpiece hook names linked in),
+        worktree_config_set_by_harness and claude_md_copied.
 
     Raises:
-        ArmError: the path exists, the worktrees dir cannot be ignored, or a git step fails.
+        ArmError: a leftover is in the way, the extension is explicitly off, the worktrees dir
+            cannot be ignored, or a git step fails.
     """
-    if path.exists():
-        raise ArmError(f"worktree {path} already exists")
+    _refuse_leftovers(repo, branch, path)
+    needs_config = _worktree_config_needed(repo)
     _ensure_worktrees_ignored(repo)
     proc = _git(repo, "worktree", "add", "-b", branch, str(path), base)
     if proc.returncode != 0:
         raise ArmError(f"worktree add failed: {proc.stderr.strip()}")
-    head = _git_ok(path, "rev-parse", "HEAD")
-    if head != base:
-        raise ArmError(f"worktree HEAD {head} is not the base {base}")
-    hooks = _install_refusing_hook(path)
+    done = _HookSetup()
+    try:
+        head = _git_ok(path, "rev-parse", "HEAD")
+        if head != base:
+            raise ArmError(f"worktree HEAD {head} is not the base {base}")
+        linked = _install_hooks(repo, path, needs_config, done)
+    except (ArmError, OSError) as exc:
+        _roll_back(repo, path, done)
+        raise ArmError(f"{exc}; the worktree was removed again, branch {branch} is kept") from exc
     copied = copy_untracked_claude_md and _copy_untracked_claude_md(repo, path)
-    return {"head": head, "branch": branch, "hooks_path": str(hooks), "claude_md_copied": copied}
+    return {"head": head, "branch": branch, "hooks_path": str(_hooks_dir(path)), "hooks_linked": linked,
+            "worktree_config_set_by_harness": needs_config, "claude_md_copied": copied}
 
 
 def arm_home(arm_dir: Path, links: tuple[str, ...]) -> Path:
@@ -433,29 +596,47 @@ def _signal_group(proc: subprocess.Popen[str], sig: int) -> None:
             pass
 
 
-def _end(proc: subprocess.Popen[str]) -> None:
-    _signal_group(proc, signal.SIGTERM)
-    try:
-        proc.wait(timeout=STOP_GRACE_S)
-    except subprocess.TimeoutExpired:
-        _signal_group(proc, getattr(signal, "SIGKILL", signal.SIGTERM))
-
-
 class _Stopper:
-    """Ends the session once, keeping the first reason; called from the reader and the deadline timer."""
+    """Ends the session once, keeping the first reason; called from the reader and the deadline timer.
+
+    "Over" means the stream reached EOF AND the leader exited. Watching the leader alone is not
+    enough: a tool child of the session can hold the stdout pipe long after the leader is gone,
+    and the reader blocks until that child lets go.
+    """
 
     def __init__(self, proc: subprocess.Popen[str]) -> None:
         self.proc = proc
+        self.eof = threading.Event()
         self.reason: str | None = None
         self._lock = threading.Lock()
+        self._kill_timer: threading.Timer | None = None
 
-    def stop(self, reason: str, *, only_if_running: bool = False) -> None:
+    def over(self) -> bool:
+        return self.eof.is_set() and self.proc.poll() is not None
+
+    def stop(self, reason: str) -> None:
+        """SIGTERM the group now and SIGKILL it after STOP_GRACE_S unless the session is over by then."""
         with self._lock:
-            # The deadline timer may fire just after a session ended by itself: that is no deadline.
-            if self.reason is not None or (only_if_running and self.proc.poll() is not None):
+            if self.reason is not None:
                 return
             self.reason = reason
-        _end(self.proc)
+            self._kill_timer = threading.Timer(STOP_GRACE_S, self._kill)
+            self._kill_timer.daemon = True
+        _signal_group(self.proc, signal.SIGTERM)
+        self._kill_timer.start()
+
+    def on_deadline(self) -> None:
+        # The timer may fire just after a session ended by itself: that is no deadline.
+        if not self.over():
+            self.stop("deadline")
+
+    def cancel(self) -> None:
+        if self._kill_timer is not None:
+            self._kill_timer.cancel()
+
+    def _kill(self) -> None:
+        if not self.over():
+            _signal_group(self.proc, getattr(signal, "SIGKILL", signal.SIGTERM))
 
 
 def _cap_reason(acct: StreamAccount, max_tokens: int) -> str | None:
@@ -467,17 +648,23 @@ def _cap_reason(acct: StreamAccount, max_tokens: int) -> str | None:
 
 
 def _pump(proc: subprocess.Popen[str], out: IO[str], acct: StreamAccount, stopper: _Stopper, max_tokens: int) -> None:
-    """Copy the session's stdout to out and the account, line by line, until EOF or a cap."""
+    """Copy the session's stdout to out and the account, line by line, until EOF; a cap stops it.
+
+    After a stop the reader keeps draining: it is EOF, not the stop, that ends the session, and
+    the account then holds every line the session wrote.
+    """
     if proc.stdout is None:
         raise ArmError("the session has no stdout pipe")
-    for line in proc.stdout:
-        out.write(line)
-        out.flush()
-        acct.feed_line(line)
-        reason = _cap_reason(acct, max_tokens)
-        if reason:
-            stopper.stop(reason)
-            return
+    try:
+        for line in proc.stdout:
+            out.write(line)
+            out.flush()
+            acct.feed_line(line)
+            reason = _cap_reason(acct, max_tokens)
+            if reason:
+                stopper.stop(reason)
+    finally:
+        stopper.eof.set()
 
 
 def _start(argv: list[str], ws: Path, env: dict[str, str], err: IO[str]) -> subprocess.Popen[str]:
@@ -494,18 +681,21 @@ def _run_session(proc: subprocess.Popen[str], out: IO[str], acct: StreamAccount,
     """Pump the session under a deadline timer; (stop reason, exit code)."""
     stopper = _Stopper(proc)
     # The deadline runs on a timer, not between lines: a session that prints nothing (a hung
-    # tool call) would otherwise never reach a check.
-    timer = threading.Timer(deadline_s, stopper.stop, args=("deadline",), kwargs={"only_if_running": True})
+    # tool call) would otherwise never reach a check. It stays armed through the final wait, so
+    # a leader that closed stdout but keeps running is ended too.
+    timer = threading.Timer(deadline_s, stopper.on_deadline)
     timer.daemon = True
     timer.start()
     try:
         _pump(proc, out, acct, stopper, max_tokens)
+        rc = proc.wait()
     except BaseException:
-        stopper.stop("interrupted")
+        stopper.stop("interrupted")  # its SIGKILL timer stays armed for Popen's own final wait
         raise
     finally:
         timer.cancel()
-    return stopper.reason or "finished", proc.wait()
+    stopper.cancel()
+    return stopper.reason or "finished", rc
 
 
 def dispatch(arm_dir: Path, ws: Path, env: dict[str, str], argv: list[str], *, max_tokens: int,
@@ -559,19 +749,61 @@ def _dir_bytes(p: Path) -> int:
     return sum(f.stat().st_size for f in p.rglob("*") if f.is_file() and not f.is_symlink())
 
 
-def prune(ws: Path, repo: Path, cache_paths: tuple[str, ...]) -> dict[str, Any]:
-    """Remove the build caches, then the worktree (run from repo, never from inside ws); keep the branch."""
+def _drop_caches(ws: Path, cache_paths: tuple[str, ...]) -> int:
     freed = 0
     for rel in cache_paths:
         p = ws / rel
         if p.is_dir() and not p.is_symlink():
             freed += _dir_bytes(p)
             shutil.rmtree(p, ignore_errors=True)
-    proc = _git(repo, "worktree", "remove", "--force", str(ws))
-    if proc.returncode != 0:
-        raise ArmError(f"worktree remove failed: {proc.stderr.strip()}")
-    shutil.rmtree(ws.parent / f"{ws.name}.githooks", ignore_errors=True)
-    return {"cache_bytes": freed, "worktree_removed": not ws.exists()}
+    return freed
+
+
+def _read_state(hooks: Path) -> dict[str, Any] | None:
+    try:
+        data = json.loads((hooks / STATE_FILE).read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+    return data if isinstance(data, dict) else None
+
+
+def _restore_worktree_config(repo: Path, state: dict[str, Any] | None) -> dict[str, Any]:
+    """Unset extensions.worktreeConfig when this arm set it and no worktree's config.worktree needs it."""
+    if state is None:
+        return {"worktree_config": "no_state", "worktree_config_kept_for": []}
+    if state.get("worktree_config_set_by_harness") is not True:
+        return {"worktree_config": "untouched", "worktree_config_kept_for": []}
+    others = _worktree_configs(repo)
+    if others:
+        return {"worktree_config": "kept", "worktree_config_kept_for": others}
+    _unset_worktree_config(repo)
+    return {"worktree_config": "unset", "worktree_config_kept_for": []}
+
+
+def prune(ws: Path, repo: Path, cache_paths: tuple[str, ...]) -> dict[str, Any]:
+    """Remove the build caches, then the worktree (run from repo, never from inside ws); keep the branch.
+
+    The arm's hooks dir is removed even when the worktree remove fails. extensions.worktreeConfig
+    is unset again only when make_worktree set it (its state file says so) and no other worktree
+    of the repo still has a config.worktree.
+
+    Returns:
+        cache_bytes, worktree_removed, worktree_config (unset, kept, untouched or no_state)
+        and worktree_config_kept_for (the config.worktree files that kept it).
+
+    Raises:
+        ArmError: the worktree remove failed (extensions.worktreeConfig is then left as it is).
+    """
+    hooks = _hooks_dir(ws)
+    state = _read_state(hooks)
+    try:
+        freed = _drop_caches(ws, cache_paths)
+        proc = _git(repo, "worktree", "remove", "--force", str(ws))
+        if proc.returncode != 0:
+            raise ArmError(f"worktree remove failed: {proc.stderr.strip()}; {WORKTREE_CONFIG_KEY} is left as it is")
+    finally:
+        shutil.rmtree(hooks, ignore_errors=True)
+    return dict({"cache_bytes": freed, "worktree_removed": not ws.exists()}, **_restore_worktree_config(repo, state))
 
 
 def delete_cfg(cfg: Path) -> None:

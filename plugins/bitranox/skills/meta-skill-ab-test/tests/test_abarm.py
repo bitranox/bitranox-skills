@@ -2,6 +2,7 @@
 import dataclasses
 import json
 import os
+import shutil
 import sys
 from pathlib import Path
 
@@ -328,3 +329,222 @@ def test_delete_cfg_removes_the_credentials_copy(tmp_path):
     A.delete_cfg(cfg)
     assert not cfg.exists()
     A.delete_cfg(cfg)
+
+
+# --- review fixes: reversible repo writes, the deadline, the workpiece's hooks, leftovers -----------
+
+
+def _ext(repo):
+    """The repo's extensions.worktreeConfig as git reads it: (rc, value)."""
+    proc = L.git(repo, "config", "--local", "--get", "extensions.worktreeConfig")
+    return proc.returncode, proc.stdout.strip()
+
+
+def _arm_ws(repo, name="abx-t-r1-C"):
+    return repo / ".claude" / "worktrees" / name
+
+
+def _registered(repo):
+    return L.git(repo, "worktree", "list", "--porcelain").stdout
+
+
+def test_make_worktree_sets_worktree_config_only_when_unset_and_prune_restores_it(scratch_repo):
+    base = (scratch_repo / ".base").read_text()
+    assert _ext(scratch_repo)[0] == 1, "precondition: the scratch repo has no extensions.worktreeConfig"
+    ws = _arm_ws(scratch_repo)
+    info = A.make_worktree(scratch_repo, base, "abx/t/r1-C", ws, copy_untracked_claude_md=False)
+    assert _ext(scratch_repo) == (0, "true")
+    assert info["worktree_config_set_by_harness"] is True
+    pruned = A.prune(ws, scratch_repo, ())
+    assert _ext(scratch_repo)[0] == 1, "the harness's own write is undone"
+    assert pruned["worktree_config"] == "unset"
+
+
+def test_make_worktree_leaves_a_preset_worktree_config_alone(scratch_repo):
+    L.git(scratch_repo, "config", "--local", "extensions.worktreeConfig", "true")
+    base = (scratch_repo / ".base").read_text()
+    ws = _arm_ws(scratch_repo)
+    info = A.make_worktree(scratch_repo, base, "abx/t/r1-C", ws, copy_untracked_claude_md=False)
+    assert info["worktree_config_set_by_harness"] is False
+    pruned = A.prune(ws, scratch_repo, ())
+    assert _ext(scratch_repo) == (0, "true"), "the user's own setting survives the prune"
+    assert pruned["worktree_config"] == "untouched"
+
+
+def test_make_worktree_refuses_an_explicitly_disabled_worktree_config(scratch_repo):
+    L.git(scratch_repo, "config", "--local", "extensions.worktreeConfig", "false")
+    base = (scratch_repo / ".base").read_text()
+    ws = _arm_ws(scratch_repo)
+    with pytest.raises(A.ArmError, match="extensions.worktreeConfig"):
+        A.make_worktree(scratch_repo, base, "abx/t/r1-C", ws, copy_untracked_claude_md=False)
+    assert not ws.exists() and _ext(scratch_repo) == (0, "false")
+
+
+def test_prune_keeps_worktree_config_while_another_worktree_uses_it(scratch_repo, tmp_path):
+    base = (scratch_repo / ".base").read_text()
+    ws = _arm_ws(scratch_repo)
+    A.make_worktree(scratch_repo, base, "abx/t/r1-C", ws, copy_untracked_claude_md=False)
+    other = tmp_path / "users-own-worktree"
+    L.git(scratch_repo, "worktree", "add", "-q", "--detach", str(other), base)
+    L.git(other, "config", "--worktree", "user.name", "someone")
+    pruned = A.prune(ws, scratch_repo, ())
+    assert _ext(scratch_repo) == (0, "true"), "another worktree's config.worktree still needs it"
+    assert pruned["worktree_config"] == "kept"
+    assert [Path(p).name for p in pruned["worktree_config_kept_for"]] == ["config.worktree"]
+
+
+def test_make_worktree_rolls_back_when_the_hook_setup_fails(scratch_repo):
+    base = (scratch_repo / ".base").read_text()
+    ws = _arm_ws(scratch_repo)
+    blocker = ws.parent / f"{ws.name}.githooks"
+    blocker.parent.mkdir(parents=True)
+    blocker.write_text("not a dir\n", encoding="utf-8")
+    with pytest.raises(A.ArmError, match="githooks"):
+        A.make_worktree(scratch_repo, base, "abx/t/r1-C", ws, copy_untracked_claude_md=False)
+    assert not ws.exists() and str(ws) not in _registered(scratch_repo), "the worktree is removed again"
+    assert _ext(scratch_repo)[0] == 1, "the extension the harness set is unset again"
+    assert blocker.read_text(encoding="utf-8") == "not a dir\n", "what the harness did not make stays"
+
+
+@POSIX_ONLY
+def test_dispatch_deadline_fires_while_a_grandchild_holds_the_stream(tmp_path):
+    """The leader exits at once; its child keeps stdout open. The deadline must still end it."""
+    arm_dir = tmp_path / "arm"
+    arm_dir.mkdir()
+    code = ("import subprocess, sys; subprocess.Popen([sys.executable, '-c', 'import time; time.sleep(30)']); "
+            "sys.exit(0)")
+    res = A.dispatch(arm_dir, tmp_path, {"PATH": os.environ["PATH"]}, [sys.executable, "-c", code],
+                     max_tokens=10**7, deadline_s=1)
+    assert res["stop_reason"] == "deadline" and res["wall_s"] < 15 and res["process_rc"] == 0
+
+
+@POSIX_ONLY
+def test_dispatch_kills_a_group_that_ignores_sigterm_after_the_grace(tmp_path, monkeypatch):
+    monkeypatch.setattr(A, "STOP_GRACE_S", 1)
+    arm_dir = tmp_path / "arm"
+    arm_dir.mkdir()
+    # SIG_IGN survives exec, so the grandchild ignores SIGTERM too; only SIGKILL ends it.
+    code = ("import signal, subprocess, sys; signal.signal(signal.SIGTERM, signal.SIG_IGN); "
+            "subprocess.Popen([sys.executable, '-c', 'import time; time.sleep(30)']); sys.exit(0)")
+    res = A.dispatch(arm_dir, tmp_path, {"PATH": os.environ["PATH"]}, [sys.executable, "-c", code],
+                     max_tokens=10**7, deadline_s=1)
+    assert res["stop_reason"] == "deadline"
+    assert 1.5 <= res["wall_s"] < 15, "deadline plus the lowered grace, then SIGKILL"
+
+
+def _hook(path, body):
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text("#!/bin/sh\n" + body + "\n", encoding="utf-8", newline="\n")
+    path.chmod(0o755)
+
+
+@pytest.mark.parametrize("where", ["hookspath", "default"])
+def test_make_worktree_keeps_the_workpiece_hooks(scratch_repo, tmp_path, where):
+    _with_origin(scratch_repo, tmp_path)
+    marker = tmp_path / "pre-commit-ran"
+    if where == "hookspath":
+        _hook(scratch_repo / "githooks" / "pre-commit", f"touch '{marker}'")
+        _hook(scratch_repo / "githooks" / "pre-push", "exit 0")
+        L.git(scratch_repo, "add", "githooks")
+        L.git(scratch_repo, "-c", "user.name=t", "-c", "user.email=t@x", "commit", "-q", "-m", "hooks")
+        L.git(scratch_repo, "config", "core.hooksPath", "githooks")
+    else:
+        _hook(scratch_repo / ".git" / "hooks" / "pre-commit", f"touch '{marker}'")
+        _hook(scratch_repo / ".git" / "hooks" / "pre-push", "exit 0")
+    base = L.git(scratch_repo, "rev-parse", "HEAD").stdout.strip()
+    ws = _arm_ws(scratch_repo)
+    info = A.make_worktree(scratch_repo, base, "abx/t/r1-C", ws, copy_untracked_claude_md=False)
+    assert not marker.exists()
+    L.git(ws, "-c", "user.name=t", "-c", "user.email=t@x", "commit", "-q", "--allow-empty", "-m", "arm work")
+    assert marker.exists(), "the workpiece's pre-commit ran in the arm"
+    refused = L.git(ws, "push", "origin", "HEAD")
+    assert refused.returncode != 0 and "pushing is refused" in refused.stderr, "its own pre-push is not linked"
+    assert info["hooks_linked"] == ["pre-commit"]
+
+
+@POSIX_ONLY
+def test_install_plugin_replaces_a_planted_credentials_link_and_tightens_cfg(tmp_path, user_home):
+    cfg = tmp_path / "cfg"
+    cfg.mkdir()
+    cfg.chmod(0o755)
+    victim = tmp_path / "victim.txt"
+    victim.write_text("keep me\n", encoding="utf-8")
+    (cfg / ".credentials.json").symlink_to(victim)
+    creds = tmp_path / "creds.json"
+    creds.write_text('{"fake": true}', encoding="utf-8")
+    plugin = tmp_path / "frozen"
+    frozen = A.Frozen(path=plugin, skills_ref="0" * 40, skill_dir=plugin / "skills" / "x", overlay_written=(), hashes={})
+    empty_bin = tmp_path / "emptybin"
+    empty_bin.mkdir()
+    with pytest.raises(A.ArmError, match="could not start"):
+        A.install_plugin(cfg, frozen, creds, {"PATH": str(empty_bin)})
+    assert victim.read_text(encoding="utf-8") == "keep me\n", "the copy never writes through a planted link"
+    target = cfg / ".credentials.json"
+    assert not target.is_symlink() and target.read_text(encoding="utf-8") == '{"fake": true}'
+    assert target.stat().st_mode & 0o777 == 0o600
+    assert cfg.stat().st_mode & 0o777 == 0o700, "an existing cfg dir is tightened too"
+
+
+def test_prune_removes_the_hooks_dir_even_when_the_worktree_remove_fails(scratch_repo):
+    base = (scratch_repo / ".base").read_text()
+    ws = _arm_ws(scratch_repo)
+    A.make_worktree(scratch_repo, base, "abx/t/r1-C", ws, copy_untracked_claude_md=False)
+    L.git(scratch_repo, "worktree", "lock", str(ws))  # a single --force does not remove a locked worktree
+    with pytest.raises(A.ArmError, match="worktree remove"):
+        A.prune(ws, scratch_repo, ())
+    assert not (ws.parent / f"{ws.name}.githooks").exists()
+
+
+def test_make_worktree_refuses_an_existing_worktree_and_names_the_cleanup(scratch_repo):
+    base = (scratch_repo / ".base").read_text()
+    ws = _arm_ws(scratch_repo)
+    A.make_worktree(scratch_repo, base, "abx/t/r1-C", ws, copy_untracked_claude_md=False)
+    with pytest.raises(A.ArmError, match="worktree remove --force") as err:
+        A.make_worktree(scratch_repo, base, "abx/t/r2-C", ws, copy_untracked_claude_md=False)
+    assert str(ws) in str(err.value)
+    assert L.git(scratch_repo, "rev-parse", "--verify", "-q", "refs/heads/abx/t/r2-C").returncode == 1
+
+
+def test_make_worktree_refuses_a_plain_directory_in_the_way(scratch_repo):
+    base = (scratch_repo / ".base").read_text()
+    ws = _arm_ws(scratch_repo)
+    ws.mkdir(parents=True)
+    with pytest.raises(A.ArmError, match="not a worktree") as err:
+        A.make_worktree(scratch_repo, base, "abx/t/r1-C", ws, copy_untracked_claude_md=False)
+    assert str(ws) in str(err.value) and ws.is_dir(), "named, never deleted"
+
+
+def test_make_worktree_refuses_an_existing_branch_and_never_deletes_it(scratch_repo):
+    base = (scratch_repo / ".base").read_text()
+    L.git(scratch_repo, "branch", "abx/t/r1-C", base)
+    with pytest.raises(A.ArmError, match="branch -D abx/t/r1-C"):
+        A.make_worktree(scratch_repo, base, "abx/t/r1-C", _arm_ws(scratch_repo), copy_untracked_claude_md=False)
+    assert L.git(scratch_repo, "rev-parse", "--verify", "-q", "refs/heads/abx/t/r1-C").returncode == 0
+
+
+def test_make_worktree_prunes_a_registration_whose_path_is_gone_then_refuses(scratch_repo):
+    base = (scratch_repo / ".base").read_text()
+    ws = _arm_ws(scratch_repo)
+    A.make_worktree(scratch_repo, base, "abx/t/r1-C", ws, copy_untracked_claude_md=False)
+    shutil.rmtree(ws)
+    assert str(ws) in _registered(scratch_repo), "precondition: a stale registration"
+    with pytest.raises(A.ArmError, match="abx/t/r1-C"):
+        A.make_worktree(scratch_repo, base, "abx/t/r1-C", ws, copy_untracked_claude_md=False)
+    assert str(ws) not in _registered(scratch_repo), "git worktree prune ran"
+    assert L.git(scratch_repo, "rev-parse", "--verify", "-q", "refs/heads/abx/t/r1-C").returncode == 0
+
+
+def test_release_frozen_removes_the_checkout_and_its_registration(tmp_path, scratch_repo, skills_repo):
+    run_dir, prof = _profile(tmp_path, scratch_repo, skills_repo)
+    frozen = A.freeze_variant(run_dir, prof, "V1", skills_repo)
+    assert str(frozen.path) in _registered(skills_repo)
+    A.release_frozen(frozen, skills_repo)
+    assert not frozen.path.exists() and str(frozen.path) not in _registered(skills_repo)
+
+
+def test_release_frozen_of_a_vanished_checkout_prunes_the_registration(tmp_path, scratch_repo, skills_repo):
+    run_dir, prof = _profile(tmp_path, scratch_repo, skills_repo)
+    frozen = A.freeze_variant(run_dir, prof, "C", skills_repo)
+    shutil.rmtree(frozen.path)
+    A.release_frozen(frozen, skills_repo)
+    assert str(frozen.path) not in _registered(skills_repo)
