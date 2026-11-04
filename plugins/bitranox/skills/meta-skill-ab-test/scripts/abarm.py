@@ -32,6 +32,7 @@ __all__ = [
     "claude_argv",
     "delete_cfg",
     "dispatch",
+    "ensure_worktrees_ignored",
     "freeze_variant",
     "install_plugin",
     "installed_plugin_path",
@@ -39,6 +40,7 @@ __all__ = [
     "plugin_root",
     "prune",
     "release_frozen",
+    "remove_worktrees_exclude",
 ]
 
 PLUGIN_NAME = "bitranox"
@@ -361,12 +363,26 @@ def _is_ignored(repo: Path, rel: str) -> bool:
     return proc.returncode == 0
 
 
-def _ensure_worktrees_ignored(repo: Path) -> None:
-    """Add .claude/worktrees/ to the repo's info/exclude unless it is already ignored."""
-    if _is_ignored(repo, WORKTREES_PROBE):
-        return
+def _exclude_file(repo: Path) -> Path:
+    """The repo's info/exclude (in the common git dir, so shared by every worktree)."""
     rel = Path(_git_ok(repo, "rev-parse", "--git-path", "info/exclude"))
-    exclude = rel if rel.is_absolute() else repo / rel
+    return rel if rel.is_absolute() else repo / rel
+
+
+def ensure_worktrees_ignored(repo: Path) -> bool:
+    """Add .claude/worktrees/ to the repo's info/exclude unless it is already ignored.
+
+    Returns:
+        True when this call appended the line, False when the path was already ignored. The
+        caller records a True durably, since only a line the harness added may be removed again
+        (remove_worktrees_exclude); one the user wrote stays.
+
+    Raises:
+        ArmError: info/exclude cannot be written, or a negation un-ignores the path anyway.
+    """
+    if _is_ignored(repo, WORKTREES_PROBE):
+        return False
+    exclude = _exclude_file(repo)
     try:
         exclude.parent.mkdir(parents=True, exist_ok=True)
         old = exclude.read_text(encoding="utf-8") if exclude.is_file() else ""
@@ -377,6 +393,31 @@ def _ensure_worktrees_ignored(repo: Path) -> None:
     if not _is_ignored(repo, WORKTREES_PROBE):
         raise ArmError(f"{WORKTREES_PATTERN} is not ignored in {repo} although {exclude} lists it; "
                        "a .gitignore negation un-ignores it")
+    return True
+
+
+def remove_worktrees_exclude(repo: Path) -> bool:
+    """Remove the last `.claude/worktrees/` line of the repo's info/exclude; whether one was there.
+
+    Call it only for a line ensure_worktrees_ignored reported adding. Every other line, and the
+    file's own line endings, stay as they were.
+
+    Raises:
+        ArmError: info/exclude cannot be read or written.
+    """
+    exclude = _exclude_file(repo)
+    try:
+        if not exclude.is_file():
+            return False
+        lines = exclude.read_text(encoding="utf-8").splitlines(keepends=True)
+        hits = [i for i, line in enumerate(lines) if line.rstrip("\r\n") == WORKTREES_PATTERN]
+        if not hits:
+            return False
+        del lines[hits[-1]]
+        exclude.write_text("".join(lines), encoding="utf-8", newline="")
+    except OSError as exc:
+        raise ArmError(f"cannot rewrite {exclude}: {exc}") from exc
+    return True
 
 
 def _hooks_dir(path: Path) -> Path:
@@ -633,7 +674,8 @@ def make_worktree(repo: Path, base: str, branch: str, path: Path, *, copy_untrac
 
     Returns:
         head, branch, hooks_path, hooks_linked (the workpiece hook names linked in),
-        worktree_config_set_by_harness and claude_md_copied.
+        worktree_config_set_by_harness, claude_md_copied and exclude_added (this call appended
+        the info/exclude line; False when the caller already ran ensure_worktrees_ignored).
 
     Raises:
         ArmError: a leftover is in the way, the extension is explicitly off, the worktrees dir
@@ -641,7 +683,7 @@ def make_worktree(repo: Path, base: str, branch: str, path: Path, *, copy_untrac
     """
     _refuse_leftovers(repo, branch, path)
     needs_config = _worktree_config_needed(repo)
-    _ensure_worktrees_ignored(repo)
+    exclude_added = ensure_worktrees_ignored(repo)
     proc = _git(repo, "worktree", "add", "-b", branch, str(path), base)
     if proc.returncode != 0:
         raise ArmError(f"worktree add failed: {proc.stderr.strip()}")
@@ -657,7 +699,8 @@ def make_worktree(repo: Path, base: str, branch: str, path: Path, *, copy_untrac
         raise ArmError(f"{exc}; {outcome}; branch {branch} is kept") from exc
     copied = copy_untracked_claude_md and _copy_untracked_claude_md(repo, path)
     return {"head": head, "branch": branch, "hooks_path": str(_hooks_dir(path)), "hooks_linked": linked,
-            "worktree_config_set_by_harness": needs_config, "claude_md_copied": copied}
+            "worktree_config_set_by_harness": needs_config, "claude_md_copied": copied,
+            "exclude_added": exclude_added}
 
 
 def arm_home(arm_dir: Path, links: tuple[str, ...]) -> Path:

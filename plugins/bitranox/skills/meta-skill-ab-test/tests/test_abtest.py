@@ -633,3 +633,43 @@ def test_prune_run_keeps_a_stale_registration_that_is_not_the_runs(tmp_path, scr
     assert T.main(_run_args(run_dir, creds, skills_repo, "--dry-run")) == 0
     assert T.main(["prune-run", str(run_dir)]) == 0
     assert str(foreign) in L.git(scratch_repo, "worktree", "list", "--porcelain").stdout
+
+
+def _exclude_text(repo):
+    path = repo / ".git" / "info" / "exclude"
+    return path.read_text(encoding="utf-8") if path.is_file() else None
+
+
+def test_prune_run_removes_only_the_exclude_line_the_harness_added(tmp_path, scratch_repo, skills_repo, fake_claude_path,
+                                                                     monkeypatch, capsys):
+    exclude = scratch_repo / ".git" / "info" / "exclude"
+    exclude.parent.mkdir(parents=True, exist_ok=True)
+    exclude.write_text("# the user's own excludes\n*.swp\n", encoding="utf-8")
+    original = _exclude_text(scratch_repo)
+    run_dir = _init_and_fill(tmp_path, scratch_repo, skills_repo)
+    env, creds = _env(fake_claude_path, tmp_path)
+    _use_env(monkeypatch, env)
+    assert T.main(["seal", str(run_dir)]) == 0
+    assert T.main(_run_args(run_dir, creds, skills_repo, "--dry-run")) == 0
+    assert ".claude/worktrees/" in _exclude_text(scratch_repo), "precondition: the harness added the line"
+    capsys.readouterr()
+    assert T.main(["prune-run", str(run_dir), "--json"]) == 0
+    out = json.loads(capsys.readouterr().out)
+    assert _exclude_text(scratch_repo) == original
+    assert out["data"]["exclude"] == "removed"
+
+
+def test_prune_run_keeps_an_exclude_line_the_user_wrote(tmp_path, scratch_repo, skills_repo, fake_claude_path, monkeypatch,
+                                                        capsys):
+    exclude = scratch_repo / ".git" / "info" / "exclude"
+    exclude.parent.mkdir(parents=True, exist_ok=True)
+    exclude.write_text(".claude/worktrees/\n", encoding="utf-8")
+    run_dir = _init_and_fill(tmp_path, scratch_repo, skills_repo)
+    env, creds = _env(fake_claude_path, tmp_path)
+    _use_env(monkeypatch, env)
+    assert T.main(["seal", str(run_dir)]) == 0
+    assert T.main(_run_args(run_dir, creds, skills_repo, "--dry-run")) == 0
+    capsys.readouterr()
+    assert T.main(["prune-run", str(run_dir), "--json"]) == 0
+    assert json.loads(capsys.readouterr().out)["data"]["exclude"] == "not_added"
+    assert _exclude_text(scratch_repo) == ".claude/worktrees/\n"

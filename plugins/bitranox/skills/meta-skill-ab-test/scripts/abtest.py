@@ -85,6 +85,9 @@ RUN_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$")
 # A live run skips only what really ran; a dry run also skips what an earlier dry run did.
 DONE_LIVE, DONE_DRY = ("ran",), ("ran", "dry")
 INTERRUPTED = "interrupted"
+# The journal step recording that the harness appended .claude/worktrees/ to the workpiece's
+# info/exclude ("added") and that prune-run took it out again ("removed").
+EXCLUDE_STEP = "exclude"
 # What the CLI prints when it calls a failed request a login failure: a bad token (401) and a
 # refused or rate-limited request (429) read the same, which is why only the probe can tell.
 LOGIN_MARKS = ("not logged in", "/login")
@@ -333,6 +336,7 @@ def _arm_steps(ctx: RunContext, result: dict[str, Any], frozen: abarm.Frozen, la
     cfg = arm_dir / "cfg"
     env = abarm.arm_env(cfg, abarm.arm_home(arm_dir, p.run.home_links), p.run.env_keep)
     result["install"] = abarm.install_plugin(cfg, frozen, ctx.credentials, env)
+    _ignore_worktrees(ctx)
     result["worktree"] = abarm.make_worktree(p.workpiece.repo, p.workpiece.base, branch, ws, copy_untracked_claude_md=True)
     result["guard"] = abguard.snapshot(ws, arm_dir / "guard")
     if not ctx.dry_run:
@@ -341,6 +345,16 @@ def _arm_steps(ctx: RunContext, result: dict[str, Any], frozen: abarm.Frozen, la
     _guard_after(result, arm_dir / "guard")
     result["floor"] = abscore.run_floor(ws, p, arm_dir)
     result["bundle_commits"] = abarm.bundle(ws, p.workpiece.base, arm_dir / "bundle.git")
+
+
+def _ignore_worktrees(ctx: RunContext) -> None:
+    """Make sure .claude/worktrees/ is ignored; journal it at once when the harness added the line.
+
+    The line is shared by every arm (only the first one adds it), so whether the harness added it
+    belongs to the run, not to an arm's state file: prune-run removes it only when this row says so.
+    """
+    if abarm.ensure_worktrees_ignored(ctx.profile.workpiece.repo):
+        record(ctx.run_dir, step=EXCLUDE_STEP, round=0, arm="", status="added")
 
 
 def _registered(repo: Path, ws: Path) -> bool:
@@ -642,12 +656,35 @@ def _arm_worktrees(profile: Profile, run_id: str) -> list[Path]:
             for name in profile.arm_names()]
 
 
+def _restore_exclude(run_dir: Path, repo: Path, errors: list[str]) -> str:
+    """Take out the info/exclude line this run's harness added; what was done, as one word.
+
+    "not_added" when no journal row says the harness added it (the user's own line stays),
+    "removed", or "kept" while a harness worktree (abx-*) of any run is still under
+    .claude/worktrees/, which would otherwise show up as untracked in the real checkout.
+    """
+    rows = [r.get("status") for r in load_journal(run_dir) if r.get("step") == EXCLUDE_STEP]
+    if not rows or rows[-1] != "added":
+        return "not_added"
+    worktrees = repo / ".claude" / "worktrees"
+    if worktrees.is_dir() and any(p.name.startswith("abx-") for p in worktrees.iterdir()):
+        return "kept"
+    try:
+        abarm.remove_worktrees_exclude(repo)
+    except abarm.ArmError as exc:
+        errors.append(str(exc))
+        return "kept"
+    record(run_dir, step=EXCLUDE_STEP, round=0, arm="", status="removed")
+    return "removed"
+
+
 def cmd_prune_run(args: argparse.Namespace) -> int:
     """Prune every arm worktree of the run, then delete its branches.
 
     An arm whose worktree git no longer lists but whose <ws>.githooks is left (the user removed a
     locked worktree by hand with `worktree remove -f -f`) is pruned too: that removes the hooks
-    dir and unsets the extension the harness set.
+    dir and unsets the extension the harness set. The `.claude/worktrees/` line of the
+    workpiece's info/exclude is removed only when the journal says the harness added it.
     """
     run_dir = _run_dir(args.run_dir)
     profile = load_profile(run_dir / "abtest.toml")
@@ -664,7 +701,8 @@ def cmd_prune_run(args: argparse.Namespace) -> int:
     deleted = [b for b in refs if git(repo, "branch", "-D", b).returncode == 0]
     errors += [f"branch {b} could not be deleted" for b in refs if b not in deleted]
     skipped = [f"frozen checkout {p} is left (release it from the skills repo)" for p in sorted((run_dir / "frozen").glob("*"))]
-    data = {"deleted": deleted, "errors": errors}
+    exclude = _restore_exclude(run_dir, repo, errors)
+    data = {"deleted": deleted, "errors": errors, "exclude": exclude}
     _emit(args.json, "prune-run", data, not errors, f"deleted {len(deleted)} branch(es) under abx/{run_id}/"
           + "".join(f"\nerror: {e}" for e in errors), skipped)
     if errors:
