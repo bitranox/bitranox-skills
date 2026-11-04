@@ -81,7 +81,7 @@ PREREG_SKELETON = """# Pre-registration
 Pairwise blind judge (design S2), A/B swap tie rule, control first then finalists; labels per design S5.4.
 """
 GITIGNORE = ("frozen/\narms/*/cfg\narms/*/home\narms/*/stream.jsonl\narms/*/bundle.git\narms/*/guard\n"
-             "arms/*/transcripts\narms/*/uncommitted.patch\narms/*/untracked.tar\n")
+             "arms/*/transcripts\narms/*/uncommitted.patch\narms/*/untracked.tar\njournal.jsonl\njournal.torn\n")
 # Where an arm's session transcripts (copied out of its config dir before that is deleted) go.
 TRANSCRIPTS = "transcripts"
 JOURNAL, TORN = "journal.jsonl", "journal.torn"
@@ -309,20 +309,26 @@ def _suite_sha(profile: Profile) -> str | None:
     return sha256_file(suite_path)
 
 
-def _commit_seal(run_dir: Path, stamp: dict[str, Any]) -> None:
-    """Append the stamp to PREREG.md, journal the seal and commit both; undo both when the commit fails."""
+def _commit_seal(run_dir: Path, stamp: dict[str, Any]) -> str:
+    """Append the stamp to PREREG.md and commit the inputs, then journal the seal with that commit.
+
+    The journal row comes AFTER the commit because it names the commit (a committed file cannot
+    name the commit that adds it); journal.jsonl is gitignored, the run's own output. A failed
+    commit undoes the PREREG.md append and the staging. Returns the seal commit.
+    """
     prereg = run_dir / "PREREG.md"
     before = _read_text(prereg)
     with prereg.open("a", encoding="utf-8", newline="\n") as fh:
         fh.write("\n## Sealed\n\n```json\n" + json.dumps(stamp, indent=1, sort_keys=True) + "\n```\n")
-    record(run_dir, step="seal", round=0, arm="", status="sealed")
     git(run_dir, "add", "-A")
     proc = git(run_dir, *SEAL_GIT, "commit", "-q", "-m", "seal")
     if proc.returncode != 0:
         prereg.write_text(before, encoding="utf-8")
-        (run_dir / JOURNAL).unlink(missing_ok=True)
         git(run_dir, "reset", "-q")
         raise RunRefused(f"seal commit failed: {proc.stderr.strip()}")
+    commit = _git_out(run_dir, "rev-parse", "--verify", "-q", "HEAD").strip()
+    record(run_dir, step="seal", round=0, arm="", status="sealed", commit=commit, suite_sha256=stamp["suite_sha256"])
+    return commit
 
 
 def cmd_seal(args: argparse.Namespace) -> int:
@@ -337,8 +343,8 @@ def cmd_seal(args: argparse.Namespace) -> int:
         raise RunRefused("; ".join(problems))
     stamp = {"sealed_at": utc_now(), "weights": WEIGHTS, "suite_sha256": _suite_sha(profile), "arms": profile.arm_names(),
              "n": profile.run.n, "warmth_tolerance": profile.run.warmth_tolerance}
-    _commit_seal(run_dir, stamp)
-    _emit(args.json, "seal", stamp, True, f"sealed {run_dir}: {len(profile.arm_names())} arms x {profile.run.n} rounds")
+    commit = _commit_seal(run_dir, stamp)
+    _emit(args.json, "seal", dict(stamp, commit=commit), True, f"sealed {run_dir}: {len(profile.arm_names())} arms x {profile.run.n} rounds")
     return EXIT_YES
 
 
@@ -676,23 +682,68 @@ def _cleanup_warnings(result: dict[str, Any]) -> None:
         _warn(f"{result.get('arm')}: {err}")
 
 
-def _require_prereg_committed(run_dir: Path) -> None:
-    """Refuse a sealed run whose PREREG.md differs from what is committed: an amendment must be committed."""
-    proc = git(run_dir, "status", "--porcelain", "--", "PREREG.md")
+def _seal_commit(run_dir: Path) -> str:
+    """The commit the seal journal row names, verified to exist in the run dir's repository."""
+    rows = [r for r in load_journal(run_dir) if r.get("step") == "seal"]
+    commit = rows[-1].get("commit") if rows else None
+    if not isinstance(commit, str) or git(run_dir, "cat-file", "-e", f"{commit}^{{commit}}").returncode != 0:
+        raise RunRefused(f"the seal record in {run_dir / JOURNAL} names no commit of {run_dir}; "
+                         "the seal cannot be checked, so the run is refused")
+    return commit
+
+
+def _git_out(run_dir: Path, *args: str) -> str:
+    proc = git(run_dir, *args)
     if proc.returncode != 0:
-        raise RunRefused(f"cannot read the git status of {run_dir / 'PREREG.md'}: {proc.stderr.strip()}")
-    if proc.stdout.strip():
-        raise RunRefused(f"{run_dir / 'PREREG.md'} has changes that are not committed ({proc.stdout.strip()}); "
-                         f"the pre-registration is append-only: commit the amendment with "
-                         f"`git -C {run_dir} add PREREG.md && git -C {run_dir} commit -m amend`, "
-                         f"or undo it with `git -C {run_dir} checkout -- PREREG.md`")
+        raise RunRefused(f"git {args[0]} failed in {run_dir}: {proc.stderr.strip()}")
+    return proc.stdout
+
+
+def _refuse_uncommitted(run_dir: Path, paths: list[str]) -> None:
+    """Refuse any uncommitted or untracked change under the sealed inputs, naming each path."""
+    dirty = _git_out(run_dir, "status", "--porcelain", "--untracked-files=all", "--", *paths).splitlines()
+    if not dirty:
+        return
+    prereg = ("; PREREG.md is append-only: commit an amendment with "
+              f"`git -C {run_dir} add PREREG.md && git -C {run_dir} commit -m amend`"
+              if any(line[3:] == "PREREG.md" for line in dirty) else "")
+    raise RunRefused(f"the sealed inputs of {run_dir} have changes that are not committed "
+                     f"({'; '.join(line.strip() for line in dirty)}){prereg}; "
+                     f"undo them with `git -C {run_dir} checkout -- <path>` (an untracked file: delete it)")
+
+
+def _refuse_changed_since_seal(run_dir: Path, commit: str, paths: list[str]) -> None:
+    """Refuse a committed change since the seal to a frozen input, and any PREREG.md change but an append."""
+    changed = _git_out(run_dir, "diff", "--name-only", commit, "HEAD", "--", *paths).split()
+    if changed:
+        raise RunRefused(f"{', '.join(changed)} changed in a commit since the seal ({commit[:12]}); "
+                         "the profile, the task and the variants are frozen at the seal")
+    sealed = _git_out(run_dir, "show", f"{commit}:PREREG.md")
+    if not _git_out(run_dir, "show", "HEAD:PREREG.md").startswith(sealed):
+        raise RunRefused(f"PREREG.md was rewritten since the seal ({commit[:12]}), not appended to; "
+                         "the pre-registration is append-only")
+
+
+def _require_seal_intact(run_dir: Path, profile: Profile) -> None:
+    """Refuse a run whose sealed inputs differ from the seal.
+
+    Uncommitted or untracked changes under abtest.toml, the task file, PREREG.md, variants/ and
+    .gitignore are refused (journal.jsonl and arms/ are the run's own output and are not looked
+    at). A committed change since the seal commit is refused for abtest.toml, the task file and
+    variants/; PREREG.md may grow by committed amendments, never be rewritten.
+    """
+    commit = _seal_commit(run_dir)
+    frozen = ["abtest.toml", profile.workpiece.task_file, "variants"]
+    _refuse_uncommitted(run_dir, [*frozen, "PREREG.md", ".gitignore"])
+    _refuse_changed_since_seal(run_dir, commit, frozen)
 
 
 def cmd_run(args: argparse.Namespace) -> int:
     run_dir = _run_dir(args.run_dir)
     _require_sealed(run_dir)
-    _require_prereg_committed(run_dir)
-    ctx = _context(args, run_dir, load_profile(run_dir / "abtest.toml"))
+    profile = load_profile(run_dir / "abtest.toml")
+    _require_seal_intact(run_dir, profile)
+    ctx = _context(args, run_dir, profile)
     for cfg in _sweep_cfgs(run_dir):
         _warn(f"deleted the config dir a killed arm left at {cfg} (it held a credentials copy); "
               "its transcripts are kept beside it")

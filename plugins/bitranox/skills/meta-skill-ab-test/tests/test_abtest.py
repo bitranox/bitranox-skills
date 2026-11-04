@@ -518,10 +518,11 @@ def test_a_task_file_that_is_not_utf8_is_refused_not_a_traceback(tmp_path, scrat
     assert "task.md is not UTF-8" in json.loads(captured.out)["data"]["error"] and captured.err.count("\n") == 1
     (run_dir / "task.md").write_text("Do the task.\n", encoding="utf-8")
     assert T.main(["seal", str(run_dir)]) == 0
+    # After the seal the task file is frozen: a rewrite is refused as a change, before it is read.
     (run_dir / "task.md").write_bytes(b"\xff\xfe bad")
     capsys.readouterr()
     assert T.main(["run", str(run_dir), "--dry-run", "--json"]) == 2
-    assert "task.md is not UTF-8" in json.loads(capsys.readouterr().out)["data"]["error"]
+    assert "M task.md" in json.loads(capsys.readouterr().out)["data"]["error"]
 
 
 @pytest.mark.parametrize("change", ["modified", "untracked"])
@@ -825,3 +826,85 @@ def test_an_arm_is_not_started_on_a_login_that_lapses_before_its_deadline(tmp_pa
     assert not (run_dir / "arms" / "r1-C").exists(), "the arm was never started, nothing was copied"
     assert "refreshed first" in out["data"]["message"] and out["data"]["paused_at"] == "r1-C"
     assert str(at) not in json.dumps(out), "no value of the credentials file is reported"
+
+
+# --- whole-branch review: run refuses inputs that differ from the seal ----------------------------
+
+def _commit_all(run_dir, message):
+    assert L.git(run_dir, "add", "-A").returncode == 0
+    assert L.git(run_dir, *T.SEAL_GIT, "commit", "-q", "-m", message).returncode == 0
+
+
+def _tweak_variant(run_dir):
+    path = run_dir / "variants" / "V1" / "SKILL.md"
+    path.write_text(path.read_text(encoding="utf-8") + "One more line.\n", encoding="utf-8")
+
+
+def _new_variant_file(run_dir):
+    (run_dir / "variants" / "V1" / "extra").mkdir()
+    (run_dir / "variants" / "V1" / "extra" / "notes.md").write_text("added after the seal\n", encoding="utf-8")
+
+
+def _edit_task(run_dir):
+    (run_dir / "task.md").write_text("Do a different task.\n", encoding="utf-8")
+
+
+def _edit_gitignore(run_dir):
+    with (run_dir / ".gitignore").open("a", encoding="utf-8") as fh:
+        fh.write("variants/\n")
+
+
+def _commit_max_tokens(run_dir):
+    toml = run_dir / "abtest.toml"
+    text = toml.read_text(encoding="utf-8")
+    assert text.count("max_tokens = 6000000") == 1
+    toml.write_text(text.replace("max_tokens = 6000000", "max_tokens = 9000000"), encoding="utf-8")
+    _commit_all(run_dir, "raise the cap")
+
+
+def _commit_variant(run_dir):
+    _tweak_variant(run_dir)
+    _commit_all(run_dir, "tweak V1")
+
+
+def _rewrite_prereg(run_dir):
+    (run_dir / "PREREG.md").write_text("# Pre-registration\n\nH1: V1 is better (rewritten).\n", encoding="utf-8")
+    _commit_all(run_dir, "rewrite")
+
+
+@pytest.mark.parametrize(("change", "named"), [
+    (_tweak_variant, "variants/V1/SKILL.md"),
+    (_new_variant_file, "variants/V1/extra/notes.md"),
+    (_edit_task, "task.md"),
+    (_edit_gitignore, ".gitignore"),
+    (_commit_max_tokens, "abtest.toml"),
+    (_commit_variant, "variants/V1/SKILL.md"),
+    (_rewrite_prereg, "PREREG.md"),
+], ids=["tweaked-variant", "untracked-variant-file", "edited-task", "edited-gitignore", "committed-max-tokens",
+        "committed-variant", "rewritten-prereg"])
+def test_run_refuses_inputs_that_changed_since_the_seal(tmp_path, scratch_repo, skills_repo, fake_claude_path, monkeypatch,
+                                                        capsys, change, named):
+    run_dir = _init_and_fill(tmp_path, scratch_repo, skills_repo)
+    env, creds = _env(fake_claude_path, tmp_path)
+    _use_env(monkeypatch, env)
+    assert T.main(["seal", str(run_dir)]) == 0
+    change(run_dir)
+    capsys.readouterr()
+    assert T.main(_run_args(run_dir, creds, skills_repo, "--dry-run", "--only", "C", "--json")) == 2
+    error = json.loads(capsys.readouterr().out)["data"]["error"]
+    assert named in error and _arm_rows(run_dir) == []
+
+
+def test_a_committed_prereg_amendment_runs_and_the_seal_row_names_the_commit(tmp_path, scratch_repo, skills_repo,
+                                                                             fake_claude_path, monkeypatch):
+    run_dir = _init_and_fill(tmp_path, scratch_repo, skills_repo)
+    env, creds = _env(fake_claude_path, tmp_path)
+    _use_env(monkeypatch, env)
+    assert T.main(["seal", str(run_dir)]) == 0
+    (seal,) = [r for r in L.read_jsonl(run_dir / "journal.jsonl") if r["step"] == "seal"]
+    assert seal["commit"] == L.git(run_dir, "rev-parse", "--verify", "-q", "HEAD").stdout.strip()
+    assert L.git(run_dir, "status", "--porcelain").stdout == "", "the journal is the run's output, not an input"
+    with (run_dir / "PREREG.md").open("a", encoding="utf-8") as fh:
+        fh.write("\n## Amendment 1\n\nH2: V1 also writes fewer tests.\n")
+    _commit_all(run_dir, "amend")
+    assert T.main(_run_args(run_dir, creds, skills_repo, "--dry-run", "--only", "C")) == 0
