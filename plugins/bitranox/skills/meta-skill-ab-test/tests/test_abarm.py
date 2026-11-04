@@ -393,17 +393,101 @@ def test_prune_keeps_worktree_config_while_another_worktree_uses_it(scratch_repo
     assert [Path(p).name for p in pruned["worktree_config_kept_for"]] == ["config.worktree"]
 
 
+# The state file's key is persisted data a later prune reads back, so its spelling is pinned here.
+STATE_KEY = "worktree_config_set_by_harness"
+
+
+def _hooks_of(ws):
+    return ws.parent / f"{ws.name}.githooks"
+
+
+def _state(ws):
+    return json.loads((_hooks_of(ws) / A.STATE_FILE).read_text(encoding="utf-8"))
+
+
+# The workpiece's post-checkout hook is the seam that makes a step after `worktree add` fail: git
+# runs it inside `worktree add`, before make_worktree's own steps, so a lock it plants makes a later
+# git write refuse. Nothing of abarm is patched.
+LOCK_THE_WORKTREE = 'git worktree lock --reason test "$PWD"'
+BLOCK_ITS_CONFIG_WORKTREE = 'touch "$(git rev-parse --git-dir)/config.worktree.lock"'
+BLOCK_THE_SHARED_CONFIG = 'touch "$(git rev-parse --git-common-dir)/config.lock"'
+
+
+def _post_checkout(repo, *lines):
+    _hook(repo / ".git" / "hooks" / "post-checkout", "\n".join(lines))
+
+
+@POSIX_ONLY
 def test_make_worktree_rolls_back_when_the_hook_setup_fails(scratch_repo):
+    _post_checkout(scratch_repo, BLOCK_ITS_CONFIG_WORKTREE)  # core.hooksPath, after the extension
     base = (scratch_repo / ".base").read_text()
     ws = _arm_ws(scratch_repo)
-    blocker = ws.parent / f"{ws.name}.githooks"
-    blocker.parent.mkdir(parents=True)
-    blocker.write_text("not a dir\n", encoding="utf-8")
-    with pytest.raises(A.ArmError, match="githooks"):
+    with pytest.raises(A.ArmError, match="removed again"):
         A.make_worktree(scratch_repo, base, "abx/t/r1-C", ws, copy_untracked_claude_md=False)
     assert not ws.exists() and str(ws) not in _registered(scratch_repo), "the worktree is removed again"
+    assert not _hooks_of(ws).exists(), "and with it the arm's hooks dir"
     assert _ext(scratch_repo)[0] == 1, "the extension the harness set is unset again"
-    assert blocker.read_text(encoding="utf-8") == "not a dir\n", "what the harness did not make stays"
+
+
+@POSIX_ONLY
+def test_make_worktree_keeps_the_hooks_and_the_extension_when_the_rollback_cannot_remove(scratch_repo):
+    _post_checkout(scratch_repo, LOCK_THE_WORKTREE, BLOCK_ITS_CONFIG_WORKTREE)
+    base = (scratch_repo / ".base").read_text()
+    ws = _arm_ws(scratch_repo)
+    with pytest.raises(A.ArmError) as err:
+        A.make_worktree(scratch_repo, base, "abx/t/r1-C", ws, copy_untracked_claude_md=False)
+    assert ws.is_dir() and _state(ws) == {STATE_KEY: True}, "the hooks dir lives as long as the worktree"
+    assert _ext(scratch_repo) == (0, "true"), "and so does the extension"
+    msg = str(err.value)
+    assert f"{_hooks_of(ws)} and its {A.STATE_FILE} are kept" in msg
+    assert "extensions.worktreeConfig, which the harness set, stays set" in msg
+    assert f"worktree unlock {ws}" in msg and "run prune again" in msg
+    L.git(scratch_repo, "worktree", "remove", "-f", "-f", str(ws))  # the cleanup the message names
+    pruned = A.prune(ws, scratch_repo, ())
+    assert not _hooks_of(ws).exists() and _ext(scratch_repo)[0] == 1 and pruned["worktree_config"] == "unset"
+    assert pruned["worktree_removed"] is False, "it was already gone"
+
+
+@POSIX_ONLY
+def test_make_worktree_writes_the_state_before_it_sets_the_extension(scratch_repo):
+    _post_checkout(scratch_repo, LOCK_THE_WORKTREE, BLOCK_THE_SHARED_CONFIG)
+    base = (scratch_repo / ".base").read_text()
+    ws = _arm_ws(scratch_repo)
+    with pytest.raises(A.ArmError, match="git config failed"):
+        A.make_worktree(scratch_repo, base, "abx/t/r1-C", ws, copy_untracked_claude_md=False)
+    assert _state(ws) == {STATE_KEY: True}, "the state was written before the config call that failed"
+    assert _ext(scratch_repo)[0] == 1, "the config call itself was refused"
+    (scratch_repo / ".git" / "config.lock").unlink()
+    L.git(scratch_repo, "worktree", "remove", "-f", "-f", str(ws))
+    pruned = A.prune(ws, scratch_repo, ())
+    assert pruned["worktree_config"] == "unset", "unsetting the never-set key is harmless"
+    assert _ext(scratch_repo)[0] == 1 and not _hooks_of(ws).exists()
+
+
+@pytest.mark.parametrize("kind", ["earlier_arm", "plain_file"])
+def test_make_worktree_refuses_a_stray_hooks_path_before_adding_the_worktree(scratch_repo, kind):
+    base = (scratch_repo / ".base").read_text()
+    ws = _arm_ws(scratch_repo)
+    hooks = _hooks_of(ws)
+    hooks.parent.mkdir(parents=True)
+    if kind == "earlier_arm":
+        hooks.mkdir()
+        (hooks / A.STATE_FILE).write_text(json.dumps({STATE_KEY: True}), encoding="utf-8")
+        L.git(scratch_repo, "config", "--local", "extensions.worktreeConfig", "true")
+    else:
+        hooks.write_text("not a dir\n", encoding="utf-8")
+    with pytest.raises(A.ArmError, match="leftover") as err:
+        A.make_worktree(scratch_repo, base, "abx/t/r1-C", ws, copy_untracked_claude_md=False)
+    assert not ws.exists() and str(ws) not in _registered(scratch_repo), "refused before worktree add"
+    assert L.git(scratch_repo, "rev-parse", "--verify", "-q", "refs/heads/abx/t/r1-C").returncode == 1, \
+        "worktree add -b never ran, so no branch was made"
+    msg = str(err.value)
+    assert f"prune of {ws} cleans it up, or rm -r {hooks}" in msg
+    assert ("config --local --unset extensions.worktreeConfig" in msg) == (kind == "earlier_arm")
+    pruned = A.prune(ws, scratch_repo, ())  # the route the message names
+    assert not hooks.exists() and not hooks.is_symlink()
+    assert pruned["worktree_config"] == ("unset" if kind == "earlier_arm" else "no_state")
+    assert _ext(scratch_repo)[0] == 1
 
 
 @POSIX_ONLY
@@ -485,14 +569,44 @@ def test_install_plugin_replaces_a_planted_credentials_link_and_tightens_cfg(tmp
     assert cfg.stat().st_mode & 0o777 == 0o700, "an existing cfg dir is tightened too"
 
 
-def test_prune_removes_the_hooks_dir_even_when_the_worktree_remove_fails(scratch_repo):
+@POSIX_ONLY
+def test_prune_keeps_the_hooks_and_the_extension_while_the_worktree_survives(scratch_repo, tmp_path):
+    _with_origin(scratch_repo, tmp_path)
     base = (scratch_repo / ".base").read_text()
     ws = _arm_ws(scratch_repo)
     A.make_worktree(scratch_repo, base, "abx/t/r1-C", ws, copy_untracked_claude_md=False)
     L.git(scratch_repo, "worktree", "lock", str(ws))  # a single --force does not remove a locked worktree
-    with pytest.raises(A.ArmError, match="worktree remove"):
+    with pytest.raises(A.ArmError, match="worktree remove") as err:
         A.prune(ws, scratch_repo, ())
-    assert not (ws.parent / f"{ws.name}.githooks").exists()
+    refused = L.git(ws, "push", "origin", "HEAD")
+    assert refused.returncode != 0 and "pushing is refused" in refused.stderr, "the survivor still cannot push"
+    assert _state(ws) == {STATE_KEY: True} and _ext(scratch_repo) == (0, "true")
+    msg = str(err.value)
+    assert f"{_hooks_of(ws)} and its {A.STATE_FILE} are kept" in msg
+    assert "says the harness set extensions.worktreeConfig" in msg
+    assert f"git -C {scratch_repo} worktree unlock {ws}" in msg and "run prune again" in msg
+    L.git(scratch_repo, "worktree", "unlock", str(ws))
+    pruned = A.prune(ws, scratch_repo, ())
+    assert not ws.exists() and str(ws) not in _registered(scratch_repo) and not _hooks_of(ws).exists()
+    assert _ext(scratch_repo)[0] == 1 and pruned["worktree_config"] == "unset"
+    assert pruned["worktree_removed"] is True
+
+
+@POSIX_ONLY
+def test_prune_after_a_manual_remove_restores_the_extension_from_the_kept_state(scratch_repo):
+    base = (scratch_repo / ".base").read_text()
+    ws = _arm_ws(scratch_repo)
+    A.make_worktree(scratch_repo, base, "abx/t/r1-C", ws, copy_untracked_claude_md=False)
+    L.git(scratch_repo, "worktree", "lock", str(ws))
+    with pytest.raises(A.ArmError, match="worktree remove") as err:
+        A.prune(ws, scratch_repo, ())
+    assert _state(ws) == {STATE_KEY: True}, "the failed prune kept the state the next one needs"
+    assert f"git -C {scratch_repo} worktree remove -f -f {ws}" in str(err.value)
+    L.git(scratch_repo, "worktree", "remove", "-f", "-f", str(ws))
+    assert not ws.exists() and str(ws) not in _registered(scratch_repo), "precondition: the worktree is gone"
+    pruned = A.prune(ws, scratch_repo, ())
+    assert pruned["worktree_removed"] is False and pruned["worktree_config"] == "unset"
+    assert not _hooks_of(ws).exists() and _ext(scratch_repo)[0] == 1
 
 
 def test_make_worktree_refuses_an_existing_worktree_and_names_the_cleanup(scratch_repo):

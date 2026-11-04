@@ -53,7 +53,10 @@ INSTALL_TIMEOUT_S = 300
 STOP_GRACE_S = 60
 WORKTREE_CONFIG_KEY = "extensions.worktreeConfig"
 # Beside the arm's hooks: what make_worktree changed in the repo, so prune can undo exactly that.
+# The hooks dir, this file and the extension it records live exactly as long as the worktree.
 STATE_FILE = ".abx-state.json"
+# True: the harness sets (or, after a crash between the two writes, was about to set) the extension.
+STATE_KEY = "worktree_config_set_by_harness"
 PRE_PUSH_HOOK = "#!/bin/sh\necho 'abtest arm: pushing is refused; the branch is collected by the harness' >&2\nexit 1\n"
 
 
@@ -444,19 +447,21 @@ def _install_hooks(repo: Path, path: Path, needs_config: bool, done: _HookSetup)
     A plain `git config` in a linked worktree writes the repository's shared config, so the real
     checkout's pushes would be refused too and, after prune, its hooks would point at a deleted
     dir. The per-worktree config needs extensions.worktreeConfig, which is set only when unset and
-    recorded in the state file so prune can undo it.
+    recorded in the state file so prune can undo it. The state file is written BEFORE the
+    extension is set: a crash between the two leaves a state file claiming a setting git never
+    made (whose unset is a harmless no-op), never a setting no state file records.
     """
     source = _workpiece_hooks_source(path)
-    if needs_config:
-        _git_ok(repo, "config", "--local", WORKTREE_CONFIG_KEY, "true")
-        done.worktree_config_set = True
     hooks = _hooks_dir(path)
     try:
         hooks.mkdir()
     except OSError as exc:
-        raise ArmError(f"cannot create the arm's hooks dir {hooks} (a leftover of an earlier arm?): {exc}") from exc
+        raise ArmError(f"cannot create the arm's hooks dir {hooks}: {exc}") from exc
     done.hooks_dir = hooks
-    (hooks / STATE_FILE).write_text(json.dumps({"worktree_config_set_by_harness": needs_config}), encoding="utf-8")
+    (hooks / STATE_FILE).write_text(json.dumps({STATE_KEY: needs_config}), encoding="utf-8")
+    if needs_config:
+        _git_ok(repo, "config", "--local", WORKTREE_CONFIG_KEY, "true")
+        done.worktree_config_set = True
     linked = _link_workpiece_hooks(source, hooks)
     hook = hooks / "pre-push"
     hook.write_text(PRE_PUSH_HOOK, encoding="utf-8", newline="\n")
@@ -465,22 +470,103 @@ def _install_hooks(repo: Path, path: Path, needs_config: bool, done: _HookSetup)
     return linked
 
 
-def _roll_back(repo: Path, path: Path, done: _HookSetup) -> None:
-    """Undo a half-made arm worktree: the worktree, the hooks dir and the extension the harness set."""
-    _git(repo, "worktree", "remove", "--force", str(path))
-    if done.hooks_dir is not None:
-        shutil.rmtree(done.hooks_dir, ignore_errors=True)
-    if done.worktree_config_set and not _worktree_configs(repo):
-        _unset_worktree_config(repo)
+def _worktree_entries(repo: Path) -> dict[str, bool]:
+    """{real path of every registered worktree: whether it is locked}."""
+    entries: dict[str, bool] = {}
+    current = None
+    for line in _git_ok(repo, "worktree", "list", "--porcelain").splitlines():
+        if line.startswith("worktree "):
+            current = os.path.realpath(line[len("worktree "):])
+            entries[current] = False
+        elif current is not None and (line == "locked" or line.startswith("locked ")):
+            entries[current] = True
+    return entries
 
 
 def _registered_paths(repo: Path) -> set[str]:
-    out = _git_ok(repo, "worktree", "list", "--porcelain")
-    return {os.path.realpath(line[len("worktree "):]) for line in out.splitlines() if line.startswith("worktree ")}
+    return set(_worktree_entries(repo))
+
+
+def _worktree_gone(repo: Path, ws: Path) -> bool:
+    """Neither the worktree's directory nor git's registration of it is left."""
+    return not (ws.exists() or ws.is_symlink()) and os.path.realpath(ws) not in _registered_paths(repo)
+
+
+def _read_state(hooks: Path) -> dict[str, Any] | None:
+    try:
+        data = json.loads((hooks / STATE_FILE).read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+    return data if isinstance(data, dict) else None
+
+
+def _remove_hooks_path(hooks: Path) -> None:
+    """Remove the arm's hooks path, a directory or (a stray leftover) a file or link."""
+    if hooks.is_symlink() or hooks.is_file():
+        hooks.unlink(missing_ok=True)
+    else:
+        shutil.rmtree(hooks, ignore_errors=True)
+
+
+def _extension_note(state: dict[str, Any] | None) -> str:
+    """What a hooks dir's state file says about extensions.worktreeConfig, for a message."""
+    if state is None:
+        return f"it holds no readable {STATE_FILE}, so whether the harness set {WORKTREE_CONFIG_KEY} is unknown"
+    if state.get(STATE_KEY) is True:
+        return f"its {STATE_FILE} says the harness set {WORKTREE_CONFIG_KEY}"
+    return f"its {STATE_FILE} says {WORKTREE_CONFIG_KEY} was not set by the harness"
+
+
+def _survivor_cleanup(repo: Path, ws: Path) -> str:
+    """The command that gets a worktree the harness could not remove out of the way."""
+    entries = _worktree_entries(repo)
+    real = os.path.realpath(ws)
+    if real not in entries:
+        return f"move or delete {ws}, which is not a worktree of {repo}"
+    discard = f"git -C {repo} worktree remove -f -f {ws}"
+    if entries[real]:
+        return f"git -C {repo} worktree unlock {ws} (or {discard} to drop it locked as it is)"
+    return discard
+
+
+def _kept_message(repo: Path, ws: Path, failure: str, *, hooks: Path | None, extension: str) -> str:
+    """Why a worktree survived, what was kept with it, and how to finish the cleanup."""
+    kept = (f"the arm's hooks dir {hooks} and its {STATE_FILE} are kept"
+            if hooks is not None and hooks.is_dir() else "no hooks dir of the arm exists")
+    return (f"{failure}; {kept}; {extension}; clean up with `{_survivor_cleanup(repo, ws)}`, "
+            "then run prune again")
+
+
+def _roll_back(repo: Path, path: Path, done: _HookSetup) -> str | None:
+    """Undo a half-made arm worktree; None when all of it is undone, else what was kept and why.
+
+    The hooks dir and the extension the harness set are removed only once the worktree is gone:
+    a surviving worktree keeps its refusing pre-push and the state file prune needs.
+    """
+    proc = _git(repo, "worktree", "remove", "--force", str(path))
+    if not _worktree_gone(repo, path):
+        extension = (f"{WORKTREE_CONFIG_KEY}, which the harness set, stays set" if done.worktree_config_set
+                     else f"{WORKTREE_CONFIG_KEY} was not changed by the harness")
+        return _kept_message(repo, path, f"the worktree remove failed rc={proc.returncode}: "
+                             f"{proc.stderr.strip()[-500:]}", hooks=done.hooks_dir, extension=extension)
+    if done.worktree_config_set and not _worktree_configs(repo):
+        _unset_worktree_config(repo)
+    if done.hooks_dir is not None:
+        _remove_hooks_path(done.hooks_dir)
+    return None
+
+
+def _hooks_leftover(repo: Path, path: Path, hooks: Path) -> str:
+    """A leftover hooks path, what its state says, and how to clean it up."""
+    state = _read_state(hooks) if hooks.is_dir() else None
+    unset = (f", then git -C {repo} config --local --unset {WORKTREE_CONFIG_KEY} unless another worktree "
+             "has a config.worktree") if state is not None and state.get(STATE_KEY) is True else ""
+    return (f"the arm's hooks path {hooks} exists ({_extension_note(state)}; prune of {path} cleans it up, "
+            f"or rm -r {hooks}{unset})")
 
 
 def _leftovers(repo: Path, branch: str, path: Path) -> list[str]:
-    """What an earlier arm left at this path or branch, each with the command that cleans it up."""
+    """What an earlier arm left at this path, its hooks path or branch, each with its cleanup."""
     found = []
     registered = os.path.realpath(path) in _registered_paths(repo)
     if path.exists() and registered:
@@ -489,6 +575,9 @@ def _leftovers(repo: Path, branch: str, path: Path) -> list[str]:
         found.append(f"{path} exists and is not a worktree of {repo} (move or delete it)")
     elif registered:
         found.append(f"worktree {path} is registered but its directory is gone (pruned now)")
+    hooks = _hooks_dir(path)
+    if hooks.exists() or hooks.is_symlink():
+        found.append(_hooks_leftover(repo, path, hooks))
     if _git(repo, "rev-parse", "--verify", "-q", f"refs/heads/{branch}").returncode == 0:
         found.append(f"branch {branch} exists (git -C {repo} branch -D {branch}, once its work is collected)")
     return found
@@ -525,8 +614,10 @@ def make_worktree(repo: Path, base: str, branch: str, path: Path, *, copy_untrac
     `.claude/worktrees/` is added to the repo's info/exclude when not already ignored, so the
     arm's tree never shows up as untracked in the real checkout. The workpiece's own hooks other
     than pre-push stay active in the arm. A leftover path, branch or stale registration is
-    refused (after one `git worktree prune`); a failure after `worktree add` removes the worktree
-    and restores the extension again before raising.
+    refused (after one `git worktree prune`), and so is a leftover `<path>.githooks`, before
+    `worktree add` runs. A failure after `worktree add` removes the worktree, then the hooks dir
+    and the extension the harness set, before raising; when the worktree cannot be removed, the
+    hooks dir and the extension are kept with it and the error names the cleanup.
 
     Returns:
         head, branch, hooks_path, hooks_linked (the workpiece hook names linked in),
@@ -549,8 +640,9 @@ def make_worktree(repo: Path, base: str, branch: str, path: Path, *, copy_untrac
             raise ArmError(f"worktree HEAD {head} is not the base {base}")
         linked = _install_hooks(repo, path, needs_config, done)
     except (ArmError, OSError) as exc:
-        _roll_back(repo, path, done)
-        raise ArmError(f"{exc}; the worktree was removed again, branch {branch} is kept") from exc
+        kept = _roll_back(repo, path, done)
+        outcome = kept or "the worktree was removed again"
+        raise ArmError(f"{exc}; {outcome}; branch {branch} is kept") from exc
     copied = copy_untracked_claude_md and _copy_untracked_claude_md(repo, path)
     return {"head": head, "branch": branch, "hooks_path": str(_hooks_dir(path)), "hooks_linked": linked,
             "worktree_config_set_by_harness": needs_config, "claude_md_copied": copied}
@@ -759,19 +851,11 @@ def _drop_caches(ws: Path, cache_paths: tuple[str, ...]) -> int:
     return freed
 
 
-def _read_state(hooks: Path) -> dict[str, Any] | None:
-    try:
-        data = json.loads((hooks / STATE_FILE).read_text(encoding="utf-8"))
-    except (OSError, ValueError):
-        return None
-    return data if isinstance(data, dict) else None
-
-
 def _restore_worktree_config(repo: Path, state: dict[str, Any] | None) -> dict[str, Any]:
     """Unset extensions.worktreeConfig when this arm set it and no worktree's config.worktree needs it."""
     if state is None:
         return {"worktree_config": "no_state", "worktree_config_kept_for": []}
-    if state.get("worktree_config_set_by_harness") is not True:
+    if state.get(STATE_KEY) is not True:
         return {"worktree_config": "untouched", "worktree_config_kept_for": []}
     others = _worktree_configs(repo)
     if others:
@@ -783,27 +867,38 @@ def _restore_worktree_config(repo: Path, state: dict[str, Any] | None) -> dict[s
 def prune(ws: Path, repo: Path, cache_paths: tuple[str, ...]) -> dict[str, Any]:
     """Remove the build caches, then the worktree (run from repo, never from inside ws); keep the branch.
 
-    The arm's hooks dir is removed even when the worktree remove fails. extensions.worktreeConfig
-    is unset again only when make_worktree set it (its state file says so) and no other worktree
-    of the repo still has a config.worktree.
+    The arm's hooks dir (with its refusing pre-push and its state file) and the extension the
+    harness set live exactly as long as the worktree: both are cleaned up only once the worktree
+    is gone, removed here or already gone (no directory and no registration), so a prune after a
+    failed one finishes the job from the kept state file. extensions.worktreeConfig is unset again
+    only when make_worktree set it (its state file says so) and no other worktree of the repo
+    still has a config.worktree. If the user enables extensions.worktreeConfig themselves while
+    an arm runs and no other config.worktree exists, prune unsets it too: the two cases cannot be
+    told apart.
 
     Returns:
-        cache_bytes, worktree_removed, worktree_config (unset, kept, untouched or no_state)
-        and worktree_config_kept_for (the config.worktree files that kept it).
+        cache_bytes, worktree_removed (True when this call removed it, False when it was already
+        gone), worktree_config (unset, kept, untouched or no_state) and worktree_config_kept_for
+        (the config.worktree files that kept it).
 
     Raises:
-        ArmError: the worktree remove failed (extensions.worktreeConfig is then left as it is).
+        ArmError: the worktree survived the remove; the hooks dir, its state file and
+            extensions.worktreeConfig are then kept, and the message names the cleanup.
     """
     hooks = _hooks_dir(ws)
     state = _read_state(hooks)
-    try:
-        freed = _drop_caches(ws, cache_paths)
+    freed = _drop_caches(ws, cache_paths)
+    already_gone = _worktree_gone(repo, ws)
+    if not already_gone:
         proc = _git(repo, "worktree", "remove", "--force", str(ws))
-        if proc.returncode != 0:
-            raise ArmError(f"worktree remove failed: {proc.stderr.strip()}; {WORKTREE_CONFIG_KEY} is left as it is")
-    finally:
-        shutil.rmtree(hooks, ignore_errors=True)
-    return dict({"cache_bytes": freed, "worktree_removed": not ws.exists()}, **_restore_worktree_config(repo, state))
+        if not _worktree_gone(repo, ws):
+            refused = f"; a push from {ws} stays refused" if hooks.is_dir() else ""
+            failure = f"worktree remove of {ws} failed rc={proc.returncode}: {proc.stderr.strip()[-500:]}{refused}"
+            raise ArmError(_kept_message(repo, ws, failure, hooks=hooks, extension=_extension_note(state)))
+    # The extension first: should its unset fail, the state file is still there for the next prune.
+    restored = _restore_worktree_config(repo, state)
+    _remove_hooks_path(hooks)
+    return dict({"cache_bytes": freed, "worktree_removed": not already_gone}, **restored)
 
 
 def delete_cfg(cfg: Path) -> None:
