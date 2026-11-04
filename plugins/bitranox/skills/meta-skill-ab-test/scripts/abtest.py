@@ -12,7 +12,9 @@ The run dir is its own git repo so the pre-registration is append-only. Its jour
 every arm attempt; `run` skips an arm the journal says ran, and sets aside (renames) the directory
 and branch of an attempt that did not finish (paused, interrupted, failed, killed, or a dry run
 before a live one) before running that arm again; the credentials copy and the worktree such an
-attempt left are removed first. A session that ends the way the CLI reports a refused request (a
+attempt left are removed first, after its transcripts and any uncommitted work are copied into
+the arm dir (as every arm's are). run refuses inputs that changed since the seal, and every
+arm's floor runs the acceptance suite as sealed. A session that ends the way the CLI reports a refused request (a
 login-looking failure, only CLI synthetic messages, or a usage-limit notice) is the only time the
 out-of-band login probe is asked; its answer pauses the run, names no cause, and the arm runs
 again on resume rather than being voided (design S4).
@@ -26,7 +28,6 @@ import re
 import shutil
 import subprocess
 import sys
-import tarfile
 import time
 from collections.abc import Callable, Iterator
 from dataclasses import dataclass
@@ -394,6 +395,8 @@ def _arm_steps(ctx: RunContext, result: dict[str, Any], frozen: abarm.Frozen, la
                                      stop_grace_s=ctx.stop_grace_s))
     # Right after the session, before the floor writes into the worktree (build output, the suite).
     result["uncommitted"] = _save_uncommitted(ctx, arm_dir, ws)
+    if result["uncommitted"].get("error"):
+        _warn(f"{label}: {result['uncommitted']['error']}")
     _guard_after(result, arm_dir / "guard")
     result["floor"] = abscore.run_floor(ws, p, arm_dir, sealed_suite=ctx.sealed_suite)
     result["bundle_commits"] = abarm.bundle(ws, p.workpiece.base, arm_dir / "bundle.git")
@@ -410,10 +413,17 @@ def _ignore_worktrees(ctx: RunContext) -> None:
 
 
 def _save_uncommitted(ctx: RunContext, arm_dir: Path, ws: Path) -> dict[str, Any]:
-    """abarm.save_uncommitted with the profile's cache paths and the harness's own CLAUDE.md copy skipped."""
+    """abarm.save_uncommitted with the profile's cache paths and the harness's own CLAUDE.md copy skipped.
+
+    Never raises: a save that fails is recorded as {"left_work": None, "error": ...}, because
+    failing the arm for it would make a paid session run again on resume.
+    """
     repo = ctx.profile.workpiece.repo
-    return abarm.save_uncommitted(ws, arm_dir, skip_prefixes=ctx.profile.floor.cache_paths,
-                                  harness_copies={"CLAUDE.md": repo / "CLAUDE.md"})
+    try:
+        return abarm.save_uncommitted(ws, arm_dir, skip_prefixes=ctx.profile.floor.cache_paths,
+                                      harness_copies={"CLAUDE.md": repo / "CLAUDE.md"})
+    except (abarm.ArmError, OSError) as exc:
+        return {"left_work": None, "error": f"save_uncommitted: {exc}"}
 
 
 def _salvage(ctx: RunContext, result: dict[str, Any], arm_dir: Path, ws: Path) -> list[str]:
@@ -433,10 +443,12 @@ def _salvage(ctx: RunContext, result: dict[str, Any], arm_dir: Path, ws: Path) -
     if "uncommitted" in result:
         return errors
     try:
-        if ws.is_dir() and ("worktree" in result or _harness_worktree_left(ctx.profile.workpiece.repo, ws)):
-            result["uncommitted"] = _save_uncommitted(ctx, arm_dir, ws)
-    except (abarm.ArmError, OSError, tarfile.TarError) as exc:
-        errors.append(f"save_uncommitted: {exc}")
+        ours = ws.is_dir() and ("worktree" in result or _harness_worktree_left(ctx.profile.workpiece.repo, ws))
+    except OSError as exc:
+        return [*errors, f"save_uncommitted: {exc}"]
+    if ours:
+        result["uncommitted"] = _save_uncommitted(ctx, arm_dir, ws)
+        errors += [result["uncommitted"]["error"]] if result["uncommitted"].get("error") else []
     return errors
 
 

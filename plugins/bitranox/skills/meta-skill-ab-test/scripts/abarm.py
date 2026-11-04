@@ -1044,7 +1044,8 @@ def save_uncommitted(ws: Path, out_dir: Path, *, skip_prefixes: tuple[str, ...] 
         left_work (anything saved), patch_bytes, untracked_count and untracked (the first 100 paths).
 
     Raises:
-        ArmError: git could not list or diff the worktree.
+        ArmError: git could not list or diff the worktree, or the tar could not be written.
+        OSError: the patch file could not be written.
     """
     out_dir.mkdir(parents=True, exist_ok=True)
     patch = out_dir / UNCOMMITTED_PATCH
@@ -1063,9 +1064,12 @@ def save_uncommitted(ws: Path, out_dir: Path, *, skip_prefixes: tuple[str, ...] 
     copies = harness_copies or {}
     untracked = [rel for rel in _untracked(ws) if not _skipped(rel, ws, skip_prefixes, copies)]
     if untracked:
-        with tarfile.open(out_dir / UNTRACKED_TAR, "w") as tar:
-            for rel in untracked:
-                tar.add(ws / rel, arcname=rel, recursive=False)
+        try:
+            with tarfile.open(out_dir / UNTRACKED_TAR, "w") as tar:
+                for rel in untracked:
+                    tar.add(ws / rel, arcname=rel, recursive=False)
+        except (OSError, tarfile.TarError) as exc:
+            raise ArmError(f"cannot write {out_dir / UNTRACKED_TAR}: {exc}") from exc
     return {"left_work": bool(patch_bytes or untracked), "patch_bytes": patch_bytes,
             "untracked_count": len(untracked), "untracked": untracked[:100]}
 

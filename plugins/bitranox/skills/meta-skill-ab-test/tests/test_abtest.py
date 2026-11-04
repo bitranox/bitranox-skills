@@ -994,3 +994,29 @@ def test_run_refuses_an_edited_sealed_suite_copy(tmp_path, scratch_repo, skills_
     assert T.main(_run_args(run_dir, creds, skills_repo, "--dry-run", "--only", "C", "--json")) == 2
     assert "sealed/acceptance/check.sh" in json.loads(capsys.readouterr().out)["data"]["error"]
     assert _arm_rows(run_dir) == []
+
+
+_LEAVES_AN_UNREADABLE_FILE = """
+import os
+from pathlib import Path
+Path("secret-draft.txt").write_text("cannot be read back\\n", encoding="utf-8")
+os.chmod("secret-draft.txt", 0)
+"""
+
+
+@pytest.mark.skipif(sys.platform == "win32" or (hasattr(os, "geteuid") and os.geteuid() == 0),
+                    reason="POSIX mode bits; root reads a mode-0 file anyway")
+def test_a_failed_save_of_uncommitted_work_never_fails_the_paid_arm(tmp_path, scratch_repo, skills_repo, fake_claude_path,
+                                                                     monkeypatch, capsys):
+    script = tmp_path / "unreadable.py"
+    script.write_text(_LEAVES_AN_UNREADABLE_FILE, encoding="utf-8")
+    run_dir = _init_and_fill(tmp_path, scratch_repo, skills_repo)
+    env, creds = _env(fake_claude_path, tmp_path)
+    _use_env(monkeypatch, dict(env, FAKE_CLAUDE_SCRIPT=str(script)))
+    assert T.main(["seal", str(run_dir)]) == 0
+    capsys.readouterr()
+    assert T.main(_run_args(run_dir, creds, skills_repo, "--only", "C"), login_check=_Probe("ok")) == 0
+    assert _arm_rows(run_dir) == [(1, "C", "ran")], "the session is not paid for twice"
+    res = json.loads((run_dir / "arms" / "r1-C" / "result.json").read_text(encoding="utf-8"))
+    assert res["uncommitted"]["left_work"] is None and "untracked.tar" in res["uncommitted"]["error"]
+    assert "save_uncommitted" in capsys.readouterr().err
