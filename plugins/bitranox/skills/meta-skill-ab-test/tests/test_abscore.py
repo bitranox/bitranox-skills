@@ -220,6 +220,15 @@ POSIX_ONLY = pytest.mark.skipif(sys.platform == "win32",
 
 GRACE_S = 0.3
 
+
+def _grace_bound(timeout_s):
+    """The most a timed-out step may cost: its timeout plus two graces (the stop, then the sweep).
+
+    The 1.5 s slack covers interpreter start-up and polling; it is far below KILL_GRACE_S, so a
+    path that waits the default grace instead of the kill_grace_s passed in exceeds it.
+    """
+    return timeout_s + 2 * GRACE_S + 1.5
+
 # A grandchild that records its pid (atomically, so a reader never sees a half-written file) and
 # sleeps. argv: pidfile, mode; a mode starting "ignore" ignores SIGTERM.
 _GRANDCHILD = (
@@ -232,15 +241,20 @@ _GRANDCHILD = (
 
 # The gate starts the grandchild, waits for its pid, then sleeps itself: a timeout that kills only
 # the direct child leaves the grandchild running. With "ignore" the grandchild ignores SIGTERM and
-# holds the pipes, so only the SIGKILL escalation removes it; with "ignore_devnull" it ignores
-# SIGTERM and holds no pipe, so the step's output closes once the gate dies and only the sweep of
-# the group after the step removes it. A mode ending "devnull" puts its stdio on /dev/null.
+# holds the pipes past the gate's death; the stop's SIGKILL removes it (and the sweep of the group
+# after the step would). With "ignore_devnull" it ignores SIGTERM and holds no pipe, so the step's
+# output closes once the gate dies and only that sweep removes it. With "leader_ignore" the GATE
+# ignores SIGTERM (set after the grandchild started, which inherits no SIG_IGN and dies on the
+# SIGTERM): the leader then holds the pipes and is never reaped unless the stop escalates to
+# SIGKILL. A mode ending "devnull" puts the grandchild's stdio on /dev/null.
 _TREE_GATE = """
-import subprocess, sys, time
+import signal, subprocess, sys, time
 from pathlib import Path
 pidfile, mode, child = Path(sys.argv[1]), sys.argv[2], sys.argv[3]
 devnull = {"stdin": subprocess.DEVNULL, "stdout": subprocess.DEVNULL, "stderr": subprocess.DEVNULL}
 subprocess.Popen([sys.executable, "-c", child, str(pidfile), mode], **(devnull if mode.endswith("devnull") else {}))
+if mode == "leader_ignore":
+    signal.signal(signal.SIGTERM, signal.SIG_IGN)
 while not pidfile.exists():
     time.sleep(0.01)
 time.sleep(float(sys.argv[4]))
@@ -292,19 +306,24 @@ def _tree_gate(pidfile, mode, gate_sleep_s):
     return [sys.executable, "-c", _TREE_GATE, str(pidfile), mode, _GRANDCHILD, str(gate_sleep_s)]
 
 
+def _timed_floor(tmp_path, prof):
+    """(run_floor's result, its wall time) with the short test grace."""
+    t0 = time.monotonic()
+    res = S.run_floor(tmp_path, prof, tmp_path / "logs", kill_grace_s=GRACE_S)
+    return res, time.monotonic() - t0
+
+
 @POSIX_ONLY
-@pytest.mark.parametrize("on_term", ["exit", "ignore", "ignore_devnull"])
+@pytest.mark.parametrize("on_term", ["exit", "ignore", "ignore_devnull", "leader_ignore"])
 def test_a_timed_out_floor_step_leaves_no_process_behind(tmp_path, on_term):
     pidfile = tmp_path / "grandchild.pid"
     prof = _pure_profile(tmp_path, gate=_tree_gate(pidfile, on_term, 30), timeout_s=1)
-    t0 = time.monotonic()
-    res = S.run_floor(tmp_path, prof, tmp_path / "logs", kill_grace_s=GRACE_S)
-    elapsed = time.monotonic() - t0
+    res, elapsed = _timed_floor(tmp_path, prof)
     pid = _pid_in(pidfile)
     try:
         assert res["steps"][0]["rc"] == S.RC_TIMEOUT
         assert pid is not None and _gone_within(pid), f"grandchild {pid} survived the floor's timeout"
-        assert elapsed < 10, elapsed
+        assert elapsed < _grace_bound(1), elapsed
     finally:
         _kill_if_alive(pid)
 
@@ -342,11 +361,12 @@ def test_a_step_whose_output_is_held_open_past_the_timeout_keeps_its_rc_and_fail
     gate = [sys.executable, "-c", _HELD_OPEN_GATE, str(pidfile), _GRANDCHILD]
     prof = _pure_profile(tmp_path, gate=gate, timeout_s=1)
     prof = dataclasses.replace(prof, floor=dataclasses.replace(prof.floor, suite="s.py", suite_cmd=("x", "{suite}")))
-    res = S.run_floor(tmp_path, prof, tmp_path / "logs", kill_grace_s=GRACE_S)
+    res, elapsed = _timed_floor(tmp_path, prof)
     pid = _pid_in(pidfile)
     try:
         (step,) = res["steps"]
         assert (step["rc"], step["error"]) == (0, S.ERROR_HELD_OPEN)
+        assert elapsed < _grace_bound(1), elapsed
         assert res["passed"] is False, "a step that hits the timeout is not a pass"
         assert "gate ok" in Path(step["log"]).read_text(encoding="utf-8")
         assert _score(tmp_path, _result(floor=res), TWO_PEERS)["floor_error"] == (
@@ -358,12 +378,15 @@ def test_a_step_whose_output_is_held_open_past_the_timeout_keeps_its_rc_and_fail
 
 # --- the floor's environment ---------------------------------------------------------------------
 
-_LEAKS = ("VIRTUAL_ENV", "UV_PROJECT_ENVIRONMENT", "GIT_CONFIG_PARAMETERS", "GIT_CONFIG_COUNT", "GIT_CONFIG_KEY_0",
-          "GIT_CONFIG_VALUE_0", "GIT_CONFIG_KEY_1", "GIT_CONFIG_VALUE_1", "GIT_DIR", "GIT_WORK_TREE",
+# PYTHONHOME pointing at a missing dir would stop the gate's interpreter from starting at all, so
+# a leak of it shows as a failed gate as well as in the names it prints.
+_LEAKS = ("VIRTUAL_ENV", "UV_PROJECT_ENVIRONMENT", "PYTHONPATH", "PYTHONHOME", "GIT_CONFIG_PARAMETERS",
+          "GIT_CONFIG_COUNT", "GIT_CONFIG_KEY_0", "GIT_CONFIG_VALUE_0", "GIT_CONFIG_KEY_1", "GIT_CONFIG_VALUE_1",
+          "GIT_CONFIG_GLOBAL", "GIT_CONFIG_SYSTEM", "GIT_DIR", "GIT_WORK_TREE",
           "GIT_INDEX_FILE", "GIT_COMMON_DIR", "GIT_OBJECT_DIRECTORY", "GIT_ALTERNATE_OBJECT_DIRECTORIES",
           "GIT_NAMESPACE", "GIT_CEILING_DIRECTORIES", "GIT_LITERAL_PATHSPECS", "GIT_GLOB_PATHSPECS",
           "GIT_NOGLOB_PATHSPECS", "GIT_ICASE_PATHSPECS")
-_KEPT = ("PYTHONUTF8", "PYTHONPATH", "ABSCORE_TEST_KEEP", "GIT_SSH_COMMAND", "GIT_CONFIG_NOSYSTEM")
+_KEPT = ("PYTHONUTF8", "ABSCORE_TEST_KEEP", "GIT_SSH_COMMAND", "GIT_CONFIG_NOSYSTEM")
 
 
 def test_the_floor_runs_without_the_launcher_venv_and_the_git_redirects(tmp_path, monkeypatch):
@@ -404,7 +427,9 @@ def test_floor_error_names_a_step_that_could_not_start(tmp_path):
 
 
 def test_floor_error_names_a_step_that_timed_out(tmp_path):
+    t0 = time.monotonic()
     s = _scored_floor(tmp_path, [sys.executable, "-c", "import time; time.sleep(10)"], timeout_s=1)
+    assert time.monotonic() - t0 < _grace_bound(1)
     assert s["floor_error"] == "gate: timed out after 1 s (rc 124)"
     assert s["floor_steps"] == [{"name": "gate", "rc": 124}]
 

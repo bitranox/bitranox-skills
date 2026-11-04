@@ -7,8 +7,8 @@ token cap, store guard fired, first-message cache read out of line with the othe
 
 Each floor step runs in its own process group (POSIX) with an explicit environment: when a step
 ends, timed out or not, every process it left in its group is stopped, and a venv, a uv project
-environment, git config overrides or a git repo the harness itself was launched from cannot
-redirect what the workpiece's commands see.
+environment, a PYTHONPATH or PYTHONHOME, git config overrides or a git repo the harness itself was
+launched from cannot redirect what the workpiece's commands see.
 """
 from __future__ import annotations
 
@@ -68,10 +68,15 @@ ERROR_HELD_OPEN = "output held open past the timeout by a process the step start
 _REPO_SCOPING_GIT_VARS = frozenset({
     "GIT_DIR", "GIT_WORK_TREE", "GIT_INDEX_FILE", "GIT_COMMON_DIR", "GIT_OBJECT_DIRECTORY",
     "GIT_ALTERNATE_OBJECT_DIRECTORIES", "GIT_NAMESPACE", "GIT_CEILING_DIRECTORIES"})
-# The launcher's venv and uv project environment, and the config git takes from the environment
-# (git -c and GIT_CONFIG_COUNT with its numbered KEY/VALUE pairs). Everything else, GIT_SSH_COMMAND,
-# PYTHONUTF8 and PYTHONPATH included, passes through unchanged.
-_LAUNCHER_VARS = frozenset({"VIRTUAL_ENV", "UV_PROJECT_ENVIRONMENT", "GIT_CONFIG_PARAMETERS", "GIT_CONFIG_COUNT"})
+# The launcher's Python environment (its venv, uv project environment, PYTHONPATH and PYTHONHOME:
+# a PYTHONPATH pointing at the checkout the harness runs from would make every arm's floor import
+# THAT code instead of the arm's) and the config git takes from the environment (git -c,
+# GIT_CONFIG_COUNT with its numbered KEY/VALUE pairs, and the files named by GIT_CONFIG_GLOBAL and
+# GIT_CONFIG_SYSTEM). Everything else, GIT_SSH_COMMAND, GIT_CONFIG_NOSYSTEM and PYTHONUTF8
+# included, passes through unchanged.
+_LAUNCHER_VARS = frozenset({
+    "VIRTUAL_ENV", "UV_PROJECT_ENVIRONMENT", "PYTHONPATH", "PYTHONHOME",
+    "GIT_CONFIG_PARAMETERS", "GIT_CONFIG_COUNT", "GIT_CONFIG_GLOBAL", "GIT_CONFIG_SYSTEM"})
 _LAUNCHER_VAR_PREFIXES = ("GIT_CONFIG_KEY_", "GIT_CONFIG_VALUE_")
 
 
@@ -112,7 +117,8 @@ def _without_venv_bin(path: str, venv: str) -> str:
 
 
 def _floor_env() -> dict[str, str]:
-    """os.environ minus the launcher's venv (its variable and its PATH entry) and the git leaks."""
+    """os.environ minus the launcher's Python environment (venv variable and PATH entry, PYTHONPATH,
+    PYTHONHOME), its git config overrides and the repo-scoping git variables."""
     env = {k: v for k, v in os.environ.items() if not _is_leaked(k)}
     venv = os.environ.get("VIRTUAL_ENV")
     if venv and "PATH" in env:
