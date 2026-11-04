@@ -30,6 +30,12 @@ a hole nobody has drawn a line under is one that gets rediscovered and half-fill
 two "versions with no entry" notes came to sit in this file disagreeing with it.
 
 
+## [10.14.0]
+
+### Added
+
+- `subagent-brief-must-not-nudge` (PreToolUse, Task, Agent and SendMessage, warn-only): checks the Must-NOT lines of a subagent brief, inline or in a referenced `*brief*.md`/`.txt` file, against the user's logged decisions (`USER-DECISIONS.jsonl`, and `EXECUTION-USER-REVIEW.md` for chat decisions, with its "(my reading)" spans cut out). It names a Must-NOT labelled as the controller's own reading, a negative "(my reading)" note from the review file repeated without its label (the 2026-11-03 "no new dependency" relay), and a Must-NOT label line that neither source holds. Replayed over 4868 recorded briefs: the first draft, judging every "must not" line, fired on 428 of them (10 of 10 sampled were false alarms); the shipped rule fires on 4, all four real relays of an inference or a widened decision. Probed on CLI 2.1.318: the context reaches the controller after the call has gone out, so the advice names SendMessage as the way to correct it.
+
 ## [10.13.1]
 
 ### Changed

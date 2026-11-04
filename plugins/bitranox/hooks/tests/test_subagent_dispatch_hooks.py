@@ -24,6 +24,7 @@ import pytest
 
 import subagent_backstop_nudge as backstop
 import subagent_brief as brief
+import subagent_brief_must_not_nudge as must_not
 import subagent_model_gate as model_gate
 import subagent_probe_capability_gate as probe_gate
 
@@ -117,5 +118,6 @@ def test_a_named_ordinary_dispatch_still_gets_the_delivery_warning():
 
 
 def test_every_hook_that_recognises_a_probe_uses_the_same_markers():
-    assert backstop.CLEAN_ROOM_MARKERS == probe_gate.CLEAN_ROOM_MARKERS == brief.CLEAN_ROOM_MARKERS
+    assert (backstop.CLEAN_ROOM_MARKERS == probe_gate.CLEAN_ROOM_MARKERS == brief.CLEAN_ROOM_MARKERS
+            == must_not.CLEAN_ROOM_MARKERS)
     assert all(brief.is_clean_room(t) for t in PROBE_TYPES)
