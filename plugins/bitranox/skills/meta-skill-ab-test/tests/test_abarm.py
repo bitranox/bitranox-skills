@@ -898,7 +898,7 @@ def _git_ok(repo, *args):
 
 
 @POSIX_ONLY
-@pytest.mark.parametrize("sandbox", ["bwrap", "bwrap-tmpfs-proc"])
+@pytest.mark.parametrize("sandbox", ["bwrap", "bwrap-host-proc"])
 def test_bwrap_problem_probes_the_values_own_namespaces_and_proc(tmp_path, sandbox):
     """`bwrap --ro-bind / / true` alone passed on a host where the arm's argv then failed."""
     log = tmp_path / "argv.txt"
@@ -913,7 +913,7 @@ def test_bwrap_problem_probes_the_values_own_namespaces_and_proc(tmp_path, sandb
 
 
 @POSIX_ONLY
-def test_a_bwrap_refused_only_its_private_proc_names_bwrap_tmpfs_proc(tmp_path):
+def test_a_bwrap_refused_only_its_private_proc_names_bwrap_host_proc(tmp_path):
     fake = tmp_path / "bin" / "bwrap"
     fake.parent.mkdir()
     fake.write_text('#!/bin/sh\nfor a in "$@"; do\n  if [ "$a" = --proc ]; then\n'
@@ -921,30 +921,36 @@ def test_a_bwrap_refused_only_its_private_proc_names_bwrap_tmpfs_proc(tmp_path):
                     "  fi\ndone\nexit 0\n", encoding="utf-8")
     fake.chmod(0o755)
     problem = A.bwrap_problem(str(fake.parent), "bwrap")
-    assert problem is not None and 'set sandbox = "bwrap-tmpfs-proc"' in problem and "Can't mount proc" in problem
-    assert A.bwrap_problem(str(fake.parent), "bwrap-tmpfs-proc") is None
+    assert problem is not None and 'set sandbox = "bwrap-host-proc"' in problem and "Can't mount proc" in problem
+    assert A.bwrap_problem(str(fake.parent), "bwrap-host-proc") is None
 
 
-def test_bwrap_tmpfs_proc_differs_from_bwrap_only_in_its_proc(tmp_path):
+def test_bwrap_host_proc_differs_from_bwrap_only_in_its_proc(tmp_path):
     m = _mounts(tmp_path)
-    plain, empty = A.sandbox_argv(m), A.sandbox_argv(m, sandbox="bwrap-tmpfs-proc")
+    plain, host = A.sandbox_argv(m), A.sandbox_argv(m, sandbox="bwrap-host-proc")
     i = plain.index("--proc")
     assert plain[i:i + 2] == ["--proc", "/proc"]
-    assert empty == [*plain[:i], "--tmpfs", "/proc", *plain[i + 2:]]
-    assert "--proc" not in empty and "--unshare-pid" in empty
+    assert host == [*plain[:i], "--ro-bind", "/proc", "/proc", *plain[i + 2:]]
+    assert "--proc" not in host
+    assert all(flag in host for flag in ("--unshare-pid", "--unshare-ipc", "--unshare-uts"))
 
 
 @POSIX_ONLY
-@pytest.mark.parametrize("sandbox", ["bwrap", "bwrap-tmpfs-proc"])
+@pytest.mark.parametrize("sandbox", ["bwrap", "bwrap-host-proc"])
 def test_a_real_bwrap_sandbox_confines_writes_and_hides_the_real_home(tmp_path, sandbox):
     """sandbox_argv run for real, each value's full argv: the writable paths take writes, the real home is hidden.
 
     Each value is skipped only when its own probe fails (on the LXC dev box "bwrap" is refused a
-    private /proc, while "bwrap-tmpfs-proc" runs). The fake real home sits under tmp_path; `tmp`
+    private /proc, while "bwrap-host-proc" runs). The fake real home sits under tmp_path; `tmp`
     points the private tmpfs away from /tmp, which holds tmp_path: a tmpfs over /tmp would hide the
     fake home whatever the home tmpfs does, and the test could not see that element go missing. A
     second, read-only check runs the production layout against the user's actual home and only
     asks whether ~/.ssh is visible.
+
+    /proc: for every value the test process (same uid, outside the sandbox) has no readable
+    environ and no usable root, and a write through that root leaves no file; for
+    "bwrap-host-proc" also host PID 1's, and its cmdline stays readable (the known residual,
+    and the proof that the /proc paths probed are real).
     """
     reason = A.bwrap_problem(os.environ.get("PATH"), sandbox)
     if reason:
@@ -976,8 +982,16 @@ def test_a_real_bwrap_sandbox_confines_writes_and_hides_the_real_home(tmp_path, 
               'test -e "$2/.ssh" && echo D_SSH_VISIBLE\n'
               'cat "$2/.cargo/tool.txt"\n'
               'echo w > "$2/.cargo/w" 2>/dev/null && echo LINK_TARGET_WRITABLE\n'
-              'echo "PWD=$(pwd)"\n')
-    proc = L.run([*A.sandbox_argv(m, sandbox=sandbox), "sh", "-c", script, "sh", str(ws), str(real_home), str(common)], timeout=60)
+              'echo "PWD=$(pwd)"\n'
+              'cat /proc/1/environ >/dev/null 2>&1 && echo P1_ENVIRON_READABLE\n'
+              'ls /proc/1/root/ >/dev/null 2>&1 && echo P1_ROOT_READABLE\n'
+              'cat "/proc/$4/environ" >/dev/null 2>&1 && echo HOST_ENVIRON_READABLE\n'
+              'ls "/proc/$4/root/" >/dev/null 2>&1 && echo HOST_ROOT_READABLE\n'
+              'echo x > "/proc/$4/root$5" 2>/dev/null && echo HOST_ROOT_WRITABLE\n'
+              'cat "/proc/$4/cmdline" >/dev/null 2>&1 && echo HOST_CMDLINE_READABLE\n')
+    escape = tmp_path / "escape-through-proc-root.txt"
+    proc = L.run([*A.sandbox_argv(m, sandbox=sandbox), "sh", "-c", script, "sh", str(ws), str(real_home), str(common),
+                  str(os.getpid()), str(escape)], timeout=60)
     out = proc.stdout
     assert "A_WS_WRITABLE" in out and (ws / "inside.txt").is_file(), proc.stderr  # (a)
     assert "REAL-HOME-CONTENT" not in out, "(b) the real home's file is readable inside the sandbox"
@@ -986,9 +1000,46 @@ def test_a_real_bwrap_sandbox_confines_writes_and_hides_the_real_home(tmp_path, 
     assert "D_SSH_VISIBLE" not in out, "(d) the real ~/.ssh is visible inside the sandbox"
     assert "CARGO-TOOL-5c2f" in out and "LINK_TARGET_WRITABLE" not in out, "a link target is re-bound read-only"
     assert f"PWD={ws}" in out
+    for leak in ("HOST_ENVIRON_READABLE", "HOST_ROOT_READABLE", "HOST_ROOT_WRITABLE"):
+        assert leak not in out, f"{leak}: a same-uid host process is reachable through /proc"
+    assert not escape.exists(), "a write through /proc/<pid>/root reached the host filesystem"
+    if sandbox == "bwrap-host-proc":
+        assert "P1_ENVIRON_READABLE" not in out and "P1_ROOT_READABLE" not in out, out
+        assert "HOST_CMDLINE_READABLE" in out, "the host /proc is not bound: the checks above prove nothing"
     real_ssh = Path.home() / ".ssh"
     if real_ssh.exists():
         live = dataclasses.replace(m, real_home=Path.home(), read_only=(repo,), tmp=Path("/tmp"))
         seen = L.run([*A.sandbox_argv(live, sandbox=sandbox), "sh", "-c", 'test -e "$1" && echo VISIBLE; echo done', "sh",
                       str(real_ssh)], timeout=60)
         assert "done" in seen.stdout and "VISIBLE" not in seen.stdout, seen.stderr
+
+
+@POSIX_ONLY
+def test_the_fake_claude_starts_inside_the_real_bwrap_host_proc_sandbox(tmp_path, scratch_repo, fake_claude_path):
+    """A process that needs /proc starts inside the real sandbox, sees its cwd and writes in ws.
+
+    The gap the earlier empty-/proc value fell through: every argv test passed while a real
+    `claude -p` could not resolve its working directory. FAKE_CLAUDE_CWD_FROM_PROC makes the fake
+    resolve its cwd through /proc/self/cwd the way that failure needs.
+    """
+    reason = A.bwrap_problem(os.environ.get("PATH"), "bwrap-host-proc")
+    if reason:
+        pytest.skip(f'sandbox = "bwrap-host-proc" cannot run on this machine: {reason}')
+    ws = scratch_repo / ".claude" / "worktrees" / "abx-sbx-r1-C"
+    _git_ok(scratch_repo, "worktree", "add", "-q", "-b", "abx/sbx/r1-C", str(ws))
+    home, cfg, priv_tmp = tmp_path / "armhome", tmp_path / "cfg", tmp_path / "privtmp"
+    for d in (home, cfg, priv_tmp):
+        d.mkdir()
+    # The fixtures sit in the checkout, which may live under the real home the sandbox hides.
+    stream = tmp_path / "stream.jsonl"
+    shutil.copyfile(FIXTURES / "stream-control.jsonl", stream)
+    m = A.SandboxMounts(ws=ws, home=home, cfg=cfg, git_common_dir=A.git_common_dir(ws), real_home=Path.home(),
+                        read_only=(scratch_repo,), tmp=priv_tmp)
+    env = dict(L.git_env(), PATH=f"{fake_claude_path}{os.pathsep}{os.environ['PATH']}", HOME=str(home),
+               CLAUDE_CONFIG_DIR=str(cfg), FAKE_CLAUDE_STREAM=str(stream), FAKE_CLAUDE_CWD_FROM_PROC="1")
+    proc = L.run([*A.sandbox_argv(m, sandbox="bwrap-host-proc"), *A.claude_argv("Do the task.", 3)], env=env, timeout=120)
+    assert proc.returncode == 0, proc.stderr
+    assert proc.stdout == stream.read_text(encoding="utf-8")
+    assert (ws / "arm-work.txt").read_text(encoding="utf-8") == "done by the fake arm\n"
+    assert L.git(ws, "log", "-1", "--format=%s").stdout.strip() == "Task 1: arm work"
+    assert list((cfg / "projects").glob("*/*.jsonl")), "no transcript was written into the config dir"

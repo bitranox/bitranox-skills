@@ -19,7 +19,7 @@ from pathlib import Path
 from typing import IO, Any
 
 from _ablib import clear_group, git, git_env, run, signal_group, tree_hashes
-from abprofile import SANDBOX_BWRAP, SANDBOX_BWRAP_TMPFS_PROC, Profile
+from abprofile import SANDBOX_BWRAP, SANDBOX_BWRAP_HOST_PROC, Profile
 from abstream import StreamAccount
 
 __all__ = [
@@ -84,10 +84,14 @@ _BWRAP_NAMESPACES = ("bwrap", "--die-with-parent", "--unshare-pid", "--unshare-i
                      "--ro-bind", "/", "/", "--dev", "/dev")
 BWRAP_BASES = {
     SANDBOX_BWRAP: (*_BWRAP_NAMESPACES, "--proc", "/proc"),
-    # A private /proc cannot be mounted inside an LXC with lxcfs, so /proc is an empty tmpfs; that
-    # also removes the same-uid /proc/<pid>/root escape a bound host /proc would open. The PID
-    # namespace stays: the session still cannot signal processes outside it.
-    SANDBOX_BWRAP_TMPFS_PROC: (*_BWRAP_NAMESPACES, "--tmpfs", "/proc"),
+    # A private /proc cannot be mounted inside an LXC with lxcfs, so the host's /proc is bound
+    # read-only. Measured 2026-11-04: a real `claude -p` session fails under an empty tmpfs /proc
+    # ("Can't access working directory ... does not exist") and runs under this one; inside bwrap's
+    # user namespace /proc/<pid>/root and /proc/<pid>/environ of host processes (same-uid ones
+    # included) answer "Permission denied", and a write through /proc/<pid>/root left no file.
+    # Known residual: other processes' /proc/<pid>/cmdline stay readable. The PID, IPC and UTS
+    # namespaces stay: the session still cannot signal processes outside it.
+    SANDBOX_BWRAP_HOST_PROC: (*_BWRAP_NAMESPACES, "--ro-bind", "/proc", "/proc"),
 }
 PRE_PUSH_HOOK = "#!/bin/sh\necho 'abtest arm: pushing is refused; the branch is collected by the harness' >&2\nexit 1\n"
 
@@ -786,8 +790,8 @@ class SandboxMounts:
 def sandbox_argv(m: SandboxMounts, *, sandbox: str = SANDBOX_BWRAP) -> list[str]:
     """The bubblewrap prefix that runs the session with m's writable set and nothing else.
 
-    sandbox picks the base (BWRAP_BASES): "bwrap" mounts a private /proc, "bwrap-tmpfs-proc" an
-    empty one; everything after the base is the same for both.
+    sandbox picks the base (BWRAP_BASES): "bwrap" mounts a private /proc, "bwrap-host-proc" binds
+    the host's /proc read-only; everything after the base is the same for both.
 
     bwrap applies its mount options in order, so the order is the design: the read-only root,
     the private /dev, /proc and tmp, then the tmpfs over the real home, then the read-only
@@ -840,7 +844,7 @@ def bwrap_problem(path_env: str | None, sandbox: str = SANDBOX_BWRAP) -> str | N
     One real probe of that value's own base (BWRAP_BASES: namespaces, /dev, /proc) running
     `true`, never an assumption: bwrap can be installed and still be refused a user namespace (a
     kernel switch, an AppArmor rule) or a private /proc (an LXC container with lxcfs). When
-    "bwrap" fails and "bwrap-tmpfs-proc" passes, the message names that value as the remedy.
+    "bwrap" fails and "bwrap-host-proc" passes, the message names that value as the remedy.
     """
     exe = shutil.which("bwrap", path=path_env)
     if exe is None:
@@ -849,9 +853,10 @@ def bwrap_problem(path_env: str | None, sandbox: str = SANDBOX_BWRAP) -> str | N
     said = _probe(exe, sandbox)
     if said is None:
         return None
-    if sandbox == SANDBOX_BWRAP and _probe(exe, SANDBOX_BWRAP_TMPFS_PROC) is None:
-        return (f'{exe} cannot mount a private /proc here ({said}); set sandbox = "{SANDBOX_BWRAP_TMPFS_PROC}": '
-                "the same sandbox with an empty /proc, for an LXC container whose lxcfs refuses a private one")
+    if sandbox == SANDBOX_BWRAP and _probe(exe, SANDBOX_BWRAP_HOST_PROC) is None:
+        return (f'{exe} cannot mount a private /proc here ({said}); set sandbox = "{SANDBOX_BWRAP_HOST_PROC}": '
+                "the same sandbox with the host's /proc bound read-only, for an LXC container whose lxcfs "
+                "refuses a private one (other processes' command lines stay readable there)")
     return (f'{exe} cannot create its sandbox = "{sandbox}" here ({said}); '
             "a refused user namespace is the usual cause")
 

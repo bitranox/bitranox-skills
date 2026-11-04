@@ -9,7 +9,10 @@ plugin install bitranox@bitranox-skills --json   records the install
                                             projects/<cwd dashkey>/<session id>.jsonl as the real
                                             CLI does, and makes one commit in the cwd; then, when
                                             FAKE_CLAUDE_SCRIPT names a Python file, runs it in the
-                                            cwd with stdout still open (a test's extra behaviour)
+                                            cwd with stdout still open (a test's extra behaviour);
+                                            with FAKE_CLAUDE_CWD_FROM_PROC set it first resolves its
+                                            cwd through /proc/self/cwd and fails the way the real CLI
+                                            does when it cannot (an empty /proc in a sandbox)
 """
 import json
 import os
@@ -53,6 +56,12 @@ def main(argv):
         print(json.dumps({"ok": True}))
         return 0
     if argv[:1] == ["-p"]:
+        if os.environ.get("FAKE_CLAUDE_CWD_FROM_PROC"):
+            try:
+                os.readlink("/proc/self/cwd")
+            except OSError as exc:
+                print(f"Error: Can't access working directory via /proc/self/cwd: {exc}", file=sys.stderr)
+                return 1
         stream = Path(os.environ["FAKE_CLAUDE_STREAM"])
         text = stream.read_text(encoding="utf-8")
         sys.stdout.write(text)

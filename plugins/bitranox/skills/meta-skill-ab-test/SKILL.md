@@ -20,9 +20,9 @@ repository with its own config dir and a frozen plugin checkout; the memory stor
 | `score`     | per-arm cost from the stream, floor result, void rules and store-change flags                   |
 | `prune-run` | deletes the run's branches, worktrees and hook dirs in the workpiece; leaves nothing of the run |
 
-A live run requires `[run] sandbox` in `abtest.toml`: `"bwrap"`, `"bwrap-tmpfs-proc"` (the same
-with an empty `/proc`, for an LXC container) or an explicit `"none"`; `prune-run` and `score`
-show which one each arm ran under.
+A live run requires `[run] sandbox` in `abtest.toml`: `"bwrap"`, `"bwrap-host-proc"` (the same
+with the host's `/proc` read-only, for an LXC container; other processes' command lines stay
+readable there) or an explicit `"none"`; `prune-run` and `score` show which one each arm ran under.
 
 The run dir is a new directory OUTSIDE the workpiece, its own git repo (`seal` commits there,
 never into the workpiece); `init --repo <workpiece> --base <commit> --skills-ref <plugin commit>
