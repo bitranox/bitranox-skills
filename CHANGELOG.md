@@ -30,6 +30,12 @@ a hole nobody has drawn a line under is one that gets rediscovered and half-fill
 two "versions with no entry" notes came to sit in this file disagreeing with it.
 
 
+## [10.14.2]
+
+### Fixed
+
+- meta-skill-ab-test: the Windows cell of the sandbox tests. The exact-argv test now renders the private tmp dir through `str()` as the code does, and the home-link test compares with `os.path.samefile`, because `os.readlink` returns a `\\?\`-prefixed path on Windows that `realpath` keeps. The harness itself is unchanged and still runs live arms on Linux only.
+
 ## [10.14.1]
 
 ### Added

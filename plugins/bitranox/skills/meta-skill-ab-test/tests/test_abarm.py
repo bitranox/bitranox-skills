@@ -816,7 +816,7 @@ def test_sandbox_argv_is_the_exact_documented_prefix(tmp_path):
     s = str
     assert A.sandbox_argv(m) == [
         "bwrap", "--die-with-parent", "--unshare-pid", "--unshare-ipc", "--unshare-uts",
-        "--ro-bind", "/", "/", "--dev", "/dev", "--proc", "/proc", "--tmpfs", "/tmp",
+        "--ro-bind", "/", "/", "--dev", "/dev", "--proc", "/proc", "--tmpfs", s(m.tmp),
         "--tmpfs", s(m.real_home),
         "--ro-bind", s(m.read_only[0]), s(m.read_only[0]), "--ro-bind", s(m.read_only[1]), s(m.read_only[1]),
         "--ro-bind", s(m.read_only[2]), s(m.read_only[2]),
@@ -866,7 +866,9 @@ def test_home_link_targets_names_the_existing_targets_only(tmp_path):
     (home / ".cargo").symlink_to(real / ".cargo")
     (home / ".rustup").symlink_to(real / ".rustup")  # dangling: its target is gone
     (home / ".local").mkdir()  # a plain dir is no link
-    assert A.home_link_targets(home, (".cargo", ".rustup", ".local", ".cache")) == (real / ".cargo",)
+    # samefile, not ==: os.readlink returns a \\?\-prefixed path on Windows, which realpath keeps (measured on 3.14).
+    found = A.home_link_targets(home, (".cargo", ".rustup", ".local", ".cache"))
+    assert len(found) == 1 and os.path.samefile(found[0], real / ".cargo"), found
 
 
 def test_git_common_dir_of_a_worktree_is_the_main_repos_git_dir(scratch_repo, tmp_path):
