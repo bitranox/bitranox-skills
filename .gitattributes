@@ -10,6 +10,8 @@
 # pin them LF so Git Bash on Windows can execute them (the *.sh rule cannot match a name with no extension).
 plugins/bitranox/skills/process-agents-subagent-driven-development/scripts/* text eol=lf
 plugins/bitranox/skills/meta-skill-ab-test/tests/fakes/* text eol=lf
+# The fake claude replays these streams byte for byte; a CRLF checkout would change every line.
+plugins/bitranox/skills/meta-skill-ab-test/tests/fixtures/*.jsonl text eol=lf
 # git hooks are extensionless bash scripts: a CRLF checkout makes the shebang read `bash\r`,
 # so git's run of the hook fails before the gate starts.
 githooks/* text eol=lf

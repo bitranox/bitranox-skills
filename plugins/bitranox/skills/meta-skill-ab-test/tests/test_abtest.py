@@ -43,7 +43,9 @@ def _env(fake_claude_path, tmp_path, stream=None):
 
 
 def _use_env(monkeypatch, env):
-    monkeypatch.setattr(os, "environ", dict(os.environ, **env))
+    """Set each variable through monkeypatch, so os.environ stays the real mapping (putenv included)."""
+    for key, value in env.items():
+        monkeypatch.setenv(key, value)
 
 
 def _run_args(run_dir, creds, skills_repo, *extra):
