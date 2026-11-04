@@ -25,6 +25,7 @@ import os
 import re
 import subprocess
 import sys
+import tarfile
 from collections.abc import Callable, Iterator
 from dataclasses import dataclass
 from pathlib import Path
@@ -78,7 +79,10 @@ PREREG_SKELETON = """# Pre-registration
 ## Decision rule
 Pairwise blind judge (design S2), A/B swap tie rule, control first then finalists; labels per design S5.4.
 """
-GITIGNORE = "frozen/\narms/*/cfg\narms/*/home\narms/*/stream.jsonl\narms/*/bundle.git\narms/*/guard\n"
+GITIGNORE = ("frozen/\narms/*/cfg\narms/*/home\narms/*/stream.jsonl\narms/*/bundle.git\narms/*/guard\n"
+             "arms/*/transcripts\narms/*/uncommitted.patch\narms/*/untracked.tar\n")
+# Where an arm's session transcripts (copied out of its config dir before that is deleted) go.
+TRANSCRIPTS = "transcripts"
 JOURNAL, TORN = "journal.jsonl", "journal.torn"
 # The run id names branches (abx/<id>/...) and worktree dirs, so it must be a plain ref component.
 RUN_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$")
@@ -364,6 +368,8 @@ def _arm_steps(ctx: RunContext, result: dict[str, Any], frozen: abarm.Frozen, la
         result.update(abarm.dispatch(arm_dir, ws, env, abarm.claude_argv(ctx.task, ctx.max_turns),
                                      max_tokens=p.run.max_tokens, deadline_s=p.run.deadline_s,
                                      stop_grace_s=ctx.stop_grace_s))
+    # Right after the session, before the floor writes into the worktree (build output, the suite).
+    result["uncommitted"] = _save_uncommitted(ctx, arm_dir, ws)
     _guard_after(result, arm_dir / "guard")
     result["floor"] = abscore.run_floor(ws, p, arm_dir)
     result["bundle_commits"] = abarm.bundle(ws, p.workpiece.base, arm_dir / "bundle.git")
@@ -377,6 +383,55 @@ def _ignore_worktrees(ctx: RunContext) -> None:
     """
     if abarm.ensure_worktrees_ignored(ctx.profile.workpiece.repo):
         record(ctx.run_dir, step=EXCLUDE_STEP, round=0, arm="", status="added")
+
+
+def _save_uncommitted(ctx: RunContext, arm_dir: Path, ws: Path) -> dict[str, Any]:
+    """abarm.save_uncommitted with the profile's cache paths and the harness's own CLAUDE.md copy skipped."""
+    repo = ctx.profile.workpiece.repo
+    return abarm.save_uncommitted(ws, arm_dir, skip_prefixes=ctx.profile.floor.cache_paths,
+                                  harness_copies={"CLAUDE.md": repo / "CLAUDE.md"})
+
+
+def _salvage(ctx: RunContext, result: dict[str, Any], arm_dir: Path, ws: Path) -> list[str]:
+    """Copy out what the arm's cleanup would destroy; the errors, never raised.
+
+    The transcripts live in the config dir delete_cfg removes, and work left uncommitted lives in
+    the worktree prune removes. The worktree is read only when it is the harness's own (make_worktree
+    returned it, or git lists it at this arm's path): a directory git does not know is never read.
+    The uncommitted work is saved here only when the arm did not get as far as saving it itself
+    (an error or an interrupt before or during the session).
+    """
+    errors = []
+    try:
+        result["transcripts"] = abarm.save_transcripts(arm_dir / "cfg", arm_dir / TRANSCRIPTS)
+    except OSError as exc:
+        errors.append(f"save_transcripts: {exc}")
+    if "uncommitted" in result:
+        return errors
+    try:
+        if ws.is_dir() and ("worktree" in result or _harness_worktree_left(ctx.profile.workpiece.repo, ws)):
+            result["uncommitted"] = _save_uncommitted(ctx, arm_dir, ws)
+    except (abarm.ArmError, OSError, tarfile.TarError) as exc:
+        errors.append(f"save_uncommitted: {exc}")
+    return errors
+
+
+def _sweep_cfgs(run_dir: Path) -> list[str]:
+    """Delete every arms/*/cfg (transcripts copied out first); the config dirs deleted.
+
+    Only a hard kill (OOM, power loss) leaves one, holding a credentials copy. _set_aside removes
+    it when its arm runs again, but `run --only V1` never visits r1-C and prune-run visits no arm
+    dir at all, so run and prune-run sweep every arm dir, set-aside attempts included.
+    """
+    swept = []
+    for cfg in sorted((run_dir / "arms").glob("*/cfg")):
+        try:
+            abarm.save_transcripts(cfg, cfg.parent / TRANSCRIPTS)
+        except OSError as exc:
+            _warn(f"{cfg}: the transcripts could not be copied out before the delete: {exc}")
+        abarm.delete_cfg(cfg)
+        swept.append(str(cfg))
+    return swept
 
 
 def _registered(repo: Path, ws: Path) -> bool:
@@ -428,8 +483,10 @@ def run_arm(ctx: RunContext, round_no: int, name: str) -> dict[str, Any]:
     """One arm, start to finish; the result dict is also written to arms/r<round>-<name>/result.json.
 
     result.json is written whatever happens, a Ctrl-C included (stop_reason "interrupted", which
-    the scorer voids); the credentials copy is deleted first, then the worktree pruned and the
-    frozen checkout released, and the exception is re-raised.
+    the scorer voids). On every path the transcripts are copied out of the config dir and any
+    uncommitted work out of the worktree first; then the credentials copy is deleted (even when
+    that copying is interrupted), the worktree pruned and the frozen checkout released, and the
+    exception is re-raised.
     """
     label = f"r{round_no}-{name}"
     arm_dir, ws, _ = _paths(ctx, label)
@@ -448,8 +505,13 @@ def run_arm(ctx: RunContext, round_no: int, name: str) -> dict[str, Any]:
         result["error"] = f"{type(exc).__name__}: {exc}"
         raise
     finally:
-        abarm.delete_cfg(arm_dir / "cfg")
+        salvage_errors: list[str] = []
+        try:
+            salvage_errors = _salvage(ctx, result, arm_dir, ws)
+        finally:
+            abarm.delete_cfg(arm_dir / "cfg")
         result["cleanup"] = _cleanup(ctx, result, frozen, ws)
+        result["cleanup"]["errors"][:0] = salvage_errors
         _write_result(arm_dir, result)
     return result
 
@@ -464,9 +526,10 @@ def _set_aside(ctx: RunContext, label: str) -> str | None:
     """Rename an unfinished attempt's arm dir and branch to <label>.attempt-<k>; the new name or None.
 
     A hard kill (OOM, power loss) runs no finally: it leaves the credentials copy in the arm's
-    cfg and the harness's worktree with its hooks dir. The copy is deleted BEFORE the rename, so
-    no set-aside directory carries it, and the worktree is pruned so the rerun is not refused as
-    an earlier arm's leftover. k is the first number free for both the directory and the branch.
+    cfg and the harness's worktree with its hooks dir. The transcripts and any uncommitted work
+    are copied into the arm dir first, then the copy is deleted BEFORE the rename, so no set-aside
+    directory carries it, and the worktree is pruned so the rerun is not refused as an earlier
+    arm's leftover. k is the first number free for both the directory and the branch.
 
     Raises:
         abarm.ArmError: the left-over worktree could not be pruned (the message names the cleanup).
@@ -474,6 +537,8 @@ def _set_aside(ctx: RunContext, label: str) -> str | None:
     """
     arm_dir, ws, branch = _paths(ctx, label)
     repo = ctx.profile.workpiece.repo
+    for error in _salvage(ctx, {}, arm_dir, ws):
+        _warn(f"{label}: {error}")
     abarm.delete_cfg(arm_dir / "cfg")
     if _harness_worktree_left(repo, ws):
         abarm.prune(ws, repo, ctx.profile.floor.cache_paths)
@@ -604,6 +669,9 @@ def cmd_run(args: argparse.Namespace) -> int:
     _require_sealed(run_dir)
     _require_prereg_committed(run_dir)
     ctx = _context(args, run_dir, load_profile(run_dir / "abtest.toml"))
+    for cfg in _sweep_cfgs(run_dir):
+        _warn(f"deleted the config dir a killed arm left at {cfg} (it held a credentials copy); "
+              "its transcripts are kept beside it")
     done: list[dict[str, Any]] = []
     skipped: list[str] = []
     for round_no, name in _schedule(ctx.profile, args.only):
@@ -705,14 +773,16 @@ def _restore_exclude(run_dir: Path, repo: Path, errors: list[str]) -> str:
 def cmd_prune_run(args: argparse.Namespace) -> int:
     """Prune every arm worktree of the run, then delete its branches.
 
-    An arm whose worktree git no longer lists but whose <ws>.githooks is left (the user removed a
-    locked worktree by hand with `worktree remove -f -f`) is pruned too: that removes the hooks
-    dir and unsets the extension the harness set. The `.claude/worktrees/` line of the
+    Every config dir left under arms/ (a hard-killed arm's, with its credentials copy) is deleted
+    first, its transcripts kept. An arm whose worktree git no longer lists but whose <ws>.githooks
+    is left (the user removed a locked worktree by hand with `worktree remove -f -f`) is pruned
+    too: that removes the hooks dir and unsets the extension the harness set. The `.claude/worktrees/` line of the
     workpiece's info/exclude is removed only when the journal says the harness added it.
     """
     run_dir = _run_dir(args.run_dir)
     profile = load_profile(run_dir / "abtest.toml")
     repo, run_id = profile.workpiece.repo, run_dir.name
+    cfg_removed = _sweep_cfgs(run_dir)
     errors = []
     for ws in _arm_worktrees(profile, run_id):
         if not _harness_worktree_left(repo, ws):
@@ -726,7 +796,7 @@ def cmd_prune_run(args: argparse.Namespace) -> int:
     errors += [f"branch {b} could not be deleted" for b in refs if b not in deleted]
     skipped = [f"frozen checkout {p} is left (release it from the skills repo)" for p in sorted((run_dir / "frozen").glob("*"))]
     exclude = _restore_exclude(run_dir, repo, errors)
-    data = {"deleted": deleted, "errors": errors, "exclude": exclude}
+    data = {"deleted": deleted, "errors": errors, "exclude": exclude, "cfg_removed": cfg_removed}
     _emit(args.json, "prune-run", data, not errors, f"deleted {len(deleted)} branch(es) under abx/{run_id}/"
           + "".join(f"\nerror: {e}" for e in errors), skipped)
     if errors:

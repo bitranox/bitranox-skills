@@ -27,6 +27,7 @@ __all__ = [
     "dashkey",
     "envelope",
     "git",
+    "git_env",
     "median",
     "read_jsonl",
     "rotated_schedule",
@@ -57,10 +58,14 @@ def run(argv: list[str], *, cwd: Path | None = None, env: dict[str, str] | None 
                           text=True, encoding="utf-8", errors="replace", timeout=timeout, check=False)
 
 
+def git_env() -> dict[str, str]:
+    """os.environ minus every GIT_* variable, so an inherited GIT_DIR cannot redirect a git call."""
+    return {k: v for k, v in os.environ.items() if not k.startswith("GIT_")}
+
+
 def git(repo: Path, *args: str) -> subprocess.CompletedProcess[str]:
     """git -C repo args..., with every inherited GIT_* variable stripped from the child env."""
-    env = {k: v for k, v in os.environ.items() if not k.startswith("GIT_")}
-    return run(["git", "-C", str(repo), *args], env=env)
+    return run(["git", "-C", str(repo), *args], env=git_env())
 
 
 def sha256_file(path: Path) -> str:

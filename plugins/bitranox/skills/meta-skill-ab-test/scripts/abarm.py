@@ -11,19 +11,22 @@ import os
 import shutil
 import signal
 import subprocess
+import tarfile
 import threading
 import time
 from dataclasses import dataclass
 from pathlib import Path
 from typing import IO, Any
 
-from _ablib import clear_group, git, run, signal_group, tree_hashes
+from _ablib import clear_group, git, git_env, run, signal_group, tree_hashes
 from abprofile import Profile
 from abstream import StreamAccount
 
 __all__ = [
     "PLUGIN_ID",
     "PRE_PUSH_HOOK",
+    "UNCOMMITTED_PATCH",
+    "UNTRACKED_TAR",
     "ArmError",
     "Frozen",
     "arm_env",
@@ -41,6 +44,8 @@ __all__ = [
     "prune",
     "release_frozen",
     "remove_worktrees_exclude",
+    "save_transcripts",
+    "save_uncommitted",
 ]
 
 PLUGIN_NAME = "bitranox"
@@ -59,6 +64,9 @@ WORKTREE_CONFIG_KEY = "extensions.worktreeConfig"
 STATE_FILE = ".abx-state.json"
 # True: the harness sets (or, after a crash between the two writes, was about to set) the extension.
 STATE_KEY = "worktree_config_set_by_harness"
+# What save_uncommitted writes into the arm dir: tracked changes as a patch, untracked files as a tar.
+UNCOMMITTED_PATCH = "uncommitted.patch"
+UNTRACKED_TAR = "untracked.tar"
 PRE_PUSH_HOOK = "#!/bin/sh\necho 'abtest arm: pushing is refused; the branch is collected by the harness' >&2\nexit 1\n"
 
 
@@ -971,6 +979,95 @@ def prune(ws: Path, repo: Path, cache_paths: tuple[str, ...]) -> dict[str, Any]:
     restored = _restore_worktree_config(repo, state)
     _remove_hooks_path(hooks)
     return dict({"cache_bytes": freed, "worktree_removed": not already_gone}, **restored)
+
+
+def save_transcripts(cfg: Path, dest: Path) -> list[str]:
+    """Copy the session transcripts under cfg/projects/ into dest; the relative paths copied.
+
+    The transcript is the only record of what the arm's session loaded and did, and it lives in
+    the arm's config dir, which delete_cfg removes: call this first. Only regular files under
+    projects/ are copied, and no symlink is followed, so the credentials copy and anything else
+    outside projects/ never come along.
+    """
+    src = cfg / "projects"
+    if src.is_symlink() or not src.is_dir():
+        return []
+    copied = []
+    for root, _dirs, files in os.walk(src):  # followlinks=False: a linked dir is never entered
+        for name in files:
+            path = Path(root) / name
+            if path.is_symlink() or not path.is_file():
+                continue
+            rel = path.relative_to(src)
+            (dest / rel).parent.mkdir(parents=True, exist_ok=True)
+            shutil.copyfile(path, dest / rel)
+            copied.append(rel.as_posix())
+    return sorted(copied)
+
+
+def _untracked(ws: Path) -> list[str]:
+    """Every untracked, not ignored path of the worktree (NUL-separated, so no path is quoted)."""
+    out = _git_ok(ws, "ls-files", "--others", "--exclude-standard", "-z")
+    return [p for p in out.split("\0") if p]
+
+
+def _skipped(rel: str, ws: Path, skip_prefixes: tuple[str, ...], harness_copies: dict[str, Path]) -> bool:
+    """A build cache, or a file the harness itself put there and the arm left unchanged."""
+    if any(rel == p.rstrip("/") or rel.startswith(p.rstrip("/") + "/") for p in skip_prefixes):
+        return True
+    source = harness_copies.get(rel)
+    try:
+        return source is not None and (ws / rel).read_bytes() == source.read_bytes()
+    except OSError:
+        return False
+
+
+def save_uncommitted(ws: Path, out_dir: Path, *, skip_prefixes: tuple[str, ...] = (),
+                     harness_copies: dict[str, Path] | None = None) -> dict[str, Any]:
+    """Save the work an arm left uncommitted: `git diff --binary HEAD` and a tar of its untracked files.
+
+    bundle() takes base..HEAD only, and prune() removes the worktree, so without this an arm's
+    uncommitted edits would be destroyed. They go into out_dir as uncommitted.patch and
+    untracked.tar, never as a WIP commit on the arm's branch: that branch is the arm's own work
+    as the judge sees it (base..HEAD), and a commit the harness made there would be judged as the
+    arm's. The patch applies with `git apply` on the arm's HEAD; the tar holds paths relative to
+    the worktree root, symlinks stored as links.
+
+    Args:
+        ws: the arm's worktree.
+        out_dir: the arm dir the two files are written to (a file with nothing to hold is not written).
+        skip_prefixes: worktree-relative build cache paths, never saved.
+        harness_copies: {worktree-relative path: the file the harness copied there}; such a file is
+            skipped while its bytes still equal the source.
+
+    Returns:
+        left_work (anything saved), patch_bytes, untracked_count and untracked (the first 100 paths).
+
+    Raises:
+        ArmError: git could not list or diff the worktree.
+    """
+    out_dir.mkdir(parents=True, exist_ok=True)
+    patch = out_dir / UNCOMMITTED_PATCH
+    with patch.open("wb") as fh:
+        try:
+            proc = subprocess.run(["git", "-C", str(ws), "diff", "--binary", "--no-color", "--no-ext-diff", "--no-textconv", "HEAD"], stdout=fh,  # nosec B603
+                                  stderr=subprocess.PIPE, env=git_env(), check=False)
+        except OSError as exc:
+            raise ArmError(f"git could not run: {exc}") from exc
+    if proc.returncode != 0:
+        raise ArmError(f"git diff in {ws} failed rc={proc.returncode}: "
+                       f"{proc.stderr.decode('utf-8', 'replace').strip()[-500:]}")
+    patch_bytes = patch.stat().st_size
+    if not patch_bytes:
+        patch.unlink()
+    copies = harness_copies or {}
+    untracked = [rel for rel in _untracked(ws) if not _skipped(rel, ws, skip_prefixes, copies)]
+    if untracked:
+        with tarfile.open(out_dir / UNTRACKED_TAR, "w") as tar:
+            for rel in untracked:
+                tar.add(ws / rel, arcname=rel, recursive=False)
+    return {"left_work": bool(patch_bytes or untracked), "patch_bytes": patch_bytes,
+            "untracked_count": len(untracked), "untracked": untracked[:100]}
 
 
 def delete_cfg(cfg: Path) -> None:

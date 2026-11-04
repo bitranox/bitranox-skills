@@ -774,3 +774,19 @@ def test_a_daemon_the_session_left_is_gone_when_dispatch_returns(tmp_path, mode)
     finally:
         for pid in pids_in(pidfile):
             kill_if_alive(pid)
+
+
+@POSIX_ONLY
+def test_save_transcripts_copies_regular_files_under_projects_only(tmp_path):
+    cfg = tmp_path / "cfg"
+    (cfg / "projects" / "-p").mkdir(parents=True)
+    (cfg / ".credentials.json").write_text('{"claudeAiOauth": {"accessToken": "tok-UNIQUE-55a1"}}', encoding="utf-8")
+    (cfg / "settings.json").write_text("{}", encoding="utf-8")
+    (cfg / "projects" / "-p" / "s1.jsonl").write_text('{"type": "user"}\n', encoding="utf-8")
+    (cfg / "projects" / "-p" / "creds-link").symlink_to(cfg / ".credentials.json")
+    (cfg / "projects" / "cfg-link").symlink_to(cfg, target_is_directory=True)
+    dest = tmp_path / "arm" / "transcripts"
+    assert A.save_transcripts(cfg, dest) == ["-p/s1.jsonl"]
+    copied = [p for p in dest.rglob("*") if p.is_file() or p.is_symlink()]
+    assert copied == [dest / "-p" / "s1.jsonl"]
+    assert A.save_transcripts(tmp_path / "no-cfg", dest) == []

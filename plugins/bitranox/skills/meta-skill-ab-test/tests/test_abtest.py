@@ -2,6 +2,7 @@
 import json
 import os
 import sys
+import tarfile
 import time
 from pathlib import Path
 
@@ -691,7 +692,101 @@ def test_ctrl_c_ends_a_session_that_ignores_sigterm_before_its_config_dir_is_del
         assert not alive(pid), "the session outlived the arm"
         time.sleep(0.3)
         assert not (run_dir / "arms" / "r1-C" / "cfg").exists(), "the session recreated the deleted config dir"
+        assert [t.rsplit("/", 1)[1] for t in _transcripts(run_dir / "arms" / "r1-C")] == ["fake-session-1.jsonl"]
         assert _arm_rows(run_dir) == [(1, "C", "interrupted")]
     finally:
         for pid in pids_in(marker):
             kill_if_alive(pid)
+
+
+# --- whole-branch review: what cleanup would destroy is copied out first -------------------------
+
+# Run by the fake claude after its commit: leaves a tracked edit, an untracked file and a build
+# cache file uncommitted; with BREAK_BUNDLE it also blocks the bundle step, so run_arm raises
+# after the session (the error path).
+_LEAVES_WORK = """
+import os
+from pathlib import Path
+Path("CLAUDE.md").write_text(Path("CLAUDE.md").read_text(encoding="utf-8") + "edited by the arm\\n", encoding="utf-8")
+Path("notes").mkdir()
+Path("notes/draft.txt").write_text("an uncommitted draft\\n", encoding="utf-8")
+Path("target").mkdir()
+Path("target/cache.bin").write_bytes(b"build output")
+if BREAK_BUNDLE:
+    (Path(os.environ["CLAUDE_CONFIG_DIR"]).parent / "bundle.git").mkdir()
+"""
+
+
+def _transcripts(arm):
+    return sorted(p.relative_to(arm / "transcripts").as_posix() for p in (arm / "transcripts").rglob("*") if p.is_file())
+
+
+def test_an_arm_keeps_its_transcript_and_says_it_left_no_uncommitted_work(tmp_path, scratch_repo, skills_repo,
+                                                                           fake_claude_path, monkeypatch):
+    run_dir = _init_and_fill(tmp_path, scratch_repo, skills_repo)
+    env, creds = _env(fake_claude_path, tmp_path)
+    _use_env(monkeypatch, env)
+    assert T.main(["seal", str(run_dir)]) == 0
+    assert T.main(_run_args(run_dir, creds, skills_repo, "--only", "C"), login_check=_Probe("ok")) == 0
+    arm = run_dir / "arms" / "r1-C"
+    res = json.loads((arm / "result.json").read_text(encoding="utf-8"))
+    (transcript,) = _transcripts(arm)
+    assert transcript.endswith("/fake-session-1.jsonl") and res["transcripts"] == [transcript]
+    assert "fake transcript of fake-session-1" in (arm / "transcripts" / transcript).read_text(encoding="utf-8")
+    assert res["uncommitted"]["left_work"] is False and not (arm / A.UNCOMMITTED_PATCH).exists()
+    assert not (arm / A.UNTRACKED_TAR).exists() and not (arm / "cfg").exists()
+
+
+@pytest.mark.parametrize("path", ["normal", "error"])
+def test_uncommitted_work_and_the_transcript_survive_the_cleanup(tmp_path, scratch_repo, skills_repo, fake_claude_path,
+                                                                  monkeypatch, path):
+    script = tmp_path / "leaves_work.py"
+    script.write_text(_LEAVES_WORK.replace("BREAK_BUNDLE", str(path == "error")), encoding="utf-8")
+    run_dir = _init_and_fill(tmp_path, scratch_repo, skills_repo)
+    env, creds = _env(fake_claude_path, tmp_path)
+    _use_env(monkeypatch, dict(env, FAKE_CLAUDE_SCRIPT=str(script)))
+    assert T.main(["seal", str(run_dir)]) == 0
+    rc = T.main(_run_args(run_dir, creds, skills_repo, "--only", "C"), login_check=_Probe("ok"))
+    assert rc == (0 if path == "normal" else 2)
+    assert _arm_rows(run_dir) == [(1, "C", "ran" if path == "normal" else "error")]
+    arm = run_dir / "arms" / "r1-C"
+    res = json.loads((arm / "result.json").read_text(encoding="utf-8"))
+    assert ("bundle failed" in res.get("error", "")) == (path == "error")
+    assert (arm / A.UNCOMMITTED_PATCH).is_file(), "the arm's uncommitted edit was destroyed with its worktree"
+    assert "+edited by the arm" in (arm / A.UNCOMMITTED_PATCH).read_text(encoding="utf-8")
+    assert res["uncommitted"]["left_work"] is True and res["uncommitted"]["untracked"] == ["notes/draft.txt"]
+    with tarfile.open(arm / A.UNTRACKED_TAR) as tar:
+        assert tar.getnames() == ["notes/draft.txt"]
+        assert tar.extractfile("notes/draft.txt").read() == b"an uncommitted draft\n"
+    assert [t.rsplit("/", 1)[1] for t in _transcripts(arm)] == ["fake-session-1.jsonl"]
+    assert not _ws(scratch_repo, run_dir, "r1-C").exists() and not (arm / "cfg").exists()
+    hits, scanned = _files_carrying(arm, SECRET)
+    assert hits == [] and scanned > 5
+
+
+def _plant_cfg(arm, token):
+    cfg = arm / "cfg"
+    (cfg / "projects" / "-some-project").mkdir(parents=True)
+    (cfg / "projects" / "-some-project" / "killed-session.jsonl").write_text('{"type": "user"}\n', encoding="utf-8")
+    (cfg / ".credentials.json").write_text(json.dumps({"claudeAiOauth": {"accessToken": token}}), encoding="utf-8")
+    return cfg
+
+
+def test_run_and_prune_run_delete_a_config_dir_a_killed_arm_left(tmp_path, scratch_repo, skills_repo, fake_claude_path,
+                                                                 monkeypatch, capsys):
+    run_dir = _init_and_fill(tmp_path, scratch_repo, skills_repo)
+    env, creds = _env(fake_claude_path, tmp_path)
+    _use_env(monkeypatch, env)
+    assert T.main(["seal", str(run_dir)]) == 0
+    killed = _plant_cfg(run_dir / "arms" / "r1-C", PLANTED)
+    # --only V1 never visits r1-C, so only a sweep of every arm dir reaches its credentials copy.
+    assert T.main(_run_args(run_dir, creds, skills_repo, "--dry-run", "--only", "V1")) == 0
+    assert not killed.exists()
+    assert (run_dir / "arms" / "r1-C" / "transcripts" / "-some-project" / "killed-session.jsonl").is_file()
+    aside = _plant_cfg(run_dir / "arms" / "r1-V1.attempt-1", PLANTED)
+    capsys.readouterr()
+    assert T.main(["prune-run", str(run_dir), "--json"]) == 0
+    assert json.loads(capsys.readouterr().out)["data"]["cfg_removed"] == [str(aside)]
+    assert not aside.exists()
+    hits, scanned = _files_carrying(run_dir, PLANTED, SECRET)
+    assert hits == [] and scanned > 5

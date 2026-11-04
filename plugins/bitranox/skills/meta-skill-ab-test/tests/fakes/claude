@@ -5,17 +5,30 @@
 plugin marketplace add <dir> --json         copies <dir> to the config dir's plugin cache
 plugin install bitranox@bitranox-skills --json   records the install
 -p <prompt> ...                             replays FAKE_CLAUDE_STREAM (a stream.jsonl path) to
-                                            stdout and makes one commit in the cwd; then, when
+                                            stdout, writes a transcript under the config dir's
+                                            projects/<cwd dashkey>/<session id>.jsonl as the real
+                                            CLI does, and makes one commit in the cwd; then, when
                                             FAKE_CLAUDE_SCRIPT names a Python file, runs it in the
                                             cwd with stdout still open (a test's extra behaviour)
 """
 import json
 import os
+import re
 import runpy
 import shutil
 import subprocess
 import sys
 from pathlib import Path
+
+
+def _write_transcript(cfg, stream_text):
+    """One transcript line naming the session the replayed stream's init record gives."""
+    first = json.loads(stream_text.splitlines()[0]) if stream_text.strip() else {}
+    session = first.get("session_id") or "fake-session"
+    project = cfg / "projects" / re.sub(r"[^a-zA-Z0-9]", "-", os.getcwd())
+    project.mkdir(parents=True, exist_ok=True)
+    (project / f"{session}.jsonl").write_text(
+        json.dumps({"type": "user", "message": {"content": "fake transcript of " + session}}) + "\n", encoding="utf-8")
 
 
 def main(argv):
@@ -41,8 +54,10 @@ def main(argv):
         return 0
     if argv[:1] == ["-p"]:
         stream = Path(os.environ["FAKE_CLAUDE_STREAM"])
-        sys.stdout.write(stream.read_text(encoding="utf-8"))
+        text = stream.read_text(encoding="utf-8")
+        sys.stdout.write(text)
         sys.stdout.flush()
+        _write_transcript(cfg, text)
         Path("arm-work.txt").write_text("done by the fake arm\n", encoding="utf-8")
         env = dict(os.environ, GIT_AUTHOR_NAME="arm", GIT_AUTHOR_EMAIL="arm@x",
                    GIT_COMMITTER_NAME="arm", GIT_COMMITTER_EMAIL="arm@x")
