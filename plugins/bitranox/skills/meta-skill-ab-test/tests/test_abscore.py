@@ -218,24 +218,32 @@ def test_warmth_skips_an_arm_without_a_reading(tmp_path):
 POSIX_ONLY = pytest.mark.skipif(sys.platform == "win32",
                                 reason="the A/B harness is Linux only (POSIX process groups); Windows is unsupported")
 
-# The gate starts a grandchild that records its pid and sleeps, then sleeps itself: a timeout that
-# kills only the direct child leaves the grandchild running. With "ignore" the grandchild ignores
-# SIGTERM, so only the SIGKILL escalation removes it.
+GRACE_S = 0.3
+
+# A grandchild that records its pid (atomically, so a reader never sees a half-written file) and
+# sleeps. argv: pidfile, mode; a mode starting "ignore" ignores SIGTERM.
+_GRANDCHILD = (
+    "import os, signal, sys, time\n"
+    "if sys.argv[2].startswith('ignore'): signal.signal(signal.SIGTERM, signal.SIG_IGN)\n"
+    "tmp = sys.argv[1] + '.tmp'\n"
+    "open(tmp, 'w').write(str(os.getpid()))\n"
+    "os.replace(tmp, sys.argv[1])\n"
+    "time.sleep(30)\n")
+
+# The gate starts the grandchild, waits for its pid, then sleeps itself: a timeout that kills only
+# the direct child leaves the grandchild running. With "ignore" the grandchild ignores SIGTERM and
+# holds the pipes, so only the SIGKILL escalation removes it; with "ignore_devnull" it ignores
+# SIGTERM and holds no pipe, so the step's output closes once the gate dies and only the sweep of
+# the group after the step removes it. A mode ending "devnull" puts its stdio on /dev/null.
 _TREE_GATE = """
 import subprocess, sys, time
 from pathlib import Path
-pidfile = Path(sys.argv[1])
-child = (
-    "import os, signal, sys, time\\n"
-    "if sys.argv[2] == 'ignore': signal.signal(signal.SIGTERM, signal.SIG_IGN)\\n"
-    "tmp = sys.argv[1] + '.tmp'\\n"
-    "open(tmp, 'w').write(str(os.getpid()))\\n"
-    "os.replace(tmp, sys.argv[1])\\n"
-    "time.sleep(30)\\n")
-subprocess.Popen([sys.executable, "-c", child, str(pidfile), sys.argv[2]])
+pidfile, mode, child = Path(sys.argv[1]), sys.argv[2], sys.argv[3]
+devnull = {"stdin": subprocess.DEVNULL, "stdout": subprocess.DEVNULL, "stderr": subprocess.DEVNULL}
+subprocess.Popen([sys.executable, "-c", child, str(pidfile), mode], **(devnull if mode.endswith("devnull") else {}))
 while not pidfile.exists():
     time.sleep(0.01)
-time.sleep(30)
+time.sleep(float(sys.argv[4]))
 """
 
 
@@ -267,54 +275,125 @@ def _gone_within(pid, seconds=5.0):
     return False
 
 
+def _kill_if_alive(pid):
+    """Cleanup for a test that failed: never leave its grandchild running past the test."""
+    if pid is not None and _alive(pid):
+        try:
+            os.kill(pid, signal.SIGKILL)
+        except ProcessLookupError:
+            pass
+
+
+def _pid_in(pidfile):
+    return int(pidfile.read_text(encoding="utf-8")) if pidfile.exists() else None
+
+
+def _tree_gate(pidfile, mode, gate_sleep_s):
+    return [sys.executable, "-c", _TREE_GATE, str(pidfile), mode, _GRANDCHILD, str(gate_sleep_s)]
+
+
 @POSIX_ONLY
-@pytest.mark.parametrize("on_term", ["exit", "ignore"])
-def test_a_timed_out_floor_step_leaves_no_process_behind(tmp_path, monkeypatch, on_term):
-    monkeypatch.setattr(S, "KILL_GRACE_S", 0.3)
+@pytest.mark.parametrize("on_term", ["exit", "ignore", "ignore_devnull"])
+def test_a_timed_out_floor_step_leaves_no_process_behind(tmp_path, on_term):
     pidfile = tmp_path / "grandchild.pid"
-    prof = _pure_profile(tmp_path, gate=[sys.executable, "-c", _TREE_GATE, str(pidfile), on_term], timeout_s=1)
+    prof = _pure_profile(tmp_path, gate=_tree_gate(pidfile, on_term, 30), timeout_s=1)
     t0 = time.monotonic()
-    res = S.run_floor(tmp_path, prof, tmp_path / "logs")
+    res = S.run_floor(tmp_path, prof, tmp_path / "logs", kill_grace_s=GRACE_S)
     elapsed = time.monotonic() - t0
-    pid = int(pidfile.read_text(encoding="utf-8"))
+    pid = _pid_in(pidfile)
     try:
         assert res["steps"][0]["rc"] == S.RC_TIMEOUT
-        assert _gone_within(pid), f"grandchild {pid} survived the floor's timeout"
+        assert pid is not None and _gone_within(pid), f"grandchild {pid} survived the floor's timeout"
         assert elapsed < 10, elapsed
     finally:
-        if _alive(pid):
-            try:
-                os.kill(pid, signal.SIGKILL)
-            except ProcessLookupError:
-                pass
+        _kill_if_alive(pid)
+
+
+@POSIX_ONLY
+def test_a_clean_step_leaves_no_background_process_behind(tmp_path):
+    """A gate that starts a daemon with its stdio on /dev/null and exits 0 passes, and the daemon is gone."""
+    pidfile = tmp_path / "daemon.pid"
+    prof = _pure_profile(tmp_path, gate=_tree_gate(pidfile, "devnull", 0), timeout_s=30)
+    res = S.run_floor(tmp_path, prof, tmp_path / "logs", kill_grace_s=GRACE_S)
+    pid = _pid_in(pidfile)
+    try:
+        assert res["passed"] is True and res["steps"][0]["error"] is None
+        assert pid is not None and _gone_within(pid, 2.0), f"daemon {pid} outlived its floor step"
+    finally:
+        _kill_if_alive(pid)
+
+
+# The gate starts a grandchild that inherits its stdout and stderr, then exits 0 at once: the
+# leader is done long before the timeout, but the step's output stays open until the grandchild dies.
+_HELD_OPEN_GATE = """
+import subprocess, sys, time
+from pathlib import Path
+pidfile = Path(sys.argv[1])
+subprocess.Popen([sys.executable, "-c", sys.argv[2], str(pidfile), "exit"])
+while not pidfile.exists():
+    time.sleep(0.01)
+print("gate ok")
+"""
+
+
+@POSIX_ONLY
+def test_a_step_whose_output_is_held_open_past_the_timeout_keeps_its_rc_and_fails(tmp_path):
+    pidfile = tmp_path / "holder.pid"
+    gate = [sys.executable, "-c", _HELD_OPEN_GATE, str(pidfile), _GRANDCHILD]
+    prof = _pure_profile(tmp_path, gate=gate, timeout_s=1)
+    prof = dataclasses.replace(prof, floor=dataclasses.replace(prof.floor, suite="s.py", suite_cmd=("x", "{suite}")))
+    res = S.run_floor(tmp_path, prof, tmp_path / "logs", kill_grace_s=GRACE_S)
+    pid = _pid_in(pidfile)
+    try:
+        (step,) = res["steps"]
+        assert (step["rc"], step["error"]) == (0, S.ERROR_HELD_OPEN)
+        assert res["passed"] is False, "a step that hits the timeout is not a pass"
+        assert "gate ok" in Path(step["log"]).read_text(encoding="utf-8")
+        assert _score(tmp_path, _result(floor=res), TWO_PEERS)["floor_error"] == (
+            "gate: output held open past the timeout by a process the step started (rc 0)")
+        assert pid is not None and _gone_within(pid), f"holder {pid} survived the floor step"
+    finally:
+        _kill_if_alive(pid)
 
 
 # --- the floor's environment ---------------------------------------------------------------------
 
-_LEAKS = ("VIRTUAL_ENV", "GIT_DIR", "GIT_WORK_TREE", "GIT_INDEX_FILE", "GIT_COMMON_DIR", "GIT_OBJECT_DIRECTORY",
-          "GIT_ALTERNATE_OBJECT_DIRECTORIES", "GIT_NAMESPACE", "GIT_CEILING_DIRECTORIES", "GIT_LITERAL_PATHSPECS",
-          "GIT_GLOB_PATHSPECS", "GIT_NOGLOB_PATHSPECS", "GIT_ICASE_PATHSPECS")
+_LEAKS = ("VIRTUAL_ENV", "UV_PROJECT_ENVIRONMENT", "GIT_CONFIG_PARAMETERS", "GIT_CONFIG_COUNT", "GIT_CONFIG_KEY_0",
+          "GIT_CONFIG_VALUE_0", "GIT_CONFIG_KEY_1", "GIT_CONFIG_VALUE_1", "GIT_DIR", "GIT_WORK_TREE",
+          "GIT_INDEX_FILE", "GIT_COMMON_DIR", "GIT_OBJECT_DIRECTORY", "GIT_ALTERNATE_OBJECT_DIRECTORIES",
+          "GIT_NAMESPACE", "GIT_CEILING_DIRECTORIES", "GIT_LITERAL_PATHSPECS", "GIT_GLOB_PATHSPECS",
+          "GIT_NOGLOB_PATHSPECS", "GIT_ICASE_PATHSPECS")
+_KEPT = ("PYTHONUTF8", "PYTHONPATH", "ABSCORE_TEST_KEEP", "GIT_SSH_COMMAND", "GIT_CONFIG_NOSYSTEM")
 
 
-def test_the_floor_runs_without_the_venv_and_the_repo_scoping_git_variables(tmp_path, monkeypatch):
+def test_the_floor_runs_without_the_launcher_venv_and_the_git_redirects(tmp_path, monkeypatch):
     for name in _LEAKS:
         monkeypatch.setenv(name, str(tmp_path / "leak"))
-    monkeypatch.setenv("PYTHONUTF8", "1")
-    monkeypatch.setenv("ABSCORE_TEST_KEEP", "yes")
-    monkeypatch.setenv("GIT_SSH_COMMAND", "ssh")
-    # The gate prints the variable NAMES only, never a value.
-    gate = [sys.executable, "-c", "import json, os; print(json.dumps(sorted(os.environ)))"]
+    for name in _KEPT:
+        monkeypatch.setenv(name, "1")
+    venv = tmp_path / "launcher-venv"
+    monkeypatch.setenv("VIRTUAL_ENV", str(venv))
+    bin_dir = venv / ("Scripts" if sys.platform == "win32" else "bin")
+    # The venv's bin dir first and again later with a trailing separator; the gate is an absolute
+    # path, so the synthetic PATH does not have to find anything.
+    others = [str(tmp_path / "a"), str(tmp_path / "b"), str(tmp_path / "c")]
+    path = [str(bin_dir), others[0], str(bin_dir) + os.sep, others[1], "", others[2]]
+    monkeypatch.setenv("PATH", os.pathsep.join(path))
+    # The gate prints the variable NAMES and PATH only, never another value.
+    gate = [sys.executable, "-c", "import json, os; print(json.dumps([sorted(os.environ), os.environ['PATH']]))"]
     res = S.run_floor(tmp_path, _pure_profile(tmp_path, gate=gate), tmp_path / "logs")
-    seen = set(json.loads(Path(res["steps"][0]["log"]).read_text(encoding="utf-8")))
+    names, seen_path = json.loads(Path(res["steps"][0]["log"]).read_text(encoding="utf-8"))
     assert res["passed"] is True
-    assert seen.isdisjoint(_LEAKS), sorted(seen & set(_LEAKS))
-    assert {"PYTHONUTF8", "ABSCORE_TEST_KEEP", "GIT_SSH_COMMAND"} <= seen
+    assert set(names).isdisjoint(_LEAKS), sorted(set(names) & set(_LEAKS))
+    assert set(_KEPT) <= set(names)
+    assert seen_path.split(os.pathsep) == [others[0], others[1], "", others[2]]
 
 
 # --- floor_error and floor_steps -----------------------------------------------------------------
 
 def _scored_floor(tmp_path, gate, timeout_s=30):
-    floor = S.run_floor(tmp_path, _pure_profile(tmp_path, gate=gate, timeout_s=timeout_s), tmp_path / "logs")
+    floor = S.run_floor(tmp_path, _pure_profile(tmp_path, gate=gate, timeout_s=timeout_s), tmp_path / "logs",
+                        kill_grace_s=GRACE_S)
     return _score(tmp_path, _result(floor=floor), TWO_PEERS)
 
 
@@ -324,8 +403,7 @@ def test_floor_error_names_a_step_that_could_not_start(tmp_path):
     assert s["floor_steps"] == [{"name": "gate", "rc": 127}] and s["floor_passed"] is False
 
 
-def test_floor_error_names_a_step_that_timed_out(tmp_path, monkeypatch):
-    monkeypatch.setattr(S, "KILL_GRACE_S", 0.3)
+def test_floor_error_names_a_step_that_timed_out(tmp_path):
     s = _scored_floor(tmp_path, [sys.executable, "-c", "import time; time.sleep(10)"], timeout_s=1)
     assert s["floor_error"] == "gate: timed out after 1 s (rc 124)"
     assert s["floor_steps"] == [{"name": "gate", "rc": 124}]

@@ -5,9 +5,10 @@ model not opus (and every other reason the stream account gives), no result reco
 token cap, store guard fired, first-message cache read out of line with the other finished arms
 (design S5.5, warmth_tolerance). The floor's answer is each command's exit code, nothing else.
 
-Each floor step runs in its own process group (POSIX) with an explicit environment: a step that
-times out takes every process it started with it, and a venv or a git repo the harness itself was
-launched from cannot redirect what the workpiece's commands see.
+Each floor step runs in its own process group (POSIX) with an explicit environment: when a step
+ends, timed out or not, every process it left in its group is stopped, and a venv, a uv project
+environment, git config overrides or a git repo the harness itself was launched from cannot
+redirect what the workpiece's commands see.
 """
 from __future__ import annotations
 
@@ -17,6 +18,7 @@ import signal
 import subprocess
 import sys
 import time
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
@@ -26,6 +28,8 @@ from abprofile import Profile
 __all__ = [
     "CAP_STOP_REASONS",
     "CLEAN_STOP_REASON",
+    "ERROR_HELD_OPEN",
+    "ERROR_NOT_STARTED",
     "KILL_GRACE_S",
     "MISSING_STOP_REASON",
     "RC_NOT_STARTED",
@@ -50,16 +54,33 @@ STREAM_VOID_STOP_REASON = "void"
 # Written when result.json carries no stop reason: abarm records one for every way an arm ENDS,
 # so its absence means the run never reached that point.
 MISSING_STOP_REASON = "no stop reason recorded (the arm did not end normally: interrupted or crashed)"
-# How long a timed-out step's process group gets between SIGTERM and SIGKILL: long enough for a
+# How long a step's leftover process group gets between SIGTERM and SIGKILL: long enough for a
 # test runner to flush and remove its temp files, short against any floor timeout.
 KILL_GRACE_S = 5.0
+# How often the leftover group is asked whether it is empty yet during that grace.
+_GROUP_POLL_S = 0.05
+ERROR_NOT_STARTED = "could not start"
+# The leader exited before the timeout, but something it started kept stdout or stderr open past
+# it. The leader's own exit code is recorded; the step still fails, since it hit the timeout.
+ERROR_HELD_OPEN = "output held open past the timeout by a process the step started"
 # The variables that would make a git command in the workpiece act on ANOTHER repository (the one
 # the harness was started from), plus the pathspec modes that change what a pathspec matches.
-# Everything else, GIT_SSH_COMMAND and PYTHONUTF8 included, passes through unchanged.
 _REPO_SCOPING_GIT_VARS = frozenset({
     "GIT_DIR", "GIT_WORK_TREE", "GIT_INDEX_FILE", "GIT_COMMON_DIR", "GIT_OBJECT_DIRECTORY",
     "GIT_ALTERNATE_OBJECT_DIRECTORIES", "GIT_NAMESPACE", "GIT_CEILING_DIRECTORIES"})
-ERROR_NOT_STARTED = "could not start"
+# The launcher's venv and uv project environment, and the config git takes from the environment
+# (git -c and GIT_CONFIG_COUNT with its numbered KEY/VALUE pairs). Everything else, GIT_SSH_COMMAND,
+# PYTHONUTF8 and PYTHONPATH included, passes through unchanged.
+_LAUNCHER_VARS = frozenset({"VIRTUAL_ENV", "UV_PROJECT_ENVIRONMENT", "GIT_CONFIG_PARAMETERS", "GIT_CONFIG_COUNT"})
+_LAUNCHER_VAR_PREFIXES = ("GIT_CONFIG_KEY_", "GIT_CONFIG_VALUE_")
+
+
+@dataclass(frozen=True)
+class _Limits:
+    """How long a step may run, and how long its leftover group gets between SIGTERM and SIGKILL."""
+
+    timeout_s: int
+    kill_grace_s: float
 
 
 def _partial_output(exc: subprocess.TimeoutExpired) -> str:
@@ -74,27 +95,60 @@ def _partial_output(exc: subprocess.TimeoutExpired) -> str:
 
 
 def _is_leaked(name: str) -> bool:
-    if name == "VIRTUAL_ENV" or name in _REPO_SCOPING_GIT_VARS:
+    if name in _LAUNCHER_VARS or name in _REPO_SCOPING_GIT_VARS or name.startswith(_LAUNCHER_VAR_PREFIXES):
         return True
     return name.startswith("GIT_") and name.endswith("_PATHSPECS")
 
 
+def _same_dir(entry: str) -> str:
+    return os.path.normcase(os.path.normpath(entry))
+
+
+def _without_venv_bin(path: str, venv: str) -> str:
+    """PATH minus the venv's bin dir (Scripts on Windows); every other entry stays, in order."""
+    drop = _same_dir(os.path.join(venv, "Scripts" if sys.platform == "win32" else "bin"))
+    # An empty entry means the cwd to a shell; it is not the venv's, so it is kept as it is.
+    return os.pathsep.join(e for e in path.split(os.pathsep) if not e or _same_dir(e) != drop)
+
+
 def _floor_env() -> dict[str, str]:
-    """os.environ minus VIRTUAL_ENV and the repo-scoping git variables."""
-    return {k: v for k, v in os.environ.items() if not _is_leaked(k)}
+    """os.environ minus the launcher's venv (its variable and its PATH entry) and the git leaks."""
+    env = {k: v for k, v in os.environ.items() if not _is_leaked(k)}
+    venv = os.environ.get("VIRTUAL_ENV")
+    if venv and "PATH" in env:
+        env["PATH"] = _without_venv_bin(env["PATH"], venv)
+    return env
 
 
-def _signal_group(proc: subprocess.Popen[str], sig: int) -> None:
+def _signal_group(pgid: int, sig: int) -> bool:
+    """Send sig to the step's process group; False once no member is left that this run may signal."""
     try:
-        os.killpg(proc.pid, sig)
-    except (ProcessLookupError, PermissionError):  # the group is already empty
-        pass
+        os.killpg(pgid, sig)
+    except (ProcessLookupError, PermissionError):
+        return False
+    return True
 
 
-def _reap(proc: subprocess.Popen[str]) -> str:
+def _clear_group(pgid: int, grace: float) -> None:
+    """SIGTERM whatever the step left in its group, give it grace to exit, then SIGKILL the rest.
+
+    A member killed but not yet reaped by its new parent still counts as present, so the wait can
+    run its whole grace; the SIGKILL after it is then a no-op.
+    """
+    if not _signal_group(pgid, signal.SIGTERM):
+        return
+    deadline = time.monotonic() + grace
+    while time.monotonic() < deadline:
+        if not _signal_group(pgid, 0):
+            return
+        time.sleep(_GROUP_POLL_S)
+    _signal_group(pgid, signal.SIGKILL)
+
+
+def _reap(proc: subprocess.Popen[str], grace: float) -> str:
     """Collect everything the stopped step printed; a process that left its group cannot hang us."""
     try:
-        out, err = proc.communicate(timeout=KILL_GRACE_S)
+        out, err = proc.communicate(timeout=grace)
     except subprocess.TimeoutExpired as exc:
         # Something started its own session and kept the pipes: stop reading and reap the step.
         for pipe in (proc.stdout, proc.stderr):
@@ -105,19 +159,21 @@ def _reap(proc: subprocess.Popen[str]) -> str:
     return (out or "") + (err or "")
 
 
-def _stop_tree(proc: subprocess.Popen[str]) -> str:
-    """Stop the step and everything it started, reap it, and return what it printed."""
+def _stop_tree(proc: subprocess.Popen[str], grace: float) -> str:
+    """Stop a step that hit its timeout and the members holding its pipes; return what it printed.
+
+    A member that ignores SIGTERM and holds no pipe outlives this; _clear_group, which runs after
+    every step, is what removes it.
+    """
     if sys.platform == "win32":
         proc.kill()  # no process groups to signal; the direct child is what can be stopped
-        return _reap(proc)
-    _signal_group(proc, signal.SIGTERM)
+        return _reap(proc, grace)
+    _signal_group(proc.pid, signal.SIGTERM)
     try:
-        out, err = proc.communicate(timeout=KILL_GRACE_S)
+        out, err = proc.communicate(timeout=grace)
     except subprocess.TimeoutExpired:
-        _signal_group(proc, signal.SIGKILL)
-        return _reap(proc)
-    # The step exited, but a member that ignored SIGTERM and holds no pipe may still run.
-    _signal_group(proc, signal.SIGKILL)
+        _signal_group(proc.pid, signal.SIGKILL)
+        return _reap(proc, grace)
     return (out or "") + (err or "")
 
 
@@ -127,7 +183,19 @@ def _start(argv: list[str], tree: Path) -> subprocess.Popen[str]:
                             start_new_session=sys.platform != "win32")
 
 
-def _execute(argv: list[str], tree: Path, timeout: int) -> tuple[int, str, str | None]:
+def _finish(proc: subprocess.Popen[str], argv: list[str], limits: _Limits) -> tuple[int, str, str | None]:
+    try:
+        out, err = proc.communicate(timeout=limits.timeout_s)
+    except subprocess.TimeoutExpired:
+        # Read before the tree is stopped: afterwards every leader has an exit code, the signal's.
+        leader_rc = proc.poll()
+        error = f"timed out after {limits.timeout_s} s" if leader_rc is None else ERROR_HELD_OPEN
+        out = _stop_tree(proc, limits.kill_grace_s) + f"\n{argv[0]} {error}\n"
+        return (RC_TIMEOUT if leader_rc is None else leader_rc), out, error
+    return proc.returncode, out + err, None
+
+
+def _execute(argv: list[str], tree: Path, limits: _Limits) -> tuple[int, str, str | None]:
     """(exit code, combined output, error); error names why the command did not run to its end."""
     try:
         proc = _start(argv, tree)
@@ -135,43 +203,53 @@ def _execute(argv: list[str], tree: Path, timeout: int) -> tuple[int, str, str |
         # FileNotFoundError and PermissionError: the command never ran, so the floor cannot pass.
         return RC_NOT_STARTED, f"{argv[0]} could not start in {tree}: {exc}\n", ERROR_NOT_STARTED
     try:
-        out, err = proc.communicate(timeout=timeout)
-    except subprocess.TimeoutExpired:
-        error = f"timed out after {timeout} s"
-        return RC_TIMEOUT, _stop_tree(proc) + f"\n{argv[0]} {error}\n", error
-    return proc.returncode, out + err, None
+        return _finish(proc, argv, limits)
+    finally:
+        if sys.platform != "win32":
+            # A daemon with its stdio on /dev/null never shows in the pipes: only the group finds it.
+            _clear_group(proc.pid, limits.kill_grace_s)
 
 
-def _step(name: str, argv: list[str], tree: Path, timeout: int, log: Path) -> dict[str, Any]:
+def _step(name: str, argv: list[str], tree: Path, *, limits: _Limits, log: Path) -> dict[str, Any]:
     t0 = time.monotonic()
-    rc, out, error = _execute(argv, tree, timeout)
+    rc, out, error = _execute(argv, tree, limits)
     log.write_text(out, encoding="utf-8")
     return {"name": name, "argv": argv, "rc": rc, "error": error, "wall_s": round(time.monotonic() - t0, 1),
             "log": str(log)}
 
 
-def run_floor(tree: Path, profile: Profile, log_dir: Path) -> dict[str, Any]:
+def _step_passed(step: dict[str, Any]) -> bool:
+    return step["rc"] == 0 and step["error"] is None
+
+
+def run_floor(tree: Path, profile: Profile, log_dir: Path, *, kill_grace_s: float = KILL_GRACE_S) -> dict[str, Any]:
     """Run the gate, then the suite (when set); the suite is skipped once the gate failed.
 
     Args:
         tree: the checkout the commands run in (their cwd).
         profile: the sealed profile; its floor names the argv lists and the per-step timeout.
         log_dir: where floor-gate.log and floor-suite.log are written (created when missing).
+        kill_grace_s: how long a step's leftover process group gets between SIGTERM and SIGKILL.
 
     Returns:
-        {"passed": every step exited 0, "steps": [{"name", "argv", "rc", "error", "wall_s", "log"}]}.
-        A step that could not start exits RC_NOT_STARTED with error "could not start"; one that
-        timed out exits RC_TIMEOUT with error "timed out after N s", and its whole process group
-        is stopped (SIGTERM, KILL_GRACE_S, SIGKILL). error is None for a step that ran to its end,
-        whatever its exit code: a gate that exits 124 itself did not time out.
+        {"passed": every step exited 0 and ran to its end, "steps": [{"name", "argv", "rc", "error",
+        "wall_s", "log"}]}. A step that could not start exits RC_NOT_STARTED with error "could not
+        start"; one that timed out exits RC_TIMEOUT with error "timed out after N s". A step whose
+        leader exited before the timeout while a process it started held its output open past it
+        keeps the leader's exit code, with error ERROR_HELD_OPEN, and fails. error is None for a
+        step that ran to its end, whatever its exit code: a gate that exits 124 itself did not time
+        out. After every step its process group is stopped (SIGTERM, kill_grace_s, SIGKILL), so
+        nothing a step started outlives it. The limit: a grandchild that leaves the group with
+        setsid() is not killed (process groups cannot reach it; only a cgroup could), but the floor
+        does not hang on it, since its pipes are closed after the grace and the step is reaped.
     """
     log_dir.mkdir(parents=True, exist_ok=True)
-    timeout = profile.floor.timeout_s
-    steps = [_step("gate", list(profile.floor.gate), tree, timeout, log_dir / "floor-gate.log")]
+    limits = _Limits(timeout_s=profile.floor.timeout_s, kill_grace_s=kill_grace_s)
+    steps = [_step("gate", list(profile.floor.gate), tree, limits=limits, log=log_dir / "floor-gate.log")]
     suite = profile.suite_argv()
-    if suite is not None and steps[0]["rc"] == 0:
-        steps.append(_step("suite", suite, tree, timeout, log_dir / "floor-suite.log"))
-    return {"passed": all(s["rc"] == 0 for s in steps), "steps": steps}
+    if suite is not None and _step_passed(steps[0]):
+        steps.append(_step("suite", suite, tree, limits=limits, log=log_dir / "floor-suite.log"))
+    return {"passed": all(_step_passed(s) for s in steps), "steps": steps}
 
 
 def _result_reason(res: dict[str, Any]) -> list[str]:
@@ -267,8 +345,9 @@ def score_arm(arm_dir: Path, profile: Profile, peers: list[dict[str, Any]]) -> d
     Returns:
         The score: arm, cost_usd, per_model, main_new_tokens (every model's new input),
         first_cache_read, floor_passed, floor_error (None when every floor step ran to its end, else
-        "<step>: could not start (rc 127)" or "<step>: timed out after N s (rc 124)" for the first
-        such step), floor_steps ([{"name", "rc"}] per step attempted, in order), bundle_commits, wall_s,
+        "<step>: could not start (rc 127)", "<step>: timed out after N s (rc 124)" or "<step>:
+        output held open past the timeout by a process the step started (rc <the leader's>)" for
+        the first such step), floor_steps ([{"name", "rc"}] per step attempted, in order), bundle_commits, wall_s,
         warmth_checked (False when the arm or fewer than WARMTH_MIN_PEERS peers had a reading),
         result_subtype (the result record's subtype, informational: it never voids) and void (every
         reason, the stream account's own ones first and unchanged; empty means the arm counts).
