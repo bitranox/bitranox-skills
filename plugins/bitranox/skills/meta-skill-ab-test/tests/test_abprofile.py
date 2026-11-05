@@ -223,3 +223,34 @@ def test_a_variant_task_file_must_be_a_relative_path_inside_the_run_dir(tmp_path
     with pytest.raises(P.ProfileError) as exc:
         P.load_profile(_write(tmp_path, scratch_repo, text))
     assert str(exc.value).startswith("variant[1].task_file: must be a non-empty relative path inside the run dir")
+
+
+SUITE = GOOD.replace('gate = ["./gate.sh"]', 'gate = ["./gate.sh"]\nsuite = "acceptance/t.sh"\nsuite_cmd = ["sh", "{{suite}}"]')
+
+
+def test_suite_from_loads_as_an_absolute_path_and_defaults_to_none(tmp_path, scratch_repo):
+    assert P.load_profile(_write(tmp_path, scratch_repo, SUITE)).floor.suite_from is None
+    src = (tmp_path / "elsewhere" / "t.sh").as_posix()
+    prof = P.load_profile(_write(tmp_path, scratch_repo, SUITE.replace("suite_cmd =", f'suite_from = "{src}"\nsuite_cmd =')))
+    assert prof.floor.suite_from == src and prof.floor.suite == "acceptance/t.sh"
+
+
+@pytest.mark.parametrize(("line", "problem"), [
+    ('suite_from = "relative/t.sh"', "floor.suite_from: must be an absolute path when set"),
+    ("suite_from = 3", "floor.suite_from: must be an absolute path when set"),
+    ('suite_from = ""', "floor.suite_from: must be an absolute path when set"),
+    ('suite_from = "<path>"', "floor.suite_from: must be an absolute path when set"),
+], ids=["relative", "not-a-string", "empty", "placeholder"])
+def test_suite_from_must_be_an_absolute_path(tmp_path, scratch_repo, line, problem):
+    with pytest.raises(P.ProfileError) as exc:
+        P.load_profile(_write(tmp_path, scratch_repo, SUITE.replace("suite_cmd =", f"{line}\nsuite_cmd =")))
+    assert problem in str(exc.value).splitlines()
+
+
+def test_suite_from_without_a_suite_is_refused(tmp_path, scratch_repo):
+    src = (tmp_path / "t.sh").as_posix()
+    text = GOOD.replace('gate = ["./gate.sh"]', f'gate = ["./gate.sh"]\nsuite_from = "{src}"')
+    with pytest.raises(P.ProfileError) as exc:
+        P.load_profile(_write(tmp_path, scratch_repo, text))
+    assert str(exc.value).splitlines() == [
+        "floor.suite_from: needs floor.suite, the path the sealed copy takes in each arm's worktree"]

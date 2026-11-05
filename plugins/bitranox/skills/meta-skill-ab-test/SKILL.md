@@ -26,6 +26,8 @@ readable there) or an explicit `"none"`; `prune-run` and `score` show which one 
 A `[[variant]]` with `remove_skill = true` (no `dir`, no `markers`) is a bare arm that runs the
 plugin without the skill under test, and a variant's `task_file` gives that arm its own prompt,
 sealed and recorded per arm with its sha256 (a bare arm's prompt must not name the missing skill).
+An acceptance suite kept outside the workpiece is named by `[floor] suite_from = "<absolute path>"`:
+`seal` copies it from there, and `suite` stays the path the sealed copy takes in each arm's worktree.
 
 The run dir is a new directory OUTSIDE the workpiece, its own git repo (`seal` commits there,
 never into the workpiece); `init --repo <workpiece> --base <commit> --skills-ref <plugin commit>

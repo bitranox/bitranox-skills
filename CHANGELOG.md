@@ -30,6 +30,17 @@ a hole nobody has drawn a line under is one that gets rediscovered and half-fill
 two "versions with no entry" notes came to sit in this file disagreeing with it.
 
 
+## [10.16.0]
+
+### Added
+
+- `meta-skill-ab-test`: `[floor] suite_from = "<absolute path>"` names an acceptance suite kept
+  outside the workpiece. `seal` copies it from there to `sealed/<floor.suite>` (the workpiece is
+  not touched) and records `suite_from` with the sha256 in PREREG.md and the seal row; it refuses
+  a `suite_from` that is missing or not a file. `floor.suite` stays the path the sealed copy takes
+  in each arm's worktree, and `run` still refuses a sealed copy whose sha256 differs from the
+  seal. The profile refuses a `suite_from` that is not an absolute path or has no `floor.suite`.
+
 ## [10.15.0]
 
 ### Added

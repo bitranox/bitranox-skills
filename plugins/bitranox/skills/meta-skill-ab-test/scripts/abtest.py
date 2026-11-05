@@ -118,7 +118,8 @@ host's /proc read-only (an LXC container); "none" opts out, recorded per arm.
 
 [[variant]] remove_skill = true (no dir, no markers): a bare arm, the plugin without the skill under test.
 [[variant]] task_file = "task-V1.md": that arm's own prompt (default [workpiece].task_file); seal records
-its sha256 per arm, run refuses a changed one, and the journal, result.json and score name it."""
+its sha256 per arm, run refuses a changed one, and the journal, result.json and score name it.
+[floor] suite_from = "/abs/path": seal copies the acceptance suite from there instead of <repo>/<suite>."""
 SEAL_GIT = ("-c", "user.name=abtest", "-c", "user.email=abtest@localhost", "-c", "commit.gpgsign=false",
             "-c", "core.hooksPath=/dev/null")
 
@@ -337,13 +338,21 @@ def _seal_suite(run_dir: Path, profile: Profile) -> str | None:
     """Copy the acceptance suite into sealed/ (committed with the seal); its sha256, None without a suite.
 
     The copy, not the workpiece's file, is what every arm's floor runs: the workpiece's suite may
-    be untracked (then no worktree has it) or edited later, and an arm could edit its own.
+    be untracked (then no worktree has it) or edited later, and an arm could edit its own. The
+    source is floor.suite_from when set (a suite kept outside the workpiece, which then stays
+    untouched), else <workpiece repo>/<floor.suite>; the copy lands at sealed/<floor.suite> either way.
     """
     if not profile.floor.suite:
         return None
-    suite_path = profile.workpiece.repo / profile.floor.suite
-    if not suite_path.is_file():
-        raise RunRefused(f"floor.suite {suite_path} does not exist at the workpiece")
+    if profile.floor.suite_from is not None:
+        suite_path = Path(profile.floor.suite_from)
+        if not suite_path.is_file():
+            raise RunRefused(f"floor.suite_from {suite_path} does not exist or is not a file")
+    else:
+        suite_path = profile.workpiece.repo / profile.floor.suite
+        if not suite_path.is_file():
+            raise RunRefused(f"floor.suite {suite_path} does not exist at the workpiece "
+                             "(a suite kept elsewhere is named by floor.suite_from)")
     sealed = run_dir / SEALED_DIR / profile.floor.suite
     sealed.parent.mkdir(parents=True, exist_ok=True)
     shutil.copyfile(suite_path, sealed)
@@ -376,7 +385,7 @@ def _commit_seal(run_dir: Path, stamp: dict[str, Any]) -> str:
         raise RunRefused(f"seal commit failed: {proc.stderr.strip()}")
     commit = _git_out(run_dir, "rev-parse", "--verify", "-q", "HEAD").strip()
     record(run_dir, step="seal", round=0, arm="", status="sealed", commit=commit, suite_sha256=stamp["suite_sha256"],
-           task_files=stamp["task_files"])
+           suite_from=stamp["suite_from"], task_files=stamp["task_files"])
     return commit
 
 
@@ -392,7 +401,7 @@ def cmd_seal(args: argparse.Namespace) -> int:
         raise RunRefused("; ".join(problems))
     stamp = {"sealed_at": utc_now(), "weights": WEIGHTS, "suite_sha256": _seal_suite(run_dir, profile), "arms": profile.arm_names(),
              "n": profile.run.n, "warmth_tolerance": profile.run.warmth_tolerance,
-             "task_files": _task_stamp(run_dir, profile)}
+             "task_files": _task_stamp(run_dir, profile), "suite_from": profile.floor.suite_from}
     commit = _commit_seal(run_dir, stamp)
     _emit(args.json, "seal", dict(stamp, commit=commit), True, f"sealed {run_dir}: {len(profile.arm_names())} arms x {profile.run.n} rounds")
     return EXIT_YES

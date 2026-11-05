@@ -50,6 +50,7 @@ markers = []
 gate = ["make", "test"]
 # suite = "acceptance/test_task.py"
 # suite_cmd = ["pytest", "{suite}", "-q"]
+# suite_from = "/absolute/path/of/the/suite"  # seal reads the suite here, not at <repo>/<suite>
 cache_paths = [".venv", "target"]
 timeout_s = 1800
 
@@ -106,11 +107,20 @@ class Variant:
 
 @dataclass(frozen=True)
 class Floor:
+    """The [floor] table.
+
+    Attributes:
+        suite: where each arm's floor places the sealed suite, relative to the arm's worktree.
+        suite_from: an absolute path seal copies the suite from, for a suite that is not in the
+            workpiece repository; None reads it from <workpiece repo>/<suite>.
+    """
+
     gate: tuple[str, ...]
     suite: str | None
     suite_cmd: tuple[str, ...]
     cache_paths: tuple[str, ...]
     timeout_s: int
+    suite_from: str | None = None
 
 
 @dataclass(frozen=True)
@@ -318,12 +328,27 @@ def _suite(c: _Check, fl: dict[str, Any]) -> str | None:
     return suite
 
 
+def _suite_from(c: _Check, fl: dict[str, Any], suite: str | None) -> str | None:
+    """The absolute path seal reads the suite from; meaningless, so refused, without a suite."""
+    v = fl.get("suite_from")
+    if v is None:
+        return None
+    if not isinstance(v, str) or not v.strip() or v.strip().startswith("<") or not Path(v).is_absolute():
+        c.problems.append("floor.suite_from: must be an absolute path when set")
+        return None
+    if "suite" not in fl:
+        c.problems.append("floor.suite_from: needs floor.suite, the path the sealed copy takes in each arm's worktree")
+        return None
+    return v if suite is not None else None
+
+
 def _floor(c: _Check, fl: dict[str, Any]) -> Floor:
     suite = _suite(c, fl)
     floor = Floor(gate=c.str_list(fl, "gate", "floor"), suite=suite,
                   suite_cmd=c.str_list(fl, "suite_cmd", "floor", required=suite is not None),
                   cache_paths=c.str_list(fl, "cache_paths", "floor", required=False),
-                  timeout_s=c.integer(fl, "timeout_s", "floor", minimum=1, default=1800))
+                  timeout_s=c.integer(fl, "timeout_s", "floor", minimum=1, default=1800),
+                  suite_from=_suite_from(c, fl, suite))
     if suite is not None and "{suite}" not in " ".join(floor.suite_cmd):
         c.problems.append("floor.suite_cmd: must contain the {suite} placeholder")
     return floor

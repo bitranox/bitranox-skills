@@ -1022,6 +1022,76 @@ def test_run_refuses_an_edited_sealed_suite_copy(tmp_path, scratch_repo, skills_
     assert _arm_rows(run_dir) == []
 
 
+def _with_suite_from(tmp_path, scratch_repo, skills_repo, suite_text):
+    """A run whose suite lives OUTSIDE the workpiece (floor.suite_from); the workpiece has no copy."""
+    source = tmp_path / "other-repo" / "acceptance.sh"
+    source.parent.mkdir()
+    source.write_text(suite_text, encoding="utf-8")
+    run_dir = _init_and_fill(tmp_path, scratch_repo, skills_repo)
+    toml = run_dir / "abtest.toml"
+    text = toml.read_text(encoding="utf-8")
+    old = '# suite = "acceptance/test_task.py"\n# suite_cmd = ["pytest", "{suite}", "-q"]\n'
+    assert text.count(old) == 1
+    toml.write_text(text.replace(old, f'suite = "acceptance/check.sh"\nsuite_cmd = ["sh", "{{suite}}"]\n'
+                                      f'suite_from = "{source.as_posix()}"\n'), encoding="utf-8")
+    return run_dir, source
+
+
+def test_seal_copies_the_suite_from_suite_from_and_every_floor_runs_it(tmp_path, scratch_repo, skills_repo,
+                                                                     fake_claude_path, monkeypatch, capsys):
+    run_dir, source = _with_suite_from(tmp_path, scratch_repo, skills_repo, "echo outside ok\n")
+    assert not (scratch_repo / "acceptance").exists(), "the workpiece holds no suite"
+    before = L.git(scratch_repo, "status", "--porcelain").stdout
+    env, creds = _env(fake_claude_path, tmp_path)
+    _use_env(monkeypatch, env)
+    capsys.readouterr()
+    assert T.main(["seal", str(run_dir), "--json"]) == 0
+    stamp = json.loads(capsys.readouterr().out)["data"]
+    sealed = run_dir / "sealed" / "acceptance" / "check.sh"
+    assert sealed.read_bytes() == source.read_bytes()
+    assert stamp["suite_sha256"] == L.sha256_file(source) and stamp["suite_from"] == source.as_posix()
+    (seal,) = [r for r in L.read_jsonl(run_dir / "journal.jsonl") if r["step"] == "seal"]
+    assert (seal["suite_from"], seal["suite_sha256"]) == (source.as_posix(), L.sha256_file(source))
+    assert L.git(scratch_repo, "status", "--porcelain").stdout == before, "the workpiece is not dirtied"
+    assert T.main(_run_args(run_dir, creds, skills_repo, "--only", "C"), login_check=_Probe("ok")) == 0
+    passed, step = _suite_step(run_dir)
+    assert passed is True and (step["name"], step["rc"], step["error"]) == ("suite", 0, None)
+
+
+def test_seal_refuses_a_suite_from_that_does_not_exist(tmp_path, scratch_repo, skills_repo, capsys):
+    run_dir, source = _with_suite_from(tmp_path, scratch_repo, skills_repo, "exit 0\n")
+    source.unlink()
+    capsys.readouterr()
+    assert T.main(["seal", str(run_dir), "--json"]) == 2
+    error = json.loads(capsys.readouterr().out)["data"]["error"]
+    assert f"floor.suite_from {source} does not exist or is not a file" in error
+    assert not (run_dir / "journal.jsonl").exists() and not (run_dir / "sealed").exists()
+
+
+def test_without_suite_from_seal_still_reads_the_workpiece_and_records_none(tmp_path, scratch_repo, skills_repo, capsys):
+    run_dir = _with_suite(tmp_path, scratch_repo, skills_repo, "exit 0\n")
+    capsys.readouterr()
+    assert T.main(["seal", str(run_dir), "--json"]) == 0
+    stamp = json.loads(capsys.readouterr().out)["data"]
+    assert stamp["suite_from"] is None
+    assert stamp["suite_sha256"] == L.sha256_file(scratch_repo / "acceptance" / "check.sh")
+
+
+def test_run_refuses_a_suite_from_copy_whose_hash_differs_from_the_seal(tmp_path, scratch_repo, skills_repo,
+                                                                         fake_claude_path, monkeypatch, capsys):
+    run_dir, source = _with_suite_from(tmp_path, scratch_repo, skills_repo, "exit 3\n")
+    env, creds = _env(fake_claude_path, tmp_path)
+    _use_env(monkeypatch, env)
+    assert T.main(["seal", str(run_dir)]) == 0
+    source.write_text("exit 0\n", encoding="utf-8")  # the source moving on changes nothing sealed
+    assert T.main(_run_args(run_dir, creds, skills_repo, "--dry-run", "--only", "C")) == 0
+    (run_dir / "sealed" / "acceptance" / "check.sh").write_text("exit 0\n", encoding="utf-8")
+    _commit_all(run_dir, "loosen the sealed copy")
+    capsys.readouterr()
+    assert T.main(_run_args(run_dir, creds, skills_repo, "--dry-run", "--only", "V1", "--json")) == 2
+    assert "sealed/acceptance/check.sh" in json.loads(capsys.readouterr().out)["data"]["error"]
+
+
 _LEAVES_AN_UNREADABLE_FILE = """
 import os
 from pathlib import Path
