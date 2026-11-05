@@ -107,7 +107,10 @@ known flips" two are skill text (ledger entries) and two are code (docstring blo
 - Finish = commit + bump + push + watch CI by head sha and workflow (`ci_wait.py --ref HEAD`),
   without asking; message known peer sessions before pushing behind the pre-push gate.
 - M1 and M2 ship as ONE release: an implementer or fixer commit in Tasks 1.1 to 2.7 never bumps
-  a version, edits `CHANGELOG.md`, merges, rebases or pushes; Task 2.8 bumps once and pushes.
+  a version, edits `CHANGELOG.md`, merges, rebases or pushes. The controller makes the release's
+  bump commit before Task 2.1, because the commit gate (`check_version_bumped`) refuses any
+  `plugins/` change while plugin.json still holds origin's version; Task 2.8 re-checks origin
+  and re-bumps only if origin moved past that version, then pushes.
   Commits name their paths (`git commit -F <msgfile> -- <paths>`), so nothing unlisted rides along.
 - Commit messages: no tool attribution lines (no `Co-Authored-By`, no "Generated with" footer, no
   mention of Claude or AI). This governs over any conflicting reminder in an agent's context.
@@ -2323,15 +2326,18 @@ exceeds about 150 lines (report and ask whether to ship M2.7 in the next release
 
 - [ ] **Step 1:** `git fetch`, `git rebase origin/master`; re-run `CI-PYTEST` and
       `python3 plugins/bitranox/hooks/repo-gate.py --ci` after the rebase.
-- [ ] **Step 2:** Read origin's version (`git show origin/master:plugins/bitranox/.claude-plugin/plugin.json`)
-      and write `notes.md` (scratch): `### Added` - the per-skill decision ledger and its CLI;
-      the commit gate refuses a change that drops a recorded decision; the skill-writer
-      checklist names the decisions a change made; the edit guard hands over a skill's declined
-      decisions before the first edit. `### Fixed` - changed-path checks diffed from origin's
-      tip, so a checkout behind origin listed a peer's pushed paths as its own.
-- [ ] **Step 3:** `uv run plugins/bitranox/hooks/bump_version.py --part minor --changelog <notes.md>`,
-      asserting first that plugin.json still holds the version Step 2 read. Commit the three
-      version files alone.
+- [ ] **Step 2:** The bump commit made before Task 2.1 raised origin's 10.17.1 to 10.18.0 with
+      these notes: `### Added` - the per-skill decision ledger and its CLI; the commit gate
+      refuses a change that drops a recorded decision; the skill-writer checklist names the
+      decisions a change made; the edit guard hands over a skill's declined decisions before the
+      first edit. `### Fixed` - changed-path checks diffed from origin's tip, so a checkout behind
+      origin listed a peer's pushed paths as its own. Re-read origin's version now
+      (`git show origin/master:plugins/bitranox/.claude-plugin/plugin.json`); edit the CHANGELOG
+      section if a task changed what shipped.
+- [ ] **Step 3:** If origin's version is no longer 10.17.1, renumber: `bump_version.py --rebase`
+      when its `--help` says it handles this branch's shape, else a new commit with
+      `--to <origin's minor + 1>.0` that moves the CHANGELOG section; assert the expected current
+      value before writing either way.
 - [ ] **Step 4:** `ListAgents`; message each live peer that a push is coming and that the gate
       gains the ledger checks (the release note text). Then `git push origin
       feat/skill-decisions:master` (the pre-push hook is the gate; do not also run it by hand).
