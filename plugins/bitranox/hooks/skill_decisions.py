@@ -12,14 +12,16 @@ the SKILL.md edit guard hands an editing agent the skill's rejected and removed 
 its first edit. Both read this module, so it is standard library only.
 
 Decisions:
-- Anchors are compared after `normalise`: per line, leading blockquote and list markers are
-  stripped, every whitespace-separated marker-only token is dropped, and whitespace collapses.
+- Anchors are compared after `normalise`: per line, leading blockquote markers are stripped,
+  every whitespace-separated marker-only token (a list marker, a stray ">") is dropped, and
+  whitespace collapses.
   Why: measured 2026-11-05 on 91 window commits of three skills (the plan's PREREG): re-wrapping,
   re-padding and renumbering moved no anchor, and 3 meaning changes fired. Reopen if a refusal
   log shows rewordings outnumbering meaning changes over 30 days.
 - The id hashes the whole entry, so two entries written the same day in two worktrees never
   collide, and an entry edited in place no longer matches its id.
 """
+import datetime
 import hashlib
 import json
 import re
@@ -134,13 +136,23 @@ def _anchor_problems(entry: dict) -> list[str]:
             for a in bad]
 
 
+def _date_problems(entry: dict) -> list[str]:
+    date = str(entry.get("date", ""))
+    if not _DATE.fullmatch(date):
+        return ["date: YYYY-MM-DD"]
+    try:
+        datetime.date.fromisoformat(date)
+    except ValueError:
+        return ["date: not a calendar date"]
+    return []
+
+
 def validate_entry(entry: dict) -> list[str]:
     """Every problem with `entry`, one `<field>: <reason>` string each; [] when it is valid."""
     problems = ["%s: unknown field" % k for k in entry if k not in FIELDS]
     if entry.get("v") != 1:
         problems.append("v: must be 1")
-    if not _DATE.fullmatch(str(entry.get("date", ""))):
-        problems.append("date: YYYY-MM-DD")
+    problems += _date_problems(entry)
     required = ("decision", "why") if entry.get("kind") == "void" else ("decision", "why", "reopen_if")
     problems += ["%s: empty" % f for f in required if not _text(entry, f)]
     problems += _vocabulary_problems(entry) + _list_problems(entry) + _anchor_problems(entry)

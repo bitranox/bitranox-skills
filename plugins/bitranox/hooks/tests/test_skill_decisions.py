@@ -94,7 +94,9 @@ def test_an_anchor_outside_20_to_200_characters_is_refused(anchor):
 
 
 def test_the_length_is_measured_after_normalising():
-    padded = "- " + "a b c d e f g h i"    # 17 characters once the list marker is gone
+    padded = "- - - - " + "a b c d e f g h i"    # long enough raw, too short once the markers go
+    assert (len(padded), len(SD.normalise(padded))) == (25, 17)
+    assert len(padded) >= SD.ANCHOR_MIN > len(SD.normalise(padded))
     assert any(p.startswith("anchors:") for p in SD.validate_entry(_rule(anchors=[padded])))
 
 
@@ -103,7 +105,16 @@ def test_the_length_is_measured_after_normalising():
                                          ("evidence", {"tier": "argued", "text": ""}),
                                          ("topic", "Env Model")])
 def test_a_value_outside_its_vocabulary_is_refused(field, value):
-    assert SD.validate_entry(_rule(**{field: value}))
+    assert any(p.startswith(field + ":") for p in SD.validate_entry(_rule(**{field: value})))
+
+
+@pytest.mark.parametrize("date", ["2026-13-45", "2026-02-30"])
+def test_a_date_that_is_not_on_the_calendar_is_refused(date):
+    assert any(p.startswith("date:") for p in SD.validate_entry(_rule(date=date)))
+
+
+def test_a_real_calendar_date_passes_the_date_check():
+    assert not any(p.startswith("date:") for p in SD.validate_entry(_rule(date="2026-11-05")))
 
 
 def test_an_unknown_field_is_refused_so_a_typo_cannot_hide_a_reason():

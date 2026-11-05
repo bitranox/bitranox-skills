@@ -749,7 +749,9 @@ def test_an_anchor_outside_20_to_200_characters_is_refused(anchor):
 
 
 def test_the_length_is_measured_after_normalising():
-    padded = "- " + "a b c d e f g h i"    # 17 characters once the list marker is gone
+    padded = "- - - - " + "a b c d e f g h i"    # long enough raw, too short once the markers go
+    assert (len(padded), len(SD.normalise(padded))) == (25, 17)
+    assert len(padded) >= SD.ANCHOR_MIN > len(SD.normalise(padded))
     assert any(p.startswith("anchors:") for p in SD.validate_entry(_rule(anchors=[padded])))
 
 
@@ -758,7 +760,16 @@ def test_the_length_is_measured_after_normalising():
                                          ("evidence", {"tier": "argued", "text": ""}),
                                          ("topic", "Env Model")])
 def test_a_value_outside_its_vocabulary_is_refused(field, value):
-    assert SD.validate_entry(_rule(**{field: value}))
+    assert any(p.startswith(field + ":") for p in SD.validate_entry(_rule(**{field: value})))
+
+
+@pytest.mark.parametrize("date", ["2026-13-45", "2026-02-30"])
+def test_a_date_that_is_not_on_the_calendar_is_refused(date):
+    assert any(p.startswith("date:") for p in SD.validate_entry(_rule(date=date)))
+
+
+def test_a_real_calendar_date_passes_the_date_check():
+    assert not any(p.startswith("date:") for p in SD.validate_entry(_rule(date="2026-11-05")))
 
 
 def test_an_unknown_field_is_refused_so_a_typo_cannot_hide_a_reason():
@@ -787,14 +798,16 @@ the SKILL.md edit guard hands an editing agent the skill's rejected and removed 
 its first edit. Both read this module, so it is standard library only.
 
 Decisions:
-- Anchors are compared after `normalise`: per line, leading blockquote and list markers are
-  stripped, every whitespace-separated marker-only token is dropped, and whitespace collapses.
+- Anchors are compared after `normalise`: per line, leading blockquote markers are stripped,
+  every whitespace-separated marker-only token (a list marker, a stray ">") is dropped, and
+  whitespace collapses.
   Why: measured 2026-11-05 on 91 window commits of three skills (the plan's PREREG): re-wrapping,
   re-padding and renumbering moved no anchor, and 3 meaning changes fired. Reopen if a refusal
   log shows rewordings outnumbering meaning changes over 30 days.
 - The id hashes the whole entry, so two entries written the same day in two worktrees never
   collide, and an entry edited in place no longer matches its id.
 """
+import datetime
 import hashlib
 import json
 import re
@@ -908,13 +921,23 @@ def _anchor_problems(entry):
             for a in bad]
 
 
+def _date_problems(entry: dict) -> list[str]:
+    date = str(entry.get("date", ""))
+    if not _DATE.fullmatch(date):
+        return ["date: YYYY-MM-DD"]
+    try:
+        datetime.date.fromisoformat(date)
+    except ValueError:
+        return ["date: not a calendar date"]
+    return []
+
+
 def validate_entry(entry):
     """Every problem with `entry`, one `<field>: <reason>` string each; [] when it is valid."""
     problems = ["%s: unknown field" % k for k in entry if k not in FIELDS]
     if entry.get("v") != 1:
         problems.append("v: must be 1")
-    if not _DATE.fullmatch(str(entry.get("date", ""))):
-        problems.append("date: YYYY-MM-DD")
+    problems += _date_problems(entry)
     required = ("decision", "why") if entry.get("kind") == "void" else ("decision", "why", "reopen_if")
     problems += ["%s: empty" % f for f in required if not _text(entry, f)]
     problems += _vocabulary_problems(entry) + _list_problems(entry) + _anchor_problems(entry)
@@ -925,8 +948,8 @@ def validate_entry(entry):
 
 - [ ] **Step 4:** Run `CI-PYTEST -k skill_decisions`. Expected: all pass.
 - [ ] **Step 5: Mutation check:** with `mutation_arm --revert` (compuse-toolbox), remove in turn
-      the `_QUOTE_MARKERS.sub`, the marker-token filter, and the `entry_id` comparison; each
-      must turn at least one test RED.
+      the `_QUOTE_MARKERS.sub`, the marker-token filter, the `entry_id` comparison, and the
+      `len(normalise(a))` length measure (as `len(a)`); each must turn at least one test RED.
 - [ ] **Step 6: Commit** `skill_decisions: the decision ledger model and anchor matcher` with
       `-- plugins/bitranox/hooks/skill_decisions.py plugins/bitranox/hooks/tests/test_skill_decisions.py`.
 
