@@ -84,6 +84,19 @@ the instrument is broken, not the answer: read ten fire events by hand before an
 A per-skill commit count examined by the replay that differs from the window size above voids the
 run for that skill.
 
+## Deviations (recorded before any control or replay ran)
+
+- D-1, instrument: line-start marker stripping alone cannot keep an anchor quoted across two list
+  items stable, because the anchor carries the inner "2." and a renumbering changes it (a harness
+  test went red on it). `normalise` also drops, anywhere and on both the anchor and the text,
+  every whitespace-separated token that is only a marker: `-`, `*`, `+`, a run of `>`, `N.` or
+  `N)`. Both sides lose the same tokens, so a match stays sound; prose dashes and "step 2." become
+  invisible to it.
+- D-2, labelling context: a fixed after-excerpt "around the old position" cannot show the labeller
+  a rule that was reworded and MOVED within SKILL.md. The labeller additionally gets the
+  after-text region that best matches the vanished anchor by word-window similarity, with its
+  similarity ratio.
+
 ## Result
 
 (empty until the run)
