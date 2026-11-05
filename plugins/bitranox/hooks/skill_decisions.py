@@ -24,7 +24,11 @@ Decisions:
 import datetime
 import hashlib
 import json
+import os
 import re
+import subprocess
+from collections.abc import Callable, Iterable, Iterator, Mapping
+from dataclasses import dataclass
 from pathlib import Path
 
 LEDGER_REL = ".skillwriter/decisions.jsonl"
@@ -90,6 +94,12 @@ def entry_id(entry: dict) -> str:
     return "d-%s-%s" % (str(entry.get("date", "")).replace("-", ""), digest)
 
 
+def _list(entry: dict, field: str) -> list:
+    # A field the list check refuses must not crash the checks that iterate it.
+    value = entry.get(field)
+    return value if isinstance(value, list) else []
+
+
 def _text(entry: dict, field: str) -> str:
     value = entry.get(field)
     return value.strip() if isinstance(value, str) else ""
@@ -116,7 +126,7 @@ def _list_problems(entry: dict) -> list[str]:
         value = entry.get(field)
         if not isinstance(value, list) or not all(isinstance(x, str) for x in value):
             problems.append("%s: must be a list of strings" % field)
-    supersedes = entry.get("supersedes") or []
+    supersedes = _list(entry, "supersedes")
     if any(not _ID.fullmatch(x) for x in supersedes if isinstance(x, str)):
         problems.append("supersedes: every item must be an entry id")
     if entry.get("kind") == "void" and not supersedes:
@@ -125,7 +135,7 @@ def _list_problems(entry: dict) -> list[str]:
 
 
 def _anchor_problems(entry: dict) -> list[str]:
-    anchors = entry.get("anchors") or []
+    anchors = _list(entry, "anchors")
     if entry.get("kind") != "rule":
         return ["anchors: only a rule entry carries anchors"] if anchors else []
     if not anchors:
@@ -159,3 +169,169 @@ def validate_entry(entry: dict) -> list[str]:
     if entry.get("id") != entry_id(entry):
         problems.append("id: does not match the entry (edited after it was written?)")
     return problems
+
+
+# ---- reading a ledger ----
+# Every reader takes the ledger as an iterable of lines, or a factory returning a fresh one for each
+# pass, so a ledger is never held whole: what a pass keeps is the id sets below and the brief's
+# budget, never an entry's text.
+
+_CORPUS_SEP = "\n\x00\n"   # a NUL token: no anchor can match across two files
+_CORPUS_SKIP = (".skillwriter/", "tests/")
+
+LinesFactory = Callable[[], Iterable[str | bytes]]
+
+
+def file_lines(path: str | Path) -> Iterator[str]:
+    """The lines of `path`, read one at a time; nothing for a missing file."""
+    path = Path(path)
+    if not path.is_file():
+        return
+    # Iterating the file splits on newlines only; str.splitlines would also split a JSON string
+    # holding a raw U+2028.
+    with path.open(encoding="utf-8", newline="") as fh:
+        yield from fh
+
+
+def parse_entries(lines: Iterable[str | bytes]) -> Iterator[dict]:
+    """Yield each entry of `lines` (str or bytes), validated; blank lines are skipped.
+
+    Raises:
+        LedgerError: at the first line that is not UTF-8, not a JSON object, or not a valid entry.
+    """
+    for line_no, raw in enumerate(lines, 1):
+        try:
+            text = raw.decode("utf-8") if isinstance(raw, bytes) else raw
+        except UnicodeDecodeError:
+            raise LedgerError(line_no, "not UTF-8") from None
+        if not text.strip():
+            continue
+        try:
+            entry = json.loads(text)
+        except ValueError as exc:
+            raise LedgerError(line_no, "not JSON (%s)" % exc) from None
+        if not isinstance(entry, dict):
+            raise LedgerError(line_no, "not a JSON object")
+        problems = validate_entry(entry)
+        if problems:
+            raise LedgerError(line_no, "; ".join(problems))
+        yield entry
+
+
+def live_entries(lines_factory: LinesFactory) -> Iterator[dict]:
+    """Entries no later entry supersedes, voids excluded. Two passes over `lines_factory()`."""
+    superseded = set()
+    for entry in parse_entries(lines_factory()):
+        superseded.update(entry["supersedes"])
+    for entry in parse_entries(lines_factory()):
+        if entry["id"] not in superseded and entry["kind"] != "void":
+            yield entry
+
+
+def corpus_text(files: Mapping[str, bytes]) -> str:
+    """The skill's Markdown a rule anchor must occur in: `*.md` outside `.skillwriter/`, `tests/`."""
+    parts = [data.decode("utf-8", errors="replace") for rel, data in sorted(files.items())
+             if rel.endswith(".md") and not rel.startswith(_CORPUS_SKIP)]
+    return _CORPUS_SEP.join(parts)
+
+
+def _git_env() -> dict[str, str]:
+    # A GIT_DIR or pathspec variable inherited from a hook would point git at another repo.
+    return {k: v for k, v in os.environ.items() if not k.startswith("GIT_")}
+
+
+def _tracked_files(skill_dir: Path) -> list[str] | None:
+    """Paths git tracks under `skill_dir`, relative to it; None when git cannot answer."""
+    try:
+        out = subprocess.run(["git", "ls-files", "-z", "--", "."], cwd=str(skill_dir),
+                             capture_output=True, env=_git_env(), check=False)
+    except OSError:
+        return None
+    return os.fsdecode(out.stdout).split("\0") if out.returncode == 0 else None
+
+
+def corpus_from_dir(skill_dir: str | Path) -> str:
+    """`corpus_text` of the files git tracks under `skill_dir`; every file there without git."""
+    skill_dir = Path(skill_dir)
+    listed = _tracked_files(skill_dir)
+    if listed is None:
+        listed = [p.relative_to(skill_dir).as_posix() for p in skill_dir.rglob("*") if p.is_file()]
+    files = {}
+    for rel in filter(None, listed):
+        try:
+            files[rel] = (skill_dir / rel).read_bytes()
+        except OSError:
+            continue        # listed but gone from disk: a deletion this corpus does not hold
+    return corpus_text(files)
+
+
+@dataclass(frozen=True)
+class Finding:
+    """One problem `check_ledger` found; an anchor finding carries the entry's reasons."""
+
+    entry_id: str
+    problem: str
+    anchor: str = ""
+    decision: str = ""
+    why: str = ""
+    reopen_if: str = ""
+
+    def render(self) -> str:
+        if not self.anchor:
+            return "%s: %s" % (self.entry_id or "ledger", self.problem)
+        return ("%s: %s %r\n  decision: %s\n  why: %s\n  reopen if: %s"
+                % (self.entry_id, self.problem, self.anchor, self.decision, self.why, self.reopen_if))
+
+
+def _integrity_findings(lines_factory: LinesFactory) -> list[Finding]:
+    findings, seen = [], set()
+    for entry in parse_entries(lines_factory()):
+        if entry["id"] in seen:
+            findings.append(Finding(entry["id"], "duplicate id"))
+        unknown = [s for s in entry["supersedes"] if s not in seen]
+        if unknown:
+            findings.append(Finding(entry["id"], "supersedes unknown or later id %s" % ", ".join(unknown)))
+        seen.add(entry["id"])
+    return findings
+
+
+def check_ledger(lines_factory: LinesFactory, corpus: str) -> list[Finding]:
+    """Findings for a ledger against its skill's text: integrity first, then every live anchor."""
+    try:
+        findings = _integrity_findings(lines_factory)
+        text = normalise(corpus)
+        for entry in live_entries(lines_factory):
+            for anchor in entry["anchors"]:
+                if normalise(anchor) not in text:
+                    findings.append(Finding(entry["id"], "anchor no longer in the skill text:", anchor,
+                                            entry["decision"], entry["why"], entry["reopen_if"]))
+    except LedgerError as exc:
+        return [Finding("", str(exc))]
+    return findings
+
+
+def _brief_block(entry: dict) -> str:
+    return ("- [%s] %s (%s, %s)\n  why: %s\n  reopen if: %s"
+            % (entry["kind"], entry["decision"], entry["id"], entry["evidence"]["tier"],
+               entry["why"], entry["reopen_if"]))
+
+
+def render_brief(lines_factory: LinesFactory, *, skill: str, budget_chars: int = 6000) -> str:
+    """The live rejected and removed entries, in full until `budget_chars` is spent, then a count."""
+    blocks, used, left = [], 0, 0
+    for entry in live_entries(lines_factory):
+        if entry["kind"] not in ("rejected", "removed"):
+            continue
+        block = _brief_block(entry)
+        if used + len(block) > budget_chars:
+            left += 1
+            continue
+        blocks.append(block)
+        used += len(block)
+    if not blocks and not left:
+        return ""
+    text = "Decisions already taken for %s (rejected or removed, oldest first):\n" % skill + "\n".join(blocks)
+    if left:
+        text += ("\n%d more not shown: python3 <plugin>/hooks/skill_decisions.py show %s "
+                 "--kind rejected,removed --full" % (left, skill))
+    return text
