@@ -812,7 +812,9 @@ _ID = re.compile(r"d-[0-9]{8}-[0-9a-f]{8}")
 _DATE = re.compile(r"[0-9]{4}-[0-9]{2}-[0-9]{2}")
 _TOPIC = re.compile(r"[a-z0-9][a-z0-9-]{0,39}")
 _QUOTE_MARKERS = re.compile(r"^(?:>[ \t]?)+")
-_LIST_MARKER = re.compile(r"^(?:[-*+]|[0-9]+[.)])[ \t]+")
+# No separate line-start list-marker strip: a list marker is always followed by whitespace, so it
+# is a whole token that _MARKER_TOKEN already drops, and a strip of it could never change the
+# result (an equivalent mutant in the Task 1.1 battery, removed 2026-11-05).
 _MARKER_TOKEN = re.compile(r"^(?:[-*+>]+|[0-9]+[.)])$")
 
 
@@ -827,14 +829,15 @@ class LedgerError(ValueError):
 def normalise(text):
     """One-space-separated words of `text`, without blockquote and list markers.
 
-    Markers are dropped at line starts AND as standalone tokens anywhere, on the anchor and the
-    text alike: an anchor quoted across two list items carries the inner "2.", which only a
-    token-level drop keeps stable under renumbering. Both sides lose the same tokens, so a match
+    Blockquote markers are stripped at line starts, where they may touch the first word
+    (">word"); list markers and stray ">" are dropped as standalone tokens anywhere, on the anchor
+    and the text alike: an anchor quoted across two list items carries the inner "2.", which only
+    a token-level drop keeps stable under renumbering. Both sides lose the same tokens, so a match
     stays sound; prose dashes and "step 2." become invisible to it.
     """
     words = []
     for line in text.splitlines():
-        line = _LIST_MARKER.sub("", _QUOTE_MARKERS.sub("", line.strip()))
+        line = _QUOTE_MARKERS.sub("", line.strip())
         words.extend(w for w in line.split() if not _MARKER_TOKEN.match(w))
     return " ".join(words)
 
@@ -922,8 +925,8 @@ def validate_entry(entry):
 
 - [ ] **Step 4:** Run `CI-PYTEST -k skill_decisions`. Expected: all pass.
 - [ ] **Step 5: Mutation check:** with `mutation_arm --revert` (compuse-toolbox), remove in turn
-      the `_QUOTE_MARKERS.sub`, the `_LIST_MARKER.sub`, the marker-token filter, and the
-      `entry_id` comparison; each must turn at least one test RED.
+      the `_QUOTE_MARKERS.sub`, the marker-token filter, and the `entry_id` comparison; each
+      must turn at least one test RED.
 - [ ] **Step 6: Commit** `skill_decisions: the decision ledger model and anchor matcher` with
       `-- plugins/bitranox/hooks/skill_decisions.py plugins/bitranox/hooks/tests/test_skill_decisions.py`.
 
