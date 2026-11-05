@@ -1037,7 +1037,13 @@ _SKILL_MD_RX = re.compile(r"^%s/([^/]+)/SKILL\.md$" % re.escape(_SKILLS_DIR))
 
 
 def _merge_base(root):
-    """The commit HEAD forked from origin/master, or None when either ref is missing."""
+    """The commit HEAD forked from origin/master, or None when there is none to diff from.
+
+    None covers more than a missing ref: an unborn HEAD, and a HEAD that shares no history with
+    origin/master (unrelated histories, a shallow clone cut above the fork point), have no
+    merge-base either. `_changed_vs_origin` then returns None and both checks reading it pass
+    with nothing to judge, rather than guess a base that would list paths that are not ours.
+    """
     rc, out, _ = _git(root, "merge-base", "HEAD", "origin/master")
     sha = out.strip()
     return sha if rc == 0 and sha else None

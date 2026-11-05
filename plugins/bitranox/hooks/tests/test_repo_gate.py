@@ -3518,8 +3518,8 @@ def test_lf_endings_reads_a_commit_all_from_disk(tmp_path):
 def git_repo_with_origin(tmp_path, files):
     """A repo carrying an origin/master ref, so the origin-comparing checks actually run.
 
-    Both checks below return [] the moment `rev-parse --verify origin/master` fails, so without
-    this ref they pass while asserting nothing - which is how they came to have no test at all.
+    Both checks below return [] whenever `git merge-base HEAD origin/master` does not resolve, so
+    without this ref they pass while asserting nothing.
     """
     git_repo(tmp_path, files)
     subprocess.run(["git", "-c", "user.email=t@example.invalid", "-c", "user.name=t",
@@ -4264,6 +4264,25 @@ def test_changed_vs_origin_does_not_list_a_peer_s_pushed_path_as_ours(tmp_path):
     subprocess.run(["git", "update-ref", "refs/remotes/origin/master", "HEAD"], cwd=tmp_path, check=True)
     subprocess.run(["git", "reset", "-q", "--hard", base], cwd=tmp_path, check=True)
     (tmp_path / "mine.md").write_text("a2\n", encoding="utf-8")
+
+    assert RG._changed_vs_origin(tmp_path) == ["mine.md"]
+
+
+def test_changed_vs_origin_on_a_diverged_checkout_lists_our_commit_not_the_peer_s(tmp_path):
+    """Local commits ahead of origin AND origin moved ahead: only our side is ours.
+
+    Diffed against origin's tip, the peer's pushed path shows up too, because HEAD lacks it.
+    """
+    git_repo_with_origin(tmp_path, {"mine.md": "a\n", "theirs.md": "b\n"})
+    base = subprocess.run(["git", "rev-parse", "HEAD"], cwd=tmp_path, capture_output=True,
+                          text=True, check=True).stdout.strip()
+    ident = ["-c", "user.email=t@example.invalid", "-c", "user.name=t"]
+    (tmp_path / "theirs.md").write_text("b2\n", encoding="utf-8")
+    subprocess.run(["git", *ident, "commit", "-qam", "peer", "--no-verify"], cwd=tmp_path, check=True)
+    subprocess.run(["git", "update-ref", "refs/remotes/origin/master", "HEAD"], cwd=tmp_path, check=True)
+    subprocess.run(["git", "reset", "-q", "--hard", base], cwd=tmp_path, check=True)
+    (tmp_path / "mine.md").write_text("a2\n", encoding="utf-8")
+    subprocess.run(["git", *ident, "commit", "-qam", "ours", "--no-verify"], cwd=tmp_path, check=True)
 
     assert RG._changed_vs_origin(tmp_path) == ["mine.md"]
 
