@@ -36,7 +36,10 @@ checkout and the skill under test, and the profile's `[run]` holds the model (`o
 the arms, `C` being the shipped control. `score` reports USD and new tokens per model from each
 arm's stream. An arm's work is its commits on the workpiece branch `abx/<run>/...` plus
 `arms/<label>/uncommitted.patch`: judge the diffs pairwise BEFORE `prune-run`, which deletes those
-branches and keeps the run dir.
+branches and keeps the run dir. It also removes, by exact path, a worktree an arm registered itself
+under `arms/` (a parallel node's), with its branch. Never delete a run dir by hand: it can hold the
+pinned plugin checkout (`--skills-repo` worktree), still registered in the skills repository, that
+later runs start from. Remove the arm data inside it and leave that checkout.
 
 Do not judge a variant from transcripts (the design's reason for this skill), do not run arms in
 parallel (serial interleaved arms isolate CPU, quota and the prompt cache; the design's

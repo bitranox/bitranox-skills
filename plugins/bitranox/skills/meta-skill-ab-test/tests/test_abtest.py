@@ -631,6 +631,25 @@ def test_prune_run_keeps_a_stale_registration_that_is_not_the_runs(tmp_path, scr
     assert str(foreign) in L.git(scratch_repo, "worktree", "list", "--porcelain").stdout
 
 
+def test_prune_run_removes_a_worktree_the_arm_registered_under_its_own_home(tmp_path, scratch_repo, skills_repo,
+                                                                          fake_claude_path, monkeypatch):
+    run_dir = _init_and_fill(tmp_path, scratch_repo, skills_repo)
+    env, creds = _env(fake_claude_path, tmp_path)
+    _use_env(monkeypatch, env)
+    assert T.main(["seal", str(run_dir)]) == 0
+    assert T.main(_run_args(run_dir, creds, skills_repo, "--dry-run")) == 0
+    own = run_dir / "arms" / "r1-C" / "home" / "wt" / "node-8"
+    assert L.git(scratch_repo, "worktree", "add", "-q", "-b", "node-8", str(own)).returncode == 0
+    foreign = tmp_path / "users-worktree"
+    assert L.git(scratch_repo, "worktree", "add", "-q", "-b", "users-topic", str(foreign)).returncode == 0
+    assert T.main(["prune-run", str(run_dir)]) == 0
+    listed = L.git(scratch_repo, "worktree", "list", "--porcelain").stdout
+    assert str(own) not in listed and not own.exists(), "the arm's own worktree stays registered"
+    assert L.git(scratch_repo, "branch", "--list", "node-8").stdout.strip() == ""
+    assert str(foreign) in listed, "a worktree outside the run's arms dir was touched"
+    assert L.git(scratch_repo, "branch", "--list", "users-topic").stdout.strip() != ""
+
+
 def _exclude_text(repo):
     path = repo / ".git" / "info" / "exclude"
     return path.read_text(encoding="utf-8") if path.is_file() else None

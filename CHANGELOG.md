@@ -30,6 +30,12 @@ a hole nobody has drawn a line under is one that gets rediscovered and half-fill
 two "versions with no entry" notes came to sit in this file disagreeing with it.
 
 
+## [10.17.1]
+
+### Fixed
+
+- `meta-skill-ab-test`: `prune-run` also removes a worktree an arm registered itself under `arms/` (a parallel node's), by exact path and with its branch; before, it survived and stayed registered in the real repository. SKILL.md says a run dir can hold the pinned plugin checkout and must not be deleted by hand.
+
 ## [10.17.0]
 
 ### Added

@@ -269,6 +269,26 @@ def _run_branches(repo: Path, run_id: str) -> list[str]:
     return proc.stdout.split()
 
 
+def _arm_made_worktrees(repo: Path, run_dir: Path) -> list[tuple[Path, str | None]]:
+    """The worktrees of repo registered under run_dir/arms, with each one's branch (None: detached).
+
+    An arm can register a worktree of its own in its home (a parallel node: arms/<label>/home/wt/
+    node-8), outside the abx-<run>-<label> namespace and its abx/<run>/ branches. The path under
+    the run's own arms dir is what says the run made it; a worktree anywhere else is never listed.
+    """
+    proc = git(repo, "worktree", "list", "--porcelain")
+    if proc.returncode != 0:
+        raise RunRefused(f"cannot list the worktrees of {repo}: {proc.stderr.strip()}")
+    arms = (run_dir / "arms").resolve()
+    found: list[tuple[Path, str | None]] = []
+    for block in proc.stdout.split("\n\n"):
+        fields = dict(line.split(" ", 1) for line in block.splitlines() if " " in line)
+        path = Path(fields["worktree"]) if "worktree" in fields else None
+        if path is not None and path.resolve().is_relative_to(arms):
+            found.append((path, fields.get("branch", "").removeprefix("refs/heads/") or None))
+    return found
+
+
 def _refuse_run_id_collision(repo: Path, run_id: str) -> None:
     """Refuse a run id whose branches already exist: its arms would be refused as leftovers, and
     prune-run would delete the other run's branches with this one's."""
@@ -1028,7 +1048,8 @@ def cmd_prune_run(args: argparse.Namespace) -> int:
     """Prune every arm worktree of the run, then delete its branches.
 
     Every config dir left under arms/ (a hard-killed arm's, with its credentials copy) is deleted
-    first, its transcripts kept. An arm whose worktree git no longer lists but whose <ws>.githooks
+    first, its transcripts kept. A worktree an arm registered itself under arms/ (a parallel node's)
+    is removed by exact path with its branch. An arm whose worktree git no longer lists but whose <ws>.githooks
     is left (the user removed a locked worktree by hand with `worktree remove -f -f`) is pruned
     too: that removes the hooks dir and unsets the extension the harness set. The `.claude/worktrees/` line of the
     workpiece's info/exclude is removed only when the journal says the harness added it.
@@ -1045,7 +1066,14 @@ def cmd_prune_run(args: argparse.Namespace) -> int:
             abarm.prune(ws, repo, profile.floor.cache_paths)
         except abarm.ArmError as exc:
             errors.append(f"{ws}: {exc}")
-    refs = _run_branches(repo, run_id)
+    own_refs: list[str] = []
+    for path, branch in _arm_made_worktrees(repo, run_dir):
+        # remove by exact path, never `git worktree prune`: that drops every stale registration
+        if git(repo, "worktree", "remove", "--force", str(path)).returncode != 0:
+            errors.append(f"{path}: worktree remove failed")
+        elif branch:
+            own_refs.append(branch)
+    refs = [*_run_branches(repo, run_id), *own_refs]
     deleted = [b for b in refs if git(repo, "branch", "-D", b).returncode == 0]
     errors += [f"branch {b} could not be deleted" for b in refs if b not in deleted]
     skipped = [f"frozen checkout {p} is left (release it from the skills repo)" for p in sorted((run_dir / "frozen").glob("*"))]
