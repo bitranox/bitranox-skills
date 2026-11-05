@@ -47,6 +47,7 @@ _QUOTE_MARKERS = re.compile(r"^(?:>[ \t]?)+")
 # is a whole token that _MARKER_TOKEN already drops, and a strip of it could never change the
 # result.
 _MARKER_TOKEN = re.compile(r"^(?:[-*+>]+|[0-9]+[.)])$")
+_CONTROL = re.compile(r"[\x00-\x1f\x7f]")
 
 
 class LedgerError(ValueError):
@@ -140,10 +141,14 @@ def _anchor_problems(entry: dict) -> list[str]:
         return ["anchors: only a rule entry carries anchors"] if anchors else []
     if not anchors:
         return ["anchors: a rule entry needs at least one"]
-    bad = [a for a in anchors if isinstance(a, str)
-           and not ANCHOR_MIN <= len(normalise(a)) <= ANCHOR_MAX]
-    return ["anchors: %d to %d characters after normalising: %r" % (ANCHOR_MIN, ANCHOR_MAX, a)
-            for a in bad]
+    texts = [a for a in anchors if isinstance(a, str)]
+    problems = ["anchors: %d to %d characters after normalising: %r" % (ANCHOR_MIN, ANCHOR_MAX, a)
+                for a in texts if not ANCHOR_MIN <= len(normalise(a)) <= ANCHOR_MAX]
+    # A control character is no text a skill shows, and a NUL would let an anchor match across the
+    # file separator corpus_text puts between two files.
+    problems += ["anchors: contains a control character: %r" % a
+                 for a in texts if _CONTROL.search(a)]
+    return problems
 
 
 def _date_problems(entry: dict) -> list[str]:
@@ -182,14 +187,18 @@ _CORPUS_SKIP = (".skillwriter/", "tests/")
 LinesFactory = Callable[[], Iterable[str | bytes]]
 
 
-def file_lines(path: str | Path) -> Iterator[str]:
-    """The lines of `path`, read one at a time; nothing for a missing file."""
+def file_lines(path: str | Path) -> Iterator[bytes]:
+    """The lines of `path` as bytes, read one at a time; nothing for a missing file.
+
+    Bytes, so `parse_entries` decodes each line inside its per-line check: a line that is not
+    UTF-8 becomes a `LedgerError` naming it, never a UnicodeDecodeError raised by the read.
+    """
     path = Path(path)
     if not path.is_file():
         return
-    # Iterating the file splits on newlines only; str.splitlines would also split a JSON string
+    # Iterating a binary file splits on b"\n" only; str.splitlines would also split a JSON string
     # holding a raw U+2028.
-    with path.open(encoding="utf-8", newline="") as fh:
+    with path.open("rb") as fh:
         yield from fh
 
 
@@ -302,6 +311,7 @@ def check_ledger(lines_factory: LinesFactory, corpus: str) -> list[Finding]:
         text = normalise(corpus)
         for entry in live_entries(lines_factory):
             for anchor in entry["anchors"]:
+                # anchor_occurs, with the corpus normalised once: keep the two tests identical.
                 if normalise(anchor) not in text:
                     findings.append(Finding(entry["id"], "anchor no longer in the skill text:", anchor,
                                             entry["decision"], entry["why"], entry["reopen_if"]))
@@ -322,8 +332,10 @@ def render_brief(lines_factory: LinesFactory, *, skill: str, budget_chars: int =
     for entry in live_entries(lines_factory):
         if entry["kind"] not in ("rejected", "removed"):
             continue
-        block = _brief_block(entry)
-        if used + len(block) > budget_chars:
+        block = None if left else _brief_block(entry)
+        # A strict oldest-first prefix: once one block does not fit, every later entry is counted,
+        # a shorter one too, so the brief never shows a newer decision while hiding an older one.
+        if block is None or used + len(block) > budget_chars:
             left += 1
             continue
         blocks.append(block)

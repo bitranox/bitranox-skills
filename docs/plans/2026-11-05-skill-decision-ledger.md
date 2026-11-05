@@ -748,6 +748,17 @@ def test_an_anchor_outside_20_to_200_characters_is_refused(anchor):
     assert any(p.startswith("anchors:") for p in SD.validate_entry(_rule(anchors=[anchor])))
 
 
+@pytest.mark.parametrize("control", [chr(0), chr(9), chr(0x7F)])
+def test_an_anchor_holding_a_control_character_is_refused(control):
+    anchor = "bmk alone," + control + " shared across projects"
+    problems = SD.validate_entry(_rule(anchors=[anchor]))
+    assert any(p.startswith("anchors: contains a control character") for p in problems)
+
+
+def test_a_plain_anchor_raises_no_control_character_problem():
+    assert not any("control" in p for p in SD.validate_entry(_rule()))
+
+
 def test_the_length_is_measured_after_normalising():
     padded = "- - - - " + "a b c d e f g h i"    # long enough raw, too short once the markers go
     assert (len(padded), len(SD.normalise(padded))) == (25, 17)
@@ -829,6 +840,7 @@ _QUOTE_MARKERS = re.compile(r"^(?:>[ \t]?)+")
 # is a whole token that _MARKER_TOKEN already drops, and a strip of it could never change the
 # result.
 _MARKER_TOKEN = re.compile(r"^(?:[-*+>]+|[0-9]+[.)])$")
+_CONTROL = re.compile(r"[\x00-\x1f\x7f]")
 
 
 class LedgerError(ValueError):
@@ -915,10 +927,14 @@ def _anchor_problems(entry):
         return ["anchors: only a rule entry carries anchors"] if anchors else []
     if not anchors:
         return ["anchors: a rule entry needs at least one"]
-    bad = [a for a in anchors if isinstance(a, str)
-           and not ANCHOR_MIN <= len(normalise(a)) <= ANCHOR_MAX]
-    return ["anchors: %d to %d characters after normalising: %r" % (ANCHOR_MIN, ANCHOR_MAX, a)
-            for a in bad]
+    texts = [a for a in anchors if isinstance(a, str)]
+    problems = ["anchors: %d to %d characters after normalising: %r" % (ANCHOR_MIN, ANCHOR_MAX, a)
+                for a in texts if not ANCHOR_MIN <= len(normalise(a)) <= ANCHOR_MAX]
+    # A control character is no text a skill shows, and a NUL would let an anchor match across the
+    # file separator corpus_text puts between two files.
+    problems += ["anchors: contains a control character: %r" % a
+                 for a in texts if _CONTROL.search(a)]
+    return problems
 
 
 def _date_problems(entry: dict) -> list[str]:
@@ -948,8 +964,9 @@ def validate_entry(entry):
 
 - [ ] **Step 4:** Run `CI-PYTEST -k skill_decisions`. Expected: all pass.
 - [ ] **Step 5: Mutation check:** with `mutation_arm --revert` (compuse-toolbox), remove in turn
-      the `_QUOTE_MARKERS.sub`, the marker-token filter, the `entry_id` comparison, and the
-      `len(normalise(a))` length measure (as `len(a)`); each must turn at least one test RED.
+      the `_QUOTE_MARKERS.sub`, the marker-token filter, the `entry_id` comparison, the
+      `len(normalise(a))` length measure (as `len(a)`), and the `_CONTROL` anchor check; each must
+      turn at least one test RED.
 - [ ] **Step 6: Commit** `skill_decisions: the decision ledger model and anchor matcher` with
       `-- plugins/bitranox/hooks/skill_decisions.py plugins/bitranox/hooks/tests/test_skill_decisions.py`.
 
@@ -962,7 +979,8 @@ def validate_entry(entry):
 **Interfaces:**
 - Consumes: M1.1.
 - Produces:
-  - `file_lines(path) -> Iterator[str]` (nothing for a missing file)
+  - `file_lines(path) -> Iterator[bytes]` (nothing for a missing file; bytes, so a line that is
+    not UTF-8 is a `LedgerError` from `parse_entries`)
   - `parse_entries(lines: Iterable[str | bytes]) -> Iterator[dict]` (raises `LedgerError`)
   - `live_entries(lines_factory: Callable[[], Iterable]) -> Iterator[dict]` (two passes; `void`
     entries are never live)
@@ -1012,6 +1030,23 @@ def test_parse_reports_the_line_number_of_a_bad_line():
 
 def test_blank_lines_are_skipped():
     assert len(list(SD.parse_entries(["\n"] + _lines(_rule()) + ["  \n"]))) == 1
+
+
+def test_a_ledger_file_that_is_not_utf8_is_a_ledger_error_naming_the_line(tmp_path):
+    path = tmp_path / "decisions.jsonl"
+    path.write_bytes(json.dumps(_rule()).encode("utf-8") + b"\n" + b"\xff\xfe\n")
+    with pytest.raises(SD.LedgerError) as err:
+        list(SD.parse_entries(SD.file_lines(path)))
+    assert err.value.line_no == 2
+    [finding] = SD.check_ledger(lambda: SD.file_lines(path), "bmk alone, shared across projects")
+    assert finding.problem.startswith("line 2: ")
+
+
+def test_a_raw_line_separator_inside_a_json_string_stays_one_ledger_line(tmp_path):
+    entry = _rejected(why="first half" + LINE_SEPARATOR + "second half")
+    path = tmp_path / "decisions.jsonl"
+    path.write_bytes((json.dumps(entry, ensure_ascii=False) + "\n").encode("utf-8"))
+    assert [e["id"] for e in SD.parse_entries(SD.file_lines(path))] == [entry["id"]]
 
 
 def test_a_superseded_entry_and_a_void_are_not_live():
@@ -1083,6 +1118,22 @@ def test_the_brief_lists_rejected_and_removed_in_full_and_counts_the_rest():
     assert "more not shown" in brief and "skill_decisions.py show devops-bmk" in brief
 
 
+def test_the_brief_stops_at_the_first_block_that_does_not_fit():
+    a, b, c = _rejected(why="why A"), _rejected(why="why B " + "x" * 300), _rejected(why="why C")
+    budget = 300
+    # Precondition: A and C together fit, so only a strict oldest-first prefix leaves C out.
+    assert len(SD._brief_block(a)) + len(SD._brief_block(c)) <= budget < len(SD._brief_block(b))
+    brief = SD.render_brief(_factory(a, b, c), skill="devops-bmk", budget_chars=budget)
+    assert "why A" in brief and "why B" not in brief and "why C" not in brief
+    assert "2 more not shown" in brief
+
+
+def test_a_first_block_over_the_budget_still_gives_a_brief():
+    brief = SD.render_brief(_factory(_rejected()), skill="devops-bmk", budget_chars=10)
+    assert brief.startswith("Decisions already taken for devops-bmk")
+    assert "1 more not shown" in brief and "skill_decisions.py show devops-bmk" in brief
+
+
 def test_the_brief_is_empty_when_nothing_was_rejected_or_removed():
     assert SD.render_brief(_factory(_rule()), skill="devops-bmk") == ""
 
@@ -1123,18 +1174,31 @@ _CORPUS_SKIP = (".skillwriter/", "tests/")
 
 
 def file_lines(path):
-    """The lines of `path`, read one at a time; nothing for a missing file."""
+    """The lines of `path` as bytes, read one at a time; nothing for a missing file.
+
+    Bytes, so `parse_entries` decodes each line inside its per-line check: a line that is not
+    UTF-8 becomes a `LedgerError` naming it, never a UnicodeDecodeError raised by the read.
+    """
     path = Path(path)
     if not path.is_file():
         return
-    with path.open(encoding="utf-8", newline="") as fh:
+    # Iterating a binary file splits on b"\n" only; str.splitlines would also split a JSON string
+    # holding a raw U+2028.
+    with path.open("rb") as fh:
         yield from fh
 
 
 def parse_entries(lines):
-    """Yield each entry of `lines` (str or bytes), validated; blank lines are skipped."""
+    """Yield each entry of `lines` (str or bytes), validated; blank lines are skipped.
+
+    Raises:
+        LedgerError: at the first line that is not UTF-8, not a JSON object, or not a valid entry.
+    """
     for line_no, raw in enumerate(lines, 1):
-        text = raw.decode("utf-8") if isinstance(raw, bytes) else raw
+        try:
+            text = raw.decode("utf-8") if isinstance(raw, bytes) else raw
+        except UnicodeDecodeError:
+            raise LedgerError(line_no, "not UTF-8") from None
         if not text.strip():
             continue
         try:
@@ -1226,6 +1290,7 @@ def check_ledger(lines_factory, corpus):
         text = normalise(corpus)
         for entry in live_entries(lines_factory):
             for anchor in entry["anchors"]:
+                # anchor_occurs, with the corpus normalised once: keep the two tests identical.
                 if normalise(anchor) not in text:
                     findings.append(Finding(entry["id"], "anchor no longer in the skill text:", anchor,
                                             entry["decision"], entry["why"], entry["reopen_if"]))
@@ -1246,8 +1311,10 @@ def render_brief(lines_factory, *, skill, budget_chars=6000):
     for entry in live_entries(lines_factory):
         if entry["kind"] not in ("rejected", "removed"):
             continue
-        block = _brief_block(entry)
-        if used + len(block) > budget_chars:
+        block = None if left else _brief_block(entry)
+        # A strict oldest-first prefix: once one block does not fit, every later entry is counted,
+        # a shorter one too, so the brief never shows a newer decision while hiding an older one.
+        if block is None or used + len(block) > budget_chars:
             left += 1
             continue
         blocks.append(block)
@@ -1264,7 +1331,8 @@ def render_brief(lines_factory, *, skill, budget_chars=6000):
 - [ ] **Step 4:** Run `CI-PYTEST -k skill_decisions`. Expected: all pass.
 - [ ] **Step 5: Mutation check** (`mutation_arm --revert`): drop the `supersedes` filter in
       `live_entries`; drop `_CORPUS_SKIP`; replace `_CORPUS_SEP` with `"\n"`; make
-      `render_brief` ignore the budget. Each must turn a test RED.
+      `render_brief` ignore the budget; let `render_brief` keep scanning past the first block that
+      does not fit; open the file in text mode in `file_lines`. Each must turn a test RED.
 - [ ] **Step 6: Commit** `skill_decisions: read, check and brief a ledger` with the two paths.
 
 ### Task 1.3 (M1.3): writing entries, and the CLI

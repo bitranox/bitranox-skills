@@ -96,6 +96,17 @@ def test_an_anchor_outside_20_to_200_characters_is_refused(anchor):
     assert any(p.startswith("anchors:") for p in SD.validate_entry(_rule(anchors=[anchor])))
 
 
+@pytest.mark.parametrize("control", [chr(0), chr(9), chr(0x7F)])
+def test_an_anchor_holding_a_control_character_is_refused(control):
+    anchor = "bmk alone," + control + " shared across projects"
+    problems = SD.validate_entry(_rule(anchors=[anchor]))
+    assert any(p.startswith("anchors: contains a control character") for p in problems)
+
+
+def test_a_plain_anchor_raises_no_control_character_problem():
+    assert not any("control" in p for p in SD.validate_entry(_rule()))
+
+
 def test_the_length_is_measured_after_normalising():
     padded = "- - - - " + "a b c d e f g h i"    # long enough raw, too short once the markers go
     assert (len(padded), len(SD.normalise(padded))) == (25, 17)
@@ -157,6 +168,23 @@ def test_a_line_that_is_not_utf8_is_a_ledger_error():
     with pytest.raises(SD.LedgerError) as err:
         list(SD.parse_entries([json.dumps(_rule()).encode("utf-8") + b"\n", b"\xff\xfe\n"]))
     assert err.value.line_no == 2
+
+
+def test_a_ledger_file_that_is_not_utf8_is_a_ledger_error_naming_the_line(tmp_path):
+    path = tmp_path / "decisions.jsonl"
+    path.write_bytes(json.dumps(_rule()).encode("utf-8") + b"\n" + b"\xff\xfe\n")
+    with pytest.raises(SD.LedgerError) as err:
+        list(SD.parse_entries(SD.file_lines(path)))
+    assert err.value.line_no == 2
+    [finding] = SD.check_ledger(lambda: SD.file_lines(path), "bmk alone, shared across projects")
+    assert finding.problem.startswith("line 2: ")
+
+
+def test_a_raw_line_separator_inside_a_json_string_stays_one_ledger_line(tmp_path):
+    entry = _rejected(why="first half" + LINE_SEPARATOR + "second half")
+    path = tmp_path / "decisions.jsonl"
+    path.write_bytes((json.dumps(entry, ensure_ascii=False) + "\n").encode("utf-8"))
+    assert [e["id"] for e in SD.parse_entries(SD.file_lines(path))] == [entry["id"]]
 
 
 @pytest.mark.parametrize("field", ["anchors", "supersedes"])
@@ -260,6 +288,22 @@ def test_the_brief_lists_rejected_and_removed_in_full_and_counts_the_rest():
     brief = SD.render_brief(_factory(*entries), skill="devops-bmk", budget_chars=2000)
     assert "reason 0" in brief and len(brief) < 2600
     assert "more not shown" in brief and "skill_decisions.py show devops-bmk" in brief
+
+
+def test_the_brief_stops_at_the_first_block_that_does_not_fit():
+    a, b, c = _rejected(why="why A"), _rejected(why="why B " + "x" * 300), _rejected(why="why C")
+    budget = 300
+    # Precondition: A and C together fit, so only a strict oldest-first prefix leaves C out.
+    assert len(SD._brief_block(a)) + len(SD._brief_block(c)) <= budget < len(SD._brief_block(b))
+    brief = SD.render_brief(_factory(a, b, c), skill="devops-bmk", budget_chars=budget)
+    assert "why A" in brief and "why B" not in brief and "why C" not in brief
+    assert "2 more not shown" in brief
+
+
+def test_a_first_block_over_the_budget_still_gives_a_brief():
+    brief = SD.render_brief(_factory(_rejected()), skill="devops-bmk", budget_chars=10)
+    assert brief.startswith("Decisions already taken for devops-bmk")
+    assert "1 more not shown" in brief and "skill_decisions.py show devops-bmk" in brief
 
 
 def test_the_brief_lists_a_removed_rule_beside_a_rejected_one():
