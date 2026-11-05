@@ -99,4 +99,44 @@ run for that skill.
 
 ## Result
 
-(empty until the run)
+### Controls (MEASURED 2026-11-05, recorded before the window replay)
+
+- PC1, PC2a, PC2b: all three fired (present at the parent, absent at the named commit).
+- Picking: 60 anchors returned (20 per skill), all 60 occur exactly once in their window-start
+  text and are 20 to 200 characters after normalising; no picking failures.
+- NC1 to NC4: no anchor lost under any transform, in any skill. NC1 and NC3 changed the text in
+  all three skills. NC2 and NC4 changed nothing in devops-bmk and compuse-toolbox, whose
+  window-start texts have 0 blockquote and 0 ordered-list lines outside fences (counted), so
+  those two controls rest on meta-skill-writer alone (6 blockquote and 20 ordered-list lines).
+
+### Window replay (MEASURED 2026-11-05)
+
+Commits examined equal the window sizes: devops-bmk 25, compuse-toolbox 40, meta-skill-writer 26.
+Five fires in total, labelled by the opus labeller (effort medium):
+
+| Skill           | Commit   | Labeller        | Event                                                            |
+|-----------------|----------|-----------------|------------------------------------------------------------------|
+| devops-bmk      | 488e08cd | REWORDED        | "You no longer need a caller-side lock" became "You do not need" |
+| devops-bmk      | dd60c7fc | REWORDED        | "at its latest patch" became "on the patch uv builds it on"      |
+| devops-bmk      | 237b6aab | MEANING-CHANGED | `push` / `git add -A` passage reframed around the gate's order   |
+| devops-bmk      | 862e6030 | MEANING-CHANGED | "release it directly" gained a condition                         |
+| compuse-toolbox | b534fae2 | MEANING-CHANGED | the scan's "read none" exit code changed from 3 to 2             |
+
+Hand check of all five events (fewer than the ten the PREREG names, because only five exist): I
+agree on events 1, 4 and 5. On dd60c7fc I read a behaviour change (which patch is built), while
+the labeller judged it against the rule as the picker stated it, which does not mention the patch;
+on 237b6aab I could read either label. With my labels instead of the labeller's, devops-bmk has 1
+or 2 REWORDED fires; the outcome below is the same either way.
+
+- REWORDED fires per 10 window commits: devops-bmk 0.8, compuse-toolbox 0.0, meta-skill-writer
+  0.0. Median 0.0 (threshold: at most 1).
+- MEANING-CHANGED fires in total: 3 (one per about 30 window commits).
+- Falsifiers: both labels occur, and fires are not zero, so the instrument is not flat.
+
+**Outcome A**: all positive controls fired, no negative control fired, and the median is 0.0
+REWORDED fires per 10 commits. Build the refusing gate as designed.
+
+Limits, stated so the result is not read as more than it is: five fire events in 91 commits from
+60 agent-picked anchors is a small sample; meta-skill-writer produced none; NC2 and NC4 rest on
+one skill; the anchors were picked at each window's start, so rules added later in the window were
+never anchored. Artifacts: the main checkout's `.plan/skill-decisions/` (gitignored).
