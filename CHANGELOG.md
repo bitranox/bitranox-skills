@@ -30,6 +30,26 @@ a hole nobody has drawn a line under is one that gets rediscovered and half-fill
 two "versions with no entry" notes came to sit in this file disagreeing with it.
 
 
+## [10.18.0]
+
+### Added
+
+- Each skill can keep a decision ledger, `.skillwriter/decisions.jsonl`, written through
+  `hooks/skill_decisions.py` (`add`, `show`, `check`): what the skill decided, why, the evidence,
+  and what would reopen it. A rule entry is bound to the skill text by short quoted anchors.
+- The commit and push gate refuses a change whose shipped text of a touched skill loses a live
+  anchor, and names the entry's decision, reason and reopen condition; a superseding entry with
+  its own reason answers it. Ledgers are append-only, and CI checks every ledger.
+- A skill change's skill-writer checklist carries a `Decisions:` line naming the ledger entries
+  the change added, or `Decisions: none - <reason>`.
+- The SKILL.md edit guard hands an editing agent the skill's rejected and removed decisions once,
+  before its first edit, unless it already ran `skill_decisions.py show` for that skill.
+
+### Fixed
+
+- The changed-path checks of the commit gate diffed against origin's tip, so a checkout behind
+  origin listed a peer's pushed paths as its own changes. They now diff from the merge-base.
+
 ## [10.17.1]
 
 ### Fixed
