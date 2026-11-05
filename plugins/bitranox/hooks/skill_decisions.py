@@ -39,7 +39,7 @@ _TOPIC = re.compile(r"[a-z0-9][a-z0-9-]{0,39}")
 _QUOTE_MARKERS = re.compile(r"^(?:>[ \t]?)+")
 # No separate line-start list-marker strip: a list marker is always followed by whitespace, so it
 # is a whole token that _MARKER_TOKEN already drops, and a strip of it could never change the
-# result (an equivalent mutant in the Task 1.1 battery, removed 2026-11-05).
+# result.
 _MARKER_TOKEN = re.compile(r"^(?:[-*+>]+|[0-9]+[.)])$")
 
 
