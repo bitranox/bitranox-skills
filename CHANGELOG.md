@@ -30,6 +30,21 @@ a hole nobody has drawn a line under is one that gets rediscovered and half-fill
 two "versions with no entry" notes came to sit in this file disagreeing with it.
 
 
+## [10.17.0]
+
+### Added
+
+- New PreToolUse hook `unchained-gate-in-doc.py` (Edit, Write, MultiEdit). It refuses an edit to
+  a `SKILL.md` or `CLAUDE.md` that adds a bash block in which a gate (`cargo clippy`, `make test`,
+  `pytest`, any program the masked-exit guard treats as a gate) is followed by another command
+  with nothing consuming its status. A reader pastes such a block into one call, gets the last
+  command's exit code, and a red gate reads green. Ways out: the gate's own refusal
+  (`|| { echo REFUSE; exit 1; }`), chaining with `&&`, reading `$?` or `${PIPESTATUS[0]}` on the
+  next line, `set -e`, or a `# unchained-ok: <reason>` comment for a deliberate case. Only
+  findings the edit ADDS are refused, so existing blocks never stop an unrelated edit. Before
+  shipping, it was replayed over 2337 recorded edits of those files: 2 refusals, both the defect
+  that motivated it (a `Cargo.lock` check appended after a clippy gate).
+
 ## [10.16.2]
 
 ### Fixed

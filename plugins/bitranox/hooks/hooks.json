@@ -266,6 +266,10 @@
           {
             "type": "command",
             "command": "bash \"${CLAUDE_PLUGIN_ROOT}/hooks/run-python.sh\" --hook \"${CLAUDE_PLUGIN_ROOT}/hooks/config-edit-guard.py\""
+          },
+          {
+            "type": "command",
+            "command": "bash \"${CLAUDE_PLUGIN_ROOT}/hooks/run-python.sh\" --hook \"${CLAUDE_PLUGIN_ROOT}/hooks/unchained-gate-in-doc.py\""
           }
         ]
       },
