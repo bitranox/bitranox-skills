@@ -4247,3 +4247,27 @@ def test_the_mirror_audit_runs_from_a_marketplace_worktree_outside_public(tmp_pa
 
     assert RG.audit_mirrors(mwt, mirrors=THING) == 1
     assert IN_PROGRESS in capsys.readouterr().out
+
+
+def test_changed_vs_origin_does_not_list_a_peer_s_pushed_path_as_ours(tmp_path):
+    """A checkout BEHIND origin listed every path origin gained since as its own change.
+
+    The checklist rule only survived that because reading the peer's missing file raised OSError
+    and was skipped; the decision ledger check reads the shipped text and would refuse on it.
+    """
+    git_repo_with_origin(tmp_path, {"mine.md": "a\n", "theirs.md": "b\n"})
+    base = subprocess.run(["git", "rev-parse", "HEAD"], cwd=tmp_path, capture_output=True,
+                          text=True, check=True).stdout.strip()
+    (tmp_path / "theirs.md").write_text("b2\n", encoding="utf-8")
+    subprocess.run(["git", "-c", "user.email=t@example.invalid", "-c", "user.name=t", "commit",
+                    "-qam", "peer", "--no-verify"], cwd=tmp_path, check=True)
+    subprocess.run(["git", "update-ref", "refs/remotes/origin/master", "HEAD"], cwd=tmp_path, check=True)
+    subprocess.run(["git", "reset", "-q", "--hard", base], cwd=tmp_path, check=True)
+    (tmp_path / "mine.md").write_text("a2\n", encoding="utf-8")
+
+    assert RG._changed_vs_origin(tmp_path) == ["mine.md"]
+
+
+def test_merge_base_is_none_without_an_origin_ref(tmp_path):
+    git_repo(tmp_path, {"x.md": "a\n"})
+    assert RG._merge_base(tmp_path) is None

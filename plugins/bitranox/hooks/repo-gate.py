@@ -1036,15 +1036,27 @@ _SKILLS_DIR = "plugins/bitranox/skills"
 _SKILL_MD_RX = re.compile(r"^%s/([^/]+)/SKILL\.md$" % re.escape(_SKILLS_DIR))
 
 
+def _merge_base(root):
+    """The commit HEAD forked from origin/master, or None when either ref is missing."""
+    rc, out, _ = _git(root, "merge-base", "HEAD", "origin/master")
+    sha = out.strip()
+    return sha if rc == 0 and sha else None
+
+
 def _changed_vs_origin(root):
-    """Worktree+index+untracked paths changed vs origin/master (the maintainer pre-commit view)."""
-    rc, _, _ = _git(root, "rev-parse", "--verify", "origin/master")
-    if rc != 0:
+    """Worktree+index+untracked paths changed since HEAD forked from origin/master.
+
+    The base is the merge-base, not origin's tip: diffed against the tip, a checkout that is
+    behind lists every path origin gained since as its own change, and a check that reads those
+    paths judges a peer's pushed work as this commit's.
+    """
+    base = _merge_base(root)
+    if base is None:
         return None
-    # `diff origin/master` compares the WORKING TREE, so a staged change whose working copy was
+    # `diff <base>` compares the WORKING TREE, so a staged change whose working copy was
     # reverted afterwards was missing - yet that staged text is exactly what the commit carries.
-    _, changed = _git_paths(root, "diff", "--name-only", "origin/master")
-    _, staged = _git_paths(root, "diff", "--cached", "--name-only", "origin/master")
+    _, changed = _git_paths(root, "diff", "--name-only", base)
+    _, staged = _git_paths(root, "diff", "--cached", "--name-only", base)
     _, untracked = _git_paths(root, "ls-files", "--others", "--exclude-standard")
     return list(dict.fromkeys(changed + staged + untracked))
 
