@@ -1211,10 +1211,15 @@ def test_a_bwrap_run_starts_the_session_inside_the_sandbox_argv(tmp_path, scratc
     arm = run_dir / "arms" / "r1-C"
     pairs = list(zip(session, session[1:], session[2:], strict=False))
     rw = [(s, d) for flag, s, d in pairs if flag == "--bind"]
-    assert rw == [(str(p), str(p)) for p in (ws, arm / "home", arm / "cfg", (scratch_repo / ".git").resolve())]
+    common = (scratch_repo / ".git").resolve()
+    own_entry = common / "worktrees" / ws.name
+    assert rw == [(str(p), str(p)) for p in (ws, arm / "home", arm / "cfg", common, own_entry)]
+    registry = str(common / "worktrees")
+    assert session.index(registry) < session.index(str(own_entry)), "the arm's own entry is re-bound last"
     assert ("--tmpfs", str(Path.home())) in list(zip(session, session[1:], strict=False))
     ro = [s for flag, s, _ in pairs if flag == "--ro-bind"]
     assert str(scratch_repo) in ro and any(Path(s).parent == run_dir / "frozen" for s in ro), ro
+    assert registry in ro, "the repo's worktree registry is read-only in the sandbox"
     chdir = session.index("--chdir")
     assert session[chdir + 1] == str(ws) and session[chdir + 2:chdir + 4] == ["claude", "-p"]
     rows = [r for r in L.read_jsonl(run_dir / "journal.jsonl") if r["step"] == "arm"]

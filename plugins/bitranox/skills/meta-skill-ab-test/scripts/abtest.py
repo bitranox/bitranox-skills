@@ -113,7 +113,8 @@ PAUSE_EXPIRY = "a login that expires before the arm's deadline"
 # A seal refuses a PREREG.md still holding a skeleton placeholder; a bare "<" ("cost < 0.10") is prose.
 PLACEHOLDER_RE = re.compile(r"<[^>\n]+>")
 EPILOG = """[run] sandbox in abtest.toml: "bwrap" runs each live session in a bubblewrap sandbox (writable:
-its worktree, home, config dir, the repo's .git; real home hidden); "bwrap-host-proc" is the same with the
+its worktree, home, config dir, the repo's .git; real home hidden; the repo's other worktree
+registrations read-only, so an arm's git worktree prune or add cannot touch them); "bwrap-host-proc" is the same with the
 host's /proc read-only (an LXC container); "none" opts out, recorded per arm.
 
 [[variant]] remove_skill = true (no dir, no markers): a bare arm, the plugin without the skill under test.

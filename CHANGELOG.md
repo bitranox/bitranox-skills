@@ -30,6 +30,12 @@ a hole nobody has drawn a line under is one that gets rediscovered and half-fill
 two "versions with no entry" notes came to sit in this file disagreeing with it.
 
 
+## [10.16.1]
+
+### Fixed
+
+- `meta-skill-ab-test`: the arm sandbox keeps the real repository's other worktree registrations out of reach. The arm's own registry entry stays writable, the rest of `<git-dir>/worktrees` is read-only, so an arm's `git worktree prune` (which dropped a neighbour's 12 registrations) or `git worktree add` cannot touch them.
+
 ## [10.16.0]
 
 ### Added

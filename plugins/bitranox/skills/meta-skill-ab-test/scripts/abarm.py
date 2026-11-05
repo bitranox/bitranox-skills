@@ -867,7 +867,27 @@ def sandbox_argv(m: SandboxMounts, *, sandbox: str = SANDBOX_BWRAP) -> list[str]
         argv += ["--ro-bind", str(path), str(path)]
     for path in (m.ws, m.home, m.cfg, m.git_common_dir):
         argv += ["--bind", str(path), str(path)]
-    return [*argv, "--chdir", str(m.ws)]
+    return [*argv, *_registry_guard_argv(m), "--chdir", str(m.ws)]
+
+
+def _registry_guard_argv(m: SandboxMounts) -> list[str]:
+    """Binds that keep every OTHER worktree's registration in the real repo out of the arm's reach.
+
+    The arm commits into the common git dir, so that dir is writable, and with it
+    <common>/worktrees: one entry per worktree of the repository, the user's and other sessions'
+    included. Inside the sandbox the real home is hidden, so those worktrees look gone and an
+    arm's `git worktree prune` deletes their registrations (measured: 12 of a neighbour's
+    worktrees dropped). So <common>/worktrees is re-bound read-only and only the arm's own entry
+    (its HEAD, index and logs live there) is bound writable again, LAST. Empty when the repo has
+    no worktrees dir or the arm's git dir is not an entry of it (a plain checkout).
+    """
+    registry = m.git_common_dir / "worktrees"
+    if not registry.is_dir():
+        return []
+    own = Path(_git_ok(m.ws, "rev-parse", "--absolute-git-dir"))
+    if own.parent != registry:
+        return []
+    return ["--ro-bind", str(registry), str(registry), "--bind", str(own), str(own)]
 
 
 def git_common_dir(ws: Path) -> Path:

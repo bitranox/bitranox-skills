@@ -1105,3 +1105,35 @@ def test_the_fake_claude_starts_inside_the_real_bwrap_host_proc_sandbox(tmp_path
     assert (ws / "arm-work.txt").read_text(encoding="utf-8") == "done by the fake arm\n"
     assert L.git(ws, "log", "-1", "--format=%s").stdout.strip() == "Task 1: arm work"
     assert list((cfg / "projects").glob("*/*.jsonl")), "no transcript was written into the config dir"
+
+
+def test_sandboxed_worktree_prune_leaves_a_neighbours_registration_alone(scratch_repo: Path, tmp_path: Path) -> None:
+    """An arm's `git worktree prune` cannot drop the registration of a worktree outside the sandbox.
+
+    The neighbour lives under the directory the sandbox hides behind its private tmpfs, so inside
+    it the neighbour looks gone and an unguarded prune deletes its entry (a real neighbour lost 12
+    that way). The arm's own worktree stays usable: its entry is writable.
+    """
+    reason = A.bwrap_problem(os.environ.get("PATH"), "bwrap-host-proc")
+    if reason:
+        pytest.skip(f'sandbox = "bwrap-host-proc" cannot run on this machine: {reason}')
+    ws = scratch_repo / ".claude" / "worktrees" / "abx-sbx-r1-C"
+    _git_ok(scratch_repo, "worktree", "add", "-q", "-b", "abx/sbx/r1-C", str(ws))
+    outside = tmp_path / "hidden"
+    outside.mkdir()
+    neighbour = outside / "neighbour"
+    _git_ok(scratch_repo, "worktree", "add", "-q", "-b", "other/topic", str(neighbour))
+    home, cfg = tmp_path / "armhome", tmp_path / "cfg"
+    for d in (home, cfg):
+        d.mkdir()
+    m = A.SandboxMounts(ws=ws, home=home, cfg=cfg, git_common_dir=A.git_common_dir(ws), real_home=Path.home(),
+                        read_only=(scratch_repo,), tmp=outside)
+    env = dict(L.git_env(), HOME=str(home))
+    prefix = A.sandbox_argv(m, sandbox="bwrap-host-proc")
+    L.run([*prefix, "git", "worktree", "prune"], env=env, timeout=60)
+    L.run([*prefix, "git", "worktree", "add", "-q", "-b", "sibling", str(ws.parent / "sibling")], env=env, timeout=60)
+    listed = L.git(scratch_repo, "worktree", "list", "--porcelain").stdout
+    assert str(neighbour) in listed, "the arm's prune dropped a neighbour's registration"
+    assert "sibling" not in listed, "the arm registered a new worktree in the real repository"
+    own = L.run([*prefix, "git", "commit", "-q", "--allow-empty", "-m", "own"], env=env, timeout=60)
+    assert own.returncode == 0, own.stderr
