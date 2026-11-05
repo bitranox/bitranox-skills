@@ -497,6 +497,1845 @@ Report to the user: the controls, REWORDED fires per 10 commits for each skill, 
 letter, and for Outcome A the step-level tasks for M1 and M2 appended to the plan file. Outcome B
 stops; Outcome C asks one question.
 
+Decided 2026-11-05: **Outcome A** (PREREG `## Result`). The refusing gate is built as designed.
+M3 and M4 get their step-level tasks once M1 and M2 have shipped.
+
+---
+
+## DETAILED plan, milestones M1 and M2 (one release)
+
+Order: M2.1 first (it is a fix the new checks stand on, and ships in its own commit), then M1.1
+to M1.3, then M2.2 to M2.7, then the release task M2.8. Every task runs in the worktree
+`bitranox-skills-wt-skill-decisions` on branch `feat/skill-decisions`. Before M2.1, merge
+`origin/master` into the branch (`git fetch && git merge --ff-only origin/master` fails on a
+diverged branch; then `git rebase origin/master`, the branch is unpushed).
+
+The test command below is the CI set from the repo `CLAUDE.md`; it is called **CI-PYTEST** in the
+steps:
+
+```bash
+env -u VIRTUAL_ENV uv run --with pytest --with PyYAML --with lxml --with defusedxml \
+  --with ruamel.yaml --with httpx2 python -m pytest plugins/bitranox/hooks/tests/ -q
+```
+
+Every commit message is written to a scratch file in its own earlier command and committed with
+`git commit -F <file> -- <paths>`; a commit takes the paths it names and nothing else, so the
+worktree's `handover.md` checkpoint never rides along.
+
+### Task M2.1: `_changed_vs_origin` diffs from the merge-base
+
+**Files:**
+- Modify: `plugins/bitranox/hooks/repo-gate.py:1039-1049` (`_changed_vs_origin`), plus a new
+  `_merge_base(root)` beside it
+- Test: `plugins/bitranox/hooks/tests/test_repo_gate.py` (append)
+
+**Interfaces:**
+- Produces: `_merge_base(root) -> str | None` (full sha of `git merge-base HEAD origin/master`,
+  None when either ref is missing or git fails); `_changed_vs_origin(root)` keeps its signature
+  and return type (`list[str] | None`).
+
+**Out of scope:**
+- `check_version_bumped` (repo-gate.py:415): it diffs `origin/master` directly and does not call
+  `_changed_vs_origin`; its question ("is the version still origin's?") is about origin's tip on
+  purpose.
+- `_plugin_version_pair`: same reason.
+
+**STOP conditions:**
+- the function at line 1039 does not match the text quoted in Step 0;
+- a caller other than `check_skill_review` (line 1219) and `check_cso` (line 1335) appears;
+- an existing test turns red that relies on the tip comparison (read it before changing it: it
+  may encode a case the merge-base view must also answer).
+
+- [ ] **Step 0:** `grep -n "_changed_vs_origin" plugins/bitranox/hooks/*.py` lists exactly the
+      definition and the two callers above.
+- [ ] **Step 1: Write the failing test** (it drives the real function on a real repo):
+
+```python
+def test_changed_vs_origin_does_not_list_a_peer_s_pushed_path_as_ours(tmp_path):
+    """A checkout BEHIND origin listed every path origin gained since as its own change.
+
+    The checklist rule only survived that because reading the peer's missing file raised OSError
+    and was skipped; the decision ledger check reads the shipped text and would refuse on it.
+    """
+    git_repo_with_origin(tmp_path, {"mine.md": "a\n", "theirs.md": "b\n"})
+    base = subprocess.run(["git", "rev-parse", "HEAD"], cwd=tmp_path, capture_output=True,
+                          text=True, check=True).stdout.strip()
+    (tmp_path / "theirs.md").write_text("b2\n", encoding="utf-8")
+    subprocess.run(["git", "-c", "user.email=t@example.invalid", "-c", "user.name=t", "commit",
+                    "-qam", "peer", "--no-verify"], cwd=tmp_path, check=True)
+    subprocess.run(["git", "update-ref", "refs/remotes/origin/master", "HEAD"], cwd=tmp_path, check=True)
+    subprocess.run(["git", "reset", "-q", "--hard", base], cwd=tmp_path, check=True)
+    (tmp_path / "mine.md").write_text("a2\n", encoding="utf-8")
+
+    assert RG._changed_vs_origin(tmp_path) == ["mine.md"]
+
+
+def test_merge_base_is_none_without_an_origin_ref(tmp_path):
+    git_repo(tmp_path, {"x.md": "a\n"})
+    assert RG._merge_base(tmp_path) is None
+```
+
+- [ ] **Step 2:** Run `CI-PYTEST -k "peer_s_pushed_path or merge_base_is_none"`.
+      Expected: FAIL; the first lists `["mine.md", "theirs.md"]`, the second raises
+      `AttributeError: ... '_merge_base'`.
+- [ ] **Step 3: Implement:**
+
+```python
+def _merge_base(root):
+    """The commit HEAD forked from origin/master, or None when either ref is missing."""
+    rc, out, _ = _git(root, "merge-base", "HEAD", "origin/master")
+    sha = out.strip()
+    return sha if rc == 0 and sha else None
+
+
+def _changed_vs_origin(root):
+    """Worktree+index+untracked paths changed since HEAD forked from origin/master.
+
+    The base is the merge-base, not origin's tip: diffed against the tip, a checkout that is
+    behind lists every path origin gained since as its own change, and a check that reads those
+    paths judges a peer's pushed work as this commit's.
+    """
+    base = _merge_base(root)
+    if base is None:
+        return None
+    # `diff <base>` compares the WORKING TREE, so a staged change whose working copy was
+    # reverted afterwards was missing - yet that staged text is exactly what the commit carries.
+    _, changed = _git_paths(root, "diff", "--name-only", base)
+    _, staged = _git_paths(root, "diff", "--cached", "--name-only", base)
+    _, untracked = _git_paths(root, "ls-files", "--others", "--exclude-standard")
+    return list(dict.fromkeys(changed + staged + untracked))
+```
+
+- [ ] **Step 4:** Run `CI-PYTEST`. Expected: all pass, the two new tests included.
+- [ ] **Step 5: Mutation check:** put `"origin/master"` back as the diff base in a scratch copy
+      (`mutation_arm` from compuse-toolbox, `--revert`), run the first test, require RED; restore.
+- [ ] **Step 6: Commit** `repo-gate: changed-path checks diff from the merge-base, not origin's
+      tip` with `-- plugins/bitranox/hooks/repo-gate.py plugins/bitranox/hooks/tests/test_repo_gate.py`.
+      No version bump in this commit: the release task bumps once for the whole branch.
+
+### Task M1.1: the ledger model and the matcher
+
+**Files:**
+- Create: `plugins/bitranox/hooks/skill_decisions.py`
+- Create: `plugins/bitranox/hooks/tests/test_skill_decisions.py`
+
+**Interfaces:**
+- Produces (fixed names, M1.2 to M2.7 rely on them):
+  - `LEDGER_REL = ".skillwriter/decisions.jsonl"`
+  - `KINDS = ("rule", "removed", "rejected", "void")`, `TIERS = ("measured", "user", "argued",
+    "inherited")`, `ORIGINS = ("authored", "imported", "baseline", "ab")`
+  - `normalise(text: str) -> str`, `anchor_occurs(anchor: str, text: str) -> bool` (moved
+    unchanged from the M0 harness, deviation D-1 included)
+  - `ledger_path(skill_dir) -> Path`
+  - `entry_id(entry: dict) -> str` (`d-<yyyymmdd>-<8 hex>`, sha256 over the canonical JSON of the
+    entry without its `id`)
+  - `validate_entry(entry: dict) -> list[str]` (one `<field>: <reason>` string per problem)
+  - `class LedgerError(ValueError)` with `.line_no: int` and `.reason: str`
+
+**Out of scope:**
+- `.plan/skill-decisions/anchor_replay.py` (scratch harness, never shipped): copy its two
+  functions, do not import it.
+- `hooks/tell_chars.py`: used by M1.3, not changed.
+
+**STOP conditions:**
+- `hooks/skill_decisions.py` already exists;
+- the conftest does not put `plugins/bitranox/hooks` on `sys.path` (conftest.py:14-17 today);
+- a mutant of a normalise rule stays GREEN after Step 4.
+
+- [ ] **Step 1: Write the failing tests:**
+
+```python
+"""Tests for skill_decisions: the per-skill decision ledger."""
+import copy
+
+import pytest
+
+import skill_decisions as SD
+
+LINE_SEPARATOR = chr(0x2028)  # built with chr(): a typed escape would land as the raw character
+
+
+def _rule(**over):
+    entry = {"v": 1, "date": "2026-11-05", "kind": "rule", "topic": "env-model",
+             "decision": "bmk installs alone as a shared uv tool.",
+             "why": "The per-project env was the inverse of what bmk 3.8.0 does.",
+             "evidence": {"tier": "measured", "text": "bmk 3.8.0 release behaviour"},
+             "reopen_if": "bmk changes its env model again.",
+             "anchors": ["bmk alone, shared across projects"],
+             "supersedes": [], "refs": [], "origin": "authored"}
+    entry.update(over)
+    entry["id"] = SD.entry_id(entry)
+    return entry
+
+
+# ---- matcher (the M0-measured rules) ----
+
+def test_a_rewrap_and_a_repad_do_not_break_an_anchor():
+    assert SD.anchor_occurs("Do **not** add `--with .` to the install line",
+                            "Do **not** add\n   `--with .`   to the\ninstall line")
+
+
+def test_a_blockquote_rewrap_does_not_break_an_anchor():
+    assert SD.anchor_occurs("never restore the per-project env", "> never restore the\n> per-project env")
+    assert SD.anchor_occurs("never restore the per-project env", ">never restore the\n>per-project env")
+
+
+def test_an_anchor_spanning_two_list_items_survives_renumbering():
+    anchor = "commit the plan. 2. push the plan"
+    assert SD.anchor_occurs(anchor, "1. commit the plan.\n2. push the plan")
+    assert SD.anchor_occurs(anchor, "3. commit the plan.\n4. push the plan")
+
+
+def test_a_reworded_sentence_breaks_the_anchor():
+    assert not SD.anchor_occurs("bmk installs as a persistent uv tool",
+                                "bmk installs into a per-project .venv-bmk")
+
+
+def test_unusual_line_separators_count_as_whitespace():
+    assert SD.anchor_occurs("first half second half", "first half" + LINE_SEPARATOR + "second half")
+
+
+def test_case_matters():
+    assert not SD.anchor_occurs("Never push", "never push")
+
+
+# ---- entry model ----
+
+def test_a_complete_rule_entry_validates():
+    assert SD.validate_entry(_rule()) == []
+
+
+def test_the_id_is_the_date_plus_a_hash_of_the_whole_entry():
+    a, b = _rule(), _rule(why="Another reason, same day.")
+    assert a["id"].startswith("d-20261105-") and len(a["id"]) == len("d-20261105-") + 8
+    assert a["id"] != b["id"]
+
+
+def test_an_entry_edited_after_its_id_was_computed_is_refused():
+    entry = _rule()
+    entry["why"] = "rewritten in place"
+    assert any(p.startswith("id:") for p in SD.validate_entry(entry))
+
+
+@pytest.mark.parametrize("field", ["why", "reopen_if", "decision", "topic"])
+def test_a_rule_without_a_mandatory_field_is_refused(field):
+    entry = _rule(**{field: ""})
+    assert any(p.startswith(field + ":") for p in SD.validate_entry(entry))
+
+
+def test_a_void_entry_needs_why_and_a_target_but_no_reopen_if():
+    void = _rule(kind="void", anchors=[], reopen_if="", supersedes=["d-20261101-0123abcd"])
+    assert SD.validate_entry(void) == []
+    no_target = _rule(kind="void", anchors=[], reopen_if="", supersedes=[])
+    assert any(p.startswith("supersedes:") for p in SD.validate_entry(no_target))
+
+
+def test_only_a_rule_carries_anchors_and_a_rule_needs_one():
+    assert any(p.startswith("anchors:") for p in SD.validate_entry(_rule(anchors=[])))
+    assert any(p.startswith("anchors:") for p in SD.validate_entry(_rule(kind="rejected")))
+
+
+@pytest.mark.parametrize("anchor", ["too short to anchor", "x" * 201])
+def test_an_anchor_outside_20_to_200_characters_is_refused(anchor):
+    assert any(p.startswith("anchors:") for p in SD.validate_entry(_rule(anchors=[anchor])))
+
+
+def test_the_length_is_measured_after_normalising():
+    padded = "- " + "a b c d e f g h i"    # 17 characters once the list marker is gone
+    assert any(p.startswith("anchors:") for p in SD.validate_entry(_rule(anchors=[padded])))
+
+
+@pytest.mark.parametrize("field,value", [("kind", "note"), ("origin", "copied"),
+                                         ("evidence", {"tier": "felt", "text": "x"}),
+                                         ("evidence", {"tier": "argued", "text": ""}),
+                                         ("topic", "Env Model")])
+def test_a_value_outside_its_vocabulary_is_refused(field, value):
+    assert SD.validate_entry(_rule(**{field: value}))
+
+
+def test_an_unknown_field_is_refused_so_a_typo_cannot_hide_a_reason():
+    entry = copy.deepcopy(_rule())
+    entry["reopen-if"] = entry.pop("reopen_if")
+    problems = SD.validate_entry(entry)
+    assert any("reopen-if" in p for p in problems) and any(p.startswith("reopen_if:") for p in problems)
+```
+
+- [ ] **Step 2:** Run `CI-PYTEST -k skill_decisions`. Expected: collection ERROR,
+      `ModuleNotFoundError: No module named 'skill_decisions'`.
+- [ ] **Step 3: Implement** (module head; M1.2 and M1.3 extend the same file):
+
+```python
+#!/usr/bin/env python3
+"""The per-skill decision ledger: what a skill decided, why, and what would reopen it.
+
+Each skill keeps one append-only JSON Lines file at `<skill>/.skillwriter/decisions.jsonl`.
+An entry records one decision about the skill's text: a `rule` the text states (bound to the
+text by anchors, phrases that must keep occurring in the skill's Markdown), a `removed` rule, a
+`rejected` alternative, or a `void` that withdraws an entry written in error. An entry is LIVE
+while no later entry names it in `supersedes`.
+
+The commit gate (`repo-gate.py`) refuses a change whose shipped text loses a live anchor, and
+the SKILL.md edit guard hands an editing agent the skill's rejected and removed entries before
+its first edit. Both read this module, so it is standard library only.
+
+Decisions:
+- Anchors are compared after `normalise`: per line, leading blockquote and list markers are
+  stripped, every whitespace-separated marker-only token is dropped, and whitespace collapses.
+  Why: measured 2026-11-05 on 91 window commits of three skills (the plan's PREREG): re-wrapping,
+  re-padding and renumbering moved no anchor, and 3 meaning changes fired. Reopen if a refusal
+  log shows rewordings outnumbering meaning changes over 30 days.
+- The id hashes the whole entry, so two entries written the same day in two worktrees never
+  collide, and an entry edited in place no longer matches its id.
+"""
+import hashlib
+import json
+import re
+from pathlib import Path
+
+LEDGER_REL = ".skillwriter/decisions.jsonl"
+KINDS = ("rule", "removed", "rejected", "void")
+TIERS = ("measured", "user", "argued", "inherited")
+ORIGINS = ("authored", "imported", "baseline", "ab")
+FIELDS = ("v", "id", "date", "kind", "topic", "decision", "why", "evidence", "reopen_if",
+          "anchors", "supersedes", "refs", "origin")
+ANCHOR_MIN, ANCHOR_MAX = 20, 200
+
+_ID = re.compile(r"d-[0-9]{8}-[0-9a-f]{8}")
+_DATE = re.compile(r"[0-9]{4}-[0-9]{2}-[0-9]{2}")
+_TOPIC = re.compile(r"[a-z0-9][a-z0-9-]{0,39}")
+_QUOTE_MARKERS = re.compile(r"^(?:>[ \t]?)+")
+_LIST_MARKER = re.compile(r"^(?:[-*+]|[0-9]+[.)])[ \t]+")
+_MARKER_TOKEN = re.compile(r"^(?:[-*+>]+|[0-9]+[.)])$")
+
+
+class LedgerError(ValueError):
+    """A ledger line that is not a valid entry; `line_no` is 1-based."""
+
+    def __init__(self, line_no, reason):
+        super().__init__("line %d: %s" % (line_no, reason))
+        self.line_no, self.reason = line_no, reason
+
+
+def normalise(text):
+    """One-space-separated words of `text`, without blockquote and list markers.
+
+    Markers are dropped at line starts AND as standalone tokens anywhere, on the anchor and the
+    text alike: an anchor quoted across two list items carries the inner "2.", which only a
+    token-level drop keeps stable under renumbering. Both sides lose the same tokens, so a match
+    stays sound; prose dashes and "step 2." become invisible to it.
+    """
+    words = []
+    for line in text.splitlines():
+        line = _LIST_MARKER.sub("", _QUOTE_MARKERS.sub("", line.strip()))
+        words.extend(w for w in line.split() if not _MARKER_TOKEN.match(w))
+    return " ".join(words)
+
+
+def anchor_occurs(anchor, text):
+    """True when `anchor` occurs in `text` after both are normalised (case-sensitive)."""
+    return normalise(anchor) in normalise(text)
+
+
+def ledger_path(skill_dir):
+    return Path(skill_dir) / LEDGER_REL
+
+
+def _canonical(entry):
+    body = {k: v for k, v in entry.items() if k != "id"}
+    return json.dumps(body, sort_keys=True, ensure_ascii=False, separators=(",", ":"))
+
+
+def entry_id(entry):
+    """`d-<yyyymmdd>-<first 8 hex of sha256 over the entry without its id>`."""
+    digest = hashlib.sha256(_canonical(entry).encode("utf-8")).hexdigest()[:8]
+    return "d-%s-%s" % (str(entry.get("date", "")).replace("-", ""), digest)
+
+
+def _text(entry, field):
+    value = entry.get(field)
+    return value.strip() if isinstance(value, str) else ""
+
+
+def _vocabulary_problems(entry):
+    problems = []
+    for field, allowed in (("kind", KINDS), ("origin", ORIGINS)):
+        if entry.get(field) not in allowed:
+            problems.append("%s: must be one of %s" % (field, ", ".join(allowed)))
+    evidence = entry.get("evidence")
+    if not isinstance(evidence, dict) or evidence.get("tier") not in TIERS:
+        problems.append("evidence: tier must be one of %s" % ", ".join(TIERS))
+    elif not _text(evidence, "text"):
+        problems.append("evidence: text is empty")
+    if not _TOPIC.fullmatch(str(entry.get("topic", ""))):
+        problems.append("topic: lowercase letters, digits and dashes, 1 to 40 characters")
+    return problems
+
+
+def _list_problems(entry):
+    problems = []
+    for field in ("anchors", "supersedes", "refs"):
+        value = entry.get(field)
+        if not isinstance(value, list) or not all(isinstance(x, str) for x in value):
+            problems.append("%s: must be a list of strings" % field)
+    supersedes = entry.get("supersedes") or []
+    if any(not _ID.fullmatch(x) for x in supersedes if isinstance(x, str)):
+        problems.append("supersedes: every item must be an entry id")
+    if entry.get("kind") == "void" and not supersedes:
+        problems.append("supersedes: a void entry names the entry it withdraws")
+    return problems
+
+
+def _anchor_problems(entry):
+    anchors = entry.get("anchors") or []
+    if entry.get("kind") != "rule":
+        return ["anchors: only a rule entry carries anchors"] if anchors else []
+    if not anchors:
+        return ["anchors: a rule entry needs at least one"]
+    bad = [a for a in anchors if isinstance(a, str)
+           and not ANCHOR_MIN <= len(normalise(a)) <= ANCHOR_MAX]
+    return ["anchors: %d to %d characters after normalising: %r" % (ANCHOR_MIN, ANCHOR_MAX, a)
+            for a in bad]
+
+
+def validate_entry(entry):
+    """Every problem with `entry`, one `<field>: <reason>` string each; [] when it is valid."""
+    problems = ["%s: unknown field" % k for k in entry if k not in FIELDS]
+    if entry.get("v") != 1:
+        problems.append("v: must be 1")
+    if not _DATE.fullmatch(str(entry.get("date", ""))):
+        problems.append("date: YYYY-MM-DD")
+    required = ("decision", "why") if entry.get("kind") == "void" else ("decision", "why", "reopen_if")
+    problems += ["%s: empty" % f for f in required if not _text(entry, f)]
+    problems += _vocabulary_problems(entry) + _list_problems(entry) + _anchor_problems(entry)
+    if entry.get("id") != entry_id(entry):
+        problems.append("id: does not match the entry (edited after it was written?)")
+    return problems
+```
+
+- [ ] **Step 4:** Run `CI-PYTEST -k skill_decisions`. Expected: all pass.
+- [ ] **Step 5: Mutation check:** with `mutation_arm --revert` (compuse-toolbox), remove in turn
+      the `_QUOTE_MARKERS.sub`, the `_LIST_MARKER.sub`, the marker-token filter, and the
+      `entry_id` comparison; each must turn at least one test RED.
+- [ ] **Step 6: Commit** `skill_decisions: the decision ledger model and anchor matcher` with
+      `-- plugins/bitranox/hooks/skill_decisions.py plugins/bitranox/hooks/tests/test_skill_decisions.py`.
+
+### Task M1.2: reading a ledger: parse, live entries, check, brief
+
+**Files:**
+- Modify: `plugins/bitranox/hooks/skill_decisions.py`
+- Test: `plugins/bitranox/hooks/tests/test_skill_decisions.py` (append)
+
+**Interfaces:**
+- Consumes: M1.1.
+- Produces:
+  - `file_lines(path) -> Iterator[str]` (nothing for a missing file)
+  - `parse_entries(lines: Iterable[str | bytes]) -> Iterator[dict]` (raises `LedgerError`)
+  - `live_entries(lines_factory: Callable[[], Iterable]) -> Iterator[dict]` (two passes; `void`
+    entries are never live)
+  - `corpus_text(files: Mapping[str, bytes]) -> str` (the skill's `*.md` outside `.skillwriter/`
+    and `tests/`, joined so no anchor can span two files)
+  - `corpus_from_dir(skill_dir) -> str` (tracked files via `git ls-files -z`, every `GIT_*`
+    variable stripped; the directory walk when git cannot answer)
+  - `@dataclass(frozen=True) class Finding: entry_id, problem, anchor="", decision="", why="",
+    reopen_if=""` with `render() -> str`
+  - `check_ledger(lines_factory, corpus: str) -> list[Finding]`
+  - `render_brief(lines_factory, *, skill: str, budget_chars: int = 6000) -> str` ("" when the
+    skill has no live rejected or removed entry)
+
+**Out of scope:** the CLI (M1.3); any writing.
+
+**STOP conditions:**
+- the peak-memory test in Step 1 cannot separate the two sizes (the per-entry text is held);
+- `git ls-files -z` cannot be run from a skill dir with `cwd=` (then the gate must pass files in).
+
+- [ ] **Step 1: Write the failing tests** (append):
+
+```python
+import json
+import subprocess
+import tracemalloc
+
+
+def _lines(*entries):
+    return [json.dumps(e) + "\n" for e in entries]
+
+
+def _factory(*entries):
+    data = _lines(*entries)
+    return lambda: iter(data)
+
+
+def _rejected(**over):
+    return _rule(kind="rejected", anchors=[], topic="per-project-env",
+                 decision="Install bmk per project.", **over)
+
+
+def test_parse_reports_the_line_number_of_a_bad_line():
+    with pytest.raises(SD.LedgerError) as err:
+        list(SD.parse_entries(_lines(_rule()) + ["{not json\n"]))
+    assert err.value.line_no == 2
+
+
+def test_blank_lines_are_skipped():
+    assert len(list(SD.parse_entries(["\n"] + _lines(_rule()) + ["  \n"]))) == 1
+
+
+def test_a_superseded_entry_and_a_void_are_not_live():
+    old = _rule()
+    new = _rule(decision="bmk installs alone, reworded.", supersedes=[old["id"]])
+    void = _rule(kind="void", anchors=[], reopen_if="", supersedes=[new["id"]],
+                 why="written against the wrong skill")
+    assert [e["id"] for e in SD.live_entries(_factory(old, new))] == [new["id"]]
+    assert list(SD.live_entries(_factory(old, new, void))) == []
+
+
+def test_check_passes_while_every_live_anchor_occurs():
+    corpus = "Intro.\n\nbmk alone,\nshared across projects.\n"
+    assert SD.check_ledger(_factory(_rule()), corpus) == []
+
+
+def test_check_names_the_entry_and_its_reason_when_an_anchor_is_gone():
+    entry = _rule()
+    [finding] = SD.check_ledger(_factory(entry), "bmk installs per project now.\n")
+    assert (finding.entry_id, finding.anchor) == (entry["id"], "bmk alone, shared across projects")
+    assert entry["why"] in finding.render() and entry["reopen_if"] in finding.render()
+
+
+def test_a_superseded_rule_s_anchor_may_go():
+    old = _rule()
+    new = _rule(decision="per-project env again", anchors=["each project gets its own bmk env"],
+                supersedes=[old["id"]])
+    assert SD.check_ledger(_factory(old, new), "Now each project gets its own bmk env.\n") == []
+
+
+def test_check_reports_a_duplicate_id_and_an_unknown_supersede_target():
+    entry = _rule()
+    stray = _rule(decision="x", supersedes=["d-20990101-deadbeef"])
+    problems = [f.problem for f in SD.check_ledger(_factory(entry, entry, stray), "bmk alone, shared across projects")]
+    assert any("duplicate" in p for p in problems) and any("unknown" in p for p in problems)
+
+
+def test_check_turns_a_parse_error_into_one_finding():
+    [finding] = SD.check_ledger(lambda: iter(["{broken\n"]), "")
+    assert "line 1" in finding.problem
+
+
+def test_the_corpus_is_the_markdown_outside_skillwriter_and_tests():
+    files = {"SKILL.md": b"keep one", "references/x.md": b"keep two",
+             ".skillwriter/checklist-1.md": b"drop one", "tests/fixture.md": b"drop two",
+             "scripts/x.py": b"drop three"}
+    text = SD.corpus_text(files)
+    assert "keep one" in text and "keep two" in text and "drop" not in text
+
+
+def test_an_anchor_cannot_span_two_files():
+    files = {"SKILL.md": b"the end of one file", "references/x.md": b"start of another"}
+    assert not SD.anchor_occurs("one file start of another", SD.corpus_text(files))
+
+
+def test_corpus_from_dir_reads_tracked_markdown_only(tmp_path):
+    (tmp_path / "SKILL.md").write_text("tracked text\n", encoding="utf-8")
+    (tmp_path / "notes.md").write_text("untracked text\n", encoding="utf-8")
+    subprocess.run(["git", "init", "-q", "."], cwd=tmp_path, check=True)
+    subprocess.run(["git", "add", "SKILL.md"], cwd=tmp_path, check=True)
+    text = SD.corpus_from_dir(tmp_path)
+    assert "tracked text" in text and "untracked text" not in text
+
+
+def test_the_brief_lists_rejected_and_removed_in_full_and_counts_the_rest():
+    entries = [_rejected(why="reason %d " % i + "x" * 300) for i in range(30)]
+    brief = SD.render_brief(_factory(*entries), skill="devops-bmk", budget_chars=2000)
+    assert "reason 0" in brief and len(brief) < 2600
+    assert "more not shown" in brief and "skill_decisions.py show devops-bmk" in brief
+
+
+def test_the_brief_is_empty_when_nothing_was_rejected_or_removed():
+    assert SD.render_brief(_factory(_rule()), skill="devops-bmk") == ""
+
+
+def test_file_lines_of_a_missing_ledger_is_empty(tmp_path):
+    assert list(SD.file_lines(tmp_path / "absent.jsonl")) == []
+
+
+def _peak(tmp_path, n):
+    path = tmp_path / ("ledger-%d.jsonl" % n)
+    with path.open("w", encoding="utf-8") as fh:
+        for i in range(n):
+            fh.write(json.dumps(_rejected(why="r%d " % i + "w" * 1000)) + "\n")
+    tracemalloc.start()
+    SD.check_ledger(lambda: SD.file_lines(path), "corpus")
+    SD.render_brief(lambda: SD.file_lines(path), skill="s")
+    peak = tracemalloc.get_traced_memory()[1]
+    tracemalloc.stop()
+    return peak
+
+
+def test_peak_memory_does_not_hold_the_entries(tmp_path):
+    """19,000 more entries of 1 KB each would add about 19 MB if their text were held; the id
+    sets the check keeps add about 100 to 150 bytes per entry (about 3 MB), so 8 MB separates the
+    two outcomes with room on both sides."""
+    small, large = _peak(tmp_path, 1000), _peak(tmp_path, 20000)
+    assert large - small < 8_000_000
+```
+
+- [ ] **Step 2:** Run `CI-PYTEST -k skill_decisions`. Expected: FAIL with
+      `AttributeError: module 'skill_decisions' has no attribute 'parse_entries'` (and the others).
+- [ ] **Step 3: Implement** (append to `skill_decisions.py`; add `import os`, `import subprocess`,
+      `from dataclasses import dataclass` to the imports):
+
+```python
+_CORPUS_SEP = "\n\x00\n"   # a NUL token: no anchor can match across two files
+_CORPUS_SKIP = (".skillwriter/", "tests/")
+
+
+def file_lines(path):
+    """The lines of `path`, read one at a time; nothing for a missing file."""
+    path = Path(path)
+    if not path.is_file():
+        return
+    with path.open(encoding="utf-8", newline="") as fh:
+        yield from fh
+
+
+def parse_entries(lines):
+    """Yield each entry of `lines` (str or bytes), validated; blank lines are skipped."""
+    for line_no, raw in enumerate(lines, 1):
+        text = raw.decode("utf-8") if isinstance(raw, bytes) else raw
+        if not text.strip():
+            continue
+        try:
+            entry = json.loads(text)
+        except ValueError as exc:
+            raise LedgerError(line_no, "not JSON (%s)" % exc) from None
+        if not isinstance(entry, dict):
+            raise LedgerError(line_no, "not a JSON object")
+        problems = validate_entry(entry)
+        if problems:
+            raise LedgerError(line_no, "; ".join(problems))
+        yield entry
+
+
+def live_entries(lines_factory):
+    """Entries no later entry supersedes, voids excluded. Two passes over `lines_factory()`."""
+    superseded = set()
+    for entry in parse_entries(lines_factory()):
+        superseded.update(entry["supersedes"])
+    for entry in parse_entries(lines_factory()):
+        if entry["id"] not in superseded and entry["kind"] != "void":
+            yield entry
+
+
+def corpus_text(files):
+    """The skill's Markdown a rule anchor must occur in: `*.md` outside `.skillwriter/`, `tests/`."""
+    parts = [data.decode("utf-8", errors="replace") for rel, data in sorted(files.items())
+             if rel.endswith(".md") and not rel.startswith(_CORPUS_SKIP)]
+    return _CORPUS_SEP.join(parts)
+
+
+def _git_env():
+    # A GIT_DIR or pathspec variable inherited from a hook would point git at another repo.
+    return {k: v for k, v in os.environ.items() if not k.startswith("GIT_")}
+
+
+def corpus_from_dir(skill_dir):
+    """`corpus_text` of the files git tracks under `skill_dir`; every file there without git."""
+    skill_dir = Path(skill_dir)
+    try:
+        out = subprocess.run(["git", "ls-files", "-z", "--", "."], cwd=str(skill_dir),
+                             capture_output=True, env=_git_env(), check=False)
+        listed = out.stdout.decode("utf-8").split("\0") if out.returncode == 0 else None
+    except OSError:
+        listed = None
+    if listed is None:
+        listed = [p.relative_to(skill_dir).as_posix() for p in skill_dir.rglob("*") if p.is_file()]
+    files = {}
+    for rel in filter(None, listed):
+        try:
+            files[rel] = (skill_dir / rel).read_bytes()
+        except OSError:
+            continue        # listed but gone from disk: a deletion this corpus does not hold
+    return corpus_text(files)
+
+
+@dataclass(frozen=True)
+class Finding:
+    entry_id: str
+    problem: str
+    anchor: str = ""
+    decision: str = ""
+    why: str = ""
+    reopen_if: str = ""
+
+    def render(self):
+        if not self.anchor:
+            return "%s: %s" % (self.entry_id or "ledger", self.problem)
+        return ("%s: %s %r\n  decision: %s\n  why: %s\n  reopen if: %s"
+                % (self.entry_id, self.problem, self.anchor, self.decision, self.why, self.reopen_if))
+
+
+def _integrity_findings(lines_factory):
+    findings, seen = [], set()
+    for entry in parse_entries(lines_factory()):
+        if entry["id"] in seen:
+            findings.append(Finding(entry["id"], "duplicate id"))
+        unknown = [s for s in entry["supersedes"] if s not in seen]
+        if unknown:
+            findings.append(Finding(entry["id"], "supersedes unknown or later id %s" % ", ".join(unknown)))
+        seen.add(entry["id"])
+    return findings
+
+
+def check_ledger(lines_factory, corpus):
+    """Findings for a ledger against its skill's text: integrity first, then every live anchor."""
+    try:
+        findings = _integrity_findings(lines_factory)
+        text = normalise(corpus)
+        for entry in live_entries(lines_factory):
+            for anchor in entry["anchors"]:
+                if normalise(anchor) not in text:
+                    findings.append(Finding(entry["id"], "anchor no longer in the skill text:", anchor,
+                                            entry["decision"], entry["why"], entry["reopen_if"]))
+    except LedgerError as exc:
+        return [Finding("", str(exc))]
+    return findings
+
+
+def _brief_block(entry):
+    return ("- [%s] %s (%s, %s)\n  why: %s\n  reopen if: %s"
+            % (entry["kind"], entry["decision"], entry["id"], entry["evidence"]["tier"],
+               entry["why"], entry["reopen_if"]))
+
+
+def render_brief(lines_factory, *, skill, budget_chars=6000):
+    """The live rejected and removed entries, in full until `budget_chars` is spent, then a count."""
+    blocks, used, left = [], 0, 0
+    for entry in live_entries(lines_factory):
+        if entry["kind"] not in ("rejected", "removed"):
+            continue
+        block = _brief_block(entry)
+        if used + len(block) > budget_chars:
+            left += 1
+            continue
+        blocks.append(block)
+        used += len(block)
+    if not blocks and not left:
+        return ""
+    text = "Decisions already taken for %s (rejected or removed, oldest first):\n" % skill + "\n".join(blocks)
+    if left:
+        text += ("\n%d more not shown: python3 <plugin>/hooks/skill_decisions.py show %s "
+                 "--kind rejected,removed --full" % (left, skill))
+    return text
+```
+
+- [ ] **Step 4:** Run `CI-PYTEST -k skill_decisions`. Expected: all pass.
+- [ ] **Step 5: Mutation check** (`mutation_arm --revert`): drop the `supersedes` filter in
+      `live_entries`; drop `_CORPUS_SKIP`; replace `_CORPUS_SEP` with `"\n"`; make
+      `render_brief` ignore the budget. Each must turn a test RED.
+- [ ] **Step 6: Commit** `skill_decisions: read, check and brief a ledger` with the two paths.
+
+### Task M1.3: writing entries, and the CLI
+
+**Files:**
+- Modify: `plugins/bitranox/hooks/skill_decisions.py`
+- Modify: `.gitattributes` (one line)
+- Test: `plugins/bitranox/hooks/tests/test_skill_decisions.py` (append)
+
+**Interfaces:**
+- Consumes: M1.1, M1.2, `tell_chars.find_tell_codepoints(text) -> list[str]`.
+- Produces:
+  - `class EntryRefused(ValueError)` with `.problems: list[str]`
+  - `append_entries(skill_dir, entries: list[dict], *, today: str | None = None) -> list[str]`
+    (assigns `v`, `date`, `id`; validates; refuses tells; requires each new anchor to occur
+    EXACTLY once in `corpus_from_dir(skill_dir)`; refuses a duplicate id and a `supersedes`
+    naming an id the ledger does not hold; writes all or nothing; returns the new ids). The CLI
+    calls it once per skill, so a file naming two skills is all or nothing PER SKILL, and the
+    `--json` envelope lists what was written before a refusal.
+  - `main(argv: list[str] | None = None) -> int` with the verbs below
+
+CLI contract (every verb; `--json` puts `{ok, command, data, skipped}` on stdout; diagnostics go
+to stderr; exit 0 yes, 1 findings or refused, 2 could not run; no tracebacks):
+
+```
+skill_decisions.py add   --from-file ENTRIES.json [--skills-dir DIR] [--json]
+skill_decisions.py show  SKILL [--skill-dir DIR] [--kind K[,K]] [--topic T] [--id ID] [--all] [--full] [--json]
+skill_decisions.py check [SKILL ...] [--skills-dir DIR] [--json]
+```
+
+- `ENTRIES.json` holds one object or a list; each object names its `skill` (removed before the
+  entry is stored). Without `--skills-dir`, `add` and `check` use
+  `<git top of the cwd>/plugins/bitranox/skills` and exit 2 naming `--skills-dir` when there is
+  none: a write must never land in an installed plugin copy.
+- `show` without `--skill-dir` uses the same repo dir, else the skills dir of the plugin this
+  script ships in (read-only, so an install can read its own declined list).
+
+**Out of scope:** the gate and the guard (M2); `contrib_queue.py`; any seeding (M3).
+
+**STOP conditions:**
+- `tell_chars.find_tell_codepoints` does not exist or has another signature;
+- `.gitattributes` already has a rule for `decisions.jsonl`.
+
+- [ ] **Step 1: Write the failing tests** (append; `_skill` builds a real tracked skill dir):
+
+```python
+def _skill(tmp_path, text="Intro.\n\nbmk alone, shared across projects.\n"):
+    repo = tmp_path / "repo"
+    skill = repo / "plugins" / "bitranox" / "skills" / "devops-bmk"
+    (skill / ".skillwriter").mkdir(parents=True)
+    (skill / "SKILL.md").write_text(text, encoding="utf-8")
+    subprocess.run(["git", "init", "-q", "."], cwd=repo, check=True)
+    subprocess.run(["git", "add", "-A"], cwd=repo, check=True)
+    return repo, skill
+
+
+def _draft(**over):
+    entry = {k: v for k, v in _rule().items() if k not in ("id", "date", "v")}
+    entry.update(over)
+    return entry
+
+
+def test_append_assigns_id_and_date_and_writes_one_line(tmp_path):
+    _repo, skill = _skill(tmp_path)
+    [new_id] = SD.append_entries(skill, [_draft()], today="2026-11-06")
+    [stored] = list(SD.parse_entries(SD.file_lines(SD.ledger_path(skill))))
+    assert stored["id"] == new_id and new_id.startswith("d-20261106-")
+
+
+def test_an_anchor_that_occurs_twice_is_refused(tmp_path):
+    _repo, skill = _skill(tmp_path, "bmk alone, shared across projects.\n" * 2)
+    with pytest.raises(SD.EntryRefused) as err:
+        SD.append_entries(skill, [_draft()], today="2026-11-06")
+    assert any("exactly once" in p for p in err.value.problems)
+    assert not SD.ledger_path(skill).exists()
+
+
+def test_an_anchor_absent_from_the_text_is_refused(tmp_path):
+    _repo, skill = _skill(tmp_path, "something else entirely\n")
+    with pytest.raises(SD.EntryRefused):
+        SD.append_entries(skill, [_draft()], today="2026-11-06")
+
+
+def test_a_batch_is_all_or_nothing(tmp_path):
+    _repo, skill = _skill(tmp_path)
+    with pytest.raises(SD.EntryRefused):
+        SD.append_entries(skill, [_draft(), _draft(why="")], today="2026-11-06")
+    assert list(SD.file_lines(SD.ledger_path(skill))) == []
+
+
+def test_a_typographic_tell_is_refused(tmp_path):
+    _repo, skill = _skill(tmp_path)
+    with pytest.raises(SD.EntryRefused) as err:
+        SD.append_entries(skill, [_draft(why="because" + chr(0x2014) + "it broke")], today="2026-11-06")
+    assert any(p.startswith("entry 1: why:") for p in err.value.problems)
+
+
+def test_supersedes_must_name_a_recorded_id(tmp_path):
+    _repo, skill = _skill(tmp_path, "bmk alone, shared across projects. Then run make test first.\n")
+    [first] = SD.append_entries(skill, [_draft()], today="2026-11-06")
+    stray = _draft(decision="gate first", anchors=["Then run make test first."],
+                   supersedes=["d-20990101-deadbeef"])
+    with pytest.raises(SD.EntryRefused) as err:
+        SD.append_entries(skill, [stray], today="2026-11-06")
+    assert any(p.startswith("entry 1: supersedes:") for p in err.value.problems)
+    stray["supersedes"] = [first]
+    assert len(SD.append_entries(skill, [stray], today="2026-11-06")) == 1
+
+
+def test_show_all_includes_superseded_entries(tmp_path, capsys, monkeypatch):
+    repo, skill = _skill(tmp_path, "bmk alone, shared across projects. Then run make test first.\n")
+    [first] = SD.append_entries(skill, [_draft()], today="2026-11-06")
+    SD.append_entries(skill, [_draft(decision="gate first", anchors=["Then run make test first."],
+                                     supersedes=[first])], today="2026-11-06")
+    monkeypatch.chdir(repo)
+    _rc, live, _ = _cli(capsys, "show", "devops-bmk", "--json")
+    _rc, every, _ = _cli(capsys, "show", "devops-bmk", "--all", "--json")
+    assert len(json.loads(live)["data"]["entries"]) == 1
+    assert len(json.loads(every)["data"]["entries"]) == 2
+
+
+def _cli(capsys, *argv):
+    rc = SD.main(list(argv))
+    out = capsys.readouterr()
+    return rc, out.out, out.err
+
+
+def test_cli_add_show_check_round_trip(tmp_path, capsys, monkeypatch):
+    repo, skill = _skill(tmp_path)
+    src = tmp_path / "entries.json"
+    src.write_text(json.dumps([dict(_draft(), skill="devops-bmk")]), encoding="utf-8")
+    monkeypatch.chdir(repo)
+    rc, out, _ = _cli(capsys, "add", "--from-file", str(src), "--json")
+    assert rc == 0 and json.loads(out)["ok"] is True
+    rc, out, _ = _cli(capsys, "show", "devops-bmk")
+    assert rc == 0 and "env-model" in out
+    rc, _, _ = _cli(capsys, "check", "devops-bmk")
+    assert rc == 0
+    (skill / "SKILL.md").write_text("bmk installs per project now.\n", encoding="utf-8")
+    rc, out, _ = _cli(capsys, "check", "devops-bmk", "--json")
+    assert rc == 1 and json.loads(out)["data"]["findings"]
+
+
+def test_cli_add_outside_a_repo_exits_2_naming_the_flag(tmp_path, capsys, monkeypatch):
+    src = tmp_path / "entries.json"
+    src.write_text(json.dumps(dict(_draft(), skill="devops-bmk")), encoding="utf-8")
+    monkeypatch.chdir(tmp_path)        # pytest's tmp dir is in no repo holding plugins/bitranox/skills
+    rc, out, err = _cli(capsys, "add", "--from-file", str(src))
+    assert rc == 2 and "--skills-dir" in err and "Traceback" not in err
+
+
+def test_cli_json_mode_still_prints_json_on_a_run_error(tmp_path, capsys, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    rc, out, _ = _cli(capsys, "add", "--from-file", str(tmp_path / "missing.json"), "--json")
+    assert rc == 2 and json.loads(out)["ok"] is False
+```
+
+- [ ] **Step 2:** Run `CI-PYTEST -k skill_decisions`. Expected: FAIL on the missing
+      `append_entries`, `EntryRefused` and `main`.
+- [ ] **Step 3: Implement** (append; add `import argparse`, `import datetime`, `import sys`):
+
+```python
+class EntryRefused(ValueError):
+    """`append_entries` wrote nothing; `problems` says why, one line each."""
+
+    def __init__(self, problems):
+        super().__init__("; ".join(problems))
+        self.problems = list(problems)
+
+
+def _tell_problems(entry):
+    import tell_chars  # noqa: PLC0415 - sibling hook module; keeps the reading half importable alone
+    problems = []
+    for field in ("decision", "why", "reopen_if", "topic"):
+        if tell_chars.find_tell_codepoints(_text(entry, field)):
+            problems.append("%s: typographic tell (use ASCII punctuation)" % field)
+    evidence = entry.get("evidence") or {}
+    if isinstance(evidence, dict) and tell_chars.find_tell_codepoints(_text(evidence, "text")):
+        problems.append("evidence: typographic tell (use ASCII punctuation)")
+    return problems
+
+
+def _anchor_count_problems(entry, normalised_corpus):
+    problems = []
+    for anchor in entry.get("anchors") or []:
+        hits = normalised_corpus.count(normalise(anchor))
+        if hits != 1:
+            problems.append("anchors: must occur exactly once in the skill text, found %d: %r"
+                            % (hits, anchor))
+    return problems
+
+
+def append_entries(skill_dir, entries, *, today=None):
+    """Validate and append `entries` to the skill's ledger, all or nothing; return their ids."""
+    today = today or datetime.datetime.now(datetime.timezone.utc).date().isoformat()
+    path = ledger_path(skill_dir)
+    known = {e["id"] for e in parse_entries(file_lines(path))}
+    corpus = normalise(corpus_from_dir(skill_dir))
+    problems, lines, ids = [], [], []
+    for n, draft in enumerate(entries, 1):
+        entry = dict(draft, v=1, date=draft.get("date") or today)
+        entry["id"] = entry_id(entry)
+        found = validate_entry(entry) + _tell_problems(entry) + _anchor_count_problems(entry, corpus)
+        if entry["id"] in known:
+            found.append("id: an identical entry is already in the ledger")
+        found += ["supersedes: unknown id %s" % s for s in entry.get("supersedes") or []
+                  if s not in known]
+        problems += ["entry %d: %s" % (n, p) for p in found]
+        known.add(entry["id"])
+        ids.append(entry["id"])
+        lines.append(json.dumps(entry, sort_keys=True, ensure_ascii=False) + "\n")
+    if problems:
+        raise EntryRefused(problems)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    prefix = "\n" if _ends_without_newline(path) else ""
+    with path.open("a", encoding="utf-8", newline="") as fh:
+        fh.write(prefix + "".join(lines))
+    return ids
+
+
+def _ends_without_newline(path):
+    """True when a non-empty `path` lacks a final newline; reads one byte, not the ledger."""
+    if not path.is_file() or path.stat().st_size == 0:
+        return False
+    with path.open("rb") as fh:
+        fh.seek(-1, 2)
+        return fh.read(1) != b"\n"
+```
+
+  CLI (the same file):
+
+```python
+def _repo_skills_dir():
+    try:
+        out = subprocess.run(["git", "rev-parse", "--show-toplevel"], capture_output=True,
+                             encoding="utf-8", errors="replace", env=_git_env(), check=False)
+    except OSError:
+        return None
+    candidate = Path(out.stdout.strip()) / "plugins" / "bitranox" / "skills"
+    return candidate if out.returncode == 0 and candidate.is_dir() else None
+
+
+class _RunError(Exception):
+    """The verb could not run (exit 2)."""
+
+
+def _skills_dir(arg):
+    found = Path(arg) if arg else _repo_skills_dir()
+    if found is None or not found.is_dir():
+        raise _RunError("no skills dir: run inside the marketplace repo or pass --skills-dir")
+    return found
+
+
+def _cmd_add(args):
+    try:
+        raw = json.loads(Path(args.from_file).read_text(encoding="utf-8"))
+    except (OSError, ValueError) as exc:
+        raise _RunError("cannot read %s: %s" % (args.from_file, exc)) from None
+    drafts = raw if isinstance(raw, list) else [raw]
+    root, written = _skills_dir(args.skills_dir), {}
+    by_skill = {}
+    for draft in drafts:
+        skill = draft.pop("skill", None) if isinstance(draft, dict) else None
+        if not skill or not (root / skill).is_dir():
+            raise _RunError("every entry names an existing skill in 'skill': %r" % skill)
+        by_skill.setdefault(skill, []).append(draft)
+    try:
+        for skill, batch in by_skill.items():
+            written[skill] = append_entries(root / skill, batch)
+    except EntryRefused as exc:
+        return 1, {"written": written, "refused": exc.problems}
+    return 0, {"written": written}
+
+
+def _show_dir(args):
+    if args.skill_dir:
+        return Path(args.skill_dir)
+    root = _repo_skills_dir() or Path(__file__).resolve().parents[1] / "skills"
+    return root / args.skill
+
+
+def _cmd_show(args):
+    skill_dir = _show_dir(args)
+    path = ledger_path(skill_dir)
+    # parse_entries takes an ITERABLE of lines, live_entries a FACTORY it calls once per pass.
+    entries = parse_entries(file_lines(path)) if args.all else live_entries(lambda: file_lines(path))
+    kinds = set(args.kind.split(",")) if args.kind else set(KINDS)
+    shown = []
+    for entry in entries:
+        if entry["kind"] in kinds and (not args.topic or entry["topic"] == args.topic) \
+                and (not args.id or entry["id"] == args.id):
+            shown.append(entry if args.full else {k: entry[k] for k in ("id", "kind", "topic", "decision")})
+    return 0, {"skill": skill_dir.name, "entries": shown}
+
+
+def _cmd_check(args):
+    root = _skills_dir(args.skills_dir)
+    names = args.skills or sorted(p.parent.parent.name for p in root.glob("*/" + LEDGER_REL))
+    findings = []
+    for name in names:
+        path = ledger_path(root / name)
+        for f in check_ledger(lambda p=path: file_lines(p), corpus_from_dir(root / name)):
+            findings.append({"skill": name, "text": f.render()})
+    return (1 if findings else 0), {"checked": names, "findings": findings}
+
+
+def _parser():
+    parser = argparse.ArgumentParser(prog="skill_decisions.py", description=__doc__.split("\n")[0])
+    parser.add_argument("--json", action="store_true", help="print a JSON envelope")
+    sub = parser.add_subparsers(dest="command", required=True)
+    add = sub.add_parser("add", help="append entries from a JSON file")
+    add.add_argument("--from-file", required=True)
+    add.add_argument("--skills-dir")
+    show = sub.add_parser("show", help="list a skill's decisions")
+    show.add_argument("skill")
+    show.add_argument("--skill-dir")
+    show.add_argument("--kind")
+    show.add_argument("--topic")
+    show.add_argument("--id")
+    show.add_argument("--all", action="store_true", help="include superseded and void entries")
+    show.add_argument("--full", action="store_true", help="every field, not one line each")
+    check = sub.add_parser("check", help="check ledgers against their skill text")
+    check.add_argument("skills", nargs="*")
+    check.add_argument("--skills-dir")
+    for p in (add, show, check):
+        p.add_argument("--json", action="store_true", default=argparse.SUPPRESS)
+    return parser
+
+
+def _print_text(command, data):
+    if command == "show":
+        for e in data["entries"]:
+            print(json.dumps(e, ensure_ascii=False) if "why" in e else
+                  "%s  %-8s %-24s %s" % (e["id"], e["kind"], e["topic"], e["decision"]))
+    elif command == "check":
+        for f in data["findings"]:
+            print("%s: %s" % (f["skill"], f["text"]))
+        print("checked %d ledger(s), %d finding(s)" % (len(data["checked"]), len(data["findings"])))
+    else:
+        for skill, ids in data.get("written", {}).items():
+            print("%s: %s" % (skill, ", ".join(ids)))
+        for problem in data.get("refused", []):
+            print("refused: " + problem, file=sys.stderr)
+
+
+def main(argv=None):
+    args = _parser().parse_args(argv)
+    verbs = {"add": _cmd_add, "show": _cmd_show, "check": _cmd_check}
+    try:
+        rc, data = verbs[args.command](args)
+    except (_RunError, LedgerError, OSError) as exc:
+        if args.json:
+            print(json.dumps({"ok": False, "command": args.command, "data": {"error": str(exc)},
+                              "skipped": []}))
+        print("skill_decisions.py %s: %s" % (args.command, exc), file=sys.stderr)
+        return 2
+    if args.json:
+        print(json.dumps({"ok": rc == 0, "command": args.command, "data": data, "skipped": []},
+                         ensure_ascii=False))
+    else:
+        _print_text(args.command, data)
+    return rc
+
+
+if __name__ == "__main__":
+    sys.exit(main())
+```
+
+- [ ] **Step 4:** Add to `.gitattributes`, below the existing `*.jsonl` fixture rule:
+      `plugins/bitranox/skills/*/.skillwriter/decisions.jsonl text eol=lf merge=union`
+      (union: two branches appending to one ledger merge by keeping both sides' lines).
+- [ ] **Step 5:** Run `CI-PYTEST`. Expected: all pass.
+- [ ] **Step 6:** Run the CLI by hand on a scratch copy of a real skill:
+      `cp -a plugins/bitranox/skills/devops-bmk <scratchpad>/m1/devops-bmk` inside a scratch git
+      repo laid out as `plugins/bitranox/skills/`, then `add` one rule entry quoting a real
+      sentence, `show`, `check`, delete that sentence, `check` again (exit 1, the entry's why and
+      reopen_if printed). Paste the four outputs into the task's review notes.
+- [ ] **Step 7: Commit** `skill_decisions: add/show/check CLI and union merge for ledgers` with
+      `-- plugins/bitranox/hooks/skill_decisions.py plugins/bitranox/hooks/tests/test_skill_decisions.py .gitattributes`.
+
+### Task M2.2: the commit and push gate checks ledgers
+
+**Files:**
+- Modify: `plugins/bitranox/hooks/repo-gate.py`: `_LF_SUFFIXES` (line 219), `shipped_files`
+  (1601), `_selected_files` (1582), `_working_tree_files` (1451), `run_checks` (2687), new
+  `check_skill_decisions` and `check_all_skill_decisions` placed after `check_skill_review`
+- Test: `plugins/bitranox/hooks/tests/test_repo_gate.py` (append)
+
+**Interfaces:**
+- Consumes: `skill_decisions` (M1), `_merge_base` and `_changed_vs_origin` (M2.1),
+  `_checked_out_bytes`, `STAGE_INDEX`, `STAGE_HEAD`, `CommitSelection`.
+- Produces:
+  - `shipped_files(skill_dir, stage, *, ignore=_mirror_ignored)` and the same keyword on
+    `_selected_files` and `_working_tree_files`; every existing caller keeps its behaviour
+  - `check_skill_decisions(root, stage=STAGE_INDEX, *, log=None) -> list[str]`
+  - `check_all_skill_decisions(root) -> list[str]`
+  - `log` receives one dict per refusal: `{"time", "skill", "entry_id", "problem"}`; the default
+    appends it to `self_improve_signals._audit_dir() / "skill-decision-gate.jsonl"` and swallows
+    any `OSError`
+
+**Out of scope:**
+- The mirror gate's own reading (`MIRROR_IGNORED_DIRS` stays as it is: the ledger must never
+  count as drift between twins).
+- `check_version_bumped`.
+
+**STOP conditions:**
+- an existing `shipped_files` caller passes a positional third argument;
+- making `.jsonl` an LF-checked suffix turns a tracked file red (Step 0 lists them first);
+- a deleted skill directory makes `shipped_files` raise rather than return `{}`.
+
+- [ ] **Step 0:** `git ls-files '*.jsonl'` and `git ls-files --eol '*.jsonl'`: every listed
+      file shows `i/lf`. If one does not, STOP.
+- [ ] **Step 1: Write the failing tests.** They drive the gate on real repos built by a helper
+      that commits a skill with a ledger and sets `origin/master` to that commit:
+
+```python
+import skill_decisions as SD
+
+SKILL = "plugins/bitranox/skills/devops-bmk"
+RULE_TEXT = "Intro.\n\nbmk alone, shared across projects.\n"
+
+
+def _ledger_line(text_anchor="bmk alone, shared across projects", **over):
+    entry = {"v": 1, "date": "2026-11-05", "kind": "rule", "topic": "env-model",
+             "decision": "bmk installs alone.", "why": "Measured on bmk 3.8.0.",
+             "evidence": {"tier": "measured", "text": "release notes"},
+             "reopen_if": "bmk changes its env model.", "anchors": [text_anchor],
+             "supersedes": [], "refs": [], "origin": "authored"}
+    entry.update(over)
+    entry["id"] = SD.entry_id(entry)
+    return json.dumps(entry) + "\n", entry
+
+
+def _ledger_repo(tmp_path, ledger_lines):
+    files = {SKILL + "/SKILL.md": RULE_TEXT,
+             SKILL + "/.skillwriter/decisions.jsonl": "".join(ledger_lines)}
+    return git_repo_with_origin(tmp_path, files)
+
+
+def _stage(root, rel, text):
+    write(root / rel, text)
+    subprocess.run(["git", "add", rel], cwd=root, check=True)
+
+
+def test_a_staged_change_that_drops_a_live_anchor_is_refused_with_the_reason(tmp_path):
+    line, entry = _ledger_line()
+    root = _ledger_repo(tmp_path, [line])
+    _stage(root, SKILL + "/SKILL.md", "Intro.\n\nbmk installs per project now.\n")
+    logged = []
+    fails = RG.check_skill_decisions(root, RG.STAGE_INDEX, log=logged.append)
+    assert len(fails) == 1 and entry["id"] in fails[0] and entry["why"] in fails[0]
+    assert "skill_decisions.py add" in fails[0]
+    assert [r["entry_id"] for r in logged] == [entry["id"]]
+
+
+def test_a_superseding_entry_staged_with_the_change_passes(tmp_path):
+    line, entry = _ledger_line()
+    root = _ledger_repo(tmp_path, [line])
+    new_line, _ = _ledger_line("each project gets its own bmk env", decision="per project",
+                               supersedes=[entry["id"]])
+    _stage(root, SKILL + "/SKILL.md", "Intro.\n\nNow each project gets its own bmk env.\n")
+    _stage(root, SKILL + "/.skillwriter/decisions.jsonl", line + new_line)
+    assert RG.check_skill_decisions(root, RG.STAGE_INDEX, log=lambda r: None) == []
+
+
+def test_an_unstaged_edit_does_not_block_a_commit(tmp_path):
+    """The index is what the commit carries: a half-done working copy is not part of it."""
+    line, _ = _ledger_line()
+    root = _ledger_repo(tmp_path, [line])
+    write(root / SKILL / "SKILL.md", "half-done rewrite\n")
+    assert RG.check_skill_decisions(root, RG.STAGE_INDEX, log=lambda r: None) == []
+
+
+def test_a_push_reads_head_not_the_index(tmp_path):
+    line, _ = _ledger_line()
+    root = _ledger_repo(tmp_path, [line])
+    _stage(root, SKILL + "/SKILL.md", "dropped\n")
+    assert RG.check_skill_decisions(root, RG.STAGE_HEAD, log=lambda r: None) == []
+
+
+def test_a_removed_ledger_line_is_refused(tmp_path):
+    line, _ = _ledger_line()
+    second, _ = _ledger_line(topic="second")
+    root = _ledger_repo(tmp_path, [line, second])
+    _stage(root, SKILL + "/.skillwriter/decisions.jsonl", second)
+    fails = RG.check_skill_decisions(root, RG.STAGE_INDEX, log=lambda r: None)
+    assert any("append-only" in f for f in fails)
+
+
+def test_deleting_the_whole_skill_takes_its_ledger_with_it(tmp_path):
+    line, _ = _ledger_line()
+    root = _ledger_repo(tmp_path, [line])
+    subprocess.run(["git", "rm", "-rq", SKILL], cwd=root, check=True)
+    assert RG.check_skill_decisions(root, RG.STAGE_INDEX, log=lambda r: None) == []
+
+
+def test_another_skill_s_broken_ledger_does_not_block_an_unrelated_commit(tmp_path):
+    line, _ = _ledger_line()
+    root = _ledger_repo(tmp_path, [line])
+    write(root / SKILL / "SKILL.md", "dropped, but not staged and not this commit\n")
+    _stage(root, "plugins/bitranox/hooks/x.py", "x = 1\n")
+    assert RG.check_skill_decisions(root, RG.STAGE_INDEX, log=lambda r: None) == []
+
+
+def test_ci_sweeps_every_ledger_in_the_working_tree(tmp_path):
+    line, entry = _ledger_line()
+    root = _ledger_repo(tmp_path, [line])
+    write(root / SKILL / "SKILL.md", "dropped\n")
+    subprocess.run(["git", "add", "-A"], cwd=root, check=True)
+    fails = RG.check_all_skill_decisions(root)
+    assert len(fails) == 1 and entry["id"] in fails[0]
+
+
+def test_jsonl_is_an_lf_checked_suffix():
+    assert ".jsonl" in RG._LF_SUFFIXES
+```
+
+  The test named `another_skill_s_broken_ledger` stages nothing in the skill, so the skill is
+  touched only in the working tree; it passes because the gate reads the INDEX of a touched skill,
+  which still holds the anchor. Keep it: it is the "a peer's half-done edit never blocks" control.
+
+- [ ] **Step 2:** Run `CI-PYTEST -k "ledger or anchor or skill_s or jsonl or append_only or
+      superseding or push_reads"`. Expected: FAIL, `AttributeError: ... check_skill_decisions`.
+- [ ] **Step 3: Implement.** Thread the keyword through the three readers (replace each
+      `_mirror_ignored(rel)` call inside them with `ignore(rel)`, default `ignore=_mirror_ignored`,
+      and pass it on from `shipped_files` to `_selected_files` and `_working_tree_files`). Then:
+
+```python
+import skill_decisions  # sibling module, standard library only
+
+_LF_SUFFIXES = (".py", ".sh", ".json", ".jsonl")
+_SKILL_PATH_RX = re.compile(r"^%s/([^/]+)/" % re.escape(_SKILLS_DIR))
+#: What the decision check skips when it reads a skill: caches only. The mirror reader skips
+#: `.skillwriter/` too, but the ledger lives there.
+_DECISION_IGNORED = frozenset({"__pycache__", ".pytest_cache", ".git", ".ruff_cache"})
+
+
+def _decision_ignored(rel):
+    return bool(_DECISION_IGNORED & set(rel.split("/")))
+
+
+def _log_decision_refusal(record):
+    try:
+        from self_improve_signals import _audit_dir  # noqa: PLC0415 - optional sink, never a gate input
+        path = _audit_dir() / "skill-decision-gate.jsonl"
+        path.parent.mkdir(parents=True, exist_ok=True)
+        with path.open("a", encoding="utf-8") as fh:
+            fh.write(json.dumps(record) + "\n")
+    except Exception:  # noqa: BLE001 - the log is for the 30-day review; it must never block
+        pass
+
+
+def _decision_message(name, finding):
+    return ("skills/%s: %s\n  The rule's earlier decision is recorded with a reason. If the change "
+            "is meant, record why: python3 plugins/bitranox/hooks/skill_decisions.py add --from-file "
+            "<entries.json> with an entry whose supersedes names %s, staged with this change."
+            % (name, finding.render(), finding.entry_id or "<id>"))
+
+
+def _append_only_problem(root, name, shipped_ledger):
+    base = _merge_base(root)
+    if base is None:
+        return None
+    rel = "%s/%s/%s" % (_SKILLS_DIR, name, skill_decisions.LEDGER_REL)
+    before = _checked_out_bytes(root, base, rel)
+    if not before:
+        return None
+    old, new = before.splitlines(), shipped_ledger.splitlines()
+    if new[:len(old)] != old:
+        return ("skills/%s: %s is append-only; a line present at the fork point was changed or "
+                "removed. Withdraw an entry with a new void entry instead." % (name, rel))
+    return None
+
+
+def _judge_skill(root, name, files, log):
+    if "SKILL.md" not in files:
+        return []                                   # the skill is deleted: its ledger goes with it
+    ledger = files.get(skill_decisions.LEDGER_REL, b"")
+    fails = []
+    problem = _append_only_problem(root, name, ledger)
+    if problem:
+        fails.append(problem)
+    lines = ledger.decode("utf-8", errors="replace").splitlines(keepends=True)
+    for finding in skill_decisions.check_ledger(lambda: iter(lines), skill_decisions.corpus_text(files)):
+        log({"time": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()), "skill": name,
+             "entry_id": finding.entry_id, "problem": finding.problem})
+        fails.append(_decision_message(name, finding))
+    return fails
+
+
+def check_skill_decisions(root, stage=STAGE_INDEX, *, log=None):
+    """Refuse a commit or push whose SHIPPED text of a touched skill loses a live ledger anchor.
+
+    Only the skills this change touches since the merge-base are read, and each at what the
+    commit or push ships (`shipped_files` at `stage`), so another skill's half-done working copy
+    never blocks an unrelated commit. The whole shipped skill dir is held at once, the ledger
+    included: the same per-skill bound the mirror check already has.
+    """
+    changed = _changed_vs_origin(root)
+    if changed is None:
+        return []
+    log = log or _log_decision_refusal
+    names = sorted({m.group(1) for p in changed for m in [_SKILL_PATH_RX.match(p)] if m})
+    fails = []
+    for name in names:
+        skill_dir = root / _SKILLS_DIR / name
+        files = shipped_files(skill_dir, stage, ignore=_decision_ignored) if skill_dir.is_dir() else {}
+        fails += _judge_skill(root, name, files, log)
+    return fails
+
+
+def check_all_skill_decisions(root):
+    """The CI sweep: every ledger in the checkout against its skill's tracked text."""
+    fails = []
+    for path in sorted((root / _SKILLS_DIR).glob("*/" + skill_decisions.LEDGER_REL)):
+        skill_dir = path.parent.parent
+        for finding in skill_decisions.check_ledger(lambda p=path: skill_decisions.file_lines(p),
+                                                    skill_decisions.corpus_from_dir(skill_dir)):
+            fails.append(_decision_message(skill_dir.name, finding))
+    return fails
+```
+
+  In `run_checks`, after `failures += check_version_sync(root)`:
+
+```python
+    # Both modes: CI sweeps every ledger (a clean checkout has nothing half-done), the hook and
+    # the pre-push judge only the skills the change touches, at what it ships.
+    if ci:
+        failures += check_all_skill_decisions(root)
+    else:
+        failures += check_skill_decisions(root, stage=mirror_at)
+```
+
+  Check that `time` and `json` are already imported in repo-gate.py; add only what is missing.
+
+- [ ] **Step 4:** Run `CI-PYTEST`. Expected: all pass, every pre-existing mirror test included
+      (they prove the `ignore` default kept their behaviour).
+- [ ] **Step 5:** `python3 plugins/bitranox/hooks/repo-gate.py --ci` from the worktree root.
+      Expected: no ledger finding (no ledger exists yet) and the same verdict as before the task.
+- [ ] **Step 6: Mutation check:** make `_judge_skill` read the working tree instead of `files`
+      (call `skill_decisions.corpus_from_dir(skill_dir)`); `test_an_unstaged_edit_does_not_block`
+      must go RED. Drop the `new[:len(old)] != old` check; `test_a_removed_ledger_line` must go RED.
+- [ ] **Step 7: Commit** `repo-gate: refuse a change that drops a recorded skill decision` with
+      `-- plugins/bitranox/hooks/repo-gate.py plugins/bitranox/hooks/tests/test_repo_gate.py`.
+
+### Task M2.3: the checklist states what the change decided (D4)
+
+**Files:**
+- Modify: `plugins/bitranox/hooks/repo-gate.py:1184-1215` (`skill_review_failures`)
+- Test: `plugins/bitranox/hooks/tests/test_repo_gate.py` (append)
+
+**Interfaces:**
+- Consumes: `skill_decisions.parse_entries`, `skill_decisions.file_lines`, `ledger_path`.
+- Produces: `DECISIONS_LINE_RX` (module constant) and the new failure text.
+
+The rule: among the co-changed `.skillwriter/*.md` files of a changed `SKILL.md` (the files the
+function already reads), at least one holds a line matching
+
+```python
+DECISIONS_LINE_RX = re.compile(
+    r"^Decisions:[ \t]+(?:none[ \t]+-[ \t]+\S.*|d-[0-9]{8}-[0-9a-f]{8}(?:,[ \t]*d-[0-9]{8}-[0-9a-f]{8})*)[ \t]*$",
+    re.MULTILINE)
+```
+
+and every id it names is in that skill's ledger. The function already reads the checklists from
+the working tree; the ledger is read the same way (`ledger_path(root / _SKILLS_DIR / name)`), so
+the two sides of one rule use one lens.
+
+**Out of scope:** the table re-pad waiver (a re-pad has no checklist and stays exempt);
+`has_open_checkbox`.
+
+**STOP conditions:** an existing `skill_review_failures` test builds a fully ticked checklist
+for a changed SKILL.md and now fails: update that fixture by adding a `Decisions: none - fixture`
+line, never by loosening the rule, and list every fixture changed in the commit message.
+
+- [ ] **Step 1: Write the failing tests:**
+
+```python
+def _review(tmp_path, checklist, ledger=""):
+    rel = "plugins/bitranox/skills/s1/"
+    files = {rel + "SKILL.md": "x\n", rel + ".skillwriter/checklist-1.md": checklist}
+    if ledger:
+        files[rel + ".skillwriter/decisions.jsonl"] = ledger
+    for path, text in files.items():
+        write(tmp_path / path, text)
+    return RG.skill_review_failures(tmp_path, list(files), read_original=lambda rel: None)
+
+
+def test_a_checklist_without_a_decisions_line_is_refused(tmp_path):
+    fails = _review(tmp_path, "- [x] RED\n- [x] GREEN\n")
+    assert any("Decisions:" in f for f in fails)
+
+
+def test_decisions_none_with_a_reason_passes(tmp_path):
+    assert _review(tmp_path, "- [x] RED\nDecisions: none - wording only, no rule changed\n") == []
+
+
+def test_decisions_none_without_a_reason_is_refused(tmp_path):
+    assert _review(tmp_path, "- [x] RED\nDecisions: none\n")
+
+
+def test_decisions_naming_an_id_the_ledger_lacks_is_refused(tmp_path):
+    fails = _review(tmp_path, "- [x] RED\nDecisions: d-20261105-0123abcd\n")
+    assert any("d-20261105-0123abcd" in f for f in fails)
+
+
+def test_decisions_naming_a_ledger_id_passes(tmp_path):
+    line, entry = _ledger_line()
+    assert _review(tmp_path, "- [x] RED\nDecisions: %s\n" % entry["id"], ledger=line) == []
+```
+
+- [ ] **Step 2:** Run `CI-PYTEST -k decisions`. Expected: the first, third and fourth FAIL.
+- [ ] **Step 3: Implement.** In `skill_review_failures`, after the open-checkbox loop for one
+      skill (`for a in arts:`), add:
+
+```python
+        fails += _decisions_line_failures(root, name, arts)
+```
+
+  and beside the function:
+
+```python
+def _ledger_ids(root, name):
+    path = skill_decisions.ledger_path(root / _SKILLS_DIR / name)
+    try:
+        return {e["id"] for e in skill_decisions.parse_entries(skill_decisions.file_lines(path))}
+    except (skill_decisions.LedgerError, OSError):
+        return set()                    # the ledger check reports a broken ledger itself
+
+
+def _decisions_line_failures(root, name, arts):
+    lines = []
+    for a in arts:
+        try:
+            lines += DECISIONS_LINE_RX.findall((root / a).read_text(encoding="utf-8"))
+        except OSError:
+            continue
+    if not lines:
+        return ["skills/%s: the co-changed checklist has no 'Decisions:' line. Name the ledger ids "
+                "this change added ('Decisions: d-YYYYMMDD-xxxxxxxx, ...') or say why it decided "
+                "nothing ('Decisions: none - <reason>')." % name]
+    named = set(re.findall(r"d-[0-9]{8}-[0-9a-f]{8}", "\n".join(lines)))
+    missing = sorted(named - _ledger_ids(root, name))
+    return (["skills/%s: 'Decisions:' names %s, not in the skill's ledger." % (name, ", ".join(missing))]
+            if missing else [])
+```
+
+  `DECISIONS_LINE_RX.findall` returns the whole line only if the pattern has no group; the
+  pattern above uses only non-capturing groups, so it does. Keep it that way.
+
+- [ ] **Step 4:** Run `CI-PYTEST`. Expected: all pass (fixtures updated per the STOP rule).
+- [ ] **Step 5: Mutation check:** remove the `missing` comparison; the id test must go RED.
+- [ ] **Step 6: Commit** `repo-gate: a skill change's checklist names the decisions it recorded`.
+
+### Task M2.4: the edit guard hands over the skill's declined decisions once
+
+**Files:**
+- Modify: `plugins/bitranox/hooks/skill-edit-guard.py` (`decide`, module docstring)
+- Test: `plugins/bitranox/hooks/tests/test_skill_edit_guard.py` (append)
+- Scratch, not shipped: `<scratchpad>/m2/price_brief_guard.py`
+
+**Interfaces:**
+- Consumes: `skill_decisions.render_brief`, `ledger_path`, `file_lines`;
+  `self_improve_signals.session_state_path(session, suffix)`; `_agent_transcript(event)`.
+- Produces: `ran_show(transcript: Path, skill: str) -> bool`; `decide` unchanged in signature.
+
+**Out of scope:** `skill_receipt.py`; the receipt and load checks (the brief runs only AFTER
+both pass, so an agent outside the procedure still gets the existing refusal first).
+
+**STOP conditions:**
+- the pricing replay (Step 1) cannot read the corpus or finds the transcript layout differs from
+  `_agent_transcript`'s;
+- the pricing shows more than one refusal per (agent, skill) is possible (the flag is broken).
+
+- [ ] **Step 1: Price it before building it.** Write `price_brief_guard.py` (scratch) that walks
+      `~/.claude/projects` with `rglob("*.jsonl")`, dedupes `tool_use` blocks by id, and for every
+      `Edit`, `Write` or `MultiEdit` whose `file_path` matches the guard's `_SKILL_MD` counts the
+      FIRST one per (transcript file, skill name); also counts how many of those transcripts held
+      an earlier Bash command containing `skill_decisions.py show <skill>` (expected 0 today).
+      Print: transcripts scanned, first-edits per (agent, skill), sessions with at least one, and
+      the 30-day figure. Record the four numbers in the guard's docstring `Decisions` block
+      (Step 4). This is the UPPER BOUND of refusals once every skill has a ledger; with M1/M2
+      alone only skills holding a rejected or removed entry can refuse.
+- [ ] **Step 2: Write the failing tests** (append; they reuse the module's `_session`,
+      `_load_record`, `_CACHE` and `armed`):
+
+```python
+import skill_decisions as SD
+
+
+def _skill_with_rejection(tmp_path, name="foo"):
+    skill = tmp_path / "repo" / "skills" / name
+    (skill / ".skillwriter").mkdir(parents=True)
+    (skill / "SKILL.md").write_text("text\n", encoding="utf-8")
+    entry = {"v": 1, "date": "2026-11-05", "kind": "rejected", "topic": "per-project-env",
+             "decision": "Install per project.", "why": "Two projects cannot share it.",
+             "evidence": {"tier": "measured", "text": "x"}, "reopen_if": "bmk changes.",
+             "anchors": [], "supersedes": [], "refs": [], "origin": "authored"}
+    entry["id"] = SD.entry_id(entry)
+    SD.ledger_path(skill).write_text(json.dumps(entry) + "\n", encoding="utf-8")
+    return skill / "SKILL.md"
+
+
+def _brief_edit(transcript, path):
+    return {"session_id": "S", "transcript_path": str(transcript), "tool_name": "Edit",
+            "tool_input": {"file_path": str(path)}}
+
+
+def _show_record(skill):
+    return {"type": "assistant", "message": {"content": [
+        {"type": "tool_use", "id": "toolu_s", "name": "Bash",
+         "input": {"command": "python3 /p/hooks/skill_decisions.py show %s --kind rejected,removed --full" % skill}}]}}
+
+
+def test_the_first_edit_is_refused_once_with_the_declined_decisions(tmp_path, armed):
+    path = _skill_with_rejection(tmp_path)
+    main = _session(tmp_path, [_load_record(_CACHE + "meta-skill-writer")])
+    reason = G.decide(_brief_edit(main, path), {})
+    assert reason is not None and "Two projects cannot share it." in reason
+    assert "re-send" in reason
+    assert G.decide(_brief_edit(main, path), {}) is None
+
+
+def test_an_agent_that_ran_show_is_not_refused(tmp_path, armed):
+    path = _skill_with_rejection(tmp_path)
+    main = _session(tmp_path, [_load_record(_CACHE + "meta-skill-writer"), _show_record("foo")])
+    assert G.decide(_brief_edit(main, path), {}) is None
+
+
+def test_show_for_another_skill_does_not_count(tmp_path, armed):
+    path = _skill_with_rejection(tmp_path)
+    main = _session(tmp_path, [_load_record(_CACHE + "meta-skill-writer"), _show_record("foo-bar")])
+    assert G.decide(_brief_edit(main, path), {}) is not None
+
+
+def test_a_skill_with_no_declined_decision_is_never_refused(tmp_path, armed):
+    path = tmp_path / "repo" / "skills" / "plain" / "SKILL.md"
+    path.parent.mkdir(parents=True)
+    path.write_text("text\n", encoding="utf-8")
+    main = _session(tmp_path, [_load_record(_CACHE + "meta-skill-writer")])
+    assert G.decide(_brief_edit(main, path), {}) is None
+
+
+def test_an_unreadable_ledger_lets_the_edit_through(tmp_path, armed):
+    path = _skill_with_rejection(tmp_path)
+    SD.ledger_path(path.parent).write_text("{broken\n", encoding="utf-8")
+    main = _session(tmp_path, [_load_record(_CACHE + "meta-skill-writer")])
+    assert G.decide(_brief_edit(main, path), {}) is None
+
+
+def test_each_agent_is_refused_once_for_itself(tmp_path, armed):
+    path = _skill_with_rejection(tmp_path)
+    main = _session(tmp_path, [], agent="a1", agent_records=[_load_record(_CACHE + "meta-skill-writer")])
+    event = dict(_brief_edit(main, path), agent_id="a1", agent_type="general-purpose")
+    assert G.decide(event, {}) is not None and G.decide(event, {}) is None
+```
+
+- [ ] **Step 3:** Run `CI-PYTEST -k "declined or ran_show or show_for or no_declined or
+      unreadable_ledger or refused_once"`. Expected: the first, third and last FAIL (the guard
+      allows them today).
+- [ ] **Step 4: Implement.** In `decide`, replace the allow line after the receipt and load
+      checks:
+
+```python
+    if receipt and _loaded_by_editing_agent(event):
+        return _brief_refusal(event, path)             # None unless the decisions brief is owed
+```
+
+  and add:
+
+```python
+_BRIEF_FLAG = ".skill-decisions-brief-"
+_BRIEF = ("Before this first edit of skills/%s, read what was already decided for it. Each entry "
+          "below was taken for the reason given; re-proposing one needs that reason answered, in a "
+          "new ledger entry that supersedes it.\n\n%s\n\nThe full list: python3 <plugin>/hooks/"
+          "skill_decisions.py show %s --kind rejected,removed --full. Now re-send the edit, revised "
+          "or unchanged; the re-send is not refused.")
+
+
+def _bash_commands(record):
+    content = (record.get("message") or {}).get("content")
+    for block in content if isinstance(content, list) else []:
+        if isinstance(block, dict) and block.get("type") == "tool_use" and block.get("name") == "Bash":
+            yield str((block.get("input") or {}).get("command") or "")
+
+
+def ran_show(transcript, skill):
+    """True when `transcript` holds a Bash call of `skill_decisions.py show <skill>`."""
+    wanted = re.compile(r"skill_decisions\.py\b.*\bshow\s+%s(?![\w-])" % re.escape(skill))
+    with Path(transcript).open(encoding="utf-8", errors="replace") as fh:
+        for line in fh:
+            if "skill_decisions" not in line:
+                continue
+            try:
+                record = json.loads(line)
+            except ValueError:
+                continue
+            if any(wanted.search(c) for c in _bash_commands(record)):
+                return True
+    return False
+
+
+def _refuse_once(session, agent, skill):
+    """True the first time for (session, agent, skill), recording it; False after, or if unstorable."""
+    try:
+        from self_improve_signals import session_state_path  # noqa: PLC0415 - optional state store
+        key = hashlib.sha1(("%s/%s" % (agent, skill)).encode("utf-8")).hexdigest()[:16]
+        flag = session_state_path(session, _BRIEF_FLAG + key)
+        if flag.exists():
+            return False
+        flag.parent.mkdir(parents=True, exist_ok=True)
+        flag.write_text("refused\n", encoding="utf-8")
+        return True
+    except Exception:  # noqa: BLE001 - a flag that cannot be stored lets the edit through
+        return False
+
+
+def _brief_refusal(event, path):
+    session = event.get("session_id")
+    if not isinstance(session, str) or not session.strip():
+        return None
+    skill_dir = Path(path).parent
+    try:
+        import skill_decisions  # noqa: PLC0415 - a missing module must not wedge the guard
+        ledger = skill_decisions.ledger_path(skill_dir)
+        brief = skill_decisions.render_brief(lambda: skill_decisions.file_lines(ledger),
+                                             skill=skill_dir.name)
+    except Exception:  # noqa: BLE001 - ledger integrity is the commit gate's job, not this guard's
+        return None
+    if not brief:
+        return None
+    transcript = _agent_transcript(event)
+    try:
+        if transcript is not None and ran_show(transcript, skill_dir.name):
+            return None
+    except OSError:
+        pass                                           # unreadable: one refusal costs one re-send
+    if not _refuse_once(session, event.get("agent_id") or "main", skill_dir.name):
+        return None
+    return _BRIEF % (skill_dir.name, brief, skill_dir.name)
+```
+
+  Add `import hashlib` to the imports. Extend the module docstring's decision list with:
+
+```
+  - AFTER both checks pass, once per (session, agent, skill): when the skill's ledger holds a
+    live rejected or removed entry and the editing agent's transcript shows no
+    `skill_decisions.py show <skill>` call, the first edit is refused with those entries
+    (`render_brief`); the re-send passes. This direction fails OPEN: an unreadable ledger, a
+    missing module or an unstorable flag lets the edit through, because the commit gate owns
+    ledger integrity and this refusal only delivers reading.
+
+Decisions:
+- Refuse once, not every time, and never when the agent ran `show`: the user chose the
+  refuse-once form for EnterWorktree and the question-premise hook (2026-10-12), and an agent
+  that followed the procedure must never pay for it. Priced on <the date Step 1 ran> by
+  replaying the transcript corpus: <the four numbers Step 1 printed>. Reopen if the refusal log
+  shows agents
+  re-sending unchanged edits without reading the brief.
+```
+
+- [ ] **Step 5:** Run `CI-PYTEST`. Expected: all pass, every existing guard test included.
+- [ ] **Step 6: Mutation check:** make `_refuse_once` always return True; the "once" tests must
+      go RED. Drop the `(?![\w-])` lookahead; `test_show_for_another_skill` must go RED.
+- [ ] **Step 7: Commit** `skill-edit-guard: hand over a skill's declined decisions before its
+      first edit` with the guard and its test.
+
+### Task M2.5: the skill-writer procedure reads and writes the ledger
+
+**REQUIRED SUB-SKILL:** `bitranox:meta-skill-writer` for every SKILL.md change below (receipt,
+RED baseline with `bitranox:baseline-probe` agents, GREEN, REFACTOR, checklist). This task's own
+checklist is the first one the M2.3 rule binds, so it carries a `Decisions:` line.
+
+**Files:**
+- Modify: `plugins/bitranox/skills/meta-skill-writer/SKILL.md` (sections named below; line numbers
+  from the plan's Critical files, re-read before editing)
+- Create: `plugins/bitranox/skills/meta-skill-writer/.skillwriter/decisions.jsonl` (through the
+  CLI only) and the skill-writer checklist for this change
+- Modify: `CONTRIBUTING.md` (lines 238-241), `CLAUDE.md` (a new short section)
+
+What the text must say (the GREEN target; the RED baseline asks a probe agent, given the
+current skill text and a scenario "you are about to re-add a rule that was removed last month",
+what it does first, and must show it does NOT look for prior decisions):
+
+1. **Step 0b, read the decisions** (right after the receipt step): run
+   `python3 <plugin>/hooks/skill_decisions.py show <skill> --kind rejected,removed --full`, then
+   the one-line index (`show <skill>`). For a tool-repo twin, pass `--skill-dir` naming the
+   marketplace copy. An edit that reverses a listed decision needs a new entry answering its
+   `reopen_if`, written before the edit.
+2. **Baseline pass:** when the skill has no `rule` entries yet AND the edit is a rewrite or an
+   A/B test, first record its load-bearing rules as `origin: baseline` entries, in their own
+   commit, so the rewrite is checked against them.
+3. **REFACTOR, append entries:** every decision the edit makes becomes an entry (`rule` with an
+   anchor for a rule the text now states; `removed` for one taken out; `rejected` for an
+   alternative or a declined gap whose reason will still hold next time). Entries go in through
+   `add --from-file`, never by hand.
+4. **Picking an anchor:** quote 20 to 200 characters that are the stable core of one rule,
+   unique in the skill's Markdown, not a heading and not inside a table row; prefer the clause
+   that would have to change if the rule changed. Avoid the three twin divergences (the `name:`
+   field, a trailing `(<name>)` on the H1, the self-install blockquote).
+5. **Checklist line:** `Decisions: <id>, <id>` or `Decisions: none - <reason>`.
+6. **"Keep out of both" carve-out** (lines 627-657): the ledger holds decision, reason, evidence
+   and reopen-if; it is still no place for session narrative. Entry text is public: no private
+   hosts, paths or repo names; "user decision <date>" is fine.
+
+**Ledger entries for this change** (dogfood; written with `add --from-file` after the GREEN
+text exists, so each anchor quotes the shipped sentence):
+- one `rule` per item 1 to 5 above, tier `user` for 1, 3 and 5 (the user's 2026-11-05 decision
+  quoted in the plan's Context), tier `measured` for 4 (the M0 PREREG result);
+- one `rejected` entry: "a narrative history file per skill", why: git and CHANGELOG already hold
+  the narrative and a rewritten history file erodes (the context-watcher finding), reopen if: an
+  editor needs history the ledger plus `git log` cannot answer.
+
+`CONTRIBUTING.md` (at the existing skill-change section): two sentences naming the ledger, the
+`Decisions:` line, and `skill_decisions.py show`. `CLAUDE.md`: a section "Skill decisions are
+recorded per skill" stating where the ledger lives, that the commit gate refuses a dropped anchor
+and how to answer it (a superseding entry), and that hooks and jigs use a docstring `Decisions`
+block instead (M3 adds that rule to the hook and jig skills).
+
+**STOP conditions:** the RED baseline already looks for prior decisions (then the text change
+is not needed as drafted: report what the probe did); a probe agent's GREEN run still skips
+`show`; `repo-gate.py --mirrors` reports meta-skill-writer as mirrored (then its twin needs the
+same text: add that repo to this task before editing).
+
+- [ ] **Step 1:** Run the meta-skill-writer procedure through RED (two baseline-probe agents),
+      GREEN (the text above), REFACTOR (entries, checklist with its `Decisions:` line).
+- [ ] **Step 2:** `python3 plugins/bitranox/hooks/skill_decisions.py check meta-skill-writer`
+      exits 0; `python3 plugins/bitranox/hooks/repo-gate.py --ci` passes.
+- [ ] **Step 3: Commit** `meta-skill-writer: read and record a skill's decisions` with the
+      SKILL.md, its `.skillwriter/` files, `CONTRIBUTING.md` and `CLAUDE.md`.
+
+### Task M2.6: end-to-end controls on a scratch worktree
+
+No code; this proves the shipped behaviour the plan's M2 verification names, with the REAL hook
+entry points (`repo-gate.py` reading a PreToolUse event on stdin, `skill-edit-guard.py` likewise),
+never the functions.
+
+- [ ] **Step 1:** `git worktree add <scratchpad>/m2/e2e HEAD` (detached). In it, record a rule
+      entry for a real sentence of `devops-bmk/SKILL.md` via `add`, commit it with its checklist.
+- [ ] **Step 2:** Delete that sentence, stage it, and pipe a `git commit` PreToolUse event into
+      `repo-gate.py` (`git -C <e2e>` in the command so the hook judges that repo). Expected: exit
+      2, the message names the entry id, its why and its reopen_if.
+- [ ] **Step 3:** Add a superseding entry, stage it, replay the event. Expected: pass.
+- [ ] **Step 4, controls:** (a) leave another skill's SKILL.md edited and unstaged, commit an
+      unrelated file: passes. (b) Move `origin/master` of the scratch repo one commit ahead of
+      HEAD (`update-ref`), commit an unrelated file: passes. (c) Drop the sentence AND write the
+      superseding entry to the ledger on disk, then `git commit -F msg -- SKILL.md` naming only
+      SKILL.md: refused (that selection takes SKILL.md from disk and the ledger from HEAD, where
+      the superseding entry is absent).
+- [ ] **Step 5, guard:** replay an Edit event for that skill with a transcript that loaded
+      meta-skill-writer and holds a fresh receipt (`skill_receipt.py start` under an isolated
+      HOME): refused once with the brief once a `rejected` entry exists; the re-send passes; a
+      transcript holding a `show` call is not refused; a skill with an empty ledger is not.
+- [ ] **Step 6:** Write the outputs of Steps 2 to 5 into the review notes; remove the scratch
+      worktree with `wtclean.py --apply` after checking nothing runs in it.
+
+### Task M2.7: mirrored skills (M2b)
+
+**Files:**
+- Modify: `plugins/bitranox/hooks/repo-gate.py` (the tool-repo path, `_tool_repo_touched` and
+  the function that judges a tool-repo commit's twins)
+- Test: `plugins/bitranox/hooks/tests/test_repo_gate.py` (append)
+
+When a TOOL repo commit or push ships a change to a twin, also run the MARKETPLACE copy's ledger
+(read at its published ref plus local commits, the way the mirror check already reads the
+marketplace side) against the twin's shipped Markdown, after erasing the three by-convention
+divergences with the mirror check's own normaliser. A finding refuses the tool-repo commit with
+the same message as M2.2, naming the marketplace ledger as the place to add the superseding entry.
+
+**STOP conditions:** the tool-repo path has no single function receiving both the twin's shipped
+files and the marketplace skill dir (then report the call graph and split this task); the change
+exceeds about 150 lines (report and ask whether to ship M2.7 in the next release).
+
+- [ ] **Step 1:** Read the tool-repo commit path end to end (`_tool_repo_touched` at the line
+      after `run_checks`, its callers, the mirror normaliser) and write its call graph into the
+      review notes.
+- [ ] **Step 2:** Failing test: a tool repo whose twin `SKILL.md` drops a sentence the
+      marketplace ledger anchors is refused; the same drop with a superseding marketplace entry
+      passes; a twin edit that touches no anchor passes.
+- [ ] **Step 3:** Implement at the function Step 1 found; run `CI-PYTEST`; mutation check (skip
+      the new call: the refusal test goes RED).
+- [ ] **Step 4: Commit** `repo-gate: a tool repo's twin answers to the marketplace ledger`.
+
+### Task M2.8: release
+
+- [ ] **Step 1:** `git fetch`, `git rebase origin/master`; re-run `CI-PYTEST` and
+      `python3 plugins/bitranox/hooks/repo-gate.py --ci` after the rebase.
+- [ ] **Step 2:** Read origin's version (`git show origin/master:plugins/bitranox/.claude-plugin/plugin.json`)
+      and write `notes.md` (scratch): `### Added` - the per-skill decision ledger and its CLI;
+      the commit gate refuses a change that drops a recorded decision; the skill-writer
+      checklist names the decisions a change made; the edit guard hands over a skill's declined
+      decisions before the first edit. `### Fixed` - changed-path checks diffed from origin's
+      tip, so a checkout behind origin listed a peer's pushed paths as its own.
+- [ ] **Step 3:** `uv run plugins/bitranox/hooks/bump_version.py --part minor --changelog <notes.md>`,
+      asserting first that plugin.json still holds the version Step 2 read. Commit the three
+      version files alone.
+- [ ] **Step 4:** `ListAgents`; message each live peer that a push is coming and that the gate
+      gains the ledger checks (the release note text). Then `git push origin
+      feat/skill-decisions:master` (the pre-push hook is the gate; do not also run it by hand).
+- [ ] **Step 5:** `ci_wait.py --ref HEAD` (compuse-toolbox), every run terminal and green;
+      `git fetch` and confirm `git log origin/master -1 --format=%s` is the bump commit.
+- [ ] **Step 6:** Update OPEN-WORK [28] in the main checkout: `next:` becomes M3 (seed, code
+      docstring rule, audit rooms, meta-self-improve), and the plan file gets the M3 tasks in a
+      later session.
+
 ## Critical files
 
 - `plugins/bitranox/hooks/repo-gate.py` (219 `_LF_SUFFIXES`, 1039-1049 `_changed_vs_origin`,
