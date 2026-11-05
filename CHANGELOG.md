@@ -30,6 +30,12 @@ a hole nobody has drawn a line under is one that gets rediscovered and half-fill
 two "versions with no entry" notes came to sit in this file disagreeing with it.
 
 
+## [10.16.2]
+
+### Fixed
+
+- `meta-skill-ab-test`: the sandboxed worktree-registry test gives its commit an explicit author identity, so it passes on a runner with no git identity configured.
+
 ## [10.16.1]
 
 ### Fixed

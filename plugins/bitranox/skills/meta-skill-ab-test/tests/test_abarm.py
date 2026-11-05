@@ -1128,7 +1128,9 @@ def test_sandboxed_worktree_prune_leaves_a_neighbours_registration_alone(scratch
         d.mkdir()
     m = A.SandboxMounts(ws=ws, home=home, cfg=cfg, git_common_dir=A.git_common_dir(ws), real_home=Path.home(),
                         read_only=(scratch_repo,), tmp=outside)
-    env = dict(L.git_env(), HOME=str(home))
+    ident = {"GIT_AUTHOR_NAME": "t", "GIT_AUTHOR_EMAIL": "t@example.org",
+             "GIT_COMMITTER_NAME": "t", "GIT_COMMITTER_EMAIL": "t@example.org"}
+    env = dict(L.git_env(), HOME=str(home), **ident)
     prefix = A.sandbox_argv(m, sandbox="bwrap-host-proc")
     L.run([*prefix, "git", "worktree", "prune"], env=env, timeout=60)
     L.run([*prefix, "git", "worktree", "add", "-q", "-b", "sibling", str(ws.parent / "sibling")], env=env, timeout=60)
