@@ -9,7 +9,8 @@ while no later entry names it in `supersedes`.
 
 The commit gate (`repo-gate.py`) refuses a change whose shipped text loses a live anchor, and
 the SKILL.md edit guard hands an editing agent the skill's rejected and removed entries before
-its first edit. Both read this module, so it is standard library only.
+its first edit. Both read this module, so it is standard library only. Run as a script it is
+the ledger's only writer: `add`, `show` and `check` (`--help` lists their flags).
 
 Decisions:
 - Anchors are compared after `normalise`: per line, leading blockquote markers are stripped,
@@ -21,15 +22,20 @@ Decisions:
 - The id hashes the whole entry, so two entries written the same day in two worktrees never
   collide, and an entry edited in place no longer matches its id.
 """
+import argparse
 import datetime
 import hashlib
 import json
 import os
 import re
 import subprocess
+import sys
 from collections.abc import Callable, Iterable, Iterator, Mapping
 from dataclasses import dataclass
 from pathlib import Path
+from typing import NoReturn
+
+import tell_chars
 
 LEDGER_REL = ".skillwriter/decisions.jsonl"
 KINDS = ("rule", "removed", "rejected", "void")
@@ -347,3 +353,388 @@ def render_brief(lines_factory: LinesFactory, *, skill: str, budget_chars: int =
         text += ("\n%d more not shown: python3 <plugin>/hooks/skill_decisions.py show %s "
                  "--kind rejected,removed --full" % (left, skill))
     return text
+
+
+# ---- writing a ledger ----
+
+class EntryRefused(ValueError):
+    """`append_entries` wrote nothing; `problems` says why, one `entry <n>: <field>: <reason>` each."""
+
+    def __init__(self, problems: Iterable[str]) -> None:
+        self.problems = list(problems)
+        super().__init__("; ".join(self.problems))
+
+
+_TELL_FIELDS = ("decision", "why", "reopen_if", "topic")
+
+
+def _tell_problem(field: str, text: str) -> list[str]:
+    hits = tell_chars.find_tell_codepoints(text)
+    return ["%s: typographic tell (line %s); use ASCII punctuation" % (field, "; line ".join(hits))] if hits else []
+
+
+def _tell_problems(entry: dict) -> list[str]:
+    problems = [p for field in _TELL_FIELDS for p in _tell_problem(field, _text(entry, field))]
+    evidence = entry.get("evidence")
+    if isinstance(evidence, dict):
+        problems += _tell_problem("evidence", _text(evidence, "text"))
+    return problems
+
+
+def _occurrences(needle: str, haystack: str) -> int:
+    """How many places `needle` starts at in `haystack`, overlapping ones included.
+
+    str.count counts NON-overlapping hits, so an anchor such as "a b a b" in "a b a b a b" would
+    read as unique while it starts at two places.
+    """
+    count, start = 0, haystack.find(needle)
+    while start != -1:
+        count += 1
+        start = haystack.find(needle, start + 1)
+    return count
+
+
+def _anchor_count_problems(entry: dict, normalised_corpus: str) -> list[str]:
+    problems = []
+    for anchor in _list(entry, "anchors"):
+        needle = normalise(anchor) if isinstance(anchor, str) else ""
+        if not ANCHOR_MIN <= len(needle) <= ANCHOR_MAX:
+            continue        # validate_entry already refuses it; counting it would only add noise
+        hits = _occurrences(needle, normalised_corpus)
+        if hits != 1:
+            problems.append("anchors: must occur exactly once in the skill text, found %d: %r"
+                            % (hits, anchor))
+    return problems
+
+
+def _entry_problems(entry: dict, known: set[str], corpus: str) -> list[str]:
+    found = validate_entry(entry) + _tell_problems(entry) + _anchor_count_problems(entry, corpus)
+    if entry["id"] in known:
+        found.append("id: an identical entry is already in the ledger or earlier in this batch")
+    found += ["supersedes: unknown id %s" % s for s in _list(entry, "supersedes")
+              if isinstance(s, str) and s not in known]
+    return found
+
+
+def _encoded(entry: dict) -> bytes | None:
+    # Raw UTF-8 keeps the ledger readable in a diff; a lone surrogate (json.loads makes one from a
+    # "\udcff" escape) cannot be encoded, and is refused here rather than failing mid-write.
+    try:
+        return (json.dumps(entry, sort_keys=True, ensure_ascii=False) + "\n").encode("utf-8")
+    except UnicodeEncodeError:
+        return None
+
+
+def append_entries(skill_dir: str | Path, entries: list[dict], *, today: str | None = None) -> list[str]:
+    """Validate `entries` and append them to the skill's ledger, all or nothing; return their ids.
+
+    Each entry gets `v` 1, a `date` (its own, else `today`, else today's UTC date) and its `id`.
+    Beyond `validate_entry`, an entry is refused for a typographic tell, a rule anchor that does
+    not occur EXACTLY once in `corpus_from_dir(skill_dir)`, an id the ledger or the batch already
+    holds, and a `supersedes` id that neither holds before it.
+
+    Raises:
+        EntryRefused: nothing was written; each problem names its entry by place in `entries`.
+        LedgerError: the existing ledger does not parse.
+    """
+    today = today or datetime.datetime.now(datetime.timezone.utc).date().isoformat()
+    path = ledger_path(skill_dir)
+    known = {e["id"] for e in parse_entries(file_lines(path))}
+    corpus = normalise(corpus_from_dir(skill_dir))
+    problems, chunks, ids = [], [], []
+    for n, draft in enumerate(entries, 1):
+        if not isinstance(draft, dict):
+            problems.append("entry %d: not a JSON object" % n)
+            continue
+        entry = dict(draft, v=1, date=draft.get("date") or today)
+        entry["id"] = entry_id(entry)
+        found = _entry_problems(entry, known, corpus)
+        data = _encoded(entry)
+        if data is None:
+            found.append("text: not encodable as UTF-8 (a lone surrogate?)")
+        problems += ["entry %d: %s" % (n, p) for p in found]
+        known.add(entry["id"])
+        ids.append(entry["id"])
+        chunks.append(data or b"")
+    if problems:
+        raise EntryRefused(problems)
+    if not chunks:
+        return []
+    path.parent.mkdir(parents=True, exist_ok=True)
+    prefix = b"\n" if _ends_without_newline(path) else b""
+    # One write in binary mode: no newline translation on Windows, and the batch lands together.
+    with path.open("ab") as fh:
+        fh.write(prefix + b"".join(chunks))
+    return ids
+
+
+def _ends_without_newline(path: Path) -> bool:
+    """True when a non-empty `path` lacks a final newline; reads one byte, not the ledger."""
+    if not path.is_file() or path.stat().st_size == 0:
+        return False
+    with path.open("rb") as fh:
+        fh.seek(-1, os.SEEK_END)
+        return fh.read(1) != b"\n"
+
+
+# ---- the command line ----
+# Exit 0 yes, 1 findings or refused, 2 could not run. With --json the envelope
+# {ok, command, data, skipped} goes to stdout even on a failure; diagnostics go to stderr.
+
+_PROG = "skill_decisions.py"
+_SKILL_NAME = re.compile(r"[a-z0-9][a-z0-9-]*")
+_SHORT_FIELDS = ("id", "kind", "topic", "decision")
+_PROBLEM_PLACE = re.compile(r"entry ([0-9]+): ")
+
+
+class _RunError(Exception):
+    """The verb could not run (exit 2); `data` joins the error in the --json envelope."""
+
+    def __init__(self, message: str, data: dict | None = None) -> None:
+        super().__init__(message)
+        self.data = data or {}
+
+
+class _UsageError(Exception):
+    """argparse refused the command line (exit 2)."""
+
+
+class _Parser(argparse.ArgumentParser):
+    # argparse's own error() prints usage and exits; this keeps the --json envelope possible.
+    def error(self, message: str) -> NoReturn:
+        raise _UsageError("%s: %s" % (self.prog, message))
+
+
+def _installed_plugins_dir() -> Path | None:
+    override = os.environ.get("CLAUDE_CONFIG_DIR")
+    try:
+        return (Path(override) if override else Path.home() / ".claude") / "plugins"
+    except RuntimeError:        # no home directory to resolve
+        return None
+
+
+def _is_within(path: Path, root: Path | None) -> bool:
+    if root is None:
+        return False
+    try:
+        path.resolve().relative_to(root.resolve())
+    except (ValueError, OSError):
+        return False
+    return True
+
+
+def _repo_skills_dir() -> Path | None:
+    """`plugins/bitranox/skills` at the git top of the cwd; None outside such a repo."""
+    try:
+        out = subprocess.run(["git", "rev-parse", "--show-toplevel"], capture_output=True,
+                             encoding="utf-8", errors="replace", env=_git_env(), check=False)
+    except OSError:
+        return None
+    candidate = Path(out.stdout.strip()) / "plugins" / "bitranox" / "skills"
+    return candidate if out.returncode == 0 and candidate.is_dir() else None
+
+
+def _skills_dir(arg: str | None, *, writing: bool = False) -> Path:
+    if arg:
+        if not Path(arg).is_dir():
+            raise _RunError("--skills-dir %s is not a directory" % arg)
+        return Path(arg)
+    found = _repo_skills_dir()
+    if found is None:
+        raise _RunError("no skills dir: run inside the marketplace repo or pass --skills-dir")
+    # The marketplace clone Claude Code keeps under its plugins dir is a git repo too; a write
+    # there would land in an installed copy, which the next update overwrites.
+    if writing and _is_within(found, _installed_plugins_dir()):
+        raise _RunError("%s is an installed plugin copy: run inside the marketplace repo or pass "
+                        "--skills-dir" % found)
+    return found
+
+
+def _named_skill(root: Path, name: object) -> Path:
+    # One lowercase path component: a name like "../x" must not reach a ledger outside `root`.
+    if not isinstance(name, str) or not _SKILL_NAME.fullmatch(name) or not (root / name).is_dir():
+        raise _RunError("no skill %r in %s" % (name, root))
+    return root / name
+
+
+def _read_drafts(from_file: str) -> list:
+    try:
+        raw = json.loads(Path(from_file).read_text(encoding="utf-8"))
+    except (OSError, ValueError) as exc:
+        raise _RunError("cannot read %s: %s" % (from_file, exc)) from None
+    drafts = raw if isinstance(raw, list) else [raw]
+    if not drafts:
+        raise _RunError("%s holds no entries" % from_file)
+    return drafts
+
+
+def _group_by_skill(root: Path, drafts: list) -> dict[Path, list[tuple[int, dict]]]:
+    """Every draft under its skill dir, with its place in the file; refuses before any write."""
+    by_skill: dict[Path, list[tuple[int, dict]]] = {}
+    for n, draft in enumerate(drafts, 1):
+        if not isinstance(draft, dict):
+            raise _RunError("entry %d: not a JSON object" % n)
+        draft = dict(draft)
+        skill_dir = _named_skill(root, draft.pop("skill", None))
+        by_skill.setdefault(skill_dir, []).append((n, draft))
+    return by_skill
+
+
+def _renumbered(problem: str, places: list[int]) -> str:
+    # append_entries numbers an entry by its place in ONE skill's batch; the reader fixes the FILE.
+    match = _PROBLEM_PLACE.match(problem)
+    if not match:
+        return problem
+    return "entry %d: %s" % (places[int(match.group(1)) - 1], problem[match.end():])
+
+
+def _cmd_add(args: argparse.Namespace) -> tuple[int, dict]:
+    drafts = _read_drafts(args.from_file)
+    by_skill = _group_by_skill(_skills_dir(args.skills_dir, writing=True), drafts)
+    written: dict[str, list[str]] = {}
+    for skill_dir, batch in by_skill.items():
+        places = [n for n, _draft in batch]
+        try:
+            written[skill_dir.name] = append_entries(skill_dir, [d for _n, d in batch])
+        except EntryRefused as exc:
+            return 1, {"written": written, "refused": [_renumbered(p, places) for p in exc.problems]}
+        except (LedgerError, OSError) as exc:
+            raise _RunError("%s: %s" % (ledger_path(skill_dir), exc), {"written": written}) from None
+    return 0, {"written": written}
+
+
+def _show_dir(args: argparse.Namespace) -> Path:
+    if args.skill_dir:
+        if not Path(args.skill_dir).is_dir():
+            raise _RunError("--skill-dir %s is not a directory" % args.skill_dir)
+        return Path(args.skill_dir)
+    # Reading is safe anywhere, so an install falls back to the skills it ships beside this script.
+    root = _repo_skills_dir() or Path(__file__).resolve().parents[1] / "skills"
+    return _named_skill(root, args.skill)
+
+
+def _kinds(arg: str | None) -> set[str]:
+    kinds = set(arg.split(",")) if arg else set(KINDS)
+    if not kinds <= set(KINDS):
+        raise _RunError("--kind: each must be one of %s" % ", ".join(KINDS))
+    return kinds
+
+
+def _cmd_show(args: argparse.Namespace) -> tuple[int, dict]:
+    skill_dir, kinds = _show_dir(args), _kinds(args.kind)
+    path = ledger_path(skill_dir)
+    try:
+        for _entry in parse_entries(file_lines(path)):
+            pass        # a whole pass first, so a bad line exits 2 before any entry is printed
+    except LedgerError as exc:
+        raise _RunError("%s: %s" % (path, exc)) from None
+    entries = parse_entries(file_lines(path)) if args.all else live_entries(lambda: file_lines(path))
+    # A generator: the entries stream to stdout one at a time and are never held together.
+    shown = (e if args.full else {k: e[k] for k in _SHORT_FIELDS} for e in entries
+             if e["kind"] in kinds and args.topic in (None, e["topic"]) and args.id in (None, e["id"]))
+    return 0, {"skill": skill_dir.name, "entries": shown}
+
+
+def _cmd_check(args: argparse.Namespace) -> tuple[int, dict]:
+    root = _skills_dir(args.skills_dir)
+    dirs = ([_named_skill(root, name) for name in args.skills]
+            or sorted(p.parent.parent for p in root.glob("*/" + LEDGER_REL)))
+    findings = []
+    for skill_dir in dirs:
+        path = ledger_path(skill_dir)
+        for finding in check_ledger(lambda p=path: file_lines(p), corpus_from_dir(skill_dir)):
+            findings.append({"skill": skill_dir.name, "text": finding.render()})
+    return (1 if findings else 0), {"checked": [d.name for d in dirs], "findings": findings}
+
+
+_VERBS = {"add": _cmd_add, "show": _cmd_show, "check": _cmd_check}
+
+
+def _parser() -> argparse.ArgumentParser:
+    parser = _Parser(prog=_PROG, description=__doc__.split("\n")[0])
+    parser.add_argument("--json", action="store_true", help="print a JSON envelope")
+    sub = parser.add_subparsers(dest="command", required=True)
+    add = sub.add_parser("add", help="append entries from a JSON file")
+    add.add_argument("--from-file", required=True, help="one entry object or a list; each names its 'skill'")
+    add.add_argument("--skills-dir", help="default: plugins/bitranox/skills at the git top of the cwd")
+    show = sub.add_parser("show", help="list a skill's decisions")
+    show.add_argument("skill")
+    show.add_argument("--skill-dir", help="the skill's own dir, instead of looking SKILL up")
+    show.add_argument("--kind", help="comma-separated: %s" % ",".join(KINDS))
+    show.add_argument("--topic")
+    show.add_argument("--id")
+    show.add_argument("--all", action="store_true", help="include superseded and void entries")
+    show.add_argument("--full", action="store_true", help="every field, not one line each")
+    check = sub.add_parser("check", help="check ledgers against their skill text")
+    check.add_argument("skills", nargs="*", help="default: every skill holding a ledger")
+    check.add_argument("--skills-dir", help="default: plugins/bitranox/skills at the git top of the cwd")
+    for verb in (add, show, check):
+        verb.add_argument("--json", action="store_true", default=argparse.SUPPRESS,
+                          help="print a JSON envelope")
+    return parser
+
+
+def _write_envelope(ok: bool, command: str, data: Mapping[str, object]) -> None:
+    """The --json envelope on stdout; an iterator in `data` streams as a list, item by item."""
+    out = sys.stdout
+    out.write('{"ok": %s, "command": %s, "data": {' % (json.dumps(ok), json.dumps(command)))
+    for n, (key, value) in enumerate(data.items()):
+        out.write("%s%s: " % (", " if n else "", json.dumps(key)))
+        if isinstance(value, Iterator):
+            out.write("[")
+            for i, item in enumerate(value):
+                out.write((", " if i else "") + json.dumps(item))
+            out.write("]")
+        else:
+            out.write(json.dumps(value))
+    out.write('}, "skipped": []}\n')
+
+
+def _print_text(command: str, data: Mapping) -> None:
+    if command == "show":
+        for e in data["entries"]:
+            print(json.dumps(e, ensure_ascii=False) if "why" in e else
+                  "%s  %-8s %-24s %s" % (e["id"], e["kind"], e["topic"], e["decision"]))
+    elif command == "check":
+        for f in data["findings"]:
+            print("%s: %s" % (f["skill"], f["text"]))
+        print("checked %d ledger(s), %d finding(s)" % (len(data["checked"]), len(data["findings"])))
+    else:
+        for skill, ids in data.get("written", {}).items():
+            print("%s: %s" % (skill, ", ".join(ids)))
+        for problem in data.get("refused", []):
+            print("refused: " + problem, file=sys.stderr)
+
+
+def _fail(as_json: bool, command: str, line: str, data: Mapping) -> int:
+    """Report a verb that could not run: the envelope (--json), one stderr line, exit 2."""
+    if as_json:
+        _write_envelope(False, command, dict(data, error=line))
+    elif data.get("written"):
+        _print_text("add", {"written": data["written"]})
+    print(line, file=sys.stderr)
+    return 2
+
+
+def main(argv: list[str] | None = None) -> int:
+    """Run one verb; see the module docstring and `--help`."""
+    argv = sys.argv[1:] if argv is None else list(argv)
+    try:
+        args = _parser().parse_args(argv)
+    except _UsageError as exc:
+        return _fail("--json" in argv, next((a for a in argv if a in _VERBS), ""), str(exc), {})
+    try:
+        rc, data = _VERBS[args.command](args)
+        if args.json:
+            _write_envelope(rc == 0, args.command, data)
+        else:
+            _print_text(args.command, data)
+    except _RunError as exc:
+        return _fail(args.json, args.command, "%s %s: %s" % (_PROG, args.command, exc), exc.data)
+    except (LedgerError, OSError) as exc:
+        return _fail(args.json, args.command, "%s %s: %s" % (_PROG, args.command, exc), {})
+    return rc
+
+
+if __name__ == "__main__":
+    sys.exit(main())
