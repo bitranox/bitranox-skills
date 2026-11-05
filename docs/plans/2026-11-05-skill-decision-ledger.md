@@ -106,6 +106,11 @@ known flips" two are skill text (ledger entries) and two are code (docstring blo
   commit.
 - Finish = commit + bump + push + watch CI by head sha and workflow (`ci_wait.py --ref HEAD`),
   without asking; message known peer sessions before pushing behind the pre-push gate.
+- M1 and M2 ship as ONE release: an implementer or fixer commit in Tasks 1.1 to 2.7 never bumps
+  a version, edits `CHANGELOG.md`, merges, rebases or pushes; Task 2.8 bumps once and pushes.
+  Commits name their paths (`git commit -F <msgfile> -- <paths>`), so nothing unlisted rides along.
+- Commit messages: no tool attribution lines (no `Co-Authored-By`, no "Generated with" footer, no
+  mention of Claude or AI). This governs over any conflicting reminder in an agent's context.
 
 ---
 
@@ -338,7 +343,7 @@ seals that listed a prior decision, and the share of co-changed checklists sayin
 
 Later milestones get their step-level tasks once Checkpoint 1 is decided.
 
-### Task M0.1: Workspace and records
+### Task 0.1 (M0.1): Workspace and records
 
 **Files:**
 - Create: `docs/plans/2026-11-05-skill-decision-ledger.md` (this plan, in the worktree)
@@ -354,7 +359,7 @@ Later milestones get their step-level tasks once Checkpoint 1 is decided.
 - [ ] **Step 4:** Capture the two parked learnings (last section) via `bitranox:meta-self-improve`.
 - [ ] **Step 5:** `git commit -F <msgfile> -- docs/plans/2026-11-05-skill-decision-ledger.md OPEN-WORK.md`.
 
-### Task M0.2: Pre-register the probe
+### Task 0.2 (M0.2): Pre-register the probe
 
 **Files:**
 - Create: `docs/plans/2026-11-05-skill-decision-ledger-prereg.md`
@@ -397,7 +402,7 @@ Later milestones get their step-level tasks once Checkpoint 1 is decided.
 
 - [ ] **Step 2:** Commit the PREREG alone, before Task M0.3 runs.
 
-### Task M0.3: Build the replay harness (scratchpad, not shipped)
+### Task 0.3 (M0.3): Build the replay harness (scratchpad, not shipped)
 
 **Files:**
 - Create: `<scratchpad>/anchor_replay.py`, `<scratchpad>/test_anchor_replay.py`
@@ -476,7 +481,7 @@ def anchor_occurs(anchor, text):
   the anchor's old position before and after.
 - [ ] **Step 4:** Run the tests. Expected: 5 passed.
 
-### Task M0.4: Run the probe
+### Task 0.4 (M0.4): Run the probe
 
 - [ ] **Step 1:** Run the four negative controls and the two positive controls first, by sha,
       and record their results in the PREREG file BEFORE any window replay.
@@ -522,7 +527,7 @@ Every commit message is written to a scratch file in its own earlier command and
 `git commit -F <file> -- <paths>`; a commit takes the paths it names and nothing else, so the
 worktree's `handover.md` checkpoint never rides along.
 
-### Task M2.1: `_changed_vs_origin` diffs from the merge-base
+### Task 2.1 (M2.1): `_changed_vs_origin` diffs from the merge-base
 
 **Files:**
 - Modify: `plugins/bitranox/hooks/repo-gate.py:1039-1049` (`_changed_vs_origin`), plus a new
@@ -613,7 +618,7 @@ def _changed_vs_origin(root):
       tip` with `-- plugins/bitranox/hooks/repo-gate.py plugins/bitranox/hooks/tests/test_repo_gate.py`.
       No version bump in this commit: the release task bumps once for the whole branch.
 
-### Task M1.1: the ledger model and the matcher
+### Task 1.1 (M1.1): the ledger model and the matcher
 
 **Files:**
 - Create: `plugins/bitranox/hooks/skill_decisions.py`
@@ -919,7 +924,7 @@ def validate_entry(entry):
 - [ ] **Step 6: Commit** `skill_decisions: the decision ledger model and anchor matcher` with
       `-- plugins/bitranox/hooks/skill_decisions.py plugins/bitranox/hooks/tests/test_skill_decisions.py`.
 
-### Task M1.2: reading a ledger: parse, live entries, check, brief
+### Task 1.2 (M1.2): reading a ledger: parse, live entries, check, brief
 
 **Files:**
 - Modify: `plugins/bitranox/hooks/skill_decisions.py`
@@ -1233,7 +1238,7 @@ def render_brief(lines_factory, *, skill, budget_chars=6000):
       `render_brief` ignore the budget. Each must turn a test RED.
 - [ ] **Step 6: Commit** `skill_decisions: read, check and brief a ledger` with the two paths.
 
-### Task M1.3: writing entries, and the CLI
+### Task 1.3 (M1.3): writing entries, and the CLI
 
 **Files:**
 - Modify: `plugins/bitranox/hooks/skill_decisions.py`
@@ -1611,7 +1616,7 @@ if __name__ == "__main__":
 - [ ] **Step 7: Commit** `skill_decisions: add/show/check CLI and union merge for ledgers` with
       `-- plugins/bitranox/hooks/skill_decisions.py plugins/bitranox/hooks/tests/test_skill_decisions.py .gitattributes`.
 
-### Task M2.2: the commit and push gate checks ledgers
+### Task 2.2 (M2.2): the commit and push gate checks ledgers
 
 **Files:**
 - Modify: `plugins/bitranox/hooks/repo-gate.py`: `_LF_SUFFIXES` (line 219), `shipped_files`
@@ -1876,7 +1881,7 @@ def check_all_skill_decisions(root):
 - [ ] **Step 7: Commit** `repo-gate: refuse a change that drops a recorded skill decision` with
       `-- plugins/bitranox/hooks/repo-gate.py plugins/bitranox/hooks/tests/test_repo_gate.py`.
 
-### Task M2.3: the checklist states what the change decided (D4)
+### Task 2.3 (M2.3): the checklist states what the change decided (D4)
 
 **Files:**
 - Modify: `plugins/bitranox/hooks/repo-gate.py:1184-1215` (`skill_review_failures`)
@@ -1985,7 +1990,7 @@ def _decisions_line_failures(root, name, arts):
 - [ ] **Step 5: Mutation check:** remove the `missing` comparison; the id test must go RED.
 - [ ] **Step 6: Commit** `repo-gate: a skill change's checklist names the decisions it recorded`.
 
-### Task M2.4: the edit guard hands over the skill's declined decisions once
+### Task 2.4 (M2.4): the edit guard hands over the skill's declined decisions once
 
 **Files:**
 - Modify: `plugins/bitranox/hooks/skill-edit-guard.py` (`decide`, module docstring)
@@ -2198,7 +2203,7 @@ Decisions:
 - [ ] **Step 7: Commit** `skill-edit-guard: hand over a skill's declined decisions before its
       first edit` with the guard and its test.
 
-### Task M2.5: the skill-writer procedure reads and writes the ledger
+### Task 2.5 (M2.5): the skill-writer procedure reads and writes the ledger
 
 **REQUIRED SUB-SKILL:** `bitranox:meta-skill-writer` for every SKILL.md change below (receipt,
 RED baseline with `bitranox:baseline-probe` agents, GREEN, REFACTOR, checklist). This task's own
@@ -2262,7 +2267,7 @@ same text: add that repo to this task before editing).
 - [ ] **Step 3: Commit** `meta-skill-writer: read and record a skill's decisions` with the
       SKILL.md, its `.skillwriter/` files, `CONTRIBUTING.md` and `CLAUDE.md`.
 
-### Task M2.6: end-to-end controls on a scratch worktree
+### Task 2.6 (M2.6): end-to-end controls on a scratch worktree
 
 No code; this proves the shipped behaviour the plan's M2 verification names, with the REAL hook
 entry points (`repo-gate.py` reading a PreToolUse event on stdin, `skill-edit-guard.py` likewise),
@@ -2287,7 +2292,7 @@ never the functions.
 - [ ] **Step 6:** Write the outputs of Steps 2 to 5 into the review notes; remove the scratch
       worktree with `wtclean.py --apply` after checking nothing runs in it.
 
-### Task M2.7: mirrored skills (M2b)
+### Task 2.7 (M2.7): mirrored skills (M2b)
 
 **Files:**
 - Modify: `plugins/bitranox/hooks/repo-gate.py` (the tool-repo path, `_tool_repo_touched` and
@@ -2314,7 +2319,7 @@ exceeds about 150 lines (report and ask whether to ship M2.7 in the next release
       the new call: the refusal test goes RED).
 - [ ] **Step 4: Commit** `repo-gate: a tool repo's twin answers to the marketplace ledger`.
 
-### Task M2.8: release
+### Task 2.8 (M2.8): release
 
 - [ ] **Step 1:** `git fetch`, `git rebase origin/master`; re-run `CI-PYTEST` and
       `python3 plugins/bitranox/hooks/repo-gate.py --ci` after the rebase.
