@@ -423,3 +423,32 @@ Three traps no `--help` covers live in `references/` (load them with the Read to
 Each jig is one import-safe core function plus a thin `argparse` CLI, shipped with a pytest test.
 When a jig is insufficient in use, ENHANCE it (add a RED regression test for the gap, then fix),
 rather than hand-rolling around it - so the tool matures and cannot silently regress.
+
+When a hook or jig settles a choice a later editor could plausibly undo (a rule tightened or
+loosened, an alternative tried and dropped, a threshold picked from a measurement), record it in
+the module docstring, in a block headed `Decisions:`:
+
+```text
+Decisions:
+    - <what the code does, one sentence>. Why: <the reason>. Evidence: <measured | user |
+      argued | inherited>: <where it came from>. Reopen if: <the condition that would change it>.
+      Pinned by: <tests/test_file.py::test_name>
+    - Rejected: <the alternative not taken>. Why: ... Reopen if: ...
+```
+
+Pin each decision with a test that fails when the decision is reverted, and name that test in the
+block; a decision with no test says `Pinned by: none - <why no test can hold it>`. A skill's
+SKILL.md text uses the per-skill ledger instead (`bitranox:meta-skill-writer`, Step 0b); code
+gets no ledger file.
+
+**Read the block, and the tests it names, before you change a jig's matcher, rule or
+threshold.** A change that reverses an entry (tightens what an entry loosened, adopts a
+`Rejected:` alternative) is made only when you can say what met its `Reopen if:`. Then rewrite
+that entry instead of adding one that contradicts it, put that answer in its `Why:`, and keep a
+test that fails on the behaviour you replaced: a narrowing keeps a test for what must still match.
+The form you replaced stays in the block as that entry's `Rejected:` line. When the decision you
+reverse has no entry (it predates the block, or only a commit records it), recover its reason
+from that commit and the tests it added, write it into the `Rejected:` line naming the commit as
+its source, and reverse it only when you can say why that reason no longer holds. The block
+states what the code does now and why; which commit changed it is git's job, and a commit message
+alone is no record, because the next editor reads the module, not the log.
