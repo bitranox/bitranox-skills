@@ -4730,6 +4730,28 @@ def test_a_renamed_skill_with_its_ledger_and_text_intact_passes(tmp_path, kind):
     assert RG.check_skill_decisions(root, _renamed_stage(root, kind), log=lambda r: None) == []
 
 
+@pytest.mark.usefixtures("_bare_git_env")
+def test_a_deleted_skill_plus_a_new_one_sharing_a_helper_file_is_no_rename(tmp_path):
+    """git pairs ANY identical file, so a new skill holding the deleted one's conftest.py read as
+    its rename and was refused for an empty ledger it never had. Only a paired SKILL.md or ledger
+    makes a rename."""
+    line, _ = _ledger_line()
+    helper = "import sys\nsys.path.insert(0, 'scripts')\n"
+    write(tmp_path / LEDGER_SKILL / "scripts/tests/conftest.py", helper)
+    root = _ledger_repo(tmp_path, [line])
+    subprocess.run(["git", "rm", "-r", "-q", LEDGER_SKILL], cwd=root, check=True)
+    fresh = "plugins/bitranox/skills/totally-new"
+    write(root / fresh / "SKILL.md",
+          "---\nname: totally-new\n---\n# Totally new\n\nNothing in common with the old one.\n")
+    write(root / fresh / "scripts/tests/conftest.py", helper)
+    subprocess.run(["git", "add", "-A"], cwd=root, check=True)
+    # control: git does pair the helper file, so the rule must look past that pairing
+    pairs = RG._stage_renames(root, RG.STAGE_INDEX, RG._merge_base(root))
+    assert (LEDGER_SKILL + "/scripts/tests/conftest.py",
+            fresh + "/scripts/tests/conftest.py") in pairs
+    assert RG.check_skill_decisions(root, RG.STAGE_INDEX, log=lambda r: None) == []
+
+
 def test_jsonl_is_an_lf_checked_suffix():
     assert ".jsonl" in RG._LF_SUFFIXES
 
@@ -4823,6 +4845,43 @@ def test_a_decisions_line_inside_a_code_fence_does_not_count(tmp_path):
     assert len(fails) == 1 and "no 'Decisions:' line" in fails[0]
     # control: the same line outside the fence counts
     assert _review(tmp_path, fenced + "Decisions: none - stated\n") == []
+
+
+@pytest.mark.parametrize("checklist", [
+    # a fence nested in a list item stands at the item's indent, past CommonMark's three spaces
+    "- [x] RED\n- [x] Format:\n\n    ```\n    Decisions: none - <reason>\n    ```\n",
+    "- [x] RED\n- [x] Format:\n\n      ~~~text\n      Decisions: none - <reason>\n      ~~~\n",
+    # an indented code block: four spaces after a blank line, outside any list item
+    "Checked:\n\n    Decisions: none - an example of the line\n",
+    "    Decisions: none - a code block opening the file\n",
+    # four spaces past a list item's own content indent is a code block inside that item
+    "- [x] RED\n\n      Decisions: none - code inside the item\n",
+])
+def test_a_decisions_line_in_an_indented_fence_or_code_block_does_not_count(tmp_path, checklist):
+    fails = _review(tmp_path, checklist)
+    assert len(fails) == 1 and "no 'Decisions:' line" in fails[0], fails
+
+
+@pytest.mark.parametrize("checklist", [
+    # a list item's own continuation paragraph is prose, not code
+    "- [x] RED\n- [x] Format:\n\n    Decisions: none - a paragraph of the item\n",
+    # a closed indented fence hides only its own lines
+    "- [x] Format:\n\n    ```\n    Decisions: none - quoted\n    ```\n\nDecisions: none - stated\n",
+    # prose after an indented code block counts again
+    "Checked:\n\n    some code\n\nDecisions: none - stated\n",
+])
+def test_a_decisions_line_beside_an_indented_fence_or_code_block_counts(tmp_path, checklist):
+    assert _review(tmp_path, checklist) == []
+
+
+@pytest.mark.parametrize("text, expected", [
+    # has_open_checkbox keeps its own reading: an indented line is never hidden from it
+    ("Prose.\n\n    - [ ] an open box indented after a blank line\n", True),
+    ("- [x] A\n\n    ```\n    - [ ] inside a list item's fence\n    ```\n", True),
+    ("- [x] A\n\n```\n- [ ] quoted in a fence\n```\n", False),
+])
+def test_has_open_checkbox_keeps_its_three_space_fence_reading(text, expected):
+    assert RG.has_open_checkbox(text) is expected
 
 
 def test_a_decisions_line_in_a_checklist_that_is_not_co_changed_does_not_count(tmp_path):

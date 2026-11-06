@@ -1240,24 +1240,80 @@ DECISIONS_LINE_RX = re.compile(
 _DECISION_ID_RX = re.compile(r"d-[0-9]{8}-[0-9a-f]{8}")
 
 
-def _unfenced_lines(text):
+#: A fence opener at any indent: one nested in a list item stands at the item's own indent.
+_FENCE_ANY_INDENT = re.compile(r"^[ \t]*(`{3,}|~{3,})(.*)$")
+#: A list item's marker and the whitespace after it; group 0's width is the item's content indent.
+_LIST_MARKER = re.compile(r"^[ \t]*(?:[-*+]|[0-9]{1,9}[.)])(?:[ \t]+|$)")
+
+
+def _fence_step(fence, found):
+    """The open fence after a line whose fence match is ``found``, and whether that line is part
+    of a fence: (fence, hidden). ``fence`` is the opener's run, None outside a fence.
+
+    A fence closes on a bare run of the same character at least as long as its opener; a
+    backtick opener whose info string holds a backtick is a code span, not a fence.
+    """
+    if fence is not None:
+        closes = found and found.group(1)[0] == fence[0] and len(found.group(1)) >= len(fence) \
+            and not found.group(2).strip()
+        return (None if closes else fence), True
+    if found and not (found.group(1)[0] == "`" and "`" in found.group(2)):
+        return found.group(1), True
+    return None, False
+
+
+def _unfenced_lines(text, fence_rx=_FENCE):
     """Yield the lines of `text` outside fenced code blocks, as a Markdown reader sees them.
 
-    A fence closes on a bare run of the same character at least as long as its opener; one never
-    closed hides the rest of the file, as it does from a Markdown reader.
+    A fence never closed hides the rest of the file, as it does from a Markdown reader. By default
+    an opener counts at up to three spaces of indent only, CommonMark's rule at the top level.
     """
     fence = None
     for line in text.splitlines():
-        found = _FENCE.match(line)
-        if fence is not None:
-            if found and found.group(1)[0] == fence[0] and len(found.group(1)) >= len(fence) \
-                    and not found.group(2).strip():
-                fence = None
+        fence, hidden = _fence_step(fence, fence_rx.match(line))
+        if not hidden:
+            yield line
+
+
+def _indent(line):
+    """The width of ``line``'s leading whitespace, a tab counted as four columns."""
+    wide = line.expandtabs(4)
+    return len(wide) - len(wide.lstrip())
+
+
+def _statement_lines(text):
+    """Yield the lines of `text` a Markdown reader shows as prose: outside every code block.
+
+    Stricter than `_unfenced_lines`, which `has_open_checkbox` keeps because hiding a line there
+    hides an open box: here a hidden line can only fail to satisfy the Decisions rule. A fence
+    opens at any indent (one nested in a list item stands past three spaces), and a line indented
+    four columns past the enclosing list item's content (past column 0 outside a list) is an
+    indented code block when no paragraph runs on into it. Nested items keep a stack of content
+    indents; a list marker, or a line after a blank one, indented less than an item's content
+    leaves that item (any other line runs on lazily as a paragraph continuation).
+    """
+    items, paragraph = [], False                   # content indents; a paragraph is open
+    for line in _unfenced_lines(text, _FENCE_ANY_INDENT):
+        if not line.strip():
+            paragraph = False
             continue
-        if found and not (found.group(1)[0] == "`" and "`" in found.group(2)):
-            fence = found.group(1)
-            continue
+        indent = _indent(line)
+        if not paragraph and indent >= (items[-1] if items else 0) + 4:
+            continue                               # an indented code block line
+        marker = _LIST_MARKER.match(line)
+        while items and (marker or not paragraph) and indent < items[-1]:
+            items.pop()
+        if marker:
+            items.append(_content_indent(marker.group(0)))
+        paragraph = True
         yield line
+
+
+def _content_indent(marker):
+    """The content indent of a list item whose marker and following whitespace are ``marker``;
+    a marker ending the line puts the content one column past it."""
+    width = len(marker.expandtabs(4))
+    return width if marker[-1:] in (" ", "\t") else width + 1
 
 
 def has_open_checkbox(text):
@@ -1333,13 +1389,14 @@ def _decisions_line_failures(name, texts, ledger, *, unreadable=False):
     """Why the shipped co-changed checklist ``texts`` of skill ``name`` do not state what it
     decided.
 
-    One of them must hold a `DECISIONS_LINE_RX` line outside a code fence (a fenced one quotes the
-    format, as a fenced box quotes a box), and every id those lines name must be in the shipped
+    One of them must hold a `DECISIONS_LINE_RX` line outside any code block (`_statement_lines`:
+    a fenced or indented one quotes the format, as a fenced box quotes a box), and every id those
+    lines name must be in the shipped
     ``ledger`` bytes. Both sides are read at one stage (`_shipped_review_files`). With an
     ``unreadable`` checklist among them, a missing line is not reported: that checklist may hold
     it, and its own refusal already blocks the change.
     """
-    lines = [line for text in texts for line in _unfenced_lines(text)
+    lines = [line for text in texts for line in _statement_lines(text)
              if DECISIONS_LINE_RX.match(line)]
     if not lines and unreadable:
         return []
@@ -1349,7 +1406,7 @@ def _decisions_line_failures(name, texts, ledger, *, unreadable=False):
                 "('Decisions: d-YYYYMMDD-xxxxxxxx, ...') or "
                 "say why it decided nothing ('Decisions: none - <reason>'), at the line start or "
                 "after a list marker and an optional ticked box ('- [x] Decisions: ...'), outside "
-                "a code fence." % name]
+                "a code fence or an indented code block." % name]
     named = set(_DECISION_ID_RX.findall("\n".join(lines)))
     if not named:
         return []
@@ -2427,22 +2484,25 @@ def _stage_renames(root, stage, base):
 def _renamed_skills(root, stage, base, names):
     """{new name: old name} for each skill of ``names`` new since ``base`` that a rename made.
 
-    A skill counts as renamed when git pairs one of its files (`_stage_renames`) with the file at
-    the same place in another skill's dir. A rename git cannot pair, every file rewritten past its
-    similarity threshold, reads as a deletion plus a new skill, as it does to git. Only asked when
-    a skill of ``names`` has no SKILL.md at the fork point, so an edit to existing skills pays
-    one `ls-tree` and no diff.
+    A skill counts as renamed when git pairs its SKILL.md or its ledger (`_stage_renames`) with
+    the same file of another skill's dir. Any other file does not count: git pairs an identical
+    helper (a copied `scripts/tests/conftest.py`) just as readily, and a deleted skill plus an
+    unrelated new one holding that copy read as a rename, judged against a ledger it never had. A
+    rename git cannot pair, SKILL.md rewritten past its similarity threshold, reads as a deletion
+    plus a new skill, as it does to git. Only asked when a skill of ``names`` has no SKILL.md at
+    the fork point, so an edit to existing skills pays one `ls-tree` and no diff.
     """
     if base is None or not names:
         return {}
     mds = {name: "%s/%s/SKILL.md" % (_SKILLS_DIR, name) for name in names}
     _, at_base = _git_paths(root, "ls-tree", "-r", "--name-only", base, "--", *mds.values())
     new = {name for name, md in mds.items() if md not in at_base}
+    identity = ("SKILL.md", skill_decisions.LEDGER_REL)
     found = {}
     for old, moved in _stage_renames(root, stage, base) if new else ():
         a, b = _SKILL_FILE_RX.match(old), _SKILL_FILE_RX.match(moved)
         if a and b and b.group(1) in new and a.group(1) != b.group(1) \
-                and old[a.end():] == moved[b.end():]:
+                and old[a.end():] == moved[b.end():] and old[a.end():] in identity:
             found.setdefault(b.group(1), a.group(1))
     return found
 
