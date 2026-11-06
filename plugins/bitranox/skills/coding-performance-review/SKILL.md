@@ -1,6 +1,6 @@
 ---
 name: coding-performance-review
-description: Use when measuring, comparing or reviewing performance in any language - before optimising, when a change or commit message claims a speedup, when timing two versions, builds or configurations against each other, when an A/B timing reads as a clear win or a clear null, when reviewing code for algorithmic cost, N+1 queries or calls, per-item I/O, repeated work, blocking calls, or unbounded memory and input, or when the language has no performance skill of its own (bash, JavaScript, Go, SQL). Routes Python to coding-python-performance-review and Rust to coding-rust-performance-review.
+description: Use when slow, or to profile, benchmark or review performance before optimising; when a speedup or an A/B win could be noise; on latency, throughput, N+1 queries, unbounded memory, loops doing per-item I/O, blocking calls, repeated work or algorithmic cost; when timing two versions, builds or configurations against each other, reading an A/B that shows no difference, or checking a speedup claimed in a diff or commit; and for any language without a performance skill of its own (bash, JavaScript, Go, SQL). Routes Python to coding-python-performance-review and Rust to coding-rust-performance-review.
 ---
 
 # Performance review and measurement (any language)
