@@ -90,3 +90,44 @@ Decisions: d-20261106-f1d066f6, d-20261106-0231555d
 - [x] Ledger: two `rule` entries, tier `user`, origin `authored`, each anchored on its own new
       sentence; `skill_decisions.py check meta-self-improve`: "checked 1 ledger(s), 0
       finding(s)", rc 0.
+
+## Follow-up: the real path of the ledger tool, and the no-checkout drop
+
+Wording fix, no decision changed; both anchored sentences are unchanged and the ledger ids above
+stay valid. Step 2 now says `<plugin>` is `plugins/bitranox` inside the marketplace checkout,
+else the installed plugin directory, and points at "Resolving `<plugin>`" under step 4. Step 3b
+says the `add --from-file` runs from the checkout root, and that without a checkout the
+`drop --reason` is the only record: no ledger entry, and the report says so.
+
+- [x] RED, text check of the pre-edit file: step 2 said "`<plugin>` is the marketplace checkout",
+      which makes the command `<checkout>/hooks/skill_decisions.py`; `ls hooks/skill_decisions.py`
+      at the checkout root: no such file. Step 4 defines `<plugin>` as the plugin directory ("In
+      the source repo the same path is `plugins/bitranox`"), so the two disagreed. Step 3b named
+      only the checkout route and said nothing for a session without one.
+- [x] Command the edit names, executed from the checkout root:
+      `python3 plugins/bitranox/hooks/skill_decisions.py show compuse-git --skill-dir
+      plugins/bitranox/skills/compuse-git --kind rejected,removed --full` printed nothing, rc 0.
+- [x] GREEN (haiku x1, edited text pasted with the step 4 definition). (a) at the checkout root:
+      the command above, quoting "`<plugin>` is `plugins/bitranox` inside the marketplace checkout
+      when the session has one". (b1) no checkout: `<cache>/bitranox/<version>/hooks/
+      skill_decisions.py show compuse-git --skill-dir <cache>/bitranox/<version>/skills/
+      compuse-git ...`, derived from the announced base directory per step 4. (b2) no ledger
+      entry and no `add`, quoting "Without a checkout, the `drop --reason` is the only record:
+      write no ledger entry, and say so in the report (step 7)".
+- [x] Gaps from GREEN, decided:
+  - DECLINED, covered elsewhere: the queue command (SKILL.md, step 3b, "`contrib_queue.py add
+    --what ... --target skill:<name> --why ... "<cwd>"`") and the entry fields (step 3b, the
+    "The entry carries `skill` ..." sentence); both were cut from the excerpt.
+  - DECLINED, the text ties them: "source repo", "marketplace checkout" and `plugins/bitranox`
+    name one place - step 4, "In the source repo the same path is `plugins/bitranox`".
+  - DECLINED, ships together: an installed copy without the script - `skill_decisions.py` is
+    tracked at `plugins/bitranox/hooks/` (`git ls-files`), so any installed version carrying
+    this text carries the script.
+  - DECLINED, by design: a no-checkout drop leaves no durable ledger record; that is the case
+    this fix states, and the report line is what surfaces it.
+  - DECLINED, judgement and outside this fix: how a session finds a checkout, and a checkout
+    that is not the session's own.
+- [x] Width and fence check over the added lines printed nothing (longest 97 columns); no
+      non-ASCII; the paragraphs after both insertions (the routing table; the "ANOTHER repo"
+      paragraph) read unchanged. `skill_decisions.py check meta-self-improve`: "checked 1
+      ledger(s), 0 finding(s)", rc 0.

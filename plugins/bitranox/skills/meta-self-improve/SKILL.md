@@ -172,9 +172,10 @@ beside a queued skill fix is otherwise a duplicate that outlives the fix.
 Before queueing against `skill:<name>` (cases 1 and 2), read that skill's declined list:
 `python3 <plugin>/hooks/skill_decisions.py show <name> --skill-dir <plugin>/skills/<name>
 --kind rejected,removed --full`. `<name>` is the skill's directory name, the same one `--target`
-takes (`compuse-git`, no plugin prefix), and `<plugin>` is the marketplace checkout when the
-session has one (it holds entries newer than the installed copy), else the installed plugin; empty
-output means nothing was declined. When the lesson re-proposes a listed entry, queue it only with
+takes (`compuse-git`, no plugin prefix), and `<plugin>` is `plugins/bitranox` inside the
+marketplace checkout when the session has one (it holds entries newer than the installed copy),
+else the installed plugin directory (see "Resolving `<plugin>`" under step 4); empty output means
+nothing was declined. When the lesson re-proposes a listed entry, queue it only with
 a `--why` that answers that entry's `reopen_if` and names its id; otherwise drop the candidate (do
 not queue it) and say so in the report (step 7). A queue `drop` does not stop a reworded lesson
 being queued again; the ledger entry is what the next session reads.
@@ -312,7 +313,9 @@ PLACE-HERE line) before calling the placement wrong.
   When a skill-targeted entry is dropped as disproven, or declined for a reason that will still
   hold next time, also record it as a `rejected` entry in that skill's ledger in the source repo:
   from the marketplace checkout (never the installed plugin copy), write the entry to a JSON file
-  and run `python3 plugins/bitranox/hooks/skill_decisions.py add --from-file <file>`. The entry
+  and run `python3 plugins/bitranox/hooks/skill_decisions.py add --from-file <file>` from the
+  checkout root. Without a checkout, the `drop --reason` is the only record: write no ledger
+  entry, and say so in the report (step 7). The entry
   carries `skill` (the directory name), `"kind": "rejected"`, `"origin": "authored"`, a `topic`,
   the proposal prefixed `Rejected:` as `decision`, the drop reason as `why`, what would reopen it
   as `reopen_if`, `evidence` (`{"tier": ..., "text": ...}`, tier `measured`, `user`, `argued` or
