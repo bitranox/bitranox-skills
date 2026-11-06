@@ -36,17 +36,24 @@ two "versions with no entry" notes came to sit in this file disagreeing with it.
 
 - Skill ledgers seeded from the declined skill contributions: each kept proposal is a `rejected`
   entry (origin `imported`) with its reason and what would reopen it.
+- devops-bmk and meta-dream-tree record two decisions that were once changed forward and back:
+  bmk runs from its own shared tool env (resolving it together with the project is a `rejected`
+  entry), and the dream's placement judgment runs inline on the session model, with its tier note.
 - meta-claude-hooks and compuse-toolbox: a hook or jig records a decision in a `Decisions:` block
-  in its module docstring, pinned by a test that fails when the decision is reverted.
+  in its module docstring, each decision naming the test that fails when it is reverted, or why
+  no test can.
+- meta-skill-writer: a decision about a bundled script or hook goes in that file's docstring
+  `Decisions:` block, not in the skill's ledger, which holds decisions about the skill's text.
 - meta-self-improve reads a skill's declined decisions before queueing a fix to it, and records a
   lasting drop as a `rejected` entry.
 - meta-adopting-external-skills: an adoption records what it left out of the upstream skill.
-- meta-skill-audit: each skill's reviewer sees that skill's declined decisions.
+- meta-skill-audit: each skill's reviewer sees that skill's declined decisions, and a brief cut
+  short names a command that prints the rest from the reviewer's room.
 
 ### Changed
 
-- `secret_patterns.py` and `memory_engine.py` carry the first docstring decision blocks, for two
-  decisions that were once changed forward and back.
+- `secret_patterns.py` and `memory_engine.py` carry docstring decision blocks for two decisions
+  that were once changed forward and back.
 
 ## [10.19.2]
 
