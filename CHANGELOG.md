@@ -30,7 +30,7 @@ a hole nobody has drawn a line under is one that gets rediscovered and half-fill
 two "versions with no entry" notes came to sit in this file disagreeing with it.
 
 
-## [10.18.0]
+## [10.19.0]
 
 ### Added
 
@@ -49,6 +49,26 @@ two "versions with no entry" notes came to sit in this file disagreeing with it.
 
 - The changed-path checks of the commit gate diffed against origin's tip, so a checkout behind
   origin listed a peer's pushed paths as its own changes. They now diff from the merge-base.
+
+## [10.18.0]
+
+### Added
+
+- New PreToolUse hook `block-or-echo-verdict.py` (Bash). It refuses a grep-family command
+  (`grep`, `egrep`, `fgrep`, `zgrep`, `rg`, `git grep`), `diff`, `cmp` or `git diff` followed by
+  `|| echo <verdict>`, where the label is a clean or negative verdict ("clean", "no ...", "none",
+  "not found", "missing", "identical", "different", "ok"). These tools exit 1 for "no match" or
+  "different" and 2 or more when they could not look (a missing file, a bad regex, conflicting
+  options), and `||` fires on both, so the verdict also prints when nothing was checked. The
+  incident: `grep -inE ... -P || echo "no attribution"` exited 2 on conflicting matchers and
+  printed the all-clear. It also matches through an intermediate `&& echo ...` and inside
+  `$(...)`. It passes a label that admits doubt ("rc=$?", "or error"), a count (`|| echo 0`),
+  `|| true`, a pipeline ending in another program, the tool under `!`, and quoted or heredoc
+  text; a command string handed to another shell (`ssh host '...'`) is not inspected. The
+  refusal names a form it passes (`cmd; rc=$?; [ $rc -eq 1 ] && ...; [ $rc -gt 1 ] && ...`),
+  pinned by a test. Replayed before shipping over 205,309 recorded Bash calls: 224 refusals
+  (0.109%), every one the shape; 2 printed the verdict beside grep's own error message, and 22
+  more sent stderr to /dev/null first, so an error could not have shown.
 
 ## [10.17.1]
 
