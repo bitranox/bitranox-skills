@@ -4,6 +4,7 @@ import json
 import shlex
 import subprocess
 import sys
+import threading
 
 import pytest
 
@@ -593,6 +594,34 @@ def test_show_counts_across_a_line_break_in_one_command(tmp_path, armed):
 _DEEP = "[" * 100000 + "]" * 100000
 
 
+def _on_bounded_stack(fn):
+    """Run `fn` on a thread with a 4 MiB stack and return its result or raise its exception.
+
+    From Python 3.14 the json decoder's depth limit is the thread's real stack, so on a host whose
+    main thread has an unlimited stack (the GitHub Linux and macOS runners) `_DEEP` decodes and the
+    RecursionError branch these tests exist for never runs. A bounded thread stack makes the
+    decoder fail the same way on every host and Python version.
+    """
+    box = {}
+
+    def target():
+        try:
+            box["value"] = fn()
+        except BaseException as exc:  # handed back to the caller below
+            box["error"] = exc
+
+    previous = threading.stack_size(4 * 1024 * 1024)
+    try:
+        worker = threading.Thread(target=target)
+        worker.start()
+    finally:
+        threading.stack_size(previous)
+    worker.join()
+    if "error" in box:
+        raise box["error"]
+    return box.get("value")
+
+
 @pytest.mark.parametrize("line", [
     json.dumps({"type": "assistant", "message": "x", "note": "skill_decisions"}),
     json.dumps({"type": "assistant", "message": {"content": [
@@ -605,13 +634,13 @@ def test_an_odd_transcript_line_is_skipped_by_the_show_check(tmp_path, armed, li
     main = _session(tmp_path, [_LOAD])
     with main.open("a", encoding="utf-8") as fh:
         fh.write(line + "\n")
-    assert G.decide(_brief_edit(main, path), {}) is not None
+    assert _on_bounded_stack(lambda: G.decide(_brief_edit(main, path), {})) is not None
 
 
 def test_the_deep_line_really_is_past_the_decoder():
     """Precondition for the nested-past-the-decoder cases: json.loads raises, not ValueError."""
     with pytest.raises(RecursionError):
-        json.loads('{"x": %s}' % _DEEP)
+        _on_bounded_stack(lambda: json.loads('{"x": %s}' % _DEEP))
 
 
 @pytest.mark.parametrize("line", [
@@ -624,5 +653,5 @@ def test_an_odd_line_in_the_load_check_still_denies(tmp_path, armed, line):
     main = _session(tmp_path, [])
     with main.open("a", encoding="utf-8") as fh:
         fh.write(line + "\n")
-    reason = G.decide(_edit(main), {})
+    reason = _on_bounded_stack(lambda: G.decide(_edit(main), {}))
     assert reason is not None and "never loaded" in reason

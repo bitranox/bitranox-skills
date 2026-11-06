@@ -30,6 +30,15 @@ a hole nobody has drawn a line under is one that gets rediscovered and half-fill
 two "versions with no entry" notes came to sit in this file disagreeing with it.
 
 
+## [10.19.1]
+
+### Fixed
+
+- skill-edit-guard tests: the deeply nested transcript-line cases run on a thread with a 4 MiB
+  stack. From Python 3.14 the json decoder's depth limit is the thread's real stack, so on a host
+  with an unlimited stack (the GitHub Linux and macOS runners) the line decoded and the
+  precondition test failed, while the guard's RecursionError branch went untested there.
+
 ## [10.19.0]
 
 ### Added
