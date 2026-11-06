@@ -184,6 +184,9 @@ Entry (schema `v: 1`):
 - Corpus: the skill dir's tracked `*.md` files except `.skillwriter/` and `tests/`.
 - `supersedes`: ids this entry replaces. An entry is LIVE when no later entry supersedes it.
   Reworded with the same meaning, split in two, merged: new `rule` entries that supersede the old.
+  As built: a `void` withdraws its target AND what the target did, so a voided entry's own
+  `supersedes` count for nothing and the entry it superseded is live again; `add` refuses a void
+  that names a void, so no fixpoint is needed.
 - `id`: `d-<yyyymmdd>-<first 8 hex of sha256 over the entry's canonical JSON>`, so two worktrees
   appending at once never collide and a same-day rewording gets its own id; `.gitattributes` gains
   `plugins/bitranox/skills/*/.skillwriter/decisions.jsonl text eol=lf merge=union`.
@@ -200,12 +203,13 @@ Lives in `hooks/` because `repo-gate.py` and `skill-edit-guard.py` import it. Li
 - `ledger_path(skill_dir) -> Path`
 - `parse_entries(lines) -> Iterator[dict]` (generator over any iterable of lines, so the gate can
   feed it a staged blob; raises `LedgerError(line_no, reason)`)
-- `live_entries(lines_factory) -> Iterator[dict]` (two passes: the first keeps superseded ids only)
+- `live_entries(lines_factory) -> Iterator[dict]` (two passes: the first keeps ids only - the
+  void targets and each superseding entry's `supersedes`)
 - `validate_entry(entry) -> list[str]` (one `<field>: <reason>` line each)
 - `append_entries(skill_dir, entries) -> list[str]` (assigns id/date/v, validates, checks anchors
   against the corpus, refuses a duplicate id and typographic tells via `tell_chars`, appends)
-- `check_ledger(lines_factory, corpus_text) -> list[Finding]` (`Finding`: entry id, topic, the
-  vanished anchor, the entry's why and reopen_if)
+- `check_ledger(lines_factory, corpus_text) -> list[Finding]` (`Finding`, as built: entry id,
+  problem, the vanished anchor, the entry's decision, why and reopen_if; it carries no topic)
 - `render_brief(lines_factory, budget_chars=6000) -> str` (live rejected and removed entries in
   full until the budget is spent, then a count of what is left and the `show` command)
 
@@ -216,8 +220,8 @@ CLI (`--json` envelope `{ok, command, data, skipped}` on every verb; exit 0 yes,
 - `show <skill> [--skill-dir DIR] [--kind K[,K]] [--topic T] [--id ID] [--all] [--full]`
   (default: live entries, one line each; `--skill-dir` reads a ledger elsewhere, for example the
   marketplace ledger while editing a tool-repo twin)
-- `check [<skill> ...] [--skills-dir DIR] [--text-root DIR]` (no skill = every ledger; reads the
-  working tree, for use by hand and by CI)
+- `check [<skill> ...] [--skills-dir DIR]` (no skill = every ledger; reads the working tree,
+  for use by hand and by CI; a `--text-root` flag was planned and not built)
 
 Held in memory: the current line, the set of superseded ids (about 20 bytes each), and for a
 check the normalised Markdown of ONE skill. A test measures peak memory at 1,000 and 20,000
@@ -235,8 +239,13 @@ entries.
   `shipped_files` at `stage`, the mirror check's own readers) and run `check_ledger`. Also refuse
   a ledger line that was present at the merge-base and is gone (append-only), except when that
   skill's `SKILL.md` is deleted in the same change. Refusal text prints the entry's decision, why
-  and reopen_if and names the way out: `add` a superseding entry with its reason.
+  and reopen_if and names the way out: `add` a superseding entry with its reason. As built, a
+  rename carries the ledger: a skill new since the merge-base that git's rename detection pairs
+  with another skill's files is judged against the OLD name's ledger there, and the changed-path
+  diff runs with `--no-renames` so a ledger moved out of its skill counts as removed.
 - The same function in `--ci` mode sweeps EVERY ledger on disk (CI has a clean checkout).
+  As built, CI also runs the per-change check at HEAD, which on a pull request gives the
+  append-only half a fork point (on a push the merge-base is HEAD and it judges nothing).
 - `skill_review_failures` gains the D4 line: among the co-changed `.skillwriter/*.md` files of a
   changed SKILL.md, one must hold `Decisions: ...` naming ids present in the shipped ledger, or
   `Decisions: none - <reason>`.

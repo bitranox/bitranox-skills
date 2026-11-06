@@ -36,17 +36,25 @@ two "versions with no entry" notes came to sit in this file disagreeing with it.
 
 - Each skill can keep a decision ledger, `.skillwriter/decisions.jsonl`, written through
   `hooks/skill_decisions.py` (`add`, `show`, `check`): what the skill decided, why, the evidence,
-  and what would reopen it. A rule entry is bound to the skill text by short quoted anchors.
+  and what would reopen it. A rule entry is bound to the skill text by short quoted anchors. A
+  `void` entry withdraws an entry and what it did, so a rule a voided entry superseded is live
+  again; a void cannot target a void. `add` is all or nothing across every skill a file names,
+  and counts an anchor only in files git tracks, saying so when untracked Markdown is present.
 - The commit and push gate refuses a change whose shipped text of a touched skill loses a live
   anchor, and names the entry's decision, reason and reopen condition; a superseding entry with
-  its own reason answers it. Ledgers are append-only, and CI checks every ledger.
+  its own reason answers it. Ledgers are append-only: a ledger moved out of its skill counts as
+  removed, and a skill renamed since the fork point answers to its old name's ledger. CI checks
+  every ledger, and on a pull request also refuses a ledger line removed since the fork point.
 - A commit or push in a tool repo that ships a mirrored skill's twin is judged against the
   marketplace copy's ledger too, read at what the marketplace published or committed; a refusal
   names that ledger as the place for the superseding entry.
 - A skill change's skill-writer checklist carries a `Decisions:` line naming the ledger entries
-  the change added, or `Decisions: none - <reason>`.
-- The SKILL.md edit guard hands an editing agent the skill's rejected and removed decisions once,
-  before its first edit, unless it already ran `skill_decisions.py show` for that skill.
+  the change added, or `Decisions: none - <reason>`, at the line start or in a list item, ticked
+  or not (`- [x] Decisions: ...`).
+- The SKILL.md edit guard hands an agent editing a marketplace skill that skill's rejected and
+  removed decisions once, before its first edit, unless it already ran `skill_decisions.py show`
+  for that skill. An edit of a tool-repo twin gets no such brief; its editor runs `show` with the
+  marketplace `--skill-dir`.
 
 ### Fixed
 

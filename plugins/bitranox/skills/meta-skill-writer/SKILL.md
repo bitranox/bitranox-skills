@@ -1139,8 +1139,10 @@ An edit that reverses a listed decision (re-adds a removed rule, adopts a reject
 drops a recorded rule) is made only when you can answer that entry's `reopen_if` with what
 changed; without that answer, keep the decision. With it, make the edit, then record a new entry
 that names the old one in `supersedes` and carries the answer in its `why`. The edit guard refuses
-an agent's first edit of a SKILL.md once, showing this list, when that agent has not run `show`
-for the skill, and the commit gate refuses a change whose shipped text no longer holds a live
+an agent's first edit of a marketplace SKILL.md once, showing this list, when that agent has not
+run `show` for the skill; it reads the ledger beside the edited file, so an edit of a tool-repo
+twin gets no such refusal, and its editor runs `show` with the marketplace `--skill-dir` as above.
+The commit gate refuses a change whose shipped text no longer holds a live
 rule's anchor: an edit that deletes or rewords such a sentence records a `removed` entry, or a new
 `rule` with a new anchor, that supersedes it.
 
@@ -1155,22 +1157,29 @@ Write the entries once the new text exists, since an anchor quotes the text as w
 - `removed` - a rule the edit takes out.
 - `rejected` - an alternative not adopted, or a gap declined for a reason that will still hold the
   next time someone proposes it. A decline that only fits this edit stays in the checklist.
-- `void` - withdraws an entry written in error, named in `supersedes`.
+- `void` - withdraws an entry written in error, named in `supersedes`, together with what that
+  entry did: voiding an entry that superseded another makes the other live again. A void cannot
+  target a void (`add` refuses it); to restore a voided entry, add it again as a new entry.
 
-Each entry also has `topic` (lowercase, dashes; reuse the topic of an entry it supersedes),
-`decision`, `why`, `reopen_if` (not needed for `void`), `evidence`, `origin` (`authored`;
-`baseline` for the baseline pass below), and three lists: `anchors`, `supersedes` (ids this entry
-replaces) and `refs` (free-text pointers such as a checklist file name or a commit subject;
-`[]` when none). `evidence` is `{"tier": ..., "text": ...}`, the tier saying how the decision was
-established:
+Each entry also has `topic` (lowercase letters, digits and dashes, at most 40 characters,
+starting with a letter or digit; reuse the topic of an entry it supersedes), `decision`, `why`,
+`reopen_if` (not needed for `void`), `evidence`, `origin`, and three lists: `anchors`,
+`supersedes` (ids this entry replaces) and `refs` (free-text pointers such as a checklist file
+name or a commit subject; `[]` when none). `origin` is one of `authored` (an editor's own entry,
+the usual one), `baseline` (the baseline pass below), `ab` (a decision an A/B test settled) and
+`imported` (carried over from an older record). `evidence` is `{"tier": ..., "text": ...}`,
+exactly those two fields, the tier saying how the decision was established:
 
 - `measured` - you ran or measured it (a probe, a test, a replay).
 - `user` - a user decision, cited by date in `text`.
 - `argued` - reasoning, no measurement.
 - `inherited` - taken from a source nobody here re-checked (a changelog, a reviewer's claim).
 
-`add` assigns `v`, `id` and `date` and refuses an invalid entry with one line per problem. Entry
-text is public, so it names no private host, path or repo.
+`add` always assigns `v` and `id`, keeps a `date` you supply (`YYYY-MM-DD`) and otherwise sets
+today's UTC date, and refuses an invalid entry with one line per problem. A file naming several
+skills is all or nothing: one refused entry writes none of them. An anchor is counted in the
+files git tracks, so `git add` a new Markdown file before quoting from it. Entry text is public,
+so it names no private host, path or repo.
 
 - **Picking an anchor:** quote 20 to 200 characters that are the stable core of one rule: unique
   in the skill's Markdown (`add` refuses a phrase it finds zero times or twice), not a heading,
@@ -1182,7 +1191,9 @@ text is public, so it names no private host, path or repo.
   test, first record its load-bearing rules as `rule` entries with `"origin": "baseline"`, in a
   commit of their own, so the rewrite is checked against them.
 - **The checklist names them** on one line the commit gate reads: `Decisions: <id>, <id>` (ids in
-  the ledger the commit ships) or `Decisions: none - <reason>`.
+  the ledger the commit ships) or `Decisions: none - <reason>`. The line may be indented and may
+  stand in a list item, ticked or not (`- Decisions: ...`, `1. Decisions: ...`,
+  `- [x] Decisions: ...`); one inside a code fence does not count.
 
 **Last step - close the receipt when the procedure is finished** (the change and its review
 artifact committed; for a coordinator, also every subagent it dispatched to edit a SKILL.md has

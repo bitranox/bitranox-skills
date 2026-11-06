@@ -145,11 +145,16 @@ script's `add --from-file`; `bitranox:meta-skill-writer` (Step 0b) says when and
 - The commit and push gates refuse a change whose shipped text no longer contains a live `rule`
   entry's anchor, printing the entry's decision, why and reopen_if. Answer with a superseding
   entry (`removed`, or a `rule` with a new anchor) that gives the reason, never by editing the
-  ledger. A line deleted from a ledger is refused too: it is append-only.
-- A SKILL.md change's checklist carries `Decisions: <id>, <id>` or `Decisions: none - <reason>`.
-- The SKILL.md edit guard refuses an agent's first edit of a skill once, with that skill's
-  rejected and removed decisions, unless the agent has run `show` for it.
-- `repo-gate.py --ci` checks every ledger against its skill text.
+  ledger. A line deleted from a ledger is refused too: it is append-only, and a renamed skill
+  answers to its old name's ledger at the fork point.
+- A SKILL.md change's checklist carries `Decisions: <id>, <id>` or `Decisions: none - <reason>`,
+  at the line start or in a list item (`- [x] Decisions: ...`), outside a code fence.
+- The SKILL.md edit guard refuses an agent's first edit of a marketplace skill once, with that
+  skill's rejected and removed decisions, unless the agent has run `show` for it. It reads the
+  ledger beside the edited file, so a tool-repo twin's editor runs `show` with the marketplace
+  `--skill-dir` instead.
+- `repo-gate.py --ci` checks every ledger against its skill text, and on a pull request also
+  refuses a ledger line removed since the fork point.
 - Hooks and jigs keep no ledger: a decision about one goes in a `Decisions` block of its module
   docstring (decision, why, evidence, reopen if), pinned by a test that fails when it is reverted.
 
