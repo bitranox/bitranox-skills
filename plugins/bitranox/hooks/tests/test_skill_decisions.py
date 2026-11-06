@@ -1,5 +1,6 @@
 """Tests for skill_decisions: the per-skill decision ledger."""
 import copy
+import io
 import json
 import os
 import subprocess
@@ -759,3 +760,87 @@ def test_the_script_runs_as_a_file(tmp_path):
                           str(skill.parent), "--json"], capture_output=True, encoding="utf-8",
                          cwd=str(tmp_path), env=_clean_env(), check=False)
     assert out.returncode == 0 and json.loads(out.stdout)["ok"] is True, out.stderr
+
+
+# ---- inputs that must not reach a traceback ----
+
+_SURROGATE = chr(0xDCFF)        # what json.loads makes of a "\udcff" escape
+_NOT_CP1252 = chr(0x4E2D)       # a CJK ideograph: no cp1252 byte encodes it
+# Deep enough to exhaust the decoder on any stack size; balanced, so it is valid JSON.
+_DEEP = 1_000_000
+
+
+def _script():
+    return os.path.join(os.path.dirname(SD.__file__), "skill_decisions.py")
+
+
+def test_a_lone_surrogate_in_a_draft_is_refused_naming_the_field(tmp_path):
+    _repo, skill = _skill(tmp_path)
+    with pytest.raises(SD.EntryRefused) as err:
+        SD.append_entries(skill, [_draft(decision="x" + _SURROGATE + " y")], today="2026-11-06")
+    assert any(p.startswith("entry 1: decision: not encodable") for p in err.value.problems)
+    assert not SD.ledger_path(skill).exists()
+
+
+def test_a_lone_surrogate_in_a_ledger_line_is_a_ledger_error():
+    entry = _rule()
+    line = json.dumps(dict(entry, why="x" + _SURROGATE)) + "\n"     # ASCII: the escape, not the char
+    with pytest.raises(SD.LedgerError) as err:
+        list(SD.parse_entries([json.dumps(entry) + "\n", line]))
+    assert err.value.line_no == 2 and "why: not encodable" in err.value.reason
+
+
+def test_cli_add_refuses_a_lone_surrogate_without_a_traceback(tmp_path):
+    _repo, skill = _skill(tmp_path)
+    src = _entries_file(tmp_path, dict(_draft(decision="x" + _SURROGATE + " y"), skill="devops-bmk"))
+    assert "\\udcff" in src.read_text(encoding="utf-8")
+    out = subprocess.run([sys.executable, _script(), "add", "--from-file", str(src), "--skills-dir",
+                          str(skill.parent), "--json"], capture_output=True, encoding="utf-8",
+                         errors="replace", cwd=str(tmp_path), env=_clean_env(), check=False)
+    assert out.returncode == 1 and "Traceback" not in out.stderr, out.stderr
+    envelope = json.loads(out.stdout)
+    assert envelope["ok"] is False and envelope["data"]["written"] == {}
+    assert any(p.startswith("entry 1: decision: not encodable") for p in envelope["data"]["refused"])
+    assert not SD.ledger_path(skill).exists()
+
+
+def test_text_output_survives_a_console_that_cannot_encode_it(tmp_path):
+    _repo, skill = _skill(tmp_path)
+    SD.append_entries(skill, [_draft(decision="Install bmk " + _NOT_CP1252 + " alone.")],
+                      today="2026-11-06")
+    shown = subprocess.run([sys.executable, _script(), "show", "devops-bmk", "--skill-dir", str(skill)],
+                           capture_output=True, encoding="utf-8", errors="replace", cwd=str(tmp_path),
+                           env={**os.environ, "PYTHONIOENCODING": "cp1252"}, check=False)
+    assert shown.returncode == 0 and "Traceback" not in shown.stderr, shown.stderr
+    assert "\\u4e2d" in shown.stdout
+
+
+def test_a_refusal_survives_a_strict_stderr_that_cannot_encode_it(tmp_path, monkeypatch):
+    # CPython opens its own stderr with backslashreplace whatever PYTHONIOENCODING says, so only a
+    # caller that installed a strict stream of its own reaches the case main's reconfigure covers.
+    _repo, skill = _skill(tmp_path)
+    absent = _draft(anchors=["Install bmk " + _NOT_CP1252 + " alone, never per project."])
+    src = _entries_file(tmp_path, dict(absent, skill="devops-bmk"))
+    err = io.TextIOWrapper(io.BytesIO(), encoding="cp1252", errors="strict")
+    monkeypatch.setattr(sys, "stderr", err)
+    rc = SD.main(["add", "--from-file", str(src), "--skills-dir", str(skill.parent)])
+    err.flush()
+    text = err.buffer.getvalue().decode("cp1252")
+    assert rc == 1 and "refused: entry 1: anchors:" in text and "\\u4e2d" in text
+
+
+def test_cli_add_of_a_too_deeply_nested_file_could_not_run(tmp_path, capsys, monkeypatch):
+    repo, _skill_dir = _skill(tmp_path)
+    src = tmp_path / "deep.json"
+    src.write_text("[" * _DEEP + "]" * _DEEP, encoding="utf-8")
+    monkeypatch.chdir(repo)
+    rc, out, err = _cli(capsys, "add", "--from-file", str(src))
+    assert rc == 2 and out == "" and len(err.splitlines()) == 1 and "deep.json" in err
+    rc, out, err = _cli(capsys, "add", "--from-file", str(src), "--json")
+    assert rc == 2 and json.loads(out)["ok"] is False and len(err.splitlines()) == 1
+
+
+def test_a_too_deeply_nested_ledger_line_is_a_ledger_error():
+    with pytest.raises(SD.LedgerError) as err:
+        list(SD.parse_entries([json.dumps(_rule()) + "\n", "[" * _DEEP + "]" * _DEEP + "\n"]))
+    assert err.value.line_no == 2 and "not JSON" in err.value.reason

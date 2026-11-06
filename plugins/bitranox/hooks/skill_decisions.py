@@ -168,6 +168,27 @@ def _date_problems(entry: dict) -> list[str]:
     return []
 
 
+def _unencodable_problems(entry: dict) -> list[str]:
+    """One `<field>: <reason>` per field that UTF-8 cannot encode; [] for the usual entry.
+
+    entry_id and the stored line both encode the entry as UTF-8, and json.loads turns a "\\udcff"
+    escape into a lone surrogate that no UTF-8 encoder accepts; asking first keeps that a problem
+    with a field name instead of a UnicodeEncodeError.
+    """
+    def encodable(value: object) -> bool:
+        try:
+            json.dumps(value, ensure_ascii=False).encode("utf-8")
+        except UnicodeEncodeError:
+            return False
+        return True
+    if encodable(entry):
+        return []
+    # backslashreplace: a surrogate in a field NAME must not make the problem text unprintable.
+    return ["%s: not encodable as UTF-8 (a lone surrogate?)"
+            % str(k).encode("utf-8", "backslashreplace").decode("utf-8")
+            for k, v in entry.items() if not (encodable(k) and encodable(v))]
+
+
 def validate_entry(entry: dict) -> list[str]:
     """Every problem with `entry`, one `<field>: <reason>` string each; [] when it is valid."""
     problems = ["%s: unknown field" % k for k in entry if k not in FIELDS]
@@ -177,7 +198,10 @@ def validate_entry(entry: dict) -> list[str]:
     required = ("decision", "why") if entry.get("kind") == "void" else ("decision", "why", "reopen_if")
     problems += ["%s: empty" % f for f in required if not _text(entry, f)]
     problems += _vocabulary_problems(entry) + _list_problems(entry) + _anchor_problems(entry)
-    if entry.get("id") != entry_id(entry):
+    unencodable = _unencodable_problems(entry)
+    if unencodable:
+        problems += unencodable         # no id can be computed for it, so none can match
+    elif entry.get("id") != entry_id(entry):
         problems.append("id: does not match the entry (edited after it was written?)")
     return problems
 
@@ -225,6 +249,8 @@ def parse_entries(lines: Iterable[str | bytes]) -> Iterator[dict]:
             entry = json.loads(text)
         except ValueError as exc:
             raise LedgerError(line_no, "not JSON (%s)" % exc) from None
+        except RecursionError:
+            raise LedgerError(line_no, "not JSON (nested too deeply)") from None
         if not isinstance(entry, dict):
             raise LedgerError(line_no, "not a JSON object")
         problems = validate_entry(entry)
@@ -416,13 +442,10 @@ def _entry_problems(entry: dict, known: set[str], corpus: str) -> list[str]:
     return found
 
 
-def _encoded(entry: dict) -> bytes | None:
-    # Raw UTF-8 keeps the ledger readable in a diff; a lone surrogate (json.loads makes one from a
-    # "\udcff" escape) cannot be encoded, and is refused here rather than failing mid-write.
-    try:
-        return (json.dumps(entry, sort_keys=True, ensure_ascii=False) + "\n").encode("utf-8")
-    except UnicodeEncodeError:
-        return None
+def _encoded(entry: dict) -> bytes:
+    # Raw UTF-8 keeps the ledger readable in a diff; append_entries has already refused an entry
+    # holding a lone surrogate, the one value this encode would fail on.
+    return (json.dumps(entry, sort_keys=True, ensure_ascii=False) + "\n").encode("utf-8")
 
 
 def append_entries(skill_dir: str | Path, entries: list[dict], *, today: str | None = None) -> list[str]:
@@ -447,15 +470,15 @@ def append_entries(skill_dir: str | Path, entries: list[dict], *, today: str | N
             problems.append("entry %d: not a JSON object" % n)
             continue
         entry = dict(draft, v=1, date=draft.get("date") or today)
+        if _unencodable_problems(entry):
+            # Before entry_id, which encodes the entry: validate_entry names the field instead.
+            problems += ["entry %d: %s" % (n, p) for p in validate_entry(entry)]
+            continue
         entry["id"] = entry_id(entry)
-        found = _entry_problems(entry, known, corpus)
-        data = _encoded(entry)
-        if data is None:
-            found.append("text: not encodable as UTF-8 (a lone surrogate?)")
-        problems += ["entry %d: %s" % (n, p) for p in found]
+        problems += ["entry %d: %s" % (n, p) for p in _entry_problems(entry, known, corpus)]
         known.add(entry["id"])
         ids.append(entry["id"])
-        chunks.append(data or b"")
+        chunks.append(_encoded(entry))
     if problems:
         raise EntryRefused(problems)
     if not chunks:
@@ -560,7 +583,8 @@ def _named_skill(root: Path, name: object) -> Path:
 def _read_drafts(from_file: str) -> list:
     try:
         raw = json.loads(Path(from_file).read_text(encoding="utf-8"))
-    except (OSError, ValueError) as exc:
+    except (OSError, ValueError, RecursionError) as exc:
+        # RecursionError: json.loads gives up on deep nesting by raising it, not a ValueError.
         raise _RunError("cannot read %s: %s" % (from_file, exc)) from None
     drafts = raw if isinstance(raw, list) else [raw]
     if not drafts:
@@ -716,8 +740,18 @@ def _fail(as_json: bool, command: str, line: str, data: Mapping) -> int:
     return 2
 
 
+def _tolerant_streams() -> None:
+    # Run directly, not through run-python.sh, the script inherits the console's codepage: on a
+    # cp1252 Windows console a non-ASCII decision would otherwise end in a UnicodeEncodeError.
+    for stream in (sys.stdout, sys.stderr):
+        reconfigure = getattr(stream, "reconfigure", None)
+        if reconfigure is not None:
+            reconfigure(errors="backslashreplace")
+
+
 def main(argv: list[str] | None = None) -> int:
     """Run one verb; see the module docstring and `--help`."""
+    _tolerant_streams()
     argv = sys.argv[1:] if argv is None else list(argv)
     try:
         args = _parser().parse_args(argv)
