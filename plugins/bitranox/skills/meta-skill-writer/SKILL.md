@@ -1159,7 +1159,9 @@ Write the entries once the new text exists, since an anchor quotes the text as w
   next time someone proposes it. A decline that only fits this edit stays in the checklist.
 - `void` - withdraws an entry written in error, named in `supersedes`, together with what that
   entry did: voiding an entry that superseded another makes the other live again. A void cannot
-  target a void (`add` refuses it); to restore a voided entry, add it again as a new entry.
+  target a void (`add` refuses it). To restore a voided entry, add it again with its `why` saying
+  it restores that entry: the id is a hash of the entry, so an unchanged copy with the same date
+  is refused as identical, while the changed `why` gives it a new id.
 
 Each entry also has `topic` (lowercase letters, digits and dashes, at most 40 characters,
 starting with a letter or digit; reuse the topic of an entry it supersedes), `decision`, `why`,
