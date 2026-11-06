@@ -29,6 +29,22 @@ after backslashes become `/` and `.`/`..` segments collapse:
     agent), resolved by `transcript_siblings.agent_transcript`.
   - UNLESS the env `BITRANOX_SKILL_WRITER` is set: the emergency bypass. NOTE: a shell `export` in a
     Bash tool call does NOT reach this hook (separate process) - the env must be set at SESSION start.
+  - AFTER both checks pass, once per (session, agent, skill): when the skill's ledger holds a
+    live rejected or removed entry and the editing agent's transcript shows no
+    `skill_decisions.py show <skill>` call, the first edit is refused with those entries
+    (`render_brief`); the re-send passes. This direction fails OPEN: an unreadable ledger, a
+    missing module or an unstorable flag lets the edit through, because the commit gate owns
+    ledger integrity and this refusal only delivers reading.
+
+Decisions:
+- Refuse once, not every time, and never when the agent ran `show`: the user chose the
+  refuse-once form for EnterWorktree and the question-premise hook (2026-10-12), and an agent
+  that followed the procedure must never pay for it. Priced on 2026-11-06 by replaying the
+  transcript corpus: 5679 transcripts scanned, 487 first SKILL.md edits per (agent, skill), in
+  121 sessions; 482 of those edits (118 sessions) fell in the last 30 days, and none followed a
+  `show` call. That is the upper bound once every skill has a ledger; only a skill holding a
+  live rejected or removed entry can refuse. Reopen if the refusal log shows agents
+  re-sending unchanged edits without reading the brief.
 
 Errors split by direction. Unparseable stdin and any error escaping `main` fail OPEN (exit 0): a broken
 guard must never wedge a turn. An error while consulting the receipt store, a transcript that cannot
@@ -37,6 +53,7 @@ count as no evidence and the edit is blocked, because evidence that cannot be re
 the guard.
 Pure standard library; launched via run-python.sh so it works on Windows too.
 """
+import hashlib
 import json
 import os
 import posixpath
@@ -123,6 +140,79 @@ def _loaded_by_editing_agent(event):
         return False                                   # unreadable evidence is no evidence
 
 
+_BRIEF_FLAG = ".skill-decisions-brief-"
+_BRIEF = ("Before this first edit of skills/%s, read what was already decided for it. Each entry "
+          "below was taken for the reason given; re-proposing one needs that reason answered, in a "
+          "new ledger entry that supersedes it.\n\n%s\n\nThe full list: python3 <plugin>/hooks/"
+          "skill_decisions.py show %s --kind rejected,removed --full. Now re-send the edit, revised "
+          "or unchanged; the re-send is not refused.")
+
+
+def _bash_commands(record):
+    content = (record.get("message") or {}).get("content")
+    for block in content if isinstance(content, list) else []:
+        if isinstance(block, dict) and block.get("type") == "tool_use" and block.get("name") == "Bash":
+            yield str((block.get("input") or {}).get("command") or "")
+
+
+def ran_show(transcript, skill):
+    """True when `transcript` holds a Bash call of `skill_decisions.py show <skill>`. Raises OSError."""
+    # The lookahead keeps `show foo` from counting for `show foo-bar`: skill names hold hyphens.
+    wanted = re.compile(r"skill_decisions\.py\b.*\bshow\s+%s(?![\w-])" % re.escape(skill))
+    with Path(transcript).open(encoding="utf-8", errors="replace") as fh:
+        for line in fh:
+            if "skill_decisions" not in line:
+                continue                               # cheap prefilter, as in skill_loaded
+            try:
+                record = json.loads(line)
+            except ValueError:
+                continue
+            if isinstance(record, dict) and any(wanted.search(c) for c in _bash_commands(record)):
+                return True
+    return False
+
+
+def _refuse_once(session, agent, skill):
+    """True the first time for (session, agent, skill), recording it; False after, or if unstorable."""
+    try:
+        from self_improve_signals import session_state_path  # noqa: PLC0415 - optional state store
+        key = hashlib.sha1(("%s/%s" % (agent, skill)).encode("utf-8")).hexdigest()[:16]
+        flag = session_state_path(session, _BRIEF_FLAG + key)
+        if flag.exists():
+            return False
+        flag.parent.mkdir(parents=True, exist_ok=True)
+        flag.write_text("refused\n", encoding="utf-8")
+        return True
+    except Exception:  # noqa: BLE001 - a flag that cannot be stored lets the edit through
+        return False
+
+
+def _brief_refusal(event, path):
+    """The decisions-brief refusal owed before this agent's first edit of the skill, or None."""
+    session = event.get("session_id")
+    if not isinstance(session, str) or not session.strip():
+        return None
+    skill_dir = Path(path).parent
+    try:
+        import skill_decisions  # noqa: PLC0415 - a missing module must not wedge the guard
+        ledger = skill_decisions.ledger_path(skill_dir)
+        brief = skill_decisions.render_brief(lambda: skill_decisions.file_lines(ledger),
+                                             skill=skill_dir.name)
+    except Exception:  # noqa: BLE001 - ledger integrity is the commit gate's job, not this guard's
+        return None
+    if not brief:
+        return None
+    transcript = _agent_transcript(event)
+    try:
+        if transcript is not None and ran_show(transcript, skill_dir.name):
+            return None
+    except OSError:
+        pass                                           # unreadable: one refusal costs one re-send
+    if not _refuse_once(session, event.get("agent_id") or "main", skill_dir.name):
+        return None
+    return _BRIEF % (skill_dir.name, brief, skill_dir.name)
+
+
 def decide(event, env):
     """Pure: (event, env) -> a block-reason string (deny the tool call), or None to allow silently."""
     if (event.get("tool_name") or "") not in _TOOLS:
@@ -141,7 +231,7 @@ def decide(event, env):
         return None                                    # emergency bypass (env at session launch)
     receipt = _receipt_fresh(event)
     if receipt and _loaded_by_editing_agent(event):
-        return None                                    # this agent ENTERED the skill-writer procedure
+        return _brief_refusal(event, path)             # None unless the decisions brief is owed
     if receipt:
         why = ("A meta-skill-writer receipt is armed, but THIS agent never loaded the skill: a receipt "
                "is shared by every agent in the session, so a subagent cannot ride its parent's. "

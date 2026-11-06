@@ -5,6 +5,7 @@ import sys
 
 import pytest
 
+import skill_decisions as SD
 import skill_edit_guard as G
 
 
@@ -391,3 +392,77 @@ def test_end_to_end_with_the_real_receipt_store(tmp_path, monkeypatch, capsys, h
         results.append(G.main())
     assert results == [0, 2]
     assert "SKILL-EDIT GUARD" in capsys.readouterr().err
+
+
+# --- the decisions brief: a skill's declined decisions, handed over once before its first edit ----
+#
+# Runs only AFTER the receipt and load checks pass. The session-state flag lives under the
+# autouse `home` fixture's HOME, so a real ~/.claude never decides a test.
+
+
+def _skill_with_rejection(tmp_path, name="foo"):
+    skill = tmp_path / "repo" / "skills" / name
+    (skill / ".skillwriter").mkdir(parents=True)
+    (skill / "SKILL.md").write_text("text\n", encoding="utf-8")
+    entry = {"v": 1, "date": "2026-11-05", "kind": "rejected", "topic": "per-project-env",
+             "decision": "Install per project.", "why": "Two projects cannot share it.",
+             "evidence": {"tier": "measured", "text": "x"}, "reopen_if": "bmk changes.",
+             "anchors": [], "supersedes": [], "refs": [], "origin": "authored"}
+    entry["id"] = SD.entry_id(entry)
+    SD.ledger_path(skill).write_text(json.dumps(entry) + "\n", encoding="utf-8")
+    return skill / "SKILL.md"
+
+
+def _brief_edit(transcript, path):
+    return {"session_id": "S", "transcript_path": str(transcript), "tool_name": "Edit",
+            "tool_input": {"file_path": str(path)}}
+
+
+def _show_record(skill):
+    return {"type": "assistant", "message": {"content": [
+        {"type": "tool_use", "id": "toolu_s", "name": "Bash",
+         "input": {"command": "python3 /p/hooks/skill_decisions.py show %s --kind rejected,removed --full"
+                   % skill}}]}}
+
+
+def test_the_first_edit_is_refused_once_with_the_declined_decisions(tmp_path, armed):
+    path = _skill_with_rejection(tmp_path)
+    main = _session(tmp_path, [_load_record(_CACHE + "meta-skill-writer")])
+    reason = G.decide(_brief_edit(main, path), {})
+    assert reason is not None and "Two projects cannot share it." in reason
+    assert "re-send" in reason
+    assert G.decide(_brief_edit(main, path), {}) is None
+
+
+def test_an_agent_that_ran_show_is_not_refused(tmp_path, armed):
+    path = _skill_with_rejection(tmp_path)
+    main = _session(tmp_path, [_load_record(_CACHE + "meta-skill-writer"), _show_record("foo")])
+    assert G.decide(_brief_edit(main, path), {}) is None
+
+
+def test_show_for_another_skill_does_not_count(tmp_path, armed):
+    path = _skill_with_rejection(tmp_path)
+    main = _session(tmp_path, [_load_record(_CACHE + "meta-skill-writer"), _show_record("foo-bar")])
+    assert G.decide(_brief_edit(main, path), {}) is not None
+
+
+def test_a_skill_with_no_declined_decision_is_never_refused(tmp_path, armed):
+    path = tmp_path / "repo" / "skills" / "plain" / "SKILL.md"
+    path.parent.mkdir(parents=True)
+    path.write_text("text\n", encoding="utf-8")
+    main = _session(tmp_path, [_load_record(_CACHE + "meta-skill-writer")])
+    assert G.decide(_brief_edit(main, path), {}) is None
+
+
+def test_an_unreadable_ledger_lets_the_edit_through(tmp_path, armed):
+    path = _skill_with_rejection(tmp_path)
+    SD.ledger_path(path.parent).write_text("{broken\n", encoding="utf-8")
+    main = _session(tmp_path, [_load_record(_CACHE + "meta-skill-writer")])
+    assert G.decide(_brief_edit(main, path), {}) is None
+
+
+def test_each_agent_is_refused_once_for_itself(tmp_path, armed):
+    path = _skill_with_rejection(tmp_path)
+    main = _session(tmp_path, [], agent="a1", agent_records=[_load_record(_CACHE + "meta-skill-writer")])
+    event = dict(_brief_edit(main, path), agent_id="a1", agent_type="general-purpose")
+    assert G.decide(event, {}) is not None and G.decide(event, {}) is None
