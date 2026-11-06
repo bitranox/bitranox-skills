@@ -4527,5 +4527,106 @@ def test_run_checks_wires_the_decision_check_in_both_modes(tmp_path, monkeypatch
     assert any(entry["id"] in f for f in ci)
 
 
+def _commit_all(root, message):
+    """Commit everything under ``root`` with a fixed identity, so no user config is needed."""
+    env = {**os.environ, "GIT_AUTHOR_NAME": "t", "GIT_AUTHOR_EMAIL": "t@example.invalid",
+           "GIT_COMMITTER_NAME": "t", "GIT_COMMITTER_EMAIL": "t@example.invalid"}
+    subprocess.run(["git", "add", "-A"], cwd=root, check=True, env=env)
+    subprocess.run(["git", "commit", "-q", "--no-verify", "-m", message], cwd=root, check=True, env=env)
+
+
+def _git_out(root, *args):
+    return subprocess.run(["git", *args], cwd=root, capture_output=True, text=True,
+                          check=True).stdout.strip()
+
+
+@pytest.mark.usefixtures("_bare_git_env")
+def test_a_push_judges_a_committed_ledger_change_whose_index_and_working_copy_were_reverted(tmp_path):
+    """A push ships HEAD: a ledger line removed in a commit is judged even once the index and the
+    working copy hold the fork point's ledger again, which leaves nothing for the merge-base diff."""
+    line, _ = _ledger_line()
+    second, _ = _ledger_line(topic="second")
+    root = _ledger_repo(tmp_path, [line, second])
+    base = _git_out(root, "rev-parse", "HEAD")
+    write(root / LEDGER_REL, second)
+    _commit_all(root, "drop a ledger line")
+    subprocess.run(["git", "checkout", base, "--", LEDGER_REL], cwd=root, check=True)
+    assert RG._changed_vs_origin(root) == []
+    fails = RG.check_skill_decisions(root, RG.STAGE_HEAD, log=lambda r: None)
+    assert any("append-only" in f and "line 1" in f for f in fails)
+    # The commit carries the restored index, so the same tree judged as a commit passes.
+    assert RG.check_skill_decisions(root, RG.STAGE_INDEX, log=lambda r: None) == []
+
+
+@pytest.mark.parametrize("stage", [RG.STAGE_INDEX, RG.STAGE_HEAD])
+@pytest.mark.usefixtures("_bare_git_env")
+def test_a_skill_dir_removed_from_disk_but_still_shipped_is_judged_on_what_ships(tmp_path, stage):
+    """`rm -rf` without `git rm` deletes nothing a commit or push ships: the index (and HEAD)
+    still carry the skill, so its staged or committed text is what is judged, not the empty disk."""
+    line, entry = _ledger_line()
+    root = _ledger_repo(tmp_path, [line])
+    _stage(root, LEDGER_SKILL + "/SKILL.md", "Intro.\n\nbmk installs per project now.\n")
+    if stage == RG.STAGE_HEAD:
+        _commit_all(root, "drop the anchor")
+    shutil.rmtree(root / LEDGER_SKILL)
+    fails = RG.check_skill_decisions(root, stage, log=lambda r: None)
+    assert len(fails) == 1 and entry["id"] in fails[0]
+
+
+@pytest.mark.usefixtures("_bare_git_env")
+def test_a_skill_deleted_with_git_rm_after_a_staged_edit_passes(tmp_path):
+    """The control for the removed-dir case: here the stage itself ships no SKILL.md, so the
+    skill is deleted and its ledger goes with it."""
+    line, _ = _ledger_line()
+    root = _ledger_repo(tmp_path, [line])
+    _stage(root, LEDGER_SKILL + "/SKILL.md", "Intro.\n\nbmk installs per project now.\n")
+    subprocess.run(["git", "rm", "-rqf", LEDGER_SKILL], cwd=root, check=True)
+    assert not (root / LEDGER_SKILL).exists()
+    assert RG.check_skill_decisions(root, RG.STAGE_INDEX, log=lambda r: None) == []
+
+
+@pytest.mark.parametrize("stage", [RG.STAGE_INDEX, RG.STAGE_HEAD])
+@pytest.mark.usefixtures("_bare_git_env")
+def test_a_checkout_behind_origin_is_not_judged_on_origin_s_newer_ledger(tmp_path, stage):
+    """Origin gained an entry in another skill's ledger after this checkout forked. Judged against
+    origin's tip instead of the merge-base, this checkout would read as having removed it."""
+    other = "plugins/bitranox/skills/other-skill"
+    other_line, _ = _ledger_line("other rule text", topic="other")
+    write(tmp_path / other / "SKILL.md", "Other rule text.\n")
+    write(tmp_path / other / ".skillwriter/decisions.jsonl", other_line)
+    line, _ = _ledger_line()
+    root = _ledger_repo(tmp_path, [line])
+    newer, _ = _ledger_line("a newer rule", topic="newer")
+    write(root / other / "SKILL.md", "Other rule text.\n\nA newer rule.\n")
+    write(root / other / ".skillwriter/decisions.jsonl", other_line + newer)
+    _commit_all(root, "origin moves on")
+    subprocess.run(["git", "update-ref", "refs/remotes/origin/master", "HEAD"], cwd=root, check=True)
+    subprocess.run(["git", "reset", "-q", "--hard", "HEAD~1"], cwd=root, check=True)
+    _stage(root, LEDGER_SKILL + "/references/notes.md", "A note.\n")
+    _stage(root, "plugins/bitranox/hooks/x.py", "x = 1\n")
+    if stage == RG.STAGE_HEAD:
+        _commit_all(root, "an unrelated change")
+    assert RG.check_skill_decisions(root, stage, log=lambda r: None) == []
+
+
+@pytest.mark.usefixtures("_bare_git_env")
+def test_a_commit_naming_paths_is_judged_on_its_selection_not_the_working_tree(tmp_path):
+    """`git commit -- SKILL.md` takes SKILL.md from disk and leaves the unstaged ledger change out,
+    so the superseding entry sitting in the working copy is not part of what this commit ships."""
+    line, entry = _ledger_line()
+    root = _ledger_repo(tmp_path, [line])
+    new_line, _ = _ledger_line("each project gets its own bmk env", decision="per project",
+                               supersedes=[entry["id"]])
+    write(root / LEDGER_SKILL / "SKILL.md", "Intro.\n\nNow each project gets its own bmk env.\n")
+    write(root / LEDGER_REL, line + new_line)
+    only_md = RG.CommitSelection("only", [LEDGER_SKILL + "/SKILL.md"], where=root)
+    fails = RG.check_skill_decisions(root, only_md, log=lambda r: None)
+    assert len(fails) == 1 and entry["id"] in fails[0]
+    # The controls: naming the ledger too ships the supersede, and the plain index ships neither.
+    both = RG.CommitSelection("only", [LEDGER_SKILL + "/SKILL.md", LEDGER_REL], where=root)
+    assert RG.check_skill_decisions(root, both, log=lambda r: None) == []
+    assert RG.check_skill_decisions(root, RG.STAGE_INDEX, log=lambda r: None) == []
+
+
 def test_jsonl_is_an_lf_checked_suffix():
     assert ".jsonl" in RG._LF_SUFFIXES

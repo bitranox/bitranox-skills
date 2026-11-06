@@ -1604,19 +1604,41 @@ def _selection_index(directory, selection):
         yield env if _stage_selection(selection, top, real_index.strip(), temp_index, env) else None
 
 
+def _git_anchor(skill_dir):
+    """(an existing directory to run git in, ``skill_dir`` as a pathspec relative to it).
+
+    The skill dir itself with pathspec ".", or, for a dir gone from disk, its nearest existing
+    ancestor: `rm -rf` without `git rm` deletes nothing the index or HEAD ships, and git cannot
+    run in a directory that does not exist, so a reader anchored there would see nothing at all.
+    """
+    here = skill_dir
+    while not here.is_dir() and here.parent != here:
+        here = here.parent
+    return here, skill_dir.relative_to(here).as_posix()
+
+
+def _under(sub, path):
+    """``path`` (relative to the git anchor) relative to the skill dir ``sub``, or None if outside it."""
+    if sub == ".":
+        return path
+    return path[len(sub) + 1:] if path.startswith(sub + "/") else None
+
+
 def _selected_files(skill_dir, selection, *, ignore=_mirror_ignored):
     """`shipped_files` for a `CommitSelection`, or None when git cannot say what it takes."""
-    with _selection_index(skill_dir, selection) as env:
+    here, sub = _git_anchor(Path(skill_dir))
+    with _selection_index(here, selection) as env:
         if env is None:
             return None
-        rc_l, listed = _git_paths(skill_dir, "ls-files", "--", ".", env=env)
+        rc_l, listed = _git_paths(here, "ls-files", "--", sub, env=env)
         if rc_l:
             return None
         found = {}
-        for rel in dict.fromkeys(listed):
-            if ignore(rel):
+        for path in dict.fromkeys(listed):
+            rel = _under(sub, path)
+            if rel is None or ignore(rel):
                 continue
-            data = _checked_out_bytes(skill_dir, "", rel, env=env)
+            data = _checked_out_bytes(here, "", path, env=env)
             if data is None:
                 return None
             found[rel] = data
@@ -1631,7 +1653,8 @@ def shipped_files(skill_dir, stage, *, ignore=_mirror_ignored):
     committed (#111). ``stage`` is ``STAGE_INDEX``, ``STAGE_HEAD`` or a `CommitSelection`, the one
     kind of commit that DOES take files from the working tree; when git cannot say what that
     selection takes, the index is read, as for a plain commit. Without git, or with nothing to list
-    (no commit yet), the working tree is all there is, and that is what is compared.
+    (no commit yet), the working tree is all there is, and that is what is compared. A skill dir
+    gone from disk is still read at ``stage`` (`_git_anchor`): only what the stage lists counts.
 
     ``ignore(rel)`` names the files left out; the default is the mirror comparison's set, and the
     decision check passes a narrower one because its ledger lives under `.skillwriter/`.
@@ -1642,17 +1665,19 @@ def shipped_files(skill_dir, stage, *, ignore=_mirror_ignored):
         if selected is not None:
             return selected
         stage = STAGE_INDEX
+    here, sub = _git_anchor(skill_dir)
     if stage == STAGE_INDEX:
-        commit, (rc, listed) = "", _git_paths(skill_dir, "ls-files", "--", ".")
+        commit, (rc, listed) = "", _git_paths(here, "ls-files", "--", sub)
     else:
-        commit, (rc, listed) = "HEAD", _git_paths(skill_dir, "ls-tree", "-r", "--name-only", "HEAD", "--", ".")
+        commit, (rc, listed) = "HEAD", _git_paths(here, "ls-tree", "-r", "--name-only", "HEAD", "--", sub)
     if rc:
         return _working_tree_files(skill_dir, ignore=ignore)
     found = {}
-    for rel in dict.fromkeys(listed):            # an unmerged path is listed once per stage
-        if ignore(rel):
+    for path in dict.fromkeys(listed):           # an unmerged path is listed once per stage
+        rel = _under(sub, path)
+        if rel is None or ignore(rel):
             continue
-        data = _checked_out_bytes(skill_dir, commit, rel)
+        data = _checked_out_bytes(here, commit, path)
         if data is None:
             return _working_tree_files(skill_dir, ignore=ignore)
         found[rel] = data
@@ -2216,8 +2241,20 @@ def check_skill_decisions(root, stage=STAGE_INDEX, *, log=None):
     included: the same per-skill bound the mirror check already has. ``log`` receives one
     ``{"time", "skill", "entry_id", "problem"}`` record per refusal (default: the audit log,
     `_log_decision_refusal`).
+
+    A push also counts the paths its commits change (`_pushed_changes`, the push half of
+    `_shipped_changes`): a change committed and then reverted in both the index and the working
+    copy is invisible to the merge-base diff, yet HEAD ships it. A commit needs no such half, even
+    one whose command also pushes: what it carries is the index, and a skill whose index text
+    differs from the fork point is already in the merge-base diff. Whether a skill is deleted is
+    read from what ships (no SKILL.md in it), never from the disk.
     """
     changed = _changed_vs_origin(root)
+    if changed is None:
+        return []
+    if not _is_commit(stage):
+        rc, pushed = _pushed_changes(root)
+        changed += [] if rc else pushed
     if not changed:
         return []
     base = _merge_base(root)
@@ -2225,14 +2262,16 @@ def check_skill_decisions(root, stage=STAGE_INDEX, *, log=None):
     names = sorted({m.group(1) for m in (_SKILL_FILE_RX.match(p) for p in changed) if m})
     fails = []
     for name in _skills_with_a_ledger(root, names, base):
-        skill_dir = root / _SKILLS_DIR / name
-        files = shipped_files(skill_dir, stage, ignore=_decision_ignored) if skill_dir.is_dir() else {}
+        files = shipped_files(root / _SKILLS_DIR / name, stage, ignore=_decision_ignored)
         fails += _judge_skill(root, name, files, base, log)
     return fails
 
 
 def check_all_skill_decisions(root):
-    """The CI sweep: every ledger in the checkout against its skill's tracked text.
+    """The CI sweep: every ledger on disk against its skill's files as checked out on disk.
+
+    Both are read from the working tree (`file_lines`, `corpus_from_dir`), not from the index or
+    HEAD: in CI that is a clean checkout of the pushed commit, so the two agree there.
 
     No append-only check: CI on a push diffs nothing (by then the change IS origin/master), so
     that half lives in the hook and the pre-push gate only.
