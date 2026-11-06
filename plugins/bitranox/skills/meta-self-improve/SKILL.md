@@ -169,6 +169,16 @@ fires only while releasing, which loads the release skill: no fact. A
 quoting rule for ANY self-authored shell text binds far more than git commits: a fact too. A fact
 beside a queued skill fix is otherwise a duplicate that outlives the fix.
 
+Before queueing against `skill:<name>` (cases 1 and 2), read that skill's declined list:
+`python3 <plugin>/hooks/skill_decisions.py show <name> --skill-dir <plugin>/skills/<name>
+--kind rejected,removed --full`. `<name>` is the skill's directory name, the same one `--target`
+takes (`compuse-git`, no plugin prefix), and `<plugin>` is the marketplace checkout when the
+session has one (it holds entries newer than the installed copy), else the installed plugin; empty
+output means nothing was declined. When the lesson re-proposes a listed entry, queue it only with
+a `--why` that answers that entry's `reopen_if` and names its id; otherwise drop the candidate (do
+not queue it) and say so in the report (step 7). A queue `drop` does not stop a reworded lesson
+being queued again; the ledger entry is what the next session reads.
+
 | Kind                                                                                            | Home                                                                                                                                           |
 |-------------------------------------------------------------------------------------------------|------------------------------------------------------------------------------------------------------------------------------------------------|
 | User correction or working-style directive ("from now on...", "always/never...")                | a `feedback` memory AND, if it must bind future sessions, a CLAUDE.md guardrail line                                                           |
@@ -299,6 +309,16 @@ PLACE-HERE line) before calling the placement wrong.
   disproven or stale. Select by `--match`, never `--index`: an index shifts under the previous
   close, so two closes from one listing destroy the wrong entry. A delivered contribution recorded
   as rejected tells every later reader the work was not done.
+  When a skill-targeted entry is dropped as disproven, or declined for a reason that will still
+  hold next time, also record it as a `rejected` entry in that skill's ledger in the source repo:
+  from the marketplace checkout (never the installed plugin copy), write the entry to a JSON file
+  and run `python3 plugins/bitranox/hooks/skill_decisions.py add --from-file <file>`. The entry
+  carries `skill` (the directory name), `"kind": "rejected"`, `"origin": "authored"`, a `topic`,
+  the proposal prefixed `Rejected:` as `decision`, the drop reason as `why`, what would reopen it
+  as `reopen_if`, `evidence` (`{"tier": ..., "text": ...}`, tier `measured`, `user`, `argued` or
+  `inherited`) and empty `anchors`, `supersedes` and `refs` lists; each field is defined in
+  `bitranox:meta-skill-writer`, Step 0b. A close because the entry already shipped or duplicates
+  another entry records nothing.
   **A contribution that lands in ANOTHER repo is still shipped** (a private repo, the local
   toolbox, a user command): close it in the same pass that verifies the landing, because the queue
   never sees that repo's commit. Close it against the queue it was FILED in, not the repo it
