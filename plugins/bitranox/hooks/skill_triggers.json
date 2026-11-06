@@ -67,6 +67,25 @@
   "boundary-parsing",
   "coding-python-enforce-data-architecture-strict"
  ],
+ "coding-performance-review": [
+  "measuring",
+  "comparing",
+  "reviewing",
+  "performance",
+  "language",
+  "optimising",
+  "change",
+  "commit",
+  "message",
+  "claims",
+  "speedup",
+  "timing",
+  "versions",
+  "builds",
+  "per-item",
+  "coding-python-performance-review",
+  "coding-rust-performance-review"
+ ],
  "coding-python-clean-architecture": [
   "structuring",
   "python",

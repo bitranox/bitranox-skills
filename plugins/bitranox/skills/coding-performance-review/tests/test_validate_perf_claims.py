@@ -1,4 +1,6 @@
 """validate_perf_claims: what counts as a claim, where it is reported, and the CLI contract."""
+import textwrap
+
 import validate_perf_claims as vpc
 
 SCRIPT = "validate_perf_claims.py"
@@ -138,3 +140,34 @@ def test_cli_non_ansi_path_under_cp1252_is_written_as_utf8(tmp_path, run_script,
     r = run_script(SCRIPT, str(p), env=clean_env(PYTHONIOENCODING="cp1252"))
     assert r.returncode == 0, r.stderr
     assert "proj_\u7530\u4e2d" in r.stdout.decode("utf-8")
+
+
+# --- phrasings and the CLI's missing-file contract ------------------------------------------
+
+def _diff(tmp_path, name, body):
+    p = tmp_path / name
+    p.write_text(textwrap.dedent(body), encoding="utf-8")
+    return str(p)
+
+
+def test_claims_extracts_varied_phrasings(tmp_path):
+    diff = _diff(tmp_path, "changes.diff", """
+        +This change is 40% faster and gives a 3x speedup.
+        +It reduced latency by 30%.
+        +Improves the cache hit rate noticeably.
+    """)
+    claims = " | ".join(c["claim"] for c in vpc.find_performance_claims(diff)).lower()
+    assert "40% faster" in claims
+    assert "3x speedup" in claims
+    assert ("latency by 30%" in claims) or ("30%" in claims)
+    assert "cache hit rate" in claims
+
+
+def test_claims_empty_when_none(tmp_path):
+    diff = _diff(tmp_path, "d.diff", "+just a normal refactor, no numbers here.\n")
+    assert vpc.find_performance_claims(diff) == []
+
+
+def test_validate_main_missing_file_returns_2(tmp_path):
+    # 2 = could not do the job; 1 would read as an answer
+    assert vpc.main([str(tmp_path / "nope.diff")]) == 2

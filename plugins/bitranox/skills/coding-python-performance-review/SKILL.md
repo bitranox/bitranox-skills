@@ -52,16 +52,16 @@ Systematically identify performance issues  -  caching opportunities, uncompiled
 
 Use the Read tool to load referenced files for full details.
 
-| Tool                          | File                           | Purpose                                                    |
-|-------------------------------|--------------------------------|------------------------------------------------------------|
-| Pure function finder (AST)    | find_cache_candidates.py       | Detect pure, expensive functions via AST analysis          |
-| Hotspot profiler              | find_hotspots.py               | Find frequently-called functions from cProfile data        |
-| Candidate prioritizer         | prioritize_cache_candidates.py | Cross-reference pure functions with hotspots               |
-| Cache profiling template      | profile_with_cache_template.py | Before/after profiling with lru_cache monkey-patch         |
-| Uncompiled regex finder (AST) | find_uncompiled_regex.py       | Flag re.match/search/findall with string literal patterns  |
-| Unbounded memory finder (AST) | find_unbounded_memory.py       | Flag whole-file/DB/log reads that materialize large data   |
-| Performance claims extractor  | validate_perf_claims.py        | Extract claims from a diff; YOU validate each by profiling |
-| Before/after comparator       | compare_performance.py         | Git-based before/after test-suite timing comparison        |
+| Tool                          | File                                                 | Purpose                                                    |
+|-------------------------------|------------------------------------------------------|------------------------------------------------------------|
+| Pure function finder (AST)    | find_cache_candidates.py                             | Detect pure, expensive functions via AST analysis          |
+| Hotspot profiler              | find_hotspots.py                                     | Find frequently-called functions from cProfile data        |
+| Candidate prioritizer         | prioritize_cache_candidates.py                       | Cross-reference pure functions with hotspots               |
+| Cache profiling template      | profile_with_cache_template.py                       | Before/after profiling with lru_cache monkey-patch         |
+| Uncompiled regex finder (AST) | find_uncompiled_regex.py                             | Flag re.match/search/findall with string literal patterns  |
+| Unbounded memory finder (AST) | find_unbounded_memory.py                             | Flag whole-file/DB/log reads that materialize large data   |
+| Performance claims extractor  | ../coding-performance-review/validate_perf_claims.py | Extract claims from a diff; YOU validate each by profiling |
+| Before/after comparator       | compare_performance.py                               | Git-based before/after test-suite timing comparison        |
 
 ## Workflow
 
@@ -88,7 +88,8 @@ Step 5 (Merge & sort) -> Step 6 (Present one-by-one) ->
 When invoked to vet a performance claim in a diff rather than hunt for new ones, skip the
 discovery steps and use the two checker tools directly:
 
-- `validate_perf_claims.py <diff_file>` - EXTRACTS the "Nx faster / N% faster / twice as
+- `python3 ../coding-performance-review/validate_perf_claims.py <diff_file>` (path relative to
+  this skill's directory) - EXTRACTS the "Nx faster / N% faster / twice as
   fast" style claim phrases from the diff's ADDED lines and prints each with its `path:line`.
   It does no profiling and reaches no verdict: YOU check each against a real profiled run and
   report the unproven or contradicted ones.
