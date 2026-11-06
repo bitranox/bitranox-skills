@@ -243,7 +243,12 @@ for one change only, and only when it can PROVE it against `origin/master`: whit
 re-padding (the same line count, every changed line a table row on both sides with the same
 indentation and blockquote prefix, every cell equal after stripping, every separator keeping its
 alignment, and the tables canonical per `reformat_tables`), which is what the reformat-md-tables
-hook writes into a fresh worktree for a skill nobody edited. Additionally, a skill's frontmatter
+hook writes into a fresh worktree for a skill nobody edited. The checklist also carries one
+`Decisions:` line, naming the ids of the ledger entries the change recorded in
+`skills/<name>/.skillwriter/decisions.jsonl` or saying `Decisions: none - <reason>`. Read a
+skill's earlier decisions with `python3 plugins/bitranox/hooks/skill_decisions.py show <name>
+--kind rejected,removed --full` before editing it, and write new ones only with its `add`
+command. Additionally, a skill's frontmatter
 description must be trigger-first ("Use when <situations>...") and yield at least 3 distinctive
 keywords - the skill router derives its trigger map from descriptions
 (`hooks/build_skill_triggers.py`; rebuild it when a description changes, the test suite checks the
