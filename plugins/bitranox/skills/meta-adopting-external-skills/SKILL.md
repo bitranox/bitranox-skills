@@ -137,6 +137,25 @@ text instead, since it matches no upstream name at all. A derived skill with no 
 line is missing attribution: MIT requires the notice to travel with every adapted copy. Fix every
 affected skill in one change.
 
+**Record the adoption's decisions in the new skill's ledger, before the adoption commit.** A
+commit message guards nothing; the ledger is what the next editor of the skill is shown. Record a
+`rejected` entry for each upstream part Step 3 deliberately left out, so a later sync does not
+re-import it (`decision` names the part, `reopen_if` says what would bring it back), and a `rule`
+entry, anchored on the sentence that states it, for each bitranox rule Step 3 added that the
+upstream text does not have. From the checkout root, `git add` the new skill directory first (an
+anchor is only counted in files git tracks), write the entries to a JSON file, and run
+`python3 plugins/bitranox/hooks/skill_decisions.py add --from-file <file>`. Each entry carries
+`skill` (`<name>`, the new skill's directory name), `kind`, `topic`, `decision`, `why`, `reopen_if`,
+`evidence` (`{"tier": ..., "text": ...}`), `"origin": "authored"`, `anchors` (empty for
+`rejected`) and the `supersedes` and `refs` lists (`[]` when empty); each field is defined in
+`bitranox:meta-skill-writer`, Step 0b. Put the ids `add` prints on the `Decisions:` line of the
+skill's `.skillwriter/checklist-*.md` from Step 3 (`Decisions: none - <reason>` when the adoption
+left nothing out and added no rule), then `git add` the ledger it wrote,
+`plugins/bitranox/skills/<name>/.skillwriter/decisions.jsonl`, and the checklist: both go in the
+adoption commit. A later re-sync from upstream is an edit of the skill, so
+Step 0b has its editor read the `rejected` entries first, and the commit gate refuses a change
+that drops a live `rule` entry's anchor.
+
 ## Step 5 - Upstream-first and coexist
 
 **REQUIRED: `bitranox:meta-self-improve`, its "Propagating skill (or hook) improvements upstream"
