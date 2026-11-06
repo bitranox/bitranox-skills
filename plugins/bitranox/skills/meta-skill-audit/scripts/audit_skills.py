@@ -30,6 +30,7 @@ import importlib.util
 import json
 import os
 import re
+import shlex
 import shutil
 import subprocess
 import sys
@@ -350,8 +351,11 @@ def _decisions_module(path):
     A plain `import skill_decisions` returns whatever copy sys.modules already holds - one loaded
     for an earlier room, or the plugin's own under a whole-repo test run - so a room whose copy
     differs would be briefed by a module it does not ship. Loading by path under a name derived
-    from the file's bytes gives each distinct copy its own module. Its own sibling import
-    (`tell_chars`) still resolves through sys.path, which only the ledger-writing path uses."""
+    from the file's bytes gives each distinct copy its own module. Its sibling `tell_chars` is a
+    plain top-level import, so it resolves while `exec_module` runs, with `path`'s directory at
+    the front of sys.path for that call only: the first copy of `tell_chars` loaded goes into
+    sys.modules and every later room's module reuses it. That cannot change a brief, because only
+    the ledger-writing path (`prepare_entries`, behind `add`) calls into `tell_chars`."""
     path = Path(path)
     digest = hashlib.sha256(path.read_bytes()).hexdigest()[:16]
     module = _DECISION_MODULES.get(digest)
@@ -378,6 +382,19 @@ def _decisions_module(path):
     return module
 
 
+def _show_command(module_path, skill_dir):
+    """The command printing `skill_dir`'s declined decisions in full, runnable from the room.
+
+    Built like the edit guard's `show_command`: the room holds no `.skillwriter/`, so a bare
+    `show <name>` there finds no ledger. It names the interpreter running this audit (a bare
+    `python3` is a Store stub on Windows), the script by absolute path, and the SOURCE skill dir
+    that holds the ledger. `abspath`, not `resolve`: a symlinked dir keeps the name it was given."""
+    skill_dir = os.path.abspath(skill_dir)
+    return "%s %s show %s --skill-dir %s --kind rejected,removed --full" % (
+        shlex.quote(sys.executable or "python3"), shlex.quote(os.path.abspath(module_path)),
+        shlex.quote(os.path.basename(skill_dir)), shlex.quote(skill_dir))
+
+
 def decision_brief(skills_src, name, hooks_dir, log=None):
     """The skill's live rejected and removed decisions, rendered as the edit guard renders them.
 
@@ -398,7 +415,7 @@ def decision_brief(skills_src, name, hooks_dir, log=None):
         module = _decisions_module(module_path)
         return module.render_brief(
             lambda: module.file_lines(ledger), skill=name, budget_chars=12000,
-            show_command="skill_decisions.py show %s --kind rejected,removed --full" % name)
+            show_command=_show_command(module_path, ledger.parent.parent))
     except Exception as exc:  # a broken ledger costs the brief, never the audit
         if log:
             log("NOTE: %s: decision ledger unreadable (%s); no brief" % (name, exc))

@@ -5,7 +5,10 @@ substitute reviewer rather than patching internals."""
 
 import json
 import os
+import shlex
 import shutil
+import subprocess
+import sys
 from pathlib import Path
 
 import audit_skills as A
@@ -392,6 +395,66 @@ def test_decision_brief_renders_with_the_hooks_dir_it_is_given(tmp_path):
     copy = A.decision_brief(tmp_path / "skills", "foo", other)
     assert real.startswith("Decisions already taken for foo")
     assert copy.startswith("OTHER COPY for foo")
+
+
+def _over_budget_ledger(skills, name, count=40):
+    """A ledger of `count` rejected entries, each long enough that the brief's budget runs out."""
+    sd = A._decisions_module(PLUGIN_HOOKS / "skill_decisions.py")
+    entries = []
+    for i in range(count):
+        entry = dict(_REJECTED, topic="topic-%d" % i, decision="Not adopted: proposal %d." % i,
+                     why="reason number %d, %s" % (i, "padding " * 60))
+        entry["id"] = sd.entry_id(entry)
+        entries.append(entry)
+    _ledger(skills, name, entries)
+    return entries
+
+
+def test_decision_brief_trailer_names_a_command_that_runs_from_anywhere(tmp_path):
+    """The 'more not shown' trailer is a command a reviewer can run in its room, which has no
+    ledger: it names the interpreter, the script's absolute path and the source skill dir."""
+    entries = _over_budget_ledger(tmp_path / "skills", "foo")
+    brief = A.decision_brief(tmp_path / "skills", "foo", PLUGIN_HOOKS)
+    assert "more not shown: " in brief
+    command = brief.rsplit("more not shown: ", 1)[1].strip()
+    elsewhere = tmp_path / "room"
+    elsewhere.mkdir()
+    done = subprocess.run(shlex.split(command), cwd=elsewhere, capture_output=True,
+                          encoding="utf-8", errors="replace", timeout=60,
+                          env={**os.environ, "PYTHONUTF8": "1"})
+    assert done.returncode == 0, done.stderr
+    last = entries[-1]["why"]
+    assert last not in brief             # the entry the trailer stands for was cut from the brief
+    assert last in done.stdout
+
+
+def _fresh_hooks_copy(tmp_path, tail):
+    """A copy of the plugin hooks whose skill_decisions.py ends with `tail`: new bytes, so the
+    module is loaded afresh rather than taken from the cache keyed by content."""
+    hooks = tmp_path / "hooks-copy"
+    shutil.copytree(PLUGIN_HOOKS, hooks, ignore=shutil.ignore_patterns("tests", "__pycache__"))
+    module = hooks / "skill_decisions.py"
+    module.write_text(module.read_text(encoding="utf-8") + tail, encoding="utf-8")
+    return hooks
+
+
+def test_decision_brief_leaves_sys_path_as_it_found_it(tmp_path):
+    _ledger(tmp_path / "skills", "foo", [_REJECTED])
+    hooks = _fresh_hooks_copy(tmp_path, "\n# copy for %s\n" % tmp_path.name)
+    before = list(sys.path)
+    brief = A.decision_brief(tmp_path / "skills", "foo", hooks)
+    assert "a rebase rewrites a tagged commit" in brief  # the load really ran
+    assert sys.path == before
+
+
+def test_decision_brief_leaves_sys_path_as_it_found_it_when_the_module_raises(tmp_path):
+    _ledger(tmp_path / "skills", "foo", [_REJECTED])
+    hooks = _fresh_hooks_copy(tmp_path, "\nraise RuntimeError('broken copy %s')\n" % tmp_path.name)
+    before = list(sys.path)
+    notes = []
+    assert A.decision_brief(tmp_path / "skills", "foo", hooks, log=notes.append) == ""
+    assert any("broken copy" in n for n in notes)       # it failed inside exec_module
+    assert sys.path == before
 
 
 def test_prompt_carries_the_brief_only_when_there_is_one():
