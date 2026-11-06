@@ -2450,6 +2450,475 @@ exceeds about 150 lines (report and ask whether to ship M2.7 in the next release
       docstring rule, audit rooms, meta-self-improve), and the plan file gets the M3 tasks in a
       later session.
 
+## DETAILED plan, milestone M3: seed, code rule, other readers (one release)
+
+Written 2026-11-06 after 10.19.2 shipped M0 to M2 (CI green on 985387f3). Authored on opus by the
+user's choice that day ("Write M3 on opus now", EXECUTION-USER-REVIEW.md); whether the SKILL.md
+edits below are also authored on opus is asked once when execution starts. M4 (A/B wiring) keeps
+its MID-plan interface and gets tasks once the A/B tool's verdict step exists.
+
+### M3 constraints (in addition to the Global Constraints)
+
+- M3 ships as ONE release, 10.20.0 if origin is still 10.19.2: the controller makes the bump
+  commit before Task 3.1 (`bump_version.py --part minor`, asserting 10.19.2 first), with the
+  notes in Task 3.7. Implementers and fixers never bump, edit `CHANGELOG.md`, rebase or push.
+- Work in a fresh worktree from `origin/master` (`bitranox:git-worktrees`), branch
+  `feat/skill-decisions-m3`; the M1/M2 worktree `bitranox-skills-wt-skill-decisions` is removed
+  first with `wtclean.py --apply` once `git status` there is clean and nothing runs in it.
+- Every entry goes in through `python3 plugins/bitranox/hooks/skill_decisions.py add --from-file
+  <file>`, never by hand; entry text is public (rule D6): no private host, path, repo or project
+  name, no session narrative; "user decision <date>" is fine.
+- A docstring `Decisions` block uses exactly the form Task 3.1 writes into the skills, so Task 3.2
+  starts only after Task 3.1 is committed.
+- Measured baselines at plan time (2026-11-06, re-measure at the start of the task that uses
+  them, and record both numbers if they differ): `repo-gate.py --mirrors` exits 1 with 11 pairs in
+  sync and one DRIFT, `coding-python-layered-config` against its library twin, which predates M3
+  and is not M3's to fix; the closed contribution files hold 80 skill-targeted entries that did
+  not ship (76 `rejected`, 4 dropped with no outcome) in 75 files, 65 of them naming 25 skills that
+  exist in this repo.
+
+### Task 3.1 (M3.1): the hook and jig skills teach a docstring `Decisions` block
+
+**REQUIRED SUB-SKILL:** `bitranox:meta-skill-writer` for both SKILL.md edits (receipt, Step 0b
+`show`, RED with two `bitranox:baseline-probe` agents per skill, GREEN, REFACTOR, checklist with a
+`Decisions:` line).
+
+**Files:**
+- Modify: `plugins/bitranox/skills/meta-claude-hooks/references/authoring.md` (a new section
+  before `## Security`), `plugins/bitranox/skills/meta-claude-hooks/SKILL.md` (one bullet in
+  `## Before you write a hook, answer these`)
+- Modify: `plugins/bitranox/skills/compuse-toolbox/SKILL.md` (`## Building or enhancing a jig`)
+- Create (through the CLI): `.skillwriter/decisions.jsonl` in both skills; one checklist each
+
+**Out of scope:** `meta-skill-writer` (the ledger rule for SKILL.md text is already there and
+says hooks and jigs use a docstring block); the hooks themselves (Task 3.2 writes the first two
+blocks).
+
+The text both skills must carry (GREEN target; adapt the surrounding prose, keep the block form
+verbatim so every block in the repo has one shape):
+
+````markdown
+When a hook or jig settles a choice a later editor could plausibly undo (a rule tightened or
+loosened, an alternative tried and dropped, a threshold picked from a measurement), record it in
+the module docstring, in a block headed `Decisions:`:
+
+```text
+Decisions:
+    - <what the code does, one sentence>. Why: <the reason>. Evidence: <measured | user |
+      argued | inherited>: <where it came from>. Reopen if: <the condition that would change it>.
+      Pinned by: <tests/test_file.py::test_name>
+    - Rejected: <the alternative not taken>. Why: ... Reopen if: ...
+```
+
+Pin each decision with a test that fails when the decision is reverted, and name that test in the
+block; a decision with no test says `Pinned by: none - <why no test can hold it>`. A skill's
+SKILL.md text uses the per-skill ledger instead (`bitranox:meta-skill-writer`, Step 0b); code
+gets no ledger file.
+````
+
+RED scenario for both skills (each probe gets the CURRENT skill text only): "You are tightening a
+hook's matcher. A git log search shows the same matcher was loosened four months ago. Where do
+you record why you are tightening it, and what do you check first?" RED passes when the probe
+records the reason only in the commit message or nowhere, and does not look in the module
+docstring. GREEN: the probe writes a `Decisions:` entry with all four fields and a `Pinned by:`
+test, and reads the existing block first.
+
+**Ledger entries for this change** (one `add --from-file`, after the GREEN text exists):
+- per skill, one `rule` entry anchored on the sentence "Pin each decision with a test that fails
+  when the decision is reverted" (check it occurs exactly once in that skill's corpus; if the
+  corpus repeats it, anchor the block's first line instead), tier `user` (decision 2 of
+  2026-11-05, quoted in this plan's Context), origin `authored`;
+- per skill, one `rejected` entry: "a decisions.jsonl ledger for hooks and jigs", why: "code
+  already carries its reason in the module docstring and its behaviour in a regression test; a
+  second record would drift from both", tier `user`, reopen_if: "a reverted code decision is
+  found whose docstring and tests both carried it and it was still undone".
+
+**STOP conditions:** a RED probe already writes a docstring decision block (report what it did;
+the text may then only need the block form); `repo-gate.py --mirrors` lists either skill as
+mirrored (then its twin needs the same text: add that repo to this task first).
+
+- [ ] **Step 1:** meta-skill-writer RED for `meta-claude-hooks`, GREEN, REFACTOR, entries,
+      checklist; `skill_decisions.py check meta-claude-hooks` exits 0.
+- [ ] **Step 2:** The same for `compuse-toolbox`; `check compuse-toolbox` exits 0.
+- [ ] **Step 3:** `python3 plugins/bitranox/hooks/repo-gate.py --ci` passes.
+- [ ] **Step 4: Commit** `meta-claude-hooks, compuse-toolbox: record a code decision in its
+      docstring` naming both skill dirs' changed files.
+
+### Task 3.2 (M3.2): the four known forward-and-back cases
+
+**Files:**
+- Create (through the CLI): `plugins/bitranox/skills/devops-bmk/.skillwriter/decisions.jsonl`,
+  `plugins/bitranox/skills/meta-dream-tree/.skillwriter/decisions.jsonl`
+- Modify: `plugins/bitranox/hooks/secret_patterns.py` (module docstring only)
+- Modify: `plugins/bitranox/hooks/memory_engine.py` (the docstring of the function that raises
+  `PinnedEntry`, `add_or_update_entry`)
+
+**Out of scope:** any SKILL.md or code BEHAVIOUR change. These are records of decisions already
+shipped; a ledger-only change needs no skill-writer checklist (the D4 line binds SKILL.md changes).
+
+**Interfaces:**
+- Consumes: the docstring block form from Task 3.1, verbatim.
+
+What each record says (read the cited commits with `git show -s` first and take the reasons
+from them, not from this list, if they disagree):
+
+1. `devops-bmk`, the env model (f0367056 -> d3a7a0d5 -> 48e94f13): a `rule` entry, decision
+   "bmk runs from its own shared uv tool env, which holds bmk alone; project tests run in the
+   project venv", anchored on `bmk alone, in uv's own tool dir, shared by every project`
+   (SKILL.md line 15 at plan time), refs the three shas; and a `rejected` entry for "resolving bmk
+   together with the project (`--with .`, a per-project bmk env)", why taken from the section
+   that lists what that caused, reopen_if "bmk's own install model changes (check its
+   CHANGELOG)". The skill is mirrored: after the add, run `repo-gate.py --mirror-of
+   <bmk tool repo path from --mirrors>` and require it to pass, so the anchor also occurs in the
+   twin.
+2. `meta-dream-tree`, the tier note (added b13255aa, dropped by the rewrite cec8867b, restored
+   e3056501): a `rule` entry anchored on `Placement/promotion judgment runs INLINE on the session
+   model` (`references/dream-core.md`, `## Tier note`), why "the inline judgment needs the whole
+   loaded store and is capability-sensitive; a rewrite dropped the note once and it had to be
+   restored", tier `inherited`, refs the three shas.
+3. `secret_patterns.py`: a module-docstring block with one decision, "a name is secret when ANY
+   word is a secret word, unless its last word names something about the secret", and one
+   `Rejected:` line, "deciding by the last word only (70be81d1)", why from 76e5fe42's message
+   (it missed SECRET_KEY_BASE, DB_PASSWORD_PROD and run-together NPMTOKEN), Evidence `measured`:
+   the replay in 76e5fe42, Pinned by: the `test_secret_patterns.py` test whose parameters include
+   `SECRET_KEY_BASE=abc123def` (find its name with `grep -n`).
+4. `memory_engine.py`: a block on `add_or_update_entry` with one `Rejected:` line, "a
+   `bx:owner=human` partition on the pointer line (53c54a85, reverted c59cb953)", why from
+   f1278a93's message (every fact is model-written, so "human-owned" labelled the model's own
+   write; `bx:pin` already marks the facts that need protecting), Pinned by:
+   `tests/test_memory_pin_gate.py::test_add_refuses_a_pinned_target_and_leaves_the_original_hook_on_disk`.
+
+The inline "do not re-add" notes (user decision 3) were examined when this task was written:
+`git grep -n -i -E "do not re-?add|never re-?add|deliberately removed"` over SKILL.md files and
+hook sources gave three hits. `hooks/classifier.py:585` already states its reason and its reopen
+condition in the docstring, the form Task 3.1 teaches; `meta-dream-crosstree/SKILL.md:173` and
+`meta-dream-tree/SKILL.md:440` are contribution-queue procedure ("may already be shipped -> drop,
+do not re-add"), not decisions about the skill. Nothing to record; re-run the grep in Step 1 and
+handle any NEW hit the same way.
+
+**STOP conditions:** an anchor occurs zero or more than one time in its skill's corpus (report the
+count, do not pick another sentence silently); `--mirror-of` refuses devops-bmk; a named test does
+not exist (`pytest --collect-only -q <file>` must list it).
+
+- [ ] **Step 1:** Write `<scratch>/m3/known.json` (entries 1 and 2), run `add --from-file`;
+      `check devops-bmk meta-dream-tree` exits 0; `--mirror-of` for devops-bmk passes.
+- [ ] **Step 2:** Edit the two docstrings; `pytest --collect-only -q` shows both named tests;
+      run `CI-PYTEST` (the Global Constraints command).
+- [ ] **Step 3: Commit** `Record four decisions that were once changed forward and back` naming
+      the two ledgers and the two hook files.
+
+### Task 3.3 (M3.3): seed the ledgers from the declined contributions
+
+No shipped code: the selection script lives in `<scratch>/m3/seed/` and is deleted at the end.
+
+**Files:**
+- Create (through the CLI): `.skillwriter/decisions.jsonl` in each skill that keeps an entry (up
+  to 25 skills at plan time)
+- Create: `<scratch>/m3/seed/select.py`, `<scratch>/m3/seed/candidates.jsonl`,
+  `<scratch>/m3/seed/verdicts.md`, `<scratch>/m3/seed/entries.json`
+
+**Out of scope:** the contribution files themselves (read-only; never close, ship or rewrite an
+entry from here); targets that are not a skill directory in this repo.
+
+- [ ] **Step 1: select.** `select.py` reads every
+      `~/.claude/self-improve-audit/*.contrib-rejected.jsonl` (not `*.rehomed`), line by line,
+      keeps records whose `target` starts with `skill:` and whose `outcome` is not `shipped`,
+      strips a `bitranox:` prefix from the name, and writes one candidate per line with `skill`,
+      `what`, `why`, `reason` (or `note`), `outcome`, `closed_ts` (or `dropped_ts`) and the source
+      file. Records whose name is not a directory under `plugins/bitranox/skills/` go to a
+      skipped list with the name. It prints both counts. Expected at plan time: 65 candidates,
+      15 skipped (`a`, `b`, `c`, `foo`, `toolbox`, `infra-soundtouch-decloud` and five `provmm-*`
+      targets); a difference is recorded, not a stop.
+- [ ] **Step 2: judge.** Read every candidate (no sampling) and write one line per candidate into
+      `verdicts.md`: KEEP, or DROP with one of `shipped-later` (grep the skill: the proposal is in
+      its text now), `duplicate` (another candidate says the same), `task-local` (true only for
+      the project it came from), `no-reason` (the record states no reason). Give the per-reason
+      counts at the end.
+- [ ] **Step 3: write.** For each KEEP, one `rejected` entry in `entries.json`: `skill`, `topic`
+      (2-4 words), `decision` "Not adopted: <the proposal, rewritten to rule D6>", `why` (the
+      reason, rewritten to D6), `evidence` `{"tier": "inherited", "text": "declined
+      contribution, closed <date>"}`, `reopen_if` (what would make the reason false; never "n/a"),
+      `origin` `imported`, no anchors. One `add --from-file entries.json` (a multi-skill add is
+      atomic).
+- [ ] **Step 4: verify.** `skill_decisions.py check` (all ledgers) exits 0;
+      `repo-gate.py --ci` passes (its secret scan reads the new files); the toolbox
+      `pushcheck.py` over the unpushed range reports no private name.
+- [ ] **Step 5: Commit** `Seed skill ledgers from the declined contributions` naming only the
+      `decisions.jsonl` files; put the counts from Steps 1 and 2 in the message body. Delete
+      `<scratch>/m3/seed/` by its exact path.
+
+**STOP conditions:** a candidate's reason cannot be stated without a private name (DROP it as
+`task-local` and list it in the report); `add` refuses an entry twice after a fix.
+
+### Task 3.4 (M3.4): self-improve reads the ledger before queueing, and records a lasting drop
+
+**REQUIRED SUB-SKILL:** `bitranox:meta-skill-writer`.
+
+**Files:**
+- Modify: `plugins/bitranox/skills/meta-self-improve/SKILL.md` (step 2 cases 1 and 2; the
+  `drop --match ... --reason` sentence in step 3b's contribution paragraph)
+- Create (through the CLI): its ledger entries and checklist
+
+GREEN text:
+1. Before queueing against `skill:<name>` (cases 1 and 2), read that skill's declined list:
+   `python3 <plugin>/hooks/skill_decisions.py show <name> --skill-dir <plugin>/skills/<name>
+   --kind rejected,removed --full`. When the lesson re-proposes a listed entry, queue it only with
+   a `--why` that answers that entry's `reopen_if` and names its id; otherwise drop the
+   candidate and say so in the report.
+2. At `drop --match ... --reason ...`: when a skill-targeted entry is dropped as disproven or
+   declined for a reason that will still hold next time, also record it as a `rejected` entry in
+   that skill's ledger in the source repo (`add --from-file`, origin `authored`); a drop because
+   it already shipped or duplicates another entry records nothing.
+
+RED: a probe given the current text and "you are about to queue: 'compuse-git should tell agents
+to rebase instead of merge'; the skill's ledger has a rejected entry for exactly that" must queue
+it without looking. GREEN: it runs `show` first and does not queue (or queues answering the
+reopen condition).
+
+**Ledger entries:** one `rule` per GREEN item (tier `user`, the 2026-11-05 plan approval), each
+anchored on its own new sentence.
+
+- [ ] **Step 1:** meta-skill-writer RED, GREEN, REFACTOR, entries, checklist;
+      `check meta-self-improve` exits 0; `repo-gate.py --ci` passes.
+- [ ] **Step 2: Commit** `meta-self-improve: read a skill's declined decisions before queueing
+      a fix to it`.
+
+### Task 3.5 (M3.5): adopting an external skill writes its first entries
+
+**REQUIRED SUB-SKILL:** `bitranox:meta-skill-writer`.
+
+**Files:**
+- Modify: `plugins/bitranox/skills/meta-adopting-external-skills/SKILL.md` (`## Step 4 -
+  Integrate and pass the gate`)
+- Create (through the CLI): its ledger entries and checklist
+
+GREEN text (Step 4): before the adoption commit, record the adoption's decisions in the new
+skill's ledger with `add --from-file`: a `rejected` entry for each upstream part deliberately left
+out (so a later sync does not re-import it), and a `rule` entry, anchored, for each bitranox rule
+Step 3 added that the upstream text does not have. Both go in the adoption commit; the checklist's
+`Decisions:` line names them.
+
+RED: "You adopted an upstream skill and removed its section on auto-committing because it
+violates our commit rules. Six months later upstream changes and you re-sync. What stops the
+section coming back?" RED passes when the probe names nothing durable beyond the commit message.
+
+**Ledger entries:** one `rule` for the GREEN paragraph (tier `argued`).
+
+- [ ] **Step 1:** meta-skill-writer RED, GREEN, REFACTOR, entries, checklist;
+      `check meta-adopting-external-skills` exits 0.
+- [ ] **Step 2: Commit** `meta-adopting-external-skills: an adoption records what it left out`.
+
+### Task 3.6 (M3.6): skill audit reviewers get the declined list
+
+**Files:**
+- Modify: `plugins/bitranox/skills/meta-skill-audit/scripts/audit_skills.py` (`build_prompt`,
+  `audit_one`, `audit_all`, a new `decision_brief` and `DECISIONS_NOTE`)
+- Test: `plugins/bitranox/skills/meta-skill-audit/tests/test_audit_skills.py` (append)
+
+**Interfaces:**
+- Produces: `decision_brief(skills_src, name, hooks_dir, log=None) -> str`;
+  `build_prompt(name, prefix="bitranox", project_local=False, decisions="") -> str`;
+  `audit_one(..., decisions="")` passes it through.
+- Consumes: `skill_decisions.render_brief(lines_factory, *, skill, budget_chars, show_command)`
+  and `skill_decisions.file_lines(path)`, imported from the ROOM's `hooks/` the way `_exclusions`
+  imports `harness_checks`.
+
+**Out of scope:** the room's `.skillwriter/` exclusion (keep it: reviewers judge the shipped
+text, not the author's notes; the brief comes from the source dir); the script-audit path
+(`audit_scripts`), which has no per-skill ledger.
+
+- [ ] **Step 1: failing tests** (append to `test_audit_skills.py`; the real `skill_decisions`
+      from this plugin's `hooks/`, no monkeypatching):
+
+```python
+from pathlib import Path
+
+PLUGIN_HOOKS = Path(__file__).resolve().parents[3] / "hooks"
+
+
+def _ledger(skills, name, lines):
+    d = skills / name / ".skillwriter"
+    d.mkdir(parents=True)
+    (skills / name / "SKILL.md").write_text("# x\n", encoding="utf-8")
+    (d / "decisions.jsonl").write_text("".join(json.dumps(e) + "\n" for e in lines),
+                                       encoding="utf-8")
+
+
+_REJECTED = {"v": 1, "id": "d-20261106-0000aaaa", "date": "2026-11-06", "kind": "rejected",
+             "topic": "rebase", "decision": "Not adopted: rebase instead of merge.",
+             "why": "a rebase rewrites a tagged commit", "evidence": {"tier": "argued", "text": "x"},
+             "reopen_if": "releases stop tagging main", "anchors": [], "supersedes": [],
+             "refs": [], "origin": "authored"}
+
+
+def test_decision_brief_renders_a_rejected_entry(tmp_path):
+    _ledger(tmp_path, "foo", [_REJECTED])
+    brief = A.decision_brief(tmp_path, "foo", PLUGIN_HOOKS)
+    assert "a rebase rewrites a tagged commit" in brief
+    assert "releases stop tagging main" in brief
+
+
+def test_decision_brief_is_empty_without_a_ledger(tmp_path):
+    (tmp_path / "foo").mkdir()
+    assert A.decision_brief(tmp_path, "foo", PLUGIN_HOOKS) == ""
+
+
+def test_decision_brief_is_empty_and_says_so_when_the_ledger_is_broken(tmp_path):
+    d = tmp_path / "foo" / ".skillwriter"
+    d.mkdir(parents=True)
+    (d / "decisions.jsonl").write_text("{not json\n", encoding="utf-8")
+    notes = []
+    assert A.decision_brief(tmp_path, "foo", PLUGIN_HOOKS, log=notes.append) == ""
+    assert any("foo" in n for n in notes)
+
+
+def test_decision_brief_is_empty_and_says_so_without_the_module(tmp_path):
+    _ledger(tmp_path, "foo", [_REJECTED])
+    notes = []
+    assert A.decision_brief(tmp_path, "foo", tmp_path / "no-hooks", log=notes.append) == ""
+    assert any("foo" in n for n in notes)
+
+
+def test_prompt_carries_the_brief_only_when_there_is_one():
+    assert "DECIDED ALREADY" not in A.build_prompt("x")
+    p = A.build_prompt("x", decisions="Decisions already taken for x: ...")
+    assert "DECIDED ALREADY" in p and "Decisions already taken for x" in p
+
+
+def test_audit_all_hands_each_reviewer_its_own_brief(tmp_path):
+    plugin = tmp_path / "plugin-src"
+    shutil.copytree(PLUGIN_HOOKS, plugin / "hooks",
+                    ignore=shutil.ignore_patterns("tests", "__pycache__"))
+    _ledger(plugin / "skills", "foo", [_REJECTED])
+    (plugin / "skills" / "bar").mkdir()
+    (plugin / "skills" / "bar" / "SKILL.md").write_text("# bar\n", encoding="utf-8")
+    seen = {}
+
+    def runner(prompt, cwd, model, timeout):
+        name = "foo" if "skills/foo/" in prompt else "bar"
+        seen[name] = prompt
+        return "NO FINDINGS\n\nSkill gaps\nnone\n"
+
+    A.audit_all(plugin, tmp_path / "room", jobs=1, runner=runner, log=lambda *_: None)
+    assert "a rebase rewrites a tagged commit" in seen["foo"]
+    assert "DECIDED ALREADY" not in seen["bar"]
+```
+
+  Add `import json` and `import shutil` to the test module's imports if absent. If `runner`'s
+  real signature or the stored-report check differs from the above, adapt the fake to the
+  existing tests' fake runner (grep `def runner` / `runner=` in the file) and keep the asserts.
+
+- [ ] **Step 2:** Run `env -u VIRTUAL_ENV uv run --with pytest python -m pytest
+      plugins/bitranox/skills/meta-skill-audit/tests/test_audit_skills.py -q -k "brief or
+      DECIDED or own_brief"`. Expected: FAIL, `AttributeError: module 'audit_skills' has no
+      attribute 'decision_brief'`.
+- [ ] **Step 3: implement** in `audit_skills.py` (after `PROMPT`, and in the three functions):
+
+```python
+DECISIONS_NOTE = """
+DECIDED ALREADY: this skill's maintainers declined or removed the items below, each with its reason
+and the condition that would reopen it. Do not report one of them as a defect or a skill gap unless
+you can show its reopen condition is met; if you do, quote that condition in the WHY line.
+
+{brief}
+"""
+
+
+def decision_brief(skills_src, name, hooks_dir, log=None):
+    """The skill's live rejected and removed decisions, rendered as the edit guard renders them.
+
+    The room leaves `.skillwriter/` out so a reviewer judges the shipped text, not the author's
+    notes; the ledger is read from the SOURCE skills dir instead. Rendering goes through the
+    plugin's own `skill_decisions` module, so the brief cannot drift from the edit guard's. Any
+    failure returns "" and says why through `log`: a missing brief loses context, not the audit.
+    """
+    ledger = Path(skills_src) / name / ".skillwriter" / "decisions.jsonl"
+    if not ledger.is_file():
+        return ""
+    module = Path(hooks_dir) / "skill_decisions.py"
+    if not module.is_file():
+        if log:
+            log("NOTE: %s has a decision ledger but %s is missing; no brief" % (name, module))
+        return ""
+    if str(hooks_dir) not in sys.path:
+        sys.path.insert(0, str(hooks_dir))
+    try:
+        import skill_decisions  # noqa: PLC0415 - loaded from the room's hooks, not importable at module scope
+        return skill_decisions.render_brief(
+            lambda: skill_decisions.file_lines(ledger), skill=name, budget_chars=12000,
+            show_command="skill_decisions.py show %s --kind rejected,removed --full" % name)
+    except Exception as exc:  # a broken ledger costs the brief, never the audit
+        if log:
+            log("NOTE: %s: decision ledger unreadable (%s); no brief" % (name, exc))
+        return ""
+
+
+def build_prompt(name, prefix="bitranox", project_local=False, decisions=""):
+    """The reviewer contract for one skill. `prefix` is the plugin's skill namespace;
+    `project_local` adds the note that the owning repo's paths resolve (see REPO_MANIFEST);
+    `decisions` is the skill's declined list (`decision_brief`), appended when non-empty."""
+    prompt = PROMPT.format(name=name, prefix=prefix)
+    if project_local:
+        prompt += PROJECT_LOCAL_NOTE.format(manifest=REPO_MANIFEST)
+    if decisions:
+        prompt += DECISIONS_NOTE.format(brief=decisions)
+    return prompt
+
+
+def audit_one(name, room, reports_dir, model="opus", timeout=900, prefix="bitranox",
+              runner=_subprocess_runner, decisions=""):
+    """Review one skill and write its report. `runner` is the injectable reviewer seam."""
+    project_local = (Path(room) / REPO_MANIFEST).is_file()
+    out = runner(build_prompt(name, prefix, project_local, decisions), room, model, timeout)
+    path = Path(reports_dir) / ("%s.audit.txt" % name)
+    stored = store_report(path, name, out)
+    return name, count_findings(stored)
+```
+
+  and in `audit_all`, after `names` is known:
+
+```python
+    skills_src = Path(skills_dir) if skills_dir else Path(plugin_src) / "skills"
+    briefs = {n: decision_brief(skills_src, n, Path(room) / "hooks", log) for n in names}
+    results = _run_pool(jobs, names,
+                        lambda n: audit_one(n, room, reports, model, timeout, prefix, runner,
+                                            briefs[n]), log)
+```
+
+  replacing the existing `results = _run_pool(...)` statement.
+- [ ] **Step 4:** Run the whole module with CI's dependency set; all pass. Mutation check:
+      remove the `if decisions:` append in `build_prompt`; `test_audit_all_hands_each_reviewer_
+      its_own_brief` and the prompt test go RED; restore.
+- [ ] **Step 5:** If `meta-skill-audit/SKILL.md` describes what the reviewer prompt contains,
+      add one sentence that it also carries the skill's declined decisions (through
+      meta-skill-writer, with a checklist and `Decisions:` line); if it does not describe the
+      prompt, change no SKILL.md and say so in the report.
+- [ ] **Step 6: Commit** `meta-skill-audit: a skill's reviewer sees its declined decisions`.
+
+**STOP conditions:** `render_brief` or `file_lines` has a different signature than above; the
+room's `hooks/` does not contain `skill_decisions.py` after `prepare_room`.
+
+### Task 3.7 (M3.7): verification and release
+
+- [ ] **Step 1:** `python3 plugins/bitranox/hooks/skill_decisions.py check` exits 0 over every
+      ledger; `repo-gate.py --mirrors` shows the plan-time verdicts (the one pre-existing DRIFT
+      may have been fixed by its owner; any NEW drift is a stop); `repo-gate.py --ci` passes.
+- [ ] **Step 2:** CHANGELOG notes for the bump commit: `### Added` - per-skill ledgers seeded
+      from the declined contributions; the hook and jig skills record a code decision in a
+      docstring `Decisions` block; meta-self-improve reads a skill's declined list before
+      queueing a fix and records a lasting drop; an adoption records what it left out; skill
+      audit reviewers see the declined list. `### Changed` - `secret_patterns.py` and
+      `memory_engine.py` carry the first docstring decision blocks. Re-read origin's version;
+      renumber per Task 2.8 Step 3 if origin moved.
+- [ ] **Step 3:** `ListAgents`; message the peers that work in this repo (at least `skills` and
+      `dream`) that the push is coming and what it adds. `git push origin
+      feat/skill-decisions-m3:master` (the pre-push hook is the gate).
+- [ ] **Step 4:** `ci_wait.py --ref HEAD` (compuse-toolbox), run in the background alone; every
+      run terminal and green; fetch and confirm `origin/master` equals HEAD.
+- [ ] **Step 5:** OPEN-WORK [28] in the main checkout: `open:` leads with "M3 shipped in
+      <version>"; `next:` becomes M4 (waits for the A/B tool's verdict step) and the 30-day review
+      date (2026-12-06, the MID plan's "Review after 30 days").
+
 ## Critical files
 
 - `plugins/bitranox/hooks/repo-gate.py` (219 `_LF_SUFFIXES`, 1039-1049 `_changed_vs_origin`,
