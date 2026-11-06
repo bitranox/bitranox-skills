@@ -54,7 +54,8 @@ two "versions with no entry" notes came to sit in this file disagreeing with it.
   origin listed a peer's pushed paths as its own changes. They now diff from the merge-base.
 - The skill-review and description checks of the commit gate judged every SKILL.md the working
   tree had changed, so another session's unstaged edit to a skill refused an unrelated commit.
-  They now judge the SKILL.md the commit or push ships, and so does the table re-pad waiver.
+  They now judge the SKILL.md the commit or push ships, and so does the table re-pad waiver,
+  which compares it with the merge-base rather than origin's tip.
 
 ## [10.18.0]
 

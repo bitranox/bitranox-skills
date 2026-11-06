@@ -883,7 +883,8 @@ def test_skill_review_still_rejects_an_open_list_item_checkbox(tmp_path, body):
 # The reformat-md-tables hook rewrites a non-canonical table in every fresh worktree, and the
 # checklist requirement then fires for a skill nobody edited. A re-pad changes nothing a reader or
 # the router sees, so it is waived - but only when the gate PROVES it, line by line, against
-# origin/master. Every test below that expects a refusal is a control for that proof.
+# the merge-base with origin/master. Every test below that expects a refusal is a control for that
+# proof.
 
 _REAL_ROOT = Path(RG.__file__).resolve().parents[3]
 
@@ -1000,7 +1001,7 @@ def test_a_re_pad_that_is_still_not_canonical_is_not_waived(tmp_path):
 def test_a_new_skill_with_no_original_is_not_waived(tmp_path):
     changed = _skill_with_formatter(tmp_path, PAD_NEW)
     fails = RG.skill_review_failures(tmp_path, changed, read_original=lambda rel: None)
-    assert len(fails) == 1 and "origin/master" in fails[0]
+    assert len(fails) == 1 and "no version at its merge-base" in fails[0], fails
 
 
 def test_without_the_formatter_nothing_is_waived(tmp_path):
@@ -4264,7 +4265,8 @@ def test_changed_vs_origin_does_not_list_a_peer_s_pushed_path_as_ours(tmp_path):
     (tmp_path / "theirs.md").write_text("b2\n", encoding="utf-8")
     subprocess.run(["git", "-c", "user.email=t@example.invalid", "-c", "user.name=t", "commit",
                     "-qam", "peer", "--no-verify"], cwd=tmp_path, check=True)
-    subprocess.run(["git", "update-ref", "refs/remotes/origin/master", "HEAD"], cwd=tmp_path, check=True)
+    subprocess.run(["git", "update-ref", "refs/remotes/origin/master", "HEAD"], cwd=tmp_path,
+                   check=True)
     subprocess.run(["git", "reset", "-q", "--hard", base], cwd=tmp_path, check=True)
     (tmp_path / "mine.md").write_text("a2\n", encoding="utf-8")
 
@@ -4281,11 +4283,14 @@ def test_changed_vs_origin_on_a_diverged_checkout_lists_our_commit_not_the_peer_
                           text=True, check=True).stdout.strip()
     ident = ["-c", "user.email=t@example.invalid", "-c", "user.name=t"]
     (tmp_path / "theirs.md").write_text("b2\n", encoding="utf-8")
-    subprocess.run(["git", *ident, "commit", "-qam", "peer", "--no-verify"], cwd=tmp_path, check=True)
-    subprocess.run(["git", "update-ref", "refs/remotes/origin/master", "HEAD"], cwd=tmp_path, check=True)
+    subprocess.run(["git", *ident, "commit", "-qam", "peer", "--no-verify"], cwd=tmp_path,
+                   check=True)
+    subprocess.run(["git", "update-ref", "refs/remotes/origin/master", "HEAD"], cwd=tmp_path,
+                   check=True)
     subprocess.run(["git", "reset", "-q", "--hard", base], cwd=tmp_path, check=True)
     (tmp_path / "mine.md").write_text("a2\n", encoding="utf-8")
-    subprocess.run(["git", *ident, "commit", "-qam", "ours", "--no-verify"], cwd=tmp_path, check=True)
+    subprocess.run(["git", *ident, "commit", "-qam", "ours", "--no-verify"], cwd=tmp_path,
+                   check=True)
 
     assert RG._changed_vs_origin(tmp_path) == ["mine.md"]
 
@@ -4412,7 +4417,8 @@ def test_an_appended_ledger_line_is_not_an_append_only_breach(tmp_path):
 
 @pytest.mark.usefixtures("_bare_git_env")
 def test_deleting_the_ledger_but_keeping_the_skill_is_refused(tmp_path):
-    """The ledger is gone from disk and index alike, so only HEAD and the fork point still hold it."""
+    """The ledger is gone from disk and index alike, so only HEAD and the fork point still hold
+    it."""
     line, _ = _ledger_line()
     root = _ledger_repo(tmp_path, [line])
     subprocess.run(["git", "rm", "-q", LEDGER_REL], cwd=root, check=True)
@@ -4534,7 +4540,8 @@ def _commit_all(root, message):
     env = {**os.environ, "GIT_AUTHOR_NAME": "t", "GIT_AUTHOR_EMAIL": "t@example.invalid",
            "GIT_COMMITTER_NAME": "t", "GIT_COMMITTER_EMAIL": "t@example.invalid"}
     subprocess.run(["git", "add", "-A"], cwd=root, check=True, env=env)
-    subprocess.run(["git", "commit", "-q", "--no-verify", "-m", message], cwd=root, check=True, env=env)
+    subprocess.run(["git", "commit", "-q", "--no-verify", "-m", message], cwd=root, check=True,
+                   env=env)
 
 
 def _git_out(root, *args):
@@ -4543,9 +4550,11 @@ def _git_out(root, *args):
 
 
 @pytest.mark.usefixtures("_bare_git_env")
-def test_a_push_judges_a_committed_ledger_change_whose_index_and_working_copy_were_reverted(tmp_path):
+def test_a_push_judges_a_committed_ledger_change_whose_index_and_working_copy_were_reverted(
+        tmp_path):
     """A push ships HEAD: a ledger line removed in a commit is judged even once the index and the
-    working copy hold the fork point's ledger again, which leaves nothing for the merge-base diff."""
+    working copy hold the fork point's ledger again, which leaves nothing for the merge-base
+    diff."""
     line, _ = _ledger_line()
     second, _ = _ledger_line(topic="second")
     root = _ledger_repo(tmp_path, [line, second])
@@ -4602,7 +4611,8 @@ def test_a_checkout_behind_origin_is_not_judged_on_origin_s_newer_ledger(tmp_pat
     write(root / other / "SKILL.md", "Other rule text.\n\nA newer rule.\n")
     write(root / other / ".skillwriter/decisions.jsonl", other_line + newer)
     _commit_all(root, "origin moves on")
-    subprocess.run(["git", "update-ref", "refs/remotes/origin/master", "HEAD"], cwd=root, check=True)
+    subprocess.run(["git", "update-ref", "refs/remotes/origin/master", "HEAD"], cwd=root,
+                   check=True)
     subprocess.run(["git", "reset", "-q", "--hard", "HEAD~1"], cwd=root, check=True)
     _stage(root, LEDGER_SKILL + "/references/notes.md", "A note.\n")
     _stage(root, "plugins/bitranox/hooks/x.py", "x = 1\n")
@@ -4639,7 +4649,8 @@ def test_jsonl_is_an_lf_checked_suffix():
 # --------------------------------------------------------------------------
 
 def _review(tmp_path, checklist, ledger="", *, extra=None, changed_extra=()):
-    """skill_review_failures over a changed SKILL.md plus ``checklist``, no git: the working tree."""
+    """skill_review_failures over a changed SKILL.md plus ``checklist``, no git: the working
+    tree."""
     rel = "plugins/bitranox/skills/s1/"
     files = {rel + "SKILL.md": "x\n", rel + ".skillwriter/checklist-1.md": checklist}
     if ledger:
@@ -4713,7 +4724,8 @@ def test_a_decisions_line_in_a_checklist_that_is_not_co_changed_does_not_count(t
 def test_a_broken_ledger_is_left_to_the_decision_check(tmp_path):
     """An id cannot be looked up in a ledger that does not parse; `check_skill_decisions` refuses
     that ledger by its line, so this rule does not add a second, false 'not in the ledger'."""
-    assert _review(tmp_path, "- [x] RED\nDecisions: d-20261105-0123abcd\n", ledger="{not json\n") == []
+    assert _review(tmp_path, "- [x] RED\nDecisions: d-20261105-0123abcd\n",
+                   ledger="{not json\n") == []
 
 
 def _decision_change(tmp_path, *, stage_ledger):
@@ -4745,7 +4757,8 @@ def test_an_id_only_in_the_working_tree_ledger_is_refused_at_the_index_stage(tmp
 
 @pytest.mark.usefixtures("_bare_git_env")
 def test_run_checks_reads_the_ledger_at_the_stage_it_judges(tmp_path, monkeypatch):
-    """A push ships HEAD: a ledger entry staged but not committed passes the commit, not the push."""
+    """A push ships HEAD: a ledger entry staged but not committed passes the commit, not the
+    push."""
     monkeypatch.setenv("HOME", str(tmp_path / "home"))
     monkeypatch.setenv("USERPROFILE", str(tmp_path / "home"))
     root, changed, new_id = _decision_change(tmp_path, stage_ledger=True)
@@ -4764,7 +4777,8 @@ def test_run_checks_reads_the_ledger_at_the_stage_it_judges(tmp_path, monkeypatc
 
 
 def _commit_paths(root, message, paths):
-    """`git commit -- <paths>` with a fixed identity: only ``paths`` go in, the rest stays staged."""
+    """`git commit -- <paths>` with a fixed identity: only ``paths`` go in, the rest stays
+    staged."""
     env = {**os.environ, "GIT_AUTHOR_NAME": "t", "GIT_AUTHOR_EMAIL": "t@example.invalid",
            "GIT_COMMITTER_NAME": "t", "GIT_COMMITTER_EMAIL": "t@example.invalid"}
     subprocess.run(["git", "commit", "-q", "--no-verify", "-m", message, "--", *paths],
@@ -4789,7 +4803,8 @@ def _checklist_change(tmp_path, staged, on_disk=None):
 
 @pytest.mark.usefixtures("_bare_git_env")
 def test_a_decisions_line_only_in_the_working_copy_is_refused_at_the_index_stage(tmp_path):
-    """The commit carries the index: a line written to the checklist but never staged is not in it."""
+    """The commit carries the index: a line written to the checklist but never staged is not in
+    it."""
     root = _checklist_change(tmp_path, "- [x] RED\n", "- [x] RED\nDecisions: none - only on disk\n")
     fails = RG.check_skill_review(root, stage=RG.STAGE_INDEX)
     assert len(fails) == 1 and "no 'Decisions:' line" in fails[0]
@@ -4838,8 +4853,10 @@ def test_a_staged_ticked_checklist_with_a_decisions_line_passes(tmp_path):
 
 @pytest.mark.usefixtures("_bare_git_env")
 def test_a_commit_naming_the_checklist_is_judged_on_its_working_copy(tmp_path):
-    """`git commit -- SKILL.md <checklist>` takes the checklist from disk, so its working copy counts."""
-    root = _checklist_change(tmp_path, "- [x] RED\n", "- [x] RED\nDecisions: none - taken from disk\n")
+    """`git commit -- SKILL.md <checklist>` takes the checklist from disk, so its working copy
+    counts."""
+    root = _checklist_change(tmp_path, "- [x] RED\n",
+                             "- [x] RED\nDecisions: none - taken from disk\n")
     both = RG.CommitSelection("only", [LEDGER_SKILL + "/SKILL.md", _CHECKLIST], where=root)
     assert RG.check_skill_review(root, stage=both) == []
     # controls: the plain index still holds the line-less copy, and a selection leaving the
@@ -4913,6 +4930,40 @@ def test_a_skill_deleted_in_what_ships_is_still_a_review_case(tmp_path):
     assert RG.check_cso(root) == []
 
 
+def _commit_then_restore(root, rel):
+    """Commit the working copy of ``rel``, then put the fork point's text back in index and disk.
+
+    What is left is a change only HEAD carries: the merge-base diff of index and working tree is
+    empty, while a push ships the commit."""
+    base = _git_out(root, "rev-parse", "--verify", "HEAD")
+    _commit_all(root, "an unpushed edit of " + rel)
+    subprocess.run(["git", "checkout", base, "--", rel], cwd=root, check=True)
+    assert RG._changed_vs_origin(root) == []
+
+
+@pytest.mark.usefixtures("_bare_git_env")
+def test_a_push_reviews_a_committed_skill_edit_whose_index_and_disk_were_reverted(tmp_path):
+    """A push ships HEAD, so the unpushed commit's SKILL.md edit still needs its checklist."""
+    line, _ = _ledger_line()
+    root = _ledger_repo(tmp_path, [line])
+    write(root / _SKILL_MD, RULE_TEXT + "More.\n")
+    _commit_then_restore(root, _SKILL_MD)
+    fails = RG.check_skill_review(root, stage=RG.STAGE_HEAD)
+    assert len(fails) == 1 and "without an updated .skillwriter/checklist" in fails[0], fails
+    # The commit carries the restored index, so the same tree judged as a commit passes.
+    assert RG.check_skill_review(root, stage=RG.STAGE_INDEX) == []
+
+
+@pytest.mark.usefixtures("_bare_git_env")
+def test_a_push_lints_a_committed_description_whose_index_and_disk_were_reverted(tmp_path):
+    """The description lint takes the same push candidates as the review check."""
+    root = _cso_repo(tmp_path)
+    _commit_then_restore(root, _CSO_MD)
+    fails = RG.check_cso(root, stage=RG.STAGE_HEAD)
+    assert len(fails) == 1 and "skills/kappa" in fails[0] and "scalar" in fails[0], fails
+    assert RG.check_cso(root, stage=RG.STAGE_INDEX) == []
+
+
 def _pad_repo(tmp_path):
     """The formatter plus a SKILL.md holding PAD_ORIG at the merge-base, HEAD and the index."""
     _skill_with_formatter(tmp_path, PAD_ORIG)
@@ -4936,6 +4987,23 @@ def test_a_staged_real_edit_is_not_waived_by_a_working_copy_restored_to_the_base
     root, rel = _pad_repo(tmp_path)
     _stage(root, rel, PAD_NEW.replace("| short   |", "| shorter |"))
     write(root / rel, PAD_ORIG)
+    fails = RG.check_skill_review(root, stage=RG.STAGE_INDEX)
+    assert len(fails) == 1 and "cell" in fails[0], fails
+
+
+@pytest.mark.usefixtures("_bare_git_env")
+def test_a_re_pad_is_judged_against_the_merge_base_when_origin_changed_the_skill_since(tmp_path):
+    """A checkout behind origin: origin's tip holds a newer SKILL.md, so comparing a re-pad of the
+    fork point's text with the tip reads origin's own edit as a line this change altered."""
+    root, rel = _pad_repo(tmp_path)
+    write(root / rel, PAD_ORIG.replace("Prose line.", "Prose line, newer on origin."))
+    _g(root, "commit", "-qam", "origin moves on")
+    _g(root, "update-ref", "refs/remotes/origin/master", "HEAD")
+    _g(root, "reset", "-q", "--hard", "HEAD~1")
+    _stage(root, rel, PAD_NEW)
+    assert RG.check_skill_review(root, stage=RG.STAGE_INDEX) == []
+    # control: a changed cell against the same base is still refused
+    _stage(root, rel, PAD_NEW.replace("| short   |", "| shorter |"))
     fails = RG.check_skill_review(root, stage=RG.STAGE_INDEX)
     assert len(fails) == 1 and "cell" in fails[0], fails
 
@@ -5005,7 +5073,8 @@ MP_LEDGER = "plugins/bitranox/skills/coding-python-thing/.skillwriter/decisions.
 
 
 def _ledgered_pair(tmp_path):
-    """`_published_pair` whose marketplace skill also publishes a ledger entry anchoring its paragraph."""
+    """`_published_pair` whose marketplace skill also publishes a ledger entry anchoring its
+    paragraph."""
     public, root, tool = _published_pair(tmp_path)
     line, entry = _ledger_line("One paragraph of content")
     write(root / MP_LEDGER, line)
@@ -5016,7 +5085,8 @@ def _ledgered_pair(tmp_path):
 
 
 def _edit_both(root, tool, edit):
-    """The same ``edit`` on both sides: staged in the tool repo, left uncommitted in the marketplace."""
+    """The same ``edit`` on both sides: staged in the tool repo, left uncommitted in the
+    marketplace."""
     write(root / MP_SKILL, edit(MIRROR_BODY))
     write(tool / TW_SKILL, edit(TWIN_BODY))
     _g(tool, "add", "-A")
@@ -5049,10 +5119,12 @@ def test_a_twin_that_drops_a_marketplace_anchor_is_refused(tmp_path, monkeypatch
 
 
 @pytest.mark.usefixtures("_bare_git_env")
-def test_a_superseding_entry_the_marketplace_committed_lets_the_twin_drop_pass(tmp_path, monkeypatch, capsys):
+def test_a_superseding_entry_the_marketplace_committed_lets_the_twin_drop_pass(
+        tmp_path, monkeypatch, capsys):
     public, root, tool, line, entry = _ledgered_pair(tmp_path)
     _edit_both(root, tool, _replace("One paragraph of content.", IN_PROGRESS))
-    newer, _ = _ledger_line(IN_PROGRESS.rstrip("."), decision="Superseded.", supersedes=[entry["id"]])
+    newer, _ = _ledger_line(IN_PROGRESS.rstrip("."), decision="Superseded.",
+                            supersedes=[entry["id"]])
     write(root / MP_LEDGER, line + newer)
     _tool_repo_commit(monkeypatch, public, tool)
     # Uncommitted in the marketplace, the superseding entry does not count yet...
@@ -5068,7 +5140,8 @@ def test_a_superseding_entry_the_marketplace_committed_lets_the_twin_drop_pass(t
 @pytest.mark.usefixtures("_bare_git_env")
 def test_a_twin_edit_that_keeps_every_anchor_passes(tmp_path, monkeypatch):
     public, root, tool, _line, _entry = _ledgered_pair(tmp_path)
-    _edit_both(root, tool, _replace("One paragraph of content.", "One paragraph of content.\n\nAnother one."))
+    _edit_both(root, tool, _replace("One paragraph of content.",
+                                    "One paragraph of content.\n\nAnother one."))
     _tool_repo_commit(monkeypatch, public, tool)
 
     assert RG.main(parts=_parts()) == 0

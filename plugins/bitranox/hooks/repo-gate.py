@@ -1075,6 +1075,23 @@ def _changed_vs_origin(root):
     return list(dict.fromkeys(changed + staged + untracked))
 
 
+def _shipping_candidates(root, stage):
+    """The paths a change at ``stage`` may ship a change to since the merge-base, or None.
+
+    `_changed_vs_origin`, and on a push also the paths its commits change (`_pushed_changes`): a
+    change committed and then reverted in both the index and the working copy is invisible to the
+    merge-base diff, yet HEAD ships it. A commit needs no such half, even one whose command also
+    pushes: what it carries is the index, and a path whose index text differs from the fork point
+    is already in the merge-base diff. None when there is no merge-base to diff from. A superset:
+    each check still reads what the stage ships before judging a path.
+    """
+    changed = _changed_vs_origin(root)
+    if changed is None or _is_commit(stage):
+        return changed
+    rc, pushed = _pushed_changes(root)
+    return changed if rc else list(dict.fromkeys(changed + pushed))
+
+
 def _table_rows(lines, tool):
     """Per line: (leading whitespace, blockquote prefix, row) for a markdown table row, else None.
 
@@ -1142,9 +1159,15 @@ def table_padding_problem(old, new, tool):
     return None
 
 
-def _origin_text(root, rel):
-    """The origin/master text of `rel` as a checkout here would write it, or None."""
-    data = _checked_out_bytes(root, "origin/master", rel)
+def _merge_base_text(root, rel):
+    """The text of `rel` at the merge-base as a checkout here would write it, or None.
+
+    The fork point, not origin's tip: the candidate list is diffed from the merge-base, and in a
+    checkout behind origin the tip can hold origin's own later edit of the same SKILL.md, which a
+    re-pad of the fork point's text would then read as a changed line.
+    """
+    base = _merge_base(root)
+    data = None if base is None else _checked_out_bytes(root, base, rel)
     return None if data is None else data.decode("utf-8", errors="replace")
 
 
@@ -1166,17 +1189,18 @@ def table_repad_problem(root, rel, shipped, read_original=None):
 
     The waiver exists because the reformat-md-tables hook rewrites a non-canonical table in every
     fresh worktree, and the checklist requirement then fires for a skill nobody edited. It is
-    granted on a proof, never on a judgement: padding only against origin/master (see
-    `table_padding_problem`), and canonical per the shipped formatter, so the hook will not
-    rewrite it again. Both halves judge ``shipped``, the bytes the change carries (None when it
-    carries no SKILL.md), never the file on disk, which may hold an edit nobody staged.
+    granted on a proof, never on a judgement: padding only against the merge-base text (see
+    `table_padding_problem`, `_merge_base_text`), and canonical per the shipped formatter, so the
+    hook will not rewrite it again. Both halves judge ``shipped``, the bytes the change carries
+    (None when it carries no SKILL.md), never the file on disk, which may hold an edit nobody
+    staged. ``read_original(rel)`` replaces the merge-base reader, so tests need no remote.
     """
     tool = _table_checker(root)
     if tool is None:
         return "the table formatter is not shipped here, so a re-pad cannot be proven"
-    old = (read_original or (lambda path: _origin_text(root, path)))(rel)
+    old = (read_original or (lambda path: _merge_base_text(root, path)))(rel)
     if old is None:
-        return "it has no origin/master version to compare against"
+        return "it has no version at its merge-base with origin/master to compare against"
     if shipped is None:
         return "this change deletes it"
     try:
@@ -1203,7 +1227,8 @@ _FENCE = re.compile(r"^ {0,3}(`{3,}|~{3,})(.*)$")
 #: The checklist line stating what a skill change decided (D4): the ledger ids it recorded, or
 #: `none - <reason>`. Only non-capturing groups, so a match is the whole line; keep it that way.
 DECISIONS_LINE_RX = re.compile(
-    r"^Decisions:[ \t]+(?:none[ \t]+-[ \t]+\S.*|d-[0-9]{8}-[0-9a-f]{8}(?:,[ \t]*d-[0-9]{8}-[0-9a-f]{8})*)[ \t]*$",
+    r"^Decisions:[ \t]+(?:none[ \t]+-[ \t]+\S.*|"
+    r"d-[0-9]{8}-[0-9a-f]{8}(?:,[ \t]*d-[0-9]{8}-[0-9a-f]{8})*)[ \t]*$",
     re.MULTILINE)
 _DECISION_ID_RX = re.compile(r"d-[0-9]{8}-[0-9a-f]{8}")
 
@@ -1258,7 +1283,8 @@ def _shipped_skill_md(root, name, stage):
 
 
 def _skill_mds_shipping_a_change(root, changed, stage):
-    """``changed`` without the SKILL.md paths whose bytes, as ``stage`` ships them, equal the merge-base's.
+    """``changed`` without the SKILL.md paths whose bytes, as ``stage`` ships them, equal the
+    merge-base's.
 
     `_changed_vs_origin` unions the working tree, so it lists a SKILL.md that only a peer's unstaged
     edit touched; judged as this commit's change, that edit refused an unrelated commit. A SKILL.md
@@ -1272,7 +1298,8 @@ def _skill_mds_shipping_a_change(root, changed, stage):
     kept = []
     for path in changed:
         match = _SKILL_MD_RX.match(path)
-        if match and _shipped_skill_md(root, match.group(1), stage) == _checked_out_bytes(root, base, path):
+        if match and (_shipped_skill_md(root, match.group(1), stage)
+                      == _checked_out_bytes(root, base, path)):
             continue
         kept.append(path)
     return kept
@@ -1296,7 +1323,8 @@ def _ids_missing_from(ledger, named):
 
 
 def _decisions_line_failures(name, texts, ledger, *, unreadable=False):
-    """Why the shipped co-changed checklist ``texts`` of skill ``name`` do not state what it decided.
+    """Why the shipped co-changed checklist ``texts`` of skill ``name`` do not state what it
+    decided.
 
     One of them must hold a `DECISIONS_LINE_RX` line outside a code fence (a fenced one quotes the
     format, as a fenced box quotes a box), and every id those lines name must be in the shipped
@@ -1304,12 +1332,14 @@ def _decisions_line_failures(name, texts, ledger, *, unreadable=False):
     ``unreadable`` checklist among them, a missing line is not reported: that checklist may hold
     it, and its own refusal already blocks the change.
     """
-    lines = [line for text in texts for line in _unfenced_lines(text) if DECISIONS_LINE_RX.match(line)]
+    lines = [line for text in texts for line in _unfenced_lines(text)
+             if DECISIONS_LINE_RX.match(line)]
     if not lines and unreadable:
         return []
     if not lines:
-        return ["skills/%s: the co-changed checklist has no 'Decisions:' line in the required form. "
-                "Name the ledger ids this change added ('Decisions: d-YYYYMMDD-xxxxxxxx, ...') or "
+        return ["skills/%s: the co-changed checklist has no 'Decisions:' line in the "
+                "required form. Name the ledger ids this change added "
+                "('Decisions: d-YYYYMMDD-xxxxxxxx, ...') or "
                 "say why it decided nothing ('Decisions: none - <reason>')." % name]
     named = set(_DECISION_ID_RX.findall("\n".join(lines)))
     if not named:
@@ -1334,7 +1364,7 @@ def skill_review_failures(root, changed, read_original=None, stage=None):
 
     One mechanical exception, waived only on proof: a change that re-pads tables and nothing else
     (`table_repad_problem`), judged on the SKILL.md the stage ships. `read_original(rel)` returns
-    the origin/master text, or None; it defaults to reading git and is a parameter so tests need
+    the merge-base text, or None; it defaults to reading git and is a parameter so tests need
     no remote."""
     stage = STAGE_INDEX if stage is None else stage
     fails = []
@@ -1388,11 +1418,12 @@ def _shipped_checklist_texts(arts, shipped, skill_prefix):
 
 def check_skill_review(root, stage=None):
     """`skill_review_failures` for every SKILL.md whose text, as ``stage`` ships it, is changed."""
-    changed = _changed_vs_origin(root)
+    stage = STAGE_INDEX if stage is None else stage
+    changed = _shipping_candidates(root, stage)
     if changed is None:
         return []
-    stage = STAGE_INDEX if stage is None else stage
-    return skill_review_failures(root, _skill_mds_shipping_a_change(root, changed, stage), stage=stage)
+    shipping = _skill_mds_shipping_a_change(root, changed, stage)
+    return skill_review_failures(root, shipping, stage=stage)
 
 
 def _shipped_description(root, name, stage):
@@ -1522,10 +1553,10 @@ def check_toolbox_rule_coverage(root):
 
 def check_cso(root, stage=None):
     """`cso_failures` for every SKILL.md whose text, as ``stage`` ships it, is changed."""
-    changed = _changed_vs_origin(root)
+    stage = STAGE_INDEX if stage is None else stage
+    changed = _shipping_candidates(root, stage)
     if changed is None:
         return []
-    stage = STAGE_INDEX if stage is None else stage
     return cso_failures(root, _skill_mds_shipping_a_change(root, changed, stage), stage=stage)
 
 
@@ -1784,7 +1815,8 @@ def _git_anchor(skill_dir):
 
 
 def _under(sub, path):
-    """``path`` (relative to the git anchor) relative to the skill dir ``sub``, or None if outside it."""
+    """``path`` (relative to the git anchor) relative to the skill dir ``sub``, or None if
+    outside it."""
     if sub == ".":
         return path
     return path[len(sub) + 1:] if path.startswith(sub + "/") else None
@@ -1835,7 +1867,8 @@ def shipped_files(skill_dir, stage, *, ignore=_mirror_ignored):
     if stage == STAGE_INDEX:
         commit, (rc, listed) = "", _git_paths(here, "ls-files", "--", sub)
     else:
-        commit, (rc, listed) = "HEAD", _git_paths(here, "ls-tree", "-r", "--name-only", "HEAD", "--", sub)
+        commit, (rc, listed) = "HEAD", _git_paths(here, "ls-tree", "-r", "--name-only", "HEAD",
+                                                  "--", sub)
     if rc:
         return _working_tree_files(skill_dir, ignore=ignore)
     found = {}
@@ -1940,7 +1973,8 @@ def published_files(skill_dir, *, ignore=_mirror_ignored):
             return None
         return set(edited), lambda rel: _checked_out_bytes(skill_dir, "HEAD", rel)
 
-    return _on_published(skill_dir, local_since, lambda: shipped_files(skill_dir, STAGE_HEAD, ignore=ignore),
+    return _on_published(skill_dir, local_since,
+                         lambda: shipped_files(skill_dir, STAGE_HEAD, ignore=ignore),
                          ignore=ignore)
 
 
@@ -2297,7 +2331,7 @@ def _shipped_changes(root, stage, publishes, published="origin/master"):
     return 0, changed
 
 
-# ---- the skill decision ledger (`skill_decisions`): a recorded decision holds the skill's text ----
+# ---- the skill decision ledger (`skill_decisions`): a recorded decision holds the skill text ----
 
 #: What the decision check skips when it reads a skill: caches only. The mirror reader skips
 #: `.skillwriter/` too, but the ledger lives there.
@@ -2309,9 +2343,11 @@ def _decision_ignored(rel):
 
 
 def _log_decision_refusal(record):
-    """Append one refusal to the machine-local audit log; a log that cannot be written is skipped."""
+    """Append one refusal to the machine-local audit log; a log that cannot be written is
+    skipped."""
     try:
-        from self_improve_signals import _audit_dir  # noqa: PLC0415 - optional sink, a broken one must not break the gate
+        # Imported here as an optional sink: a broken audit module must not break the gate.
+        from self_improve_signals import _audit_dir  # noqa: PLC0415 - optional sink
         path = _audit_dir() / "skill-decision-gate.jsonl"
         path.parent.mkdir(parents=True, exist_ok=True)
         with path.open("a", encoding="utf-8") as fh:
@@ -2347,17 +2383,18 @@ def _append_only_problem(root, ledger_rel, shipped, base):
         # The line ending is no part of an entry: a last line the fork point left without its b"\n"
         # gets one when the next entry is appended.
         if new is None or new.rstrip(b"\r\n") != old.rstrip(b"\r\n"):
-            return ("%s is append-only; line %d, present at the fork point, was changed or removed. "
-                    "Withdraw an entry with a new void entry instead." % (ledger_rel, number))
+            return ("%s is append-only; line %d, present at the fork point, was changed or "
+                    "removed. Withdraw an entry with a new void entry instead."
+                    % (ledger_rel, number))
     return None
 
 
 def _decision_message(name, finding, ledger_rel, where="staged with this change"):
     """One refusal line for ``finding``; ``where`` says where the superseding entry must land."""
     if finding.anchor:
-        return ("skills/%s: %s\n  The rule's earlier decision is recorded with a reason. If the change "
-                "is meant, record why: python3 plugins/bitranox/hooks/skill_decisions.py add --from-file "
-                "<entries.json> with an entry whose supersedes names %s, %s."
+        return ("skills/%s: %s\n  The rule's earlier decision is recorded with a reason. If the "
+                "change is meant, record why: python3 plugins/bitranox/hooks/skill_decisions.py "
+                "add --from-file <entries.json> with an entry whose supersedes names %s, %s."
                 % (name, finding.render(), finding.entry_id, where))
     if not finding.entry_id:
         # check_ledger turns a LedgerError into this one finding: the ledger does not parse, so
@@ -2388,7 +2425,8 @@ def _judge_skill(root, name, files, base, log):
     return [message for _entry_id, _problem, message in refusals]
 
 
-#: Every twin decision refusal names this, so the tool-repo gate can label it (`gate_tool_repo_mirror`).
+#: Every twin decision refusal names this, so the tool-repo gate can label it
+#: (`gate_tool_repo_mirror`).
 _MARKETPLACE_LEDGER = "the marketplace ledger"
 
 
@@ -2400,17 +2438,20 @@ def _twin_decision_failures(name, here_dir, twin_files):
     ledger is read as that check reads the marketplace side (`published_files`): what it published
     or committed, never an uncommitted entry. SKILL.md goes through `normalise_mirror` first, so an
     anchor kept only in text the convention erases (an H1 parenthetical, the `name:` line, the
-    self-install blockquote) is gone. No append-only half: a tool-repo change cannot edit the ledger.
+    self-install blockquote) is gone. No append-only half: a tool-repo change cannot edit the
+    ledger.
     """
     rel = skill_decisions.LEDGER_REL
     ledger = published_files(here_dir, ignore=lambda path: path != rel).get(rel)
     if not ledger or "SKILL.md" not in twin_files:
         return []
     files = dict(twin_files)
-    files["SKILL.md"] = normalise_mirror(files["SKILL.md"].decode("utf-8", errors="replace")).encode("utf-8")
+    text = files["SKILL.md"].decode("utf-8", errors="replace")
+    files["SKILL.md"] = normalise_mirror(text).encode("utf-8")
     shown = "%s %s" % (_MARKETPLACE_LEDGER, here_dir / rel)
     where = "committed to %s, in that checkout, before this change" % shown
-    findings = skill_decisions.check_ledger(lambda: _ledger_lines(ledger), skill_decisions.corpus_text(files))
+    findings = skill_decisions.check_ledger(lambda: _ledger_lines(ledger),
+                                            skill_decisions.corpus_text(files))
     return [_decision_message(name, finding, shown, where) for finding in findings]
 
 
@@ -2444,19 +2485,12 @@ def check_skill_decisions(root, stage=STAGE_INDEX, *, log=None):
     ``{"time", "skill", "entry_id", "problem"}`` record per refusal (default: the audit log,
     `_log_decision_refusal`).
 
-    A push also counts the paths its commits change (`_pushed_changes`, the push half of
-    `_shipped_changes`): a change committed and then reverted in both the index and the working
-    copy is invisible to the merge-base diff, yet HEAD ships it. A commit needs no such half, even
-    one whose command also pushes: what it carries is the index, and a skill whose index text
-    differs from the fork point is already in the merge-base diff. Whether a skill is deleted is
-    read from what ships (no SKILL.md in it), never from the disk.
+    The candidates are `_shipping_candidates`, as for the review and description checks: a push
+    also counts the paths its commits change, so a change committed and then reverted in both the
+    index and the working copy is still judged. Whether a skill is deleted is read from what ships
+    (no SKILL.md in it), never from the disk.
     """
-    changed = _changed_vs_origin(root)
-    if changed is None:
-        return []
-    if not _is_commit(stage):
-        rc, pushed = _pushed_changes(root)
-        changed += [] if rc else pushed
+    changed = _shipping_candidates(root, stage)
     if not changed:
         return []
     base = _merge_base(root)
@@ -3110,8 +3144,9 @@ def run_checks(root, ci, full_pytest=None, run_pytest=True, baseline=0, mirror_a
     (so version-bump, skill-review and mirrors apply) and the last gate before CI (so it runs the
     whole suite CI runs, not just hooks/tests). `mirror_at` is what the commit or push ships of the
     marketplace (`mirror_stage`): the index on a commit, HEAD on a push; the LF, description,
-    decision, review and mirror checks read it. `publishes` says the same command also pushes (`command_publishes`). `notices`, when
-    given, collects what passed but must still reach the model (`check_skill_mirrors`).
+    decision, review and mirror checks read it. `publishes` says the same command also pushes
+    (`command_publishes`). `notices`, when given, collects what passed but must still reach the
+    model (`check_skill_mirrors`).
     `is_installed` answers whether THIS interpreter has a module (`pytest_interpreter`); a test
     passes one to stand in for a session interpreter that lacks the CI set. `parts` carries the
     other collaborators (`GateParts`)."""
@@ -3269,7 +3304,8 @@ def gate_tool_repo_mirror(root, stage=STAGE_INDEX, guessed=False, publishes=Fals
     blocked = {name for name in mine if any(name in f for f in fails)}
     unstaged = {name for name in blocked if any(name in f and _UNSTAGED_MARK in f for f in fails)}
     # Refused by the marketplace ledger alone: every failure naming it is a decision refusal.
-    decided = {name for name in blocked if all(_MARKETPLACE_LEDGER in f for f in fails if name in f)}
+    decided = {name for name in blocked
+               if all(_MARKETPLACE_LEDGER in f for f in fails if name in f)}
     lines = []
     for name in mine:
         verdict = ("UNPUSHED" if name in unpushed else "UNSTAGED" if name in unstaged else
