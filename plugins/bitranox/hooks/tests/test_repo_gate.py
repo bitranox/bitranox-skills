@@ -4990,3 +4990,85 @@ def test_decisions_ids_separated_by_a_bare_comma_pass(tmp_path):
     second, two = _ledger_line(topic="second")
     checklist = "- [x] RED\nDecisions: %s,%s\n" % (one["id"], two["id"])
     assert _review(tmp_path, checklist, ledger=first + second) == []
+
+
+# --------------------------------------------------------------------------
+# A tool repo's twin answers to the MARKETPLACE copy's decision ledger
+# --------------------------------------------------------------------------
+#
+# The mirror check alone lets a twin drop an anchored sentence whenever the marketplace holds the
+# same drop where a commit accepts it (uncommitted, or in a linked worktree), while the ledger that
+# records the reason stays in the marketplace. Each refusal case below keeps the marketplace text
+# equal to the twin's, so only the ledger can refuse it.
+
+MP_LEDGER = "plugins/bitranox/skills/coding-python-thing/.skillwriter/decisions.jsonl"
+
+
+def _ledgered_pair(tmp_path):
+    """`_published_pair` whose marketplace skill also publishes a ledger entry anchoring its paragraph."""
+    public, root, tool = _published_pair(tmp_path)
+    line, entry = _ledger_line("One paragraph of content")
+    write(root / MP_LEDGER, line)
+    _g(root, "add", "-A")
+    _g(root, "commit", "-qm", "ledger")
+    _g(root, "update-ref", "refs/remotes/origin/master", "HEAD")
+    return public, root, tool, line, entry
+
+
+def _edit_both(root, tool, edit):
+    """The same ``edit`` on both sides: staged in the tool repo, left uncommitted in the marketplace."""
+    write(root / MP_SKILL, edit(MIRROR_BODY))
+    write(tool / TW_SKILL, edit(TWIN_BODY))
+    _g(tool, "add", "-A")
+
+
+def _replace(old, new):
+    return lambda body: body.replace(old, new)
+
+
+def _into_the_h1(body):
+    """Move the anchored paragraph into the H1 parenthetical, which the mirror convention erases."""
+    for own in ("(coding-python-thing)", "(python-thing)"):
+        body = body.replace(own, "(One paragraph of content)")
+    return body.replace("\nOne paragraph of content.\n", "\n")
+
+
+@pytest.mark.usefixtures("_bare_git_env")
+@pytest.mark.parametrize("edit", [_replace("One paragraph of content.", IN_PROGRESS), _into_the_h1],
+                         ids=["dropped", "kept-only-in-the-h1-parenthetical"])
+def test_a_twin_that_drops_a_marketplace_anchor_is_refused(tmp_path, monkeypatch, capsys, edit):
+    public, root, tool, _line, entry = _ledgered_pair(tmp_path)
+    _edit_both(root, tool, edit)
+    _tool_repo_commit(monkeypatch, public, tool)
+
+    assert RG.main(parts=_parts()) == 2
+    err = capsys.readouterr().err
+    assert entry["id"] in err and entry["why"] in err and "skill_decisions.py add" in err
+    assert str(root / MP_LEDGER) in err                     # names the ledger to supersede in
+    assert "DECISION" in err and "DRIFT" not in err
+
+
+@pytest.mark.usefixtures("_bare_git_env")
+def test_a_superseding_entry_the_marketplace_committed_lets_the_twin_drop_pass(tmp_path, monkeypatch, capsys):
+    public, root, tool, line, entry = _ledgered_pair(tmp_path)
+    _edit_both(root, tool, _replace("One paragraph of content.", IN_PROGRESS))
+    newer, _ = _ledger_line(IN_PROGRESS.rstrip("."), decision="Superseded.", supersedes=[entry["id"]])
+    write(root / MP_LEDGER, line + newer)
+    _tool_repo_commit(monkeypatch, public, tool)
+    # Uncommitted in the marketplace, the superseding entry does not count yet...
+    assert RG.main(parts=_parts()) == 2
+    assert entry["id"] in capsys.readouterr().err
+
+    _g(root, "commit", "-qam", "supersede")                 # ...committed there, it does.
+    _hook_stdin(monkeypatch, "git commit -m x")
+    assert RG.main(parts=_parts()) == 0
+    assert "DECISION" not in capsys.readouterr().err
+
+
+@pytest.mark.usefixtures("_bare_git_env")
+def test_a_twin_edit_that_keeps_every_anchor_passes(tmp_path, monkeypatch):
+    public, root, tool, _line, _entry = _ledgered_pair(tmp_path)
+    _edit_both(root, tool, _replace("One paragraph of content.", "One paragraph of content.\n\nAnother one."))
+    _tool_repo_commit(monkeypatch, public, tool)
+
+    assert RG.main(parts=_parts()) == 0

@@ -40,6 +40,9 @@ two "versions with no entry" notes came to sit in this file disagreeing with it.
 - The commit and push gate refuses a change whose shipped text of a touched skill loses a live
   anchor, and names the entry's decision, reason and reopen condition; a superseding entry with
   its own reason answers it. Ledgers are append-only, and CI checks every ledger.
+- A commit or push in a tool repo that ships a mirrored skill's twin is judged against the
+  marketplace copy's ledger too, read at what the marketplace published or committed; a refusal
+  names that ledger as the place for the superseding entry.
 - A skill change's skill-writer checklist carries a `Decisions:` line naming the ledger entries
   the change added, or `Decisions: none - <reason>`.
 - The SKILL.md edit guard hands an editing agent the skill's rejected and removed decisions once,

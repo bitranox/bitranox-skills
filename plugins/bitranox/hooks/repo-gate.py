@@ -1850,12 +1850,13 @@ def shipped_files(skill_dir, stage, *, ignore=_mirror_ignored):
     return dict(sorted(found.items()))
 
 
-def _on_published(skill_dir, local_since, fallback):
+def _on_published(skill_dir, local_since, fallback, ignore=_mirror_ignored):
     """The published ref's files, each one the checkout changed since forking replaced by its local copy.
 
     ``local_since(base)`` returns ``(paths, read)`` - the paths changed here since the fork point
     ``base`` and a reader giving a path's local bytes, or None for a path that is gone - or None
-    when it cannot tell. Every failure to read git hands over to ``fallback()``.
+    when it cannot tell. Every failure to read git hands over to ``fallback()``. ``ignore(rel)``
+    names the files left out, as in `shipped_files`.
     """
     skill_dir = Path(skill_dir)
     published = _published_commit(skill_dir)
@@ -1870,14 +1871,14 @@ def _on_published(skill_dir, local_since, fallback):
     paths, read = local
     found = {}
     for rel in upstream:
-        if rel in paths or _mirror_ignored(rel):
+        if rel in paths or ignore(rel):
             continue
         data = _checked_out_bytes(skill_dir, published, rel)
         if data is None:
             return fallback()
         found[rel] = data
     for rel in paths:
-        data = None if _mirror_ignored(rel) else read(rel)
+        data = None if ignore(rel) else read(rel)
         if data is not None:
             found[rel] = data
     return dict(sorted(found.items()))
@@ -1920,14 +1921,15 @@ def mirror_files(skill_dir):
     return _on_published(skill_dir, local_since, lambda: _working_tree_files(skill_dir))
 
 
-def published_files(skill_dir):
+def published_files(skill_dir, *, ignore=_mirror_ignored):
     """Map every comparable file of a mirrored skill to what its repo has PUBLISHED or COMMITTED.
 
     The reading of the side a commit or push is NOT being made in: its published ref, with every
     file it committed since forking from that ref read from HEAD. Its uncommitted and untracked
     files are ignored - they belong to another session's work in progress, which neither commit
     ships. Measured as #84: a tool-repo commit was blocked as DRIFT by a marketplace edit nobody
-    had committed. With no published ref this is HEAD; without git, the working tree.
+    had committed. With no published ref this is HEAD; without git, the working tree. ``ignore``
+    as in `shipped_files`: the twin decision check reads the ledger, which the default leaves out.
     """
 
     skill_dir = Path(skill_dir)
@@ -1938,7 +1940,8 @@ def published_files(skill_dir):
             return None
         return set(edited), lambda rel: _checked_out_bytes(skill_dir, "HEAD", rel)
 
-    return _on_published(skill_dir, local_since, lambda: shipped_files(skill_dir, STAGE_HEAD))
+    return _on_published(skill_dir, local_since, lambda: shipped_files(skill_dir, STAGE_HEAD, ignore=ignore),
+                         ignore=ignore)
 
 
 #: A published ref last fetched longer ago than this is named beside the comparison that read it.
@@ -2106,6 +2109,9 @@ def mirror_failures(root, names, committing=None, stage=STAGE_INDEX, notices=Non
     ``twins`` maps a skill name to the twin directory to read instead of its main-checkout path, for
     a tool repo worked in from a linked worktree (`_tool_repo_twins`). ``mirrors`` is the pair table,
     `MIRRORED_SKILLS` unless a caller passes another.
+
+    A gate committing the twin also judges the twin's shipped text against the marketplace copy's
+    decision ledger (`_twin_decision_failures`), whether or not the pair drifted.
     """
 
     public = _marketplace_public(root)
@@ -2129,6 +2135,9 @@ def mirror_failures(root, names, committing=None, stage=STAGE_INDEX, notices=Non
         mine_files, their_files = read_here(here_dir), read_twin(twin_dir)
         if not mine_files or not their_files:
             continue  # nothing committed on one side yet: no text either commit could ship
+        if committing == "twin":
+            # Before the drift test: a twin in sync with an uncommitted marketplace edit passes it.
+            fails += _twin_decision_failures(name, here_dir, their_files)
         differing, sample = _mirror_differences(mine_files, their_files)
         if not differing:
             continue
@@ -2343,12 +2352,13 @@ def _append_only_problem(root, ledger_rel, shipped, base):
     return None
 
 
-def _decision_message(name, finding, ledger_rel):
+def _decision_message(name, finding, ledger_rel, where="staged with this change"):
+    """One refusal line for ``finding``; ``where`` says where the superseding entry must land."""
     if finding.anchor:
         return ("skills/%s: %s\n  The rule's earlier decision is recorded with a reason. If the change "
                 "is meant, record why: python3 plugins/bitranox/hooks/skill_decisions.py add --from-file "
-                "<entries.json> with an entry whose supersedes names %s, staged with this change."
-                % (name, finding.render(), finding.entry_id))
+                "<entries.json> with an entry whose supersedes names %s, %s."
+                % (name, finding.render(), finding.entry_id, where))
     if not finding.entry_id:
         # check_ledger turns a LedgerError into this one finding: the ledger does not parse, so
         # none of its entries was judged.
@@ -2376,6 +2386,32 @@ def _judge_skill(root, name, files, base, log):
         log({"time": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()), "skill": name,
              "entry_id": entry_id, "problem": problem})
     return [message for _entry_id, _problem, message in refusals]
+
+
+#: Every twin decision refusal names this, so the tool-repo gate can label it (`gate_tool_repo_mirror`).
+_MARKETPLACE_LEDGER = "the marketplace ledger"
+
+
+def _twin_decision_failures(name, here_dir, twin_files):
+    """The refusals the marketplace skill ``here_dir``'s ledger gives the twin text ``twin_files``.
+
+    The twin is the same skill under its own repo's name, so a decision recorded in the marketplace
+    binds its text too; the mirror check alone passes a drop the marketplace holds uncommitted. The
+    ledger is read as that check reads the marketplace side (`published_files`): what it published
+    or committed, never an uncommitted entry. SKILL.md goes through `normalise_mirror` first, so an
+    anchor kept only in text the convention erases (an H1 parenthetical, the `name:` line, the
+    self-install blockquote) is gone. No append-only half: a tool-repo change cannot edit the ledger.
+    """
+    rel = skill_decisions.LEDGER_REL
+    ledger = published_files(here_dir, ignore=lambda path: path != rel).get(rel)
+    if not ledger or "SKILL.md" not in twin_files:
+        return []
+    files = dict(twin_files)
+    files["SKILL.md"] = normalise_mirror(files["SKILL.md"].decode("utf-8", errors="replace")).encode("utf-8")
+    shown = "%s %s" % (_MARKETPLACE_LEDGER, here_dir / rel)
+    where = "committed to %s, in that checkout, before this change" % shown
+    findings = skill_decisions.check_ledger(lambda: _ledger_lines(ledger), skill_decisions.corpus_text(files))
+    return [_decision_message(name, finding, shown, where) for finding in findings]
 
 
 def _skills_with_a_ledger(root, names, base):
@@ -3232,15 +3268,20 @@ def gate_tool_repo_mirror(root, stage=STAGE_INDEX, guessed=False, publishes=Fals
     # not. The table and the diff are the actionable part, so they cannot go anywhere else.
     blocked = {name for name in mine if any(name in f for f in fails)}
     unstaged = {name for name in blocked if any(name in f and _UNSTAGED_MARK in f for f in fails)}
+    # Refused by the marketplace ledger alone: every failure naming it is a decision refusal.
+    decided = {name for name in blocked if all(_MARKETPLACE_LEDGER in f for f in fails if name in f)}
     lines = []
     for name in mine:
         verdict = ("UNPUSHED" if name in unpushed else "UNSTAGED" if name in unstaged else
-                   "DRIFT" if name in blocked else "in sync")
+                   "DECISION" if name in decided else "DRIFT" if name in blocked else "in sync")
         lines.append("%-9s%-34s %s" % (verdict, name, mirrors[name]))
     lines += ["\n" + failure for failure in fails]
     if blocked <= unpushed:
         lines.append("repo-gate: blocked - %s ships a skill whose marketplace twin is committed but "
                      "not yet published." % root)
+    elif blocked <= decided:
+        lines.append("repo-gate: blocked - %s ships a twin text that drops a decision recorded in "
+                     "%s." % (root, _MARKETPLACE_LEDGER))
     elif blocked <= unstaged:
         lines.append("repo-gate: blocked - %s holds the mirror fix on disk, but the commit does not "
                      "take it." % root)
