@@ -1219,15 +1219,17 @@ def has_open_checkbox(text):
     return any(_OPEN_TASK.match(line) for line in _unfenced_lines(text))
 
 
-def _shipped_ledger(root, name, stage):
-    """The ledger bytes of skill ``name`` as ``stage`` ships them, b"" when it ships none.
+def _shipped_review_files(root, name, arts, stage):
+    """The ledger and the co-changed checklists ``arts`` of skill ``name``, as ``stage`` ships them.
 
-    Read the way the decision check reads it (`shipped_files`), so an entry written to disk but
-    never staged is not one this commit records. Only the ledger is read, not the whole skill.
+    Read the way the decision check reads a skill (`shipped_files`): a checklist line or ticked box
+    written to disk but never staged, a ledger entry likewise, and an untracked checklist are not
+    in what this commit carries. Maps the path relative to the skill dir to its bytes; a file the
+    stage does not ship is absent. Only these files are read, not the whole skill.
     """
-    files = shipped_files(root / _SKILLS_DIR / name, stage,
-                          ignore=lambda rel: rel != skill_decisions.LEDGER_REL)
-    return files.get(skill_decisions.LEDGER_REL, b"")
+    prefix = "%s/%s/" % (_SKILLS_DIR, name)
+    wanted = {skill_decisions.LEDGER_REL} | {a[len(prefix):] for a in arts}
+    return shipped_files(root / _SKILLS_DIR / name, stage, ignore=lambda rel: rel not in wanted)
 
 
 def _ids_missing_from(ledger, named):
@@ -1247,20 +1249,18 @@ def _ids_missing_from(ledger, named):
     return missing
 
 
-def _decisions_line_failures(root, name, arts, stage):
-    """Why the co-changed checklists ``arts`` of skill ``name`` do not state what it decided.
+def _decisions_line_failures(name, texts, ledger, *, unreadable=False):
+    """Why the shipped co-changed checklist ``texts`` of skill ``name`` do not state what it decided.
 
     One of them must hold a `DECISIONS_LINE_RX` line outside a code fence (a fenced one quotes the
-    format, as a fenced box quotes a box), and every id those lines name must be in the ledger
-    ``stage`` ships. The checklists are read where the checkbox rule reads them.
+    format, as a fenced box quotes a box), and every id those lines name must be in the shipped
+    ``ledger`` bytes. Both sides are read at one stage (`_shipped_review_files`). With an
+    ``unreadable`` checklist among them, a missing line is not reported: that checklist may hold
+    it, and its own refusal already blocks the change.
     """
-    lines = []
-    for a in arts:
-        try:
-            text = (root / a).read_text(encoding="utf-8")
-        except OSError:
-            continue
-        lines += [line for line in _unfenced_lines(text) if DECISIONS_LINE_RX.match(line)]
+    lines = [line for text in texts for line in _unfenced_lines(text) if DECISIONS_LINE_RX.match(line)]
+    if not lines and unreadable:
+        return []
     if not lines:
         return ["skills/%s: the co-changed checklist has no 'Decisions:' line in the required form. "
                 "Name the ledger ids this change added ('Decisions: d-YYYYMMDD-xxxxxxxx, ...') or "
@@ -1268,7 +1268,7 @@ def _decisions_line_failures(root, name, arts, stage):
     named = set(_DECISION_ID_RX.findall("\n".join(lines)))
     if not named:
         return []
-    missing = sorted(_ids_missing_from(_shipped_ledger(root, name, stage), named))
+    missing = sorted(_ids_missing_from(ledger, named))
     if not missing:
         return []
     return ["skills/%s: 'Decisions:' names %s, not in the skill's ledger as this change ships it "
@@ -1281,7 +1281,8 @@ def skill_review_failures(root, changed, read_original=None, stage=None):
     """A changed SKILL.md needs a co-changed, fully-checked .skillwriter/checklist-*.md - the
     skill-writer procedure's committed receipt. Prose discipline gets cherry-picked; a required
     artifact does not. One of those checklists also says what the change decided
-    (`_decisions_line_failures`), judged against the ledger ``stage`` ships (default the index).
+    (`_decisions_line_failures`). The checklists and the ledger are read as ``stage`` ships them
+    (default the index), never from the working tree, so a checklist that is not staged is none.
 
     One mechanical exception, waived only on proof: a change that re-pads tables and nothing else
     (`table_repad_problem`). `read_original(rel)` returns the origin/master text, or None; it
@@ -1292,26 +1293,48 @@ def skill_review_failures(root, changed, read_original=None, stage=None):
     for name in names:
         prefix = "%s/%s/.skillwriter/" % (_SKILLS_DIR, name)
         arts = [p for p in changed if p.startswith(prefix) and p.endswith(".md")]
-        if not arts:
+        shipped = _shipped_review_files(root, name, arts, stage) if arts else {}
+        skill_prefix = "%s/%s/" % (_SKILLS_DIR, name)
+        # A checklist the stage does not ship (untracked, unstaged-deleted) is no receipt of it.
+        kept = [a for a in arts if a[len(skill_prefix):] in shipped]
+        if not kept:
             not_a_repad = table_repad_problem(root, "%s/%s/SKILL.md" % (_SKILLS_DIR, name),
                                               read_original)
             if not_a_repad is None:
                 continue
+            unshipped = (" (%s is not in what this change ships: stage it)" % ", ".join(arts)
+                         if arts else "")
             fails.append("skills/%s/SKILL.md changed without an updated .skillwriter/checklist-*.md "
-                         "in the same change - run bitranox:meta-skill-writer and commit its "
+                         "in the same change%s - run bitranox:meta-skill-writer and commit its "
                          "checklist artifact. (Not a table re-pad, which needs none: %s.)"
-                         % (name, not_a_repad))
+                         % (name, unshipped, not_a_repad))
             continue
-        for a in arts:
-            try:
-                text = (root / a).read_text(encoding="utf-8")
-            except OSError:
-                continue
-            if has_open_checkbox(text):
-                fails.append("%s has unchecked boxes - finish the skill-writer checklist before "
-                             "committing." % a)
-        fails += _decisions_line_failures(root, name, arts, stage)
+        texts, problems = _shipped_checklist_texts(kept, shipped, skill_prefix)
+        fails += problems
+        fails += _decisions_line_failures(name, texts, shipped.get(skill_decisions.LEDGER_REL, b""),
+                                          unreadable=len(texts) < len(kept))
     return fails
+
+
+def _shipped_checklist_texts(arts, shipped, skill_prefix):
+    """(the decoded texts of the shipped checklists ``arts``, the refusals reading them gave).
+
+    A checklist is decoded strictly, as the ledger is: a non-UTF-8 one is refused by name rather
+    than read with a replacement character, and an open checkbox in one is refused too.
+    """
+    texts, problems = [], []
+    for a in arts:
+        try:
+            text = shipped[a[len(skill_prefix):]].decode("utf-8")
+        except UnicodeDecodeError as exc:
+            problems.append("%s is not valid UTF-8 as this change ships it (byte %d) - re-save it "
+                            "as UTF-8 and stage it." % (a, exc.start))
+            continue
+        if has_open_checkbox(text):
+            problems.append("%s has unchecked boxes - finish the skill-writer checklist before "
+                            "committing." % a)
+        texts.append(text)
+    return texts, problems
 
 
 def check_skill_review(root, stage=None):

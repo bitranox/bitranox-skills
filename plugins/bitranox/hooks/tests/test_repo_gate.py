@@ -4748,7 +4748,10 @@ def test_run_checks_reads_the_ledger_at_the_stage_it_judges(tmp_path, monkeypatc
     """A push ships HEAD: a ledger entry staged but not committed passes the commit, not the push."""
     monkeypatch.setenv("HOME", str(tmp_path / "home"))
     monkeypatch.setenv("USERPROFILE", str(tmp_path / "home"))
-    root, _changed, new_id = _decision_change(tmp_path, stage_ledger=True)
+    root, changed, new_id = _decision_change(tmp_path, stage_ledger=True)
+    # HEAD must ship the checklist (the checklist is read at the stage too) and only the ledger
+    # entry stay staged, or the push would be refused for a missing checklist instead.
+    _commit_paths(root, "the skill change without its ledger entry", changed)
     parts = RG.GateParts(mirrors={})
 
     def named(stage):
@@ -4758,3 +4761,105 @@ def test_run_checks_reads_the_ledger_at_the_stage_it_judges(tmp_path, monkeypatc
     assert named(RG.STAGE_INDEX) == []
     pushed = named(RG.STAGE_HEAD)
     assert len(pushed) == 1 and new_id in pushed[0]
+
+
+def _commit_paths(root, message, paths):
+    """`git commit -- <paths>` with a fixed identity: only ``paths`` go in, the rest stays staged."""
+    env = {**os.environ, "GIT_AUTHOR_NAME": "t", "GIT_AUTHOR_EMAIL": "t@example.invalid",
+           "GIT_COMMITTER_NAME": "t", "GIT_COMMITTER_EMAIL": "t@example.invalid"}
+    subprocess.run(["git", "commit", "-q", "--no-verify", "-m", message, "--", *paths],
+                   cwd=root, check=True, env=env)
+
+
+_CHECKLIST = LEDGER_SKILL + "/.skillwriter/checklist-1.md"
+
+
+def _checklist_change(tmp_path, staged, on_disk=None):
+    """A repo whose SKILL.md change is staged with ``staged`` as its checklist (None: untracked),
+    the checklist's working copy then holding ``on_disk`` when given."""
+    line, _ = _ledger_line()
+    root = _ledger_repo(tmp_path, [line])
+    _stage(root, LEDGER_SKILL + "/SKILL.md", RULE_TEXT + "More.\n")
+    if staged is not None:
+        _stage(root, _CHECKLIST, staged)
+    if on_disk is not None:
+        write(root / _CHECKLIST, on_disk)
+    return root
+
+
+@pytest.mark.usefixtures("_bare_git_env")
+def test_a_decisions_line_only_in_the_working_copy_is_refused_at_the_index_stage(tmp_path):
+    """The commit carries the index: a line written to the checklist but never staged is not in it."""
+    root = _checklist_change(tmp_path, "- [x] RED\n", "- [x] RED\nDecisions: none - only on disk\n")
+    fails = RG.check_skill_review(root, stage=RG.STAGE_INDEX)
+    assert len(fails) == 1 and "no 'Decisions:' line" in fails[0]
+    _stage(root, _CHECKLIST, (root / _CHECKLIST).read_bytes())          # control: stage it
+    assert RG.check_skill_review(root, stage=RG.STAGE_INDEX) == []
+
+
+@pytest.mark.usefixtures("_bare_git_env")
+def test_a_box_ticked_only_in_the_working_copy_is_refused_at_the_index_stage(tmp_path):
+    """The checkbox rule reads the checklist through the same lens as the Decisions rule."""
+    root = _checklist_change(tmp_path, "- [ ] RED\nDecisions: none - fixture\n",
+                             "- [x] RED\nDecisions: none - fixture\n")
+    fails = RG.check_skill_review(root, stage=RG.STAGE_INDEX)
+    assert len(fails) == 1 and "unchecked" in fails[0] and _CHECKLIST in fails[0]
+    _stage(root, _CHECKLIST, (root / _CHECKLIST).read_bytes())          # control: stage it
+    assert RG.check_skill_review(root, stage=RG.STAGE_INDEX) == []
+
+
+@pytest.mark.usefixtures("_bare_git_env")
+def test_an_untracked_checklist_is_no_checklist_of_the_change(tmp_path):
+    """An untracked file ships nothing, though `_changed_vs_origin` lists it as changed."""
+    root = _checklist_change(tmp_path, None, "- [x] RED\nDecisions: none - never staged\n")
+    assert _CHECKLIST in RG._changed_vs_origin(root)
+    fails = RG.check_skill_review(root, stage=RG.STAGE_INDEX)
+    assert len(fails) == 1 and "without an updated .skillwriter/checklist" in fails[0]
+    assert "stage it" in fails[0]
+    _stage(root, _CHECKLIST, (root / _CHECKLIST).read_bytes())          # control: stage it
+    assert RG.check_skill_review(root, stage=RG.STAGE_INDEX) == []
+
+
+@pytest.mark.usefixtures("_bare_git_env")
+def test_a_checklist_staged_then_deleted_from_the_index_is_no_checklist(tmp_path):
+    """`git rm --cached` leaves the file on disk and in the change list, yet the commit drops it."""
+    root = _checklist_change(tmp_path, "- [x] RED\nDecisions: none - staged once\n")
+    subprocess.run(["git", "rm", "-q", "--cached", _CHECKLIST], cwd=root, check=True)
+    fails = RG.check_skill_review(root, stage=RG.STAGE_INDEX)
+    assert len(fails) == 1 and "without an updated .skillwriter/checklist" in fails[0]
+
+
+@pytest.mark.usefixtures("_bare_git_env")
+def test_a_staged_ticked_checklist_with_a_decisions_line_passes(tmp_path):
+    """The control for the lens tests: what the index ships is complete, the disk agrees."""
+    root = _checklist_change(tmp_path, "- [x] RED\nDecisions: none - fixture\n")
+    assert RG.check_skill_review(root, stage=RG.STAGE_INDEX) == []
+
+
+@pytest.mark.usefixtures("_bare_git_env")
+def test_a_commit_naming_the_checklist_is_judged_on_its_working_copy(tmp_path):
+    """`git commit -- SKILL.md <checklist>` takes the checklist from disk, so its working copy counts."""
+    root = _checklist_change(tmp_path, "- [x] RED\n", "- [x] RED\nDecisions: none - taken from disk\n")
+    both = RG.CommitSelection("only", [LEDGER_SKILL + "/SKILL.md", _CHECKLIST], where=root)
+    assert RG.check_skill_review(root, stage=both) == []
+    # controls: the plain index still holds the line-less copy, and a selection leaving the
+    # checklist out commits HEAD's (none), so neither ships the line
+    assert RG.check_skill_review(root, stage=RG.STAGE_INDEX)
+    only_md = RG.CommitSelection("only", [LEDGER_SKILL + "/SKILL.md"], where=root)
+    fails = RG.check_skill_review(root, stage=only_md)
+    assert len(fails) == 1 and "without an updated .skillwriter/checklist" in fails[0]
+
+
+@pytest.mark.usefixtures("_bare_git_env")
+def test_a_checklist_that_is_not_utf_8_is_refused_in_one_line(tmp_path):
+    root = _checklist_change(tmp_path, b"- [x] RED\nDecisions: none - fixture\n\xff\n")
+    fails = RG.check_skill_review(root, stage=RG.STAGE_INDEX)
+    assert len(fails) == 1 and "UTF-8" in fails[0] and _CHECKLIST in fails[0]
+    assert "\n" not in fails[0]
+
+
+def test_decisions_ids_separated_by_a_bare_comma_pass(tmp_path):
+    first, one = _ledger_line()
+    second, two = _ledger_line(topic="second")
+    checklist = "- [x] RED\nDecisions: %s,%s\n" % (one["id"], two["id"])
+    assert _review(tmp_path, checklist, ledger=first + second) == []
