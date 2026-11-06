@@ -1181,14 +1181,19 @@ _OPEN_TASK = re.compile(r"^[ \t]*(?:[-*+]|\d{1,9}[.)])[ \t]+\[ \](?:[ \t]|$)")
 _FENCE = re.compile(r"^ {0,3}(`{3,}|~{3,})(.*)$")
 
 
-def has_open_checkbox(text):
-    """True when `text` has an unticked task-list item outside a fenced code block.
+#: The checklist line stating what a skill change decided (D4): the ledger ids it recorded, or
+#: `none - <reason>`. Only non-capturing groups, so a match is the whole line; keep it that way.
+DECISIONS_LINE_RX = re.compile(
+    r"^Decisions:[ \t]+(?:none[ \t]+-[ \t]+\S.*|d-[0-9]{8}-[0-9a-f]{8}(?:,[ \t]*d-[0-9]{8}-[0-9a-f]{8})*)[ \t]*$",
+    re.MULTILINE)
+_DECISION_ID_RX = re.compile(r"d-[0-9]{8}-[0-9a-f]{8}")
 
-    A bare substring test for `[ ]` refused a fully ticked checklist whose line QUOTED an open-item
-    template, so only a box that is itself a list item counts: one inside a code span, in prose or
-    in a fenced example is text about a box, not an open one. A fence closes on a bare run of the
-    same character at least as long as its opener; one never closed hides the rest of the file,
-    as it does from a Markdown reader.
+
+def _unfenced_lines(text):
+    """Yield the lines of `text` outside fenced code blocks, as a Markdown reader sees them.
+
+    A fence closes on a bare run of the same character at least as long as its opener; one never
+    closed hides the rest of the file, as it does from a Markdown reader.
     """
     fence = None
     for line in text.splitlines():
@@ -1201,19 +1206,87 @@ def has_open_checkbox(text):
         if found and not (found.group(1)[0] == "`" and "`" in found.group(2)):
             fence = found.group(1)
             continue
-        if _OPEN_TASK.match(line):
-            return True
-    return False
+        yield line
 
 
-def skill_review_failures(root, changed, read_original=None):
+def has_open_checkbox(text):
+    """True when `text` has an unticked task-list item outside a fenced code block.
+
+    A bare substring test for `[ ]` refused a fully ticked checklist whose line QUOTED an open-item
+    template, so only a box that is itself a list item counts: one inside a code span, in prose or
+    in a fenced example is text about a box, not an open one (`_unfenced_lines`).
+    """
+    return any(_OPEN_TASK.match(line) for line in _unfenced_lines(text))
+
+
+def _shipped_ledger(root, name, stage):
+    """The ledger bytes of skill ``name`` as ``stage`` ships them, b"" when it ships none.
+
+    Read the way the decision check reads it (`shipped_files`), so an entry written to disk but
+    never staged is not one this commit records. Only the ledger is read, not the whole skill.
+    """
+    files = shipped_files(root / _SKILLS_DIR / name, stage,
+                          ignore=lambda rel: rel != skill_decisions.LEDGER_REL)
+    return files.get(skill_decisions.LEDGER_REL, b"")
+
+
+def _ids_missing_from(ledger, named):
+    """The ids of ``named`` no entry of the ledger bytes carries, read one line at a time.
+
+    Nothing is missing from a ledger that does not parse: `check_skill_decisions` refuses that
+    ledger by its line, and an id cannot honestly be called absent from text nobody could read.
+    """
+    missing = set(named)
+    try:
+        for entry in skill_decisions.parse_entries(_ledger_lines(ledger)):
+            missing.discard(entry["id"])
+            if not missing:
+                break
+    except skill_decisions.LedgerError:
+        return set()
+    return missing
+
+
+def _decisions_line_failures(root, name, arts, stage):
+    """Why the co-changed checklists ``arts`` of skill ``name`` do not state what it decided.
+
+    One of them must hold a `DECISIONS_LINE_RX` line outside a code fence (a fenced one quotes the
+    format, as a fenced box quotes a box), and every id those lines name must be in the ledger
+    ``stage`` ships. The checklists are read where the checkbox rule reads them.
+    """
+    lines = []
+    for a in arts:
+        try:
+            text = (root / a).read_text(encoding="utf-8")
+        except OSError:
+            continue
+        lines += [line for line in _unfenced_lines(text) if DECISIONS_LINE_RX.match(line)]
+    if not lines:
+        return ["skills/%s: the co-changed checklist has no 'Decisions:' line in the required form. "
+                "Name the ledger ids this change added ('Decisions: d-YYYYMMDD-xxxxxxxx, ...') or "
+                "say why it decided nothing ('Decisions: none - <reason>')." % name]
+    named = set(_DECISION_ID_RX.findall("\n".join(lines)))
+    if not named:
+        return []
+    missing = sorted(_ids_missing_from(_shipped_ledger(root, name, stage), named))
+    if not missing:
+        return []
+    return ["skills/%s: 'Decisions:' names %s, not in the skill's ledger as this change ships it "
+            "(%s/%s/%s). Record the entry (python3 plugins/bitranox/hooks/skill_decisions.py add "
+            "--from-file <entries.json>) and stage the ledger with this change, or correct the id."
+            % (name, ", ".join(missing), _SKILLS_DIR, name, skill_decisions.LEDGER_REL)]
+
+
+def skill_review_failures(root, changed, read_original=None, stage=None):
     """A changed SKILL.md needs a co-changed, fully-checked .skillwriter/checklist-*.md - the
     skill-writer procedure's committed receipt. Prose discipline gets cherry-picked; a required
-    artifact does not.
+    artifact does not. One of those checklists also says what the change decided
+    (`_decisions_line_failures`), judged against the ledger ``stage`` ships (default the index).
 
     One mechanical exception, waived only on proof: a change that re-pads tables and nothing else
     (`table_repad_problem`). `read_original(rel)` returns the origin/master text, or None; it
     defaults to reading git and is a parameter so tests need no remote."""
+    stage = STAGE_INDEX if stage is None else stage
     fails = []
     names = sorted({m.group(1) for p in changed for m in [_SKILL_MD_RX.match(p)] if m})
     for name in names:
@@ -1237,14 +1310,15 @@ def skill_review_failures(root, changed, read_original=None):
             if has_open_checkbox(text):
                 fails.append("%s has unchecked boxes - finish the skill-writer checklist before "
                              "committing." % a)
+        fails += _decisions_line_failures(root, name, arts, stage)
     return fails
 
 
-def check_skill_review(root):
+def check_skill_review(root, stage=None):
     changed = _changed_vs_origin(root)
     if changed is None:
         return []
-    return skill_review_failures(root, changed)
+    return skill_review_failures(root, changed, stage=stage)
 
 
 def cso_failures(root, changed):
@@ -2947,7 +3021,7 @@ def run_checks(root, ci, full_pytest=None, run_pytest=True, baseline=0, mirror_a
     if not ci:
         failures += check_version_bumped(root)
         failures += check_ragged_tables(root)
-        failures += check_skill_review(root)
+        failures += check_skill_review(root, stage=mirror_at)
         failures += check_skill_mirrors(root, stage=mirror_at, notices=notices, publishes=publishes,
                                         mirrors=parts.mirrors)
     # The whole-suite moments (--ci, the pre-push hook) also run the TypeScript side; a commit's

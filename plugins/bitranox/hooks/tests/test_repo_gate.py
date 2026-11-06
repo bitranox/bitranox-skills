@@ -808,7 +808,8 @@ def _skill(root, name, desc, checklist=None, checked=True):
     if checklist:
         box = "[x]" if checked else "[ ]"
         write(root / f"plugins/bitranox/skills/{name}/.skillwriter/{checklist}",
-              "# checklist\n- %s RED baseline\n- %s pressure scenarios\n" % (box, box))
+              "# checklist\n- %s RED baseline\n- %s pressure scenarios\n"
+              "Decisions: none - fixture\n" % (box, box))
 
 
 def test_skill_review_requires_cochanged_checklist(tmp_path):
@@ -837,7 +838,8 @@ def test_skill_review_rejects_unchecked_boxes(tmp_path):
 def _checklist_body(root, name, body):
     _skill(root, name, "Use when gamma gizmos need a checklist body test")
     rel = f"plugins/bitranox/skills/{name}/.skillwriter/checklist-20261030.md"
-    write(root / rel, body)
+    # The Decisions line comes FIRST: a body whose fence never closes would hide one appended after.
+    write(root / rel, "Decisions: none - fixture\n" + body)
     return ["plugins/bitranox/skills/%s/SKILL.md" % name, rel]
 
 
@@ -4630,3 +4632,129 @@ def test_a_commit_naming_paths_is_judged_on_its_selection_not_the_working_tree(t
 
 def test_jsonl_is_an_lf_checked_suffix():
     assert ".jsonl" in RG._LF_SUFFIXES
+
+
+# --------------------------------------------------------------------------
+# The skill-writer checklist states what the change decided: `Decisions: <ids>` or `none - <why>`
+# --------------------------------------------------------------------------
+
+def _review(tmp_path, checklist, ledger="", *, extra=None, changed_extra=()):
+    """skill_review_failures over a changed SKILL.md plus ``checklist``, no git: the working tree."""
+    rel = "plugins/bitranox/skills/s1/"
+    files = {rel + "SKILL.md": "x\n", rel + ".skillwriter/checklist-1.md": checklist}
+    if ledger:
+        files[rel + ".skillwriter/decisions.jsonl"] = ledger
+    for path, text in {**files, **(extra or {})}.items():
+        write(tmp_path / path, text)
+    return RG.skill_review_failures(tmp_path, list(files) + list(changed_extra),
+                                    read_original=lambda rel: None)
+
+
+def test_a_checklist_without_a_decisions_line_is_refused(tmp_path):
+    fails = _review(tmp_path, "- [x] RED\n- [x] GREEN\n")
+    assert len(fails) == 1 and "Decisions:" in fails[0] and "skills/s1" in fails[0]
+
+
+def test_decisions_none_with_a_reason_passes(tmp_path):
+    assert _review(tmp_path, "- [x] RED\nDecisions: none - wording only, no rule changed\n") == []
+
+
+@pytest.mark.parametrize("line", [
+    "Decisions: none",                   # no reason at all
+    "Decisions: none -",                 # the dash, still no reason
+    "Decisions: none - ",                # a reason of whitespace only
+    "Decisions: nothing - reworded",     # not the keyword
+    "Decisions: d-2026110-0123abcd",     # a malformed id: seven date digits
+    "Decisions: d-20261105-0123abcd d-20261105-0123abce",   # ids not separated by a comma
+    "- Decisions: none - in a list item",  # the line must start with the key
+])
+def test_a_decisions_line_not_in_the_required_form_is_refused(tmp_path, line):
+    fails = _review(tmp_path, "- [x] RED\n%s\n" % line)
+    assert len(fails) == 1 and "no 'Decisions:' line" in fails[0]
+
+
+def test_decisions_naming_an_id_the_ledger_lacks_is_refused(tmp_path):
+    fails = _review(tmp_path, "- [x] RED\nDecisions: d-20261105-0123abcd\n")
+    assert len(fails) == 1 and "d-20261105-0123abcd" in fails[0] and "ledger" in fails[0]
+
+
+def test_decisions_naming_an_id_a_present_ledger_lacks_is_refused(tmp_path):
+    line, entry = _ledger_line()
+    fails = _review(tmp_path, "- [x] RED\nDecisions: %s, d-20261105-0123abcd\n" % entry["id"],
+                    ledger=line)
+    assert len(fails) == 1 and "d-20261105-0123abcd" in fails[0]
+    assert entry["id"] not in fails[0]           # only the id the ledger lacks is named
+
+
+def test_decisions_naming_a_ledger_id_passes(tmp_path):
+    line, entry = _ledger_line()
+    assert _review(tmp_path, "- [x] RED\nDecisions: %s\n" % entry["id"], ledger=line) == []
+
+
+def test_a_decisions_line_inside_a_code_fence_does_not_count(tmp_path):
+    """Read the way `has_open_checkbox` reads a checklist: a fenced line is an example, not a
+    statement, so a checklist quoting the format has still not said what it decided."""
+    fenced = "- [x] RED\n\n```text\nDecisions: none - an example of the line\n```\n"
+    fails = _review(tmp_path, fenced)
+    assert len(fails) == 1 and "no 'Decisions:' line" in fails[0]
+    # control: the same line outside the fence counts
+    assert _review(tmp_path, fenced + "Decisions: none - stated\n") == []
+
+
+def test_a_decisions_line_in_a_checklist_that_is_not_co_changed_does_not_count(tmp_path):
+    old = "plugins/bitranox/skills/s1/.skillwriter/checklist-0.md"
+    stale = {old: "- [x] RED\nDecisions: none - an earlier change\n"}
+    fails = _review(tmp_path, "- [x] RED\n", extra=stale)
+    assert len(fails) == 1 and "no 'Decisions:' line" in fails[0]
+    # control: once that checklist is part of the change too, its line counts
+    assert _review(tmp_path, "- [x] RED\n", extra=stale, changed_extra=[old]) == []
+
+
+def test_a_broken_ledger_is_left_to_the_decision_check(tmp_path):
+    """An id cannot be looked up in a ledger that does not parse; `check_skill_decisions` refuses
+    that ledger by its line, so this rule does not add a second, false 'not in the ledger'."""
+    assert _review(tmp_path, "- [x] RED\nDecisions: d-20261105-0123abcd\n", ledger="{not json\n") == []
+
+
+def _decision_change(tmp_path, *, stage_ledger):
+    """A repo whose skill change names a NEW ledger entry, staged with it or only on disk."""
+    line, _ = _ledger_line()
+    root = _ledger_repo(tmp_path, [line])
+    new_line, new = _ledger_line(decision="bmk installs alone, measured again.")
+    checklist = LEDGER_SKILL + "/.skillwriter/checklist-1.md"
+    _stage(root, LEDGER_SKILL + "/SKILL.md", RULE_TEXT + "More.\n")
+    _stage(root, checklist, "- [x] RED\nDecisions: %s\n" % new["id"])
+    if stage_ledger:
+        _stage(root, LEDGER_REL, line + new_line)
+    else:
+        write(root / LEDGER_REL, line + new_line)
+    return root, [LEDGER_SKILL + "/SKILL.md", checklist], new["id"]
+
+
+@pytest.mark.usefixtures("_bare_git_env")
+def test_an_id_only_in_the_working_tree_ledger_is_refused_at_the_index_stage(tmp_path):
+    """The commit carries the index: an entry written but never staged is not in what ships."""
+    root, changed, new_id = _decision_change(tmp_path, stage_ledger=False)
+    fails = RG.skill_review_failures(root, changed, read_original=lambda rel: None,
+                                     stage=RG.STAGE_INDEX)
+    assert len(fails) == 1 and new_id in fails[0]
+    _stage(root, LEDGER_REL, (root / LEDGER_REL).read_bytes())          # control: stage it
+    assert RG.skill_review_failures(root, changed, read_original=lambda rel: None,
+                                    stage=RG.STAGE_INDEX) == []
+
+
+@pytest.mark.usefixtures("_bare_git_env")
+def test_run_checks_reads_the_ledger_at_the_stage_it_judges(tmp_path, monkeypatch):
+    """A push ships HEAD: a ledger entry staged but not committed passes the commit, not the push."""
+    monkeypatch.setenv("HOME", str(tmp_path / "home"))
+    monkeypatch.setenv("USERPROFILE", str(tmp_path / "home"))
+    root, _changed, new_id = _decision_change(tmp_path, stage_ledger=True)
+    parts = RG.GateParts(mirrors={})
+
+    def named(stage):
+        fails = RG.run_checks(root, ci=False, run_pytest=False, mirror_at=stage, parts=parts)
+        return [f for f in fails if "'Decisions:' names" in f]
+
+    assert named(RG.STAGE_INDEX) == []
+    pushed = named(RG.STAGE_HEAD)
+    assert len(pushed) == 1 and new_id in pushed[0]
