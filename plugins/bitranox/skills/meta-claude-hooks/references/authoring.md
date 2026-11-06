@@ -366,13 +366,14 @@ change that reverses an entry (tightens what an entry loosened, adopts a `Reject
 is made only when you can say what met its `Reopen if:`. Then rewrite that entry instead of adding
 one that contradicts it, put that answer in its `Why:`, and keep a test that fails on the behaviour
 you replaced: a narrowing keeps a test for what must still match. The form you replaced stays in
-the block as that entry's `Rejected:` line. When the decision you reverse has no entry (it
+the block as a `- Rejected:` entry beside it. When the decision you reverse has no entry (it
 predates the block, or only a commit records it), recover its reason from that commit and the
-tests it added, write it into the `Rejected:` line naming the commit as its source, and reverse it
-only when you can say why that reason no longer holds. A matcher that lives in
+tests it added, write it into a `- Rejected:` entry naming the commit as its source, and reverse
+it only when you can say why that reason no longer holds. A matcher that lives in
 `hooks.json`, which takes no comments, is recorded in the docstring of the script it launches. The
-block states what the code does now and why; which commit changed it is git's job, and a commit
-message alone is no record, because the next editor reads the module, not the log. Figures a
+block states what the code does now and why, with no history narrative: a commit is named only as
+the source of a reason, and a commit message alone is no record, because the next editor reads
+the module, not the log. Figures a
 replay produced (the escalation section of SKILL.md) go in the entry's `Evidence:`.
 
 ## Security

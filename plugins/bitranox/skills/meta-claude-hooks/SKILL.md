@@ -104,7 +104,8 @@ Upstream, for detail beyond these files: <https://code.claude.com/docs/en/hooks.
 6. **What happens when it breaks?** Decide deliberately, because a hook's failure mode is its real behaviour.
 7. **What has this hook already decided?** Before you change a matcher, a rule or a threshold,
    read the `Decisions:` block in the module docstring and the tests it names; record what your
-   change settles there, each entry pinned by a test. The block's form is in
+   change settles there, each decision naming the test that pins it (or why no test can) and each
+   rejected alternative as a `- Rejected:` entry. The block's form is in
    `references/authoring.md`, "Record a decision in the module docstring".
 
 ## The five that bite hardest
