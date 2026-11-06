@@ -172,9 +172,10 @@ beside a queued skill fix is otherwise a duplicate that outlives the fix.
 Before queueing against `skill:<name>` (cases 1 and 2), read that skill's declined list:
 `python3 <plugin>/hooks/skill_decisions.py show <name> --skill-dir <plugin>/skills/<name>
 --kind rejected,removed --full`. `<name>` is the skill's directory name, the same one `--target`
-takes (`compuse-git`, no plugin prefix), and `<plugin>` is `plugins/bitranox` inside the
-marketplace checkout when the session has one (it holds entries newer than the installed copy),
-else the installed plugin directory (see "Resolving `<plugin>`" under step 4); empty output means
+takes (`compuse-git`, no plugin prefix), and `<plugin>` is `<checkout>/plugins/bitranox`, where
+`<checkout>` is the root of the marketplace checkout, when the session has one (it holds entries
+newer than the installed copy), else the installed plugin directory (see "Resolving `<plugin>`"
+under step 4); empty output means
 nothing was declined. When the lesson re-proposes a listed entry, queue it only with
 a `--why` that answers that entry's `reopen_if` and names its id; otherwise drop the candidate (do
 not queue it) and say so in the report (step 7). A queue `drop` does not stop a reworded lesson
@@ -313,15 +314,16 @@ PLACE-HERE line) before calling the placement wrong.
   When a skill-targeted entry is dropped as disproven, or declined for a reason that will still
   hold next time, also record it as a `rejected` entry in that skill's ledger in the source repo:
   from the marketplace checkout (never the installed plugin copy), write the entry to a JSON file
-  and run `python3 plugins/bitranox/hooks/skill_decisions.py add --from-file <file>` from the
-  checkout root. Without a checkout, the `drop --reason` is the only record: write no ledger
-  entry, and say so in the report (step 7). The entry
+  and, with `<checkout>` (the checkout's root) as the working directory, run
+  `python3 <checkout>/plugins/bitranox/hooks/skill_decisions.py add --from-file <file>`: `add`
+  finds the skills from the working directory's repo. The entry
   carries `skill` (the directory name), `"kind": "rejected"`, `"origin": "authored"`, a `topic`,
-  the proposal prefixed `Rejected:` as `decision`, the drop reason as `why`, what would reopen it
+  the proposal, stated plainly, as `decision`, the drop reason as `why`, what would reopen it
   as `reopen_if`, `evidence` (`{"tier": ..., "text": ...}`, tier `measured`, `user`, `argued` or
   `inherited`) and empty `anchors`, `supersedes` and `refs` lists; each field is defined in
   `bitranox:meta-skill-writer`, Step 0b. A close because the entry already shipped or duplicates
-  another entry records nothing.
+  another entry records nothing. Without a checkout, the `drop --reason` is the only record:
+  write no ledger entry, and say so in the report (step 7).
   **A contribution that lands in ANOTHER repo is still shipped** (a private repo, the local
   toolbox, a user command): close it in the same pass that verifies the landing, because the queue
   never sees that repo's commit. Close it against the queue it was FILED in, not the repo it
@@ -345,11 +347,13 @@ Compose the entry per the specs in references/memory-backend.md:
   (the engine adds the frontmatter frame).
 
 **Resolving `<plugin>`**, used in every command in this skill: it is the installed plugin
-directory. Inside a HOOK, Claude Code exports it as `$CLAUDE_PLUGIN_ROOT`. **In an ordinary
-session that variable is NOT set** - derive the path instead from the base directory this skill
-announces when it is invoked, dropping the trailing `/skills/meta-self-improve`. Never hardcode a
-version directory: the cache holds one per installed version, so a pasted path silently targets an
-old copy after the next bump. In the source repo the same path is `plugins/bitranox`.
+directory, except that step 2's ledger `show` and step 3b's ledger `add` read the marketplace
+checkout (`<checkout>/plugins/bitranox`) when the session has one. Inside a HOOK, Claude Code
+exports it as `$CLAUDE_PLUGIN_ROOT`. **In an ordinary session that variable is NOT set** - derive
+the path instead from the base directory this skill announces when it is invoked, dropping the
+trailing `/skills/meta-self-improve`. Never hardcode a version directory: the cache holds one per
+installed version, so a pasted path silently targets an old copy after the next bump. In the source
+repo the same path is `plugins/bitranox`.
 
 Then ONE engine call per fact, and REQUIRE its success line (the printed slug):
 
