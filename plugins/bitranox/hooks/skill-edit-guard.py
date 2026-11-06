@@ -33,9 +33,9 @@ after backslashes become `/` and `.`/`..` segments collapse:
     live rejected or removed entry and the editing agent's transcript shows no
     `skill_decisions.py show <skill>` call, the first edit is refused with those entries
     (`render_brief`) and a `show` command naming this install's script and the skill's own dir
-    (`show_command`), so it runs from any cwd; the re-send passes. This direction fails OPEN: an unreadable ledger, a
-    missing module or an unstorable flag lets the edit through, because the commit gate owns
-    ledger integrity and this refusal only delivers reading.
+    (`show_command`), so it runs from any cwd; the re-send passes. This direction fails OPEN: an
+    unreadable ledger, a missing module or an unstorable flag lets the edit through, because the
+    commit gate owns ledger integrity and this refusal only delivers reading.
 
 Decisions:
 - Refuse once, not every time, and never when the agent ran `show`: the user chose the
@@ -45,9 +45,14 @@ Decisions:
   121 sessions; 482 of those edits (118 sessions) fell in the last 30 days, and none followed a
   `show` call. The corpus itself reaches back only to 2026-10-06 (one stray transcript from
   2026-05-22 aside), about the transcript retention window, so the 482 is close to the whole
-  visible history, not a rate sampled from a longer one. That is the upper bound once every skill has a ledger; only a skill holding a
-  live rejected or removed entry can refuse. Reopen if the refusal log shows agents
-  re-sending unchanged edits without reading the brief.
+  visible history, not a rate sampled from a longer one. That is the upper bound once every
+  skill has a ledger; only a skill holding a live rejected or removed entry can refuse. Reopen
+  if the refusal log shows agents re-sending unchanged edits without reading the brief.
+- `ran_show` credits any Bash command in the agent's transcript that names `skill_decisions.py`
+  and then `show` directly followed by the skill's name, whatever else the command holds (an
+  `echo` quoting it, a pipe, other flags) and whichever ledger it read. It is a cheap check for
+  a refuse-once nudge, accepted as such: an agent that wants to dodge one refusal can, and the
+  commit gate, not this guard, is what holds the recorded decisions.
 
 Errors split by direction. Unparseable stdin and any error escaping `main` fail OPEN (exit 0): a broken
 guard must never wedge a turn. An error while consulting the receipt store, a transcript that cannot

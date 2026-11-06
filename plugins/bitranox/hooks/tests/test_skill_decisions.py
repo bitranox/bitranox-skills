@@ -203,10 +203,32 @@ def test_a_list_field_holding_a_number_is_a_problem_not_a_crash(field):
 def test_a_superseded_entry_and_a_void_are_not_live():
     old = _rule()
     new = _rule(decision="bmk installs alone, reworded.", supersedes=[old["id"]])
+    assert [e["id"] for e in SD.live_entries(_factory(old, new))] == [new["id"]]
+    void = _rule(kind="void", anchors=[], reopen_if="", supersedes=[old["id"]],
+                 why="written against the wrong skill")
+    assert list(SD.live_entries(_factory(old, void))) == []
+
+
+def test_voiding_a_superseding_entry_withdraws_its_supersede_too():
+    """A void withdraws the entry AND what it did: the rule it superseded is live again, so its
+    anchor holds the text once more instead of no rule holding it at all."""
+    old = _rule()
+    new = _rule(decision="bmk installs alone, reworded.", anchors=["bmk installs alone, reworded"],
+                supersedes=[old["id"]])
     void = _rule(kind="void", anchors=[], reopen_if="", supersedes=[new["id"]],
                  why="written against the wrong skill")
-    assert [e["id"] for e in SD.live_entries(_factory(old, new))] == [new["id"]]
-    assert list(SD.live_entries(_factory(old, new, void))) == []
+    assert [e["id"] for e in SD.live_entries(_factory(old, new, void))] == [old["id"]]
+    [finding] = SD.check_ledger(_factory(old, new, void), "Intro, with neither rule.\n")
+    assert finding.entry_id == old["id"]
+
+
+@pytest.mark.parametrize("field,value", [("topic", 7), ("v", True),
+                                         ("evidence", {"tier": "measured", "text": "x", "by": "me"}),
+                                         ("evidence", {"tier": "measured", "text": 5})])
+def test_a_field_of_the_wrong_type_is_refused(field, value):
+    """`str(7)` matched the topic pattern and `True != 1` is False, so both were stored; an
+    evidence object takes exactly its two string fields."""
+    assert any(p.startswith(field + ":") for p in SD.validate_entry(_rule(**{field: value})))
 
 
 def test_check_passes_while_every_live_anchor_occurs():
@@ -412,6 +434,33 @@ def test_an_anchor_absent_from_the_text_is_refused(tmp_path):
     with pytest.raises(SD.EntryRefused) as err:
         SD.append_entries(skill, [_draft()], today="2026-11-06")
     assert any("exactly once" in p and "found 0" in p for p in err.value.problems)
+    assert not any("untracked" in p for p in err.value.problems)
+
+
+def test_an_anchor_only_in_an_untracked_markdown_file_is_refused_saying_so(tmp_path):
+    """The gate reads what git ships, so an untracked file does not count; the refusal says why
+    the anchor was not found instead of reading like a wrong anchor."""
+    _repo, skill = _skill(tmp_path, "something else entirely\n")
+    (skill / "references").mkdir()
+    (skill / "references" / "notes.md").write_text("bmk alone, shared across projects.\n",
+                                                   encoding="utf-8")
+    with pytest.raises(SD.EntryRefused) as err:
+        SD.append_entries(skill, [_draft()], today="2026-11-06")
+    assert any("found 0" in p and "untracked files are not read: git add them first" in p
+               for p in err.value.problems)
+
+
+def test_voiding_a_void_is_refused(tmp_path):
+    """A void withdraws what its target did; a void of a void would need a fixpoint to say what
+    is live, so the ledger never holds one."""
+    _repo, skill = _skill(tmp_path)
+    [rule_id] = SD.append_entries(skill, [_draft()], today="2026-11-06")
+    void = _draft(kind="void", anchors=[], reopen_if="", supersedes=[rule_id], why="wrong skill")
+    [void_id] = SD.append_entries(skill, [void], today="2026-11-06")
+    undo = _draft(kind="void", anchors=[], reopen_if="", supersedes=[void_id], why="undo it")
+    with pytest.raises(SD.EntryRefused) as err:
+        SD.append_entries(skill, [undo], today="2026-11-06")
+    assert any(p.startswith("entry 1: supersedes:") and void_id in p for p in err.value.problems)
 
 
 def test_a_batch_is_all_or_nothing(tmp_path):
@@ -624,7 +673,9 @@ def test_cli_add_takes_a_single_object_and_strips_the_skill_field(tmp_path, caps
     assert rc == 0 and stored["id"] == new_id and "skill" not in stored
 
 
-def test_cli_add_is_all_or_nothing_per_skill_and_lists_what_was_written(tmp_path, capsys, monkeypatch):
+def test_cli_add_across_skills_is_all_or_nothing(tmp_path, capsys, monkeypatch):
+    """One skill's refused entry writes nothing to any skill: written per skill, a retry of the
+    whole file was then refused as identical for the skill that had been written."""
     repo, first = _skill(tmp_path)
     _repo, second = _skill(tmp_path, "nothing to anchor here\n", name="meta-skill-writer")
     src = _entries_file(tmp_path, dict(_draft(), skill="devops-bmk"),
@@ -633,10 +684,28 @@ def test_cli_add_is_all_or_nothing_per_skill_and_lists_what_was_written(tmp_path
     rc, out, err = _cli(capsys, "add", "--from-file", str(src), "--json")
     data = json.loads(out)["data"]
     assert rc == 1 and json.loads(out)["ok"] is False
-    assert list(data["written"]) == ["devops-bmk"] and len(data["written"]["devops-bmk"]) == 1
+    assert data["written"] == {}
     # The refused entry is the FILE's second, though it is the first of its skill's batch.
     assert data["refused"] and all(p.startswith("entry 2: anchors:") for p in data["refused"])
-    assert SD.ledger_path(first).is_file() and not SD.ledger_path(second).exists()
+    assert not SD.ledger_path(first).exists() and not SD.ledger_path(second).exists()
+    # Fixed and retried, the same file now writes both.
+    (second / "SKILL.md").write_text("bmk alone, shared across projects.\n", encoding="utf-8")
+    subprocess.run(["git", "add", "-A"], cwd=second, check=True, env=_clean_env())
+    rc, out, _err = _cli(capsys, "add", "--from-file", str(src), "--json")
+    assert rc == 0 and sorted(json.loads(out)["data"]["written"]) == ["devops-bmk",
+                                                                        "meta-skill-writer"]
+
+
+def test_cli_add_reports_every_skill_s_refusals_at_once(tmp_path, capsys, monkeypatch):
+    repo, _first = _skill(tmp_path, "nothing here\n")
+    _repo, _second = _skill(tmp_path, "nothing to anchor here\n", name="meta-skill-writer")
+    src = _entries_file(tmp_path, dict(_draft(), skill="devops-bmk"),
+                        dict(_draft(), skill="meta-skill-writer"))
+    monkeypatch.chdir(repo)
+    rc, out, _err = _cli(capsys, "add", "--from-file", str(src), "--json")
+    refused = json.loads(out)["data"]["refused"]
+    assert rc == 1 and any(p.startswith("entry 1:") for p in refused)
+    assert any(p.startswith("entry 2:") for p in refused)
 
 
 def test_cli_add_text_mode_prints_refusals_on_stderr(tmp_path, capsys, monkeypatch):
@@ -666,8 +735,8 @@ def test_cli_add_of_an_empty_list_is_a_run_error(tmp_path, capsys, monkeypatch):
     assert rc == 2 and "no entries" in err
 
 
-def test_cli_add_over_a_corrupt_ledger_names_it_and_what_was_written(tmp_path, capsys, monkeypatch):
-    repo, _first = _skill(tmp_path)
+def test_cli_add_over_a_corrupt_ledger_names_it_and_writes_nothing(tmp_path, capsys, monkeypatch):
+    repo, first = _skill(tmp_path)
     _repo, second = _skill(tmp_path, name="meta-skill-writer")
     SD.ledger_path(second).write_bytes(b"{not json\n")
     src = _entries_file(tmp_path, dict(_draft(), skill="devops-bmk"),
@@ -675,7 +744,7 @@ def test_cli_add_over_a_corrupt_ledger_names_it_and_what_was_written(tmp_path, c
     monkeypatch.chdir(repo)
     rc, out, err = _cli(capsys, "add", "--from-file", str(src), "--json")
     data = json.loads(out)["data"]
-    assert rc == 2 and list(data["written"]) == ["devops-bmk"]
+    assert rc == 2 and data["written"] == {} and not SD.ledger_path(first).exists()
     assert "decisions.jsonl" in data["error"] and "line 1" in data["error"]
     assert len(err.splitlines()) == 1 and "decisions.jsonl" in err
 
@@ -740,6 +809,33 @@ def test_cli_check_reports_a_corrupt_ledger_as_a_finding(tmp_path, capsys, monke
     rc, out, _err = _cli(capsys, "check", "--json")
     [finding] = json.loads(out)["data"]["findings"]
     assert rc == 1 and finding["skill"] == "devops-bmk" and "line 1" in finding["text"]
+
+
+def test_show_hints_at_all_when_a_void_or_a_superseded_id_is_asked_for(tmp_path, capsys,
+                                                                       monkeypatch):
+    repo, skill = _skill(tmp_path, "bmk alone, shared across projects. Then run make test first.\n")
+    [first] = SD.append_entries(skill, [_draft()], today="2026-11-06")
+    SD.append_entries(skill, [_draft(decision="gate first", anchors=["Then run make test first."],
+                                     supersedes=[first])], today="2026-11-06")
+    monkeypatch.chdir(repo)
+    for flags in (["--id", first], ["--kind", "void"]):
+        rc, out, err = _cli(capsys, "show", "devops-bmk", *flags)
+        assert rc == 0 and out == "" and "--all" in err
+        rc, out, err = _cli(capsys, "show", "devops-bmk", "--all", *flags)
+        assert "--all" not in err
+    # A show that lists what it was asked for prints no hint.
+    rc, out, err = _cli(capsys, "show", "devops-bmk")
+    assert rc == 0 and out and err == ""
+
+
+def test_check_warns_when_it_examined_no_ledger(tmp_path, capsys, monkeypatch):
+    repo, skill = _skill(tmp_path)
+    monkeypatch.chdir(repo)
+    rc, out, err = _cli(capsys, "check")
+    assert rc == 0 and "no ledger" in err and str(skill.parent) in err
+    SD.append_entries(skill, [_draft()], today="2026-11-06")
+    rc, out, err = _cli(capsys, "check")
+    assert rc == 0 and err == ""
 
 
 def test_cli_check_prints_the_reason_of_a_lost_anchor(tmp_path, capsys, monkeypatch):

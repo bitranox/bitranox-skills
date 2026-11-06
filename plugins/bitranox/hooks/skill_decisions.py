@@ -4,8 +4,9 @@
 Each skill keeps one append-only JSON Lines file at `<skill>/.skillwriter/decisions.jsonl`.
 An entry records one decision about the skill's text: a `rule` the text states (bound to the
 text by anchors, phrases that must keep occurring in the skill's Markdown), a `removed` rule, a
-`rejected` alternative, or a `void` that withdraws an entry written in error. An entry is LIVE
-while no later entry names it in `supersedes`.
+`rejected` alternative, or a `void` that withdraws an entry written in error and its effects:
+what that entry superseded is live again. An entry is LIVE while no entry that is not itself
+voided names it in `supersedes`.
 
 The commit gate (`repo-gate.py`) refuses a change whose shipped text loses a live anchor, and
 the SKILL.md edit guard hands an editing agent the skill's rejected and removed entries before
@@ -122,7 +123,11 @@ def _vocabulary_problems(entry: dict) -> list[str]:
         problems.append("evidence: tier must be one of %s" % ", ".join(TIERS))
     elif not _text(evidence, "text"):
         problems.append("evidence: text is empty")
-    if not _TOPIC.fullmatch(str(entry.get("topic", ""))):
+    elif set(evidence) != {"tier", "text"}:
+        problems.append("evidence: exactly the fields tier and text")
+    # A str check first: str(7) matches the pattern, and `show --topic 7` never matches an int.
+    topic = entry.get("topic")
+    if not isinstance(topic, str) or not _TOPIC.fullmatch(topic):
         problems.append("topic: lowercase letters, digits and dashes, 1 to 40 characters")
     return problems
 
@@ -192,8 +197,9 @@ def _unencodable_problems(entry: dict) -> list[str]:
 def validate_entry(entry: dict) -> list[str]:
     """Every problem with `entry`, one `<field>: <reason>` string each; [] when it is valid."""
     problems = ["%s: unknown field" % k for k in entry if k not in FIELDS]
-    if entry.get("v") != 1:
-        problems.append("v: must be 1")
+    # type() and not ==: True == 1 in Python, and 1.0 == 1 too.
+    if type(entry.get("v")) is not int or entry.get("v") != 1:
+        problems.append("v: must be the integer 1")
     problems += _date_problems(entry)
     required = ("decision", "why") if entry.get("kind") == "void" else ("decision", "why", "reopen_if")
     problems += ["%s: empty" % f for f in required if not _text(entry, f)]
@@ -260,10 +266,23 @@ def parse_entries(lines: Iterable[str | bytes]) -> Iterator[dict]:
 
 
 def live_entries(lines_factory: LinesFactory) -> Iterator[dict]:
-    """Entries no later entry supersedes, voids excluded. Two passes over `lines_factory()`."""
-    superseded = set()
+    """Entries no later entry supersedes, voids excluded. Two passes over `lines_factory()`.
+
+    A void withdraws its targets AND what they did: a voided entry's own `supersedes` count for
+    nothing, so the entry it superseded is live again. A void that names a void does not bring
+    the first void's target back (`append_entries` refuses one), so no fixpoint is needed.
+    """
+    voided: set[str] = set()
+    supersedes: dict[str, list[str]] = {}     # ids only, never an entry's text
     for entry in parse_entries(lines_factory()):
-        superseded.update(entry["supersedes"])
+        if entry["kind"] == "void":
+            voided.update(entry["supersedes"])
+        elif entry["supersedes"]:
+            supersedes[entry["id"]] = entry["supersedes"]
+    superseded = set(voided)
+    for entry_id, targets in supersedes.items():
+        if entry_id not in voided:
+            superseded.update(targets)
     for entry in parse_entries(lines_factory()):
         if entry["id"] not in superseded and entry["kind"] != "void":
             yield entry
@@ -428,7 +447,10 @@ def _occurrences(needle: str, haystack: str) -> int:
     return count
 
 
-def _anchor_count_problems(entry: dict, normalised_corpus: str) -> list[str]:
+_UNTRACKED_HINT = " (untracked files are not read: git add them first)"
+
+
+def _anchor_count_problems(entry: dict, normalised_corpus: str, untracked_md: bool) -> list[str]:
     problems = []
     for anchor in _list(entry, "anchors"):
         needle = normalise(anchor) if isinstance(anchor, str) else ""
@@ -436,18 +458,41 @@ def _anchor_count_problems(entry: dict, normalised_corpus: str) -> list[str]:
             continue        # validate_entry already refuses it; counting it would only add noise
         hits = _occurrences(needle, normalised_corpus)
         if hits != 1:
-            problems.append("anchors: must occur exactly once in the skill text, found %d: %r"
-                            % (hits, anchor))
+            problems.append("anchors: must occur exactly once in the skill text, found %d: %r%s"
+                            % (hits, anchor, _UNTRACKED_HINT if not hits and untracked_md else ""))
     return problems
 
 
-def _entry_problems(entry: dict, known: set[str], corpus: str) -> list[str]:
-    found = validate_entry(entry) + _tell_problems(entry) + _anchor_count_problems(entry, corpus)
-    if entry["id"] in known:
+@dataclass(frozen=True)
+class _Known:
+    """What a batch is checked against: the ids the ledger and the batch hold so far, and which
+    of them are voids."""
+
+    ids: set[str]
+    voids: set[str]
+
+
+def _entry_problems(entry: dict, known: _Known, corpus: str, untracked_md: bool) -> list[str]:
+    found = (validate_entry(entry) + _tell_problems(entry)
+             + _anchor_count_problems(entry, corpus, untracked_md))
+    if entry["id"] in known.ids:
         found.append("id: an identical entry is already in the ledger or earlier in this batch")
-    found += ["supersedes: unknown id %s" % s for s in _list(entry, "supersedes")
-              if isinstance(s, str) and s not in known]
+    targets = [s for s in _list(entry, "supersedes") if isinstance(s, str)]
+    found += ["supersedes: unknown id %s" % s for s in targets if s not in known.ids]
+    if entry.get("kind") == "void":
+        found += ["supersedes: %s is a void; a void cannot be voided" % s
+                  for s in targets if s in known.voids]
     return found
+
+
+def _untracked_markdown(skill_dir: Path) -> bool:
+    """True when git lists an untracked, not ignored `.md` file under `skill_dir`."""
+    try:
+        out = subprocess.run(["git", "ls-files", "-z", "-o", "--exclude-standard", "--", "."],
+                             cwd=str(skill_dir), capture_output=True, env=_git_env(), check=False)
+    except OSError:
+        return False
+    return out.returncode == 0 and any(p.endswith(b".md") for p in out.stdout.split(b"\0"))
 
 
 def _encoded(entry: dict) -> bytes:
@@ -456,22 +501,38 @@ def _encoded(entry: dict) -> bytes:
     return (json.dumps(entry, sort_keys=True, ensure_ascii=False) + "\n").encode("utf-8")
 
 
-def append_entries(skill_dir: str | Path, entries: list[dict], *, today: str | None = None) -> list[str]:
-    """Validate `entries` and append them to the skill's ledger, all or nothing; return their ids.
+@dataclass(frozen=True)
+class PreparedBatch:
+    """A batch `prepare_entries` validated: the ledger to append to, the bytes and their ids."""
+
+    path: Path
+    chunks: tuple[bytes, ...]
+    ids: tuple[str, ...]
+
+
+def prepare_entries(skill_dir: str | Path, entries: list[dict], *,
+                    today: str | None = None) -> PreparedBatch:
+    """Validate `entries` for the skill's ledger and encode them, writing nothing.
 
     Each entry gets `v` 1, a `date` (its own, else `today`, else today's UTC date) and its `id`.
     Beyond `validate_entry`, an entry is refused for a typographic tell, a rule anchor that does
-    not occur EXACTLY once in `corpus_from_dir(skill_dir)`, an id the ledger or the batch already
-    holds, and a `supersedes` id that neither holds before it.
+    not occur EXACTLY once in `corpus_from_dir(skill_dir)` (git-tracked files only; a refusal
+    finding none says so when untracked Markdown sits in the skill), an id the ledger or the batch
+    already holds, a `supersedes` id that neither holds before it, and a void naming a void.
 
     Raises:
-        EntryRefused: nothing was written; each problem names its entry by place in `entries`.
+        EntryRefused: each problem names its entry by place in `entries`.
         LedgerError: the existing ledger does not parse.
     """
     today = today or datetime.datetime.now(datetime.timezone.utc).date().isoformat()
     path = ledger_path(skill_dir)
-    known = {e["id"] for e in parse_entries(file_lines(path))}
+    known = _Known(set(), set())
+    for e in parse_entries(file_lines(path)):
+        known.ids.add(e["id"])
+        if e["kind"] == "void":
+            known.voids.add(e["id"])
     corpus = normalise(corpus_from_dir(skill_dir))
+    untracked_md = _untracked_markdown(Path(skill_dir))
     problems, chunks, ids = [], [], []
     for n, draft in enumerate(entries, 1):
         if not isinstance(draft, dict):
@@ -483,20 +544,40 @@ def append_entries(skill_dir: str | Path, entries: list[dict], *, today: str | N
             problems += ["entry %d: %s" % (n, p) for p in validate_entry(entry)]
             continue
         entry["id"] = entry_id(entry)
-        problems += ["entry %d: %s" % (n, p) for p in _entry_problems(entry, known, corpus)]
-        known.add(entry["id"])
+        problems += ["entry %d: %s" % (n, p)
+                     for p in _entry_problems(entry, known, corpus, untracked_md)]
+        known.ids.add(entry["id"])
+        if entry.get("kind") == "void":
+            known.voids.add(entry["id"])
         ids.append(entry["id"])
         chunks.append(_encoded(entry))
     if problems:
         raise EntryRefused(problems)
-    if not chunks:
+    return PreparedBatch(path, tuple(chunks), tuple(ids))
+
+
+def write_prepared(batch: PreparedBatch) -> list[str]:
+    """Append a `prepare_entries` batch to its ledger in one write; return its ids."""
+    if not batch.chunks:
         return []
-    path.parent.mkdir(parents=True, exist_ok=True)
-    prefix = b"\n" if _ends_without_newline(path) else b""
+    batch.path.parent.mkdir(parents=True, exist_ok=True)
+    prefix = b"\n" if _ends_without_newline(batch.path) else b""
     # One write in binary mode: no newline translation on Windows, and the batch lands together.
-    with path.open("ab") as fh:
-        fh.write(prefix + b"".join(chunks))
-    return ids
+    with batch.path.open("ab") as fh:
+        fh.write(prefix + b"".join(batch.chunks))
+    return list(batch.ids)
+
+
+def append_entries(skill_dir: str | Path, entries: list[dict], *, today: str | None = None) -> list[str]:
+    """Validate `entries` and append them to the skill's ledger, all or nothing; return their ids.
+
+    `prepare_entries` then `write_prepared`; see the first for what is refused.
+
+    Raises:
+        EntryRefused: nothing was written; each problem names its entry by place in `entries`.
+        LedgerError: the existing ledger does not parse.
+    """
+    return write_prepared(prepare_entries(skill_dir, entries, today=today))
 
 
 def _ends_without_newline(path: Path) -> bool:
@@ -601,7 +682,11 @@ def _read_drafts(from_file: str) -> list:
 
 
 def _group_by_skill(root: Path, drafts: list) -> dict[Path, list[tuple[int, dict]]]:
-    """Every draft under its skill dir, with its place in the file; refuses before any write."""
+    """Every draft under its skill dir, with its place in the file.
+
+    Raises _RunError for a draft that is no object or names no skill under `root`. `_cmd_add`
+    then validates every skill's batch before it writes any, so a file is all or nothing.
+    """
     by_skill: dict[Path, list[tuple[int, dict]]] = {}
     for n, draft in enumerate(drafts, 1):
         if not isinstance(draft, dict):
@@ -621,18 +706,37 @@ def _renumbered(problem: str, places: list[int]) -> str:
 
 
 def _cmd_add(args: argparse.Namespace) -> tuple[int, dict]:
+    """All or nothing across the whole file: every skill's batch is validated before any is
+    written, so a refusal in one skill never leaves another written and the retry refused as
+    identical."""
     drafts = _read_drafts(args.from_file)
     by_skill = _group_by_skill(_skills_dir(args.skills_dir, writing=True), drafts)
-    written: dict[str, list[str]] = {}
+    prepared: list[tuple[Path, PreparedBatch]] = []
+    refused: list[str] = []
     for skill_dir, batch in by_skill.items():
         places = [n for n, _draft in batch]
         try:
-            written[skill_dir.name] = append_entries(skill_dir, [d for _n, d in batch])
+            prepared.append((skill_dir, prepare_entries(skill_dir, [d for _n, d in batch])))
         except EntryRefused as exc:
-            return 1, {"written": written, "refused": [_renumbered(p, places) for p in exc.problems]}
+            refused += [_renumbered(p, places) for p in exc.problems]
         except (LedgerError, OSError) as exc:
-            raise _RunError("%s: %s" % (ledger_path(skill_dir), exc), {"written": written}) from None
+            raise _RunError("%s: %s" % (ledger_path(skill_dir), exc), {"written": {}}) from None
+    if refused:
+        return 1, {"written": {}, "refused": sorted(refused, key=_place)}
+    written: dict[str, list[str]] = {}
+    for skill_dir, ready in prepared:
+        try:
+            written[skill_dir.name] = write_prepared(ready)
+        except OSError as exc:
+            # A failed write cannot be rolled back across files: say what did land.
+            raise _RunError("%s: %s" % (ready.path, exc), {"written": written}) from None
     return 0, {"written": written}
+
+
+def _place(problem: str) -> int:
+    """The entry number a refusal starts with, so refusals read in file order across skills."""
+    match = _PROBLEM_PLACE.match(problem)
+    return int(match.group(1)) if match else 0
 
 
 def _show_dir(args: argparse.Namespace) -> Path:
@@ -661,16 +765,37 @@ def _cmd_show(args: argparse.Namespace) -> tuple[int, dict]:
     except LedgerError as exc:
         raise _RunError("%s: %s" % (path, exc)) from None
     entries = parse_entries(file_lines(path)) if args.all else live_entries(lambda: file_lines(path))
-    # A generator: the entries stream to stdout one at a time and are never held together.
-    shown = (e if args.full else {k: e[k] for k in _SHORT_FIELDS} for e in entries
-             if e["kind"] in kinds and args.topic in (None, e["topic"]) and args.id in (None, e["id"]))
-    return 0, {"skill": skill_dir.name, "entries": shown}
+    return 0, {"skill": skill_dir.name, "entries": _shown(entries, args, kinds)}
+
+
+_ALL_HINT = ("%s show: void and superseded entries are listed only with --all"
+             % _PROG)
+
+
+def _shown(entries: Iterable[dict], args: argparse.Namespace, kinds: set[str]) -> Iterator[dict]:
+    """The entries `show` prints, streamed one at a time and never held together.
+
+    Without --all, a show asking for voids, or for an id that matched nothing, ends with a stderr
+    hint: those entries are never live, so the empty answer would read as "not recorded".
+    """
+    count = 0
+    for e in entries:
+        if e["kind"] in kinds and args.topic in (None, e["topic"]) and args.id in (None, e["id"]):
+            count += 1
+            yield e if args.full else {k: e[k] for k in _SHORT_FIELDS}
+    if not args.all and ((args.kind and "void" in kinds) or (args.id and not count)):
+        print(_ALL_HINT, file=sys.stderr)
 
 
 def _cmd_check(args: argparse.Namespace) -> tuple[int, dict]:
     root = _skills_dir(args.skills_dir)
     dirs = ([_named_skill(root, name) for name in args.skills]
             or sorted(p.parent.parent for p in root.glob("*/" + LEDGER_REL)))
+    if not dirs:
+        # Exit 0 stands (nothing found is nothing wrong), but a check that read nothing must say
+        # where it looked: a wrong cwd or --skills-dir reads exactly like a clean store.
+        print("%s check: no ledger found under %s (*/%s)" % (_PROG, root, LEDGER_REL),
+              file=sys.stderr)
     findings = []
     for skill_dir in dirs:
         path = ledger_path(skill_dir)

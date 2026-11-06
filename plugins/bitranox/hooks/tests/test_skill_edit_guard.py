@@ -463,6 +463,31 @@ def test_an_unreadable_ledger_lets_the_edit_through(tmp_path, armed):
     assert G.decide(_brief_edit(main, path), {}) is None
 
 
+def test_an_unstorable_refuse_once_flag_lets_the_edit_through(tmp_path, armed, home):
+    """The flag lives in the audit dir; a FILE where that dir should be makes it unstorable, and
+    an edit the guard could never let through on a re-send must not be refused at all."""
+    path = _skill_with_rejection(tmp_path)
+    main = _session(tmp_path, [_load_record(_CACHE + "meta-skill-writer")])
+    audit = home / ".claude" / "self-improve-audit"
+    audit.parent.mkdir(parents=True, exist_ok=True)
+    audit.write_text("not a dir\n", encoding="utf-8")
+    assert G.decide(_brief_edit(main, path), {}) is None
+    # The control: with the dir storable again, the same first edit is refused.
+    audit.unlink()
+    assert G.decide(_brief_edit(main, path), {}) is not None
+
+
+def test_a_missing_skill_decisions_module_lets_the_edit_through(tmp_path, armed, monkeypatch):
+    """A None entry in sys.modules makes `import skill_decisions` raise ImportError, as a missing
+    file would; the guard's import is the seam, nothing inside either module is replaced."""
+    path = _skill_with_rejection(tmp_path)
+    main = _session(tmp_path, [_load_record(_CACHE + "meta-skill-writer")])
+    monkeypatch.setitem(sys.modules, "skill_decisions", None)
+    assert G.decide(_brief_edit(main, path), {}) is None
+    monkeypatch.setitem(sys.modules, "skill_decisions", SD)   # the control: importable, it refuses
+    assert G.decide(_brief_edit(main, path), {}) is not None
+
+
 def test_each_agent_is_refused_once_for_itself(tmp_path, armed):
     path = _skill_with_rejection(tmp_path)
     main = _session(tmp_path, [], agent="a1", agent_records=[_load_record(_CACHE + "meta-skill-writer")])
