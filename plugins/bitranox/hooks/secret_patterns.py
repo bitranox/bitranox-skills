@@ -11,6 +11,25 @@ carries nothing, while `Password: <value>`, `DB_PASSWORD=<value>`, `{"password":
 A value that cannot be a secret whatever the name before it - a function word in prose, a mask a
 tool already applied, a type annotation, an attribute reference - is not one.
 
+Decisions:
+    - A name is secret when ANY word is a secret word, unless its last word names something about
+      the secret (`_NON_SECRET_TAILS`: ID, FILE, PATH, URL, POLICY, COUNT, ...); a slug-length
+      name is the one exception, where only the last word counts (`_SLUG_WORDS`). Why: the
+      last-word rule missed names whose secret word is not last (SECRET_KEY_BASE,
+      DB_PASSWORD_PROD) and run-together capitals (NPMTOKEN, DBPWD, GOOGLECREDENTIALS).
+      Evidence: measured: a replay against the last-word release over 1226 memory facts, 21969
+      classifier shadow states and 61359 texts from the newest 400 transcripts; every span the
+      last-word rules redacted and this one leaves alone (244 spans, 158 distinct) was a
+      placeholder, a variable reference, a PWD path, a comparison, a count, an empty or
+      already-redacted value, or code, none a secret. Reopen if: a replay over real text finds a
+      secret this rule leaves alone, or a non-secret name it redacts that no `_NON_SECRET_TAILS`
+      word can exempt.
+      Pinned by: tests/test_secret_patterns.py::test_structured_and_mid_line_secret_values_are_redacted[SECRET_KEY_BASE=abc123def-abc123def]
+    - Rejected: deciding by the last word of the name only (70be81d1). Why: it missed
+      SECRET_KEY_BASE, DB_PASSWORD_PROD and run-together NPMTOKEN, secrets whose secret word is
+      not last or not separated (76e5fe42). Reopen if: the replay above, re-run, shows the any-word
+      rule redacting real non-secrets the tail list cannot fix.
+
 Pure standard library.
 """
 
