@@ -309,6 +309,14 @@ def test_a_first_block_over_the_budget_still_gives_a_brief():
     assert "1 more not shown" in brief and "skill_decisions.py show devops-bmk" in brief
 
 
+def test_the_brief_trailer_names_the_callers_show_command_when_given():
+    command = "py /i/hooks/skill_decisions.py show devops-bmk --skill-dir /r/devops-bmk --full"
+    brief = SD.render_brief(_factory(_rejected()), skill="devops-bmk", budget_chars=10,
+                            show_command=command)
+    assert brief.endswith("1 more not shown: " + command)
+    assert "<plugin>" not in brief
+
+
 def test_the_brief_lists_a_removed_rule_beside_a_rejected_one():
     removed = _rule(kind="removed", anchors=[], decision="Dropped the --with . install line.")
     brief = SD.render_brief(_factory(removed, _rejected()), skill="devops-bmk")

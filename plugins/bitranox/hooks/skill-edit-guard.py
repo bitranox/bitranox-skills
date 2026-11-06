@@ -32,7 +32,8 @@ after backslashes become `/` and `.`/`..` segments collapse:
   - AFTER both checks pass, once per (session, agent, skill): when the skill's ledger holds a
     live rejected or removed entry and the editing agent's transcript shows no
     `skill_decisions.py show <skill>` call, the first edit is refused with those entries
-    (`render_brief`); the re-send passes. This direction fails OPEN: an unreadable ledger, a
+    (`render_brief`) and a `show` command naming this install's script and the skill's own dir
+    (`show_command`), so it runs from any cwd; the re-send passes. This direction fails OPEN: an unreadable ledger, a
     missing module or an unstorable flag lets the edit through, because the commit gate owns
     ledger integrity and this refusal only delivers reading.
 
@@ -42,7 +43,9 @@ Decisions:
   that followed the procedure must never pay for it. Priced on 2026-11-06 by replaying the
   transcript corpus: 5679 transcripts scanned, 487 first SKILL.md edits per (agent, skill), in
   121 sessions; 482 of those edits (118 sessions) fell in the last 30 days, and none followed a
-  `show` call. That is the upper bound once every skill has a ledger; only a skill holding a
+  `show` call. The corpus itself reaches back only to 2026-10-06 (one stray transcript from
+  2026-05-22 aside), about the transcript retention window, so the 482 is close to the whole
+  visible history, not a rate sampled from a longer one. That is the upper bound once every skill has a ledger; only a skill holding a
   live rejected or removed entry can refuse. Reopen if the refusal log shows agents
   re-sending unchanged edits without reading the brief.
 
@@ -58,6 +61,7 @@ import json
 import os
 import posixpath
 import re
+import shlex
 import sys
 from pathlib import Path
 
@@ -83,7 +87,8 @@ def _agent_transcript(event):
 
 
 def _texts(record):
-    content = (record.get("message") or {}).get("content")
+    message = record.get("message")
+    content = message.get("content") if isinstance(message, dict) else None
     if isinstance(content, str):
         return [content]
     if isinstance(content, list):
@@ -112,8 +117,10 @@ def skill_loaded(transcript, skill=_SKILL):
                 continue
             try:
                 record = json.loads(line)
-            except ValueError:
-                continue                               # a torn or truncated line is not evidence
+            except (ValueError, RecursionError):
+                # A torn line is not evidence, nor one nested past the decoder's depth: escaping,
+                # that RecursionError would reach main's catch-all and ALLOW the edit.
+                continue
             if _is_load_of(record, skill):
                 return True
     return False
@@ -143,30 +150,60 @@ def _loaded_by_editing_agent(event):
 _BRIEF_FLAG = ".skill-decisions-brief-"
 _BRIEF = ("Before this first edit of skills/%s, read what was already decided for it. Each entry "
           "below was taken for the reason given; re-proposing one needs that reason answered, in a "
-          "new ledger entry that supersedes it.\n\n%s\n\nThe full list: python3 <plugin>/hooks/"
-          "skill_decisions.py show %s --kind rejected,removed --full. Now re-send the edit, revised "
+          "new ledger entry that supersedes it.\n\n%s\n\n%sNow re-send the edit, revised "
           "or unchanged; the re-send is not refused.")
+_FULL_LIST = "Every field of every entry, runnable from any directory:\n%s\n\n"
+_SHOW_SCRIPT = Path(__file__).resolve().parent / "skill_decisions.py"
+
+
+def show_command(skill_dir):
+    """The shell command printing `skill_dir`'s declined decisions in full, runnable from any cwd.
+
+    It names this install's own script and the skill's own dir, because `show <name>` alone
+    looks the name up in the cwd's repo: from a tool-repo twin, or any `skills/x/SKILL.md`
+    outside the marketplace, that is a different ledger or none. The interpreter is the one
+    running this hook (run-python.sh found it), since a bare `python3` is a Store stub on Windows.
+    """
+    skill_dir = Path(skill_dir)
+    return "%s %s show %s --skill-dir %s --kind rejected,removed --full" % (
+        shlex.quote(sys.executable or "python3"), shlex.quote(str(_SHOW_SCRIPT)),
+        shlex.quote(skill_dir.name), shlex.quote(str(skill_dir)))
 
 
 def _bash_commands(record):
-    content = (record.get("message") or {}).get("content")
+    # Every level type-checked: a transcript line is data, and one odd shape raising here would
+    # end the whole decision rather than this one line.
+    message = record.get("message")
+    content = message.get("content") if isinstance(message, dict) else None
     for block in content if isinstance(content, list) else []:
-        if isinstance(block, dict) and block.get("type") == "tool_use" and block.get("name") == "Bash":
-            yield str((block.get("input") or {}).get("command") or "")
+        if not (isinstance(block, dict) and block.get("type") == "tool_use" and block.get("name") == "Bash"):
+            continue
+        tool_input = block.get("input")
+        if isinstance(tool_input, dict):
+            yield str(tool_input.get("command") or "")
+
+
+def _show_pattern(skill):
+    # The name as typed or as show_command quotes it, so the emitted command itself is credited.
+    # The lookahead keeps `show foo` from counting for `show foo-bar`: skill names hold hyphens.
+    # IGNORECASE as in _SKILL_MD (the edited path may spell the name in another case); DOTALL
+    # because one Bash command may span lines.
+    names = sorted({re.escape(skill), re.escape(shlex.quote(skill))})
+    return re.compile(r"skill_decisions\.py\b.*\bshow\s+(?:%s)(?![\w-])" % "|".join(names),
+                      re.IGNORECASE | re.DOTALL)
 
 
 def ran_show(transcript, skill):
     """True when `transcript` holds a Bash call of `skill_decisions.py show <skill>`. Raises OSError."""
-    # The lookahead keeps `show foo` from counting for `show foo-bar`: skill names hold hyphens.
-    wanted = re.compile(r"skill_decisions\.py\b.*\bshow\s+%s(?![\w-])" % re.escape(skill))
+    wanted = _show_pattern(skill)
     with Path(transcript).open(encoding="utf-8", errors="replace") as fh:
         for line in fh:
             if "skill_decisions" not in line:
                 continue                               # cheap prefilter, as in skill_loaded
             try:
                 record = json.loads(line)
-            except ValueError:
-                continue
+            except (ValueError, RecursionError):
+                continue                               # torn, or nested past the decoder's depth
             if isinstance(record, dict) and any(wanted.search(c) for c in _bash_commands(record)):
                 return True
     return False
@@ -193,11 +230,12 @@ def _brief_refusal(event, path):
     if not isinstance(session, str) or not session.strip():
         return None
     skill_dir = Path(path).parent
+    command = show_command(skill_dir)
     try:
         import skill_decisions  # noqa: PLC0415 - a missing module must not wedge the guard
         ledger = skill_decisions.ledger_path(skill_dir)
         brief = skill_decisions.render_brief(lambda: skill_decisions.file_lines(ledger),
-                                             skill=skill_dir.name)
+                                             skill=skill_dir.name, show_command=command)
     except Exception:  # noqa: BLE001 - ledger integrity is the commit gate's job, not this guard's
         return None
     if not brief:
@@ -210,7 +248,9 @@ def _brief_refusal(event, path):
         pass                                           # unreadable: one refusal costs one re-send
     if not _refuse_once(session, event.get("agent_id") or "main", skill_dir.name):
         return None
-    return _BRIEF % (skill_dir.name, brief, skill_dir.name)
+    # When entries were left out, the brief's own trailer already names the command; say it once.
+    full_list = "" if command in brief else _FULL_LIST % command
+    return _BRIEF % (skill_dir.name, brief, full_list)
 
 
 def decide(event, env):

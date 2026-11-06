@@ -1,6 +1,8 @@
 """Tests for skill-edit-guard.py: deny a SKILL.md edit (exit 2), allow else, env opt-out, fail-open."""
 
 import json
+import shlex
+import subprocess
 import sys
 
 import pytest
@@ -466,3 +468,136 @@ def test_each_agent_is_refused_once_for_itself(tmp_path, armed):
     main = _session(tmp_path, [], agent="a1", agent_records=[_load_record(_CACHE + "meta-skill-writer")])
     event = dict(_brief_edit(main, path), agent_id="a1", agent_type="general-purpose")
     assert G.decide(event, {}) is not None and G.decide(event, {}) is None
+
+
+# --- review fixes: the refuse-once key, whose transcript is read, a command the reader can run ---
+
+_LOAD = _load_record(_CACHE + "meta-skill-writer")
+
+
+def _sub_edit(transcript, path, agent="a1"):
+    return dict(_brief_edit(transcript, path), agent_id=agent, agent_type="general-purpose")
+
+
+def _bash_record(command):
+    return {"type": "assistant", "message": {"content": [
+        {"type": "tool_use", "id": "toolu_b", "name": "Bash", "input": {"command": command}}]}}
+
+
+def _rejection(why, topic="per-project-env"):
+    entry = {"v": 1, "date": "2026-11-05", "kind": "rejected", "topic": topic,
+             "decision": "Install per project.", "why": why,
+             "evidence": {"tier": "measured", "text": "x"}, "reopen_if": "bmk changes.",
+             "anchors": [], "supersedes": [], "refs": [], "origin": "authored"}
+    entry["id"] = SD.entry_id(entry)
+    return entry
+
+
+def test_the_main_agent_and_a_subagent_are_each_refused_on_the_same_skill(tmp_path, armed):
+    """The flag is keyed by agent: the main agent's refusal must not spend the subagent's."""
+    path = _skill_with_rejection(tmp_path)
+    main = _session(tmp_path, [_LOAD], agent="a1", agent_records=[_LOAD])
+    assert G.decide(_brief_edit(main, path), {}) is not None
+    assert G.decide(_sub_edit(main, path), {}) is not None
+
+
+def test_one_agent_is_refused_once_for_each_skill(tmp_path, armed):
+    """The flag is keyed by skill: a refusal on foo must not spend the one owed on bar."""
+    foo = _skill_with_rejection(tmp_path, "foo")
+    bar = _skill_with_rejection(tmp_path, "bar")
+    main = _session(tmp_path, [_LOAD])
+    assert G.decide(_brief_edit(main, foo), {}) is not None
+    assert G.decide(_brief_edit(main, bar), {}) is not None
+
+
+def test_a_show_in_the_main_transcript_does_not_count_for_a_subagent(tmp_path, armed):
+    """The editing agent's own transcript decides, not the main one every event carries."""
+    path = _skill_with_rejection(tmp_path)
+    main = _session(tmp_path, [_LOAD, _show_record("foo")], agent="a1", agent_records=[_LOAD])
+    assert G.decide(_sub_edit(main, path), {}) is not None
+
+
+def test_the_refusal_names_a_show_command_that_runs_from_any_directory(tmp_path, armed):
+    """`show <name>` alone resolves the name in the cwd's repo; the emitted command must not."""
+    path = _skill_with_rejection(tmp_path / "a repo")              # a space, so quoting matters
+    main = _session(tmp_path, [_LOAD])
+    reason = G.decide(_brief_edit(main, path), {})
+    command = G.show_command(path.parent)
+    assert reason is not None and reason.count(command) == 1
+    elsewhere = tmp_path / "elsewhere"
+    elsewhere.mkdir()
+    done = subprocess.run(shlex.split(command), cwd=str(elsewhere), capture_output=True,
+                          encoding="utf-8", errors="replace", timeout=120)
+    assert done.returncode == 0, done.stderr
+    assert "Two projects cannot share it." in done.stdout
+
+
+def test_a_brief_with_hidden_entries_names_the_command_once(tmp_path, armed):
+    """The brief's own trailer carries the command when entries are hidden; no second copy."""
+    path = _skill_with_rejection(tmp_path)
+    with SD.ledger_path(path.parent).open("a", encoding="utf-8") as fh:
+        for n in range(40):
+            fh.write(json.dumps(_rejection("reason %d " % n + "x" * 300, topic="t%d" % n)) + "\n")
+    main = _session(tmp_path, [_LOAD])
+    reason = G.decide(_brief_edit(main, path), {})
+    command = G.show_command(path.parent)
+    assert reason is not None and "more not shown: " + command in reason
+    assert reason.count(command) == 1
+
+
+@pytest.mark.parametrize("name", ["foo", "odd name"])
+def test_running_the_emitted_command_counts_as_having_read_the_decisions(tmp_path, armed, name):
+    path = _skill_with_rejection(tmp_path / "a repo", name)
+    main = _session(tmp_path, [_LOAD, _bash_record(G.show_command(path.parent))])
+    assert G.decide(_brief_edit(main, path), {}) is None
+
+
+def test_show_counts_whatever_case_the_edited_path_spells_the_name_in(tmp_path, armed):
+    path = _skill_with_rejection(tmp_path, "Foo")
+    main = _session(tmp_path, [_LOAD, _show_record("foo")])
+    assert G.decide(_brief_edit(main, path), {}) is None
+
+
+def test_show_counts_across_a_line_break_in_one_command(tmp_path, armed):
+    path = _skill_with_rejection(tmp_path)
+    command = "python3 /p/hooks/skill_decisions.py \\\n  show foo --kind rejected,removed --full"
+    main = _session(tmp_path, [_LOAD, _bash_record(command)])
+    assert G.decide(_brief_edit(main, path), {}) is None
+
+
+_DEEP = "[" * 100000 + "]" * 100000
+
+
+@pytest.mark.parametrize("line", [
+    json.dumps({"type": "assistant", "message": "x", "note": "skill_decisions"}),
+    json.dumps({"type": "assistant", "message": {"content": [
+        {"type": "tool_use", "id": "t", "name": "Bash", "input": "skill_decisions.py show foo"}]}}),
+    '{"note": "skill_decisions", "deep": %s}' % _DEEP,
+], ids=["message-is-a-string", "input-is-a-string", "nested-past-the-decoder"])
+def test_an_odd_transcript_line_is_skipped_by_the_show_check(tmp_path, armed, line):
+    """Data, not a crash: each shape raised out of decide before (AttributeError, RecursionError)."""
+    path = _skill_with_rejection(tmp_path)
+    main = _session(tmp_path, [_LOAD])
+    with main.open("a", encoding="utf-8") as fh:
+        fh.write(line + "\n")
+    assert G.decide(_brief_edit(main, path), {}) is not None
+
+
+def test_the_deep_line_really_is_past_the_decoder():
+    """Precondition for the nested-past-the-decoder cases: json.loads raises, not ValueError."""
+    with pytest.raises(RecursionError):
+        json.loads('{"x": %s}' % _DEEP)
+
+
+@pytest.mark.parametrize("line", [
+    json.dumps({"type": "user", "isMeta": True,
+                "message": "Base directory for this skill: /c/skills/meta-skill-writer"}),
+    '{"note": "Base directory for this skill: /c/skills/meta-skill-writer", "deep": %s}' % _DEEP,
+], ids=["message-is-a-string", "nested-past-the-decoder"])
+def test_an_odd_line_in_the_load_check_still_denies(tmp_path, armed, line):
+    """An exception escaping the load check reached main's catch-all, which ALLOWS the edit."""
+    main = _session(tmp_path, [])
+    with main.open("a", encoding="utf-8") as fh:
+        fh.write(line + "\n")
+    reason = G.decide(_edit(main), {})
+    assert reason is not None and "never loaded" in reason

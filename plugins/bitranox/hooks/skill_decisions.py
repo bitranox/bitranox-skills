@@ -358,8 +358,15 @@ def _brief_block(entry: dict) -> str:
                entry["why"], entry["reopen_if"]))
 
 
-def render_brief(lines_factory: LinesFactory, *, skill: str, budget_chars: int = 6000) -> str:
-    """The live rejected and removed entries, in full until `budget_chars` is spent, then a count."""
+def render_brief(lines_factory: LinesFactory, *, skill: str, budget_chars: int = 6000,
+                 show_command: str | None = None) -> str:
+    """The live rejected and removed entries, in full until `budget_chars` is spent, then a count.
+
+    `show_command` is the command the "more not shown" trailer names. A caller that knows where
+    this script and the skill really live passes a runnable one; the default is a placeholder,
+    because `show <skill>` alone resolves the name against the cwd's repo, which outside the
+    marketplace is a different ledger or none.
+    """
     blocks, used, left = [], 0, 0
     for entry in live_entries(lines_factory):
         if entry["kind"] not in ("rejected", "removed"):
@@ -376,8 +383,9 @@ def render_brief(lines_factory: LinesFactory, *, skill: str, budget_chars: int =
         return ""
     text = "Decisions already taken for %s (rejected or removed, oldest first):\n" % skill + "\n".join(blocks)
     if left:
-        text += ("\n%d more not shown: python3 <plugin>/hooks/skill_decisions.py show %s "
-                 "--kind rejected,removed --full" % (left, skill))
+        command = show_command or ("python3 <plugin>/hooks/skill_decisions.py show %s "
+                                   "--kind rejected,removed --full" % skill)
+        text += "\n%d more not shown: %s" % (left, command)
     return text
 
 
