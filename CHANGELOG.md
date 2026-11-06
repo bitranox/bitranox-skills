@@ -30,6 +30,24 @@ a hole nobody has drawn a line under is one that gets rediscovered and half-fill
 two "versions with no entry" notes came to sit in this file disagreeing with it.
 
 
+## [10.20.0]
+
+### Added
+
+- Skill ledgers seeded from the declined skill contributions: each kept proposal is a `rejected`
+  entry (origin `imported`) with its reason and what would reopen it.
+- meta-claude-hooks and compuse-toolbox: a hook or jig records a decision in a `Decisions:` block
+  in its module docstring, pinned by a test that fails when the decision is reverted.
+- meta-self-improve reads a skill's declined decisions before queueing a fix to it, and records a
+  lasting drop as a `rejected` entry.
+- meta-adopting-external-skills: an adoption records what it left out of the upstream skill.
+- meta-skill-audit: each skill's reviewer sees that skill's declined decisions.
+
+### Changed
+
+- `secret_patterns.py` and `memory_engine.py` carry the first docstring decision blocks, for two
+  decisions that were once changed forward and back.
+
 ## [10.19.2]
 
 ### Fixed
