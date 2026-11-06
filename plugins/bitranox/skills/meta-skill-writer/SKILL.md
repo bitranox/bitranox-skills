@@ -635,10 +635,12 @@ edit; who caught what. **Keep in the artifact:** the claim tested, how it was te
 outcome - a verbatim line of agent output earns its place when it IS the evidence, a paragraph of
 narrative around it does not.
 
-**A decision is not a story.** Why a rule was added, removed or rejected, the evidence, and what
-would reopen it go in the skill's decision ledger (see "Step 0b" under Planning Before You Start),
-not in a checklist, and that holds for a decision that reverses an earlier one. A user decision is
-cited by date ("user decision 2026-11-05"), never as a conversation; the ledger holds no session
+**A decision is not a story.** Why a rule in the skill's text was added, removed or rejected, the
+evidence, and what would reopen it go in the skill's decision ledger (see "Step 0b" under Planning
+Before You Start), not in a checklist, and that holds for a decision that reverses an earlier one.
+A decision about a bundled script or hook goes in that file's module docstring instead (see "A
+bundled script's decisions go in its docstring, not the skill's ledger"). A user decision is cited
+by date ("user decision 2026-11-05"), never as a conversation; the ledger holds no session
 narrative either.
 
 The trap is that provenance feels like rigour while you are writing it, because it is what you
@@ -799,6 +801,18 @@ so Windows does not silently break it:
        the return code plus an output-file or output-text check in your own code, not shell
        glue. If you must accept a user-supplied command template, parse it once with
        `shlex.split` and substitute placeholders into the list elements (no shell).
+
+### A bundled script's decisions go in its docstring, not the skill's ledger
+
+When a bundled script (`skills/<skill>/scripts/*.py`) or a hook settles a choice a later editor
+could plausibly undo (a threshold picked from a measurement, an alternative tried and dropped),
+record it in a `Decisions:` block in that file's module docstring, each decision naming the test
+that pins it (or why no test can). The block's form is in `bitranox:meta-claude-hooks`,
+`references/authoring.md`, "Record a decision in the module docstring". Read the block, and the
+tests it names, before you change such a file. The skill's decision ledger (Step 0b) holds
+decisions about the skill's TEXT only, and a `rule` anchor quotes the skill's Markdown, never
+code: a change that touches only a script records nothing in the ledger, and when the change
+also edits SKILL.md, its checklist's `Decisions:` line names only the ledger entries.
 
 ### Ship tests for every script (and they MUST pass)
 
@@ -1146,7 +1160,10 @@ The commit gate refuses a change whose shipped text no longer holds a live
 rule's anchor: an edit that deletes or rewords such a sentence records a `removed` entry, or a new
 `rule` with a new anchor, that supersedes it.
 
-**Record every decision the edit makes, in REFACTOR, before the commit.** Write each one through
+**Record every decision the edit makes about the skill's text, in REFACTOR, before the
+commit.** A decision about a bundled script or hook goes in that file's module docstring instead
+(see "A bundled script's decisions go in its docstring, not the skill's ledger"). Write each
+ledger decision through
 `python3 plugins/bitranox/hooks/skill_decisions.py add --from-file <entries.json>`, never by
 editing the ledger: the file holds one entry object or a list, and each entry names its `skill`.
 Write the entries once the new text exists, since an anchor quotes the text as written. The
@@ -1661,9 +1678,10 @@ Deploying untested skills = deploying untested code. It's a violation of quality
       and that run's output is in the review artifact
 - [ ] Every pass and every "X does not happen" verdict also ran on `haiku`; the artifact states
       the tiers and cell count
-- [ ] Every decision the edit makes is a ledger entry written with `skill_decisions.py add`
-      (`rule` with an anchor, `removed`, `rejected` for a decline that will still hold), and the
-      checklist carries its `Decisions:` line
+- [ ] Every decision the edit makes about the skill's text is a ledger entry written with
+      `skill_decisions.py add` (`rule` with an anchor, `removed`, `rejected` for a decline that
+      will still hold), and the checklist carries its `Decisions:` line; a decision about a
+      bundled script or hook is in that file's docstring `Decisions:` block instead
 - [ ] Identify NEW rationalizations from testing
 - [ ] Add explicit counters (if discipline skill)
 - [ ] Build rationalization table from all test iterations
