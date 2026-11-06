@@ -4533,6 +4533,8 @@ def test_run_checks_wires_the_decision_check_in_both_modes(tmp_path, monkeypatch
     ci = RG.run_checks(root, ci=True, run_pytest=False, parts=parts)
     assert any(entry["id"] in f for f in hook)
     assert any(entry["id"] in f for f in ci)
+    # The sweep and the per-change check both see this anchor: CI reports it once.
+    assert len([f for f in ci if entry["id"] in f]) == 1
 
 
 def _commit_all(root, message):
@@ -4640,6 +4642,94 @@ def test_a_commit_naming_paths_is_judged_on_its_selection_not_the_working_tree(t
     assert RG.check_skill_decisions(root, RG.STAGE_INDEX, log=lambda r: None) == []
 
 
+@pytest.mark.parametrize("target", ["docs/old.jsonl",
+                                    "plugins/bitranox/skills/other-skill/kept.jsonl"])
+@pytest.mark.usefixtures("_bare_git_env")
+def test_a_ledger_moved_out_of_its_skill_with_git_mv_is_refused(tmp_path, target):
+    """git's rename detection lists a move under its NEW path only, so the skill the ledger left
+    was no candidate and the move passed; the old path must be listed as removed."""
+    line, _ = _ledger_line()
+    root = _ledger_repo(tmp_path, [line])
+    (root / target).parent.mkdir(parents=True, exist_ok=True)
+    subprocess.run(["git", "mv", LEDGER_REL, target], cwd=root, check=True)
+    fails = RG.check_skill_decisions(root, RG.STAGE_INDEX, log=lambda r: None)
+    assert any("present at the fork point, was changed or removed" in f and LEDGER_REL in f
+               for f in fails)
+
+
+@pytest.mark.usefixtures("_bare_git_env")
+def test_ci_on_a_pull_request_refuses_a_ledger_line_removed_with_its_anchor(tmp_path, monkeypatch):
+    """A PR's HEAD sits above origin/master, so the append-only half has a fork point to read in
+    CI too. Line 1 and its anchor are both gone, which leaves the sweep nothing to object to: the
+    remaining ledger matches the remaining text."""
+    monkeypatch.setenv("HOME", str(tmp_path / "home"))
+    monkeypatch.setenv("USERPROFILE", str(tmp_path / "home"))
+    first, _ = _ledger_line()
+    second, _ = _ledger_line("release names its version", topic="second")
+    write(tmp_path / LEDGER_SKILL / "SKILL.md",
+          RULE_TEXT + "\nEach release names its version.\n")
+    write(tmp_path / LEDGER_REL, first + second)
+    root = git_repo_with_origin(tmp_path, {})
+    write(root / LEDGER_SKILL / "SKILL.md", "Intro.\n\nEach release names its version.\n")
+    write(root / LEDGER_REL, second)
+    _commit_all(root, "drop the first rule and its entry")
+    parts = RG.GateParts(mirrors={})
+    assert RG.check_all_skill_decisions(root) == []           # the sweep alone passes it
+    ci = RG.run_checks(root, ci=True, run_pytest=False, parts=parts)
+    assert any("append-only" in f and "line 1" in f for f in ci)
+
+
+RENAMED_SKILL = "plugins/bitranox/skills/devops-bmk2"
+#: Long enough that dropping the rule line leaves git's rename detection pairing the SKILL.md.
+LONG_RULE_TEXT = ("Intro.\n\n" + "".join("Unchanged context line %d.\n" % n for n in range(12))
+                  + "\nbmk alone, shared across projects.\n")
+
+
+def _renamed_skill_repo(tmp_path, *, keep_ledger):
+    """A repo whose skill was renamed with `git mv` after its fork point; with ``keep_ledger``
+    False the moved SKILL.md lost the rule line and the moved ledger was emptied, on disk."""
+    line, _ = _ledger_line()
+    write(tmp_path / LEDGER_SKILL / "SKILL.md", LONG_RULE_TEXT)
+    write(tmp_path / LEDGER_REL, line)
+    root = git_repo_with_origin(tmp_path, {})
+    subprocess.run(["git", "mv", LEDGER_SKILL, RENAMED_SKILL], cwd=root, check=True)
+    if not keep_ledger:
+        write(root / RENAMED_SKILL / "SKILL.md",
+              LONG_RULE_TEXT.replace("\nbmk alone, shared across projects.\n", ""))
+        write(root / RENAMED_SKILL / ".skillwriter/decisions.jsonl", "")
+    return root
+
+
+def _renamed_stage(root, kind):
+    if kind == "index":
+        subprocess.run(["git", "add", "-A"], cwd=root, check=True)
+        return RG.STAGE_INDEX
+    if kind == "head":
+        _commit_all(root, "rename the skill")
+        return RG.STAGE_HEAD
+    # `git commit -- <old dir> <new dir>` takes the moved files from disk, unstaged edits included.
+    return RG.CommitSelection("only", [LEDGER_SKILL, RENAMED_SKILL], where=root)
+
+
+@pytest.mark.parametrize("kind", ["index", "head", "selection"])
+@pytest.mark.usefixtures("_bare_git_env")
+def test_a_renamed_skill_carries_its_ledger_into_the_append_only_check(tmp_path, kind):
+    """Renamed with `git mv`, the old name reads as deleted and the new one had no ledger at the
+    fork point, so an emptied ledger passed. The new ledger answers to the old path's bytes."""
+    root = _renamed_skill_repo(tmp_path, keep_ledger=False)
+    fails = RG.check_skill_decisions(root, _renamed_stage(root, kind), log=lambda r: None)
+    new_ledger = RENAMED_SKILL + "/.skillwriter/decisions.jsonl"
+    assert any("append-only" in f and new_ledger in f and LEDGER_REL in f and "line 1" in f
+               for f in fails), fails
+
+
+@pytest.mark.parametrize("kind", ["index", "head", "selection"])
+@pytest.mark.usefixtures("_bare_git_env")
+def test_a_renamed_skill_with_its_ledger_and_text_intact_passes(tmp_path, kind):
+    root = _renamed_skill_repo(tmp_path, keep_ledger=True)
+    assert RG.check_skill_decisions(root, _renamed_stage(root, kind), log=lambda r: None) == []
+
+
 def test_jsonl_is_an_lf_checked_suffix():
     assert ".jsonl" in RG._LF_SUFFIXES
 
@@ -4677,11 +4767,34 @@ def test_decisions_none_with_a_reason_passes(tmp_path):
     "Decisions: nothing - reworded",     # not the keyword
     "Decisions: d-2026110-0123abcd",     # a malformed id: seven date digits
     "Decisions: d-20261105-0123abcd d-20261105-0123abce",   # ids not separated by a comma
-    "- Decisions: none - in a list item",  # the line must start with the key
+    "- [ ] Decisions: none - an open box",  # only a ticked box may precede the key
+    "> Decisions: none - quoted",        # a blockquote is not a list marker
+    "[x] Decisions: none - a box without a list marker",
 ])
 def test_a_decisions_line_not_in_the_required_form_is_refused(tmp_path, line):
     fails = _review(tmp_path, "- [x] RED\n%s\n" % line)
-    assert len(fails) == 1 and "no 'Decisions:' line" in fails[0]
+    assert any("no 'Decisions:' line" in f for f in fails)
+    # The refusal shows the forms it accepts, the list-item one included.
+    assert any("- [x] Decisions:" in f for f in fails)
+
+
+@pytest.mark.parametrize("line", [
+    "- Decisions: none - in a list item",
+    "* Decisions: none - a star item",
+    "+ Decisions: none - a plus item",
+    "1. Decisions: none - an ordered item",
+    "- [x] Decisions: none - a ticked task item",
+    "- [X] Decisions: none - an upper-case tick",
+    "  Decisions: none - indented",
+    "    - [x] Decisions: none - an indented task item",
+])
+def test_a_decisions_line_after_whitespace_a_list_marker_or_a_ticked_box_passes(tmp_path, line):
+    assert _review(tmp_path, "- [x] RED\n%s\n" % line) == []
+
+
+def test_ids_on_a_list_item_decisions_line_are_still_looked_up(tmp_path):
+    fails = _review(tmp_path, "- [x] RED\n- [x] Decisions: d-20261105-0123abcd\n")
+    assert len(fails) == 1 and "d-20261105-0123abcd" in fails[0] and "ledger" in fails[0]
 
 
 def test_decisions_naming_an_id_the_ledger_lacks_is_refused(tmp_path):
@@ -5072,9 +5185,11 @@ def test_decisions_ids_separated_by_a_bare_comma_pass(tmp_path):
 MP_LEDGER = "plugins/bitranox/skills/coding-python-thing/.skillwriter/decisions.jsonl"
 
 
-def _ledgered_pair(tmp_path):
+def _ledgered_pair(tmp_path, monkeypatch):
     """`_published_pair` whose marketplace skill also publishes a ledger entry anchoring its
-    paragraph."""
+    paragraph. HOME is ``tmp_path / "home"``: a decision refusal is written to the audit log."""
+    monkeypatch.setenv("HOME", str(tmp_path / "home"))
+    monkeypatch.setenv("USERPROFILE", str(tmp_path / "home"))
     public, root, tool = _published_pair(tmp_path)
     line, entry = _ledger_line("One paragraph of content")
     write(root / MP_LEDGER, line)
@@ -5107,7 +5222,7 @@ def _into_the_h1(body):
 @pytest.mark.parametrize("edit", [_replace("One paragraph of content.", IN_PROGRESS), _into_the_h1],
                          ids=["dropped", "kept-only-in-the-h1-parenthetical"])
 def test_a_twin_that_drops_a_marketplace_anchor_is_refused(tmp_path, monkeypatch, capsys, edit):
-    public, root, tool, _line, entry = _ledgered_pair(tmp_path)
+    public, root, tool, _line, entry = _ledgered_pair(tmp_path, monkeypatch)
     _edit_both(root, tool, edit)
     _tool_repo_commit(monkeypatch, public, tool)
 
@@ -5119,9 +5234,30 @@ def test_a_twin_that_drops_a_marketplace_anchor_is_refused(tmp_path, monkeypatch
 
 
 @pytest.mark.usefixtures("_bare_git_env")
+def test_a_twin_decision_refusal_is_audited_once_and_names_a_stale_marketplace_ref(
+        tmp_path, monkeypatch, capsys):
+    """Two marketplace checkouts (the main one and a linked worktree) both refuse the twin, and the
+    gate reports one of them: the audit log gets that one refusal, not one per checkout read."""
+    public, root, tool, _line, entry = _ledgered_pair(tmp_path, monkeypatch)
+    home = tmp_path / "home"
+    _g(root, "worktree", "add", "-q", "-b", "side", str(tmp_path / "mp-wt"))
+    _fetched(root, 9)
+    _edit_both(root, tool, _replace("One paragraph of content.", IN_PROGRESS))
+    _tool_repo_commit(monkeypatch, public, tool)
+
+    assert RG.main(parts=_parts()) == 2
+    err = capsys.readouterr().err
+    assert "DECISION" in err and "last fetched 9.0 days ago" in err
+    sink = home / ".claude" / "self-improve-audit" / "skill-decision-gate.jsonl"
+    records = [json.loads(x) for x in sink.read_text(encoding="utf-8").splitlines()]
+    assert [(r["skill"], r["entry_id"]) for r in records] == [("coding-python-thing", entry["id"])]
+    assert set(records[0]) == {"time", "skill", "entry_id", "problem"}
+
+
+@pytest.mark.usefixtures("_bare_git_env")
 def test_a_superseding_entry_the_marketplace_committed_lets_the_twin_drop_pass(
         tmp_path, monkeypatch, capsys):
-    public, root, tool, line, entry = _ledgered_pair(tmp_path)
+    public, root, tool, line, entry = _ledgered_pair(tmp_path, monkeypatch)
     _edit_both(root, tool, _replace("One paragraph of content.", IN_PROGRESS))
     newer, _ = _ledger_line(IN_PROGRESS.rstrip("."), decision="Superseded.",
                             supersedes=[entry["id"]])
@@ -5139,7 +5275,7 @@ def test_a_superseding_entry_the_marketplace_committed_lets_the_twin_drop_pass(
 
 @pytest.mark.usefixtures("_bare_git_env")
 def test_a_twin_edit_that_keeps_every_anchor_passes(tmp_path, monkeypatch):
-    public, root, tool, _line, _entry = _ledgered_pair(tmp_path)
+    public, root, tool, _line, _entry = _ledgered_pair(tmp_path, monkeypatch)
     _edit_both(root, tool, _replace("One paragraph of content.",
                                     "One paragraph of content.\n\nAnother one."))
     _tool_repo_commit(monkeypatch, public, tool)

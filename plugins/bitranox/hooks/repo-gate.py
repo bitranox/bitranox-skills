@@ -66,7 +66,8 @@ Checks:
                     and refuse a live rule anchor gone from its Markdown, a ledger line present
                     at the fork point changed or removed, or a ledger that does not parse
                     (`check_skill_decisions`); CI checks every ledger in the checkout
-                    (`check_all_skill_decisions`).
+                    (`check_all_skill_decisions`) and runs the per-change check at HEAD, which
+                    on a pull request also judges the append-only half.
 
 The collaborators the gate reaches beyond its arguments - the mirror pair table, the pytest run,
 the claude check, the PATH lookup - arrive as one `GateParts` bundle, so a caller can replace them.
@@ -1069,8 +1070,10 @@ def _changed_vs_origin(root):
         return None
     # `diff <base>` compares the WORKING TREE, so a staged change whose working copy was
     # reverted afterwards was missing - yet that staged text is exactly what the commit carries.
-    _, changed = _git_paths(root, "diff", "--name-only", base)
-    _, staged = _git_paths(root, "diff", "--cached", "--name-only", base)
+    # --no-renames: with git's default rename detection a move lists only its NEW path, so the
+    # skill a ledger was moved out of would be no candidate and its removal would pass unjudged.
+    _, changed = _git_paths(root, "diff", "--name-only", "--no-renames", base)
+    _, staged = _git_paths(root, "diff", "--cached", "--name-only", "--no-renames", base)
     _, untracked = _git_paths(root, "ls-files", "--others", "--exclude-standard")
     return list(dict.fromkeys(changed + staged + untracked))
 
@@ -1082,7 +1085,8 @@ def _shipping_candidates(root, stage):
     change committed and then reverted in both the index and the working copy is invisible to the
     merge-base diff, yet HEAD ships it. A commit needs no such half, even one whose command also
     pushes: what it carries is the index, and a path whose index text differs from the fork point
-    is already in the merge-base diff. None when there is no merge-base to diff from. A superset:
+    is already in the merge-base diff, which lists both ends of a move (`--no-renames`). None
+    when there is no merge-base to diff from. A superset:
     each check still reads what the stage ships before judging a path.
     """
     changed = _changed_vs_origin(root)
@@ -1225,9 +1229,12 @@ _FENCE = re.compile(r"^ {0,3}(`{3,}|~{3,})(.*)$")
 
 
 #: The checklist line stating what a skill change decided (D4): the ledger ids it recorded, or
-#: `none - <reason>`. Only non-capturing groups, so a match is the whole line; keep it that way.
+#: `none - <reason>`. It may be indented and stand in a list item, ticked or not (`- Decisions:`,
+#: `1. Decisions:`, `- [x] Decisions:`): a checklist is a list, and its author writes it as one.
+#: Only non-capturing groups, so a match is the whole line; keep it that way.
 DECISIONS_LINE_RX = re.compile(
-    r"^Decisions:[ \t]+(?:none[ \t]+-[ \t]+\S.*|"
+    r"^[ \t]*(?:(?:[-*+]|[0-9]{1,9}[.)])[ \t]+(?:\[[xX]\][ \t]+)?)?"
+    r"Decisions:[ \t]+(?:none[ \t]+-[ \t]+\S.*|"
     r"d-[0-9]{8}-[0-9a-f]{8}(?:,[ \t]*d-[0-9]{8}-[0-9a-f]{8})*)[ \t]*$",
     re.MULTILINE)
 _DECISION_ID_RX = re.compile(r"d-[0-9]{8}-[0-9a-f]{8}")
@@ -1340,7 +1347,9 @@ def _decisions_line_failures(name, texts, ledger, *, unreadable=False):
         return ["skills/%s: the co-changed checklist has no 'Decisions:' line in the "
                 "required form. Name the ledger ids this change added "
                 "('Decisions: d-YYYYMMDD-xxxxxxxx, ...') or "
-                "say why it decided nothing ('Decisions: none - <reason>')." % name]
+                "say why it decided nothing ('Decisions: none - <reason>'), at the line start or "
+                "after a list marker and an optional ticked box ('- [x] Decisions: ...'), outside "
+                "a code fence." % name]
     named = set(_DECISION_ID_RX.findall("\n".join(lines)))
     if not named:
         return []
@@ -2111,7 +2120,7 @@ def _unstaged_message(name, skill_dir, differing, stage):
 
 
 def mirror_failures(root, names, committing=None, stage=STAGE_INDEX, notices=None, twins=None,
-                    mirrors=None):
+                    mirrors=None, log=None):
     """Return a failure per mirrored skill in ``names`` whose twin has drifted.
 
     A mirrored skill is a DIRECTORY. Several pairs ship `references/` and `scripts/` beside their
@@ -2145,7 +2154,8 @@ def mirror_failures(root, names, committing=None, stage=STAGE_INDEX, notices=Non
     `MIRRORED_SKILLS` unless a caller passes another.
 
     A gate committing the twin also judges the twin's shipped text against the marketplace copy's
-    decision ledger (`_twin_decision_failures`), whether or not the pair drifted.
+    decision ledger (`_twin_decision_failures`), whether or not the pair drifted; ``log``, when
+    given, receives an audit record per such refusal.
     """
 
     public = _marketplace_public(root)
@@ -2171,7 +2181,7 @@ def mirror_failures(root, names, committing=None, stage=STAGE_INDEX, notices=Non
             continue  # nothing committed on one side yet: no text either commit could ship
         if committing == "twin":
             # Before the drift test: a twin in sync with an uncommitted marketplace edit passes it.
-            fails += _twin_decision_failures(name, here_dir, their_files)
+            fails += _twin_decision_failures(name, here_dir, their_files, log)
         differing, sample = _mirror_differences(mine_files, their_files)
         if not differing:
             continue
@@ -2372,21 +2382,69 @@ def _ledger_lines(data):
         start = end
 
 
-def _append_only_problem(root, ledger_rel, shipped, base):
-    """Why ``shipped`` is not the fork point's ledger plus appended lines, or None when it is."""
-    before = _checked_out_bytes(root, base, ledger_rel) if base else None
+def _append_only_problem(root, ledger_rel, shipped, base, fork_rel=None):
+    """Why ``shipped`` is not the fork point's ledger plus appended lines, or None when it is.
+
+    ``fork_rel`` is where the fork point kept this ledger when its skill was renamed since
+    (`_renamed_skills`); by default the ledger's own path."""
+    before = _checked_out_bytes(root, base, fork_rel or ledger_rel) if base else None
     if not before:
         return None
+    moved = " (moved from %s)" % fork_rel if fork_rel and fork_rel != ledger_rel else ""
     after = _ledger_lines(shipped)
     for number, old in enumerate(_ledger_lines(before), 1):
         new = next(after, None)
         # The line ending is no part of an entry: a last line the fork point left without its b"\n"
         # gets one when the next entry is appended.
         if new is None or new.rstrip(b"\r\n") != old.rstrip(b"\r\n"):
-            return ("%s is append-only; line %d, present at the fork point, was changed or "
+            return ("%s%s is append-only; line %d, present at the fork point, was changed or "
                     "removed. Withdraw an entry with a new void entry instead."
-                    % (ledger_rel, number))
+                    % (ledger_rel, moved, number))
     return None
+
+
+def _stage_renames(root, stage, base):
+    """(old, new) for every path ``stage`` ships moved since ``base``, as git's `-M` pairs them.
+
+    The index on a commit (a `CommitSelection` through its throwaway index, the plain index when
+    git cannot build that), HEAD on a push. [] when git cannot say."""
+    args = ("diff", "--name-status", "-M")
+    if not _is_commit(stage):
+        rc, out = _git_paths(root, *args, base, "HEAD")
+    else:
+        selecting = isinstance(stage, CommitSelection)
+        with (_selection_index(root, stage) if selecting else contextlib.nullcontext()) as env:
+            rc, out = _git_paths(root, *args, "--cached", base, env=env)
+    pairs, at = [], 0
+    while not rc and at < len(out):
+        status = out[at][:1]
+        if status == "R" and at + 2 < len(out):
+            pairs.append((out[at + 1], out[at + 2]))
+        at += 3 if status in ("R", "C") else 2
+    return pairs
+
+
+def _renamed_skills(root, stage, base, names):
+    """{new name: old name} for each skill of ``names`` new since ``base`` that a rename made.
+
+    A skill counts as renamed when git pairs one of its files (`_stage_renames`) with the file at
+    the same place in another skill's dir. A rename git cannot pair, every file rewritten past its
+    similarity threshold, reads as a deletion plus a new skill, as it does to git. Only asked when
+    a skill of ``names`` has no SKILL.md at the fork point, so an edit to existing skills pays
+    one `ls-tree` and no diff.
+    """
+    if base is None or not names:
+        return {}
+    mds = {name: "%s/%s/SKILL.md" % (_SKILLS_DIR, name) for name in names}
+    _, at_base = _git_paths(root, "ls-tree", "-r", "--name-only", base, "--", *mds.values())
+    new = {name for name, md in mds.items() if md not in at_base}
+    found = {}
+    for old, moved in _stage_renames(root, stage, base) if new else ():
+        a, b = _SKILL_FILE_RX.match(old), _SKILL_FILE_RX.match(moved)
+        if a and b and b.group(1) in new and a.group(1) != b.group(1) \
+                and old[a.end():] == moved[b.end():]:
+            found.setdefault(b.group(1), a.group(1))
+    return found
 
 
 def _decision_message(name, finding, ledger_rel, where="staged with this change"):
@@ -2404,25 +2462,39 @@ def _decision_message(name, finding, ledger_rel, where="staged with this change"
     return "skills/%s: %s: %s" % (name, ledger_rel, finding.render())
 
 
-def _judge_skill(root, name, files, base, log):
-    """The refusals for skill ``name`` as its ``files`` ship; each one is also handed to ``log``."""
+def _judge_skill(root, name, files, base, log, fork_name=None):
+    """The refusals for skill ``name`` as its ``files`` ship; each one is also handed to ``log``.
+
+    ``fork_name`` is the name the skill had at the fork point when a rename made it
+    (`_renamed_skills`): the append-only half reads that skill's ledger there."""
     if "SKILL.md" not in files:
         return []                                   # the skill is deleted: its ledger goes with it
     ledger_rel = "%s/%s/%s" % (_SKILLS_DIR, name, skill_decisions.LEDGER_REL)
+    fork_rel = "%s/%s/%s" % (_SKILLS_DIR, fork_name or name, skill_decisions.LEDGER_REL)
     ledger = files.get(skill_decisions.LEDGER_REL, b"")
     refusals = []                                   # (entry id, problem, message)
-    breach = _append_only_problem(root, ledger_rel, ledger, base)
+    breach = _append_only_problem(root, ledger_rel, ledger, base, fork_rel)
     if breach:
         refusals.append(("", breach, "skills/%s: %s" % (name, breach)))
     findings = skill_decisions.check_ledger(lambda: _ledger_lines(ledger),
                                             skill_decisions.corpus_text(files))
     for finding in findings:
-        problem = finding.problem + (" %r" % finding.anchor if finding.anchor else "")
-        refusals.append((finding.entry_id, problem, _decision_message(name, finding, ledger_rel)))
+        refusals.append((finding.entry_id, _finding_problem(finding),
+                         _decision_message(name, finding, ledger_rel)))
     for entry_id, problem, _message in refusals:
-        log({"time": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()), "skill": name,
-             "entry_id": entry_id, "problem": problem})
+        log(_refusal_record(name, entry_id, problem))
     return [message for _entry_id, _problem, message in refusals]
+
+
+def _finding_problem(finding):
+    """The audit record's ``problem`` for ``finding``: its problem, then the anchor it lost."""
+    return finding.problem + (" %r" % finding.anchor if finding.anchor else "")
+
+
+def _refusal_record(name, entry_id, problem):
+    """One audit log record for a decision refusal of skill ``name``."""
+    return {"time": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()), "skill": name,
+            "entry_id": entry_id, "problem": problem}
 
 
 #: Every twin decision refusal names this, so the tool-repo gate can label it
@@ -2430,7 +2502,7 @@ def _judge_skill(root, name, files, base, log):
 _MARKETPLACE_LEDGER = "the marketplace ledger"
 
 
-def _twin_decision_failures(name, here_dir, twin_files):
+def _twin_decision_failures(name, here_dir, twin_files, log=None):
     """The refusals the marketplace skill ``here_dir``'s ledger gives the twin text ``twin_files``.
 
     The twin is the same skill under its own repo's name, so a decision recorded in the marketplace
@@ -2440,6 +2512,11 @@ def _twin_decision_failures(name, here_dir, twin_files):
     anchor kept only in text the convention erases (an H1 parenthetical, the `name:` line, the
     self-install blockquote) is gone. No append-only half: a tool-repo change cannot edit the
     ledger.
+
+    The ledger comes from a published ref, so a refusal names that ref when it was last fetched
+    over STALE_REF_DAYS ago, as a drift message does (`stale_ref_notes`). ``log``, when given,
+    receives one audit record per refusal (`_refusal_record`); the caller decides which reading
+    counts, since a gate reads several checkouts and reports one.
     """
     rel = skill_decisions.LEDGER_REL
     ledger = published_files(here_dir, ignore=lambda path: path != rel).get(rel)
@@ -2452,7 +2529,10 @@ def _twin_decision_failures(name, here_dir, twin_files):
     where = "committed to %s, in that checkout, before this change" % shown
     findings = skill_decisions.check_ledger(lambda: _ledger_lines(ledger),
                                             skill_decisions.corpus_text(files))
-    return [_decision_message(name, finding, shown, where) for finding in findings]
+    notes = "".join("\n  " + note for note in stale_ref_notes([here_dir])) if findings else ""
+    for finding in findings if log else ():
+        log(_refusal_record(name, finding.entry_id, _finding_problem(finding)))
+    return [_decision_message(name, finding, shown, where) + notes for finding in findings]
 
 
 def _skills_with_a_ledger(root, names, base):
@@ -2488,7 +2568,9 @@ def check_skill_decisions(root, stage=STAGE_INDEX, *, log=None):
     The candidates are `_shipping_candidates`, as for the review and description checks: a push
     also counts the paths its commits change, so a change committed and then reverted in both the
     index and the working copy is still judged. Whether a skill is deleted is read from what ships
-    (no SKILL.md in it), never from the disk.
+    (no SKILL.md in it), never from the disk. A rename carries the ledger: a skill renamed since
+    the fork point (`_renamed_skills`) is judged against its old name's ledger there, or the old
+    name would read as deleted and the new one as having no ledger to append to.
     """
     changed = _shipping_candidates(root, stage)
     if not changed:
@@ -2496,10 +2578,12 @@ def check_skill_decisions(root, stage=STAGE_INDEX, *, log=None):
     base = _merge_base(root)
     log = log or _log_decision_refusal
     names = sorted({m.group(1) for m in (_SKILL_FILE_RX.match(p) for p in changed) if m})
+    renamed = _renamed_skills(root, stage, base, names)
+    judged = set(_skills_with_a_ledger(root, names, base)) | set(renamed)
     fails = []
-    for name in _skills_with_a_ledger(root, names, base):
+    for name in (n for n in names if n in judged):
         files = shipped_files(root / _SKILLS_DIR / name, stage, ignore=_decision_ignored)
-        fails += _judge_skill(root, name, files, base, log)
+        fails += _judge_skill(root, name, files, base, log, renamed.get(name))
     return fails
 
 
@@ -2509,8 +2593,9 @@ def check_all_skill_decisions(root):
     Both are read from the working tree (`file_lines`, `corpus_from_dir`), not from the index or
     HEAD: in CI that is a clean checkout of the pushed commit, so the two agree there.
 
-    No append-only check: CI on a push diffs nothing (by then the change IS origin/master), so
-    that half lives in the hook and the pre-push gate only.
+    No append-only check here: that half needs a fork point, which `check_skill_decisions` reads.
+    `run_checks` runs both in CI; on a push the merge-base is HEAD, so only a pull request (and
+    the hook and pre-push gate) gives that half something to diff.
     """
     fails = []
     for path in sorted((root / _SKILLS_DIR).glob("*/" + skill_decisions.LEDGER_REL)):
@@ -3171,9 +3256,13 @@ def run_checks(root, ci, full_pytest=None, run_pytest=True, baseline=0, mirror_a
     failures += check_changelog_current_version(root)
     failures += check_version_sync(root)
     # Both modes: CI sweeps every ledger (a clean checkout has nothing half-done), the hook and
-    # the pre-push judge only the skills the change touches, at what it ships.
+    # the pre-push judge only the skills the change touches, at what it ships. CI runs the
+    # per-change check at HEAD too, for its append-only half: on a pull request HEAD sits above
+    # its fork point, while on a push the merge-base IS HEAD, so it has no candidates and no cost.
+    # A finding both report is listed once.
     if ci:
-        failures += check_all_skill_decisions(root)
+        failures += list(dict.fromkeys(check_all_skill_decisions(root)
+                                       + check_skill_decisions(root, stage=STAGE_HEAD)))
     else:
         failures += check_skill_decisions(root, stage=mirror_at)
     # Version-bump is a release/merge concern owned by the maintainer, not a per-PR
@@ -3224,7 +3313,8 @@ def _tool_repo_touched(root, stage, publishes, twins):
     return {name for name, twin in twins.items() if any(path.is_relative_to(twin) for path in shipped)}
 
 
-def gate_tool_repo_mirror(root, stage=STAGE_INDEX, guessed=False, publishes=False, mirrors=None):
+def gate_tool_repo_mirror(root, stage=STAGE_INDEX, guessed=False, publishes=False, mirrors=None,
+                          log=None):
     """Check the mirror of a skill edited in its OWN repo, before it is committed or pushed.
 
     `main` has already read the event and confirmed it is a gated command, and `root` is the
@@ -3253,7 +3343,9 @@ def gate_tool_repo_mirror(root, stage=STAGE_INDEX, guessed=False, publishes=Fals
     checkout, but it says so through ``additionalContext``, the one exit-0 channel the
     model actually reads (plain stdout/stderr on exit 0 does not reach it).
 
-    ``mirrors`` is the pair table, `MIRRORED_SKILLS` unless a caller passes another.
+    ``mirrors`` is the pair table, `MIRRORED_SKILLS` unless a caller passes another. ``log``
+    receives one audit record per reported decision refusal (default: the audit log,
+    `_log_decision_refusal`).
     """
 
     if root is None:
@@ -3279,23 +3371,28 @@ def gate_tool_repo_mirror(root, stage=STAGE_INDEX, guessed=False, publishes=Fals
     if _is_commit(stage):
         candidates += _other_marketplace_checkouts(marketplace)
     notices, fails, unpushed = [], [], set()
+    log = log or _log_decision_refusal
     for name in mine:
         refusals = []
         for candidate in candidates:
-            found = []
+            found, records = [], []
             failed = mirror_failures(candidate, {name}, committing="twin", stage=stage, notices=found,
-                                     twins=twins, mirrors=mirrors)
+                                     twins=twins, mirrors=mirrors, log=records.append)
             if not failed:
                 notices += found
                 break
-            refusals.append(failed)
+            refusals.append((failed, records))
         else:
             held = None if _is_commit(stage) else _unpushed_holder(marketplace, name, stage, twins, mirrors)
             if held:
                 unpushed.add(name)
                 fails.append(_unpushed_message(name, *held))
             else:
-                fails += refusals[0]  # the checkout a push would read is the one to report
+                fails += refusals[0][0]  # the checkout a push would read is the one to report
+                # Its decision refusals only: every checkout read refuses alike, and a refusal of
+                # one the gate passed through never blocked anything.
+                for record in refusals[0][1]:
+                    log(record)
     if not fails:
         _say_context(notices)
         return 0
