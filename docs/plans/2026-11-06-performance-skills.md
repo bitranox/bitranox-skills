@@ -72,6 +72,10 @@ no scripts. Design: `docs/plans/2026-11-06-performance-skills-design.md` (commit
 - Create: `plugins/bitranox/skills/coding-performance-review/.skillwriter/decisions.jsonl` (via `skill_decisions.py add`)
 - Create: `plugins/bitranox/skills/coding-performance-review/.skillwriter/checklist-20261106-new-skill.md`
 - Create: `plugins/bitranox/skills/coding-python-performance-review/.skillwriter/checklist-20261106-claim-checker-moved.md`
+- Regenerate: `plugins/bitranox/hooks/skill_triggers.json`, `docs/skills.md`; Modify: `README.md`
+  (skill count 83 -> 84, 3 places). A new skill directory fails the hook suite's catalogue,
+  trigger-map and README-count tests, which the commit gate runs, so the commit that adds a skill
+  carries its regenerated artifacts.
 
 **Interfaces:**
 - Produces: `validate_perf_claims.py` at its new path, unchanged in content and CLI
@@ -385,10 +389,18 @@ change is two path mentions; `Decisions: none - the claim checker moved to the g
 
 - [ ] **Step 12: Commit**
 
-Message file (earlier call): `feat(skills): coding-performance-review, the generic performance skill` with a body naming the move.
+First regenerate the derived artifacts:
+
 ```bash
-git add plugins/bitranox/skills/coding-performance-review plugins/bitranox/skills/coding-python-performance-review
-git commit -F "$SCRATCH/msg-task1.txt" -- plugins/bitranox/skills/coding-performance-review plugins/bitranox/skills/coding-python-performance-review
+python3 plugins/bitranox/hooks/build_skill_triggers.py
+python3 plugins/bitranox/hooks/build_skill_docs.py
+```
+and change the three README mentions of `83` skills to `84` (`ls plugins/bitranox/skills | wc -l`
+must print 84). Then, message file (earlier call):
+`feat(skills): coding-performance-review, the generic performance skill` with a body naming the move.
+```bash
+git add plugins/bitranox/skills/coding-performance-review plugins/bitranox/skills/coding-python-performance-review plugins/bitranox/hooks/skill_triggers.json docs/skills.md README.md
+git commit -F "$SCRATCH/msg-task1.txt" -- plugins/bitranox/skills/coding-performance-review plugins/bitranox/skills/coding-python-performance-review plugins/bitranox/hooks/skill_triggers.json docs/skills.md README.md
 ```
 The commit gate runs the suite. No version bump in this commit (Task 4 releases).
 
@@ -701,8 +713,14 @@ In `plugins/bitranox/skills/coding-rust/SKILL.md`, section `## See also`, add th
 Checklist `coding-rust/.skillwriter/checklist-20261106-see-also-perf.md` with
 `Decisions: none - a cross-reference to the new skill; no rule changed`.
 
-- [ ] **Step 7: Commit** with `-F` and the pathspecs
-`plugins/bitranox/skills/coding-rust-performance-review plugins/bitranox/skills/coding-rust`.
+- [ ] **Step 7: Regenerate, then commit**
+
+Run `python3 plugins/bitranox/hooks/build_skill_triggers.py` and
+`python3 plugins/bitranox/hooks/build_skill_docs.py`, and change the three README mentions of `84`
+skills and the one in `docs/installation.md` ("all 84 skills") to `85`
+(`ls plugins/bitranox/skills | wc -l` must print 85): the commit gate's hook suite refuses a new
+skill directory without them. Commit with `-F` and the pathspecs
+`plugins/bitranox/skills/coding-rust-performance-review plugins/bitranox/skills/coding-rust plugins/bitranox/hooks/skill_triggers.json docs/skills.md README.md docs/installation.md`.
 
 ---
 
@@ -712,8 +730,7 @@ Checklist `coding-rust/.skillwriter/checklist-20261106-see-also-perf.md` with
 - Modify: `plugins/bitranox/skills/process-review-enhance-code-quality/SKILL.md` (the paragraph
   "**The cost rows are read, never measured.**")
 - Create: `plugins/bitranox/skills/process-review-enhance-code-quality/.skillwriter/checklist-20261106-perf-skills-routing.md`
-- Regenerate: `plugins/bitranox/hooks/skill_triggers.json`, `docs/skills.md`
-- Modify: `README.md` (skill count, 3 places)
+- Regenerate (check only, Tasks 1 and 3 already regenerated): `plugins/bitranox/hooks/skill_triggers.json`, `docs/skills.md`
 - Bump: `plugins/bitranox/.claude-plugin/plugin.json`, `pyproject.toml`, `CHANGELOG.md`
 
 **Out of scope:**
@@ -737,19 +754,23 @@ with
 for the method and for any other language."
 Checklist with `Decisions: none - routing extended to the new performance skills; no rule changed`.
 
-- [ ] **Step 2: Regenerate**
+- [ ] **Step 2: Confirm the generated artifacts are in sync**
 
 ```bash
-python3 plugins/bitranox/hooks/build_skill_triggers.py
-python3 plugins/bitranox/hooks/build_skill_docs.py
-grep -c 'coding-performance-review\|coding-rust-performance-review' docs/skills.md plugins/bitranox/hooks/skill_triggers.json
+python3 plugins/bitranox/hooks/build_skill_triggers.py --check
+python3 plugins/bitranox/hooks/build_skill_docs.py --check
 ```
-Expected: each file counts at least 2. Then `ls plugins/bitranox/skills | wc -l` (expect 85) and
-change the three README mentions of `83` skills to that number.
+Expected: both exit 0 (Tasks 1 and 3 regenerated them; Step 1 changes no description). If either
+fails, run it without `--check` and include the result in this task's commit.
 
-- [ ] **Step 3: Bump**
+- [ ] **Step 3: Bump (already made: commit 3395c79e, 10.20.0 -> 10.21.0)**
 
-Fetch, then write `$SCRATCH/notes.md`:
+The commit gate refuses any commit touching `plugins/` while plugin.json equals origin's version,
+so the controller made the bump commit before Task 1's commit, with the notes below. In this task:
+`git fetch origin`; if origin's plugin.json is still 10.20.0, keep the bump and only correct the
+CHANGELOG section if the shipped content differs from these notes. If origin moved past 10.20.0,
+rebase onto it and re-bump from origin's number. The notes used for 3395c79e,
+`$SCRATCH/notes.md`:
 
 ```markdown
 ### Added
@@ -768,6 +789,7 @@ Fetch, then write `$SCRATCH/notes.md`:
 ```
 
 ```bash
+# only when origin moved past 10.20.0, after the rebase:
 uv run plugins/bitranox/hooks/bump_version.py --part minor --changelog "$SCRATCH/notes.md"
 ```
 
