@@ -26,6 +26,7 @@ Pure standard library.
 import argparse
 import concurrent.futures as cf
 import hashlib
+import importlib.util
 import json
 import os
 import re
@@ -331,12 +332,88 @@ run anything must say so here rather than return a clean report.
 """
 
 
-def build_prompt(name, prefix="bitranox", project_local=False):
+DECISIONS_NOTE = """
+DECIDED ALREADY: this skill's maintainers declined or removed the items below, each with its reason
+and the condition that would reopen it. Do not report one of them as a defect or a skill gap unless
+you can show its reopen condition is met; if you do, quote that condition in the WHY line.
+
+{brief}
+"""
+
+# Loaded `skill_decisions` modules, keyed by the bytes of the file they came from.
+_DECISION_MODULES = {}
+
+
+def _decisions_module(path):
+    """The `skill_decisions` module at `path`, loaded from that file and no other.
+
+    A plain `import skill_decisions` returns whatever copy sys.modules already holds - one loaded
+    for an earlier room, or the plugin's own under a whole-repo test run - so a room whose copy
+    differs would be briefed by a module it does not ship. Loading by path under a name derived
+    from the file's bytes gives each distinct copy its own module. Its own sibling import
+    (`tell_chars`) still resolves through sys.path, which only the ledger-writing path uses."""
+    path = Path(path)
+    digest = hashlib.sha256(path.read_bytes()).hexdigest()[:16]
+    module = _DECISION_MODULES.get(digest)
+    if module is not None:
+        return module
+    name = "_audit_skill_decisions_%s" % digest
+    spec = importlib.util.spec_from_file_location(name, path)
+    module = importlib.util.module_from_spec(spec)
+    hooks = str(path.parent)
+    added = hooks not in sys.path
+    if added:
+        sys.path.insert(0, hooks)
+    # Registered before exec: a string-annotated dataclass in the module looks itself up there.
+    sys.modules[name] = module
+    try:
+        spec.loader.exec_module(module)
+    except BaseException:
+        sys.modules.pop(name, None)
+        raise
+    finally:
+        if added:
+            sys.path.remove(hooks)
+    _DECISION_MODULES[digest] = module
+    return module
+
+
+def decision_brief(skills_src, name, hooks_dir, log=None):
+    """The skill's live rejected and removed decisions, rendered as the edit guard renders them.
+
+    The room leaves `.skillwriter/` out so a reviewer judges the shipped text, not the author's
+    notes; the ledger is read from the SOURCE skills dir instead. Rendering goes through the
+    plugin's own `skill_decisions` module from `hooks_dir`, so the brief cannot drift from the
+    edit guard's. Any failure returns "" and says why through `log`: a missing brief loses
+    context, not the audit."""
+    ledger = Path(skills_src) / name / ".skillwriter" / "decisions.jsonl"
+    if not ledger.is_file():
+        return ""
+    module_path = Path(hooks_dir) / "skill_decisions.py"
+    if not module_path.is_file():
+        if log:
+            log("NOTE: %s has a decision ledger but %s is missing; no brief" % (name, module_path))
+        return ""
+    try:
+        module = _decisions_module(module_path)
+        return module.render_brief(
+            lambda: module.file_lines(ledger), skill=name, budget_chars=12000,
+            show_command="skill_decisions.py show %s --kind rejected,removed --full" % name)
+    except Exception as exc:  # a broken ledger costs the brief, never the audit
+        if log:
+            log("NOTE: %s: decision ledger unreadable (%s); no brief" % (name, exc))
+        return ""
+
+
+def build_prompt(name, prefix="bitranox", project_local=False, decisions=""):
     """The reviewer contract for one skill. `prefix` is the plugin's skill namespace;
-    `project_local` adds the note that the owning repo's paths resolve (see REPO_MANIFEST)."""
+    `project_local` adds the note that the owning repo's paths resolve (see REPO_MANIFEST);
+    `decisions` is the skill's declined list (`decision_brief`), appended when non-empty."""
     prompt = PROMPT.format(name=name, prefix=prefix)
     if project_local:
         prompt += PROJECT_LOCAL_NOTE.format(manifest=REPO_MANIFEST)
+    if decisions:
+        prompt += DECISIONS_NOTE.format(brief=decisions)
     return prompt
 
 
@@ -846,10 +923,11 @@ def _subprocess_runner(prompt, cwd, model, timeout):
 
 
 def audit_one(name, room, reports_dir, model="opus", timeout=900, prefix="bitranox",
-              runner=_subprocess_runner):
-    """Review one skill and write its report. `runner` is the injectable reviewer seam."""
+              runner=_subprocess_runner, decisions=""):
+    """Review one skill and write its report. `runner` is the injectable reviewer seam;
+    `decisions` is the skill's declined list for the prompt (`decision_brief`)."""
     project_local = (Path(room) / REPO_MANIFEST).is_file()
-    out = runner(build_prompt(name, prefix, project_local), room, model, timeout)
+    out = runner(build_prompt(name, prefix, project_local, decisions), room, model, timeout)
     path = Path(reports_dir) / ("%s.audit.txt" % name)
     stored = store_report(path, name, out)
     return name, count_findings(stored)
@@ -935,8 +1013,12 @@ def audit_all(plugin_src, room_root, model="opus", jobs=6, timeout=900, only=(),
     if not names:
         raise NothingSelected("no skill in %s matches the selection %s" % (room, _shown(only)))
     log("auditing %d skill(s) in %s with %d job(s)" % (len(names), room, jobs))
+    # The ledgers stay in the source: the room is copied without `.skillwriter/`.
+    skills_src = Path(skills_dir) if skills_dir else Path(plugin_src) / "skills"
+    briefs = {n: decision_brief(skills_src, n, Path(room) / "hooks", log) for n in names}
     results = _run_pool(jobs, names,
-                        lambda n: audit_one(n, room, reports, model, timeout, prefix, runner), log)
+                        lambda n: audit_one(n, room, reports, model, timeout, prefix, runner,
+                                            briefs[n]), log)
     log("DONE: %d finding(s) across %d skill(s)" % (sum(results.values()), len(names)))
     return results
 

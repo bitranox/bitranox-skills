@@ -3,9 +3,15 @@
 The reviewer is injected at the `runner` seam, so these exercise the real module end to end with a
 substitute reviewer rather than patching internals."""
 
+import json
 import os
+import shutil
+from pathlib import Path
 
 import audit_skills as A
+
+# The plugin's real hooks dir, so the decision brief is rendered by the real skill_decisions module.
+PLUGIN_HOOKS = Path(__file__).resolve().parents[3] / "hooks"
 
 
 def _plugin(tmp_path, skills=("alpha", "beta"), with_hook=True):
@@ -319,3 +325,97 @@ def test_a_project_local_review_is_told_the_repo_paths_resolve(tmp_path):
     assert "PROJECT-LOCAL" in flat
     # Control: a plugin review keeps the install-unit contract and never mentions a manifest.
     assert A.REPO_MANIFEST not in A.build_prompt("x")
+
+
+# ---- declined decisions -------------------------------------------------------------------------
+
+def _ledger(skills, name, lines):
+    """A skill `name` under `skills` with a decision ledger holding `lines`."""
+    d = skills / name / ".skillwriter"
+    d.mkdir(parents=True)
+    (skills / name / "SKILL.md").write_text("# x\n", encoding="utf-8")
+    (d / "decisions.jsonl").write_text("".join(json.dumps(e) + "\n" for e in lines),
+                                       encoding="utf-8")
+
+
+# The id is content-derived (`skill_decisions.entry_id`); a made-up one fails validation and the
+# brief is then empty, so this literal must change whenever a field below does.
+_REJECTED = {"v": 1, "id": "d-20261106-64c2bb95", "date": "2026-11-06", "kind": "rejected",
+             "topic": "rebase", "decision": "Not adopted: rebase instead of merge.",
+             "why": "a rebase rewrites a tagged commit", "evidence": {"tier": "argued", "text": "x"},
+             "reopen_if": "releases stop tagging main", "anchors": [], "supersedes": [],
+             "refs": [], "origin": "authored"}
+
+
+def test_decision_brief_renders_a_rejected_entry(tmp_path):
+    _ledger(tmp_path, "foo", [_REJECTED])
+    notes = []
+    brief = A.decision_brief(tmp_path, "foo", PLUGIN_HOOKS, log=notes.append)
+    assert notes == []                    # a fixture the real module refuses would say so here
+    assert "a rebase rewrites a tagged commit" in brief
+    assert "releases stop tagging main" in brief
+
+
+def test_decision_brief_is_empty_without_a_ledger(tmp_path):
+    (tmp_path / "foo").mkdir()
+    assert A.decision_brief(tmp_path, "foo", PLUGIN_HOOKS) == ""
+
+
+def test_decision_brief_is_empty_and_says_so_when_the_ledger_is_broken(tmp_path):
+    d = tmp_path / "foo" / ".skillwriter"
+    d.mkdir(parents=True)
+    (d / "decisions.jsonl").write_text("{not json\n", encoding="utf-8")
+    notes = []
+    assert A.decision_brief(tmp_path, "foo", PLUGIN_HOOKS, log=notes.append) == ""
+    assert any("foo" in n for n in notes)
+
+
+def test_decision_brief_is_empty_and_says_so_without_the_module(tmp_path):
+    _ledger(tmp_path, "foo", [_REJECTED])
+    notes = []
+    assert A.decision_brief(tmp_path, "foo", tmp_path / "no-hooks", log=notes.append) == ""
+    assert any("foo" in n for n in notes)
+
+
+def test_decision_brief_renders_with_the_hooks_dir_it_is_given(tmp_path):
+    """Two hooks dirs with different skill_decisions copies give two different briefs: a module
+    loaded for one room is never reused for another."""
+    _ledger(tmp_path / "skills", "foo", [_REJECTED])
+    other = tmp_path / "other-hooks"
+    shutil.copytree(PLUGIN_HOOKS, other, ignore=shutil.ignore_patterns("tests", "__pycache__"))
+    module = other / "skill_decisions.py"
+    text = module.read_text(encoding="utf-8")
+    marker = "Decisions already taken for %s"
+    assert text.count(marker) == 1, "the mutation below must apply exactly once"
+    module.write_text(text.replace(marker, "OTHER COPY for %s"), encoding="utf-8")
+    real = A.decision_brief(tmp_path / "skills", "foo", PLUGIN_HOOKS)
+    copy = A.decision_brief(tmp_path / "skills", "foo", other)
+    assert real.startswith("Decisions already taken for foo")
+    assert copy.startswith("OTHER COPY for foo")
+
+
+def test_prompt_carries_the_brief_only_when_there_is_one():
+    assert "DECIDED ALREADY" not in A.build_prompt("x")
+    p = A.build_prompt("x", decisions="Decisions already taken for x: ...")
+    assert "DECIDED ALREADY" in p and "Decisions already taken for x" in p
+
+
+def test_audit_all_hands_each_reviewer_its_own_brief(tmp_path):
+    plugin = tmp_path / "plugin-src"
+    shutil.copytree(PLUGIN_HOOKS, plugin / "hooks",
+                    ignore=shutil.ignore_patterns("tests", "__pycache__"))
+    _ledger(plugin / "skills", "foo", [_REJECTED])
+    (plugin / "skills" / "bar").mkdir()
+    (plugin / "skills" / "bar" / "SKILL.md").write_text("# bar\n", encoding="utf-8")
+    seen = {}
+
+    def runner(prompt, cwd, model, timeout):
+        name = "foo" if "skills/foo/" in prompt else "bar"
+        seen[name] = prompt
+        return "NO FINDINGS\n\nSkill gaps\nnone\n"
+
+    A.audit_all(plugin, tmp_path / "room", jobs=1, runner=runner, log=lambda *_: None)
+    assert "a rebase rewrites a tagged commit" in seen["foo"]
+    assert "DECIDED ALREADY" not in seen["bar"]
+    # The room leaves the ledger out; the brief came from the source dir.
+    assert not (tmp_path / "room" / "plugin" / "skills" / "foo" / ".skillwriter").exists()
