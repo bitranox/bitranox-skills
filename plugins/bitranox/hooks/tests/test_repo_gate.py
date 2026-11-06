@@ -23,6 +23,7 @@ from pathlib import Path
 import pytest
 
 import repo_gate as RG
+import skill_decisions as SD
 
 
 # --------------------------------------------------------------------------
@@ -4290,3 +4291,241 @@ def test_changed_vs_origin_on_a_diverged_checkout_lists_our_commit_not_the_peer_
 def test_merge_base_is_none_without_an_origin_ref(tmp_path):
     git_repo(tmp_path, {"x.md": "a\n"})
     assert RG._merge_base(tmp_path) is None
+
+
+# --------------------------------------------------------------------------
+# The skill decision ledger: the commit and push gate (check_skill_decisions) and the CI sweep
+# --------------------------------------------------------------------------
+
+LEDGER_SKILL = "plugins/bitranox/skills/devops-bmk"
+LEDGER_REL = LEDGER_SKILL + "/.skillwriter/decisions.jsonl"
+RULE_TEXT = "Intro.\n\nbmk alone, shared across projects.\n"
+
+
+@pytest.fixture
+def _bare_git_env(monkeypatch):
+    """No inherited variable may point the tests' git, or the gate's, at another repository.
+
+    A push from a linked worktree exports GIT_DIR to its hooks, and this suite runs from one. The
+    GIT_CONFIG_* pins of `_lf_git_eol_config` stay.
+    """
+    for key in list(os.environ):
+        if key.startswith("GIT_") and not key.startswith("GIT_CONFIG_"):
+            monkeypatch.delenv(key)
+
+
+def _ledger_line(text_anchor="bmk alone, shared across projects", *, ensure_ascii=True, **over):
+    entry = {"v": 1, "date": "2026-11-05", "kind": "rule", "topic": "env-model",
+             "decision": "bmk installs alone.", "why": "Measured on bmk 3.8.0.",
+             "evidence": {"tier": "measured", "text": "release notes"},
+             "reopen_if": "bmk changes its env model.", "anchors": [text_anchor],
+             "supersedes": [], "refs": [], "origin": "authored"}
+    entry.update(over)
+    entry["id"] = SD.entry_id(entry)
+    return json.dumps(entry, ensure_ascii=ensure_ascii) + "\n", entry
+
+
+def _ledger_repo(tmp_path, ledger_lines):
+    """A repo whose HEAD and origin/master hold the skill with ``ledger_lines`` as its ledger.
+
+    Written byte for byte (`write`), not through `git_repo`'s text mode: a CRLF fixture on Windows
+    would differ from the LF ledger a test stages, which the append-only check would refuse.
+    """
+    write(tmp_path / LEDGER_SKILL / "SKILL.md", RULE_TEXT)
+    write(tmp_path / LEDGER_REL, "".join(ledger_lines))
+    return git_repo_with_origin(tmp_path, {})
+
+
+def _stage(root, rel, data):
+    path = root / rel
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_bytes(data if isinstance(data, bytes) else data.encode("utf-8"))
+    subprocess.run(["git", "add", rel], cwd=root, check=True)
+
+
+@pytest.mark.usefixtures("_bare_git_env")
+def test_a_staged_change_that_drops_a_live_anchor_is_refused_with_the_reason(tmp_path):
+    line, entry = _ledger_line()
+    root = _ledger_repo(tmp_path, [line])
+    _stage(root, LEDGER_SKILL + "/SKILL.md", "Intro.\n\nbmk installs per project now.\n")
+    logged = []
+    fails = RG.check_skill_decisions(root, RG.STAGE_INDEX, log=logged.append)
+    assert len(fails) == 1 and entry["id"] in fails[0] and entry["why"] in fails[0]
+    assert "skill_decisions.py add" in fails[0]
+    assert [r["entry_id"] for r in logged] == [entry["id"]]
+    assert set(logged[0]) == {"time", "skill", "entry_id", "problem"}
+    assert logged[0]["skill"] == "devops-bmk"
+
+
+@pytest.mark.usefixtures("_bare_git_env")
+def test_a_superseding_entry_staged_with_the_change_passes(tmp_path):
+    line, entry = _ledger_line()
+    root = _ledger_repo(tmp_path, [line])
+    new_line, _ = _ledger_line("each project gets its own bmk env", decision="per project",
+                               supersedes=[entry["id"]])
+    _stage(root, LEDGER_SKILL + "/SKILL.md", "Intro.\n\nNow each project gets its own bmk env.\n")
+    _stage(root, LEDGER_REL, line + new_line)
+    assert RG.check_skill_decisions(root, RG.STAGE_INDEX, log=lambda r: None) == []
+
+
+@pytest.mark.usefixtures("_bare_git_env")
+def test_an_unstaged_edit_does_not_block_a_commit(tmp_path):
+    """The index is what the commit carries: a half-done working copy is not part of it."""
+    line, _ = _ledger_line()
+    root = _ledger_repo(tmp_path, [line])
+    write(root / LEDGER_SKILL / "SKILL.md", "half-done rewrite\n")
+    assert RG.check_skill_decisions(root, RG.STAGE_INDEX, log=lambda r: None) == []
+
+
+@pytest.mark.usefixtures("_bare_git_env")
+def test_a_push_reads_head_not_the_index(tmp_path):
+    line, _ = _ledger_line()
+    root = _ledger_repo(tmp_path, [line])
+    _stage(root, LEDGER_SKILL + "/SKILL.md", "dropped\n")
+    assert RG.check_skill_decisions(root, RG.STAGE_HEAD, log=lambda r: None) == []
+    # The control: the same tree read at the index is refused, so HEAD's pass is not vacuous.
+    assert RG.check_skill_decisions(root, RG.STAGE_INDEX, log=lambda r: None) != []
+
+
+@pytest.mark.usefixtures("_bare_git_env")
+def test_a_removed_ledger_line_is_refused(tmp_path):
+    line, _ = _ledger_line()
+    second, _ = _ledger_line(topic="second")
+    root = _ledger_repo(tmp_path, [line, second])
+    _stage(root, LEDGER_REL, second)
+    logged = []
+    fails = RG.check_skill_decisions(root, RG.STAGE_INDEX, log=logged.append)
+    assert any("append-only" in f for f in fails)
+    assert any("append-only" in r["problem"] for r in logged)
+
+
+@pytest.mark.usefixtures("_bare_git_env")
+def test_an_appended_ledger_line_is_not_an_append_only_breach(tmp_path):
+    line, _ = _ledger_line()
+    second, _ = _ledger_line(topic="second")
+    root = _ledger_repo(tmp_path, [line])
+    _stage(root, LEDGER_REL, line + second)
+    assert RG.check_skill_decisions(root, RG.STAGE_INDEX, log=lambda r: None) == []
+
+
+@pytest.mark.usefixtures("_bare_git_env")
+def test_deleting_the_ledger_but_keeping_the_skill_is_refused(tmp_path):
+    """The ledger is gone from disk and index alike, so only HEAD and the fork point still hold it."""
+    line, _ = _ledger_line()
+    root = _ledger_repo(tmp_path, [line])
+    subprocess.run(["git", "rm", "-q", LEDGER_REL], cwd=root, check=True)
+    fails = RG.check_skill_decisions(root, RG.STAGE_INDEX, log=lambda r: None)
+    assert any("append-only" in f and "line 1" in f for f in fails)
+
+
+@pytest.mark.usefixtures("_bare_git_env")
+def test_deleting_the_whole_skill_takes_its_ledger_with_it(tmp_path):
+    line, _ = _ledger_line()
+    root = _ledger_repo(tmp_path, [line])
+    subprocess.run(["git", "rm", "-rq", LEDGER_SKILL], cwd=root, check=True)
+    assert RG.check_skill_decisions(root, RG.STAGE_INDEX, log=lambda r: None) == []
+
+
+@pytest.mark.usefixtures("_bare_git_env")
+def test_another_skill_s_broken_ledger_does_not_block_an_unrelated_commit(tmp_path):
+    line, _ = _ledger_line()
+    root = _ledger_repo(tmp_path, [line])
+    write(root / LEDGER_SKILL / "SKILL.md", "dropped, but not staged and not this commit\n")
+    _stage(root, "plugins/bitranox/hooks/x.py", "x = 1\n")
+    assert RG.check_skill_decisions(root, RG.STAGE_INDEX, log=lambda r: None) == []
+
+
+@pytest.mark.usefixtures("_bare_git_env")
+def test_a_staged_ledger_holding_a_raw_u2028_in_a_string_passes(tmp_path):
+    """One JSON line holding a raw U+2028 is ONE line: only b"\\n" ends a ledger line.
+
+    str.splitlines would cut the line at the U+2028 into two halves that are not JSON, so a valid
+    ledger written with ensure_ascii=False would be refused.
+    """
+    line, _ = _ledger_line()
+    root = _ledger_repo(tmp_path, [line])
+    wide, _ = _ledger_line(topic="wide", ensure_ascii=False,
+                           decision="bmk installs alone." + chr(0x2028) + "Still one entry.")
+    assert chr(0x2028) in wide
+    _stage(root, LEDGER_REL, line + wide)
+    assert RG.check_skill_decisions(root, RG.STAGE_INDEX, log=lambda r: None) == []
+
+
+@pytest.mark.usefixtures("_bare_git_env")
+def test_a_staged_non_utf8_ledger_line_is_refused_naming_skill_ledger_and_line(tmp_path):
+    """A byte that is not UTF-8 is refused, never read as U+FFFD.
+
+    The bad line is built so that a lenient decode (errors="replace") turns it into a VALID entry:
+    its decision holds U+FFFD and its id was computed over that, so only a strict per-line decode
+    can tell the shipped bytes are not the entry.
+    """
+    line, _ = _ledger_line()
+    root = _ledger_repo(tmp_path, [line])
+    fake, _ = _ledger_line(topic="fake", ensure_ascii=False,
+                           decision="bmk installs alone " + chr(0xFFFD) + ".")
+    bad = fake.encode("utf-8").replace(chr(0xFFFD).encode("utf-8"), b"\xff")
+    _stage(root, LEDGER_REL, line.encode("utf-8") + bad)
+    logged = []
+    fails = RG.check_skill_decisions(root, RG.STAGE_INDEX, log=logged.append)
+    assert len(fails) == 1
+    assert "devops-bmk" in fails[0] and LEDGER_REL in fails[0]
+    assert "line 2" in fails[0] and "not UTF-8" in fails[0]
+    assert "\n" not in fails[0]
+    assert [r["entry_id"] for r in logged] == [""]
+
+
+@pytest.mark.usefixtures("_bare_git_env")
+def test_the_default_log_appends_to_the_audit_dir_and_never_raises(tmp_path, monkeypatch):
+    home = tmp_path / "home"
+    home.mkdir()
+    monkeypatch.setenv("HOME", str(home))
+    monkeypatch.setenv("USERPROFILE", str(home))
+    line, entry = _ledger_line()
+    root = _ledger_repo(tmp_path / "repo", [line])
+    _stage(root, LEDGER_SKILL + "/SKILL.md", "dropped\n")
+    assert RG.check_skill_decisions(root, RG.STAGE_INDEX) != []
+    sink = home / ".claude" / "self-improve-audit" / "skill-decision-gate.jsonl"
+    records = [json.loads(x) for x in sink.read_text(encoding="utf-8").splitlines()]
+    assert [r["entry_id"] for r in records] == [entry["id"]]
+    # An audit dir that cannot hold the log (a FILE where the dir should be) still refuses cleanly.
+    sink.unlink()
+    sink.parent.rmdir()
+    sink.parent.write_text("not a dir\n", encoding="utf-8")
+    assert RG.check_skill_decisions(root, RG.STAGE_INDEX) != []
+
+
+@pytest.mark.usefixtures("_bare_git_env")
+def test_ci_sweeps_every_ledger_in_the_working_tree(tmp_path):
+    line, entry = _ledger_line()
+    root = _ledger_repo(tmp_path, [line])
+    write(root / LEDGER_SKILL / "SKILL.md", "dropped\n")
+    subprocess.run(["git", "add", "-A"], cwd=root, check=True)
+    fails = RG.check_all_skill_decisions(root)
+    assert len(fails) == 1 and entry["id"] in fails[0]
+
+
+@pytest.mark.usefixtures("_bare_git_env")
+def test_ci_sweep_names_the_ledger_and_line_of_a_malformed_one(tmp_path):
+    root = _ledger_repo(tmp_path, ["{not json\n"])
+    fails = RG.check_all_skill_decisions(root)
+    assert len(fails) == 1 and LEDGER_REL in fails[0] and "line 1" in fails[0]
+
+
+@pytest.mark.usefixtures("_bare_git_env")
+def test_run_checks_wires_the_decision_check_in_both_modes(tmp_path, monkeypatch):
+    """The hook judges the index of a touched skill; --ci sweeps every ledger on disk."""
+    # run_checks logs a refusal through the default sink, which must not land in the real HOME.
+    monkeypatch.setenv("HOME", str(tmp_path / "home"))
+    monkeypatch.setenv("USERPROFILE", str(tmp_path / "home"))
+    line, entry = _ledger_line()
+    root = _ledger_repo(tmp_path, [line])
+    _stage(root, LEDGER_SKILL + "/SKILL.md", "dropped\n")
+    parts = RG.GateParts(mirrors={})
+    hook = RG.run_checks(root, ci=False, run_pytest=False, parts=parts)
+    ci = RG.run_checks(root, ci=True, run_pytest=False, parts=parts)
+    assert any(entry["id"] in f for f in hook)
+    assert any(entry["id"] in f for f in ci)
+
+
+def test_jsonl_is_an_lf_checked_suffix():
+    assert ".jsonl" in RG._LF_SUFFIXES
