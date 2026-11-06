@@ -19,9 +19,12 @@ without error until the next re-render of that level drops it.
 
 `bx:pin` is a WRITE-PERMISSION gate, not just render-ordering advice: an
 ordinary `add` targeting an already-pinned slug raises `PinnedEntry` before any write (see
-`add_or_update_entry`); the only way through is the separate `amend-pinned` verb. The movers (`move`,
+`upsert_entry`); the only way through is the separate `amend-pinned` verb. The movers (`move`,
 `relocate`, `rename`) are unaffected - they carry pin through untouched, never refuse. All output is
 ASCII (` - ` separators, never an em dash).
+
+The pin gate's recorded decision (the rejected `bx:owner=human` partition it replaced) is in the
+`Decisions` block of `upsert_entry`'s docstring.
 
 Pure standard library; cross-platform (pathlib, UTF-8, the O_EXCL lock in self_improve_signals).
 """
