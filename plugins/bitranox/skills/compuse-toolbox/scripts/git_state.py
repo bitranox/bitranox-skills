@@ -15,6 +15,7 @@ preceded by the same hand-typed branch / HEAD==origin / dirty check. This does i
 Run:
   uv run scripts/git_state.py                 # the current directory
   uv run scripts/git_state.py repoA repoB     # named repos
+  uv run scripts/git_state.py --fetch repoA   # `git fetch --prune` each repo first
   uv run scripts/git_state.py --root ~/src    # every repo found under a directory (a .git
                                               # directory, or the .git FILE of a linked
                                               # worktree or submodule)
@@ -23,15 +24,51 @@ Run:
       # untracked / no-repo - never via `git status`, see classify_files() for why.
   add --json in either mode for an envelope {ok, command, data, skipped}
 
+Ahead/behind come from local refs, so they are as of each repo's LAST FETCH: a clone nobody fetched
+reports a confident, precise, wrong number (measured: 2 ahead / 0 behind, 609 behind after a
+fetch). Without --fetch the human output says so on stderr; JSON carries `fetched`.
+
+A FOREIGN upstream is one whose branch name differs from the local branch's: a branch cut from a
+remote-tracking ref (`git checkout -b feat origin/master`) gets that ref as its upstream, and a
+`git push origin feat` without -u leaves it so. Porcelain then counts against origin/master and
+reports the topic commits as unpushed although origin/feat holds them. Such a repo is flagged
+(`upstream origin/master is not origin/feat`) and judged against origin/<branch> by name instead:
+in sync only when that ref exists and equals HEAD, out of sync when it is absent or differs.
+
 Exit status (repo mode) is 0 when every repo is in sync, 1 if any is out of sync (behind/ahead/
-diverged, no upstream, or an upstream gone on the remote), so this doubles as a pre-push guard,
-and 2 when the check itself is incomplete: a repo git could not read, a --root that does not
+diverged, no upstream, an upstream gone on the remote, or a foreign upstream whose namesake is
+absent or differs from HEAD), so this doubles as a pre-push guard, and 2 when the check itself is
+incomplete: a repo git could not read, a --fetch that failed for a repo, a --root that does not
 exist, holds no repo, or has a directory the walk could not read. Exit status (`--files` mode) is
 format-independent: 0 at least one file matched the glob, 1 none matched, 2 the walk or every
 matched repo's git calls failed outright, or the walk hit an unreadable directory and matched
 nothing - because "nothing matched" and "could not classify anything" must not look alike.
 Under --json, `ok` means the check ran (exit 0 or 1) and is false only on exit 2; a usage error
 or a crash prints the envelope too, and exits 2.
+
+Decisions:
+    - A foreign upstream is judged against <remote>/<branch> by name: in sync only when that ref
+      exists and equals HEAD, out of sync (exit 1) when it is absent or differs, and a branch that
+      tracks a differently named branch on purpose is judged the same way. Why: the question a
+      pre-push guard answers is "is this branch pushed under its own name", and the configuration
+      cannot tell intent from accident. Evidence: measured: 2026-11-06, a worktree whose `@{u}..`
+      listed 2 commits against origin/master while HEAD equalled origin/<branch>. Reopen if: a
+      fleet sweep shows deliberate differently named tracking is common and the exit 1 is noise.
+      Pinned by: tests/test_git_state.py::test_a_foreign_upstream_with_no_namesake_is_out_of_sync,
+      tests/test_git_state.py::test_a_foreign_upstream_whose_namesake_equals_head_is_in_sync_but_flagged
+    - Rejected: keep porcelain's `@{u}` counts for a foreign upstream and only add a note. Why: they
+      count against another branch, so the exit code would still answer the wrong question.
+      Reopen if: never while the exit code is meant as a pre-push guard.
+    - Without --fetch nothing is fetched, and the human output says the counts are as of the last
+      fetch (stderr; JSON carries `fetched`). Why: a read-only check by default needs no network
+      and cannot hang on a credential prompt. Evidence: argued. Reopen if: callers keep acting on
+      unfetched counts despite the note. Pinned by:
+      tests/test_git_state.py::test_without_fetch_the_counts_are_stale_and_say_so
+    - Rejected: fetching by default. Why: as above. Reopen if: as above.
+    - A failed --fetch is exit 2 (the check is incomplete), the state is still read and printed.
+      Why: a stale answer presented as fetched would be the defect --fetch exists to remove.
+      Evidence: argued. Reopen if: never. Pinned by:
+      tests/test_git_state.py::test_a_failed_fetch_is_exit_2_and_named
 """
 
 import json
@@ -94,8 +131,19 @@ def _changed_path(line: str) -> str:
     return line.split(" ", 9)[9].split("\t")[0]
 
 
-def git_state(repo) -> dict:
-    """Run git in `repo` and return its parsed state (adds "repo" + "error")."""
+def git_state(repo, fetch: bool = False) -> dict:
+    """Run git in `repo` and return its parsed state (adds "repo" + "error").
+
+    With `fetch`, `git fetch --prune` runs first; its failure is "fetch_error" (the state is still
+    read, from the refs as they were)."""
+    fetch_error = _fetch(repo) if fetch else None
+    state = _read_state(repo)
+    if fetch:
+        state["fetch_error"] = fetch_error
+    return state
+
+
+def _read_state(repo) -> dict:
     try:
         # quotePath off so a staged non-ASCII name prints as itself rather than as octal escapes;
         # decoded as UTF-8 with replacement so an undecodable name cannot crash the check.
@@ -108,7 +156,82 @@ def git_state(repo) -> dict:
         return {"repo": str(repo), "error": (out.stderr or "not a git repo").strip()}
     state = parse_branch_status(out.stdout)
     state["repo"] = str(repo)
+    _judge_own_upstream(repo, state)
     return state
+
+
+_FETCH_TIMEOUT = 120
+
+
+def _fetch(repo) -> str | None:
+    """`git fetch --prune` in `repo`; None on success, else why it failed.
+
+    No prompt can block it: GIT_TERMINAL_PROMPT=0 stops https credential prompts, and a new
+    session (POSIX) leaves ssh no controlling terminal to ask a passphrase on. A timeout kills the
+    whole group, since git's ssh child would otherwise outlive it."""
+    env = dict(os.environ, GIT_TERMINAL_PROMPT="0", LC_ALL="C")
+    try:
+        proc = subprocess.Popen(["git", "-C", str(repo), "fetch", "--prune", "--quiet"],
+                                stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
+                                stderr=subprocess.PIPE, env=env, encoding="utf-8",
+                                errors="replace", start_new_session=os.name != "nt")
+    except OSError as exc:
+        return str(exc)
+    try:
+        _out, err = proc.communicate(timeout=_FETCH_TIMEOUT)
+    except subprocess.TimeoutExpired:
+        _kill_tree(proc)
+        return "git fetch timed out after %ds" % _FETCH_TIMEOUT
+    if proc.returncode == 0:
+        return None
+    lines = [line for line in (err or "").splitlines() if line.strip()]
+    return lines[-1].strip() if lines else "git fetch exited %d" % proc.returncode
+
+
+def _kill_tree(proc) -> None:
+    try:
+        if os.name != "nt":
+            os.killpg(proc.pid, 9)
+        else:
+            proc.kill()
+    except OSError:
+        pass
+    proc.communicate()
+
+
+def _git_out(repo, *args) -> str | None:
+    try:
+        res = subprocess.run(["git", "-C", str(repo), *args], capture_output=True,
+                             encoding="utf-8", errors="replace", timeout=30)
+    except (OSError, subprocess.SubprocessError):
+        return None
+    return res.stdout if res.returncode == 0 else None
+
+
+def _judge_own_upstream(repo, state: dict) -> None:
+    """Flag a FOREIGN upstream and re-judge in_sync against <remote>/<branch> (see module doc).
+
+    Adds foreign_upstream, own_upstream, own_exists, own_ahead, own_behind (None when not
+    foreign or not countable)."""
+    state.update(foreign_upstream=False, own_upstream=None, own_exists=None, own_ahead=None,
+                 own_behind=None)
+    branch = state.get("branch")
+    if not state.get("upstream") or not branch or branch == "(detached)":
+        return
+    line = (_git_out(repo, "for-each-ref", "--format=%(upstream:remotename)%09"
+                     "%(upstream:remoteref)", "refs/heads/" + branch) or "").strip("\n")
+    remote, _tab, remote_ref = line.partition("\t")
+    if not remote_ref or remote_ref.removeprefix("refs/heads/") == branch:
+        return
+    own = "%s/%s" % (remote if remote and remote != "." else "origin", branch)
+    exists = _git_out(repo, "rev-parse", "--verify", "-q", "refs/remotes/" + own) is not None
+    state.update(foreign_upstream=True, own_upstream=own, own_exists=exists)
+    counts = _git_out(repo, "rev-list", "--left-right", "--count",
+                      "HEAD...refs/remotes/" + own) if exists else None
+    if counts is not None and len(counts.split()) == 2:
+        ahead, behind = (int(n) for n in counts.split())
+        state.update(own_ahead=ahead, own_behind=behind)
+    state["in_sync"] = state["own_ahead"] == 0 and state["own_behind"] == 0
 
 
 def find_repos(root, errors: list[str] | None = None) -> list[str]:
@@ -403,11 +526,14 @@ def _main(argv=None) -> int:
                     help="switch modes: classify every file under --root matching GLOB "
                          "(e.g. 'CLAUDE.md' or '*.md') instead of reporting repo state")
     ap.add_argument("--json", action="store_true", help="machine-readable envelope")
+    ap.add_argument("--fetch", action="store_true",
+                    help="repo mode: `git fetch --prune` each repo before reading it, so "
+                         "ahead/behind are current rather than as of the last fetch")
     args = ap.parse_args(argv)
     tolerate_unencodable_stdout()
     if args.files:
         return _main_files(args.files, args.root, args.json)
-    return _main_repos(args.repos, args.root, args.json)
+    return _main_repos(args.repos, args.root, args.json, args.fetch)
 
 
 def tolerate_unencodable_stdout(stream=None) -> None:
@@ -439,6 +565,8 @@ def _repo_targets(repos, root) -> tuple[list[str], list[str]]:
 
 
 def _sync_flag(s: dict) -> str | None:
+    if s.get("foreign_upstream"):
+        return _foreign_flag(s)
     if s["in_sync"]:
         return None
     if not s["upstream"]:
@@ -448,27 +576,42 @@ def _sync_flag(s: dict) -> str | None:
     return f"ahead {s['ahead']}/behind {s['behind']}"
 
 
-def _main_repos(repos, root, as_json) -> int:
+def _foreign_flag(s: dict) -> str:
+    note = "upstream %s is not %s" % (s["upstream"], s["own_upstream"])
+    if not s["own_exists"]:
+        return "%s (%s absent)" % (note, s["own_upstream"])
+    if s["in_sync"]:
+        return "OK (%s)" % note
+    if s["own_ahead"] is None:
+        return "%s (not countable)" % note
+    return "ahead %d/behind %d vs %s (%s)" % (s["own_ahead"], s["own_behind"], s["own_upstream"],
+                                              note)
+
+
+def _main_repos(repos, root, as_json, fetch=False) -> int:
     """Repo mode. 0 all in sync, 1 any out of sync, 2 the check is incomplete: a repo git could
-    not read, or a --root that is missing, holds no repo, or has an unreadable directory - a
-    pre-push guard that looked at nothing must not read as a pass."""
+    not read or (--fetch) not fetch, or a --root that is missing, holds no repo, or has an
+    unreadable directory - a pre-push guard that looked at nothing must not read as a pass."""
     targets, problems = _repo_targets(repos, root)
     rc = 2 if problems else 0
     states = []
     for repo in targets:
-        s = git_state(repo)
+        s = git_state(repo, fetch=fetch)
         states.append(s)
-        if "error" in s:
+        if "error" in s or s.get("fetch_error"):
             rc = 2
-            continue
-        if not s["in_sync"]:
+        if "error" not in s and not s["in_sync"]:
             rc = max(rc, 1)
     if as_json:
         print(json.dumps({"ok": rc != 2, "command": "git-state",
-                          "data": {"root": root, "repos": states}, "skipped": problems}, indent=2))
+                          "data": {"root": root, "fetched": fetch, "repos": states},
+                          "skipped": problems}, indent=2))
     else:
         for s in states:
             _print_repo_state(s)
+        if not fetch and any(s.get("upstream") for s in states):
+            print("git_state: ahead/behind are as of each repo's last fetch (--fetch refreshes)",
+                  file=sys.stderr)
     for problem in problems:
         print("git_state: %s" % problem, file=sys.stderr)
     return rc
@@ -480,6 +623,8 @@ def _print_repo_state(s: dict) -> None:
         return
     flags = [f for f in (_sync_flag(s), f"dirty {s['dirty']}" if s["dirty"] else None) if f]
     print(f"{s['repo']:40} {str(s['branch']):20} {'OK' if not flags else ' '.join(flags)}")
+    if s.get("fetch_error"):
+        print(f"    fetch failed: {s['fetch_error']}")
     for path in s.get("staged", ()):
         print(f"    staged  {path}")
 

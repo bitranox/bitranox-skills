@@ -26,9 +26,36 @@ A third check REFUSES `git check-ignore -q` / `--quiet` with two or more paths: 
 `--quiet is only valid with a single pathname`, and a "non-zero means not ignored" reading takes
 that as an answer for every path.
 
+A fourth, ADVISORY check covers `@{u}` / `@{upstream}` (any case, bare or as `<branch>@{u}`) used as
+a revision by a git command that takes one (log, rev-list, diff, reset, ...). A branch cut from a
+remote-tracking ref (`git checkout -b feat origin/master`, `git worktree add -b feat <wt>
+origin/master`) gets THAT ref as its upstream, and `git push origin feat` without `-u` leaves it
+so; `git log @{u}..` then lists every topic commit as unpushed although origin/feat holds them
+(measured 2026-11-06). The guard reads the branch and its upstream in the repo the git call runs in
+(`git -C`, a leading `cd`, else the event cwd) and, when the upstream's branch name differs from the
+local one, says so in one line and whether `<remote>/<branch>` exists locally. Detached HEAD, no
+upstream, or matching names: silent.
+
 Pure standard library. Reads the PreToolUse event JSON on stdin. Exit 2 blocks the
 call and shows stderr to the model; the advisory is `additionalContext` on stdout with exit 0;
 every other path (including any error) exits 0 so a broken guard never wedges a turn.
+
+Decisions:
+    - The `@{u}` check advises a branch that tracks a differently named branch ON PURPOSE too. Why:
+      the deliberate setup and the accident are the identical configuration, so silence on one is
+      silence on the other, and one line costs a reader who chose it nothing. Evidence: argued.
+      Reopen if: a replay over real transcripts shows it firing mostly on deliberate setups.
+      Pinned by: tests/test_git_footgun_guard.py::test_upstream_of_another_name_is_advised
+    - It advises, never blocks. Why: comparing against a differently named upstream can be the
+      intent (a topic measured against master), and only the reader knows. Evidence: argued.
+      Reopen if: a recorded case where the advisory was read and the wrong-branch count still
+      decided something. Pinned by: tests/test_git_footgun_guard.py::test_upstream_of_another_name_is_advised
+    - Only revision-taking verbs (`_REV_VERBS`) are read for `@{u}`. Why: a commit message, tag or
+      stash text may mention `@{u}` without naming a revision. Evidence: argued.
+      Reopen if: a revision-taking verb missing from `_REV_VERBS` turns up in a miss.
+      Pinned by: tests/test_git_footgun_guard.py::test_upstream_text_that_is_no_revision_is_silent
+    - Rejected: reading `@{u}` in any git statement. Why: the message-taking verbs above.
+      Reopen if: never on its own; widen `_REV_VERBS` instead.
 """
 import json
 import os
@@ -308,16 +335,92 @@ def pathspec_commit_losses(command, cwd, tool_name=None):
     return losses
 
 
-def _advise(losses):
+# Verbs that take a revision, so an `@{u}` operand is one. A message-taking verb (commit, tag,
+# notes, stash) is left out on purpose: its `-m` text may mention `@{u}` without naming a revision.
+_REV_VERBS = frozenset({
+    "log", "rev-list", "rev-parse", "diff", "show", "reset", "rebase", "merge", "cherry",
+    "cherry-pick", "shortlog", "range-diff", "branch", "checkout", "switch", "format-patch",
+    "describe", "merge-base", "name-rev", "for-each-ref", "whatchanged", "difftool", "restore",
+    "revert", "blame", "archive",
+})
+# git matches the `@{upstream}` / `@{u}` suffix case-insensitively (at_mark uses strncasecmp).
+_UPSTREAM_MARK = re.compile(r"([A-Za-z0-9._/+-]*)@\{(?:u|upstream)\}", re.IGNORECASE)
+_CURRENT = frozenset({"", "HEAD", "@"})
+
+
+def _upstream_use(command, tool_name):
+    """(verb, branch-or-"" for HEAD) of the first statement using `@{u}` as a revision, else None."""
+    for argv in _statements(command, tool_name):
+        for verb in _REV_VERBS:
+            operands = git_verb_operands(argv, frozenset({verb}), tool_name or "Bash")
+            if operands is None:
+                continue
+            for token in drop_redirections(operands):
+                found = _UPSTREAM_MARK.search(token)
+                if found:
+                    # `HEAD...@{u}`: the ref is what follows the last range operator.
+                    ref = found.group(1).split("..")[-1].lstrip(".")
+                    return verb, "" if ref in _CURRENT else ref
+            break
+    return None
+
+
+def _branch_upstream(repo, ref):
+    """(branch, remote, upstream short name, upstream's branch name) or None when unknowable."""
+    if ref:
+        if _git(repo, "rev-parse", "--verify", "-q", "refs/heads/" + ref) is None:
+            return None
+        branch = ref
+    else:
+        branch = (_git(repo, "symbolic-ref", "-q", "--short", "HEAD") or "").strip()
+    if not branch:
+        return None
+    line = (_git(repo, "for-each-ref", "--format=%(upstream:remotename)%09%(upstream:remoteref)"
+                 "%09%(upstream:short)", "refs/heads/" + branch) or "").strip("\n")
+    remote, _tab, rest = line.partition("\t")
+    remote_ref, _tab, short = rest.partition("\t")
+    if not short:
+        return None
+    return branch, remote, short, remote_ref.removeprefix("refs/heads/")
+
+
+def foreign_upstream(command, cwd, tool_name=None):
+    """One advisory line when `@{u}` in `command` names a branch of another name, else None."""
+    use = _upstream_use(command, tool_name)
+    if use is None:
+        return None
+    verb, ref = use
+    repo = git_verb_dir(command, cwd, frozenset({verb}), tool_name)
+    if not repo or not os.path.isdir(repo):
+        return None
+    found = _branch_upstream(repo, ref)
+    if found is None or found[3] == found[0]:
+        return None
+    branch, remote, short, _name = found
+    own = "%s/%s" % (remote if remote and remote != "." else "origin", branch)
+    head = "UPSTREAM IS ANOTHER BRANCH: `@{u}` of `%s` is `%s`, not `%s`, so it counts against " \
+           "that branch (and only as of the last fetch). " % (branch, short, own)
+    if _git(repo, "rev-parse", "--verify", "-q", "refs/remotes/" + own) is not None:
+        return head + ("`%s` exists locally: `git fetch`, then compare with it by name "
+                       "(`git rev-list --left-right --count HEAD...%s`), or "
+                       "`git branch --set-upstream-to=%s %s`." % (own, own, own, branch))
+    return head + ("`%s` does not exist locally (never pushed, or not fetched): `git fetch`, "
+                   "then compare with the branch you pushed by name." % own)
+
+
+def _pathspec_advice(losses):
     listed = "\n".join("  - %s: %s" % (path, what) for path, what in losses)
-    sys.stdout.write(json.dumps({"hookSpecificOutput": {
-        "hookEventName": "PreToolUse",
-        "additionalContext": (
-            "PATHSPEC COMMIT OVER A STAGED-ONLY CHANGE: `git commit <paths>` records the WORKTREE "
+    return ("PATHSPEC COMMIT OVER A STAGED-ONLY CHANGE: `git commit <paths>` records the WORKTREE "
             "copy of each named path, so it will discard what only the index holds:\n" + listed +
             "\nIf the staged state is what you meant, commit WITHOUT a pathspec after checking "
             "`git diff --cached --stat` lists only your paths. If this commit already ran, check "
-            "`git show --stat HEAD` and restage + `git commit --amend --no-edit`."),
+            "`git show --stat HEAD` and restage + `git commit --amend --no-edit`.")
+
+
+def _advise(notes):
+    sys.stdout.write(json.dumps({"hookSpecificOutput": {
+        "hookEventName": "PreToolUse",
+        "additionalContext": "\n\n".join(notes),
     }}) + "\n")
 
 
@@ -352,12 +455,21 @@ def main() -> int:
         same = same_command_losses(command, tool_name)
         if same:
             return _refuse_same_command(same)
+        notes = []
         try:
             losses = pathspec_commit_losses(command, event.get("cwd"), tool_name)
+            if losses:
+                notes.append(_pathspec_advice(losses))
         except Exception:  # noqa: BLE001 - an advisory must never wedge a turn
-            losses = []
-        if losses:
-            _advise(losses)
+            pass
+        try:
+            upstream = foreign_upstream(command, event.get("cwd"), tool_name)
+            if upstream:
+                notes.append(upstream)
+        except Exception:  # noqa: BLE001 - an advisory must never wedge a turn
+            pass
+        if notes:
+            _advise(notes)
         return 0
     return shell_text.refuse(
         "git rev-parse --short takes a SINGLE revision; with 2+ revs it fails "

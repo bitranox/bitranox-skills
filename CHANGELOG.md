@@ -30,6 +30,19 @@ a hole nobody has drawn a line under is one that gets rediscovered and half-fill
 two "versions with no entry" notes came to sit in this file disagreeing with it.
 
 
+## [10.21.0]
+
+### Added
+
+- git-footgun-guard advises when a git command uses `@{u}` / `@{upstream}` as a revision on a
+  branch whose upstream has another name (a branch cut from `origin/master` and pushed without
+  `-u`): it names both refs, says whether `origin/<branch>` exists locally, and gives the fix.
+  `@{u}..` there counts the topic commits as unpushed although `origin/<branch>` holds them.
+- compuse-toolbox `git_state.py` flags such a foreign upstream and judges the branch against
+  `origin/<branch>` by name (in sync only when it exists and equals HEAD), and gains `--fetch`
+  (`git fetch --prune` first; a failed fetch is exit 2). Without `--fetch` the human output says
+  the counts are as of the last fetch, and the JSON carries `fetched`.
+
 ## [10.20.0]
 
 ### Added
