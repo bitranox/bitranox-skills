@@ -99,6 +99,7 @@ import harness_checks as hc  # noqa: E402
 import shell_text  # noqa: E402
 import secret_patterns  # noqa: E402
 import skill_decisions  # noqa: E402
+import skill_frontmatter  # noqa: E402
 
 # git commit / git push / gh pr create detection lives in `shell_text` now: a second hook asks the
 # same question for its own reason (a commit is when work concludes, which is when the
@@ -1147,14 +1148,28 @@ def _origin_text(root, rel):
     return None if data is None else data.decode("utf-8", errors="replace")
 
 
-def table_repad_problem(root, rel, read_original=None):
+def _would_reformat(tool, data):
+    """True when the formatter would rewrite the SKILL.md bytes ``data``.
+
+    `reformat_file` is the only public check and it takes a path, so the bytes go through a scratch
+    file: its private line-level helper skips the BOM and CR handling the path reader does, and a
+    second copy of that handling would drift from the hook that rewrites the file.
+    """
+    with tempfile.TemporaryDirectory(prefix="repo-gate-repad-") as scratch:
+        path = Path(scratch) / "SKILL.md"
+        path.write_bytes(data)
+        return tool.reformat_file(path, check_only=True)
+
+
+def table_repad_problem(root, rel, shipped, read_original=None):
     """Why the changed SKILL.md `rel` is NOT a waivable table re-pad, or None when it is.
 
     The waiver exists because the reformat-md-tables hook rewrites a non-canonical table in every
     fresh worktree, and the checklist requirement then fires for a skill nobody edited. It is
     granted on a proof, never on a judgement: padding only against origin/master (see
     `table_padding_problem`), and canonical per the shipped formatter, so the hook will not
-    rewrite it again.
+    rewrite it again. Both halves judge ``shipped``, the bytes the change carries (None when it
+    carries no SKILL.md), never the file on disk, which may hold an edit nobody staged.
     """
     tool = _table_checker(root)
     if tool is None:
@@ -1162,16 +1177,20 @@ def table_repad_problem(root, rel, read_original=None):
     old = (read_original or (lambda path: _origin_text(root, path)))(rel)
     if old is None:
         return "it has no origin/master version to compare against"
+    if shipped is None:
+        return "this change deletes it"
     try:
-        with open(root / rel, encoding="utf-8", newline="") as handle:
-            new = handle.read()
-    except (OSError, UnicodeDecodeError):
-        return "it cannot be read"
+        new = shipped.decode("utf-8")
+    except UnicodeDecodeError:
+        return "it is not valid UTF-8 as this change ships it"
     problem = table_padding_problem(old, new, tool)
     if problem:
         return problem
-    if tool.reformat_file(root / rel, check_only=True):
-        return "its tables are not in the canonical form reformat_tables writes"
+    try:
+        if _would_reformat(tool, shipped):
+            return "its tables are not in the canonical form reformat_tables writes"
+    except OSError:
+        return "the formatter could not check it"
     return None
 
 
@@ -1220,16 +1239,43 @@ def has_open_checkbox(text):
 
 
 def _shipped_review_files(root, name, arts, stage):
-    """The ledger and the co-changed checklists ``arts`` of skill ``name``, as ``stage`` ships them.
+    """The SKILL.md, the ledger and the co-changed checklists ``arts`` of skill ``name``, as
+    ``stage`` ships them.
 
-    Read the way the decision check reads a skill (`shipped_files`): a checklist line or ticked box
-    written to disk but never staged, a ledger entry likewise, and an untracked checklist are not
-    in what this commit carries. Maps the path relative to the skill dir to its bytes; a file the
-    stage does not ship is absent. Only these files are read, not the whole skill.
+    Read the way the decision check reads a skill (`shipped_files`): a SKILL.md edit, a checklist
+    line or ticked box written to disk but never staged, a ledger entry likewise, and an untracked
+    checklist are not in what this commit carries. Maps the path relative to the skill dir to its
+    bytes; a file the stage does not ship is absent. Only these files are read, not the whole skill.
     """
     prefix = "%s/%s/" % (_SKILLS_DIR, name)
-    wanted = {skill_decisions.LEDGER_REL} | {a[len(prefix):] for a in arts}
+    wanted = {"SKILL.md", skill_decisions.LEDGER_REL} | {a[len(prefix):] for a in arts}
     return shipped_files(root / _SKILLS_DIR / name, stage, ignore=lambda rel: rel not in wanted)
+
+
+def _shipped_skill_md(root, name, stage):
+    """The bytes of skill ``name``'s SKILL.md as ``stage`` ships it, or None when it ships none."""
+    return _shipped_review_files(root, name, (), stage).get("SKILL.md")
+
+
+def _skill_mds_shipping_a_change(root, changed, stage):
+    """``changed`` without the SKILL.md paths whose bytes, as ``stage`` ships them, equal the merge-base's.
+
+    `_changed_vs_origin` unions the working tree, so it lists a SKILL.md that only a peer's unstaged
+    edit touched; judged as this commit's change, that edit refused an unrelated commit. A SKILL.md
+    the stage ships unchanged from the fork point is dropped here; one changed by an earlier
+    unpushed commit stays, since what ships still differs. One absent from what ships but present
+    at the fork point (a staged deletion) differs too and stays. Every other path is kept.
+    """
+    base = _merge_base(root)
+    if base is None:
+        return list(changed)
+    kept = []
+    for path in changed:
+        match = _SKILL_MD_RX.match(path)
+        if match and _shipped_skill_md(root, match.group(1), stage) == _checked_out_bytes(root, base, path):
+            continue
+        kept.append(path)
+    return kept
 
 
 def _ids_missing_from(ledger, named):
@@ -1283,23 +1329,26 @@ def skill_review_failures(root, changed, read_original=None, stage=None):
     artifact does not. One of those checklists also says what the change decided
     (`_decisions_line_failures`). The checklists and the ledger are read as ``stage`` ships them
     (default the index), never from the working tree, so a checklist that is not staged is none.
+    Every SKILL.md in ``changed`` is judged as changed: `check_skill_review` first drops the ones
+    the stage ships unchanged (`_skill_mds_shipping_a_change`).
 
     One mechanical exception, waived only on proof: a change that re-pads tables and nothing else
-    (`table_repad_problem`). `read_original(rel)` returns the origin/master text, or None; it
-    defaults to reading git and is a parameter so tests need no remote."""
+    (`table_repad_problem`), judged on the SKILL.md the stage ships. `read_original(rel)` returns
+    the origin/master text, or None; it defaults to reading git and is a parameter so tests need
+    no remote."""
     stage = STAGE_INDEX if stage is None else stage
     fails = []
     names = sorted({m.group(1) for p in changed for m in [_SKILL_MD_RX.match(p)] if m})
     for name in names:
         prefix = "%s/%s/.skillwriter/" % (_SKILLS_DIR, name)
         arts = [p for p in changed if p.startswith(prefix) and p.endswith(".md")]
-        shipped = _shipped_review_files(root, name, arts, stage) if arts else {}
+        shipped = _shipped_review_files(root, name, arts, stage)
         skill_prefix = "%s/%s/" % (_SKILLS_DIR, name)
         # A checklist the stage does not ship (untracked, unstaged-deleted) is no receipt of it.
         kept = [a for a in arts if a[len(skill_prefix):] in shipped]
         if not kept:
             not_a_repad = table_repad_problem(root, "%s/%s/SKILL.md" % (_SKILLS_DIR, name),
-                                              read_original)
+                                              shipped.get("SKILL.md"), read_original)
             if not_a_repad is None:
                 continue
             unshipped = (" (%s is not in what this change ships: stage it)" % ", ".join(arts)
@@ -1338,23 +1387,41 @@ def _shipped_checklist_texts(arts, shipped, skill_prefix):
 
 
 def check_skill_review(root, stage=None):
+    """`skill_review_failures` for every SKILL.md whose text, as ``stage`` ships it, is changed."""
     changed = _changed_vs_origin(root)
     if changed is None:
         return []
-    return skill_review_failures(root, changed, stage=stage)
+    stage = STAGE_INDEX if stage is None else stage
+    return skill_review_failures(root, _skill_mds_shipping_a_change(root, changed, stage), stage=stage)
 
 
-def cso_failures(root, changed):
+def _shipped_description(root, name, stage):
+    """The `description:` of skill ``name``'s SKILL.md as ``stage`` ships it, or None.
+
+    Decoded as `skill_frontmatter.read_text` decodes a file, then read by the same field reader, so
+    the lint sees the string the router and the catalog are built from."""
+    data = _shipped_skill_md(root, name, stage)
+    if data is None:
+        return None
+    text = data.decode("utf-8-sig", errors="replace")
+    return skill_frontmatter.field(skill_frontmatter.frontmatter_block(text), "description")
+
+
+def cso_failures(root, changed, stage=None):
     """A changed skill description must be a single-line plain YAML scalar, trigger-first
     ('Use when ...'), and yield distinctive keywords - that is what makes it router-derivable
     and findable (the CSO rules). Block scalars (`>-`/`|`) and quoted scalars leak their
-    style markers into the derived catalog and trigger map."""
+    style markers into the derived catalog and trigger map.
+
+    The description is read as ``stage`` ships the SKILL.md (default the index), never from the
+    working tree; a skill whose SKILL.md the stage does not ship has none to lint."""
+    stage = STAGE_INDEX if stage is None else stage
     fails = []
     for p in changed:
         m = _SKILL_MD_RX.match(p)
         if not m:
             continue
-        desc = hc.frontmatter_description(root / p)
+        desc = _shipped_description(root, m.group(1), stage)
         if desc is None:
             continue
         fails.extend(hc.cso_failures_for("skills/%s" % m.group(1), desc))
@@ -1453,11 +1520,13 @@ def check_toolbox_rule_coverage(root):
     return toolbox_rule_coverage_failures(root)
 
 
-def check_cso(root):
+def check_cso(root, stage=None):
+    """`cso_failures` for every SKILL.md whose text, as ``stage`` ships it, is changed."""
     changed = _changed_vs_origin(root)
     if changed is None:
         return []
-    return cso_failures(root, changed)
+    stage = STAGE_INDEX if stage is None else stage
+    return cso_failures(root, _skill_mds_shipping_a_change(root, changed, stage), stage=stage)
 
 
 
@@ -2178,7 +2247,7 @@ def _commit_changes(root, stage):
 def check_skill_mirrors(root, stage=STAGE_INDEX, notices=None, publishes=False, mirrors=None):
     """Gate the mirrored twin of every skill this change ships a change to.
 
-    Scoped to what the change SHIPS, like the review and description checks are to what changed:
+    Scoped to what the change SHIPS, like the review and description checks:
     pre-existing drift in a skill this commit does not change must not block it ([740]: an
     unrelated commit was refused over an unstaged skill edit, and over a peer's unpushed commit),
     and the maintainer has ``--mirrors`` for the full sweep. A commit counts the files its own
@@ -3004,8 +3073,8 @@ def run_checks(root, ci, full_pytest=None, run_pytest=True, baseline=0, mirror_a
     SCOPE and defaults to `ci`. They are separate axes because a pre-push is BOTH: the maintainer
     (so version-bump, skill-review and mirrors apply) and the last gate before CI (so it runs the
     whole suite CI runs, not just hooks/tests). `mirror_at` is what the commit or push ships of the
-    marketplace (`mirror_stage`): the index on a commit, HEAD on a push; the LF and mirror checks
-    read it. `publishes` says the same command also pushes (`command_publishes`). `notices`, when
+    marketplace (`mirror_stage`): the index on a commit, HEAD on a push; the LF, description,
+    decision, review and mirror checks read it. `publishes` says the same command also pushes (`command_publishes`). `notices`, when
     given, collects what passed but must still reach the model (`check_skill_mirrors`).
     `is_installed` answers whether THIS interpreter has a module (`pytest_interpreter`); a test
     passes one to stand in for a session interpreter that lacks the CI set. `parts` carries the
@@ -3021,7 +3090,7 @@ def run_checks(root, ci, full_pytest=None, run_pytest=True, baseline=0, mirror_a
     failures += check_skills_index(root)
     failures += check_attribution(root)
     failures += check_skill_naming(root)
-    failures += check_cso(root)
+    failures += check_cso(root, stage=mirror_at)
     failures += check_frontmatter(root)
     failures += check_toolbox_rule_coverage(root)
     failures += check_secrets(root)

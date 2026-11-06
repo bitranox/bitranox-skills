@@ -1018,12 +1018,12 @@ def test_the_waiver_reads_origin_master_through_the_real_entry_point(tmp_path):
     _g(tmp_path, "add", "-A")
     _g(tmp_path, "commit", "-qm", "base")
     _g(tmp_path, "update-ref", "refs/remotes/origin/master", "HEAD")
-    skill = tmp_path / "plugins/bitranox/skills/alpha/SKILL.md"
+    skill = "plugins/bitranox/skills/alpha/SKILL.md"
 
-    write(skill, PAD_NEW)
+    _stage(tmp_path, skill, PAD_NEW)          # staged: the gate judges what the commit ships
     assert RG.check_skill_review(tmp_path) == []
 
-    write(skill, PAD_NEW.replace("| short   |", "| shorter |"))  # control: same route, one cell
+    _stage(tmp_path, skill, PAD_NEW.replace("| short   |", "| shorter |"))  # control: one cell
     fails = RG.check_skill_review(tmp_path)
     assert len(fails) == 1 and "cell" in fails[0]
 
@@ -4856,6 +4856,133 @@ def test_a_checklist_that_is_not_utf_8_is_refused_in_one_line(tmp_path):
     fails = RG.check_skill_review(root, stage=RG.STAGE_INDEX)
     assert len(fails) == 1 and "UTF-8" in fails[0] and _CHECKLIST in fails[0]
     assert "\n" not in fails[0]
+
+
+# --------------------------------------------------------------------------
+# The review and CSO checks judge the SKILL.md the commit ships, never the working tree
+# --------------------------------------------------------------------------
+#
+# Observed: a pathspec commit of four hook files was refused over a SKILL.md it did not carry,
+# whose only change was another session's unstaged edit. `_changed_vs_origin` lists that path (it
+# unions the working tree), so the checks must ask what the stage ships before judging a skill.
+
+_SKILL_MD = LEDGER_SKILL + "/SKILL.md"
+_UNRELATED = "plugins/bitranox/hooks/other.py"
+
+
+def _peer_edit_repo(tmp_path):
+    """A repo whose merge-base, HEAD and index hold one SKILL.md and an unrelated file; on disk
+    the SKILL.md then carries a peer's half-done edit and the unrelated file this commit's."""
+    line, _ = _ledger_line()
+    write(tmp_path / _UNRELATED, "x = 1\n")
+    root = _ledger_repo(tmp_path, [line])
+    write(root / _SKILL_MD, RULE_TEXT + "A peer's unfinished sentence.\n")
+    write(root / _UNRELATED, "x = 2\n")
+    return root
+
+
+@pytest.mark.usefixtures("_bare_git_env")
+def test_an_unstaged_skill_edit_demands_no_checklist_of_a_commit_that_does_not_carry_it(tmp_path):
+    root = _peer_edit_repo(tmp_path)
+    assert _SKILL_MD in RG._changed_vs_origin(root)          # the superset still lists it
+    assert RG.check_skill_review(root, stage=RG.STAGE_INDEX) == []
+    unrelated = RG.CommitSelection("only", [_UNRELATED], where=root)
+    assert RG.check_skill_review(root, stage=unrelated) == []
+
+
+@pytest.mark.usefixtures("_bare_git_env")
+def test_the_same_skill_edit_shipped_still_demands_the_checklist(tmp_path):
+    """The control: the narrowing drops only what the stage does not ship."""
+    root = _peer_edit_repo(tmp_path)
+    taken = RG.CommitSelection("only", [_SKILL_MD], where=root)    # the commit takes it from disk
+    fails = RG.check_skill_review(root, stage=taken)
+    assert len(fails) == 1 and "without an updated .skillwriter/checklist" in fails[0]
+    subprocess.run(["git", "add", _SKILL_MD], cwd=root, check=True)
+    fails = RG.check_skill_review(root, stage=RG.STAGE_INDEX)
+    assert len(fails) == 1 and "without an updated .skillwriter/checklist" in fails[0]
+
+
+@pytest.mark.usefixtures("_bare_git_env")
+def test_a_skill_deleted_in_what_ships_is_still_a_review_case(tmp_path):
+    """Kept as it was: a staged deletion of a skill differs from the merge-base, so it is refused
+    without a shipped checklist, and its description is not linted (there is none to read)."""
+    root = _peer_edit_repo(tmp_path)
+    subprocess.run(["git", "rm", "-q", "-r", "--cached", LEDGER_SKILL], cwd=root, check=True)
+    fails = RG.check_skill_review(root, stage=RG.STAGE_INDEX)
+    assert len(fails) == 1 and "without an updated .skillwriter/checklist" in fails[0]
+    assert RG.check_cso(root) == []
+
+
+def _pad_repo(tmp_path):
+    """The formatter plus a SKILL.md holding PAD_ORIG at the merge-base, HEAD and the index."""
+    _skill_with_formatter(tmp_path, PAD_ORIG)
+    _g(tmp_path, "init", "-q", ".")
+    _g(tmp_path, "add", "-A")
+    _g(tmp_path, "commit", "-qm", "base")
+    _g(tmp_path, "update-ref", "refs/remotes/origin/master", "HEAD")
+    return tmp_path, "plugins/bitranox/skills/alpha/SKILL.md"
+
+
+@pytest.mark.usefixtures("_bare_git_env")
+def test_a_staged_re_pad_is_waived_whatever_the_working_copy_holds(tmp_path):
+    root, rel = _pad_repo(tmp_path)
+    _stage(root, rel, PAD_NEW)
+    write(root / rel, PAD_NEW.replace("| short   |", "| shorter |"))     # unstaged, not a re-pad
+    assert RG.check_skill_review(root, stage=RG.STAGE_INDEX) == []
+
+
+@pytest.mark.usefixtures("_bare_git_env")
+def test_a_staged_real_edit_is_not_waived_by_a_working_copy_restored_to_the_base(tmp_path):
+    root, rel = _pad_repo(tmp_path)
+    _stage(root, rel, PAD_NEW.replace("| short   |", "| shorter |"))
+    write(root / rel, PAD_ORIG)
+    fails = RG.check_skill_review(root, stage=RG.STAGE_INDEX)
+    assert len(fails) == 1 and "cell" in fails[0], fails
+
+
+_CSO_MD = "plugins/bitranox/skills/kappa/SKILL.md"
+_CSO_GOOD = ("---\nname: kappa\ndescription: Use when kappa gadgets fail with linker errors on "
+             "windows runners\n---\n\n# kappa\n")
+_CSO_BAD = _CSO_GOOD.replace("description: Use", "description: >-\n  Use")
+
+
+def _cso_repo(tmp_path):
+    """A repo whose merge-base, HEAD and index hold a good description; the disk a block scalar."""
+    root = git_repo_with_origin(tmp_path, {_CSO_MD: _CSO_GOOD})
+    write(root / _CSO_MD, _CSO_BAD)
+    return root
+
+
+@pytest.mark.usefixtures("_bare_git_env")
+def test_an_unstaged_bad_description_is_not_linted(tmp_path):
+    root = _cso_repo(tmp_path)
+    assert RG.check_cso(root) == []
+
+
+@pytest.mark.usefixtures("_bare_git_env")
+def test_a_staged_bad_description_is_linted(tmp_path):
+    """The control: what the index ships is the block scalar, so the lint fires."""
+    root = _cso_repo(tmp_path)
+    subprocess.run(["git", "add", _CSO_MD], cwd=root, check=True)
+    fails = RG.check_cso(root)
+    assert len(fails) == 1 and "skills/kappa" in fails[0] and "scalar" in fails[0]
+
+
+@pytest.mark.usefixtures("_bare_git_env")
+def test_the_description_lint_reads_the_stage_run_checks_judges(tmp_path, monkeypatch):
+    """A push ships HEAD: a bad description staged but not committed blocks the commit only."""
+    monkeypatch.setenv("HOME", str(tmp_path / "home"))
+    monkeypatch.setenv("USERPROFILE", str(tmp_path / "home"))
+    root = _cso_repo(tmp_path / "repo")
+    subprocess.run(["git", "add", _CSO_MD], cwd=root, check=True)
+
+    def kappa(stage):
+        fails = RG.run_checks(root, ci=False, run_pytest=False, mirror_at=stage,
+                              parts=RG.GateParts(mirrors={}))
+        return [f for f in fails if "skills/kappa:" in f]
+
+    assert len(kappa(RG.STAGE_INDEX)) == 1
+    assert kappa(RG.STAGE_HEAD) == []
 
 
 def test_decisions_ids_separated_by_a_bare_comma_pass(tmp_path):
