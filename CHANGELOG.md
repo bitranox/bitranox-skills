@@ -30,6 +30,15 @@ a hole nobody has drawn a line under is one that gets rediscovered and half-fill
 two "versions with no entry" notes came to sit in this file disagreeing with it.
 
 
+## [10.19.2]
+
+### Fixed
+
+- skill-edit-guard tests: the nested-past-the-decoder cases give the guard a decoder that raises
+  RecursionError for the marked line, instead of feeding it 100000 nested brackets. How deep the
+  json decoder goes depends on the host: on the GitHub Linux runners CPython 3.14 and 3.15 decoded
+  that line even on a 4 MiB thread, so the 10.19.1 bounded-stack fix still failed there.
+
 ## [10.19.1]
 
 ### Fixed

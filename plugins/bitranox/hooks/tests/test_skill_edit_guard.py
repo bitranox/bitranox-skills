@@ -4,7 +4,7 @@ import json
 import shlex
 import subprocess
 import sys
-import threading
+import types
 
 import pytest
 
@@ -591,67 +591,50 @@ def test_show_counts_across_a_line_break_in_one_command(tmp_path, armed):
     assert G.decide(_brief_edit(main, path), {}) is None
 
 
-_DEEP = "[" * 100000 + "]" * 100000
+# A line the decoder cannot finish because of its nesting depth. How deep that is depends on the
+# host: from Python 3.14 the limit is the thread's real stack, and on the GitHub Linux runners
+# json.loads decoded 100000 levels even on a 4 MiB thread. So these tests hand the guard a decoder
+# that raises RecursionError for the marked line, which reaches its except clause on every host.
+_PAST_THE_DECODER = "__nested_past_the_decoder__"
 
 
-def _on_bounded_stack(fn):
-    """Run `fn` on a thread with a 4 MiB stack and return its result or raise its exception.
+@pytest.fixture
+def depth_limited_json(monkeypatch):
+    """Replace the guard's json module: RecursionError for a marked line, the real decoder else."""
+    def loads(text, *args, **kwargs):
+        if _PAST_THE_DECODER in text:
+            raise RecursionError("maximum recursion depth exceeded while decoding a JSON array")
+        return json.loads(text, *args, **kwargs)
 
-    From Python 3.14 the json decoder's depth limit is the thread's real stack, so on a host whose
-    main thread has an unlimited stack (the GitHub Linux and macOS runners) `_DEEP` decodes and the
-    RecursionError branch these tests exist for never runs. A bounded thread stack makes the
-    decoder fail the same way on every host and Python version.
-    """
-    box = {}
-
-    def target():
-        try:
-            box["value"] = fn()
-        except BaseException as exc:  # handed back to the caller below
-            box["error"] = exc
-
-    previous = threading.stack_size(4 * 1024 * 1024)
-    try:
-        worker = threading.Thread(target=target)
-        worker.start()
-    finally:
-        threading.stack_size(previous)
-    worker.join()
-    if "error" in box:
-        raise box["error"]
-    return box.get("value")
+    monkeypatch.setattr(G, "json", types.SimpleNamespace(loads=loads, load=json.load))
 
 
 @pytest.mark.parametrize("line", [
     json.dumps({"type": "assistant", "message": "x", "note": "skill_decisions"}),
     json.dumps({"type": "assistant", "message": {"content": [
         {"type": "tool_use", "id": "t", "name": "Bash", "input": "skill_decisions.py show foo"}]}}),
-    '{"note": "skill_decisions", "deep": %s}' % _DEEP,
+    json.dumps({"note": "skill_decisions", _PAST_THE_DECODER: 1}),
 ], ids=["message-is-a-string", "input-is-a-string", "nested-past-the-decoder"])
-def test_an_odd_transcript_line_is_skipped_by_the_show_check(tmp_path, armed, line):
+def test_an_odd_transcript_line_is_skipped_by_the_show_check(tmp_path, armed, depth_limited_json,
+                                                             line):
     """Data, not a crash: each shape raised out of decide before (AttributeError, RecursionError)."""
     path = _skill_with_rejection(tmp_path)
     main = _session(tmp_path, [_LOAD])
     with main.open("a", encoding="utf-8") as fh:
         fh.write(line + "\n")
-    assert _on_bounded_stack(lambda: G.decide(_brief_edit(main, path), {})) is not None
-
-
-def test_the_deep_line_really_is_past_the_decoder():
-    """Precondition for the nested-past-the-decoder cases: json.loads raises, not ValueError."""
-    with pytest.raises(RecursionError):
-        _on_bounded_stack(lambda: json.loads('{"x": %s}' % _DEEP))
+    assert G.decide(_brief_edit(main, path), {}) is not None
 
 
 @pytest.mark.parametrize("line", [
     json.dumps({"type": "user", "isMeta": True,
                 "message": "Base directory for this skill: /c/skills/meta-skill-writer"}),
-    '{"note": "Base directory for this skill: /c/skills/meta-skill-writer", "deep": %s}' % _DEEP,
+    json.dumps({"note": "Base directory for this skill: /c/skills/meta-skill-writer",
+                _PAST_THE_DECODER: 1}),
 ], ids=["message-is-a-string", "nested-past-the-decoder"])
-def test_an_odd_line_in_the_load_check_still_denies(tmp_path, armed, line):
+def test_an_odd_line_in_the_load_check_still_denies(tmp_path, armed, depth_limited_json, line):
     """An exception escaping the load check reached main's catch-all, which ALLOWS the edit."""
     main = _session(tmp_path, [])
     with main.open("a", encoding="utf-8") as fh:
         fh.write(line + "\n")
-    reason = _on_bounded_stack(lambda: G.decide(_edit(main), {}))
+    reason = G.decide(_edit(main), {})
     assert reason is not None and "never loaded" in reason
