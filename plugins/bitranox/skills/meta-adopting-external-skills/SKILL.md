@@ -141,7 +141,8 @@ affected skill in one change.
 commit message guards nothing; the ledger is what the next editor of the skill is shown. Record a
 `rejected` entry for each upstream part Step 3 deliberately left out, so a later sync does not
 re-import it (`decision` names the part, `reopen_if` says what would bring it back), and a `rule`
-entry, anchored on the sentence that states it, for each bitranox rule Step 3 added that the
+entry, anchored on a 20 to 200 character phrase of the sentence that states it (`add` refuses a
+longer or shorter anchor), for each bitranox rule Step 3 added that the
 upstream text does not have. From the checkout root, `git add` the new skill directory first (an
 anchor is only counted in files git tracks), write the entries to a JSON file, and run
 `python3 plugins/bitranox/hooks/skill_decisions.py add --from-file <file>`. Each entry carries
@@ -152,9 +153,11 @@ anchor is only counted in files git tracks), write the entries to a JSON file, a
 skill's `.skillwriter/checklist-*.md` from Step 3 (`Decisions: none - <reason>` when the adoption
 left nothing out and added no rule), then `git add` the ledger it wrote,
 `plugins/bitranox/skills/<name>/.skillwriter/decisions.jsonl`, and the checklist: both go in the
-adoption commit. A later re-sync from upstream is an edit of the skill, so
-Step 0b has its editor read the `rejected` entries first, and the commit gate refuses a change
-that drops a live `rule` entry's anchor.
+adoption commit. Before that commit, run the gate again,
+`python3 plugins/bitranox/hooks/repo-gate.py --ci`: the run above came before the ledger existed,
+and the gate checks it. A later re-sync from
+upstream is an edit of the skill, so Step 0b has its editor read the `rejected` entries first,
+and the commit gate refuses a change that drops a live `rule` entry's anchor.
 
 ## Step 5 - Upstream-first and coexist
 
