@@ -763,13 +763,14 @@ python3 plugins/bitranox/hooks/build_skill_docs.py --check
 Expected: both exit 0 (Tasks 1 and 3 regenerated them; Step 1 changes no description). If either
 fails, run it without `--check` and include the result in this task's commit.
 
-- [ ] **Step 3: Bump (already made: commit 3395c79e, 10.20.0 -> 10.21.0)**
+- [ ] **Step 3: Bump (already made: the branch's first commit, 10.21.0 -> 10.22.0)**
 
 The commit gate refuses any commit touching `plugins/` while plugin.json equals origin's version,
-so the controller made the bump commit before Task 1's commit, with the notes below. In this task:
-`git fetch origin`; if origin's plugin.json is still 10.20.0, keep the bump and only correct the
-CHANGELOG section if the shipped content differs from these notes. If origin moved past 10.20.0,
-rebase onto it and re-bump from origin's number. The notes used for 3395c79e,
+so the controller made the bump commit before Task 1's commit, with the notes below; a peer's
+10.21.0 release moved it to 10.22.0 by a rebase. In this task: `git fetch origin`; if origin's
+plugin.json is still 10.21.0, keep the bump and only correct the CHANGELOG section if the shipped
+content differs from these notes. If origin moved past 10.21.0, rebase onto it and re-bump from
+origin's number (`bump_version.py --part minor`). The notes used for the bump,
 `$SCRATCH/notes.md`:
 
 ```markdown
