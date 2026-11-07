@@ -74,3 +74,6 @@ reviewing Rust; each rule states the failure it prevents.
 For untrusted input at a service/CLI boundary (validate at the edge, escape per sink - SQL/HTML/shell/
 path), the language-agnostic rules are in `bitranox:coding-input-sanitization`. Sanitize at the
 boundary, not in the libraries between.
+
+- `bitranox:coding-rust-performance-review` - performance: clippy's perf lints, criterion,
+  profilers, release-profile settings and a Rust hot-path checklist.

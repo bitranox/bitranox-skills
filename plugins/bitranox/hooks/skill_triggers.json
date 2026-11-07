@@ -383,6 +383,26 @@
   "non-io",
   "non-constant-time"
  ],
+ "coding-rust-performance-review": [
+  "reviewing",
+  "improving",
+  "performance",
+  "rust",
+  "code",
+  "slow",
+  "loop",
+  "needless",
+  "clones",
+  "allocations",
+  "string",
+  "grown",
+  "without",
+  "capacity",
+  "release-profile",
+  "codegen-units",
+  "with_capacity",
+  "spawn_blocking"
+ ],
  "compuse-bash": [
   "running",
   "bash",

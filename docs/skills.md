@@ -3,7 +3,7 @@
 
 # Skill catalog
 
-All 84 skills shipped by the `bitranox` plugin, grouped by taxonomy category
+All 85 skills shipped by the `bitranox` plugin, grouped by taxonomy category
 ([`skill-taxonomy.json`](../plugins/bitranox/skill-taxonomy.json)). Invoke any of them as
 `/bitranox:<skill>`; Claude also picks one up automatically when a task matches its
 description. Each description below is the skill's own trigger description - it states WHEN
@@ -34,6 +34,7 @@ Language/runtime-specific craft: architecture, references, idioms, libraries, pa
 - [`coding-python-uv`](../plugins/bitranox/skills/coding-python-uv/SKILL.md) - Use when writing, configuring, debugging, or deploying Python projects that use uv as the package manager, virtual environment manager, Python version manager, or pip replacement. Covers project setup, dependency management, lockfiles, Python-version installs and .python-version pins, scripts, tools, building, publishing, Docker, CI/CD, authentication, caching, and migration from pip/pip-tools.
 - [`coding-resilience`](../plugins/bitranox/skills/coding-resilience/SKILL.md) - Use when code depends on any external resource that can be absent, slow, flaky, rate-limited, or vanish mid-run - a network connection, remote service or HTTP/REST API, proxy, DNS name, database or connection pool, mount, disk space, CPU/memory headroom, or SSH/VNC session. Keywords - retry, backoff, jitter, timeout, health check, circuit breaker, graceful degradation, self-healing, pool eviction, rate limit, 429, connection reset, flaky, hang. For where resilience lives in a layered app see coding-python-clean-architecture; for library picks see coding-python-use-modern-libraries.
 - [`coding-rust`](../plugins/bitranox/skills/coding-rust/SKILL.md) - Use when writing or reviewing Rust and deciding how to handle errors, secrets or credentials, dependency/crate choices, or type design - or when a review flags a synthetic std::io::Error used for a non-IO condition, a non-constant-time secret/token comparison, an inline --password, a heavyweight crate pulled in for one narrow job, or a struct whose invalid field combinations are constructible.
+- [`coding-rust-performance-review`](../plugins/bitranox/skills/coding-rust-performance-review/SKILL.md) - Use when reviewing or improving the performance of Rust code - a slow hot loop, needless clones or allocations, a Vec or String grown without capacity, Regex::new or format! inside a loop, async code that blocks or holds a lock across .await, unbuffered I/O, a benchmark (criterion, cargo bench), a profiler or flamegraph run, release-profile settings (lto, codegen-units, debug symbols), or timing a change between two builds. Keywords - clippy perf, criterion, flamegraph, samply, heaptrack, DHAT, with_capacity, spawn_blocking.
 
 ## web
 
