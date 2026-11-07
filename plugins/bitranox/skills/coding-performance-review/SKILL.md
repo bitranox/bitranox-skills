@@ -25,7 +25,9 @@ in code. The language skills add their own tools on top of this one; the method 
    number (an issue, a backlog line, a saved profile), run your probe on the unfixed code and
    require it to land within an order of magnitude of that figure before you trust your after
    number. A probe that hits an early return is fast in both arms, so the fix looks enormous
-   while the slow path never ran.
+   while the slow path never ran. If BEFORE is far too fast, count calls into the hot function
+   to find the guard that returns early, change the input so it reaches the slow path, repeat
+   this check, and leave a comment in the test saying why its input has that shape.
 3. **Identical settings on both sides.** Same build mode and flags, input, data size, warm or cold
    state, host and concurrency. Diff what each side RESOLVED, defaults included, not its config
    file.

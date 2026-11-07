@@ -28,21 +28,11 @@ Your approach:
 
 ## Always Flag: Unbounded Memory and Unsafe Input
 
-Independent of the cache/regex pipeline, these are first-class findings (usually SEVERE):
-
-- **Unbounded memory growth.** Code that reads big files, huge database result sets, or huge
-  log files fully into memory - or accumulates an unbounded list/dict/string - instead of
-  streaming, iterating, chunking, or paginating. Require bounded memory (generators, `iter`
-  chunks, server-side cursors, line-by-line/`io` streaming, pagination). Only neglect this when
-  the dataset is provably and safely bounded (small, fixed size); then materializing is fine.
-- **Unsafe / unbounded input.** Input that is not size-bounded or sanitized: unbounded length,
-  unvalidated types, and unhandled encoding or arbitrary characters (non-ASCII, emoji, CJK,
-  control characters, binary data). Adversarial input must not blow up time or memory (ReDoS,
-  quadratic blow-ups, OOM). Inputs must be bounded, validated, and the handling tested.
-- **Untrusted structured input.** Structured data (a dict, JSON, a deserialized payload) used
-  without parsing or validating its structure - assuming keys, types, or shape that may be
-  missing or wrong. Require a parse/validation step at the boundary, unless the project has
-  deliberately accepted skipping it.
+The language-neutral checklist (unbounded memory, unbounded or unsafe input, untrusted structured
+input, quadratic work, N+1 calls, per-item I/O) and the measurement method live in
+`bitranox:coding-performance-review`: load it alongside this skill. Step 4f below is this
+skill's Python scanner for the unbounded-memory item; the Python remedies are generators, `iter`
+chunks, server-side cursors, line-by-line or `io` streaming, and pagination.
 
 ## Purpose
 
@@ -104,12 +94,8 @@ discovery steps and use the two checker tools directly:
   commands. If it says PART of your changes was re-applied, it prints no command to run: the
   stash still holds all of them, and the rest is restored by hand.
 
-When the defect you are fixing already has a recorded BEFORE figure (a backlog item, an issue, a
-saved profile), run your probe or test against the UNFIXED code first and require it to land within
-an order of magnitude of that figure before you trust your AFTER number. A probe that hits an early
-return is fast in both arms, so the fix looks enormous while the slow path never ran. If BEFORE is
-far too fast, count calls into the hot function to find the guard that returns early, and leave a
-comment in the test saying why its input has that shape.
+Before trusting an AFTER figure, follow the method in `bitranox:coding-performance-review`:
+reproduce the recorded BEFORE figure with the same probe, interleave the arms and pin the core.
 
 Report findings with measured numbers from the real test suite; never accept a claim on
 synthetic benchmarks.
@@ -607,5 +593,4 @@ After running the test suite, report:
 - **ONE issue at a time**  -  never batch-present
 - **ALWAYS audit existing caches**  -  verify they're still effective, propose removal if not
 - **RESPECT prior decisions by default, but RE-ASSESS them**  -  re-open an accepted item (propose-first) only when ground truth shows its premise no longer holds; never silently skip one that ground truth now contradicts
-- **ALWAYS flag unbounded memory**  -  big files / huge DB results / huge logfiles must stream, not load whole
-- **ALWAYS flag unsafe input**  -  bound length, sanitize types/encoding (non-ASCII/emoji/CJK/binary), test it
+- **ALWAYS walk the generic checklist**  -  unbounded memory and unsafe input first (bitranox:coding-performance-review)
