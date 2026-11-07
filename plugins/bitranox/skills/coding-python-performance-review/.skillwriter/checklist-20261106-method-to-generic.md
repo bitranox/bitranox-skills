@@ -105,4 +105,5 @@ return advice went to the generic skill's Method item 2, with its own checklist 
       the Key Behaviors line "RESPECT prior decisions by default, but RE-ASSESS them".
 - [x] Added lines: none over 100 columns, no fence. ASCII only.
 
-Decisions: none - restores a list the pre-edit text carried; d-20261106-4e9b9bbf still governs.
+No ledger entry for this follow-up: it restores a list the pre-edit text carried, and the
+decision recorded above still governs.
