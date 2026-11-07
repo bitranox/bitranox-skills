@@ -30,6 +30,22 @@ a hole nobody has drawn a line under is one that gets rediscovered and half-fill
 two "versions with no entry" notes came to sit in this file disagreeing with it.
 
 
+## [10.22.0]
+
+### Added
+
+- `coding-performance-review`: the measurement method (profile first, reproduce the before
+  figure, interleave A/B runs, pin cores on hybrid CPUs, prove the change took effect) and a
+  language-neutral review checklist, with a router to the language skills. It now holds
+  `validate_perf_claims.py`.
+- `coding-rust-performance-review`: a Rust hot-path checklist plus recipes for clippy's perf
+  lints, criterion, profilers and release-profile settings.
+
+### Changed
+
+- `coding-python-performance-review` points at the generic skill for the method and the
+  language-neutral checklist, and runs the claim checker from its new place.
+
 ## [10.21.0]
 
 ### Added
