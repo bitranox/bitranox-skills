@@ -1,6 +1,6 @@
 ---
 name: coding-rust-performance-review
-description: Use when reviewing or improving the performance of Rust code - a slow hot loop, needless clones or allocations, a Vec or String grown without capacity, Regex::new or format! inside a loop, async code that blocks or holds a lock across .await, unbuffered I/O, a benchmark (criterion, cargo bench), a profiler or flamegraph run, release-profile settings (lto, codegen-units, debug symbols), or timing a change between two builds. Keywords - clippy perf, criterion, flamegraph, samply, heaptrack, DHAT, with_capacity, spawn_blocking.
+description: Use when Rust is slow or its performance needs a benchmark - criterion, flamegraph, samply, perf, heaptrack, DHAT, clones, with_capacity, spawn_blocking, an .await with a std Mutex guard held across it, blocking calls in async code, Regex::new or format! inside a loop, needless allocations, a Vec or String grown without capacity, unbuffered I/O, clippy perf lints, cargo bench, release-profile settings (lto, codegen-units, debug symbols), or timing a change between two Rust builds.
 ---
 
 # Rust performance review
@@ -20,8 +20,10 @@ ships no scripts, because clippy and criterion already do the mechanical part.
   `[profile.release]`, or `CARGO_PROFILE_RELEASE_DEBUG=line-tables-only cargo build --release`
   for one build. Debug info does not change the optimisation level.
 - **Profile settings are A/B arms, not defaults:** `lto = "thin"` or `"fat"`,
-  `codegen-units = 1`, `panic = "abort"`, and `RUSTFLAGS="-C target-cpu=native"` (that binary may
-  not run on an older CPU). Record which ones each arm used.
+  `codegen-units = 1`, `panic = "abort"` (a behaviour change as well: a panic no longer unwinds,
+  so `Drop` does not run and `catch_unwind` catches nothing), and
+  `RUSTFLAGS="-C target-cpu=native"` (that binary may not run on an older CPU). Record which ones
+  each arm used.
 
 ## Lint first: clippy
 
@@ -74,7 +76,8 @@ run (repeated with the order swapped) as a cross-check only.
 
 ## Profilers and allocations
 
-These recipes are unverified on this skill's test host (the tools were not installed there):
+The flamegraph, samply, perf and heaptrack recipes are unverified: none of those tools has been
+run for this skill. The `dhat` crate snippet is verified: it writes `dhat-heap.json`.
 - `cargo flamegraph --bin app -- <args>` (`cargo install flamegraph`; builds release by default,
   uses perf on Linux and dtrace on macOS).
 - `samply record ./target/release/app <args>` (`cargo install samply`), viewed in the Firefox

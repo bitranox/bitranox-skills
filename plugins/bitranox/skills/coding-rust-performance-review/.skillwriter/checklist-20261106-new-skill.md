@@ -120,9 +120,9 @@ regex in the loop, clippy's perf lints. R2 - the guard across `.await`, blocking
       `out` with `String::new()`. PASS on four points, see the diff below for the fifth.
 - [x] R2 opus: guard (quotes the table row "A `std::sync::Mutex` or `RwLock` guard alive across
       `.await`"), blocking I/O (quotes "Blocking calls in async code (`std::fs`,
-      `std::thread::sleep`, heavy CPU)", uses `spawn_blocking`), unbounded read (quotes "`read_to_string`/`read_to_end` on
-      a large input"). Adds a measurement plan (release, interleave, heaptrack, prove the change).
-      PASS.
+      `std::thread::sleep`, heavy CPU)", uses `spawn_blocking`), unbounded read (quotes
+      "`read_to_string`/`read_to_end` on a large input"). Adds a measurement plan (release,
+      interleave, heaptrack, prove the change). PASS.
 - [x] R2 haiku: guard, blocking I/O ("`tokio::fs`, `spawn_blocking`, or a thread pool such as
       rayon"), unbounded read. Adds a measurement plan. PASS.
 - [x] Diff against RED, both directions. Gained: clippy (0 of 4 RED R1 cells, 2 of 2 GREEN R1);
