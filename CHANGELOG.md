@@ -44,7 +44,11 @@ two "versions with no entry" notes came to sit in this file disagreeing with it.
 ### Changed
 
 - `coding-python-performance-review` points at the generic skill for the method and the
-  language-neutral checklist, and runs the claim checker from its new place.
+  language-neutral checklist, and runs the claim checker from its new place. It also says
+  `compare_performance.py` times each arm once, so a delta needs repeated, alternating runs.
+- `process-review-enhance-code-quality` routes the measured performance pass to the Python, Rust
+  or generic performance skill by language.
+- `coding-rust` points at `coding-rust-performance-review` from its See also section.
 
 ## [10.21.0]
 

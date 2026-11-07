@@ -66,8 +66,12 @@ criterion_main!(benches);
 Before and after: on the old code `cargo bench --bench hot_path -- --save-baseline before`, then
 on the new code `cargo bench --bench hot_path -- --baseline before`. Criterion reports the change
 with a confidence interval; "No change in performance detected" or "Change within noise
-threshold" is not a win. `black_box` keeps the compiler from deleting the work being timed. A
-criterion run is a micro-benchmark: confirm a win on the real workload too.
+threshold" is not a win. The two runs happen one after the other, so one pair is all-A-then-all-B:
+alternate old and new at least three times each, saving each run under its own name
+(`--save-baseline old1`, then `new1`, `old2`, ...), and compare saved runs without re-sampling
+(`--load-baseline new1 --baseline old1`) before calling a change real. `black_box` keeps the
+compiler from deleting the work being timed. A criterion run is a micro-benchmark: confirm a win
+on the real workload too.
 
 For whole programs, `hyperfine --warmup 3 ./old ./new` compares two binaries, but it runs all of
 one command's runs before the other's, which is not the interleaving the generic method asks

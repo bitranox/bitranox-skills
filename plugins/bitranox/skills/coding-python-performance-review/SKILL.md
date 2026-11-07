@@ -85,7 +85,9 @@ discovery steps and use the two checker tools directly:
   report the unproven or contradicted ones.
 - `compare_performance.py` - stash the working changes (untracked files too), time the test
   suite on the previous commit, restore the branch and the changes, time again, and report
-  the measured delta as before/after evidence. Exit 2 means there is no valid comparison: a
+  the delta. It times each arm once, one after the other, so one run is a single sample, not
+  evidence: repeat it until each arm has at least three runs, alternating, before quoting a
+  delta (the generic method's interleaving rule). Exit 2 means there is no valid comparison: a
   suite run failed, there is no previous commit, git is missing, or a git step failed; never
   quote its numbers then. If stderr says the repository was NOT restored, run the git commands it prints
   first: they name the branch to check out and the sha of the stash holding your uncommitted
