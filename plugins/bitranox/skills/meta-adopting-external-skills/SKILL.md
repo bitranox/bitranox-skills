@@ -155,9 +155,10 @@ left nothing out and added no rule), then `git add` the ledger it wrote,
 `plugins/bitranox/skills/<name>/.skillwriter/decisions.jsonl`, and the checklist: both go in the
 adoption commit. Before that commit, run the gate again,
 `python3 plugins/bitranox/hooks/repo-gate.py --ci`: the run above came before the ledger existed,
-and the gate checks it. A later re-sync from
-upstream is an edit of the skill, so Step 0b has its editor read the `rejected` entries first,
-and the commit gate refuses a change that drops a live `rule` entry's anchor.
+and the gate checks it. Make the adoption commit yourself, as ONE commit on its own worktree branch
+(`bitranox:git-worktrees`), never on master: it stays unpushed until Step 5 decides. A later
+re-sync from upstream is an edit of the skill, so Step 0b has its editor read the `rejected`
+entries first, and the commit gate refuses a change that drops a live `rule` entry's anchor.
 
 ## Step 5 - Upstream-first and coexist
 
@@ -166,11 +167,23 @@ section.** Offer the improvement to the original author first (a PR to their rep
 the bitranox copy only if upstream stalls or declines. Either way the user's other installed
 plugins are left untouched - the bitranox copy coexists, and the user chooses which to invoke.
 
+**Ship it from the branch, or delete the branch.** Once upstream stalls or declines, push the
+adoption branch to master as every change to this repo ships. Run
+`python3 plugins/bitranox/hooks/bump_version.py --rebase` first: another release may have taken the
+version the commit carries while it waited, and `--rebase` moves that one commit onto
+`origin/master` with a version above origin's, in `plugin.json`, `pyproject.toml` and its
+`CHANGELOG.md` heading (it refuses when nothing was taken; a plain rebase onto `origin/master` is
+then enough). If upstream takes the change instead, delete the branch and its worktree: nothing
+was published.
+
 ## Common mistakes
 
 - Doing any adoption work before the license check passes.
 - Assuming MIT when no license is present (it is all-rights-reserved).
-- Letting the helper or yourself commit, push, or uninstall anything.
+- Letting the helper commit, push, or uninstall anything, or uninstalling anything yourself. The
+  adoption commit and its push are yours, on the branch and at the time Step 5 sets.
+- Pushing the adoption before upstream stalls or declines, or leaving its branch behind after
+  upstream took the change.
 - Restating skill-writer or self-improve here instead of cross-referencing them.
 - Writing provenance narrative ("ported from X") instead of the structured credit line plus the
   notices entry.

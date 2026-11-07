@@ -30,6 +30,17 @@ a hole nobody has drawn a line under is one that gets rediscovered and half-fill
 two "versions with no entry" notes came to sit in this file disagreeing with it.
 
 
+## [10.22.1]
+
+### Fixed
+
+- meta-adopting-external-skills no longer contradicts itself about who commits: you make the
+  adoption commit and push it, and the helper never does. The commit sits as one commit on its own
+  worktree branch and goes to master only once upstream stalls or declines, after
+  `bump_version.py --rebase` renumbers a version another release took meanwhile. If upstream takes
+  the change, delete the branch and its worktree. Both rules are recorded in the skill's decision
+  ledger.
+
 ## [10.22.0]
 
 ### Added
