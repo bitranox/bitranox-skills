@@ -1572,6 +1572,42 @@ def _moved_config(tmp_path, monkeypatch):
     return home, arm
 
 
+def test_the_project_index_sits_inside_a_moved_config_dir(tmp_path, monkeypatch):
+    # Claude Code writes .claude.json INSIDE CLAUDE_CONFIG_DIR when that is set (CLI 2.1.319,
+    # `claude mcp list` with an empty config dir); the sibling would be the real home's index.
+    _, arm = _moved_config(tmp_path, monkeypatch)
+    assert P.default_claude_json(arm / "plugins" / "cache") == arm / ".claude.json"
+
+
+def test_the_project_index_is_the_sibling_without_claude_config_dir(tmp_path, monkeypatch):
+    monkeypatch.delenv("CLAUDE_CONFIG_DIR", raising=False)
+    config = tmp_path / "home" / ".claude"
+    assert P.default_claude_json(config / "plugins" / "cache") == tmp_path / "home" / ".claude.json"
+
+
+def test_a_claude_config_dir_naming_another_dir_keeps_the_sibling(tmp_path, monkeypatch):
+    # An explicit --cache-dir for a config dir the variable does not name is not that config.
+    _moved_config(tmp_path, monkeypatch)
+    config = tmp_path / "other" / ".claude"
+    assert P.default_claude_json(config / "plugins" / "cache") == tmp_path / "other" / ".claude.json"
+
+
+def test_a_moved_config_dir_reads_its_own_project_index(tmp_path, monkeypatch, cache):
+    """End to end: under CLAUDE_CONFIG_DIR the project settings come from <dir>/.claude.json."""
+    # The fixture cache is <tmp>/plugins/cache, so <tmp> is the config dir the variable names.
+    monkeypatch.setenv("HOME", str(tmp_path / "home"))
+    monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(tmp_path))
+    project = tmp_path / "some-project"
+    project.mkdir()
+    settings = write_project_settings(
+        project, {"enabledPlugins": {"orphan-plugin@other-marketplace": True}})
+    (tmp_path / ".claude.json").write_text(
+        json.dumps({"projects": {str(project): {}}}), encoding="utf-8")
+    plan = plan_for(cache)
+    assert settings in plan.settings_files
+    assert all("orphan-plugin" not in path for path in paths(plan.prune))
+
+
 def test_the_default_cache_follows_claude_config_dir(tmp_path, monkeypatch):
     # Claude Code keeps its plugin cache in CLAUDE_CONFIG_DIR when that is set; pruning under
     # ~/.claude then would judge (and could delete from) a cache no session uses.

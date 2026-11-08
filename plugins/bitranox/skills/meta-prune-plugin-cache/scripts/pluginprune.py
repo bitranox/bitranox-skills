@@ -643,11 +643,33 @@ def default_settings_files(cache_dir: Path) -> list[Path]:
 
 
 def default_claude_json(cache_dir: Path) -> Path:
-    """`~/.claude.json`, the sibling of the `~/.claude` directory the cache path already names."""
+    """The project index Claude Code keeps for the config dir the cache path names.
+
+    Claude Code puts `.claude.json` INSIDE the config dir when CLAUDE_CONFIG_DIR is set, and beside
+    it (`~/.claude.json`) when it is not (measured on CLI 2.1.319: `claude mcp list` with an empty
+    CLAUDE_CONFIG_DIR wrote `<dir>/.claude.json`, without it `~/.claude.json`). The sibling read
+    under a moved config dir would take the REAL home's index, whose projects belong to another
+    configuration. Only a CLAUDE_CONFIG_DIR naming this very config dir counts: a `--cache-dir`
+    for some other dir keeps the sibling rule, and `--claude-json` overrides both.
+    """
     claude_dir = cache_dir.parent.parent
+    if _names_config_override(claude_dir):
+        return claude_dir / ".claude.json"
     if not claude_dir.name:
         return claude_dir / ".claude.json"  # a cache two levels below a root has no sibling
     return claude_dir.with_name(claude_dir.name + ".json")
+
+
+def _names_config_override(claude_dir: Path) -> bool:
+    """True when CLAUDE_CONFIG_DIR is set and names `claude_dir` (compared absolute, normalised)."""
+    override = os.environ.get("CLAUDE_CONFIG_DIR", "")
+    if not override.strip():
+        return False
+
+    def norm(path: Path) -> str:
+        return os.path.normcase(os.path.normpath(os.path.abspath(path)))
+
+    return norm(Path(override).expanduser()) == norm(claude_dir)
 
 
 def project_settings_files(claude_json: Path) -> list[Path]:
@@ -1254,7 +1276,8 @@ def _build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument(
         "--claude-json", help="the project index to discover project settings from"
-        " (default: ~/.claude.json)"
+        " (default: ~/.claude.json, or .claude.json inside CLAUDE_CONFIG_DIR when that names"
+        " the config dir the cache is in)"
     )
     parser.add_argument(
         "--no-project-settings",

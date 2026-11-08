@@ -30,6 +30,12 @@ a hole nobody has drawn a line under is one that gets rediscovered and half-fill
 two "versions with no entry" notes came to sit in this file disagreeing with it.
 
 
+## [10.37.0]
+
+### Fixed
+
+- meta-prune-plugin-cache: under `CLAUDE_CONFIG_DIR`, `pluginprune.py` now reads the project index from `.claude.json` inside the config dir, where Claude Code keeps it then, instead of the home directory's `~/.claude.json`. The home file lists another configuration's projects, so a plugin enabled only in a project of the moved configuration could read as an uninstalled leftover.
+
 ## [10.36.0]
 
 ### Fixed
