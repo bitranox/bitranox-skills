@@ -30,6 +30,15 @@ a hole nobody has drawn a line under is one that gets rediscovered and half-fill
 two "versions with no entry" notes came to sit in this file disagreeing with it.
 
 
+## [10.35.0]
+
+### Fixed
+
+- The context watcher no longer answers a subagent's tool call. A subagent's hook event carries
+  the main session's transcript and session id, so the save request went to the subagent, and the
+  session's asked flag then kept the main session silent until another tenth of the window: the
+  compaction came without a checkpoint. A subagent's event is now quiet and marks nothing.
+
 ## [10.34.0]
 
 ### Fixed

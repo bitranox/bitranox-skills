@@ -519,6 +519,37 @@ def test_over_the_save_point_asks_then_waits_a_tenth_of_the_window(tmp_path, ses
     assert W.decide(_event(session, far, tmp_path), CFG) is not None
 
 
+def test_a_subagent_tool_call_neither_asks_nor_spends_the_main_sessions_request(tmp_path, session):
+    """A subagent's PostToolUse carries the MAIN transcript and session plus its own agent_id."""
+    t = _transcript(tmp_path, _usage_line(cache_read=150_000))
+    sub = dict(_event(session, t, tmp_path), hook_event_name="PostToolUse", agent_id="a59e0edd6e4a")
+    assert W.decide(sub, CFG) is None
+    # the main session's own next tool call still gets the request
+    main = dict(_event(session, t, tmp_path), hook_event_name="PostToolUse")
+    assert W.decide(main, CFG) is not None
+
+
+def test_an_event_naming_a_subagent_transcript_is_quiet(tmp_path, session):
+    sub_dir = tmp_path / "sess" / "subagents"
+    sub_dir.mkdir(parents=True)
+    t = sub_dir / "agent-a59e0edd6e4a.jsonl"
+    t.write_text(_usage_line(cache_read=150_000) + "\n", encoding="utf-8")
+    ev = dict(_event(session, str(t), tmp_path), hook_event_name="PostToolUse")
+    assert W.decide(ev, CFG) is None
+
+
+@pytest.mark.parametrize(("event", "expected"), [
+    ({"agent_id": "abc"}, True),
+    ({"agent_id": None, "transcript_path": "/p/s.jsonl"}, False),
+    ({"agent_id": "", "transcript_path": "/p/s.jsonl"}, False),
+    ({"transcript_path": "/p/s/subagents/agent-abc.jsonl"}, True),
+    ({"transcript_path": "/p/agent-notes/s.jsonl"}, False),
+    ({}, False),
+])
+def test_is_subagent_event(event, expected):
+    assert W.is_subagent_event(event) is expected
+
+
 def test_under_the_save_point_never_asks(tmp_path, session):
     t = _transcript(tmp_path, _usage_line(cache_read=1000))
     assert W.decide(_event(session, t, tmp_path), CFG) is None

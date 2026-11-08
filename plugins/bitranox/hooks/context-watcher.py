@@ -521,6 +521,17 @@ def _family_known(model_id) -> bool:
     return any(mid.startswith(prefix) for prefix, _window in _FAMILY_WINDOWS)
 
 
+def is_subagent_event(event) -> bool:
+    """True when a subagent fired this event: it names an `agent_id`, or its transcript is one. PURE.
+
+    The second form covers an event whose `transcript_path` already points at a subagent's own
+    `agent-<id>.jsonl`, the shape sha-literal-nudge also accepts.
+    """
+    if event.get("agent_id"):
+        return True
+    return pathlib.Path(str(event.get("transcript_path") or "")).name.startswith("agent-")
+
+
 def decide(event, cfg):
     """The text for this Stop or PostToolUse event, or None to stay quiet. IMPURE (reads).
 
@@ -534,9 +545,18 @@ def decide(event, cfg):
     `stop_hook_active` means a Stop hook already kept this turn going. Blocking that continuation
     again would stack a second interruption on one turn and spend the consecutive-block budget, so
     it stays quiet and marks nothing; the next ordinary Stop asks instead.
+
+    A subagent's tool call fires this hook too, with the MAIN session's `session_id` and
+    `transcript_path` plus its own `agent_id`. Answering it would hand the main session's request
+    to the subagent, and the session's asked flag would then hold the main session silent until
+    another tenth of the window: measured in one session, three compaction cycles lost their
+    request this way while subagents ran past the save point. So a subagent's event is quiet and
+    marks nothing, and the main session's next tool call or Stop asks.
     """
     on_stop = (event.get("hook_event_name") or "Stop") == "Stop"
     if on_stop and event.get("stop_hook_active"):
+        return None
+    if is_subagent_event(event):
         return None
     session = str(event.get("session_id") or "")
     transcript = event.get("transcript_path") or ""
