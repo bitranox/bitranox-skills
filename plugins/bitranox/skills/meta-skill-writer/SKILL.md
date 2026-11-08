@@ -720,6 +720,17 @@ pptx/
 ```
 When: Reference material too large for inline
 
+**Trimming or splitting a SKILL.md into reference pages:** move text verbatim by line range, then
+
+- prove nothing was lost: every non-blank old body line exists in SKILL.md or a page, each
+  deliberate rewording listed as an expected miss (the misses also prove the check can fire);
+- give each page an intro line pointing back to SKILL.md, and repoint every "above" or "below"
+  that now crosses a page (each repoint is an expected miss too);
+- extend any test that scans SKILL.md (a skill-vs-CLI check) to the pages, or it stays green while
+  no longer covering what moved;
+- probe ROUTING on `opus` and `haiku` (SKILL.md alone: which page would you open?) and add the
+  keywords their gaps name to the routing table; a reading review misses them.
+
 ### Bundled scripts and hooks: keep them cross-platform
 
 Any script you ship inside a skill or as a hook (a `.sh`, `.py`, `.js`, scripts in
@@ -1149,6 +1160,9 @@ plugins/bitranox/hooks/repo-gate.py --mirrors` lists the pairs) keeps its ledger
 copy: run the command from the marketplace repo, or add
 `--skill-dir <marketplace>/plugins/bitranox/skills/<skill>` after the marketplace skill name.
 
+**Resuming a skill edit after a compaction:** the summary can list `show` and the RED baseline as
+done when they never ran. Re-run both before any GREEN probe or commit.
+
 An edit that reverses a listed decision (re-adds a removed rule, adopts a rejected alternative,
 drops a recorded rule) is made only when you can answer that entry's `reopen_if` with what
 changed; without that answer, keep the decision. With it, make the edit, then record a new entry
@@ -1402,7 +1416,10 @@ dir) and builds a command on it, substitute the text's own definition literally 
 command: a probe that writes a working command may have inferred past a wrong definition, so its
 pass does not prove the text. Measured: a step defined `<plugin>` as the checkout root, so its
 literal command named a script that does not exist (rc 2), while three GREEN probes wrote the
-right path and passed.
+right path and passed. An edit that appends a check after a gate command in a bash block chains the
+gate's own refusal first (`gate || { echo REFUSE; exit 1; }`) and runs the block with the gate
+failing and passing: otherwise the block's exit code is the appended check's, so a red gate reads
+green (`false; test -z ""` exits 0).
 
 **How to dispatch a verification test:**
 
@@ -1423,6 +1440,21 @@ Task tool call:
 ```
 
 Agent should now comply. If agent still fails: skill is unclear or incomplete - revise and re-test.
+
+**Check the outgoing prompt before you dispatch; a defect in it fakes a result.**
+
+- A prompt embedding the skill must carry the text itself. A leftover placeholder
+  (`EXCERPT_PLACEHOLDER`, `<paste here>`) makes the arm VOID: it answers from nothing, which reads
+  like a real RED.
+- Check every background sentence the prompt says it may rely on against the code, as strictly as
+  the skill text. A simplified one that contradicts the correct skill makes both tiers report a
+  phantom gap and answer conditionally.
+- Questions from a file that also holds the expected answer go out as a copy without that field;
+  an answer the probe can read turns it into an echo.
+
+**Run a headless `claude -p` subject with `--output-format stream-json --verbose`.** A Stop hook in
+the probe session can block the end of the turn, and plain `-p` then prints the model's reply to
+the hook instead of its answer. Read the first assistant text block in the stream.
 
 **Require a `Skill gaps` section from every test subagent, RED and GREEN.** End each dispatch
 prompt with:
@@ -1526,9 +1558,14 @@ it, and each fix round can break the layout again. Two checks, every round:
 
 - **Mechanical: line width and fence closure over the ADDED lines.** The script below reads
   `git diff -U0` for the file, maps each hunk to the new file's line numbers, and reports an added
-  prose line over 100 columns (fenced code and `|` table rows skipped) and any closing fence with
+  prose line over 100 columns (fenced code and `|` table rows skipped), an added line outside a
+  fence with an odd backtick count (a code span split across lines), and any closing fence with
   text after it. A closer that carries text does not close the fence, so everything after it
-  renders as code until the next bare fence.
+  renders as code until the next bare fence. Fix an overflow by reflowing the WHOLE paragraph,
+  never one wide line at a time: each single fix pushes the overflow onto the next line.
+  `mdwrap.py` (home: `skills/compuse-toolbox/scripts/`) reflows one paragraph by anchor, but it
+  wraps inside a code span, so rejoin any span this check reports. A hand-rolled reflow asserts
+  the word sequence is unchanged and protects spans (a sentinel for their spaces).
 
   ```bash
   git diff -U0 -- SKILL.md | python3 -c '
@@ -1549,6 +1586,8 @@ it, and each fix round can break the layout again. Two checks, every round:
       if m:
           fence = m[1]
           continue
+      if no in added and line.count("`") % 2:
+          print(f"{no}: odd backtick count, so a code span is split across lines")
       if no in added and not line.lstrip().startswith("|") and len(line) > 100:
           print(f"{no}: {len(line)} columns")
   ' SKILL.md
@@ -1558,6 +1597,8 @@ it, and each fix round can break the layout again. Two checks, every round:
   "this", "Measured: ...", "see the next paragraph") now binds to your new text instead of what it
   meant, and a new bullet that restates one already nearby reads as a second rule. Neither shows
   up in a quote-back, which passes on presence alone. Fix the reference or merge the duplicate.
+  When you add a bullet or row to a list, also read the sentence that INTRODUCES the list and fix
+  any number word in it ("Three things ...").
 
 **Verify each fix by quote-back.** Re-ask the contested question and require the answer to be a
 DIRECT QUOTE of the governing text, or the single word NONE. A paraphrase proves the model can
@@ -1565,14 +1606,25 @@ reason to the answer; only a quote proves the skill says it. NONE means you have
 rule yet, however clear it felt while editing. Dispatch the quote-back as an `opus` subagent at
 effort `medium` (review dispatch, see bitranox:process-agents-subagent-driven-development "Review
 dispatches"); the `haiku` re-run under "A pass gets the same re-run as a failure" is a probe arm
-and passes no `effort` field.
+and passes no `effort` field. Ask for one quote per field and each further quote on its own line:
+quotes joined with labels or separators fail a substring check though each is verbatim. When a
+checker scores the quotes, normalise whitespace, split on the joiners, read each remaining miss by
+hand, and run the same checker against the pre-edit text as a control (a quote from text the edit
+added must fail there).
+
+**A bold lead must stay true without its paragraph.** A weak tier can quote the lead and miss the
+paragraph's detail. In REFACTOR read each bold lead alone and ask whether it still holds; when a
+quote-back splits by tier (`opus` right, `haiku` wrong), check the lead first, reword it to the
+paragraph's real scope and re-test on `haiku`.
 
 **A quote-back proves the text is readable, never that it is true.** A probe quotes a false
 sentence back as faithfully as a true one. Before probing a touched paragraph, check each
 mechanism claim in it against the code it describes: grep the symbol, read the branch that raises
 or returns. Measured: a skill said a capture call refuses a loopback interface by name; no code
 checks the name (it refuses by the link type the device reports), and two tiers quoted the false
-sentence back correctly.
+sentence back correctly. Nor can it see the text disagree with the skill's own tool: when an edit
+changes what the skill says is right, run or grep the tool the skill ships for the old advice and
+fix it in the same release.
 
 **Before you ship, list every case the edit decides beyond the reported defect.** A fix for one
 defect usually settles neighbouring cases too: a new exception, a "the user's own X stays as is"
@@ -1676,7 +1728,8 @@ Deploying untested skills = deploying untested code. It's a violation of quality
       on a claim about the system cites the `file:line` read or the command run
 - [ ] After every fix round and before each re-probe or delta review: the width and fence check
       over the added lines printed nothing, and the paragraph after each insertion point was read
-      for a re-bound back-reference or a duplicated bullet
+      for a re-bound back-reference or a duplicated bullet, and each list's introducing sentence
+      for a stale count
 - [ ] GREEN diffed against RED in BOTH directions, with every baseline result missing from GREEN
       accounted for - a lost result is a REFACTOR requirement, not a trade
 - [ ] Each fix verified by quote-back (a direct quote of the governing text, or NONE)
