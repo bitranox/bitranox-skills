@@ -12,12 +12,13 @@ Probed on interactive CLI 2.1.296: PostToolUse on AskUserQuestion receives `tool
 that was actually shown and answered - a call refused at PreToolUse produces no event.
 
 Where it writes (user decision 2026-10-12, "Own JSONL file"): `USER-DECISIONS.jsonl` at the root of
-the MAIN checkout of the repository the session's cwd is in - a linked worktree logs there too, so
-removing the worktree does not take the log with it. "The session's cwd" is the event's `cwd`,
-where the shell sat when the user ANSWERED: a session that had changed into a nested repository
-(a sub-checkout under an umbrella) logs into that repository's log, not the one it started in, so
-look there before calling an answer unlogged (measured 2026-10-31: an answer reported missing was
-in the nested repository's log, written the second it was given). The name goes into the repository's own
+the MAIN checkout of the repository the session was LAUNCHED in - a linked worktree logs there too,
+so removing the worktree does not take the log with it. The launch directory is the cwd of the
+first transcript record that has one, because the event's `cwd` is where the shell sat when the
+user answered, and a session that had changed into a nested repository (a sub-checkout under an
+umbrella, even a public fork's checkout) would otherwise log there while every reader looks at the
+session's own root. When the launch directory is unknown or in no repository the event's `cwd`
+decides, and each record keeps that `cwd` either way. The name goes into the repository's own
 exclude file unless git already ignores it, never into a tracked .gitignore and never skipped for
 `track_private`: this log must not be committable. Outside a repository it falls back to
 `~/.claude/self-improve-audit/<project-slug>.USER-DECISIONS.jsonl`. The hand-written
@@ -66,6 +67,36 @@ def log_path(cwd):
         return root / LOG_NAME
     audit = claude_paths.audit_dir()
     return audit / (project_slug(str(cwd or "unknown")) + "." + LOG_NAME)
+
+
+# Only the opening records are read: the launch cwd is on the first one that carries any.
+_TRANSCRIPT_HEAD_LINES = 50
+
+
+def launch_cwd(transcript_path):
+    """The directory the session started in, from its transcript's opening records, else None."""
+    if not isinstance(transcript_path, str) or not transcript_path:
+        return None
+    try:
+        with open(transcript_path, "rb") as handle:
+            for _, raw in zip(range(_TRANSCRIPT_HEAD_LINES), handle):
+                try:
+                    record = json.loads(raw)
+                except ValueError:
+                    continue
+                cwd = record.get("cwd") if isinstance(record, dict) else None
+                if isinstance(cwd, str) and cwd:
+                    return cwd
+    except OSError:
+        return None
+    return None
+
+
+def log_cwd(event):
+    """The directory whose repository owns this event's log: the launch cwd, else the event's."""
+    event_cwd = event.get("cwd") if isinstance(event.get("cwd"), str) else None
+    launched = launch_cwd(event.get("transcript_path"))
+    return launched if launched and main_checkout_root(launched) is not None else event_cwd
 
 
 _JOIN = ", "
@@ -158,8 +189,7 @@ def main() -> int:
     rows = records(event, now)
     if not rows:
         return 0
-    cwd = event.get("cwd") if isinstance(event.get("cwd"), str) else None
-    append(log_path(cwd), rows)
+    append(log_path(log_cwd(event)), rows)
     return 0
 
 

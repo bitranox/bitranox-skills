@@ -144,6 +144,43 @@ def test_outside_a_repo_it_falls_back_to_the_audit_dir(tmp_path):
     assert not (plain / U.LOG_NAME).exists()
 
 
+def _transcript(tmp_path, cwd):
+    path = tmp_path / "session.jsonl"
+    records = [{"type": "permission-mode"}, {"type": "user", "cwd": str(cwd)}]
+    path.write_text("".join(json.dumps(r) + "\n" for r in records), encoding="utf-8")
+    return str(path)
+
+
+def _nested(repo):
+    nested = repo / "nested"
+    nested.mkdir()
+    assert _git(nested, "init", "-q", "-b", "main").returncode == 0
+    return nested
+
+
+def test_an_answer_given_from_a_nested_repo_logs_at_the_launch_root(repo, tmp_path):
+    nested = _nested(repo)
+    event = {**_event(nested), "transcript_path": _transcript(tmp_path, repo)}
+    assert _run(event, tmp_path / "home").returncode == 0
+    assert _records(repo / "USER-DECISIONS.jsonl")[0]["cwd"] == str(nested)
+    assert not (nested / "USER-DECISIONS.jsonl").exists()
+
+
+def test_without_a_transcript_the_event_cwd_decides(repo, tmp_path):
+    nested = _nested(repo)
+    assert _run(_event(nested), tmp_path / "home").returncode == 0
+    assert (nested / "USER-DECISIONS.jsonl").exists()
+    assert not (repo / "USER-DECISIONS.jsonl").exists()
+
+
+def test_a_session_launched_outside_any_repo_uses_the_event_cwd(repo, tmp_path):
+    outside = tmp_path / "plain"
+    outside.mkdir()
+    event = {**_event(repo), "transcript_path": _transcript(tmp_path, outside)}
+    assert _run(event, tmp_path / "home").returncode == 0
+    assert (repo / "USER-DECISIONS.jsonl").exists()
+
+
 def test_notes_and_a_free_text_answer_are_kept(repo, tmp_path):
     annotations = {_QUESTION["question"]: {"notes": "only for public repos"}}
     _run(_event(repo, answers={_QUESTION["question"]: "something else entirely"},
