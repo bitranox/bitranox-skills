@@ -337,6 +337,16 @@ def test_the_save_request_names_the_numbers_and_the_skill():
     assert "150,000" in msg and "107,000" in msg and "meta-context-watcher" in msg
 
 
+def test_the_save_request_says_to_replace_the_whole_handover():
+    # A session once answered the request with an Edit that appended an update to a handover whose
+    # first line still read `# STALE` from the previous hand-back; compact-resume then rightly
+    # skipped it as already read, and the fresh checkpoint was lost. The request must say why the
+    # whole file is replaced, since the reader acts on the request mid-task, not on the skill.
+    _s, detail = W.compact_verdict(150_000, 200_000, 70, 400_000, 140_000)
+    msg = W._save(detail)
+    assert "Replace the whole file" in msg and "`# STALE`" in msg
+
+
 def test_the_misconfigured_message_says_which_knob_to_set():
     _s, detail = W.compact_verdict(563_038, 200_000, 70, 400_000, 0)
     detail["source"] = "assumed"

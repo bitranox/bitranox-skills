@@ -30,6 +30,14 @@ a hole nobody has drawn a line under is one that gets rediscovered and half-fill
 two "versions with no entry" notes came to sit in this file disagreeing with it.
 
 
+## [10.33.0]
+
+### Fixed
+
+- The context watcher's save request now says to replace the whole `handover.md`: a checkpoint
+  appended under a first line still reading `# STALE` from an earlier hand-back is skipped as
+  already read, so the compaction lost it.
+
 ## [10.32.0]
 
 ### Changed
