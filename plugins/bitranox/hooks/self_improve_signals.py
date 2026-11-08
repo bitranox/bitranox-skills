@@ -830,7 +830,11 @@ REJECTED = "rejected"
 
 def rejected_file(proj):
     """Tombstones for contributions that have left the queue, either outcome (never re-queued).
-    Keyed exactly like `contrib_file`, `queue_key:` included."""
+    Keyed exactly like `contrib_file`, `queue_key:` included.
+
+    The name says rejected but the file holds shipped records too; `outcome` tells them apart.
+    It is not renamed because every installed plugin version reads this path: an open session
+    on an older version would find no closed set and let a dream re-queue every closed entry."""
     return _audit_dir() / (_queue_file_key(proj) + ".contrib-rejected.jsonl")
 
 

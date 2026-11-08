@@ -45,7 +45,9 @@ matches`. Run `contrib_queue.py queues` first: it lists every queue with its key
 project path; then close the entry from that project's dir or address it as `queue_key:<hash>`,
 which every verb accepts. `drain` closes the WHOLE queue at
 once and fits only a sweep where every entry shipped. `contrib_queue.py shipped` and
-`contrib_queue.py rejected` show what left and why. The drop writes a TOMBSTONE, which is
+`contrib_queue.py rejected` show what left and why; count closed entries with them, never by the
+lines of `<hash>.contrib-rejected.jsonl`, which despite its name holds BOTH outcomes, told apart
+only by each record's `outcome` field. The drop writes a TOMBSTONE, which is
 the part that makes it stick: `add` dedups only against the LIVE queue, so without the tombstone the
 next dream that re-notices the same gap silently re-queues it. A re-add of a dropped intent is
 refused and says so. An out-of-range index is refused rather than deleting the wrong entry.

@@ -49,7 +49,10 @@ reported. `queues` prints a one-line pointer here while any such file exists.
 An intent leaves the queue by one of two OUTCOMES, and they are not interchangeable: `ship` for
 what was delivered, `drop` for what turned out wrong or stale. Both block a re-queue; only the
 outcome recorded differs, and recording a delivered contribution as rejected misleads every later
-reader about whether the work was done. `drain` closes the WHOLE queue at once, recording every
+reader about whether the work was done. Both outcomes are stored in ONE file,
+`<hash>.contrib-rejected.jsonl` - the name predates `ship` - told apart only by each record's
+`outcome`, so count closed entries with `shipped` and `rejected`, never by that file's lines.
+`drain` closes the WHOLE queue at once, recording every
 entry as shipped, and so fits only a sweep where every entry shipped - to close one entry, use
 `ship`.
 
@@ -281,7 +284,8 @@ def main(argv=None):
     dp.add_argument("--match", default="", help="unique text from its what/target - order-proof")
     dp.add_argument("--reason", default="", help="why it is wrong or stale (kept in the tombstone)")
     dp.add_argument("proj", nargs="?", default=None)
-    rj = sub.add_parser("rejected", help="show the dropped intents and why")
+    rj = sub.add_parser("rejected", help="show the dropped intents and why (the "
+                                         ".contrib-rejected.jsonl store also holds shipped ones)")
     rj.add_argument("proj", nargs="?", default=None)
     sl = sub.add_parser("shipped", help="show the intents that delivered, and where")
     sl.add_argument("proj", nargs="?", default=None)

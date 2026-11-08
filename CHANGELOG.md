@@ -30,6 +30,20 @@ a hole nobody has drawn a line under is one that gets rediscovered and half-fill
 two "versions with no entry" notes came to sit in this file disagreeing with it.
 
 
+## [10.26.0]
+
+### Changed
+
+- `redcheck.py` weighs each shared term by how likely a document of that size is to hold it by
+  chance, so a long memory index no longer reads as prior coverage for every scenario; each hit
+  reports `evidence` and `evidence_needed`. process-test-driven-development says to grep each
+  `CLAUDE.local.md` after every clean run.
+
+### Fixed
+
+- meta-self-improve and `contrib_queue.py` say to count closed contributions with `shipped` and
+  `rejected`: the `<hash>.contrib-rejected.jsonl` store holds shipped entries too.
+
 ## [10.25.0]
 
 ### Added

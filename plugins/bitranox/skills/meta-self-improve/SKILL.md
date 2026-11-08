@@ -311,6 +311,11 @@ PLACE-HERE line) before calling the placement wrong.
   disproven or stale. Select by `--match`, never `--index`: an index shifts under the previous
   close, so two closes from one listing destroy the wrong entry. A delivered contribution recorded
   as rejected tells every later reader the work was not done.
+  To count closed entries, run `contrib_queue.py shipped` or `contrib_queue.py rejected`; never
+  count the lines of `<hash>.contrib-rejected.jsonl`. Despite its name, that file holds EVERY
+  closed entry, shipped ones included, and only each record's `outcome` field tells them apart:
+  `ship` writes `shipped`, `drop` writes `rejected`, and `rejected` lists every record whose
+  outcome is not `shipped`, an older record with no outcome included.
   When a skill-targeted entry is dropped as disproven, or declined for a reason that will still
   hold next time, also record it as a `rejected` entry in that skill's ledger in the source repo:
   from the marketplace checkout (never the installed plugin copy), write the entry to a JSON file
