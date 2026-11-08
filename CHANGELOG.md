@@ -30,6 +30,23 @@ a hole nobody has drawn a line under is one that gets rediscovered and half-fill
 two "versions with no entry" notes came to sit in this file disagreeing with it.
 
 
+## [10.38.0]
+
+### Added
+
+- meta-skill-ab-test: `run` holds an exclusive lock on `<run dir>/run.lock` (the holder's pid in
+  it), so a second `run` on the same run dir exits 2 naming that pid; SIGTERM stops a run on the
+  Ctrl-C path (`result.json`, an `interrupted` journal row, exit 130).
+- meta-skill-ab-test: the floor's step classifier reads `build_prerequisite_missing(protoc)` when
+  a build script failed because protoc is missing, and `score` now also classifies the gate step
+  (`floor_gate`, `gate=` on the text line).
+- meta-skill-ab-test: `[workpiece] link = [...]` symlinks gitignored workpiece paths (a vendored
+  protoc) into every arm's worktree before its session (`linked` in `result.json`); `seal`
+  refuses an entry that is missing, tracked, not ignored, or ignored only as a directory.
+- meta-skill-ab-test: `[run] unattended_note` is appended to every arm's prompt alike, its sha256
+  recorded in each journal row and `result.json`; `score` adds `last_text` and
+  `ended_with_question` and flags an arm whose session ended by asking, never voiding it.
+
 ## [10.37.2]
 
 ### Added
