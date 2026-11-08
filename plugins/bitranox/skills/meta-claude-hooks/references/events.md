@@ -194,7 +194,18 @@ deprecated on this event (`approve` and `block` map to `allow` and `deny`).
   and `ExitPlanMode` need `updatedInput` paired with it; and from v2.1.199 an MCP tool flagged
   `_meta["anthropic/requiresUserInteraction"]` keeps its approval prompt whatever the hook says.
 - **`ask` forces a prompt even in auto mode** (v2.1.211+): the classifier may still deny, but it cannot approve
-  silently. The prompt carries a source label: `[settings]`, `[plugin:<name>]` or `[skill]`.
+  silently. The prompt carries a source label: `[settings]`, `[plugin:<name>]` or `[skill]`. Two calls take a
+  different path: one Claude Code's own checks also flag (a protected-path write, a command asking to run outside
+  the sandbox) can be denied by the classifier before any prompt, and `SubagentHandback` shows no prompt and runs
+  even if the classifier objects. To stop a `SubagentHandback`, return `deny`: the subagent is told up to three
+  times to call it again, and if the hook keeps denying it ends without delivering its report.
+- **`updatedInput` with no `permissionDecision` can be denied in auto mode.** The server reviewed the input Claude
+  wrote, not the input the hook returned. In interactive terminal and VS Code sessions on a direct API connection
+  the denial reads `a hook changed this call's input after auto mode reviewed it`; if Claude then repeats the
+  changed input exactly, the hook still runs and can deny or ask, but any `updatedInput` it returns is dropped. In
+  those sessions a `command` hook from settings or a plugin's hooks file can change Bash, PowerShell, Monitor, Edit,
+  Write and NotebookEdit calls without this denial, unless any hook changed an earlier call in the same response
+  or a Bash command asks to run outside the sandbox.
 - **`defer` works only under `-p` and only for a single tool call in the turn.** In an interactive session it is
   logged and ignored; with several tool calls in the turn it is ignored and the call proceeds through the normal
   permission flow. Either way it is not a deny.
@@ -207,7 +218,10 @@ deprecated on this event (`approve` and `block` map to `allow` and `deny`).
   re-enters PreToolUse (a replay, not the model deciding again). Per the official hooks doc: a `-p` resume does
   not restore the stored permission mode (pass it again; plan mode has its own route via
   `--permission-prompt-tool`), and a tool that is gone by then ends the resume as `tool_deferred_unavailable`
-  while the call stays pending; it is dropped once a prompt is sent, with the resume or after it.
+  (`PreToolUse` does not fire; the result's `deferred_tool_use` names the tool) while the call stays pending. A
+  prompt sent then does not reach Claude and the run exits 1. Make the tool available and resume, or resume with a
+  prompt and `CLAUDE_CODE_DROP_UNAVAILABLE_DEFERRED_TOOL=1` to drop the call: Claude gets an error as its result
+  and answers the prompt. With the variable set and no prompt the call is still dropped and the run exits 1.
 
 Exit 2 blocks regardless of JSON. Staying silent (exit 0, no output) does **not** approve: the call continues
 through the normal permission flow. A hook can deny; it cannot rubber-stamp by silence.
@@ -279,6 +293,13 @@ For `Bash`, v2.1.269+ can add `tool_response.bashEditDiff`: the files a command 
 (`changedFiles`, up to 5 diffs in `files`, plus `moreFiles`, `unavailable`, `skipped`, `shared`). It is recorded in
 auto and `bypassPermissions` mode, or in any mode with the `bashEditDiffEnabled` setting. It is best effort and in
 public beta, so use it to find what to review, **not to enforce a policy**.
+
+**After an interrupt, the key pressed decides whether the hook finishes.** `Ctrl+Enter` that ends the turn while a
+tool runs gives `PostToolUse` hooks 10 seconds on the finished tool's result, then kills a command hook still
+running, whatever its `timeout`. `Enter` queues without interrupting, so the usual `timeout` holds. `Esc` cancels
+the hooks at once. `Ctrl+Enter` acts as `Esc` when a `!` command is queued ahead of your messages or background
+tasks are disabled (`CLAUDE_CODE_DISABLE_BACKGROUND_TASKS`). A command hook that must run past the 10 seconds
+needs `async: true`, and then cannot block or rewrite the result.
 
 ### PostToolUseFailure
 
@@ -518,6 +539,9 @@ Matcher: `manual`, `auto`. Input adds `trigger` and `custom_instructions`. Top-l
 Blocking an `auto` compaction only skips it when it was proactive. When compaction was triggered to recover from
 a context-limit error the API already returned, blocking it surfaces that error and **the request fails**.
 
+A hook that exits 0 and does not block has its stdout used as instructions for the compaction summary, up to
+10,000 characters per hook; longer output is cut at that cap and a marker appended.
+
 ### PostCompact
 
 Fires after compaction completes. **Cannot be blocked**; stderr to the user only.
@@ -536,8 +560,8 @@ build before a hook depends on one.
 - **The same turn continues after an AUTO compaction.** Tool calls followed the compaction boundary under the
   original prompt id, five times in a row; the agent does not stop and wait for a new prompt.
 - **`SessionStart` with source `compact` is how a hook reaches the model after it.** Its `additionalContext`
-  is present in the very next API request. `PreCompact` can block but not inject, and `PostCompact`'s output
-  fields are discarded.
+  is present in the very next API request. `PreCompact` can block or steer the summary but not inject into the
+  conversation, and `PostCompact`'s output fields are discarded.
 - **An `env` block in `settings.json` reaches hook subprocesses.** Setting `CLAUDE_CODE_AUTO_COMPACT_WINDOW`
   there both sets the session's window and lets a hook read it, so a hook can check it agrees with the window
   it assumes.
@@ -712,9 +736,10 @@ stderr is shown nowhere.
 
 Fires when Claude Code sends a notification. **Exit code and stderr are ignored**; no decision control.
 
-Matcher: `permission_prompt`, `idle_prompt`, `auth_success`, `elicitation_dialog`, `elicitation_url_dialog`,
-`elicitation_complete`, `elicitation_response`, `agent_needs_input`, `agent_completed`,
-`quota_auto_resume_fired`, `quota_auto_resume_stale`, `quota_auto_resume_disabled`. Version floors:
+Matcher: `permission_prompt`, `idle_prompt`, `auth_success`, `auth_storage_failure` (sign-in completed but the
+credentials could not be saved; fires in place of `auth_success`, v2.1.288+), `elicitation_dialog`,
+`elicitation_url_dialog`, `elicitation_complete`, `elicitation_response`, `agent_needs_input`, `agent_completed`,
+`quota_auto_resume_fired`, `quota_auto_resume_stale`, `quota_auto_resume_disabled`, `plugin_notification`. Version floors:
 `agent_needs_input` and `agent_completed` need v2.1.198 (and `agent_needs_input` for a teammate's terminal setup
 question v2.1.248); the three quota values, which fire on claude.ai usage-limit auto-resume, need v2.1.234.
 

@@ -130,8 +130,9 @@ skip that test on Windows (`@pytest.mark.skipif(sys.platform == "win32", reason=
 by running its script directly with `sys.executable`), or resolve Git Bash's own `bash.exe` explicitly and pass
 that path. Never rely on `PATH` lookup for `bash` in a test that must pass on Windows.
 
-**An interactive-only tool needs an interactive probe.** Headless `claude -p` does not offer `AskUserQuestion`
-(observed on CLI 2.1.296; check `ExitPlanMode` the same way), so the model reports no matching tool and the hook
+**An interactive-only tool needs an interactive probe.** Headless `claude -p` offers `AskUserQuestion` and
+`ExitPlanMode` only to a run with a permission host (an Agent SDK `canUseTool` callback). In a plain `-p` run
+(observed on CLI 2.1.296) the model reports no matching tool and the hook
 never fires - a non-answer that looks like a hook that found nothing. Probe in a real interactive session under
 tmux, with a throwaway settings file in a scratch directory that registers a `PreToolUse` hook (matcher
 `AskUserQuestion`) which appends its stdin to a log and denies with a unique marker string:

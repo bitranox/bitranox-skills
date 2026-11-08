@@ -5,7 +5,7 @@ description: Use when writing, editing, debugging or reviewing a Claude Code hoo
 
 # Claude Code hooks
 
-Reference baseline: hooks.md, fetched 2026-10-29, 33 events, content cca596f09813
+Reference baseline: hooks.md, fetched 2026-11-08, 33 events, content d40fe422477c
 
 Hooks are the deterministic layer around the agent: Claude Code runs your handler at a fixed point in its
 lifecycle, so a rule holds whether or not the model decides to honour it.
@@ -197,6 +197,13 @@ Five things make the number trustworthy:
   `(command, cwd)` receives the recorded cwd, so a rule about paths can be measured rather than
   guessed; but any shape it cannot decide (an interpreter write exposes no filename) is silently
   outside whatever you measured.
+
+**Precision prices only a hazard a gate would block.** A guard against a WRONG ANSWER (the command
+succeeds and prints a misleading verdict) is never followed by a block, so `guard_replay`'s
+precision reads 0 whatever the guard is worth. Price it by what each firing printed instead: write
+the firings with `--firings OUT.jsonl`, join each record's `id` to the matching `tool_use_id`
+result in its `transcript`, count the outcomes that are the hazard (a verdict printed beside a tool
+error, stderr suppressed so the error could not show) and read a sample of those.
 
 Unit tests prove a guard fires on the shapes you listed. Only a replay tells you whether it is
 QUIET on everything else - and a block that is not quiet gets routed around, which leaves you worse
