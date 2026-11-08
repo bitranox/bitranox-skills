@@ -14,6 +14,8 @@ All content is ASCII.
 
 import io
 import json
+import os
+import subprocess
 import sys
 
 import pytest
@@ -290,6 +292,43 @@ def test_owed_nap_from_another_session_names_that_transcript_and_does_not_claim_
     reason = _reason_of(capsys)
     assert str(old) in reason                       # review THAT file, not this session's
     assert "EARLIER session" in reason              # and say the compaction was not this one
+
+
+def _register_session(home, session_id, pid):
+    sessions = home / ".claude" / "sessions"
+    sessions.mkdir(parents=True, exist_ok=True)
+    (sessions / ("%d.json" % pid)).write_text(
+        json.dumps({"pid": pid, "sessionId": session_id}), encoding="utf-8")
+
+
+def test_owed_nap_of_a_live_peer_session_does_not_block(tmp_path, monkeypatch, capsys):
+    # The owner is still running: a nap here would consume its material under it.
+    import self_improve_signals as S
+    _iso_home(tmp_path, monkeypatch)
+    _register_session(tmp_path / "home", "sid-peer", os.getpid())
+    peer = tmp_path / "peer.jsonl"
+    peer.write_text("{}\n", encoding="utf-8")
+    S.mark_nap_owed(str(tmp_path), session_id="sid-peer", transcript_path=str(peer))
+    tp = make_transcript(tmp_path, user="ok", asst="Done.")
+    run_gate(monkeypatch, tmp_path, {"transcript_path": tp, "cwd": str(tmp_path),
+                                     "session_id": "sid-current"})
+    assert "CONTEXT COMPACTION" not in capsys.readouterr().out
+
+
+def test_owed_nap_of_an_ended_peer_session_still_blocks(tmp_path, monkeypatch, capsys):
+    # Control for the test above: same registry shape, but the owner's process is gone.
+    import self_improve_signals as S
+    _iso_home(tmp_path, monkeypatch)
+    ended = subprocess.Popen([sys.executable, "-c", "pass"])
+    ended.wait()
+    _register_session(tmp_path / "home", "sid-peer", ended.pid)
+    peer = tmp_path / "peer.jsonl"
+    peer.write_text("{}\n", encoding="utf-8")
+    S.mark_nap_owed(str(tmp_path), session_id="sid-peer", transcript_path=str(peer))
+    tp = make_transcript(tmp_path, user="ok", asst="Done.")
+    run_gate(monkeypatch, tmp_path, {"transcript_path": tp, "cwd": str(tmp_path),
+                                     "session_id": "sid-current"})
+    assert "CONTEXT COMPACTION" in _reason_of(capsys)
 
 
 def test_owed_nap_from_this_session_still_reads_as_this_session(tmp_path, monkeypatch, capsys):
