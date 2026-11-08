@@ -154,6 +154,45 @@ def test_facts_are_loaded_with_their_level_so_a_candidate_can_be_opened(tmp_path
     assert all(f.level.endswith(str(tmp_path)) or str(tmp_path) in f.level for f in loaded)
 
 
+FAR2 = ("When a remote download stalls, check its progress within a minute and stop it rather "
+        "than waiting for the transfer timeout to expire on its own.")
+
+
+def make_chain_tree(root: Path) -> Path:
+    """Anchor + a sibling holding a near-duplicate pair + the project a nap runs from."""
+    (root / "CLAUDE.md").write_text("anchor\n", encoding="utf-8")
+    store = root / ".claude-memory" / "facts"
+    store.mkdir(parents=True)
+    levels = {root: [("third-slug", FAR)],
+              root / "sib": [("first-slug", NEAR_A), ("second-slug", NEAR_B)],
+              root / "proj": [("fourth-slug", FAR2)]}
+    for lvl, entries in levels.items():
+        lvl.mkdir(exist_ok=True)
+        (lvl / "CLAUDE.local.md").write_text(
+            "# Memory index\n" + "".join(f"- [{s}](mem:{s}) - When {s}, do it.\n"
+                                          for s, _ in entries), encoding="utf-8")
+        for slug, body in entries:
+            (store / f"{slug}.md").write_text(f"---\nname: {slug}\ndescription: d\n---\n\n{body}\n",
+                                              encoding="utf-8")
+    return root / "proj"
+
+
+def test_chain_scope_loads_only_the_facts_the_chain_levels_point_at(tmp_path):
+    proj = make_chain_tree(tmp_path)
+    assert {f.slug for f in DS.load_facts(proj, scope="chain")} == {"third-slug", "fourth-slug"}
+    assert len(DS.load_facts(proj)) == 4          # the tree scope still sees the sibling's pair
+
+
+def test_cli_chain_scope_leaves_a_sibling_duplicate_alone(tmp_path):
+    proj = make_chain_tree(tmp_path)
+    r = run_cli(["--from", str(proj), "--scope", "chain", "--json"], tmp_path)
+    assert r.returncode == 0, r.stdout + r.stderr
+    env = json.loads(r.stdout)
+    assert env["data"]["candidates"] == [] and env["data"]["control"]["detected"] is True
+    r = run_cli(["--from", str(proj), "--json"], tmp_path)
+    assert r.returncode == 1                     # control: the tree scope finds the sibling pair
+
+
 def run_cli(args, cwd):
     return subprocess.run([sys.executable, str(TOOL), *args], capture_output=True, text=True,
                           encoding="utf-8", errors="replace", check=False, cwd=str(cwd))

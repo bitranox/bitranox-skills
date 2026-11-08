@@ -88,24 +88,37 @@ than deleting it.
    flag is the human's call, not a subagent's. Run the same `apply` with `--dry-run` instead and
    hand back the delta it prints, so the user decides it in the report. A batch holding a pinned
    fact is refused whole, so leave it out of the batch and dry-run it on its own.
-   `show --body --slug <slug> > f` writes the body alone (its header goes to stderr), so edit `f`
-   and pass it straight back as `--body-file`.
+   `show --body --slug <slug> > f` writes the stored body, its `---` frontmatter frame included
+   (the header goes to stderr), so edit the prose in `f` and pass it straight back as
+   `--body-file`: the engine stores a framed body once, never framing it again, and re-syncs the
+   frame's `description:` to the hook. Do not strip the frame by hand.
    A long owed stretch: read it with `dream_state.py session-review --prose` (text turns and
    failed tool results only, one part per 64 MB of transcript) rather than paging raw JSONL.
+   An EARLIER session's owed transcript is read with `session-review --prose --transcript PATH`
+   and marked with `session-reviewed --prose --transcript PATH`, the same PATH: a bare
+   `session-reviewed` advances the LIVE session's watermark instead, discharging a stretch nobody
+   read and leaving the owed one open.
    **A capture that wrote BELOW the chain** (an existing fact owned by a descendant level the
    session edited - the Stop gate's ROUTING EVIDENCE names those dirs) widens steps 2 and 6 to
    that level: take the backup with `--from <that descendant>` (its chain holds the cwd's chain),
    pass it as the narrowest dir of `reconcile --check`, and name each such write in the report as
    a capture carve-out write. Otherwise the manifest diff and the chain check never see the fold.
 2. **Back up + manifest** the CHAIN's levels only (per the core), widened to a descendant level
-   step 1 wrote at (see step 1).
+   step 1 wrote at (see step 1): `store_manifest.py backup --from <cwd> --scope chain --out <dir>`
+   (home: `<plugin>/skills/meta-dream-tree/`), with `<dir>` a new directory in the scratchpad.
 2b. **Read the toolbox inventory** - `uv run ~/.claude/skills/toolbox/tools/toolbox.py list`, the
    READ half of the toolbox pass (per the core); skip only if that path does not exist. It runs
    HERE, before steps 3-5, because those are the passes whose scans a shipped tool has often
    already implemented and calibrated - check the names before hand-rolling any scan below.
    Deferring "the toolbox pass" defers the CONSOLIDATE half only, never this read.
 3. **Dedup within the chain**: fold near-duplicates among the chain's entries (engine `add`,
-   same slug). Do not chase sibling duplicates - out of scope, the full dream's job.
+   same slug). Do not chase sibling duplicates - out of scope, the full dream's job. Find the
+   candidates with `dedup_scan.py --from <cwd> --scope chain` (home:
+   `<plugin>/skills/meta-dream-tree/`): it reads only the facts the chain's levels point at, so it
+   fits a nap (measured: 609 facts in 29 s, where the tree-wide default ran past 3 minutes and was
+   stopped). Exit 1 lists candidates to READ, never duplicates to fold unread; exit 2 means its
+   planted control did not fire and an empty list proves nothing, so chain dedup goes on the
+   deferred list as not done, with that reason.
 4. **Chain-internal placement only**: route entries whose EVIDENCE is already clear through the
    routing prompt (in the core), applying only moves whose from AND to levels are ON the chain
    (up or down). Low/UNSURE and anything involving a sibling stays put. A pinned fact re-levels
@@ -117,8 +130,12 @@ than deleting it.
    0 none, 2 is an error to report) and handle each candidate whose level is ON the chain exactly
    as `bitranox:meta-dream-tree` step 7, question 3 says: re-check against the current release,
    then reword, archive or merge.
-6. **Verify + report + state the leftovers**: the core's verification contract (manifest diff,
-   reconcile `TOTAL problems: 0` over the chain), then report counts AND an explicit
+6. **Verify + report + state the leftovers**: the core's verification contract - the manifest
+   diff, `store_manifest.py verify --out <the step 2 dir>` (`--out` is the backup dir, not the
+   manifest file), and `TOTAL problems: 0` from ONE `reconcile_memory_index.py --check` call
+   given the whole chain, narrowest first: the cwd's level, each ancestor level, and the anchor
+   (home: `<plugin>/skills/meta-self-improve/`, not `hooks/`); one call per level checks no
+   reference between levels - then report counts AND an explicit
    "deferred to the full dream" list (sibling dedup, tree-wide placement, descriptor synthesis,
    behavioral passes, unshipped skill/hook contributions (skill-fit) queued but not delivered, and
    the toolbox CONSOLIDATE half per dream-core.md - machine-global, outside the nap's chain-only
