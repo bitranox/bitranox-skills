@@ -8,9 +8,11 @@ description: Use when comparing a shipped bitranox skill against one or more mod
 Provisional text: the harness ships and runs; the full guide (judge, report, worked example)
 follows in a later release. Every command below is `python3 <this skill's dir>/scripts/abtest.py
 <subcommand> <run_dir> [--json]`; `--help` on each subcommand lists its options. Exit 0 yes, 1 no,
-2 could not run. Each arm runs the shipped `claude -p` in a nested git worktree of the real
-repository with its own config dir and a frozen plugin checkout; the memory store is not written
-(`BITRANOX_MEMORY_WRITES=off`) and any change to it is recorded for adjudication, never a void.
+2 could not run. `--json` prints one pretty-printed envelope across many lines, so a caller parses
+the whole stdout as one JSON document, never line by line. Each arm runs the shipped `claude -p`
+in a nested git worktree of the real repository with its own config dir and a frozen plugin
+checkout; the memory store is not written (`BITRANOX_MEMORY_WRITES=off`) and any change to it is
+recorded for adjudication, never a void.
 
 | Subcommand  | One line                                                                                          |
 |-------------|---------------------------------------------------------------------------------------------------|
@@ -28,6 +30,20 @@ plugin without the skill under test, and a variant's `task_file` gives that arm 
 sealed and recorded per arm with its sha256 (a bare arm's prompt must not name the missing skill).
 An acceptance suite kept outside the workpiece is named by `[floor] suite_from = "<absolute path>"`:
 `seal` copies it from there, and `suite` stays the path the sealed copy takes in each arm's worktree.
+
+A fresh worktree holds only tracked files, so build output the workpiece keeps untracked (a vendored
+protoc, a downloaded toolchain) is missing there and the arm's build fails for a reason that is not
+its code. `[workpiece] link = [".packages"]` symlinks each such path (relative to the workpiece
+root; `third_party/protoc` works too) into every arm's worktree before its session, and the arm's
+`result.json` lists the entries under `linked`. `seal` refuses an entry that is missing, tracked,
+not ignored, or ignored only by a dir-only pattern: `.packages/` does not match the symlink, so an
+agent's `git add -A` would commit it. Then also ignore it as `/.packages` (in `.git/info/exclude`,
+say; the `.packages/` line may stay) and run `seal` again. An entry gone by an arm's start fails
+that arm before its session. The link points at the workpiece's own copy: under either bwrap kind
+it is read-only, so a build writing into it fails there, and under `sandbox = "none"` such a write
+changes the workpiece's real copy. An environment variable naming the tool (`PROTOC`) still needs
+`[run] env_keep`. Removing the arm's worktree, which each arm does at its end, deletes the link,
+never its target.
 
 The run dir is a new directory OUTSIDE the workpiece, its own git repo (`seal` commits there,
 never into the workpiece); `init --repo <workpiece> --base <commit> --skills-ref <plugin commit>

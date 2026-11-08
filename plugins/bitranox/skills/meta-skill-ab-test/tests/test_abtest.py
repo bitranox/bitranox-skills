@@ -1587,3 +1587,132 @@ def test_a_run_takes_the_lock_and_frees_it_and_the_sigterm_handler_at_its_end(
     assert _lock_is_free(run_dir), "a finished run left the run dir locked"
     assert (run_dir / LOCK_FILE).read_text(encoding="utf-8").strip() == str(os.getpid()), "the lock names its holder"
     assert LOCK_FILE not in L.git(run_dir, "status", "--porcelain").stdout, "the lock file is gitignored"
+
+
+# --- [workpiece] link: a gitignored build prerequisite linked into every arm's worktree ----------
+
+PROTOC = Path(".packages") / "protoc" / "bin" / "protoc"
+NEEDS_PROTOC = '["sh", "-c", "test -x .packages/protoc/bin/protoc"]'
+
+
+def _plant_packages(repo, *, exclude_line="/.packages"):
+    """A gitignored .packages dir holding an executable protoc, as a build script would leave it."""
+    tool = repo / PROTOC
+    tool.parent.mkdir(parents=True)
+    tool.write_text("#!/bin/sh\necho protoc\n", encoding="utf-8")
+    tool.chmod(0o755)
+    if exclude_line is not None:
+        with (repo / ".git" / "info" / "exclude").open("a", encoding="utf-8") as fh:
+            fh.write(f"\n{exclude_line}\n")
+
+
+def _with_link(run_dir, entries='[".packages"]'):
+    toml = run_dir / "abtest.toml"
+    text = toml.read_text(encoding="utf-8")
+    assert text.count('task_file = "task.md"\n') == 1
+    toml.write_text(text.replace('task_file = "task.md"\n', f'task_file = "task.md"\nlink = {entries}\n'), encoding="utf-8")
+
+
+def test_a_linked_prerequisite_reaches_the_arms_floor_and_survives_prune_run(
+        tmp_path, scratch_repo, skills_repo, fake_claude_path, monkeypatch, capsys):
+    _plant_packages(scratch_repo)
+    run_dir = _init_and_fill(tmp_path, scratch_repo, skills_repo, gate=NEEDS_PROTOC)
+    _with_link(run_dir)
+    env, creds = _env(fake_claude_path, tmp_path)
+    _use_env(monkeypatch, env)
+    assert T.main(["seal", str(run_dir)]) == 0
+    assert T.main(_run_args(run_dir, creds, skills_repo, "--only", "C"), login_check=_Probe("ok")) == 0
+    arm = run_dir / "arms" / "r1-C"
+    res = json.loads((arm / "result.json").read_text(encoding="utf-8"))
+    assert res["floor"]["passed"] is True, res["floor"]
+    assert res["linked"] == [".packages"]
+    assert not (arm / A.UNTRACKED_TAR).exists(), "the link was saved as the arm's own untracked work"
+    assert T.main(["prune-run", str(run_dir)]) == 0
+    assert (scratch_repo / PROTOC).is_file(), "removing the arm's worktree deleted the workpiece's real dir"
+    assert not _ws(scratch_repo, run_dir, "r1-C").exists()
+
+
+def test_without_the_link_the_same_gate_fails(tmp_path, scratch_repo, skills_repo, fake_claude_path, monkeypatch):
+    _plant_packages(scratch_repo)
+    run_dir = _init_and_fill(tmp_path, scratch_repo, skills_repo, gate=NEEDS_PROTOC)
+    env, creds = _env(fake_claude_path, tmp_path)
+    _use_env(monkeypatch, env)
+    assert T.main(["seal", str(run_dir)]) == 0
+    assert T.main(_run_args(run_dir, creds, skills_repo, "--only", "C"), login_check=_Probe("ok")) == 0
+    res = json.loads((run_dir / "arms" / "r1-C" / "result.json").read_text(encoding="utf-8"))
+    assert res["floor"]["passed"] is False and res["linked"] == []
+
+
+def _track_packages(repo):
+    for args in (("add", "-f", str(PROTOC)), ("commit", "-q", "-m", "vendor protoc")):
+        assert L.git(repo, *args).returncode == 0
+
+
+@pytest.mark.parametrize(("setup", "named"), [
+    ("missing", "workpiece.link: .packages does not exist in the workpiece"),
+    ("tracked", "workpiece.link: .packages is tracked by git"),
+    ("not_ignored", "workpiece.link: .packages is not ignored by git"),
+    ("negated", "workpiece.link: .packages is not ignored by git"),
+    ("dir_only", "workpiece.link: .packages is ignored only as a directory (.packages/)"),
+])
+def test_seal_refuses_a_link_that_is_not_ignored_build_output(tmp_path, scratch_repo, skills_repo, capsys, setup, named):
+    if setup != "missing":
+        _plant_packages(scratch_repo, exclude_line={"tracked": "/.packages", "not_ignored": None,
+                                                    "negated": "/.packages\n!/.packages",
+                                                    "dir_only": ".packages/"}[setup])
+    if setup == "tracked":
+        _track_packages(scratch_repo)
+    run_dir = _init_and_fill(tmp_path, scratch_repo, skills_repo)
+    _with_link(run_dir)
+    capsys.readouterr()
+    assert T.main(["seal", str(run_dir)]) == 2
+    err = capsys.readouterr().err
+    assert named in err, err
+    assert not (run_dir / "journal.jsonl").exists(), "a refused seal recorded nothing"
+
+
+def _commit_file(repo, rel, text):
+    (repo / rel).parent.mkdir(parents=True, exist_ok=True)
+    (repo / rel).write_text(text, encoding="utf-8")
+    for args in (("add", rel), ("commit", "-q", "-m", f"add {rel}")):
+        assert L.git(repo, *args).returncode == 0
+
+
+@pytest.mark.parametrize("layout", ["dir_only_beside_a_symlink_pattern", "nested_gitignore"])
+def test_seal_accepts_a_link_git_ignores_as_a_symlink_and_the_arm_gets_it(
+        tmp_path, scratch_repo, skills_repo, fake_claude_path, monkeypatch, layout):
+    """The .gitignore files that decide are the ones a worktree has, so the seal check reads those."""
+    if layout == "dir_only_beside_a_symlink_pattern":
+        # The tracked .gitignore wins over info/exclude for the directory, but not for the symlink.
+        _commit_file(scratch_repo, ".gitignore", "CLAUDE.local.md\n.packages/\n")
+        _plant_packages(scratch_repo)
+        entry, gate = ".packages", NEEDS_PROTOC
+    else:
+        _commit_file(scratch_repo, "third_party/.gitignore", "/protoc\n")
+        (scratch_repo / "third_party" / "protoc").mkdir()
+        (scratch_repo / "third_party" / "protoc" / "README").write_text("vendored\n", encoding="utf-8")
+        entry, gate = "third_party/protoc", '["test", "-f", "third_party/protoc/README"]'
+    (scratch_repo / ".base").write_text(L.git(scratch_repo, "rev-parse", "HEAD").stdout.strip(), encoding="utf-8")
+    run_dir = _init_and_fill(tmp_path, scratch_repo, skills_repo, gate=gate)
+    _with_link(run_dir, f'["{entry}"]')
+    env, creds = _env(fake_claude_path, tmp_path)
+    _use_env(monkeypatch, env)
+    assert T.main(["seal", str(run_dir)]) == 0
+    assert T.main(_run_args(run_dir, creds, skills_repo, "--only", "C"), login_check=_Probe("ok")) == 0
+    res = json.loads((run_dir / "arms" / "r1-C" / "result.json").read_text(encoding="utf-8"))
+    assert res["floor"]["passed"] is True and res["linked"] == [entry]
+
+
+def test_a_link_adds_no_bind_to_the_sandbox(tmp_path, scratch_repo, skills_repo, fake_claude_path, fake_bwrap, monkeypatch):
+    _plant_packages(scratch_repo)
+    run_dir = _init_and_fill(tmp_path, scratch_repo, skills_repo, gate=NEEDS_PROTOC, sandbox="bwrap")
+    _with_link(run_dir)
+    env, creds = _env(fake_claude_path, tmp_path)
+    _use_env(monkeypatch, env)
+    assert T.main(["seal", str(run_dir)]) == 0
+    assert T.main(_run_args(run_dir, creds, skills_repo, "--only", "C"), login_check=_Probe("ok")) == 0
+    session = [json.loads(line) for line in fake_bwrap.read_text(encoding="utf-8").splitlines()][-1]
+    assert not any(".packages" in a for a in session), "the link reaches the arm through the workpiece's read-only bind"
+    assert str(scratch_repo) in session
+    res = json.loads((run_dir / "arms" / "r1-C" / "result.json").read_text(encoding="utf-8"))
+    assert res["floor"]["passed"] is True and res["linked"] == [".packages"]

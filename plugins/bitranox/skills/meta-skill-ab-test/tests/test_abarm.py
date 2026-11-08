@@ -1139,3 +1139,55 @@ def test_sandboxed_worktree_prune_leaves_a_neighbours_registration_alone(scratch
     assert "sibling" not in listed, "the arm registered a new worktree in the real repository"
     own = L.run([*prefix, "git", "commit", "-q", "--allow-empty", "-m", "own"], env=env, timeout=60)
     assert own.returncode == 0, own.stderr
+
+
+# --- link_paths: a gitignored workpiece path linked into the arm's worktree ----------------------
+
+def _linkable(repo, *, pattern="/.packages"):
+    (repo / ".packages" / "bin").mkdir(parents=True)
+    (repo / ".packages" / "bin" / "protoc").write_text("#!/bin/sh\n", encoding="utf-8")
+    with (repo / ".git" / "info" / "exclude").open("a", encoding="utf-8") as fh:
+        fh.write(f"\n{pattern}\n")
+    ws = repo / ".claude" / "worktrees" / "abx-t-r1-C"
+    A.make_worktree(repo, (repo / ".base").read_text(), "abx/t/r1-C", ws, copy_untracked_claude_md=False)
+    return ws
+
+
+def test_link_paths_links_each_entry_to_the_workpiece_and_git_ignores_it(scratch_repo):
+    ws = _linkable(scratch_repo)
+    assert A.link_paths(scratch_repo, ws, (".packages",)) == [".packages"]
+    assert (ws / ".packages").is_symlink() and (ws / ".packages").resolve() == (scratch_repo / ".packages").resolve()
+    assert (ws / ".packages" / "bin" / "protoc").is_file()
+    assert L.git(ws, "status", "--porcelain").stdout.strip() == "", "the link shows as the arm's own work"
+    assert A.link_paths(scratch_repo, ws, ()) == []
+
+
+def test_link_paths_refuses_a_path_the_worktree_already_has(scratch_repo):
+    ws = _linkable(scratch_repo)
+    (ws / ".packages").mkdir()
+    with pytest.raises(A.ArmError, match=r"\.packages already exists in the arm's worktree"):
+        A.link_paths(scratch_repo, ws, (".packages",))
+    assert not (ws / ".packages").is_symlink()
+
+
+def test_link_paths_refuses_a_missing_source(scratch_repo):
+    ws = _linkable(scratch_repo)
+    with pytest.raises(A.ArmError, match=r"third_party does not exist in the workpiece"):
+        A.link_paths(scratch_repo, ws, ("third_party",))
+
+
+def test_link_paths_refuses_a_link_git_would_show_and_removes_the_links_it_made(scratch_repo):
+    ws = _linkable(scratch_repo, pattern=".packages/")
+    (scratch_repo / "vendor").mkdir()
+    with (scratch_repo / ".git" / "info" / "exclude").open("a", encoding="utf-8") as fh:
+        fh.write("/vendor\n")
+    with pytest.raises(A.ArmError, match=r"git does not ignore the link \.packages in the arm's worktree"):
+        A.link_paths(scratch_repo, ws, ("vendor", ".packages"))
+    assert not (ws / "vendor").exists() and not (ws / ".packages").exists(), "a refused link_paths left links behind"
+
+
+def test_prune_removes_the_link_and_keeps_its_target(scratch_repo):
+    ws = _linkable(scratch_repo)
+    A.link_paths(scratch_repo, ws, (".packages",))
+    A.prune(ws, scratch_repo, (".packages",))
+    assert not ws.exists() and (scratch_repo / ".packages" / "bin" / "protoc").is_file()

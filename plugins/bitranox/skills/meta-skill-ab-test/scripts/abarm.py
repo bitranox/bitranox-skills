@@ -45,6 +45,7 @@ __all__ = [
     "home_link_targets",
     "install_plugin",
     "installed_plugin_path",
+    "link_paths",
     "make_worktree",
     "plugin_root",
     "prune",
@@ -802,6 +803,56 @@ def make_worktree(repo: Path, base: str, branch: str, path: Path, *, copy_untrac
     return {"head": head, "branch": branch, "hooks_path": str(_hooks_dir(path)), "hooks_linked": linked,
             "worktree_config_set_by_harness": needs_config, "claude_md_copied": copied,
             "exclude_added": exclude_added}
+
+
+def link_paths(repo: Path, ws: Path, links: tuple[str, ...]) -> list[str]:
+    """Symlink each gitignored workpiece path (workpiece.link) into the arm's fresh worktree.
+
+    A worktree holds only tracked files, so build output the workpiece keeps untracked (a
+    vendored protoc, a downloaded toolchain) is missing there and the arm's build fails for a
+    reason that is not its code. The link points at the workpiece's own copy; under bwrap that
+    copy is read-only through the workpiece's existing bind. git must ignore each link IN the
+    worktree, where it is a symlink and a dir-only pattern (`name/`) no longer matches: else an
+    agent's `git add -A` commits it, so such a link is refused.
+
+    Returns:
+        The entries linked, in order.
+
+    Raises:
+        ArmError: an entry is missing in the workpiece, already exists in the worktree, or is not
+            ignored there; the links this call made are removed first.
+    """
+    made: list[Path] = []
+    try:
+        for entry in links:
+            made.append(_link_one(repo, ws, entry))
+        for entry in links:
+            _require_ignored_link(ws, entry)
+    except (ArmError, OSError) as exc:
+        for link in made:
+            link.unlink(missing_ok=True)
+        raise ArmError(f"workpiece.link: {exc}") from exc
+    return list(links)
+
+
+def _link_one(repo: Path, ws: Path, entry: str) -> Path:
+    source, link = repo / entry, ws / entry
+    if not source.exists():
+        raise ArmError(f"{entry} does not exist in the workpiece {repo}")
+    if link.exists() or link.is_symlink():
+        raise ArmError(f"{entry} already exists in the arm's worktree; it is tracked or the arm made it")
+    link.parent.mkdir(parents=True, exist_ok=True)
+    link.symlink_to(source)
+    return link
+
+
+def _require_ignored_link(ws: Path, entry: str) -> None:
+    proc = _git(ws, "check-ignore", "-q", "--no-index", "--", entry)
+    if proc.returncode == 1:
+        raise ArmError(f"git does not ignore the link {entry} in the arm's worktree (a pattern with a "
+                       f"trailing slash matches directories only, not a symlink); ignore it as /{entry}")
+    if proc.returncode != 0:
+        raise ArmError(f"git check-ignore {entry} failed rc={proc.returncode}: {proc.stderr.strip()[-300:]}")
 
 
 def arm_home(arm_dir: Path, links: tuple[str, ...]) -> Path:

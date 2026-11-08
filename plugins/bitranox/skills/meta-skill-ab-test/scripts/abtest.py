@@ -29,6 +29,7 @@ import shutil
 import signal
 import subprocess
 import sys
+import tempfile
 import threading
 import time
 from collections.abc import Callable, Iterator
@@ -53,7 +54,9 @@ from _ablib import (
     append_jsonl,
     envelope,
     git,
+    git_env,
     rotated_schedule,
+    run,
     sha256_file,
     utc_now,
 )
@@ -145,7 +148,12 @@ host's /proc read-only (an LXC container); "none" opts out, recorded per arm.
 [[variant]] remove_skill = true (no dir, no markers): a bare arm, the plugin without the skill under test.
 [[variant]] task_file = "task-V1.md": that arm's own prompt (default [workpiece].task_file); seal records
 its sha256 per arm, run refuses a changed one, and the journal, result.json and score name it.
-[floor] suite_from = "/abs/path": seal copies the acceptance suite from there instead of <repo>/<suite>."""
+[floor] suite_from = "/abs/path": seal copies the acceptance suite from there instead of <repo>/<suite>.
+[workpiece] link = [".packages"]: gitignored workpiece paths a fresh worktree lacks (a vendored protoc),
+symlinked into every arm's worktree before its session; read-only under bwrap. seal refuses an entry that
+is missing, tracked, not ignored, or ignored only by a dir-only pattern (".packages/"): ignore it as
+"/.packages".
+--json prints one pretty-printed envelope: parse the whole stdout as one JSON document."""
 SEAL_GIT = ("-c", "user.name=abtest", "-c", "user.email=abtest@localhost", "-c", "commit.gpgsign=false",
             "-c", "core.hooksPath=/dev/null")
 
@@ -377,7 +385,57 @@ def _seal_problems(run_dir: Path, profile: Profile) -> list[str]:
             continue  # a remove_skill variant: the arm runs without the skill, nothing to overlay
         if not (run_dir / v.dir).is_dir() or not any(p.is_file() for p in (run_dir / v.dir).rglob("*")):
             problems.append(f"variants/{v.name}: {v.dir} holds no file")
+    problems += [p for entry in profile.workpiece.link if (p := _link_problem(profile.workpiece.repo, entry))]
     return problems
+
+
+def _link_problem(repo: Path, entry: str) -> str | None:
+    """Why workpiece.link `entry` cannot be linked into an arm's worktree; None when it can.
+
+    Only ignored build output is linkable: a tracked path is in every worktree already, and an
+    unignored one would show as the arm's own work. In a worktree the entry is a symlink, which a
+    dir-only pattern (`name/`) does not match, so the entry must be ignored AS a symlink;
+    link_paths checks that again in each worktree.
+    """
+    if not (repo / entry).exists():
+        return f"workpiece.link: {entry} does not exist in the workpiece {repo}"
+    if git(repo, "ls-files", "--", entry).stdout.strip():
+        return f"workpiece.link: {entry} is tracked by git; a worktree has it already"
+    # -q decides; -v alone would also count a matching negated (!) pattern as ignored.
+    if git(repo, "check-ignore", "-q", "--no-index", "--", entry).returncode != 0:
+        return f"workpiece.link: {entry} is not ignored by git; ignore it as /{entry} (e.g. in .git/info/exclude)"
+    if not _ignored_as_symlink(repo, entry):
+        # -v prints <source>:<line>:<pattern><TAB><path>: the pattern that ignores the directory.
+        verbose = git(repo, "check-ignore", "-v", "--no-index", "--", entry).stdout
+        pattern = verbose.split("\t", 1)[0].split(":", 2)[-1]
+        return (f"workpiece.link: {entry} is ignored only as a directory ({pattern}), so its symlink in a "
+                f"worktree would not be; also ignore it as /{entry}, without the trailing slash")
+    return None
+
+
+def _ignored_as_symlink(repo: Path, entry: str) -> bool:
+    """Would git ignore `entry` where it is a symlink, as in an arm's worktree? Nothing is written to repo.
+
+    git asks the filesystem whether a path is a directory, so the question is put to a scratch
+    work tree that holds a symlink at `entry` and copies of the .gitignore files on its way; the
+    repository's own info/exclude and core.excludesFile apply through --git-dir as usual.
+    """
+    git_dir = git(repo, "rev-parse", "--absolute-git-dir").stdout.strip()
+    with tempfile.TemporaryDirectory(prefix="abtest-link-") as tmp:
+        scratch = Path(tmp)
+        parts = Path(entry).parts
+        for depth in range(len(parts)):
+            source = repo.joinpath(*parts[:depth], ".gitignore")
+            if source.is_file():
+                target = scratch.joinpath(*parts[:depth], ".gitignore")
+                target.parent.mkdir(parents=True, exist_ok=True)
+                shutil.copyfile(source, target)
+        link = scratch / entry
+        link.parent.mkdir(parents=True, exist_ok=True)
+        link.symlink_to(repo / entry)
+        proc = run(["git", "--git-dir", git_dir, "--work-tree", str(scratch), "-C", str(scratch),
+                    "check-ignore", "-q", "--no-index", "--", entry], env=git_env())
+    return proc.returncode == 0
 
 
 def _seal_suite(run_dir: Path, profile: Profile) -> str | None:
@@ -492,6 +550,7 @@ def _arm_steps(ctx: RunContext, result: dict[str, Any], frozen: abarm.Frozen, la
     result["install"] = abarm.install_plugin(cfg, frozen, ctx.credentials, env)
     _ignore_worktrees(ctx)
     result["worktree"] = abarm.make_worktree(p.workpiece.repo, p.workpiece.base, branch, ws, copy_untracked_claude_md=True)
+    result["linked"] = abarm.link_paths(p.workpiece.repo, ws, p.workpiece.link)
     result["guard"] = abguard.snapshot(ws, arm_dir / "guard")
     if not ctx.dry_run:
         result.update(abarm.dispatch(arm_dir, ws, env, _session_argv(ctx, result["name"], frozen, ws, home, cfg),
