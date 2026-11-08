@@ -30,6 +30,14 @@ a hole nobody has drawn a line under is one that gets rediscovered and half-fill
 two "versions with no entry" notes came to sit in this file disagreeing with it.
 
 
+## [10.37.2]
+
+### Added
+
+- meta-skill-ab-test: `score` reports per arm how many subagent transcripts the arm left and the most running at once, from each transcript's first and last timestamp (`subagents`), since a background Agent call returns at once and the stream cannot show overlap.
+- meta-skill-ab-test: `score` collects the `[abx] idea=N` markers an arm wrote from the writing tool calls in its stream and its subagent transcripts (`idea_markers`: count per idea and the first line of each), because the progress file they go to is untracked and in no branch; a marker only quoted in a prompt, a brief or a read-back does not count, and a missing stream reads `-` rather than `none`.
+- meta-skill-ab-test: `score` splits a failing acceptance suite by its log (`floor_suite`) into `does_not_compile` (rustc error codes and the missing symbols they name) and `tests_failed` (N of M tests), where cargo exits 101 for both; `floor_error` and `floor_steps` are unchanged.
+
 ## [10.37.1]
 
 ### Fixed

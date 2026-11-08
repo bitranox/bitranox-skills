@@ -43,6 +43,24 @@ under `arms/` (a parallel node's), with its branch. Never delete a run dir by ha
 pinned plugin checkout (`--skills-repo` worktree), still registered in the skills repository, that
 later runs start from. Remove the arm data inside it and leave that checkout.
 
+Each `score` line also reads three fields from the arm dir; they inform, they never void. Each
+field shows `-` when its own source is absent: `subagents=` when the arm has no `transcripts/`
+dir, `ideas=` when it has neither `stream.jsonl` nor a subagent transcript, `suite=` when the
+floor ran no suite step. `subagents=N(max M at once)` counts the arm's subagent transcripts
+(`agent-*.jsonl` under `transcripts/`) and the most whose first-to-last timestamp spans overlap
+at one instant (a background Agent call returns at once, so the stream alone cannot show
+parallelism; `max 1` means no two spans overlapped). `ideas=1x2,3x1` reads idea 1 with 2
+distinct marker lines, idea 3 with 1, and prints the first line of each idea below the arm.
+Markers are read from the writing tool calls (Write, Edit, MultiEdit, NotebookEdit, a Bash
+redirect or `tee`, into any file) in `stream.jsonl` and in the subagent transcripts, a call
+found in both counted once, because `.bitranox/` is untracked and in no branch; a marker only
+quoted in a prompt, a brief or a read-back does not count, a write by any other route
+(`sed -i`, a script) is not seen, and `none` means the calls were read and hold no written
+marker. `suite=` splits a failing acceptance suite by its log into
+`does_not_compile(<code>x<error lines>,...; missing <symbols>)` and `tests_failed(<failed> of
+<total>)`; plain `failed` is a non-zero exit its log explains neither way, and
+`did_not_finish` a suite that timed out, could not start or was not placed.
+
 Do not judge a variant from transcripts (the design's reason for this skill), do not run arms in
 parallel (serial interleaved arms isolate CPU, quota and the prompt cache; the design's
 measured reason), and do not edit the sealed inputs mid-run: `run` refuses

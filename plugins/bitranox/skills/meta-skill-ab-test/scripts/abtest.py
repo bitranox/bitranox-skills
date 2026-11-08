@@ -37,6 +37,7 @@ from typing import Any
 import abarm
 import abguard
 import abscore
+import abtrace
 from _ablib import (
     EXIT_ERROR,
     EXIT_NO,
@@ -995,9 +996,15 @@ def _store_flag(label: str, score: dict[str, Any]) -> str | None:
 def _score_line(label: str, score: dict[str, Any]) -> str:
     line = (f"{label}: cost={score['cost_usd']} floor={score['floor_passed']} void={score['void'] or '-'} "
             f"sandbox={score.get('sandbox') or '-'} task={score.get('task_file') or '-'}"
-            f"@{(score.get('task_sha256') or '-')[:12]}")
+            f"@{(score.get('task_sha256') or '-')[:12]}"
+            f" subagents={abtrace.describe_subagents(score.get('subagents'))}"
+            f" ideas={abtrace.describe_ideas(score.get('idea_markers'))}"
+            f" suite={abtrace.describe_suite(score.get('floor_suite'))}")
     flag = _store_flag(label, score)
-    return line if flag is None else f"{line} FLAG {flag}"
+    line = line if flag is None else f"{line} FLAG {flag}"
+    # One line per idea under its arm: the first marker line the arm wrote for it.
+    ideas = (score.get("idea_markers") or {}).get("ideas") or {}
+    return "\n".join([line, *(f"  {label} idea {n}: {v['first']}" for n, v in ideas.items())])
 
 
 def cmd_score(args: argparse.Namespace) -> int:

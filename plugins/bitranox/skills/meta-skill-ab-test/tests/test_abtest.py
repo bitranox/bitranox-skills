@@ -380,6 +380,37 @@ def test_score_flags_an_arm_whose_store_changed_without_voiding_it(tmp_path, scr
     assert data["arms"]["r2-C"]["store_guard"] == "clean" and data["arms"]["r2-C"]["store_changes"] == []
 
 
+def test_score_text_names_subagents_ideas_and_the_suite_outcome(tmp_path, scratch_repo, skills_repo, capsys):
+    run_dir = _init_and_fill(tmp_path, scratch_repo, skills_repo, n=2)
+    assert T.main(["seal", str(run_dir)]) == 0
+    _fabricate_arm(run_dir, 1, cache_read=11000)
+    _fabricate_arm(run_dir, 2, cache_read=11000)
+    arm = run_dir / "arms" / "r1-C"
+    sub = arm / "transcripts" / "-ws" / "s1" / "subagents"
+    sub.mkdir(parents=True)
+    for name in ("a", "b"):
+        stamps = [json.dumps({"timestamp": f"2026-11-08T10:0{m}:00Z"}) for m in (0, 5)]
+        (sub / f"agent-{name}.jsonl").write_text("\n".join(stamps) + "\n", encoding="utf-8")
+    bash = {"type": "tool_use", "id": "t1", "name": "Bash",
+            "input": {"command": 'echo "[abx] idea=3 reviewed twice" >> .bitranox/sdd/progress.md'}}
+    (arm / "stream.jsonl").write_text(json.dumps({"type": "assistant", "message": {"id": "m", "content": [bash]}})
+                                      + "\n", encoding="utf-8")
+    (arm / "floor-suite.log").write_text((FIXTURES / "cargo-test-failed.log").read_text(encoding="utf-8"),
+                                         encoding="utf-8")
+    res = json.loads((arm / "result.json").read_text(encoding="utf-8"))
+    res["floor"] = {"passed": False, "steps": [{"name": "gate", "rc": 0, "error": None},
+                                               {"name": "suite", "rc": 101, "error": None}]}
+    (arm / "result.json").write_text(json.dumps(res), encoding="utf-8")
+    capsys.readouterr()
+    assert T.main(["score", str(run_dir)]) == 0
+    lines = capsys.readouterr().out.splitlines()
+    r1 = next(ln for ln in lines if ln.startswith("r1-C:"))
+    r2 = next(ln for ln in lines if ln.startswith("r2-C:"))
+    assert "subagents=2(max 2 at once)" in r1 and "ideas=3x1" in r1 and "suite=tests_failed(2 of 10)" in r1, r1
+    assert "  r1-C idea 3: [abx] idea=3 reviewed twice" in lines, lines
+    assert "subagents=- ideas=- suite=-" in r2, r2
+
+
 def test_prune_run_deletes_the_branches(tmp_path, scratch_repo, skills_repo, fake_claude_path, monkeypatch):
     run_dir = _init_and_fill(tmp_path, scratch_repo, skills_repo)
     env, creds = _env(fake_claude_path, tmp_path)

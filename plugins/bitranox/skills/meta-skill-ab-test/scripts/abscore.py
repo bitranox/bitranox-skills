@@ -29,6 +29,7 @@ from typing import Any
 
 from _ablib import clear_group, median, sha256_file, signal_group
 from abprofile import Profile
+from abtrace import idea_markers, subagent_overlap, suite_outcome
 
 __all__ = [
     "CAP_STOP_REASONS",
@@ -45,6 +46,7 @@ __all__ = [
     "STORE_GUARD_CLEAN",
     "STORE_GUARD_SKIPPED",
     "STREAM_VOID_STOP_REASON",
+    "SUITE_LOG",
     "WARMTH_MIN_PEERS",
     "SealedSuite",
     "run_floor",
@@ -74,6 +76,12 @@ STORE_GUARD_SKIPPED = "skipped"
 # How long a step's leftover process group gets between SIGTERM and SIGKILL: long enough for a
 # test runner to flush and remove its temp files, short against any floor timeout.
 KILL_GRACE_S = 5.0
+# Where run_floor writes each step's output, in the log dir it is given (the arm dir under run).
+GATE_LOG = "floor-gate.log"
+SUITE_LOG = "floor-suite.log"
+# What an arm dir keeps beside result.json: abarm writes the stream, abtest copies the transcripts.
+STREAM_FILE = "stream.jsonl"
+TRANSCRIPTS_DIR = "transcripts"
 ERROR_NOT_STARTED = "could not start"
 # The suite step did not run because the sealed copy could not be put in place, or its bytes
 # (the sealed copy's or the placed file's) differ from the sha256 the seal recorded.
@@ -310,10 +318,10 @@ def run_floor(tree: Path, profile: Profile, log_dir: Path, *, kill_grace_s: floa
     """
     log_dir.mkdir(parents=True, exist_ok=True)
     limits = _Limits(timeout_s=profile.floor.timeout_s, kill_grace_s=kill_grace_s)
-    steps = [_step("gate", list(profile.floor.gate), tree, limits=limits, log=log_dir / "floor-gate.log")]
+    steps = [_step("gate", list(profile.floor.gate), tree, limits=limits, log=log_dir / GATE_LOG)]
     suite = profile.suite_argv()
     if suite is not None and _step_passed(steps[0]):
-        steps.append(_suite_step(suite, tree, profile, sealed_suite, limits=limits, log=log_dir / "floor-suite.log"))
+        steps.append(_suite_step(suite, tree, profile, sealed_suite, limits=limits, log=log_dir / SUITE_LOG))
     return {"passed": all(_step_passed(s) for s in steps), "steps": steps}
 
 
@@ -393,6 +401,17 @@ def _floor_error(steps: list[dict[str, Any]]) -> str | None:
     return None
 
 
+def _suite_step_of(steps: list[dict[str, Any]]) -> dict[str, Any] | None:
+    return next((s for s in steps if s.get("name") == "suite"), None)
+
+
+def _trace_fields(arm_dir: Path, steps: list[dict[str, Any]]) -> dict[str, Any]:
+    """What the arm's kept files show: subagent overlap, idea markers, the suite's outcome."""
+    return {"subagents": subagent_overlap(arm_dir / TRANSCRIPTS_DIR),
+            "idea_markers": idea_markers(arm_dir / STREAM_FILE, arm_dir / TRANSCRIPTS_DIR),
+            "floor_suite": suite_outcome(_suite_step_of(steps), arm_dir / SUITE_LOG)}
+
+
 def _score_record(res: dict[str, Any], arm_dir: Path, profile: Profile,
                   peers: list[dict[str, Any]]) -> dict[str, Any]:
     floor = res.get("floor") or {}
@@ -408,7 +427,7 @@ def _score_record(res: dict[str, Any], arm_dir: Path, profile: Profile,
             "warmth_checked": checked, "result_subtype": res.get("result_subtype"),
             "store_changes": changes, "store_guard": _store_guard(res, changes),
             "sandbox": res.get("sandbox"), "task_file": res.get("task_file"), "task_sha256": res.get("task_sha256"),
-            "void": _void_reasons(res, warmth_reasons)}
+            "void": _void_reasons(res, warmth_reasons), **_trace_fields(arm_dir, steps)}
 
 
 def score_arm(arm_dir: Path, profile: Profile, peers: list[dict[str, Any]]) -> dict[str, Any]:
@@ -433,8 +452,12 @@ def score_arm(arm_dir: Path, profile: Profile, peers: list[dict[str, Any]]) -> d
         _SKIPPED; recorded for adjudication, it never voids), sandbox (the profile's [run] sandbox the
         arm ran under, "bwrap", "bwrap-host-proc" or "none"; None for an arm run before the key existed),
         task_file and task_sha256 (the prompt the arm was given, relative to the run dir; None for an
-        arm run before per-arm prompts existed), and void (every reason, the stream
-        account's own ones first and unchanged; empty means the arm counts).
+        arm run before per-arm prompts existed), void (every reason, the stream
+        account's own ones first and unchanged; empty means the arm counts), and three readings
+        of the arm dir's kept files, informational and never voiding: subagents
+        (abtrace.subagent_overlap of transcripts/), idea_markers (abtrace.idea_markers of
+        stream.jsonl and the subagent transcripts) and floor_suite (abtrace.suite_outcome of the suite step and
+        floor-suite.log); each is None when its file or step is absent.
 
     Raises:
         FileNotFoundError: arm_dir has no result.json.

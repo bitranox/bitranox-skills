@@ -1,0 +1,39 @@
+   Compiling sbx v0.1.0 (/work)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 3.21s
+     Running unittests src/lib.rs (target/debug/deps/sbx-0c1d2e3f4a5b6c7d)
+
+running 4 tests
+test policy::tests::parses ... ok
+test policy::tests::rejects ... ok
+test mount::tests::binds ... ok
+test mount::tests::ro ... ok
+
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/acceptance.rs (target/debug/deps/acceptance-1a2b3c4d5e6f7a8b)
+
+running 6 tests
+test denies_network ... FAILED
+test allows_tmp ... ok
+test keeps_proc ... FAILED
+test binds_home ... ok
+test runs_echo ... ok
+test exits_zero ... ok
+
+failures:
+
+---- denies_network stdout ----
+thread 'denies_network' panicked at tests/acceptance.rs:40:5:
+assertion failed: !out.status.success()
+
+---- keeps_proc stdout ----
+thread 'keeps_proc' panicked at tests/acceptance.rs:52:5:
+assertion `left == right` failed
+
+failures:
+    denies_network
+    keeps_proc
+
+test result: FAILED. 4 passed; 2 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.02s
+
+error: test failed, to rerun pass `--test acceptance`
