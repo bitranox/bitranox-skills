@@ -32,6 +32,16 @@ two "versions with no entry" notes came to sit in this file disagreeing with it.
 
 ## [10.27.0]
 
+### Added
+
+- `meta-skill-ab-test` gains "Designing the grid" and "Before and during a live run". A rewrite
+  of a source document needs an arm that delivers the source verbatim. A bare arm is not a
+  dynamic-workflow arm, and a removed skill's name left in other skills is a confound to state
+  in `PREREG.md`. Fix rounds do not converge, so run a fresh hunt after each. Set `deadline_s`
+  from the longest arm, before `seal`. Commit a `PREREG.md` amendment at once. A run spends the
+  5-hour and 7-day usage windows, and a limit notice reruns the arm from scratch. `--dry-run`
+  runs the full floor, so never start it beside a live arm.
+
 ### Changed
 
 - The self-improve Stop gate no longer asks to invoke `meta-self-improve` or `meta-dream-nap`
