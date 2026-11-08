@@ -128,7 +128,7 @@ def test_score_carries_the_listed_fields(tmp_path):
     assert set(s) == {"arm", "cost_usd", "per_model", "main_new_tokens", "first_cache_read", "floor_passed",
                       "bundle_commits", "void", "wall_s", "floor_error", "floor_steps", "warmth_checked",
                       "result_subtype", "store_changes", "store_guard", "sandbox", "task_file", "task_sha256",
-                      "subagents", "idea_markers", "floor_suite", "floor_gate"}
+                      "subagents", "idea_markers", "floor_suite", "floor_gate", "last_text", "ended_with_question"}
     assert (s["arm"], s["main_new_tokens"], s["bundle_commits"], s["wall_s"]) == ("r1-C", 20010, 1, 1.2)
 
 
@@ -158,6 +158,7 @@ def test_score_reads_subagents_ideas_and_the_suite_from_the_arm_dir(tmp_path):
 def test_an_arm_with_no_kept_files_scores_none_for_all_three(tmp_path):
     s = _score(tmp_path, _result(), TWO_PEERS)
     assert (s["subagents"], s["idea_markers"], s["floor_suite"], s["floor_gate"]) == (None, None, None, None)
+    assert s["ended_with_question"] is None, "no stream, no last words"
 
 
 def test_a_gate_that_cannot_find_protoc_reads_as_a_missing_prerequisite(tmp_path):
@@ -592,3 +593,38 @@ def test_a_suite_that_cannot_be_placed_as_sealed_fails_without_running(tmp_path,
     suite = res["steps"][1]
     assert res["passed"] is False and suite["rc"] == S.RC_NOT_STARTED and suite["error"].startswith(error)
     assert outside is None or list(outside.iterdir()) == [], "nothing was written outside the tree"
+
+
+# --- ended_with_question: an arm whose session stopped to ask the absent human ---------------------
+
+def _text_record(mid, *blocks):
+    content = [{"type": "text", "text": b} if isinstance(b, str) else b for b in blocks]
+    return {"type": "assistant", "message": {"id": mid, "model": "claude-opus-5-5", "content": content}}
+
+
+_TOOL = {"type": "tool_use", "id": "t", "name": "Bash", "input": {"command": "ls"}}
+
+
+@pytest.mark.parametrize(("records", "expected"), [
+    ([_text_record("m1", "Done. Shall I open the PR?  ")], True),
+    ([_text_record("m1", "Which file?"), _text_record("m2", "Done, all tests pass.")], False),
+    ([_text_record("m1", "Should I keep going?"), _text_record("m1", _TOOL)], True),
+    ([_text_record("m1", _TOOL)], None),
+], ids=["question", "statement", "question-then-tool-use", "no-text"])
+def test_score_flags_an_arm_whose_last_words_are_a_question(tmp_path, records, expected):
+    arm = tmp_path / "arms" / "r1-C"
+    arm.mkdir(parents=True)
+    (arm / "stream.jsonl").write_text("".join(json.dumps(r) + "\n" for r in records), encoding="utf-8")
+    (arm / "result.json").write_text(json.dumps(_result()), encoding="utf-8")
+    s = S.score_arm(arm, _pure_profile(tmp_path), peers=TWO_PEERS)
+    assert s["ended_with_question"] is expected
+    assert s["void"] == [], "a question flags the arm, it never voids it"
+
+
+def test_a_bad_byte_in_the_stream_costs_its_line_not_the_last_words(tmp_path):
+    arm = tmp_path / "arms" / "r1-C"
+    arm.mkdir(parents=True)
+    (arm / "stream.jsonl").write_bytes(b'{"type": "assistant", "message": {"content": "ok?"}}\n\xff\xfe\n')
+    (arm / "result.json").write_text(json.dumps(_result()), encoding="utf-8")
+    s = S.score_arm(arm, _pure_profile(tmp_path), peers=TWO_PEERS)
+    assert (s["last_text"], s["ended_with_question"]) == ("ok?", True)

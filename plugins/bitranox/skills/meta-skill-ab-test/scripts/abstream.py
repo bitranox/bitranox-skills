@@ -141,6 +141,10 @@ class StreamAccount:
     per_message_model: dict[str, int] = field(default_factory=dict)
     result: dict[str, Any] | None = None
     void_reasons: list[str] = field(default_factory=list)
+    # The text of the last model record that carried any, on one line: the session's last words.
+    # A record holding only a tool_use keeps the earlier text (the CLI writes each content block
+    # of a message as its own record), and a CLI synthetic notice is no model text.
+    last_text: str | None = None
 
     def feed_line(self, line: str) -> None:
         """Account one line of a stream, as saved or as it arrives from a live arm.
@@ -200,6 +204,7 @@ class StreamAccount:
             # A CLI notice charges no tokens and is no model message: it only voids the arm.
             self._void(SYNTHETIC_REASON_PREFIX + _text_of(message)[:SYNTHETIC_TEXT_LIMIT])
             return
+        self.last_text = _text_of(message) or self.last_text
         usage = message.get("usage")
         usage = usage if isinstance(usage, dict) else {}
         mid = message.get("id") if isinstance(message.get("id"), str) else None
@@ -273,7 +278,7 @@ class StreamAccount:
                 "per_model": self.per_model(), "total_cost_usd": r.get("total_cost_usd"), "num_turns": r.get("num_turns"),
                 "duration_ms": r.get("duration_ms"), "result_subtype": r.get("subtype"),
                 "has_result": self.result is not None, "skipped_lines": self.skipped_lines,
-                "void_reasons": void_reasons}
+                "void_reasons": void_reasons, "last_text": self.last_text}
 
 
 def _text_of(message: dict[str, Any]) -> str:

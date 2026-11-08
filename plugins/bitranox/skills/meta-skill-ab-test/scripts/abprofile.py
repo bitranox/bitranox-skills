@@ -67,6 +67,9 @@ warmth_tolerance = 0.25
 # repo's .git; the real home is hidden. "none" runs it unconfined, and the journal and score say so.
 # In an LXC container (lxcfs refuses a private /proc) use "bwrap-host-proc": host /proc read-only.
 sandbox = "bwrap"
+# Appended to every arm's prompt alike, after a blank line; its sha256 is in each journal row and
+# result.json. It must not name the skill under test (a bare arm gets it too).
+# unattended_note = "No human reads this session. Never stop to ask; decide, note why, and finish."
 '''
 
 
@@ -149,6 +152,9 @@ class Run:
     # One of SANDBOX_VALUES, or None when the key is missing: a dry run may go ahead, while a
     # live run and a seal refuse it (SANDBOX_MISSING).
     sandbox: str | None = None
+    # Text appended to EVERY arm's prompt alike (the bare arm's too), e.g. that no human will
+    # answer a question; None appends nothing.
+    unattended_note: str | None = None
 
 
 @dataclass(frozen=True)
@@ -412,13 +418,24 @@ def _sandbox(c: _Check, rn: dict[str, Any]) -> str | None:
     return str(v)
 
 
+def _unattended_note(c: _Check, rn: dict[str, Any]) -> str | None:
+    """run.unattended_note: optional; when present a non-blank string that is no <placeholder>."""
+    if "unattended_note" not in rn:
+        return None
+    note = rn["unattended_note"]
+    if not isinstance(note, str) or not note.strip() or note.strip().startswith("<"):
+        c.problems.append("run.unattended_note: must be non-blank text (leave the key out for no note)")
+        return None
+    return note.strip()
+
+
 def _run(c: _Check, rn: dict[str, Any]) -> Run:
     run = Run(model=c.text(rn, "model", "run", default="opus"),
               n=c.integer(rn, "n", "run", minimum=1), deadline_s=c.integer(rn, "deadline_s", "run", minimum=60),
               max_tokens=c.integer(rn, "max_tokens", "run", minimum=1000), warmth_tolerance=_warmth_tolerance(c, rn),
               env_keep=c.str_list(rn, "env_keep", "run", required=False, default=DEFAULT_ENV_KEEP),
               home_links=c.str_list(rn, "home_links", "run", required=False, default=DEFAULT_HOME_LINKS),
-              sandbox=_sandbox(c, rn))
+              sandbox=_sandbox(c, rn), unattended_note=_unattended_note(c, rn))
     if run.model != "opus":
         c.problems.append("run.model: only 'opus' is allowed (user directive: every arm runs on opus)")
     return run

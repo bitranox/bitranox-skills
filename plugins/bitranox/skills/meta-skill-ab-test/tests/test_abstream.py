@@ -223,3 +223,51 @@ def test_a_synthetic_reason_is_cut_to_80_characters_and_tolerates_no_text():
     acct.feed({"type": "assistant", "message": {"id": "s2", "model": "<synthetic>"}})
     assert acct.void_reasons == ["CLI synthetic message: " + "x" * 80, "CLI synthetic message: "]
     assert (acct.first_cache_read, acct.new_tokens, acct.output_tokens) == (None, 0, 0)
+
+
+# --- last_text: the session's last words, to tell an arm that stopped to ask -----------------------
+
+def _said(mid, *blocks):
+    content = [{"type": "text", "text": b} if isinstance(b, str) else b for b in blocks]
+    return {"type": "assistant", "message": {"id": mid, "model": "claude-opus-5-5", "content": content,
+                                             "usage": {"input_tokens": 1, "output_tokens": 1}}}
+
+
+TOOL_USE = {"type": "tool_use", "id": "t1", "name": "Bash", "input": {"command": "ls"}}
+
+
+def test_last_text_is_the_last_assistant_text_on_one_line():
+    acct = S.StreamAccount()
+    for record in (OPUS_INIT, _said("m1", "Plan first."), _said("m2", "Done.\n\nShould I  also\npush it?")):
+        acct.feed(record)
+    assert acct.last_text == "Done. Should I also push it?"
+    assert acct.summary()["last_text"] == "Done. Should I also push it?"
+
+
+def test_a_tool_use_only_record_keeps_the_text_before_it():
+    """The CLI writes each content block of one message as its own record under the same id."""
+    acct = S.StreamAccount()
+    for record in (OPUS_INIT, _said("m1", "Which branch should I use?"), _said("m1", TOOL_USE), _said("m2", TOOL_USE)):
+        acct.feed(record)
+    assert acct.last_text == "Which branch should I use?"
+
+
+def test_a_later_text_block_of_the_same_message_id_replaces_the_earlier_one():
+    acct = S.StreamAccount()
+    for record in (OPUS_INIT, _said("m1", "Checking."), _said("m1", TOOL_USE), _said("m1", "Shall I go on?")):
+        acct.feed(record)
+    assert acct.last_text == "Shall I go on?"
+
+
+def test_a_synthetic_notice_is_not_the_sessions_last_words():
+    acct = S.StreamAccount()
+    for record in (OPUS_INIT, _said("m1", "All tests pass."), _synthetic("s1", "Is the API down?")):
+        acct.feed(record)
+    assert acct.last_text == "All tests pass."
+
+
+def test_a_stream_without_assistant_text_has_no_last_text():
+    acct = S.StreamAccount()
+    for record in (OPUS_INIT, _said("m1", TOOL_USE), _said("m2", "   ")):
+        acct.feed(record)
+    assert acct.last_text is None and acct.summary()["last_text"] is None

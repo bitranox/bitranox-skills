@@ -1,4 +1,5 @@
 """abtest CLI: init, seal, run (dry and fake-live), score, prune-run, resume; through the fake claude."""
+import hashlib
 import importlib.util
 import json
 import os
@@ -1701,6 +1702,111 @@ def test_seal_accepts_a_link_git_ignores_as_a_symlink_and_the_arm_gets_it(
     assert T.main(_run_args(run_dir, creds, skills_repo, "--only", "C"), login_check=_Probe("ok")) == 0
     res = json.loads((run_dir / "arms" / "r1-C" / "result.json").read_text(encoding="utf-8"))
     assert res["floor"]["passed"] is True and res["linked"] == [entry]
+
+
+# --- [run] unattended_note and the ended-with-a-question flag -------------------------------------
+
+NOTE = "No human reads this session. Never stop to ask; decide, record why, and finish."
+
+
+def _with_note(run_dir, note=NOTE):
+    toml = run_dir / "abtest.toml"
+    text = toml.read_text(encoding="utf-8")
+    assert text.count("\nmax_tokens = ") == 1
+    toml.write_text(text.replace("\nmax_tokens = ", f"\nunattended_note = {json.dumps(note)}\nmax_tokens = "),
+                    encoding="utf-8")
+
+
+def test_the_unattended_note_reaches_every_arms_prompt_and_every_record_names_it(
+        tmp_path, scratch_repo, skills_repo, fake_claude_path, monkeypatch, capsys):
+    run_dir = _init_and_fill(tmp_path, scratch_repo, skills_repo)
+    _add_bare(run_dir)
+    _with_note(run_dir)
+    env, creds = _env(fake_claude_path, tmp_path)
+    _use_env(monkeypatch, env)
+    assert T.main(["seal", str(run_dir)]) == 0
+    for arm in ("C", "V1", "Vbare"):
+        assert T.main(_run_args(run_dir, creds, skills_repo, "--only", arm), login_check=_Probe("ok")) == 0
+    prompts = {arm: _session_line(run_dir, f"r1-{arm}")["prompt"] for arm in ("C", "V1", "Vbare")}
+    assert prompts == {"C": f"Do the task.\n\n{NOTE}\n", "V1": f"Do the task.\n\n{NOTE}\n",
+                       "Vbare": f"{BARE_TASK}\n{NOTE}\n"}, "every arm, the bare one too, gets the same note"
+    sha = hashlib.sha256(NOTE.encode("utf-8")).hexdigest()
+    rows = [r for r in L.read_jsonl(run_dir / "journal.jsonl") if r["step"] == "arm"]
+    assert [(r["arm"], r["unattended_note_sha256"]) for r in rows] == [("C", sha), ("V1", sha), ("Vbare", sha)]
+    for arm in ("C", "V1", "Vbare"):
+        res = json.loads((run_dir / "arms" / f"r1-{arm}" / "result.json").read_text(encoding="utf-8"))
+        assert res["unattended_note_sha256"] == sha
+
+
+def test_without_a_note_the_prompt_is_the_task_alone_and_the_record_says_none(
+        tmp_path, scratch_repo, skills_repo, fake_claude_path, monkeypatch):
+    run_dir = _init_and_fill(tmp_path, scratch_repo, skills_repo)
+    env, creds = _env(fake_claude_path, tmp_path)
+    _use_env(monkeypatch, env)
+    assert T.main(["seal", str(run_dir)]) == 0
+    assert T.main(_run_args(run_dir, creds, skills_repo, "--only", "C"), login_check=_Probe("ok")) == 0
+    assert _session_line(run_dir, "r1-C")["prompt"] == "Do the task.\n"
+    (row,) = [r for r in L.read_jsonl(run_dir / "journal.jsonl") if r["step"] == "arm"]
+    assert row["unattended_note_sha256"] is None
+
+
+def _question_stream(tmp_path, last_words):
+    """The control session with one more opus message whose text is `last_words`."""
+    rows = [json.loads(line) for line in (FIXTURES / "stream-control.jsonl").read_text(encoding="utf-8").splitlines()]
+    said = {"type": "assistant", "message": {"id": "msg_2", "model": "claude-opus-5-5",
+                                             "content": [{"type": "text", "text": last_words}],
+                                             "usage": {"input_tokens": 1, "output_tokens": 1}}}
+    path = tmp_path / "stream-question.jsonl"
+    path.write_text("".join(json.dumps(r) + "\n" for r in [*rows[:2], said, rows[2]]), encoding="utf-8")
+    return path
+
+
+def test_score_flags_an_arm_that_ended_by_asking_and_still_counts_it(
+        tmp_path, scratch_repo, skills_repo, fake_claude_path, monkeypatch, capsys):
+    run_dir = _init_and_fill(tmp_path, scratch_repo, skills_repo)
+    env, creds = _env(fake_claude_path, tmp_path, stream=_question_stream(tmp_path, "The plan is ready. Shall I start?"))
+    _use_env(monkeypatch, env)
+    assert T.main(["seal", str(run_dir)]) == 0
+    assert T.main(_run_args(run_dir, creds, skills_repo, "--only", "C"), login_check=_Probe("ok")) == 0
+    res = json.loads((run_dir / "arms" / "r1-C" / "result.json").read_text(encoding="utf-8"))
+    assert res["last_text"] == "The plan is ready. Shall I start?"
+    capsys.readouterr()
+    assert T.main(["score", str(run_dir), "--json"]) == 0
+    data = json.loads(capsys.readouterr().out)["data"]
+    assert data["arms"]["r1-C"]["ended_with_question"] is True and data["arms"]["r1-C"]["void"] == []
+    assert data["flags"] == {"r1-C": "ended with a question: The plan is ready. Shall I start?"}
+    assert T.main(["score", str(run_dir)]) == 0
+    assert "FLAG ended with a question: The plan is ready. Shall I start?" in capsys.readouterr().out
+
+
+def test_the_question_flag_shows_the_end_of_a_long_last_text(
+        tmp_path, scratch_repo, skills_repo, fake_claude_path, monkeypatch, capsys):
+    words = "Report: " + "all done, " * 40 + "but which release branch should I tag?"
+    run_dir = _init_and_fill(tmp_path, scratch_repo, skills_repo)
+    env, creds = _env(fake_claude_path, tmp_path, stream=_question_stream(tmp_path, words))
+    _use_env(monkeypatch, env)
+    assert T.main(["seal", str(run_dir)]) == 0
+    assert T.main(_run_args(run_dir, creds, skills_repo, "--only", "C"), login_check=_Probe("ok")) == 0
+    capsys.readouterr()
+    assert T.main(["score", str(run_dir), "--json"]) == 0
+    data = json.loads(capsys.readouterr().out)["data"]
+    assert data["flags"] == {"r1-C": f"ended with a question: ...{words[-T.QUESTION_SHOWN:]}"}
+    assert data["arms"]["r1-C"]["last_text"] == words, "the score keeps the whole text"
+
+
+def test_a_store_change_and_a_question_flag_the_arm_together(tmp_path, scratch_repo, skills_repo, capsys):
+    run_dir = _init_and_fill(tmp_path, scratch_repo, skills_repo)
+    assert T.main(["seal", str(run_dir)]) == 0
+    _fabricate_arm(run_dir, 1, cache_read=11000, guard_changes=["changed facts/x.md"])
+    arm = run_dir / "arms" / "r1-C"
+    said = {"type": "assistant", "message": {"id": "m", "model": "claude-opus-5-5",
+                                             "content": [{"type": "text", "text": "Merge it?"}]}}
+    (arm / "stream.jsonl").write_text(json.dumps(said) + "\n", encoding="utf-8")
+    capsys.readouterr()
+    assert T.main(["score", str(run_dir), "--json"]) == 0
+    flag = json.loads(capsys.readouterr().out)["data"]["flags"][arm.name]
+    assert flag == (f"store changed: 1 entries, adjudicate against arms/{arm.name}/transcripts/; "
+                    "ended with a question: Merge it?")
 
 
 def test_a_link_adds_no_bind_to_the_sandbox(tmp_path, scratch_repo, skills_repo, fake_claude_path, fake_bwrap, monkeypatch):

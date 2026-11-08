@@ -22,6 +22,7 @@ again on resume rather than being voided (design S4).
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import os
 import re
@@ -153,7 +154,12 @@ its sha256 per arm, run refuses a changed one, and the journal, result.json and 
 symlinked into every arm's worktree before its session; read-only under bwrap. seal refuses an entry that
 is missing, tracked, not ignored, or ignored only by a dir-only pattern (".packages/"): ignore it as
 "/.packages".
+[run] unattended_note = "...": appended to every arm's prompt alike after a blank line (the bare arm's
+too); its sha256 is in each journal row and result.json. score's ended_with_question flags an arm whose
+session's last text ends with "?" (it stopped to ask); a flag, never a void.
 --json prints one pretty-printed envelope: parse the whole stdout as one JSON document."""
+# How much of an arm's last text the question flag shows: its end, where the question is.
+QUESTION_SHOWN = 200
 SEAL_GIT = ("-c", "user.name=abtest", "-c", "user.email=abtest@localhost", "-c", "commit.gpgsign=false",
             "-c", "core.hooksPath=/dev/null")
 
@@ -198,7 +204,17 @@ class RunContext:
     def arm_meta(self, name: str) -> dict[str, Any]:
         """What every journal row and result.json of arm `name` records beside its outcome."""
         task = self.tasks[name]
-        return {"sandbox": self.profile.run.sandbox, "task_file": task.file, "task_sha256": task.sha256}
+        note = self.profile.run.unattended_note
+        return {"sandbox": self.profile.run.sandbox, "task_file": task.file, "task_sha256": task.sha256,
+                "unattended_note_sha256": None if note is None else hashlib.sha256(note.encode("utf-8")).hexdigest()}
+
+    def prompt(self, name: str) -> str:
+        """Arm `name`'s task text, then the profile's unattended_note after a blank line when it has one."""
+        text, note = self.tasks[name].text, self.profile.run.unattended_note
+        if note is None:
+            return text
+        ended = text if text.endswith("\n") else text + "\n"
+        return f"{ended}\n{note}\n"
 
 
 def _warn(text: str) -> None:
@@ -531,7 +547,7 @@ def _guard_after(result: dict[str, Any], guard_dir: Path) -> None:
 
 def _session_argv(ctx: RunContext, name: str, frozen: abarm.Frozen, ws: Path, home: Path, cfg: Path) -> list[str]:
     """claude_argv with arm `name`'s prompt, behind the bubblewrap prefix when the profile names a bwrap sandbox."""
-    argv = abarm.claude_argv(ctx.tasks[name].text, ctx.max_turns)
+    argv = abarm.claude_argv(ctx.prompt(name), ctx.max_turns)
     sandbox = ctx.profile.run.sandbox
     if sandbox not in SANDBOX_BWRAP_KINDS:
         return argv
@@ -1129,6 +1145,20 @@ def _store_flag(label: str, score: dict[str, Any]) -> str | None:
     return f"store changed: {len(changes)} entries, adjudicate against arms/{label}/{TRANSCRIPTS}/"
 
 
+def _question_flag(score: dict[str, Any]) -> str | None:
+    """The line that names an arm whose session ended by asking (nobody answers); a flag, never a void."""
+    if score.get("ended_with_question") is not True:
+        return None
+    text = str(score.get("last_text") or "")
+    return f"ended with a question: {text if len(text) <= QUESTION_SHOWN else '...' + text[-QUESTION_SHOWN:]}"
+
+
+def _arm_flag(label: str, score: dict[str, Any]) -> str | None:
+    """Every flag of the arm on one line, "; "-joined; None when it has none."""
+    flags = [f for f in (_store_flag(label, score), _question_flag(score)) if f is not None]
+    return "; ".join(flags) or None
+
+
 def _score_line(label: str, score: dict[str, Any]) -> str:
     line = (f"{label}: cost={score['cost_usd']} floor={score['floor_passed']} void={score['void'] or '-'} "
             f"sandbox={score.get('sandbox') or '-'} task={score.get('task_file') or '-'}"
@@ -1137,7 +1167,7 @@ def _score_line(label: str, score: dict[str, Any]) -> str:
             f" ideas={abtrace.describe_ideas(score.get('idea_markers'))}"
             f" suite={abtrace.describe_suite(score.get('floor_suite'))}"
             f" gate={abtrace.describe_suite(score.get('floor_gate'))}")
-    flag = _store_flag(label, score)
+    flag = _arm_flag(label, score)
     line = line if flag is None else f"{line} FLAG {flag}"
     # One line per idea under its arm: the first marker line the arm wrote for it.
     ideas = (score.get("idea_markers") or {}).get("ideas") or {}
@@ -1155,7 +1185,7 @@ def cmd_score(args: argparse.Namespace) -> int:
     scores = _score_all(run_dir, profile, results)
     for res in results.values():
         record(run_dir, step="score", round=res.get("round", 0), arm=res.get("name", ""), status="scored")
-    flags = {label: flag for label, score in scores.items() if (flag := _store_flag(label, score)) is not None}
+    flags = {label: flag for label, score in scores.items() if (flag := _arm_flag(label, score)) is not None}
     _emit(args.json, "score", {"arms": scores, "flags": flags}, True,
           "\n".join(_score_line(k, v) for k, v in scores.items()))
     return EXIT_YES

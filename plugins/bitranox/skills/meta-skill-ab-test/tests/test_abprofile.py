@@ -289,3 +289,26 @@ def test_a_link_entry_that_resolves_outside_the_workpiece_is_refused(tmp_path, s
 
 def test_the_skeleton_names_link_as_a_commented_option():
     assert '# link = [".packages"]' in P.SKELETON
+
+
+# --- [run] unattended_note: one text appended to every arm's prompt -------------------------------
+
+def _with_note(value):
+    return GOOD.replace("max_tokens = 5000", f"max_tokens = 5000\nunattended_note = {value}")
+
+
+def test_unattended_note_loads_and_defaults_to_none(tmp_path, scratch_repo):
+    assert P.load_profile(_write(tmp_path, scratch_repo)).run.unattended_note is None
+    prof = P.load_profile(_write(tmp_path, scratch_repo, _with_note('"No human reads this; never ask, decide."')))
+    assert prof.run.unattended_note == "No human reads this; never ask, decide."
+
+
+@pytest.mark.parametrize("value", ['""', '"   "', "3", '["a"]', '"<what every arm is told>"'],
+                         ids=["empty", "blank", "not-a-string", "a-list", "placeholder"])
+def test_a_bad_unattended_note_is_a_profile_error(tmp_path, scratch_repo, value):
+    with pytest.raises(P.ProfileError, match=r"run\.unattended_note: "):
+        P.load_profile(_write(tmp_path, scratch_repo, _with_note(value)))
+
+
+def test_the_skeleton_names_unattended_note_as_a_commented_option():
+    assert "# unattended_note = " in P.SKELETON
