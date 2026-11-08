@@ -28,6 +28,8 @@ from collections.abc import Mapping
 from pathlib import Path
 from typing import NamedTuple
 
+import claude_paths
+
 # ---- Audit-file location (shared by self-improve-audit.py writer + session-start reader) --
 
 def proj_key(proj):
@@ -62,7 +64,7 @@ def proj_key(proj):
 
 def audit_file(proj):
     """Where the SessionEnd audit writes candidate misses for the next SessionStart to read."""
-    return Path.home() / ".claude" / "self-improve-audit" / (proj_key(proj) + ".md")
+    return claude_paths.audit_dir() / (proj_key(proj) + ".md")
 
 
 # The characters that carry STRUCTURE in the frames a snippet is quoted into: the audit envelope's
@@ -461,7 +463,7 @@ def memory_lock(target_path, timeout=5.0, poll=0.05, now=None):
 
 def last_dream_file(proj):
     """Marker holding the unix timestamp of the last completed dream for this project."""
-    return Path.home() / ".claude" / "self-improve-audit" / (proj_key(proj) + ".dream")
+    return claude_paths.audit_dir() / (proj_key(proj) + ".dream")
 
 
 def dream_mode(proj=None):
@@ -1610,7 +1612,7 @@ def discovery_roots():
 
 def _audit_dir():
     """Machine-local scratch dir the recall/gather caches and the stores-generation marker share."""
-    return Path.home() / ".claude" / "self-improve-audit"
+    return claude_paths.audit_dir()
 
 
 def _stores_gen_file():
@@ -2210,7 +2212,7 @@ def subject_levels(touched, cwd):
 
 def seeded_file(proj):
     """Marker that this project has been seed-nudged (so the bootstrap nudge fires once)."""
-    return Path.home() / ".claude" / "self-improve-audit" / (proj_key(proj) + ".seeded")
+    return claude_paths.audit_dir() / (proj_key(proj) + ".seeded")
 
 
 def mark_seeded(proj, now=None):
@@ -2251,7 +2253,7 @@ def promotion_file():
     SHARED across projects, not per-project, because the question it answers is "how many DISTINCT
     projects corroborate this?" - a per-project file structurally cannot see another project's
     sighting, so the count it could offer would only ever be one project's own repeats."""
-    return Path.home() / ".claude" / "self-improve-audit" / "promotion-candidates.json"
+    return claude_paths.audit_dir() / "promotion-candidates.json"
 
 
 def _read_sightings():
@@ -2386,7 +2388,7 @@ def store_changed(memory_dir_path, since_mtime):
 
 
 def _model_review_file():
-    return Path.home() / ".claude" / "self-improve-audit" / "model-review.txt"
+    return claude_paths.audit_dir() / "model-review.txt"
 
 
 def model_review_due(interval_days=30, now=None):
@@ -2416,7 +2418,7 @@ def mark_model_reviewed(now=None):
 
 
 def _backup_reminder_file():
-    return Path.home() / ".claude" / "self-improve-audit" / "offsite-backup-reminder.txt"
+    return claude_paths.audit_dir() / "offsite-backup-reminder.txt"
 
 
 def backup_reminder_due(interval_days=30, now=None):
@@ -2464,17 +2466,17 @@ def _filler_baseline_path():
 
 def _filler_local_path(proj):
     """PER-PROJECT learned filler blacklist (out-of-store, machine-local)."""
-    return Path.home() / ".claude" / "self-improve-audit" / (proj_key(proj) + ".filler.json")
+    return claude_paths.audit_dir() / (proj_key(proj) + ".filler.json")
 
 
 def _topical_words_path(proj):
     """PER-PROJECT learned topical whitelist - confirmed genuine topics, not re-queued for classification."""
-    return Path.home() / ".claude" / "self-improve-audit" / (proj_key(proj) + ".topical.json")
+    return claude_paths.audit_dir() / (proj_key(proj) + ".topical.json")
 
 
 def _recall_pending_path(proj):
     """PER-PROJECT queue of as-yet-unclassified recall keywords, drained by the dream classifier."""
-    return Path.home() / ".claude" / "self-improve-audit" / (proj_key(proj) + ".recall-unknown.txt")
+    return claude_paths.audit_dir() / (proj_key(proj) + ".recall-unknown.txt")
 
 
 def _read_word_json(path):

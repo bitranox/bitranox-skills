@@ -52,6 +52,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
+import claude_paths  # noqa: E402 - needs the sys.path line above
 from process_liveness import LiveSessions, live_session_ids  # noqa: E402 - needs the sys.path line above
 
 __all__ = [
@@ -587,7 +588,7 @@ def _age(path: Path, now: float) -> float:
 
 
 def default_state_dir() -> Path:
-    return Path.home() / ".claude" / "self-improve-audit"
+    return claude_paths.audit_dir()
 
 
 def _parse(argv: Sequence[str]) -> argparse.Namespace:

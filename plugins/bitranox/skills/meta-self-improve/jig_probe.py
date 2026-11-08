@@ -55,6 +55,7 @@ for _d in (str(_HOOKS), str(_JIGS)):
     if _d not in sys.path:
         sys.path.insert(0, _d)
 
+import claude_paths  # noqa: E402 - the sys.path setup above makes the hooks dir importable
 from classifier import Question, get_classifier, prepare_state  # noqa: E402
 
 __all__ = [
@@ -323,7 +324,7 @@ class _Outcome:
 
 
 def _log_path(named):
-    return Path(named) if named else Path.home() / ".claude" / "self-improve-audit" / JIG_LOG
+    return Path(named) if named else claude_paths.audit_dir() / JIG_LOG
 
 
 def _calls_or_nothing(args):

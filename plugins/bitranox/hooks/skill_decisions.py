@@ -36,6 +36,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import NoReturn
 
+import claude_paths
 import tell_chars
 
 LEDGER_REL = ".skillwriter/decisions.jsonl"
@@ -618,9 +619,8 @@ class _Parser(argparse.ArgumentParser):
 
 
 def _installed_plugins_dir() -> Path | None:
-    override = os.environ.get("CLAUDE_CONFIG_DIR")
     try:
-        return (Path(override) if override else Path.home() / ".claude") / "plugins"
+        return claude_paths.config_dir() / "plugins"
     except RuntimeError:        # no home directory to resolve
         return None
 

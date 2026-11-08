@@ -70,6 +70,7 @@ for _d in (str(_HOOKS), str(_JIGS)):
     if _d not in sys.path:
         sys.path.insert(0, _d)
 
+import claude_paths  # noqa: E402 - the sys.path setup above makes the hooks dir importable
 import classifier as cl  # noqa: E402 - the sys.path above is what makes this importable
 import judge_panel as jp  # noqa: E402 - a sibling module; imported after the sys.path setup
 import skill_roster  # noqa: E402 - same sys.path
@@ -77,7 +78,7 @@ import transcript_turns  # noqa: E402 - same sys.path
 
 def default_log():
     """The audit directory the hooks log into, resolved per run so a changed HOME is honoured."""
-    return Path.home() / ".claude" / "self-improve-audit"
+    return claude_paths.audit_dir()
 
 DEFAULT_THRESHOLD = 0.5
 
@@ -724,7 +725,7 @@ DEFAULT_SHORTLIST = 3
 # suppress. Measured over the corpus: 595 of 1,409 typed prompts. Sampling without splitting on
 # it would let one class dominate whichever way the shuffle fell.
 CONTINUATION_WORDS = 3
-DEFAULT_REPLAY_LOG = Path.home() / ".claude" / "self-improve-audit" / "classifier-replay.jsonl"
+DEFAULT_REPLAY_LOG = claude_paths.audit_dir() / "classifier-replay.jsonl"
 DEFAULT_CORPUS = "~/.claude/projects"
 
 # Planted pair, asserted before any number from a run may be read. They must answer DIFFERENTLY:

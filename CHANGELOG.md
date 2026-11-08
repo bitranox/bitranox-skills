@@ -30,6 +30,22 @@ a hole nobody has drawn a line under is one that gets rediscovered and half-fill
 two "versions with no entry" notes came to sit in this file disagreeing with it.
 
 
+## [10.28.0]
+
+### Changed
+
+- The plugin's state dir follows `CLAUDE_CONFIG_DIR`. When it is set (and not blank), nudge flags,
+  audit logs, dream watermarks, the contribution queue and the classifier's shadow log live in
+  `$CLAUDE_CONFIG_DIR/self-improve-audit` instead of `~/.claude/self-improve-audit`, with no
+  fallback to the home one. A Claude Code session run against a throwaway config dir (an A/B arm,
+  an install test) therefore neither reads nor writes your real state. Every hook and skill script
+  resolves the path through one new hooks module, `claude_paths.py`, and a test fails if one builds
+  it from the home directory by hand again. Nothing is copied from the old location: a session
+  launched with the variable set starts with empty state.
+- `skill_decisions.py` and the `skill-listing-budget` hook use the same helper; a blank
+  `CLAUDE_CONFIG_DIR` now counts as unset there too.
+- `docs/reference.md` lists `CLAUDE_CONFIG_DIR` among the environment variables.
+
 ## [10.27.0]
 
 ### Added
