@@ -75,6 +75,32 @@ def test_backlog_add_then_list(repo, env):
     assert (repo / "OPEN-WORK.md").is_file()
 
 
+def test_add_and_close_name_the_file_they_wrote(repo, env):
+    rc, out = call(repo, env, "backlog_add", ITEM)
+    assert rc == 0 and Path(out["data"]["path"]) == (repo / "OPEN-WORK.md").resolve()
+    assert "note" not in out["data"]
+    rc, out = call(repo, env, "backlog_close", {"rank": 20, "reason": "done"})
+    assert rc == 0 and Path(out["data"]["path"]) == (repo / "OPEN-WORK.md").resolve()
+    assert "note" not in out["data"]
+
+
+def test_add_in_a_linked_worktree_names_the_main_checkout(repo, env, tmp_path):
+    # A linked worktree has its own OPEN-WORK.md: the line is not in the main checkout's copy until
+    # the commit reaches it, so the result must say which file it wrote and where the other one is.
+    ident = {**env, "GIT_AUTHOR_NAME": "t", "GIT_AUTHOR_EMAIL": "t@example.invalid",
+             "GIT_COMMITTER_NAME": "t", "GIT_COMMITTER_EMAIL": "t@example.invalid"}
+    subprocess.run(["git", "-C", str(repo), "commit", "-q", "--allow-empty", "-m", "base"],
+                   check=True, env=ident)
+    wt = tmp_path / "wt"
+    subprocess.run(["git", "-C", str(repo), "worktree", "add", "-q", str(wt)], check=True, env=env)
+    rc, out = call(wt, env, "backlog_add", ITEM)
+    assert rc == 0 and Path(out["data"]["path"]) == (wt / "OPEN-WORK.md").resolve()
+    assert str(repo.resolve()) in out["data"]["note"]
+    assert not (repo / "OPEN-WORK.md").exists()
+    rc, out = call(wt, env, "backlog_close", {"rank": 20, "reason": "done"})
+    assert rc == 0 and str(repo.resolve()) in out["data"]["note"]
+
+
 def test_a_taken_rank_is_a_refusal_with_its_kind(repo, env):
     call(repo, env, "backlog_add", ITEM)
     rc, out = call(repo, env, "backlog_add", ITEM)

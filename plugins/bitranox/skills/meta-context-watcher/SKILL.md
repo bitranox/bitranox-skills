@@ -83,6 +83,15 @@ repo's backlog (see below) is a hand edit there. A session without them (the plu
 Claude Code 2.1.259 or newer) edits the file by hand under the same rules.
 Neither route commits.
 
+**In a linked worktree, the file written is the worktree's own copy.** A session working in
+`.claude/worktrees/<name>` adds and closes lines in that worktree's `OPEN-WORK.md`, and the main
+checkout's copy, which is where a user who asks to see the backlog looks, does not have them until
+the commit reaches it. `backlog_add` and `backlog_close` return the file they wrote in `path`, and
+in a linked worktree a `note` naming the main checkout's copy. Before reporting an item as added
+or closed, bring the commit to the main checkout (a fast-forward there, when its tree is clean
+and yours to touch), or tell the user which file holds it - the only option for a backlog that
+is not tracked, since no commit carries it.
+
 The date is when it was FIRST raised and never changes. `ORIGIN` is `USER:` (their own words where
 they gave any) or `FOUND:`. `size` is how much is left; it is the field that disappears first when
 a list is retyped, and it breaks ties within an origin, so it is not optional. It is NOT the first
@@ -310,9 +319,13 @@ after it; handover mode, and any handover the user asked for, take steps 7 and 8
    `OPEN-WORK.md`: tracking them costs one diff per session and buys a history for the one file that
    is destroyed on purpose every time, so a dropped item can be recovered once somebody notices.
    A compact-mode checkpoint commits nothing just for itself: both files ride along with the next
-   commit the work makes. Committed now or later, check that neither carries a secret, an
-   internal hostname or a private address, because a tracked file in a public repo publishes all
-   three permanently.
+   commit the work makes. Until then the checkpoint lives only in the working tree, and git has no
+   copy of an uncommitted edit: before any step that resets or overwrites `handover.md` or
+   `OPEN-WORK.md` (a release step's `git restore handover.md` to clean the tree, a checkout, a
+   stash, a task that rewrites it), copy it to the scratchpad and put it back right after that
+   step, whether it succeeded or not. Committed now or later, check that
+   neither carries a secret, an internal hostname or a private address, because a tracked file
+   in a public repo publishes all three permanently.
 5. **End the file with its own expiry instruction:**
 
    > Read this, then replace the first line with `# STALE - read <date>, work continued`. Do not
