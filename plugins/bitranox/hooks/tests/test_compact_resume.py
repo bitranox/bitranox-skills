@@ -226,13 +226,80 @@ def test_a_touched_handover_from_before_the_nudge_does_not_displace_a_fresh_one(
 
 
 @pytest.mark.parametrize("name", ["handover.prev.md", "my-handover.md", "HANDOVER.md.bak"])
-def test_only_a_file_named_handover_md_counts(tmp_path, monkeypatch, capsys, name):
+def test_another_name_without_the_lessons_heading_does_not_count(tmp_path, monkeypatch, capsys,
+                                                                  name):
     repo = _repo(tmp_path)
     SIG.mark_checkpoint_asked("s-1", now=time.time() - 60)
     _write_fresh(tmp_path / "other" / name, "# Handover\n- NOT-A-CHECKPOINT-17\n")
     ctx = _context(_run(monkeypatch, capsys, _event(repo)))
     assert "NOT-A-CHECKPOINT-17" not in ctx
     assert "no checkpoint" in ctx.lower()
+
+
+# ---- an improvised name: <anything>-handover.md with the checkpoint heading ---------------------
+# Measured 2026-11-08 over 5497 transcripts: sessions with a worktree outside any repo wrote their
+# checkpoints to ~/wt-<topic>-handover.md (43 writes, three names), and none was ever handed back.
+
+_LESSONS = "## Lessons for the next nap\n- none\n"
+
+
+def test_an_improvised_name_with_the_lessons_heading_is_handed_back(tmp_path, monkeypatch,
+                                                                     capsys):
+    repo = _repo(tmp_path)
+    SIG.mark_checkpoint_asked("s-1", now=time.time() - 60)
+    written = _write_fresh(tmp_path / "home" / "wt-vmxnet3-handover.md",
+                           "# vmxnet3 checkpoint\n- IMPROVISED-19\n\n" + _LESSONS)
+    ctx = _context(_run(monkeypatch, capsys, _event(repo)))
+    assert "IMPROVISED-19" in ctx
+    assert str(written) in ctx
+
+
+def test_an_improvised_name_without_the_heading_is_not_a_checkpoint(tmp_path, monkeypatch,
+                                                                     capsys):
+    """The corpus's one other `-handover.md` file was a skill checklist, which has no such line."""
+    repo = _repo(tmp_path)
+    SIG.mark_checkpoint_asked("s-1", now=time.time() - 60)
+    _write_fresh(tmp_path / "skill" / ".skillwriter" / "checklist-20261029-goal-and-handover.md",
+                 "# Checklist\n- [x] CHECKLIST-20\n## RED\n- nothing\n")
+    ctx = _context(_run(monkeypatch, capsys, _event(repo)))
+    assert "CHECKLIST-20" not in ctx
+    assert "no checkpoint" in ctx.lower()
+
+
+def test_the_heading_counts_only_as_a_line_of_its_own(tmp_path, monkeypatch, capsys):
+    repo = _repo(tmp_path)
+    SIG.mark_checkpoint_asked("s-1", now=time.time() - 60)
+    _write_fresh(tmp_path / "notes" / "design-handover.md",
+                 "# Notes\n- MENTION-21: a checkpoint has a ## Lessons for the next nap heading\n")
+    ctx = _context(_run(monkeypatch, capsys, _event(repo)))
+    assert "MENTION-21" not in ctx
+
+
+def test_the_backup_copy_never_counts_even_with_the_heading(tmp_path, monkeypatch, capsys):
+    """handover.prev.md holds an EARLIER checkpoint, heading included; handing it back as current
+    would resume from the wrong moment."""
+    repo = _repo(tmp_path)
+    SIG.mark_checkpoint_asked("s-1", now=time.time() - 60)
+    _write_fresh(tmp_path / "other" / "handover.prev.md", "# Checkpoint\n- BACKUP-22\n\n" + _LESSONS)
+    ctx = _context(_run(monkeypatch, capsys, _event(repo)))
+    assert "BACKUP-22" not in ctx
+
+
+def test_handover_md_itself_needs_no_heading(tmp_path, monkeypatch, capsys):
+    repo = _repo(tmp_path)
+    SIG.mark_checkpoint_asked("s-1", now=time.time() - 60)
+    _write_fresh(tmp_path / "other" / "handover.md", "# Handover\n- PLAIN-23\n")
+    ctx = _context(_run(monkeypatch, capsys, _event(repo)))
+    assert "PLAIN-23" in ctx
+
+
+@pytest.mark.parametrize("name, expected", [
+    ("handover.md", True), ("wt-x-handover.md", True), ("-handover.md", False),
+    ("handover.prev.md", False), ("x-handover.md.bak", False), ("xhandover.md", False),
+    ("myhandover.md", False),
+])
+def test_is_checkpoint_name(name, expected):
+    assert H.is_checkpoint_name(name) is expected
 
 
 def test_another_sessions_touched_handover_is_not_this_sessions_checkpoint(tmp_path, monkeypatch,

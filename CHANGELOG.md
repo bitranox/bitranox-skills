@@ -30,6 +30,17 @@ a hole nobody has drawn a line under is one that gets rediscovered and half-fill
 two "versions with no entry" notes came to sit in this file disagreeing with it.
 
 
+## [10.31.0]
+
+### Fixed
+
+- compact-resume hands back a checkpoint saved under an improvised name. Besides `handover.md`, it
+  takes a file this session wrote whose name ends in `-handover.md` (such as
+  `~/wt-vmxnet3-handover.md`, written by sessions whose worktree is outside any repo), provided one
+  of its lines is exactly `## Lessons for the next nap`, the heading every checkpoint carries. A
+  file with that suffix but without the heading is not taken, and `handover.prev.md`, the backup of
+  an earlier checkpoint, never is.
+
 ## [10.30.0]
 
 ### Removed
