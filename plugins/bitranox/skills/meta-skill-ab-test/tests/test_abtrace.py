@@ -143,6 +143,23 @@ def test_ideas_are_ordered_by_number_not_by_text(tmp_path):
     assert list(X.idea_markers(stream)["ideas"]) == ["2", "9", "10"]
 
 
+def test_an_idea_named_by_word_counts_and_sorts_after_the_numbered_ones(tmp_path):
+    """A preregistered idea may be named by word; a digits-only pattern reported writes=0 for it."""
+    stream = _stream(tmp_path, _assistant(_tool_use(
+        "t1", "Bash",
+        command=f"cat >> {PROGRESS} <<'EOF'\n[abx] idea=final-design-review ran\n[abx] idea=3 ran\nEOF")))
+    markers = X.idea_markers(stream)
+    assert markers["writes"] == 1
+    assert list(markers["ideas"]) == ["3", "final-design-review"]
+    assert markers["ideas"]["final-design-review"]["first"] == "[abx] idea=final-design-review ran"
+
+
+def test_a_placeholder_in_angle_brackets_is_not_an_idea(tmp_path):
+    stream = _stream(tmp_path, _assistant(_tool_use(
+        "t1", "Bash", command=f'echo "[abx] idea=<id> <what>" >> {PROGRESS}')))
+    assert X.idea_markers(stream) == {"writes": 0, "ideas": {}}
+
+
 def test_multiedit_and_tee_writes_count(tmp_path):
     stream = _stream(
         tmp_path,

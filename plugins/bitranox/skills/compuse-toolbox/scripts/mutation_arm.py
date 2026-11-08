@@ -65,7 +65,9 @@ run as it is, in place of `--test`: exit 0 is SURVIVED, a non-zero exit KILLED w
 line as the reason, and a mutant that did not build (`error[E...]`, `could not compile`, `make:
 ***`) or a command that could not run (126/127) INCONCLUSIVE - an unbuildable mutant is not a test
 noticing it. The command's own summary is not parsed, so read the reason before believing a kill.
-`--battery` with `--cmd` needs no `tests` in the spec. Every restore writes the original bytes back
+`--battery` with `--cmd` needs no `tests` in the spec. A killed or inconclusive `--cmd` arm prints
+the end of its output (`output_tail` in `--json`), and `--log-dir DIR` keeps each arm's whole output,
+since the reason alone is one line and cannot tell a failed check from a crash. Every restore writes the original bytes back
 with a FRESH mtime: restoring the original mtime made it older than the build made from the
 mutant, so cargo and make reused the MUTANT build for the restored source.
   `mutation_arm.py --mutate src/lib.rs old.txt new.txt --cmd "cargo test -p crate" --timeout 600`
@@ -238,6 +240,32 @@ def command_runner(command, *, which=shutil.which):
 _DID_NOT_BUILD = re.compile(r"^error\[E\d+\]: |could not compile|compilation terminated|"
                             r":\d+:\d+: (?:fatal )?error: ", re.MULTILINE)
 _NO_MODULE = re.compile(r"No module named '?([\w.]+)'?")
+
+#: How much of an arm's output a report carries. The whole output goes to --log-dir; a report is
+#: read in a terminal or a JSON envelope, where a test log of megabytes is not wanted.
+OUTPUT_TAIL_LINES = 20
+_OUTPUT_TAIL_CHARS = 8000
+
+
+def output_tail(output: str) -> str:
+    """The last lines of an arm's output, bounded in lines and in characters. PURE."""
+    return "\n".join(output[-_OUTPUT_TAIL_CHARS:].splitlines()[-OUTPUT_TAIL_LINES:])
+
+
+def _write_log(log_path, output):
+    """Save an arm's whole output; the path written, or None when it could not be.
+
+    Reported, never raised: by now the arm has run and been restored, and its verdict is worth
+    more than its log.
+    """
+    if log_path is None:
+        return None
+    try:
+        Path(log_path).write_text(output, encoding="utf-8", errors="replace")
+    except OSError as exc:
+        print(f"mutation_arm: could not write the arm's log {log_path}: {exc}", file=sys.stderr)
+        return None
+    return str(log_path)
 
 
 def command_verdict(returncode: int | None, output: str) -> tuple[str, str | None]:
@@ -563,7 +591,7 @@ def plan_text_mutations(specs):
     return _plan(specs, _match_endings)
 
 
-def run_arm(planned, nodeid, *, runner=None, timeout=None, command=False):
+def run_arm(planned, nodeid, *, runner=None, timeout=None, command=False, log_path=None):
     """Apply every mutation, run the arm, restore from copies taken first. Returns a report.
 
     `timeout` bounds the arm in SECONDS. Without one a mutation that makes the test spin hangs
@@ -572,7 +600,8 @@ def run_arm(planned, nodeid, *, runner=None, timeout=None, command=False):
     and left a mutated file on disk. The restore is in a `finally`, so a killed arm still
     restores. `nodeid` is one node id or a list of them; `caught_by` names those that failed.
     With `command`, `runner` is the whole arm (a `--cmd` such as `cargo test`), run as it is,
-    and judged by :func:`command_verdict` instead of pytest's summary.
+    and judged by :func:`command_verdict` instead of pytest's summary. `log_path` receives the
+    arm's whole output.
     """
     runner = runner or [sys.executable, "-m", "pytest"]
     # Before anything is written: a cache predating the mutation can be served IN PLACE of it when
@@ -631,6 +660,8 @@ def run_arm(planned, nodeid, *, runner=None, timeout=None, command=False):
         "verdict": verdict,
         "failure": reason,
         "caught_by": [] if error or command else failed_nodeids(output),
+        "output_tail": output_tail(output or ""),
+        "log": _write_log(log_path, output or ""),
         "restored": restored,
         "bytecode_purged": purged,
         "bytecode_left": left,
@@ -754,6 +785,8 @@ def _parse(argv):
                     help="run every labelled arm in this JSON spec, baseline green first and last")
     ap.add_argument("--timeout", type=float, default=None, metavar="SECONDS",
                     help="bound each arm; a mutation can make a test SPIN rather than fail")
+    ap.add_argument("--log-dir", default=None, metavar="DIR",
+                    help="keep each arm's whole output in a file under DIR (created if missing)")
     runner = ap.add_mutually_exclusive_group()
     runner.add_argument("--python", default=None, metavar="PATH",
                         help="interpreter that runs the arm as PATH -m pytest "
@@ -801,7 +834,7 @@ def _main_single(args, runner, source) -> int:
         return _refuse("no --mutate or --revert given", as_json=args.json)
     command = args.cmd is not None
     if command and args.test:
-        return _refuse("--test names a pytest node; with --cmd the command itself is the arm",
+        return _refuse("--test names a pytest node; with --cmd the command itself is the arm: drop --test",
                        as_json=args.json)
     if not args.test and not command:
         return _refuse("--test is required with --mutate or --revert", as_json=args.json)
@@ -818,7 +851,8 @@ def _main_single(args, runner, source) -> int:
 
     try:
         report = run_arm(planned, args.cmd if command else args.test, runner=runner,
-                         timeout=args.timeout, command=command)
+                         timeout=args.timeout, command=command,
+                         log_path=_arm_log_path(args.log_dir, 0, "arm"))
     except (AnchorError, OSError) as exc:
         return _refuse(f"refused before mutating - {exc}", as_json=args.json)
     report["runner"], report["runner_source"] = runner, source
@@ -833,8 +867,30 @@ def _main_single(args, runner, source) -> int:
         print(f"{report['verdict'].upper()}: {args.cmd if command else args.test}")
         if report["failure"]:
             print(f"  reason: {report['failure']}")
+        _print_output_tail(report)
         _explain_unfinished(report, runner)
     return outcome_code(report)
+
+
+def _arm_log_path(log_dir, index, label):
+    """Where this arm's output goes, the directory created; None without --log-dir.
+
+    Index-prefixed: two labels can differ only in characters the slug replaces.
+    """
+    if log_dir is None:
+        return None
+    Path(log_dir).mkdir(parents=True, exist_ok=True)
+    return Path(log_dir) / f"{index:02d}-{re.sub(r'[^A-Za-z0-9._-]', '_', label)}.log"
+
+
+def _print_output_tail(arm, indent="  ") -> None:
+    """The end of the output of an arm no pytest summary explains: what the one-line reason cannot
+    say. A pytest arm that killed names its failing test instead, and a survivor has nothing to
+    explain."""
+    if arm.get("output_tail") and not arm.get("caught_by") and arm["verdict"] != "survived":
+        print(f"{indent}output:")
+        for line in arm["output_tail"].splitlines():
+            print(f"{indent}  {line}")
 
 
 def _warn_restore(report) -> None:
@@ -938,8 +994,6 @@ def load_battery(path, override_tests=None, *, need_tests=True):
     if not isinstance(arms_raw, list) or not arms_raw:
         raise BatteryError("the battery has no arms (want {\"tests\": [...], \"arms\": [...]})")
     tests_raw = override_tests or (spec.get("tests") if isinstance(spec, dict) else None)
-    if not tests_raw and need_tests:
-        raise BatteryError("the battery names no tests: give \"tests\" in the spec or --test")
     tests = _str_list(tests_raw, "tests") if tests_raw else []
     arms, seen = [], set()
     for arm in arms_raw:
@@ -951,7 +1005,18 @@ def load_battery(path, override_tests=None, *, need_tests=True):
         seen.add(label)
         arm_tests = _str_list(arm["tests"], f"arm {label!r} tests") if "tests" in arm else None
         arms.append((label, _arm_mutations(arm, label), arm_tests))
+    if need_tests and not tests:
+        tests = _tests_from_arms(arms)
     return tests, arms
+
+
+def _tests_from_arms(arms):
+    """The baseline's tests when only the arms name any: every arm's, each once, in order."""
+    for label, _, arm_tests in arms:
+        if not arm_tests:
+            raise BatteryError(f"the battery names no tests for arm {label!r}: give \"tests\" "
+                               "in the spec, on that arm, or --test")
+    return list(dict.fromkeys(test for _, _, arm_tests in arms for test in arm_tests))
 
 
 def _baseline(runner, tests, timeout, command=False) -> dict:
@@ -971,7 +1036,7 @@ def _baseline(runner, tests, timeout, command=False) -> dict:
     return {"green": returncode == 0, "pytest_returncode": returncode, "failure": failure}
 
 
-def run_battery(arms, tests, *, runner, timeout=None, command=False) -> dict:
+def run_battery(arms, tests, *, runner, timeout=None, command=False, log_dir=None) -> dict:
     """Baseline, then every arm in turn (each restored before the next), then the baseline again.
 
     `arms` holds (label, planned, arm_tests) with every anchor already validated. A red baseline
@@ -983,10 +1048,10 @@ def run_battery(arms, tests, *, runner, timeout=None, command=False) -> dict:
               "final_baseline": None}
     if not result["baseline"]["green"]:
         return result
-    for label, planned, arm_tests in arms:
+    for index, (label, planned, arm_tests) in enumerate(arms):
         try:
             report = run_arm(planned, arm_tests or tests, runner=runner, timeout=timeout,
-                             command=command)
+                             command=command, log_path=_arm_log_path(log_dir, index, label))
         except (AnchorError, OSError) as exc:
             report = {"verdict": "error", "failure": f"refused before mutating - {exc}",
                       "caught_by": [], "restored": True, "bytecode_left": []}
@@ -1015,7 +1080,7 @@ def _main_battery(args, runner, source) -> int:
     try:
         command = args.cmd is not None
         if command and args.test:
-            raise BatteryError("--test names a pytest node; with --cmd the command itself is the arm")
+            raise BatteryError("--test names a pytest node; with --cmd the command itself is the arm: drop --test")
         tests, arms_spec = load_battery(args.battery, [args.test] if args.test else None,
                                         need_tests=not command)
         arms = []
@@ -1028,7 +1093,8 @@ def _main_battery(args, runner, source) -> int:
         return _refuse(f"refused, nothing written - {exc}", as_json=args.json)
 
     try:
-        result = run_battery(arms, tests, runner=runner, timeout=args.timeout, command=command)
+        result = run_battery(arms, tests, runner=runner, timeout=args.timeout, command=command,
+                             log_dir=args.log_dir)
     except (AnchorError, OSError) as exc:
         return _refuse(f"refused before mutating - {exc}", as_json=args.json)
     result.update(mode="battery", runner=runner, runner_source=source)
@@ -1057,6 +1123,7 @@ def _print_battery(result) -> None:
         elif arm["verdict"] != "survived" and arm.get("failure"):
             line += f"  ({arm['failure']})"
         print(line)
+        _print_output_tail(arm, indent="    ")
     if result["final_baseline"] is not None:
         print(f"final baseline: {'GREEN' if result['final_baseline']['green'] else 'RED'}")
 

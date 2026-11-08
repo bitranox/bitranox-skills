@@ -144,6 +144,8 @@ def _checked(*lines):
     _checked("if s.count(START) != 1:", "    raise SystemExit('start')",
              "if s.count(END) != 1:", "    sys.exit('end')"),
     _checked("if not s.count(START) == 1 or s.count(END) != 1:", "    raise ValueError('x')"),
+    _checked("for anchor in (START, END):", "    if s.count(anchor) != 1:", "        raise SystemExit(anchor)"),
+    _checked("for anchor in [START, END]:", "    assert s.count(anchor) == 1"),
     # string-constant anchors paired with the same constant
     "s = p.read_text()\nassert s.count('# BEGIN') == 1 and s.count('# END') == 1\n"
     "a = s.index('# BEGIN'); b = s.index('# END')\np.write_text(s[:a] + new + s[b:])\n",
@@ -158,6 +160,9 @@ def test_a_fully_checked_splice_is_exempt(program):
     # the recorded recurrence was the END marker: checking only the start is not enough
     _checked("assert s.count(START) == 1"),
     _checked("assert s.count(END) == 1"),
+    _checked("for anchor in (START,):", "    assert s.count(anchor) == 1"),
+    _checked("for anchor in names:", "    assert s.count(anchor) == 1"),
+    _checked("for anchor in (START, END):", "    if s.count(anchor) != 1:", "        print('warn')"),
     # the wrong comparison: present at least once is not unique
     _checked("assert s.count(START) >= 1", "assert s.count(END) >= 1"),
     _checked("assert s.count(START) == 1", "assert s.count(END) == 2"),

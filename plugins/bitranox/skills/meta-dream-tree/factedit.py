@@ -701,6 +701,35 @@ def clean_body(text: str) -> str:
     return trimmed + "\n" if trimmed else ""
 
 
+#: A stored body shorter than this is a stub: replacing it wholesale is routine, not a loss.
+_SHRINK_MIN_STORED = 200
+#: A new body under this share of the stored one reads as a lost body, not an edit. Measured:
+#: a fold meant to append lost the stored text to an empty extraction, and apply replaced 2419
+#: characters with the new paragraph alone.
+_SHRINK_RATIO = 0.5
+
+
+def _prose(text: str) -> str:
+    """A body without its leading frame, when it has one. PURE."""
+    stripped = (text or "").lstrip()
+    frame = _FRAME_RX.match(stripped)
+    return stripped[frame.end():].lstrip("\r\n") if frame else text or ""
+
+
+def shrink_problem(stored: str, new: str) -> str | None:
+    """Why `new` must not silently replace `stored`, or None when it may. PURE.
+
+    Measured on the prose: the frame is the engine's, a stored body carries one and a new body may
+    not, so counting it would refuse a faithful edit of a fact whose hook is long.
+    """
+    old_chars, new_chars = len(_prose(stored)), len(_prose(new))
+    if old_chars < _SHRINK_MIN_STORED or new_chars >= old_chars * _SHRINK_RATIO:
+        return None
+    return (f"the new body has {new_chars} characters against {old_chars} stored, under half: "
+            "a change meant to APPEND that lost the stored text looks exactly like this, so check "
+            "the body file, or pass --shrink if the cut is deliberate")
+
+
 def _render_fact(data: dict, body: str, show_body: bool) -> str:
     lines = [
         f"slug        {data['slug']}",
@@ -819,7 +848,7 @@ class ApplyOutcome:
 
 
 def plan_apply(spec: ApplySpec, rules: EngineRules, *, allow_pinned: bool,
-               dry_run: bool) -> ApplyPlan:
+               dry_run: bool, allow_shrink: bool = False) -> ApplyPlan:
     """Read the fact and check the change, writing nothing. Raises FactEditError on a bad request.
 
     An over-cap hook is NOT raised: it comes back as a refused verdict, because single `apply`
@@ -836,6 +865,10 @@ def plan_apply(spec: ApplySpec, rules: EngineRules, *, allow_pinned: bool,
                          "the change and print the engine command without writing")
     if hook is None and body is None and not spec.title and not spec.type_:
         raise BadInput("nothing to change: give --hook/--hook-file, --body-file, --title or --type")
+    if body is not None and not allow_shrink:
+        problem = shrink_problem(fact.body, body)
+        if problem:
+            raise BadInput(f"{fact.slug!r}: {problem}")
     if spec.type_:
         # Fail closed on an unknown vocabulary - a tool that cannot check is not a tool that
         # passes. A PINNED fact is forwarded like any other: `amend-pinned` carries --type and is
@@ -954,7 +987,8 @@ def cmd_apply(args, rules: EngineRules) -> int:
                      level=Path(args.level) if args.level else None, hook=args.hook,
                      hook_file=args.hook_file, body_file=args.body_file, title=args.title,
                      type_=args.type_)
-    plan = plan_apply(spec, rules, allow_pinned=args.allow_pinned, dry_run=args.dry_run)
+    plan = plan_apply(spec, rules, allow_pinned=args.allow_pinned, dry_run=args.dry_run,
+                      allow_shrink=args.shrink)
     out = execute_plan(plan, rules, stage_dir=args.stage_dir, dry_run=args.dry_run,
                        python=args.python)
     _emit(args.as_json, "apply", out.ok, out.data, out.skipped, out.text)
@@ -1033,7 +1067,7 @@ def parse_batch(text: str, *, base: Path, start: Path,
 
 
 def _preflight(entry: BatchEntry, rules: EngineRules, *, allow_pinned: bool,
-               dry_run: bool) -> list[str]:
+               dry_run: bool, allow_shrink: bool = False) -> list[str]:
     """Every problem with one entry, found without writing anything.
 
     The named files and the slug are checked independently first, so an entry with both a missing
@@ -1054,7 +1088,8 @@ def _preflight(entry: BatchEntry, rules: EngineRules, *, allow_pinned: bool,
     if problems:
         return problems
     try:
-        plan = plan_apply(spec, rules, allow_pinned=allow_pinned, dry_run=dry_run)
+        plan = plan_apply(spec, rules, allow_pinned=allow_pinned, dry_run=dry_run,
+                          allow_shrink=allow_shrink)
     except FactEditError as exc:
         return [f"{tag}: {type(exc).__name__}: {exc}"]
     return [f"{tag}: refused: {r}" for r in plan.verdict.refusals]
@@ -1083,7 +1118,8 @@ def cmd_apply_batch(args, rules: EngineRules) -> int:
     if not entries and not problems:
         raise BadInput(f"the batch file {path} holds no entries")
     for entry in entries:
-        problems += _preflight(entry, rules, allow_pinned=args.allow_pinned, dry_run=args.dry_run)
+        problems += _preflight(entry, rules, allow_pinned=args.allow_pinned, dry_run=args.dry_run,
+                               allow_shrink=args.shrink)
     report = {"batch": str(path), "dry_run": bool(args.dry_run), "entries": len(entries),
               "applied": [], "staged": [], "failed": None,
               "not_applied": [e.spec.slug for e in entries], "problems": problems, "results": []}
@@ -1119,7 +1155,7 @@ def _run_entry(entry: BatchEntry, args, rules: EngineRules, report: dict) -> dic
     report["not_applied"].remove(slug)
     try:
         plan = plan_apply(entry.spec, rules, allow_pinned=args.allow_pinned,
-                          dry_run=args.dry_run)
+                          dry_run=args.dry_run, allow_shrink=args.shrink)
         out = execute_plan(plan, rules, stage_dir=args.stage_dir, dry_run=args.dry_run,
                            python=args.python)
     except FactEditError as exc:
@@ -1242,6 +1278,9 @@ def build_parser() -> argparse.ArgumentParser:
                      help="where to write the staged hook/body files (default: a temp dir)")
     ap_.add_argument("--dry-run", action="store_true",
                      help="stage the files and print the engine command without running it")
+    ap_.add_argument("--shrink", action="store_true",
+                     help="let a new body drop under half of a stored one; without it apply "
+                          "refuses, since a lost body looks exactly like that")
     ap_.add_argument("--allow-pinned", action="store_true",
                      help="write a PINNED fact (through amend-pinned); without it apply refuses "
                           "one, since pinned content is a human's to change")

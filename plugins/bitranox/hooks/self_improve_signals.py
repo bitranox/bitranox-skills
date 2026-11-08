@@ -660,6 +660,44 @@ def contrib_file(proj):
     return _audit_dir() / (_queue_file_key(proj) + ".contrib.jsonl")
 
 
+def _main_root_from_gitfile(repo, gitfile):
+    """The main checkout a linked worktree's `.git` FILE points at; `repo` itself for anything
+    else that uses a gitfile (a submodule is a repository of its own)."""
+    text = gitfile.read_text(encoding="utf-8", errors="replace").strip()
+    if not text.startswith("gitdir:"):
+        return repo
+    gitdir = (repo / text[len("gitdir:"):].strip()).resolve()
+    if gitdir.parent.name != "worktrees":
+        return repo
+    common = gitdir.parent.parent
+    return common.parent if common.name == ".git" else common
+
+
+def queue_home(proj):
+    """The directory whose contribution queue `proj` belongs to: the repo's MAIN checkout.
+
+    An entry is about the repo, not about where the session happened to stand, so one added from
+    a linked worktree or a subdirectory must land in the queue the repo's dream reads. Keyed on
+    the raw cwd, a worktree's entries sat under a key nothing looked at and outlived the
+    worktree. Read from the `.git` entry with no git process: this runs inside hooks. A path
+    outside any repository is its own home, so its key is the one it always had.
+    """
+    try:
+        start = Path(os.path.abspath(os.fspath(proj) if proj else os.getcwd()))
+    except (TypeError, ValueError):
+        return proj
+    for directory in (start, *start.parents):
+        dotgit = directory / ".git"
+        try:
+            if dotgit.is_dir():
+                return str(directory)
+            if dotgit.is_file():
+                return str(_main_root_from_gitfile(directory, dotgit))
+        except OSError:
+            return str(start)
+    return str(start)
+
+
 def _queue_file_key(proj):
     """The file key of `proj`'s queue AND its tombstones: a `queue_key:` pseudo-path names it
     directly, anything else is hashed. One resolver for both files, because a tombstone written
@@ -674,7 +712,7 @@ def _queue_file_key(proj):
             raise ValueError(
                 "not a queue key: %r - expected the 16 hex chars `contrib_queue.py queues` prints" % key)
         return key
-    return proj_key(proj)
+    return proj_key(queue_home(proj))
 
 
 def _read_jsonl_records(path):
@@ -770,7 +808,7 @@ def add_contribution(proj, record, max_items=100, strict=False):
             if (not rec.get("proj")
                     and not (isinstance(proj, str) and proj.startswith(QUEUE_KEY_PREFIX))):
                 try:
-                    rec["proj"] = os.path.abspath(os.fspath(proj) if proj else os.getcwd())
+                    rec["proj"] = os.path.abspath(queue_home(proj))
                 except (TypeError, ValueError):
                     pass
             cur.append(rec)
@@ -933,12 +971,23 @@ def read_shipped(proj):
 def resolve_contribution(proj, index=None, match=None):
     """The 0-based position of exactly ONE queued contribution, by `index` (1-based) or `match`.
 
-    `match` is a case-insensitive substring of the entry's `what` or `target`, and exists because an
-    INDEX SHIFTS under the previous close: closing two entries by the indices of one listing hits
-    the wrong second entry, which silently destroys a contribution that was meant to stay queued.
-    Raises IndexError (out of range, no match, or an ambiguous match) rather than guessing, and
-    OSError when the queue cannot be read."""
+    `match` is a case-insensitive substring of the entry's `what` or `target`, or `<what> -> <target>`
+    as the listing prints it, which is the only way to tell apart two entries with one `what`. It
+    exists because an INDEX SHIFTS under the previous close: closing two entries by the indices of
+    one listing hits the wrong second entry, which silently destroys a contribution that was meant
+    to stay queued. Raises IndexError (out of range, no match, or an ambiguous match) rather than
+    guessing, and OSError when the queue cannot be read."""
     return _resolve_in(read_contributions(proj), index, match)
+
+
+def _contribution_matches(record, needle):
+    """Does lowercased `needle` select `record`: a substring of what or target, or `what -> target`."""
+    what = str(record.get("what") or "").lower()
+    target = str(record.get("target") or "").lower()
+    if needle in what or needle in target:
+        return True
+    head, arrow, tail = needle.partition(" -> ")
+    return bool(arrow) and head.strip() in what and tail.strip() in target
 
 
 def _resolve_in(cur, index=None, match=None):
@@ -946,9 +995,7 @@ def _resolve_in(cur, index=None, match=None):
     must select from the records it will rewrite, not from a second read)."""
     if match:
         needle = str(match).lower()
-        hits = [i for i, r in enumerate(cur)
-                if needle in str(r.get("what") or "").lower()
-                or needle in str(r.get("target") or "").lower()]
+        hits = [i for i, r in enumerate(cur) if _contribution_matches(r, needle)]
         if not hits:
             raise IndexError("no queued contribution matches %r (queue holds %d)" % (match, len(cur)))
         if len(hits) > 1:

@@ -1362,3 +1362,85 @@ def test_a_windows_cmd_is_split_by_commandlinetoargvw_without_its_quotes():
 @pytest.mark.skipif(os.name == "nt", reason="asserts the POSIX shlex split")
 def test_a_posix_cmd_is_split_by_shlex():
     assert M.split_command("'my crate' a\\ b") == ["my crate", "a b"]
+
+
+def test_a_killed_command_arm_keeps_its_output_so_the_failing_check_can_be_read(tmp_path):
+    """The KILLED reason is only the last output line; a real check prints what failed above it."""
+    p = _cmd_project(tmp_path)
+    (p / "check.py").write_text(
+        "from src import classify\n"
+        "if classify(0) != 'zero':\n"
+        "    print('CHECK zero-case FAILED')\n"
+        "    print('teardown finished')\n"
+        "    raise SystemExit(1)\n", encoding="utf-8")
+    (p / "old.txt").write_text('return "zero"', encoding="utf-8")
+    (p / "new.txt").write_text('return "ZERO"', encoding="utf-8")
+    argv = ["--mutate", "src.py", "old.txt", "new.txt", "--cmd", f'"{sys.executable}" check.py']
+    data = json.loads(run(p, *argv, "--json").stdout)["data"]
+    assert data["verdict"] == "killed" and "CHECK zero-case FAILED" in data["output_tail"]
+    human = run(p, *argv)
+    assert "CHECK zero-case FAILED" in human.stdout, (human.stdout, human.stderr)
+
+
+def test_output_tail_is_bounded_and_keeps_the_end():
+    text = "\n".join(f"line {n}" for n in range(500))
+    tail = M.output_tail(text)
+    assert tail.splitlines()[-1] == "line 499"
+    assert len(tail.splitlines()) == M.OUTPUT_TAIL_LINES
+
+
+def test_log_dir_keeps_every_arms_whole_output(tmp_path):
+    p = _cmd_project(tmp_path)
+    (p / "check.py").write_text(
+        "print('first line of the arm')\nfrom src import classify\n"
+        "raise SystemExit(0 if classify(0) == 'zero' else 1)\n", encoding="utf-8")
+    spec = tmp_path / "battery.json"
+    spec.write_text(json.dumps({"arms": [
+        {"label": "zero case/1", "file": "src.py", "old": 'return "zero"', "new": 'return "ZERO"'},
+    ]}), encoding="utf-8", newline="")
+    logs = tmp_path / "logs"
+    proc = run(p, "--battery", str(spec), "--cmd", f'"{sys.executable}" check.py',
+               "--log-dir", str(logs), "--json")
+    assert proc.returncode == 0, (proc.stdout, proc.stderr)
+    arm = json.loads(proc.stdout)["data"]["arms"][0]
+    assert Path(arm["log"]).parent == logs
+    assert "first line of the arm" in Path(arm["log"]).read_text(encoding="utf-8")
+
+
+def test_the_test_with_cmd_refusal_says_what_to_do(tmp_path):
+    p = _cmd_project(tmp_path)
+    (p / "old.txt").write_text('return "zero"', encoding="utf-8")
+    (p / "new.txt").write_text('return "ZERO"', encoding="utf-8")
+    proc = run(p, "--mutate", "src.py", "old.txt", "new.txt", "--cmd", f'"{sys.executable}" check.py',
+               "--test", "t::a")
+    assert proc.returncode == 2
+    assert "drop --test" in proc.stderr + proc.stdout
+
+
+def test_a_battery_whose_arms_all_carry_tests_needs_no_top_level_list(tmp_path):
+    p = make_project(tmp_path)
+    spec = tmp_path / "battery.json"
+    spec.write_text(json.dumps({"arms": [
+        {"label": "z", "file": "src.py", "old": 'return "zero"', "new": 'return "ZERO"',
+         "tests": ["test_src.py::test_zero"]},
+        {"label": "n", "file": "src.py", "old": 'return "negative"', "new": 'return "NEG"',
+         "tests": ["test_src.py::test_negative"]},
+    ]}), encoding="utf-8", newline="")
+    proc = run(p, "--battery", str(spec), "--json")
+    assert proc.returncode == 0, (proc.stdout, proc.stderr)
+    data = json.loads(proc.stdout)["data"]
+    assert data["tests"] == ["test_src.py::test_zero", "test_src.py::test_negative"]
+    assert data["baseline"]["green"]
+
+
+def test_a_battery_with_one_arm_lacking_tests_names_that_arm(tmp_path):
+    p = make_project(tmp_path)
+    spec = tmp_path / "battery.json"
+    spec.write_text(json.dumps({"arms": [
+        {"label": "z", "file": "src.py", "old": 'return "zero"', "new": 'return "ZERO"',
+         "tests": ["test_src.py::test_zero"]},
+        {"label": "bare", "file": "src.py", "old": 'return "negative"', "new": 'return "NEG"'},
+    ]}), encoding="utf-8", newline="")
+    proc = run(p, "--battery", str(spec))
+    assert proc.returncode == 2
+    assert "'bare'" in proc.stderr + proc.stdout

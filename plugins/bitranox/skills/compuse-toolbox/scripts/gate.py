@@ -750,6 +750,25 @@ def _directory(parser: argparse.ArgumentParser, option: str, text: str) -> str:
     return text
 
 
+# Program words that start a further gate. An inner `--` also passes arguments on (`cargo test --
+# --nocapture`, `tool.py -- input.txt`), so it counts as a second gate only when one of these
+# follows it. `cargo` is here for `-- ruff check -- cargo test`; its own `--` is followed by a flag.
+_NEXT_GATE_WORDS = frozenset({"bandit", "cargo", "lint-imports", "make", "mypy", "npm", "pyright",
+                              "pytest", "python", "python3", "ruff", "uv", "uvx"})
+
+
+def several_gates_after_dashdash(rest: list[str]) -> str | None:
+    """The program word of a second gate chained after `--` by a further `--`, else None.
+
+    Everything after the first `--` is ONE argv, so the next gate would reach the first program
+    as arguments: measured, pytest collected 0 tests and the run read as refused, not as a mistake.
+    """
+    for token, following in zip(rest, rest[1:], strict=False):
+        if token == "--" and following in _NEXT_GATE_WORDS:
+            return following
+    return None
+
+
 def gate_settings(parser: argparse.ArgumentParser, written) -> list[GateSettings]:
     """One GateSettings per --gate, from the --gate-cwd / --gate-env written AFTER it.
 
@@ -765,7 +784,8 @@ def gate_settings(parser: argparse.ArgumentParser, written) -> list[GateSettings
             continue
         flag = "--" + option.replace("_", "-")
         if not per_gate:
-            parser.error(f"{flag} must be written after the --gate it applies to")
+            parser.error(f"{flag} must be written after the --gate it applies to: "
+                         f'--gate "<cmd>" {flag} ...')
         last = per_gate[-1]
         if option == "gate_cwd":
             per_gate[-1] = GateSettings(_directory(parser, flag, value), last.env)
@@ -868,6 +888,10 @@ def _main(argv=None) -> int:
             # `-- env -u VIRTUAL_ENV make --version` reported "[FAIL] env (rc=2)", naming the
             # wrapper instead of the thing under test, while the single-string gate named it
             # correctly - both routes derive the name through derived_name for that reason.
+            chained = several_gates_after_dashdash(args.rest)
+            if chained is not None:
+                p.error(f"a second gate ({chained}) follows a further `--`, so it would reach the "
+                        f'first program as arguments: write each gate as its own --gate "name=cmd"')
             positional = (derived_name(args.rest), list(args.rest))
         else:
             # A lone positional written WITHOUT `--` is the whole gate as one quoted

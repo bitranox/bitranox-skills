@@ -69,6 +69,7 @@ import math
 import os
 import re
 import sys
+import tempfile
 import time
 from pathlib import Path
 
@@ -114,6 +115,20 @@ def _read_or_report(reader, proj, what):
         return None
 
 
+def _home_note(path):
+    """Why a queue's path is not where new entries go, or "": a key made from a worktree or a
+    subdirectory before queues were keyed by repo, or a temp dir nothing will come back to."""
+    home = sig.queue_home(path)
+    if os.path.abspath(home) != os.path.abspath(path):
+        return "  (inside %s: new entries go to that repo's queue)" % home
+    try:
+        temp = tempfile.gettempdir()
+        inside_temp = os.path.commonpath([os.path.abspath(path), temp]) == temp
+    except ValueError:
+        inside_temp = False
+    return "  (temp dir)" if inside_temp else ""
+
+
 def _queue_rows(qdir):
     """[(key, open count or None when unreadable, live claims, where)] per queue file in `qdir`."""
     rows = []
@@ -130,7 +145,7 @@ def _queue_rows(qdir):
         if not path:
             where = "(project unknown - queued before the path was recorded)"
         elif os.path.isdir(path):
-            where = path
+            where = path + _home_note(path)
         else:
             where = "%s  (cwd gone)" % path
         claimed = sum(1 for r in recs if sig.claim_state(r) == "live")
@@ -141,7 +156,7 @@ def _queue_rows(qdir):
 def _print_queues():
     """The `queues` verb. Exit 0 listed; 2 when a queue file could not be read (it is listed as
     unreadable, never counted as holding nothing)."""
-    # The queue is addressed by cwd, and the filename is a one-way hash of it - so without this
+    # The queue is addressed by repo (or by cwd outside one), and the filename is a one-way hash - so without this
     # there is no way to ask which projects have pending contributions, and a queue whose cwd was
     # deleted or renamed is invisible AND unreachable by every other verb. Entries added since the
     # `proj` stamp landed carry their own path; older ones cannot be resolved and say so.

@@ -7,7 +7,7 @@ never confused with "nothing to look at":
 - subagent_overlap: the subagent transcripts under arms/<label>/transcripts/. A stream's Agent call
   and its tool_result say nothing about parallelism for run_in_background, whose launch returns at
   once; each transcript's own first and last timestamp do.
-- idea_markers: the `[abx] idea=N ...` lines an arm writes to .bitranox/sdd/progress.md. That file
+- idea_markers: the `[abx] idea=<number or word> ...` lines an arm writes to .bitranox/sdd/progress.md. That file
   is untracked, so it is in no branch: the writing tool calls in the stream and the subagent
   transcripts are the only record left.
 - suite_outcome (and step_outcome, the same reading of any floor step, the gate's included): the
@@ -46,7 +46,9 @@ __all__ = [
 # Claude Code names a subagent's transcript agent-<id>.jsonl (beside it agent-<id>.meta.json); the
 # main session's transcript is <session-id>.jsonl, so the prefix alone tells them apart.
 SUBAGENT_PREFIX = "agent-"
-MARKER = re.compile(r"\[abx\] idea=(\d+)[^\n]*")
+# An idea id is a number or a word (idea=final-design-review); "<" keeps the prompt's own
+# "idea=<id>" template out of the count.
+MARKER = re.compile(r"\[abx\] idea=([A-Za-z0-9][\w-]*)[^\n]*")
 # The tools whose input IS the text written, and the input fields that carry it.
 _WRITE_FIELDS = {"Write": ("content",), "Edit": ("new_string",), "NotebookEdit": ("new_source",)}
 # A shell command writes when it appends (>>), tees, or redirects stdout to a file: "2>/dev/null"
@@ -188,11 +190,16 @@ def _tool_uses(record: dict[str, Any]) -> Iterator[dict[str, Any]]:
             yield block
 
 
+def _idea_order(idea: str) -> tuple[int, int, str]:
+    """Numbered ideas first and by value (2 before 10), then named ones by text."""
+    return (0, int(idea), "") if idea.isascii() and idea.isdigit() else (1, 0, idea)
+
+
 class _IdeaTally:
-    """Distinct marker lines per idea number, the first seen of each, and the writing calls."""
+    """Distinct marker lines per idea id, the first seen of each, and the writing calls."""
 
     def __init__(self) -> None:
-        self.lines: dict[int, list[str]] = {}
+        self.lines: dict[str, list[str]] = {}
         self.writes = 0
         self.seen_ids: set[str] = set()
 
@@ -207,12 +214,12 @@ class _IdeaTally:
             self.writes += 1
         for m in markers:
             line = m.group(0).strip()
-            known = self.lines.setdefault(int(m.group(1)), [])
+            known = self.lines.setdefault(m.group(1), [])
             if line not in known:
                 known.append(line)
 
     def result(self) -> dict[str, Any]:
-        ideas = {str(n): {"count": len(lines), "first": lines[0]} for n, lines in sorted(self.lines.items())}
+        ideas = {n: {"count": len(self.lines[n]), "first": self.lines[n][0]} for n in sorted(self.lines, key=_idea_order)}
         return {"writes": self.writes, "ideas": ideas}
 
 
@@ -223,7 +230,7 @@ def _subagent_transcripts(transcripts: Path | None) -> list[Path]:
 
 
 def idea_markers(stream: Path, transcripts: Path | None = None) -> dict[str, Any] | None:
-    """The `[abx] idea=N ...` lines the arm wrote, read from the writing tool calls it made.
+    """The `[abx] idea=<id> ...` lines the arm wrote, read from the writing tool calls it made.
 
     The calls are read from the stream and from every subagent transcript (agent-*.jsonl) under
     transcripts: a background subagent's calls need not reach the stream, and a call seen in both

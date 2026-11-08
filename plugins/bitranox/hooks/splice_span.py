@@ -196,6 +196,19 @@ def _stops(body):
     return False
 
 
+def _keys_checked_by_loop(node):
+    """Anchors `for a in (A, B): <check on a>` covers. Only a literal tuple or list can be paired;
+    a loop over a name is left unchecked, on the refuse side like any anchor that cannot be paired."""
+    if not (isinstance(node.iter, (ast.Tuple, ast.List)) and isinstance(node.target, ast.Name)):
+        return set()
+    inner = set()
+    for stmt in node.body:
+        inner |= _checked_anchors(stmt)
+    if ("name", node.target.id) not in inner:
+        return set()
+    return {key for key in (_anchor_key(item) for item in node.iter.elts) if key}
+
+
 def _checked_anchors(tree):
     """Every anchor key the program asserts unique, or stops on when it is not."""
     keys = set()
@@ -204,6 +217,8 @@ def _checked_anchors(tree):
             keys |= _asserted_unique(node.test)
         elif isinstance(node, ast.If) and _stops(node.body):
             keys |= _refused_when_not_unique(node.test)
+        elif isinstance(node, ast.For):
+            keys |= _keys_checked_by_loop(node)
     return keys
 
 

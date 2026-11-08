@@ -30,6 +30,27 @@ a hole nobody has drawn a line under is one that gets rediscovered and half-fill
 two "versions with no entry" notes came to sit in this file disagreeing with it.
 
 
+## [10.40.0]
+
+### Fixed
+
+- `block-masked-gate-exit` now sees `gate.py ... | tail && git commit`, as it already did for a piped bare pytest.
+- `block-index-splice` lets through a splice whose anchors are count-checked in a literal `for` loop over them, which its refusal text already promised.
+- `gate.py` refuses `-- a -- b` and names the repeated `--gate "name=cmd"` form instead of running one long argv; a misplaced per-gate flag now shows the order it needs.
+- `abtrace` accepts word idea ids (`idea=final-design-review`); its marker matched digits only, so such runs were reported as untraced.
+- `contrib_queue ship|drop --match` accepts the `what -> target` text exactly as `list` prints it.
+- `mutation_arm --battery` accepts a spec whose arms all carry their own tests, as the docstring said; an arm without any is named in the refusal.
+- `mutation_arm`: `--test` with `--cmd` is refused with the fix in the message.
+
+### Added
+
+- `mutation_arm`: a killed or inconclusive `--cmd` arm prints the end of its output (`output_tail` in `--json`), and `--log-dir DIR` keeps each arm's whole output.
+- `factedit apply` refuses a new body under half of a stored one unless `--shrink` is given, since a fold that lost the stored text looks exactly like that.
+
+### Changed
+
+- Contribution queues are keyed by the repo's main checkout: an entry added from a linked worktree or a subdirectory lands in the queue the repo's dream reads. `queues` marks a key made from a worktree, a subdirectory or a temp dir.
+
 ## [10.39.0]
 
 ### Added

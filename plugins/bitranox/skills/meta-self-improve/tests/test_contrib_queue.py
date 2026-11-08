@@ -1,4 +1,8 @@
 """Tests for contrib_queue.py (the durable pending-upstream-contribution queue CLI). ASCII only."""
+import json
+import os
+import subprocess
+
 import pytest
 
 import contrib_queue as Q
@@ -209,6 +213,24 @@ def test_match_is_case_insensitive_and_matches_the_target_too(capsys):
     capsys.readouterr()
     assert Q.main(["ship", "--match", "DREAM-TREE", "--note", "v9", "/p/m4"]) == 0
     assert [r["what"] for r in S.read_shipped("/p/m4")] == ["some gap"]
+
+
+def test_match_accepts_the_what_arrow_target_text_list_prints(capsys):
+    """Two entries with one `what` and different targets are told apart by the listing's own text."""
+    Q.main(["add", "--what", "Memory Boundedness.", "--target", "skill:process-plan-brainstorming", "/p/m6"])
+    Q.main(["add", "--what", "Memory Boundedness.", "--target", "skill:coding-python-clean-architecture", "/p/m6"])
+    capsys.readouterr()
+    assert Q.main(["ship", "--match", "Memory Boundedness. -> skill:process-plan-brainstorming",
+                   "--note", "v1", "/p/m6"]) == 0
+    assert [r["target"] for r in S.read_contributions("/p/m6")] == ["skill:coding-python-clean-architecture"]
+    assert [r["target"] for r in S.read_shipped("/p/m6")] == ["skill:process-plan-brainstorming"]
+
+
+def test_an_arrow_selector_still_refuses_when_one_half_does_not_match(capsys):
+    Q.main(["add", "--what", "an entry", "--target", "skill:a", "/p/m7"])
+    capsys.readouterr()
+    assert Q.main(["ship", "--match", "an entry -> skill:other", "--note", "v1", "/p/m7"]) != 0
+    assert len(S.read_contributions("/p/m7")) == 1
 
 
 def test_ship_needs_exactly_one_selector(capsys):
@@ -761,3 +783,76 @@ def test_queues_names_no_claim_count_when_nothing_is_claimed(tmp_path, capsys):
     assert Q.main(["queues"]) == 0
     row = next(line for line in capsys.readouterr().out.splitlines() if str(where) in line)
     assert "  1 open  %s" % where in row            # no claim field between count and path
+
+
+# ---- a queue belongs to the repo, whichever checkout or subdirectory the entry came from ---------
+
+def _git(cwd, *args):
+    env = {k: v for k, v in os.environ.items() if not k.startswith("GIT_")}
+    subprocess.run(["git", "-c", "user.name=t", "-c", "user.email=t@example.invalid", *args],
+                   cwd=str(cwd), check=True, capture_output=True, env=env)
+
+
+def _repo_with_worktree(tmp_path):
+    main = tmp_path / "main"
+    main.mkdir()
+    _git(main, "init", "-q")
+    _git(main, "commit", "-q", "--allow-empty", "-m", "base")
+    linked = tmp_path / "linked"
+    _git(main, "worktree", "add", "-q", "-b", "side", str(linked))
+    return main, linked
+
+
+def test_an_entry_added_from_a_linked_worktree_lands_in_the_main_checkouts_queue(tmp_path, capsys):
+    main, linked = _repo_with_worktree(tmp_path)
+    assert Q.main(["add", "--what", "from the worktree", "--target", "skill:x", str(linked)]) == 0
+    capsys.readouterr()
+    assert [r["what"] for r in S.read_contributions(str(main))] == ["from the worktree"]
+    assert S.read_contributions(str(main))[0]["proj"] == str(main)
+    Q.main(["list", str(linked)])
+    assert "from the worktree" in capsys.readouterr().out
+
+
+def test_an_entry_added_from_a_subdirectory_lands_in_the_repos_queue(tmp_path):
+    main, _ = _repo_with_worktree(tmp_path)
+    sub = main / "pkg" / "deep"
+    sub.mkdir(parents=True)
+    Q.main(["add", "--what", "from below", "--target", "skill:x", str(sub)])
+    assert [r["what"] for r in S.read_contributions(str(main))] == ["from below"]
+
+
+def test_a_path_outside_any_repo_keeps_its_own_key(tmp_path):
+    plain = tmp_path / "plain"
+    plain.mkdir()
+    assert S._queue_file_key(str(plain)) == S.proj_key(str(plain))
+
+
+def test_a_relative_gitdir_in_a_gitfile_still_finds_the_main_checkout(tmp_path):
+    main = tmp_path / "main"
+    (main / ".git" / "worktrees" / "w").mkdir(parents=True)
+    linked = tmp_path / "w"
+    linked.mkdir()
+    (linked / ".git").write_text("gitdir: ../main/.git/worktrees/w\n", encoding="utf-8")
+    assert S.queue_home(str(linked)) == str(main)
+
+
+def test_a_submodule_gitfile_keeps_the_submodule_as_its_own_home(tmp_path):
+    outer = tmp_path / "outer"
+    (outer / ".git" / "modules" / "sub").mkdir(parents=True)
+    sub = outer / "sub"
+    sub.mkdir()
+    (sub / ".git").write_text("gitdir: ../.git/modules/sub\n", encoding="utf-8")
+    assert S.queue_home(str(sub)) == str(sub)
+
+
+def _queue_keyed_at(path, what):
+    S.contrib_file("queue_key:" + S.proj_key(path)).write_text(
+        json.dumps({"what": what, "proj": str(path)}) + "\n", encoding="utf-8")
+
+
+def test_queues_flags_a_key_made_from_a_worktree_of_a_repo(tmp_path, capsys):
+    main, linked = _repo_with_worktree(tmp_path)
+    S.contrib_file("queue_key:" + S.proj_key(str(linked))).parent.mkdir(parents=True, exist_ok=True)
+    _queue_keyed_at(str(linked), "old worktree entry")
+    assert Q.main(["queues"]) == 0
+    assert f"inside {main}" in capsys.readouterr().out

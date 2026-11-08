@@ -855,6 +855,28 @@ class TestAnEmptyDashDashGateIsAUsageError:
         assert not log.exists()
 
 
+class TestSeveralGatesChainedAfterDashDash:
+    def test_a_second_gate_after_an_inner_dashdash_is_refused_naming_the_gate_form(self, tmp_path, capsys):
+        """`-- uv run pytest -- ruff check` ran pytest with the rest as its arguments: 0 tests."""
+        log = tmp_path / "g.log"
+        with pytest.raises(SystemExit) as exc:
+            gate.main(["--log", str(log), "--", "uv", "run", "pytest", "-q", "--", "ruff", "check", "."])
+        assert exc.value.code == 2
+        err = capsys.readouterr().err
+        assert '--gate "name=cmd"' in err and "ruff" in err
+        assert not log.exists()
+
+    @pytest.mark.parametrize("rest", [["cargo", "test", "--", "--nocapture"],
+                                      ["python3", "tool.py", "--", "input.txt"]])
+    def test_an_inner_dashdash_that_passes_arguments_is_still_one_gate(self, tmp_path, capsys, rest):
+        assert gate.several_gates_after_dashdash(rest) is None
+
+    def test_the_order_error_shows_the_working_order(self, tmp_path, capsys):
+        with pytest.raises(SystemExit):
+            gate.main(["--log", str(tmp_path / "g.log"), "--gate-cwd", str(tmp_path), "--gate", OK])
+        assert '--gate "<cmd>" --gate-cwd' in capsys.readouterr().err
+
+
 class TestTheFollowUpPrintsAfterTheReport:
     def test_then_output_follows_the_report_when_stdout_is_a_pipe(self, tmp_path):
         """A piped stdout is block-buffered, so the report sat in Python's buffer while the --then

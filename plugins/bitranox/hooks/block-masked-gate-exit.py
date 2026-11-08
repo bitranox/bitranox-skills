@@ -566,6 +566,15 @@ def _pipeline_elements(statement: str, tool_name: str = "Bash") -> list[str]:
     return [e for e in _PIPE.split(masked) if e.strip()]
 
 
+def _gate_or_jig_in(element: str, tool_name: str = "Bash") -> re.Match[str] | None:
+    """The gate this pipeline element runs as its program word, the gate.py jig included.
+
+    gate.py returns its gate's status, so piping it into `tail` discards the verdict exactly as
+    piping pytest does. Its `--gate "..."` text is quoted, hence masked, so GATE alone never saw it.
+    """
+    return gate_program_in(element, tool_name, GATE) or gate_program_in(element, tool_name, JIG)
+
+
 def _first_gate(elements: list[str], tool_name: str = "Bash") -> tuple[int, re.Match[str]] | None:
     """(index, match) of the first element whose PROGRAM is a gate, or None.
 
@@ -573,7 +582,7 @@ def _first_gate(elements: list[str], tool_name: str = "Bash") -> tuple[int, re.M
     and reading their arguments as a gate refused a read-only look at a file before a commit.
     """
     for index, element in enumerate(elements):
-        found = gate_program_in(element, tool_name, GATE)
+        found = _gate_or_jig_in(element, tool_name)
         if found is not None:
             return index, found
     return None
@@ -595,7 +604,7 @@ def masks_a_gate(statement: str, tool_name: str = "Bash") -> bool:
     if first is None:
         return False
     # If the gate IS the last element, the pipeline's status is the gate's.
-    if gate_program_in(elements[-1], tool_name, GATE):
+    if _gate_or_jig_in(elements[-1], tool_name):
         return False
     # Only a swallowing filter AFTER the gate masks it. Filter names stand outside quotes, so the
     # masked element reads the same as the raw one here.

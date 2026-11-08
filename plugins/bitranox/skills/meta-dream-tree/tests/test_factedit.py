@@ -1112,3 +1112,67 @@ def test_control_a_writable_stage_dir_still_applies(tmp_path):
                  "--stage-dir", str(tmp_path / "stage")], tmp_path)
     assert r.returncode == 0, r.stdout + r.stderr
     assert json.loads(r.stdout)["ok"] is True
+
+
+# ---- apply refuses a body that loses most of the stored one -------------------------------------
+
+LONG_BODY = "Stored prose that carries the fact. " * 20 + "\n"
+
+
+def _tree_with_long_body(tmp_path: Path) -> Path:
+    level = make_tree(tmp_path)
+    fact = level.parent / ".claude-memory" / "facts" / "feedback-demo.md"
+    fact.write_text(fact.read_text(encoding="utf-8").replace("The body prose.\n", LONG_BODY),
+                    encoding="utf-8")
+    return level
+
+
+def _stored(level: Path) -> str:
+    return (level.parent / ".claude-memory" / "facts" / "feedback-demo.md").read_text(encoding="utf-8")
+
+
+def test_apply_refuses_a_body_that_loses_most_of_the_stored_one(tmp_path):
+    """A fold meant to APPEND lost the stored text to an empty extraction, and apply replaced a
+    2419-character body with the new paragraph alone: nothing but a later read noticed."""
+    level = _tree_with_long_body(tmp_path)
+    body = tmp_path / "b.md"
+    body.write_text("Only the new paragraph.\n", encoding="utf-8")
+    proc = run_cli(["apply", "--slug", "feedback-demo", "--from", str(level),
+                    "--body-file", str(body)], tmp_path)
+    assert proc.returncode != 0, proc.stdout
+    assert "--shrink" in proc.stderr + proc.stdout
+    assert str(len(LONG_BODY)) in proc.stderr + proc.stdout
+    assert "Stored prose" in _stored(level)
+
+
+def test_apply_shrink_allows_a_deliberate_cut(tmp_path):
+    level = _tree_with_long_body(tmp_path)
+    body = tmp_path / "b.md"
+    body.write_text("Only the new paragraph.\n", encoding="utf-8")
+    proc = run_cli(["apply", "--slug", "feedback-demo", "--from", str(level),
+                    "--body-file", str(body), "--shrink"], tmp_path)
+    assert proc.returncode == 0, (proc.stdout, proc.stderr)
+    assert "Only the new paragraph." in _stored(level) and "Stored prose" not in _stored(level)
+
+
+def test_apply_lets_a_moderate_trim_through_without_shrink(tmp_path):
+    level = _tree_with_long_body(tmp_path)
+    body = tmp_path / "b.md"
+    body.write_text(LONG_BODY[: int(len(LONG_BODY) * 0.7)] + "\n", encoding="utf-8")
+    proc = run_cli(["apply", "--slug", "feedback-demo", "--from", str(level),
+                    "--body-file", str(body)], tmp_path)
+    assert proc.returncode == 0, (proc.stdout, proc.stderr)
+
+
+def test_a_short_stored_body_can_be_replaced_freely():
+    assert FE.shrink_problem("short", "x") is None
+
+
+def test_shrink_problem_states_both_lengths():
+    problem = FE.shrink_problem("y" * 1000, "x" * 100)
+    assert problem and "1000" in problem and "100" in problem
+
+
+def test_the_frame_is_not_counted_as_prose():
+    framed = "---\nname: a\ndescription: " + "d" * 500 + "\n---\n\n" + "p" * 100
+    assert FE.shrink_problem(framed, "q" * 80) is None

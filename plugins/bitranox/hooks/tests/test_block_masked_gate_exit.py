@@ -40,6 +40,8 @@ def run_main(monkeypatch, command):
         ("fmt piped to head, then OK echo", 'cargo fmt -- --check 2>&1 | head -20 && echo "FMT-OK"'),
         ("clippy piped to grep, then commit", 'cargo clippy -- -D warnings 2>&1 | grep -E "^error" ; git add -A && git commit -m x'),
         ("pytest piped to tail, then commit", 'pytest -q | tail -3; git commit -m "wip"'),
+        ("the gate.py jig piped to tail, then commit",
+         'python3 /p/scripts/gate.py --gate "pytest=uv run pytest -q" 2>&1 | tail -3 && git add a && git commit -F m'),
         ("ruff piped to wc, then PASS echo", 'ruff check . | wc -l && echo "PASS"'),
         ("pyright piped to grep, then push", 'pyright | grep error; git push'),
         ("make test piped to tail, then clean echo", 'make test 2>&1 | tail -5 && echo "all clean"'),
