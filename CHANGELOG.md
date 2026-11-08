@@ -30,6 +30,12 @@ a hole nobody has drawn a line under is one that gets rediscovered and half-fill
 two "versions with no entry" notes came to sit in this file disagreeing with it.
 
 
+## [10.39.0]
+
+### Added
+
+- process-agents-subagent-driven-development: a "Final Whole-Branch Review" section. The final reviewer reads the source design, the amended plan and the run ledgers, reports defects (each with a failing input) apart from plan changes, and a fix subagent works the confirmed ones. In an A/B run the control branch carried 13 confirmed defects and the variant 10.
+
 ## [10.38.1]
 
 ### Fixed

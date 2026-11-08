@@ -490,7 +490,8 @@ final whole-branch review. When you fill a reviewer template:
   `python3 "$CLAUDE_PLUGIN_ROOT/skills/process-agents-subagent-driven-development/scripts/review_package.py" MERGE_BASE HEAD` (from the repo under review; MERGE_BASE = the commit the
   branch started from, e.g. `git merge-base main HEAD`) and include the
   printed path in the final review dispatch, so the final reviewer reads
-  one file instead of re-deriving the branch diff with git commands.
+  one file instead of re-deriving the branch diff with git commands. What
+  else it reads and what it reports is "Final Whole-Branch Review" below.
 - Every fix dispatch carries the implementer contract: the fix subagent
   re-runs the tests covering its change and reports the results, and commits under the same
   attribution policy line the implementer got (see File Handoffs). Copy implementer-prompt.md's
@@ -504,6 +505,45 @@ final whole-branch review. When you fill a reviewer template:
   subagent with the complete findings list  -  not one fixer per finding.
   Per-finding fixers each rebuild context and re-run suites; a real
   session's final-review fix wave cost more than all its tasks combined.
+
+## Final Whole-Branch Review
+
+The per-task reviewers check each task's code against the plan. Two kinds of defect pass every one
+of them: a defect the PLAN wrote (its text contradicts the design it implements, or the code it
+names), and a defect BETWEEN tasks (each task correct alone, wrong together: state one task sets and
+another consumes, an input one task produces that another cannot handle). The final review exists
+for those, so it reads more than the plan.
+
+Dispatch it to a fresh `opus` agent (effort `medium`, like every review) after the last task's
+review is approved, with the review package and these inputs, each by path:
+
+- the SOURCE DESIGN the plan implements: the document its header or Global Constraints names as
+  its source. Read it in full. If the plan names none, say so in the dispatch.
+- the plan at HEAD, with every amendment made during the run. The amended plan is the plan: judge
+  the branch against it, not against the plan as it stood at the start.
+- `.bitranox/sdd/progress.md`, `.bitranox/sdd/decisions.md` when present, and
+  `EXECUTION-USER-REVIEW.md` when present: the decisions and amendments, and the Minor findings
+  the task reviews deferred to this review.
+
+Its instructions, in the dispatch:
+
+1. Hunt defects across the whole branch, design first: where does the delivered behaviour differ
+   from what the design requires, and where do two tasks' pieces fail together? Every finding
+   names the code lines and a CONCRETE failing input or event sequence (values, keystrokes, sizes);
+   a suspicion without one is not a finding.
+2. Report in two parts. DEFECTS: each with severity (Critical, Important, Minor), the failing input,
+   the lines, and whether the plan's own text caused it. PLAN CHANGES: every way the branch extends
+   or departs from the plan as it stood at MERGE_BASE - what changed, where it is recorded (plan
+   amendment, decisions file, review log, nowhere), and whether the design supports it. A departure
+   recorded nowhere is also a DEFECT.
+3. Triage the deferred Minor list: fix before merge, or keep as recorded debt, one line each.
+
+Then, before fixing anything, confirm each Critical and Important defect yourself: run its failing
+input, or read the code path it names far enough to see it fail. Dispatch ONE fix subagent with
+the confirmed list (see the bullet above), under the same regression-test rule: each test it adds
+must fail with that defect put back. A defect the fix would resolve by changing what the plan text
+requires goes through the plan-mandated rule above. The PLAN CHANGES list goes, unchanged, into the
+final message to the user, after the result.
 
 ## File Handoffs
 
