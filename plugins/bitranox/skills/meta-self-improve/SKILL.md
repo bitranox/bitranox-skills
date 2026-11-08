@@ -197,7 +197,8 @@ Grep the pointer blocks (`CLAUDE.local.md`), the anchor's `facts/` bodies, the n
 and the CLAUDE.md chain for each candidate's keywords. If a related entry exists, UPDATE it: rerun
 the engine `add` against the level that OWNS its pointer, passing `--slug <the stored slug>` - it
 then upserts an unpinned fact (a pinned one is refused, see below). New entry only when nothing
-covers it.
+covers it. Run this search in a tool call of its own and read the result before the engine `add`:
+bundled as `grep ... && add`, a hit does not stop the add, and the duplicate is written anyway.
 
 **Both halves of that sentence are load-bearing, and each fails silently in its own direction.**
 
@@ -349,7 +350,9 @@ Compose the entry per the specs in references/memory-backend.md:
   advisory soft-cap warning. Past 500 the engine REFUSES the add (`! refused:`, exit 2, nothing
   written): rewrite the hook to the one directive that fires, and let the body carry the rest.
 - **Body: framed prose with reasoning.** The fact, then `**Why:**` and `**How to apply:**` lines
-  (the engine adds the frontmatter frame).
+  (the engine adds the frontmatter frame). Check every count, sequence and cost in the incident
+  narrative against the transcript before the `add`, or drop the claim: a remembered "the user asked
+  twice" or "an evening was lost" enters the store as a measurement.
 
 **Resolving `<plugin>`**, used in every command in this skill: it is the installed plugin
 directory, except that step 2's ledger `show` and step 3b's ledger `add` read the marketplace
@@ -531,8 +534,9 @@ transcripts: a tool fixed in place from a work session was then gated, bumped, p
 CI-watched from that project, 2,096 minutes of it - a third of all instrumentation time in work
 sessions - and the share grew week on week. The exception is the user asking for the fix in so
 many words; "it is broken" is a symptom to queue, "fix it" is a request to honour, in a worktree
-of the plugin's repo. A PreToolUse nudge (`tooling-detour-nudge`) says this once per session
-when a write is about to land in the plugin source from elsewhere.
+of the plugin's repo. When the session's work IS the plugin's repo, the tool is the work: fix it
+now in a worktree there, do not queue it. A PreToolUse nudge (`tooling-detour-nudge`) says this
+once per session when a write is about to land in the plugin source from elsewhere.
 
 ## Deliverables (a completed capture run has ALL of these)
 
