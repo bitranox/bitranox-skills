@@ -30,6 +30,21 @@ a hole nobody has drawn a line under is one that gets rediscovered and half-fill
 two "versions with no entry" notes came to sit in this file disagreeing with it.
 
 
+## [10.27.0]
+
+### Changed
+
+- The self-improve Stop gate no longer asks to invoke `meta-self-improve` or `meta-dream-nap`
+  again when the transcript shows that skill was invoked after the last compaction: its body is
+  still in context, so the block says to follow the loaded procedure instead of reloading it. A
+  skill invoked only before the compaction is still asked for, since the summary keeps at most a
+  truncated copy.
+
+### Fixed
+
+- `skills_invoked` no longer stops with an error on a transcript line holding a JSON value that
+  is not an object.
+
 ## [10.26.0]
 
 ### Added

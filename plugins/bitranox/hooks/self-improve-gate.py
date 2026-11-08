@@ -21,6 +21,17 @@ threshold; the patterns alone still block, and an unanswered request leaves thei
 
 Pure standard library: no jq, no cksum, no shell. Reads the Stop event JSON on
 stdin and, when it fires, prints a {"decision":"block",...} JSON on stdout.
+
+Decisions
+---------
+- Decision: a block asks to FOLLOW meta-self-improve or meta-dream-nap, not to invoke it, only
+  when the transcript shows a Skill call for it after the last compact_boundary record.
+  Why: such a body is still whole in context, and re-invoking it reloaded a long SKILL.md on
+  every block after each compaction (seen 2026-11-02/03 in a long autonomous run). A call before
+  the boundary does not count: the summary keeps at most a truncated copy of that body.
+  Evidence: test_self_improve_gate.py, the *_only_when_the_*_not_loaded tests.
+  Reopen if: Claude Code starts re-injecting invoked skill bodies whole after a compaction, or
+  stops writing compact_boundary records to the transcript.
 """
 
 import hashlib
@@ -59,12 +70,12 @@ from self_improve_signals import (
 import classifier as _classifier  # noqa: E402
 import transcript_turns as _turns  # noqa: E402
 
-_REASON = (
+_REASON_TEMPLATE = (
     'A learning signal was detected this turn (a correction, an explicit "remember", a good idea '
     "endorsed by either side - you judging the user's suggestion good (adopt it), or the user "
     'endorsing yours (a confirmed approach) - a self-admitted miss, or a realization such as '
     '"now I understand the real ..."). Before you '
-    'stop: invoke the self-improve skill (Skill tool, name "meta-self-improve") to capture this '
+    "stop: %s to capture this "
     "session's learnings per its procedure. Capture writes each fact at ONE project level, the level "
     "of the fact's SUBJECT, kept concrete; raising it to a higher altitude is the dream's job, never "
     "capture's. A must-hold intermediate-subtree rule is proposed for that level's CLAUDE.md; "
@@ -72,6 +83,44 @@ _REASON = (
     "extension skill exists (a repo-local *-self-improve), follow its bindings too. If on "
     "reflection there is genuinely nothing worth recording, say so in one line and then stop."
 )
+
+
+def _run_skill(name, loaded, invoke):
+    """How a block reason asks for skill `name`: `invoke` it, or follow it when it is loaded.
+
+    A skill invoked since the last compaction still has its whole body in context, and telling the
+    model to invoke it again reloads that body on every block (observed after each compaction in a
+    long autonomous run). `loaded` is the bare names from
+    `self_improve_signals.skills_loaded_since_compaction`; anything not in it is asked for as
+    before, since a body loaded only before a compaction survives at most truncated."""
+    if name in loaded:
+        return ("follow the %s skill, which is ALREADY LOADED in this context since the last "
+                "compaction - do not invoke it again, run its procedure from the text you have,"
+                % name)
+    return invoke
+
+
+def _reason(loaded=frozenset()):
+    """The self-improve block reason, asking for the skill as `_run_skill` decides."""
+    return _REASON_TEMPLATE % _run_skill(
+        "meta-self-improve", loaded,
+        'invoke the self-improve skill (Skill tool, name "meta-self-improve")')
+
+
+# The reason for a session that loaded no skill since its last compaction.
+_REASON = _reason()
+
+
+def _loaded_since_compaction(transcript_path):
+    """Bare names of the skills invoked since the transcript's last compaction, or an empty set.
+
+    Read only when the gate blocks: it streams the whole transcript, which a quiet turn should
+    not pay for."""
+    try:
+        with open(transcript_path, encoding="utf-8", errors="replace") as fh:
+            return _sig.skills_loaded_since_compaction(fh)
+    except Exception:                                     # noqa: BLE001 - a hint must never wedge a turn
+        return frozenset()
 
 
 def _routing_hint(event, proj):
@@ -160,7 +209,7 @@ def _drop_unsatisfiable_nap(proj, session_id=""):
         return ""
 
 
-def _nap_owed_hint(proj, session_id=""):
+def _nap_owed_hint(proj, session_id="", loaded=frozenset()):
     """Prose demanding the post-compaction consolidation, or '' when none is owed.
 
     A compaction clears the model's CONTEXT but NOT the transcript file, so the pre-compaction
@@ -173,7 +222,9 @@ def _nap_owed_hint(proj, session_id=""):
     one the block names the file that actually compacted and says whose it is.
 
     A decline the user gave (`dream_state.py nap-decline`) stands until the next compaction
-    rewrites the obligation, so the block does not return on every new message after a no."""
+    rewrites the obligation, so the block does not return on every new message after a no.
+
+    `loaded` names the skills already loaded since the last compaction (see `_run_skill`)."""
     try:
         if not _sig.nap_owed_blocks(proj):
             return ""
@@ -181,17 +232,19 @@ def _nap_owed_hint(proj, session_id=""):
         owed_session = info.get("session_id") or ""
         owed_transcript = info.get("transcript_path") or ""
         foreign = bool(owed_session) and bool(session_id) and owed_session != session_id
+        run_nap = _run_skill("meta-dream-nap", loaded,
+                             'run the nap (Skill tool, name "meta-dream-nap")')
         if foreign:
             head = ("A CONTEXT COMPACTION happened in an EARLIER session and the consolidation has "
                     "not run since. It was NOT this session, so your own context is intact; what is "
                     "unread is that session's transcript, still on disk in full%s. Before you stop: "
-                    'run the nap (Skill tool, name "meta-dream-nap"), which reads that file, not '
-                    "this one. " % (" at " + owed_transcript if owed_transcript else ""))
+                    "%s. The nap reads that file, not this one. "
+                    % (" at " + owed_transcript if owed_transcript else "", run_nap.rstrip(",")))
         else:
             head = ("A CONTEXT COMPACTION happened and the consolidation has not run since. "
                     "Compaction cleared your context but NOT the session transcript on disk, so this "
                     "session's earlier learnings are still recoverable - but ONLY from the file. "
-                    'Before you stop: run the nap (Skill tool, name "meta-dream-nap"). ')
+                    "Before you stop: %s. " % run_nap.rstrip(","))
         return head + ("Read the session from DISK (dream_state.py session-review), not from what "
                        "you still remember - what you remember is the compacted summary. It is "
                        "incremental: only the part no reviewer has consumed yet comes back. If the "
@@ -412,7 +465,10 @@ def main():
                 pass
         out["decision"] = "block"
         hints = _routing_hint(event, proj) + _skill_hint(transcript) + sub_hint
-        out["reason"] = nap_hint + _REASON + hints
+        loaded = _loaded_since_compaction(transcript)
+        if nap_hint and "meta-dream-nap" in loaded:
+            nap_hint = _nap_owed_hint(proj, event.get("session_id") or "", loaded)
+        out["reason"] = nap_hint + _reason(loaded) + hints
         if sub_hint:
             # A non-empty hint ALWAYS blocks, so the quoted findings are consumed here.
             _consume_subagent_hint(event.get("session_id") or "")

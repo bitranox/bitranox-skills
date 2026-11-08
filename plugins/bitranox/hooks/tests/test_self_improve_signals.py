@@ -1915,6 +1915,52 @@ def test_skills_invoked_empty_when_no_skill_calls():
     assert S.skills_invoked('{"type":"assistant","message":{"content":[]}}') == {}
 
 
+def test_skills_invoked_skips_a_record_that_is_not_an_object():
+    # A transcript line holding a JSON array or number used to raise AttributeError out of the
+    # loop, so one odd line lost the tally for the whole session.
+    skill = json.dumps({"type": "assistant", "message": {"content": [
+        {"type": "tool_use", "name": "Skill", "input": {"skill": "compuse-git"}}]}})
+    assert S.skills_invoked("\n".join(["[1, 2]", "7", skill])) == {"compuse-git": 1}
+
+
+def _skill_line(name, **extra):
+    rec = {"type": "assistant", "message": {"content": [
+        {"type": "tool_use", "name": "Skill", "input": {"skill": name}}]}}
+    rec.update(extra)
+    return json.dumps(rec) + "\n"
+
+
+_BOUNDARY = json.dumps({"type": "system", "subtype": "compact_boundary", "content": "x"}) + "\n"
+
+
+def test_skills_loaded_since_compaction_counts_only_calls_after_the_last_boundary():
+    # A body loaded before a compaction survives at most truncated, so only calls after the LAST
+    # boundary count as loaded; a name invoked again after it counts again.
+    lines = [_skill_line("bitranox:meta-self-improve"), _BOUNDARY,
+             _skill_line("bitranox:meta-dream-nap"), _BOUNDARY,
+             _skill_line("bitranox:compuse-git"), _skill_line("meta-skill-writer")]
+    assert S.skills_loaded_since_compaction(lines) == {"compuse-git", "meta-skill-writer"}
+
+
+def test_skills_loaded_since_compaction_without_a_boundary_is_every_call():
+    lines = [_skill_line("bitranox:meta-self-improve"), "not json\n", "[3]\n", "\n"]
+    assert S.skills_loaded_since_compaction(lines) == {"meta-self-improve"}
+
+
+def test_skills_loaded_since_compaction_ignores_a_subagent_call():
+    # A sidechain record is a subagent's call: its skill body went into the subagent's context.
+    lines = [_BOUNDARY, _skill_line("bitranox:meta-self-improve", isSidechain=True)]
+    assert S.skills_loaded_since_compaction(lines) == frozenset()
+
+
+def test_skills_loaded_since_compaction_streams_an_open_file(tmp_path):
+    p = tmp_path / "t.jsonl"
+    p.write_text(_skill_line("x:meta-dream-nap") + _BOUNDARY + _skill_line("x:compuse-git"),
+                 encoding="utf-8")
+    with open(p, encoding="utf-8") as fh:
+        assert S.skills_loaded_since_compaction(fh) == {"compuse-git"}
+
+
 def test_altitude_chain_handles_a_relative_path(tmp_path, monkeypatch):
     """A relative path must yield the same chain as its absolute form.
 

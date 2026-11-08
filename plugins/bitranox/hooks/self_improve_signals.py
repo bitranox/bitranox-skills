@@ -3104,15 +3104,59 @@ def skills_invoked(transcript_text):
             obj = json.loads(line)
         except ValueError:
             continue
-        if obj.get("type") != "assistant":
-            continue
-        content = obj.get("message", {}).get("content")
-        if not isinstance(content, list):
-            continue
-        for b in content:
-            if not isinstance(b, dict) or b.get("type") != "tool_use" or b.get("name") != "Skill":
-                continue
-            name = (b.get("input") or {}).get("skill")
-            if isinstance(name, str) and name:
-                tally[name] = tally.get(name, 0) + 1
+        for name in _skill_calls(obj):
+            tally[name] = tally.get(name, 0) + 1
     return tally
+
+
+def _skill_calls(obj):
+    """The skill names an assistant transcript record invokes through the Skill tool, in order.
+
+    A record that is not a JSON object (a stray array or number line) names none, rather than
+    raising out of the caller's loop."""
+    if not isinstance(obj, dict) or obj.get("type") != "assistant":
+        return []
+    message = obj.get("message")
+    content = message.get("content") if isinstance(message, dict) else None
+    if not isinstance(content, list):
+        return []
+    names = []
+    for b in content:
+        if not isinstance(b, dict) or b.get("type") != "tool_use" or b.get("name") != "Skill":
+            continue
+        args = b.get("input")
+        name = args.get("skill") if isinstance(args, dict) else None
+        if isinstance(name, str) and name:
+            names.append(name)
+    return names
+
+
+def skills_loaded_since_compaction(lines):
+    """Bare names of the skills invoked after the transcript's LAST compaction boundary.
+
+    A skill invoked since the last compaction still has its whole body in the model's context, so
+    a block telling it to invoke that skill again only reloads the same text (a long SKILL.md, on
+    every block). One invoked BEFORE the boundary is different: the compaction summary keeps at
+    most a truncated copy of its body, so re-invoking it is the right advice there.
+
+    `lines` is any iterable of raw transcript lines (an open file streams it), and only the set of
+    names is held, so memory does not grow with the transcript. A `bitranox:` prefix is dropped,
+    because callers ask by the bare name. A sidechain record is a subagent's call, which loads
+    nothing into this context.
+    """
+    loaded = set()
+    for raw in lines:
+        line = raw.strip()
+        if not line:
+            continue
+        try:
+            obj = json.loads(line)
+        except ValueError:
+            continue
+        if not isinstance(obj, dict) or obj.get("isSidechain") is True:
+            continue
+        if obj.get("type") == "system" and obj.get("subtype") == "compact_boundary":
+            loaded.clear()
+            continue
+        loaded.update(name.rsplit(":", 1)[-1] for name in _skill_calls(obj))
+    return frozenset(loaded)

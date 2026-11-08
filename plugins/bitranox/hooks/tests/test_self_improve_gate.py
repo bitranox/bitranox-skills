@@ -304,6 +304,73 @@ def test_owed_nap_from_this_session_still_reads_as_this_session(tmp_path, monkey
     assert "meta-dream-nap" in reason
 
 
+_BOUNDARY = {"type": "system", "subtype": "compact_boundary", "content": "Conversation compacted"}
+
+
+def _skill_record(name):
+    return {"type": "assistant", "message": {"content": [
+        {"type": "tool_use", "name": "Skill", "input": {"skill": name}}]}}
+
+
+def _transcript_of(tmp_path, records, user):
+    p = tmp_path / "transcript.jsonl"
+    lines = [json.dumps(r) for r in records]
+    lines.append(json.dumps({"type": "user", "message": {"content": user}}))
+    p.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    return str(p)
+
+
+@pytest.mark.parametrize("records,loaded", [
+    ([], False),                                                          # never invoked
+    ([_skill_record("bitranox:meta-self-improve"), _BOUNDARY], False),   # only before the compaction
+    ([_BOUNDARY, _skill_record("bitranox:meta-self-improve")], True),    # loaded since it
+])
+def test_self_improve_reason_asks_to_invoke_only_when_the_body_is_not_loaded(
+        tmp_path, monkeypatch, capsys, records, loaded):
+    # Observed in a long autonomous run: after each compaction the gate asked to invoke the skill
+    # again although its body was already in context, reloading it on every block.
+    tp = _transcript_of(tmp_path, records, "No, that's wrong, the flag is --tree")
+    run_gate(monkeypatch, tmp_path, {"transcript_path": tp, "cwd": str(tmp_path)})
+    reason = _reason_of(capsys)
+    assert reason                                                 # it blocked either way
+    assert ('Skill tool, name "meta-self-improve"' in reason) is not loaded
+    assert ("ALREADY LOADED" in reason) is loaded
+    assert "to capture this session's learnings" in reason       # the duty itself never goes
+
+
+@pytest.mark.parametrize("records,loaded", [
+    ([_skill_record("bitranox:meta-dream-nap"), _BOUNDARY], False),
+    ([_BOUNDARY, _skill_record("bitranox:meta-dream-nap")], True),
+])
+def test_owed_nap_asks_to_invoke_only_when_the_nap_is_not_loaded(
+        tmp_path, monkeypatch, capsys, records, loaded):
+    import self_improve_signals as S
+    _iso_home(tmp_path, monkeypatch)
+    tp = _transcript_of(tmp_path, records, "ok")
+    S.mark_nap_owed(str(tmp_path), session_id="sid-current", transcript_path=tp)
+    run_gate(monkeypatch, tmp_path, {"transcript_path": tp, "cwd": str(tmp_path),
+                                     "session_id": "sid-current"})
+    reason = _reason_of(capsys)
+    assert ('Skill tool, name "meta-dream-nap"' in reason) is not loaded
+    assert ("follow the meta-dream-nap skill, which is ALREADY LOADED" in reason) is loaded
+    assert "DISK" in reason                                       # still told to read the file
+
+
+def test_owed_nap_from_another_session_says_the_loaded_nap_reads_that_file(
+        tmp_path, monkeypatch, capsys):
+    import self_improve_signals as S
+    _iso_home(tmp_path, monkeypatch)
+    old = tmp_path / "older-session.jsonl"
+    old.write_text("{}\n", encoding="utf-8")
+    S.mark_nap_owed(str(tmp_path), session_id="sid-old", transcript_path=str(old))
+    tp = _transcript_of(tmp_path, [_skill_record("bitranox:meta-dream-nap")], "ok")
+    run_gate(monkeypatch, tmp_path, {"transcript_path": tp, "cwd": str(tmp_path),
+                                     "session_id": "sid-current"})
+    reason = _reason_of(capsys)
+    assert "ALREADY LOADED" in reason
+    assert "The nap reads that file, not this one." in reason and str(old) in reason
+
+
 def _gate_output(capsys):
     out = capsys.readouterr().out.strip()
     return json.loads(out) if out else {}
