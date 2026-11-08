@@ -256,6 +256,19 @@ uv run scripts/landed.py x3 --also-into backup/integration  # x3 was rewritten b
 - **Gitignored files are not checked** (a `.venv`, build output): they are taken as
   regenerable. Removing the worktree deletes them even WITHOUT `--discard-uncommitted` - git
   refuses over an untracked file, never over an ignored one - so copy out any you need first.
+  Not every ignored file is regenerable: a decision log, a handover or a backlog kept out of git
+  on purpose is work, and `landed.py` exits 0 over it. Before removing the worktree, list its
+  ignored files (`git status --ignored --short` inside it) and diff each one that is not build
+  output (anything a build, install or tool run recreates: a venv, caches, compiled output)
+  against the main checkout's copy (`diff <worktree>/<file> <main>/<file>`). A same-named
+  copy there proves nothing on its own: measured, the main copy was a condensed version holding 83
+  of the worktree's 93 lines, and every dropped line would have gone with the worktree. The `<`
+  lines are the ones removal deletes: copy the main copy aside (it has no history either), merge
+  them into it, and diff again until none is left. A file with no copy there is copied into the
+  main checkout (beside the existing name if that is taken), where it must be ignored too, or a
+  commit sweeps it in. Compare a secret-bearing file such as `.env` with `cmp -s`, never `diff`,
+  which prints its values; a differing one is copied in beside the existing file and the merge
+  left to its owner.
 - `--into` defaults to the first of `origin/HEAD`, `origin/main`, `origin/master`, `main`,
   `master` that resolves - fetch first, since a stale `origin/*` gives a confident stale answer.
 - Exit 0 = landed, 1 = not landed, 2 = could not run. The text output names each unlanded file
@@ -285,6 +298,20 @@ not updated, `-d` reports `error: the branch '<branch>' is not fully merged` for
 on origin. Measured: after `git push origin topic:master`, `git branch -d topic` exited 1 while
 `git merge-base --is-ancestor topic origin/master` exited 0. Fetch, check that exit 0 (or run
 `landed.py`), then delete with `-D`.
+
+**`ExitWorktree` with `remove` counts commits against where the session started, not origin.**
+Its "Discarded N commits" (and the refusal "Worktree has N commits") counts the worktree's
+commits that the session's starting commit lacks, so a branch already pushed to origin, with a
+local `master` that lags, reads as N commits thrown away. Measured: "Discarded 31 commits" for a
+worktree whose release was on origin with CI green, right after `landed.py` reported no commit
+missing from `origin/master`. Judge a removal by `landed.py` BEFORE it, never by that count. Once
+the worktree is gone, fetch and test its tip from the main checkout:
+`git merge-base --is-ancestor <tip> origin/<default>` (exit 0: on origin; 1 can still be work
+landed squashed or cherry-picked, so run `landed.py <tip>` before calling it lost), where `<tip>`
+is the sha you recorded before removing (a branch removed with it leaves no ref to test) or the
+branch if it survived, never `HEAD`, which there is the main checkout's own. The
+count covers commits only: uncommitted and ignored files went with the worktree, and git cannot
+bring them back.
 
 ## Step 5: Finishing - Reclaim the Per-Topic Build Cache (wtclean)
 
