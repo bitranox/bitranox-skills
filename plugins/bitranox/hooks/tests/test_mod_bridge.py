@@ -32,13 +32,16 @@ def run(cwd, env, data, preexec_fn=None):
 
 
 _CHILD_STACK = 8 << 20
+# Far past what 8 MiB holds on any frame size: the macOS runner's smaller C frames fit 100,000
+# levels into it, so a depth near that would decode there and miss the branch.
+_DEEP = 1_000_000
 
 
 def bounded_stack():
     """A preexec_fn giving the child an 8 MiB stack, or None where there is no rlimit (Windows).
 
     From Python 3.14 the json decoder's depth limit is the thread's real stack, and the GitHub
-    Linux and macOS runners run with an unlimited one: there 200,000 open brackets decode to a
+    Linux and macOS runners run with an unlimited one: there a million open brackets decode to a
     plain 'Expecting value' error and the RecursionError branch is never reached, while the test
     passes either way. The child's stack is sized from the rlimit at exec, so bounding it there
     makes the branch reachable on every runner.
@@ -146,7 +149,7 @@ def test_a_request_the_bridge_cannot_run_exits_2(tmp_path, env, raw):
 
 def test_nesting_past_the_decoders_depth_exits_2_not_a_traceback(tmp_path, env):
     """The RecursionError branch of `_request`, reached on every runner (`bounded_stack`)."""
-    p = run(tmp_path, env, ("[" * 200000).encode("ascii"), preexec_fn=bounded_stack())
+    p = run(tmp_path, env, ("[" * _DEEP).encode("ascii"), preexec_fn=bounded_stack())
     assert p.returncode == 2 and len(p.stdout.decode("ascii").splitlines()) == 1
     out = json.loads(p.stdout.decode("ascii"))
     assert (out["ok"], out["error"]["kind"]) == (False, "BadRequest")

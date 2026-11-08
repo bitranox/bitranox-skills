@@ -30,6 +30,14 @@ a hole nobody has drawn a line under is one that gets rediscovered and half-fill
 two "versions with no entry" notes came to sit in this file disagreeing with it.
 
 
+## [10.24.2]
+
+### Fixed
+
+- The jsonl_grep and mod-bridge deep-nesting tests nest a million levels instead of 100,000 and
+  200,000. The macOS runner's smaller C frames fit 100,000 levels into the 8 MiB child stack, so
+  the jsonl_grep premise test saw the line decode on macOS 3.15 and failed.
+
 ## [10.24.1]
 
 ### Changed

@@ -386,14 +386,17 @@ def _run_backend(backend, args, stdin=b"", preexec_fn=None):
 
 
 _CHILD_STACK = 8 << 20
-_DEEP_LINE = '{"x":' + "[" * 100000 + "]" * 100000 + '}'
+# 1,000,000 levels, not 100,000: the macOS runner's smaller C frames fit 100,000 levels into the
+# 8 MiB child stack and decoded them (3.15), so the depth must overflow 8 MiB on every frame size.
+_DEEP = 1_000_000
+_DEEP_LINE = '{"x":' + "[" * _DEEP + "]" * _DEEP + '}'
 
 
 def _bounded_stack():
     """A preexec_fn giving the child an 8 MiB stack, or None where there is no rlimit (Windows).
 
     From Python 3.14 the stdlib decoder's depth limit is the thread's real stack, and the GitHub
-    Linux and macOS runners run with an unlimited one: there 100,000 levels decode, the explicit
+    Linux and macOS runners run with an unlimited one: there a million levels decode, the explicit
     depth check refuses them instead, and the RecursionError branch of `_loads` is never reached
     while the test passes either way. The child's stack is sized from the rlimit at exec.
     """
