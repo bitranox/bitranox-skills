@@ -142,9 +142,11 @@ that contradict each other always changes the plan text, so it is never
 yours. Present the rest, the findings whose fix changes what the plan TEXT
 requires, to your human partner as one batched question  -  each finding
 beside the plan text that mandates it, asking which governs  -  before
-execution begins, not one interrupt per discovery mid-plan. If the scan is
-clean, proceed without comment. The review loop remains the net for
-conflicts that only emerge from implementation.
+execution begins, not one interrupt per discovery mid-plan. In a headless run
+nobody can answer that question: route those findings by "When No Human Can
+Answer" below instead. If the scan is clean, proceed without comment. The
+review loop remains the net for conflicts that only emerge from
+implementation.
 
 **Check the plan's SHAPE in the same pass.** `task_brief.py` extracts a task by its
 `Task <id>` heading and prepends the plan's `Global Constraints` section. A plan written in plan
@@ -196,6 +198,32 @@ whose docs follow someone else's style, run `git config bitranox.reformatMdTable
 the checkout before the first Bash call (at once, if Bash already ran, then check `git status`
 for tables it already realigned), and after the first dispatch check `git status` for markdown
 nobody meant to change.
+
+## When No Human Can Answer
+
+Every rule here that sends a decision to your human partner assumes someone will answer. A run
+started with nobody to ask - `claude -p` or an SDK node launched from a script, an A/B arm, a
+brief saying no one is watching - has no one, and a question that ends the turn there reads as the
+run finishing: measured, a controller asked one after 3 of 14 tasks and the run exited as a
+success. So in a headless run, route each finding whose fix changes what the plan TEXT requires
+(found in the pre-flight scan, in the review loop, or behind a BLOCKED report that the plan is
+wrong) by one test: does the fix change behaviour a release already ships?
+
+- **It does** - the code before this plan did it for callers outside the branch, and a tag or a
+  published package or plugin version carries it. Stop the run UNFINISHED: dispatch neither the
+  fix nor the next task. The task whose review holds the finding is not done: leave its
+  plan-conforming commit in place and count it with the unfinished tasks. Append the finding, the
+  plan text that mandates it and the question to `EXECUTION-USER-REVIEW.md`, and begin the final
+  message with `UNFINISHED:`, then the tasks done (N of M), the finding, and the question. Nothing
+  in that message may read as completion.
+- **It does not** - the fix touches only what this plan adds, or behaviour no release has shipped.
+  Do not ask. Dispatch the fix as a commit of its own, apart from the task's plan-conforming work,
+  so one revert restores what the plan text says. Log it in `EXECUTION-USER-REVIEW.md` with that
+  commit and a reopen-if line, continue with the next task, and name the deviation and its revert
+  in the final message.
+- **You cannot tell** whether a release ships it: treat it as shipped and stop.
+
+A run with a human present is unchanged: ask, as the rules above say.
 
 ## Model Selection
 
@@ -354,7 +382,7 @@ Implementer subagents report one of four statuses. Handle each appropriately:
 1. If it's a context problem, provide more context and re-dispatch with the same model
 2. If the task requires more reasoning, re-dispatch with a more capable model
 3. If the task is too large, break it into smaller pieces
-4. If the plan itself is wrong, decide it as for a plan-mandated finding (see the review loop): escalate to the human when the fix changes what the plan text requires
+4. If the plan itself is wrong, decide it as for a plan-mandated finding (see the review loop): escalate to the human when the fix changes what the plan text requires (in a headless run, see "When No Human Can Answer")
 
 **Never** ignore an escalation or force the same model to retry without changes. If the implementer said it's stuck, something needs to change.
 
@@ -449,7 +477,8 @@ final whole-branch review. When you fill a reviewer template:
   after all. Any other fix, one that changes what the plan TEXT requires
   the task to do, is the human's decision: present the finding and the
   plan text, ask which governs, and do not dispatch that fix without
-  asking. Never dismiss a finding because the plan mandates it.
+  asking (in a headless run, "When No Human Can Answer" decides it
+  instead). Never dismiss a finding because the plan mandates it.
 - A regression test that comes with a fix is only a restatement until it
   FAILS against the defect. Require the fix report to show it failing with
   the exact defect the fix removes put back: compuse-toolbox's

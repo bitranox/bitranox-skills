@@ -30,6 +30,20 @@ a hole nobody has drawn a line under is one that gets rediscovered and half-fill
 two "versions with no entry" notes came to sit in this file disagreeing with it.
 
 
+## [10.29.0]
+
+### Changed
+
+- process-agents-subagent-driven-development: a new section, "When No Human Can Answer", covers a
+  headless run (`claude -p`, an SDK node, an A/B arm, a brief saying nobody is watching). A finding
+  whose fix changes what the plan text requires is routed by whether the fix changes behaviour a
+  release already ships. If it does, or the controller cannot tell, the run stops: no fix, no next
+  task, the question goes into `EXECUTION-USER-REVIEW.md`, and the final message begins
+  `UNFINISHED:` with the tasks done. Otherwise the fix goes in as its own commit (one revert
+  restores the plan's reading), is logged with a reopen-if line, and the run continues. The
+  pre-flight review, the review loop and BLOCKED step 4 point at it. A run with a human present
+  still asks.
+
 ## [10.28.0]
 
 ### Changed
